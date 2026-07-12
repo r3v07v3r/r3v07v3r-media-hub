@@ -9,7 +9,7 @@ Standalone Windows media client using TorBox as its account and playback backend
 - Mandatory first-run TorBox API-token onboarding
 - Token verification against TorBox and Windows-encrypted local storage
 - Local SQLite database in the signed-in user's application-data folder
-- Cached live Movies and Series catalogs from Cinemeta
+- Cached live Movies and Series catalogs from Cinemeta with Simkl trending and stale-cache failover
 - Cached live Anime catalog and episode metadata from Anime Kitsu
 - Full-bleed feature backdrops, poster artwork and optional title logos
 - In-app privacy-enhanced YouTube trailer playback
