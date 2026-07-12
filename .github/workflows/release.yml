@@ -19,7 +19,20 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm test
-      - name: Build and publish GitHub Release
-        run: npm run release:win
+      - name: Build Windows update artifacts
+        run: npm run pack:win
+      - name: Create release and upload every updater artifact
+        shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $tag = $env:GITHUB_REF_NAME
+          gh release view $tag 2>$null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create $tag --verify-tag --title "R3V07V3R Media Hub $tag" --generate-notes
+          }
+          $assets = Get-ChildItem dist -File | Where-Object { $_.Name -eq 'latest.yml' -or $_.Name -match '^R3V07V3R-Media-Hub-.*-Setup\.exe(\.blockmap)?$' }
+          if ($assets.Count -lt 3) { throw "Expected installer, blockmap and latest.yml; found $($assets.Count) artifacts." }
+          gh release upload $tag $assets.FullName --clobber
+          $published = gh release view $tag --json assets | ConvertFrom-Json
+          if ($published.assets.Count -lt 3) { throw "Release asset verification failed." }

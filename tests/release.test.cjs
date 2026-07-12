@@ -1,5 +1,5 @@
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path');
 const root=path.join(__dirname,'..');
 test('packaging targets the public GitHub update repository',()=>{const pkg=require('../package.json');assert.deepEqual(pkg.build.publish[0],{provider:'github',owner:'R3v07v3R',repo:'r3v07v3r-media-hub',releaseType:'release'});assert.match(pkg.scripts['release:win'],/--publish always/)});
-test('tag release workflow runs tests and publishes with the GitHub Actions token',()=>{const yaml=fs.readFileSync(path.join(root,'.github/workflows/release.yml'),'utf8');assert.match(yaml,/tags:/);assert.match(yaml,/npm test/);assert.match(yaml,/secrets\.GITHUB_TOKEN/)});
+test('tag release workflow runs tests and publishes with the GitHub Actions token',()=>{const yaml=fs.readFileSync(path.join(root,'.github/workflows/release.yml'),'utf8');assert.match(yaml,/tags:/);assert.match(yaml,/npm test/);assert.match(yaml,/secrets\.GITHUB_TOKEN/);assert.match(yaml,/assets\.Count -lt 3/);assert.match(yaml,/gh release upload/)});
 test('main process only starts auto-update checks in packaged builds',()=>{const source=fs.readFileSync(path.join(root,'src/main.cjs'),'utf8');assert.match(source,/if\(!app\.isPackaged\)return/);assert.match(source,/autoInstallOnAppQuit=true/);assert.match(source,/quitAndInstall/)});
