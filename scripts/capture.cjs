@@ -1,11 +1,2 @@
-const { app, BrowserWindow } = require('electron');
-const path = require('node:path');
-app.whenReady().then(async () => {
-  const win = new BrowserWindow({ width: 1440, height: 900, show: false, webPreferences: { preload: path.join(__dirname, '..', 'src', 'preload.cjs'), contextIsolation: true } });
-  await win.loadFile(path.join(__dirname, '..', 'src', 'index.html'));
-  await new Promise(resolve => setTimeout(resolve, 800));
-  const image = await win.webContents.capturePage();
-  require('node:fs').mkdirSync(path.join(__dirname, '..', 'artifacts'), { recursive: true });
-  require('node:fs').writeFileSync(path.join(__dirname, '..', 'artifacts', 'windows-home.png'), image.toPNG());
-  app.quit();
-});
+const {app,BrowserWindow,ipcMain}=require('electron');const path=require('node:path'),fs=require('node:fs');
+app.whenReady().then(async()=>{const demo={id:'tt-cinema',title:'R3V07V3R Cinema',type:'movie',poster:'assets/app-icon.png',background:'assets/brand-wide.png',year:'2026',description:'Feature art, trailers and one-click playback in an immersive home cinema view.',rating:'9.2',runtime:'2h 14m',genres:['Science Fiction','Action'],trailers:[{source:'dQw4w9WgXcQ',name:'Official trailer'}]};ipcMain.handle('app:bootstrap',()=>({configured:true,user:{email:'Cinema profile'},library:[]}));ipcMain.handle('home:personalized',()=>({tracked:[],updates:[],recommendations:[demo,...Array.from({length:9},(_,i)=>({...demo,id:`demo-${i}`,title:`Cinema Feature ${i+1}`}))],preferredGenres:['Science Fiction','Action']}));ipcMain.handle('tracking:list',()=>({tracked:[],history:[]}));const win=new BrowserWindow({width:1440,height:900,show:false,backgroundColor:'#070a12',webPreferences:{preload:path.join(__dirname,'..','src','preload.cjs'),contextIsolation:true}});await win.loadFile(path.join(__dirname,'..','src','index.html'));await new Promise(r=>setTimeout(r,1500));const image=await win.webContents.capturePage();const dir=path.join(__dirname,'..','artifacts');fs.mkdirSync(dir,{recursive:true});fs.writeFileSync(path.join(dir,'cinema-home.png'),image.toPNG());app.quit()});

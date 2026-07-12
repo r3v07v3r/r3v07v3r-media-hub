@@ -11,6 +11,9 @@ Standalone Windows media client using TorBox as its account and playback backend
 - Local SQLite database in the signed-in user's application-data folder
 - Cached live Movies and Series catalogs from Cinemeta
 - Cached live Anime catalog and episode metadata from Anime Kitsu
+- Full-bleed feature backdrops, poster artwork and optional title logos
+- In-app privacy-enhanced YouTube trailer playback
+- Cinema full-screen mode from the header or `F11`
 - Local tracked list and watch history
 - Home-page rows for new episodes from tracked shows
 - Genre recommendations learned from locally watched titles

@@ -1,6 +1,6 @@
 const Database=require('better-sqlite3');
 function parse(value,fallback){try{return JSON.parse(value)}catch{return fallback}}
-function normalizeTitle(item){return{id:String(item.id),type:item.type||'movie',title:item.title||item.name||'Untitled',poster:item.poster||'',background:item.background||'',year:String(item.year||''),genres:Array.isArray(item.genres)?item.genres:[],description:item.description||'',rating:item.rating||''}}
+function normalizeTitle(item){return{id:String(item.id),type:item.type||'movie',title:item.title||item.name||'Untitled',poster:item.poster||'',background:item.background||'',logo:item.logo||'',year:String(item.year||''),genres:Array.isArray(item.genres)?item.genres:[],description:item.description||'',rating:item.rating||'',runtime:item.runtime||'',trailers:Array.isArray(item.trailers)?item.trailers:[]}}
 function episodePosition(v){return{season:Number(v.season)||1,episode:Number(v.episode??v.number)||0}}
 function compareEpisode(a,b){return a.season-b.season||a.episode-b.episode}
 function latestReleased(videos,now){return(videos||[]).filter(v=>{const released=v.released||v.firstAired;return !released||new Date(released)<=now}).map(episodePosition).filter(v=>v.episode>0).sort(compareEpisode).at(-1)||{season:0,episode:0}}
