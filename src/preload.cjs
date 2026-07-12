@@ -1,6 +1,1 @@
-const { contextBridge, ipcRenderer } = require('electron');
-contextBridge.exposeInMainWorld('mediaHub', {
-  settingsStatus: () => ipcRenderer.invoke('settings:status'),
-  saveTorBox: token => ipcRenderer.invoke('torbox:save', token),
-  testTorBox: () => ipcRenderer.invoke('torbox:test')
-});
+const{contextBridge,ipcRenderer}=require('electron');contextBridge.exposeInMainWorld('mediaHub',{bootstrap:()=>ipcRenderer.invoke('app:bootstrap'),connectTorBox:t=>ipcRenderer.invoke('torbox:connect',t),disconnect:()=>ipcRenderer.invoke('torbox:disconnect'),catalog:k=>ipcRenderer.invoke('catalog:list',k),meta:(type,id)=>ipcRenderer.invoke('catalog:meta',{type,id}),resolve:(type,id)=>ipcRenderer.invoke('stream:resolve',{type,id}),play:url=>ipcRenderer.invoke('play:url',url),openExternal:url=>ipcRenderer.invoke('open:external',url),library:()=>ipcRenderer.invoke('library:list'),playLibrary:item=>ipcRenderer.invoke('library:play',item)});
