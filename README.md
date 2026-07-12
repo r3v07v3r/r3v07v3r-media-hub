@@ -9,7 +9,8 @@ Standalone Windows media client using TorBox as its account and playback backend
 - Live Movies and Series catalogs from Cinemeta
 - Live Anime catalog and episode metadata from Anime Kitsu
 - TorBox stored-content list
-- Meteor stream resolution using the connected TorBox account
+- Keyless Meteor torrent discovery followed by direct TorBox cache checking
+- TorBox token is never embedded in Meteor URLs
 - Automatic best playable cached stream selection
 - Direct playback in VLC on Windows
 
