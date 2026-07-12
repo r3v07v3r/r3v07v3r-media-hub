@@ -17,7 +17,7 @@ Standalone Windows media client using TorBox as its account and playback backend
 - Local tracked list and watch history
 - Home-page rows for new episodes from tracked shows
 - Genre recommendations learned from locally watched titles
-- Simkl PIN authentication, playback scrobbling, and watched-history sync
+- Simkl PIN authentication, in-app redirect-URI guidance with one-click copy, playback scrobbling, and watched-history sync
 - TorBox stored-content list
 - Keyless Meteor discovery followed by direct TorBox cache checking
 - TorBox token is never embedded in Meteor URLs

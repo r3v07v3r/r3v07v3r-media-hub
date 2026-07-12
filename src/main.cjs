@@ -1,4 +1,4 @@
-const {app,BrowserWindow,ipcMain,safeStorage,shell}=require('electron');
+const {app,BrowserWindow,ipcMain,safeStorage,shell,clipboard}=require('electron');
 const path=require('node:path');const fs=require('node:fs');const {spawn}=require('node:child_process');
 const {validateTorBoxToken,meteorP2PConfigPath,normalizeMeta,normalizeKitsuAnime,normalizeSimklCatalog,rankStreams,selectVideoFile}=require('./core.cjs');
 const {createDatabase}=require('./database.cjs');
@@ -62,6 +62,7 @@ ipcMain.handle('play:stream',async(_e,{stream,mediaId})=>{
 });
 ipcMain.handle('play:url',async(_e,url)=>launchPlayback(url));
 ipcMain.handle('window:toggle-fullscreen',event=>{const win=BrowserWindow.fromWebContents(event.sender);win.setFullScreen(!win.isFullScreen());return{fullScreen:win.isFullScreen()}});
+ipcMain.handle('clipboard:write',(_event,value)=>{clipboard.writeText(String(value||''));return{ok:true}});
 ipcMain.handle('open:external',async(_e,url)=>{if(!/^https:\/\//.test(String(url)))throw new Error('Invalid external URL.');await shell.openExternal(url);return{ok:true}});
 ipcMain.handle('simkl:status',async()=>{const creds=simklCredentials();if(!creds.accessToken)return{connected:false,clientId:creds.clientId};try{const user=await simklRequest('/users/settings',{method:'POST',body:'{}'});return{connected:true,clientId:creds.clientId,user}}catch(error){return{connected:false,clientId:creds.clientId,error:error.message}}});
 ipcMain.handle('simkl:start',async(_e,rawClientId)=>{const clientId=String(rawClientId||'').trim();if(clientId.length<8)throw new Error('Enter the client ID from your Simkl developer app.');const result=await getJson(simklUrl('/oauth/pin',clientId),{headers:{'User-Agent':`r3v07v3r-media-hub/${app.getVersion()}`}});const s=readSettings();s.simklClientId=clientId;writeSettings(s);return result});
