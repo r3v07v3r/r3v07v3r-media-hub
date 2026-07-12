@@ -1,6 +1,6 @@
 {
   "name": "r3v07v3r-media-hub",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "Standalone TorBox-powered Movies, Series and Anime desktop client",
   "main": "src/main.cjs",
   "author": "R3v07v3R",
@@ -8,18 +8,45 @@
   "scripts": {
     "start": "electron .",
     "test": "node --test tests/*.test.cjs",
-    "pack:win": "electron-builder --win portable --x64"
+    "pack:win": "electron-rebuild -f -w better-sqlite3 -v 37.10.3 && electron-builder --win nsis --x64"
   },
   "devDependencies": {
+    "@electron/rebuild": "^4.2.0",
     "electron": "^37.2.0",
     "electron-builder": "^26.0.12"
+  },
+  "dependencies": {
+    "better-sqlite3": "^12.11.1"
   },
   "build": {
     "appId": "za.co.r3v07v3r.mediahub",
     "productName": "R3V07V3R Media Hub",
     "asar": true,
-    "directories": { "output": "dist" },
-    "files": ["src/**/*", "package.json"],
-    "win": { "target": ["portable"], "artifactName": "R3V07V3R-Media-Hub-${version}-Windows.exe" }
+    "npmRebuild": false,
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "src/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "artifactName": "R3V07V3R-Media-Hub-${version}-Setup.exe",
+      "icon": "assets/app-icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": true,
+      "allowElevation": true,
+      "allowToChangeInstallationDirectory": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "R3V07V3R Media Hub",
+      "installerIcon": "assets/app-icon.ico",
+      "uninstallerIcon": "assets/app-icon.ico"
+    }
   }
 }
