@@ -22,6 +22,8 @@ Standalone Windows media client using TorBox as its account and playback backend
 - Keyless Meteor discovery followed by direct TorBox cache checking
 - TorBox token is never embedded in Meteor URLs
 - Automatic best cached stream selection and VLC playback
+- Automatic GitHub Release update checks, background downloads and restart-to-install
+- Tag-driven Windows release workflow in GitHub Actions
 
 ## Simkl setup
 

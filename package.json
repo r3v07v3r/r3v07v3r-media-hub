@@ -1,6 +1,6 @@
 {
   "name": "r3v07v3r-media-hub",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "Standalone TorBox-powered Movies, Series and Anime desktop client",
   "main": "src/main.cjs",
   "author": "R3v07v3R",
@@ -8,7 +8,8 @@
   "scripts": {
     "start": "electron .",
     "test": "node --test tests/*.test.cjs",
-    "pack:win": "electron-rebuild -f -w better-sqlite3 -v 37.10.3 && electron-builder --win nsis --x64"
+    "pack:win": "electron-rebuild -f -w better-sqlite3 -v 37.10.3 && electron-builder --win nsis --x64",
+    "release:win": "electron-rebuild -f -w better-sqlite3 -v 37.10.3 && electron-builder --win nsis --x64 --publish always"
   },
   "devDependencies": {
     "@electron/rebuild": "^4.2.0",
@@ -16,13 +17,20 @@
     "electron-builder": "^26.0.12"
   },
   "dependencies": {
-    "better-sqlite3": "^12.11.1"
+    "better-sqlite3": "^12.11.1",
+    "electron-updater": "^6.8.9"
   },
   "build": {
     "appId": "za.co.r3v07v3r.mediahub",
     "productName": "R3V07V3R Media Hub",
     "asar": true,
     "npmRebuild": false,
+    "publish": [{
+      "provider": "github",
+      "owner": "R3v07v3R",
+      "repo": "r3v07v3r-media-hub",
+      "releaseType": "release"
+    }],
     "directories": {
       "output": "dist"
     },
