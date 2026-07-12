@@ -3,3 +3,8 @@ dist/
 *.log
 .env
 .DS_Store
+.capture-profile/
+artifacts/
+audit.json
+vlc-test.mp4
+vlc-out.webm
