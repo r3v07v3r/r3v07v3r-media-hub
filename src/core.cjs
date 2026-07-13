@@ -1,5 +1,5 @@
 const ROOM_ALPHABET='ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-const {filterCatalog,episodeWatchState}=require('./shared.js');
+const {filterCatalog,isItemWatched,episodeWatchState}=require('./shared.js');
 function createRoomCode(random=Math.random){let value='';for(let i=0;i<6;i++)value+=ROOM_ALPHABET[Math.floor(random()*ROOM_ALPHABET.length)%ROOM_ALPHABET.length];return`${value.slice(0,3)}-${value.slice(3)}`}
 function streamResolution(stream){const text=`${stream.name||''} ${stream.title||''}`.toLowerCase();if(/2160|4k/.test(text))return 2160;if(/1080/.test(text))return 1080;if(/720/.test(text))return 720;return stream.resolution||0}
 function rankStreams(streams){const score=s=>(s.exact===false?0:100000)+(s.cached===false?0:20000)+(s.compatible===false?-50000:10000)+streamResolution(s);return[...streams].sort((a,b)=>score(b)-score(a))}
@@ -20,4 +20,4 @@ function selectPlayableStream(streams){const playable=(streams||[]).filter(s=>ty
 function selectVideoFile(files,season,episode){const video=/\.(mkv|mp4|avi|mov|webm|m4v|ts)$/i;const candidates=[...(files||[])].filter(f=>video.test(f.name||f.short_name||''));if(Number.isFinite(season)&&Number.isFinite(episode)){const s=String(season).padStart(2,'0'),e=String(episode).padStart(2,'0');const patterns=[new RegExp(`S${s}[ ._-]*E${e}`,'i'),new RegExp(`(?:^|[ ._-])${season}x${e}(?:[ ._-]|$)`,'i')];const match=candidates.filter(f=>patterns.some(p=>p.test(f.name||f.short_name||''))).sort((a,b)=>(b.size||0)-(a.size||0))[0];if(match)return match}return candidates.sort((a,b)=>(b.size||0)-(a.size||0))[0]||null}
 
 function dedupeCatalog(groups){const seen=new Set(),result=[];for(const item of(groups||[]).flat()){const key=String(item?.id||'');if(!key||seen.has(key))continue;seen.add(key);result.push(item)}return result}
-module.exports={filterCatalog,dedupeCatalog,episodeWatchState,createRoomCode,rankStreams,validateTorBoxToken,meteorConfigPath,meteorP2PConfigPath,normalizeMeta,normalizeKitsuAnime,normalizeKitsuEpisode,normalizeSimklCatalog,parseReleaseName,enrichTorBoxItem,selectPlayableStream,selectVideoFile};
+module.exports={filterCatalog,isItemWatched,dedupeCatalog,episodeWatchState,createRoomCode,rankStreams,validateTorBoxToken,meteorConfigPath,meteorP2PConfigPath,normalizeMeta,normalizeKitsuAnime,normalizeKitsuEpisode,normalizeSimklCatalog,parseReleaseName,enrichTorBoxItem,selectPlayableStream,selectVideoFile};

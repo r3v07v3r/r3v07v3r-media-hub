@@ -1,0 +1,6 @@
+const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path');
+const root=path.join(__dirname,'..'),html=fs.readFileSync(path.join(root,'src/index.html'),'utf8'),renderer=fs.readFileSync(path.join(root,'src/renderer.js'),'utf8'),css=fs.readFileSync(path.join(root,'src/styles.css'),'utf8');
+test('catalog toolbar offers both unwatched and watched views',()=>{assert.match(html,/id="watchFilter"/);assert.match(html,/value="both"/);assert.match(html,/value="unwatched"/);assert.match(html,/value="watched"/)});
+test('cards render a visible watched indicator from history',()=>{assert.match(renderer,/isItemWatched\(item,watchHistory\)/);assert.match(renderer,/watched-indicator/);assert.match(renderer,/✓ Watched/);assert.match(css,/\.watched-indicator\{/)});
+test('watch filter participates in rendering and reacts immediately',()=>{assert.match(renderer,/watchMode:[\s\S]{0,120}\$\('#watchFilter'\)\.value/);assert.match(renderer,/history:watchHistory/);assert.match(renderer,/watchFilter.*onchange/s);assert.match(renderer,/watchHistory=.*tracking\.history/s)});
+test('marking watched refreshes local card state',()=>{assert.match(renderer,/watchHistory\.push/);assert.match(renderer,/markWatched[\s\S]*render\(\)/)});
