@@ -1,0 +1,6 @@
+const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path');
+const root=path.join(__dirname,'..'),css=fs.readFileSync(path.join(root,'src/styles.css'),'utf8'),renderer=fs.readFileSync(path.join(root,'src/renderer.js'),'utf8');
+function lastRule(selector){const matches=[...css.matchAll(new RegExp(selector.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+'\\{([^}]+)\\}','g'))];return matches.at(-1)?.[1]||''}
+test('series details use one modal scrollbar and a readable two-column episode list',()=>{const rule=lastRule('.episode-grid');assert.match(rule,/overflow:visible/);assert.match(rule,/max-height:none/);assert.match(rule,/grid-template-columns:repeat\(2,minmax\(0,1fr\)\)/);assert.doesNotMatch(rule,/overflow:auto|overflow-y:auto/)});
+test('series actions appear before the episode list and episode labels include season and episode',()=>{assert.match(renderer,/class="button-row detail-actions"/);assert.ok(renderer.indexOf('class="button-row detail-actions"')<renderer.indexOf('${episodes.length?episodeSelector'));assert.match(renderer,/S\$\{season\} E\$\{episode\}/)});
+test('episode badges keep season and episode on one readable line',()=>{const rule=lastRule('.episode-tile>span');assert.match(rule,/flex:0 0 76px/);assert.match(rule,/white-space:nowrap/)});
