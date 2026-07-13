@@ -5,12 +5,12 @@ const {validateTorBoxToken,meteorP2PConfigPath,normalizeMeta,normalizeKitsuAnime
 const {createDatabase}=require('./database.cjs');
 const {historyPayload,scrobblePayload}=require('./simkl.cjs');
 const {createPlaybackProxy}=require('./playback.cjs');
-const {createVlcTranscoder}=require('./vlc.cjs');
+const {createVlcTranscoder,findFfprobe,probeMedia,needsAudioCompatibility}=require('./vlc.cjs');
 const {THEMES,normalizeTheme,publicSettings,logoutSettings}=require('./preferences.cjs');
 const {isAllowedExternalUrl,isValidCatalogKind,isTrustedIpcSender,sanitizeTrackers}=require('./security.cjs');
 const {autoUpdater}=require('electron-updater');
 const TORBOX='https://api.torbox.app/v1/api';
-let mediaDb,activeMediaUrl='',updateReady=false;const playbackProxy=createPlaybackProxy(),vlcTranscoder=createVlcTranscoder();
+let mediaDb,activeMediaUrl='',activeMediaTracks={video:[],audio:[],subtitle:[],probed:false},updateReady=false;const playbackProxy=createPlaybackProxy(),vlcTranscoder=createVlcTranscoder(),ffprobePath=findFfprobe();
 const settingsPath=()=>path.join(app.getPath('userData'),'settings.json');
 function readSettings(){try{return JSON.parse(fs.readFileSync(settingsPath(),'utf8'))}catch{return{}}}
 function writeSettings(v){const target=settingsPath(),directory=path.dirname(target),temporary=`${target}.${process.pid}.${Date.now()}.tmp`;fs.mkdirSync(directory,{recursive:true});try{fs.writeFileSync(temporary,JSON.stringify(v,null,2),{mode:0o600});fs.renameSync(temporary,target)}finally{try{if(fs.existsSync(temporary))fs.unlinkSync(temporary)}catch{}}}
@@ -18,8 +18,9 @@ function encrypt(v){if(!safeStorage.isEncryptionAvailable())throw new Error('Win
 function decrypt(v){try{return safeStorage.decryptString(Buffer.from(v,'base64'))}catch{return''}}
 function token(){const settings=readSettings();return settings.onboardingVersion===2?decrypt(settings.torboxToken||''):''}
 function simklCredentials(){const s=readSettings();return{clientId:s.simklClientId||'',accessToken:decrypt(s.simklAccessToken||'')}}
-async function preparePlayback(url){activeMediaUrl=url;await vlcTranscoder.stop();return{ok:true,player:'embedded',url:await playbackProxy.register(url)}}
-async function stopPlayback(){activeMediaUrl='';await Promise.all([playbackProxy.close(),vlcTranscoder.stop()])}
+function vlcPath(){return['C:/Program Files/VideoLAN/VLC/vlc.exe','C:/Program Files (x86)/VideoLAN/VLC/vlc.exe'].find(fs.existsSync)}
+async function preparePlayback(url){activeMediaUrl=url;await vlcTranscoder.stop();activeMediaTracks=await probeMedia(ffprobePath,url);if(needsAudioCompatibility(activeMediaTracks)&&vlcPath()){await playbackProxy.close();return{ok:true,player:'embedded',tracks:activeMediaTracks,autoReason:'Audio was converted for browser compatibility.',...await vlcTranscoder.start(vlcPath(),url,{audio:activeMediaTracks.audio.find(x=>x.default)?.ordinal??0})}}return{ok:true,player:'embedded',compatibility:false,tracks:activeMediaTracks,url:await playbackProxy.register(url)}}
+async function stopPlayback(){activeMediaUrl='';activeMediaTracks={video:[],audio:[],subtitle:[],probed:false};await Promise.all([playbackProxy.close(),vlcTranscoder.stop()])}
 async function getJson(url,options={}){const controller=new AbortController();const timer=setTimeout(()=>controller.abort(),30000);try{const response=await fetch(url,{...options,signal:controller.signal});const body=await response.json().catch(()=>({}));if(!response.ok||body.success===false)throw new Error(body.detail||`Request failed (${response.status})`);return body}finally{clearTimeout(timer)}}
 async function torbox(pathname,query={}){const auth=token();if(!auth)throw new Error('TorBox is not connected.');const url=new URL(TORBOX+pathname);Object.entries(query).forEach(([k,v])=>v!==undefined&&url.searchParams.set(k,String(v)));return getJson(url,{headers:{Authorization:`Bearer ${auth}`}})}
 const catalogUrls={movie:'https://v3-cinemeta.strem.io/catalog/movie/top.json',series:'https://v3-cinemeta.strem.io/catalog/series/top.json'};
@@ -69,7 +70,8 @@ handle('play:stream',async(_e,{stream,mediaId})=>{
   const parts=String(mediaId||'').split(':');const episode=Number(parts.at(-1)),season=Number(parts.at(-2));const episodic=parts.length>=3&&Number.isFinite(season)&&Number.isFinite(episode);const file=selectVideoFile(item.files||[],episodic?season:undefined,episodic?episode:undefined);if(!file)throw new Error('No matching video file was found in the TorBox torrent.');
   const result=await getJson(`${TORBOX}/torrents/requestdl?token=${encodeURIComponent(auth)}&torrent_id=${encodeURIComponent(item.id)}&file_id=${encodeURIComponent(file.id)}&redirect=false`);const url=typeof result.data==='string'?result.data:result.data?.url||result.data?.download_url;if(!url)throw new Error('TorBox did not return a playable URL.');return preparePlayback(url)
 });
-handle('playback:compatibility',async()=>{if(!activeMediaUrl)throw new Error('No active media is available for compatibility mode.');const vlc=['C:/Program Files/VideoLAN/VLC/vlc.exe','C:/Program Files (x86)/VideoLAN/VLC/vlc.exe'].find(fs.existsSync);return vlcTranscoder.start(vlc,activeMediaUrl)});
+handle('playback:compatibility',async(_event,selection={})=>{if(!activeMediaUrl)throw new Error('No active media is available for compatibility mode.');await playbackProxy.close();return{tracks:activeMediaTracks,...await vlcTranscoder.start(vlcPath(),activeMediaUrl,selection)}});
+handle('playback:select-tracks',async(_event,selection={})=>{if(!activeMediaUrl)throw new Error('No active media is available for track selection.');const safe={audio:Number.isInteger(selection.audio)?selection.audio:-1,subtitle:Number.isInteger(selection.subtitle)?selection.subtitle:-1,startTime:Math.max(0,Math.min(Number(selection.startTime)||0,86400))};await playbackProxy.close();return{tracks:activeMediaTracks,selection:safe,...await vlcTranscoder.start(vlcPath(),activeMediaUrl,safe)}});
 handle('playback:stop',async()=>{await stopPlayback();return{ok:true}});
 handle('window:toggle-fullscreen',event=>{const win=BrowserWindow.fromWebContents(event.sender);win.setFullScreen(!win.isFullScreen());return{fullScreen:win.isFullScreen()}});
 handle('update:check',async()=>{if(!app.isPackaged)return{state:'development',version:app.getVersion()};const result=await autoUpdater.checkForUpdates(),version=result?.updateInfo?.version||app.getVersion();return{state:version===app.getVersion()?'current':'available',version}});
