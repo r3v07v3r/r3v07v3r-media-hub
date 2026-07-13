@@ -29,9 +29,9 @@ jobs:
           $tag = $env:GITHUB_REF_NAME
           gh release view $tag 2>$null
           if ($LASTEXITCODE -ne 0) {
-            gh release create $tag --verify-tag --title "R3V07V3R Media Hub $tag" --generate-notes
+            gh release create $tag --verify-tag --title "R3 Media Hub $tag" --generate-notes
           }
-          $assets = Get-ChildItem dist -File | Where-Object { $_.Name -eq 'latest.yml' -or $_.Name -match '^R3V07V3R-Media-Hub-.*-Setup\.exe(\.blockmap)?$' }
+          $assets = Get-ChildItem dist -File | Where-Object { $_.Name -eq 'latest.yml' -or $_.Name -match '^R3-Media-Hub-.*-Setup\.exe(\.blockmap)?$' }
           if ($assets.Count -lt 3) { throw "Expected installer, blockmap and latest.yml; found $($assets.Count) artifacts." }
           gh release upload $tag $assets.FullName --clobber
           $published = gh release view $tag --json assets | ConvertFrom-Json

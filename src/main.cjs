@@ -40,7 +40,7 @@ function handle(channel,listener){ipcMain.handle(channel,(event,...args)=>{if(!i
 handle('app:bootstrap',async()=>{const configured=Boolean(token());if(!configured)return{configured:false};try{const [user,library]=await Promise.all([torbox('/user/me'),torbox('/torrents/mylist',{limit:100})]);return{configured:true,user:user.data||{},library:library.data||[]}}catch(error){return{configured:false,error:error.message}}});
 handle('torbox:connect',async(_e,raw)=>{const value=String(raw||'').trim();if(!validateTorBoxToken(value))return{ok:false,message:'Enter the API token shown in TorBox Settings.'};try{const result=await getJson(`${TORBOX}/user/me`,{headers:{Authorization:`Bearer ${value}`}});const s=readSettings();s.torboxToken=encrypt(value);s.onboardingVersion=2;writeSettings(s);return{ok:true,user:result.data||{},message:'TorBox connected.'}}catch(error){return{ok:false,message:error.message}}});
 handle('torbox:disconnect',()=>{const s=readSettings();delete s.torboxToken;writeSettings(s);return{ok:true}});
-handle('settings:get',()=>({...publicSettings(readSettings()),themes:THEMES,torboxConnected:Boolean(token()),vlcInstalled:['C:/Program Files/VideoLAN/VLC/vlc.exe','C:/Program Files (x86)/VideoLAN/VLC/vlc.exe'].some(fs.existsSync)}));
+handle('settings:get',()=>({...publicSettings(readSettings()),appVersion:app.getVersion(),themes:THEMES,torboxConnected:Boolean(token()),vlcInstalled:['C:/Program Files/VideoLAN/VLC/vlc.exe','C:/Program Files (x86)/VideoLAN/VLC/vlc.exe'].some(fs.existsSync)}));
 handle('settings:set-theme',(_event,value)=>{const s=readSettings();s.theme=normalizeTheme(value);writeSettings(s);return{theme:s.theme}});
 handle('account:logout',async()=>{await stopPlayback();writeSettings(logoutSettings(readSettings()));return{ok:true}});
 handle('catalog:list',async(_e,payload)=>{const kind=payload?.kind,force=payload?.force===true;if(!isValidCatalogKind(kind))throw new Error('Unsupported catalog.');return catalogData(kind,force)});
@@ -72,7 +72,7 @@ handle('play:stream',async(_e,{stream,mediaId})=>{
 handle('playback:compatibility',async()=>{if(!activeMediaUrl)throw new Error('No active media is available for compatibility mode.');const vlc=['C:/Program Files/VideoLAN/VLC/vlc.exe','C:/Program Files (x86)/VideoLAN/VLC/vlc.exe'].find(fs.existsSync);return vlcTranscoder.start(vlc,activeMediaUrl)});
 handle('playback:stop',async()=>{await stopPlayback();return{ok:true}});
 handle('window:toggle-fullscreen',event=>{const win=BrowserWindow.fromWebContents(event.sender);win.setFullScreen(!win.isFullScreen());return{fullScreen:win.isFullScreen()}});
-handle('update:check',async()=>{if(!app.isPackaged)return{state:'development'};const result=await autoUpdater.checkForUpdates();return{state:'checking',version:result?.updateInfo?.version}});
+handle('update:check',async()=>{if(!app.isPackaged)return{state:'development',version:app.getVersion()};const result=await autoUpdater.checkForUpdates(),version=result?.updateInfo?.version||app.getVersion();return{state:version===app.getVersion()?'current':'available',version}});
 handle('update:install',()=>{if(app.isPackaged&&updateReady)autoUpdater.quitAndInstall(false,true);return{ok:app.isPackaged&&updateReady}});
 handle('clipboard:write',(_event,value)=>{clipboard.writeText(String(value||''));return{ok:true}});
 handle('open:external',async(_e,url)=>{if(!isAllowedExternalUrl(url))throw new Error('This external link is not permitted.');await shell.openExternal(url);return{ok:true}});

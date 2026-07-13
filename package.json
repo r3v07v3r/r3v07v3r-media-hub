@@ -1,6 +1,6 @@
 {
   "name": "r3v07v3r-media-hub",
-  "version": "0.8.2",
+  "version": "0.9.0",
   "description": "Standalone TorBox-powered Movies, Series and Anime desktop client",
   "main": "src/main.cjs",
   "author": "R3v07v3R",
@@ -21,7 +21,7 @@
   },
   "build": {
     "appId": "za.co.r3v07v3r.mediahub",
-    "productName": "R3V07V3R Media Hub",
+    "productName": "R3 Media Hub",
     "asar": true,
     "afterPack": "scripts/after-pack.cjs",
     "npmRebuild": false,
@@ -44,7 +44,7 @@
       "target": [
         "nsis"
       ],
-      "artifactName": "R3V07V3R-Media-Hub-${version}-Setup.exe",
+      "artifactName": "R3-Media-Hub-${version}-Setup.exe",
       "icon": "assets/app-icon.ico"
     },
     "nsis": {
@@ -54,7 +54,7 @@
       "allowToChangeInstallationDirectory": false,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "R3V07V3R Media Hub",
+      "shortcutName": "R3 Media Hub",
       "installerIcon": "assets/app-icon.ico",
       "uninstallerIcon": "assets/app-icon.ico"
     }

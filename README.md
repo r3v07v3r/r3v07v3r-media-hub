@@ -1,10 +1,10 @@
-# R3V07V3R Media Hub
+# R3 Media Hub
 
 Standalone Windows media client using TorBox as its account and playback backend. It does not connect to or depend on a personal media server.
 
 ## Windows application
 
-- Per-machine NSIS installer to `Program Files\R3V07V3R Media Hub`
+- Per-machine NSIS installer with a stable upgrade identity
 - Desktop and Start Menu shortcuts
 - Mandatory first-run TorBox API-token onboarding
 - Token verification against TorBox and Windows-encrypted local storage
