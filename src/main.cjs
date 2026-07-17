@@ -10,7 +10,7 @@ const {THEMES,normalizeTheme,publicSettings,logoutSettings}=require('./preferenc
 const {isAllowedExternalUrl,isValidCatalogKind,isTrustedIpcSender,sanitizeTrackers}=require('./security.cjs');
 const {autoUpdater}=require('electron-updater');
 const TORBOX='https://api.torbox.app/v1/api';
-let mediaDb,activeMediaUrl='',activeMediaTracks={video:[],audio:[],subtitle:[],probed:false},updateReady=false;const playbackProxy=createPlaybackProxy(),vlcTranscoder=createVlcTranscoder(),ffprobePath=findFfprobe(),vlcInstallPath=findVlc();
+let mediaDb,activeMediaUrl='',activeMediaTracks={video:[],audio:[],subtitle:[],probed:false},updateReady=false;const playbackProxy=createPlaybackProxy(),vlcTranscoder=createVlcTranscoder({onLog:line=>logError('vlc:stderr',line.trim())}),ffprobePath=findFfprobe(),vlcInstallPath=findVlc();
 const settingsPath=()=>path.join(app.getPath('userData'),'settings.json');
 const logPath=()=>path.join(app.getPath('userData'),'logs','main.log');
 function logError(scope,error){try{const line=`${new Date().toISOString()} [${scope}] ${error?.message||error}\n`;fs.mkdirSync(path.dirname(logPath()),{recursive:true});fs.appendFileSync(logPath(),line)}catch{}}

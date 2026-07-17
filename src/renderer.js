@@ -38,7 +38,9 @@ const updatePlayPause=()=>{$('#playerPlayPause').textContent=player.paused?'▶'
 const updateSeekable=()=>{const hasDuration=Number.isFinite(player.duration)&&player.duration>0;$('#seekTrack').classList.toggle('disabled',!hasDuration);$('#controlDuration').textContent=hasDuration?formatTime(player.duration):'LIVE'};
 const updateProgress=()=>{if(seeking)return;$('#controlElapsed').textContent=formatTime(player.currentTime);const hasDuration=Number.isFinite(player.duration)&&player.duration>0;$('#seekFill').style.width=hasDuration?`${Math.min(100,player.currentTime/player.duration*100)}%`:'0%'};
 const seekTo=event=>{if($('#seekTrack').classList.contains('disabled')||!Number.isFinite(player.duration))return;const rect=$('#seekTrack').getBoundingClientRect(),ratio=Math.min(1,Math.max(0,(event.clientX-rect.left)/rect.width));player.currentTime=ratio*player.duration;$('#seekFill').style.width=`${ratio*100}%`};
-$('#playerPlayPause').onclick=()=>{if(player.paused)player.play();else player.pause();revealControls()};
+const togglePlayPause=()=>{if(player.paused)player.play();else player.pause();revealControls()};
+$('#playerPlayPause').onclick=togglePlayPause;
+player.onclick=togglePlayPause;
 player.addEventListener('play',updatePlayPause,{signal:playerSignal});player.addEventListener('pause',updatePlayPause,{signal:playerSignal});
 player.addEventListener('timeupdate',updateProgress,{signal:playerSignal});
 player.addEventListener('loadedmetadata',updateSeekable,{signal:playerSignal});player.addEventListener('durationchange',updateSeekable,{signal:playerSignal});
