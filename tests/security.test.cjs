@@ -4,6 +4,7 @@ test('external browser links are restricted to trusted account and project hosts
  assert.equal(isAllowedExternalUrl('https://torbox.app/settings'),true);
  assert.equal(isAllowedExternalUrl('https://simkl.com/pin'),true);
  assert.equal(isAllowedExternalUrl('https://github.com/r3v07v3r/r3v07v3r-media-hub/releases'),true);
+ assert.equal(isAllowedExternalUrl('https://www.themoviedb.org/settings/api'),true);
  assert.equal(isAllowedExternalUrl('https://torbox.app.evil.example/phish'),false);
  assert.equal(isAllowedExternalUrl('http://torbox.app/settings'),false);
  assert.equal(isAllowedExternalUrl('file:///C:/Windows/System32/calc.exe'),false);
