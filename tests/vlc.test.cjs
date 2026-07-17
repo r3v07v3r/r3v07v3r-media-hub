@@ -21,3 +21,15 @@ test('a VLC spawn failure rejects immediately instead of waiting for the port-wa
  await assert.rejects(()=>transcoder.start('C:/fake/vlc.exe','https://download.example/video.mkv',{}),/VLC failed to start: spawn ENOENT/);
  assert.ok(Date.now()-started<2000,'spawn errors should fail fast instead of waiting out the 8s port timeout');
 });
+test('VLC stderr output is captured and forwarded instead of being discarded, so playback failures are diagnosable',async()=>{
+ function fakeSpawn(){
+  const listeners={};
+  const child={stderr:{on(event,cb){(listeners['stderr:'+event]=listeners['stderr:'+event]||[]).push(cb);return child.stderr}},once(event,cb){(listeners[event]=listeners[event]||[]).push(cb);return child},unref(){},kill(){},killed:false};
+  setImmediate(()=>{(listeners['stderr:data']||[]).forEach(cb=>cb(Buffer.from('main error: could not open output\n')));(listeners.error||[]).forEach(cb=>cb(new Error('spawn ENOENT')))});
+  return child;
+ }
+ const logs=[];
+ const transcoder=createVlcTranscoder({spawnImpl:fakeSpawn,randomBytes:size=>Buffer.alloc(size,1),onLog:line=>logs.push(line)});
+ await assert.rejects(()=>transcoder.start('C:/fake/vlc.exe','https://download.example/video.mkv',{}));
+ assert.ok(logs.some(line=>line.includes('could not open output')),'stderr output should be forwarded to onLog for diagnosis');
+});
