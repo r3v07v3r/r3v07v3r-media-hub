@@ -1,4 +1,4 @@
-const TRUSTED_EXTERNAL_HOSTS=new Set(['torbox.app','www.torbox.app','simkl.com','www.simkl.com','github.com']);
+const TRUSTED_EXTERNAL_HOSTS=new Set(['torbox.app','www.torbox.app','simkl.com','www.simkl.com','github.com','themoviedb.org','www.themoviedb.org']);
 const {isPrivateAddress}=require('./playback.cjs');
 function isAllowedExternalUrl(value){try{const url=new URL(String(value));if(url.protocol!=='https:'||url.username||url.password||!TRUSTED_EXTERNAL_HOSTS.has(url.hostname.toLowerCase()))return false;if(url.hostname.toLowerCase()==='github.com'&&!url.pathname.startsWith('/r3v07v3r/r3v07v3r-media-hub'))return false;return true}catch{return false}}
 function isValidCatalogKind(value){return['movie','series','anime'].includes(value)}
