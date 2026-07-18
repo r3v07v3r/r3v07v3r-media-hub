@@ -1,7 +1,7 @@
 const {app,BrowserWindow,ipcMain,safeStorage,shell,clipboard}=require('electron');
 const path=require('node:path');const fs=require('node:fs');
 const {pathToFileURL}=require('node:url');
-const {validateTorBoxToken,meteorP2PConfigPath,normalizeMeta,normalizeKitsuAnime,normalizeSimklCatalog,normalizeSimklSearchResult,filterAnimeRelationships,normalizeTmdbCollectionPart,dedupeCatalog,enrichTorBoxItem,rankStreams,selectVideoFile,continueWatchingList}=require('./core.cjs');
+const {validateTorBoxToken,meteorP2PConfigPath,normalizeMeta,normalizeKitsuAnime,normalizeSimklCatalog,normalizeSimklSearchResult,filterAnimeRelationships,normalizeTmdbCollectionPart,dedupeCatalog,enrichTorBoxItem,rankStreams,selectVideoFile,continueWatchingList,airingStatus}=require('./core.cjs');
 const {createDatabase}=require('./database.cjs');
 const {historyPayload,seasonHistoryPayload,scrobblePayload,watchedFromAllItems}=require('./simkl.cjs');
 const {createPlaybackProxy}=require('./playback.cjs');
@@ -63,7 +63,13 @@ handle('catalog:list',async(_e,payload)=>{const kind=payload?.kind,force=payload
 handle('catalog:meta',async(_e,{type,id})=>metadata(type,id));
 handle('catalog:search',async(_e,{kind,query})=>{if(!isValidCatalogKind(kind))throw new Error('Unsupported catalog.');const q=String(query||'').trim();if(q.length<2)return[];return kind==='anime'?kitsuSearch(q):simklSearch(kind,q)});
 handle('catalog:related',async(_e,{type,id})=>{if(type==='anime')return relatedAnime(id);if(type==='movie')return relatedMovie(id);return[]});
-handle('tracking:list',async()=>({tracked:mediaDb.tracked(),history:[...mediaDb.history(),...await simklWatchedHistory()]}));
+handle('tracking:list',async()=>{
+  const trackedItems=mediaDb.tracked(),history=[...mediaDb.history(),...await simklWatchedHistory()];
+  const details=(await Promise.all(trackedItems.filter(x=>x.type!=='movie').map(x=>metadata(x.type,x.id).catch(()=>null)))).filter(Boolean);
+  const newEpisodesById=new Map(mediaDb.trackedUpdates(details).map(u=>[String(u.id),u.newEpisodeCount])),airingById=new Map(details.map(d=>[String(d.id),airingStatus(d)]));
+  const tracked=trackedItems.map(item=>({...item,newEpisodeCount:newEpisodesById.get(String(item.id))||0,airing:airingById.get(String(item.id))||''}));
+  return{tracked,history};
+});
 handle('tracking:toggle',(_e,item)=>{const tracked=mediaDb.isTracked(item.id);if(tracked)mediaDb.untrack(item.id);else mediaDb.track(item);return{tracked:!tracked}});
 handle('tracking:mark-watched',async(_e,{item,playback})=>{mediaDb.markWatched(item,playback||{});const creds=simklCredentials();if(!creds.accessToken)return{ok:true,simklSynced:false};try{await simklRequest('/sync/history',{method:'POST',body:JSON.stringify(historyPayload(item,playback||{}))});return{ok:true,simklSynced:true}}catch(error){logError('simkl:sync-history',error);return{ok:true,simklSynced:false,simklError:error.message}}});
 handle('tracking:unmark-watched',async(_e,{item,playback})=>{const p=playback||{};mediaDb.unmarkWatched(item.id,p.season,p.episode);const creds=simklCredentials();if(!creds.accessToken)return{ok:true,simklSynced:false};try{await simklRequest('/sync/history/remove',{method:'POST',body:JSON.stringify(historyPayload(item,p))});return{ok:true,simklSynced:true}}catch(error){logError('simkl:remove-history',error);return{ok:true,simklSynced:false,simklError:error.message}}});
