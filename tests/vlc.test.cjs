@@ -1,5 +1,6 @@
 const test=require('node:test'),assert=require('node:assert/strict');
-const {buildVlcArguments,isValidCompatibilityToken,parseMediaTracks,needsAudioCompatibility,createVlcTranscoder,captureFrame}=require('../src/vlc.cjs');
+const {EventEmitter}=require('node:events');
+const {buildVlcArguments,isValidCompatibilityToken,parseMediaTracks,needsAudioCompatibility,createVlcTranscoder,captureFrame,waitForStreamData}=require('../src/vlc.cjs');
 
 test('VLC compatibility arguments transcode to browser-supported WebM on loopback only',()=>{
  const token='a'.repeat(64),args=buildVlcArguments('https://download.example/video.mkv?token=private',18765,token);
@@ -49,4 +50,35 @@ test('captureFrame resolves null on ffmpeg error, empty output, or unsafe input'
  assert.equal(await captureFrame('','https://download.example/video.mkv',10,{execFileImpl:failingExecFile}),null);
  assert.equal(await captureFrame('C:/fake/ffmpeg.exe','http://unsafe.example/video.mkv',10,{execFileImpl:failingExecFile}),null);
  assert.equal(await captureFrame('C:/fake/ffmpeg.exe','https://download.example/video.mkv',-5,{execFileImpl:failingExecFile}),null);
+});
+test('waitForStreamData resolves as soon as the transcoded stream actually delivers a byte, not merely once the port accepts a connection',async()=>{
+ function fakeHttpGet(url,onResponse){
+  const req=Object.assign(new EventEmitter(),{destroy(){},setTimeout(){return req}});
+  const response=new EventEmitter();response.destroy=()=>{};
+  setImmediate(()=>{onResponse(response);response.emit('data',Buffer.from('webm-bytes'))});
+  return req;
+ }
+ await waitForStreamData('http://127.0.0.1:1/token.webm',1000,{httpGetImpl:fakeHttpGet});
+});
+test('waitForStreamData keeps retrying while VLC has bound the port but has not produced any bytes yet (the race this fixes), then gives up with a friendly message once the timeout elapses',async()=>{
+ let attempts=0;
+ function fakeHttpGet(url,onResponse){
+  attempts++;
+  const req=Object.assign(new EventEmitter(),{destroy(){},setTimeout(){return req}});
+  const response=new EventEmitter();response.destroy=()=>{};
+  setImmediate(()=>{onResponse(response);response.emit('end')});
+  return req;
+ }
+ await assert.rejects(()=>waitForStreamData('http://127.0.0.1:1/token.webm',500,{httpGetImpl:fakeHttpGet}),/VLC compatibility mode did not start producing video in time\./);
+ assert.ok(attempts>1,'should retry instead of failing on the first empty response, since the muxer legitimately needs a moment to produce its first packet');
+});
+test('waitForStreamData stops immediately when the in-flight request is cancelled',async()=>{
+ const controller=new AbortController();
+ function fakeHttpGet(){
+  const req=Object.assign(new EventEmitter(),{destroy(){},setTimeout(){return req}});
+  const response=new EventEmitter();response.destroy=()=>{};
+  return req;
+ }
+ controller.abort();
+ await assert.rejects(()=>waitForStreamData('http://127.0.0.1:1/token.webm',5000,{httpGetImpl:fakeHttpGet,signal:controller.signal}),/VLC compatibility mode was cancelled\./);
 });
