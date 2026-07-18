@@ -49,3 +49,18 @@ test('preload exposes the reconciliation preview and apply channels',()=>{
  assert.match(preload,/malReconcilePreview:\(\)=>ipcRenderer\.invoke\('mal:reconcile-preview'\)/);
  assert.match(preload,/malReconcileApply:diff=>ipcRenderer\.invoke\('mal:reconcile-apply',diff\)/);
 });
+test('marking watched, unmarking, and marking a season watched all best-effort push the resulting progress to MyAnimeList, mirroring the Simkl error-tolerance pattern',()=>{
+ for(const channel of["'tracking:mark-watched'","'tracking:unmark-watched'","'tracking:mark-season-watched'"])assert.match(main,new RegExp(`handle\\(${channel},async\\(_e,\\{[^}]*\\}\\)=>\\{[\\s\\S]{0,700}await pushMalProgress\\(item\\)`));
+});
+test('MAL progress push only applies to anime with a kitsu id and a live MAL connection, and never throws on failure',()=>{
+ assert.match(main,/async function pushMalProgress\(item\)\{if\(item\.type!=='anime'\|\|!String\(item\.id\)\.startsWith\('kitsu:'\)\)return\{malSynced:false\}/);
+ assert.match(main,/if\(!malCredentials\(\)\.accessToken\)return\{malSynced:false\}/);
+ assert.match(main,/catch\(error\)\{logError\('mal:push-progress',error\);return\{malSynced:false,malError:error\.message\}\}/);
+});
+test('the kitsu-to-MAL id lookup filters Kitsu\'s per-anime mappings for the MyAnimeList entry and caches the result',()=>{
+ assert.match(main,/m\.attributes\?\.externalSite==='myanimelist\/anime'/);
+ assert.match(main,/mal:mapping:mal-for-kitsu:/);
+});
+test('status messages mention MyAnimeList sync alongside the existing Simkl status text',()=>{
+ assert.match(renderer,/\+\(result\.malSynced\?' Synced to MyAnimeList\.':''\)\}/);
+});
