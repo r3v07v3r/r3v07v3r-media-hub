@@ -17,7 +17,9 @@
     "electron-builder": "^26.0.12"
   },
   "dependencies": {
-    "electron-updater": "^6.8.9"
+    "@achingbrain/nat-port-mapper": "^4.0.5",
+    "electron-updater": "^6.8.9",
+    "ws": "^8.21.1"
   },
   "build": {
     "appId": "za.co.r3v07v3r.mediahub",
