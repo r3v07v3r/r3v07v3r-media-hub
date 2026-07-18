@@ -17,7 +17,7 @@ test('a client receiving queue-sync applies it locally and pushes the result to 
 });
 test('suggesting or removing applies directly when you are the host, but is sent to the host to process when you are a client, since only the host owns the authoritative queue',()=>{
  assert.match(main,/handle\('party:suggest',\(_e,item\)=>\{if\(!party\)throw new Error\('You are not in a party\.'\);if\(!item\|\|item\.id===undefined\|\|item\.id===null\)throw new Error\('Nothing to suggest\.'\);/);
- assert.match(main,/if\(party\.role==='host'\)\{party\.queue=applyQueueEvent\(party\.queue,event\);broadcastQueue\(\)\}else\{party\.ws\.send\(encryptMessage\(party\.secret,event\)\)\}return\{ok:true\}\}\);\s*handle\('party:remove'/);
+ assert.match(main,/if\(party\.role==='host'\)\{party\.queue=applyQueueEvent\(party\.queue,event\);broadcastQueue\(\)\}else\{partyBroadcast\(encryptMessage\(party\.secret,event\)\)\}return\{ok:true\}\}\);\s*handle\('party:remove'/);
 });
 test('preload exposes suggest, remove, vote and queue-fetch channels',()=>{
  assert.match(preload,/partySuggest:item=>ipcRenderer\.invoke\('party:suggest',item\)/);
@@ -26,7 +26,7 @@ test('preload exposes suggest, remove, vote and queue-fetch channels',()=>{
  assert.match(preload,/partyQueue:\(\)=>ipcRenderer\.invoke\('party:queue'\)/);
 });
 test('voting is only accepted once the connection knows its own verified member id, and a non-host member votes by sending the event to the host rather than mutating a local queue it does not own',()=>{
- assert.match(main,/handle\('party:vote',\(_e,\{queueId,direction\}=\{\}\)=>\{if\(!party\)throw new Error\('You are not in a party\.'\);const dir=Number\(direction\);if\(dir!==1&&dir!==-1\)throw new Error\('Invalid vote\.'\);const voterId=party\.role==='host'\?party\.hostId:party\.selfId;if\(!voterId\)throw new Error\('Still connecting to the party — try again in a moment\.'\);const event=\{type:'vote',queueId:String\(queueId\|\|''\),voterId,direction:dir\};if\(party\.role==='host'\)\{party\.queue=applyQueueEvent\(party\.queue,event\);broadcastQueue\(\)\}else\{party\.ws\.send\(encryptMessage\(party\.secret,event\)\)\}return\{ok:true\}\}\)/);
+ assert.match(main,/handle\('party:vote',\(_e,\{queueId,direction\}=\{\}\)=>\{if\(!party\)throw new Error\('You are not in a party\.'\);const dir=Number\(direction\);if\(dir!==1&&dir!==-1\)throw new Error\('Invalid vote\.'\);const voterId=party\.role==='host'\?party\.hostId:party\.selfId;if\(!voterId\)throw new Error\('Still connecting to the party — try again in a moment\.'\);const event=\{type:'vote',queueId:String\(queueId\|\|''\),voterId,direction:dir\};if\(party\.role==='host'\)\{party\.queue=applyQueueEvent\(party\.queue,event\);broadcastQueue\(\)\}else\{partyBroadcast\(encryptMessage\(party\.secret,event\)\)\}return\{ok:true\}\}\)/);
 });
 test('the party room lets any member search the live catalog and suggest a result, reusing the existing search IPC rather than a new lookup path',()=>{
  assert.match(renderer,/id="partySuggestKind"/);
