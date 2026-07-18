@@ -42,3 +42,9 @@ test('direct-playback subtitles attach via a real HTML5 track element and force 
  assert.match(renderer,/trackEl\.kind='subtitles'/);
  assert.match(renderer,/trackEl\.track\.mode='showing'/);
 });
+test('when the embedded subtitles look inadequate, the player automatically fetches and applies the best OpenSubtitles match instead of requiring a manual click, and never surfaces an error if that background attempt fails',()=>{
+ assert.match(renderer,/if\(!window\.mediaHubShared\.subtitlesInadequate\(tracks\.subtitle\)\)return;try\{const found=await window\.mediaHub\.subtitlesSearch\(\{item:subtitleContext,playback:subtitleContext\}\)/);
+ assert.match(renderer,/const applied=await window\.mediaHub\.subtitlesApply\(\{fileId:found\[0\]\.fileId,compatibility:compatibilityStarted,selection:selection\(\)\}\)/);
+ assert.match(renderer,/No usable subtitles were found in the file — fetched a matching subtitle for you\./);
+ assert.match(renderer,/\}catch\{\}\}\)\(\);player\.onerror=/);
+});
