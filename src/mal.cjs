@@ -1,0 +1,3 @@
+function buildAuthorizeUrl(clientId,state,codeVerifier,redirectUri){const url=new URL('https://myanimelist.net/v1/oauth2/authorize');url.searchParams.set('response_type','code');url.searchParams.set('client_id',clientId);url.searchParams.set('state',state);url.searchParams.set('redirect_uri',redirectUri);url.searchParams.set('code_challenge',codeVerifier);url.searchParams.set('code_challenge_method','plain');return url.toString()}
+function normalizeMalEntry(entry){const node=entry?.node||{},status=entry?.list_status||{};return{malId:Number(node.id)||0,title:String(node.title||'Untitled'),status:String(status.status||''),watchedEpisodes:Number(status.num_episodes_watched)||0}}
+module.exports={buildAuthorizeUrl,normalizeMalEntry};
