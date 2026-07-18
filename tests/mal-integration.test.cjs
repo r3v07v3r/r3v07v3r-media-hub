@@ -29,3 +29,23 @@ test('Settings shows a MyAnimeList connection card next to Simkl, with a redirec
  assert.match(renderer,/value="http:\/\/127\.0\.0\.1:48765\/mal\/callback" readonly/);
  assert.match(renderer,/manageMal'\)\.onclick=openMalSettings/);
 });
+test('reconciliation is preview-then-confirm, never applying a diff the user has not reviewed',()=>{
+ assert.match(main,/handle\('mal:reconcile-preview'/);
+ assert.match(main,/handle\('mal:reconcile-apply',async\(_e,diff\)=>/);
+ assert.match(renderer,/malSyncNow'\)\.onclick=openMalReconcile/);
+ assert.match(renderer,/async function openMalReconcile\(\)/);
+ assert.match(renderer,/malConfirmSync'\)\.onclick=async\(\)=>\{/);
+ assert.match(renderer,/window\.mediaHub\.malReconcileApply\(diff\)/);
+});
+test('reconciliation resolves Kitsu-MAL id mappings through Kitsu\'s own mapping filter and caches them long-term to avoid repeat lookups',()=>{
+ assert.match(main,/filter\[mappingExternalId\]=\$\{encodeURIComponent\(malId\)\}&filter\[mappingExternalSite\]=myanimelist\/anime/);
+ assert.match(main,/mediaDb\.putCache\(key,kitsuId,30\*24\*60\*60\*1000\)/);
+});
+test('pushing MAL-ahead progress into local history also best-effort syncs Simkl in one bulk call, matching the existing mark-season-watched pattern',()=>{
+ assert.match(main,/for\(const episode of episodeNumbers\)mediaDb\.markWatched\(media,\{season:1,episode\}\)/);
+ assert.match(main,/seasonHistoryPayload\(media,1,episodeNumbers\)/);
+});
+test('preload exposes the reconciliation preview and apply channels',()=>{
+ assert.match(preload,/malReconcilePreview:\(\)=>ipcRenderer\.invoke\('mal:reconcile-preview'\)/);
+ assert.match(preload,/malReconcileApply:diff=>ipcRenderer\.invoke\('mal:reconcile-apply',diff\)/);
+});
