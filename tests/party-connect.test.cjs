@@ -28,11 +28,11 @@ test('the party feature does not touch the existing SSRF guards that protect rea
  assert.doesNotMatch(playback,/party/i);
 });
 test('leaving or quitting cleanly tears down whichever role is active: the host closes every member socket, the server, and any UPnP mapping; a client just closes its own socket',()=>{
- assert.match(main,/function closeParty\(\)\{if\(!party\)return;if\(party\.role==='host'\)\{for\(const m of party\.members\.values\(\)\)try\{m\.ws\?\.close\(\)\}catch\{\}try\{party\.wss\.close\(\)\}catch\{\}party\.upnpStop\?\.\(\)\}else\{try\{party\.ws\.close\(\)\}catch\{\}\}party=null\}/);
+ assert.match(main,/function closeParty\(\)\{if\(!party\)return;if\(party\.role==='host'&&party\.mode!=='relay'\)\{for\(const m of party\.members\.values\(\)\)try\{m\.ws\?\.close\(\)\}catch\{\}try\{party\.wss\.close\(\)\}catch\{\}party\.upnpStop\?\.\(\)\}else\{if\(party\.mode==='relay'\)try\{party\.ws\.send\(encryptMessage\(party\.secret,\{type:'leave'\}\)\)\}catch\{\}try\{party\.ws\.close\(\)\}catch\{\}\}party=null\}/);
  assert.match(main,/app\.on\('before-quit',\(\)=>\{playbackProxy\.close\(\)\.catch\(\(\)=>\{\}\);vlcTranscoder\.stop\(\)\.catch\(\(\)=>\{\}\);closeParty\(\);/);
 });
 test('preload exposes the party host/join/leave/status channels and a subscription for party events pushed from main',()=>{
- assert.match(preload,/partyHost:name=>ipcRenderer\.invoke\('party:host',name\)/);
+ assert.match(preload,/partyHost:\(name,mode\)=>ipcRenderer\.invoke\('party:host',\{name,mode\}\)/);
  assert.match(preload,/partyJoin:payload=>ipcRenderer\.invoke\('party:join',payload\)/);
  assert.match(preload,/partyLeave:\(\)=>ipcRenderer\.invoke\('party:leave'\)/);
  assert.match(preload,/partyStatus:\(\)=>ipcRenderer\.invoke\('party:status'\)/);
@@ -46,7 +46,7 @@ test('a new Party nav item exists and toggles a slide-out panel instead of navig
 });
 test('the party lobby lets you host or join, and the room view shows the share code and a LAN-only warning to the host, driven by fresh IPC status rather than stale local state',()=>{
  assert.match(renderer,/async function renderPartyPanel\(\)\{const status=await window\.mediaHub\.partyStatus\(\)/);
- assert.match(renderer,/window\.mediaHub\.partyHost\(\$\('#partyHostName'\)\.value\)/);
+ assert.match(renderer,/window\.mediaHub\.partyHost\(\$\('#partyHostName'\)\.value,\$\('#partyHostMode'\)\.value\)/);
  assert.match(renderer,/window\.mediaHub\.partyJoin\(\{code:\$\('#partyJoinCode'\)\.value\.trim\(\),name:\$\('#partyJoinName'\)\.value\}\)/);
  assert.match(renderer,/status\.role==='host'&&lastPartyCode/);
  assert.match(renderer,/Automatic internet port-forwarding was unavailable/);

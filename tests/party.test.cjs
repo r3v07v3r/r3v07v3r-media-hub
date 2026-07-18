@@ -1,5 +1,5 @@
 const test=require('node:test'),assert=require('node:assert/strict');
-const {isValidEndpoint,encodeShareCode,decodeShareCode,deriveKey,encryptMessage,decryptMessage,createMemberId,applyQueueEvent,queueScore,sortQueue}=require('../src/party.cjs');
+const {isValidEndpoint,isValidRelayEndpoint,encodeShareCode,encodeRelayShareCode,decodeShareCode,deriveKey,encryptMessage,decryptMessage,createMemberId,applyQueueEvent,queueScore,sortQueue}=require('../src/party.cjs');
 test('endpoints are only valid with a real IP/host string and an in-range port',()=>{
  assert.equal(isValidEndpoint({ip:'192.168.1.50',port:41234}),true);
  assert.equal(isValidEndpoint({ip:'203.0.113.7',port:80}),true);
@@ -18,12 +18,31 @@ test('a share code carries both LAN and WAN endpoints when UPnP mapping succeede
  const code=encodeShareCode({lan:{ip:'192.168.1.50',port:41234},wan:{ip:'203.0.113.7',port:55000},secret:'s3cr3t',name:'Alex'});
  assert.deepEqual(decodeShareCode(code).wan,{ip:'203.0.113.7',port:55000});
 });
-test('decoding rejects malformed, tampered, or wrong-version share codes instead of throwing',()=>{
+test('decoding rejects malformed, tampered, or unsupported-version share codes instead of throwing',()=>{
  assert.equal(decodeShareCode('not-base64-json'),null);
  assert.equal(decodeShareCode(''),null);
- assert.equal(decodeShareCode(Buffer.from(JSON.stringify({v:2,lan:{ip:'1.2.3.4',port:1},secret:'x'})).toString('base64url')),null);
+ assert.equal(decodeShareCode(Buffer.from(JSON.stringify({v:3,lan:{ip:'1.2.3.4',port:1},secret:'x'})).toString('base64url')),null);
  assert.equal(decodeShareCode(Buffer.from(JSON.stringify({v:1,lan:{ip:'1.2.3.4',port:99999},secret:'x'})).toString('base64url')),null);
  assert.equal(decodeShareCode(Buffer.from(JSON.stringify({v:1,lan:{ip:'1.2.3.4',port:1}})).toString('base64url')),null);
+});
+test('a v2 (relay) share code with no relay endpoint at all is rejected the same as any other malformed code',()=>{
+ assert.equal(decodeShareCode(Buffer.from(JSON.stringify({v:2,secret:'x'})).toString('base64url')),null);
+});
+test('relay endpoints are only valid with an https URL and a UUID-shaped room id, matching exactly what the Worker mints',()=>{
+ assert.equal(isValidRelayEndpoint({url:'https://sync.example.workers.dev',roomId:'8f14e45f-ceea-4a3d-8e0f-9c1a4f5b6c7d'}),true);
+ assert.equal(isValidRelayEndpoint({url:'http://sync.example.workers.dev',roomId:'8f14e45f-ceea-4a3d-8e0f-9c1a4f5b6c7d'}),false);
+ assert.equal(isValidRelayEndpoint({url:'https://sync.example.workers.dev',roomId:'not-a-uuid'}),false);
+ assert.equal(isValidRelayEndpoint({url:'not a url',roomId:'8f14e45f-ceea-4a3d-8e0f-9c1a4f5b6c7d'}),false);
+ assert.equal(isValidRelayEndpoint(null),false);
+});
+test('a relay share code round-trips the worker url, room id, secret and name',()=>{
+ const relay={url:'https://sync.example.workers.dev',roomId:'8f14e45f-ceea-4a3d-8e0f-9c1a4f5b6c7d'};
+ const code=encodeRelayShareCode({relay,secret:'s3cr3t',name:'Alex'});
+ assert.deepEqual(decodeShareCode(code),{v:2,relay,secret:'s3cr3t',name:'Alex'});
+});
+test('encoding a relay share code rejects an invalid relay endpoint or a missing secret up front',()=>{
+ assert.throws(()=>encodeRelayShareCode({relay:{url:'not a url',roomId:'8f14e45f-ceea-4a3d-8e0f-9c1a4f5b6c7d'},secret:'s'}));
+ assert.throws(()=>encodeRelayShareCode({relay:{url:'https://sync.example.workers.dev',roomId:'8f14e45f-ceea-4a3d-8e0f-9c1a4f5b6c7d'},secret:''}));
 });
 test('encoding rejects an invalid LAN endpoint or a missing secret up front, since every party needs at least a reachable host and a key',()=>{
  assert.throws(()=>encodeShareCode({lan:{ip:'',port:1},secret:'s'}));
