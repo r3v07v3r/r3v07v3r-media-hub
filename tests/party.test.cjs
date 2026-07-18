@@ -1,5 +1,5 @@
 const test=require('node:test'),assert=require('node:assert/strict');
-const {isValidEndpoint,encodeShareCode,decodeShareCode,deriveKey,encryptMessage,decryptMessage,createMemberId}=require('../src/party.cjs');
+const {isValidEndpoint,encodeShareCode,decodeShareCode,deriveKey,encryptMessage,decryptMessage,createMemberId,applyQueueEvent}=require('../src/party.cjs');
 test('endpoints are only valid with a real IP/host string and an in-range port',()=>{
  assert.equal(isValidEndpoint({ip:'192.168.1.50',port:41234}),true);
  assert.equal(isValidEndpoint({ip:'203.0.113.7',port:80}),true);
@@ -47,4 +47,28 @@ test('member ids are short random hex strings suitable as map keys',()=>{
  assert.equal(id,'07'.repeat(8));
  assert.equal(typeof createMemberId(),'string');
  assert.equal(createMemberId().length,16);
+});
+test('suggesting a title adds it to the queue but a second suggestion of the same catalog item is silently deduped',()=>{
+ const first=applyQueueEvent([],{type:'suggest',queueId:'q1',item:{id:'tt1',title:'A Movie'},suggestedBy:'Alex'});
+ assert.deepEqual(first,[{queueId:'q1',item:{id:'tt1',title:'A Movie'},suggestedBy:'Alex'}]);
+ const second=applyQueueEvent(first,{type:'suggest',queueId:'q2',item:{id:'tt1',title:'A Movie'},suggestedBy:'Sam'});
+ assert.equal(second.length,1);
+});
+test('suggesting with no item, or one with no id, is ignored rather than corrupting the queue',()=>{
+ assert.deepEqual(applyQueueEvent([],{type:'suggest',queueId:'q1'}),[]);
+ assert.deepEqual(applyQueueEvent([],{type:'suggest',queueId:'q1',item:{title:'No id'}}),[]);
+});
+test('removing drops only the matching queue entry by its own queueId, leaving the rest untouched',()=>{
+ const queue=[{queueId:'q1',item:{id:'a'},suggestedBy:'Alex'},{queueId:'q2',item:{id:'b'},suggestedBy:'Sam'}];
+ assert.deepEqual(applyQueueEvent(queue,{type:'remove',queueId:'q1'}),[{queueId:'q2',item:{id:'b'},suggestedBy:'Sam'}]);
+ assert.deepEqual(applyQueueEvent(queue,{type:'remove',queueId:'not-present'}),queue);
+});
+test('a queue-sync event replaces the whole local queue with the host\'s authoritative list',()=>{
+ const incoming=[{queueId:'q9',item:{id:'z'},suggestedBy:'Host'}];
+ assert.deepEqual(applyQueueEvent([{queueId:'stale',item:{id:'old'}}],{type:'queue-sync',queue:incoming}),incoming);
+});
+test('an unrecognized event type leaves the queue unchanged instead of throwing',()=>{
+ const queue=[{queueId:'q1',item:{id:'a'}}];
+ assert.deepEqual(applyQueueEvent(queue,{type:'nowPlaying'}),queue);
+ assert.deepEqual(applyQueueEvent(queue,null),queue);
 });
