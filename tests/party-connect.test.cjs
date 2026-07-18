@@ -38,15 +38,22 @@ test('preload exposes the party host/join/leave/status channels and a subscripti
  assert.match(preload,/partyStatus:\(\)=>ipcRenderer\.invoke\('party:status'\)/);
  assert.match(preload,/onPartyEvent:callback=>\{const listener=\(_event,value\)=>callback\(value\);ipcRenderer\.on\('party:event',listener\)/);
 });
-test('a new Party nav item exists and dispatches to a dedicated render path instead of the catalog pipeline',()=>{
+test('a new Party nav item exists and toggles a slide-out panel instead of navigating the catalog pipeline',()=>{
  assert.match(indexHtml,/data-section="party">☍ <span>Party<\/span>/);
- assert.match(renderer,/party:\['WATCH TOGETHER','Party'\]/);
- assert.match(renderer,/if\(next==='party'\)\{await renderPartySection\(\)\}/);
+ assert.match(indexHtml,/<aside id="partyPanel" class="party-panel"><\/aside>/);
+ assert.match(renderer,/if\(b\.dataset\.section==='party'\)\{togglePartyPanel\(\);return\}/);
+ assert.doesNotMatch(renderer,/if\(next==='party'\)/);
 });
-test('the party lobby lets you host or join, and the room view only shows the share code and a LAN-only warning to the host, driven by fresh IPC status rather than stale local state',()=>{
- assert.match(renderer,/async function renderPartySection\(\)\{const status=await window\.mediaHub\.partyStatus\(\)/);
+test('the party lobby lets you host or join, and the room view shows the share code and a LAN-only warning to the host, driven by fresh IPC status rather than stale local state',()=>{
+ assert.match(renderer,/async function renderPartyPanel\(\)\{const status=await window\.mediaHub\.partyStatus\(\)/);
  assert.match(renderer,/window\.mediaHub\.partyHost\(\$\('#partyHostName'\)\.value\)/);
  assert.match(renderer,/window\.mediaHub\.partyJoin\(\{code:\$\('#partyJoinCode'\)\.value\.trim\(\),name:\$\('#partyJoinName'\)\.value\}\)/);
  assert.match(renderer,/status\.role==='host'&&lastPartyCode/);
  assert.match(renderer,/Automatic internet port-forwarding was unavailable/);
+});
+test('the panel shows the party name and your own display name at the top of the room view, and a close control that hides the panel without leaving the party',()=>{
+ assert.match(renderer,/\$\{esc\(status\.hostName\|\|'Watch Party'\)\}'s Party/);
+ assert.match(renderer,/You: \$\{esc\(status\.selfName\|\|''\)\}/);
+ assert.match(renderer,/function togglePartyPanel\(forceOpen\)\{partyPanelOpen=forceOpen!==undefined\?forceOpen:!partyPanelOpen;\$\('#partyPanel'\)\.classList\.toggle\('open',partyPanelOpen\)/);
+ assert.match(renderer,/\$\('#partyPanelClose'\)\.onclick=\(\)=>togglePartyPanel\(false\)/);
 });

@@ -36,7 +36,15 @@ test('incoming play/pause/seek/position messages are only ever applied to a curr
  assert.match(renderer,/function handlePartyPlaybackMessage\(msg\)\{if\(!msg\)return;if\(msg\.type==='nowPlaying'\)\{autoPlayPartyNowPlaying\(msg\);return\}if\(!activePartyRole\)return;/);
  assert.match(renderer,/activePartyRole==='client'&&Number\.isFinite\(msg\.position\)&&Math\.abs\(player\.currentTime-msg\.position\)>5/);
 });
-test('the shared queue only shows a Play button to the host, and clicking it opens the existing title detail flow rather than a separate playback path',()=>{
- assert.match(renderer,/status\.role==='host'\?`<button type="button" class="party-queue-play" data-queue-index="\$\{i\}" title="Play this" aria-label="Play this">▶<\/button>`:''/);
- assert.match(renderer,/const picked=queue\[Number\(button\.dataset\.queueIndex\)\];if\(picked\)openItem\(\{id:picked\.item\.id,type:picked\.item\.type,title:picked\.item\.title,poster:picked\.item\.poster\}\)/);
+test('every queue item is clickable by any member and opens the existing title detail flow — playback authority is enforced server-side (only a host broadcasts nowPlaying), not by hiding a button from non-hosts',()=>{
+ assert.match(renderer,/<button type="button" class="party-queue-open" data-queue-index="\$\{i\}">/);
+ assert.match(renderer,/const picked=queue\[Number\(button\.dataset\.queueIndex\)\];if\(picked\)\{togglePartyPanel\(false\);openItem\(\{id:picked\.item\.id,type:picked\.item\.type,title:picked\.item\.title,poster:picked\.item\.poster\}\)\}/);
+});
+test('removing a suggestion is only offered to the host in the panel UI, matching the server-side host-only enforcement',()=>{
+ assert.match(renderer,/status\.role==='host'\?`<button type="button" class="party-queue-remove" data-queue-id="\$\{esc\(q\.queueId\)\}" title="Remove suggestion" aria-label="Remove suggestion">×<\/button>`:''/);
+});
+test('every queue item shows an up/down vote control with the current score, and clicking it calls the vote IPC channel',()=>{
+ assert.match(renderer,/class="party-vote-btn party-vote-up \$\{myVote===1\?'active':''\}" data-queue-id="\$\{esc\(q\.queueId\)\}" data-direction="1"/);
+ assert.match(renderer,/class="party-vote-btn party-vote-down \$\{myVote===-1\?'active':''\}" data-queue-id="\$\{esc\(q\.queueId\)\}" data-direction="-1"/);
+ assert.match(renderer,/window\.mediaHub\.partyVote\(\{queueId:button\.dataset\.queueId,direction:Number\(button\.dataset\.direction\)\}\)/);
 });
