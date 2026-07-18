@@ -26,9 +26,9 @@ test('preload exposes the subtitle search and apply channels',()=>{
  assert.match(preload,/subtitlesApply:payload=>ipcRenderer\.invoke\('subtitles:apply',payload\)/);
 });
 test('the player carries enough context (type, id, title, season, episode) from both the catalog and TorBox library playback paths to search subtitles',()=>{
- assert.match(renderer,/openPlayer\(prepared,meta\.title,playback\.season\?`Season \$\{playback\.season\} • Episode \$\{playback\.episode\}`:'',scrobble\.connected,\{type:meta\.type,id:meta\.id,title:meta\.title,season:playback\.season,episode:playback\.episode\}\)/);
+ assert.match(renderer,/openPlayer\(prepared,meta\.title,playback\.season\?`Season \$\{playback\.season\} • Episode \$\{playback\.episode\}`:'',scrobble\.connected,\{type:meta\.type,id:meta\.id,title:meta\.title,season:playback\.season,episode:playback\.episode\}/);
  assert.match(renderer,/openPlayer\(prepared,item\.title,item\.season\?`Season \$\{item\.season\} • Episode \$\{item\.episode\}`:'',false,\{type:item\.type\|\|'movie',id:item\.id,title:item\.title,season:item\.season,episode:item\.episode\}\)/);
- assert.match(renderer,/function openPlayer\(prepared,title,subtitle,simklTracking,subtitleContext=\{\}\)/);
+ assert.match(renderer,/function openPlayer\(prepared,title,subtitle,simklTracking,subtitleContext=\{\},partyRole=null\)/);
 });
 test('the player offers a Search subtitles action that lists OpenSubtitles results and applies the chosen one through the correct path for the current playback engine',()=>{
  assert.match(renderer,/id="fixPlayerSubtitles" class="compatibility-card"/);
