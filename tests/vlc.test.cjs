@@ -1,5 +1,5 @@
 const test=require('node:test'),assert=require('node:assert/strict');
-const {buildVlcArguments,isValidCompatibilityToken,parseMediaTracks,needsAudioCompatibility,createVlcTranscoder}=require('../src/vlc.cjs');
+const {buildVlcArguments,isValidCompatibilityToken,parseMediaTracks,needsAudioCompatibility,createVlcTranscoder,captureFrame}=require('../src/vlc.cjs');
 
 test('VLC compatibility arguments transcode to browser-supported WebM on loopback only',()=>{
  const token='a'.repeat(64),args=buildVlcArguments('https://download.example/video.mkv?token=private',18765,token);
@@ -32,4 +32,20 @@ test('VLC stderr output is captured and forwarded instead of being discarded, so
  const transcoder=createVlcTranscoder({spawnImpl:fakeSpawn,randomBytes:size=>Buffer.alloc(size,1),onLog:line=>logs.push(line)});
  await assert.rejects(()=>transcoder.start('C:/fake/vlc.exe','https://download.example/video.mkv',{}));
  assert.ok(logs.some(line=>line.includes('could not open output')),'stderr output should be forwarded to onLog for diagnosis');
+});
+test('captureFrame returns a base64 data URL from ffmpeg stdout on success',async()=>{
+ let calledArgs=null;
+ const fakeExecFile=(ffmpegPath,args,opts,cb)=>{calledArgs=args;cb(null,Buffer.from('fakejpegbytes'))};
+ const url=await captureFrame('C:/fake/ffmpeg.exe','https://download.example/video.mkv',42,{execFileImpl:fakeExecFile});
+ assert.equal(url,`data:image/jpeg;base64,${Buffer.from('fakejpegbytes').toString('base64')}`);
+ assert.ok(calledArgs.includes('-ss'));assert.ok(calledArgs.includes('42'));assert.ok(calledArgs.includes('https://download.example/video.mkv'));
+});
+test('captureFrame resolves null on ffmpeg error, empty output, or unsafe input',async()=>{
+ const failingExecFile=(ffmpegPath,args,opts,cb)=>cb(new Error('ffmpeg failed'));
+ assert.equal(await captureFrame('C:/fake/ffmpeg.exe','https://download.example/video.mkv',10,{execFileImpl:failingExecFile}),null);
+ const emptyExecFile=(ffmpegPath,args,opts,cb)=>cb(null,Buffer.alloc(0));
+ assert.equal(await captureFrame('C:/fake/ffmpeg.exe','https://download.example/video.mkv',10,{execFileImpl:emptyExecFile}),null);
+ assert.equal(await captureFrame('','https://download.example/video.mkv',10,{execFileImpl:failingExecFile}),null);
+ assert.equal(await captureFrame('C:/fake/ffmpeg.exe','http://unsafe.example/video.mkv',10,{execFileImpl:failingExecFile}),null);
+ assert.equal(await captureFrame('C:/fake/ffmpeg.exe','https://download.example/video.mkv',-5,{execFileImpl:failingExecFile}),null);
 });

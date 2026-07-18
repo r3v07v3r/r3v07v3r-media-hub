@@ -5,12 +5,12 @@ const {validateTorBoxToken,meteorP2PConfigPath,normalizeMeta,normalizeKitsuAnime
 const {createDatabase}=require('./database.cjs');
 const {historyPayload,seasonHistoryPayload,scrobblePayload,watchedFromAllItems}=require('./simkl.cjs');
 const {createPlaybackProxy}=require('./playback.cjs');
-const {createVlcTranscoder,findFfprobe,findVlc,probeMedia,needsAudioCompatibility}=require('./vlc.cjs');
+const {createVlcTranscoder,findFfprobe,findFfmpeg,findVlc,probeMedia,needsAudioCompatibility,captureFrame}=require('./vlc.cjs');
 const {THEMES,normalizeTheme,publicSettings,logoutSettings}=require('./preferences.cjs');
 const {isAllowedExternalUrl,isValidCatalogKind,isTrustedIpcSender,sanitizeTrackers}=require('./security.cjs');
 const {autoUpdater}=require('electron-updater');
 const TORBOX='https://api.torbox.app/v1/api';
-let mediaDb,activeMediaUrl='',activeMediaTracks={video:[],audio:[],subtitle:[],probed:false},updateReady=false;const playbackProxy=createPlaybackProxy(),vlcTranscoder=createVlcTranscoder({onLog:line=>logError('vlc:stderr',redactUrls(line.trim()))}),ffprobePath=findFfprobe(),vlcInstallPath=findVlc();
+let mediaDb,activeMediaUrl='',activeMediaTracks={video:[],audio:[],subtitle:[],probed:false},updateReady=false;const playbackProxy=createPlaybackProxy(),vlcTranscoder=createVlcTranscoder({onLog:line=>logError('vlc:stderr',redactUrls(line.trim()))}),ffprobePath=findFfprobe(),ffmpegPath=findFfmpeg(),vlcInstallPath=findVlc();
 const settingsPath=()=>path.join(app.getPath('userData'),'settings.json');
 const logPath=()=>path.join(app.getPath('userData'),'logs','main.log');
 function logError(scope,error){try{const line=`${new Date().toISOString()} [${scope}] ${error?.message||error}\n`;fs.mkdirSync(path.dirname(logPath()),{recursive:true});fs.appendFileSync(logPath(),line)}catch{}}
@@ -101,6 +101,7 @@ handle('play:stream',async(_e,{stream,mediaId})=>{
 handle('playback:compatibility',async(_event,selection={})=>{if(!activeMediaUrl)throw new Error('No active media is available for compatibility mode.');const started=await vlcTranscoder.start(vlcInstallPath,activeMediaUrl,selection);await playbackProxy.close();return{tracks:activeMediaTracks,...started}});
 handle('playback:select-tracks',async(_event,selection={})=>{if(!activeMediaUrl)throw new Error('No active media is available for track selection.');const safe={audio:Number.isInteger(selection.audio)?selection.audio:-1,subtitle:Number.isInteger(selection.subtitle)?selection.subtitle:-1,startTime:Math.max(0,Math.min(Number(selection.startTime)||0,86400))};const started=await vlcTranscoder.start(vlcInstallPath,activeMediaUrl,safe);await playbackProxy.close();return{tracks:activeMediaTracks,selection:safe,...started}});
 handle('playback:stop',async()=>{await stopPlayback();return{ok:true}});
+handle('playback:thumbnail',async(_e,seconds)=>{if(!activeMediaUrl)return null;return captureFrame(ffmpegPath,activeMediaUrl,Number(seconds)||0)});
 handle('window:toggle-fullscreen',event=>{const win=BrowserWindow.fromWebContents(event.sender);win.setFullScreen(!win.isFullScreen());return{fullScreen:win.isFullScreen()}});
 handle('update:check',async()=>{if(!app.isPackaged)return{state:'development',version:app.getVersion()};const result=await autoUpdater.checkForUpdates(),version=result?.updateInfo?.version||app.getVersion();return{state:version===app.getVersion()?'current':'available',version}});
 handle('update:install',()=>{if(app.isPackaged&&updateReady)autoUpdater.quitAndInstall(false,true);return{ok:app.isPackaged&&updateReady}});
