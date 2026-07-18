@@ -18,9 +18,18 @@ test('MAL tokens are refreshed proactively before expiry and stored encrypted, n
  assert.match(main,/settings\.malAccessToken=encrypt\(result\.access_token\)/);
  assert.doesNotMatch(main,/malAccessToken=result\.access_token/);
 });
+test('MAL client_secret is optional but included in both the initial and refresh token exchanges when the user provides one, since some MAL app registrations require it even with PKCE',()=>{
+ assert.match(main,/clientSecret:decrypt\(s\.malClientSecret\|\|''\)/);
+ assert.match(main,/if\(creds\.clientSecret\)params\.client_secret=creds\.clientSecret;const result=await malTokenRequest\(params\)/);
+ assert.match(main,/if\(clientSecret\)params\.client_secret=clientSecret;const result=await malTokenRequest\(params\)/);
+ assert.match(main,/if\(clientSecret\)s\.malClientSecret=encrypt\(clientSecret\);else delete s\.malClientSecret/);
+ assert.match(main,/delete s\.malClientSecret;writeSettings\(s\);stopMalServer\(\)/);
+ assert.match(renderer,/id="malClientSecret" type="password"/);
+ assert.match(renderer,/window\.mediaHub\.malStart\(\{clientId:\$\('#malClientId'\)\.value,clientSecret:\$\('#malClientSecret'\)\.value\}\)/);
+});
 test('MAL IPC channels are exposed to the renderer through the preload bridge',()=>{
  assert.match(preload,/malStatus:\(\)=>ipcRenderer\.invoke\('mal:status'\)/);
- assert.match(preload,/malStart:clientId=>ipcRenderer\.invoke\('mal:start',clientId\)/);
+ assert.match(preload,/malStart:creds=>ipcRenderer\.invoke\('mal:start',creds\)/);
  assert.match(preload,/malDisconnect:\(\)=>ipcRenderer\.invoke\('mal:disconnect'\)/);
 });
 test('Settings shows a MyAnimeList connection card next to Simkl, with a redirect URI the user pastes into their MAL app registration',()=>{
