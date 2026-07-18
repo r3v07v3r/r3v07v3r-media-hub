@@ -13,6 +13,8 @@ test('external browser links are restricted to trusted account and project hosts
  assert.equal(isAllowedExternalUrl('https://myanimelist.net/apiconfig'),true);
  assert.equal(isAllowedExternalUrl('https://myanimelist.net/profile/someone'),false);
  assert.equal(isAllowedExternalUrl('https://myanimelist.net.evil.example/apiconfig'),false);
+ assert.equal(isAllowedExternalUrl('https://www.opensubtitles.com/en/consumers'),true);
+ assert.equal(isAllowedExternalUrl('http://opensubtitles.com/en/consumers'),false);
 });
 test('catalog IPC accepts only the supported catalog identifiers',()=>{for(const kind of['movie','series','anime'])assert.equal(isValidCatalogKind(kind),true);for(const kind of['home','library','../settings',null])assert.equal(isValidCatalogKind(kind),false)});
 test('privileged IPC is restricted to the exact app document',()=>{const app='file:///C:/Program%20Files/R3/app.asar/src/index.html';assert.equal(isTrustedIpcSender(app,app),true);assert.equal(isTrustedIpcSender('https://example.com/',app),false);assert.equal(isTrustedIpcSender('file:///C:/tmp/index.html',app),false)});
