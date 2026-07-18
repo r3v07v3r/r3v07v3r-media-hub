@@ -7,6 +7,6 @@ const THEMES=[
 ];
 const ids=new Set(THEMES.map(theme=>theme.id));
 function normalizeTheme(value){return ids.has(value)?value:'neon'}
-function publicSettings(settings={}){return{theme:normalizeTheme(settings.theme),simklClientId:String(settings.simklClientId||'')}}
+function publicSettings(settings={}){return{theme:normalizeTheme(settings.theme),simklClientId:String(settings.simklClientId||''),subtitleLanguage:String(settings.subtitleLanguage||'en')}}
 function logoutSettings(settings={}){return{theme:normalizeTheme(settings.theme)}}
 module.exports={THEMES,normalizeTheme,publicSettings,logoutSettings};

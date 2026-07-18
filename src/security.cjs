@@ -1,4 +1,4 @@
-const TRUSTED_EXTERNAL_HOSTS=new Set(['torbox.app','www.torbox.app','simkl.com','www.simkl.com','github.com','themoviedb.org','www.themoviedb.org','myanimelist.net','www.myanimelist.net']);
+const TRUSTED_EXTERNAL_HOSTS=new Set(['torbox.app','www.torbox.app','simkl.com','www.simkl.com','github.com','themoviedb.org','www.themoviedb.org','myanimelist.net','www.myanimelist.net','opensubtitles.com','www.opensubtitles.com']);
 const {isPrivateAddress}=require('./playback.cjs');
 function isAllowedExternalUrl(value){try{const url=new URL(String(value)),host=url.hostname.toLowerCase();if(url.protocol!=='https:'||url.username||url.password||!TRUSTED_EXTERNAL_HOSTS.has(host))return false;if(host==='github.com'&&!url.pathname.startsWith('/r3v07v3r/r3v07v3r-media-hub'))return false;if((host==='themoviedb.org'||host==='www.themoviedb.org')&&!url.pathname.startsWith('/settings/'))return false;if((host==='myanimelist.net'||host==='www.myanimelist.net')&&!['/v1/oauth2/authorize','/apiconfig'].some(p=>url.pathname.startsWith(p)))return false;return true}catch{return false}}
 function isValidCatalogKind(value){return['movie','series','anime'].includes(value)}
