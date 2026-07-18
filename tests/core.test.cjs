@@ -1,5 +1,5 @@
 const test=require('node:test');const assert=require('node:assert/strict');
-const {filterCatalog,isItemWatched,dedupeCatalog,episodeWatchState,createRoomCode,rankStreams,validateTorBoxToken,meteorConfigPath,meteorP2PConfigPath,normalizeMeta,normalizeKitsuAnime,normalizeKitsuEpisode,normalizeSimklCatalog,normalizeSimklSearchResult,filterAnimeRelationships,normalizeTmdbCollectionPart,parseReleaseName,enrichTorBoxItem,selectPlayableStream,selectVideoFile}=require('../src/core.cjs');
+const {filterCatalog,isItemWatched,dedupeCatalog,episodeWatchState,continueWatchingList,createRoomCode,rankStreams,validateTorBoxToken,meteorConfigPath,meteorP2PConfigPath,normalizeMeta,normalizeKitsuAnime,normalizeKitsuEpisode,normalizeSimklCatalog,normalizeSimklSearchResult,filterAnimeRelationships,normalizeTmdbCollectionPart,parseReleaseName,enrichTorBoxItem,selectPlayableStream,selectVideoFile}=require('../src/core.cjs');
 const catalog=[{title:'Dune: Part Two',type:'movie',year:2024},{title:'Frieren',type:'anime',year:2023},{title:'Shōgun',type:'series',year:2024}];
 test('catalog filtering combines section and search query',()=>assert.deepEqual(filterCatalog(catalog,'anime','frie').map(x=>x.title),['Frieren']));
 test('catalog filters include wanted genres and reject unwanted genres',()=>{const items=[{title:'Space Drama',year:2024,type:'movie',rating:'8.2',genres:['Drama','Sci-Fi']},{title:'Family Laughs',year:2023,type:'movie',rating:'7.5',genres:['Comedy','Family']},{title:'Dark Laughs',year:2022,type:'movie',rating:'8.8',genres:['Comedy','Horror']}];const result=filterCatalog(items,'movie','',{includeGenres:['Comedy'],excludeGenres:['Horror']});assert.deepEqual(result.map(x=>x.title),['Family Laughs'])});
@@ -54,3 +54,31 @@ test('Simkl search results become clickable cards with a temporary simkl: id, si
  assert.equal(item.poster,'https://simkl.in/posters/30/3002370dbc564e5d8_m.jpg');
  assert.equal(item.rating,'7.5');
 });
+test('continue watching lists shows with some progress but not fully caught up, sorted by most recent watch activity, and skips never-started or finished shows',()=>{
+ const showA={id:'tt1',type:'series',title:'Partially Watched',videos:[{season:1,episode:1},{season:1,episode:2},{season:1,episode:3}]};
+ const showB={id:'tt2',type:'series',title:'Never Started',videos:[{season:1,episode:1},{season:1,episode:2}]};
+ const showC={id:'tt3',type:'series',title:'Fully Caught Up',videos:[{season:1,episode:1}]};
+ const history=[
+  {id:'tt1',season:1,episode:1,watchedAt:'2026-01-01T00:00:00Z'},
+  {id:'tt3',season:1,episode:1,watchedAt:'2026-01-05T00:00:00Z'},
+  {id:'tt1',season:1,episode:2,watchedAt:'2026-01-10T00:00:00Z'}
+ ];
+ const list=continueWatchingList([showA,showB,showC],history);
+ assert.deepEqual(list.map(x=>x.id),['tt1']);
+ assert.equal(list[0].continueSeason,1);
+ assert.equal(list[0].continueEpisode,3);
+ assert.equal(list[0].watchedCount,2);
+ assert.equal(list[0].totalCount,3);
+ assert.equal(list[0].lastWatchedAt,'2026-01-10T00:00:00Z');
+});
+test('continue watching sorts multiple in-progress shows by most recently watched first',()=>{
+ const older={id:'tt1',type:'series',title:'Older',videos:[{season:1,episode:1},{season:1,episode:2}]};
+ const newer={id:'tt2',type:'series',title:'Newer',videos:[{season:1,episode:1},{season:1,episode:2}]};
+ const history=[
+  {id:'tt1',season:1,episode:1,watchedAt:'2026-01-01T00:00:00Z'},
+  {id:'tt2',season:1,episode:1,watchedAt:'2026-02-01T00:00:00Z'}
+ ];
+ const list=continueWatchingList([older,newer],history);
+ assert.deepEqual(list.map(x=>x.id),['tt2','tt1']);
+});
+test('continue watching tolerates shows with no episode list',()=>{assert.deepEqual(continueWatchingList([{id:'tt1',type:'series',videos:[]}],[]),[]);assert.deepEqual(continueWatchingList([],[]),[])});
