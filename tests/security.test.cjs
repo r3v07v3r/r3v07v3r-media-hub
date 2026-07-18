@@ -9,6 +9,10 @@ test('external browser links are restricted to trusted account and project hosts
  assert.equal(isAllowedExternalUrl('https://torbox.app.evil.example/phish'),false);
  assert.equal(isAllowedExternalUrl('http://torbox.app/settings'),false);
  assert.equal(isAllowedExternalUrl('file:///C:/Windows/System32/calc.exe'),false);
+ assert.equal(isAllowedExternalUrl('https://myanimelist.net/v1/oauth2/authorize?client_id=abc'),true);
+ assert.equal(isAllowedExternalUrl('https://myanimelist.net/apiconfig'),true);
+ assert.equal(isAllowedExternalUrl('https://myanimelist.net/profile/someone'),false);
+ assert.equal(isAllowedExternalUrl('https://myanimelist.net.evil.example/apiconfig'),false);
 });
 test('catalog IPC accepts only the supported catalog identifiers',()=>{for(const kind of['movie','series','anime'])assert.equal(isValidCatalogKind(kind),true);for(const kind of['home','library','../settings',null])assert.equal(isValidCatalogKind(kind),false)});
 test('privileged IPC is restricted to the exact app document',()=>{const app='file:///C:/Program%20Files/R3/app.asar/src/index.html';assert.equal(isTrustedIpcSender(app,app),true);assert.equal(isTrustedIpcSender('https://example.com/',app),false);assert.equal(isTrustedIpcSender('file:///C:/tmp/index.html',app),false)});
