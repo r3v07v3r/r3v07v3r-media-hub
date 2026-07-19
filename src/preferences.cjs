@@ -7,6 +7,7 @@ const THEMES=[
 ];
 const ids=new Set(THEMES.map(theme=>theme.id));
 function normalizeTheme(value){return ids.has(value)?value:'neon'}
-function publicSettings(settings={}){return{theme:normalizeTheme(settings.theme),simklClientId:String(settings.simklClientId||''),subtitleLanguage:String(settings.subtitleLanguage||'en'),partySyncUrl:String(settings.partySyncUrl||'')}}
-function logoutSettings(settings={}){return{theme:normalizeTheme(settings.theme)}}
-module.exports={THEMES,normalizeTheme,publicSettings,logoutSettings};
+function normalizeUpdateChannel(value){return value==='preview'?'preview':'stable'}
+function publicSettings(settings={}){return{theme:normalizeTheme(settings.theme),simklClientId:String(settings.simklClientId||''),subtitleLanguage:String(settings.subtitleLanguage||'en'),partySyncUrl:String(settings.partySyncUrl||''),updateChannel:normalizeUpdateChannel(settings.updateChannel)}}
+function logoutSettings(settings={}){return{theme:normalizeTheme(settings.theme),updateChannel:normalizeUpdateChannel(settings.updateChannel)}}
+module.exports={THEMES,normalizeTheme,normalizeUpdateChannel,publicSettings,logoutSettings};
