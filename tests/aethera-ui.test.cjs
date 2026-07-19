@@ -22,11 +22,12 @@ test('the player bar is split into Aethera clusters: volume left, an outlined gl
 test('the CC button jumps straight into the OpenSubtitles search, opening the playback panel first if it is closed',()=>{
  assert.match(renderer,/\$\('#playerCC'\)\.onclick=\(\)=>\{const panel=\$\('#playerTrackPanel'\);if\(panel\.classList\.contains\('hidden'\)\)\$\('#playerSettings'\)\.onclick\(\);\$\('#fixPlayerSubtitles'\)\.onclick\(\)\}/);
 });
-test('the sidebar collapses to a glowing icon rail with tooltips and the header becomes a command bar with brand, user status and clock',()=>{
- assert.match(css,/\.app-shell\{grid-template-columns:88px 1fr\}/);
- assert.match(css,/\.nav-item span\{display:none\}/);
+test('the sidebar keeps labeled nav items with a glowing accent line along its edge, and the header becomes a command bar: brand left, a centered search pill, real user status and clock right',()=>{
+ assert.match(css,/\.sidebar::before\{content:"";position:absolute;[^}]*background:linear-gradient\(180deg,transparent,var\(--cyan\),var\(--accent\),transparent\)/);
+ assert.doesNotMatch(css,/\.nav-item span\{display:none\}/);
  assert.match(renderer,/USER: \$\{\(user\.username\|\|user\.email\|\|'GUEST'\)\.toUpperCase\(\)\} • ONLINE/);
  assert.match(renderer,/function tickClock\(\)/);
+ assert.match(css,/\.header-center\{flex:1;display:flex;justify-content:center\}/);
 });
 test('settings are organized behind a left tab rail showing one panel at a time, with the connections panel visible by default',()=>{
  assert.match(renderer,/class="settings-tab active" data-settings-tab="0"/);
