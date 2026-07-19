@@ -17,3 +17,12 @@ test('the hero primary action is a real Watch Now / Track pair, not a fake voice
  assert.match(renderer,/class="hero-dots"/);
  assert.match(css,/\.hero-dots button\.active/);
 });
+test('the hero title is styled as a wide-tracked uppercase wordmark instead of a plain heading, matching the reference concept\'s stylized movie-logo title treatment',()=>{
+ assert.match(css,/\.hero h1\{[^}]*letter-spacing:5px;text-transform:uppercase;font-weight:800/);
+ assert.doesNotMatch(css,/\.hero h1\{[^}]*letter-spacing:-2px/);
+});
+test('the hero dot-pagination track is a glowing pill container (not bare dots floating on the backdrop), and its active dot glows in the theme accent rather than a hardcoded color',()=>{
+ assert.match(css,/\.hero-dots\{position:absolute;z-index:3;right:24px;bottom:22px;display:flex;gap:6px;padding:5px;border:1px solid var\(--line\);border-radius:999px/);
+ assert.match(css,/\.hero-dots button\.active\{background:linear-gradient\(90deg,var\(--accent\),var\(--cyan\)\);box-shadow:0 0 12px var\(--glow\)\}/);
+ assert.doesNotMatch(css,/box-shadow:0 0 12px #ed315d\}/);
+});
