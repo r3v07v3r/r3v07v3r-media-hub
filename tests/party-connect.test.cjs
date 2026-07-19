@@ -39,7 +39,7 @@ test('preload exposes the party host/join/leave/status channels and a subscripti
  assert.match(preload,/onPartyEvent:callback=>\{const listener=\(_event,value\)=>callback\(value\);ipcRenderer\.on\('party:event',listener\)/);
 });
 test('a new Party nav item exists and toggles a slide-out panel instead of navigating the catalog pipeline',()=>{
- assert.match(indexHtml,/data-section="party">☍ <span>Party<\/span>/);
+ assert.match(indexHtml,/data-section="party"><i class="nav-icon">☍<\/i> <span>Party<\/span>/);
  assert.match(indexHtml,/<aside id="partyPanel" class="party-panel"><\/aside>/);
  assert.match(renderer,/if\(b\.dataset\.section==='party'\)\{togglePartyPanel\(\);return\}/);
  assert.doesNotMatch(renderer,/if\(next==='party'\)/);

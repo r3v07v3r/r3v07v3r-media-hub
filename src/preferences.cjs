@@ -1,4 +1,5 @@
 const THEMES=[
+ {id:'aethera',name:'Aethera',description:'Glowing teal glass command deck'},
  {id:'neon',name:'Neon Noir',description:'Signature magenta command center'},
  {id:'midnight',name:'Midnight Gold',description:'Deep black with warm gold highlights'},
  {id:'ocean',name:'Abyssal Ocean',description:'Navy glass with electric cyan'},
@@ -6,7 +7,7 @@ const THEMES=[
  {id:'terminal',name:'Ghost Terminal',description:'Tactical graphite and phosphor green'}
 ];
 const ids=new Set(THEMES.map(theme=>theme.id));
-function normalizeTheme(value){return ids.has(value)?value:'neon'}
+function normalizeTheme(value){return ids.has(value)?value:'aethera'}
 function normalizeUpdateChannel(value){return value==='preview'?'preview':'stable'}
 function publicSettings(settings={}){return{theme:normalizeTheme(settings.theme),simklClientId:String(settings.simklClientId||''),subtitleLanguage:String(settings.subtitleLanguage||'en'),partySyncUrl:String(settings.partySyncUrl||''),updateChannel:normalizeUpdateChannel(settings.updateChannel)}}
 function logoutSettings(settings={}){return{theme:normalizeTheme(settings.theme),updateChannel:normalizeUpdateChannel(settings.updateChannel)}}
