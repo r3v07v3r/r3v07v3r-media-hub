@@ -11,10 +11,22 @@ test('the design-language layer is palette-driven (var(--accent)/var(--glow)) ra
  assert.match(css,/\.nav-item\.active\{border:1px solid var\(--accent\)/);
  assert.match(css,/\.card:hover\{border-color:var\(--accent\);box-shadow:0 0 24px var\(--glow\)/);
 });
-test('the player play/pause control becomes a glowing orb centered on the top edge of an outlined glass control bar, per the Aethera concept',()=>{
+test('the player bar is split into Aethera clusters: volume left, an outlined glass seek bar center with the play orb centered on its top edge, CC and fullscreen right',()=>{
+ assert.match(renderer,/<div class="pc-cluster pc-left"><button type="button" id="playerMute"/);
+ assert.match(renderer,/<div class="pc-bar"><button type="button" id="playerPlayPause"/);
+ assert.match(renderer,/<div class="pc-cluster pc-right"><button type="button" id="playerCC"[^>]*>CC<\/button><button type="button" id="playerControlsFullscreen"/);
  assert.match(css,/#playerPlayPause\{position:absolute;left:50%;top:0;transform:translate\(-50%,-50%\);width:58px;height:58px/);
- assert.match(css,/\.player-controls\{left:26px;right:26px;bottom:20px;[^}]*border:1px solid var\(--line\);border-radius:18px/);
+ assert.match(css,/\.pc-bar\{position:relative;flex:1;[^}]*border:1px solid var\(--line\);border-radius:18px/);
  assert.match(css,/\.seek-fill\{background:linear-gradient\(90deg,var\(--accent\),var\(--cyan\)\);box-shadow:0 0 12px var\(--glow\)\}/);
+});
+test('the CC button jumps straight into the OpenSubtitles search, opening the playback panel first if it is closed',()=>{
+ assert.match(renderer,/\$\('#playerCC'\)\.onclick=\(\)=>\{const panel=\$\('#playerTrackPanel'\);if\(panel\.classList\.contains\('hidden'\)\)\$\('#playerSettings'\)\.onclick\(\);\$\('#fixPlayerSubtitles'\)\.onclick\(\)\}/);
+});
+test('the sidebar collapses to a glowing icon rail with tooltips and the header becomes a command bar with brand, user status and clock',()=>{
+ assert.match(css,/\.app-shell\{grid-template-columns:88px 1fr\}/);
+ assert.match(css,/\.nav-item span\{display:none\}/);
+ assert.match(renderer,/USER: \$\{\(user\.username\|\|user\.email\|\|'GUEST'\)\.toUpperCase\(\)\} • ONLINE/);
+ assert.match(renderer,/function tickClock\(\)/);
 });
 test('settings are organized behind a left tab rail showing one panel at a time, with the connections panel visible by default',()=>{
  assert.match(renderer,/class="settings-tab active" data-settings-tab="0"/);
