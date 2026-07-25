@@ -1,7 +1,13 @@
-appId: com.electron.app
-productName: r3-media-center-electron
+# Identity carried over from the pre-rewrite app (v0.12.x) so the installed
+# "R3 Media Hub" auto-updates into this build: same appId means NSIS treats it
+# as the same application (upgrades in place, removes the old install), and the
+# matching package.json name keeps userData at %APPDATA%\r3v07v3r-media-hub so
+# the existing media-hub.sqlite and settings carry over.
+appId: za.co.r3v07v3r.mediahub
+productName: R3 Media Hub
 directories:
   buildResources: build
+  output: dist
 files:
   - '!**/.vscode/*'
   - '!src/*'
@@ -12,12 +18,21 @@ files:
 asarUnpack:
   - resources/**
 win:
-  executableName: r3-media-center-electron
+  target:
+    - nsis
+  icon: build/icon.ico
+  artifactName: R3-Media-Hub-${version}-Setup.${ext}
 nsis:
-  artifactName: ${name}-${version}-setup.${ext}
-  shortcutName: ${productName}
-  uninstallDisplayName: ${productName}
-  createDesktopShortcut: always
+  oneClick: false
+  perMachine: true
+  allowElevation: true
+  allowToChangeInstallationDirectory: false
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: R3 Media Hub
+  uninstallDisplayName: R3 Media Hub
+  installerIcon: build/icon.ico
+  uninstallerIcon: build/icon.ico
 mac:
   entitlementsInherit: build/entitlements.mac.plist
   extendInfo:
@@ -39,5 +54,7 @@ appImage:
   artifactName: ${name}-${version}.${ext}
 npmRebuild: false
 publish:
-  provider: generic
-  url: https://example.com/auto-updates
+  provider: github
+  owner: R3v07v3R
+  repo: r3v07v3r-media-hub
+  releaseType: release

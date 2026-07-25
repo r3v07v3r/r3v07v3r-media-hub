@@ -52,9 +52,25 @@ function settingsPath(): string {
   return path.join(app.getPath('userData'), 'media-hub-settings.json')
 }
 
+// The pre-rewrite app (<= 0.12.x) stored the same keys — same names, same
+// safeStorage-encrypted token encoding — in settings.json in this same
+// userData folder (the folder is shared because package.json `name` matches
+// the old app). settings.json is left in place so rolling back to an old
+// build loses nothing.
+function legacySettingsPath(): string {
+  return path.join(app.getPath('userData'), 'settings.json')
+}
+
 export function readSettings(): MediaHubRawSettings {
   try {
     return JSON.parse(fs.readFileSync(settingsPath(), 'utf8')) as MediaHubRawSettings
+  } catch {
+    // No media-hub-settings.json yet — fall through to the one-time legacy import.
+  }
+  try {
+    const legacy = JSON.parse(fs.readFileSync(legacySettingsPath(), 'utf8')) as MediaHubRawSettings
+    writeSettings(legacy)
+    return legacy
   } catch {
     return {}
   }
