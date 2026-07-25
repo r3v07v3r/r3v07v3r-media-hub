@@ -195,7 +195,10 @@ export function commandExists(command: string): boolean {
 // ---------- git (READ-ONLY — see file header) ----------
 
 export function isGitRepo(): boolean {
-  const r = spawnSync('git', ['rev-parse', '--is-inside-work-tree'], { cwd: ROOT, encoding: 'utf8' })
+  const r = spawnSync('git', ['rev-parse', '--is-inside-work-tree'], {
+    cwd: ROOT,
+    encoding: 'utf8'
+  })
   return r.status === 0
 }
 
@@ -212,7 +215,8 @@ export function gitDiffStat(): string {
 }
 
 export function gitChangedFiles(): string[] {
-  const out = spawnSync('git', ['status', '--porcelain'], { cwd: ROOT, encoding: 'utf8' }).stdout ?? ''
+  const out =
+    spawnSync('git', ['status', '--porcelain'], { cwd: ROOT, encoding: 'utf8' }).stdout ?? ''
   return out
     .split('\n')
     .map((l) => l.trim())

@@ -66,7 +66,10 @@ const REVIEW_SCHEMA = {
     'instructions_for_claude'
   ],
   properties: {
-    status: { type: 'string', enum: ['approved', 'changes_required', 'human_review_required', 'blocked'] },
+    status: {
+      type: 'string',
+      enum: ['approved', 'changes_required', 'human_review_required', 'blocked']
+    },
     score: { type: 'integer', minimum: 0, maximum: 100 },
     summary: { type: 'string' },
     issues: {
@@ -74,7 +77,15 @@ const REVIEW_SCHEMA = {
       items: {
         type: 'object',
         additionalProperties: false,
-        required: ['priority', 'category', 'title', 'description', 'expected', 'evidence', 'suggested_fix'],
+        required: [
+          'priority',
+          'category',
+          'title',
+          'description',
+          'expected',
+          'evidence',
+          'suggested_fix'
+        ],
         properties: {
           priority: { type: 'string', enum: ['P0', 'P1', 'P2', 'P3', 'P4'] },
           category: { type: 'string' },
@@ -91,10 +102,6 @@ const REVIEW_SCHEMA = {
     instructions_for_claude: { type: 'string' }
   }
 } as const
-
-interface OscillationState {
-  seenFingerprints: Record<string, number> // title|category -> times it has flipped resolved->reopened
-}
 
 function issueFingerprint(issue: { title: string; category: string }): string {
   return `${issue.category.toLowerCase()}|${issue.title.toLowerCase().trim()}`
@@ -114,7 +121,9 @@ function detectOscillation(current: ReviewIssue[]): {
     const iterations = history[fp] ?? []
     // 3+ separate appearances (with gaps implied by STATE bookkeeping in ai-loop) suggests a cycle.
     if (iterations.length >= 2) {
-      reasons.push(`"${issue.title}" (${issue.category}) has recurred ${iterations.length + 1} times without resolving.`)
+      reasons.push(
+        `"${issue.title}" (${issue.category}) has recurred ${iterations.length + 1} times without resolving.`
+      )
     }
   }
   return { flagged: reasons.length > 0, reasons }
@@ -123,13 +132,16 @@ function detectOscillation(current: ReviewIssue[]): {
 function imageToDataUri(filePath: string): string | null {
   if (!existsSync(filePath)) return null
   const ext = path.extname(filePath).toLowerCase()
-  const mime = ext === '.png' ? 'image/png' : ext === '.jpg' || ext === '.jpeg' ? 'image/jpeg' : null
+  const mime =
+    ext === '.png' ? 'image/png' : ext === '.jpg' || ext === '.jpeg' ? 'image/jpeg' : null
   if (!mime) return null
   const base64 = readFileSync(filePath).toString('base64')
   return `data:${mime};base64,${base64}`
 }
 
-function collectScreenshotPairs(screenshotReport: ScreenshotReport): Array<{ label: string; dataUri: string }> {
+function collectScreenshotPairs(
+  screenshotReport: ScreenshotReport
+): Array<{ label: string; dataUri: string }> {
   const images: Array<{ label: string; dataUri: string }> = []
   for (const route of screenshotReport.routes) {
     for (const shot of route.screenshots) {
@@ -139,7 +151,8 @@ function collectScreenshotPairs(screenshotReport: ScreenshotReport): Array<{ lab
 
       const refPath = path.join(AI_DIR, 'screenshots', 'reference', path.basename(shot))
       const refDataUri = imageToDataUri(refPath)
-      if (refDataUri) images.push({ label: `reference — ${path.basename(shot)}`, dataUri: refDataUri })
+      if (refDataUri)
+        images.push({ label: `reference — ${path.basename(shot)}`, dataUri: refDataUri })
     }
   }
   return images
@@ -148,7 +161,13 @@ function collectScreenshotPairs(screenshotReport: ScreenshotReport): Array<{ lab
 export function formatReviewMarkdown(review: ReviewResult): string {
   const counts = countByPriority(review.issues)
   const lines: string[] = []
-  lines.push(`# AI Review`, '', `**Status:** ${review.status}`, `**Score:** ${review.score}/100`, '')
+  lines.push(
+    `# AI Review`,
+    '',
+    `**Status:** ${review.status}`,
+    `**Score:** ${review.score}/100`,
+    ''
+  )
   lines.push(`## Summary`, '', review.summary, '')
   lines.push(
     `## Issue counts`,
@@ -166,8 +185,18 @@ export function formatReviewMarkdown(review: ReviewResult): string {
       lines.push(`- **Suggested fix:** ${issue.suggested_fix}`, '')
     }
   }
-  lines.push(`## Approved for automatic fix`, '', review.approved_for_automatic_fix.join(', ') || '(none)', '')
-  lines.push(`## Instructions for Claude`, '', review.instructions_for_claude || '(none — no changes required)', '')
+  lines.push(
+    `## Approved for automatic fix`,
+    '',
+    review.approved_for_automatic_fix.join(', ') || '(none)',
+    ''
+  )
+  lines.push(
+    `## Instructions for Claude`,
+    '',
+    review.instructions_for_claude || '(none — no changes required)',
+    ''
+  )
   return lines.join('\n')
 }
 
@@ -177,7 +206,9 @@ export async function runReview(opts: { verbose?: boolean } = {}): Promise<Revie
 
   const requirements = readTextIfExists(path.join(AI_DIR, 'REQUIREMENTS.md'))
   if (!requirements) {
-    throw new Error('.ai/REQUIREMENTS.md not found. Create it before running a review — see .ai/README.md.')
+    throw new Error(
+      '.ai/REQUIREMENTS.md not found. Create it before running a review — see .ai/README.md.'
+    )
   }
   const previousReview = readTextIfExists(path.join(AI_DIR, 'REVIEW.md'))
   const reviewerPrompt = readTextIfExists(path.join(AI_DIR, 'prompts', 'reviewer.md'))
@@ -185,29 +216,63 @@ export async function runReview(opts: { verbose?: boolean } = {}): Promise<Revie
     throw new Error('.ai/prompts/reviewer.md not found.')
   }
 
-  const qaReport: QaReport = readJSON(path.join(AI_DIR, 'reports', 'qa-latest.json'), null as unknown as QaReport) ?? (await runQA({ verbose: opts.verbose }))
+  const qaReport: QaReport =
+    readJSON(path.join(AI_DIR, 'reports', 'qa-latest.json'), null as unknown as QaReport) ??
+    (await runQA({ verbose: opts.verbose }))
   const screenshotReport: ScreenshotReport =
-    readJSON(path.join(AI_DIR, 'reports', 'screenshots-latest.json'), null as unknown as ScreenshotReport) ??
-    (await runScreenshots({ verbose: opts.verbose }))
+    readJSON(
+      path.join(AI_DIR, 'reports', 'screenshots-latest.json'),
+      null as unknown as ScreenshotReport
+    ) ?? (await runScreenshots({ verbose: opts.verbose }))
 
   const images = collectScreenshotPairs(screenshotReport)
 
   const userPrompt = [
-    '## REQUIREMENTS.md', requirements, '',
-    previousReview ? '## Previous REVIEW.md (for context — do not reopen accepted subjective decisions without new evidence)' : '',
-    previousReview ?? '', '',
-    '## Git status', '```', tail(gitStatus(), 2000), '```', '',
-    '## Git diff --stat', '```', tail(gitDiffStat(), 2000), '```', '',
-    '## Git diff', '```diff', tail(gitDiff(), 8000), '```', '',
-    '## Changed files', gitChangedFiles().join('\n') || '(none)', '',
-    '## QA results', '```json', JSON.stringify(summarizeQaForReview(qaReport), null, 2), '```', '',
-    '## Screenshot / console / network evidence', '```json',
+    '## REQUIREMENTS.md',
+    requirements,
+    '',
+    previousReview
+      ? '## Previous REVIEW.md (for context — do not reopen accepted subjective decisions without new evidence)'
+      : '',
+    previousReview ?? '',
+    '',
+    '## Git status',
+    '```',
+    tail(gitStatus(), 2000),
+    '```',
+    '',
+    '## Git diff --stat',
+    '```',
+    tail(gitDiffStat(), 2000),
+    '```',
+    '',
+    '## Git diff',
+    '```diff',
+    tail(gitDiff(), 8000),
+    '```',
+    '',
+    '## Changed files',
+    gitChangedFiles().join('\n') || '(none)',
+    '',
+    '## QA results',
+    '```json',
+    JSON.stringify(summarizeQaForReview(qaReport), null, 2),
+    '```',
+    '',
+    '## Screenshot / console / network evidence',
+    '```json',
     JSON.stringify(
-      screenshotReport.routes.map((r) => ({ name: r.name, url: r.url, consoleErrors: r.consoleErrors, failedRequests: r.failedRequests })),
+      screenshotReport.routes.map((r) => ({
+        name: r.name,
+        url: r.url,
+        consoleErrors: r.consoleErrors,
+        failedRequests: r.failedRequests
+      })),
       null,
       2
     ),
-    '```', '',
+    '```',
+    '',
     images.length > 0
       ? `${images.length} screenshot image(s) are attached below (current build, and reference where available).`
       : 'No screenshots available for this review.'
@@ -231,9 +296,15 @@ export async function runReview(opts: { verbose?: boolean } = {}): Promise<Revie
   // "approved" just because the model said so.
   const counts = countByPriority(review.issues)
   const qaBlocking =
-    (config.requireBuildSuccess && qaReport.commands.some((c) => c.name === 'build' && !c.success)) ||
+    (config.requireBuildSuccess &&
+      qaReport.commands.some((c) => c.name === 'build' && !c.success)) ||
     (config.requireTestsSuccess && qaReport.commands.some((c) => c.name === 'test' && !c.success))
-  const meetsBar = review.score >= config.approvalScore && counts.P0 === 0 && counts.P1 === 0 && counts.P2 === 0 && !qaBlocking
+  const meetsBar =
+    review.score >= config.approvalScore &&
+    counts.P0 === 0 &&
+    counts.P1 === 0 &&
+    counts.P2 === 0 &&
+    !qaBlocking
 
   const oscillation = detectOscillation(review.issues)
   if (oscillation.flagged) {

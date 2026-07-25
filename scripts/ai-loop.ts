@@ -76,9 +76,16 @@ function recordIssueHistory(state: StateFile, review: ReviewResult): void {
   }
 }
 
-function appendChangelog(iteration: number, review: ReviewResult, qa: QaReport, changedFiles: string[]): void {
+function appendChangelog(
+  iteration: number,
+  review: ReviewResult,
+  qa: QaReport,
+  changedFiles: string[]
+): void {
   const counts = countByPriority(review.issues)
-  const prior = readTextIfExists(CHANGELOG_PATH) ?? '# AI Loop Changelog\n\nConcise per-iteration summary. Full diffs live in git history, not here.\n'
+  const prior =
+    readTextIfExists(CHANGELOG_PATH) ??
+    '# AI Loop Changelog\n\nConcise per-iteration summary. Full diffs live in git history, not here.\n'
   const entry = [
     '',
     `## Iteration ${iteration} — ${new Date().toISOString()}`,
@@ -134,11 +141,16 @@ function printFinalSummary(opts: {
   log(lines.join('\n'))
 }
 
-async function invokeClaude(review: ReviewResult, config: ReturnType<typeof loadConfig>): Promise<void> {
+async function invokeClaude(
+  review: ReviewResult,
+  config: ReturnType<typeof loadConfig>
+): Promise<void> {
   const implementerPrompt = readTextIfExists(path.join(AI_DIR, 'prompts', 'implementer.md')) ?? ''
   const autoFixable = review.issues.filter((i) => config.autoFixPriorities.includes(i.priority))
   const issueList = autoFixable
-    .map((i) => `- [${i.priority}] ${i.title}: ${i.description}\n  Suggested fix: ${i.suggested_fix}`)
+    .map(
+      (i) => `- [${i.priority}] ${i.title}: ${i.description}\n  Suggested fix: ${i.suggested_fix}`
+    )
     .join('\n')
 
   const prompt = [
@@ -163,7 +175,10 @@ async function invokeClaude(review: ReviewResult, config: ReturnType<typeof load
   }
 
   section('Invoking Claude to implement approved fixes')
-  const result = runCommand('claude-implement', config.claude.command, [...config.claude.args, prompt])
+  const result = runCommand('claude-implement', config.claude.command, [
+    ...config.claude.args,
+    prompt
+  ])
   log(result.stdout)
   if (!result.success) {
     log(result.stderr)
@@ -177,9 +192,15 @@ async function dryRun(): Promise<void> {
 
   log(`Config: maxIterations=${config.maxIterations}, approvalScore=${config.approvalScore}`)
   log(`Auto-fix priorities: ${config.autoFixPriorities.join(', ')}`)
-  log(`Require build success: ${config.requireBuildSuccess}, require tests success: ${config.requireTestsSuccess}`)
-  log(`Reviewer: ${config.review.provider} / model=${config.review.model || '(unresolved — set OPENAI_MODEL)'}`)
-  log(`Screenshots enabled: ${config.screenshots.enabled}, routes: ${config.screenshots.routes.map((r) => r.name).join(', ')}`)
+  log(
+    `Require build success: ${config.requireBuildSuccess}, require tests success: ${config.requireTestsSuccess}`
+  )
+  log(
+    `Reviewer: ${config.review.provider} / model=${config.review.model || '(unresolved — set OPENAI_MODEL)'}`
+  )
+  log(
+    `Screenshots enabled: ${config.screenshots.enabled}, routes: ${config.screenshots.routes.map((r) => r.name).join(', ')}`
+  )
 
   log(`\nGit repo detected: ${isGitRepo()}`)
   log(`REQUIREMENTS.md present: ${!!readTextIfExists(path.join(AI_DIR, 'REQUIREMENTS.md'))}`)
@@ -191,7 +212,9 @@ async function dryRun(): Promise<void> {
   log(`\nDetected QA stack: ${qaPreview.stack}`)
   log(`Detected QA commands: ${qaPreview.commands.map((c) => c.name).join(', ') || '(none)'}`)
 
-  log('\nDry run complete — no OpenAI calls were made and no files were modified beyond .ai/reports/qa-*.json.')
+  log(
+    '\nDry run complete — no OpenAI calls were made and no files were modified beyond .ai/reports/qa-*.json.'
+  )
 }
 
 async function main(): Promise<void> {
@@ -202,7 +225,9 @@ async function main(): Promise<void> {
   }
 
   if (!isGitRepo()) {
-    throw new Error('Not a git repository. The loop uses git diff/status as evidence — run `git init` first.')
+    throw new Error(
+      'Not a git repository. The loop uses git diff/status as evidence — run `git init` first.'
+    )
   }
 
   const config = loadConfig()
@@ -234,7 +259,13 @@ async function main(): Promise<void> {
     if (review.status === 'approved') {
       state.status = 'approved'
       saveState(state)
-      printFinalSummary({ iterations: iterationsRun, review, qa, changedFiles: gitChangedFiles().length, status: 'APPROVED' })
+      printFinalSummary({
+        iterations: iterationsRun,
+        review,
+        qa,
+        changedFiles: gitChangedFiles().length,
+        status: 'APPROVED'
+      })
       return
     }
 

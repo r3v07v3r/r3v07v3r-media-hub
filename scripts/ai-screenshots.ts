@@ -153,7 +153,8 @@ export async function runScreenshots(opts: { verbose?: boolean } = {}): Promise<
       enabled: true,
       serveDir,
       routes: [],
-      error: 'playwright is not installed. Run `npm install` (it is a devDependency) and, if needed, `npx playwright install chromium`.',
+      error:
+        'playwright is not installed. Run `npm install` (it is a devDependency) and, if needed, `npx playwright install chromium`.',
       generatedAt: new Date().toISOString()
     }
     writeJSON(path.join(AI_DIR, 'reports', 'screenshots-latest.json'), report)
@@ -177,15 +178,20 @@ export async function runScreenshots(opts: { verbose?: boolean } = {}): Promise<
         if (msg.type() === 'error') consoleErrors.push(msg.text())
       })
       page.on('requestfailed', (req) => {
-        failedRequests.push(`${req.method()} ${req.url()} — ${req.failure()?.errorText ?? 'unknown error'}`)
+        failedRequests.push(
+          `${req.method()} ${req.url()} — ${req.failure()?.errorText ?? 'unknown error'}`
+        )
       })
 
       if (opts.verbose) log(`capturing: ${route.name} (${route.url})`)
-      await page.goto(`http://127.0.0.1:${port}${route.url}`, { waitUntil: 'networkidle' }).catch((err) => {
-        consoleErrors.push(`navigation error: ${(err as Error).message}`)
-      })
+      await page
+        .goto(`http://127.0.0.1:${port}${route.url}`, { waitUntil: 'networkidle' })
+        .catch((err) => {
+          consoleErrors.push(`navigation error: ${(err as Error).message}`)
+        })
 
-      const offsets = route.captureOffsetsMs && route.captureOffsetsMs.length > 0 ? route.captureOffsetsMs : [0]
+      const offsets =
+        route.captureOffsetsMs && route.captureOffsetsMs.length > 0 ? route.captureOffsetsMs : [0]
       const shots: string[] = []
       let elapsed = 0
       for (const offset of offsets) {
@@ -199,7 +205,13 @@ export async function runScreenshots(opts: { verbose?: boolean } = {}): Promise<
         shots.push(path.relative(ROOT, filePath))
       }
 
-      routes.push({ name: route.name, url: route.url, screenshots: shots, consoleErrors, failedRequests })
+      routes.push({
+        name: route.name,
+        url: route.url,
+        screenshots: shots,
+        consoleErrors,
+        failedRequests
+      })
       await page.close()
     }
   } finally {
@@ -207,7 +219,12 @@ export async function runScreenshots(opts: { verbose?: boolean } = {}): Promise<
     server.close()
   }
 
-  const report: ScreenshotReport = { enabled: true, serveDir, routes, generatedAt: new Date().toISOString() }
+  const report: ScreenshotReport = {
+    enabled: true,
+    serveDir,
+    routes,
+    generatedAt: new Date().toISOString()
+  }
   writeJSON(path.join(AI_DIR, 'reports', 'screenshots-latest.json'), report)
   return report
 }
@@ -221,7 +238,9 @@ if (isMain) {
       process.exit(1)
     }
     for (const r of report.routes) {
-      log(`${r.name}: ${r.screenshots.join(', ')} (${r.consoleErrors.length} console errors, ${r.failedRequests.length} failed requests)`)
+      log(
+        `${r.name}: ${r.screenshots.join(', ')} (${r.consoleErrors.length} console errors, ${r.failedRequests.length} failed requests)`
+      )
     }
     process.exit(0)
   })

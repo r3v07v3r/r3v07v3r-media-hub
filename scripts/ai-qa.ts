@@ -12,7 +12,16 @@
 
 import { existsSync, readFileSync } from 'node:fs'
 import path from 'node:path'
-import { AI_DIR, ROOT, log, runCommand, section, tail, writeJSON, type CommandResult } from './ai-utils.js'
+import {
+  AI_DIR,
+  ROOT,
+  log,
+  runCommand,
+  section,
+  tail,
+  writeJSON,
+  type CommandResult
+} from './ai-utils.js'
 
 export interface QaReport {
   stack: string
@@ -35,7 +44,8 @@ function detectNodeCommands(): PlannedCommand[] {
   const planned: PlannedCommand[] = []
   // Order matters: fail fast on cheap checks before the expensive build.
   if (scripts.lint) planned.push({ name: 'lint', command: 'npm', args: ['run', 'lint'] })
-  if (scripts.typecheck) planned.push({ name: 'typecheck', command: 'npm', args: ['run', 'typecheck'] })
+  if (scripts.typecheck)
+    planned.push({ name: 'typecheck', command: 'npm', args: ['run', 'typecheck'] })
   if (scripts.test) planned.push({ name: 'test', command: 'npm', args: ['run', 'test'] })
   if (scripts.build) planned.push({ name: 'build', command: 'npm', args: ['run', 'build'] })
   return planned
@@ -114,7 +124,11 @@ if (isMain) {
     for (const c of report.commands) {
       log(`${c.success ? 'PASS' : 'FAIL'}  ${c.name}  (${c.durationMs}ms)`)
     }
-    log(report.overallSuccess ? '\nAll QA checks passed.' : '\nSome QA checks failed — see .ai/reports/qa-latest.json')
+    log(
+      report.overallSuccess
+        ? '\nAll QA checks passed.'
+        : '\nSome QA checks failed — see .ai/reports/qa-latest.json'
+    )
     process.exit(report.overallSuccess ? 0 : 1)
   })
 }
