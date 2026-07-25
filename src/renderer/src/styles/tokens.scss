@@ -1,0 +1,65 @@
+// ---------------------------------------------------------------------------
+// Design tokens — spec section 20. Centralized so every component pulls
+// from one source instead of re-declaring hex values. Colors match the
+// reference (Dune-style) dashboard: deep near-black background, cyan/blue/
+// violet glow family for primary UI energy, orange reserved for the
+// Continue Watching progress accent, green/yellow/grey for match-confidence
+// tiers.
+// ---------------------------------------------------------------------------
+
+$bg: #02060b;
+$panel: rgba(5, 11, 18, 0.78);
+$panel-strong: rgba(8, 14, 24, 0.92);
+$border-subtle: rgba(255, 255, 255, 0.08);
+$border-active: rgba(148, 214, 255, 0.5);
+
+$cyan: #1fc9ff;
+$blue: #287cff;
+$violet: #7e45ff;
+$purple: #a943ff;
+$pink: #ef569c;
+$orange: #ff7a32;
+$green: #35ef92;
+$yellow: #e8d24c;
+
+$text-primary: #f1f1f1;
+$text-secondary: #a5a8ae;
+$text-muted: #747b85;
+
+// ---------------------------------------------------------------------------
+// Layout constants — the fixed 1920x1080 design canvas is the source of
+// truth; responsive breakpoints scale/reflow from it rather than the other
+// way around (spec section 1).
+// ---------------------------------------------------------------------------
+$canvas-w: 1920px;
+$canvas-h: 1080px;
+
+$nav-rail-width: 220px;
+$nav-rail-collapsed-width: 84px;
+
+$radius-small: 8px;
+$radius-medium: 14px;
+$radius-large: 22px;
+$radius-pill: 999px;
+
+// ---------------------------------------------------------------------------
+// Motion tokens
+// ---------------------------------------------------------------------------
+$transition-fast: 160ms cubic-bezier(0.4, 0, 0.2, 1);
+$transition-standard: 260ms cubic-bezier(0.4, 0, 0.2, 1);
+$ease-organic: cubic-bezier(0.45, 0, 0.2, 1);
+$ease-reactive: cubic-bezier(0.2, 0, 0, 1);
+$motion-idle-medium: 6s;
+$motion-breathe: 4.5s;
+
+// Match-confidence tiers (spec section: AI Picks match coloring)
+@function match-color($pct) {
+  @if $pct >= 90 {
+    @return $green;
+  } @else if $pct >= 80 {
+    @return $cyan;
+  } @else if $pct >= 70 {
+    @return $yellow;
+  }
+  @return $text-muted;
+}

@@ -1,0 +1,349 @@
+.rail {
+  position: relative;
+  /* Reference target: a full-height organic panel again (not the
+     fit-content/vertically-centered treatment from an earlier pass) —
+     the shape itself now comes from the SVG blob below, which is what
+     actually needs the full column height to trace its wave past every
+     item. */
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  width: 220px;
+  padding: 8px 14px 20px;
+  /* The old linear-gradient panel fill is gone — .railShapeFill (the
+     closed blob path in the SVG below) is now what paints the panel's
+     dark translucent body, shaped to the organic boundary instead of a
+     rectangle. */
+  transition: width var(--transition-standard);
+  overflow: visible;
+}
+.rail.collapsed {
+  width: 84px;
+}
+
+/* ---------- Organic blob shape ---------- */
+.railShape {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  pointer-events: none;
+  z-index: 1;
+}
+.railShapeFill {
+  /* Fill color/opacity comes from the gradient def in the JSX (fades
+     toward the shape's outer edge) — nothing to override here. */
+}
+/* Mostly dim — per spec, NOT a uniform bright cyan border. This is the
+   quiet baseline the isolated moving highlight (below) stands out
+   against. */
+.railShapeEdge {
+  fill: none;
+  stroke: rgba(120, 165, 210, 0.28);
+  stroke-width: 1.2;
+}
+/* One or two short bright segments travelling the boundary — "isolated
+   moving cyan energy highlights," not a fully-lit outline. A short dash
+   (0.05 of the path length) riding a slow dashoffset loop, rather than
+   the near-solid 0.035/1 trace the previous full-line design used. */
+.railShapeTravel {
+  fill: none;
+  stroke: #8fe3ff;
+  stroke-width: 2.2;
+  stroke-linecap: round;
+  stroke-dasharray: 0.05 0.5;
+  filter: drop-shadow(0 0 6px rgba(148, 214, 255, 0.95));
+  animation: railTravel var(--motion-idle-medium, 7s) linear infinite;
+}
+@keyframes railTravel {
+  to {
+    stroke-dashoffset: -1;
+  }
+}
+
+.railNode {
+  position: absolute;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #d6efff;
+  box-shadow: 0 0 10px 2px rgba(94, 193, 255, 0.9);
+  transform: translateY(-50%);
+  z-index: 2;
+  pointer-events: none;
+  animation: railNodeBreathe var(--motion-breathe, 4.5s) var(--ease-organic, ease-in-out) infinite;
+  animation-delay: var(--node-delay, 0s);
+}
+@keyframes railNodeBreathe {
+  0%,
+  100% {
+    opacity: 0.65;
+    transform: translateY(-50%) scale(1);
+  }
+  50% {
+    opacity: 1;
+    transform: translateY(-50%) scale(1.25);
+  }
+}
+/* One-shot brighter burst fired when the active nav item changes — the
+   spine "reacting" to navigation rather than only idling. */
+.railNodePulse {
+  animation: railNodeBurst 900ms var(--ease-reactive, ease-out);
+}
+@keyframes railNodeBurst {
+  0% {
+    box-shadow: 0 0 10px 2px rgba(94, 193, 255, 0.9);
+  }
+  35% {
+    box-shadow: 0 0 22px 8px rgba(148, 214, 255, 1);
+  }
+  100% {
+    box-shadow: 0 0 10px 2px rgba(94, 193, 255, 0.9);
+  }
+}
+
+.toggle {
+  align-self: flex-end;
+  width: 32px;
+  height: 32px;
+  min-width: 32px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+  transition: color var(--transition-fast), background var(--transition-fast);
+}
+.toggle:hover {
+  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.list {
+  display: flex;
+  flex-direction: column;
+  /* Was 4px — tightened so the items read as one compact, closely-knit
+     block now that the rail itself has shrunk to fit them, rather than
+     a loosely spaced list with room to spare. */
+  gap: 1px;
+  flex: 1;
+}
+
+.item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 10px;
+  border-radius: var(--radius-medium);
+  min-height: 44px;
+  color: var(--text-muted);
+  transition: color var(--transition-fast), background var(--transition-fast);
+}
+.item:hover {
+  color: var(--text-secondary);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.iconWrap {
+  position: relative;
+  flex: 0 0 auto;
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: inherit;
+  transition: box-shadow var(--transition-standard), background var(--transition-standard);
+}
+.iconWrap svg {
+  width: 18px;
+  height: 18px;
+  position: relative;
+  z-index: 1;
+}
+
+/* Luminous halo ring around the active item's icon — a portal-like glow
+   rather than the flat tinted-circle-only treatment used before. */
+.iconHalo {
+  position: absolute;
+  inset: -9px;
+  z-index: 0;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(56, 193, 255, 0.28), transparent 68%);
+  box-shadow: 0 0 0 1px rgba(120, 200, 255, 0.55), 0 0 22px 4px rgba(56, 193, 255, 0.55);
+  animation: iconHaloPulse 3.6s ease-in-out infinite;
+}
+@keyframes iconHaloPulse {
+  0%,
+  100% {
+    opacity: 0.75;
+    transform: scale(0.97);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.05);
+  }
+}
+
+.label {
+  font-size: 13.5px;
+  font-weight: 500;
+  white-space: nowrap;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.collapsed .label {
+  display: none;
+}
+
+.dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--accent-cyan);
+  box-shadow: 0 0 6px var(--accent-cyan);
+}
+
+.itemActive {
+  color: var(--text-primary);
+}
+.itemActive .iconWrap {
+  background: linear-gradient(135deg, rgba(24, 169, 255, 0.35), rgba(141, 77, 255, 0.35));
+  box-shadow: 0 0 0 1px rgba(94, 193, 255, 0.4), 0 0 22px rgba(94, 193, 255, 0.35);
+  color: #fff;
+}
+
+.tooltip {
+  position: absolute;
+  left: calc(100% + 10px);
+  top: 50%;
+  transform: translateY(-50%);
+  padding: 6px 10px;
+  border-radius: var(--radius-small);
+  font-size: 12px;
+  white-space: nowrap;
+  background: var(--panel-strong);
+  border: 1px solid var(--border-subtle);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--transition-fast);
+  z-index: 40;
+}
+.collapsed .item:hover .tooltip,
+.collapsed .item:focus-visible .tooltip {
+  opacity: 1;
+}
+
+/* Mobile: bottom nav bar, per spec section 16.
+   Selectors here also target `.rail.collapsed` / `.collapsed .label`
+   explicitly and repeat every property those rules set — a plain
+   `.rail`/`.label` selector inside this media query has LOWER
+   specificity than the unconditional `.rail.collapsed` /
+   `.collapsed .label` rules above, so without this the desktop/tablet
+   auto-collapse state (which the resize-driven JS still applies below
+   1200px) would win and squash the bottom bar down to an 84px icon
+   nub with hidden labels regardless of source order. Mobile always
+   renders the full bottom bar; the collapse toggle is hidden here and
+   irrelevant to this layout. */
+@media (max-width: 767px) {
+  .rail,
+  .rail.collapsed {
+    width: 100%;
+    height: auto;
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 10px;
+    padding-bottom: max(8px, env(safe-area-inset-bottom));
+    border-right: none;
+    border-top: 1px solid var(--border-subtle);
+    clip-path: none;
+  }
+  .toggle {
+    display: none;
+  }
+  /* The organic blob shape is art-directed for a tall vertical rail —
+     at the wide-short bottom-bar shape it would just be a horizontal
+     smear, so it's hidden in favor of the plain top border above. */
+  .railShape,
+  .railNode {
+    display: none;
+  }
+  .list {
+    flex-direction: row;
+    /* Exactly 5 primary items + More (spec section 8) — fits without
+       horizontal scrolling, unlike the old all-9-items row. */
+    justify-content: space-around;
+    width: 100%;
+    gap: 2px;
+    position: relative;
+  }
+  .item,
+  .moreButton {
+    flex-direction: column;
+    gap: 2px;
+    padding: 6px 8px;
+    min-width: 44px;
+    background: none;
+    border: none;
+    font: inherit;
+  }
+  .label,
+  .collapsed .label {
+    display: block;
+    font-size: 9.5px;
+  }
+  .tooltip {
+    display: none;
+  }
+
+  .moreWrap {
+    position: relative;
+  }
+  .moreSheet {
+    position: absolute;
+    bottom: calc(100% + 10px);
+    right: 0;
+    z-index: 40;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 8px;
+    border-radius: var(--radius-medium);
+    min-width: 168px;
+  }
+  .moreSheetItem {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 9px 10px;
+    border-radius: var(--radius-small);
+    color: var(--text-secondary);
+    font-size: 13px;
+    transition: background var(--transition-fast), color var(--transition-fast);
+  }
+  .moreSheetItem:hover {
+    background: rgba(255, 255, 255, 0.06);
+    color: var(--text-primary);
+  }
+  .moreSheetItem.itemActive {
+    color: var(--accent-cyan);
+  }
+  .moreSheetItem svg {
+    width: 16px;
+    height: 16px;
+  }
+}
+
+/* Hide the More sheet/button entirely above mobile — it's a mobile-only
+   concept, the full item list renders on tablet/desktop instead. */
+@media (min-width: 768px) {
+  .moreWrap {
+    display: none;
+  }
+}

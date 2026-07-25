@@ -1,0 +1,25 @@
+node_modules
+dist
+out
+.DS_Store
+.eslintcache
+*.log*
+.tmdb-cache/
+
+# Secrets — TMDB_API_KEY / OPENAI_API_KEY live here. Was previously
+# referenced as "already in .gitignore" in scripts/fetch-tmdb-artwork.mjs
+# but never actually added; fixed as part of wiring up the .ai/ review
+# loop, which also reads OPENAI_API_KEY from this file.
+.env
+.env.local
+.env.*.local
+
+# AI development review loop (.ai/) — REQUIREMENTS.md, prompts, config,
+# REVIEW.*, STATE.json, CHANGELOG.md, and reference screenshots ARE
+# committed (they're the shared source of truth between Claude/GPT and
+# the audit trail across iterations). Only regenerated-every-run output
+# is ignored here.
+.ai/reports/*.json
+.ai/screenshots/current/*.png
+.ai/screenshots/current/*.jpg
+preview-dist/

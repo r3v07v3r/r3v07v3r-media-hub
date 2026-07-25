@@ -1,0 +1,268 @@
+.section {
+  grid-area: picks;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+  /* Explicit floor, not 0 — the scroller below has non-visible overflow,
+     which forces its own automatic minimum size to 0 and would otherwise
+     collapse this auto-sized grid row to nothing at the stacked
+     (<1100px) breakpoint. */
+  min-height: 280px;
+}
+
+.heading {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-family: var(--font-display);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 1.4px;
+  color: var(--text-primary);
+  flex: 0 0 auto;
+}
+.heading svg {
+  width: 16px;
+  height: 16px;
+  color: var(--accent-violet);
+}
+
+.scrollerWrap {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+}
+.scroller {
+  list-style: none;
+  margin: 0;
+  padding: 3px 3px 8px;
+  display: flex;
+  gap: 16px;
+  height: 100%;
+  overflow-x: auto;
+  scroll-behavior: smooth;
+}
+
+.arrow {
+  position: absolute;
+  top: 50%;
+  right: -6px;
+  transform: translateY(-50%);
+  width: 34px;
+  height: 34px;
+  min-width: 34px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-primary);
+  background: rgba(6, 10, 18, 0.75);
+  border: 1px solid var(--border-subtle);
+  z-index: 3;
+}
+.arrow:hover {
+  border-color: var(--border-active);
+}
+.arrow svg {
+  width: 15px;
+  height: 15px;
+}
+
+/* Mirrors .arrow on the opposite side — the layout sketch shows both a
+   "<" and a ">" flanking this row, not just a single "show more" arrow
+   on the right. Only shown once the row has actually scrolled away
+   from its start, since a back-arrow with nothing behind it to scroll
+   to is dead weight. */
+.arrowLeft {
+  left: -6px;
+  right: auto;
+}
+
+/* ---------- Card ----------
+   Reference target: wide cinematic tiles (~230-250px at 1920, roughly
+   five visible across the primary viewport), not narrow portrait/data
+   cards. One continuous image with title/ratings/match% overlaid on it
+   via a bottom scrim — see MediaCard.tsx, there's no separate text
+   block below the art anymore. */
+.card {
+  position: relative;
+  flex: 0 0 auto;
+  /* Width intentionally unchanged (236px matches the reference's ~5-
+     wide row) — only the aspect ratio moved slightly taller (was 8/7)
+     so the artwork region has a touch more vertical room for the
+     title/ratings/match overlay to sit on. */
+  width: 236px;
+  aspect-ratio: 21 / 20;
+  border-radius: var(--radius-medium);
+  overflow: hidden;
+  border: 1px solid var(--border-subtle);
+  cursor: pointer;
+  background: rgba(10, 15, 25, 0.4);
+  transition: transform var(--transition-fast), box-shadow var(--transition-fast), border-color var(--transition-fast);
+}
+.card:hover,
+.card:focus-visible {
+  transform: translateY(-6px);
+  border-color: var(--border-active);
+  box-shadow: 0 18px 34px -14px rgba(56, 193, 255, 0.5);
+}
+
+.cardArtImage {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+.cardScrim {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  /* Deeper reach than the old poster-card scrim — this now has to carry
+     three lines of overlaid text (title, ratings, match%) at the bottom
+     of a landscape image, not just a badge chip. */
+  background: linear-gradient(180deg, transparent 38%, rgba(3, 5, 10, 0.55) 62%, rgba(2, 4, 8, 0.92) 100%);
+}
+
+.playButton {
+  position: absolute;
+  z-index: 2;
+  bottom: 12px;
+  right: 12px;
+  width: 30px;
+  height: 30px;
+  min-width: 30px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  background: rgba(4, 8, 15, 0.55);
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  opacity: 0;
+  transition: opacity var(--transition-fast), background var(--transition-fast);
+}
+.card:hover .playButton,
+.card:focus-visible .playButton {
+  opacity: 1;
+}
+.playButton:hover {
+  background: var(--accent-blue);
+}
+.playButton svg {
+  width: 13px;
+  height: 13px;
+}
+
+.moreButton {
+  position: absolute;
+  z-index: 2;
+  top: 10px;
+  right: 10px;
+  width: 24px;
+  height: 24px;
+  min-width: 24px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  background: rgba(4, 8, 15, 0.5);
+  opacity: 0;
+  transition: opacity var(--transition-fast);
+}
+.card:hover .moreButton,
+.card:focus-visible .moreButton {
+  opacity: 1;
+}
+.moreButton svg {
+  width: 12px;
+  height: 12px;
+}
+
+.cardOverlay {
+  position: absolute;
+  z-index: 1;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 10px 14px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.cardTitle {
+  font-family: var(--font-display);
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+  color: var(--text-primary);
+  text-shadow: 0 2px 10px rgba(0, 0, 0, 0.7);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cardRatings {
+  font-size: 11px;
+  color: var(--text-secondary);
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.cardRatings svg {
+  width: 9px;
+  height: 9px;
+  color: var(--accent-yellow);
+  margin-right: 2px;
+  vertical-align: -1px;
+}
+.matchText {
+  font-size: 11.5px;
+  font-weight: 700;
+  margin-top: 1px;
+}
+.matchExcellent {
+  color: var(--accent-green);
+}
+.matchGood {
+  color: #b7e64c;
+}
+.matchFair {
+  color: var(--accent-yellow);
+}
+.matchLow {
+  color: var(--text-muted);
+}
+
+.skeletonCard {
+  flex: 0 0 auto;
+  width: 236px;
+  aspect-ratio: 21 / 20;
+  border-radius: var(--radius-medium);
+  background: linear-gradient(
+    100deg,
+    rgba(255, 255, 255, 0.04),
+    rgba(255, 255, 255, 0.09),
+    rgba(255, 255, 255, 0.04)
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.4s ease-in-out infinite;
+}
+@keyframes shimmer {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
+}
+
+@media (max-width: 1439px) {
+  .card {
+    width: 200px;
+  }
+  .skeletonCard {
+    width: 200px;
+  }
+}

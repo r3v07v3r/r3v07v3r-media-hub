@@ -1,0 +1,356 @@
+.panel {
+  /* Shares FeaturedHero's grid cell (see HomeDashboard.module.css) and
+     self-aligns to its top-right corner — a floating glass card over
+     the hero's own key art, not a separate opaque column. Reverts to
+     its own "continue" row at the tablet/mobile breakpoints below,
+     where the hero/continue split back into a normal stacked layout. */
+  grid-area: hero;
+  justify-self: end;
+  align-self: start;
+  z-index: 6;
+  width: 100%;
+  /* Widened to fit the larger thumbnails below (76px -> 96px, ~26%) —
+     per the brief, this panel should read as a real "continue watching
+     shelf," not a compact monitoring widget. */
+  max-width: 372px;
+  margin: 28px 28px 0 0;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 240px;
+  max-height: calc(100% - 56px);
+  overflow: hidden;
+  /* Much larger corner radius than the standard .glass-panel treatment
+     — reference shows an almost pill-like rounding on this specific
+     card, distinct from every other panel's radius-large. */
+  border-radius: 28px;
+  padding: 18px 16px;
+  /* Near-black translucent centre with a faint blue inner wash, per
+     spec — deliberately NOT the shared .glass-panel gradient (too grey/
+     neutral) or .animated-edge's all-around conic border (too uniform).
+     This panel's identity is a dark glass body with color concentrated
+     at specific edges, built up from the layers below instead. */
+  background: radial-gradient(120% 90% at 30% 20%, rgba(35, 70, 130, 0.22), transparent 60%),
+    linear-gradient(165deg, rgba(8, 13, 24, 0.82), rgba(3, 6, 12, 0.88));
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.5);
+}
+
+/* Perimeter treatment: thin cyan hugging the lower boundary, warm
+   orange/red concentrated along the upper-right corner — two distinct
+   colored edges rather than one uniform border, per spec. Layered as
+   box-shadows (cheap, no extra DOM) plus a conic sliver for the
+   upper-right warm glow. */
+.panelGlow {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  background: radial-gradient(220px 90px at 85% 0%, rgba(255, 122, 61, 0.32), transparent 65%),
+    radial-gradient(160px 70px at 100% 6%, rgba(255, 90, 60, 0.22), transparent 70%),
+    radial-gradient(260px 60px at 50% 100%, rgba(56, 193, 255, 0.26), transparent 68%);
+  box-shadow: inset 0 -1.5px 0 rgba(56, 193, 255, 0.4), inset 0 0 40px rgba(56, 193, 255, 0.05);
+}
+.panel > *:not(.panelGlow) {
+  position: relative;
+  z-index: 1;
+}
+
+.heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--font-display);
+  font-size: 12.5px;
+  font-weight: 700;
+  letter-spacing: 1.4px;
+  color: var(--text-primary);
+  margin-bottom: 12px;
+  flex: 0 0 auto;
+}
+.heading svg {
+  width: 15px;
+  height: 15px;
+  color: var(--accent-cyan);
+}
+
+.list {
+  display: flex;
+  flex-direction: column;
+  /* Reference: rows have real breathing room between them, not a tight
+     compact stack. */
+  gap: 14px;
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
+}
+
+.item {
+  position: relative;
+  display: flex;
+  /* Tighter than the previous 12px — thumbnail and metadata should read
+     as one unit, not two separately-spaced columns. */
+  gap: 10px;
+  padding: 5px;
+  border-radius: var(--radius-medium);
+  transition: background var(--transition-fast);
+}
+.item:hover,
+.item:focus-within {
+  background: rgba(255, 255, 255, 0.045);
+}
+
+.thumbButton {
+  position: relative;
+  flex: 0 0 auto;
+  /* Larger, closer-to-portrait thumbnail — reference shows a full
+     character-scale still, not a thin 16:9 sliver. ~26% larger than the
+     previous 76px per the brief. */
+  width: 96px;
+  aspect-ratio: 3 / 4;
+  border-radius: var(--radius-small);
+  overflow: hidden;
+}
+.thumbImage {
+  width: 100%;
+  height: 100%;
+}
+.thumbCheck {
+  position: absolute;
+  bottom: 3px;
+  right: 3px;
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  background: var(--accent-green);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #04180f;
+  /* One-shot confirmation pulse (motion spec section 13) — plays once
+     when a completed row first mounts, not a looping animation. */
+  animation: completePulse 900ms var(--ease-reactive, ease-out);
+}
+@keyframes completePulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(47, 211, 155, 0.7);
+    transform: scale(0.6);
+  }
+  55% {
+    box-shadow: 0 0 0 9px rgba(47, 211, 155, 0);
+    transform: scale(1.15);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(47, 211, 155, 0);
+    transform: scale(1);
+  }
+}
+.thumbCheck svg {
+  width: 9px;
+  height: 9px;
+}
+
+.info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 4px;
+}
+.title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.meta {
+  font-size: 10.5px;
+  color: var(--text-muted);
+  display: flex;
+  gap: 6px;
+}
+.progressRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.progressTrack {
+  flex: 1;
+  height: 3px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.12);
+  overflow: hidden;
+}
+.progressFill {
+  position: relative;
+  height: 100%;
+  background: linear-gradient(90deg, var(--accent-blue), var(--accent-cyan));
+  transition: width var(--transition-standard);
+  overflow: hidden;
+}
+/* Faint shimmer travelling across the filled portion — a resume point
+   should feel "live," not like a static progress bar (motion spec
+   section 13). */
+.progressFill::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  width: 40%;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.55), transparent);
+  transform: translateX(-160%);
+  animation: progressShimmer 3.2s var(--ease-organic, ease-in-out) infinite;
+}
+@keyframes progressShimmer {
+  to {
+    transform: translateX(360%);
+  }
+}
+.progressPct {
+  font-size: 10px;
+  color: var(--text-muted);
+  flex: 0 0 auto;
+}
+.ratings {
+  font-size: 10px;
+  color: var(--text-muted);
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.ratings svg {
+  width: 9px;
+  height: 9px;
+  color: var(--accent-yellow);
+  margin-right: 2px;
+  vertical-align: -1px;
+}
+
+.hoverActions {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  display: flex;
+  gap: 3px;
+  opacity: 0;
+  transition: opacity var(--transition-fast);
+}
+.item:hover .hoverActions,
+.item:focus-within .hoverActions {
+  opacity: 1;
+}
+.hoverActionButton {
+  width: 24px;
+  height: 24px;
+  min-width: 24px;
+  min-height: 24px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-secondary);
+  background: rgba(4, 8, 15, 0.75);
+  border: 1px solid var(--border-subtle);
+}
+.hoverActionButton:hover {
+  color: var(--text-primary);
+  border-color: var(--border-active);
+}
+.hoverActionButton svg {
+  width: 11px;
+  height: 11px;
+}
+
+.footer {
+  flex: 0 0 auto;
+  margin-top: 10px;
+  text-align: center;
+}
+.viewAll {
+  font-size: 12px;
+  color: var(--accent-cyan);
+  padding: 6px;
+}
+.viewAll:hover {
+  text-decoration: underline;
+}
+
+.empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--text-muted);
+  font-size: 12.5px;
+  text-align: center;
+  padding: 20px 10px;
+}
+
+/* Tablet + mobile (spec sections 7/8): Continue Watching becomes a
+   horizontal carousel of vertical cards instead of a tall side-panel
+   list of horizontal rows — the side-column treatment doesn't fit a
+   single-column stacked layout. */
+@media (max-width: 1099px) {
+  .panel {
+    /* Back to its own stacked "continue" row at this breakpoint — the
+       desktop-only shared-cell/self-align float (see the base .panel
+       rule above) only makes sense next to a full-width hero. */
+    grid-area: continue;
+    justify-self: stretch;
+    align-self: stretch;
+    max-width: none;
+    margin: 0;
+    max-height: none;
+    /* NOT 0 — .panel keeps overflow:hidden and is an auto-sized grid row
+       at this breakpoint, so a non-visible-overflow item with no min-height
+       contributes zero to that row's auto height (the same collapse trap
+       documented elsewhere in this codebase) and the whole carousel
+       squashes to a sliver. This floor covers heading + one row of
+       168px-wide/16:9 cards + their title/meta text. */
+    min-height: 210px;
+    padding: 14px 4px 14px 16px;
+  }
+  .heading {
+    padding-right: 12px;
+  }
+  .list {
+    flex-direction: row;
+    overflow-x: auto;
+    overflow-y: visible;
+    gap: 12px;
+    padding-right: 16px;
+    flex: 0 0 auto;
+  }
+  .item {
+    flex: 0 0 auto;
+    flex-direction: column;
+    width: 168px;
+    gap: 8px;
+    padding: 0;
+  }
+  .item:hover,
+  .item:focus-within {
+    background: none;
+  }
+  .thumbButton {
+    width: 100%;
+    aspect-ratio: 16 / 9;
+  }
+  .info {
+    justify-content: flex-start;
+  }
+  /* Hover-revealed actions don't work on touch — keep them visible
+     outright rather than behind an unreachable :hover state. */
+  .hoverActions {
+    opacity: 1;
+    top: 6px;
+    right: 6px;
+  }
+}

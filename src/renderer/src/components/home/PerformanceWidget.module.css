@@ -1,0 +1,203 @@
+/* Vertical stacked gauge stack (reference art direction) — a narrow tall
+   panel with CPU/GPU/RAM as horizontal ring+label rows, one under the
+   other, rather than the previous single horizontal row of three rings.
+   Keeps its own "status" grid cell (row 2, col 3) rather than sharing
+   row 1's "hero" cell with Continue Watching — row 1 is only 520px tall
+   at minimum and the two together didn't fit without starving Continue
+   Watching's own list down to a single visible row. Top-aligned (was
+   `align-self: stretch` + `justify-content: center`, which centered it
+   in the middle of row 2's 260px, reading as detached from Continue
+   Watching above) and shrunk down, so it hugs the row directly under
+   Continue Watching instead. */
+.widget {
+  grid-area: status;
+  align-self: start;
+  justify-self: center;
+  margin-top: 4px;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 8px;
+  width: 116px;
+  padding: 13px 12px;
+  /* Reference: a near-capsule pill, noticeably rounder than the app's
+     other panels. */
+  border-radius: 22px;
+  min-width: 0;
+  cursor: pointer;
+  transition: border-color var(--transition-fast);
+}
+.widget:hover {
+  border-color: var(--border-active);
+}
+
+.gauge {
+  position: relative;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+.gaugeRingWrap {
+  position: relative;
+  flex: 0 0 auto;
+  width: 30px;
+  height: 30px;
+}
+.gaugeRing {
+  width: 30px;
+  height: 30px;
+}
+.gaugeTrack {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.1);
+  stroke-width: 3;
+}
+.gaugeFill {
+  fill: none;
+  stroke: var(--accent-blue);
+  stroke-width: 3;
+  stroke-linecap: round;
+  transform: rotate(-90deg);
+  transform-origin: 50% 50%;
+  transition: stroke-dashoffset 0.3s linear, stroke 0.6s ease;
+}
+.gaugeLabel {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  font-size: 8.5px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+.gaugeName {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  color: var(--text-secondary);
+}
+.gaugeName svg {
+  color: var(--accent-cyan);
+}
+
+.divider {
+  width: 100%;
+  height: 1px;
+  background: var(--border-subtle);
+  flex: 0 0 auto;
+}
+
+.net {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  flex: 0 0 auto;
+}
+.netRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.netRow svg {
+  width: 11px;
+  height: 11px;
+  color: var(--accent-cyan);
+}
+
+.detail {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 10px;
+  color: var(--text-muted);
+  padding-top: 4px;
+  border-top: 1px dashed var(--border-subtle);
+}
+
+@media (max-width: 1439px) {
+  .widget {
+    width: 100px;
+    padding: 10px 12px;
+    gap: 7px;
+  }
+  .gaugeRingWrap,
+  .gaugeRing {
+    width: 26px;
+    height: 26px;
+  }
+}
+
+/* Tablet + mobile (spec section 7): performance data no longer gets its
+   own grid row (an empty-feeling standalone row is exactly what the spec
+   says to avoid) — the widget takes itself out of grid flow and floats
+   as a small pill button instead. Clicking it opens .popover with the
+   full gauge stack, positioned above the button so it never gets clipped
+   by the viewport edge. */
+@media (max-width: 1099px) {
+  .widget {
+    grid-area: unset;
+    position: fixed;
+    right: 16px;
+    bottom: 20px;
+    z-index: 35;
+    flex-direction: row;
+    align-items: center;
+    width: auto;
+    padding: 8px 12px;
+    gap: 8px;
+    border-radius: var(--radius-pill);
+  }
+  /* Hide the always-rendered inline gauge stack (desktop's default
+     content) — the popover below renders its own copy instead, so the
+     collapsed pill button shows just .compactSummary. */
+  .widget > .gauge,
+  .widget > .divider,
+  .widget > .net {
+    display: none;
+  }
+  .compactSummary {
+    display: flex;
+  }
+}
+
+.compactSummary {
+  display: none;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-secondary);
+}
+.compactSummary svg {
+  width: 14px;
+  height: 14px;
+  color: var(--accent-cyan);
+}
+
+.popover {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 10px);
+  z-index: 36;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 168px;
+  padding: 14px 16px;
+  border-radius: var(--radius-large);
+}
+
+/* Mobile: sit above the fixed bottom nav instead of overlapping it. */
+@media (max-width: 767px) {
+  .widget {
+    bottom: calc(76px + env(safe-area-inset-bottom, 0px));
+  }
+}

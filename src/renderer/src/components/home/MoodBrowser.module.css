@@ -1,0 +1,390 @@
+.section {
+  grid-area: mood;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  /* Explicit floor, not 0 — .cropX below has non-visible overflow-x,
+     which forces its own automatic minimum size to 0 and would otherwise
+     collapse this auto-sized grid row to nothing at the stacked
+     (<1100px) breakpoint. */
+  min-height: 190px;
+  overflow: visible;
+  /* Was bled left past .main's own edge by the rail's full published
+     width to run underneath the nav rail. In practice the rail's SVG
+     boundary is much narrower down at the mood row's vertical position
+     than at its widest bulge (near the top, by the Home item), so
+     bleeding by the full --nav-rail-width put the entire first pill
+     underneath the rail's opaque fill/z-index — not just the connector
+     line tucking under an edge, but the "Thrilling" pill vanishing
+     completely. Bleed by a small fixed amount instead: enough for the
+     connector line's cyan trail to visibly run under the rail's thin
+     lower boundary (per the reference), not enough to hide a pill. */
+  margin-left: -48px;
+  width: calc(100% + 48px);
+}
+
+.heading {
+  text-align: center;
+  font-family: var(--font-display);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 1.2px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  margin-bottom: 6px;
+  flex: 0 0 auto;
+}
+
+.cropX {
+  position: relative;
+  overflow-x: auto;
+  overflow-y: visible;
+}
+
+/* Flowing multicolor light line the pills sit on top of, tying the row
+   together the way a single connected trail does in the reference. Lives
+   INSIDE .row (not .cropX) so its 100% width tracks the row's real
+   content width — including the "min-width: max-content" case where the
+   row is wider than the viewport and scrolls — rather than just the
+   scroll container's visible viewport. */
+.connector {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  width: 100%;
+  height: 60px;
+  transform: translateY(-50%);
+  z-index: 0;
+  pointer-events: none;
+  overflow: visible;
+}
+.connectorLine {
+  opacity: 0.55;
+}
+.connectorPulse {
+  stroke-dasharray: 60 940;
+  stroke-dashoffset: 0;
+  animation: moodConnectorTravel var(--motion-idle-slow, 10s) linear infinite;
+  opacity: 0.9;
+}
+@keyframes moodConnectorTravel {
+  to {
+    stroke-dashoffset: -1000;
+  }
+}
+.reduced .connectorPulse {
+  animation: none;
+  opacity: 0;
+}
+
+.row {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  /* Was justify-content: center with pills at a fixed width — on wide
+     viewports that left the whole strip centered with ~30px of dead
+     margin on each side instead of reaching the same left/right edges
+     as the hero, AI Picks, and Continue Watching above it. Pills now
+     grow (see .pill's flex-grow) to consume that space themselves, so
+     the row's real content spans edge-to-edge and justify-content only
+     matters as a fallback. */
+  justify-content: center;
+  /* Close together, not overlapping — just enough separation that each
+     capsule's own edge stays legible, tight enough that the glow blooms
+     bleed into a near-continuous strip of light per the reference. */
+  gap: 3px;
+  padding: 14px 10px 8px;
+  width: 100%;
+}
+
+/* Large, saturated glowing mood capsules sitting close together on the
+   connector line (per reference), replacing the earlier compact
+   left-aligned glass chips. Icon centered near the top, label centered
+   below, generous outer bloom that's allowed to extend past the
+   capsule's own edge into the gap toward its neighbors — that bleed is
+   what reads as "connected by light" rather than a row of separate
+   buttons, while the capsules themselves still never overlap. */
+.pill {
+  position: relative;
+  /* Custom organic blob, not a stadium/pill — asymmetric elliptical
+     corner radii (the CSS "blob" technique: four different x/y radius
+     pairs) instead of a uniform 999px pill, so every mood control reads
+     as a one-off irregular shape rather than a row of identical
+     capsules. flex-grow (not 0 0 auto) is what makes the row cover the
+     full width: each pill starts at 224px and stretches to fill
+     whatever's left over, so 7 pills always tile edge-to-edge across
+     the section's real width instead of sitting centered at their
+     intrinsic size. min-width keeps them from ever going narrower than
+     the reference's proportions. */
+  width: auto;
+  min-width: 224px;
+  height: 118px;
+  flex: 1 1 224px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 14px;
+  border-radius: 62% 38% 51% 49% / 58% 44% 56% 42%;
+  overflow: visible;
+  isolation: isolate;
+  border: 1px solid hsla(var(--hue), 60%, 55%, 0.22);
+  /* Centre stays dark — colour lives almost entirely in the perimeter
+     glow (.pillHalo, below) plus this thin edge-hugging rim, not in the
+     fill itself. Was inverted before (bright fill fading to dark at the
+     edge); this is the reference's actual treatment. */
+  background: radial-gradient(
+    ellipse at 50% 42%,
+    rgba(6, 10, 18, 0.55) 0%,
+    rgba(4, 7, 13, 0.7) 46%,
+    hsla(var(--hue), 70%, 42%, 0.22) 82%,
+    hsla(var(--hue), 75%, 50%, 0.4) 100%
+  );
+  backdrop-filter: blur(6px);
+  color: inherit;
+  text-align: center;
+  box-shadow: 0 0 26px -6px hsla(var(--hue), 90%, 55%, 0.45);
+  transition: transform var(--transition-fast), border-color var(--transition-fast),
+    background var(--transition-fast), box-shadow var(--transition-fast);
+}
+.pill:hover,
+.pill:focus-visible {
+  transform: translateY(-4px);
+  border-color: hsla(var(--hue), 88%, 70%, 0.5);
+  background: radial-gradient(
+    ellipse at 50% 42%,
+    rgba(6, 10, 18, 0.55) 0%,
+    rgba(4, 7, 13, 0.68) 44%,
+    hsla(var(--hue), 75%, 45%, 0.3) 80%,
+    hsla(var(--hue), 80%, 55%, 0.5) 100%
+  );
+  box-shadow: 0 0 36px -4px hsla(var(--hue), 90%, 58%, 0.6);
+}
+
+.pillHalo {
+  position: absolute;
+  /* Pooled toward the bottom rather than centered — the reference's
+     pills read as floating just above a glowing light source beneath
+     them, not lit evenly from the middle. */
+  top: 82%;
+  left: 50%;
+  translate: -50% -50%;
+  z-index: -1;
+  /* Deliberately wider than the capsule itself — the bloom is allowed to
+     bleed toward (and now, at this tight a gap, gently into) the next
+     capsule's own glow, which is what makes the row read as one
+     connected strip of light per the reference. Sized as a percentage
+     of the pill (its containing block), not a fixed px, because pills
+     now flex-grow to fill the row's full width — a fixed halo would go
+     stale (too small, not reaching the capsule's own edge) the moment a
+     pill grows past its 224px starting basis. */
+  width: 112%;
+  height: 157%;
+  border-radius: 50%;
+  background: radial-gradient(circle, hsla(var(--hue), 95%, 65%, 0.48), transparent 70%);
+  filter: blur(24px);
+}
+
+.pillIcon {
+  position: relative;
+  z-index: 1;
+  flex: 0 0 auto;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: hsl(var(--hue), 95%, 85%);
+  /* Thin glassy ring rather than a solid gradient badge — closer to the
+     reference's lighter, more delicate icon treatment. */
+  background: radial-gradient(circle at 35% 30%, hsla(var(--hue), 90%, 60%, 0.16), transparent 70%);
+  box-shadow: inset 0 0 0 1.5px hsla(var(--hue), 90%, 78%, 0.75), 0 0 16px 1px hsla(var(--hue), 95%, 62%, 0.5);
+  transition: box-shadow var(--transition-standard), transform var(--transition-standard);
+}
+.pillIcon svg {
+  width: 20px;
+  height: 20px;
+}
+.pill:hover .pillIcon,
+.pill:focus-visible .pillIcon {
+  transform: scale(1.08);
+}
+
+.pillLabel {
+  position: relative;
+  z-index: 1;
+  font-family: var(--font-body);
+  font-size: 12.5px;
+  font-weight: 700;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+  color: hsl(var(--hue), 92%, 90%);
+  text-shadow: 0 0 10px hsla(var(--hue), 90%, 55%, 0.45);
+  line-height: 1.2;
+}
+
+.pillActive {
+  border-color: hsla(var(--hue), 90%, 72%, 0.6);
+  background: radial-gradient(
+    ellipse at 50% 42%,
+    rgba(6, 10, 18, 0.5) 0%,
+    rgba(4, 7, 13, 0.62) 42%,
+    hsla(var(--hue), 85%, 50%, 0.4) 82%,
+    hsla(var(--hue), 88%, 58%, 0.62) 100%
+  );
+  box-shadow: 0 0 0 1px hsla(var(--hue), 90%, 72%, 0.4), 0 16px 34px -14px hsla(var(--hue), 90%, 55%, 0.7);
+}
+.pillActive .pillIcon {
+  box-shadow: 0 0 0 1px hsla(var(--hue), 90%, 85%, 0.9), 0 0 26px 4px hsla(var(--hue), 95%, 65%, 0.9);
+}
+
+/* Each mood gets a genuinely distinct silhouette (not a shared template
+   with minor jitter) — the corner radii below are deliberately pushed
+   toward each mood's own character rather than staying close to a
+   common baseline blob. .row's first child is the connector <svg>, so
+   nth-child(2) is the first actual pill (Thrilling) through
+   nth-child(8) (Action). */
+.row > button:nth-child(2) {
+  /* Thrilling — pointed left edge (low radius on the left corners),
+     rounded right, like a blob leaning/darting rightward. */
+  border-radius: 22% 74% 78% 26% / 55% 62% 48% 50%;
+}
+.row > button:nth-child(3) {
+  /* Emotional — heart-like: two rounded lobes up top, a single
+     narrower point at the bottom. */
+  border-radius: 64% 64% 34% 34% / 74% 74% 30% 30%;
+}
+.row > button:nth-child(4) {
+  /* Mind-Bending — wide central bulge via alternating high/low
+     vertical radii, reading as a twisted, off-axis blob. */
+  border-radius: 62% 38% 62% 38% / 38% 64% 34% 66%;
+}
+.row > button:nth-child(5) {
+  /* Feel Good — a soft, near-clean oval; the calmest shape in the row. */
+  border-radius: 50% 50% 50% 50% / 62% 62% 58% 58%;
+}
+.row > button:nth-child(6) {
+  /* Family — slight upper bulge (top corners rounder/taller than the
+     bottom), reading as gently top-heavy. */
+  border-radius: 58% 58% 44% 44% / 68% 68% 46% 46%;
+}
+.row > button:nth-child(7) {
+  /* Sci-Fi — stretched/elongated profile: very round left-right,
+     flatter top-bottom, so it reads as a lens rather than a circle. */
+  border-radius: 82% 82% 82% 82% / 34% 34% 34% 34%;
+}
+.row > button:nth-child(8) {
+  /* Action — mirror of Thrilling: sharper right edge, rounded left. */
+  border-radius: 74% 22% 26% 78% / 50% 55% 50% 48%;
+}
+
+/* ---------- Filtered results drawer ---------- */
+.resultsDrawer {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(100% + 8px);
+  z-index: 30;
+  max-height: 260px;
+  padding: 16px 18px;
+  border-radius: var(--radius-large);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.resultsHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12.5px;
+  color: var(--text-secondary);
+}
+.resultsClear {
+  color: var(--accent-cyan);
+  font-size: 12px;
+}
+.resultsGrid {
+  display: flex;
+  gap: 12px;
+  overflow-x: auto;
+  padding-bottom: 4px;
+}
+.resultCard {
+  flex: 0 0 auto;
+  width: 110px;
+  height: 66px;
+  border-radius: var(--radius-small);
+  display: flex;
+  align-items: flex-end;
+  padding: 6px 8px;
+  font-size: 10.5px;
+  font-weight: 600;
+  color: #fff;
+  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.6);
+}
+.resultsEmpty {
+  font-size: 12px;
+  color: var(--text-muted);
+  padding: 8px 0;
+}
+
+@media (max-width: 1439px) {
+  .pill {
+    /* flex-basis (set via the .pill flex shorthand) wins over `width`
+       for main-axis sizing whenever it's anything other than `auto` —
+       since the base rule sets an explicit 224px basis, this breakpoint
+       has to override flex/min-width too, not just width, or the pills
+       would silently stay at the desktop basis. */
+    width: auto;
+    min-width: 192px;
+    flex: 1 1 192px;
+    height: 96px;
+    padding: 12px;
+    gap: 6px;
+    border-radius: 999px;
+  }
+  .pillIcon {
+    width: 32px;
+    height: 32px;
+  }
+  .pillIcon svg {
+    width: 15px;
+    height: 15px;
+  }
+  /* .pillHalo no longer needs an override here — it's percentage-sized
+     off the pill itself now, so it tracks this breakpoint's pill size
+     automatically. */
+  .pillLabel {
+    font-size: 11.5px;
+  }
+}
+
+@media (max-width: 767px) {
+  /* Mobile keeps the old horizontal-scroll strip instead of stretching
+     to fill — there usually isn't spare width to fill on a phone, and
+     growing pills here would fight the scrollable, fixed-size-capsule
+     behavior .cropX already provides. */
+  .row {
+    justify-content: flex-start;
+    min-width: max-content;
+    width: auto;
+  }
+  .pill {
+    width: 168px;
+    min-width: 168px;
+    flex: 0 0 168px;
+    height: 88px;
+    border-radius: 999px;
+  }
+  .pillIcon {
+    width: 30px;
+    height: 30px;
+  }
+  /* .pillHalo is percentage-sized off the pill (see base rule) and
+     tracks this breakpoint's fixed pill size automatically. */
+}

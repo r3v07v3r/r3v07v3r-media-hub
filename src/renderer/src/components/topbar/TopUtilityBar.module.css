@@ -1,0 +1,180 @@
+.bar {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  padding: 16px 26px;
+  min-height: 76px;
+}
+
+/* ---------- Brand ---------- */
+.brand {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+.brandMark {
+  /* Reference treatment is a thin, silvery, faintly-etched mark rather
+     than a solid bold neon fill — a subtle cyan glow and hairline
+     outline instead of a heavy color block. */
+  font-family: var(--font-brand);
+  font-weight: 500;
+  font-size: 23px;
+  letter-spacing: 3px;
+  color: #eef5fc;
+  -webkit-text-stroke: 0.4px rgba(120, 210, 255, 0.5);
+  text-shadow: 0 0 14px rgba(94, 200, 255, 0.4);
+}
+.brandWord {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.2;
+  font-family: var(--font-display);
+  font-weight: 500;
+  font-size: 10px;
+  letter-spacing: 3px;
+  color: var(--text-muted);
+}
+
+/* ---------- User / environment status ---------- */
+.status {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+.avatarButton {
+  position: relative;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 15px;
+  color: #fff;
+  border: 1px solid var(--border-subtle);
+  transition: box-shadow var(--transition-fast), transform var(--transition-fast);
+}
+.avatarButton:hover,
+.avatarButton[aria-expanded="true"] {
+  box-shadow: 0 0 0 3px rgba(56, 229, 255, 0.25);
+}
+.avatarButton:active {
+  transform: scale(0.96);
+}
+
+.profileMenu {
+  position: absolute;
+  top: 54px;
+  right: 0;
+  min-width: 180px;
+  border-radius: var(--radius-medium);
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  z-index: 60;
+}
+.profileMenuItem {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 10px;
+  border-radius: var(--radius-small);
+  font-size: 13px;
+  color: var(--text-secondary);
+  text-align: left;
+  min-height: 44px;
+}
+.profileMenuItem:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-primary);
+}
+.profileMenuItem[aria-current="true"] {
+  color: var(--text-primary);
+  background: rgba(56, 229, 255, 0.1);
+}
+.profileMenuAvatar {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 700;
+  color: #fff;
+  flex: 0 0 auto;
+}
+
+.separator {
+  width: 1px;
+  height: 30px;
+  background: var(--border-subtle);
+}
+
+.timeBlock {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.25;
+}
+.time {
+  font-family: var(--font-display);
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.date {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.weather {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-secondary);
+}
+.weatherIcon {
+  width: 18px;
+  height: 18px;
+  color: var(--accent-cyan);
+}
+.weatherTemp {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 15px;
+}
+.weatherSkeleton {
+  width: 44px;
+  height: 14px;
+  border-radius: 4px;
+  background: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0.06),
+    rgba(255, 255, 255, 0.14),
+    rgba(255, 255, 255, 0.06)
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.4s ease-in-out infinite;
+}
+@keyframes shimmer {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
+}
+
+@media (max-width: 900px) {
+  .timeBlock .date,
+  .brandWord {
+    display: none;
+  }
+}

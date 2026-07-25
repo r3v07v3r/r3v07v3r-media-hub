@@ -1,0 +1,158 @@
+'use client'
+
+import { useAppState } from '@renderer/context/AppStateContext'
+import { Icon } from '@renderer/components/icons/Icon'
+import { resolveArtwork } from '@renderer/lib/artwork'
+import { ArtworkImage } from '@renderer/components/media/ArtworkImage'
+import styles from './ContinueWatchingPanel.module.css'
+
+export function ContinueWatchingPanel() {
+  const {
+    continueWatching,
+    startPlayback,
+    markContinueWatching,
+    removeContinueWatching,
+    openDetail
+  } = useAppState()
+
+  return (
+    <aside className={styles.panel} aria-label="Continue watching">
+      <div className={styles.panelGlow} aria-hidden="true" />
+      <h2 className={styles.heading}>
+        <Icon name="clock" />
+        Continue Watching
+      </h2>
+
+      {continueWatching.length === 0 ? (
+        <div className={styles.empty}>
+          <Icon name="tracked" size={22} />
+          Nothing in progress right now — start watching something and it&apos;ll show up here.
+        </div>
+      ) : (
+        <ul className={styles.list}>
+          {continueWatching.map((c) => {
+            const m = c.media
+            const isDone = m.completed
+            const artwork = resolveArtwork(m)
+            return (
+              <li key={m.id} className={styles.item}>
+                <button
+                  type="button"
+                  className={`${styles.thumbButton} animated-edge`}
+                  onClick={() => (isDone ? openDetail(m) : startPlayback(m))}
+                  aria-label={isDone ? `Open details for ${m.title}` : `Resume ${m.title}`}
+                >
+                  <ArtworkImage
+                    src={artwork.thumbnailUrl}
+                    alt=""
+                    fallbackTitle={m.title}
+                    artTint={m.artTint}
+                    sizes="88px"
+                    className={styles.thumbImage}
+                  />
+                  {isDone && (
+                    <span className={styles.thumbCheck} aria-hidden="true">
+                      <Icon name="check" strokeWidth={2.4} />
+                    </span>
+                  )}
+                </button>
+                <div className={styles.info}>
+                  <span className={styles.title}>{m.title}</span>
+                  {isDone ? (
+                    <span className={styles.meta}>Completed</span>
+                  ) : (
+                    <>
+                      <span className={styles.meta}>
+                        {m.seasonNumber && `S${m.seasonNumber} · Ep ${m.episodeNumber}`}
+                      </span>
+                      <div className={styles.progressRow}>
+                        <div
+                          className={styles.progressTrack}
+                          role="progressbar"
+                          aria-label={`${m.title} watch progress`}
+                          aria-valuenow={m.progressPercentage ?? 0}
+                          aria-valuemin={0}
+                          aria-valuemax={100}
+                        >
+                          <div
+                            className={styles.progressFill}
+                            style={{ width: `${m.progressPercentage ?? 0}%` }}
+                          />
+                        </div>
+                        <span className={styles.progressPct}>
+                          {m.remainingMinutes
+                            ? `${m.remainingMinutes}m left`
+                            : `${m.progressPercentage}%`}
+                        </span>
+                      </div>
+                    </>
+                  )}
+                  <div className={styles.ratings}>
+                    {m.communityRating && (
+                      <span>
+                        <Icon name="star" />
+                        {m.communityRating.toFixed(1)}
+                      </span>
+                    )}
+                    {m.imdbRating && <span>IMDb {m.imdbRating.toFixed(1)}</span>}
+                  </div>
+                </div>
+
+                <div className={styles.hoverActions}>
+                  {!isDone && (
+                    <button
+                      type="button"
+                      className={styles.hoverActionButton}
+                      onClick={() => startPlayback(m)}
+                      aria-label={`Resume ${m.title}`}
+                    >
+                      <Icon name="play" />
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    className={styles.hoverActionButton}
+                    onClick={() => startPlayback({ ...m, progressPercentage: 0 })}
+                    aria-label={`Restart ${m.title}`}
+                  >
+                    <Icon name="refresh" />
+                  </button>
+                  <button
+                    type="button"
+                    className={styles.hoverActionButton}
+                    onClick={() => markContinueWatching(m.id, !m.watched)}
+                    aria-label={m.watched ? `Mark ${m.title} unwatched` : `Mark ${m.title} watched`}
+                  >
+                    <Icon name={m.watched ? 'eye-off' : 'eye'} />
+                  </button>
+                  <button
+                    type="button"
+                    className={styles.hoverActionButton}
+                    onClick={() => removeContinueWatching(m.id)}
+                    aria-label={`Remove ${m.title} from Continue Watching`}
+                  >
+                    <Icon name="trash" />
+                  </button>
+                  <button
+                    type="button"
+                    className={styles.hoverActionButton}
+                    onClick={() => openDetail(m)}
+                    aria-label={`More information about ${m.title}`}
+                  >
+                    <Icon name="info" />
+                  </button>
+                </div>
+              </li>
+            )
+          })}
+        </ul>
+      )}
+
+      <div className={styles.footer}>
+        <button type="button" className={styles.viewAll}>
+          View All
+        </button>
+      </div>
+    </aside>
+  )
+}

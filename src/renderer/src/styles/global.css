@@ -1,0 +1,329 @@
+@import "@fontsource/inter/400.css";
+@import "@fontsource/inter/500.css";
+@import "@fontsource/inter/600.css";
+@import "@fontsource/inter/700.css";
+@import "@fontsource/rajdhani/400.css";
+@import "@fontsource/rajdhani/500.css";
+@import "@fontsource/rajdhani/600.css";
+@import "@fontsource/rajdhani/700.css";
+@import "@fontsource/orbitron/500.css";
+@import "@fontsource/orbitron/700.css";
+@import "@fontsource/orbitron/900.css";
+
+/* ---------- Design tokens (spec section 13) ---------- */
+:root {
+  --background: #02060d;
+  --background-elevated: rgba(8, 14, 25, 0.78);
+  --panel: rgba(10, 17, 29, 0.68);
+  --panel-strong: rgba(12, 18, 30, 0.9);
+  --text-primary: #f4f6fb;
+  --text-secondary: #a9b0bf;
+  --text-muted: #6f7889;
+
+  --accent-blue: #18a9ff;
+  --accent-cyan: #38e5ff;
+  --accent-violet: #8d4dff;
+  --accent-magenta: #ff4fa7;
+  --accent-orange: #ff7a28;
+  --accent-green: #27e69a;
+  --accent-yellow: #f4cb45;
+
+  --border-subtle: rgba(160, 190, 230, 0.18);
+  --border-active: rgba(94, 193, 255, 0.62);
+
+  --radius-small: 12px;
+  --radius-medium: 20px;
+  --radius-large: 30px;
+  --radius-pill: 999px;
+
+  --blur-panel: 22px;
+
+  --transition-fast: 160ms ease;
+  --transition-standard: 280ms cubic-bezier(0.2, 0.8, 0.2, 1);
+
+  --font-body: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-display: "Rajdhani", var(--font-body);
+  --font-brand: "Orbitron", var(--font-body);
+
+  color-scheme: dark;
+
+  /* ---------- Motion tokens ----------
+     Shared vocabulary for the ambient/reactive motion system so nothing
+     invents its own duration or easing. Durations are deliberately
+     staggered by component (see per-component `animation-delay`) so the
+     whole interface never pulses in lockstep. */
+  --motion-idle-slow: 10s;
+  --motion-idle-medium: 6s;
+  --motion-breathe: 4.5s;
+  --motion-pulse: 2.4s;
+  --motion-reactive: 260ms;
+  --motion-page: 500ms;
+
+  --ease-organic: cubic-bezier(0.37, 0, 0.63, 1);
+  --ease-smooth: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-reactive: cubic-bezier(0.16, 1, 0.3, 1);
+
+  /* SSR-safe default matching the expanded desktop rail — SidebarNavigation
+     overwrites this on mount with the rail's real current width (see its
+     nav-rail-width effect), so this value only shows for the brief window
+     before hydration and should match its most common actual state. */
+  --nav-rail-width: 220px;
+}
+
+/* Registered custom property so animating --edge-angle interpolates as a
+   real angle (0deg -> 360deg) instead of snapping — required for the
+   rotating conic-gradient edge energy used by .animated-edge. */
+@property --edge-angle {
+  syntax: "<angle>";
+  inherits: false;
+  initial-value: 0deg;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+body {
+  background: var(--background);
+  color: var(--text-primary);
+  font-family: var(--font-body);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  position: relative;
+}
+
+/* ---------- Film grain (reference art direction) ----------
+   A subtle, fixed noise overlay across the whole dashboard for the
+   cinematic texture in the reference — an SVG feTurbulence pattern
+   tiled via a data URI rather than a shipped image asset. Kept very
+   low-opacity and blended with "overlay" so it reads as texture, not
+   visible static. */
+body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 999;
+  pointer-events: none;
+  opacity: 0.05;
+  mix-blend-mode: overlay;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  background-size: 140px 140px;
+}
+
+button,
+input {
+  font-family: inherit;
+  color: inherit;
+}
+
+button {
+  cursor: pointer;
+  background: none;
+  border: none;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+/* ---------- Focus visibility (spec section 19) ---------- */
+:focus {
+  outline: none;
+}
+:focus-visible {
+  outline: 2px solid var(--accent-cyan);
+  outline-offset: 3px;
+  border-radius: 6px;
+}
+
+/* ---------- Glass panel treatment (spec section 14) ---------- */
+.glass-panel {
+  background: linear-gradient(145deg, rgba(18, 26, 42, 0.78), rgba(5, 10, 19, 0.64));
+  border: 1px solid rgba(143, 183, 224, 0.2);
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.42), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  backdrop-filter: blur(22px);
+  -webkit-backdrop-filter: blur(22px);
+}
+
+/* ---------- Motion primitives ----------
+   Shared building blocks for the ambient/reactive motion system — apply
+   these classes instead of writing one-off animations per component.
+   All keyframes animate transform/opacity only (never width/height/top/
+   left) per the performance requirements, and everything is already
+   covered by the prefers-reduced-motion override below (animation
+   durations clamp to ~0, so a looping animation just settles on its
+   final frame instead of being surgically special-cased per class). */
+
+/* Rotating conic-gradient edge light — a border that is mostly dark with
+   a moving highlight sweeping the perimeter, not a fully-lit outline. */
+.animated-edge {
+  position: relative;
+  isolation: isolate;
+}
+.animated-edge::before {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  z-index: 5;
+  border-radius: inherit;
+  padding: 1px;
+  background: conic-gradient(
+    from var(--edge-angle),
+    transparent 0deg,
+    transparent 250deg,
+    rgba(37, 210, 255, 0.15) 280deg,
+    rgba(81, 151, 255, 0.8) 315deg,
+    rgba(165, 89, 255, 0.65) 335deg,
+    transparent 360deg
+  );
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  pointer-events: none;
+  animation: edgeRotate var(--motion-idle-slow) linear infinite;
+  animation-delay: var(--edge-delay, 0s);
+  opacity: 0.7;
+  transition: opacity var(--transition-standard);
+}
+.animated-edge:hover::before,
+.animated-edge:focus-within::before,
+.animated-edge.edge-active::before {
+  opacity: 1;
+  animation-duration: calc(var(--motion-idle-slow) * 0.45);
+}
+@keyframes edgeRotate {
+  to {
+    --edge-angle: 360deg;
+  }
+}
+
+/* Slow "breathing" — glow expansion + faint opacity/scale shift. Give
+   each instance a different --breathe-delay so panels don't pulse in
+   sync. */
+.breathing-glow {
+  animation: breathe var(--motion-breathe) var(--ease-organic) infinite;
+  animation-delay: var(--breathe-delay, 0s);
+}
+@keyframes breathe {
+  0%,
+  100% {
+    opacity: 0.55;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.03);
+  }
+}
+
+/* Outward-expanding ring "ping" — used for energy nodes on the nav spine
+   and momentary confirmation pulses (e.g. completed items). */
+.pulse-ring {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border: 1px solid currentColor;
+  opacity: 0;
+  pointer-events: none;
+  animation: pulseRing var(--motion-pulse) var(--ease-smooth) infinite;
+  animation-delay: var(--pulse-delay, 0s);
+}
+@keyframes pulseRing {
+  0% {
+    transform: scale(0.55);
+    opacity: 0.65;
+  }
+  100% {
+    transform: scale(2.1);
+    opacity: 0;
+  }
+}
+
+/* One diagonal light sweep on hover/active — used on cards and the
+   search field during processing. */
+.light-sweep {
+  position: relative;
+  overflow: hidden;
+}
+.light-sweep::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  pointer-events: none;
+  background: linear-gradient(115deg, transparent 42%, rgba(255, 255, 255, 0.16) 50%, transparent 58%);
+  transform: translateX(-130%);
+  transition: transform 750ms var(--ease-smooth);
+}
+.light-sweep:hover::after,
+.light-sweep.sweep-active::after {
+  transform: translateX(130%);
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.skip-link {
+  position: fixed;
+  top: -60px;
+  left: 12px;
+  z-index: 500;
+  background: var(--panel-strong);
+  color: var(--text-primary);
+  padding: 10px 18px;
+  border-radius: var(--radius-small);
+  border: 1px solid var(--border-active);
+  transition: top var(--transition-fast);
+}
+.skip-link:focus {
+  top: 12px;
+}
+
+/* ---------- Reduced motion (spec section 15 / 19) ---------- */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Thin, unobtrusive scrollbars for the horizontal rows */
+.thin-scroll::-webkit-scrollbar {
+  height: 6px;
+  width: 6px;
+}
+.thin-scroll::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 4px;
+}
+.thin-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}

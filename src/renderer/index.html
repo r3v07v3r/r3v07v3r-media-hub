@@ -1,0 +1,22 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <title>R3 Media Center</title>
+    <!-- https://developer.mozilla.org/en-US/docs/Web/HTTP/CSP -->
+    <!-- img-src allows image.tmdb.org: real poster/backdrop art resolved
+         ahead of time into src/renderer/src/data/tmdbArtwork.generated.json
+         (see lib/artwork) — see REMOTE_IMAGE_DOMAINS in
+         lib/artwork/config.ts, which is the single source of truth this
+         should stay in sync with if another remote provider is added. -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://image.tmdb.org; connect-src 'self'"
+    />
+  </head>
+
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

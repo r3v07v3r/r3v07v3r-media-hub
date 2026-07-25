@@ -1,0 +1,85 @@
+.dashboard {
+  height: 100%;
+  min-height: 0;
+  display: grid;
+  /* Reference composition target (see public/reference/dashboard-
+     reference.png): the assistant/orb column and the telemetry column
+     are both roughly 260-340px, and the hero spans the FULL remaining
+     width — including the space Continue Watching sits in. "hero hero"
+     in row 1 is not a typo: the same named area repeated across columns
+     2 and 3 merges into one spanned grid cell, so the hero's own
+     background art can run edge-to-edge behind Continue Watching.
+     ContinueWatchingPanel is deliberately also placed on `grid-area:
+     hero` (see its own .module.css) and self-aligned to the top-right
+     corner of that shared cell — a floating glass card over the art,
+     not a separate opaque column — matching the reference exactly. */
+  grid-template-columns: 260px minmax(0, 1fr) 340px;
+  grid-template-rows: minmax(520px, 1fr) minmax(260px, auto) auto;
+  /* ContinueWatchingPanel shares "hero" (see its own .module.css) and
+     self-aligns to the top-right corner of that cell — a floating
+     glass card over the hero's art, not a separate opaque column.
+     PerformanceWidget keeps its own "status" cell in row 2 (see
+     PerformanceWidget.module.css) but top-aligns within it instead of
+     centering, so it visually hugs the row above — directly under
+     Continue Watching — rather than floating in the middle of row 2's
+     260px of height. Tried merging both into the "hero" cell so
+     telemetry could sit *inside* Continue Watching's own column; that
+     made them compete for row 1's fixed 520px floor and left too
+     little room for Continue Watching's list to show more than one
+     row. Keeping separate cells but aligning telemetry to the top of
+     its own gets the same "closer together" read without that
+     conflict. */
+  grid-template-areas:
+    "assistant hero hero"
+    "picks picks status"
+    "mood mood mood";
+  gap: 16px;
+  padding: 14px 26px 22px;
+}
+
+@media (max-width: 1439px) {
+  .dashboard {
+    grid-template-columns: 220px minmax(0, 1fr) 300px;
+    gap: 12px;
+    padding: 12px 20px 18px;
+  }
+}
+
+/* Tablet (spec section 7): single column, hero first, AI Picks directly
+   below it, Continue Watching (now a horizontal carousel — see
+   ContinueWatchingPanel.module.css) beneath that, then mood. "status"
+   is deliberately absent from this list — PerformanceWidget takes
+   itself out of grid flow at this width and floats as a small
+   expandable button instead of reserving its own empty-feeling row. */
+@media (max-width: 1099px) {
+  .dashboard {
+    grid-template-columns: 1fr;
+    grid-template-rows: repeat(5, auto);
+    grid-template-areas:
+      "assistant"
+      "hero"
+      "picks"
+      "continue"
+      "mood";
+    overflow-y: auto;
+  }
+}
+
+/* Mobile (spec section 8): required order is compact assistant status →
+   hero → Continue Watching carousel → AI Picks carousel → mood — Continue
+   Watching and AI Picks swap places relative to the tablet order above. */
+@media (max-width: 767px) {
+  .dashboard {
+    grid-template-areas:
+      "assistant"
+      "hero"
+      "continue"
+      "picks"
+      "mood";
+    /* Bottom nav gets its own row in AppShell's mobile grid (never
+       overlaps .main), so this only needs normal breathing room, not
+       clearance padding for a floating bar. */
+    padding: 10px 14px 20px;
+    gap: 14px;
+  }
+}

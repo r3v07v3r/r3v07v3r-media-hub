@@ -1,0 +1,101 @@
+.shell {
+  position: relative;
+  height: 100dvh;
+  width: 100vw;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  grid-template-rows: auto 1fr;
+  grid-template-areas:
+    "topbar topbar"
+    "sidebar main";
+  overflow: hidden;
+}
+
+.topbar {
+  grid-area: topbar;
+  z-index: 20;
+  /* Same min-width:0 fix as .main/.sidebar — the topbar shares the
+     mobile layout's single 1fr column, so its own content (search field,
+     weather/clock/avatar cluster) would otherwise set the column's
+     implicit minimum width and stretch every row (including the bottom
+     nav) to match, silently overflowing the viewport. */
+  min-width: 0;
+}
+
+.sidebar {
+  grid-area: sidebar;
+  z-index: 15;
+  /* Same fix as .main below: without min-width:0, a grid item's implicit
+     minimum size is its content's min-content width. At the mobile
+     breakpoint the bottom nav's 6 non-shrinking items (5 primary + More)
+     have enough combined min-content width to overflow the 1fr track
+     silently (clipped by .shell's overflow:hidden, not reflowed), which
+     was cutting the last couple of nav items off-screen. */
+  min-width: 0;
+  min-height: 0;
+  /* The rail itself is no longer full-height (see .rail in
+     SidebarNavigation.module.css — it's sized to fit its buttons, not
+     the whole column), so this flex column is what actually centers it
+     vertically within the sidebar's grid track. Mobile overrides the
+     rail to width:100%/height:auto inside its own media query, and the
+     mobile grid row is already content-sized, so this centering is a
+     no-op there rather than a conflict.
+
+     "safe center" (not plain "center") plus a scroll fallback matter
+     in practice: this column's real height comes from 100dvh on
+     .shell, and some embedding contexts (e.g. an iframe/webview whose
+     visible frame doesn't match what dvh resolves against) can end up
+     reporting a taller box than what's actually on screen. Plain
+     center would then center the nav buttons inside that oversized,
+     partly-offscreen box — with .shell's overflow:hidden, that leaves
+     the buttons genuinely unreachable, not just visually off-center.
+     "safe center" falls back to start-alignment instead of overflowing
+     off both edges, and overflow-y:auto means if the rail is ever
+     taller than the visible column for any reason, it's still
+     reachable by scrolling this column instead of the whole shell. */
+  display: flex;
+  flex-direction: column;
+  justify-content: safe center;
+  overflow-y: auto;
+}
+
+.main {
+  grid-area: main;
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  /* Was overflow-x: hidden — that clipped MoodBrowser's intentional
+     negative-margin bleed (see .section in MoodBrowser.module.css)
+     right at this element's own left edge, before it could reach
+     underneath the sidebar the way the reference shows. .shell (the
+     outer grid) still has its own overflow: hidden and a fixed 100vw
+     width, so this doesn't risk an actual page-level horizontal
+     scrollbar — anything that overflows .main now just paints into the
+     sidebar's grid track instead of being clipped, and .sidebar's
+     higher z-index (15 vs. this element's 5) keeps the rail's own
+     icons/labels on top of whatever bleeds under them. */
+  position: relative;
+  z-index: 5;
+}
+
+/* ---------- Responsive breakpoints (spec section 16) ---------- */
+
+/* Tablet / compact window: collapse nav to icon rail */
+@media (max-width: 1099px) {
+  .shell {
+    grid-template-columns: auto 1fr;
+  }
+}
+
+/* Mobile: dedicated layout — bottom nav instead of a rail, so the shell
+   reflows to a single column with the nav pinned along the bottom. */
+@media (max-width: 767px) {
+  .shell {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto 1fr auto;
+    grid-template-areas:
+      "topbar"
+      "main"
+      "sidebar";
+  }
+}

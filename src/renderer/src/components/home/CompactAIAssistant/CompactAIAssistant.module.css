@@ -1,0 +1,379 @@
+.panel {
+  grid-area: assistant;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  padding: 14px 10px;
+  min-width: 0;
+  /* Explicit floor, not 0 — overflow:hidden below would otherwise zero
+     out this item's automatic minimum size and collapse its auto-sized
+     grid row to nothing at the stacked (<1100px) breakpoint. */
+  min-height: 300px;
+  overflow: hidden;
+}
+
+/* ---------- Orb ----------
+   Reference target: a luminous energy sphere — bright white-blue core,
+   cyan glass ring, violet/blue rotating filaments, irregular flowing
+   light, soft bloom well beyond the sphere's own edge — that reads as a
+   major interface object BEFORE the "R3 AI" text inside it is even
+   noticed, not a circular HUD/status icon. ~1.45x the previous 208px
+   box (itself already 1.625x an earlier 128px pass); every inset below
+   is scaled by that same 1.45 factor so the trail/halo/image layers
+   keep the same proportional relationship to the ring at the new size. */
+.orbWrap {
+  position: relative;
+  width: 302px;
+  height: 302px;
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.orbTrail {
+  position: absolute;
+  inset: -80px -61px;
+  z-index: 0;
+  pointer-events: none;
+}
+.orbHalo {
+  /* Bloom now reaches noticeably past the sphere's own silhouette (per
+     "soft bloom extending beyond the sphere") — bigger negative inset
+     and a wider blur radius than a halo merely dressing up the ring's
+     edge would need. */
+  position: absolute;
+  inset: -68px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(120, 210, 255, 0.4), rgba(139, 107, 255, 0.2) 45%, transparent 74%);
+  filter: blur(30px);
+  animation: orbBreathe 4.5s ease-in-out infinite;
+}
+@keyframes orbBreathe {
+  0%,
+  100% {
+    opacity: 0.5;
+    transform: scale(0.96);
+  }
+  50% {
+    opacity: 0.9;
+    transform: scale(1.06);
+  }
+}
+/* Bright white-blue core — the single brightest point in the sphere,
+   sitting under the swirl/canvas layers so their color reads as light
+   passing through/around a hot centre rather than a flat painted disc. */
+.orbCoreGlow {
+  /* Tighter falloff than the first pass (was transparent at 62% —
+     bright/wide enough to wash out the painted swirl's own violet/cyan
+     filament detail underneath .orbImage). Now only lights the very
+     centre; the outer two-thirds of the sphere is left for the swirl
+     texture + canvas layer to read clearly. */
+  position: absolute;
+  inset: 14px;
+  z-index: 0;
+  border-radius: 50%;
+  background: radial-gradient(
+    circle at 50% 50%,
+    rgba(255, 255, 255, 0.95) 0%,
+    rgba(198, 232, 255, 0.5) 9%,
+    rgba(93, 176, 255, 0.22) 20%,
+    transparent 38%
+  );
+  animation: orbCorePulse 3.6s ease-in-out infinite;
+  pointer-events: none;
+}
+@keyframes orbCorePulse {
+  0%,
+  100% {
+    opacity: 0.75;
+    transform: scale(0.94);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.04);
+  }
+}
+/* Cyan glass ring — a translucent inner rim (distinct from the thin
+   spinning arc-strokes in .orbRing below) that reads as the sphere's own
+   glassy surface catching light, per "cyan glass ring". */
+.orbGlassRing {
+  /* Was a much wider/stronger inset blur (30px/26px at up to 0.22/0.14
+     opacity) — at the orb's ~274px size that soft wash covered enough
+     of the sphere to flatten the painted swirl underneath into a
+     uniform glow rather than reading as a thin glassy rim. Pulled in
+     tight to the edge instead. */
+  position: absolute;
+  inset: 14px;
+  z-index: 1;
+  border-radius: 50%;
+  pointer-events: none;
+  box-shadow: inset 0 0 0 1.5px rgba(180, 235, 255, 0.4), inset 0 -5px 12px rgba(56, 193, 255, 0.16),
+    inset 0 4px 10px rgba(255, 255, 255, 0.1);
+}
+.orbImage {
+  position: absolute;
+  inset: 14px;
+  z-index: 0;
+  border-radius: 50%;
+  background-image: url("/media/ambient/ai-orb-core.jpg");
+  background-size: cover;
+  background-position: center;
+  /* Screen blend: pure black (the image's background) contributes
+     nothing, so only the glowing swirl shows through against the dark
+     UI behind it — no alpha channel needed. Brightness/saturation
+     boosted a touch over the source asset so the swirl stays clearly
+     legible at a glance rather than reading as a faint texture. */
+  filter: brightness(1.4) saturate(1.3) contrast(1.08);
+  mix-blend-mode: screen;
+  animation: orbImageSpin 36s linear infinite;
+  will-change: transform;
+}
+@keyframes orbImageSpin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.orbWrap.listening .orbImage {
+  animation-duration: 14s;
+}
+.orbWrap.processing .orbImage {
+  animation-duration: 8s;
+}
+.orbWrap.responding .orbImage {
+  animation-duration: 20s;
+}
+
+/* Real-time Canvas 2D swirl layer (AIOrbCanvas) — sits directly above
+   .orbImage at the same inset/radius, screen-blended in so its additive
+   glow reads as part of the same energy-sphere rather than a separate
+   layer. */
+.orbCanvas {
+  /* Was 0.92 — at that strength the canvas's own soft, blurry lobes
+     were washing out the painted .orbImage swirl's sharper filament
+     detail underneath it (same z-index, screen-blended, canvas paints
+     on top since it's later in the DOM). Dialed back so the canvas
+     mainly contributes its animated sparkle/core-bloom on top of a
+     still-visible static swirl, rather than replacing it. */
+  position: absolute;
+  inset: 14px;
+  z-index: 0;
+  width: calc(100% - 28px);
+  height: calc(100% - 28px);
+  border-radius: 50%;
+  mix-blend-mode: screen;
+  opacity: 0.6;
+  pointer-events: none;
+}
+
+.orbRing {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  height: 100%;
+}
+.orbRingSpin {
+  transform-origin: 84px 84px;
+  animation: orbSpin 42s linear infinite;
+}
+@keyframes orbSpin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.orbCore {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  text-align: center;
+}
+.orbLabel {
+  font-family: var(--font-display);
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: 2px;
+  color: #f2f6ff;
+  text-shadow: 0 0 16px rgba(139, 178, 255, 0.6);
+}
+.orbStatus {
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  letter-spacing: 0.3px;
+}
+
+.orbWrap.listening .orbHalo {
+  animation-duration: 1.6s;
+}
+.orbWrap.processing .orbRingSpin {
+  animation-duration: 3.2s;
+}
+
+/* Responding: slower radial pulses, warm cyan-white centre glow. */
+.orbWrap.responding .orbHalo {
+  animation-duration: 2.6s;
+  background: radial-gradient(circle, rgba(255, 255, 255, 0.4), rgba(63, 178, 255, 0.22) 45%, transparent 72%);
+}
+.orbWrap.responding .orbCore {
+  animation: orbRespondGlow 2.6s var(--ease-organic, ease-in-out) infinite;
+}
+@keyframes orbRespondGlow {
+  0%,
+  100% {
+    filter: drop-shadow(0 0 0 rgba(255, 255, 255, 0));
+  }
+  50% {
+    filter: drop-shadow(0 0 10px rgba(214, 240, 255, 0.55));
+  }
+}
+
+/* Error: one brief controlled amber-red pulse — not a loop, and never
+   the violent flashing the spec explicitly rules out. */
+.orbWrap.error .orbHalo {
+  animation: orbErrorPulse 700ms var(--ease-reactive, ease-out) 1;
+  background: radial-gradient(circle, rgba(255, 122, 96, 0.4), rgba(255, 90, 90, 0.18) 45%, transparent 72%);
+}
+@keyframes orbErrorPulse {
+  0% {
+    opacity: 0.5;
+    transform: scale(0.96);
+  }
+  40% {
+    opacity: 1;
+    transform: scale(1.12);
+  }
+  100% {
+    opacity: 0.7;
+    transform: scale(1);
+  }
+}
+
+/* ---------- Status line ---------- */
+.statusLine {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  text-align: center;
+}
+.statusLine svg {
+  width: 14px;
+  height: 14px;
+  color: var(--accent-cyan);
+  flex: 0 0 auto;
+}
+
+/* ---------- Recommendation buttons ---------- */
+.actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+  max-width: 210px;
+  flex: 0 0 auto;
+}
+.actionButton {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 9px 14px;
+  border-radius: var(--radius-pill);
+  background: rgba(10, 15, 25, 0.7);
+  border: 1px solid var(--border-subtle);
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  min-height: 44px;
+  transition: border-color var(--transition-fast), box-shadow var(--transition-fast), color var(--transition-fast);
+  overflow: hidden;
+}
+.actionButton:hover:not(:disabled) {
+  border-color: var(--border-active);
+  color: var(--text-primary);
+  box-shadow: 0 0 18px rgba(56, 193, 255, 0.18);
+}
+.actionButton:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+.actionButton svg {
+  width: 15px;
+  height: 15px;
+  flex: 0 0 auto;
+  color: var(--accent-blue);
+}
+.actionSpinner {
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  border: 2px solid rgba(141, 77, 255, 0.25);
+  border-top-color: var(--accent-violet);
+  animation: spin 0.8s linear infinite;
+  margin-left: auto;
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (max-width: 1439px) {
+  .panel {
+    padding: 14px 8px;
+  }
+  .orbWrap {
+    width: 128px;
+    height: 128px;
+  }
+}
+
+/* ---------- Mobile compact status bar ---------- */
+/* Replaces the full orb + recommend-buttons .panel entirely at mobile
+   width (spec section 8, item 3) — a single slim row rather than a
+   shrunk-down version of the desktop panel, so it doesn't eat the fold
+   before the hero even appears. */
+.compactStatusBar {
+  grid-area: assistant;
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-radius: var(--radius-large);
+  min-height: 0;
+}
+.compactStatusBar svg {
+  width: 15px;
+  height: 15px;
+  color: var(--accent-cyan);
+  flex: 0 0 auto;
+}
+.compactStatusText {
+  flex: 1;
+  min-width: 0;
+  font-size: 12.5px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.compactStatusDot {
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent-cyan);
+  box-shadow: 0 0 8px 1px rgba(56, 193, 255, 0.7);
+}
+.compactStatusBarActive .compactStatusDot {
+  background: var(--accent-violet);
+  box-shadow: 0 0 10px 2px rgba(141, 77, 255, 0.75);
+}

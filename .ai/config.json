@@ -1,0 +1,23 @@
+{
+  "maxIterations": 5,
+  "approvalScore": 90,
+  "autoFixPriorities": ["P0", "P1", "P2"],
+  "requireBuildSuccess": true,
+  "requireTestsSuccess": true,
+  "review": {
+    "provider": "openai",
+    "model": "${OPENAI_MODEL}"
+  },
+  "screenshots": {
+    "enabled": true,
+    "viewport": { "width": 1920, "height": 1080 },
+    "settleMs": 700,
+    "routes": [
+      { "name": "dashboard", "url": "/" }
+    ]
+  },
+  "claude": {
+    "command": "claude",
+    "args": ["-p"]
+  }
+}
