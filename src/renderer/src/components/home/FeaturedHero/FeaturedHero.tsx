@@ -6,6 +6,7 @@ import { MediaItem } from '@renderer/types'
 import { resolveArtwork } from '@renderer/lib/artwork'
 import { ArtworkImage } from '@renderer/components/media/ArtworkImage'
 import { useReducedMotion } from '@renderer/hooks/useReducedMotion'
+import { useAppState } from '@renderer/context/AppStateContext'
 import { FeaturedMetadata } from './FeaturedMetadata'
 import { HeroActions } from './HeroActions'
 import { HeroSlideSelector } from './HeroSlideSelector'
@@ -42,6 +43,13 @@ function HeroArtLayer({ item, current }: { item: MediaItem; current: boolean }) 
 }
 
 export function FeaturedHero() {
+  const { featured, homeFeedLive } = useAppState()
+  // home:personalized's top recommendations stand in for this dashboard's
+  // hero-rotation concept (see hooks.ts's useMediaHubHomeFeed) once real —
+  // falls back to the mock rotation before that (bridge missing, still
+  // loading, or a fetch that came back with nothing to feature).
+  const items = homeFeedLive && featured.length ? featured : FEATURED_ITEMS
+
   const [index, setIndex] = useState(0)
   const [paused, setPaused] = useState(false)
   const [prevItem, setPrevItem] = useState<MediaItem | null>(null)
@@ -50,31 +58,37 @@ export function FeaturedHero() {
   const rootRef = useRef<HTMLElement>(null)
   const prevIndexRef = useRef(index)
 
-  const item = FEATURED_ITEMS[index]
+  // Modulo, not direct indexing: `items` can swap out from under `index`
+  // (mock -> live featured pool, a different length) between renders.
+  const safeIndex = index % items.length
+  const item = items[safeIndex]
 
   // Crossfade: keep the outgoing slide mounted (fading out via CSS
   // keyframes) for one transition cycle so slide changes blend rather
   // than cut, per spec section 5 ("crossfade between slides").
   useEffect(() => {
-    if (prevIndexRef.current === index) return
-    setPrevItem(FEATURED_ITEMS[prevIndexRef.current])
-    prevIndexRef.current = index
+    if (prevIndexRef.current === safeIndex) return
+    setPrevItem(items[prevIndexRef.current % items.length])
+    prevIndexRef.current = safeIndex
     const t = setTimeout(() => setPrevItem(null), 900)
     return () => clearTimeout(t)
-  }, [index])
+  }, [safeIndex, items])
 
-  const goTo = useCallback((i: number) => {
-    setIndex((i + FEATURED_ITEMS.length) % FEATURED_ITEMS.length)
-  }, [])
-  const next = useCallback(() => goTo(index + 1), [goTo, index])
-  const prev = useCallback(() => goTo(index - 1), [goTo, index])
+  const goTo = useCallback(
+    (i: number) => {
+      setIndex((i + items.length) % items.length)
+    },
+    [items.length]
+  )
+  const next = useCallback(() => goTo(safeIndex + 1), [goTo, safeIndex])
+  const prev = useCallback(() => goTo(safeIndex - 1), [goTo, safeIndex])
 
   // Auto-advance, paused on hover/focus/reduced-motion (spec section 7).
   useEffect(() => {
     if (paused || reducedMotion) return
-    const id = setTimeout(() => setIndex((i) => (i + 1) % FEATURED_ITEMS.length), ROTATE_MS)
+    const id = setTimeout(() => setIndex((i) => (i + 1) % items.length), ROTATE_MS)
     return () => clearTimeout(id)
-  }, [index, paused, reducedMotion])
+  }, [index, paused, reducedMotion, items.length])
 
   function handleKeyDown(e: React.KeyboardEvent) {
     if (e.key === 'ArrowRight') {
@@ -139,7 +153,7 @@ export function FeaturedHero() {
               <path d="M15 5l-7 7 7 7" />
             </svg>
           </button>
-          <HeroSlideSelector items={FEATURED_ITEMS} activeIndex={index} onSelect={goTo} />
+          <HeroSlideSelector items={items} activeIndex={safeIndex} onSelect={goTo} />
           <button
             type="button"
             className={styles.navChevron}

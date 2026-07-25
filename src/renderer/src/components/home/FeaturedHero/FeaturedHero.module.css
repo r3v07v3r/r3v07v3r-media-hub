@@ -34,11 +34,26 @@
      strong contrast, and only fades where the two gradients overlap
      (bottom-left corner) or where either alone reaches zero (far left,
      bottom strip). */
-  mask-image: linear-gradient(to right, transparent 0%, rgba(0, 0, 0, 0.5) 16%, black 42%),
-    linear-gradient(to top, transparent 0%, black 32%);
+  /* Refinement pass: pushed the full-opacity threshold further right
+     (42% -> 48%) and deepened/extended the early fade (0.5 @16% -> 0.62
+     @22%) — the artwork's own visual weight now sits more toward the
+     right two-thirds instead of the right half, with a longer, gentler
+     runway of darkness on the left for the title/content to sit on top
+     of, per "shift visual focus toward the right" + "strengthen the
+     left fade." Right/top strong-contrast zone is untouched.
+     Second refinement pass: both fades deepened again (left black point
+     48% -> 55%, bottom black point 32% -> 42%) — still a Netflix-banner
+     feel at the old settings, per the latest brief. Right side is still
+     completely untouched by this mask (only fades where these two
+     gradients overlap or reach zero), so cinematic detail there is
+     unaffected. */
+  mask-image:
+    linear-gradient(to right, transparent 0%, rgba(0, 0, 0, 0.68) 24%, black 55%),
+    linear-gradient(to top, transparent 0%, black 42%);
   mask-composite: intersect;
-  -webkit-mask-image: linear-gradient(to right, transparent 0%, rgba(0, 0, 0, 0.5) 16%, black 42%),
-    linear-gradient(to top, transparent 0%, black 32%);
+  -webkit-mask-image:
+    linear-gradient(to right, transparent 0%, rgba(0, 0, 0, 0.68) 24%, black 55%),
+    linear-gradient(to top, transparent 0%, black 42%);
   -webkit-mask-composite: source-in;
 }
 .artLayerCurrent {
@@ -98,7 +113,15 @@
   position: absolute;
   inset: -10%;
   z-index: 1;
-  background: radial-gradient(circle at 68% 42%, var(--art-a, #ff8a3d) 0%, transparent 58%);
+  /* Second radial layer added near the bottom-left, where the artwork
+     transitions into the dark UI — a cool, low-saturation blue/violet
+     wash rather than the hero's own warm accent, so the seam between
+     "cinematic image" and "app chrome" reads as one continuous
+     atmosphere instead of a color boundary. This is the "subtle
+     atmospheric blending" the boundary-softening (mask + artVignette)
+     alone can't fully provide. */
+  background: radial-gradient(circle at 68% 42%, var(--art-a, #ff8a3d) 0%, transparent 58%),
+    radial-gradient(ellipse 70% 55% at 8% 96%, rgba(70, 110, 200, 0.5) 0%, transparent 72%);
   opacity: 0.32;
   mix-blend-mode: soft-light;
   animation: heroDrift 22s ease-in-out infinite;
@@ -125,22 +148,39 @@
    a touch of extra contrast in the mid-fade zone where the image is
    partially visible, not carry legibility on its own. */
 .artScrimLeft {
+  /* Deepened + extended slightly again (0.62->0.68 base, transparent
+     point 57%->62%) to match the deeper mask above — more dark negative
+     space sits behind the title block, and text stays legible over real
+     artwork rather than needing the mask alone to carry it. */
   position: absolute;
   inset: 0;
   z-index: 1;
-  background: linear-gradient(90deg, rgba(4, 8, 16, 0.55) 0%, rgba(4, 8, 16, 0.22) 30%, transparent 52%);
+  background: linear-gradient(
+    90deg,
+    rgba(4, 8, 16, 0.68) 0%,
+    rgba(4, 8, 16, 0.3) 34%,
+    transparent 62%
+  );
 }
 .artScrimBottom {
   position: absolute;
   inset: 0;
   z-index: 1;
-  background: linear-gradient(0deg, rgba(4, 8, 16, 0.62) 0%, transparent 38%);
+  background: linear-gradient(0deg, rgba(4, 8, 16, 0.68) 0%, transparent 46%);
 }
 .artVignette {
+  /* This is what softens the TOP and RIGHT edges — the mask above only
+     ever touches left/bottom, so without this the top-right quadrant
+     would still read as a hard rectangular photo edge no matter how far
+     the other two fades go. A symmetric inset shadow, deepened again
+     this pass, quietly rounds off all four sides at once so no edge of
+     the artwork reads as a cut-out rectangle, while still leaving the
+     top-right corner's own detail clearly the least affected (the
+     falloff only really bites in the outer ~120px). */
   position: absolute;
   inset: 0;
   z-index: 1;
-  box-shadow: inset 0 0 100px 20px rgba(0, 0, 0, 0.28);
+  box-shadow: inset 0 0 150px 34px rgba(0, 0, 0, 0.42);
 }
 
 .grainLayer {
@@ -176,13 +216,17 @@
   font-family: var(--font-display);
   font-weight: 300;
   color: var(--text-primary);
-  line-height: 1.0;
+  line-height: 1;
   letter-spacing: 5px;
   /* Reference: the title is the single largest text element on the
      whole screen, easily the dominant type moment in the hero — the
      previous 44px ceiling read as a modest subheading next to the
-     giant hero art. */
-  font-size: clamp(34px, 4.4vw, 64px);
+     giant hero art.
+     10-foot-interface pass: "increase hero title by approximately 15%"
+     — the whole clamp range scaled up together (34/4.4/64 -> 39/5/74)
+     so it stays proportionally the same shape at every viewport width,
+     just larger throughout. */
+  font-size: clamp(39px, 5vw, 74px);
   text-transform: uppercase;
 }
 .subtitle {
@@ -205,12 +249,14 @@
   display: flex;
   align-items: center;
   gap: 12px;
-  font-size: 12.5px;
+  /* 10-foot-interface pass: "increase metadata text by approximately
+     15%" (12.5px -> 14.5px). */
+  font-size: 14.5px;
   color: var(--text-secondary);
 }
 .metaRow svg {
-  width: 12px;
-  height: 12px;
+  width: 14px;
+  height: 14px;
   color: var(--accent-yellow);
 }
 
@@ -233,7 +279,9 @@
   font-size: 14.5px;
   min-height: 44px;
   box-shadow: 0 10px 30px -10px rgba(94, 140, 255, 0.75);
-  transition: transform var(--transition-fast), box-shadow var(--transition-fast);
+  transition:
+    transform var(--transition-fast),
+    box-shadow var(--transition-fast);
 }
 .watchNow:hover {
   transform: translateY(-1px);
@@ -255,7 +303,9 @@
   font-weight: 500;
   font-size: 14px;
   min-height: 44px;
-  transition: border-color var(--transition-fast), background var(--transition-fast);
+  transition:
+    border-color var(--transition-fast),
+    background var(--transition-fast);
 }
 .myList:hover {
   border-color: var(--border-active);
@@ -287,7 +337,9 @@
   width: 24px;
   border-radius: var(--radius-pill);
   background: rgba(255, 255, 255, 0.18);
-  transition: width var(--transition-standard), background var(--transition-standard);
+  transition:
+    width var(--transition-standard),
+    background var(--transition-standard);
   min-height: 5px;
 }
 .segmentActive {
@@ -313,7 +365,9 @@
   background: rgba(6, 10, 18, 0.55);
   border: 1px solid var(--border-subtle);
   opacity: 0;
-  transition: opacity var(--transition-fast), color var(--transition-fast);
+  transition:
+    opacity var(--transition-fast),
+    color var(--transition-fast);
 }
 .selectorWrap:hover .navChevron,
 .navChevron:focus-visible {

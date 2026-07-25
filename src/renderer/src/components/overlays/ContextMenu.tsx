@@ -48,7 +48,7 @@ export function ContextMenu() {
     {
       icon: saved ? 'check' : 'plus',
       label: saved ? 'Remove from My List' : 'Add to My List',
-      onSelect: () => toggleMyList(media.id)
+      onSelect: () => toggleMyList(media)
     },
     {
       icon: 'check',

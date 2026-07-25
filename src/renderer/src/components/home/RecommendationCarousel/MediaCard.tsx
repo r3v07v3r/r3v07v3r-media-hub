@@ -75,14 +75,26 @@ export function MediaCard({ media }: { media: MediaItem }) {
         </button>
         <div className={styles.cardOverlay}>
           <span className={styles.cardTitle}>{media.title}</span>
+          {/* 10-foot-interface pass: "★ 8.6   IMDb 8.6 / 93% Match" hierarchy
+              — star+rating is now the bright primary group, a vertical
+              divider visually separates it from the dimmer secondary IMDb
+              figure, rather than both reading as one flat, equal-weight
+              string. */}
           <div className={styles.cardRatings}>
             {media.communityRating && (
-              <span>
+              <span className={styles.ratingStar}>
                 <Icon name="star" />
                 {media.communityRating.toFixed(1)}
               </span>
             )}
-            {media.imdbRating && <span>IMDb {media.imdbRating.toFixed(1)}</span>}
+            {media.imdbRating && (
+              <>
+                {media.communityRating && (
+                  <span className={styles.ratingDivider} aria-hidden="true" />
+                )}
+                <span className={styles.ratingImdb}>IMDb {media.imdbRating.toFixed(1)}</span>
+              </>
+            )}
           </div>
           {media.matchPercentage !== undefined && (
             <span

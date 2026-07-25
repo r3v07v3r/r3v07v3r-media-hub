@@ -8,10 +8,25 @@
          ahead of time into src/renderer/src/data/tmdbArtwork.generated.json
          (see lib/artwork) — see REMOTE_IMAGE_DOMAINS in
          lib/artwork/config.ts, which is the single source of truth this
-         should stay in sync with if another remote provider is added. -->
+         should stay in sync with if another remote provider is added.
+
+         The media-hub backend integration adds three more img-src hosts —
+         Simkl (simkl.in posters/fanart/episode stills), Kitsu (its media
+         CDN for anime cover/poster art), and Cinemeta/Stremio's addon CDN
+         (images.metahub.space poster/background art) — all read straight
+         off CatalogItem.poster/background/logo, never proxied.
+
+         media-src allows http://127.0.0.1:* (any port) plus data: — the
+         media-hub playback proxy and VLC-compatibility transcoder both
+         bind to an ephemeral loopback-only port per playback session (see
+         main/media-hub/playback.ts / vlc.ts), so the exact port isn't
+         known ahead of time; loopback-only binding is itself the SSRF
+         guard (see isPrivateAddress/isAllowedRemoteMediaUrl), not this
+         CSP rule. `data:` covers the base64 VTT subtitle track src
+         subtitles:apply can return. -->
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://image.tmdb.org; connect-src 'self'"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://image.tmdb.org https://simkl.in https://*.simkl.in https://kitsu.io https://*.kitsu.io https://images.metahub.space https://*.metahub.space; media-src 'self' data: http://127.0.0.1:*; connect-src 'self'"
     />
   </head>
 

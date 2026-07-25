@@ -87,7 +87,13 @@ const MANIFEST = [
   { title: 'BLADE RUNNER', subtitle: '2049', query: 'Blade Runner 2049', yearHint: 2017 },
   { title: 'INTERSTELLAR', subtitle: '', query: 'Interstellar', yearHint: 2014 },
   { title: 'Dark', subtitle: '', query: 'Dark', mediaTypeHint: 'tv', yearHint: 2017 },
-  { title: 'The Last of Us', subtitle: '', query: 'The Last of Us', mediaTypeHint: 'tv', yearHint: 2023 },
+  {
+    title: 'The Last of Us',
+    subtitle: '',
+    query: 'The Last of Us',
+    mediaTypeHint: 'tv',
+    yearHint: 2023
+  },
   { title: 'Fallout', subtitle: '', query: 'Fallout', mediaTypeHint: 'tv', yearHint: 2024 },
   { title: 'Dune: Part One', subtitle: '', query: 'Dune', yearHint: 2021 },
   { title: 'Blade Runner 2049', subtitle: '', query: 'Blade Runner 2049', yearHint: 2017 },
@@ -97,7 +103,12 @@ const MANIFEST = [
   { title: 'Ex Machina', subtitle: '', query: 'Ex Machina', yearHint: 2014 },
   { title: 'Her', subtitle: '', query: 'Her', yearHint: 2013 },
   { title: 'Annihilation', subtitle: '', query: 'Annihilation', yearHint: 2018 },
-  { title: 'The Grand Budapest Hotel', subtitle: '', query: 'The Grand Budapest Hotel', yearHint: 2014 },
+  {
+    title: 'The Grand Budapest Hotel',
+    subtitle: '',
+    query: 'The Grand Budapest Hotel',
+    yearHint: 2014
+  },
   { title: 'Paddington 2', subtitle: '', query: 'Paddington 2', yearHint: 2017 },
   {
     title: 'Stranger Things',
@@ -220,7 +231,9 @@ async function main() {
       if (result) {
         output[k] = result
         ok += 1
-        console.log(`  ✓ ${entry.query} -> ${result.matchedTitle} (${result.mediaType}, tmdb:${result.tmdbId})`)
+        console.log(
+          `  ✓ ${entry.query} -> ${result.matchedTitle} (${result.mediaType}, tmdb:${result.tmdbId})`
+        )
       } else {
         failed += 1
       }
@@ -240,7 +253,7 @@ main().catch((err) => {
   console.error('\nFailed to reach TMDB:', err.message)
   console.error(
     'If this is a connection error (ENOTFOUND / ETIMEDOUT / 403 from a proxy), the environment ' +
-      'running this script doesn\'t have outbound internet access to api.themoviedb.org. Run it ' +
+      "running this script doesn't have outbound internet access to api.themoviedb.org. Run it " +
       'somewhere with normal internet access instead.'
   )
   process.exit(1)

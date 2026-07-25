@@ -1,15 +1,33 @@
 .rail {
   position: relative;
-  /* Reference target: a full-height organic panel again (not the
-     fit-content/vertically-centered treatment from an earlier pass) —
-     the shape itself now comes from the SVG blob below, which is what
-     actually needs the full column height to trace its wave past every
-     item. */
-  height: 100%;
+  /* Content-sized, NOT height:100% — this is the actual fix for "the nav
+     must be vertically centered." AppShell's .sidebar wrapper already
+     has `justify-content: safe center` specifically to centre this rail
+     within the full sidebar column (see the comment there), but that
+     only has any effect if .rail itself doesn't already consume the
+     full column height — a flex item sized to 100% of its container
+     leaves no leftover space for "center" to distribute. Letting .rail
+     size to its own content (toggle + item list + padding) is what lets
+     the wrapper's centering actually work, AND — since .railShape below
+     maps its viewBox onto *this* element's own box, not the column's —
+     it also makes the organic wave trace tightly around the real
+     content instead of being stretched thin across the whole column
+     with a huge dead zone above/below the items. */
   display: flex;
   flex-direction: column;
-  width: 220px;
-  padding: 8px 14px 20px;
+  /* Third refinement pass: "not a small floating menu, but a large
+     curved glass control surface" — widened ~30% (220px -> 285px). The
+     organic SVG boundary below maps its viewBox onto this element's own
+     box with preserveAspectRatio="none" (see the JSX comment), so this
+     single width change is also what makes the blob shape, the edge
+     wave, and the travelling highlights all scale up together — no path
+     geometry needs to change for the shell to read as physically bigger. */
+  width: 285px;
+  /* 10-foot-interface pass: a touch more outer breathing room to match
+     the bigger 56px icon badges below — the shell's own presence should
+     scale with its contents, not just its contents growing inside a
+     fixed frame. */
+  padding: 20px 22px 32px;
   /* The old linear-gradient panel fill is gone — .railShapeFill (the
      closed blob path in the SVG below) is now what paints the panel's
      dark translucent body, shaped to the organic boundary instead of a
@@ -33,15 +51,50 @@
 }
 .railShapeFill {
   /* Fill color/opacity comes from the gradient def in the JSX (fades
-     toward the shape's outer edge) — nothing to override here. */
+     toward the shape's outer edge) — nothing to override here. Third
+     pass darkened the gradient's own stops directly (see JSX) for "more
+     visible internal darkness," rather than adding an opacity layer
+     here that would also dim the sheen/glow layers sitting on top. */
+}
+/* Glass depth pass: sheen (top-left highlight) + shadow (bottom-right
+   pool) layered on top of the base fill, both masked to the exact same
+   organic boundary — this is what reads as "futuristic hardware," not a
+   flat tinted panel. */
+.railShapeSheen {
+  mix-blend-mode: screen;
+}
+.railShapeShadow {
+  mix-blend-mode: multiply;
+}
+/* Third pass: a faint, slow-breathing inner glow pooled near the item
+   column — "faint inner glow" as its own distinct layer from the
+   corner sheen/shadow above, reading as ambient light living inside the
+   glass rather than a surface reflection. */
+.railShapeInnerGlow {
+  mix-blend-mode: screen;
+  animation: railInnerGlowBreathe 7s ease-in-out infinite;
+}
+@keyframes railInnerGlowBreathe {
+  0%,
+  100% {
+    opacity: 0.7;
+  }
+  50% {
+    opacity: 1;
+  }
 }
 /* Mostly dim — per spec, NOT a uniform bright cyan border. This is the
    quiet baseline the isolated moving highlight (below) stands out
    against. */
 .railShapeEdge {
   fill: none;
-  stroke: rgba(120, 165, 210, 0.28);
-  stroke-width: 1.2;
+  /* 10-foot-interface pass: "strengthen glass shell visibility" — the
+     dim baseline edge nudged up (0.28 -> 0.4 opacity, 1.2 -> 1.5 width)
+     so the shell's own silhouette reads clearly even where none of the
+     travelling highlights currently sit, rather than depending on those
+     moving accents to define the shape at all. */
+  stroke: rgba(130, 175, 220, 0.4);
+  stroke-width: 1.5;
 }
 /* One or two short bright segments travelling the boundary — "isolated
    moving cyan energy highlights," not a fully-lit outline. A short dash
@@ -59,6 +112,57 @@
 @keyframes railTravel {
   to {
     stroke-dashoffset: -1;
+  }
+}
+/* Second highlight — dimmer, violet, slower and offset so the two never
+   visually merge into one continuous bright line (which would defeat
+   "isolated moving highlights"). Reinforces the HUD-hardware feel over
+   a single decorative dash. */
+.railShapeTravel2 {
+  fill: none;
+  stroke: #a988ff;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-dasharray: 0.035 0.62;
+  stroke-dashoffset: -0.4;
+  opacity: 0.75;
+  filter: drop-shadow(0 0 5px rgba(163, 138, 255, 0.7));
+  animation: railTravel2 var(--motion-idle-slow, 11s) linear infinite;
+}
+@keyframes railTravel2 {
+  to {
+    stroke-dashoffset: -1.4;
+  }
+}
+/* Third highlight — reads as an occasional brighter pulse rather than a
+   third continuously-visible line: longer, slower cycle with most of
+   its travel at low opacity and a brief bright flare (via the keyframe,
+   not just position) once per loop, so the boundary occasionally
+   "flashes" brighter without adding a third permanently-lit dash. */
+.railShapeTravel3 {
+  fill: none;
+  stroke: #bdf0ff;
+  stroke-width: 2.6;
+  stroke-linecap: round;
+  stroke-dasharray: 0.03 0.97;
+  filter: drop-shadow(0 0 7px rgba(189, 240, 255, 0.9));
+  opacity: 0;
+  animation: railTravel3 var(--motion-idle-slow, 15s) linear infinite;
+}
+@keyframes railTravel3 {
+  0% {
+    stroke-dashoffset: 0;
+    opacity: 0;
+  }
+  4% {
+    opacity: 0.95;
+  }
+  16% {
+    opacity: 0;
+  }
+  100% {
+    stroke-dashoffset: -1;
+    opacity: 0;
   }
 }
 
@@ -124,21 +228,34 @@
 .list {
   display: flex;
   flex-direction: column;
-  /* Was 4px — tightened so the items read as one compact, closely-knit
-     block now that the rail itself has shrunk to fit them, rather than
-     a loosely spaced list with room to spare. */
-  gap: 1px;
-  flex: 1;
+  /* Third refinement pass: "increase vertical spacing between navigation
+     items" / "comfortable and premium rather than compressed" — opened
+     back up (1px -> 14px) now that the enlarged shell (see .rail above)
+     has genuine room to spare. This also does double duty on task 1
+     ("increase the height of the organic nav shape"): the SVG boundary
+     maps to .rail's own content-driven height, so a taller item list is
+     what actually makes the shape occupy more vertical space, not a
+     separate manual height override. */
+  /* 10-foot-interface pass: "increase spacing between navigation items"
+     — 14px -> 20px now that the icon badges below have grown to 56px;
+     matching the larger, more physically-present control. */
+  gap: 20px;
+  /* No flex:1 — .rail is content-sized now (see .rail's comment above),
+     so there's no leftover column space for this to grow into; it would
+     be a no-op at best and confusing to read at worst. */
+  flex: 0 0 auto;
 }
 
 .item {
   position: relative;
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 9px 10px;
+  gap: 16px;
+  /* 10-foot-interface pass: more internal breathing room to match the
+     56px icon badge (12px 14px -> 13px 16px, min-height 52 -> 64). */
+  padding: 13px 16px;
   border-radius: var(--radius-medium);
-  min-height: 44px;
+  min-height: 64px;
   color: var(--text-muted);
   transition: color var(--transition-fast), background var(--transition-fast);
 }
@@ -150,31 +267,51 @@
 .iconWrap {
   position: relative;
   flex: 0 0 auto;
-  width: 38px;
-  height: 38px;
+  /* 10-foot-interface pass: "icon containers from approximately 44px to
+     56px" — the nav should read as a real physical control surface from
+     a couch, not a compact desktop menu. */
+  width: 56px;
+  height: 56px;
   border-radius: 50%;
   display: flex;
   align-items: center;
   justify-content: center;
   color: inherit;
-  transition: box-shadow var(--transition-standard), background var(--transition-standard);
+  transition:
+    box-shadow var(--transition-standard),
+    background var(--transition-standard),
+    transform var(--transition-standard);
 }
 .iconWrap svg {
-  width: 18px;
-  height: 18px;
+  /* Scaled with the 44px -> 56px badge (kept the same ~45% fill ratio)
+     — see the Icon call in SidebarNavigation.tsx for the matching
+     strokeWidth bump (1.6 -> 2.1) that keeps the bigger glyph from
+     reading as thin/washed-out. */
+  width: 25px;
+  height: 25px;
   position: relative;
   z-index: 1;
 }
 
 /* Luminous halo ring around the active item's icon — a portal-like glow
-   rather than the flat tinted-circle-only treatment used before. */
+   rather than the flat tinted-circle-only treatment used before. Third
+   pass: widened reach (-9px -> -13px inset) and a second, larger violet
+   ring added underneath the existing cyan one — "stronger cyan/blue
+   bloom" plus "subtle purple secondary glow" as two distinct layers,
+   matching .itemActive .iconWrap's own two-color box-shadow above. */
 .iconHalo {
   position: absolute;
-  inset: -9px;
+  /* 10-foot-interface pass: widened further (-13px -> -17px) to match
+     the bigger 56px badge, and both the fill and box-shadow strengthened
+     — "strengthen active Home glow" is called out explicitly this pass,
+     on top of the third pass's own increase. */
+  inset: -17px;
   z-index: 0;
   border-radius: 50%;
-  background: radial-gradient(circle, rgba(56, 193, 255, 0.28), transparent 68%);
-  box-shadow: 0 0 0 1px rgba(120, 200, 255, 0.55), 0 0 22px 4px rgba(56, 193, 255, 0.55);
+  background:
+    radial-gradient(circle, rgba(56, 193, 255, 0.38), transparent 60%),
+    radial-gradient(circle, rgba(141, 77, 255, 0.3), transparent 78%);
+  box-shadow: 0 0 0 1px rgba(120, 200, 255, 0.6), 0 0 34px 7px rgba(56, 193, 255, 0.62);
   animation: iconHaloPulse 3.6s ease-in-out infinite;
 }
 @keyframes iconHaloPulse {
@@ -190,31 +327,59 @@
 }
 
 .label {
-  font-size: 13.5px;
+  /* 10-foot-interface pass: "increase label size slightly" /
+     "increase label brightness slightly" — 14.5px -> 16px, and a fixed
+     opacity added so even the resting (var(--text-muted)) state reads
+     clearly at TV distance instead of relying only on the active item's
+     var(--text-primary) for brightness. Still visibly dimmer than the
+     active item (0.82 vs the active item's full-strength color below),
+     so the hierarchy between "current page" and "everything else" is
+     unchanged — just legible instead of washed out. */
+  font-size: 16px;
   font-weight: 500;
+  opacity: 0.82;
   white-space: nowrap;
   display: flex;
   align-items: center;
   gap: 6px;
+}
+.itemActive .label {
+  opacity: 1;
 }
 .collapsed .label {
   display: none;
 }
 
 .dot {
-  width: 5px;
-  height: 5px;
+  /* Third refinement pass: a clearer active indicator — 5px -> 7px with
+     a wider glow spread, so it reads as a deliberate status light next
+     to the label rather than a small tick mark. 10-foot-interface pass:
+     one more step (7px -> 8px) to keep pace with the larger label text
+     next to it. */
+  width: 8px;
+  height: 8px;
   border-radius: 50%;
   background: var(--accent-cyan);
-  box-shadow: 0 0 6px var(--accent-cyan);
+  box-shadow: 0 0 12px 1.5px var(--accent-cyan);
 }
 
 .itemActive {
   color: var(--text-primary);
 }
 .itemActive .iconWrap {
-  background: linear-gradient(135deg, rgba(24, 169, 255, 0.35), rgba(141, 77, 255, 0.35));
-  box-shadow: 0 0 0 1px rgba(94, 193, 255, 0.4), 0 0 22px rgba(94, 193, 255, 0.35);
+  background: linear-gradient(135deg, rgba(24, 169, 255, 0.46), rgba(141, 77, 255, 0.46));
+  /* Third refinement pass: "larger glowing circular icon container,
+     stronger cyan/blue bloom, subtle purple secondary glow" — a slight
+     scale-up on top of the shared 56px badge size, a brighter cyan core
+     ring/bloom, and a wider, dimmer violet ring layered outside it so
+     the two colors read as separate glows rather than one blended tone.
+     10-foot-interface pass: pushed further still (both box-shadow
+     layers brighter/wider) per "strengthen active Home glow." */
+  transform: scale(1.1);
+  box-shadow:
+    0 0 0 1.5px rgba(94, 193, 255, 0.58),
+    0 0 34px rgba(56, 193, 255, 0.6),
+    0 0 56px 10px rgba(141, 77, 255, 0.44);
   color: #fff;
 }
 

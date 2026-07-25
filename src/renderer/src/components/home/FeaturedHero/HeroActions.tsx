@@ -18,7 +18,7 @@ export function HeroActions({ item }: { item: MediaItem }) {
       <button
         type="button"
         className={styles.myList}
-        onClick={() => toggleMyList(item.id)}
+        onClick={() => toggleMyList(item)}
         aria-pressed={saved}
       >
         <Icon name={saved ? 'check' : 'plus'} />

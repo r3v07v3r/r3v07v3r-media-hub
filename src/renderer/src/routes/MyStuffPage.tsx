@@ -1,13 +1,12 @@
 import { Link } from 'react-router-dom'
 import { useAppState } from '@renderer/context/AppStateContext'
-import { CATALOG } from '@renderer/data/mockData'
 import { Icon } from '@renderer/components/icons/Icon'
 import { ComingSoonSection } from '@renderer/components/placeholder/ComingSoonSection'
 import styles from './MyStuff.module.css'
 
 export default function MyStuffPage() {
-  const { myList, toggleMyList, openDetail } = useAppState()
-  const items = CATALOG.filter((m) => myList.has(m.id))
+  const { myList, toggleMyList, openDetail, catalog } = useAppState()
+  const items = catalog.filter((m) => myList.has(m.id))
 
   if (items.length === 0) {
     return (
@@ -38,7 +37,7 @@ export default function MyStuffPage() {
               <button
                 type="button"
                 className={styles.remove}
-                onClick={() => toggleMyList(m.id)}
+                onClick={() => toggleMyList(m)}
                 aria-label={`Remove ${m.title} from My List`}
               >
                 <Icon name="x" size={12} />

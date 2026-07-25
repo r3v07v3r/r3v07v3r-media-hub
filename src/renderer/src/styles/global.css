@@ -66,8 +66,9 @@
   /* SSR-safe default matching the expanded desktop rail — SidebarNavigation
      overwrites this on mount with the rail's real current width (see its
      nav-rail-width effect), so this value only shows for the brief window
-     before hydration and should match its most common actual state. */
-  --nav-rail-width: 220px;
+     before hydration and should match its most common actual state.
+     Third refinement pass: rail widened 220px -> 285px. */
+  --nav-rail-width: 285px;
 }
 
 /* Registered custom property so animating --edge-angle interpolates as a
@@ -81,6 +82,31 @@
 
 * {
   box-sizing: border-box;
+}
+
+/* ---------- Scrollbar suppression (compositing pass) ----------
+   The app should read as native media-centre hardware, never as a
+   webpage — no browser-chrome scrollbar track/thumb should ever be
+   visible, on any scrollable region (page, sidebar rail fallback,
+   Continue Watching list, AI Picks/mood horizontal rows, overlay
+   panels, etc.), even though several of those regions genuinely need to
+   stay scrollable. Applied universally via the universal selector
+   rather than per-component so this covers every current AND future
+   scroll container without relying on each one remembering to opt in.
+   scrollbar-width: none is the Firefox/standard mechanism; the
+   ::-webkit-scrollbar rules are its Chromium/Electron equivalent (this
+   app only ships on Chromium via Electron, but both are included per
+   spec). This hides the scrollbar's appearance only — overflow/scroll
+   behavior on each element is untouched, so wheel/trackpad/programmatic
+   scrolling keeps working exactly as before. */
+* {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+*::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
 }
 
 html,
@@ -315,15 +341,21 @@ ul {
   }
 }
 
-/* Thin, unobtrusive scrollbars for the horizontal rows */
+/* .thin-scroll previously drew its own faint 6px thumb for the
+   horizontal rows (sidebar rail fallback, mood row, AI Picks carousel)
+   — that's exactly the "browser-style scrollbar" the compositing pass
+   now says must never be visible anywhere, even a subtle custom one.
+   The class name/usages are left in place (SidebarNavigation's wrapper,
+   MoodBrowser's .cropX, RecommendationCarousel's .scroller all still
+   apply it) since a "these three specifically scroll" marker is still
+   useful documentation, but it no longer draws anything — the universal
+   ::-webkit-scrollbar/scrollbar-width rule above already hides these
+   (and every other) scrollbar; these rules are kept, zeroed out, only
+   so a higher-specificity ".thin-scroll::-webkit-scrollbar" selector
+   can't accidentally win back over that universal rule if either is
+   edited again later. */
 .thin-scroll::-webkit-scrollbar {
-  height: 6px;
-  width: 6px;
-}
-.thin-scroll::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.12);
-  border-radius: 4px;
-}
-.thin-scroll::-webkit-scrollbar-track {
-  background: transparent;
+  display: none;
+  width: 0;
+  height: 0;
 }

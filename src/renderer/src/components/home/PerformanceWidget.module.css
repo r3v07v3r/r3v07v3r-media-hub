@@ -18,18 +18,39 @@
   display: flex;
   flex-direction: column;
   justify-content: center;
-  gap: 8px;
-  width: 116px;
-  padding: 13px 12px;
+  /* 10-foot-interface pass: reverses and exceeds the earlier two shrink
+     passes — "expand into a proper R3 system status module... feel like
+     an integrated Jarvis system panel, not a debug widget." Sized up
+     ~50% over the pre-pass footprint (96px -> 144px) and the border/edge
+     dimming from the prior "make telemetry more ambient" pass is pulled
+     back up (not to full .glass-panel strength — still secondary to
+     media content per spec, just no longer reading as a barely-there
+     decoration). */
+  gap: 10px;
+  width: 144px;
+  padding: 16px 14px;
   /* Reference: a near-capsule pill, noticeably rounder than the app's
-     other panels. */
-  border-radius: 22px;
+     other panels — radius scaled up with the widget so the proportion
+     still reads as "pill," not "rounded rectangle." */
+  border-radius: 26px;
   min-width: 0;
   cursor: pointer;
   transition: border-color var(--transition-fast);
+  /* Brightened from the ambient-dim pass (0.1 -> 0.22) so the shell
+     itself is legible as a panel edge from a few metres away, while
+     still sitting well below .glass-panel's full-strength border used
+     by primary content panels. */
+  border-color: rgba(143, 183, 224, 0.22);
 }
 .widget:hover {
   border-color: var(--border-active);
+}
+/* Brightened alongside the border above (0.4 -> 0.65) — still not full
+   intensity (that's reserved for the real high-load .edge-active state)
+   but strong enough that the "subtle animated indicator" is actually
+   visible at rest, matching "feel like an integrated Jarvis panel." */
+.widget::before {
+  opacity: 0.65;
 }
 
 .gauge {
@@ -37,22 +58,24 @@
   display: flex;
   flex-direction: row;
   align-items: center;
-  gap: 8px;
+  gap: 12px;
   flex: 0 0 auto;
 }
 .gaugeRingWrap {
   position: relative;
   flex: 0 0 auto;
-  width: 30px;
-  height: 30px;
+  width: 38px;
+  height: 38px;
 }
 .gaugeRing {
-  width: 30px;
-  height: 30px;
+  width: 38px;
+  height: 38px;
 }
 .gaugeTrack {
   fill: none;
-  stroke: rgba(255, 255, 255, 0.1);
+  /* 10-foot-interface pass: "increase gauge visibility" — brightened
+     back up from the ambient-dim pass's 0.07. */
+  stroke: rgba(255, 255, 255, 0.14);
   stroke-width: 3;
 }
 .gaugeFill {
@@ -69,18 +92,23 @@
   top: 50%;
   left: 50%;
   transform: translate(-50%, -50%);
-  font-size: 8.5px;
+  /* 10-foot-interface pass: "increase percentage text size" — this was
+     a barely-legible 7.5px; now sized to actually read as the primary
+     number inside each ring. */
+  font-size: 11px;
   font-weight: 700;
   color: var(--text-primary);
+  opacity: 0.95;
 }
 .gaugeName {
   display: flex;
   align-items: center;
-  gap: 4px;
-  font-size: 10px;
+  gap: 6px;
+  font-size: 12.5px;
   font-weight: 600;
-  letter-spacing: 0.5px;
+  letter-spacing: 0.4px;
   color: var(--text-secondary);
+  opacity: 0.88;
 }
 .gaugeName svg {
   color: var(--accent-cyan);
@@ -90,48 +118,52 @@
   width: 100%;
   height: 1px;
   background: var(--border-subtle);
+  opacity: 0.6;
   flex: 0 0 auto;
 }
 
 .net {
   display: flex;
   flex-direction: column;
-  gap: 5px;
-  font-size: 11px;
+  gap: 6px;
+  /* 10-foot-interface pass: "increase network information readability". */
+  font-size: 13px;
   color: var(--text-secondary);
+  opacity: 0.88;
   flex: 0 0 auto;
 }
 .netRow {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 7px;
 }
 .netRow svg {
-  width: 11px;
-  height: 11px;
+  width: 13px;
+  height: 13px;
   color: var(--accent-cyan);
 }
 
 .detail {
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  font-size: 10px;
+  gap: 4px;
+  font-size: 11px;
   color: var(--text-muted);
-  padding-top: 4px;
+  opacity: 0.85;
+  padding-top: 7px;
   border-top: 1px dashed var(--border-subtle);
 }
 
 @media (max-width: 1439px) {
   .widget {
-    width: 100px;
-    padding: 10px 12px;
-    gap: 7px;
+    width: 128px;
+    padding: 13px 12px;
+    gap: 9px;
   }
   .gaugeRingWrap,
   .gaugeRing {
-    width: 26px;
-    height: 26px;
+    width: 33px;
+    height: 33px;
   }
 }
 
@@ -171,14 +203,14 @@
 .compactSummary {
   display: none;
   align-items: center;
-  gap: 6px;
-  font-size: 11px;
+  gap: 8px;
+  font-size: 14px;
   font-weight: 700;
   color: var(--text-secondary);
 }
 .compactSummary svg {
-  width: 14px;
-  height: 14px;
+  width: 17px;
+  height: 17px;
   color: var(--accent-cyan);
 }
 
@@ -189,9 +221,9 @@
   z-index: 36;
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  width: 168px;
-  padding: 14px 16px;
+  gap: 14px;
+  width: 210px;
+  padding: 18px 20px;
   border-radius: var(--radius-large);
 }
 

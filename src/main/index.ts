@@ -5,7 +5,15 @@ import icon from '../../resources/icon.png?asset'
 import { registerTelemetryIpc } from './ipc/telemetry'
 import { registerSettingsIpc } from './ipc/settings'
 import { registerHttpProxyIpc } from './ipc/httpProxy'
+import { registerMediaHubIpc } from './ipc/mediaHub'
 import { APP_SCHEME, registerAppSchemeAsPrivileged, registerAppSchemeHandler } from './appProtocol'
+import { createDatabase } from './media-hub/database'
+import { getDatabase, setDatabase } from './media-hub/dbState'
+import { setActiveWindow } from './media-hub/rendererBridge'
+import { isAllowedExternalUrl } from './media-hub/security'
+import { setupAutoUpdater } from './media-hub/autoUpdate'
+import { closeParty } from './media-hub/watchParty'
+import { stopPlayback } from './media-hub/playbackSession'
 
 // Fixed 1920x1080 design canvas (spec section 1) — the composition is built
 // pixel-for-pixel at this resolution first; responsive scaling is a later
@@ -39,10 +47,58 @@ function createWindow(): void {
     mainWindow.show()
   })
 
+  // media-hub integration: only ever open an external browser window for a
+  // host on the media-hub security allowlist (TorBox/Simkl/GitHub/TMDB/MAL/
+  // OpenSubtitles) — see security.ts's isAllowedExternalUrl. Everything
+  // else is denied outright rather than silently opened, since this
+  // handler now also covers links the media-hub-backed dashboard content
+  // can trigger (catalog pages, watch-party invites, etc.), not just this
+  // shell's own UI.
   mainWindow.webContents.setWindowOpenHandler((details) => {
-    shell.openExternal(details.url)
+    if (isAllowedExternalUrl(details.url)) shell.openExternal(details.url)
     return { action: 'deny' }
   })
+
+  // Block the main window itself from ever navigating away from its own
+  // renderer origin (dev server URL, or the app:// scheme in production) —
+  // ported from the original media-hub app's `will-navigate` guard, which
+  // blocked any URL not local, adapted here for this project's custom
+  // app:// scheme instead of file://.
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    const isOwnOrigin =
+      is.dev && process.env['ELECTRON_RENDERER_URL']
+        ? url.startsWith(process.env['ELECTRON_RENDERER_URL'])
+        : url.startsWith(`${APP_SCHEME}:///`)
+    if (!isOwnOrigin) event.preventDefault()
+  })
+
+  // Deny every permission request (camera/mic/notifications/etc.) by
+  // default — ported from the original media-hub app; nothing this
+  // dashboard does needs any of these.
+  mainWindow.webContents.session.setPermissionRequestHandler((_contents, _permission, callback) =>
+    callback(false)
+  )
+
+  // Trailer playback (CatalogItem.trailers) embeds YouTube — YouTube
+  // requires a youtube-nocookie.com Referer on these hosts or embedded
+  // playback is refused. Ported from the original media-hub app verbatim.
+  mainWindow.webContents.session.webRequest.onBeforeSendHeaders(
+    {
+      urls: [
+        '*://*.youtube.com/*',
+        '*://*.youtube-nocookie.com/*',
+        '*://*.ytimg.com/*',
+        '*://*.googlevideo.com/*'
+      ]
+    },
+    (details, callback) => {
+      details.requestHeaders.Referer = 'https://www.youtube-nocookie.com/'
+      callback({ requestHeaders: details.requestHeaders })
+    }
+  )
+
+  setActiveWindow(mainWindow)
+  mainWindow.on('closed', () => setActiveWindow(null))
 
   // HMR for renderer base on electron-vite cli.
   // Load the remote URL for development or the local html file for production.
@@ -52,6 +108,8 @@ function createWindow(): void {
     // app:/// rather than loadFile()'s file:// — see appProtocol.ts.
     mainWindow.loadURL(`${APP_SCHEME}:///index.html`)
   }
+
+  setupAutoUpdater(mainWindow)
 }
 
 // This method will be called when Electron has finished
@@ -77,6 +135,15 @@ app.whenReady().then(() => {
   registerSettingsIpc()
   registerHttpProxyIpc()
 
+  // media-hub's own SQLite store (tracked items/watch history/catalog
+  // cache) — must exist before registerMediaHubIpc()'s handlers can ever
+  // be invoked, though since ipcMain.handle registration itself is
+  // synchronous and handlers only actually run once the renderer calls
+  // them (well after this whole block completes), the ordering here is
+  // for clarity more than strict necessity.
+  setDatabase(createDatabase(join(app.getPath('userData'), 'media-hub.sqlite')))
+  registerMediaHubIpc()
+
   createWindow()
 
   app.on('activate', function () {
@@ -84,6 +151,22 @@ app.whenReady().then(() => {
     // dock icon is clicked and there are no other windows open.
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
   })
+})
+
+// media-hub cleanup: stop any in-flight playback (closes the playback
+// proxy + kills a running VLC transcoder), leave/close any active Watch
+// Party, and close the SQLite handle. Ported from the original app's
+// `before-quit` handler.
+app.on('before-quit', () => {
+  stopPlayback().catch(() => {})
+  closeParty()
+  try {
+    getDatabase().close()
+  } catch {
+    // best-effort close only — if the DB was never initialized (e.g. quit
+    // during startup before app.whenReady() finished), there's nothing to
+    // close.
+  }
 })
 
 // Quit when all windows are closed, except on macOS. There, it's common

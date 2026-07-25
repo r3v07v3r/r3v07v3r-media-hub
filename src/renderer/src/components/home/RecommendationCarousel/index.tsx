@@ -2,12 +2,24 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { AI_PICKS } from '@renderer/data/mockData'
+import { useAppState } from '@renderer/context/AppStateContext'
 import { Icon } from '@renderer/components/icons/Icon'
 import { MediaCard } from './MediaCard'
 import styles from './RecommendationCarousel.module.css'
 
 export function RecommendationCarousel() {
-  const [loading, setLoading] = useState(true)
+  const { recommendations, homeFeedLive } = useAppState()
+  // Real recommendations replace the staggered-skeleton demo entirely once
+  // home:personalized has actually resolved; before that (bridge missing,
+  // still loading, or the fetch failed) the skeleton -> mock AI_PICKS reveal
+  // below still runs, so the row is never empty on a cold start.
+  const picks = homeFeedLive ? recommendations : AI_PICKS
+  // `loading` is derived, not stored directly: the skeleton timer is one
+  // input (skeletonDone), whether real data has already arrived is the
+  // other (homeFeedLive) — deriving avoids needing a synchronous setState
+  // just to short-circuit the fake delay once real data beats it.
+  const [skeletonDone, setSkeletonDone] = useState(false)
+  const loading = !homeFeedLive && !skeletonDone
   const [canScrollBack, setCanScrollBack] = useState(false)
   // Whether there's still unrevealed content to the right. On a wide
   // enough window (spec: "scale to show more items... 20+ to cover
@@ -18,9 +30,11 @@ export function RecommendationCarousel() {
   const scrollerRef = useRef<HTMLUListElement>(null)
 
   // Staggered skeleton -> reveal on first mount, standing in for a real
-  // "generating recommendations" round trip (spec section 15 / 18).
+  // "generating recommendations" round trip (spec section 15 / 18) — moot
+  // if home:personalized actually resolves before that fake delay is up
+  // (see the `loading` derivation above).
   useEffect(() => {
-    const t = setTimeout(() => setLoading(false), 900)
+    const t = setTimeout(() => setSkeletonDone(true), 900)
     return () => clearTimeout(t)
   }, [])
 
@@ -65,39 +79,49 @@ export function RecommendationCarousel() {
         <Icon name="sparkle" />
         AI Picks For You
       </h2>
-      <div className={styles.scrollerWrap}>
-        <ul
-          className={`${styles.scroller} thin-scroll`}
-          ref={scrollerRef}
-          onKeyDown={handleKeyDown}
-        >
-          {loading
-            ? Array.from({ length: 6 }).map((_, i) => (
-                <li key={i} className={styles.skeletonCard} aria-hidden="true" />
-              ))
-            : AI_PICKS.map((rec) => <MediaCard key={rec.media.id} media={rec.media} />)}
-        </ul>
-        {!loading && canScrollBack && (
-          <button
-            type="button"
-            className={`${styles.arrow} ${styles.arrowLeft}`}
-            aria-label="Show previous picks"
-            onClick={() => scrollerRef.current?.scrollBy({ left: -380, behavior: 'smooth' })}
+      {!loading && picks.length === 0 ? (
+        // Real recommendations, unlike the mock AI_PICKS pool they replace,
+        // can legitimately come back empty (e.g. no watch history yet to
+        // derive a preferred genre from) — honest empty state rather than
+        // an empty-looking scroller with no explanation.
+        <p className={styles.emptyState}>
+          Watch a few titles and recommendations will show up here.
+        </p>
+      ) : (
+        <div className={styles.scrollerWrap}>
+          <ul
+            className={`${styles.scroller} thin-scroll`}
+            ref={scrollerRef}
+            onKeyDown={handleKeyDown}
           >
-            <Icon name="chevron-left" />
-          </button>
-        )}
-        {!loading && canScrollForward && (
-          <button
-            type="button"
-            className={styles.arrow}
-            aria-label="Show more picks"
-            onClick={() => scrollerRef.current?.scrollBy({ left: 380, behavior: 'smooth' })}
-          >
-            <Icon name="chevron" />
-          </button>
-        )}
-      </div>
+            {loading
+              ? Array.from({ length: 6 }).map((_, i) => (
+                  <li key={i} className={styles.skeletonCard} aria-hidden="true" />
+                ))
+              : picks.map((rec) => <MediaCard key={rec.media.id} media={rec.media} />)}
+          </ul>
+          {!loading && canScrollBack && (
+            <button
+              type="button"
+              className={`${styles.arrow} ${styles.arrowLeft}`}
+              aria-label="Show previous picks"
+              onClick={() => scrollerRef.current?.scrollBy({ left: -380, behavior: 'smooth' })}
+            >
+              <Icon name="chevron-left" />
+            </button>
+          )}
+          {!loading && canScrollForward && (
+            <button
+              type="button"
+              className={styles.arrow}
+              aria-label="Show more picks"
+              onClick={() => scrollerRef.current?.scrollBy({ left: 380, behavior: 'smooth' })}
+            >
+              <Icon name="chevron" />
+            </button>
+          )}
+        </div>
+      )}
     </section>
   )
 }

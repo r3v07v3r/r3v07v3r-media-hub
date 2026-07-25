@@ -20,12 +20,16 @@
 }
 .waveGlow {
   filter: blur(2.5px);
-  opacity: 0.55;
+  /* Refinement pass: a touch brighter at idle (0.55 -> 0.68) — the
+     waveform should read as a live energy line flanking a control
+     surface, not a faint decorative flourish next to a search field.
+     Second pass: "stronger waveform presence," nudged further. */
+  opacity: 0.78;
   transition: opacity var(--transition-standard);
 }
 .waveLine {
-  filter: drop-shadow(0 0 3px rgba(56, 229, 255, 0.5));
-  opacity: 0.8;
+  filter: drop-shadow(0 0 4px rgba(56, 229, 255, 0.6));
+  opacity: 1;
   transition: opacity var(--transition-standard);
 }
 .spacerRight .wave {
@@ -86,18 +90,49 @@
   padding: 11px 18px;
   border-radius: var(--radius-pill);
   background: rgba(8, 13, 24, 0.55);
+  /* Second refinement pass: "softer glass feel" — the capsule had color/
+     glow but no actual glass blur behind it, so it read flatter than
+     the app's other glass surfaces. A lighter blur than .glass-panel's
+     22px (this sits over the busy top bar, not a dark background, so a
+     heavy blur would fight the waveform/backdrop it floats over). */
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
   /* Almost no conventional border — a near-transparent hairline instead
      of the app's usual --border-subtle, since this field's edge should
      read as a soft glow, not a drawn outline. */
   border: 1px solid rgba(120, 165, 220, 0.1);
   /* Reference: even at rest this field carries a visible ambient cyan/
-     violet glow around the mic/input area, not just on focus — but now
-     that real backdrop art carries most of the screen's color, this
-     idle glow is dialed back from its previous intensity so the top bar
-     doesn't compete with the hero for attention. */
-  box-shadow: 0 0 0 1px rgba(56, 193, 255, 0.05), 0 0 24px -4px rgba(94, 140, 255, 0.24),
-    0 0 44px -18px rgba(141, 77, 255, 0.28);
-  transition: box-shadow var(--transition-standard), border-color var(--transition-standard);
+     violet glow around the mic/input area, not just on focus. Refinement
+     pass: glow concentrated a little more toward the mic/left side (via
+     the extra asymmetric layer below) plus a slow breathing animation —
+     it should read as a live AI control surface that happens to hold
+     text, not a static search field with a glow applied to it. */
+  box-shadow:
+    0 0 0 1px rgba(56, 193, 255, 0.06),
+    0 0 20px -6px rgba(56, 229, 255, 0.3),
+    0 0 24px -4px rgba(94, 140, 255, 0.26),
+    0 0 44px -18px rgba(141, 77, 255, 0.3);
+  animation: capsuleBreathe 6s ease-in-out infinite;
+  transition:
+    box-shadow var(--transition-standard),
+    border-color var(--transition-standard);
+}
+@keyframes capsuleBreathe {
+  0%,
+  100% {
+    box-shadow:
+      0 0 0 1px rgba(56, 193, 255, 0.06),
+      0 0 20px -6px rgba(56, 229, 255, 0.3),
+      0 0 24px -4px rgba(94, 140, 255, 0.26),
+      0 0 44px -18px rgba(141, 77, 255, 0.3);
+  }
+  50% {
+    box-shadow:
+      0 0 0 1px rgba(56, 193, 255, 0.09),
+      0 0 24px -5px rgba(56, 229, 255, 0.4),
+      0 0 30px -4px rgba(94, 140, 255, 0.34),
+      0 0 50px -16px rgba(141, 77, 255, 0.38);
+  }
 }
 .capsule:hover {
   border-color: rgba(160, 190, 230, 0.2);
@@ -105,22 +140,41 @@
 .capsuleFocused,
 .capsule:focus-within {
   border-color: var(--border-active);
-  box-shadow: 0 0 0 4px rgba(56, 193, 255, 0.14), 0 0 26px rgba(141, 77, 255, 0.28);
+  box-shadow:
+    0 0 0 4px rgba(56, 193, 255, 0.14),
+    0 0 26px rgba(141, 77, 255, 0.28);
 }
 .capsuleListening {
   border-color: rgba(56, 229, 255, 0.65);
-  box-shadow: 0 0 0 4px rgba(56, 229, 255, 0.18), 0 0 30px rgba(56, 229, 255, 0.4);
+  box-shadow:
+    0 0 0 4px rgba(56, 229, 255, 0.18),
+    0 0 30px rgba(56, 229, 255, 0.4);
 }
 .capsuleProcessing {
   border-color: rgba(141, 77, 255, 0.65);
-  box-shadow: 0 0 0 4px rgba(141, 77, 255, 0.16), 0 0 30px rgba(141, 77, 255, 0.4);
+  box-shadow:
+    0 0 0 4px rgba(141, 77, 255, 0.16),
+    0 0 30px rgba(141, 77, 255, 0.4);
 }
 .capsuleError {
   border-color: rgba(255, 90, 90, 0.6);
   box-shadow: 0 0 0 4px rgba(255, 90, 90, 0.14);
 }
+/* The idle breathing animation (see .capsule/@keyframes capsuleBreathe
+   above) would otherwise keep overriding box-shadow every frame
+   regardless of selector specificity — CSS animations always win over
+   non-!important declarations for the property they animate. Turn it
+   off for every state that needs its own explicit glow. */
+.capsuleFocused,
+.capsule:focus-within,
+.capsuleListening,
+.capsuleProcessing,
+.capsuleError {
+  animation: none;
+}
 
 .micButton {
+  position: relative;
   flex: 0 0 auto;
   width: 30px;
   height: 30px;
@@ -131,7 +185,32 @@
   justify-content: center;
   border-radius: 50%;
   color: var(--text-secondary);
-  transition: color var(--transition-fast), background var(--transition-fast);
+  /* Second pass: soft always-on glow echoing the capsule's own ambient
+     light (see the .micButton::before comment below) — part of "the
+     microphone should feel integrated into the energy field." */
+  box-shadow: 0 0 14px -4px rgba(56, 229, 255, 0.25);
+  transition:
+    color var(--transition-fast),
+    background var(--transition-fast);
+}
+/* Refinement pass: a faint permanent glow ring behind the mic, not just
+   on hover/active — the mic is this control's real focal point, and a
+   small always-on presence there reinforces "AI control surface" over
+   "button in a search field." Deliberately subtle: .micButtonActive's
+   own box-shadow pulse (below) is still the primary active-state cue.
+   Second pass: "the microphone should feel integrated into the energy
+   field" — widened past the button's own bounds (inset -6px instead of
+   2px) and given a matching soft box-shadow, so the mic's glow visually
+   bleeds into and merges with the capsule's own ambient cyan/violet
+   light instead of reading as a separately-lit control sitting inside
+   it. */
+.micButton::before {
+  content: '';
+  position: absolute;
+  inset: -6px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(56, 229, 255, 0.14), transparent 72%);
+  pointer-events: none;
 }
 .micButton:hover {
   color: var(--accent-cyan);

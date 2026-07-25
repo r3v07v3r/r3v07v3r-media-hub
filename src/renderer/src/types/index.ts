@@ -10,6 +10,8 @@ export type MediaType = 'movie' | 'series' | 'episode' | 'live'
 export interface MediaItem {
   id: string
   mediaType: MediaType
+  /** The media-hub backend's own catalog kind ('movie' | 'series' | 'anime'), when this item came from there — see lib/mediaHub/adapters.ts. `mediaType` alone can't roundtrip this (it collapses 'anime' into 'series'), but PlaybackOverlay needs the real kind to resolve/play a stream correctly. Undefined for mock-data items, which never need it. */
+  mediaKind?: 'movie' | 'series' | 'anime'
   title: string
   subtitle?: string
   description?: string

@@ -7,7 +7,22 @@
   /* Explicit floor, not 0 — the scroller below has non-visible overflow,
      which forces its own automatic minimum size to 0 and would otherwise
      collapse this auto-sized grid row to nothing at the stacked
-     (<1100px) breakpoint. */
+     (<1100px) breakpoint.
+     10-foot-interface pass: raised alongside the card-height increase
+     below, but capped well short of the initially-planned ~20%
+     ("336px", derived from a 236->282px width jump). At that size the
+     grid's row 2 (see HomeDashboard.module.css) pushed row 3 far enough
+     down that "Browse By Mood"'s pill labels rendered below the
+     1920x1080 viewport edge — verified via getBoundingClientRect
+     (labelRect.bottom landed at ~1101px against a 1080px viewport).
+     280px is the largest floor that keeps EVERY mood pill (not just its
+     label text) fully inside the viewport with a small safety margin,
+     which "no clipping at screen edges" — reinforced repeatedly across
+     the last two passes — outranks hitting the exact "~20%" figure.
+     Card width tuned to 255px (was 282px) so its aspect-ratio-driven
+     height lands just under this floor with no wasted space; still a
+     real, visible +8% width / +11% height over the pre-pass size, just
+     not the full +20%. */
   min-height: 280px;
 }
 
@@ -21,11 +36,29 @@
   letter-spacing: 1.4px;
   color: var(--text-primary);
   flex: 0 0 auto;
+  /* 10-foot-interface pass: this is an <h2> with no prior margin reset,
+     so it was carrying the UA stylesheet's default ~0.83em top+bottom
+     margin (~21px combined at this font-size) on top of .section's own
+     10px flex gap — invisible slack that went unnoticed at the smaller
+     pre-pass card size but became real vertical-overflow budget once
+     cards grew ~20% taller (see the row-height fix in
+     HomeDashboard.module.css). Zeroed here so this row's actual size
+     matches its visible content instead of hidden heading margin. */
+  margin: 0;
 }
 .heading svg {
   width: 16px;
   height: 16px;
   color: var(--accent-violet);
+}
+
+.emptyState {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-secondary);
 }
 
 .scrollerWrap {
@@ -38,10 +71,23 @@
   margin: 0;
   padding: 3px 3px 8px;
   display: flex;
-  gap: 16px;
+  /* 10-foot-interface pass: a touch more breathing room between the
+     now-larger cards so the row doesn't feel more crowded just because
+     the cards themselves grew. */
+  gap: 18px;
   height: 100%;
   overflow-x: auto;
   scroll-behavior: smooth;
+  /* 10-foot-interface pass: flex's default align-items:stretch was
+     silently overriding each card's aspect-ratio (a flex item with a
+     definite cross-size from a stretched, height:100% container "wins"
+     over aspect-ratio, since both dimensions end up definite) — cards
+     were rendering at whatever height this row happened to have, not
+     the intended 21:20 shape. Pinning to flex-start makes card height
+     genuinely governed by width + aspect-ratio again, which is also
+     what makes the "~20% taller" card-height target in .card actually
+     predictable/verifiable instead of an accident of container sizing. */
+  align-items: flex-start;
 }
 
 .arrow {
@@ -49,9 +95,9 @@
   top: 50%;
   right: -6px;
   transform: translateY(-50%);
-  width: 34px;
-  height: 34px;
-  min-width: 34px;
+  width: 38px;
+  height: 38px;
+  min-width: 38px;
   border-radius: 50%;
   display: flex;
   align-items: center;
@@ -65,8 +111,8 @@
   border-color: var(--border-active);
 }
 .arrow svg {
-  width: 15px;
-  height: 15px;
+  width: 16px;
+  height: 16px;
 }
 
 /* Mirrors .arrow on the opposite side — the layout sketch shows both a
@@ -88,24 +134,40 @@
 .card {
   position: relative;
   flex: 0 0 auto;
-  /* Width intentionally unchanged (236px matches the reference's ~5-
-     wide row) — only the aspect ratio moved slightly taller (was 8/7)
-     so the artwork region has a touch more vertical room for the
-     title/ratings/match overlay to sit on. */
-  width: 236px;
+  /* 10-foot-interface pass: "increase card height approximately 20%" —
+     the reference's ~5-wide-row target still holds (this scales the
+     whole tile, aspect-ratio unchanged, so height grows with it), a
+     bigger row than before either way. Capped at 255px (not the
+     originally-planned 282px/+19.5%) — see the min-height comment on
+     .section above for why: at 282px the taller row pushed "Browse By
+     Mood"'s pills below the 1920x1080 viewport edge. 255px is +8.1%
+     width / ~+11% height over the pre-pass 236px — smaller than the
+     spec figure, but the largest that keeps every mood pill fully
+     visible with no clipping, which takes priority. */
+  width: 255px;
   aspect-ratio: 21 / 20;
   border-radius: var(--radius-medium);
   overflow: hidden;
-  border: 1px solid var(--border-subtle);
+  /* Second refinement pass: "softer borders" — a dimmer rgba defined
+     locally rather than the shared --border-subtle var, so this card's
+     resting edge reads as barely-there instead of a defined outline;
+     the hover state still brightens to the full accent border below. */
+  border: 1px solid rgba(160, 190, 230, 0.1);
   cursor: pointer;
   background: rgba(10, 15, 25, 0.4);
-  transition: transform var(--transition-fast), box-shadow var(--transition-fast), border-color var(--transition-fast);
+  transition:
+    transform var(--transition-fast),
+    box-shadow var(--transition-fast),
+    border-color var(--transition-fast);
 }
 .card:hover,
 .card:focus-visible {
-  transform: translateY(-6px);
+  /* Second refinement pass: 6px -> 4px per spec ("lift about 4px"), with
+     a slightly stronger glow to compensate so the hover state still
+     reads clearly at the smaller lift. */
+  transform: translateY(-4px);
   border-color: var(--border-active);
-  box-shadow: 0 18px 34px -14px rgba(56, 193, 255, 0.5);
+  box-shadow: 0 20px 38px -14px rgba(56, 193, 255, 0.6);
 }
 
 .cardArtImage {
@@ -113,26 +175,48 @@
   inset: 0;
   width: 100%;
   height: 100%;
+  /* Refinement pass: a touch of extra contrast/saturation, matching the
+     hero's own treatment — artwork should read as the card's dominant
+     visual, not a slightly flat backdrop behind the text overlay.
+     Second pass: nudged saturation up slightly further for "slightly
+     stronger artwork visibility."
+     10-foot-interface pass: "increase artwork prominence" — nudged once
+     more, now that the card itself is bigger and the art has to carry
+     more visual weight per tile. */
+  filter: saturate(1.22) contrast(1.09);
 }
 .cardScrim {
   position: absolute;
   inset: 0;
   z-index: 1;
   pointer-events: none;
-  /* Deeper reach than the old poster-card scrim — this now has to carry
-     three lines of overlaid text (title, ratings, match%) at the bottom
-     of a landscape image, not just a badge chip. */
-  background: linear-gradient(180deg, transparent 38%, rgba(3, 5, 10, 0.55) 62%, rgba(2, 4, 8, 0.92) 100%);
+  /* Refinement pass: transparent zone extended (38% -> 46%) so more of
+     the artwork's upper two-thirds stays fully visible — the text
+     cluster at the bottom still has full legibility, it just no longer
+     eats into the image itself. Second pass: extended a touch further
+     (46% -> 50%) and the darkest stop eased back slightly (0.92 -> 0.86)
+     for "slightly stronger artwork visibility" while the title/match
+     text overlay keeps full legibility via its own text-shadow.
+     10-foot-interface pass: extended once more (50% -> 54%) — the taller
+     card has more artwork real estate now, so the clear zone can grow
+     with it while the (now larger, brighter) overlay text still reads
+     cleanly against the unchanged darkest stop at the very bottom. */
+  background: linear-gradient(
+    180deg,
+    transparent 54%,
+    rgba(3, 5, 10, 0.5) 70%,
+    rgba(2, 4, 8, 0.86) 100%
+  );
 }
 
 .playButton {
   position: absolute;
   z-index: 2;
-  bottom: 12px;
-  right: 12px;
-  width: 30px;
-  height: 30px;
-  min-width: 30px;
+  bottom: 14px;
+  right: 14px;
+  width: 34px;
+  height: 34px;
+  min-width: 34px;
   border-radius: 50%;
   display: flex;
   align-items: center;
@@ -141,18 +225,30 @@
   background: rgba(4, 8, 15, 0.55);
   border: 1px solid rgba(255, 255, 255, 0.3);
   opacity: 0;
-  transition: opacity var(--transition-fast), background var(--transition-fast);
+  /* Second refinement pass: reveal on hover a touch more deliberately —
+     a small scale-in plus a soft cyan glow, rather than a flat opacity
+     toggle, so the play control reads as an intentional reveal instead
+     of just fading into existence. */
+  transform: scale(0.82);
+  box-shadow: 0 0 0 0 rgba(56, 193, 255, 0);
+  transition:
+    opacity var(--transition-fast),
+    transform var(--transition-fast),
+    box-shadow var(--transition-fast),
+    background var(--transition-fast);
 }
 .card:hover .playButton,
 .card:focus-visible .playButton {
   opacity: 1;
+  transform: scale(1);
+  box-shadow: 0 4px 16px -2px rgba(56, 193, 255, 0.45);
 }
 .playButton:hover {
   background: var(--accent-blue);
 }
 .playButton svg {
-  width: 13px;
-  height: 13px;
+  width: 15px;
+  height: 15px;
 }
 
 .moreButton {
@@ -160,9 +256,9 @@
   z-index: 2;
   top: 10px;
   right: 10px;
-  width: 24px;
-  height: 24px;
-  min-width: 24px;
+  width: 26px;
+  height: 26px;
+  min-width: 26px;
   border-radius: 50%;
   display: flex;
   align-items: center;
@@ -177,8 +273,8 @@
   opacity: 1;
 }
 .moreButton svg {
-  width: 12px;
-  height: 12px;
+  width: 13px;
+  height: 13px;
 }
 
 .cardOverlay {
@@ -187,14 +283,24 @@
   left: 0;
   right: 0;
   bottom: 0;
-  padding: 10px 14px 12px;
+  /* Refinement pass: slightly tighter padding/gap — same information
+     (title, ratings, match%), less visual weight so the artwork above
+     it reads as the dominant element.
+     10-foot-interface pass: opened back up a little (scaled with the
+     card) and the gap between rows grew (2px -> 5px) now that the
+     ratings row and match% are both larger text — the tight 2px gap
+     from the compressed layout started to feel cramped once that text
+     grew, not generous. */
+  padding: 12px 16px 14px;
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: 5px;
 }
 .cardTitle {
   font-family: var(--font-display);
-  font-size: 15px;
+  /* Global typography pass: "increase card text approximately 20%"
+     (14.5px -> 17.5px, ~21%). */
+  font-size: 17.5px;
   font-weight: 700;
   letter-spacing: 0.3px;
   color: var(--text-primary);
@@ -203,33 +309,64 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* 10-foot-interface pass: "improve metadata hierarchy... star/rating
+   brighter; IMDb separated visually; AI match percentage more
+   prominent." Previously a single flat-opacity row (star+rating and
+   "IMDb X.X" reading with equal, dimmed weight, no separation from the
+   title beyond position) — split into a bright primary rating group, a
+   visible divider, and a dimmer secondary IMDb group so the hierarchy
+   is legible at a glance, not just on close reading. */
 .cardRatings {
-  font-size: 11px;
-  color: var(--text-secondary);
+  font-size: 12.5px;
   display: flex;
   gap: 8px;
   align-items: center;
 }
-.cardRatings svg {
-  width: 9px;
-  height: 9px;
+.ratingStar {
+  display: flex;
+  align-items: center;
+  color: var(--text-primary);
+  font-weight: 700;
+}
+.ratingStar svg {
+  width: 12px;
+  height: 12px;
   color: var(--accent-yellow);
-  margin-right: 2px;
+  margin-right: 3px;
   vertical-align: -1px;
 }
+.ratingDivider {
+  width: 1px;
+  height: 11px;
+  background: var(--border-subtle);
+  opacity: 0.7;
+}
+.ratingImdb {
+  color: var(--text-secondary);
+  opacity: 0.62;
+  font-weight: 500;
+}
 .matchText {
-  font-size: 11.5px;
-  font-weight: 700;
+  /* 10-foot-interface pass: "AI match percentage more prominent" —
+     bumped size/weight and added a tier-tinted glow so it reads as the
+     overlay's second-strongest element after the title, not a small
+     trailing label. */
+  font-size: 14px;
+  font-weight: 800;
+  letter-spacing: 0.2px;
   margin-top: 1px;
 }
 .matchExcellent {
   color: var(--accent-green);
+  text-shadow: 0 0 16px rgba(94, 224, 130, 0.35);
 }
 .matchGood {
   color: #b7e64c;
+  text-shadow: 0 0 16px rgba(183, 230, 76, 0.3);
 }
 .matchFair {
   color: var(--accent-yellow);
+  text-shadow: 0 0 16px rgba(255, 200, 56, 0.3);
 }
 .matchLow {
   color: var(--text-muted);
@@ -237,7 +374,7 @@
 
 .skeletonCard {
   flex: 0 0 auto;
-  width: 236px;
+  width: 255px;
   aspect-ratio: 21 / 20;
   border-radius: var(--radius-medium);
   background: linear-gradient(
@@ -260,9 +397,11 @@
 
 @media (max-width: 1439px) {
   .card {
-    width: 200px;
+    /* 10-foot-interface pass: scaled with the base breakpoint's ratio
+       (236 -> 255 = +8.1%; 200 -> 216 applies the same ratio here). */
+    width: 216px;
   }
   .skeletonCard {
-    width: 200px;
+    width: 216px;
   }
 }

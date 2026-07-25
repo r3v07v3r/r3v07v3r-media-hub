@@ -10,18 +10,46 @@
      (<1100px) breakpoint. */
   min-height: 190px;
   overflow: visible;
-  /* Was bled left past .main's own edge by the rail's full published
-     width to run underneath the nav rail. In practice the rail's SVG
-     boundary is much narrower down at the mood row's vertical position
-     than at its widest bulge (near the top, by the Home item), so
-     bleeding by the full --nav-rail-width put the entire first pill
-     underneath the rail's opaque fill/z-index — not just the connector
-     line tucking under an edge, but the "Thrilling" pill vanishing
-     completely. Bleed by a small fixed amount instead: enough for the
-     connector line's cyan trail to visibly run under the rail's thin
-     lower boundary (per the reference), not enough to hide a pill. */
-  margin-left: -48px;
-  width: calc(100% + 48px);
+  /* Bled left past .main's own edge to run underneath the nav rail
+     footprint, closing the lower-left composition gap — this is a
+     deliberate part of the layout, not clipped by .main's overflow (see
+     the overflow-x comment on .main in AppShell.module.css).
+
+     Third refinement pass: was a small fixed 48px (just enough for the
+     connector line's glow to tuck under, deliberately not enough to
+     touch the first pill — see the git history for the original
+     reasoning) — the brief now explicitly asks for the leftmost mood
+     blobs to sit partially *under* the nav footprint as a layered
+     composition choice, and the rail itself grew to 285px this pass, so
+     a proportional half-rail-width bleed both reaches further and stays
+     in sync automatically if the rail's width ever changes again.
+     Half, not the full rail width: the rail's own SVG boundary tapers
+     back toward the left edge well before reaching this row's height
+     (it's centered higher up the column), so the DOM footprint worth
+     bleeding under is really the icon/label column, not the full
+     published width — half reaches under that comfortably without
+     pushing the whole row so far left it collides with the "assistant"
+     (AI orb) column's own content above it.
+
+     Compositing pass: nudged 0.5 -> 0.8. Fixing the clipping bug (see
+     .main in AppShell.module.css) revealed that at 0.5 — and even at an
+     intermediate 0.65 — this row's leftmost pill landed only right at
+     (or just short of) the rail's own tapered silhouette at this
+     height, reading as two separate floating shapes with a gap between
+     them rather than "the nav overlapping the mood row." 0.8 was tuned
+     by screenshot (checked against the rail's actual painted boundary,
+     not just its bounding box — the SVG boundary curves well inside
+     that box at this height) to land the pill's top-left genuinely
+     under the rail's own (translucent) glass fill, so the pill's glow
+     now visibly passes beneath it — while staying well short of the
+     rail's own widest bulge higher up the column, so nothing here
+     collides with the "assistant" column above. This value is kept in
+     lockstep with the matching compensation terms on .main
+     (AppShell.module.css) and .dashboard (HomeDashboard.module.css) —
+     if this ever changes again, update those two the same way, or the
+     clipping bug comes back. */
+  margin-left: calc(var(--nav-rail-width, 285px) * -0.8);
+  width: calc(100% + var(--nav-rail-width, 285px) * 0.8);
 }
 
 .heading {
@@ -32,6 +60,14 @@
   letter-spacing: 1.2px;
   color: var(--text-muted);
   text-transform: uppercase;
+  /* 10-foot-interface pass: this is an <h2> with no margin-top reset,
+     so it was carrying the UA stylesheet's default ~0.83em top margin
+     on top of the explicit 6px bottom margin below — unaccounted
+     vertical space in row 3's auto-sized grid track. Same class of fix
+     as the AI Picks heading in RecommendationCarousel.module.css,
+     needed to help the whole composition fit inside 1920x1080 now that
+     row 2 is taller. */
+  margin-top: 0;
   margin-bottom: 6px;
   flex: 0 0 auto;
 }
@@ -148,8 +184,11 @@
   color: inherit;
   text-align: center;
   box-shadow: 0 0 26px -6px hsla(var(--hue), 90%, 55%, 0.45);
-  transition: transform var(--transition-fast), border-color var(--transition-fast),
-    background var(--transition-fast), box-shadow var(--transition-fast);
+  transition:
+    transform var(--transition-fast),
+    border-color var(--transition-fast),
+    background var(--transition-fast),
+    box-shadow var(--transition-fast);
 }
 .pill:hover,
 .pill:focus-visible {
@@ -203,8 +242,12 @@
   /* Thin glassy ring rather than a solid gradient badge — closer to the
      reference's lighter, more delicate icon treatment. */
   background: radial-gradient(circle at 35% 30%, hsla(var(--hue), 90%, 60%, 0.16), transparent 70%);
-  box-shadow: inset 0 0 0 1.5px hsla(var(--hue), 90%, 78%, 0.75), 0 0 16px 1px hsla(var(--hue), 95%, 62%, 0.5);
-  transition: box-shadow var(--transition-standard), transform var(--transition-standard);
+  box-shadow:
+    inset 0 0 0 1.5px hsla(var(--hue), 90%, 78%, 0.75),
+    0 0 16px 1px hsla(var(--hue), 95%, 62%, 0.5);
+  transition:
+    box-shadow var(--transition-standard),
+    transform var(--transition-standard);
 }
 .pillIcon svg {
   width: 20px;
@@ -237,10 +280,14 @@
     hsla(var(--hue), 85%, 50%, 0.4) 82%,
     hsla(var(--hue), 88%, 58%, 0.62) 100%
   );
-  box-shadow: 0 0 0 1px hsla(var(--hue), 90%, 72%, 0.4), 0 16px 34px -14px hsla(var(--hue), 90%, 55%, 0.7);
+  box-shadow:
+    0 0 0 1px hsla(var(--hue), 90%, 72%, 0.4),
+    0 16px 34px -14px hsla(var(--hue), 90%, 55%, 0.7);
 }
 .pillActive .pillIcon {
-  box-shadow: 0 0 0 1px hsla(var(--hue), 90%, 85%, 0.9), 0 0 26px 4px hsla(var(--hue), 95%, 65%, 0.9);
+  box-shadow:
+    0 0 0 1px hsla(var(--hue), 90%, 85%, 0.9),
+    0 0 26px 4px hsla(var(--hue), 95%, 65%, 0.9);
 }
 
 /* Each mood gets a genuinely distinct silhouette (not a shared template
@@ -249,38 +296,46 @@
    common baseline blob. .row's first child is the connector <svg>, so
    nth-child(2) is the first actual pill (Thrilling) through
    nth-child(8) (Action). */
+/* Refinement pass: every shape's asymmetry pushed further from a
+   uniform pill — wider deltas between opposing corners, and the one
+   shape (Sci-Fi) that was a perfectly symmetric lens now wobbles
+   slightly off-axis too, so none of the seven reads as a stretched
+   capsule with rounded corners. */
 .row > button:nth-child(2) {
   /* Thrilling — pointed left edge (low radius on the left corners),
      rounded right, like a blob leaning/darting rightward. */
-  border-radius: 22% 74% 78% 26% / 55% 62% 48% 50%;
+  border-radius: 16% 80% 84% 20% / 50% 66% 42% 54%;
 }
 .row > button:nth-child(3) {
   /* Emotional — heart-like: two rounded lobes up top, a single
      narrower point at the bottom. */
-  border-radius: 64% 64% 34% 34% / 74% 74% 30% 30%;
+  border-radius: 70% 70% 26% 26% / 80% 80% 22% 22%;
 }
 .row > button:nth-child(4) {
   /* Mind-Bending — wide central bulge via alternating high/low
      vertical radii, reading as a twisted, off-axis blob. */
-  border-radius: 62% 38% 62% 38% / 38% 64% 34% 66%;
+  border-radius: 68% 32% 68% 32% / 32% 70% 28% 72%;
 }
 .row > button:nth-child(5) {
-  /* Feel Good — a soft, near-clean oval; the calmest shape in the row. */
-  border-radius: 50% 50% 50% 50% / 62% 62% 58% 58%;
+  /* Feel Good — a soft oval with a gentle organic wobble, the calmest
+     shape in the row but no longer a perfectly even ellipse. */
+  border-radius: 48% 52% 54% 46% / 60% 64% 56% 60%;
 }
 .row > button:nth-child(6) {
   /* Family — slight upper bulge (top corners rounder/taller than the
      bottom), reading as gently top-heavy. */
-  border-radius: 58% 58% 44% 44% / 68% 68% 46% 46%;
+  border-radius: 64% 62% 38% 40% / 74% 72% 40% 42%;
 }
 .row > button:nth-child(7) {
   /* Sci-Fi — stretched/elongated profile: very round left-right,
-     flatter top-bottom, so it reads as a lens rather than a circle. */
-  border-radius: 82% 82% 82% 82% / 34% 34% 34% 34%;
+     flatter top-bottom, so it reads as a lens rather than a circle —
+     now with a slight asymmetric wobble instead of a perfectly even
+     lens, which itself read as the most "pill-like" shape in the row. */
+  border-radius: 88% 86% 90% 84% / 30% 32% 28% 34%;
 }
 .row > button:nth-child(8) {
   /* Action — mirror of Thrilling: sharper right edge, rounded left. */
-  border-radius: 74% 22% 26% 78% / 50% 55% 50% 48%;
+  border-radius: 80% 16% 20% 84% / 54% 50% 52% 44%;
 }
 
 /* ---------- Filtered results drawer ---------- */

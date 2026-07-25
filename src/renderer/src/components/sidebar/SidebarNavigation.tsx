@@ -54,7 +54,10 @@ export function SidebarNavigation() {
   // there's no left column left to bleed under. Lives on <html> (not a
   // local CSS module var) since the two components aren't siblings.
   useEffect(() => {
-    const width = isMobile ? 0 : collapsed ? 84 : 220
+    // Third refinement pass: expanded rail 220px -> 285px (see .rail in
+    // SidebarNavigation.module.css) — kept in sync here since this is
+    // the value MoodBrowser reads to know how far it can bleed left.
+    const width = isMobile ? 0 : collapsed ? 84 : 285
     document.documentElement.style.setProperty('--nav-rail-width', `${width}px`)
   }, [collapsed, isMobile])
 
@@ -118,15 +121,74 @@ export function SidebarNavigation() {
       >
         <defs>
           <linearGradient id="railFillGrad" x1="0" y1="0" x2="1" y2="0">
-            <stop offset="0%" stopColor="#0a1220" stopOpacity="0.7" />
-            <stop offset="65%" stopColor="#050a14" stopOpacity="0.42" />
+            {/* Third refinement pass: "more visible internal darkness" —
+                both stops deepened (0.7 -> 0.8, 0.42 -> 0.52) so the
+                shell's body reads as genuinely dense glass/hardware
+                rather than a light tint, especially now that it's
+                physically bigger and has more area to read as flat if
+                left too translucent. 10-foot-interface pass: nudged once
+                more (0.8 -> 0.86, 0.52 -> 0.58) — "strengthen glass shell
+                visibility." */}
+            <stop offset="0%" stopColor="#0a1220" stopOpacity="0.86" />
+            <stop offset="65%" stopColor="#050a14" stopOpacity="0.58" />
             <stop offset="100%" stopColor="#050a14" stopOpacity="0" />
+          </linearGradient>
+          {/* Third pass: faint pooled glow near the item column — see
+              .railShapeInnerGlow (SidebarNavigation.module.css) for the
+              breathing animation. Off-center toward the icons (not a
+              plain centered radial) so it reads as light the controls
+              themselves are casting, not a generic panel backlight. */}
+          <radialGradient id="railInnerGlowGrad" cx="26%" cy="52%" r="60%">
+            <stop offset="0%" stopColor="#5ec8ff" stopOpacity="0.22" />
+            <stop offset="55%" stopColor="#5ec8ff" stopOpacity="0.07" />
+            <stop offset="100%" stopColor="#5ec8ff" stopOpacity="0" />
+          </radialGradient>
+          {/* Premium HUD finish, not a flat web-sidebar panel: a soft
+              diagonal sheen near the top-left (glass "internal
+              reflection") and a matching dark pool along the bottom-right
+              (an "inner shadow" read, since a literal inset box-shadow
+              can't follow this organic boundary). Both painted with the
+              same closed blob path as railShapeFill, just with a
+              different gradient on top. */}
+          {/* Third pass: nudged toward a more distinctly blue tint
+              (#dff2ff -> #bfe6ff) and a touch brighter — "subtle blue
+              reflection" called out explicitly this pass, vs. the
+              previous near-white sheen.
+              10-foot-interface pass: "strengthen inner reflection" — the
+              sheen was reading as a faint hint at TV distance. Brightened
+              the peak stop and pushed the falloff further down the shell
+              (22%/55% -> 30%/62%) so the reflection reads as a real glass
+              highlight band rather than a thin edge glow. */}
+          <linearGradient id="railGlassSheen" x1="0" y1="0" x2="0.7" y2="1">
+            <stop offset="0%" stopColor="#bfe6ff" stopOpacity="0.32" />
+            <stop offset="30%" stopColor="#bfe6ff" stopOpacity="0.1" />
+            <stop offset="62%" stopColor="#bfe6ff" stopOpacity="0" />
+          </linearGradient>
+          <linearGradient id="railInnerShadow" x1="0" y1="1" x2="0.4" y2="0.3">
+            <stop offset="0%" stopColor="#000000" stopOpacity="0.38" />
+            <stop offset="45%" stopColor="#000000" stopOpacity="0.12" />
+            <stop offset="80%" stopColor="#000000" stopOpacity="0" />
           </linearGradient>
         </defs>
         <path
           className={styles.railShapeFill}
           d="M0,0 C60,0 148,22 172,62 C202,110 230,142 230,190 C230,238 192,254 175,288 C160,318 165,358 178,394 C190,430 196,460 180,495 C168,524 165,556 178,590 C190,620 196,650 180,686 C168,716 165,746 175,776 C185,810 197,850 186,894 C176,930 140,960 90,980 C50,995 20,1000 0,1000 Z"
           fill="url(#railFillGrad)"
+        />
+        <path
+          className={styles.railShapeShadow}
+          d="M0,0 C60,0 148,22 172,62 C202,110 230,142 230,190 C230,238 192,254 175,288 C160,318 165,358 178,394 C190,430 196,460 180,495 C168,524 165,556 178,590 C190,620 196,650 180,686 C168,716 165,746 175,776 C185,810 197,850 186,894 C176,930 140,960 90,980 C50,995 20,1000 0,1000 Z"
+          fill="url(#railInnerShadow)"
+        />
+        <path
+          className={styles.railShapeSheen}
+          d="M0,0 C60,0 148,22 172,62 C202,110 230,142 230,190 C230,238 192,254 175,288 C160,318 165,358 178,394 C190,430 196,460 180,495 C168,524 165,556 178,590 C190,620 196,650 180,686 C168,716 165,746 175,776 C185,810 197,850 186,894 C176,930 140,960 90,980 C50,995 20,1000 0,1000 Z"
+          fill="url(#railGlassSheen)"
+        />
+        <path
+          className={styles.railShapeInnerGlow}
+          d="M0,0 C60,0 148,22 172,62 C202,110 230,142 230,190 C230,238 192,254 175,288 C160,318 165,358 178,394 C190,430 196,460 180,495 C168,524 165,556 178,590 C190,620 196,650 180,686 C168,716 165,746 175,776 C185,810 197,850 186,894 C176,930 140,960 90,980 C50,995 20,1000 0,1000 Z"
+          fill="url(#railInnerGlowGrad)"
         />
         <path
           className={styles.railShapeEdge}
@@ -139,6 +201,25 @@ export function SidebarNavigation() {
           pathLength={1}
           vectorEffect="non-scaling-stroke"
         />
+        {/* A second, dimmer, violet-tinted highlight travelling the same
+            boundary at a different offset/speed — "occasional travelling
+            energy highlights" (plural), not just one lone cyan dash. */}
+        <path
+          className={styles.railShapeTravel2}
+          d="M0,0 C60,0 148,22 172,62 C202,110 230,142 230,190 C230,238 192,254 175,288 C160,318 165,358 178,394 C190,430 196,460 180,495 C168,524 165,556 178,590 C190,620 196,650 180,686 C168,716 165,746 175,776 C185,810 197,850 186,894 C176,930 140,960 90,980 C50,995 20,1000 0,1000"
+          pathLength={1}
+          vectorEffect="non-scaling-stroke"
+        />
+        {/* Third highlight — a slower, occasional brighter flare rather
+            than a third always-visible dash (see .railShapeTravel3's
+            keyframe: mostly transparent, one brief bright pulse per
+            loop). "Add occasional brighter travelling highlights." */}
+        <path
+          className={styles.railShapeTravel3}
+          d="M0,0 C60,0 148,22 172,62 C202,110 230,142 230,190 C230,238 192,254 175,288 C160,318 165,358 178,394 C190,430 196,460 180,495 C168,524 165,556 178,590 C190,620 196,650 180,686 C168,716 165,746 175,776 C185,810 197,850 186,894 C176,930 140,960 90,980 C50,995 20,1000 0,1000"
+          pathLength={1}
+          vectorEffect="non-scaling-stroke"
+        />
       </svg>
       {/* key={pathname} replays the breathe + one-shot burst keyframes on
           every route change — "the spine reacting when the active nav
@@ -146,16 +227,24 @@ export function SidebarNavigation() {
           point-along-path animation. Positioned near the boundary's x at
           each node's approximate height rather than a fixed right:-3px,
           since the boundary is now a wave, not a straight edge. */}
+      {/* left values are absolute px matching the boundary's rendered
+          position, NOT percentages — because the SVG stretches
+          non-uniformly (preserveAspectRatio="none"), a percentage here
+          wouldn't track the curve the way it does for `top`. Rescaled
+          proportionally to the rail's new 285px width (was tuned for
+          220px: 172px, 178px) so the nodes still land on the boundary
+          rather than drifting into open space now that the shell is
+          wider. */}
       <span
         key={`node-a-${pathname}`}
         className={`${styles.railNode} ${styles.railNodePulse}`}
-        style={{ top: '19%', left: '172px', ['--node-delay' as string]: '0s' }}
+        style={{ top: '19%', left: '223px', ['--node-delay' as string]: '0s' }}
         aria-hidden="true"
       />
       <span
         key={`node-b-${pathname}`}
         className={`${styles.railNode} ${styles.railNodePulse}`}
-        style={{ top: '59%', left: '178px', ['--node-delay' as string]: '0.6s' }}
+        style={{ top: '59%', left: '231px', ['--node-delay' as string]: '0.6s' }}
         aria-hidden="true"
       />
 
@@ -184,7 +273,11 @@ export function SidebarNavigation() {
               >
                 <span className={styles.iconWrap}>
                   {active && <span className={styles.iconHalo} aria-hidden="true" />}
-                  <Icon name={item.icon} />
+                  {/* 10-foot-interface pass: default strokeWidth (1.6) read as
+                      thin/washed-out at the larger 56px badge size — bumped to
+                      2.1 so the glyph itself carries real visual weight,
+                      matching "increase icon visibility and stroke weight." */}
+                  <Icon name={item.icon} strokeWidth={2.1} />
                 </span>
                 <span className={styles.label}>
                   {item.label}

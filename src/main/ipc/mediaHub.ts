@@ -1,0 +1,35 @@
+// Registers every media-hub backend IPC handler. This is the equivalent of
+// r3v07v3r-media-hub's src/main.cjs, which registered every `handle(...)`
+// call inline, top-to-bottom, in one file — that file has been split into
+// one module per domain (see src/main/media-hub/), and this is where they
+// all get wired together, mirroring how this project's existing
+// registerSettingsIpc()/registerTelemetryIpc()/registerHttpProxyIpc() are
+// wired from src/main/index.ts.
+//
+// Registration order doesn't matter functionally (ipcMain.handle just adds
+// a listener per channel; nothing here is invoked until the renderer
+// actually calls it, which is always well after app.whenReady() has
+// finished setting up the database — see index.ts), so the order below
+// just follows the domain grouping used elsewhere in this port.
+
+import { registerAppIpc } from '../media-hub/appIpc'
+import { registerAutoUpdateIpc } from '../media-hub/autoUpdate'
+import { registerCatalogIpc } from '../media-hub/catalog'
+import { registerMalIpc } from '../media-hub/malSync'
+import { registerPlaybackIpc } from '../media-hub/playbackSession'
+import { registerSubtitlesIpc } from '../media-hub/subtitlesService'
+import { registerTorBoxIpc } from '../media-hub/torbox'
+import { registerTrackingIpc } from '../media-hub/tracking'
+import { registerWatchPartyIpc } from '../media-hub/watchParty'
+
+export function registerMediaHubIpc(): void {
+  registerAppIpc()
+  registerAutoUpdateIpc()
+  registerTorBoxIpc()
+  registerCatalogIpc()
+  registerTrackingIpc()
+  registerMalIpc()
+  registerSubtitlesIpc()
+  registerPlaybackIpc()
+  registerWatchPartyIpc()
+}

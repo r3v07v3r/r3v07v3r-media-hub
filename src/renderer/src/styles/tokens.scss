@@ -34,7 +34,9 @@ $text-muted: #747b85;
 $canvas-w: 1920px;
 $canvas-h: 1080px;
 
-$nav-rail-width: 220px;
+// Third refinement pass: expanded rail 220px -> 285px (see .rail in
+// SidebarNavigation.module.css).
+$nav-rail-width: 285px;
 $nav-rail-collapsed-width: 84px;
 
 $radius-small: 8px;

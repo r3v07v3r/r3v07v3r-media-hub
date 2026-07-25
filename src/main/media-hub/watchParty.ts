@@ -1,0 +1,785 @@
+// Ported from r3v07v3r-media-hub's src/main.cjs (the Watch Party section:
+// getLocalLanIp, partyMemberSummaries, partyBroadcast, broadcastPartyState,
+// broadcastQueue, handlePartyMessage, closeParty, connectPartyWs,
+// connectRelayWs, and every `party:*`/`party-sync:*` handler). The original
+// kept a single module-level `party` object whose shape silently varied by
+// `role`/`mode` (host-direct had `wss`/`port`/`upnpStop`, host-relay had
+// `ws`/`relayUrl`/`roomId`, client had `selfId` and an array `members`
+// instead of a host's `Map`, etc.) — untyped in JS, so nothing caught a
+// handler reaching for a field that only exists on a different variant.
+// Here that's modeled as an explicit `PartyState` discriminated union on
+// `role`/`mode` so the compiler enforces exactly which fields exist in each
+// of the four combinations. This is a legitimate typing improvement over
+// the original; every runtime behavior, message shape, and error string
+// below is preserved exactly.
+//
+// Direct/LAN/WAN hosting speaks a small custom WebSocket protocol
+// (hello/welcome/leave/party-state/queue-sync, all AES-256-GCM encrypted
+// via party.ts's encryptMessage/decryptMessage with a per-party shared
+// secret) directly to peers. Relay hosting/joining speaks the same
+// encrypted payloads, but wrapped in an unencrypted `{type:'relay',
+// connId, isHost, body}` envelope produced by the external R3-Party-Sync
+// worker. Do not change either wire format — it must keep interoperating
+// with the original CommonJS app's install base and with the relay
+// worker's existing protocol.
+
+import crypto from 'node:crypto'
+import os from 'node:os'
+import { WebSocket, WebSocketServer } from 'ws'
+import { MEDIA_HUB_CHANNELS } from '../../shared/media-hub/ipc-channels'
+import type {
+  ConnectResult,
+  PartyHostResult,
+  PartyMemberSummary,
+  PartyMode,
+  PartyQueueEntry,
+  PartyStatusResult
+} from '../../shared/media-hub/types'
+import { fetchJson } from './httpClient'
+import { handle } from './ipcGuard'
+import {
+  applyQueueEvent,
+  createMemberId,
+  decodeShareCode,
+  encodeRelayShareCode,
+  encodeShareCode,
+  encryptMessage,
+  decryptMessage,
+  type PartyLanEndpoint,
+  type PartyQueueEvent
+} from './party'
+import { encrypt, partySyncCredentials, readSettings, writeSettings } from './settingsStore'
+import { sendToRenderer } from './rendererBridge'
+import { attemptPortMapping } from './upnp'
+
+// A decrypted (or relay-envelope) message off the wire. Deliberately loose
+// (mirrors the original's untyped `msg`/`envelope` objects) — every handler
+// below narrows on `type` before touching any other field.
+type PartyMessage = { type?: string; [key: string]: unknown }
+
+interface PartyHostMember {
+  id: string
+  name: string
+  isHost: boolean
+  // Only ever set for direct-mode host members (each has its own inbound
+  // ws); relay-mode host members are reached through the single relay ws
+  // instead, so this stays undefined/null for them — see partyBroadcast.
+  ws?: WebSocket | null
+}
+
+interface PartyStateHostDirect {
+  role: 'host'
+  mode: 'direct'
+  wss: WebSocketServer
+  port: number
+  secret: string
+  members: Map<string, PartyHostMember>
+  hostId: string
+  selfName: string
+  hostName: string
+  queue: PartyQueueEntry[]
+  upnpStop?: () => void
+}
+
+interface PartyStateHostRelay {
+  role: 'host'
+  mode: 'relay'
+  ws: WebSocket
+  relayUrl: string
+  roomId: string
+  secret: string
+  members: Map<string, PartyHostMember>
+  hostId: string
+  selfName: string
+  hostName: string
+  queue: PartyQueueEntry[]
+}
+
+interface PartyStateClientDirect {
+  role: 'client'
+  mode: 'direct'
+  ws: WebSocket
+  secret: string
+  members: PartyMemberSummary[]
+  selfName: string
+  hostName: string
+  selfId: string
+  queue: PartyQueueEntry[]
+}
+
+interface PartyStateClientRelay {
+  role: 'client'
+  mode: 'relay'
+  ws: WebSocket
+  secret: string
+  members: PartyMemberSummary[]
+  selfName: string
+  hostName: string
+  selfId: string
+  queue: PartyQueueEntry[]
+}
+
+type PartyState =
+  PartyStateHostDirect | PartyStateHostRelay | PartyStateClientDirect | PartyStateClientRelay
+
+let party: PartyState | null = null
+
+function getLocalLanIp(): string {
+  const interfaces = os.networkInterfaces()
+  for (const name of Object.keys(interfaces)) {
+    for (const iface of interfaces[name] || []) {
+      if (iface.family === 'IPv4' && !iface.internal) return iface.address
+    }
+  }
+  return '127.0.0.1'
+}
+
+function partyMemberSummaries(): PartyMemberSummary[] {
+  const current = party
+  if (!current) return []
+  if (current.role === 'host') {
+    return [...current.members.values()].map((m) => ({ id: m.id, name: m.name, isHost: m.isHost }))
+  }
+  return current.members || []
+}
+
+function partyBroadcast(payload: string): void {
+  const current = party
+  if (!current) return
+  if (current.role === 'host' && current.mode !== 'relay') {
+    for (const m of current.members.values()) {
+      if (m.ws && m.ws.readyState === WebSocket.OPEN) m.ws.send(payload)
+    }
+    return
+  }
+  if (current.ws && current.ws.readyState === WebSocket.OPEN) current.ws.send(payload)
+}
+
+function broadcastPartyState(): void {
+  const current = party
+  if (!current || current.role !== 'host') return
+  const members = partyMemberSummaries()
+  const payload = encryptMessage(current.secret, { type: 'party-state', members })
+  partyBroadcast(payload)
+  sendToRenderer(MEDIA_HUB_CHANNELS.partyEvent, { type: 'party-state', members })
+}
+
+function broadcastQueue(): void {
+  const current = party
+  if (!current || current.role !== 'host') return
+  const payload = encryptMessage(current.secret, { type: 'queue-sync', queue: current.queue })
+  partyBroadcast(payload)
+  sendToRenderer(MEDIA_HUB_CHANNELS.partyEvent, { type: 'queue-sync', queue: current.queue })
+}
+
+function handlePartyMessage(fromId: string, msg: PartyMessage): void {
+  const current = party
+  if (current?.role === 'host' && (msg?.type === 'suggest' || msg?.type === 'vote')) {
+    const event: PartyQueueEvent =
+      msg.type === 'vote'
+        ? {
+            type: 'vote',
+            queueId: String(msg.queueId || ''),
+            voterId: fromId,
+            direction: Number(msg.direction)
+          }
+        : {
+            type: 'suggest',
+            queueId: String(msg.queueId || ''),
+            item: msg.item as PartyQueueEntry['item'],
+            suggestedBy:
+              current.members.get(fromId)?.name ||
+              (msg.suggestedBy as string | undefined) ||
+              'Someone'
+          }
+    current.queue = applyQueueEvent(current.queue, event)
+    broadcastQueue()
+    return
+  }
+  if (current?.role === 'host' && msg?.type === 'seek') return
+  if (current?.role === 'host' && current.mode !== 'relay') {
+    const payload = encryptMessage(current.secret, { ...msg, from: fromId })
+    for (const [id, m] of current.members) {
+      if (id !== fromId && m.ws && m.ws.readyState === WebSocket.OPEN) m.ws.send(payload)
+    }
+  }
+  sendToRenderer(MEDIA_HUB_CHANNELS.partyEvent, { type: 'message', from: fromId, message: msg })
+}
+
+/** Tears down the active party (host: closes the ws server/all member sockets and stops any UPnP mapping; client/relay-host: sends a best-effort `leave` then closes its socket) and clears `party`. Called both from `party:leave` and from `app.on('before-quit', ...)` in src/main/index.ts. */
+export function closeParty(): void {
+  const current = party
+  if (!current) return
+  if (current.role === 'host' && current.mode !== 'relay') {
+    for (const m of current.members.values()) {
+      try {
+        m.ws?.close()
+      } catch {
+        // best-effort
+      }
+    }
+    try {
+      current.wss.close()
+    } catch {
+      // best-effort
+    }
+    current.upnpStop?.()
+  } else {
+    if (current.mode === 'relay') {
+      try {
+        current.ws.send(encryptMessage(current.secret, { type: 'leave' }))
+      } catch {
+        // best-effort
+      }
+    }
+    try {
+      current.ws.close()
+    } catch {
+      // best-effort
+    }
+  }
+  party = null
+}
+
+function connectPartyWs(
+  endpoint: PartyLanEndpoint,
+  secret: string,
+  name: string
+): Promise<WebSocket> {
+  return new Promise((resolve, reject) => {
+    const ws = new WebSocket(`ws://${endpoint.ip}:${endpoint.port}`)
+    const timer = setTimeout(() => {
+      ws.terminate()
+      reject(new Error('Connection timed out.'))
+    }, 5000)
+    ws.once('open', () => {
+      clearTimeout(timer)
+      ws.send(encryptMessage(secret, { type: 'hello', name }))
+      resolve(ws)
+    })
+    ws.once('error', (error) => {
+      clearTimeout(timer)
+      reject(error)
+    })
+  })
+}
+
+interface ConnectRelayOptions {
+  token?: string
+  secret?: string
+  helloName?: string
+  WebSocketImpl?: typeof WebSocket
+}
+
+function connectRelayWs(
+  relayUrl: string,
+  roomId: string,
+  { token = '', secret = '', helloName = '', WebSocketImpl = WebSocket }: ConnectRelayOptions = {}
+): Promise<WebSocket> {
+  return new Promise((resolve, reject) => {
+    const wsUrl = `${relayUrl.replace(/^http/, 'ws')}/party/${encodeURIComponent(roomId)}${
+      token ? `?token=${encodeURIComponent(token)}` : ''
+    }`
+    const ws = new WebSocketImpl(wsUrl)
+    const timer = setTimeout(() => {
+      ws.terminate?.()
+      reject(new Error('R3-Party-Sync connection timed out.'))
+    }, 8000)
+    ws.once('open', () => {
+      clearTimeout(timer)
+      if (helloName) ws.send(encryptMessage(secret, { type: 'hello', name: helloName }))
+      resolve(ws)
+    })
+    ws.once('error', (error) => {
+      clearTimeout(timer)
+      reject(error)
+    })
+  })
+}
+
+interface PartyHostArgs {
+  name?: string
+  mode?: PartyMode
+}
+
+interface PartyJoinArgs {
+  code?: string
+  name?: string
+}
+
+interface PartySuggestArgs {
+  id?: unknown
+  type?: string
+  title?: string
+  poster?: string
+  year?: string
+}
+
+interface PartyVoteArgs {
+  queueId?: string
+  direction?: number
+}
+
+interface PartyNowPlayingArgs {
+  infoHash?: string
+  sources?: string[]
+  mediaId?: string
+  item?: { id?: string; type?: string; title?: string; poster?: string }
+  season?: number
+  episode?: number
+  position?: number
+}
+
+interface PartyPlaybackActionArgs {
+  type?: string
+  position?: number
+}
+
+interface PartySyncConnectArgs {
+  url?: string
+  inviteKey?: string
+}
+
+/** Registers every `party:*` and `party-sync:*` IPC handler (hosting — direct LAN/WAN with optional UPnP, and relay via R3-Party-Sync —, joining, leaving, status, queue suggest/remove/vote, now-playing/playback-action broadcast, and R3-Party-Sync connect/disconnect). */
+export function registerWatchPartyIpc(): void {
+  handle<PartyHostArgs, PartyHostResult>(MEDIA_HUB_CHANNELS.partyHost, async (_e, payload) => {
+    if (party) throw new Error('You are already in a party. Leave it first.')
+    const { name: rawName, mode } = payload || {}
+    const name =
+      String(rawName || 'Host')
+        .trim()
+        .slice(0, 40) || 'Host'
+
+    if (mode === 'relay') {
+      const creds = partySyncCredentials()
+      if (!creds.url || !creds.inviteKey)
+        throw new Error('Configure R3-Party-Sync in Settings first.')
+      const { roomId, roomToken } = await fetchJson<{ roomId: string; roomToken: string }>(
+        `${creds.url}/host`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ inviteKey: creds.inviteKey })
+        }
+      )
+      const secret = crypto.randomBytes(24).toString('base64url')
+      const members = new Map<string, PartyHostMember>()
+      const hostId = createMemberId()
+      members.set(hostId, { id: hostId, name, isHost: true })
+      const ws = await connectRelayWs(creds.url, roomId, { token: roomToken })
+      const hostRelayState: PartyStateHostRelay = {
+        role: 'host',
+        mode: 'relay',
+        ws,
+        relayUrl: creds.url,
+        roomId,
+        secret,
+        members,
+        hostId,
+        selfName: name,
+        hostName: name,
+        queue: []
+      }
+      party = hostRelayState
+      ws.on('message', (raw) => {
+        let envelope: { type?: string; connId?: string; body?: string; isHost?: boolean }
+        try {
+          envelope = JSON.parse(raw.toString())
+        } catch {
+          return
+        }
+        if (envelope.type !== 'relay') return
+        const msg = decryptMessage(secret, envelope.body || '') as PartyMessage | null
+        if (!msg) return
+        const fromId = String(envelope.connId || '')
+        if (msg.type === 'hello') {
+          members.set(fromId, {
+            id: fromId,
+            name: String(msg.name || 'Guest').slice(0, 40) || 'Guest',
+            isHost: false
+          })
+          broadcastPartyState()
+          return
+        }
+        if (msg.type === 'leave') {
+          if (members.delete(fromId)) broadcastPartyState()
+          return
+        }
+        if (!members.has(fromId)) return
+        handlePartyMessage(fromId, msg)
+      })
+      ws.on('close', () => {
+        if (party?.role === 'host' && party.mode === 'relay') {
+          party = null
+          sendToRenderer(MEDIA_HUB_CHANNELS.partyEvent, { type: 'host-disconnected' })
+        }
+      })
+      return {
+        ok: true,
+        code: encodeRelayShareCode({ relay: { url: creds.url, roomId }, secret, name })
+      }
+    }
+
+    const secret = crypto.randomBytes(24).toString('base64url')
+    const wss = await new Promise<WebSocketServer>((resolve, reject) => {
+      const server = new WebSocketServer({ host: '0.0.0.0', port: 0 })
+      server.once('listening', () => resolve(server))
+      server.once('error', reject)
+    })
+    const address = wss.address()
+    const port = typeof address === 'string' || address === null ? 0 : address.port
+    const members = new Map<string, PartyHostMember>()
+    const hostId = createMemberId()
+    members.set(hostId, { id: hostId, name, isHost: true, ws: null })
+    const hostDirectState: PartyStateHostDirect = {
+      role: 'host',
+      mode: 'direct',
+      wss,
+      port,
+      secret,
+      members,
+      hostId,
+      selfName: name,
+      hostName: name,
+      queue: []
+    }
+    party = hostDirectState
+    wss.on('connection', (ws) => {
+      let memberId: string | null = null
+      ws.on('message', (raw) => {
+        const msg = decryptMessage(secret, raw.toString()) as PartyMessage | null
+        if (!msg) {
+          ws.close()
+          return
+        }
+        if (msg.type === 'hello' && !memberId) {
+          memberId = createMemberId()
+          members.set(memberId, {
+            id: memberId,
+            name: String(msg.name || 'Guest').slice(0, 40) || 'Guest',
+            isHost: false,
+            ws
+          })
+          ws.send(encryptMessage(secret, { type: 'welcome', id: memberId }))
+          broadcastPartyState()
+          return
+        }
+        if (!memberId) return
+        handlePartyMessage(memberId, msg)
+      })
+      ws.on('close', () => {
+        if (memberId) {
+          members.delete(memberId)
+          broadcastPartyState()
+        }
+      })
+    })
+    const mapping = await attemptPortMapping(port, getLocalLanIp()).catch(() => null)
+    const lan: PartyLanEndpoint = { ip: getLocalLanIp(), port }
+    const wan: PartyLanEndpoint | null = mapping ? { ip: mapping.ip, port: mapping.port } : null
+    if (mapping && party && party.role === 'host' && party.mode === 'direct') {
+      party.upnpStop = mapping.stop
+    }
+    const code = encodeShareCode({ lan, wan, secret, name })
+    return { ok: true, code, port, wanAvailable: Boolean(wan) }
+  })
+
+  handle<PartyJoinArgs, { ok: true }>(MEDIA_HUB_CHANNELS.partyJoin, async (_e, payload) => {
+    if (party) throw new Error('You are already in a party. Leave it first.')
+    const { code, name } = payload || {}
+    const parsed = decodeShareCode(code)
+    if (!parsed) throw new Error('That party code is invalid.')
+    const displayName =
+      String(name || 'Guest')
+        .trim()
+        .slice(0, 40) || 'Guest'
+
+    if (parsed.v === 2) {
+      const ws = await connectRelayWs(parsed.relay.url, parsed.relay.roomId, {
+        secret: parsed.secret,
+        helloName: displayName
+      })
+      const clientRelayState: PartyStateClientRelay = {
+        role: 'client',
+        mode: 'relay',
+        ws,
+        secret: parsed.secret,
+        members: [],
+        selfName: displayName,
+        hostName: parsed.name || '',
+        selfId: '',
+        queue: []
+      }
+      party = clientRelayState
+      ws.on('message', (raw) => {
+        let envelope: { type?: string; connId?: string; body?: string; isHost?: boolean }
+        try {
+          envelope = JSON.parse(raw.toString())
+        } catch {
+          return
+        }
+        if (envelope.type === 'assigned') {
+          if (party?.role === 'client') party.selfId = String(envelope.connId || '')
+          return
+        }
+        if (envelope.type !== 'relay') return
+        const msg = decryptMessage(parsed.secret, envelope.body || '') as PartyMessage | null
+        if (!msg) return
+        if (msg.type === 'party-state') {
+          const members = (msg.members as PartyMemberSummary[]) || []
+          if (party?.role === 'client') party.members = members
+          sendToRenderer(MEDIA_HUB_CHANNELS.partyEvent, { type: 'party-state', members })
+          return
+        }
+        if (msg.type === 'queue-sync') {
+          if (party?.role === 'client') {
+            party.queue = applyQueueEvent(party.queue, msg as unknown as PartyQueueEvent)
+            sendToRenderer(MEDIA_HUB_CHANNELS.partyEvent, {
+              type: 'queue-sync',
+              queue: party.queue
+            })
+          }
+          return
+        }
+        if (envelope.isHost && msg.type === 'leave') {
+          party = null
+          sendToRenderer(MEDIA_HUB_CHANNELS.partyEvent, { type: 'host-disconnected' })
+          return
+        }
+        if (!envelope.isHost && (msg.type === 'nowPlaying' || msg.type === 'seek')) return
+        handlePartyMessage(envelope.isHost ? 'host' : String(envelope.connId || ''), msg)
+      })
+      ws.on('close', () => {
+        if (party?.role === 'client') {
+          party = null
+          sendToRenderer(MEDIA_HUB_CHANNELS.partyEvent, { type: 'host-disconnected' })
+        }
+      })
+      return { ok: true }
+    }
+
+    const endpoints: PartyLanEndpoint[] = [parsed.lan, parsed.wan].filter(
+      (endpoint): endpoint is PartyLanEndpoint => Boolean(endpoint)
+    )
+    let ws: WebSocket | null = null
+    let lastError: unknown = null
+    for (const endpoint of endpoints) {
+      try {
+        ws = await connectPartyWs(endpoint, parsed.secret, displayName)
+        break
+      } catch (error) {
+        lastError = error
+      }
+    }
+    if (!ws) {
+      throw new Error(
+        lastError instanceof Error ? lastError.message : 'Could not reach the party host.'
+      )
+    }
+    const connectedWs = ws
+    const clientDirectState: PartyStateClientDirect = {
+      role: 'client',
+      mode: 'direct',
+      ws: connectedWs,
+      secret: parsed.secret,
+      members: [],
+      selfName: displayName,
+      hostName: parsed.name || '',
+      selfId: '',
+      queue: []
+    }
+    party = clientDirectState
+    connectedWs.on('message', (raw) => {
+      const msg = decryptMessage(parsed.secret, raw.toString()) as PartyMessage | null
+      if (!msg) return
+      if (msg.type === 'welcome') {
+        if (party?.role === 'client') party.selfId = String(msg.id || '')
+        return
+      }
+      if (msg.type === 'party-state') {
+        const members = (msg.members as PartyMemberSummary[]) || []
+        if (party?.role === 'client') party.members = members
+        sendToRenderer(MEDIA_HUB_CHANNELS.partyEvent, { type: 'party-state', members })
+        return
+      }
+      if (msg.type === 'queue-sync') {
+        if (party?.role === 'client') {
+          party.queue = applyQueueEvent(party.queue, msg as unknown as PartyQueueEvent)
+          sendToRenderer(MEDIA_HUB_CHANNELS.partyEvent, { type: 'queue-sync', queue: party.queue })
+        }
+        return
+      }
+      handlePartyMessage('host', msg)
+    })
+    connectedWs.on('close', () => {
+      if (party?.role === 'client') {
+        party = null
+        sendToRenderer(MEDIA_HUB_CHANNELS.partyEvent, { type: 'host-disconnected' })
+      }
+    })
+    return { ok: true }
+  })
+
+  handle(MEDIA_HUB_CHANNELS.partyLeave, () => {
+    closeParty()
+    return { ok: true }
+  })
+
+  handle<undefined, PartyStatusResult>(MEDIA_HUB_CHANNELS.partyStatus, () => {
+    const current = party
+    if (!current) return { inParty: false }
+    return {
+      inParty: true,
+      role: current.role,
+      mode: current.mode || 'direct',
+      members: partyMemberSummaries(),
+      selfId: current.role === 'host' ? current.hostId : current.selfId || '',
+      selfName: current.selfName || '',
+      hostName: current.hostName || ''
+    }
+  })
+
+  handle<PartySuggestArgs, { ok: true }>(MEDIA_HUB_CHANNELS.partySuggest, (_e, item) => {
+    const current = party
+    if (!current) throw new Error('You are not in a party.')
+    if (!item || item.id === undefined || item.id === null) throw new Error('Nothing to suggest.')
+    const cleanItem: PartyQueueEntry['item'] = {
+      id: item.id as string,
+      type: item.type as string,
+      title: item.title as string,
+      poster: item.poster || '',
+      year: item.year || ''
+    }
+    const event: PartyQueueEvent = {
+      type: 'suggest',
+      queueId: createMemberId(),
+      item: cleanItem,
+      suggestedBy: current.selfName || 'Someone'
+    }
+    if (current.role === 'host') {
+      current.queue = applyQueueEvent(current.queue, event)
+      broadcastQueue()
+    } else {
+      partyBroadcast(encryptMessage(current.secret, event))
+    }
+    return { ok: true }
+  })
+
+  handle<string, { ok: true }>(MEDIA_HUB_CHANNELS.partyRemove, (_e, queueId) => {
+    const current = party
+    if (!current) throw new Error('You are not in a party.')
+    if (current.role !== 'host') throw new Error('Only the host can remove suggestions.')
+    const event: PartyQueueEvent = { type: 'remove', queueId: String(queueId || '') }
+    current.queue = applyQueueEvent(current.queue, event)
+    broadcastQueue()
+    return { ok: true }
+  })
+
+  handle<PartyVoteArgs, { ok: true }>(MEDIA_HUB_CHANNELS.partyVote, (_e, payload) => {
+    const current = party
+    if (!current) throw new Error('You are not in a party.')
+    const { queueId, direction } = payload || {}
+    const dir = Number(direction)
+    if (dir !== 1 && dir !== -1) throw new Error('Invalid vote.')
+    const voterId = current.role === 'host' ? current.hostId : current.selfId
+    if (!voterId) throw new Error('Still connecting to the party — try again in a moment.')
+    const event: PartyQueueEvent = {
+      type: 'vote',
+      queueId: String(queueId || ''),
+      voterId,
+      direction: dir
+    }
+    if (current.role === 'host') {
+      current.queue = applyQueueEvent(current.queue, event)
+      broadcastQueue()
+    } else {
+      partyBroadcast(encryptMessage(current.secret, event))
+    }
+    return { ok: true }
+  })
+
+  handle(MEDIA_HUB_CHANNELS.partyQueue, () => ({ queue: party?.queue || [] }))
+
+  handle<PartyNowPlayingArgs, { ok: true }>(MEDIA_HUB_CHANNELS.partyNowPlaying, (_e, payload) => {
+    const current = party
+    if (!current || current.role !== 'host')
+      throw new Error('Only the host can start party playback.')
+    const p = payload || {}
+    const event = {
+      type: 'nowPlaying' as const,
+      infoHash: String(p.infoHash || ''),
+      sources: Array.isArray(p.sources) ? p.sources.slice(0, 20) : [],
+      mediaId: String(p.mediaId || ''),
+      item: {
+        id: p.item?.id,
+        type: p.item?.type,
+        title: p.item?.title,
+        poster: p.item?.poster || ''
+      },
+      season: Number.isFinite(p.season) ? p.season : undefined,
+      episode: Number.isFinite(p.episode) ? p.episode : undefined,
+      position: Number(p.position) || 0
+    }
+    partyBroadcast(encryptMessage(current.secret, event))
+    return { ok: true }
+  })
+
+  handle<PartyPlaybackActionArgs, { ok: boolean }>(
+    MEDIA_HUB_CHANNELS.partyPlaybackAction,
+    (_e, payload) => {
+      const current = party
+      if (!current) return { ok: false }
+      const action = payload || {}
+      if (action.type === 'seek' && current.role !== 'host')
+        throw new Error('Only the host can seek.')
+      const event = { type: action.type, position: Number(action.position) }
+      partyBroadcast(encryptMessage(current.secret, event))
+      return { ok: true }
+    }
+  )
+
+  handle<PartySyncConnectArgs, ConnectResult>(
+    MEDIA_HUB_CHANNELS.partySyncConnect,
+    async (_e, payload) => {
+      const { url, inviteKey } = payload || {}
+      const trimmedUrl = String(url || '')
+        .trim()
+        .replace(/\/+$/, '')
+      const key = String(inviteKey || '').trim()
+      if (!trimmedUrl || !key) {
+        return { ok: false, message: 'Enter the R3-Party-Sync worker URL and your invite key.' }
+      }
+      let parsedUrl: URL
+      try {
+        parsedUrl = new URL(trimmedUrl)
+      } catch {
+        return { ok: false, message: 'That is not a valid URL.' }
+      }
+      if (parsedUrl.protocol !== 'https:') {
+        return { ok: false, message: 'The worker URL must be HTTPS.' }
+      }
+      try {
+        await fetchJson(`${trimmedUrl}/host`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ inviteKey: key })
+        })
+        const s = readSettings()
+        s.partySyncUrl = trimmedUrl
+        s.partySyncInviteKey = encrypt(key)
+        writeSettings(s)
+        return { ok: true, message: 'R3-Party-Sync connected.' }
+      } catch (error) {
+        return { ok: false, message: error instanceof Error ? error.message : String(error) }
+      }
+    }
+  )
+
+  handle(MEDIA_HUB_CHANNELS.partySyncDisconnect, () => {
+    const s = readSettings()
+    delete s.partySyncUrl
+    delete s.partySyncInviteKey
+    writeSettings(s)
+    return { ok: true }
+  })
+}

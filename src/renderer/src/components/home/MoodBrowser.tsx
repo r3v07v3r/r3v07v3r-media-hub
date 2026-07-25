@@ -1,14 +1,15 @@
 'use client'
 
 import { useMemo, useRef } from 'react'
-import { CATALOG, MOOD_CATEGORIES } from '@renderer/data/mockData'
+import { MOOD_CATEGORIES } from '@renderer/data/mockData'
 import { useAppState } from '@renderer/context/AppStateContext'
 import { Icon } from '@renderer/components/icons/Icon'
 import { useReducedMotion } from '@renderer/hooks/useReducedMotion'
 import styles from './MoodBrowser.module.css'
 
 export function MoodBrowser() {
-  const { activeMood, setActiveMood, combinedMoods, toggleCombinedMood, openDetail } = useAppState()
+  const { activeMood, setActiveMood, combinedMoods, toggleCombinedMood, openDetail, catalog } =
+    useAppState()
   const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const reducedMotion = useReducedMotion()
 
@@ -19,8 +20,8 @@ export function MoodBrowser() {
 
   const results = useMemo(() => {
     if (activeMoods.length === 0) return []
-    return CATALOG.filter((m) => m.moods?.some((mood) => activeMoods.includes(mood)))
-  }, [activeMoods])
+    return catalog.filter((m) => m.moods?.some((mood) => activeMoods.includes(mood)))
+  }, [activeMoods, catalog])
 
   function selectMood(id: string, combine: boolean) {
     if (combine) {

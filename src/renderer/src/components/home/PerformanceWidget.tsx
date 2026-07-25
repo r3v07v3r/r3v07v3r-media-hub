@@ -59,7 +59,10 @@ function Gauge({
         <span className={styles.gaugeLabel}>{Math.round(value)}%</span>
       </span>
       <span className={styles.gaugeName}>
-        <Icon name={icon} size={10} />
+        {/* 10-foot-interface pass: icon bumped alongside the gaugeName
+            font-size increase (9px -> 12.5px) so the label icon doesn't
+            end up visually undersized next to its now-larger text. */}
+        <Icon name={icon} size={13} />
         {label}
       </span>
     </div>

@@ -89,7 +89,7 @@ export function MediaDetailModal() {
           </p>
           <div className={styles.actions}>
             <PrimaryButton onClick={() => startPlayback(detailMedia)} />
-            <SecondaryButton saved={saved} onClick={() => toggleMyList(detailMedia.id)} />
+            <SecondaryButton saved={saved} onClick={() => toggleMyList(detailMedia)} />
           </div>
         </div>
       </div>

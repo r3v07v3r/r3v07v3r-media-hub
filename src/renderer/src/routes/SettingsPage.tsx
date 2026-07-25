@@ -1,6 +1,7 @@
 import { useAppState } from '@renderer/context/AppStateContext'
 import { Icon } from '@renderer/components/icons/Icon'
 import { MediaServicesSection } from './MediaServicesSection'
+import { MediaHubSettingsSections } from './MediaHubSettingsSections'
 import styles from './Settings.module.css'
 
 function ToggleRow({
@@ -81,6 +82,8 @@ export default function SettingsPage() {
       </section>
 
       <MediaServicesSection />
+
+      <MediaHubSettingsSections />
 
       <section className={`${styles.section} glass-panel`} aria-labelledby="settings-profiles">
         <h2 id="settings-profiles" className={styles.sectionTitle}>

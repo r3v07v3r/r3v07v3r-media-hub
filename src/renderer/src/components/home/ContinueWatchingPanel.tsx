@@ -89,12 +89,19 @@ export function ContinueWatchingPanel() {
                   )}
                   <div className={styles.ratings}>
                     {m.communityRating && (
-                      <span>
+                      <span className={styles.ratingStar}>
                         <Icon name="star" />
                         {m.communityRating.toFixed(1)}
                       </span>
                     )}
-                    {m.imdbRating && <span>IMDb {m.imdbRating.toFixed(1)}</span>}
+                    {m.imdbRating && (
+                      <>
+                        {m.communityRating && (
+                          <span className={styles.ratingDivider} aria-hidden="true" />
+                        )}
+                        <span className={styles.ratingImdb}>IMDb {m.imdbRating.toFixed(1)}</span>
+                      </>
+                    )}
                   </div>
                 </div>
 

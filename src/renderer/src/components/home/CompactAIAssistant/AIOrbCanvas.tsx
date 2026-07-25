@@ -62,8 +62,12 @@ export function AIOrbCanvas({ tone = 'idle' }: { tone?: Tone }) {
     canvas.height = size * dpr
     ctx.scale(dpr, dpr)
 
-    const particles: Particle[] = Array.from({ length: 18 }, (_, i) => ({
-      angle: (i / 18) * Math.PI * 2,
+    // Refinement pass: fewer particles (18 -> 12) and each one dimmer
+    // (see the twinkle fill-alpha below) — "reduce visual noise" without
+    // losing the drifting-particle effect entirely.
+    const PARTICLE_COUNT = 12
+    const particles: Particle[] = Array.from({ length: PARTICLE_COUNT }, (_, i) => ({
+      angle: (i / PARTICLE_COUNT) * Math.PI * 2,
       radius: 48 + Math.random() * 42,
       speed: 0.15 + Math.random() * 0.25,
       size: 0.9 + Math.random() * 2.2,
@@ -106,16 +110,18 @@ export function AIOrbCanvas({ tone = 'idle' }: { tone?: Tone }) {
         const lobeY = cy + Math.sin(angle) * 31
         const grad = ctx.createRadialGradient(lobeX, lobeY, 0, lobeX, lobeY, 79)
         const [r, g, b] = i === 0 ? [ra, ga, ba] : [rb, gb, bb]
-        grad.addColorStop(0, `rgba(${r},${g},${b},0.62)`)
-        grad.addColorStop(0.5, `rgba(${r},${g},${b},0.22)`)
+        // Refinement pass: ~13% dimmer swirl lobes (0.62/0.22 -> 0.54/0.19).
+        // Second refinement pass: another ~10% (0.54/0.19 -> 0.49/0.17).
+        grad.addColorStop(0, `rgba(${r},${g},${b},0.49)`)
+        grad.addColorStop(0.5, `rgba(${r},${g},${b},0.17)`)
         grad.addColorStop(1, 'rgba(0,0,0,0)')
         ctx.fillStyle = grad
         ctx.fillRect(0, 0, size, size)
       }
 
-      // Slow central core bloom
+      // Slow central core bloom (refinement pass: 0.5 -> 0.43 -> 0.39, ~10% further)
       const coreGrad = ctx.createRadialGradient(cx, cy, 0, cx, cy, 52)
-      coreGrad.addColorStop(0, `rgba(${rc},${gc},${bc},0.5)`)
+      coreGrad.addColorStop(0, `rgba(${rc},${gc},${bc},0.39)`)
       coreGrad.addColorStop(1, 'rgba(0,0,0,0)')
       ctx.fillStyle = coreGrad
       ctx.fillRect(0, 0, size, size)
@@ -130,7 +136,8 @@ export function AIOrbCanvas({ tone = 'idle' }: { tone?: Tone }) {
         const twinkle = 0.35 + 0.65 * (0.5 + 0.5 * Math.sin(t * 0.003 + p.phase * 2))
         ctx.beginPath()
         ctx.arc(px, py, p.size, 0, Math.PI * 2)
-        ctx.fillStyle = `rgba(${rc},${gc},${bc},${twinkle * 0.8})`
+        // Refinement pass: dimmer particles (0.8 -> 0.68 -> 0.61 multiplier, ~10% further).
+        ctx.fillStyle = `rgba(${rc},${gc},${bc},${twinkle * 0.61})`
         ctx.fill()
       }
 

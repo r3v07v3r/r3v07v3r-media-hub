@@ -1,14 +1,18 @@
 'use client'
 
-import { createContext, useCallback, useContext, useMemo, useRef, useState } from 'react'
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import {
   AppNotification,
   AssistantState,
   ContinueWatchingItem,
   MediaItem,
+  Recommendation,
   UIActivityState
 } from '@renderer/types'
 import { CONTINUE_WATCHING, USER_PROFILES } from '@renderer/data/mockData'
+import type { MediaHubSettingsSnapshot } from '@shared/media-hub/types'
+import { mediaItemToTrackablePayload } from '@renderer/lib/mediaHub/adapters'
+import { useMediaHubBrowseCatalog, useMediaHubHomeFeed } from '@renderer/lib/mediaHub/hooks'
 
 interface AppStateValue {
   // Profiles
@@ -18,15 +22,47 @@ interface AppStateValue {
 
   // My List — a Set of media ids. Kept centrally so the hero, the
   // carousel, continue-watching, and the detail modal all agree on
-  // whether something is saved.
+  // whether something is saved. Backed by the media-hub backend's local
+  // tracking store (tracking:toggle) when window.api.mediaHub is
+  // available — see the media-hub feed effect below — with an
+  // optimistic local update on toggle so the UI doesn't wait on the IPC
+  // round trip.
   myList: Set<string>
-  toggleMyList: (id: string) => void
+  toggleMyList: (media: MediaItem) => void
 
-  // Continue Watching — local, mutable copy of the mock data so "mark
-  // watched/unwatched" and "remove from row" have somewhere to write.
+  // Continue Watching — seeded from the media-hub backend's
+  // home:personalized (episode-level watch tracking, not a mock array —
+  // see hooks.ts's useMediaHubHomeFeed) when available, else the mock
+  // CONTINUE_WATCHING placeholder so the panel is never empty before a
+  // backend connection exists. "mark watched/unwatched" and "remove from
+  // row" write through to the real tracking:mark-watched/tracking:toggle
+  // handlers (best-effort — local state updates immediately either way).
   continueWatching: ContinueWatchingItem[]
   markContinueWatching: (id: string, watched: boolean) => void
   removeContinueWatching: (id: string) => void
+
+  // The flat "browse everything" pool (movies + series + anime, real
+  // catalog:list data when available, mockData's CATALOG fallback
+  // otherwise — see hooks.ts's useMediaHubBrowseCatalog) — shared here so
+  // MoodBrowser/My Stuff/the AI-recommend actions all fetch it once
+  // instead of each mounting their own copy of the hook.
+  catalog: MediaItem[]
+  catalogLoading: boolean
+
+  // home:personalized's recommendations/featured pool (see
+  // useMediaHubHomeFeed) — `homeFeedLive` tells a consumer whether these
+  // are real or should fall back to its own mock data, since (unlike
+  // `catalog` above) there's no mock blended in here.
+  recommendations: Recommendation[]
+  featured: MediaItem[]
+  homeFeedLive: boolean
+
+  // Snapshot of the media-hub backend's settings (torboxConnected,
+  // simklClientId, theme, ...) — read by the playback gate below and by
+  // the Settings page's TorBox/Simkl/MAL/... sections. `null` until the
+  // first fetch resolves (or forever, if window.api.mediaHub is absent).
+  mediaHubSettings: MediaHubSettingsSnapshot | null
+  refreshMediaHubSettings: () => void
 
   // Global AI assistant state machine, shared between the top-bar search
   // field and the compact assistant panel so only one "listens" at a
@@ -89,6 +125,9 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   const [myList, setMyList] = useState<Set<string>>(new Set())
   const [continueWatching, setContinueWatching] =
     useState<ContinueWatchingItem[]>(CONTINUE_WATCHING)
+  const homeFeed = useMediaHubHomeFeed()
+  const browseCatalog = useMediaHubBrowseCatalog(myList)
+  const [mediaHubSettings, setMediaHubSettings] = useState<MediaHubSettingsSnapshot | null>(null)
   const [assistantState, setAssistantState] = useState<AssistantState>('idle')
   const [assistantQuery, setAssistantQuery] = useState('')
   const [assistantResponse, setAssistantResponse] = useState<string | null>(null)
@@ -104,36 +143,100 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   const [isOffline, setIsOffline] = useState(false)
   const timers = useRef<ReturnType<typeof setTimeout>[]>([])
 
-  const toggleMyList = useCallback((id: string) => {
+  // Seed myList/continueWatching from the real backend once
+  // home:personalized actually resolves — before that (bridge missing,
+  // still loading, or the fetch failed) both keep whatever they already
+  // had, which is the empty Set / mock CONTINUE_WATCHING they were
+  // initialized with, per "keep dashboard visible" (see hooks.ts).
+  useEffect(() => {
+    if (!homeFeed.live) return
+    // Deliberate effect-based sync, not derivable inline: myList/
+    // continueWatching are locally mutable (toggleMyList/markContinueWatching
+    // apply optimistic updates on top of whatever was last seeded here), so
+    // they can't just be `= homeFeed.trackedIds` on every render — only
+    // reseeded when a fresh backend snapshot actually arrives.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setMyList(homeFeed.trackedIds)
+
+    setContinueWatching(homeFeed.continueWatching)
+  }, [homeFeed.live, homeFeed.trackedIds, homeFeed.continueWatching])
+
+  const refreshMediaHubSettings = useCallback(() => {
+    const api = window.api?.mediaHub
+    if (!api) return
+    api.settings
+      .get()
+      .then(setMediaHubSettings)
+      .catch(() => {})
+  }, [])
+
+  useEffect(() => {
+    refreshMediaHubSettings()
+    // A TorBox 401 anywhere in the backend clears the stored token — pull
+    // a fresh settings snapshot so `torboxConnected` (the playback gate
+    // below) flips back to false instead of staying stale.
+    return window.api?.mediaHub?.torbox.onUnauthorized(() => refreshMediaHubSettings())
+  }, [refreshMediaHubSettings])
+
+  const toggleMyList = useCallback((media: MediaItem) => {
     setMyList((prev) => {
       const next = new Set(prev)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
+      if (next.has(media.id)) next.delete(media.id)
+      else next.add(media.id)
       return next
+    })
+    window.api?.mediaHub?.tracking.toggle(mediaItemToTrackablePayload(media)).catch(() => {
+      // Best-effort — the optimistic local toggle above already reflects
+      // the user's intent; a failed write just means it won't survive a
+      // refresh, not a broken UI in the moment.
     })
   }, [])
 
-  const markContinueWatching = useCallback((id: string, watched: boolean) => {
-    setContinueWatching((prev) =>
-      prev.map((c) =>
-        c.media.id === id
-          ? {
-              ...c,
-              media: {
-                ...c.media,
-                watched,
-                completed: watched,
-                progressPercentage: watched ? 100 : c.media.progressPercentage
+  const markContinueWatching = useCallback(
+    (id: string, watched: boolean) => {
+      const entry = continueWatching.find((c) => c.media.id === id)
+      setContinueWatching((prev) =>
+        prev.map((c) =>
+          c.media.id === id
+            ? {
+                ...c,
+                media: {
+                  ...c.media,
+                  watched,
+                  completed: watched,
+                  progressPercentage: watched ? 100 : c.media.progressPercentage
+                }
               }
-            }
-          : c
+            : c
+        )
       )
-    )
-  }, [])
+      const api = window.api?.mediaHub
+      if (!api || !entry) return
+      const item = mediaItemToTrackablePayload(entry.media)
+      const playback = { season: entry.media.seasonNumber, episode: entry.media.episodeNumber }
+      const call = watched ? api.tracking.markWatched : api.tracking.unmarkWatched
+      call({ item, playback })
+        .then(() => homeFeed.refresh())
+        .catch(() => {})
+    },
+    [continueWatching, homeFeed]
+  )
 
-  const removeContinueWatching = useCallback((id: string) => {
-    setContinueWatching((prev) => prev.filter((c) => c.media.id !== id))
-  }, [])
+  const removeContinueWatching = useCallback(
+    (id: string) => {
+      const entry = continueWatching.find((c) => c.media.id === id)
+      setContinueWatching((prev) => prev.filter((c) => c.media.id !== id))
+      const api = window.api?.mediaHub
+      if (!api || !entry) return
+      // No dedicated "remove from continue watching" channel — untracking
+      // is what actually drops it from home:personalized's list.
+      api.tracking
+        .toggle(mediaItemToTrackablePayload(entry.media))
+        .then(() => homeFeed.refresh())
+        .catch(() => {})
+    },
+    [continueWatching, homeFeed]
+  )
 
   const pushNotification = useCallback((n: Omit<AppNotification, 'id' | 'createdAt'>) => {
     notifId += 1
@@ -161,11 +264,28 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   }, [])
   const closeDetail = useCallback(() => setDetailMedia(null), [])
 
-  const startPlayback = useCallback((media: MediaItem) => {
-    setPlaybackMedia(media)
-    setDetailMedia(null)
-    setContextMenu(null)
-  }, [])
+  // Playback gate (spec decision: keep the dashboard visible without a
+  // TorBox connection, only gate actual playback). `mediaHubSettings ===
+  // null` (bridge missing, or the first settings fetch hasn't resolved
+  // yet) is treated as "allow" rather than "block" — PlaybackOverlay
+  // itself degrades to a clear error state if it turns out there's no
+  // real backend to resolve a stream from, which is a better first
+  // impression than silently refusing to open at all.
+  const startPlayback = useCallback(
+    (media: MediaItem) => {
+      if (mediaHubSettings && !mediaHubSettings.torboxConnected) {
+        pushNotification({
+          tone: 'warning',
+          message: 'Connect TorBox in Settings to start playback.'
+        })
+        return
+      }
+      setPlaybackMedia(media)
+      setDetailMedia(null)
+      setContextMenu(null)
+    },
+    [mediaHubSettings, pushNotification]
+  )
   const stopPlayback = useCallback(() => setPlaybackMedia(null), [])
 
   const openContextMenu = useCallback(
@@ -214,6 +334,13 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       continueWatching,
       markContinueWatching,
       removeContinueWatching,
+      catalog: browseCatalog.items,
+      catalogLoading: browseCatalog.loading,
+      recommendations: homeFeed.recommendations,
+      featured: homeFeed.featured,
+      homeFeedLive: homeFeed.live,
+      mediaHubSettings,
+      refreshMediaHubSettings,
       assistantState,
       setAssistantState,
       assistantQuery,
@@ -250,6 +377,13 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       continueWatching,
       markContinueWatching,
       removeContinueWatching,
+      browseCatalog.items,
+      browseCatalog.loading,
+      homeFeed.recommendations,
+      homeFeed.featured,
+      homeFeed.live,
+      mediaHubSettings,
+      refreshMediaHubSettings,
       assistantState,
       assistantQuery,
       assistantResponse,

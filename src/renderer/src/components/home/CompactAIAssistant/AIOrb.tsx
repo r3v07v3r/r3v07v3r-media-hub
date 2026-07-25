@@ -29,7 +29,7 @@ export function AIOrb() {
       <svg className={styles.orbTrail} viewBox="0 0 220 220" aria-hidden="true">
         <defs>
           <radialGradient id="orbTrailGrad" cx="50%" cy="50%" r="50%">
-            <stop offset="0%" stopColor="#3fb2ff" stopOpacity="0.35" />
+            <stop offset="0%" stopColor="#3fb2ff" stopOpacity="0.27" />
             <stop offset="100%" stopColor="#3fb2ff" stopOpacity="0" />
           </radialGradient>
         </defs>
@@ -82,7 +82,7 @@ export function AIOrb() {
             strokeWidth="2.4"
             strokeLinecap="round"
             strokeDasharray="150 302"
-            opacity="0.85"
+            opacity="0.76"
           />
           <circle
             cx="84"
@@ -94,7 +94,7 @@ export function AIOrb() {
             strokeLinecap="round"
             strokeDasharray="40 412"
             strokeDashoffset="-200"
-            opacity="0.5"
+            opacity="0.44"
           />
         </g>
       </svg>

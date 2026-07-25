@@ -4,7 +4,8 @@
   z-index: 0;
   overflow: hidden;
   pointer-events: none;
-  background: radial-gradient(ellipse 90% 70% at 30% -10%, #0b1830 0%, var(--background) 55%),
+  background:
+    radial-gradient(ellipse 90% 70% at 30% -10%, #0b1830 0%, var(--background) 55%),
     var(--background);
 }
 
@@ -13,9 +14,13 @@
   inset: -6%;
   width: 112%;
   height: 112%;
-  background-image: url("/media/ambient/nebula-field.jpg");
+  background-image: url('/media/ambient/nebula-field.jpg');
   background-size: cover;
   background-position: center;
+  /* Refinement pass: nebula texture dialed back ~25% — the interface had
+     slightly too much background energy; this restores more calm dark
+     space behind the UI without removing the texture entirely. */
+  opacity: 0.75;
   /* Very slow pan + gentle zoom — barely perceptible moment to moment,
      unmistakable over a couple of minutes. Matches the spec's "slow
      background drift" layer, just driven by real generated art instead
@@ -37,7 +42,8 @@
   inset: -10%;
   width: 120%;
   height: 120%;
-  background-image: radial-gradient(1.4px 1.4px at 20% 30%, rgba(255, 255, 255, 0.55), transparent),
+  background-image:
+    radial-gradient(1.4px 1.4px at 20% 30%, rgba(255, 255, 255, 0.55), transparent),
     radial-gradient(1.2px 1.2px at 65% 12%, rgba(255, 255, 255, 0.4), transparent),
     radial-gradient(1px 1px at 42% 68%, rgba(255, 255, 255, 0.35), transparent),
     radial-gradient(1.6px 1.6px at 85% 45%, rgba(255, 255, 255, 0.5), transparent),
@@ -64,11 +70,12 @@
   position: absolute;
   border-radius: 50%;
   filter: blur(90px);
-  /* Was 0.35 — now that real backdrop art (TMDB stills) supplies its own
-     orange/purple/sand/green color in the hero and cards, the ambient
-     background wash should recede rather than compete with it. Dialed
-     back across all three blobs below too. */
-  opacity: 0.26;
+  /* Was 0.35, then 0.26 — refinement pass dials back a further ~23%
+     (0.26 -> 0.2). Real backdrop art now supplies most of the screen's
+     color; the ambient wash should read as a faint atmosphere behind it,
+     not a competing glow. Restores more genuinely dark, calm space
+     between the bright elements. */
+  opacity: 0.2;
   will-change: transform;
 }
 
@@ -77,7 +84,7 @@
   left: 8%;
   width: 42vw;
   height: 42vw;
-  background: radial-gradient(circle, rgba(24, 169, 255, 0.4), transparent 70%);
+  background: radial-gradient(circle, rgba(24, 169, 255, 0.32), transparent 70%);
   animation: floatBlob 28s ease-in-out infinite;
 }
 
@@ -86,7 +93,7 @@
   right: -5%;
   width: 46vw;
   height: 46vw;
-  background: radial-gradient(circle, rgba(141, 77, 255, 0.32), transparent 70%);
+  background: radial-gradient(circle, rgba(141, 77, 255, 0.26), transparent 70%);
   animation: floatBlob 34s ease-in-out infinite reverse;
 }
 
@@ -95,7 +102,7 @@
   left: 30%;
   width: 30vw;
   height: 30vw;
-  background: radial-gradient(circle, rgba(56, 229, 255, 0.15), transparent 72%);
+  background: radial-gradient(circle, rgba(56, 229, 255, 0.12), transparent 72%);
   animation: floatBlob 40s ease-in-out infinite;
 }
 
@@ -164,7 +171,11 @@
 .vignette {
   position: absolute;
   inset: 0;
-  background: radial-gradient(ellipse 120% 100% at 50% 50%, transparent 55%, rgba(0, 0, 0, 0.55) 100%);
+  background: radial-gradient(
+    ellipse 120% 100% at 50% 50%,
+    transparent 52%,
+    rgba(0, 0, 0, 0.6) 100%
+  );
 }
 
 .reduced .nebulaImage,

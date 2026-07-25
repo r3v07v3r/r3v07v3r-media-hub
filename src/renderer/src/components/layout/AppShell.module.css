@@ -64,16 +64,38 @@
   min-width: 0;
   min-height: 0;
   overflow-y: auto;
-  /* Was overflow-x: hidden — that clipped MoodBrowser's intentional
-     negative-margin bleed (see .section in MoodBrowser.module.css)
-     right at this element's own left edge, before it could reach
-     underneath the sidebar the way the reference shows. .shell (the
-     outer grid) still has its own overflow: hidden and a fixed 100vw
-     width, so this doesn't risk an actual page-level horizontal
-     scrollbar — anything that overflows .main now just paints into the
-     sidebar's grid track instead of being clipped, and .sidebar's
-     higher z-index (15 vs. this element's 5) keeps the rail's own
-     icons/labels on top of whatever bleeds under them. */
+  /* Compositing fix: leaving overflow-x unset here does NOT mean
+     "visible." Per the CSS overflow spec, when overflow-y is anything
+     other than 'visible' (here, 'auto', needed for real vertical
+     scrolling) and overflow-x is left at its 'visible' default, the
+     browser silently upgrades overflow-x's COMPUTED value to 'auto' too
+     — confirmed via getComputedStyle in this exact build, it's not a
+     theoretical concern. An 'auto' axis clips content that overflows it
+     via negative margins (you can't scroll left of 0 in LTR flow to
+     reveal it), which is what was actually cutting off MoodBrowser's
+     under-the-nav bleed (see .section in MoodBrowser.module.css) — not
+     a z-index/stacking problem, a genuine clip, verified by forcing
+     overflow:visible at runtime and watching the clipped "TH" of
+     "Thrilling" reappear.
+
+     The fix: instead of fighting that quirk (which would mean moving
+     vertical scroll off this element and risking the pinned topbar/
+     sidebar behavior), give .main's own box the same negative-margin
+     bleed MoodBrowser's .section already uses, so the bled content
+     lands INSIDE .main's border-box instead of overflowing it — nothing
+     left to clip. HomeDashboard's .dashboard padding-left absorbs the
+     matching compensation so every OTHER child (hero, AI Picks, etc.)
+     still starts at exactly the same on-screen x as before; only
+     MoodBrowser's own further negative margin (unchanged) reaches into
+     the extra room this now legitimately contains. Both use the same
+     --nav-rail-width-driven calc, so this stays correct at every rail
+     state (expanded/collapsed/mobile-hidden) automatically. */
+  margin-left: calc(var(--nav-rail-width, 285px) * -0.8);
+  width: calc(100% + var(--nav-rail-width, 285px) * 0.8);
+  /* .shell (the outer grid) still has its own overflow: hidden and a
+     fixed 100vw width, so none of this risks an actual page-level
+     horizontal scrollbar — the extra room only ever reaches into the
+     sidebar's own grid track, never past the viewport edge. */
   position: relative;
   z-index: 5;
 }

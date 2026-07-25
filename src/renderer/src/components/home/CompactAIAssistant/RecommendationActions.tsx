@@ -2,22 +2,19 @@
 
 import { useState } from 'react'
 import { useAppState } from '@renderer/context/AppStateContext'
-import { AI_PICKS, CATALOG } from '@renderer/data/mockData'
+import { AI_PICKS } from '@renderer/data/mockData'
 import { Icon } from '@renderer/components/icons/Icon'
 import styles from './CompactAIAssistant.module.css'
 
 export function RecommendationActions() {
-  const { openDetail, pushNotification } = useAppState()
+  const { openDetail, pushNotification, catalog } = useAppState()
   const [loading, setLoading] = useState<'movie' | 'series' | null>(null)
 
   function recommend(kind: 'movie' | 'series') {
     setLoading(kind)
     setTimeout(() => {
       setLoading(null)
-      const pool =
-        kind === 'movie'
-          ? CATALOG.filter((m) => m.mediaType === 'movie')
-          : CATALOG.filter((m) => m.mediaType === 'series')
+      const pool = catalog.filter((m) => m.mediaType === kind)
       const pick = (pool.length ? pool : AI_PICKS.map((r) => r.media))[
         Math.floor(Math.random() * (pool.length || AI_PICKS.length))
       ]

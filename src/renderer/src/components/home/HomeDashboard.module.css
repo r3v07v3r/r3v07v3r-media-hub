@@ -14,7 +14,22 @@
      corner of that shared cell — a floating glass card over the art,
      not a separate opaque column — matching the reference exactly. */
   grid-template-columns: 260px minmax(0, 1fr) 340px;
-  grid-template-rows: minmax(520px, 1fr) minmax(260px, auto) auto;
+  /* 10-foot-interface pass: row 2's floor raised 260px -> 280px to match
+     RecommendationCarousel's own .section min-height (raised alongside
+     the card-height increase there). Without an explicit match, `auto`
+     in minmax(260px, auto) was NOT growing this track to fit the taller
+     cards — the row stayed pinned at its 260px floor and the AI Picks
+     row's true content just visually overflowed downward into row 3,
+     overlapping "Browse By Mood"'s heading. Verified via
+     getBoundingClientRect at each step of tuning this value: 336px (the
+     size that would exactly fit the originally-planned ~20% card-height
+     increase) pushed row 3 far enough down that the mood pills'
+     labels — and part of the pills themselves — rendered below the
+     1920x1080 viewport edge. 280px is the largest floor that keeps
+     every mood pill fully on-screen with a small safety margin; see the
+     .section comment in RecommendationCarousel.module.css for the
+     matching card-size tradeoff this required. */
+  grid-template-rows: minmax(520px, 1fr) minmax(280px, auto) auto;
   /* ContinueWatchingPanel shares "hero" (see its own .module.css) and
      self-aligns to the top-right corner of that cell — a floating
      glass card over the hero's art, not a separate opaque column.
@@ -33,15 +48,33 @@
     "assistant hero hero"
     "picks picks status"
     "mood mood mood";
-  gap: 16px;
-  padding: 14px 26px 22px;
+  /* 10-foot-interface pass: trimmed 16px -> 12px. Row 2 grew ~76px
+     taller to fit the larger cards/performance panel (see the
+     grid-template-rows comment above); reclaiming a few px per gap
+     here is part of keeping the whole composition inside 1920x1080
+     without scrolling, alongside the .heading margin fix in
+     RecommendationCarousel.module.css. Purely spacing, not a layout
+     structure change — the 3-row/3-column composition is untouched. */
+  gap: 12px;
+  /* Left padding carries an extra compensating term (see .main in
+     AppShell.module.css) — .main's own box was widened leftward by
+     half the rail's width so MoodBrowser's under-nav bleed lands inside
+     it instead of being clipped; this padding-left absorbs that exact
+     same amount back out so every OTHER child here (hero, AI Picks,
+     etc.) still starts at the same on-screen x it always has. Only
+     MoodBrowser's .section reaches back into the extra room via its own
+     further negative margin.
+     10-foot-interface pass: top/bottom trimmed slightly (14/22 ->
+     10/16) for the same "reclaim vertical room the taller row 2 now
+     needs" reason as the gap change above. */
+  padding: 10px 26px 16px calc(26px + var(--nav-rail-width, 285px) * 0.8);
 }
 
 @media (max-width: 1439px) {
   .dashboard {
     grid-template-columns: 220px minmax(0, 1fr) 300px;
     gap: 12px;
-    padding: 12px 20px 18px;
+    padding: 12px 20px 18px calc(20px + var(--nav-rail-width, 285px) * 0.8);
   }
 }
 
@@ -78,8 +111,12 @@
       "mood";
     /* Bottom nav gets its own row in AppShell's mobile grid (never
        overlaps .main), so this only needs normal breathing room, not
-       clearance padding for a floating bar. */
-    padding: 10px 14px 20px;
+       clearance padding for a floating bar. The compensating calc term
+       is a no-op here in practice (--nav-rail-width publishes 0 on
+       mobile — see SidebarNavigation.tsx), kept only so this rule stays
+       consistent with the other breakpoints rather than as a required
+       fix at this width. */
+    padding: 10px 14px 20px calc(14px + var(--nav-rail-width, 285px) * 0.8);
     gap: 14px;
   }
 }
