@@ -11,8 +11,12 @@ import {
 } from '@renderer/types'
 import { CONTINUE_WATCHING, USER_PROFILES } from '@renderer/data/mockData'
 import type { MediaHubSettingsSnapshot } from '@shared/media-hub/types'
-import { mediaItemToTrackablePayload } from '@renderer/lib/mediaHub/adapters'
+import {
+  mediaItemToTrackablePayload,
+  catalogItemToMediaItem
+} from '@renderer/lib/mediaHub/adapters'
 import { useMediaHubBrowseCatalog, useMediaHubHomeFeed } from '@renderer/lib/mediaHub/hooks'
+import type { CategoryKind } from '@renderer/lib/mediaHub/categoryFilters'
 
 interface AppStateValue {
   // Profiles
@@ -48,6 +52,12 @@ interface AppStateValue {
   // instead of each mounting their own copy of the hook.
   catalog: MediaItem[]
   catalogLoading: boolean
+  /** True once catalog:list has actually resolved live data — false means
+   *  `catalog` is the mock CATALOG fallback (bridge missing, still
+   *  loading, or every kind's fetch failed). See hooks.ts. */
+  catalogLive: boolean
+  catalogSettled: boolean
+  refreshCatalog: () => void
 
   // home:personalized's recommendations/featured pool (see
   // useMediaHubHomeFeed) — `homeFeedLive` tells a consumer whether these
@@ -74,6 +84,26 @@ interface AppStateValue {
   assistantResponse: string | null
   runAssistantQuery: (query: string) => void
   closeAssistant: () => void
+
+  // The top-bar search field's category-page mode (see topbar/
+  // AIAssistantInput.tsx, which is route-aware): when the current route is
+  // /movies, /series, or /anime, typing + Enter calls catalog:search(kind,
+  // query) — a real backend search (main/media-hub/catalog.ts's
+  // catalogSearch handler, Simkl for movies/series, Kitsu for anime) —
+  // instead of the fake assistant response Home's search still uses.
+  // `kind` doubles as "is a category search currently active" — a
+  // CategoryPage only renders the search-results view when this matches
+  // its own kind, so navigating away from the page that started the
+  // search implicitly stops that search from affecting anything.
+  categorySearch: {
+    kind: CategoryKind | null
+    query: string
+    results: MediaItem[]
+    loading: boolean
+    error: boolean
+  }
+  runCategorySearch: (kind: CategoryKind, query: string) => void
+  clearCategorySearch: () => void
 
   // Toasts
   notifications: AppNotification[]
@@ -141,7 +171,18 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   const [activeMood, setActiveMood] = useState<string | null>(null)
   const [combinedMoods, setCombinedMoods] = useState<string[]>([])
   const [isOffline, setIsOffline] = useState(false)
+  const [categorySearch, setCategorySearch] = useState<AppStateValue['categorySearch']>({
+    kind: null,
+    query: '',
+    results: [],
+    loading: false,
+    error: false
+  })
   const timers = useRef<ReturnType<typeof setTimeout>[]>([])
+  // Guards against an in-flight search resolving after a newer one
+  // started (or after clearCategorySearch) — only the most recent call's
+  // result is ever applied.
+  const searchGeneration = useRef(0)
 
   // Seed myList/continueWatching from the real backend once
   // home:personalized actually resolves — before that (bridge missing,
@@ -315,6 +356,51 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     timers.current.push(t1)
   }, [])
 
+  // The backend itself requires >=2 characters (main/media-hub/catalog.ts's
+  // catalogSearch handler returns [] below that) — mirrored here so the UI
+  // can show "keep typing" rather than firing a request that's guaranteed
+  // to come back empty.
+  const runCategorySearch = useCallback(
+    (kind: CategoryKind, query: string) => {
+      const q = query.trim()
+      const generation = ++searchGeneration.current
+      if (q.length < 2) {
+        setCategorySearch({ kind, query, results: [], loading: false, error: false })
+        return
+      }
+      setCategorySearch({ kind, query, results: [], loading: true, error: false })
+      const api = window.api?.mediaHub
+      if (!api) {
+        // No bridge (browser preview) — honest empty state, never a fake
+        // result list standing in for a real search.
+        setCategorySearch({ kind, query, results: [], loading: false, error: true })
+        return
+      }
+      api.catalog
+        .search(kind, q)
+        .then((items) => {
+          if (searchGeneration.current !== generation) return
+          setCategorySearch({
+            kind,
+            query,
+            results: items.map((item) => catalogItemToMediaItem(item, { trackedIds: myList })),
+            loading: false,
+            error: false
+          })
+        })
+        .catch(() => {
+          if (searchGeneration.current !== generation) return
+          setCategorySearch({ kind, query, results: [], loading: false, error: true })
+        })
+    },
+    [myList]
+  )
+
+  const clearCategorySearch = useCallback(() => {
+    searchGeneration.current += 1
+    setCategorySearch({ kind: null, query: '', results: [], loading: false, error: false })
+  }, [])
+
   const uiActivity = useMemo<UIActivityState>(() => {
     if (playbackMedia) return 'playing'
     if (assistantState === 'listening') return 'listening'
@@ -336,6 +422,9 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       removeContinueWatching,
       catalog: browseCatalog.items,
       catalogLoading: browseCatalog.loading,
+      catalogLive: browseCatalog.live,
+      catalogSettled: browseCatalog.settled,
+      refreshCatalog: browseCatalog.refresh,
       recommendations: homeFeed.recommendations,
       featured: homeFeed.featured,
       homeFeedLive: homeFeed.live,
@@ -348,6 +437,9 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       assistantResponse,
       runAssistantQuery,
       closeAssistant,
+      categorySearch,
+      runCategorySearch,
+      clearCategorySearch,
       notifications,
       pushNotification,
       dismissNotification,
@@ -379,6 +471,9 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       removeContinueWatching,
       browseCatalog.items,
       browseCatalog.loading,
+      browseCatalog.live,
+      browseCatalog.settled,
+      browseCatalog.refresh,
       homeFeed.recommendations,
       homeFeed.featured,
       homeFeed.live,
@@ -389,6 +484,9 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       assistantResponse,
       runAssistantQuery,
       closeAssistant,
+      categorySearch,
+      runCategorySearch,
+      clearCategorySearch,
       notifications,
       pushNotification,
       dismissNotification,

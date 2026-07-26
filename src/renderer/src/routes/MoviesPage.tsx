@@ -1,11 +1,6 @@
-import { ComingSoonSection } from '@renderer/components/placeholder/ComingSoonSection'
+import { CategoryPage } from '@renderer/components/category/CategoryPage'
+import { MOVIES_CONFIG } from '@renderer/lib/mediaHub/categoryConfig'
 
 export default function MoviesPage() {
-  return (
-    <ComingSoonSection
-      icon="movies"
-      title="Movies"
-      description="Your full movie library — browse by genre, collection, and rating — is on its way here."
-    />
-  )
+  return <CategoryPage config={MOVIES_CONFIG} />
 }

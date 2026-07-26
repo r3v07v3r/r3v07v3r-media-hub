@@ -1,19 +1,37 @@
 'use client'
 
+import { useMemo } from 'react'
 import { useAppState } from '@renderer/context/AppStateContext'
+import { matchesCategoryKind, CategoryKind } from '@renderer/lib/mediaHub/categoryFilters'
 import { Icon } from '@renderer/components/icons/Icon'
 import { resolveArtwork } from '@renderer/lib/artwork'
 import { ArtworkImage } from '@renderer/components/media/ArtworkImage'
 import styles from './ContinueWatchingPanel.module.css'
 
-export function ContinueWatchingPanel() {
+export interface ContinueWatchingPanelProps {
+  /** Restricts the row to one kind — used by the Movies/Series/Anime
+   *  category pages so "Continue Watching" on the Movies page doesn't show
+   *  an in-progress series. Home omits this (unchanged: every kind mixed
+   *  together, matching the reference composition). */
+  kindFilter?: CategoryKind
+}
+
+export function ContinueWatchingPanel({ kindFilter }: ContinueWatchingPanelProps = {}) {
   const {
-    continueWatching,
+    continueWatching: allContinueWatching,
     startPlayback,
     markContinueWatching,
     removeContinueWatching,
     openDetail
   } = useAppState()
+
+  const continueWatching = useMemo(
+    () =>
+      kindFilter
+        ? allContinueWatching.filter((c) => matchesCategoryKind(c.media, kindFilter))
+        : allContinueWatching,
+    [allContinueWatching, kindFilter]
+  )
 
   return (
     <aside className={styles.panel} aria-label="Continue watching">

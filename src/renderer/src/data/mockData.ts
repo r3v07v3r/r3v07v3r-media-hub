@@ -137,6 +137,42 @@ function series(
   })
 }
 
+// MediaType has no 'anime' member (see types/index.ts) — mock anime items
+// use mediaType: 'series' (same episodic-series shape) plus mediaKind:
+// 'anime' set explicitly, mirroring what the real backend adapter
+// (lib/mediaHub/adapters.ts's catalogItemToMediaItem) does for live data.
+// Setting mediaKind here is what lets the Anime page's mock fallback
+// actually resolve to these items instead of an empty pool.
+function anime(
+  partial: Omit<
+    MediaItem,
+    | 'id'
+    | 'mediaType'
+    | 'mediaKind'
+    | 'watched'
+    | 'completed'
+    | 'inMyList'
+    | 'genres'
+    | 'artTint'
+    | 'initials'
+  > &
+    Partial<Pick<MediaItem, 'watched' | 'completed' | 'inMyList'>> & {
+      genres: string[]
+      artTint: [string, string]
+      initials: string
+    }
+): MediaItem {
+  return withRealArtwork({
+    id: nextId('a'),
+    mediaType: 'series',
+    mediaKind: 'anime',
+    watched: false,
+    completed: false,
+    inMyList: false,
+    ...partial
+  })
+}
+
 // ---------- Featured hero rotation ----------
 export const FEATURED_ITEMS: MediaItem[] = [
   movie({
@@ -698,12 +734,100 @@ export const MOOD_CATEGORIES: MoodCategory[] = [
   { id: 'action', label: 'Action', icon: 'lightning', hue: 28, accent: '#ff7a28' }
 ]
 
+// Small hand-tagged anime pool — mock/offline fallback only for the Anime
+// page and its hero (see useMediaHubBrowseCatalog/useMediaHubHomeFeed's
+// "live" flag: this never blends with real Kitsu data, it's what shows
+// before a backend connection exists or while it's unavailable).
+export const ANIME_CATALOG: MediaItem[] = [
+  anime({
+    title: 'Frontier Blade',
+    subtitle: 'Season 2',
+    releaseYear: 2022,
+    runtimeMinutes: 24,
+    genres: ['Action', 'Fantasy', 'Shonen'],
+    moods: ['action', 'thrilling'],
+    communityRating: 8.4,
+    imdbRating: 8.4,
+    artTint: ['#7e45ff', '#0c0620'],
+    initials: 'FB',
+    description:
+      'A wandering swordswoman crosses a fractured empire to break the curse binding her blade.'
+  }),
+  anime({
+    title: 'Nightfall Signal',
+    releaseYear: 2023,
+    runtimeMinutes: 23,
+    genres: ['Sci-Fi', 'Mecha'],
+    moods: ['thrilling', 'mind-bending'],
+    communityRating: 8.1,
+    imdbRating: 8.0,
+    artTint: ['#18a9ff', '#04101f'],
+    initials: 'NS',
+    description:
+      'Pilots of derelict mechs defend the last orbital city from a signal no one can explain.'
+  }),
+  anime({
+    title: 'Paper Skies',
+    releaseYear: 2021,
+    runtimeMinutes: 24,
+    genres: ['Slice of Life', 'Romance'],
+    moods: ['feel-good', 'emotional'],
+    communityRating: 8.6,
+    imdbRating: 8.5,
+    artTint: ['#ff7a28', '#1f0d02'],
+    initials: 'PS',
+    description:
+      'Two art-club rivals spend one slow, golden summer figuring out what they actually feel.'
+  }),
+  anime({
+    title: 'Ashen Requiem',
+    subtitle: 'Season 1',
+    releaseYear: 2020,
+    runtimeMinutes: 24,
+    genres: ['Fantasy', 'Drama', 'Shonen'],
+    moods: ['emotional', 'thrilling'],
+    communityRating: 8.9,
+    imdbRating: 8.8,
+    artTint: ['#a3172c', '#140306'],
+    initials: 'AR',
+    description:
+      'A disgraced knight and a runaway prince form an uneasy alliance to end a century-long war.'
+  }),
+  anime({
+    title: 'Static Bloom',
+    releaseYear: 2024,
+    runtimeMinutes: 23,
+    genres: ['Sci-Fi', 'Romance'],
+    moods: ['mind-bending', 'emotional'],
+    communityRating: 7.9,
+    imdbRating: 7.8,
+    artTint: ['#2fd39b', '#03140e'],
+    initials: 'SB',
+    description:
+      'A memory-repair technician falls for the one client whose memories she is forbidden to fix.'
+  }),
+  anime({
+    title: 'Ironclad Requiem',
+    releaseYear: 2019,
+    runtimeMinutes: 25,
+    genres: ['Action', 'Mecha', 'Sci-Fi'],
+    moods: ['action', 'thrilling'],
+    communityRating: 8.2,
+    imdbRating: 8.1,
+    artTint: ['#f4cb45', '#191202'],
+    initials: 'IR',
+    description:
+      'A conscript squad of teenage mecha pilots is all that stands between two collapsing empires.'
+  })
+]
+
 // A broader catalog so mood filtering has something to show beyond what's
 // already surfaced in Continue Watching / AI Picks.
 export const CATALOG: MediaItem[] = [
   ...AI_PICKS.map((r) => r.media),
   ...CONTINUE_WATCHING.map((c) => c.media),
   ...FEATURED_ITEMS,
+  ...ANIME_CATALOG,
   movie({
     title: 'The Grand Budapest Hotel',
     releaseYear: 2014,
@@ -764,7 +888,8 @@ export const CATALOG: MediaItem[] = [
 export const NAV_ITEMS: NavItem[] = [
   { id: 'home', label: 'Home', icon: 'home', href: '/' },
   { id: 'movies', label: 'Movies', icon: 'movies', href: '/movies' },
-  { id: 'tv', label: 'TV Shows', icon: 'tv', href: '/tv-shows' },
+  { id: 'tv', label: 'Series', icon: 'tv', href: '/series' },
+  { id: 'anime', label: 'Anime', icon: 'anime', href: '/anime' },
   { id: 'live', label: 'Live TV', icon: 'live', href: '/live-tv' },
   { id: 'sports', label: 'Sports', icon: 'sports', href: '/sports' },
   { id: 'music', label: 'Music', icon: 'music', href: '/music' },

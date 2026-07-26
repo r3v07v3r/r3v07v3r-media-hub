@@ -71,7 +71,19 @@ const PATHS: Record<string, string> = {
   wifi: '<path d="M4 9a12 12 0 0 1 16 0M7 12.3a8 8 0 0 1 10 0M10.2 15.6a4 4 0 0 1 3.6 0"/><circle cx="12" cy="19" r="1.2"/>',
   'wifi-off':
     '<path d="M2 2l20 20"/><path d="M8.5 5.5A12 12 0 0 1 20 9M4 9a12 12 0 0 1 2.2-1.8M7 12.3a8 8 0 0 1 9 1.6M10.2 15.6a4 4 0 0 1 3.6 0"/><circle cx="12" cy="19" r="1.2"/>',
-  grid: '<rect x="3.5" y="3.5" width="7" height="7" rx="1.2"/><rect x="13.5" y="3.5" width="7" height="7" rx="1.2"/><rect x="3.5" y="13.5" width="7" height="7" rx="1.2"/><rect x="13.5" y="13.5" width="7" height="7" rx="1.2"/>'
+  grid: '<rect x="3.5" y="3.5" width="7" height="7" rx="1.2"/><rect x="13.5" y="3.5" width="7" height="7" rx="1.2"/><rect x="3.5" y="13.5" width="7" height="7" rx="1.2"/><rect x="13.5" y="13.5" width="7" height="7" rx="1.2"/>',
+  // Faceted-gem/prism mark for Anime — abstract and on-brand with the rest
+  // of this set (matches 'planet'/'sparkle's geometric style) rather than
+  // reaching for a literal genre cliche.
+  anime:
+    '<path d="M12 3l7 6.5L12 21 5 9.5 12 3z"/><path d="M5 9.5h14M9 3l-2.6 6.5L12 21l5.6-11.5L15 3"/>',
+  // Category filter bar (Movies/Series/Anime) — three tune-sliders with
+  // solid knobs, a compact "adjust these controls" mark distinct from
+  // 'settings's full gear. Knobs are filled circles (not punched holes),
+  // so the glyph reads correctly on any panel background.
+  filter:
+    '<path d="M4 6h5.5M13.5 6H20M4 12h9.5M17.5 12H20M4 18h3.5M11.5 18H20"/><circle cx="11.5" cy="6" r="2" fill="currentColor" stroke="none"/><circle cx="15.5" cy="12" r="2" fill="currentColor" stroke="none"/><circle cx="9.5" cy="18" r="2" fill="currentColor" stroke="none"/>',
+  sort: '<path d="M6 4v16M6 4l-3 3M6 4l3 3M18 20V4M18 20l-3-3M18 20l3-3"/>'
 }
 
 interface IconProps {

@@ -33,6 +33,17 @@ export interface MediaItem {
   seasonNumber?: number
   episodeNumber?: number
   episodeTitle?: string
+  /** Total season/episode counts for the whole series/anime (derived from
+   *  the backend's `videos: Episode[]` list — see catalogItemToMediaItem)
+   *  — distinct from seasonNumber/episodeNumber above, which track a
+   *  specific in-progress episode, not the show's overall size. Undefined
+   *  for movies and for mock data that never populated `videos`. */
+  totalSeasons?: number
+  totalEpisodes?: number
+  /** The backend's raw status string for series/anime (e.g. "ongoing",
+   *  "ended", "returning series") — CatalogItem.status passed through
+   *  as-is, never inferred/guessed when the backend didn't provide one. */
+  status?: string
   progressPercentage?: number
   remainingMinutes?: number
   watched: boolean

@@ -124,12 +124,32 @@ export interface CatalogItemAdapterContext {
   watchedIds?: Set<string>
 }
 
+/** Season/episode counts for series+anime, derived from CatalogItem.videos
+ *  — that list is the backend's own per-episode data (see Episode's
+ *  season/episode/number fields), not a separate aggregate the backend
+ *  computes, so this is the only place that count exists. Returns
+ *  undefined counts (not 0) when there's no episode list at all, so the
+ *  UI can tell "no episode data available" apart from "confirmed zero
+ *  episodes." */
+function seasonEpisodeCounts(videos: CatalogItem['videos'] | undefined): {
+  totalSeasons?: number
+  totalEpisodes?: number
+} {
+  if (!videos || videos.length === 0) return {}
+  const seasons = new Set(videos.map((v) => v.season).filter((s) => Number.isFinite(s)))
+  return {
+    totalSeasons: seasons.size || undefined,
+    totalEpisodes: videos.length
+  }
+}
+
 /** The single conversion every other adapter in this file builds on. */
 export function catalogItemToMediaItem(
   item: CatalogItem,
   context: CatalogItemAdapterContext = {}
 ): MediaItem {
   const watched = context.watchedIds?.has(item.id) ?? false
+  const { totalSeasons, totalEpisodes } = seasonEpisodeCounts(item.videos)
   return {
     id: item.id,
     mediaType: toMediaType(item.type),
@@ -145,6 +165,9 @@ export function catalogItemToMediaItem(
     moods: genresToMoods(item.genres),
     communityRating: parseRating(item.rating),
     imdbRating: parseRating(item.rating),
+    totalSeasons,
+    totalEpisodes,
+    status: item.status || undefined,
     watched,
     completed: watched,
     inMyList: context.trackedIds?.has(item.id) ?? false,

@@ -260,6 +260,19 @@
   color: var(--accent-yellow);
 }
 
+/* Series/anime status chip ("ongoing", "ended", ...) — the backend's raw
+   value passed straight through (see FeaturedMetadata), just capitalized
+   visually via a small pill so it doesn't read as a stray lowercase word
+   among the other metaRow entries. */
+.statusChip {
+  padding: 2px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--border-subtle);
+  font-size: 12px;
+  text-transform: capitalize;
+  color: var(--text-primary);
+}
+
 /* ---------- Actions ---------- */
 .actions {
   display: flex;

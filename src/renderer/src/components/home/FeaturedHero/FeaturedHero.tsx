@@ -42,14 +42,40 @@ function HeroArtLayer({ item, current }: { item: MediaItem; current: boolean }) 
   )
 }
 
-export function FeaturedHero() {
+export interface FeaturedHeroProps {
+  /** Overrides the default Home-page item source entirely — used by the
+   *  Movies/Series/Anime category pages to rotate through that kind's own
+   *  top-of-catalog pool instead of home:personalized's cross-kind
+   *  "featured" list. When omitted, behavior is unchanged from before this
+   *  prop existed (Home's own live-recommendations-or-mock-rotation). */
+  items?: MediaItem[]
+  /** "Featured" on Home; category pages pass "Featured Movie"/"Featured
+   *  Series"/"Featured Anime" so the label matches what's actually being
+   *  shown instead of a generic term. */
+  heroLabel?: string
+}
+
+export function FeaturedHero({ items: itemsProp, heroLabel }: FeaturedHeroProps = {}) {
   const { featured, homeFeedLive } = useAppState()
   // home:personalized's top recommendations stand in for this dashboard's
   // hero-rotation concept (see hooks.ts's useMediaHubHomeFeed) once real —
   // falls back to the mock rotation before that (bridge missing, still
-  // loading, or a fetch that came back with nothing to feature).
-  const items = homeFeedLive && featured.length ? featured : FEATURED_ITEMS
+  // loading, or a fetch that came back with nothing to feature). Category
+  // pages bypass all of this by passing `items` directly.
+  const items = itemsProp ?? (homeFeedLive && featured.length ? featured : FEATURED_ITEMS)
 
+  // Guard for category pages, which can legitimately pass an empty array
+  // while their catalog fetch is still in flight (or genuinely returned
+  // nothing) — Home's own two sources are never empty, so this branch is
+  // unreachable from there. The caller (CategoryPage) is responsible for
+  // showing its own loading/empty hero placeholder in this case; this
+  // component just declines to render rather than dividing by zero below.
+  if (items.length === 0) return null
+
+  return <FeaturedHeroInner items={items} heroLabel={heroLabel} />
+}
+
+function FeaturedHeroInner({ items, heroLabel }: { items: MediaItem[]; heroLabel?: string }) {
   const [index, setIndex] = useState(0)
   const [paused, setPaused] = useState(false)
   const [prevItem, setPrevItem] = useState<MediaItem | null>(null)
@@ -140,7 +166,7 @@ export function FeaturedHero() {
       <div className={styles.grainLayer} aria-hidden="true" />
 
       <div className={styles.content}>
-        <FeaturedMetadata item={item} />
+        <FeaturedMetadata item={item} label={heroLabel} />
         <HeroActions item={item} />
         <div className={styles.selectorWrap}>
           <button
