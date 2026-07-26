@@ -13,7 +13,10 @@
     "viewport": { "width": 1920, "height": 1080 },
     "settleMs": 700,
     "routes": [
-      { "name": "dashboard", "url": "/" }
+      { "name": "dashboard", "url": "/" },
+      { "name": "movies", "url": "/#/movies" },
+      { "name": "series", "url": "/#/series" },
+      { "name": "anime", "url": "/#/anime" }
     ]
   },
   "claude": {

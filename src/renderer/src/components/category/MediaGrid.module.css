@@ -1,0 +1,83 @@
+.grid {
+  list-style: none;
+  margin: 0;
+  padding: 4px 2px 8px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(255px, 1fr));
+  gap: 18px;
+}
+
+.skeletonCard {
+  aspect-ratio: 21 / 20;
+  border-radius: var(--radius-medium);
+  background: linear-gradient(
+    100deg,
+    rgba(255, 255, 255, 0.04),
+    rgba(255, 255, 255, 0.09),
+    rgba(255, 255, 255, 0.04)
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.4s ease-in-out infinite;
+}
+@keyframes shimmer {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
+}
+
+.state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 48px 20px;
+  text-align: center;
+  color: var(--text-secondary);
+}
+.state svg {
+  color: var(--text-muted);
+  margin-bottom: 4px;
+}
+.stateTitle {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+.stateMessage {
+  margin: 0;
+  font-size: 13px;
+  max-width: 360px;
+}
+.retryButton {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 10px;
+  padding: 8px 16px;
+  border-radius: var(--radius-small);
+  border: 1px solid var(--border-active);
+  color: var(--accent-cyan);
+  font-size: 13px;
+  font-weight: 600;
+}
+.retryButton:hover {
+  background: rgba(56, 193, 255, 0.1);
+}
+.retryButton svg {
+  width: 14px;
+  height: 14px;
+  color: inherit;
+  margin: 0;
+}
+
+@media (max-width: 1439px) {
+  .grid {
+    grid-template-columns: repeat(auto-fill, minmax(216px, 1fr));
+  }
+}

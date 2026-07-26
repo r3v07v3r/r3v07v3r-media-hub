@@ -1,9 +1,24 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
+import { useLocation } from 'react-router-dom'
 import { useAppState } from '@renderer/context/AppStateContext'
+import type { CategoryKind } from '@renderer/lib/mediaHub/categoryFilters'
 import { Icon } from '@renderer/components/icons/Icon'
 import styles from './AIAssistantInput.module.css'
+
+// Route -> category kind, so this one global search field knows when it's
+// sitting on a Movies/Series/Anime page and should hit the real
+// catalog:search backend (see AppStateContext's categorySearch) instead of
+// the scripted assistant response every other route still uses. Kept as a
+// plain lookup rather than parsing categoryConfig.ts here, since this
+// component only needs the kind + a short label, not the full per-page
+// config (filters, genre lists, ...).
+const CATEGORY_ROUTE_KIND: Record<string, { kind: CategoryKind; label: string }> = {
+  '/movies': { kind: 'movie', label: 'movies' },
+  '/series': { kind: 'series', label: 'series' },
+  '/anime': { kind: 'anime', label: 'anime' }
+}
 
 const WAVE_PATH =
   'M0,14 C15,14 15,4 30,4 C45,4 45,14 60,14 C75,14 75,24 90,24 C105,24 105,14 120,14'
@@ -61,16 +76,44 @@ function WaveSpacer({ mirrored = false, state }: { mirrored?: boolean; state: st
 }
 
 export function AIAssistantInput() {
-  const { assistantState, setAssistantState, runAssistantQuery, closeAssistant } = useAppState()
+  const {
+    assistantState,
+    setAssistantState,
+    runAssistantQuery,
+    closeAssistant,
+    runCategorySearch,
+    clearCategorySearch
+  } = useAppState()
   const [value, setValue] = useState('')
   const inputRef = useRef<HTMLInputElement>(null)
   const listenTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const pathname = useLocation().pathname
+  const category = CATEGORY_ROUTE_KIND[pathname]
 
   useEffect(() => {
     return () => {
       if (listenTimer.current) clearTimeout(listenTimer.current)
     }
   }, [])
+
+  // Leaving a category page (or the query going back to empty) drops
+  // whatever search was in flight/showing on that page — otherwise a
+  // search typed on /movies would still be "active" in context after
+  // navigating to /series, which would incorrectly gate that page's own
+  // search-results view too (see CategoryPage's categorySearch check).
+  useEffect(() => {
+    if (!category) clearCategorySearch()
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setValue('')
+  }, [pathname, category, clearCategorySearch])
+
+  function submitQuery(query: string) {
+    if (category) {
+      runCategorySearch(category.kind, query)
+    } else {
+      runAssistantQuery(query)
+    }
+  }
 
   const capsuleClass = [
     styles.capsule,
@@ -89,17 +132,19 @@ export function AIAssistantInput() {
     }
     setAssistantState('listening')
     listenTimer.current = setTimeout(() => {
-      const heard = 'something thrilling for tonight'
+      const heard = category ? category.label : 'something thrilling for tonight'
       setValue(heard)
-      runAssistantQuery(heard)
+      setAssistantState(category ? 'idle' : 'listening')
+      submitQuery(heard)
     }, 1600)
   }
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
     if (e.key === 'Enter') {
-      runAssistantQuery(value)
+      submitQuery(value)
     } else if (e.key === 'Escape') {
       setValue('')
+      if (category) clearCategorySearch()
       closeAssistant()
       inputRef.current?.blur()
     }
@@ -128,9 +173,16 @@ export function AIAssistantInput() {
           ref={inputRef}
           type="text"
           className={styles.input}
-          placeholder="Ask R3 anything…"
+          placeholder={category ? `Search ${category.label}…` : 'Ask R3 anything…'}
           value={value}
-          onChange={(e) => setValue(e.target.value)}
+          onChange={(e) => {
+            const next = e.target.value
+            setValue(next)
+            // Backspacing to empty restores the browse view immediately —
+            // otherwise the last search-results view would linger until
+            // the user pressed Enter again on an empty field.
+            if (category && next.trim() === '') clearCategorySearch()
+          }}
           onFocus={() => {
             if (assistantState === 'idle') setAssistantState('focused')
           }}
@@ -138,7 +190,7 @@ export function AIAssistantInput() {
             if (assistantState === 'focused') setAssistantState('idle')
           }}
           onKeyDown={handleKeyDown}
-          aria-label="Ask R3 anything"
+          aria-label={category ? `Search ${category.label}` : 'Ask R3 anything'}
         />
         {assistantState === 'processing' && (
           <span className={styles.processingRing} aria-hidden="true" />

@@ -1,13 +1,21 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import type { CategoryKind } from '@renderer/lib/mediaHub/categoryFilters'
 import { AIOrb } from './AIOrb'
 import { AssistantStatus } from './AssistantStatus'
 import { RecommendationActions } from './RecommendationActions'
 import { CompactStatusBar } from './CompactStatusBar'
 import styles from './CompactAIAssistant.module.css'
 
-export function CompactAIAssistant() {
+export interface CompactAIAssistantProps {
+  /** Passed straight through to RecommendationActions — see that
+   *  component for why Home omits this (both movie+series buttons) while
+   *  a category page passes its own single kind. */
+  kinds?: CategoryKind[]
+}
+
+export function CompactAIAssistant({ kinds }: CompactAIAssistantProps = {}) {
   const [isCompact, setIsCompact] = useState(false)
 
   // Mobile gets a single-line "compact assistant status" (spec section 8,
@@ -36,7 +44,7 @@ export function CompactAIAssistant() {
     <section className={styles.panel} aria-label="AI assistant">
       <AIOrb />
       <AssistantStatus />
-      <RecommendationActions />
+      <RecommendationActions kinds={kinds} />
     </section>
   )
 }

@@ -1,9 +1,10 @@
-import { HashRouter, Routes, Route } from 'react-router-dom'
+import { HashRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { AppStateProvider } from '@renderer/context/AppStateContext'
 import { AppShell } from '@renderer/components/layout/AppShell'
 import { HomeDashboard } from '@renderer/components/home/HomeDashboard'
 import MoviesPage from '@renderer/routes/MoviesPage'
-import TvShowsPage from '@renderer/routes/TvShowsPage'
+import SeriesPage from '@renderer/routes/SeriesPage'
+import AnimePage from '@renderer/routes/AnimePage'
 import LiveTvPage from '@renderer/routes/LiveTvPage'
 import SportsPage from '@renderer/routes/SportsPage'
 import MusicPage from '@renderer/routes/MusicPage'
@@ -26,7 +27,15 @@ export default function App() {
           <Routes>
             <Route path="/" element={<HomeDashboard />} />
             <Route path="/movies" element={<MoviesPage />} />
-            <Route path="/tv-shows" element={<TvShowsPage />} />
+            <Route path="/series" element={<SeriesPage />} />
+            <Route path="/anime" element={<AnimePage />} />
+            {/* /tv-shows was this route's path before the Series category
+                page existed (NAV_ITEMS' 'tv' entry — mockData.ts — now
+                points at /series); redirected rather than removed outright
+                so any existing deep link/bookmark still lands somewhere
+                real instead of 404ing, without adding a second routing
+                pattern (react-router's own <Navigate>, not a new mechanism). */}
+            <Route path="/tv-shows" element={<Navigate to="/series" replace />} />
             <Route path="/live-tv" element={<LiveTvPage />} />
             <Route path="/sports" element={<SportsPage />} />
             <Route path="/music" element={<MusicPage />} />

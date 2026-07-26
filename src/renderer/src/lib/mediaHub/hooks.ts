@@ -9,7 +9,7 @@
 // loaded; false (with a mock/empty fallback) otherwise — the UI is never
 // meant to silently present mock data as if it were live.
 
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import type { CatalogItem, MediaKind } from '@shared/media-hub/types'
 import type { MediaItem, Recommendation } from '@renderer/types'
 import { CATALOG } from '@renderer/data/mockData'
@@ -36,14 +36,27 @@ export interface BrowseCatalogResult {
   items: MediaItem[]
   loading: boolean
   live: boolean
+  /** True once the initial fetch has settled (succeeded or failed) at
+   *  least once — lets a consumer tell "still loading for the first time"
+   *  apart from "loading again because refresh() was just called", since
+   *  both report `loading: true` the same way. */
+  settled: boolean
+  /** Re-runs catalog:list across all three kinds — the retry action for
+   *  category pages' "couldn't reach the backend" error state (spec:
+   *  "retry-capable error states"), and generally for anything that wants
+   *  a fresh pull without a full remount. */
+  refresh: () => void
 }
 
 /**
- * The flat "browse everything" pool backing mood filtering and My Stuff —
- * mirrors mockData.ts's CATALOG (movies + series + anime merged), but
- * fetched from the real catalog:list handler across all three kinds. Falls
- * back to the mock CATALOG while loading fails/is unavailable, so mood
- * browsing and My List never go blank.
+ * The flat "browse everything" pool backing mood filtering, My Stuff, and
+ * the Movies/Series/Anime category pages — mirrors mockData.ts's CATALOG
+ * (movies + series + anime merged), but fetched from the real catalog:list
+ * handler across all three kinds. Falls back to the mock CATALOG while
+ * loading fails/is unavailable, so mood browsing and My List never go
+ * blank — `live` tells a consumer which source it's actually looking at,
+ * so a page can say so honestly instead of presenting the fallback as
+ * real data.
  */
 export function useMediaHubBrowseCatalog(trackedIds: Set<string>): BrowseCatalogResult {
   const [items, setItems] = useState<CatalogItem[] | null>(null)
@@ -53,15 +66,20 @@ export function useMediaHubBrowseCatalog(trackedIds: Set<string>): BrowseCatalog
   // "no bridge" case out of the effect entirely instead of a synchronous
   // setState purely to undo the initial value.
   const [loading, setLoading] = useState(() => Boolean(window.api?.mediaHub))
+  const [settled, setSettled] = useState(() => !window.api?.mediaHub)
+  const [generation, setGeneration] = useState(0)
 
   useEffect(() => {
     let cancelled = false
     const api = window.api?.mediaHub
     if (!api) return
-    // No setLoading(true) here: this effect has an empty dep array (runs
-    // once, on mount), and the lazy initializer above already set loading
-    // to true for exactly this case (api present) — nothing to re-trigger.
-    Promise.all(CATALOG_KINDS.map((kind) => api.catalog.list(kind).catch(() => [])))
+    // Unlike the mount-only version this replaced, this effect also
+    // re-runs whenever refresh() bumps `generation` — so past the first
+    // run this is a real "a retry just started" transition, not a
+    // redundant re-assertion of the lazy initial value.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setLoading(true)
+    Promise.all(CATALOG_KINDS.map((kind) => api.catalog.list(kind, generation > 0).catch(() => [])))
       .then((groups) => {
         if (cancelled) return
         setItems(dedupeById(groups.flat()))
@@ -70,21 +88,28 @@ export function useMediaHubBrowseCatalog(trackedIds: Set<string>): BrowseCatalog
         if (!cancelled) setItems(null)
       })
       .finally(() => {
-        if (!cancelled) setLoading(false)
+        if (!cancelled) {
+          setLoading(false)
+          setSettled(true)
+        }
       })
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [generation])
+
+  const refresh = useCallback(() => setGeneration((g) => g + 1), [])
 
   if (items && items.length) {
     return {
       items: items.map((item) => catalogItemToMediaItem(item, { trackedIds })),
       loading,
-      live: true
+      live: true,
+      settled,
+      refresh
     }
   }
-  return { items: CATALOG, loading, live: false }
+  return { items: CATALOG, loading, live: false, settled, refresh }
 }
 
 export interface HomeFeedResult {

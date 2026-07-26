@@ -1,0 +1,140 @@
+/* Movies/Series/Anime category page shell — deliberately reuses
+   HomeDashboard.module.css's own grid-area names ("assistant"/"hero"/
+   "status"/"mood") so CompactAIAssistant/FeaturedHero/
+   ContinueWatchingPanel/PerformanceWidget/GenreBlobRow's own hardcoded
+   `grid-area` rules place them identically to Home, with two new rows of
+   this page's own: "filterbar" and "content" (rails or the filtered/
+   search results grid — see CategoryPage.tsx). Column widths and the hero
+   row's height floor are copied verbatim from HomeDashboard.module.css so
+   the hero reads as the same size/shape across every page — desktop
+   (1920x1080) first, per the integration spec; narrower widths get the
+   same reflow treatment Home already has, nothing further. */
+
+.page {
+  /* Unlike HomeDashboard's .dashboard, this is allowed to grow taller
+     than the viewport — a filter bar plus two or three stacked rails plus
+     the genre row is naturally more vertical content than Home's single
+     "AI Picks" rail, so this page scrolls inside AppShell's already-
+     scrollable .main (see AppShell.module.css) rather than fighting for
+     a second nested scroll container. */
+  min-height: 100%;
+  display: grid;
+  grid-template-columns: 260px minmax(0, 1fr) 340px;
+  grid-template-rows: minmax(520px, 1fr) auto auto auto;
+  grid-template-areas:
+    'assistant hero hero'
+    'filterbar filterbar filterbar'
+    'content content status'
+    'mood mood mood';
+  gap: 12px;
+  padding: 10px 26px 16px calc(26px + var(--nav-rail-width, 285px) * 0.8);
+}
+
+.filterbarArea {
+  grid-area: filterbar;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.offlineBanner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  border-radius: var(--radius-small);
+  border: 1px solid rgba(244, 203, 69, 0.35);
+  background: rgba(244, 203, 69, 0.08);
+  color: var(--accent-yellow);
+  font-size: 12.5px;
+}
+.offlineRetry {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+  color: inherit;
+  font-weight: 600;
+}
+.offlineRetry:hover {
+  text-decoration: underline;
+}
+
+.contentArea {
+  grid-area: content;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+}
+
+.rails {
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+}
+
+.resultsHeading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.resultsHeading h2 {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+.clearSearch {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  color: var(--accent-cyan);
+  padding: 6px 10px;
+  border-radius: var(--radius-small);
+  white-space: nowrap;
+}
+.clearSearch:hover {
+  background: rgba(56, 193, 255, 0.1);
+}
+.clearSearch svg {
+  width: 11px;
+  height: 11px;
+}
+
+@media (max-width: 1439px) {
+  .page {
+    grid-template-columns: 220px minmax(0, 1fr) 300px;
+    gap: 12px;
+    padding: 12px 20px 18px calc(20px + var(--nav-rail-width, 285px) * 0.8);
+  }
+}
+
+/* Below-desktop reflow, kept minimal per the integration spec ("design
+   for 1920x1080 first... mobile is a separate future design, do not
+   compromise desktop composition for it"). One known gap at this
+   breakpoint: ContinueWatchingPanel.module.css's own <=1099px override
+   expects a grid area literally named "continue" (its tablet/mobile
+   full-width variant); this page doesn't define one, so below 1099px it
+   falls back to normal grid auto-placement instead of that hand-tuned
+   variant. Not pixel-perfect at that width, but not broken either — left
+   as-is rather than widening this page's scope into a real
+   tablet/mobile layout pass, which the spec explicitly defers. */
+@media (max-width: 1099px) {
+  .page {
+    grid-template-columns: 1fr;
+    grid-template-rows: repeat(6, auto);
+    grid-template-areas:
+      'assistant'
+      'hero'
+      'filterbar'
+      'content'
+      'status'
+      'mood';
+    overflow-y: auto;
+  }
+}
