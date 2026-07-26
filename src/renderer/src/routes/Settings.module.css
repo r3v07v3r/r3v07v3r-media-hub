@@ -1,7 +1,15 @@
 .wrap {
   height: 100%;
   overflow-y: auto;
-  padding: 28px 32px 40px;
+  /* Left padding carries an extra compensating term (see .main in
+     AppShell.module.css) — .main's own box is widened leftward by 80% of
+     the rail's width so MoodBrowser's under-nav bleed has somewhere to
+     land; every other page absorbs that same amount back out via its own
+     padding-left so its content still starts at the on-screen x it would
+     without the bleed, instead of rendering under the nav rail. This page
+     was missing that term entirely (see HomeDashboard.module.css /
+     CategoryPage.module.css for the same pattern already in place). */
+  padding: 28px 32px 40px calc(32px + var(--nav-rail-width, 285px) * 0.8);
   max-width: 640px;
 }
 

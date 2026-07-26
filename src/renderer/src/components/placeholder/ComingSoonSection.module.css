@@ -4,7 +4,16 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 24px;
+  /* Left padding carries an extra compensating term (see .main in
+     AppShell.module.css) — .main's own box is widened leftward by 80% of
+     the rail's width so MoodBrowser's under-nav bleed has somewhere to
+     land; every other page absorbs that same amount back out via its own
+     padding-left. Here that matters even though this is centered content:
+     without it, justify-content:center centers .card within the
+     artificially widened+left-shifted box rather than the actually
+     visible area, so the card reads as off-center (shifted toward the
+     nav rail) instead of centered in the viewport. */
+  padding: 24px 24px 24px calc(24px + var(--nav-rail-width, 285px) * 0.8);
 }
 
 .card {
