@@ -82,6 +82,20 @@ export function buildFfmpegArguments(
   const startTime = Math.max(0, Number(selection.startTime) || 0)
 
   const args = ['-loglevel', 'warning']
+  // Streaming/debrid sources can drop the connection briefly under load —
+  // without these, ffmpeg just errors out on a transient network blip
+  // instead of reconnecting, which would surface as a much worse stall or
+  // failure than the interruption itself warranted.
+  args.push(
+    '-reconnect',
+    '1',
+    '-reconnect_streamed',
+    '1',
+    '-reconnect_on_network_error',
+    '1',
+    '-reconnect_delay_max',
+    '5'
+  )
   // Input-side seek (-ss before -i) is fast/keyframe-based, which is what
   // we want since video is copied, not decoded — a re-encode-precision
   // seek isn't possible (or needed) without decoding video anyway.
