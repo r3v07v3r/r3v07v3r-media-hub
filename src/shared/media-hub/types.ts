@@ -231,7 +231,7 @@ export interface MediaHubSettingsSnapshot extends MediaHubPublicSettings {
   tmdbConnected: boolean
   osConnected: boolean
   partySyncConnected: boolean
-  vlcInstalled: boolean
+  ffmpegAvailable: boolean
 }
 
 export interface ConnectResult {

@@ -193,8 +193,8 @@ const api = {
     },
 
     playback: {
-      // Both handlers start (or restart) the VLC transcoder, so their
-      // resolved payload spreads VlcTranscoderResult (url/engine/
+      // Both handlers start (or restart) the ffmpeg transcoder, so their
+      // resolved payload spreads FfmpegTranscoderResult (url/engine/
       // compatibility: true) alongside the fields named below — see
       // main/media-hub/playbackSession.ts's PlaybackCompatibilityResult /
       // PlaybackSelectTracksResult.

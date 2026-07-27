@@ -11,7 +11,7 @@ import { app, BrowserWindow, clipboard, shell } from 'electron'
 import { MEDIA_HUB_CHANNELS } from '../../shared/media-hub/ipc-channels'
 import type { MediaHubSettingsSnapshot } from '../../shared/media-hub/types'
 import { handle } from './ipcGuard'
-import { vlcInstallPath, stopPlayback } from './playbackSession'
+import { ffmpegPath, stopPlayback } from './playbackSession'
 import { normalizeTheme, publicSettings, logoutSettings, THEMES } from './preferences'
 import { isAllowedExternalUrl } from './security'
 import {
@@ -33,7 +33,7 @@ export function registerAppIpc(): void {
     tmdbConnected: Boolean(tmdbCredentials().apiKey),
     osConnected: osConnected(),
     partySyncConnected: Boolean(partySyncCredentials().url && partySyncCredentials().inviteKey),
-    vlcInstalled: Boolean(vlcInstallPath)
+    ffmpegAvailable: Boolean(ffmpegPath)
   }))
 
   handle<unknown, { theme: string }>(MEDIA_HUB_CHANNELS.settingsSetTheme, (_event, value) => {

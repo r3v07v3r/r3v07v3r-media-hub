@@ -1,30 +1,48 @@
-// Ported from r3v07v3r-media-hub's src/vlc.cjs. Two separate security
-// boundaries live in this file and are preserved exactly, byte-for-byte in
-// intent, from the original: (1) command-injection defenses around the VLC
-// subprocess — `buildVlcArguments` validates the remote URL (re-checking
-// `isAllowedRemoteMediaUrl`, defense in depth, right before every VLC
-// spawn), the compatibility port range, and the compatibility-token format
-// (64 hex chars) *before* any of it is used to build a spawned argument
-// list; (2) the same SSRF checks from playback.ts, re-applied here before
-// ever invoking ffprobe/ffmpeg/VLC against a remote URL. Do not loosen,
-// skip, or "simplify" any of these checks without re-auditing against the
-// source app.
+// Ported from r3v07v3r-media-hub's src/vlc.cjs, but compatibility-mode
+// transcoding itself no longer uses VLC — see the history below for why.
+// The remaining security boundaries are preserved exactly, byte-for-byte
+// in intent, from the original: (1) command-injection defenses around the
+// transcoder subprocess — `buildFfmpegArguments` re-checks
+// `isAllowedRemoteMediaUrl` (SSRF defense, defense in depth immediately
+// before every ffmpeg spawn) before any of it is used to build a spawned
+// argument list; (2) the same SSRF checks from playback.ts, re-applied
+// here before ever invoking ffprobe/ffmpeg against a remote URL. Do not
+// loosen, skip, or "simplify" any of these checks without re-auditing
+// against the source app.
 //
-// Deliberate deviation from the original: `findVlc()` in the source app is
-// Windows-only (hardcoded `vlc.exe`, Windows Registry lookups, Windows
-// direct-install-path checks) because that app only ever shipped a Windows
-// NSIS build. This project's electron-builder.yml targets win/mac/linux,
-// so `findVlc()` below is generalized to branch on `process.platform` the
-// same way `findFfprobe`/`findFfmpeg` already did in the original: the
-// `win32` branch keeps the exact original behavior unchanged (direct
-// paths, then registry query, then PATH scan for `vlc.exe`); `darwin` and
-// the fallback (linux/other) branches are new, added to match this
-// project's build targets, and check the platform-conventional install
-// locations before falling back to a PATH scan for the unadorned `vlc`
-// executable name. The Windows Registry (`reg.exe`) query stays strictly
-// inside the `win32` branch — it is never attempted on other platforms.
+// History: compatibility mode originally shelled out to VLC, transcoding
+// BOTH video (to VP8) and audio into a live WebM stream, even though only
+// the audio codec was ever the actual incompatibility. Two real bugs came
+// from that: (1) on this project's dev machine, GPU-accelerated decode fed
+// the VP8 encoder out-of-order timestamps, which could wedge the transcode
+// permanently; forcing software decode fixed that specific corruption, but
+// exposed (2) the deeper problem — software VP8 encoding simply cannot
+// keep up with real movie bitrates in real time (verified: a 1080p/16Mbps
+// test clip dropped hundreds of frames even after scaling down and using
+// VLC's fastest encode preset). Re-encoding video was never necessary:
+// `needsAudioCompatibility` below only ever looks at the audio codec.
+// ffmpeg's `-c:v copy` passes video through untouched (near-zero CPU cost,
+// no bitrate ceiling to keep up with) and only transcodes audio into AAC,
+// muxed into a fragmented MP4 that Chromium can play live exactly like the
+// old WebM stream — verified against a real 1080p/16Mbps source with zero
+// dropped frames, versus hundreds under the old VLC/WebM approach, and
+// unlike that approach the fragmented-MP4 stream also reports a real
+// finite `duration` instead of `Infinity`. This does mean embedded
+// subtitle tracks can no longer be burned into the video via VLC's
+// `soverlay` filter during compatibility mode (that required re-encoding
+// video, which copy mode by definition doesn't do) — the separate
+// OpenSubtitles-downloaded caption flow (subtitles:apply, WebVTT
+// `<track>`) is unaffected since it never depended on the transcode engine.
+//
+// ffmpeg is bundled with the app (resources/ffmpeg-win, wired up via
+// electron-builder.yml's extraResources) rather than required as a
+// separate user install like VLC was — most users don't have ffmpeg
+// already, unlike VLC, so requiring it separately would have left
+// compatibility mode broken for most people. `findFfmpeg()` below checks
+// the bundled resource first, falling back to a system search (useful in
+// dev, where the app isn't packaged).
 
-import { spawn, execFile, execFileSync, type ChildProcess } from 'node:child_process'
+import { spawn, execFile, type ChildProcess } from 'node:child_process'
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import http from 'node:http'
@@ -45,64 +63,34 @@ function cleanSelection(value: unknown, fallback = -1): number {
 }
 
 /**
- * Builds the VLC CLI argument list for compatibility-mode transcoding.
- * Every value that ends up in `args` is validated first: `remoteUrl` must
- * pass `isAllowedRemoteMediaUrl` (SSRF defense, re-checked here as defense
- * in depth immediately before every VLC spawn), `port` must be a real
- * ephemeral/user port (1024-65535), and `token` must match the 64-hex-char
- * compatibility-token shape. This is the command-injection defense for the
- * VLC subprocess: none of these values reach `spawn` unvalidated.
+ * Builds the ffmpeg CLI argument list for compatibility-mode transcoding:
+ * copies video untouched, transcodes only audio to AAC, muxed into a
+ * fragmented MP4 written to stdout (the caller pipes that to an HTTP
+ * response — see createFfmpegTranscoder below). `remoteUrl` is
+ * re-validated against `isAllowedRemoteMediaUrl` here as defense in depth
+ * immediately before every spawn, same as the rest of this file.
  */
-export function buildVlcArguments(
+export function buildFfmpegArguments(
   remoteUrl: string,
-  port: number,
-  token: string,
   selection: PlaybackSelection = {}
 ): string[] {
   if (!isAllowedRemoteMediaUrl(remoteUrl)) {
-    throw new Error('VLC compatibility requires a valid HTTPS media URL.')
-  }
-  if (!Number.isInteger(port) || port < 1024 || port > 65535) {
-    throw new Error('Invalid VLC compatibility port.')
-  }
-  if (!isValidCompatibilityToken(token)) {
-    throw new Error('Invalid VLC compatibility stream token.')
+    throw new Error('Compatibility mode requires a valid HTTPS media URL.')
   }
 
-  // --avcodec-hw=none: verified live (VLC's own --verbose=2 log) that this
-  // machine's GPU-accelerated decode (d3d11va/NVDEC) hands the vpx VP8
-  // encoder frames whose PTS values aren't monotonically increasing ("pts
-  // is smaller than initial pts"), which the encoder rejects — in the
-  // worst case this wedges the whole transcode permanently (the muxer
-  // waits forever for a frame that will never come, so the HTTP output
-  // never delivers anything past its initial container header) and
-  // otherwise drops frames throughout ("late buffer for mux input"),
-  // which is what surfaces as playback stutter. Forcing software decode
-  // removed the PTS-ordering mismatch entirely in the same repro.
-  const args = [
-    '-I',
-    'dummy',
-    '--no-one-instance',
-    '--no-video-title-show',
-    '--avcodec-hw=none'
-  ]
   const audio = cleanSelection(selection.audio)
-  const subtitle = cleanSelection(selection.subtitle)
   const startTime = Math.max(0, Number(selection.startTime) || 0)
-  const externalSubtitlePath =
-    typeof selection.externalSubtitlePath === 'string' ? selection.externalSubtitlePath : ''
 
-  if (audio >= 0) args.push(`--audio-track=${audio}`)
-  if (externalSubtitlePath) args.push(`--sub-file=${externalSubtitlePath}`)
-  else if (subtitle >= 0) args.push(`--sub-track=${subtitle}`)
-  if (startTime > 0) args.push(`--start-time=${Math.floor(startTime)}`)
-
-  args.push(
-    '--sout',
-    `#transcode{vcodec=VP80,vb=2800,scale=1,acodec=vorb,ab=160,channels=2,samplerate=48000,soverlay}:std{access=http,mux=webm,dst=127.0.0.1:${port}/${token}.webm}`,
-    '--sout-keep',
-    remoteUrl
-  )
+  const args = ['-loglevel', 'warning']
+  // Input-side seek (-ss before -i) is fast/keyframe-based, which is what
+  // we want since video is copied, not decoded — a re-encode-precision
+  // seek isn't possible (or needed) without decoding video anyway.
+  if (startTime > 0) args.push('-ss', String(Math.floor(startTime)))
+  args.push('-i', remoteUrl)
+  args.push('-map', '0:v:0', '-map', audio >= 0 ? `0:a:${audio}` : '0:a:0')
+  args.push('-c:v', 'copy', '-c:a', 'aac', '-b:a', '192k', '-ac', '2', '-ar', '48000')
+  args.push('-movflags', 'frag_keyframe+empty_moov+default_base_moof')
+  args.push('-f', 'mp4', 'pipe:1')
   return args
 }
 
@@ -215,84 +203,6 @@ function findInTree(root: string, name: string, depth = 4): string {
   return ''
 }
 
-// Windows-only: queries the Registry for VLC's InstallDir. Never invoked
-// outside the `win32` branch of `findVlc` below.
-function registryInstallDir(key: string): string {
-  try {
-    const output = execFileSync('reg', ['query', key, '/v', 'InstallDir'], {
-      windowsHide: true,
-      encoding: 'utf8'
-    })
-    return output.match(/InstallDir\s+REG_SZ\s+(.+)/)?.[1]?.trim() || ''
-  } catch {
-    return ''
-  }
-}
-
-/**
- * Locates the VLC executable for the current platform. See the file-header
- * comment for why this differs from the original (Windows-only) source:
- * this project ships win/mac/linux builds, so each platform gets its own
- * search strategy, with the `win32` branch kept byte-for-byte identical to
- * the original app's only supported platform.
- */
-export function findVlc(): string {
-  if (process.platform === 'win32') {
-    const executable = 'vlc.exe'
-    const direct = [
-      'C:/Program Files/VideoLAN/VLC/vlc.exe',
-      'C:/Program Files (x86)/VideoLAN/VLC/vlc.exe'
-    ]
-    for (const candidate of direct) {
-      if (fs.existsSync(candidate)) return candidate
-    }
-    for (const key of [
-      'HKLM\\SOFTWARE\\VideoLAN\\VLC',
-      'HKLM\\SOFTWARE\\WOW6432Node\\VideoLAN\\VLC'
-    ]) {
-      const dir = registryInstallDir(key)
-      if (dir) {
-        const candidate = path.join(dir, executable)
-        if (fs.existsSync(candidate)) return candidate
-      }
-    }
-    for (const dir of String(process.env.PATH || '').split(path.delimiter)) {
-      if (!dir) continue
-      const candidate = path.join(dir, executable)
-      if (fs.existsSync(candidate)) return candidate
-    }
-    return ''
-  }
-
-  if (process.platform === 'darwin') {
-    const direct = '/Applications/VLC.app/Contents/MacOS/VLC'
-    if (fs.existsSync(direct)) return direct
-    for (const dir of String(process.env.PATH || '').split(path.delimiter)) {
-      if (!dir) continue
-      const candidate = path.join(dir, 'vlc')
-      if (fs.existsSync(candidate)) return candidate
-    }
-    return ''
-  }
-
-  // linux (and any other non-Windows, non-macOS platform)
-  const direct = [
-    '/usr/bin/vlc',
-    '/usr/local/bin/vlc',
-    '/snap/bin/vlc',
-    '/var/lib/flatpak/exports/bin/org.videolan.VLC'
-  ]
-  for (const candidate of direct) {
-    if (fs.existsSync(candidate)) return candidate
-  }
-  for (const dir of String(process.env.PATH || '').split(path.delimiter)) {
-    if (!dir) continue
-    const candidate = path.join(dir, 'vlc')
-    if (fs.existsSync(candidate)) return candidate
-  }
-  return ''
-}
-
 export function findFfprobe(): string {
   const executable = process.platform === 'win32' ? 'ffprobe.exe' : 'ffprobe'
   const direct = [
@@ -364,7 +274,15 @@ export function probeMedia(
 
 export function findFfmpeg(): string {
   const executable = process.platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg'
+  // Packaged builds bundle ffmpeg (electron-builder.yml's extraResources,
+  // resources/ffmpeg-win) so compatibility mode works with zero setup —
+  // most users won't have ffmpeg installed separately, unlike VLC. Only
+  // relevant when app.isPackaged; in dev, resourcesPath doesn't contain it
+  // and this candidate simply won't exist, falling through to the system
+  // search below.
+  const bundled = path.join(process.resourcesPath || '', 'ffmpeg', executable)
   const direct = [
+    bundled,
     'C:/ffmpeg/bin/ffmpeg.exe',
     'C:/Program Files/ffmpeg/bin/ffmpeg.exe',
     'C:/Program Files (x86)/ffmpeg/bin/ffmpeg.exe'
@@ -447,130 +365,84 @@ function freePort(): Promise<number> {
   })
 }
 
-function waitForPort(
-  port: number,
-  timeout = 8000,
-  { signal }: { signal?: AbortSignal } = {}
-): Promise<void> {
-  const started = Date.now()
-  return new Promise((resolve, reject) => {
-    const attempt = (): void => {
-      if (signal?.aborted) {
-        reject(new Error('VLC compatibility mode was cancelled.'))
-        return
-      }
-      const socket = net.connect({ host: '127.0.0.1', port })
-      socket.once('connect', () => {
-        socket.destroy()
-        resolve()
-      })
-      socket.once('error', () => {
-        socket.destroy()
-        if (signal?.aborted) reject(new Error('VLC compatibility mode was cancelled.'))
-        else if (Date.now() - started >= timeout)
-          reject(new Error('VLC compatibility mode did not start in time.'))
-        else setTimeout(attempt, 150)
-      })
-    }
-    attempt()
-  })
-}
-
-export function waitForStreamData(
-  url: string,
-  timeout = 25000,
-  { httpGetImpl = http.get, signal }: { httpGetImpl?: typeof http.get; signal?: AbortSignal } = {}
-): Promise<void> {
-  const started = Date.now()
-  return new Promise((resolve, reject) => {
-    const attempt = (): void => {
-      if (signal?.aborted) {
-        reject(new Error('VLC compatibility mode was cancelled.'))
-        return
-      }
-      const retryOrFail = (): void => {
-        if (signal?.aborted) {
-          reject(new Error('VLC compatibility mode was cancelled.'))
-          return
-        }
-        if (Date.now() - started >= timeout) {
-          reject(new Error('VLC compatibility mode did not start producing video in time.'))
-          return
-        }
-        setTimeout(attempt, 300)
-      }
-      let settled = false
-      const req = httpGetImpl(url, (response) => {
-        response.on('data', (chunk: Buffer) => {
-          if (settled || !chunk.length) return
-          settled = true
-          req.destroy()
-          response.destroy()
-          resolve()
-        })
-        response.on('error', () => {
-          if (!settled) retryOrFail()
-        })
-        response.on('end', () => {
-          if (!settled) retryOrFail()
-        })
-      })
-      req.on('error', () => {
-        if (!settled) retryOrFail()
-      })
-      req.setTimeout(2000, () => req.destroy())
-    }
-    attempt()
-  })
-}
-
-export interface VlcTranscoderResult {
+export interface FfmpegTranscoderResult {
   url: string
   engine: string
   compatibility: true
 }
 
-export interface VlcTranscoder {
+export interface FfmpegTranscoder {
   start: (
-    vlcPath: string,
+    ffmpegPath: string,
     remoteUrl: string,
     selection?: PlaybackSelection
-  ) => Promise<VlcTranscoderResult>
+  ) => Promise<FfmpegTranscoderResult>
   stop: () => Promise<void>
 }
 
-export interface CreateVlcTranscoderOptions {
+export interface CreateFfmpegTranscoderOptions {
   spawnImpl?: typeof spawn
   randomBytes?: typeof crypto.randomBytes
   onLog?: (chunk: string) => void
-  httpGetImpl?: typeof http.get
 }
 
-export function createVlcTranscoder({
+/**
+ * Runs ffmpeg (copy video, transcode only audio — see the file-header
+ * comment for why) and serves its stdout over a local HTTP server we own,
+ * rather than relying on ffmpeg's own HTTP output (verified live that
+ * ffmpeg's own `-listen 1` HTTP muxer doesn't behave as a normal
+ * continuously-streaming server for this use case).
+ *
+ * ffmpeg's stdout isn't read by anyone until a real HTTP client (the
+ * renderer's `<video>` element) connects — which only happens *after*
+ * `start()` below has already returned the stream URL to the caller. If
+ * ffmpeg produces more than one pipe-buffer's worth of output before that
+ * (verified live: Windows fills at 64KB) with nobody draining it, the
+ * write blocks — and that stall can starve ffmpeg's own stderr progress
+ * output too, since both come from the same process loop. An earlier
+ * version of this function used that stderr `frame=N` progress output to
+ * detect readiness and hung indefinitely for exactly this reason on a
+ * `-ss`-seeked restart. Watching stdout's actual bytes directly avoids
+ * that dependency, but means this function and the eventual HTTP client
+ * are two readers of the same stream — bytes seen here must be buffered
+ * and replayed to the client, not just observed, or the fragment(s)
+ * consumed while detecting readiness (container header included) would
+ * never reach the real client. `pendingChunks`/`clientRes` below implement
+ * that: buffer until a client connects, then forward directly (with
+ * manual backpressure via `res.write()`'s return value, since forwarding
+ * this way loses the automatic backpressure `.pipe()` would have given).
+ */
+export function createFfmpegTranscoder({
   spawnImpl = spawn,
   randomBytes = crypto.randomBytes,
-  onLog = () => {},
-  httpGetImpl = http.get
-}: CreateVlcTranscoderOptions = {}): VlcTranscoder {
+  onLog = () => {}
+}: CreateFfmpegTranscoderOptions = {}): FfmpegTranscoder {
   let child: ChildProcess | null = null
+  let server: http.Server | null = null
 
   async function stop(): Promise<void> {
+    if (server) {
+      const closing = server
+      server = null
+      await new Promise<void>((resolve) => closing.close(() => resolve()))
+    }
     if (child && !child.killed) child.kill()
     child = null
   }
 
   async function start(
-    vlcPath: string,
+    ffmpegPath: string,
     remoteUrl: string,
     selection: PlaybackSelection = {}
-  ): Promise<VlcTranscoderResult> {
-    if (!vlcPath) throw new Error('VLC is not installed. Install VLC to use compatibility mode.')
+  ): Promise<FfmpegTranscoderResult> {
+    if (!ffmpegPath) throw new Error('Compatibility mode is unavailable (ffmpeg not found).')
     await stop()
     const port = await freePort()
     const token = randomBytes(32).toString('hex')
-    const args = buildVlcArguments(remoteUrl, port, token, selection)
-    child = spawnImpl(vlcPath, args, { windowsHide: true, stdio: ['ignore', 'ignore', 'pipe'] })
+    const args = buildFfmpegArguments(remoteUrl, selection)
+    child = spawnImpl(ffmpegPath, args, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] })
     const spawned = child
+
     spawned.stderr?.on('data', (chunk: Buffer) => {
       try {
         onLog(chunk.toString())
@@ -578,23 +450,107 @@ export function createVlcTranscoder({
         // ignore log handler errors
       }
     })
-    const portAbort = new AbortController()
-    const spawnError = new Promise<never>((_resolve, reject) => {
+
+    let ready = false
+    let totalBytes = 0
+    let clientRes: http.ServerResponse | null = null
+    let stdoutPaused = false
+    let stdoutEnded = false
+    const pendingChunks: Buffer[] = []
+    // Comfortably beyond the tiny ftyp/empty-moov header (observed ~1-2KB
+    // live) so readiness means a real media fragment arrived, not just the
+    // container header — the same shallow-check gap that made the old
+    // VLC-based version's "any nonzero byte" check misleadingly pass.
+    const READY_BYTES = 8192
+
+    // Without this, the HTTP response never ends on its own once ffmpeg
+    // finishes (a natural EOF for a short/finite source, not just a
+    // killed session) — verified live: the <video> element sat in
+    // `waiting`/`stalled` past the last real fragment instead of firing
+    // `ended`, since nothing ever called res.end() for it.
+    spawned.stdout?.on('end', () => {
+      stdoutEnded = true
+      clientRes?.end()
+    })
+
+    const readyPromise = new Promise<void>((resolve, reject) => {
+      spawned.stdout?.on('data', (chunk: Buffer) => {
+        totalBytes += chunk.length
+        if (clientRes) {
+          const ok = clientRes.write(chunk)
+          if (!ok) {
+            spawned.stdout?.pause()
+            stdoutPaused = true
+          }
+        } else {
+          pendingChunks.push(chunk)
+        }
+        if (!ready && totalBytes >= READY_BYTES) {
+          ready = true
+          resolve()
+        }
+      })
       spawned.once('error', (error) => {
-        child = null
-        portAbort.abort()
-        reject(new Error(`VLC failed to start: ${error.message}`))
+        if (!ready) reject(new Error(`ffmpeg failed to start: ${error.message}`))
+      })
+      spawned.once('exit', (code) => {
+        if (ready) return
+        // A short/low-bitrate clip can finish under READY_BYTES entirely —
+        // if ffmpeg exited having produced *some* real output, that's
+        // still a legitimate success, not a failure.
+        if (totalBytes > 0) {
+          ready = true
+          resolve()
+        } else {
+          reject(new Error(`ffmpeg exited before producing video (code ${code}).`))
+        }
+      })
+      setTimeout(() => {
+        if (!ready) reject(new Error('Compatibility mode did not start producing video in time.'))
+      }, 25000)
+    })
+    readyPromise.catch(() => {})
+
+    const expectedPath = `/${token}.mp4`
+    server = http.createServer((req, res) => {
+      if (req.url !== expectedPath) {
+        res.writeHead(404)
+        res.end()
+        return
+      }
+      res.writeHead(200, { 'Content-Type': 'video/mp4', 'Cache-Control': 'no-cache' })
+      for (const chunk of pendingChunks) res.write(chunk)
+      pendingChunks.length = 0
+      if (stdoutEnded) {
+        // A short/fast clip (e.g. copy-mode races through in well under a
+        // second) can finish entirely before any client ever connects —
+        // the 'end' listener above had nothing to call .end() on yet.
+        res.end()
+        return
+      }
+      clientRes = res
+      res.on('drain', () => {
+        if (stdoutPaused) {
+          stdoutPaused = false
+          spawned.stdout?.resume()
+        }
+      })
+      req.on('close', () => {
+        if (clientRes === res) clientRes = null
       })
     })
-    spawnError.catch(() => {})
-    spawned.unref?.()
-    const streamUrl = `http://127.0.0.1:${port}/${token}.webm`
-    const portWait = waitForPort(port, 8000, { signal: portAbort.signal }).then(() =>
-      waitForStreamData(streamUrl, 25000, { httpGetImpl, signal: portAbort.signal })
-    )
-    portWait.catch(() => {})
-    await Promise.race([portWait, spawnError])
-    return { url: streamUrl, engine: 'VLC audio/video compatibility', compatibility: true }
+    const activeServer = server
+    await new Promise<void>((resolve, reject) => {
+      activeServer.once('error', reject)
+      activeServer.listen(port, '127.0.0.1', () => resolve())
+    })
+
+    await readyPromise
+    return {
+      url: `http://127.0.0.1:${port}${expectedPath}`,
+      engine: 'ffmpeg audio compatibility (video copy)',
+      compatibility: true
+    }
   }
 
   return { start, stop }

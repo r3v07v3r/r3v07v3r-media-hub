@@ -41,8 +41,9 @@ function buildMediaId(
 /**
  * The real playback surface — resolves a TorBox-cached stream for the
  * selected title (stream:resolve), starts embedded playback (stream:play,
- * which returns either a direct proxied URL or a VLC-compatibility-mode
- * URL when the source's audio needs transcoding — see
+ * which returns either a direct proxied URL or a compatibility-mode URL
+ * (audio transcoded via ffmpeg, video untouched) when the source's audio
+ * needs converting — see
  * main/media-hub/playbackSession.ts), and renders it in a genuine
  * `<video>` element with a real control bar (play/pause, seek, volume,
  * audio/subtitle track selection, fullscreen). Replaces the earlier
@@ -75,18 +76,18 @@ export function PlaybackOverlay() {
   const [activeSubtitleTrackUrl, setActiveSubtitleTrackUrl] = useState<string | null>(null)
   const markedWatchedRef = useRef(false)
   const hideControlsTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
-  // VLC compatibility-mode playback is a live, unbounded HTTP stream with
-  // no real seek support (video.duration reports Infinity for it — see
-  // vlc.ts's comment on why --avcodec-hw=none was needed, and the sibling
-  // finding that any `currentTime` assignment computed against an
-  // Infinity duration is non-finite and throws). Each compatibility
-  // segment restarts VLC from a given --start-time and is its own fresh
-  // stream, so the <video> element's own currentTime is relative to that
-  // restart, not the absolute media position — streamStartOffsetRef holds
-  // the absolute offset the current segment began at, and
-  // activeSelectionRef holds the last audio/subtitle selection so a
-  // seek-triggered restart doesn't silently reset track choice back to
-  // default.
+  // Compatibility-mode playback is a single, non-seekable HTTP connection
+  // (the main process pipes ffmpeg's stdout straight through — see
+  // vlc.ts's createFfmpegTranscoder — with no Range support), so seeking
+  // outside whatever's already buffered can't be done by just moving
+  // currentTime; it needs a fresh transcode restarted at the target time
+  // via ffmpeg's -ss (see handleSeek below). Each restarted segment is its
+  // own fresh stream starting from 0, so the <video> element's own
+  // currentTime is relative to that restart, not the absolute media
+  // position — streamStartOffsetRef holds the absolute offset the current
+  // segment began at, and activeSelectionRef holds the last audio/subtitle
+  // selection so a seek-triggered restart doesn't silently reset track
+  // choice back to default.
   const streamStartOffsetRef = useRef(0)
   const activeSelectionRef = useRef<PlaybackSelection>({})
 
@@ -136,8 +137,8 @@ export function PlaybackOverlay() {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally keyed on the title's id, not the whole (frequently-recreated) playbackMedia object
   }, [trackedMediaId])
 
-  // Stop the backend's playback session (closes the proxy / kills any VLC
-  // transcoder) whenever the overlay closes, whether via the close
+  // Stop the backend's playback session (closes the proxy / kills any
+  // ffmpeg transcoder) whenever the overlay closes, whether via the close
   // button, Escape, or the title changing out from under it.
   useEffect(() => {
     if (!playbackMedia) return
@@ -216,12 +217,12 @@ export function PlaybackOverlay() {
         return
       }
 
-      // Compatibility-mode's stream is a live push with no real seek
-      // support — setting currentTime directly either throws (Infinity
-      // duration) or silently does nothing useful. The only real way to
-      // "seek" is what selectTrack() already does for track changes:
-      // restart the VLC transcode from a new --start-time and load the
-      // fresh stream it produces.
+      // Compatibility-mode's stream is a single non-Range HTTP connection
+      // (see streamStartOffsetRef's comment above) — setting currentTime
+      // directly can't actually reach an unbuffered position. The only
+      // real way to "seek" is what selectTrack() already does for track
+      // changes: restart the ffmpeg transcode from a new -ss position and
+      // load the fresh stream it produces.
       streamStartOffsetRef.current = target
       setCurrentTime(target)
       window.api?.mediaHub?.playback
@@ -330,10 +331,12 @@ export function PlaybackOverlay() {
             setCurrentTime(streamStartOffsetRef.current + e.currentTarget.currentTime)
           }
           onLoadedMetadata={(e) => {
-            // Compatibility mode's live stream reports duration: Infinity
-            // (see streamStartOffsetRef's comment) — prefer the real total
-            // ffprobe found, falling back to the element's own value for
-            // direct/proxied playback where it's already accurate.
+            // Compatibility mode's fragmented-stream duration climbs as
+            // more of the stream arrives rather than being known upfront
+            // (early loadedmetadata events under-report it) — prefer the
+            // real total ffprobe already found, falling back to the
+            // element's own value for direct/proxied playback where it's
+            // accurate from the start.
             const probed = tracks?.durationSeconds
             setDuration(
               probed && Number.isFinite(probed) ? probed : e.currentTarget.duration

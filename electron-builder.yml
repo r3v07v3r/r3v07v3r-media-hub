@@ -15,6 +15,11 @@ files:
   - '!{.eslintcache,eslint.config.mjs,.prettierignore,.prettierrc.yaml,dev-app-update.yml,CHANGELOG.md,README.md}'
   - '!{.env,.env.*,.npmrc,pnpm-lock.yaml}'
   - '!{tsconfig.json,tsconfig.node.json,tsconfig.web.json}'
+  # Ships only via win.extraResources below (to resourcesPath/ffmpeg) — this
+  # exclusion stops the default files glob from ALSO pulling it into
+  # app.asar.unpacked, which doubled the installer's size for no reason
+  # (verified: 137MB in each of the two locations before this was added).
+  - '!resources/ffmpeg-win/**'
 asarUnpack:
   - resources/**
 win:
@@ -22,6 +27,14 @@ win:
     - nsis
   icon: build/icon.ico
   artifactName: R3-Media-Hub-${version}-Setup.${ext}
+  # Bundled so audio-compatibility playback (copy video, transcode only
+  # audio — see vlc.ts) works with zero setup: unlike VLC, which this
+  # project no longer depends on, most users won't already have ffmpeg
+  # installed. Lands at process.resourcesPath/ffmpeg/ffmpeg.exe — see
+  # vlc.ts's findFfmpeg().
+  extraResources:
+    - from: resources/ffmpeg-win
+      to: ffmpeg
 nsis:
   oneClick: false
   perMachine: true

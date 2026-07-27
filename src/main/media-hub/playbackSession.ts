@@ -1,17 +1,18 @@
 // Ported from r3v07v3r-media-hub's src/main.cjs (subtitleCacheDir/
 // clearActiveSubtitle/preparePlayback/stopPlayback, the module-level
 // activeMediaUrl/activeMediaTracks/activeSubtitlePath/playbackProxy/
-// vlcTranscoder/ffprobePath/ffmpegPath/vlcInstallPath singletons, and the
+// ffmpegTranscoder/ffprobePath/ffmpegPath singletons, and the
 // subtitles:apply/playback:compatibility/playback:select-tracks/
 // playback:stop/playback:thumbnail IPC handlers). Active playback is
 // intentionally kept as module-level singleton state, exactly as in the
 // original app: there is only ever one "now playing" session for the whole
 // app, not per-window/per-session state.
 //
-// `vlcInstallPath`/`ffmpegPath`/`ffprobePath` are computed once at module
-// load (same as the original's module-level consts) and exported so other
-// modules — e.g. the settings snapshot's `vlcInstalled` flag — don't each
-// re-run their own executable discovery.
+// `ffmpegPath`/`ffprobePath` are computed once at module load (same as the
+// original's module-level consts) and exported so other modules don't each
+// re-run their own executable discovery. Compatibility-mode transcoding
+// used to shell out to a separately-installed VLC — see vlc.ts's header
+// comment for why that's now ffmpeg (bundled with the app) instead.
 
 import { app } from 'electron'
 import crypto from 'node:crypto'
@@ -32,22 +33,20 @@ import { createPlaybackProxy } from './playback'
 import { osDownloadSubtitleText } from './subtitlesService'
 import {
   captureFrame,
-  createVlcTranscoder,
+  createFfmpegTranscoder,
   findFfmpeg,
   findFfprobe,
-  findVlc,
   needsAudioCompatibility,
   probeMedia,
-  type VlcTranscoderResult
+  type FfmpegTranscoderResult
 } from './vlc'
 
-export const vlcInstallPath = findVlc()
 export const ffmpegPath = findFfmpeg()
 export const ffprobePath = findFfprobe()
 
 const playbackProxy = createPlaybackProxy()
-const vlcTranscoder = createVlcTranscoder({
-  onLog: (line) => logError('vlc:stderr', redactUrls(line.trim()))
+const ffmpegTranscoder = createFfmpegTranscoder({
+  onLog: (line) => logError('ffmpeg:stderr', redactUrls(line.trim()))
 })
 
 let activeMediaUrl = ''
@@ -72,16 +71,17 @@ function clearActiveSubtitle(): void {
 /**
  * Probes `url` and starts embedded playback for it: either directly (via
  * the playback proxy) or, if the source's audio codec isn't
- * browser-compatible and VLC is installed, by transcoding through VLC.
- * Also used by torbox.ts's play:stream/library:play handlers.
+ * browser-compatible, by transcoding audio through ffmpeg (video passes
+ * through untouched — see vlc.ts's header comment). Also used by
+ * torbox.ts's play:stream/library:play handlers.
  */
 export async function preparePlayback(url: string): Promise<PlaybackResult> {
   activeMediaUrl = url
-  await vlcTranscoder.stop()
+  await ffmpegTranscoder.stop()
   activeMediaTracks = await probeMedia(ffprobePath, url)
-  if (needsAudioCompatibility(activeMediaTracks) && vlcInstallPath) {
+  if (needsAudioCompatibility(activeMediaTracks) && ffmpegPath) {
     await playbackProxy.close()
-    const started = await vlcTranscoder.start(vlcInstallPath, url, {
+    const started = await ffmpegTranscoder.start(ffmpegPath, url, {
       audio: activeMediaTracks.audio.find((x) => x.default)?.ordinal ?? 0
     })
     return {
@@ -101,12 +101,12 @@ export async function preparePlayback(url: string): Promise<PlaybackResult> {
   }
 }
 
-/** Clears active playback state (URL/tracks/subtitle file) and tears down the playback proxy and any running VLC transcoder. */
+/** Clears active playback state (URL/tracks/subtitle file) and tears down the playback proxy and any running ffmpeg transcoder. */
 export async function stopPlayback(): Promise<void> {
   activeMediaUrl = ''
   activeMediaTracks = { video: [], audio: [], subtitle: [], probed: false }
   clearActiveSubtitle()
-  await Promise.all([playbackProxy.close(), vlcTranscoder.stop()])
+  await Promise.all([playbackProxy.close(), ffmpegTranscoder.stop()])
 }
 
 interface SubtitlesApplyPayload {
@@ -115,9 +115,9 @@ interface SubtitlesApplyPayload {
   selection?: PlaybackSelection
 }
 
-type PlaybackCompatibilityResult = VlcTranscoderResult & { tracks: MediaTracks }
+type PlaybackCompatibilityResult = FfmpegTranscoderResult & { tracks: MediaTracks }
 
-type PlaybackSelectTracksResult = VlcTranscoderResult & {
+type PlaybackSelectTracksResult = FfmpegTranscoderResult & {
   tracks: MediaTracks
   selection: PlaybackSelection
 }
@@ -149,11 +149,11 @@ export function registerPlaybackIpc(): void {
         startTime: Math.max(0, Math.min(Number(selection?.startTime) || 0, 86400)),
         externalSubtitlePath: filePath
       }
-      const started = await vlcTranscoder.start(vlcInstallPath, activeMediaUrl, safe)
+      const started = await ffmpegTranscoder.start(ffmpegPath, activeMediaUrl, safe)
       await playbackProxy.close()
-      // `started.compatibility` is already `true` (VlcTranscoderResult), so it
-      // isn't repeated here — TS flags a literal + spread of the same key as
-      // an error (TS2783) even though the original JS had no such issue.
+      // `started.compatibility` is already `true` (FfmpegTranscoderResult), so
+      // it isn't repeated here — TS flags a literal + spread of the same key
+      // as an error (TS2783) even though the original JS had no such issue.
       return { ok: true, tracks: activeMediaTracks, ...started }
     }
   )
@@ -162,7 +162,7 @@ export function registerPlaybackIpc(): void {
     MEDIA_HUB_CHANNELS.playbackCompatibility,
     async (_event, selection = {}) => {
       if (!activeMediaUrl) throw new Error('No active media is available for compatibility mode.')
-      const started = await vlcTranscoder.start(vlcInstallPath, activeMediaUrl, selection)
+      const started = await ffmpegTranscoder.start(ffmpegPath, activeMediaUrl, selection)
       await playbackProxy.close()
       return { tracks: activeMediaTracks, ...started }
     }
@@ -177,7 +177,7 @@ export function registerPlaybackIpc(): void {
         subtitle: Number.isInteger(selection.subtitle) ? (selection.subtitle as number) : -1,
         startTime: Math.max(0, Math.min(Number(selection.startTime) || 0, 86400))
       }
-      const started = await vlcTranscoder.start(vlcInstallPath, activeMediaUrl, safe)
+      const started = await ffmpegTranscoder.start(ffmpegPath, activeMediaUrl, safe)
       await playbackProxy.close()
       return { tracks: activeMediaTracks, selection: safe, ...started }
     }
