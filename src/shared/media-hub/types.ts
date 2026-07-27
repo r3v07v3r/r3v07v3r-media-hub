@@ -107,6 +107,14 @@ export interface MediaTracks {
   audio: MediaTrack[]
   subtitle: MediaTrack[]
   probed: boolean
+  // Total media duration from ffprobe's format section. VLC's
+  // compatibility-mode stream is a live, unbounded HTTP push (no
+  // Content-Length, no Duration element) — the <video> element itself
+  // reports `duration: Infinity` for it, so the renderer needs this
+  // independently-probed figure to render a real scrubber and compute seek
+  // targets during compatibility playback. Undefined if ffprobe didn't
+  // report a usable duration (e.g. probing failed).
+  durationSeconds?: number
 }
 
 export interface PlaybackSelection {

@@ -8,6 +8,7 @@ import type {
   MediaTrack,
   MediaTracks,
   PlaybackResult,
+  PlaybackSelection,
   SubtitleResult
 } from '@shared/media-hub/types'
 import styles from './Overlays.module.css'
@@ -74,6 +75,20 @@ export function PlaybackOverlay() {
   const [activeSubtitleTrackUrl, setActiveSubtitleTrackUrl] = useState<string | null>(null)
   const markedWatchedRef = useRef(false)
   const hideControlsTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  // VLC compatibility-mode playback is a live, unbounded HTTP stream with
+  // no real seek support (video.duration reports Infinity for it — see
+  // vlc.ts's comment on why --avcodec-hw=none was needed, and the sibling
+  // finding that any `currentTime` assignment computed against an
+  // Infinity duration is non-finite and throws). Each compatibility
+  // segment restarts VLC from a given --start-time and is its own fresh
+  // stream, so the <video> element's own currentTime is relative to that
+  // restart, not the absolute media position — streamStartOffsetRef holds
+  // the absolute offset the current segment began at, and
+  // activeSelectionRef holds the last audio/subtitle selection so a
+  // seek-triggered restart doesn't silently reset track choice back to
+  // default.
+  const streamStartOffsetRef = useRef(0)
+  const activeSelectionRef = useRef<PlaybackSelection>({})
 
   const trackedMediaId = playbackMedia?.id
   const kind =
@@ -188,19 +203,53 @@ export function PlaybackOverlay() {
   const handleSeek = useCallback(
     (event: React.MouseEvent<HTMLDivElement>) => {
       const video = videoRef.current
-      if (!video || !duration) return
+      if (!video || !duration || !Number.isFinite(duration)) return
       const rect = event.currentTarget.getBoundingClientRect()
       const fraction = Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width))
-      video.currentTime = fraction * duration
-      setCurrentTime(video.currentTime)
+      const target = fraction * duration
+
+      if (!result?.compatibility) {
+        // Direct/proxied playback (playback.ts forwards real Range/
+        // Content-Length headers) genuinely supports currentTime seeks.
+        video.currentTime = target
+        setCurrentTime(target)
+        return
+      }
+
+      // Compatibility-mode's stream is a live push with no real seek
+      // support — setting currentTime directly either throws (Infinity
+      // duration) or silently does nothing useful. The only real way to
+      // "seek" is what selectTrack() already does for track changes:
+      // restart the VLC transcode from a new --start-time and load the
+      // fresh stream it produces.
+      streamStartOffsetRef.current = target
+      setCurrentTime(target)
+      window.api?.mediaHub?.playback
+        .selectTracks({ ...activeSelectionRef.current, startTime: target })
+        .then((response) => {
+          if (!response) return
+          activeSelectionRef.current = response.selection
+          setResult((prev) => (prev ? { ...prev, ...response.selection, url: response.url } : prev))
+          setTracks(response.tracks)
+        })
+        .catch((error: unknown) => {
+          pushNotification({
+            tone: 'error',
+            message: error instanceof Error ? error.message : 'Could not seek.'
+          })
+        })
     },
-    [duration]
+    [duration, result, pushNotification]
   )
 
   async function selectTrack(kindKey: 'audio' | 'subtitle', ordinal: number) {
     if (!playbackMedia) return
     const video = videoRef.current
-    const startTime = video?.currentTime ?? 0
+    // During compatibility mode, video.currentTime is relative to the
+    // current transcode segment (see streamStartOffsetRef's definition
+    // above) — the absolute position is the segment's own start offset
+    // plus that relative time, not the relative time alone.
+    const startTime = streamStartOffsetRef.current + (video?.currentTime ?? 0)
     try {
       const response = await window.api?.mediaHub?.playback.selectTracks({
         audio: kindKey === 'audio' ? ordinal : undefined,
@@ -208,6 +257,8 @@ export function PlaybackOverlay() {
         startTime
       })
       if (!response) return
+      streamStartOffsetRef.current = startTime
+      activeSelectionRef.current = response.selection
       // A new transcode session means a new stream URL — the <video> src
       // effect below picks this up and reloads from `startTime`.
       setResult((prev) => (prev ? { ...prev, ...response.selection, url: response.url } : prev))
@@ -275,8 +326,19 @@ export function PlaybackOverlay() {
           onClick={togglePlay}
           onPlay={() => setPlaying(true)}
           onPause={() => setPlaying(false)}
-          onTimeUpdate={(e) => setCurrentTime(e.currentTarget.currentTime)}
-          onLoadedMetadata={(e) => setDuration(e.currentTarget.duration)}
+          onTimeUpdate={(e) =>
+            setCurrentTime(streamStartOffsetRef.current + e.currentTarget.currentTime)
+          }
+          onLoadedMetadata={(e) => {
+            // Compatibility mode's live stream reports duration: Infinity
+            // (see streamStartOffsetRef's comment) — prefer the real total
+            // ffprobe found, falling back to the element's own value for
+            // direct/proxied playback where it's already accurate.
+            const probed = tracks?.durationSeconds
+            setDuration(
+              probed && Number.isFinite(probed) ? probed : e.currentTarget.duration
+            )
+          }}
           onEnded={handleEnded}
           onVolumeChange={(e) => setVolume(e.currentTarget.volume)}
         >

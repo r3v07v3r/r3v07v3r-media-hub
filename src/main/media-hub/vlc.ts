@@ -69,7 +69,23 @@ export function buildVlcArguments(
     throw new Error('Invalid VLC compatibility stream token.')
   }
 
-  const args = ['-I', 'dummy', '--no-one-instance', '--no-video-title-show']
+  // --avcodec-hw=none: verified live (VLC's own --verbose=2 log) that this
+  // machine's GPU-accelerated decode (d3d11va/NVDEC) hands the vpx VP8
+  // encoder frames whose PTS values aren't monotonically increasing ("pts
+  // is smaller than initial pts"), which the encoder rejects — in the
+  // worst case this wedges the whole transcode permanently (the muxer
+  // waits forever for a frame that will never come, so the HTTP output
+  // never delivers anything past its initial container header) and
+  // otherwise drops frames throughout ("late buffer for mux input"),
+  // which is what surfaces as playback stutter. Forcing software decode
+  // removed the PTS-ordering mismatch entirely in the same repro.
+  const args = [
+    '-I',
+    'dummy',
+    '--no-one-instance',
+    '--no-video-title-show',
+    '--avcodec-hw=none'
+  ]
   const audio = cleanSelection(selection.audio)
   const subtitle = cleanSelection(selection.subtitle)
   const startTime = Math.max(0, Number(selection.startTime) || 0)
@@ -104,6 +120,7 @@ export interface FfprobeStream {
 
 export interface FfprobePayload {
   streams?: FfprobeStream[]
+  format?: { duration?: unknown }
 }
 
 function mediaLabel(
@@ -129,13 +146,20 @@ function mediaLabel(
 }
 
 export function parseMediaTracks(payload: FfprobePayload = {}): MediaTracks {
-  const result: { video: MediaTrack[]; audio: MediaTrack[]; subtitle: MediaTrack[]; probed: true } =
-    {
-      video: [],
-      audio: [],
-      subtitle: [],
-      probed: true
-    }
+  const result: {
+    video: MediaTrack[]
+    audio: MediaTrack[]
+    subtitle: MediaTrack[]
+    probed: true
+    durationSeconds?: number
+  } = {
+    video: [],
+    audio: [],
+    subtitle: [],
+    probed: true
+  }
+  const duration = Number(payload.format?.duration)
+  if (Number.isFinite(duration) && duration > 0) result.durationSeconds = duration
   for (const stream of payload.streams || []) {
     const type = stream.codec_type
     if (type !== 'video' && type !== 'audio' && type !== 'subtitle') continue
@@ -320,7 +344,7 @@ export function probeMedia(
         '-v',
         'error',
         '-show_entries',
-        'stream=index,codec_type,codec_name,width,height,channels:stream_tags=language,title:stream_disposition=default',
+        'format=duration:stream=index,codec_type,codec_name,width,height,channels:stream_tags=language,title:stream_disposition=default',
         '-of',
         'json',
         remoteUrl
