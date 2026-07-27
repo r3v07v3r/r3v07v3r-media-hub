@@ -426,7 +426,22 @@ export function createFfmpegTranscoder({
       server = null
       await new Promise<void>((resolve) => closing.close(() => resolve()))
     }
-    if (child && !child.killed) child.kill()
+    if (child && !child.killed) {
+      const dying = child
+      // Sending the kill signal doesn't mean the process (or its network
+      // connection to the remote source) has actually torn down yet —
+      // reported live: seeking killed the old ffmpeg and spawned the new
+      // one before the old one's connection to the source had actually
+      // closed, and the new connection was rejected outright (many
+      // streaming/debrid sources, TorBox included, cap concurrent
+      // connections per stream link). Waiting for the real 'exit' event
+      // — not just issuing kill() — closes most of that race; the 3s
+      // timeout is a backstop in case the process ever ignores the
+      // signal outright.
+      const exited = new Promise<void>((resolve) => dying.once('exit', () => resolve()))
+      dying.kill()
+      await Promise.race([exited, new Promise<void>((resolve) => setTimeout(resolve, 3000))])
+    }
     child = null
   }
 
@@ -536,7 +551,17 @@ export function createFfmpegTranscoder({
         }
       })
       req.on('close', () => {
-        if (clientRes === res) clientRes = null
+        if (clientRes !== res) return
+        clientRes = null
+        // If stdout was paused waiting for *this* response to drain, no
+        // 'drain' event is ever coming now that it's gone — without this,
+        // stdout would stay paused forever (no more 'data' events at all),
+        // permanently stalling the session even though nothing is
+        // actually broken downstream.
+        if (stdoutPaused) {
+          stdoutPaused = false
+          spawned.stdout?.resume()
+        }
       })
     })
     const activeServer = server
