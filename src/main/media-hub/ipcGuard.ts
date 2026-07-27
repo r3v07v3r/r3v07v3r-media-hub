@@ -23,7 +23,18 @@ function trustedRendererOrigin(): string {
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
     return process.env['ELECTRON_RENDERER_URL']
   }
-  return `${APP_SCHEME}:///index.html`
+  // index.ts requests loadURL(`${APP_SCHEME}:///index.html`) — three
+  // slashes, empty host — but Chromium's URL parser for a custom
+  // `standard: true` scheme (registerAppSchemeAsPrivileged in
+  // appProtocol.ts) normalizes an empty-authority load into a real host:
+  // the actual, live sender-frame URL is `app://index.html/` (host
+  // "index.html", path "/"), NOT `app:///index.html` (empty host, path
+  // "/index.html") — confirmed via a live remote-debugging probe against
+  // a packaged build (Runtime.evaluate('location.href') while invoking
+  // the real torbox:connect channel). Comparing against the empty-host
+  // form meant every IPC call was rejected regardless of the hash fix
+  // below — the host itself never matched.
+  return `${APP_SCHEME}://index.html/`
 }
 
 type Listener<TArgs, TResult> = (

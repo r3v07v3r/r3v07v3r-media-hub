@@ -68,7 +68,17 @@ function createWindow(): void {
     const isOwnOrigin =
       is.dev && process.env['ELECTRON_RENDERER_URL']
         ? url.startsWith(process.env['ELECTRON_RENDERER_URL'])
-        : url.startsWith(`${APP_SCHEME}:///`)
+        : // Chromium normalizes this custom standard scheme's empty-authority
+          // loadURL(`${APP_SCHEME}:///index.html`) into a real host at
+          // runtime — the actual URL is `app://index.html/...` (two
+          // slashes), not `app:///...` (three, empty host). Confirmed live
+          // via a remote-debugging probe (Runtime.evaluate('location.href')
+          // against a packaged build — see ipcGuard.ts's
+          // trustedRendererOrigin() for the same fix and fuller context).
+          // The three-slash prefix here never matched, so this guard was
+          // silently blocking every same-origin navigation it was meant to
+          // allow, not just rejecting external ones.
+          url.startsWith(`${APP_SCHEME}://`)
     if (!isOwnOrigin) event.preventDefault()
   })
 
