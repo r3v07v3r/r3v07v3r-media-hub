@@ -2,7 +2,19 @@
   grid-area: hero;
   position: relative;
   min-width: 0;
-  min-height: 320px;
+  /* Fixed, not min-height: each slide's description is a different
+     length (see FeaturedHero.tsx's ROTATE_MS rotation), so a
+     content-driven height grew/shrank the hero on every rotation and
+     shoved ContinueWatchingPanel/the rails below it up and down along
+     with it. A fixed height plus the description's own line-clamp below
+     means every slide renders at exactly this size regardless of how
+     much text it has — content below never moves. 520px matches
+     HomeDashboard/CategoryPage's own grid row floor (`minmax(520px,
+     1fr)`) exactly, rather than picking an arbitrary smaller value that
+     would leave dead space in that row (grid items stretch to their
+     row's height by default; an explicit height here overrides that, so
+     it needs to match the row itself, not just "look about right"). */
+  height: 520px;
   border-radius: var(--radius-large);
   overflow: hidden;
   display: flex;
@@ -241,8 +253,16 @@
   font-size: 14px;
   line-height: 1.55;
   color: var(--text-secondary);
-  white-space: pre-line;
   max-width: 420px;
+  /* Clamped rather than left to wrap freely — now that .hero has a fixed
+     height (see that rule's comment), an unusually long synopsis needs
+     to be truncated instead of overflowing the box. white-space:pre-line
+     dropped since -webkit-line-clamp needs normal wrapping to count
+     lines correctly; synopses don't rely on preserved line breaks. */
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
 }
 
 .metaRow {

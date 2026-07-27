@@ -1,31 +1,36 @@
 /* Movies/Series/Anime category page shell — deliberately reuses
    HomeDashboard.module.css's own grid-area names ("assistant"/"hero"/
-   "status"/"mood") so CompactAIAssistant/FeaturedHero/
-   ContinueWatchingPanel/PerformanceWidget/GenreBlobRow's own hardcoded
+   "status"/"picks") so CompactAIAssistant/FeaturedHero/
+   ContinueWatchingPanel/RecommendationCarousel's own hardcoded
    `grid-area` rules place them identically to Home, with two new rows of
-   this page's own: "filterbar" and "content" (rails or the filtered/
-   search results grid — see CategoryPage.tsx). Column widths and the hero
+   this page's own: "filterbar" and "content" (one continuous filtered
+   grid — see CategoryPage.tsx/MediaGrid.tsx). Column widths and the hero
    row's height floor are copied verbatim from HomeDashboard.module.css so
    the hero reads as the same size/shape across every page — desktop
    (1920x1080) first, per the integration spec; narrower widths get the
-   same reflow treatment Home already has, nothing further. */
+   same reflow treatment Home already has, nothing further.
+
+   The genre-pill "mood" row (GenreBlobRow) and its dedicated bottom row
+   are gone — CategoryFilterBar's own genre <select> already covers genre
+   filtering, so that row was a second, redundant control for the same
+   thing rather than adding anything the filter bar didn't. */
 
 .page {
   /* Unlike HomeDashboard's .dashboard, this is allowed to grow taller
-     than the viewport — a filter bar plus two or three stacked rails plus
-     the genre row is naturally more vertical content than Home's single
-     "AI Picks" rail, so this page scrolls inside AppShell's already-
-     scrollable .main (see AppShell.module.css) rather than fighting for
-     a second nested scroll container. */
+     than the viewport — a filter bar plus the recommendations row plus a
+     long results grid is naturally more vertical content than Home's
+     single "AI Picks" rail, so this page scrolls inside AppShell's
+     already-scrollable .main (see AppShell.module.css) rather than
+     fighting for a second nested scroll container. */
   min-height: 100%;
   display: grid;
   grid-template-columns: 260px minmax(0, 1fr) 340px;
-  grid-template-rows: minmax(520px, 1fr) auto auto auto;
+  grid-template-rows: minmax(520px, 1fr) minmax(280px, auto) auto auto;
   grid-template-areas:
     'assistant hero hero'
+    'picks picks picks'
     'filterbar filterbar filterbar'
-    'content content status'
-    'mood mood mood';
+    'content content status';
   gap: 12px;
   padding: 10px 26px 16px calc(26px + var(--nav-rail-width, 285px) * 0.8);
 }
@@ -64,12 +69,6 @@
 .contentArea {
   grid-area: content;
   min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 22px;
-}
-
-.rails {
   display: flex;
   flex-direction: column;
   gap: 22px;
@@ -131,10 +130,10 @@
     grid-template-areas:
       'assistant'
       'hero'
+      'picks'
       'filterbar'
       'content'
-      'status'
-      'mood';
+      'status';
     overflow-y: auto;
   }
 }

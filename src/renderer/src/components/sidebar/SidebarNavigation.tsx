@@ -58,7 +58,9 @@ export function SidebarNavigation() {
     // Third refinement pass: expanded rail 220px -> 285px (see .rail in
     // SidebarNavigation.module.css) — kept in sync here since this is
     // the value MoodBrowser reads to know how far it can bleed left.
-    const width = isMobile ? 0 : collapsed ? 84 : 285
+    // Collapsed 84 -> 90: matches .rail.collapsed's own width bump (see
+    // that rule's comment — the icon orb didn't actually fit in 84px).
+    const width = isMobile ? 0 : collapsed ? 90 : 285
     document.documentElement.style.setProperty('--nav-rail-width', `${width}px`)
   }, [collapsed, isMobile])
 

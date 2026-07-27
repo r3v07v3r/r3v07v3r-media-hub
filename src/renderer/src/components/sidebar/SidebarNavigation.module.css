@@ -36,7 +36,28 @@
   overflow: visible;
 }
 .rail.collapsed {
-  width: 84px;
+  /* Sized to actually fit the 56px icon orb (see .iconWrap) plus a little
+     breathing room — was 84px with .rail's own 22px/side padding still
+     applied (content box only 40px), so the 56px icon was *already*
+     wider than the space nominally reserved for it before the item's own
+     16px/side padding on top of that even entered the picture: the orb
+     was overflowing this rail's own box, not sized to it. 90px with the
+     tighter padding below gives a 56px content box — an exact fit for the
+     icon, with the active item's glow (see .iconHalo's -17px inset)
+     free to bloom outward beyond that, same as it already does today. */
+  width: 90px;
+  padding: 20px 17px 32px;
+}
+/* The icon is the only thing left once the label is hidden (see
+   `.collapsed .label` below) — the item's own label-oriented horizontal
+   padding/gap has nothing to space out anymore and was pushing the orb
+   past the rail's own edge. Centering a bare 56px icon in the space
+   .rail.collapsed's padding above now sets aside for it, instead of
+   inheriting `.item`'s unconditional 16px/16px. */
+.collapsed .item {
+  padding: 13px 0;
+  gap: 0;
+  justify-content: center;
 }
 
 /* ---------- Organic blob shape ---------- */
@@ -458,7 +479,16 @@
     position: relative;
   }
   .item,
-  .moreButton {
+  .moreButton,
+  /* Same reason as `.rail.collapsed` and `.collapsed .label` above:
+     `.collapsed .item` (added for the desktop icon-rail fit — see that
+     rule) is two classes (0,2,0) vs. plain `.item` here (0,1,0), so
+     without restating it explicitly this would win over the bottom bar's
+     own column layout on mobile, since `collapsed` is still true here
+     (same <1100px effect that drives the desktop rail also fires below
+     768px — only `isMobile`, a separate check, decides which JSX/layout
+     actually renders). */
+  .collapsed .item {
     flex-direction: column;
     gap: 2px;
     padding: 6px 8px;

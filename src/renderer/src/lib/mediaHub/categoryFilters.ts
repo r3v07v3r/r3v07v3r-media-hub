@@ -190,29 +190,3 @@ export function sortMediaItems(items: MediaItem[], sort: SortKey): MediaItem[] {
   return arr
 }
 
-/**
- * Splits a kind's full pool into "Trending" / "New & Popular" rails. The
- * backend has no per-item trending score or "new" flag (CatalogItem has
- * no popularity field) — `catalog.list()`'s own order already IS a
- * trending order for movies/series (Simkl's trending week+month feeds)
- * and a popularity order for anime (Kitsu's popularity ranking), so
- * "Trending" is just that natural order, uncut. "New & Popular" is
- * honestly synthesized as the same pool re-sorted by release year — newest
- * first — rather than inventing a second ranking signal the backend
- * doesn't provide.
- */
-export function trendingRail(items: MediaItem[], limit = 20): MediaItem[] {
-  return items.slice(0, limit)
-}
-
-export function newAndPopularRail(items: MediaItem[], limit = 20): MediaItem[] {
-  return [...items].sort((a, b) => (b.releaseYear ?? 0) - (a.releaseYear ?? 0)).slice(0, limit)
-}
-
-/** Anime-only third rail — "Top Rated", a straightforward rating sort (the backend gives no separate curated/recommended list distinct from the trending catalog itself). */
-export function topRatedRail(items: MediaItem[], limit = 20): MediaItem[] {
-  return [...items]
-    .filter((i) => i.communityRating != null)
-    .sort((a, b) => (b.communityRating ?? 0) - (a.communityRating ?? 0))
-    .slice(0, limit)
-}
