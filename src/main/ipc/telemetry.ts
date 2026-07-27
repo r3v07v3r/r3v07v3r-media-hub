@@ -1,85 +1,54 @@
 import { ipcMain, WebContents } from 'electron'
-import si from 'systeminformation'
+import { Worker } from 'worker_threads'
+import { join } from 'path'
 import { IPC_CHANNELS, SystemSnapshot } from '../../shared/ipc-types'
 
-const POLL_INTERVAL_MS = 1500
-
-let lastNetStats: si.Systeminformation.NetworkStatsData | null = null
-let pollTimer: ReturnType<typeof setInterval> | null = null
-const subscribers = new Set<WebContents>()
-
-async function readSnapshot(): Promise<SystemSnapshot> {
-  const [load, cpuTemp, mem, graphics, netStats] = await Promise.all([
-    si.currentLoad(),
-    si.cpuTemperature().catch(() => null as si.Systeminformation.CpuTemperatureData | null),
-    si.mem(),
-    si.graphics().catch(() => null as si.Systeminformation.GraphicsData | null),
-    si.networkStats().catch(() => [] as si.Systeminformation.NetworkStatsData[])
-  ])
-
-  const primaryGpu =
-    graphics?.controllers?.find((c) => (c.vram ?? 0) > 0) ?? graphics?.controllers?.[0]
-  const net = netStats[0] ?? lastNetStats
-  lastNetStats = netStats[0] ?? lastNetStats
-
-  return {
-    cpu: {
-      loadPercent: Math.round(load.currentLoad),
-      speedGHz: load.avgLoad ? null : null,
-      cores: load.cpus?.length ?? 0,
-      temperatureC:
-        cpuTemp && typeof cpuTemp.main === 'number' && !Number.isNaN(cpuTemp.main)
-          ? Math.round(cpuTemp.main)
-          : null
-    },
-    gpu: primaryGpu
-      ? {
-          loadPercent:
-            typeof primaryGpu.utilizationGpu === 'number' ? primaryGpu.utilizationGpu : null,
-          vramUsedMB: typeof primaryGpu.memoryUsed === 'number' ? primaryGpu.memoryUsed : null,
-          vramTotalMB: typeof primaryGpu.vram === 'number' ? primaryGpu.vram : null,
-          model: primaryGpu.model ?? null,
-          temperatureC:
-            typeof primaryGpu.temperatureGpu === 'number' ? primaryGpu.temperatureGpu : null
-        }
-      : null,
-    memory: {
-      usedGB: Math.round((mem.active / 1024 ** 3) * 10) / 10,
-      totalGB: Math.round((mem.total / 1024 ** 3) * 10) / 10,
-      usedPercent: Math.round((mem.active / mem.total) * 100)
-    },
-    network: {
-      downKbps: net ? Math.round((net.rx_sec ?? 0) / 128) : 0,
-      upKbps: net ? Math.round((net.tx_sec ?? 0) / 128) : 0,
-      interface: net?.iface ?? null
-    },
-    timestamp: Date.now()
-  }
+const EMPTY_SNAPSHOT: SystemSnapshot = {
+  cpu: { loadPercent: 0, speedGHz: null, cores: 0, temperatureC: null },
+  gpu: null,
+  memory: { usedGB: 0, totalGB: 0, usedPercent: 0 },
+  network: { downKbps: 0, upKbps: 0, interface: null },
+  timestamp: Date.now()
 }
 
-function startPolling(): void {
-  if (pollTimer) return
-  pollTimer = setInterval(async () => {
-    if (subscribers.size === 0) return
-    try {
-      const snapshot = await readSnapshot()
-      for (const wc of subscribers) {
-        if (!wc.isDestroyed()) wc.send(IPC_CHANNELS.systemSnapshot, snapshot)
-      }
-    } catch {
-      // A single failed poll shouldn't kill the interval — systeminformation
-      // can throw transiently on some platforms/sandboxes (missing sensors,
-      // permission-gated /sys reads, etc).
+let worker: Worker | null = null
+let latestSnapshot: SystemSnapshot = EMPTY_SNAPSHOT
+const subscribers = new Set<WebContents>()
+
+// See telemetryWorker.ts's own header comment for why this collection runs
+// off-thread: the systeminformation calls it makes measured at 700ms-1s+ of
+// genuine main-thread blocking each poll on this class of hardware, which
+// read as the whole app freezing every ~1.5s.
+function ensureWorker(): Worker {
+  if (worker) return worker
+  worker = new Worker(join(__dirname, 'telemetryWorker.js'))
+  worker.on('message', (message: { type: 'snapshot'; snapshot: SystemSnapshot } | { type: 'error'; message: string }) => {
+    if (message.type !== 'snapshot') return
+    latestSnapshot = message.snapshot
+    for (const wc of subscribers) {
+      if (!wc.isDestroyed()) wc.send(IPC_CHANNELS.systemSnapshot, message.snapshot)
     }
-  }, POLL_INTERVAL_MS)
+  })
+  // A crashed worker just means telemetry goes stale (latestSnapshot stops
+  // updating) rather than taking the app down — the gauges freeze at their
+  // last value instead of erroring, matching how a single failed
+  // si.currentLoad() etc. call used to be swallowed in the old inline loop.
+  worker.on('error', () => {
+    worker = null
+  })
+  worker.postMessage('start')
+  return worker
 }
 
 export function registerTelemetryIpc(): void {
-  ipcMain.handle(IPC_CHANNELS.systemSnapshot, async () => readSnapshot())
+  ipcMain.handle(IPC_CHANNELS.systemSnapshot, async () => {
+    ensureWorker()
+    return latestSnapshot
+  })
 
   ipcMain.on('system:subscribe', (event) => {
     subscribers.add(event.sender)
-    startPolling()
+    ensureWorker()
     event.sender.once('destroyed', () => subscribers.delete(event.sender))
   })
   ipcMain.on('system:unsubscribe', (event) => {

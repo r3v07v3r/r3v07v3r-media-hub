@@ -10,7 +10,20 @@
      was missing that term entirely (see HomeDashboard.module.css /
      CategoryPage.module.css for the same pattern already in place). */
   padding: 28px 32px 40px calc(32px + var(--nav-rail-width, 285px) * 0.8);
-  max-width: 640px;
+  max-width: 980px;
+  /* 10 independent <section> cards (Performance, Network, Media Services,
+     TorBox, TMDB, Simkl, MAL, OpenSubtitles, Watch Party, Profiles — see
+     SettingsPage.tsx / MediaServicesSection.tsx / MediaHubSettingsSections.tsx)
+     used to stack in one 640px-wide column, reading as an excessively long
+     scroll. They're all plain DOM siblings under this element already, so
+     CSS multi-column reflows them into two balanced columns with no
+     component changes. column-width (not column-count) is a fluid target,
+     not a hard split — the browser only makes two columns once there's
+     genuinely room for both at >=440px, collapsing to one below that
+     (narrower windows, or the rail expanded eating into available width)
+     instead of squeezing two cramped columns. */
+  column-width: 440px;
+  column-gap: 24px;
 }
 
 .heading {
@@ -21,12 +34,19 @@
   font-size: 24px;
   color: var(--text-primary);
   margin-bottom: 20px;
+  /* Spans full width above the columns instead of being pulled into the
+     column flow as if it were just another section. */
+  column-span: all;
 }
 
 .section {
   border-radius: var(--radius-large);
   padding: 18px 20px;
   margin-bottom: 16px;
+  /* Keeps each card intact within one column instead of splitting its
+     content across a column break. */
+  break-inside: avoid;
+  -webkit-column-break-inside: avoid;
 }
 
 .sectionTitle {

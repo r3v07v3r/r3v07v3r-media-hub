@@ -9,7 +9,7 @@ interface ComingSoonSectionProps {
 
 /**
  * Shared placeholder for the nav routes the spec names (Movies, TV Shows,
- * Live TV, Sports, Music, My Stuff, Downloads) but doesn't design in
+ * Live TV, Music, My Stuff, Downloads) but doesn't design in
  * detail — the spec's full attention is on the Home dashboard. This keeps
  * every SidebarNavigation link landing on a real, on-brand page instead
  * of a 404 while those sections await their own design pass.

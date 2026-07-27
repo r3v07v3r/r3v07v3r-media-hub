@@ -6,7 +6,6 @@ import MoviesPage from '@renderer/routes/MoviesPage'
 import SeriesPage from '@renderer/routes/SeriesPage'
 import AnimePage from '@renderer/routes/AnimePage'
 import LiveTvPage from '@renderer/routes/LiveTvPage'
-import SportsPage from '@renderer/routes/SportsPage'
 import MusicPage from '@renderer/routes/MusicPage'
 import MyStuffPage from '@renderer/routes/MyStuffPage'
 import DownloadsPage from '@renderer/routes/DownloadsPage'
@@ -37,7 +36,6 @@ export default function App() {
                 pattern (react-router's own <Navigate>, not a new mechanism). */}
             <Route path="/tv-shows" element={<Navigate to="/series" replace />} />
             <Route path="/live-tv" element={<LiveTvPage />} />
-            <Route path="/sports" element={<SportsPage />} />
             <Route path="/music" element={<MusicPage />} />
             <Route path="/my-stuff" element={<MyStuffPage />} />
             <Route path="/downloads" element={<DownloadsPage />} />

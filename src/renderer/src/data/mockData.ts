@@ -891,7 +891,6 @@ export const NAV_ITEMS: NavItem[] = [
   { id: 'tv', label: 'Series', icon: 'tv', href: '/series' },
   { id: 'anime', label: 'Anime', icon: 'anime', href: '/anime' },
   { id: 'live', label: 'Live TV', icon: 'live', href: '/live-tv' },
-  { id: 'sports', label: 'Sports', icon: 'sports', href: '/sports' },
   { id: 'music', label: 'Music', icon: 'music', href: '/music' },
   { id: 'mystuff', label: 'My Stuff', icon: 'mystuff', href: '/my-stuff' },
   { id: 'downloads', label: 'Downloads', icon: 'downloads', href: '/downloads' },

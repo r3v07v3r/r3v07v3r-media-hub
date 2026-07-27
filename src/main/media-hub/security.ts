@@ -77,11 +77,21 @@ export function isValidCatalogKind(value: unknown): value is MediaKind {
 
 /**
  * Confirms an IPC message's claimed sender URL matches the expected origin
- * exactly (normalized via URL#href), used to reject spoofed senders.
+ * (scheme/host/path/search), used to reject spoofed senders. Hash fragments
+ * are stripped from both sides before comparing: the renderer uses
+ * HashRouter (see App.tsx), so the sender's real, trusted document URL
+ * legitimately gains a `#/route` suffix on every client-side navigation —
+ * comparing full `href` (which includes the hash) would reject every IPC
+ * call made from anywhere but the exact initial route, which is not a
+ * spoofing signal, just normal in-app navigation.
  */
 export function isTrustedIpcSender(value: unknown, expected: unknown): boolean {
   try {
-    return new URL(String(value)).href === new URL(String(expected)).href
+    const actual = new URL(String(value))
+    const trusted = new URL(String(expected))
+    actual.hash = ''
+    trusted.hash = ''
+    return actual.href === trusted.href
   } catch {
     return false
   }

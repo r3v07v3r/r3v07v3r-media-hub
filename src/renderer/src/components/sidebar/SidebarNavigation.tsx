@@ -5,9 +5,9 @@ import { Icon } from '@renderer/components/icons/Icon'
 import styles from './SidebarNavigation.module.css'
 
 // Mobile's fixed bottom nav has room for 5 primary destinations + a
-// "More" trigger (spec section 8) — not all 9 NAV_ITEMS. Home/Movies/TV
-// Shows/Live TV/Music are the everyday destinations; Sports, My Stuff,
-// Downloads, and Settings move into the More sheet.
+// "More" trigger (spec section 8) — not all 8 NAV_ITEMS. Home/Movies/TV
+// Shows/Live TV/Music are the everyday destinations; My Stuff, Downloads,
+// and Settings move into the More sheet.
 const MOBILE_PRIMARY_IDS = ['home', 'movies', 'tv', 'live', 'music']
 
 export function SidebarNavigation() {
