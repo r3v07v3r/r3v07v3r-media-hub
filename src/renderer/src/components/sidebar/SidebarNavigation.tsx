@@ -5,10 +5,11 @@ import { Icon } from '@renderer/components/icons/Icon'
 import styles from './SidebarNavigation.module.css'
 
 // Mobile's fixed bottom nav has room for 5 primary destinations + a
-// "More" trigger (spec section 8) — not all 8 NAV_ITEMS. Home/Movies/TV
-// Shows/Live TV/Music are the everyday destinations; My Stuff, Downloads,
-// and Settings move into the More sheet.
-const MOBILE_PRIMARY_IDS = ['home', 'movies', 'tv', 'live', 'music']
+// "More" trigger (spec section 8) — not all 7 NAV_ITEMS. Home/Movies/
+// Series/Anime are the everyday content-browsing destinations; My Stuff
+// rounds out the primary row, and Downloads/Settings move into the More
+// sheet.
+const MOBILE_PRIMARY_IDS = ['home', 'movies', 'tv', 'anime', 'mystuff']
 
 export function SidebarNavigation() {
   const pathname = useLocation().pathname
@@ -103,19 +104,22 @@ export function SidebarNavigation() {
       {/* Organic panel shape — reference target: a real SVG blob with a
           convex/concave right boundary (bulging out to ~230px around
           Home, drawing back in between items), not a clipped rectangle
-          with a decorative line on top. viewBox 0-260 x / 0-1000 y with
+          with a decorative line on top. viewBox 0-245 x / 0-1000 y with
           preserveAspectRatio="none" lets the same normalized wave map
-          onto the rail's actual full-height pixel box. Three passes over
-          the identical boundary curve: a filled region (the panel body
-          itself — x=0/top/bottom are the screen's own straight edges,
-          only the right side is organic) sitting behind everything, a
-          dim static stroke tracing just that wavy boundary, and a bright
-          short-dash stroke animating along it — "mostly a dim edge with
-          isolated moving cyan energy highlights," not a uniform glowing
-          border. */}
+          onto the rail's actual full-height pixel box — narrowed from the
+          original 260 (a ~6% proportional zoom, not a path edit) so every
+          point along the curve sits further right in real pixels, giving
+          the item column more breathing room where the wave dips inward
+          without reshaping it. Three passes over the identical boundary
+          curve: a filled region (the panel body itself — x=0/top/bottom
+          are the screen's own straight edges, only the right side is
+          organic) sitting behind everything, a dim static stroke tracing
+          just that wavy boundary, and a bright short-dash stroke
+          animating along it — "mostly a dim edge with isolated moving
+          cyan energy highlights," not a uniform glowing border. */}
       <svg
         className={styles.railShape}
-        viewBox="0 0 260 1000"
+        viewBox="0 0 245 1000"
         preserveAspectRatio="none"
         aria-hidden="true"
       >

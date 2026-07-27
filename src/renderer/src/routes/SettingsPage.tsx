@@ -55,71 +55,73 @@ export default function SettingsPage() {
     <div className={styles.wrap}>
       <h1 className={styles.heading}>Settings</h1>
 
-      <section className={`${styles.section} glass-panel`} aria-labelledby="settings-perf">
-        <h2 id="settings-perf" className={styles.sectionTitle}>
-          Performance &amp; Display
-        </h2>
-        <ToggleRow
-          icon="cpu"
-          title="System performance panel"
-          description="Show live CPU, GPU, RAM, and network gauges on the Home dashboard."
-          checked={performancePanelVisible}
-          onChange={setPerformancePanelVisible}
-        />
-      </section>
+      <div className={styles.columns}>
+        <section className={`${styles.section} glass-panel`} aria-labelledby="settings-perf">
+          <h2 id="settings-perf" className={styles.sectionTitle}>
+            Performance &amp; Display
+          </h2>
+          <ToggleRow
+            icon="cpu"
+            title="System performance panel"
+            description="Show live CPU, GPU, RAM, and network gauges on the Home dashboard."
+            checked={performancePanelVisible}
+            onChange={setPerformancePanelVisible}
+          />
+        </section>
 
-      <section className={`${styles.section} glass-panel`} aria-labelledby="settings-network">
-        <h2 id="settings-network" className={styles.sectionTitle}>
-          Network
-        </h2>
-        <ToggleRow
-          icon={isOffline ? 'wifi-off' : 'wifi'}
-          title="Simulate offline mode"
-          description="Preview how R3 behaves without a network connection."
-          checked={isOffline}
-          onChange={setIsOffline}
-        />
-      </section>
+        <section className={`${styles.section} glass-panel`} aria-labelledby="settings-network">
+          <h2 id="settings-network" className={styles.sectionTitle}>
+            Network
+          </h2>
+          <ToggleRow
+            icon={isOffline ? 'wifi-off' : 'wifi'}
+            title="Simulate offline mode"
+            description="Preview how R3 behaves without a network connection."
+            checked={isOffline}
+            onChange={setIsOffline}
+          />
+        </section>
 
-      <MediaServicesSection />
+        <MediaServicesSection />
 
-      <MediaHubSettingsSections />
+        <MediaHubSettingsSections />
 
-      <section className={`${styles.section} glass-panel`} aria-labelledby="settings-profiles">
-        <h2 id="settings-profiles" className={styles.sectionTitle}>
-          Profiles
-        </h2>
-        <div className={styles.profileGrid}>
-          {profiles.map((p) => {
-            const active = p.id === activeProfileId
-            return (
-              <button
-                key={p.id}
-                type="button"
-                className={`${styles.profileCard} ${active ? styles.profileCardActive : ''}`}
-                onClick={() => setActiveProfileId(p.id)}
-                aria-pressed={active}
-              >
-                <span
-                  className={styles.profileAvatar}
-                  style={{
-                    background: `linear-gradient(135deg, ${p.avatarTint[0]}, ${p.avatarTint[1]})`
-                  }}
+        <section className={`${styles.section} glass-panel`} aria-labelledby="settings-profiles">
+          <h2 id="settings-profiles" className={styles.sectionTitle}>
+            Profiles
+          </h2>
+          <div className={styles.profileGrid}>
+            {profiles.map((p) => {
+              const active = p.id === activeProfileId
+              return (
+                <button
+                  key={p.id}
+                  type="button"
+                  className={`${styles.profileCard} ${active ? styles.profileCardActive : ''}`}
+                  onClick={() => setActiveProfileId(p.id)}
+                  aria-pressed={active}
                 >
-                  {p.avatarInitial}
-                </span>
-                <span className={styles.profileName}>{p.name}</span>
-                {p.isKid && <span className={styles.profileBadge}>Kids</span>}
-                {active && (
-                  <span className={styles.profileCheck} aria-hidden="true">
-                    <Icon name="check" size={12} />
+                  <span
+                    className={styles.profileAvatar}
+                    style={{
+                      background: `linear-gradient(135deg, ${p.avatarTint[0]}, ${p.avatarTint[1]})`
+                    }}
+                  >
+                    {p.avatarInitial}
                   </span>
-                )}
-              </button>
-            )
-          })}
-        </div>
-      </section>
+                  <span className={styles.profileName}>{p.name}</span>
+                  {p.isKid && <span className={styles.profileBadge}>Kids</span>}
+                  {active && (
+                    <span className={styles.profileCheck} aria-hidden="true">
+                      <Icon name="check" size={12} />
+                    </span>
+                  )}
+                </button>
+              )
+            })}
+          </div>
+        </section>
+      </div>
     </div>
   )
 }

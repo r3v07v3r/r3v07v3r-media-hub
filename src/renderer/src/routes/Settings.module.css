@@ -11,19 +11,6 @@
      CategoryPage.module.css for the same pattern already in place). */
   padding: 28px 32px 40px calc(32px + var(--nav-rail-width, 285px) * 0.8);
   max-width: 980px;
-  /* 10 independent <section> cards (Performance, Network, Media Services,
-     TorBox, TMDB, Simkl, MAL, OpenSubtitles, Watch Party, Profiles — see
-     SettingsPage.tsx / MediaServicesSection.tsx / MediaHubSettingsSections.tsx)
-     used to stack in one 640px-wide column, reading as an excessively long
-     scroll. They're all plain DOM siblings under this element already, so
-     CSS multi-column reflows them into two balanced columns with no
-     component changes. column-width (not column-count) is a fluid target,
-     not a hard split — the browser only makes two columns once there's
-     genuinely room for both at >=440px, collapsing to one below that
-     (narrower windows, or the rail expanded eating into available width)
-     instead of squeezing two cramped columns. */
-  column-width: 440px;
-  column-gap: 24px;
 }
 
 .heading {
@@ -34,9 +21,33 @@
   font-size: 24px;
   color: var(--text-primary);
   margin-bottom: 20px;
-  /* Spans full width above the columns instead of being pulled into the
-     column flow as if it were just another section. */
-  column-span: all;
+}
+
+/* 10 independent <section> cards (Performance, Network, Media Services,
+   TorBox, TMDB, Simkl, MAL, OpenSubtitles, Watch Party, Profiles — see
+   SettingsPage.tsx / MediaServicesSection.tsx / MediaHubSettingsSections.tsx)
+   used to stack in one 640px-wide column, reading as an excessively long
+   scroll. They're all plain DOM siblings, wrapped in this one element
+   (SettingsPage.tsx), so CSS multi-column reflows them into two balanced
+   columns with no further component changes.
+   column-* deliberately lives on THIS element, a separate child of .wrap,
+   not on .wrap itself — that was the actual bug in the first version of
+   this fix: .wrap has a definite height (height:100%) with its own
+   overflow-y:auto, and a multi-column container with a CONSTRAINED height
+   doesn't grow a column taller than that height when content overflows —
+   it starts an entirely new column further to the right instead. With 10
+   sections that's several columns wide, all but the first sitting off
+   the right edge of the window with no way to reach them (.wrap only
+   scrolls vertically) — which is exactly what "Settings is cut off, can't
+   see everything" was. This element has no explicit height of its own
+   (sized to its content), so there's no ceiling to overflow past in the
+   first place: the browser fills exactly two columns (determined by
+   column-width against .wrap's max-width) and lets the whole block grow
+   as tall as it needs, with .wrap's independent scroll revealing the
+   rest vertically like normal. */
+.columns {
+  column-width: 440px;
+  column-gap: 24px;
 }
 
 .section {

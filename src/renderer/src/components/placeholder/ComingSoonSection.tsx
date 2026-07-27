@@ -8,11 +8,10 @@ interface ComingSoonSectionProps {
 }
 
 /**
- * Shared placeholder for the nav routes the spec names (Movies, TV Shows,
- * Live TV, Music, My Stuff, Downloads) but doesn't design in
- * detail — the spec's full attention is on the Home dashboard. This keeps
- * every SidebarNavigation link landing on a real, on-brand page instead
- * of a 404 while those sections await their own design pass.
+ * Shared empty-state placeholder, used as a conditional fallback by pages
+ * that have real functionality but nothing to show yet (Downloads when no
+ * download client is configured, My Stuff when nothing's been saved) —
+ * not a whole-page placeholder itself.
  */
 export function ComingSoonSection({ icon, title, description }: ComingSoonSectionProps) {
   return (

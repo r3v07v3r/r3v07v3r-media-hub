@@ -261,7 +261,16 @@
 }
 .item:hover {
   color: var(--text-secondary);
-  background: rgba(255, 255, 255, 0.04);
+  /* No background rectangle: .item is a plain flex row sized to the
+     rail's own rectangular padding box, but the rail's real boundary is
+     the organic wavy edge drawn behind it (see .railShapeFill in the
+     JSX) — which pulls inward at various points along its height. A
+     rectangular hover fill sat on .item's own box regardless, so at
+     every point where the wave dips in it visibly poked out past the
+     panel's edge. Relying on the existing color transition (muted ->
+     secondary) plus the icon's own halo/glow on the active item is
+     enough hover feedback without needing a box shape that can't track
+     a curved boundary. */
 }
 
 .iconWrap {
