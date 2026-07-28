@@ -489,8 +489,26 @@ export function createFfmpegTranscoder({
     // Comfortably beyond the tiny ftyp/empty-moov header (observed ~1-2KB
     // live) so readiness means a real media fragment arrived, not just the
     // container header — the same shallow-check gap that made the old
-    // VLC-based version's "any nonzero byte" check misleadingly pass.
+    // VLC-based version's "any nonzero byte" check misleadingly pass. Now
+    // just a sanity floor, not the real readiness gate — see MIN_BUFFER_MS.
     const READY_BYTES = 8192
+    // The actual fix for live-reported playback stutter: this used to be
+    // the *only* readiness gate, so the client's <video> element started
+    // pulling from this response after as little as ~8KB had arrived —
+    // for a real 1080p copy-mode stream that's a few milliseconds of
+    // buffered head start, effectively none. Verified live: with only
+    // READY_BYTES gating, `getVideoPlaybackQuality()` showed buffered.end
+    // sitting within milliseconds of currentTime throughout playback (zero
+    // cushion) with `waiting` firing repeatedly and dropped frames
+    // climbing — any brief dip in TorBox's upstream fetch throughput
+    // starved the player instantly, since there was nothing buffered
+    // ahead to absorb it. Requiring a real multi-second wall-clock head
+    // start before the client ever starts consuming this stream — the
+    // same thing a normal streaming player's initial buffering spinner
+    // does — gives that cushion room to absorb ordinary jitter instead of
+    // it turning into a visible stutter every few seconds.
+    const MIN_BUFFER_MS = 3000
+    const startedAt = Date.now()
 
     // Without this, the HTTP response never ends on its own once ffmpeg
     // finishes (a natural EOF for a short/finite source, not just a
@@ -514,7 +532,7 @@ export function createFfmpegTranscoder({
         } else {
           pendingChunks.push(chunk)
         }
-        if (!ready && totalBytes >= READY_BYTES) {
+        if (!ready && totalBytes >= READY_BYTES && Date.now() - startedAt >= MIN_BUFFER_MS) {
           ready = true
           resolve()
         }
