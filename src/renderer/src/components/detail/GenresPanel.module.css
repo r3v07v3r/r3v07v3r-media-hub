@@ -1,0 +1,38 @@
+.panel {
+  border-radius: var(--radius-medium);
+  padding: 18px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.heading {
+  margin: 0;
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 13px;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+.chipRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.chip {
+  padding: 7px 14px;
+  border-radius: var(--radius-pill);
+  font-size: 12.5px;
+  font-weight: 600;
+  color: hsl(var(--chip-hue, 200) 85% 78%);
+  background: hsl(var(--chip-hue, 200) 70% 50% / 0.14);
+  border: 1px solid hsl(var(--chip-hue, 200) 70% 60% / 0.3);
+  transition:
+    transform var(--transition-fast),
+    background var(--transition-fast);
+}
+.chip:hover,
+.chip:focus-visible {
+  transform: translateY(-1px);
+  background: hsl(var(--chip-hue, 200) 70% 50% / 0.24);
+}

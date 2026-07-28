@@ -26,6 +26,15 @@ export interface MediaGridProps {
   onRetry?: () => void
   emptyTitle?: string
   emptyMessage?: string
+  /** Seeds the initial reveal batch above BATCH — used when restoring a
+   *  browsing position (see useRestoreBrowsingOrigin) whose focused card
+   *  was further down the list than one batch would normally render, so
+   *  it's actually present in the DOM for the restore step to find and
+   *  scroll to. Only matters on this component's first mount (a plain
+   *  useState initializer, not synced on every prop change) — CategoryPage
+   *  computes it once from whatever's in the currently-pending
+   *  BrowsingOrigin, which is exactly the mount this needs to affect. */
+  initialVisibleCount?: number
 }
 
 export function MediaGrid({
@@ -34,9 +43,10 @@ export function MediaGrid({
   error = false,
   onRetry,
   emptyTitle = 'No titles match these filters',
-  emptyMessage = 'Try widening a filter or clearing them all.'
+  emptyMessage = 'Try widening a filter or clearing them all.',
+  initialVisibleCount
 }: MediaGridProps) {
-  const [visibleCount, setVisibleCount] = useState(BATCH)
+  const [visibleCount, setVisibleCount] = useState(initialVisibleCount ?? BATCH)
   // Read inside the observer callback below instead of closing over
   // `items.length` directly — the callback ref (see sentinelRef) only
   // (re)creates the observer when the sentinel <li> itself mounts or

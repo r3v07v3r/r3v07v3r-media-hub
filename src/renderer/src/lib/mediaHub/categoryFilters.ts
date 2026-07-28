@@ -49,6 +49,53 @@ export const DEFAULT_FILTER_STATE: CategoryFilterState = {
   sort: 'trending'
 }
 
+const SORT_KEYS = new Set<SortKey>([
+  'trending',
+  'title-asc',
+  'year-desc',
+  'rating-desc',
+  'runtime-asc',
+  'runtime-desc'
+])
+
+/**
+ * Reflects filter/sort state in the URL query string rather than
+ * component-local state — this is what makes "restore my filters" (the
+ * detail page's contextual back button) just "navigate to the same URL,"
+ * and what lets a genre chip elsewhere in the app link straight into a
+ * filtered category page (`/movies?genre=Sci-Fi`) without a separate
+ * cross-page state channel. See CategoryPage.tsx's use of these via
+ * react-router's useSearchParams.
+ */
+export function filterStateFromSearchParams(params: URLSearchParams): CategoryFilterState {
+  const sort = params.get('sort')
+  return {
+    genre: params.get('genre'),
+    year: params.get('year'),
+    minRating: params.has('minRating') ? Number(params.get('minRating')) || null : null,
+    runtimeBucket: params.get('runtime'),
+    seasonsBucket: params.get('seasons'),
+    episodeLengthBucket: params.get('epLength'),
+    episodesBucket: params.get('epCount'),
+    status: params.get('status'),
+    sort: sort && SORT_KEYS.has(sort as SortKey) ? (sort as SortKey) : 'trending'
+  }
+}
+
+export function filterStateToSearchParams(filters: CategoryFilterState): URLSearchParams {
+  const params = new URLSearchParams()
+  if (filters.genre) params.set('genre', filters.genre)
+  if (filters.year) params.set('year', filters.year)
+  if (filters.minRating != null) params.set('minRating', String(filters.minRating))
+  if (filters.runtimeBucket) params.set('runtime', filters.runtimeBucket)
+  if (filters.seasonsBucket) params.set('seasons', filters.seasonsBucket)
+  if (filters.episodeLengthBucket) params.set('epLength', filters.episodeLengthBucket)
+  if (filters.episodesBucket) params.set('epCount', filters.episodesBucket)
+  if (filters.status) params.set('status', filters.status)
+  if (filters.sort !== 'trending') params.set('sort', filters.sort)
+  return params
+}
+
 export interface Bucket {
   value: string
   label: string

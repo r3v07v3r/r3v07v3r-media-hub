@@ -57,6 +57,7 @@ export function ContinueWatchingPanel({ kindFilter }: ContinueWatchingPanelProps
                 <button
                   type="button"
                   className={`${styles.thumbButton} animated-edge`}
+                  data-media-id={m.id}
                   onClick={() => (isDone ? openDetail(m) : startPlayback(m))}
                   aria-label={isDone ? `Open details for ${m.title}` : `Resume ${m.title}`}
                 >

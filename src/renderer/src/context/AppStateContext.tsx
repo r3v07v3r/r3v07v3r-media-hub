@@ -1,6 +1,7 @@
 'use client'
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
+import { useLocation, useNavigate } from 'react-router-dom'
 import {
   AppNotification,
   AssistantState,
@@ -17,6 +18,25 @@ import {
 } from '@renderer/lib/mediaHub/adapters'
 import { useMediaHubBrowseCatalog, useMediaHubHomeFeed } from '@renderer/lib/mediaHub/hooks'
 import type { CategoryKind } from '@renderer/lib/mediaHub/categoryFilters'
+import {
+  captureBrowsingOrigin,
+  deriveBrowsingLabel,
+  type BrowsingOrigin
+} from '@renderer/lib/mediaHub/browsingContext'
+
+/** movie/series/anime -> the route each one's detail page lives at — the
+ *  same plural/singular forms App.tsx's own /movies, /series, /anime
+ *  category routes already use. */
+function mediaKindToDetailPath(media: MediaItem): string {
+  // Same fallback PlaybackOverlay.tsx's own `kind` derivation uses:
+  // mediaKind is real backend data (undefined for some mock items), and
+  // MediaType has no 'anime' member at all (see adapters.ts's toMediaType)
+  // so a plain mediaType check can only ever tell movie from everything
+  // else.
+  const kind = media.mediaKind ?? (media.mediaType === 'series' ? 'series' : 'movie')
+  const segment = kind === 'movie' ? 'movies' : kind
+  return `/${segment}/${media.id}`
+}
 
 interface AppStateValue {
   // Profiles
@@ -115,12 +135,19 @@ interface AppStateValue {
   performancePanelVisible: boolean
   setPerformancePanelVisible: (v: boolean) => void
 
-  // Overlays — kept centrally so only one of each can be open at a time
-  // and any component (card, hero, continue-watching row) can trigger
-  // them.
-  detailMedia: MediaItem | null
-  openDetail: (media: MediaItem) => void
-  closeDetail: () => void
+  // "Opening a title" navigates to its real detail page (/movies/:id,
+  // /series/:id, /anime/:id) rather than opening a modal over the current
+  // page — openDetail captures a BrowsingOrigin snapshot of wherever it
+  // was called from (current route+filters, scroll position, focused
+  // card, any visible rail's scroll position) before navigating, so the
+  // detail page's contextual back control can return to exactly that
+  // spot. See lib/mediaHub/browsingContext.ts and
+  // lib/mediaHub/useRestoreBrowsingOrigin.ts (the page-side half of this).
+  browsingOrigin: BrowsingOrigin | null
+  /** `originLabelOverride`: only needed when opening a title from within
+   *  another detail page — see the implementation's own comment. */
+  openDetail: (media: MediaItem, originLabelOverride?: string) => void
+  clearBrowsingOrigin: () => void
 
   playbackMedia: MediaItem | null
   startPlayback: (media: MediaItem) => void
@@ -151,6 +178,10 @@ const AppStateContext = createContext<AppStateValue | null>(null)
 let notifId = 0
 
 export function AppStateProvider({ children }: { children: React.ReactNode }) {
+  // Safe to call here: App.tsx nests <AppStateProvider> inside <HashRouter>,
+  // so this provider always renders within a Router context.
+  const location = useLocation()
+  const navigate = useNavigate()
   const [activeProfileId, setActiveProfileId] = useState(USER_PROFILES[0].id)
   const [myList, setMyList] = useState<Set<string>>(new Set())
   const [continueWatching, setContinueWatching] =
@@ -163,7 +194,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   const [assistantResponse, setAssistantResponse] = useState<string | null>(null)
   const [notifications, setNotifications] = useState<AppNotification[]>([])
   const [performancePanelVisible, setPerformancePanelVisible] = useState(true)
-  const [detailMedia, setDetailMedia] = useState<MediaItem | null>(null)
+  const [browsingOrigin, setBrowsingOrigin] = useState<BrowsingOrigin | null>(null)
   const [playbackMedia, setPlaybackMedia] = useState<MediaItem | null>(null)
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; media: MediaItem } | null>(
     null
@@ -299,11 +330,44 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     setAssistantQuery('')
   }, [])
 
-  const openDetail = useCallback((media: MediaItem) => {
-    setDetailMedia(media)
-    setContextMenu(null)
-  }, [])
-  const closeDetail = useCallback(() => setDetailMedia(null), [])
+  // Centralized here (every "open a title" call site — card, hero,
+  // continue-watching row, context menu — already just calls
+  // openDetail(media) with no extra args) rather than threading capture
+  // logic through each of them individually: this one place can read
+  // "where are we right now" (location, active category search/mood) and
+  // "what's on screen right now" (focused card, rail scroll positions,
+  // via captureBrowsingOrigin's own DOM inspection) without every caller
+  // needing to know or supply any of it.
+  //
+  // `originLabelOverride` is the one exception: when a detail page opens
+  // ANOTHER title (the Similar Content panel), the current location is
+  // itself a detail route (/movies/abc123), which deriveBrowsingLabel
+  // can't turn into a meaningful label on its own (a URL has the id, not
+  // the title) — the caller supplies just this title (e.g. "Attack on
+  // Titan") in that one case, same as the plain kind/genre/sort labels
+  // deriveBrowsingLabel itself returns — ContextBackButton is what prepends
+  // "Back to " for every label, override or not, so this must NOT include
+  // that prefix itself (it doubled up as "Back to Back to X" before this
+  // comment was written). Every other call site omits it and gets the
+  // auto-derived label, same as before.
+  const openDetail = useCallback(
+    (media: MediaItem, originLabelOverride?: string) => {
+      const route = `${location.pathname}${location.search}`
+      const label =
+        originLabelOverride ??
+        deriveBrowsingLabel({
+          pathname: location.pathname,
+          searchParams: new URLSearchParams(location.search),
+          categorySearch,
+          activeMood
+        })
+      setBrowsingOrigin(captureBrowsingOrigin(route, label))
+      setContextMenu(null)
+      navigate(mediaKindToDetailPath(media))
+    },
+    [location.pathname, location.search, categorySearch, activeMood, navigate]
+  )
+  const clearBrowsingOrigin = useCallback(() => setBrowsingOrigin(null), [])
 
   // Playback gate (spec decision: keep the dashboard visible without a
   // TorBox connection, only gate actual playback). `mediaHubSettings ===
@@ -322,7 +386,6 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         return
       }
       setPlaybackMedia(media)
-      setDetailMedia(null)
       setContextMenu(null)
     },
     [mediaHubSettings, pushNotification]
@@ -445,9 +508,9 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       dismissNotification,
       performancePanelVisible,
       setPerformancePanelVisible,
-      detailMedia,
+      browsingOrigin,
       openDetail,
-      closeDetail,
+      clearBrowsingOrigin,
       playbackMedia,
       startPlayback,
       stopPlayback,
@@ -491,9 +554,9 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       pushNotification,
       dismissNotification,
       performancePanelVisible,
-      detailMedia,
+      browsingOrigin,
       openDetail,
-      closeDetail,
+      clearBrowsingOrigin,
       playbackMedia,
       startPlayback,
       stopPlayback,

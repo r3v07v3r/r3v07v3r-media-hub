@@ -1,0 +1,181 @@
+.section {
+  border-radius: var(--radius-medium);
+  padding: 20px 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.seasonRow {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+}
+.seasonPill {
+  flex: 0 0 auto;
+  padding: 8px 18px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border-subtle);
+  background: rgba(10, 15, 25, 0.5);
+  color: var(--text-secondary);
+  font-size: 13.5px;
+  font-weight: 600;
+  transition:
+    color var(--transition-fast),
+    background var(--transition-fast),
+    border-color var(--transition-fast);
+}
+.seasonPill:hover {
+  color: var(--text-primary);
+}
+.seasonPillActive {
+  color: #fff;
+  background: linear-gradient(135deg, var(--accent-blue), var(--accent-violet));
+  border-color: transparent;
+}
+
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 10px 10px;
+  border-radius: var(--radius-small);
+  transition: background var(--transition-fast);
+}
+.row:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+.rowNext {
+  background: linear-gradient(90deg, rgba(56, 193, 255, 0.14), rgba(141, 77, 255, 0.1));
+  border: 1px solid rgba(94, 193, 255, 0.4);
+}
+
+.number {
+  flex: 0 0 auto;
+  width: 22px;
+  text-align: center;
+  font-family: var(--font-display);
+  font-size: 15px;
+  color: var(--text-muted);
+}
+.thumb {
+  flex: 0 0 auto;
+  width: 110px;
+  aspect-ratio: 16 / 9;
+  border-radius: var(--radius-small);
+  overflow: hidden;
+}
+.info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.description {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-secondary);
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 1;
+  overflow: hidden;
+}
+
+.status {
+  flex: 0 0 auto;
+  min-width: 76px;
+}
+.watchedBadge {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--accent-green);
+}
+.watchedBadge svg {
+  width: 11px;
+  height: 11px;
+}
+.nextBadge {
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: var(--accent-cyan);
+}
+
+.playRowButton,
+.watchedToggle {
+  flex: 0 0 auto;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-secondary);
+  background: rgba(255, 255, 255, 0.04);
+  transition:
+    color var(--transition-fast),
+    background var(--transition-fast);
+}
+.playRowButton:hover,
+.watchedToggle:hover {
+  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.09);
+}
+
+.empty {
+  margin: 0;
+  padding: 20px 0;
+  font-size: 13.5px;
+  color: var(--text-secondary);
+  text-align: center;
+}
+
+.skeletonSeasonRow {
+  display: flex;
+  gap: 8px;
+}
+.skeletonPill {
+  width: 96px;
+  height: 34px;
+  border-radius: var(--radius-pill);
+  background: rgba(255, 255, 255, 0.06);
+}
+.skeletonRow {
+  height: 70px;
+  border-radius: var(--radius-small);
+  background: linear-gradient(
+    100deg,
+    rgba(255, 255, 255, 0.03),
+    rgba(255, 255, 255, 0.07),
+    rgba(255, 255, 255, 0.03)
+  );
+  background-size: 200% 100%;
+  animation: episodeShimmer 1.5s ease-in-out infinite;
+}
+@keyframes episodeShimmer {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
+}

@@ -64,6 +64,7 @@ export function MoodBrowser() {
                   style={{
                     background: `linear-gradient(150deg, ${m.artTint[0]}, ${m.artTint[1]})`
                   }}
+                  data-media-id={m.id}
                   onClick={() => openDetail(m)}
                 >
                   {m.title}

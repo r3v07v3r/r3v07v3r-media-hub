@@ -1,0 +1,57 @@
+.panel {
+  border-radius: var(--radius-medium);
+  padding: 22px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.heading {
+  margin: 0;
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 16px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--text-primary);
+}
+.synopsis {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.65;
+  color: var(--text-secondary);
+}
+.expandButton {
+  color: var(--accent-cyan);
+  font-weight: 600;
+  font-size: 13px;
+  white-space: nowrap;
+}
+.expandButton:hover {
+  text-decoration: underline;
+}
+
+.factList {
+  margin: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 12px 24px;
+}
+.fact {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.fact dt {
+  font-size: 11.5px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--text-muted);
+}
+.fact dd {
+  margin: 0;
+  font-size: 14px;
+  color: var(--text-primary);
+}
+.capitalize {
+  text-transform: capitalize;
+}

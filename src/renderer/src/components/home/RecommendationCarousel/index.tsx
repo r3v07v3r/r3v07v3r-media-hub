@@ -92,6 +92,7 @@ export function RecommendationCarousel() {
           <ul
             className={`${styles.scroller} thin-scroll`}
             ref={scrollerRef}
+            data-rail-id="ai-picks"
             onKeyDown={handleKeyDown}
           >
             {loading

@@ -5,6 +5,7 @@ import { HomeDashboard } from '@renderer/components/home/HomeDashboard'
 import MoviesPage from '@renderer/routes/MoviesPage'
 import SeriesPage from '@renderer/routes/SeriesPage'
 import AnimePage from '@renderer/routes/AnimePage'
+import { MediaDetailPage } from '@renderer/routes/MediaDetailPage'
 import MyStuffPage from '@renderer/routes/MyStuffPage'
 import DownloadsPage from '@renderer/routes/DownloadsPage'
 import SettingsPage from '@renderer/routes/SettingsPage'
@@ -24,8 +25,11 @@ export default function App() {
           <Routes>
             <Route path="/" element={<HomeDashboard />} />
             <Route path="/movies" element={<MoviesPage />} />
+            <Route path="/movies/:id" element={<MediaDetailPage kind="movie" />} />
             <Route path="/series" element={<SeriesPage />} />
+            <Route path="/series/:id" element={<MediaDetailPage kind="series" />} />
             <Route path="/anime" element={<AnimePage />} />
+            <Route path="/anime/:id" element={<MediaDetailPage kind="anime" />} />
             {/* /tv-shows was this route's path before the Series category
                 page existed (NAV_ITEMS' 'tv' entry — mockData.ts — now
                 points at /series); redirected rather than removed outright

@@ -2,11 +2,13 @@ import { Link } from 'react-router-dom'
 import { useAppState } from '@renderer/context/AppStateContext'
 import { Icon } from '@renderer/components/icons/Icon'
 import { ComingSoonSection } from '@renderer/components/placeholder/ComingSoonSection'
+import { useRestoreBrowsingOrigin } from '@renderer/lib/mediaHub/useRestoreBrowsingOrigin'
 import styles from './MyStuff.module.css'
 
 export default function MyStuffPage() {
   const { myList, toggleMyList, openDetail, catalog } = useAppState()
   const items = catalog.filter((m) => myList.has(m.id))
+  useRestoreBrowsingOrigin(true)
 
   if (items.length === 0) {
     return (
@@ -28,6 +30,7 @@ export default function MyStuffPage() {
               type="button"
               className={styles.art}
               style={{ background: `linear-gradient(150deg, ${m.artTint[0]}, ${m.artTint[1]})` }}
+              data-media-id={m.id}
               onClick={() => openDetail(m)}
             >
               <span>{m.initials}</span>

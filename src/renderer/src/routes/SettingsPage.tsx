@@ -1,5 +1,7 @@
+import { useEffect, useRef } from 'react'
 import { useAppState } from '@renderer/context/AppStateContext'
 import { Icon } from '@renderer/components/icons/Icon'
+import { AboutUpdateSection } from './AboutUpdateSection'
 import { MediaServicesSection } from './MediaServicesSection'
 import { MediaHubSettingsSections } from './MediaHubSettingsSections'
 import styles from './Settings.module.css'
@@ -51,11 +53,34 @@ export default function SettingsPage() {
     setActiveProfileId
   } = useAppState()
 
+  // Sections tile left-to-right instead of stacking in one long vertical
+  // scroll (see .tileArea in Settings.module.css) — a plain vertical mouse
+  // wheel has nothing to act on there (no vertical overflow), so it has to
+  // be translated into horizontal scrolling explicitly. A native listener,
+  // not React's onWheel: React attaches wheel handlers as passive by
+  // default, and preventDefault on a passive listener is a silent no-op
+  // (plus a console warning) — this needs to actually stop the page from
+  // trying to rubber-band-scroll vertically instead.
+  const tileAreaRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const el = tileAreaRef.current
+    if (!el) return
+    function onWheel(e: WheelEvent): void {
+      if (e.deltaY === 0) return
+      e.preventDefault()
+      el!.scrollLeft += e.deltaY
+    }
+    el.addEventListener('wheel', onWheel, { passive: false })
+    return () => el.removeEventListener('wheel', onWheel)
+  }, [])
+
   return (
     <div className={styles.wrap}>
       <h1 className={styles.heading}>Settings</h1>
 
-      <div className={styles.columns}>
+      <div className={styles.tileArea} ref={tileAreaRef}>
+        <AboutUpdateSection />
+
         <section className={`${styles.section} glass-panel`} aria-labelledby="settings-perf">
           <h2 id="settings-perf" className={styles.sectionTitle}>
             Performance &amp; Display

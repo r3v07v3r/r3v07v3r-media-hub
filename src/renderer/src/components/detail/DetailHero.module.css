@@ -1,0 +1,200 @@
+.hero {
+  grid-area: hero;
+  position: relative;
+  min-width: 0;
+  height: 520px;
+  border-radius: var(--radius-large);
+  overflow: hidden;
+  display: flex;
+  align-items: flex-start;
+  padding: 40px 32px 32px;
+  isolation: isolate;
+}
+
+.artLayer {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  mask-image: linear-gradient(to right, transparent 0%, rgba(0, 0, 0, 0.68) 24%, black 55%),
+    linear-gradient(to top, transparent 0%, black 42%);
+  mask-composite: intersect;
+  -webkit-mask-image: linear-gradient(to right, transparent 0%, rgba(0, 0, 0, 0.68) 24%, black 55%),
+    linear-gradient(to top, transparent 0%, black 42%);
+  -webkit-mask-composite: source-in;
+}
+.artImageWrap {
+  width: 100%;
+  height: 100%;
+}
+.artImage {
+  filter: saturate(1.08) contrast(1.06) brightness(1.01);
+}
+.trailerFrame {
+  width: 100%;
+  height: 100%;
+  border: none;
+}
+
+.artScrimLeft {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  background: linear-gradient(90deg, rgba(4, 8, 16, 0.68) 0%, rgba(4, 8, 16, 0.3) 34%, transparent 62%);
+}
+.artScrimBottom {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  background: linear-gradient(0deg, rgba(4, 8, 16, 0.68) 0%, transparent 46%);
+}
+
+.content {
+  position: relative;
+  z-index: 4;
+  display: flex;
+  flex-direction: column;
+  gap: 11px;
+  max-width: 560px;
+}
+
+.label {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 12.5px;
+  letter-spacing: 3px;
+  text-transform: uppercase;
+  color: var(--accent-violet);
+}
+
+.title {
+  font-family: var(--font-display);
+  font-weight: 300;
+  color: var(--text-primary);
+  line-height: 1.05;
+  letter-spacing: 4px;
+  font-size: clamp(32px, 4.2vw, 58px);
+  text-transform: uppercase;
+  margin: 0;
+}
+.subtitle {
+  display: block;
+  font-weight: 600;
+  font-size: 0.5em;
+  letter-spacing: 5px;
+  color: #d7defc;
+}
+
+.tagline {
+  margin: 0;
+  font-size: 14.5px;
+  font-weight: 600;
+  color: var(--accent-cyan);
+}
+
+.description {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.55;
+  color: var(--text-secondary);
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+}
+
+.metaRow {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  font-size: 13.5px;
+  color: var(--text-secondary);
+}
+.metaRow span::after {
+  content: '·';
+  margin-left: 10px;
+  color: var(--border-subtle);
+}
+.metaRow span:last-child::after {
+  content: '';
+  margin: 0;
+}
+.statusChip {
+  padding: 2px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--border-subtle);
+  font-size: 12px;
+  text-transform: capitalize;
+  color: var(--text-primary);
+}
+
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 6px;
+}
+.playButton {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 13px 26px;
+  border-radius: var(--radius-pill);
+  background: linear-gradient(135deg, var(--accent-blue), var(--accent-violet));
+  color: #fff;
+  font-weight: 600;
+  font-size: 14.5px;
+  min-height: 44px;
+  box-shadow: 0 10px 30px -10px rgba(94, 140, 255, 0.75);
+  transition:
+    transform var(--transition-fast),
+    box-shadow var(--transition-fast);
+}
+.playButton:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 14px 36px -8px rgba(94, 140, 255, 0.9);
+}
+.playButton svg {
+  width: 16px;
+  height: 16px;
+}
+.secondaryButton {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 13px 20px;
+  border-radius: var(--radius-pill);
+  background: rgba(10, 15, 25, 0.5);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-primary);
+  font-weight: 500;
+  font-size: 14px;
+  min-height: 44px;
+  transition:
+    border-color var(--transition-fast),
+    background var(--transition-fast);
+}
+.secondaryButton:hover,
+.secondaryButton:focus-visible {
+  border-color: var(--border-active);
+  background: rgba(10, 15, 25, 0.75);
+}
+.secondaryButton svg {
+  width: 15px;
+  height: 15px;
+}
+
+@media (max-width: 1439px) {
+  .hero {
+    padding: 26px 24px;
+  }
+  .content {
+    max-width: 480px;
+  }
+}
+
+@media (max-width: 1099px) {
+  .description {
+    display: none;
+  }
+}

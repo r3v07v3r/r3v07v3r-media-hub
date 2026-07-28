@@ -15,15 +15,18 @@
 // revealed as the person scrolls, rather than splitting the same pool
 // into a few curated rails above a genre-pill row).
 
-import { useMemo, useState } from 'react'
+import { useMemo } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { useAppState } from '@renderer/context/AppStateContext'
 import { CategoryConfig } from '@renderer/lib/mediaHub/categoryConfig'
 import {
   matchesCategoryKind,
   applyCategoryFilters,
   sortMediaItems,
-  DEFAULT_FILTER_STATE
+  filterStateFromSearchParams,
+  filterStateToSearchParams
 } from '@renderer/lib/mediaHub/categoryFilters'
+import { useRestoreBrowsingOrigin } from '@renderer/lib/mediaHub/useRestoreBrowsingOrigin'
 import { CompactAIAssistant } from '@renderer/components/home/CompactAIAssistant'
 import { FeaturedHero } from '@renderer/components/home/FeaturedHero/FeaturedHero'
 import { ContinueWatchingPanel } from '@renderer/components/home/ContinueWatchingPanel'
@@ -43,9 +46,28 @@ export function CategoryPage({ config }: { config: CategoryConfig }) {
     refreshCatalog,
     categorySearch,
     clearCategorySearch,
-    runCategorySearch
+    runCategorySearch,
+    browsingOrigin
   } = useAppState()
-  const [filters, setFilters] = useState(DEFAULT_FILTER_STATE)
+  // Filters live in the URL, not component state — this is what makes
+  // "restore my filters" (the detail page's contextual back button) just
+  // "navigate to the same URL," and what lets a genre chip on the detail
+  // page link straight into a filtered category page
+  // (/movies?genre=Sci-Fi) with no separate cross-page state channel. See
+  // categoryFilters.ts's filterStateFromSearchParams/ToSearchParams.
+  const [searchParams, setSearchParams] = useSearchParams()
+  // Keyed on the string form, not `searchParams` itself, in a variable
+  // first — URLSearchParams doesn't have stable reference equality across
+  // renders the way a plain string does, and the lint rule wants a plain
+  // expression in the dependency array rather than a method call there.
+  const searchParamsString = searchParams.toString()
+  const filters = useMemo(
+    () => filterStateFromSearchParams(searchParams),
+    [searchParamsString] // eslint-disable-line react-hooks/exhaustive-deps -- see comment above
+  )
+  function setFilters(next: typeof filters): void {
+    setSearchParams(filterStateToSearchParams(next), { replace: true })
+  }
 
   const kindItems = useMemo(
     () => catalog.filter((item) => matchesCategoryKind(item, config.kind)),
@@ -61,6 +83,29 @@ export function CategoryPage({ config }: { config: CategoryConfig }) {
     categorySearch.kind === config.kind && categorySearch.query.trim().length > 0
 
   const heroItems = useMemo(() => kindItems.slice(0, 6), [kindItems])
+
+  // Enough of the grid needs to already be rendered for the restore step
+  // (see useRestoreBrowsingOrigin) to find the previously-focused card at
+  // all — seed MediaGrid's initial reveal batch past wherever that card's
+  // index actually falls, rounded up to a clean batch boundary, instead
+  // of leaving it to the default first-30 that a deep scroll position
+  // would fall past. Computed against whichever list is actually being
+  // rendered (search results persist across a detail-page visit and back
+  // for free, since categorySearch is app-level state nothing here
+  // clears — see isSearchActive above).
+  const restoreVisibleCount = useMemo(() => {
+    if (!browsingOrigin?.focusedItemId) return undefined
+    const activeList = isSearchActive ? categorySearch.results : filteredSorted
+    const idx = activeList.findIndex((item) => item.id === browsingOrigin.focusedItemId)
+    return idx >= 0 ? Math.ceil((idx + 1) / 30) * 30 : undefined
+  }, [browsingOrigin, isSearchActive, categorySearch.results, filteredSorted])
+
+  // Catalog data is fetched once, globally (AppStateContext), not
+  // per-page — by the time this page remounts after a detail-page visit,
+  // it's already sitting in `catalog` with no loading flicker, so there's
+  // no separate "is this page's content actually ready" signal beyond
+  // "did we render past the loading branch," which `true` here reflects.
+  useRestoreBrowsingOrigin(true)
 
   return (
     <div className={styles.page}>
@@ -115,6 +160,7 @@ export function CategoryPage({ config }: { config: CategoryConfig }) {
               onRetry={() => runCategorySearch(config.kind, categorySearch.query)}
               emptyTitle={`No ${config.pluralLabel} found for "${categorySearch.query}"`}
               emptyMessage="Try a different title or keyword."
+              initialVisibleCount={restoreVisibleCount}
             />
           </>
         ) : (
@@ -123,6 +169,7 @@ export function CategoryPage({ config }: { config: CategoryConfig }) {
             loading={catalogLoading}
             emptyTitle={`No ${config.pluralLabel} to show`}
             emptyMessage="Try widening a filter or clearing them all."
+            initialVisibleCount={restoreVisibleCount}
           />
         )}
       </div>

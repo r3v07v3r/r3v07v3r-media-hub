@@ -1,0 +1,128 @@
+.panel {
+  border-radius: var(--radius-medium);
+  padding: 18px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.headerRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.heading {
+  margin: 0;
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 13px;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+.followChip {
+  padding: 5px 14px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border-subtle);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  transition: all var(--transition-fast);
+}
+.followChipActive {
+  color: var(--accent-green);
+  border-color: rgba(39, 230, 154, 0.4);
+  background: rgba(39, 230, 154, 0.08);
+}
+
+.statRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.stat {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+.statValue {
+  font-family: var(--font-display);
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+.statLabel {
+  font-size: 11px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.progressCircle {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+.progressSvg {
+  width: 72px;
+  height: 72px;
+  transform: rotate(-90deg);
+}
+.progressTrack {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.1);
+  stroke-width: 5;
+}
+.progressFill {
+  fill: none;
+  stroke: var(--accent-cyan);
+  stroke-width: 5;
+  stroke-linecap: round;
+  transition: stroke-dashoffset var(--transition-standard);
+}
+.progressValue {
+  position: absolute;
+  top: 26px;
+  font-family: var(--font-display);
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+.progressLabel {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+.lastWatchedRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 12px;
+  border-radius: var(--radius-small);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  text-align: left;
+  transition: background var(--transition-fast);
+}
+.lastWatchedRow:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-primary);
+}
+.lastWatchedRow svg {
+  flex: 0 0 auto;
+  color: var(--accent-cyan);
+}
+
+.movieStats {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.movieStatLine {
+  font-size: 13.5px;
+  color: var(--text-secondary);
+}

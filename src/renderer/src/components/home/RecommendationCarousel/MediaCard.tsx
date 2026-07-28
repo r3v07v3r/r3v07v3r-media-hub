@@ -34,6 +34,7 @@ export function MediaCard({ media }: { media: MediaItem }) {
         className={`${styles.card} animated-edge light-sweep`}
         role="button"
         tabIndex={0}
+        data-media-id={media.id}
         onClick={() => openDetail(media)}
         onKeyDown={(e) => {
           if (e.key === 'Enter') openDetail(media)

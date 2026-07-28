@@ -1,5 +1,4 @@
 import { useAppState } from '@renderer/context/AppStateContext'
-import { MediaDetailModal } from './MediaDetailModal'
 import { PlaybackOverlay } from './PlaybackOverlay'
 import { AIResponsePanel } from './AIResponsePanel'
 import { ContextMenu } from './ContextMenu'
@@ -13,7 +12,6 @@ export function GlobalOverlays() {
       <OfflineBanner />
       <AIResponsePanel />
       <ContextMenu />
-      <MediaDetailModal />
       {/* Keyed on the title's id so opening a new title (or "Restart") is a
           fresh mount — PlaybackOverlay's local playback state (status,
           currentTime, subtitle selection, etc.) then just starts from its
