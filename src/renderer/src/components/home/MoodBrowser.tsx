@@ -5,6 +5,8 @@ import { MOOD_CATEGORIES } from '@renderer/data/mockData'
 import { useAppState } from '@renderer/context/AppStateContext'
 import { Icon } from '@renderer/components/icons/Icon'
 import { useReducedMotion } from '@renderer/hooks/useReducedMotion'
+import { resolveArtwork } from '@renderer/lib/artwork'
+import { ArtworkImage } from '@renderer/components/media/ArtworkImage'
 import styles from './MoodBrowser.module.css'
 
 export function MoodBrowser() {
@@ -56,20 +58,29 @@ export function MoodBrowser() {
             <p className={styles.resultsEmpty}>Nothing matches that mood combination yet.</p>
           ) : (
             <div className={styles.resultsGrid}>
-              {results.map((m) => (
-                <button
-                  key={m.id}
-                  type="button"
-                  className={styles.resultCard}
-                  style={{
-                    background: `linear-gradient(150deg, ${m.artTint[0]}, ${m.artTint[1]})`
-                  }}
-                  data-media-id={m.id}
-                  onClick={() => openDetail(m)}
-                >
-                  {m.title}
-                </button>
-              ))}
+              {results.map((m) => {
+                const artwork = resolveArtwork(m)
+                return (
+                  <button
+                    key={m.id}
+                    type="button"
+                    className={styles.resultCard}
+                    data-media-id={m.id}
+                    onClick={() => openDetail(m)}
+                  >
+                    <ArtworkImage
+                      src={artwork.backdropUrl ?? artwork.posterUrl}
+                      alt=""
+                      fallbackTitle={m.title}
+                      artTint={m.artTint}
+                      sizes="110px"
+                      className={styles.resultArt}
+                    />
+                    <div className={styles.resultScrim} aria-hidden="true" />
+                    <span className={styles.resultTitle}>{m.title}</span>
+                  </button>
+                )
+              })}
             </div>
           )}
         </div>

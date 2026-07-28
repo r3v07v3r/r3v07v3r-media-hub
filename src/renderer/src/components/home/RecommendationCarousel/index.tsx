@@ -59,6 +59,29 @@ export function RecommendationCarousel() {
     }
   }, [loading])
 
+  // The arrows used to scroll a flat 380px regardless of how many cards
+  // that actually covers — on a row this wide that's a fraction of one
+  // card, so repeated clicks crept along almost one frame at a time
+  // instead of paging. Measures the real on-screen card width + gap (not
+  // a hardcoded constant, so this stays correct across the .card
+  // breakpoint in RecommendationCarousel.module.css) and scrolls by
+  // (visible cards - 1) of those — a full page, deliberately one card
+  // short so the last card still on screen becomes the first card of the
+  // next page instead of a card being skipped between clicks.
+  function scrollByPage(direction: 1 | -1) {
+    const el = scrollerRef.current
+    if (!el) return
+    const cards = Array.from(el.querySelectorAll<HTMLElement>(':scope > li'))
+    if (cards.length < 2) {
+      el.scrollBy({ left: direction * el.clientWidth, behavior: 'smooth' })
+      return
+    }
+    const cardStep = cards[1].offsetLeft - cards[0].offsetLeft
+    const visibleCount = Math.max(1, Math.floor(el.clientWidth / cardStep))
+    const amount = Math.max(cardStep, (visibleCount - 1) * cardStep)
+    el.scrollBy({ left: direction * amount, behavior: 'smooth' })
+  }
+
   function handleKeyDown(e: React.KeyboardEvent<HTMLUListElement>) {
     if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return
     const cards = Array.from(
@@ -106,7 +129,7 @@ export function RecommendationCarousel() {
               type="button"
               className={`${styles.arrow} ${styles.arrowLeft}`}
               aria-label="Show previous picks"
-              onClick={() => scrollerRef.current?.scrollBy({ left: -380, behavior: 'smooth' })}
+              onClick={() => scrollByPage(-1)}
             >
               <Icon name="chevron-left" />
             </button>
@@ -116,7 +139,7 @@ export function RecommendationCarousel() {
               type="button"
               className={styles.arrow}
               aria-label="Show more picks"
-              onClick={() => scrollerRef.current?.scrollBy({ left: 380, behavior: 'smooth' })}
+              onClick={() => scrollByPage(1)}
             >
               <Icon name="chevron" />
             </button>

@@ -370,17 +370,38 @@
   padding-bottom: 4px;
 }
 .resultCard {
+  position: relative;
   flex: 0 0 auto;
   width: 110px;
   height: 66px;
   border-radius: var(--radius-small);
-  display: flex;
-  align-items: flex-end;
-  padding: 6px 8px;
+  overflow: hidden;
+}
+.resultArt {
+  position: absolute;
+  inset: 0;
+}
+.resultScrim {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  background: linear-gradient(180deg, transparent 45%, rgba(3, 5, 10, 0.8) 100%);
+}
+.resultTitle {
+  position: absolute;
+  z-index: 1;
+  left: 8px;
+  right: 8px;
+  bottom: 6px;
   font-size: 10.5px;
   font-weight: 600;
   color: #fff;
   text-shadow: 0 1px 4px rgba(0, 0, 0, 0.6);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 .resultsEmpty {
   font-size: 12px;
