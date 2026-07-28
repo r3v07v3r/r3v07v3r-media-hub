@@ -277,11 +277,16 @@
   padding: 13px 16px;
   border-radius: var(--radius-medium);
   min-height: 64px;
-  color: var(--text-muted);
+  /* var(--text-muted) (#6f7889) read as genuinely faded against this
+     panel's dark glass fill — nowhere near enough contrast for a primary
+     navigation surface. Bumped to a brighter cool grey-blue so resting
+     items still read clearly one tier below the active item, instead of
+     nearly disappearing into the background. */
+  color: #c7d0e0;
   transition: color var(--transition-fast), background var(--transition-fast);
 }
 .item:hover {
-  color: var(--text-secondary);
+  color: var(--text-primary);
   /* No background rectangle: .item is a plain flex row sized to the
      rail's own rectangular padding box, but the rail's real boundary is
      the organic wavy edge drawn behind it (see .railShapeFill in the
@@ -357,24 +362,18 @@
 }
 
 .label {
-  /* 10-foot-interface pass: "increase label size slightly" /
-     "increase label brightness slightly" — 14.5px -> 16px, and a fixed
-     opacity added so even the resting (var(--text-muted)) state reads
-     clearly at TV distance instead of relying only on the active item's
-     var(--text-primary) for brightness. Still visibly dimmer than the
-     active item (0.82 vs the active item's full-strength color below),
-     so the hierarchy between "current page" and "everything else" is
-     unchanged — just legible instead of washed out. */
+  /* 10-foot-interface pass: "increase label size slightly" — 14.5px ->
+     16px. No opacity dimming here anymore — .item's own resting color
+     (#c7d0e0) already carries the muted/active hierarchy, so stacking an
+     extra 0.82 opacity on top of it just compounded the low-contrast
+     "faded menu" look. Active vs. resting is now purely a color change
+     (see .itemActive below), not color-times-opacity. */
   font-size: 16px;
   font-weight: 500;
-  opacity: 0.82;
   white-space: nowrap;
   display: flex;
   align-items: center;
   gap: 6px;
-}
-.itemActive .label {
-  opacity: 1;
 }
 .collapsed .label {
   display: none;
