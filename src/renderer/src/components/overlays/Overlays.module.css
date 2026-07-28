@@ -143,16 +143,6 @@
   justify-content: center;
   animation: fadeIn var(--transition-standard);
 }
-.playbackArt {
-  position: absolute;
-  inset: 0;
-  opacity: 0.9;
-}
-.playbackScrim {
-  position: absolute;
-  inset: 0;
-  background: linear-gradient(180deg, rgba(0, 0, 0, 0.35), rgba(0, 0, 0, 0.75));
-}
 .playbackContent {
   position: relative;
   z-index: 1;
@@ -162,11 +152,6 @@
   gap: 18px;
   color: #fff;
   text-align: center;
-}
-.playbackTitle {
-  font-family: var(--font-display);
-  font-size: 26px;
-  letter-spacing: 1.4px;
 }
 .playPauseButton {
   width: 74px;
@@ -231,35 +216,6 @@
   height: 100%;
   background: #000;
   object-fit: contain;
-}
-.playerStatus {
-  position: relative;
-  z-index: 1;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 14px;
-  color: #fff;
-  text-align: center;
-  max-width: min(420px, 80vw);
-}
-.playerSpinner {
-  width: 34px;
-  height: 34px;
-  border-radius: 50%;
-  border: 2.5px solid rgba(255, 255, 255, 0.2);
-  border-top-color: #fff;
-  animation: playerSpin 0.8s linear infinite;
-}
-@keyframes playerSpin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-.playerStatusMessage {
-  font-size: 14px;
-  color: rgba(255, 255, 255, 0.75);
-  line-height: 1.5;
 }
 .playerAutoNote {
   font-size: 12px;

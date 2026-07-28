@@ -4,16 +4,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useAppState } from '@renderer/context/AppStateContext'
 import { Icon } from '@renderer/components/icons/Icon'
 import { mediaItemToTrackablePayload } from '@renderer/lib/mediaHub/adapters'
-import type {
-  MediaTrack,
-  MediaTracks,
-  PlaybackResult,
-  PlaybackSelection,
-  SubtitleResult
-} from '@shared/media-hub/types'
+import type { MediaTrack, PlaybackSelection, SubtitleResult } from '@shared/media-hub/types'
 import styles from './Overlays.module.css'
-
-type PlayerStatus = 'resolving' | 'ready' | 'no-source' | 'error' | 'unavailable'
 
 function formatTime(seconds: number): string {
   if (!Number.isFinite(seconds) || seconds < 0) seconds = 0
@@ -25,46 +17,29 @@ function formatTime(seconds: number): string {
   return h > 0 ? `${h}:${mm}:${ss}` : `${mm}:${ss}`
 }
 
-/** For a series/anime item, `mediaId` needs a `:<season>:<episode>` suffix (see main/media-hub/torbox.ts's play:stream, which parses it back out to pick the matching file within the torrent). No episode-browser UI exists yet in this pass — an item's own seasonNumber/episodeNumber is used when set (e.g. "resume next episode" from Continue Watching), else this defaults to S1E1. */
-function buildMediaId(
-  kind: 'movie' | 'series' | 'anime',
-  id: string,
-  seasonNumber?: number,
-  episodeNumber?: number
-): string {
-  if (kind === 'movie') return id
-  const season = seasonNumber ?? 1
-  const episode = episodeNumber ?? 1
-  return `${id}:${season}:${episode}`
-}
-
 /**
- * The real playback surface — resolves a TorBox-cached stream for the
- * selected title (stream:resolve), starts embedded playback (stream:play,
- * which returns either a direct proxied URL or a compatibility-mode URL
- * (audio transcoded via ffmpeg, video untouched) when the source's audio
- * needs converting — see
- * main/media-hub/playbackSession.ts), and renders it in a genuine
+ * The real playback surface — renders the stream AppStateContext's
+ * startPlayback already resolved (stream:resolve + stream:play, done
+ * BEFORE this component ever mounts — see that function's own comment on
+ * why: a Play button showing its own inline "Searching…"/"Buffering…"
+ * beats this overlay opening full-screen just to show that text itself,
+ * and a no-source/error outcome now never opens this at all) in a genuine
  * `<video>` element with a real control bar (play/pause, seek, volume,
- * audio/subtitle track selection, fullscreen). Replaces the earlier
- * simulated transport UI entirely.
+ * audio/subtitle track selection, fullscreen).
  */
 export function PlaybackOverlay() {
-  const { playbackMedia, stopPlayback, pushNotification } = useAppState()
+  const {
+    playbackMedia,
+    playbackResult: result,
+    playbackTracks: tracks,
+    setPlaybackResult: setResult,
+    setPlaybackTracks: setTracks,
+    stopPlayback,
+    pushNotification
+  } = useAppState()
   const videoRef = useRef<HTMLVideoElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const closeRef = useRef<HTMLButtonElement>(null)
-
-  // Lazily derived from bridge presence, which is constant for this
-  // component instance's whole life (see GlobalOverlays — it's remounted
-  // fresh, via `key`, for every new title) rather than started 'resolving'
-  // and flipped to 'unavailable' by the effect below.
-  const [status, setStatus] = useState<PlayerStatus>(() =>
-    window.api?.mediaHub ? 'resolving' : 'unavailable'
-  )
-  const [errorMessage, setErrorMessage] = useState('')
-  const [result, setResult] = useState<PlaybackResult | null>(null)
-  const [tracks, setTracks] = useState<MediaTracks | null>(null)
 
   const [playing, setPlaying] = useState(true)
   const [currentTime, setCurrentTime] = useState(0)
@@ -94,48 +69,6 @@ export function PlaybackOverlay() {
   const trackedMediaId = playbackMedia?.id
   const kind =
     playbackMedia?.mediaKind ?? (playbackMedia?.mediaType === 'series' ? 'series' : 'movie')
-  const mediaId = playbackMedia
-    ? buildMediaId(kind, playbackMedia.id, playbackMedia.seasonNumber, playbackMedia.episodeNumber)
-    : ''
-
-  // Resolve + start playback for the title this instance was mounted for.
-  // GlobalOverlays keys PlaybackOverlay on the title's id, so a new title
-  // (or a "Restart") is a fresh mount — status/result/tracks/playing/
-  // currentTime/subtitle state all already start from their natural
-  // initial values above; this effect only needs to kick off the actual
-  // resolve/play call, not reset anything by hand.
-  useEffect(() => {
-    if (!playbackMedia) return
-    const api = window.api?.mediaHub
-    if (!api) return
-    let cancelled = false
-
-    api.stream
-      .resolve(kind, playbackMedia.id)
-      .then((resolved) => {
-        if (cancelled) return
-        if (!resolved.best) {
-          setStatus('no-source')
-          return
-        }
-        return api.stream.play(resolved.best, mediaId).then((played) => {
-          if (cancelled) return
-          setResult(played)
-          setTracks(played.tracks)
-          setStatus('ready')
-        })
-      })
-      .catch((error: unknown) => {
-        if (cancelled) return
-        setErrorMessage(error instanceof Error ? error.message : 'Playback failed to start.')
-        setStatus('error')
-      })
-
-    return () => {
-      cancelled = true
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally keyed on the title's id, not the whole (frequently-recreated) playbackMedia object
-  }, [trackedMediaId])
 
   // Stop the backend's playback session (closes the proxy / kills any
   // ffmpeg transcoder) whenever the overlay closes, whether via the close
@@ -174,18 +107,17 @@ export function PlaybackOverlay() {
     hideControlsTimer.current = setTimeout(() => setControlsVisible(false), 3200)
   }, [])
 
-  // Genuinely timer-driven, not a derivable value: this both shows the
-  // controls immediately and (re)arms the auto-hide timeout, and must
-  // re-run whenever `status` changes (e.g. resolving -> ready should show
-  // controls again) — an external-timer synchronization effect is exactly
-  // what useEffect is for, not something to compute inline.
+  // Genuinely timer-driven, not a derivable value: shows the controls
+  // immediately and (re)arms the auto-hide timeout on mount — an external-
+  // timer synchronization effect is exactly what useEffect is for, not
+  // something to compute inline.
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     resetControlsTimer()
     return () => {
       if (hideControlsTimer.current) clearTimeout(hideControlsTimer.current)
     }
-  }, [resetControlsTimer, status])
+  }, [resetControlsTimer])
 
   const handleEnded = useCallback(() => {
     setPlaying(false)
@@ -304,7 +236,12 @@ export function PlaybackOverlay() {
   const audioTracks = useMemo<MediaTrack[]>(() => tracks?.audio ?? [], [tracks])
   const subtitleTracks = useMemo<MediaTrack[]>(() => tracks?.subtitle ?? [], [tracks])
 
-  if (!playbackMedia) return null
+  // AppStateContext's startPlayback only ever sets playbackMedia once a
+  // real PlaybackResult is already resolved — see that function's own
+  // comment. There's no in-between "resolving"/"no-source"/"error" state
+  // for this component to render at all anymore; if playbackMedia is set,
+  // result is too.
+  if (!playbackMedia || !result) return null
 
   return (
     <div
@@ -316,52 +253,36 @@ export function PlaybackOverlay() {
       onMouseMove={resetControlsTimer}
       onDoubleClick={() => containerRef.current?.requestFullscreen?.().catch(() => {})}
     >
-      {status === 'ready' && result && (
-        // Caption track is added dynamically once a subtitle is applied
-        // (see activeSubtitleTrackUrl) — not present on initial render.
-        <video
-          ref={videoRef}
-          className={styles.videoSurface}
-          src={result.url}
-          autoPlay
-          onClick={togglePlay}
-          onPlay={() => setPlaying(true)}
-          onPause={() => setPlaying(false)}
-          onTimeUpdate={(e) =>
-            setCurrentTime(streamStartOffsetRef.current + e.currentTarget.currentTime)
-          }
-          onLoadedMetadata={(e) => {
-            // Compatibility mode's fragmented-stream duration climbs as
-            // more of the stream arrives rather than being known upfront
-            // (early loadedmetadata events under-report it) — prefer the
-            // real total ffprobe already found, falling back to the
-            // element's own value for direct/proxied playback where it's
-            // accurate from the start.
-            const probed = tracks?.durationSeconds
-            setDuration(
-              probed && Number.isFinite(probed) ? probed : e.currentTarget.duration
-            )
-          }}
-          onEnded={handleEnded}
-          onVolumeChange={(e) => setVolume(e.currentTarget.volume)}
-        >
-          {activeSubtitleTrackUrl && (
-            <track kind="subtitles" src={activeSubtitleTrackUrl} default label="Subtitles" />
-          )}
-        </video>
-      )}
-
-      {status !== 'ready' && (
-        <>
-          <div
-            className={styles.playbackArt}
-            style={{
-              background: `linear-gradient(135deg, ${playbackMedia.artTint[0]}, ${playbackMedia.artTint[1]})`
-            }}
-          />
-          <div className={styles.playbackScrim} />
-        </>
-      )}
+      {/* Caption track is added dynamically once a subtitle is applied
+          (see activeSubtitleTrackUrl) — not present on initial render. */}
+      <video
+        ref={videoRef}
+        className={styles.videoSurface}
+        src={result.url}
+        autoPlay
+        onClick={togglePlay}
+        onPlay={() => setPlaying(true)}
+        onPause={() => setPlaying(false)}
+        onTimeUpdate={(e) =>
+          setCurrentTime(streamStartOffsetRef.current + e.currentTarget.currentTime)
+        }
+        onLoadedMetadata={(e) => {
+          // Compatibility mode's fragmented-stream duration climbs as
+          // more of the stream arrives rather than being known upfront
+          // (early loadedmetadata events under-report it) — prefer the
+          // real total ffprobe already found, falling back to the
+          // element's own value for direct/proxied playback where it's
+          // accurate from the start.
+          const probed = tracks?.durationSeconds
+          setDuration(probed && Number.isFinite(probed) ? probed : e.currentTarget.duration)
+        }}
+        onEnded={handleEnded}
+        onVolumeChange={(e) => setVolume(e.currentTarget.volume)}
+      >
+        {activeSubtitleTrackUrl && (
+          <track kind="subtitles" src={activeSubtitleTrackUrl} default label="Subtitles" />
+        )}
+      </video>
 
       <button
         ref={closeRef}
@@ -373,45 +294,10 @@ export function PlaybackOverlay() {
         <Icon name="x" size={17} />
       </button>
 
-      {status === 'resolving' && (
-        <div className={styles.playerStatus}>
-          <div className={styles.playerSpinner} aria-hidden="true" />
-          <span className={styles.playbackTitle}>{playbackMedia.title}</span>
-          <span className={styles.playerStatusMessage}>Finding the best source…</span>
-        </div>
-      )}
-
-      {status === 'no-source' && (
-        <div className={styles.playerStatus}>
-          <span className={styles.playbackTitle}>{playbackMedia.title}</span>
-          <span className={styles.playerStatusMessage}>
-            No cached sources were found for this title yet. TorBox needs a source to already be
-            cached (or picked up shortly after) — try again in a bit.
-          </span>
-        </div>
-      )}
-
-      {status === 'error' && (
-        <div className={styles.playerStatus}>
-          <span className={styles.playbackTitle}>{playbackMedia.title}</span>
-          <span className={styles.playerStatusMessage}>{errorMessage}</span>
-        </div>
-      )}
-
-      {status === 'unavailable' && (
-        <div className={styles.playerStatus}>
-          <span className={styles.playbackTitle}>{playbackMedia.title}</span>
-          <span className={styles.playerStatusMessage}>
-            Playback isn&apos;t available outside the desktop app.
-          </span>
-        </div>
-      )}
-
-      {status === 'ready' && (
-        <div
-          className={`${styles.playerControls} ${!controlsVisible ? styles.playerControlsHidden : ''}`}
-        >
-          {result?.autoReason && <span className={styles.playerAutoNote}>{result.autoReason}</span>}
+      <div
+        className={`${styles.playerControls} ${!controlsVisible ? styles.playerControlsHidden : ''}`}
+      >
+        {result.autoReason && <span className={styles.playerAutoNote}>{result.autoReason}</span>}
 
           <div className={styles.playerScrubberTrack} onClick={handleSeek}>
             <div
@@ -539,7 +425,7 @@ export function PlaybackOverlay() {
             </button>
           </div>
         </div>
-      )}
-    </div>
+      </div>
   )
 }
+

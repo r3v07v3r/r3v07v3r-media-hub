@@ -2,6 +2,7 @@
 
 import type { MediaItem } from '@renderer/types'
 import type { Episode } from '@shared/media-hub/types'
+import { useAppState } from '@renderer/context/AppStateContext'
 import { Icon } from '@renderer/components/icons/Icon'
 import { resolveArtwork } from '@renderer/lib/artwork'
 import { ArtworkImage } from '@renderer/components/media/ArtworkImage'
@@ -24,6 +25,9 @@ export interface NextToPlayPanelProps {
  */
 export function NextToPlayPanel({ media, nextEpisode, allWatched, onPlay }: NextToPlayPanelProps) {
   const artwork = resolveArtwork(media)
+  const { resolvingMedia } = useAppState()
+  const isResolving = resolvingMedia?.id === media.id
+  const resolveLabel = resolvingMedia?.stage === 'buffering' ? 'Buffering…' : 'Searching…'
 
   if (!nextEpisode && !allWatched) {
     // Movie path, or a series/anime this app has no episode data for yet.
@@ -51,9 +55,15 @@ export function NextToPlayPanel({ media, nextEpisode, allWatched, onPlay }: Next
               media.runtimeMinutes && <span className={styles.meta}>{media.runtimeMinutes}m</span>
             )}
           </div>
-          <button type="button" className={styles.playNextButton} onClick={() => onPlay()}>
+          <button
+            type="button"
+            className={styles.playNextButton}
+            onClick={() => onPlay()}
+            disabled={isResolving}
+            aria-busy={isResolving}
+          >
             <Icon name="play" size={14} />
-            {media.progressPercentage ? 'Resume' : 'Play'}
+            {isResolving ? resolveLabel : media.progressPercentage ? 'Resume' : 'Play'}
           </button>
         </div>
       </section>
@@ -90,9 +100,15 @@ export function NextToPlayPanel({ media, nextEpisode, allWatched, onPlay }: Next
           <span className={styles.title}>{nextEpisode.title || `Episode ${nextEpisode.episode}`}</span>
           {nextEpisode.description && <p className={styles.description}>{nextEpisode.description}</p>}
         </div>
-        <button type="button" className={styles.playNextButton} onClick={() => onPlay(nextEpisode)}>
+        <button
+          type="button"
+          className={styles.playNextButton}
+          onClick={() => onPlay(nextEpisode)}
+          disabled={isResolving}
+          aria-busy={isResolving}
+        >
           <Icon name="play" size={14} />
-          Play Next
+          {isResolving ? resolveLabel : 'Play Next'}
         </button>
       </div>
     </section>

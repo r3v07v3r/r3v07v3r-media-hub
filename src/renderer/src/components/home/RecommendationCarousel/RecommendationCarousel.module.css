@@ -238,13 +238,27 @@
     background var(--transition-fast);
 }
 .card:hover .playButton,
-.card:focus-visible .playButton {
+.card:focus-visible .playButton,
+.playButton:disabled {
   opacity: 1;
   transform: scale(1);
   box-shadow: 0 4px 16px -2px rgba(56, 193, 255, 0.45);
 }
 .playButton:hover {
   background: var(--accent-blue);
+}
+.playButtonSpinner {
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.35);
+  border-top-color: #fff;
+  animation: mediaCardPlaySpin 0.8s linear infinite;
+}
+@keyframes mediaCardPlaySpin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 .playButton svg {
   width: 15px;

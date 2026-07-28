@@ -3,11 +3,17 @@
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import type { Episode } from '@shared/media-hub/types'
+import { useAppState } from '@renderer/context/AppStateContext'
 import { Icon } from '@renderer/components/icons/Icon'
 import { ArtworkImage } from '@renderer/components/media/ArtworkImage'
 import styles from './EpisodesSection.module.css'
 
 export interface EpisodesSectionProps {
+  /** The show's own id — startPlayback's resolvingMedia is keyed on this,
+   *  not a per-episode id (only one resolve is ever in flight at a time),
+   *  so a locally-tracked pendingKey (see below) narrows that down to
+   *  which specific row's Play button was actually clicked. */
+  mediaId: string
   episodes: Episode[]
   seasons: number[]
   selectedSeason: number | null
@@ -30,6 +36,7 @@ function key(season: number, episode: number): string {
 }
 
 export function EpisodesSection({
+  mediaId,
   episodes,
   seasons,
   selectedSeason,
@@ -41,6 +48,22 @@ export function EpisodesSection({
   onMarkSeason,
   status
 }: EpisodesSectionProps) {
+  const { resolvingMedia } = useAppState()
+  const [pendingKey, setPendingKey] = useState<string | null>(null)
+  const isShowResolving = resolvingMedia?.id === mediaId
+  // Cleared as soon as this show is no longer the one resolving —
+  // whether that's because it just succeeded (playbackMedia opens) or
+  // failed (a notification fired instead) — so a stale spinner never
+  // lingers on the row that was clicked. Adjusted during render (the same
+  // "reset state when a prop/value changes" pattern MediaGrid.tsx's own
+  // items-reset uses) rather than in an effect, which would cost an extra
+  // render pass for what's otherwise a synchronous derivation.
+  const [wasShowResolving, setWasShowResolving] = useState(isShowResolving)
+  if (wasShowResolving !== isShowResolving) {
+    setWasShowResolving(isShowResolving)
+    if (!isShowResolving) setPendingKey(null)
+  }
+
   const [seasonMenuOpen, setSeasonMenuOpen] = useState<number | null>(null)
   // Two separate escapes needed here, verified live (the menu existed in
   // the DOM at the right z-index and STILL never appeared):
@@ -250,10 +273,19 @@ export function EpisodesSection({
               <button
                 type="button"
                 className={styles.playRowButton}
-                onClick={() => onPlay(ep)}
+                onClick={() => {
+                  setPendingKey(key(ep.season, ep.episode))
+                  onPlay(ep)
+                }}
+                disabled={isShowResolving && pendingKey === key(ep.season, ep.episode)}
+                aria-busy={isShowResolving && pendingKey === key(ep.season, ep.episode)}
                 aria-label={`Play ${ep.title || `episode ${ep.episode}`}`}
               >
-                <Icon name="play" size={13} />
+                {isShowResolving && pendingKey === key(ep.season, ep.episode) ? (
+                  <span className={styles.playRowSpinner} aria-hidden="true" />
+                ) : (
+                  <Icon name="play" size={13} />
+                )}
               </button>
               <button
                 type="button"

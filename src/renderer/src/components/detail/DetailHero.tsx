@@ -1,10 +1,11 @@
 'use client'
 
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import type { MediaItem } from '@renderer/types'
 import type { ContinueWatchingItem } from '@renderer/types'
 import type { Episode, Trailer } from '@shared/media-hub/types'
 import type { DetailAdapterConfig } from '@renderer/lib/mediaHub/detailAdapters'
+import { useAppState } from '@renderer/context/AppStateContext'
 import { Icon } from '@renderer/components/icons/Icon'
 import { resolveArtwork } from '@renderer/lib/artwork'
 import { ArtworkImage } from '@renderer/components/media/ArtworkImage'
@@ -35,10 +36,16 @@ export function DetailHero({
   onToggleMyList,
   onPlay
 }: DetailHeroProps) {
+  const { resolvingMedia, pushNotification } = useAppState()
   const artwork = resolveArtwork(media)
   const hasProgress = !!continueEntry && !continueEntry.media.completed
+  const isResolving = resolvingMedia?.id === media.id
+  const [suggesting, setSuggesting] = useState(false)
 
   const playLabel = useMemo(() => {
+    if (isResolving) {
+      return resolvingMedia?.stage === 'buffering' ? 'Buffering…' : 'Searching…'
+    }
     if (hasProgress) {
       return config.isEpisodic
         ? `Resume S${continueEntry?.media.seasonNumber} E${continueEntry?.media.episodeNumber}`
@@ -48,7 +55,30 @@ export function DetailHero({
       return `Play S${nextEpisode.season} E${nextEpisode.episode}`
     }
     return 'Play'
-  }, [hasProgress, config.isEpisodic, continueEntry, nextEpisode])
+  }, [isResolving, resolvingMedia?.stage, hasProgress, config.isEpisodic, continueEntry, nextEpisode])
+
+  async function handleSuggestToParty(): Promise<void> {
+    const api = window.api?.mediaHub
+    if (!api) return
+    setSuggesting(true)
+    try {
+      await api.party.suggest({
+        id: media.id,
+        type: media.mediaKind ?? config.kind,
+        title: media.title,
+        poster: media.posterUrl ?? '',
+        year: media.releaseYear ? String(media.releaseYear) : ''
+      })
+      pushNotification({ tone: 'success', message: `Suggested ${media.title} to the party.` })
+    } catch (error) {
+      pushNotification({
+        tone: 'error',
+        message: error instanceof Error ? error.message : 'Could not suggest this title.'
+      })
+    } finally {
+      setSuggesting(false)
+    }
+  }
 
   return (
     <section className={styles.hero} aria-label={`${media.title} details`}>
@@ -105,8 +135,18 @@ export function DetailHero({
         </div>
 
         <div className={styles.actions}>
-          <button type="button" className={styles.playButton} onClick={onPlay}>
-            <Icon name="play" size={16} />
+          <button
+            type="button"
+            className={styles.playButton}
+            onClick={onPlay}
+            disabled={isResolving}
+            aria-busy={isResolving}
+          >
+            {isResolving ? (
+              <span className={styles.playSpinner} aria-hidden="true" />
+            ) : (
+              <Icon name="play" size={16} />
+            )}
             {playLabel}
           </button>
           {trailer && (
@@ -123,6 +163,15 @@ export function DetailHero({
           >
             <Icon name={inMyList ? 'check' : 'plus'} size={15} />
             {inMyList ? config.trackedLabel : config.trackLabel}
+          </button>
+          <button
+            type="button"
+            className={styles.secondaryButton}
+            onClick={handleSuggestToParty}
+            disabled={suggesting}
+          >
+            <Icon name="people" size={15} />
+            {suggesting ? 'Suggesting…' : 'Suggest to Party'}
           </button>
         </div>
       </div>

@@ -158,6 +158,23 @@
   width: 16px;
   height: 16px;
 }
+.playButton:disabled {
+  opacity: 0.75;
+  cursor: default;
+}
+.playSpinner {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.35);
+  border-top-color: #fff;
+  animation: playSpin 0.8s linear infinite;
+}
+@keyframes playSpin {
+  to {
+    transform: rotate(360deg);
+  }
+}
 .secondaryButton {
   display: flex;
   align-items: center;

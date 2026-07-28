@@ -17,9 +17,11 @@ const MATCH_CLASS: Record<string, string> = {
 }
 
 export function MediaCard({ media }: { media: MediaItem }) {
-  const { openDetail, startPlayback, openContextMenu, continueWatching } = useAppState()
+  const { openDetail, startPlayback, openContextMenu, continueWatching, resolvingMedia } =
+    useAppState()
   const artwork = resolveArtwork(media)
   const watchStatus = getWatchStatus(media, continueWatching)
+  const isResolving = resolvingMedia?.id === media.id
 
   function handleContextMenu(e: React.MouseEvent) {
     e.preventDefault()
@@ -62,9 +64,15 @@ export function MediaCard({ media }: { media: MediaItem }) {
             e.stopPropagation()
             startPlayback(media)
           }}
-          aria-label={`Play ${media.title}`}
+          disabled={isResolving}
+          aria-busy={isResolving}
+          aria-label={
+            isResolving
+              ? `${resolvingMedia?.stage === 'buffering' ? 'Buffering' : 'Searching'} ${media.title}`
+              : `Play ${media.title}`
+          }
         >
-          <Icon name="play" />
+          {isResolving ? <span className={styles.playButtonSpinner} aria-hidden="true" /> : <Icon name="play" />}
         </button>
         <button
           type="button"

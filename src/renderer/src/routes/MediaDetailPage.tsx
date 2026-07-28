@@ -353,8 +353,6 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
         onPlay={() => handlePlay(continueEntry?.media.seasonNumber, continueEntry?.media.episodeNumber)}
       />
 
-      <RatingsPanel media={media} />
-
       <div className={styles.main}>
         {config.isEpisodic ? (
           <>
@@ -365,6 +363,7 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
               onPlay={(ep) => ep && handlePlay(ep.season, ep.episode)}
             />
             <EpisodesSection
+              mediaId={media.id}
               episodes={episodes}
               seasons={seasons}
               selectedSeason={selectedSeason}
@@ -384,6 +383,7 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
       </div>
 
       <div className={styles.sidebar}>
+        <RatingsPanel media={media} />
         <ProgressPanel
           config={config}
           media={media}

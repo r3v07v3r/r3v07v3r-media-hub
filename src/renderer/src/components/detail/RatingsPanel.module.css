@@ -1,19 +1,15 @@
 .panel {
-  grid-area: ratings;
   border-radius: var(--radius-medium);
   padding: 20px 22px;
   display: flex;
   flex-direction: column;
   gap: 16px;
-  /* Used to match the hero row's own 520px height (see
-     MediaDetailPage.module.css's grid — 'hero ratings' share a row, but
-     `align-items: start` there means neither is stretched to fill it) so
-     the two looked aligned side by side — but this panel's actual content
-     (a heading + two 72px gauges) is a fraction of that height, so
-     centering it in a fixed 520px box just left most of the panel empty.
-     Sized to its own content instead; a shorter panel sitting at the top
-     of a taller grid row reads fine, an oversized panel with dead space
-     inside its own border doesn't. */
+  /* No grid-area of its own anymore — this is now just the first flex
+     child of MediaDetailPage's .sidebar column (see that file's grid
+     comment for why: it used to sit in its own grid row matched to the
+     hero's 520px height, which left dead space below it once this panel
+     was sized to its own small content instead of stretching to fill
+     that row). */
 }
 .heading {
   margin: 0;

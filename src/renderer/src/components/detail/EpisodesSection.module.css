@@ -193,6 +193,19 @@
   color: var(--text-primary);
   background: rgba(255, 255, 255, 0.09);
 }
+.playRowSpinner {
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.25);
+  border-top-color: var(--text-primary);
+  animation: episodeRowPlaySpin 0.8s linear infinite;
+}
+@keyframes episodeRowPlaySpin {
+  to {
+    transform: rotate(360deg);
+  }
+}
 
 .empty {
   margin: 0;

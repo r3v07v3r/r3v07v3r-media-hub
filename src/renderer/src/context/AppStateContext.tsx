@@ -1,6 +1,16 @@
 'use client'
 
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type Dispatch,
+  type SetStateAction
+} from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import {
   AppNotification,
@@ -11,7 +21,7 @@ import {
   UIActivityState
 } from '@renderer/types'
 import { CONTINUE_WATCHING, USER_PROFILES } from '@renderer/data/mockData'
-import type { MediaHubSettingsSnapshot } from '@shared/media-hub/types'
+import type { MediaHubSettingsSnapshot, MediaTracks, PlaybackResult } from '@shared/media-hub/types'
 import {
   mediaItemToTrackablePayload,
   catalogItemToMediaItem
@@ -22,6 +32,7 @@ import {
   useMediaHubWatchedIds
 } from '@renderer/lib/mediaHub/hooks'
 import type { CategoryKind } from '@renderer/lib/mediaHub/categoryFilters'
+import { buildMediaId } from '@renderer/lib/mediaHub/streamId'
 import {
   captureBrowsingOrigin,
   deriveBrowsingLabel,
@@ -153,8 +164,32 @@ interface AppStateValue {
   openDetail: (media: MediaItem, originLabelOverride?: string) => void
   clearBrowsingOrigin: () => void
 
+  // Resolving a stream (stream:resolve, "searching" for a cached source)
+  // and starting it (stream:play, "buffering" — spinning up the proxy or
+  // ffmpeg transcode session) both take a real network round trip.
+  // Previously PlaybackOverlay opened immediately on click and did this
+  // work itself, showing a mostly-blank full-screen takeover the whole
+  // time (and, on a no-source/error outcome, staying open just to show
+  // that one line of text) — now startPlayback does the resolving here,
+  // BEFORE the overlay ever mounts, so any Play button can show its own
+  // inline "Searching…"/"Buffering…" state instead, and a failure never
+  // opens anything at all (just a notification, staying on whatever page
+  // the person was already looking at). `resolvingMedia` is a single
+  // shared slot (only one title can be starting at a time) — a Play
+  // button anywhere in the app compares its own media.id against it to
+  // know whether IT is the one currently loading.
+  resolvingMedia: { id: string; stage: 'searching' | 'buffering' } | null
   playbackMedia: MediaItem | null
-  startPlayback: (media: MediaItem) => void
+  playbackResult: PlaybackResult | null
+  playbackTracks: MediaTracks | null
+  // Dispatch<SetStateAction<T>>, not a plain setter — PlaybackOverlay's
+  // seek/track-selection restart logic (selectTrack/handleSeek) updates
+  // these via the functional-updater form (`setResult(prev => ...)`),
+  // which only a real useState dispatch (passed straight through here)
+  // supports.
+  setPlaybackResult: Dispatch<SetStateAction<PlaybackResult | null>>
+  setPlaybackTracks: Dispatch<SetStateAction<MediaTracks | null>>
+  startPlayback: (media: MediaItem) => Promise<void>
   stopPlayback: () => void
 
   contextMenu: { x: number; y: number; media: MediaItem } | null
@@ -200,7 +235,13 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   const [notifications, setNotifications] = useState<AppNotification[]>([])
   const [performancePanelVisible, setPerformancePanelVisible] = useState(true)
   const [browsingOrigin, setBrowsingOrigin] = useState<BrowsingOrigin | null>(null)
+  const [resolvingMedia, setResolvingMedia] = useState<{
+    id: string
+    stage: 'searching' | 'buffering'
+  } | null>(null)
   const [playbackMedia, setPlaybackMedia] = useState<MediaItem | null>(null)
+  const [playbackResult, setPlaybackResult] = useState<PlaybackResult | null>(null)
+  const [playbackTracks, setPlaybackTracks] = useState<MediaTracks | null>(null)
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; media: MediaItem } | null>(
     null
   )
@@ -385,12 +426,21 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   // Playback gate (spec decision: keep the dashboard visible without a
   // TorBox connection, only gate actual playback). `mediaHubSettings ===
   // null` (bridge missing, or the first settings fetch hasn't resolved
-  // yet) is treated as "allow" rather than "block" — PlaybackOverlay
-  // itself degrades to a clear error state if it turns out there's no
+  // yet) is treated as "allow" rather than "block" — the resolve call
+  // below degrades to a clear notification if it turns out there's no
   // real backend to resolve a stream from, which is a better first
   // impression than silently refusing to open at all.
+  //
+  // Does the actual stream:resolve ("searching") + stream:play
+  // ("buffering") round trip itself now, rather than handing an
+  // unresolved title straight to PlaybackOverlay and letting IT show a
+  // full-screen "resolving"/"no source" state — see resolvingMedia's own
+  // doc comment on the AppStateValue interface for why. playbackMedia
+  // (and therefore the overlay) is only ever set once there's a real,
+  // playable PlaybackResult in hand; a no-source or error outcome just
+  // pushes a notification and leaves the person exactly where they were.
   const startPlayback = useCallback(
-    (media: MediaItem) => {
+    async (media: MediaItem) => {
       if (mediaHubSettings && !mediaHubSettings.torboxConnected) {
         pushNotification({
           tone: 'warning',
@@ -398,12 +448,49 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         })
         return
       }
-      setPlaybackMedia(media)
+      const api = window.api?.mediaHub
+      if (!api) {
+        pushNotification({
+          tone: 'error',
+          message: "Playback isn't available outside the desktop app."
+        })
+        return
+      }
       setContextMenu(null)
+      const kind = media.mediaKind ?? (media.mediaType === 'series' ? 'series' : 'movie')
+      const mediaId = buildMediaId(kind, media.id, media.seasonNumber, media.episodeNumber)
+      setResolvingMedia({ id: media.id, stage: 'searching' })
+      try {
+        const resolved = await api.stream.resolve(kind, media.id)
+        if (!resolved.best) {
+          pushNotification({
+            tone: 'error',
+            message:
+              'No cached sources were found for this title yet. TorBox needs a source to already be cached (or picked up shortly after) — try again in a bit.'
+          })
+          return
+        }
+        setResolvingMedia({ id: media.id, stage: 'buffering' })
+        const played = await api.stream.play(resolved.best, mediaId)
+        setPlaybackResult(played)
+        setPlaybackTracks(played.tracks)
+        setPlaybackMedia(media)
+      } catch (error) {
+        pushNotification({
+          tone: 'error',
+          message: error instanceof Error ? error.message : 'Playback failed to start.'
+        })
+      } finally {
+        setResolvingMedia(null)
+      }
     },
     [mediaHubSettings, pushNotification]
   )
-  const stopPlayback = useCallback(() => setPlaybackMedia(null), [])
+  const stopPlayback = useCallback(() => {
+    setPlaybackMedia(null)
+    setPlaybackResult(null)
+    setPlaybackTracks(null)
+  }, [])
 
   const openContextMenu = useCallback(
     (x: number, y: number, media: MediaItem) => setContextMenu({ x, y, media }),
@@ -524,7 +611,12 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       browsingOrigin,
       openDetail,
       clearBrowsingOrigin,
+      resolvingMedia,
       playbackMedia,
+      playbackResult,
+      playbackTracks,
+      setPlaybackResult,
+      setPlaybackTracks,
       startPlayback,
       stopPlayback,
       contextMenu,
@@ -570,7 +662,12 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       browsingOrigin,
       openDetail,
       clearBrowsingOrigin,
+      resolvingMedia,
       playbackMedia,
+      playbackResult,
+      playbackTracks,
+      setPlaybackResult,
+      setPlaybackTracks,
       startPlayback,
       stopPlayback,
       contextMenu,
