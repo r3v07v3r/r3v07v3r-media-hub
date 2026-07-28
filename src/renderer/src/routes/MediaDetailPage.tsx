@@ -268,6 +268,48 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
     }
   }
 
+  /**
+   * "Mark season watched" has a real batch IPC (tracking:mark-season-watched
+   * — one Simkl sync call for every episode in the season, see
+   * main/media-hub/tracking.ts). "Mark season unwatched" has no batch
+   * equivalent on the backend, so it's real per-episode
+   * tracking:unmark-watched calls run in parallel instead — same
+   * underlying primitive handleMarkEpisodeWatched above uses one at a
+   * time, just fired for the whole season at once here.
+   */
+  async function handleMarkSeasonWatched(season: number, watched: boolean): Promise<void> {
+    const api = window.api?.mediaHub
+    if (!api || !media) return
+    const seasonEpisodes = episodes.filter((e) => e.season === season)
+    if (seasonEpisodes.length === 0) return
+    const item = {
+      id: media.id,
+      type: kind,
+      title: media.title,
+      poster: media.posterUrl ?? '',
+      year: media.releaseYear ? String(media.releaseYear) : ''
+    }
+    try {
+      if (watched) {
+        await api.tracking.markSeasonWatched({
+          item,
+          season,
+          episodes: seasonEpisodes.map((e) => ({ season: e.season, episode: e.episode }))
+        })
+      } else {
+        await Promise.all(
+          seasonEpisodes.map((e) =>
+            api.tracking.unmarkWatched({ item, playback: { season: e.season, episode: e.episode } })
+          )
+        )
+      }
+      const refreshed = await api.tracking.list()
+      setHistory(refreshed.history.filter((h) => h.id === media.id))
+    } catch {
+      pushNotification({ tone: 'error', message: 'Could not update the season’s watched status.' })
+    }
+  }
+
   if (metaStatus === 'loading' && !media) {
     return (
       <div className={styles.page}>
@@ -331,6 +373,7 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
               nextEpisode={nextEpisode}
               onPlay={(ep) => handlePlay(ep.season, ep.episode)}
               onMarkWatched={handleMarkEpisodeWatched}
+              onMarkSeason={handleMarkSeasonWatched}
               status={metaStatus}
             />
           </>

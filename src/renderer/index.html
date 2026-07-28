@@ -11,10 +11,14 @@
          should stay in sync with if another remote provider is added.
 
          The media-hub backend integration adds three more img-src hosts —
-         Simkl (simkl.in posters/fanart/episode stills), Kitsu (its media
-         CDN for anime cover/poster art), and Cinemeta/Stremio's addon CDN
-         (images.metahub.space poster/background art) — all read straight
-         off CatalogItem.poster/background/logo, never proxied.
+         Simkl (simkl.in posters/fanart/episode stills), Kitsu (both
+         kitsu.io, its legacy media host, and kitsu.app, the CDN Kitsu's
+         API actually returns image URLs on today — anime art rendered as
+         a blank tint-gradient fallback until kitsu.app was added here,
+         since a CSP-blocked <img> fails silently with no console error),
+         and Cinemeta/Stremio's addon CDN (images.metahub.space poster/
+         background art) — all read straight off
+         CatalogItem.poster/background/logo, never proxied.
 
          media-src allows http://127.0.0.1:* (any port) plus data: — the
          media-hub playback proxy and VLC-compatibility transcoder both
@@ -26,7 +30,7 @@
          subtitles:apply can return. -->
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://image.tmdb.org https://simkl.in https://*.simkl.in https://kitsu.io https://*.kitsu.io https://images.metahub.space https://*.metahub.space; media-src 'self' data: http://127.0.0.1:*; connect-src 'self'"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://image.tmdb.org https://simkl.in https://*.simkl.in https://kitsu.io https://*.kitsu.io https://kitsu.app https://*.kitsu.app https://images.metahub.space https://*.metahub.space; media-src 'self' data: http://127.0.0.1:*; connect-src 'self'"
     />
   </head>
 

@@ -1,5 +1,7 @@
 'use client'
 
+import { useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import type { Episode } from '@shared/media-hub/types'
 import { Icon } from '@renderer/components/icons/Icon'
 import { ArtworkImage } from '@renderer/components/media/ArtworkImage'
@@ -14,6 +16,12 @@ export interface EpisodesSectionProps {
   nextEpisode: Episode | null
   onPlay: (episode: Episode) => void
   onMarkWatched: (episode: Episode, watched: boolean) => void
+  /** Batch-marks every episode in a season watched/unwatched in one go —
+   *  see MediaDetailPage's handleMarkSeasonWatched for how "watched" maps
+   *  to the real tracking:mark-season-watched batch IPC, while "unwatched"
+   *  (no equivalent batch endpoint exists) falls back to one
+   *  tracking:unmark-watched call per episode. */
+  onMarkSeason: (season: number, watched: boolean) => void
   status: 'loading' | 'ready' | 'error'
 }
 
@@ -30,8 +38,74 @@ export function EpisodesSection({
   nextEpisode,
   onPlay,
   onMarkWatched,
+  onMarkSeason,
   status
 }: EpisodesSectionProps) {
+  const [seasonMenuOpen, setSeasonMenuOpen] = useState<number | null>(null)
+  // Two separate escapes needed here, verified live (the menu existed in
+  // the DOM at the right z-index and STILL never appeared):
+  // 1) `.seasonRow` needs its own horizontal scroll (many seasons), which
+  //    — per the CSS overflow spec — silently forces its vertical
+  //    overflow to `auto` too as soon as overflow-x isn't `visible`; a
+  //    menu positioned relative to a pill inside that row gets clipped
+  //    the instant it extends past the row's own box.
+  // 2) This section is a `.glass-panel` (backdrop-filter: blur(...)) —
+  //    Chromium gives any backdrop-filter element its own containing
+  //    block for fixed/absolute descendants, same as `transform`/`filter`
+  //    do. A plain `position: fixed` menu still renders relative to THAT
+  //    section, not the viewport, so viewport-measured coordinates land
+  //    in the wrong place (confirmed by forcing top:100px/left:100px and
+  //    seeing it render ~850px/~310px off from the viewport origin).
+  // A React portal into document.body sidesteps both: the menu is no
+  // longer a descendant of .seasonRow OR this section at all, so neither
+  // one's containing-block/overflow behavior can affect it — plain
+  // viewport-relative `position: fixed` coordinates just work.
+  const [menuAnchor, setMenuAnchor] = useState<{ top: number; left: number } | null>(null)
+  const triggerRefs = useRef(new Map<number, HTMLButtonElement>())
+  const menuRef = useRef<HTMLDivElement>(null)
+
+  function toggleSeasonMenu(season: number): void {
+    if (seasonMenuOpen === season) {
+      setSeasonMenuOpen(null)
+      setMenuAnchor(null)
+      return
+    }
+    const trigger = triggerRefs.current.get(season)
+    if (trigger) {
+      const rect = trigger.getBoundingClientRect()
+      setMenuAnchor({ top: rect.bottom + 6, left: rect.left })
+    }
+    setSeasonMenuOpen(season)
+  }
+
+  useEffect(() => {
+    if (seasonMenuOpen === null) return
+    function onClick(e: MouseEvent) {
+      const target = e.target as Node
+      const trigger = triggerRefs.current.get(seasonMenuOpen as number)
+      if (
+        menuRef.current &&
+        !menuRef.current.contains(target) &&
+        !(trigger && trigger.contains(target))
+      ) {
+        setSeasonMenuOpen(null)
+        setMenuAnchor(null)
+      }
+    }
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') {
+        setSeasonMenuOpen(null)
+        setMenuAnchor(null)
+      }
+    }
+    document.addEventListener('mousedown', onClick)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onClick)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [seasonMenuOpen])
+
   if (status === 'loading') {
     return (
       <section className={`${styles.section} glass-panel`} aria-busy="true" aria-label="Loading episodes">
@@ -67,20 +141,80 @@ export function EpisodesSection({
     <section className={`${styles.section} glass-panel`} aria-label="Episodes">
       {seasons.length > 1 && (
         <div className={`${styles.seasonRow} thin-scroll`} role="tablist" aria-label="Season">
-          {seasons.map((s) => (
-            <button
-              key={s}
-              type="button"
-              role="tab"
-              aria-selected={s === selectedSeason}
-              className={`${styles.seasonPill} ${s === selectedSeason ? styles.seasonPillActive : ''}`}
-              onClick={() => onSelectSeason(s)}
-            >
-              Season {s}
-            </button>
-          ))}
+          {seasons.map((s) => {
+            const isActive = s === selectedSeason
+            const menuOpen = seasonMenuOpen === s
+            return (
+              <div key={s} className={styles.seasonItem}>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={isActive}
+                  className={`${styles.seasonPill} ${isActive ? styles.seasonPillActive : ''}`}
+                  onClick={() => onSelectSeason(s)}
+                >
+                  Season {s}
+                </button>
+                {isActive && (
+                  <button
+                    type="button"
+                    ref={(el) => {
+                      if (el) triggerRefs.current.set(s, el)
+                      else triggerRefs.current.delete(s)
+                    }}
+                    className={styles.seasonMenuTrigger}
+                    aria-haspopup="menu"
+                    aria-expanded={menuOpen}
+                    aria-label={`Season ${s} actions`}
+                    onClick={() => toggleSeasonMenu(s)}
+                  >
+                    <Icon name="chevron-down" size={12} />
+                  </button>
+                )}
+              </div>
+            )
+          })}
         </div>
       )}
+
+      {seasonMenuOpen !== null &&
+        menuAnchor &&
+        createPortal(
+          <div
+            ref={menuRef}
+            className={`${styles.seasonMenu} glass-panel`}
+            role="menu"
+            style={{ top: menuAnchor.top, left: menuAnchor.left }}
+          >
+            <button
+              type="button"
+              role="menuitem"
+              className={styles.seasonMenuItem}
+              onClick={() => {
+                onMarkSeason(seasonMenuOpen, true)
+                setSeasonMenuOpen(null)
+                setMenuAnchor(null)
+              }}
+            >
+              <Icon name="check" size={13} />
+              Mark season watched
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              className={styles.seasonMenuItem}
+              onClick={() => {
+                onMarkSeason(seasonMenuOpen, false)
+                setSeasonMenuOpen(null)
+                setMenuAnchor(null)
+              }}
+            >
+              <Icon name="eye-off" size={13} />
+              Mark season unwatched
+            </button>
+          </div>,
+          document.body
+        )}
 
       <ul className={styles.list}>
         {visible.map((ep) => {

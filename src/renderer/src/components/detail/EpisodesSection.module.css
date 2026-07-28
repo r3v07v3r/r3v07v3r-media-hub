@@ -11,6 +11,59 @@
   gap: 8px;
   overflow-x: auto;
 }
+.seasonItem {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.seasonMenuTrigger {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  color: var(--text-secondary);
+  transition: color var(--transition-fast), background var(--transition-fast);
+}
+.seasonMenuTrigger:hover {
+  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.06);
+}
+/* Fixed, not absolute: .seasonRow's own horizontal scrollbar (overflow-x:
+   auto) forces its overflow-y to `auto` too per the CSS overflow spec (an
+   axis can't stay `visible` once the other isn't), which clipped this
+   menu the instant it extended past the row's box — invisible even
+   though it existed in the DOM at the right z-index. Position is a JS-
+   measured anchor off the trigger button (see EpisodesSection.tsx),
+   since a plain CSS-relative position would need an ancestor this menu
+   can no longer use. */
+.seasonMenu {
+  position: fixed;
+  z-index: 10;
+  min-width: 190px;
+  padding: 6px;
+  border-radius: var(--radius-medium);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.seasonMenuItem {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: var(--radius-small);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+  text-align: left;
+  white-space: nowrap;
+}
+.seasonMenuItem:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
 .seasonPill {
   flex: 0 0 auto;
   padding: 8px 18px;
