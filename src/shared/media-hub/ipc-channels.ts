@@ -84,7 +84,8 @@ export const MEDIA_HUB_CHANNELS = {
   partyEvent: 'mediahub:party:event', // push event
 
   // Window
-  windowToggleFullscreen: 'mediahub:window:toggle-fullscreen'
+  windowToggleFullscreen: 'mediahub:window:toggle-fullscreen',
+  windowFullscreenChanged: 'mediahub:window:fullscreen-changed' // push event
 } as const
 
 export type MediaHubChannel = (typeof MEDIA_HUB_CHANNELS)[keyof typeof MEDIA_HUB_CHANNELS]

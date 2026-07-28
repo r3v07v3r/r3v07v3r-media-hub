@@ -79,7 +79,17 @@ const PATHS: Record<string, string> = {
   // so the glyph reads correctly on any panel background.
   filter:
     '<path d="M4 6h5.5M13.5 6H20M4 12h9.5M17.5 12H20M4 18h3.5M11.5 18H20"/><circle cx="11.5" cy="6" r="2" fill="currentColor" stroke="none"/><circle cx="15.5" cy="12" r="2" fill="currentColor" stroke="none"/><circle cx="9.5" cy="18" r="2" fill="currentColor" stroke="none"/>',
-  sort: '<path d="M6 4v16M6 4l-3 3M6 4l3 3M18 20V4M18 20l-3-3M18 20l3-3"/>'
+  sort: '<path d="M6 4v16M6 4l-3 3M6 4l3 3M18 20V4M18 20l-3-3M18 20l3-3"/>',
+  expand:
+    '<path d="M9 4H4v5M15 4h5v5M9 20H4v-5M15 20h5v-5"/>',
+  collapse:
+    '<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>',
+  // Fit-mode toggle (Fit / Fill / Stretch) — an outer frame (the player
+  // window) with an inner one (the video content) so the glyph reads as
+  // "how the picture sits inside the frame" regardless of which mode is
+  // currently active, rather than needing a different icon per mode.
+  'aspect-ratio':
+    '<rect x="3.5" y="4.5" width="17" height="15" rx="1.5"/><rect x="7.5" y="8" width="9" height="8" rx="1"/>'
 }
 
 interface IconProps {

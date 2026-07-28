@@ -304,7 +304,9 @@ const api = {
 
     window: {
       toggleFullscreen: (): Promise<{ fullScreen: boolean }> =>
-        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.windowToggleFullscreen)
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.windowToggleFullscreen),
+      onFullscreenChange: (onEvent: (payload: { fullScreen: boolean }) => void): (() => void) =>
+        subscribe<{ fullScreen: boolean }>(MEDIA_HUB_CHANNELS.windowFullscreenChanged, onEvent)
     }
   }
 }

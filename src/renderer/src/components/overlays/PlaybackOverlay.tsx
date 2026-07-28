@@ -49,6 +49,11 @@ export function PlaybackOverlay() {
   const [openMenu, setOpenMenu] = useState<'audio' | 'subtitles' | null>(null)
   const [subtitleResults, setSubtitleResults] = useState<SubtitleResult[] | null>(null)
   const [activeSubtitleTrackUrl, setActiveSubtitleTrackUrl] = useState<string | null>(null)
+  const [isFullscreen, setIsFullscreen] = useState(false)
+  // How the video fills the player frame: 'contain' (default, letterboxed,
+  // nothing cropped), 'cover' (fills the frame, crops whatever overflows),
+  // 'fill' (stretches to the frame, ignoring aspect ratio entirely).
+  const [fitMode, setFitMode] = useState<'contain' | 'cover' | 'fill'>('contain')
   const markedWatchedRef = useRef(false)
   const hideControlsTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   // Compatibility-mode playback is a single, non-seekable HTTP connection
@@ -85,6 +90,34 @@ export function PlaybackOverlay() {
     if (!video) return
     if (video.paused) video.play().catch(() => {})
     else video.pause()
+  }, [])
+
+  // Real OS-level window fullscreen (via the main process's
+  // BrowserWindow.setFullScreen), not the DOM Fullscreen API on this
+  // container div — that was the previously-shipped approach and it simply
+  // didn't work reliably here. This channel/IPC pair already existed
+  // (appIpc.ts's windowToggleFullscreen) but had no caller anywhere in the
+  // renderer until now.
+  const handleToggleFullscreen = useCallback(() => {
+    window.api?.mediaHub?.window
+      .toggleFullscreen()
+      .then((result) => setIsFullscreen(result.fullScreen))
+      .catch(() => {})
+  }, [])
+
+  // Keeps this button's icon/label in sync even if fullscreen is exited by
+  // something other than this button (Escape, the OS's own fullscreen
+  // shortcut) — see main/index.ts's enter-full-screen/leave-full-screen
+  // listeners for the other half of this.
+  useEffect(() => {
+    if (!playbackMedia) return
+    return window.api?.mediaHub?.window.onFullscreenChange((payload) =>
+      setIsFullscreen(payload.fullScreen)
+    )
+  }, [playbackMedia])
+
+  const cycleFitMode = useCallback(() => {
+    setFitMode((prev) => (prev === 'contain' ? 'cover' : prev === 'cover' ? 'fill' : 'contain'))
   }, [])
 
   useEffect(() => {
@@ -235,6 +268,7 @@ export function PlaybackOverlay() {
 
   const audioTracks = useMemo<MediaTrack[]>(() => tracks?.audio ?? [], [tracks])
   const subtitleTracks = useMemo<MediaTrack[]>(() => tracks?.subtitle ?? [], [tracks])
+  const fitModeLabel = { contain: 'Fit', cover: 'Fill', fill: 'Stretch' }[fitMode]
 
   // AppStateContext's startPlayback only ever sets playbackMedia once a
   // real PlaybackResult is already resolved — see that function's own
@@ -251,13 +285,14 @@ export function PlaybackOverlay() {
       aria-modal="true"
       aria-label="Playback"
       onMouseMove={resetControlsTimer}
-      onDoubleClick={() => containerRef.current?.requestFullscreen?.().catch(() => {})}
+      onDoubleClick={handleToggleFullscreen}
     >
       {/* Caption track is added dynamically once a subtitle is applied
           (see activeSubtitleTrackUrl) — not present on initial render. */}
       <video
         ref={videoRef}
         className={styles.videoSurface}
+        style={{ objectFit: fitMode }}
         src={result.url}
         autoPlay
         onClick={togglePlay}
@@ -417,11 +452,22 @@ export function PlaybackOverlay() {
 
             <button
               type="button"
-              className={styles.playerIconButton}
-              onClick={() => containerRef.current?.requestFullscreen?.().catch(() => {})}
-              aria-label="Fullscreen"
+              className={`${styles.playerIconButton} ${styles.playerFitButton}`}
+              onClick={cycleFitMode}
+              aria-label={`Picture fit: ${fitModeLabel} (click to change)`}
+              title={`Picture fit: ${fitModeLabel}`}
             >
-              <Icon name="grid" size={15} />
+              <Icon name="aspect-ratio" size={15} />
+              <span className={styles.playerFitLabel}>{fitModeLabel}</span>
+            </button>
+
+            <button
+              type="button"
+              className={styles.playerIconButton}
+              onClick={handleToggleFullscreen}
+              aria-label={isFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
+            >
+              <Icon name={isFullscreen ? 'collapse' : 'expand'} size={15} />
             </button>
           </div>
         </div>

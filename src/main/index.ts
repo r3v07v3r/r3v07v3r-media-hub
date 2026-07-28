@@ -9,11 +9,12 @@ import { registerMediaHubIpc } from './ipc/mediaHub'
 import { APP_SCHEME, registerAppSchemeAsPrivileged, registerAppSchemeHandler } from './appProtocol'
 import { createDatabase } from './media-hub/database'
 import { getDatabase, setDatabase } from './media-hub/dbState'
-import { setActiveWindow } from './media-hub/rendererBridge'
+import { setActiveWindow, sendToRenderer } from './media-hub/rendererBridge'
 import { isAllowedExternalUrl } from './media-hub/security'
 import { setupAutoUpdater } from './media-hub/autoUpdate'
 import { closeParty } from './media-hub/watchParty'
 import { stopPlayback } from './media-hub/playbackSession'
+import { MEDIA_HUB_CHANNELS } from '../shared/media-hub/ipc-channels'
 
 // Fixed 1920x1080 design canvas (spec section 1) — the composition is built
 // pixel-for-pixel at this resolution first; responsive scaling is a later
@@ -45,6 +46,17 @@ function createWindow(): void {
 
   mainWindow.on('ready-to-show', () => {
     mainWindow.show()
+  })
+
+  // Lets the renderer's playback fullscreen button reflect the window's
+  // real state even when it changes from something other than that button
+  // (OS-level exit via Escape/F11, etc.) — without this, the renderer's
+  // own local toggle-tracking state would drift out of sync with reality.
+  mainWindow.on('enter-full-screen', () => {
+    sendToRenderer(MEDIA_HUB_CHANNELS.windowFullscreenChanged, { fullScreen: true })
+  })
+  mainWindow.on('leave-full-screen', () => {
+    sendToRenderer(MEDIA_HUB_CHANNELS.windowFullscreenChanged, { fullScreen: false })
   })
 
   // media-hub integration: only ever open an external browser window for a
