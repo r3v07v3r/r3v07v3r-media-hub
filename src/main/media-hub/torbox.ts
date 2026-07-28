@@ -33,8 +33,8 @@ import { getDatabase } from './dbState'
 import { fetchJson, type HttpError } from './httpClient'
 import { handle } from './ipcGuard'
 import {
+  cometConfigPath,
   enrichTorBoxItem,
-  meteorP2PConfigPath,
   rankStreams,
   selectVideoFile,
   validateTorBoxToken,
@@ -140,9 +140,13 @@ export function registerTorBoxIpc(): void {
       const key = `stream:v1:${type}:${id}`
       const db = getDatabase()
       try {
-        const config = meteorP2PConfigPath()
+        // meteorfortheweebs.midnightignite.me (the domain this originally
+        // pointed to) now 301-redirects here — the "Meteor" add-on it ran
+        // was retired in favor of "Comet", a different add-on with an
+        // unrelated config schema (see cometConfigPath's own doc comment).
+        const config = cometConfigPath()
         const meteor = await fetchJson<{ streams?: StreamCandidate[] }>(
-          `https://meteorfortheweebs.midnightignite.me/${config}/stream/${type}/${encodeURIComponent(id)}.json`
+          `https://cometfortheweebs.midnightignite.me/${config}/stream/${type}/${encodeURIComponent(id)}.json`
         )
         const discovered = (meteor.streams || []).filter((s) =>
           /^[a-f0-9]{40}$/i.test(s.infoHash || '')
@@ -166,8 +170,56 @@ export function registerTorBoxIpc(): void {
             .filter((s) => available.has(s.infoHash.toLowerCase()))
             .map((s) => ({ ...s, cached: true, compatible: true }))
         )
-        const result: StreamResolveResult = { streams, best: streams[0] || null }
-        if (result.best) db.putCache(key, result, 60 * 60 * 1000)
+        if (streams.length) {
+          const result: StreamResolveResult = { streams, best: streams[0] }
+          db.putCache(key, result, 60 * 60 * 1000)
+          return result
+        }
+
+        // Real torrents exist for this title, just none TorBox has cached
+        // yet — rather than a dead end, submit the best one (ranked the
+        // same way as a cached match, by exactness/resolution — see
+        // rankStreams, whose scoring already treats `cached: false`
+        // gracefully rather than excluding it) to actually start
+        // downloading it, so this title becomes playable a few minutes
+        // later instead of never. Same magnet-building
+        // (infoHash + sanitizeTrackers) play:stream's own createtorrent
+        // call already uses, just without its `add_only_if_cached: true`
+        // flag — that flag is exactly what makes THIS submission a real
+        // "start caching" request instead of a no-op. Best-effort: any
+        // failure here (TorBox quota, network) just falls through to the
+        // same honest "nothing available yet" result as before this
+        // existed, rather than surfacing a harder error for what's meant
+        // to be a fallback path.
+        const candidate = rankStreams(discovered)[0]
+        let queued = false
+        if (candidate) {
+          try {
+            const magnet = new URL('magnet:')
+            magnet.searchParams.set('xt', `urn:btih:${candidate.infoHash.toLowerCase()}`)
+            for (const tracker of sanitizeTrackers(candidate.sources)) {
+              magnet.searchParams.append('tr', tracker)
+            }
+            const form = new FormData()
+            form.append('magnet', magnet.toString())
+            await torboxFetch(`${TORBOX}/torrents/createtorrent`, {
+              method: 'POST',
+              headers: { Authorization: `Bearer ${auth}` },
+              body: form
+            })
+            queued = true
+          } catch {
+            // Best-effort, see comment above.
+          }
+        }
+        const result: StreamResolveResult = { streams: [], best: null, queued }
+        // Cached briefly either way (a much shorter window than a real
+        // cache hit's hour) — a queued request shouldn't get resubmitted
+        // to TorBox on every repeat click while it's still working
+        // through the download, and there's no reason to re-hit the
+        // Meteor addon every click for a title with genuinely nothing
+        // available either.
+        db.putCache(key, result, 3 * 60 * 1000)
         return result
       } catch (error) {
         const stale = db.getCache<StreamResolveResult>(key, { allowExpired: true })

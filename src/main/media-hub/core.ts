@@ -67,29 +67,48 @@ export function validateTorBoxToken(token: unknown): boolean {
   return typeof token === 'string' && token.trim().length >= 24 && !/\s/.test(token.trim())
 }
 
-export function meteorConfigPath(token: string): string {
+/**
+ * Config for the P2P scraper add-on's `/{b64config}/stream/...json` route
+ * (see torbox.ts's stream:resolve). The add-on this pointed to ("Meteor")
+ * was retired and now redirects to a different, unrelated add-on ("Comet",
+ * https://github.com/g0ldyy/comet) that has its own, much larger config
+ * schema — the old `{debridService, debridApiKey, maxResults, allowP2P}`
+ * shape (and this function's former name/pair, meteorConfigPath/
+ * meteorP2PConfigPath) is rejected outright ("obsolete configuration").
+ * This shape and its encoding (plain `btoa`/base64, NOT base64url) were
+ * reverse-engineered directly from Comet's own /configure page's inline
+ * getSettings()/getManifestUrl() JS (not documented anywhere) and verified
+ * live against the actual hosted instance this app talks to — confirmed
+ * to return real infoHash-bearing candidates. `debridServices` is left
+ * empty deliberately: this app already does its own authoritative
+ * checkcached call against the user's real TorBox account right after
+ * (see torbox.ts), so there's no need to hand this third-party add-on the
+ * user's TorBox API key just to get candidates discovered.
+ */
+export function cometConfigPath(): string {
   return Buffer.from(
     JSON.stringify({
-      debridService: 'torbox',
-      debridApiKey: token,
-      maxResults: '20',
-      cachedOnly: true,
-      allowP2P: false
+      maxResultsPerResolution: 0,
+      maxSize: 0,
+      cachedOnly: false,
+      sortCachedUncachedTogether: false,
+      removeTrash: true,
+      resultFormat: ['all'],
+      debridServices: [],
+      enableTorrent: true,
+      deduplicateStreams: false,
+      scrapeDebridAccountTorrents: false,
+      debridStreamProxyPassword: '',
+      languages: { required: [], allowed: [], exclude: [], preferred: [] },
+      resolutions: {},
+      options: {
+        remove_ranks_under: -10000000000,
+        allow_english_in_languages: false,
+        remove_unknown_languages: false
+      }
     }),
     'utf8'
-  ).toString('base64url')
-}
-
-export function meteorP2PConfigPath(): string {
-  return Buffer.from(
-    JSON.stringify({
-      debridService: 'torrent',
-      debridApiKey: '',
-      maxResults: '30',
-      allowP2P: true
-    }),
-    'utf8'
-  ).toString('base64url')
+  ).toString('base64')
 }
 
 interface RawTrailerInput {

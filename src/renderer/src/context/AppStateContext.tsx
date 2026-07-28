@@ -463,10 +463,17 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       try {
         const resolved = await api.stream.resolve(kind, media.id)
         if (!resolved.best) {
+          // `queued` (see StreamResolveResult's own doc comment) means a
+          // real torrent existed but nothing was cached yet, and the
+          // backend just submitted it to TorBox to start downloading —
+          // genuinely different from "nothing exists for this title
+          // anywhere," and worth telling apart rather than one generic
+          // failure message for both.
           pushNotification({
-            tone: 'error',
-            message:
-              'No cached sources were found for this title yet. TorBox needs a source to already be cached (or picked up shortly after) — try again in a bit.'
+            tone: resolved.queued ? 'warning' : 'error',
+            message: resolved.queued
+              ? "This title wasn't cached yet, so TorBox has started downloading it — try again in a few minutes."
+              : 'No sources were found for this title yet — try again later.'
           })
           return
         }

@@ -90,6 +90,12 @@ export interface StreamCandidate {
 export interface StreamResolveResult {
   streams: StreamCandidate[]
   best: StreamCandidate | null
+  /** True when nothing was cached on TorBox yet, but a real torrent
+   *  candidate existed and was just submitted to start caching it (see
+   *  torbox.ts's stream:resolve handler) — lets the renderer tell that
+   *  apart from a genuine "nothing exists for this title anywhere" dead
+   *  end, since only one of those is worth "try again in a few minutes." */
+  queued?: boolean
 }
 
 export interface MediaTrack {
