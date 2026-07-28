@@ -28,7 +28,6 @@ export interface CategoryConfig {
   path: string
   label: string
   pluralLabel: string
-  heroLabel: string
   searchPlaceholder: string
   icon: string
   filterFields: CategoryFilterFields
@@ -39,7 +38,6 @@ export const MOVIES_CONFIG: CategoryConfig = {
   path: '/movies',
   label: 'Movies',
   pluralLabel: 'movies',
-  heroLabel: 'Featured Movie',
   searchPlaceholder: 'Search movies…',
   icon: 'movies',
   filterFields: {
@@ -56,7 +54,6 @@ export const SERIES_CONFIG: CategoryConfig = {
   path: '/series',
   label: 'Series',
   pluralLabel: 'series',
-  heroLabel: 'Featured Series',
   searchPlaceholder: 'Search series…',
   icon: 'tv',
   filterFields: {
@@ -73,7 +70,6 @@ export const ANIME_CONFIG: CategoryConfig = {
   path: '/anime',
   label: 'Anime',
   pluralLabel: 'anime',
-  heroLabel: 'Featured Anime',
   searchPlaceholder: 'Search anime…',
   icon: 'anime',
   filterFields: {

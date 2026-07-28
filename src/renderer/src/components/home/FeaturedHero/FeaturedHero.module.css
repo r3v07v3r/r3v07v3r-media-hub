@@ -215,15 +215,6 @@
   max-width: 520px;
 }
 
-.label {
-  font-family: var(--font-display);
-  font-weight: 600;
-  font-size: 12.5px;
-  letter-spacing: 3px;
-  text-transform: uppercase;
-  color: var(--accent-violet);
-}
-
 .title {
   font-family: var(--font-display);
   font-weight: 300;
@@ -240,6 +231,22 @@
      just larger throughout. */
   font-size: clamp(39px, 5vw, 74px);
   text-transform: uppercase;
+  /* Rotating between slides swaps in titles of wildly different lengths
+     ("MICHAEL" vs "THE MANDALORIAN AND GROGU", the latter wrapping to 3
+     lines at this font size) — left unconstrained, a short title left
+     everything below it (description, actions, slide selector) sitting
+     several lines higher than a long one did, so Watch Now/My List
+     visibly jumped position on every auto-rotation. Clamped to 3 lines
+     AND floored at that same height (via the `lh` unit, so it tracks
+     line-height directly rather than a hand-computed px number) reserves
+     identical vertical space regardless of which title is showing —
+     short titles leave blank space below them instead of collapsing the
+     box. */
+  min-height: 3lh;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
 }
 .subtitle {
   display: block;
@@ -258,7 +265,14 @@
      height (see that rule's comment), an unusually long synopsis needs
      to be truncated instead of overflowing the box. white-space:pre-line
      dropped since -webkit-line-clamp needs normal wrapping to count
-     lines correctly; synopses don't rely on preserved line breaks. */
+     lines correctly; synopses don't rely on preserved line breaks.
+     min-height floors this at the same 3-line height line-clamp caps it
+     at — line-clamp alone only ever shrinks a box (down to however many
+     lines the actual text needs), it doesn't grow a short synopsis back
+     up to match a long one, which was the other half of the
+     actions/selector position jumping between rotations (see .title's
+     matching comment). */
+  min-height: 3lh;
   display: -webkit-box;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 3;

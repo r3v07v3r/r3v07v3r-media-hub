@@ -1,12 +1,13 @@
 /* Movies/Series/Anime category page shell — deliberately reuses
    HomeDashboard.module.css's own grid-area names ("assistant"/"hero"/
-   "status"/"picks") so CompactAIAssistant/FeaturedHero/
-   ContinueWatchingPanel/RecommendationCarousel's own hardcoded
-   `grid-area` rules place them identically to Home, with two new rows of
-   this page's own: "filterbar" and "content" (one continuous filtered
-   grid — see CategoryPage.tsx/MediaGrid.tsx). Column widths and the hero
-   row's height floor are copied verbatim from HomeDashboard.module.css so
-   the hero reads as the same size/shape across every page — desktop
+   "picks") so CompactAIAssistant/FeaturedHero/ContinueWatchingPanel/
+   RecommendationCarousel's own hardcoded `grid-area` rules place them
+   identically to Home, with two new rows of this page's own: "filterbar"
+   and "content" (one continuous filtered grid, spanning all three
+   columns — there's no "status" column here; PerformanceWidget is
+   Home-only — see CategoryPage.tsx/MediaGrid.tsx). Column widths and the
+   hero row's height floor are copied verbatim from HomeDashboard.module.css
+   so the hero reads as the same size/shape across every page — desktop
    (1920x1080) first, per the integration spec; narrower widths get the
    same reflow treatment Home already has, nothing further.
 
@@ -30,7 +31,7 @@
     'assistant hero hero'
     'picks picks picks'
     'filterbar filterbar filterbar'
-    'content content status';
+    'content content content';
   gap: 12px;
   padding: 10px 26px 16px calc(26px + var(--nav-rail-width, 285px) * 0.8);
 }

@@ -49,13 +49,9 @@ export interface FeaturedHeroProps {
    *  "featured" list. When omitted, behavior is unchanged from before this
    *  prop existed (Home's own live-recommendations-or-mock-rotation). */
   items?: MediaItem[]
-  /** "Featured" on Home; category pages pass "Featured Movie"/"Featured
-   *  Series"/"Featured Anime" so the label matches what's actually being
-   *  shown instead of a generic term. */
-  heroLabel?: string
 }
 
-export function FeaturedHero({ items: itemsProp, heroLabel }: FeaturedHeroProps = {}) {
+export function FeaturedHero({ items: itemsProp }: FeaturedHeroProps = {}) {
   const { featured, homeFeedLive } = useAppState()
   // home:personalized's top recommendations stand in for this dashboard's
   // hero-rotation concept (see hooks.ts's useMediaHubHomeFeed) once real —
@@ -72,10 +68,10 @@ export function FeaturedHero({ items: itemsProp, heroLabel }: FeaturedHeroProps 
   // component just declines to render rather than dividing by zero below.
   if (items.length === 0) return null
 
-  return <FeaturedHeroInner items={items} heroLabel={heroLabel} />
+  return <FeaturedHeroInner items={items} />
 }
 
-function FeaturedHeroInner({ items, heroLabel }: { items: MediaItem[]; heroLabel?: string }) {
+function FeaturedHeroInner({ items }: { items: MediaItem[] }) {
   const [index, setIndex] = useState(0)
   const [paused, setPaused] = useState(false)
   const [prevItem, setPrevItem] = useState<MediaItem | null>(null)
@@ -166,7 +162,7 @@ function FeaturedHeroInner({ items, heroLabel }: { items: MediaItem[]; heroLabel
       <div className={styles.grainLayer} aria-hidden="true" />
 
       <div className={styles.content}>
-        <FeaturedMetadata item={item} label={heroLabel} />
+        <FeaturedMetadata item={item} />
         <HeroActions item={item} />
         <div className={styles.selectorWrap}>
           <button

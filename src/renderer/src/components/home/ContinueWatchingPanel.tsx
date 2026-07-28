@@ -62,7 +62,7 @@ export function ContinueWatchingPanel({ kindFilter }: ContinueWatchingPanelProps
                   aria-label={isDone ? `Open details for ${m.title}` : `Resume ${m.title}`}
                 >
                   <ArtworkImage
-                    src={artwork.thumbnailUrl}
+                    src={artwork.thumbnailUrl ?? artwork.posterUrl ?? artwork.backdropUrl}
                     alt=""
                     fallbackTitle={m.title}
                     artTint={m.artTint}

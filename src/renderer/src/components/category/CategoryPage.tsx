@@ -5,15 +5,17 @@
 // categoryConfig.ts) rather than three near-identical page components, per
 // the integration spec's "prefer a shared category-page architecture with
 // configuration/data adapters" instruction. Composition mirrors
-// HomeDashboard.tsx's own grid (same "assistant"/"hero"/"status"/"picks"
-// grid-area names, reused unchanged by CompactAIAssistant/FeaturedHero/
-// ContinueWatchingPanel/RecommendationCarousel/PerformanceWidget — see
-// CategoryPage.module.css) so these pages read as direct siblings of Home
-// rather than a new layout pattern, with two new rows of its own: the
-// filter bar and one continuous results grid below it (see MediaGrid —
-// always showing every title matching the current filters, lazily
-// revealed as the person scrolls, rather than splitting the same pool
-// into a few curated rails above a genre-pill row).
+// HomeDashboard.tsx's own grid (same "assistant"/"hero"/"picks" grid-area
+// names, reused unchanged by CompactAIAssistant/FeaturedHero/
+// ContinueWatchingPanel/RecommendationCarousel — see CategoryPage.module.css)
+// so these pages read as direct siblings of Home rather than a new layout
+// pattern, with two new rows of its own: the filter bar and one continuous
+// results grid below it (see MediaGrid — always showing every title
+// matching the current filters, lazily revealed as the person scrolls,
+// rather than splitting the same pool into a few curated rails above a
+// genre-pill row). PerformanceWidget (Home's own CPU/GPU/RAM gauges) is
+// deliberately NOT reused here — that panel is Home-specific, not a
+// standing app-wide fixture.
 
 import { useMemo } from 'react'
 import { useSearchParams } from 'react-router-dom'
@@ -31,7 +33,6 @@ import { CompactAIAssistant } from '@renderer/components/home/CompactAIAssistant
 import { FeaturedHero } from '@renderer/components/home/FeaturedHero/FeaturedHero'
 import { ContinueWatchingPanel } from '@renderer/components/home/ContinueWatchingPanel'
 import { RecommendationCarousel } from '@renderer/components/home/RecommendationCarousel'
-import { PerformanceWidget } from '@renderer/components/home/PerformanceWidget'
 import { Icon } from '@renderer/components/icons/Icon'
 import { CategoryFilterBar } from './CategoryFilterBar'
 import { MediaGrid } from './MediaGrid'
@@ -119,7 +120,7 @@ export function CategoryPage({ config }: { config: CategoryConfig }) {
           would break that self-placement. */}
       <CompactAIAssistant kinds={[config.kind]} />
 
-      <FeaturedHero items={heroItems} heroLabel={config.heroLabel} />
+      <FeaturedHero items={heroItems} />
       <ContinueWatchingPanel kindFilter={config.kind} />
       <RecommendationCarousel />
 
@@ -173,8 +174,6 @@ export function CategoryPage({ config }: { config: CategoryConfig }) {
           />
         )}
       </div>
-
-      <PerformanceWidget />
     </div>
   )
 }

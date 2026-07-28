@@ -2,19 +2,9 @@ import { MediaItem } from '@renderer/types'
 import { Icon } from '@renderer/components/icons/Icon'
 import styles from './FeaturedHero.module.css'
 
-export function FeaturedMetadata({
-  item,
-  label = 'Featured'
-}: {
-  item: MediaItem
-  /** "Featured" on Home; category pages pass "Featured Movie"/"Featured
-   *  Series"/"Featured Anime" so this reads as page-specific rather than
-   *  generic. */
-  label?: string
-}) {
+export function FeaturedMetadata({ item }: { item: MediaItem }) {
   return (
     <div>
-      <span className={styles.label}>{label}</span>
       <h1 className={styles.title}>
         {item.title}
         {item.subtitle && <span className={styles.subtitle}>{item.subtitle}</span>}
