@@ -16,7 +16,11 @@ import {
   mediaItemToTrackablePayload,
   catalogItemToMediaItem
 } from '@renderer/lib/mediaHub/adapters'
-import { useMediaHubBrowseCatalog, useMediaHubHomeFeed } from '@renderer/lib/mediaHub/hooks'
+import {
+  useMediaHubBrowseCatalog,
+  useMediaHubHomeFeed,
+  useMediaHubWatchedIds
+} from '@renderer/lib/mediaHub/hooks'
 import type { CategoryKind } from '@renderer/lib/mediaHub/categoryFilters'
 import {
   captureBrowsingOrigin,
@@ -187,7 +191,8 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   const [continueWatching, setContinueWatching] =
     useState<ContinueWatchingItem[]>(CONTINUE_WATCHING)
   const homeFeed = useMediaHubHomeFeed()
-  const browseCatalog = useMediaHubBrowseCatalog(myList)
+  const watchedIdsResult = useMediaHubWatchedIds()
+  const browseCatalog = useMediaHubBrowseCatalog(myList, watchedIdsResult.watchedIds)
   const [mediaHubSettings, setMediaHubSettings] = useState<MediaHubSettingsSnapshot | null>(null)
   const [assistantState, setAssistantState] = useState<AssistantState>('idle')
   const [assistantQuery, setAssistantQuery] = useState('')
@@ -288,10 +293,18 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       const playback = { season: entry.media.seasonNumber, episode: entry.media.episodeNumber }
       const call = watched ? api.tracking.markWatched : api.tracking.unmarkWatched
       call({ item, playback })
-        .then(() => homeFeed.refresh())
+        .then(() => {
+          homeFeed.refresh()
+          // Watching/unwatching here changes what tracking:list's history
+          // reports for this id too — refresh so the plain catalog grids'
+          // own watched/completed badges (see watchedIdsResult, threaded
+          // into browseCatalog above) don't go stale until some unrelated
+          // catalog refetch happens to pick it up.
+          watchedIdsResult.refresh()
+        })
         .catch(() => {})
     },
-    [continueWatching, homeFeed]
+    [continueWatching, homeFeed, watchedIdsResult]
   )
 
   const removeContinueWatching = useCallback(

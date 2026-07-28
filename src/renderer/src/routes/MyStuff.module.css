@@ -39,13 +39,11 @@
   height: 130px;
   border-radius: var(--radius-medium);
   border: 1px solid var(--border-subtle);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-family: var(--font-display);
-  font-weight: 700;
-  font-size: 28px;
-  color: rgba(255, 255, 255, 0.9);
+  overflow: hidden;
+}
+.artImage {
+  position: absolute;
+  inset: 0;
 }
 
 .info {

@@ -7,11 +7,20 @@ import { Icon } from '@renderer/components/icons/Icon'
 import { useReducedMotion } from '@renderer/hooks/useReducedMotion'
 import { resolveArtwork } from '@renderer/lib/artwork'
 import { ArtworkImage } from '@renderer/components/media/ArtworkImage'
+import { WatchStatusBadge } from '@renderer/components/media/WatchStatusBadge'
+import { getWatchStatus } from '@renderer/lib/mediaHub/watchStatus'
 import styles from './MoodBrowser.module.css'
 
 export function MoodBrowser() {
-  const { activeMood, setActiveMood, combinedMoods, toggleCombinedMood, openDetail, catalog } =
-    useAppState()
+  const {
+    activeMood,
+    setActiveMood,
+    combinedMoods,
+    toggleCombinedMood,
+    openDetail,
+    catalog,
+    continueWatching
+  } = useAppState()
   const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const reducedMotion = useReducedMotion()
 
@@ -60,6 +69,7 @@ export function MoodBrowser() {
             <div className={styles.resultsGrid}>
               {results.map((m) => {
                 const artwork = resolveArtwork(m)
+                const watchStatus = getWatchStatus(m, continueWatching)
                 return (
                   <button
                     key={m.id}
@@ -78,6 +88,7 @@ export function MoodBrowser() {
                     />
                     <div className={styles.resultScrim} aria-hidden="true" />
                     <span className={styles.resultTitle}>{m.title}</span>
+                    <WatchStatusBadge status={watchStatus} compact />
                   </button>
                 )
               })}

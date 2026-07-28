@@ -5,6 +5,8 @@ import { MediaItem, matchTier } from '@renderer/types'
 import { Icon } from '@renderer/components/icons/Icon'
 import { resolveArtwork } from '@renderer/lib/artwork'
 import { ArtworkImage } from '@renderer/components/media/ArtworkImage'
+import { WatchStatusBadge } from '@renderer/components/media/WatchStatusBadge'
+import { getWatchStatus } from '@renderer/lib/mediaHub/watchStatus'
 import styles from './RecommendationCarousel.module.css'
 
 const MATCH_CLASS: Record<string, string> = {
@@ -15,8 +17,9 @@ const MATCH_CLASS: Record<string, string> = {
 }
 
 export function MediaCard({ media }: { media: MediaItem }) {
-  const { openDetail, startPlayback, openContextMenu } = useAppState()
+  const { openDetail, startPlayback, openContextMenu, continueWatching } = useAppState()
   const artwork = resolveArtwork(media)
+  const watchStatus = getWatchStatus(media, continueWatching)
 
   function handleContextMenu(e: React.MouseEvent) {
     e.preventDefault()
@@ -51,6 +54,7 @@ export function MediaCard({ media }: { media: MediaItem }) {
           className={styles.cardArtImage}
         />
         <div className={styles.cardScrim} aria-hidden="true" />
+        <WatchStatusBadge status={watchStatus} />
         <button
           type="button"
           className={styles.playButton}

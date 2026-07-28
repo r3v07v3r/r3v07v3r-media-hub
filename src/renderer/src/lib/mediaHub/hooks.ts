@@ -58,7 +58,10 @@ export interface BrowseCatalogResult {
  * so a page can say so honestly instead of presenting the fallback as
  * real data.
  */
-export function useMediaHubBrowseCatalog(trackedIds: Set<string>): BrowseCatalogResult {
+export function useMediaHubBrowseCatalog(
+  trackedIds: Set<string>,
+  watchedIds: Set<string>
+): BrowseCatalogResult {
   const [items, setItems] = useState<CatalogItem[] | null>(null)
   // Lazily derived from bridge presence (a constant for this component's
   // lifetime, not something that changes across renders) rather than
@@ -102,7 +105,7 @@ export function useMediaHubBrowseCatalog(trackedIds: Set<string>): BrowseCatalog
 
   if (items && items.length) {
     return {
-      items: items.map((item) => catalogItemToMediaItem(item, { trackedIds })),
+      items: items.map((item) => catalogItemToMediaItem(item, { trackedIds, watchedIds })),
       loading,
       live: true,
       settled,
@@ -110,6 +113,48 @@ export function useMediaHubBrowseCatalog(trackedIds: Set<string>): BrowseCatalog
     }
   }
   return { items: CATALOG, loading, live: false, settled, refresh }
+}
+
+export interface WatchedIdsResult {
+  /** ids with at least one tracking:list history entry — see
+   *  CatalogItemAdapterContext's own doc comment in adapters.ts for what
+   *  this does and doesn't distinguish (a movie's binary watched/unwatched,
+   *  vs. a series/anime's "at least one episode watched," which reads as
+   *  "completed" once it's no longer sitting in Continue Watching — see
+   *  lib/mediaHub/watchStatus.ts, the one place that combines the two). */
+  watchedIds: Set<string>
+  refresh: () => void
+}
+
+/**
+ * tracking:list's history, reduced to just the id set every catalog-sourced
+ * MediaItem needs for its watched/completed badge (see
+ * CatalogItemAdapterContext.watchedIds) — a separate hook from
+ * useMediaHubHomeFeed because this is a flat, kind-agnostic id lookup
+ * (Movies/Series/Anime grids and My Stuff all need it), not part of the
+ * Home-specific personalized feed.
+ */
+export function useMediaHubWatchedIds(): WatchedIdsResult {
+  const [watchedIds, setWatchedIds] = useState<Set<string>>(new Set())
+  const [generation, setGeneration] = useState(0)
+
+  useEffect(() => {
+    let cancelled = false
+    const api = window.api?.mediaHub
+    if (!api) return
+    api.tracking
+      .list()
+      .then((result) => {
+        if (cancelled) return
+        setWatchedIds(new Set(result.history.map((h) => h.id)))
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [generation])
+
+  return { watchedIds, refresh: () => setGeneration((g) => g + 1) }
 }
 
 export interface HomeFeedResult {
