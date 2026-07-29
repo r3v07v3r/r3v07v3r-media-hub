@@ -101,7 +101,26 @@ export function buildFfmpegArguments(
   // Input-side seek (-ss before -i) is fast/keyframe-based, which is what
   // we want since video is copied, not decoded — a re-encode-precision
   // seek isn't possible (or needed) without decoding video anyway.
-  if (startTime > 0) args.push('-ss', String(Math.floor(startTime)))
+  //
+  // -noaccurate_seek is the fix for a real live-reported bug: after any
+  // seek, audio played noticeably behind the video for the rest of that
+  // segment. Root cause — ffmpeg's *default* behavior for -ss before -i is
+  // "accurate seek": it seeks near a keyframe internally, but for any
+  // stream being decoded/re-encoded (audio here — never true for a
+  // `-c:v copy` stream, which by definition can't be trimmed to a
+  // non-keyframe point without re-encoding) it then discards frames until
+  // the exact requested startTime. That makes audio start almost exactly
+  // at startTime while copy-mode video can only start at the nearest
+  // preceding keyframe — video ends up with extra "keyframe-to-startTime"
+  // content audio doesn't have, so audio reads as behind by however far
+  // that keyframe gap is (commonly several seconds). -noaccurate_seek
+  // stops ffmpeg from doing that discard-until-exact-time trim for audio,
+  // so both streams land at the same real position ffmpeg's demuxer
+  // reaches — audio and video stay in sync with each other, at the cost of
+  // playback occasionally starting up to one keyframe-interval earlier
+  // than the literal position clicked, which is far less noticeable than a
+  // sustained A/V desync.
+  if (startTime > 0) args.push('-noaccurate_seek', '-ss', String(Math.floor(startTime)))
   args.push('-i', remoteUrl)
   args.push('-map', '0:v:0', '-map', audio >= 0 ? `0:a:${audio}` : '0:a:0')
   args.push('-c:v', 'copy', '-c:a', 'aac', '-b:a', '192k', '-ac', '2', '-ar', '48000')
