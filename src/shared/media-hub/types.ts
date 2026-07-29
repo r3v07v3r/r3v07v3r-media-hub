@@ -228,6 +228,8 @@ export interface MediaHubPublicSettings {
   subtitleLanguage: string
   partySyncUrl: string
   updateChannel: UpdateChannel
+  /** How long to buffer ahead before playback starts — see shared/media-hub/playbackBuffer.ts. */
+  playbackBuffer: string
 }
 
 export interface MediaHubSettingsSnapshot extends MediaHubPublicSettings {

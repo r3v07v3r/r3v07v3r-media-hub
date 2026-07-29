@@ -6,6 +6,7 @@
 // "improvements".
 
 import type { MediaHubPublicSettings, Theme, UpdateChannel } from '../../shared/media-hub/types'
+import { normalizePlaybackBuffer } from '../../shared/media-hub/playbackBuffer'
 
 export const THEMES: Theme[] = [
   { id: 'neon', name: 'Neon Noir', description: 'Signature magenta command center' },
@@ -39,20 +40,23 @@ export function publicSettings(settings: Record<string, unknown> = {}): MediaHub
     simklClientId: String(settings.simklClientId || ''),
     subtitleLanguage: String(settings.subtitleLanguage || 'en'),
     partySyncUrl: String(settings.partySyncUrl || ''),
-    updateChannel: normalizeUpdateChannel(settings.updateChannel)
+    updateChannel: normalizeUpdateChannel(settings.updateChannel),
+    playbackBuffer: normalizePlaybackBuffer(settings.playbackBuffer)
   }
 }
 
 /**
- * Narrower projection used on logout — only theme and update channel
- * survive; every account/service-identifying field is intentionally
- * dropped.
+ * Narrower projection used on logout — only theme, update channel, and
+ * playback buffering survive; every account/service-identifying field is
+ * intentionally dropped. Playback buffering is a device/connection
+ * preference, not account data, so it belongs alongside theme here.
  */
 export function logoutSettings(
   settings: Record<string, unknown> = {}
-): Pick<MediaHubPublicSettings, 'theme' | 'updateChannel'> {
+): Pick<MediaHubPublicSettings, 'theme' | 'updateChannel' | 'playbackBuffer'> {
   return {
     theme: normalizeTheme(settings.theme),
-    updateChannel: normalizeUpdateChannel(settings.updateChannel)
+    updateChannel: normalizeUpdateChannel(settings.updateChannel),
+    playbackBuffer: normalizePlaybackBuffer(settings.playbackBuffer)
   }
 }

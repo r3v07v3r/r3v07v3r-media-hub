@@ -13,6 +13,7 @@ export const MEDIA_HUB_CHANNELS = {
   settingsGet: 'mediahub:settings:get',
   settingsSetTheme: 'mediahub:settings:set-theme',
   settingsSetSubtitleLanguage: 'mediahub:settings:set-subtitle-language',
+  settingsSetPlaybackBuffer: 'mediahub:settings:set-playback-buffer',
   logout: 'mediahub:account:logout',
   torboxConnect: 'mediahub:torbox:connect',
   torboxDisconnect: 'mediahub:torbox:disconnect',

@@ -50,7 +50,9 @@ import net from 'node:net'
 import path from 'node:path'
 
 import type { MediaTrack, MediaTracks, PlaybackSelection } from '../../shared/media-hub/types'
+import { getPlaybackBufferSeconds } from '../../shared/media-hub/playbackBuffer'
 import { isAllowedRemoteMediaUrl } from './playback'
+import { readSettings } from './settingsStore'
 
 /** Compatibility-stream token: 64 lowercase hex chars, same shape as the playback-proxy token. */
 export function isValidCompatibilityToken(value: unknown): boolean {
@@ -507,7 +509,16 @@ export function createFfmpegTranscoder({
     // same thing a normal streaming player's initial buffering spinner
     // does — gives that cushion room to absorb ordinary jitter instead of
     // it turning into a visible stutter every few seconds.
-    const MIN_BUFFER_MS = 3000
+    //
+    // User-configurable (Settings > Playback buffer — see
+    // shared/media-hub/playbackBuffer.ts): a fixed 3s floor doesn't help
+    // enough on a genuinely bad connection, so "Extra"/"Maximum" let
+    // someone deliberately trade a longer wait up front for a smoother
+    // watch. This is the server-side floor specifically for compatibility
+    // mode's transcode; PlaybackOverlay's client-side buffered-ahead gate
+    // (the same setting) is what actually does most of the work, and
+    // applies to direct/proxied playback too, not just this mode.
+    const MIN_BUFFER_MS = getPlaybackBufferSeconds(readSettings().playbackBuffer) * 1000
     const startedAt = Date.now()
 
     // Without this, the HTTP response never ends on its own once ffmpeg

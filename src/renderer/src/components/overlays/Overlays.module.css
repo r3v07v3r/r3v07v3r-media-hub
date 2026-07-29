@@ -221,6 +221,37 @@
   font-size: 12px;
   color: rgba(255, 255, 255, 0.55);
 }
+/* Shown while PlaybackOverlay's buffering-gate effect is waiting for
+   enough of the stream to buffer ahead before it calls .play() itself —
+   the video element sits underneath, loaded but paused, so this reads as
+   an intentional pause-to-buffer rather than a blank/broken player. */
+.playerBuffering {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  color: rgba(255, 255, 255, 0.85);
+  font-size: 14px;
+  background: rgba(0, 0, 0, 0.35);
+  pointer-events: none;
+}
+.playerBufferingSpinner {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: 3px solid rgba(255, 255, 255, 0.25);
+  border-top-color: #fff;
+  animation: playerBufferingSpin 0.8s linear infinite;
+}
+@keyframes playerBufferingSpin {
+  to {
+    transform: rotate(360deg);
+  }
+}
 .playerControls {
   position: absolute;
   left: 0;

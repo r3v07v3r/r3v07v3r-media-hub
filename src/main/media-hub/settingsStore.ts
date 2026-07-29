@@ -45,6 +45,7 @@ export interface MediaHubRawSettings {
   theme?: string
   subtitleLanguage?: string
   updateChannel?: string
+  playbackBuffer?: string
   [key: string]: unknown
 }
 

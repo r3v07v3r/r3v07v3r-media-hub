@@ -13,6 +13,7 @@ import type { MediaHubSettingsSnapshot } from '../../shared/media-hub/types'
 import { handle } from './ipcGuard'
 import { ffmpegPath, stopPlayback } from './playbackSession'
 import { normalizeTheme, publicSettings, logoutSettings, THEMES } from './preferences'
+import { normalizePlaybackBuffer } from '../../shared/media-hub/playbackBuffer'
 import { isAllowedExternalUrl } from './security'
 import {
   getTorBoxToken,
@@ -53,6 +54,16 @@ export function registerAppIpc(): void {
         .match(/^[a-z-]{2,10}$/) || ['en'])[0]
       writeSettings(settings)
       return { subtitleLanguage: settings.subtitleLanguage }
+    }
+  )
+
+  handle<unknown, { playbackBuffer: string }>(
+    MEDIA_HUB_CHANNELS.settingsSetPlaybackBuffer,
+    (_event, value) => {
+      const settings = readSettings()
+      settings.playbackBuffer = normalizePlaybackBuffer(value)
+      writeSettings(settings)
+      return { playbackBuffer: settings.playbackBuffer }
     }
   )
 

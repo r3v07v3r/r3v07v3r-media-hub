@@ -4,6 +4,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useAppState } from '@renderer/context/AppStateContext'
 import { Icon } from '@renderer/components/icons/Icon'
 import { mediaItemToTrackablePayload } from '@renderer/lib/mediaHub/adapters'
+import { decodeVttDataUrl, encodeVttDataUrl, shiftVttCues } from '@renderer/lib/mediaHub/vttShift'
+import { getPlaybackBufferSeconds } from '@shared/media-hub/playbackBuffer'
 import type { MediaTrack, PlaybackSelection, SubtitleResult } from '@shared/media-hub/types'
 import styles from './Overlays.module.css'
 
@@ -35,13 +37,17 @@ export function PlaybackOverlay() {
     setPlaybackResult: setResult,
     setPlaybackTracks: setTracks,
     stopPlayback,
-    pushNotification
+    pushNotification,
+    mediaHubSettings
   } = useAppState()
   const videoRef = useRef<HTMLVideoElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const closeRef = useRef<HTMLButtonElement>(null)
 
-  const [playing, setPlaying] = useState(true)
+  // Starts false, not true: playback is no longer autoPlay-driven — see
+  // the buffering-gate effect below, which calls .play() itself only once
+  // enough of the stream has actually buffered ahead.
+  const [playing, setPlaying] = useState(false)
   const [currentTime, setCurrentTime] = useState(0)
   const [duration, setDuration] = useState(0)
   const [volume, setVolume] = useState(1)
@@ -54,8 +60,19 @@ export function PlaybackOverlay() {
   // nothing cropped), 'cover' (fills the frame, crops whatever overflows),
   // 'fill' (stretches to the frame, ignoring aspect ratio entirely).
   const [fitMode, setFitMode] = useState<'contain' | 'cover' | 'fill'>('contain')
+  // True once enough of the stream has buffered ahead to actually start
+  // playing — see the buffering-gate effect below. Resets on every new
+  // segment (a fresh title, or a seek/track-change restart in
+  // compatibility mode each begin their own fresh buffer-up).
+  const [bufferingReady, setBufferingReady] = useState(false)
   const markedWatchedRef = useRef(false)
   const hideControlsTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  // The ORIGINAL, un-shifted subtitle VTT text (absolute-timeline cue
+  // times, exactly as OpenSubtitles/srtToVtt produced it) — kept
+  // separately from activeSubtitleTrackUrl (which is always the CURRENTLY
+  // shifted version actually applied to the <track>) so re-shifting after
+  // another seek never compounds an earlier shift.
+  const subtitleVttRef = useRef<string | null>(null)
   // Compatibility-mode playback is a single, non-seekable HTTP connection
   // (the main process pipes ffmpeg's stdout straight through — see
   // vlc.ts's createFfmpegTranscoder — with no Range support), so seeking
@@ -118,6 +135,18 @@ export function PlaybackOverlay() {
 
   const cycleFitMode = useCallback(() => {
     setFitMode((prev) => (prev === 'contain' ? 'cover' : prev === 'cover' ? 'fill' : 'contain'))
+  }, [])
+
+  // Re-derives the currently-applied subtitle track from the ORIGINAL vtt
+  // text (subtitleVttRef) shifted by whatever streamStartOffsetRef is
+  // right now — called every time that offset changes (seek or track
+  // restart during compatibility mode), so the <track> src always matches
+  // the segment currently playing instead of drifting further out of sync
+  // with every subsequent seek.
+  const applyShiftedSubtitle = useCallback(() => {
+    if (!subtitleVttRef.current) return
+    const shifted = shiftVttCues(subtitleVttRef.current, streamStartOffsetRef.current)
+    setActiveSubtitleTrackUrl(encodeVttDataUrl(shifted))
   }, [])
 
   useEffect(() => {
@@ -190,6 +219,7 @@ export function PlaybackOverlay() {
       // load the fresh stream it produces.
       streamStartOffsetRef.current = target
       setCurrentTime(target)
+      applyShiftedSubtitle()
       window.api?.mediaHub?.playback
         .selectTracks({ ...activeSelectionRef.current, startTime: target })
         .then((response) => {
@@ -205,7 +235,7 @@ export function PlaybackOverlay() {
           })
         })
     },
-    [duration, result, pushNotification]
+    [duration, result, pushNotification, applyShiftedSubtitle]
   )
 
   async function selectTrack(kindKey: 'audio' | 'subtitle', ordinal: number) {
@@ -225,6 +255,7 @@ export function PlaybackOverlay() {
       if (!response) return
       streamStartOffsetRef.current = startTime
       activeSelectionRef.current = response.selection
+      applyShiftedSubtitle()
       // A new transcode session means a new stream URL — the <video> src
       // effect below picks this up and reloads from `startTime`.
       setResult((prev) => (prev ? { ...prev, ...response.selection, url: response.url } : prev))
@@ -256,7 +287,14 @@ export function PlaybackOverlay() {
   async function applySubtitle(fileId: number) {
     try {
       const applied = await window.api?.mediaHub?.subtitles.apply(fileId, false)
-      if (applied?.vttDataUrl) setActiveSubtitleTrackUrl(applied.vttDataUrl)
+      if (applied?.vttDataUrl) {
+        // Store the ORIGINAL absolute-timeline VTT, then apply it shifted
+        // by whatever offset the current segment is already at (applying
+        // a subtitle after having already seeked once shouldn't itself be
+        // instantly out of sync).
+        subtitleVttRef.current = decodeVttDataUrl(applied.vttDataUrl)
+        applyShiftedSubtitle()
+      }
     } catch (error) {
       pushNotification({
         tone: 'error',
@@ -269,6 +307,76 @@ export function PlaybackOverlay() {
   const audioTracks = useMemo<MediaTrack[]>(() => tracks?.audio ?? [], [tracks])
   const subtitleTracks = useMemo<MediaTrack[]>(() => tracks?.subtitle ?? [], [tracks])
   const fitModeLabel = { contain: 'Fit', cover: 'Fill', fill: 'Stretch' }[fitMode]
+
+  const targetBufferSeconds = getPlaybackBufferSeconds(mediaHubSettings?.playbackBuffer)
+
+  // The actual "let it buffer for a while on a bad connection" gate — the
+  // <video> element no longer autoplays (see `playing`'s initial value
+  // above); instead this waits until enough of the CURRENT segment has
+  // buffered ahead of the playhead (or the element itself already says it
+  // has enough — readyState 4 — or a real segment shorter than the target
+  // has simply finished downloading in full) before calling .play() itself.
+  // Applies uniformly to both playback modes: direct/proxied streaming
+  // already gets real Range-based buffering from Chromium, this just adds
+  // a deliberate wait *before* consuming any of that buffer; compatibility
+  // mode's server-side head start (vlc.ts's MIN_BUFFER_MS) still applies on
+  // top, so this is genuinely two layers of the same setting reinforcing
+  // each other, not a replacement for either. Re-runs on every new segment
+  // — a fresh title, or any seek/track-change restart in compatibility mode
+  // — since each of those is its own fresh buffer-up from scratch.
+  useEffect(() => {
+    const video = videoRef.current
+    if (!video || !result?.url) return
+    setBufferingReady(false)
+    let settled = false
+
+    function tryStart(force = false) {
+      if (settled || !video) return
+      const buffered = video.buffered
+      const bufferedEnd = buffered.length ? buffered.end(buffered.length - 1) : 0
+      // readyState alone is deliberately NOT treated as "good enough" —
+      // Chromium can reach HAVE_ENOUGH_DATA with barely anything buffered,
+      // which let playback start well before the configured target and
+      // reintroduced exactly the stall this feature exists to prevent
+      // (verified live: readyState 4 with ~2s actually buffered against a
+      // 15s "Maximum" target started playing, then stalled a few seconds
+      // in). A short clip that's already fully downloaded is the one
+      // legitimate reason to stop waiting early — nothing more is ever
+      // coming, so there's no point holding out for a target buffer bigger
+      // than the whole file.
+      const totalDuration =
+        tracks?.durationSeconds && Number.isFinite(tracks.durationSeconds)
+          ? tracks.durationSeconds
+          : video.duration
+      const fullyBuffered = Number.isFinite(totalDuration) && bufferedEnd >= totalDuration - 0.25
+      const haveEnough =
+        force || fullyBuffered || bufferedEnd - video.currentTime >= targetBufferSeconds
+      if (!haveEnough) return
+      settled = true
+      setBufferingReady(true)
+      video.play().catch(() => {})
+    }
+
+    const onProgress = () => tryStart()
+    video.addEventListener('progress', onProgress)
+    video.addEventListener('loadedmetadata', onProgress)
+    video.addEventListener('canplaythrough', onProgress)
+    // Never make someone wait indefinitely for the target to be reached —
+    // a connection too slow to ever get there should still start playing
+    // (and likely stutter) rather than appear stuck on "Buffering…" forever.
+    const maxWait = setTimeout(() => tryStart(true), 20000)
+    // Handles the (common) case where enough had already buffered before
+    // any of these listeners were attached.
+    tryStart()
+
+    return () => {
+      settled = true
+      clearTimeout(maxWait)
+      video.removeEventListener('progress', onProgress)
+      video.removeEventListener('loadedmetadata', onProgress)
+      video.removeEventListener('canplaythrough', onProgress)
+    }
+  }, [result?.url, targetBufferSeconds, tracks])
 
   // AppStateContext's startPlayback only ever sets playbackMedia once a
   // real PlaybackResult is already resolved — see that function's own
@@ -294,7 +402,6 @@ export function PlaybackOverlay() {
         className={styles.videoSurface}
         style={{ objectFit: fitMode }}
         src={result.url}
-        autoPlay
         onClick={togglePlay}
         onPlay={() => setPlaying(true)}
         onPause={() => setPlaying(false)}
@@ -318,6 +425,13 @@ export function PlaybackOverlay() {
           <track kind="subtitles" src={activeSubtitleTrackUrl} default label="Subtitles" />
         )}
       </video>
+
+      {!bufferingReady && (
+        <div className={styles.playerBuffering} aria-live="polite">
+          <span className={styles.playerBufferingSpinner} aria-hidden="true" />
+          <span>Buffering…</span>
+        </div>
+      )}
 
       <button
         ref={closeRef}

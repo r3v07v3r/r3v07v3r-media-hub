@@ -118,7 +118,9 @@ const api = {
       setTheme: (theme: string): Promise<{ theme: string }> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.settingsSetTheme, theme),
       setSubtitleLanguage: (language: string): Promise<{ subtitleLanguage: string }> =>
-        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.settingsSetSubtitleLanguage, language)
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.settingsSetSubtitleLanguage, language),
+      setPlaybackBuffer: (preset: string): Promise<{ playbackBuffer: string }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.settingsSetPlaybackBuffer, preset)
     },
 
     account: {

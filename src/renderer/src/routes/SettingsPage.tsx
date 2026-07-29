@@ -6,6 +6,54 @@ import { MediaServicesSection } from './MediaServicesSection'
 import { MediaHubSettingsSections } from './MediaHubSettingsSections'
 import styles from './Settings.module.css'
 
+const PLAYBACK_BUFFER_OPTIONS: { value: string; label: string }[] = [
+  { value: 'auto', label: 'Auto' },
+  { value: 'extra', label: 'Extra' },
+  { value: 'maximum', label: 'Maximum' }
+]
+
+function SegmentedRow({
+  icon,
+  title,
+  description,
+  value,
+  options,
+  onChange
+}: {
+  icon: string
+  title: string
+  description: string
+  value: string
+  options: { value: string; label: string }[]
+  onChange: (v: string) => void
+}) {
+  return (
+    <div className={styles.row}>
+      <div className={styles.rowIcon} aria-hidden="true">
+        <Icon name={icon} size={17} />
+      </div>
+      <div className={styles.rowText}>
+        <span className={styles.rowTitle}>{title}</span>
+        <span className={styles.rowDescription}>{description}</span>
+      </div>
+      <div className={styles.segmentGroup} role="radiogroup" aria-label={title}>
+        {options.map((option) => (
+          <button
+            key={option.value}
+            type="button"
+            role="radio"
+            aria-checked={value === option.value}
+            className={`${styles.segmentButton} ${value === option.value ? styles.segmentButtonActive : ''}`}
+            onClick={() => onChange(option.value)}
+          >
+            {option.label}
+          </button>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 function ToggleRow({
   icon,
   title,
@@ -50,8 +98,15 @@ export default function SettingsPage() {
     setIsOffline,
     profiles,
     activeProfileId,
-    setActiveProfileId
+    setActiveProfileId,
+    mediaHubSettings,
+    refreshMediaHubSettings
   } = useAppState()
+
+  async function handleSetPlaybackBuffer(preset: string) {
+    await window.api?.mediaHub?.settings.setPlaybackBuffer(preset)
+    refreshMediaHubSettings()
+  }
 
   // Sections tile left-to-right instead of stacking in one long vertical
   // scroll (see .tileArea in Settings.module.css) — a plain vertical mouse
@@ -91,6 +146,14 @@ export default function SettingsPage() {
             description="Show live CPU, GPU, RAM, and network gauges on the Home dashboard."
             checked={performancePanelVisible}
             onChange={setPerformancePanelVisible}
+          />
+          <SegmentedRow
+            icon="clock"
+            title="Playback buffer"
+            description="How long to buffer before playback starts. Higher settings help on a slow or unstable connection at the cost of a longer wait to start."
+            value={mediaHubSettings?.playbackBuffer ?? 'auto'}
+            options={PLAYBACK_BUFFER_OPTIONS}
+            onChange={handleSetPlaybackBuffer}
           />
         </section>
 
