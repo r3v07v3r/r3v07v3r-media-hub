@@ -357,6 +357,20 @@ ul {
 [data-motion-suspended='true'] *::after {
   animation-play-state: paused !important;
 }
+/* Carve-out for GlobalOverlays.tsx's data-motion-exempt wrapper — one-shot
+   mount/entrance animations (a dialog/toast/AI-panel fading or sliding in)
+   must always run to completion, unlike the ambient/idle loops the rule
+   above targets. Pausing one of these mid-run froze it at a partially- (or
+   fully-) transparent starting keyframe forever, since motion stays
+   suspended for the entire rest of a movie's playback — this is equal
+   specificity and importance to the rule above, so source order (this
+   rule comes after) is what makes it win. */
+[data-motion-exempt],
+[data-motion-exempt] *,
+[data-motion-exempt] *::before,
+[data-motion-exempt] *::after {
+  animation-play-state: running !important;
+}
 
 /* .thin-scroll previously drew its own faint 6px thumb for the
    horizontal rows (sidebar rail fallback, mood row, AI Picks carousel)
