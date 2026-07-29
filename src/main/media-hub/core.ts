@@ -420,22 +420,37 @@ export function selectVideoFile(
 ): TorBoxFile | null {
   const video = /\.(mkv|mp4|avi|mov|webm|m4v|ts)$/i
   const candidates = [...(files || [])].filter((f) => video.test(f.name || f.short_name || ''))
-  if (
+  const episodic =
     typeof season === 'number' &&
     Number.isFinite(season) &&
     typeof episode === 'number' &&
     Number.isFinite(episode)
-  ) {
-    const s = String(season).padStart(2, '0')
-    const e = String(episode).padStart(2, '0')
+  if (episodic) {
+    // Both padded (S01E03) and unpadded (S1E3) forms of each number, since
+    // real-world release names aren't consistent about zero-padding —
+    // matching only the padded season while requiring a padded episode (the
+    // original patterns' actual behavior) silently missed plenty of
+    // otherwise-correctly-named files.
+    const sPad = String(season).padStart(2, '0')
+    const ePad = String(episode).padStart(2, '0')
     const patterns = [
-      new RegExp(`S${s}[ ._-]*E${e}`, 'i'),
-      new RegExp(`(?:^|[ ._-])${season}x${e}(?:[ ._-]|$)`, 'i')
+      new RegExp(`S(?:${season}|${sPad})[ ._-]*E(?:${episode}|${ePad})(?:\\D|$)`, 'i'),
+      new RegExp(`(?:^|[ ._-])(?:${season}|${sPad})x(?:${episode}|${ePad})(?:[ ._-]|$)`, 'i')
     ]
     const match = candidates
       .filter((f) => patterns.some((p) => p.test(f.name || f.short_name || '')))
       .sort((a, b) => (b.size || 0) - (a.size || 0))[0]
-    if (match) return match
+    // Deliberately NOT falling back to "largest video file in the torrent"
+    // here, unlike the movie path below — a season-pack torrent's file
+    // names not matching any expected pattern means we genuinely don't
+    // know which file is the requested episode, and guessing "biggest
+    // file" reliably picks a DIFFERENT, usually longer episode (a finale,
+    // a double-length episode, ...) instead of erroring. Live-reported bug:
+    // requesting a specific episode played a different, longer one instead
+    // of failing loudly — this fallback returning ANY video file in the
+    // pack whenever the season/episode patterns didn't match is exactly
+    // that failure mode.
+    return match || null
   }
   return candidates.sort((a, b) => (b.size || 0) - (a.size || 0))[0] || null
 }
