@@ -21,17 +21,31 @@ import si from 'systeminformation'
 import type { SystemSnapshot } from '../../shared/ipc-types'
 
 const POLL_INTERVAL_MS = 1500
+// si.graphics() alone runs ~200-900ms on this class of hardware (see the
+// file-header comment) — by far the most expensive of these calls, for a
+// gauge that only needs to look "live," not genuinely real-time. Querying
+// it on every 1.5s cycle was paying that full cost 3x as often as the GPU
+// number actually needed to move; every 3rd cycle (~4.5s) keeps the gauge
+// visibly live while cutting that specific cost by two-thirds.
+const GRAPHICS_POLL_EVERY = 3
 
 let lastNetStats: si.Systeminformation.NetworkStatsData | null = null
+let lastGraphics: si.Systeminformation.GraphicsData | null = null
+let cycle = 0
 
 async function readSnapshot(): Promise<SystemSnapshot> {
+  const shouldPollGraphics = cycle % GRAPHICS_POLL_EVERY === 0
+  cycle += 1
   const [load, cpuTemp, mem, graphics, netStats] = await Promise.all([
     si.currentLoad(),
     si.cpuTemperature().catch(() => null as si.Systeminformation.CpuTemperatureData | null),
     si.mem(),
-    si.graphics().catch(() => null as si.Systeminformation.GraphicsData | null),
+    shouldPollGraphics
+      ? si.graphics().catch(() => null as si.Systeminformation.GraphicsData | null)
+      : Promise.resolve(lastGraphics),
     si.networkStats().catch(() => [] as si.Systeminformation.NetworkStatsData[])
   ])
+  lastGraphics = graphics
 
   const primaryGpu =
     graphics?.controllers?.find((c) => (c.vram ?? 0) > 0) ?? graphics?.controllers?.[0]

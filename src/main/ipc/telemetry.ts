@@ -40,6 +40,23 @@ function ensureWorker(): Worker {
   return worker
 }
 
+// Without this, the worker (and the WMI-backed si.currentLoad/mem/graphics/
+// networkStats calls it makes every 1.5s — see telemetryWorker.ts's own
+// header comment on how expensive those genuinely are) kept polling and
+// broadcasting to an empty subscriber set for the rest of the app's
+// lifetime the instant anyone had ever opened the Performance widget once,
+// even after navigating away from it entirely. Terminating (not just
+// telling it to stop) frees the worker thread outright; ensureWorker()
+// already handles lazily spinning up a fresh one if a subscriber shows up
+// again later.
+function dropSubscriber(sender: WebContents): void {
+  subscribers.delete(sender)
+  if (subscribers.size > 0 || !worker) return
+  worker.postMessage('stop')
+  void worker.terminate()
+  worker = null
+}
+
 export function registerTelemetryIpc(): void {
   ipcMain.handle(IPC_CHANNELS.systemSnapshot, async () => {
     ensureWorker()
@@ -49,9 +66,9 @@ export function registerTelemetryIpc(): void {
   ipcMain.on('system:subscribe', (event) => {
     subscribers.add(event.sender)
     ensureWorker()
-    event.sender.once('destroyed', () => subscribers.delete(event.sender))
+    event.sender.once('destroyed', () => dropSubscriber(event.sender))
   })
   ipcMain.on('system:unsubscribe', (event) => {
-    subscribers.delete(event.sender)
+    dropSubscriber(event.sender)
   })
 }

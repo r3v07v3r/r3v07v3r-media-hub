@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { PerformanceSnapshot } from '@renderer/types'
 import { useReducedMotion } from './useReducedMotion'
+import { useMotionSuspended } from './useMotionSuspended'
 
 function smoothStep(current: number, target: number, amount = 0.35) {
   return current + (target - current) * amount
@@ -15,6 +16,11 @@ function smoothStep(current: number, target: number, amount = 0.35) {
  *  crashing or silently pretending to have live data. */
 export function usePerformanceMetrics() {
   const reducedMotion = useReducedMotion()
+  // The widget this feeds can be mounted but invisible (Home underneath a
+  // full-screen movie, or the window minimized) — no reason to keep
+  // re-rendering a smoothing tween nobody can see every 220ms.
+  const motionSuspended = useMotionSuspended()
+  const skipSmoothing = reducedMotion || motionSuspended
   const [snapshot, setSnapshot] = useState<PerformanceSnapshot>({
     cpu: 0,
     gpu: 0,
@@ -41,7 +47,7 @@ export function usePerformanceMetrics() {
   }, [])
 
   useEffect(() => {
-    if (reducedMotion) {
+    if (skipSmoothing) {
       setSnapshot({
         cpu: targets.current.cpu,
         gpu: targets.current.gpu,
@@ -61,7 +67,7 @@ export function usePerformanceMetrics() {
       }))
     }, 220)
     return () => clearInterval(id)
-  }, [reducedMotion])
+  }, [skipSmoothing])
 
   return { ...snapshot, live }
 }

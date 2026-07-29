@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react'
 import { useReducedMotion } from '@renderer/hooks/useReducedMotion'
+import { useMotionSuspended } from '@renderer/hooks/useMotionSuspended'
 import styles from './CompactAIAssistant.module.css'
 
 // Procedural Canvas 2D swirling-energy texture for the AI orb — CSS alone
@@ -37,6 +38,12 @@ function hexToRgb(hex: string): [number, number, number] {
 export function AIOrbCanvas({ tone = 'idle' }: { tone?: Tone }) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const reducedMotion = useReducedMotion()
+  // Unlike the CSS animations elsewhere (paused in one shot via global.css's
+  // [data-motion-suspended] rule), this rAF loop is JS-driven and can't be
+  // reached by that CSS — it needs its own check for the same "nothing to
+  // see it" condition (window hidden/minimized, or a movie playing
+  // full-screen over this still-mounted page).
+  const motionSuspended = useMotionSuspended()
   const toneRef = useRef(tone)
   // Mutating a ref during render is impure (React may re-invoke render
   // without side effects, e.g. under StrictMode's double-render) — the
@@ -143,7 +150,7 @@ export function AIOrbCanvas({ tone = 'idle' }: { tone?: Tone }) {
 
       ctx.restore()
 
-      if (!reducedMotion) {
+      if (!reducedMotion && !motionSuspended) {
         t += 16
         raf = requestAnimationFrame(frame)
       }
@@ -151,7 +158,7 @@ export function AIOrbCanvas({ tone = 'idle' }: { tone?: Tone }) {
 
     frame()
     return () => cancelAnimationFrame(raf)
-  }, [reducedMotion])
+  }, [reducedMotion, motionSuspended])
 
   return <canvas ref={canvasRef} className={styles.orbCanvas} aria-hidden="true" />
 }

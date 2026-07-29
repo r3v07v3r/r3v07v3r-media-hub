@@ -341,6 +341,23 @@ ul {
   }
 }
 
+/* ---------- Motion suspension (nothing to see, so stop compositing it) ----------
+   Every ambient/decorative CSS animation in the app (sidebar highlights,
+   background blobs, star/nebula drift, shimmer, halo pulses, ...) pauses
+   in one shot when AppShell's useMotionSuspended() flips true: the window
+   is hidden/minimized, or a movie is playing full-screen over everything
+   (the routed page and its chrome stay mounted underneath
+   PlaybackOverlay's opaque surface — see AppShell.tsx — so their
+   animations were compositing for an audience of nobody). Deliberately
+   `animation-play-state: paused`, not the reduced-motion override's
+   duration-collapse above — this must resume exactly where it left off
+   the instant either condition clears, not jump to its final frame. */
+[data-motion-suspended='true'] *,
+[data-motion-suspended='true'] *::before,
+[data-motion-suspended='true'] *::after {
+  animation-play-state: paused !important;
+}
+
 /* .thin-scroll previously drew its own faint 6px thumb for the
    horizontal rows (sidebar rail fallback, mood row, AI Picks carousel)
    — that's exactly the "browser-style scrollbar" the compositing pass
