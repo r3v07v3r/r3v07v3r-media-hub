@@ -86,7 +86,16 @@ export const MEDIA_HUB_CHANNELS = {
 
   // Window
   windowToggleFullscreen: 'mediahub:window:toggle-fullscreen',
-  windowFullscreenChanged: 'mediahub:window:fullscreen-changed' // push event
+  windowFullscreenChanged: 'mediahub:window:fullscreen-changed', // push event
+
+  // Profiles
+  profilesList: 'mediahub:profiles:list',
+  profilesGetActive: 'mediahub:profiles:get-active',
+  profilesSetActive: 'mediahub:profiles:set-active',
+  profilesCreate: 'mediahub:profiles:create',
+  profilesUpdate: 'mediahub:profiles:update',
+  profilesDelete: 'mediahub:profiles:delete',
+  profilesVerifyPin: 'mediahub:profiles:verify-pin'
 } as const
 
 export type MediaHubChannel = (typeof MEDIA_HUB_CHANNELS)[keyof typeof MEDIA_HUB_CHANNELS]

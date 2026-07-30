@@ -211,6 +211,36 @@ export interface MarkWatchedResult {
 }
 
 // ---------------------------------------------------------------------
+// Profiles
+// ---------------------------------------------------------------------
+
+/** Renderer-facing profile shape — never carries pinSalt/pinHash, only
+ *  whether one is set (see main/media-hub/profiles.ts's ProfileRecord for
+ *  the main-process-only shape that does carry those fields). */
+export interface ProfilePublic {
+  id: string
+  name: string
+  avatarInitial: string
+  avatarTint: [string, string]
+  isKid: boolean
+  hasPin: boolean
+}
+
+export interface ProfilesListResult {
+  profiles: ProfilePublic[]
+  activeProfileId: string
+}
+
+export interface ProfileSetActiveResult {
+  ok: true
+  activeProfileId: string
+}
+
+export interface ProfileVerifyPinResult {
+  ok: boolean
+}
+
+// ---------------------------------------------------------------------
 // Settings / connection status
 // ---------------------------------------------------------------------
 

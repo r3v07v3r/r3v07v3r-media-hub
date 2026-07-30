@@ -24,6 +24,7 @@ import path from 'node:path'
 import { MEDIA_HUB_CHANNELS } from '../../shared/media-hub/ipc-channels'
 import { logError } from './logger'
 import { sendToRenderer } from './rendererBridge'
+import type { ProfileRecord } from './profiles'
 
 export interface MediaHubRawSettings {
   onboardingVersion?: number
@@ -46,6 +47,8 @@ export interface MediaHubRawSettings {
   subtitleLanguage?: string
   updateChannel?: string
   playbackBuffer?: string
+  profiles?: ProfileRecord[]
+  activeProfileId?: string
   [key: string]: unknown
 }
 

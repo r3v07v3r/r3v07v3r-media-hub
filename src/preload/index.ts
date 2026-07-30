@@ -31,6 +31,10 @@ import type {
   PartyStatusResult,
   PlaybackResult,
   PlaybackSelection,
+  ProfilePublic,
+  ProfilesListResult,
+  ProfileSetActiveResult,
+  ProfileVerifyPinResult,
   SimklPinStart,
   SimklPollResult,
   SimklStatus,
@@ -309,6 +313,31 @@ const api = {
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.windowToggleFullscreen),
       onFullscreenChange: (onEvent: (payload: { fullScreen: boolean }) => void): (() => void) =>
         subscribe<{ fullScreen: boolean }>(MEDIA_HUB_CHANNELS.windowFullscreenChanged, onEvent)
+    },
+
+    profiles: {
+      list: (): Promise<ProfilesListResult> => ipcRenderer.invoke(MEDIA_HUB_CHANNELS.profilesList),
+      getActive: (): Promise<ProfileSetActiveResult> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.profilesGetActive),
+      setActive: (id: string, pin?: string): Promise<ProfileSetActiveResult> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.profilesSetActive, { id, pin }),
+      create: (payload: {
+        name: string
+        avatarTint?: [string, string]
+        isKid?: boolean
+        pin?: string
+      }): Promise<ProfilePublic> => ipcRenderer.invoke(MEDIA_HUB_CHANNELS.profilesCreate, payload),
+      update: (payload: {
+        id: string
+        name?: string
+        avatarTint?: [string, string]
+        isKid?: boolean
+        pin?: string | null
+      }): Promise<ProfilePublic> => ipcRenderer.invoke(MEDIA_HUB_CHANNELS.profilesUpdate, payload),
+      remove: (id: string): Promise<ProfilesListResult> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.profilesDelete, { id }),
+      verifyPin: (id: string, pin: string): Promise<ProfileVerifyPinResult> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.profilesVerifyPin, { id, pin })
     }
   }
 }

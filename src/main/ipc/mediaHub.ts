@@ -17,6 +17,7 @@ import { registerAutoUpdateIpc } from '../media-hub/autoUpdate'
 import { registerCatalogIpc } from '../media-hub/catalog'
 import { registerMalIpc } from '../media-hub/malSync'
 import { registerPlaybackIpc } from '../media-hub/playbackSession'
+import { registerProfilesIpc } from '../media-hub/profiles'
 import { registerSubtitlesIpc } from '../media-hub/subtitlesService'
 import { registerTorBoxIpc } from '../media-hub/torbox'
 import { registerTrackingIpc } from '../media-hub/tracking'
@@ -32,4 +33,5 @@ export function registerMediaHubIpc(): void {
   registerSubtitlesIpc()
   registerPlaybackIpc()
   registerWatchPartyIpc()
+  registerProfilesIpc()
 }
