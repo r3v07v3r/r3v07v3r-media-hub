@@ -38,6 +38,7 @@ import {
   findFfprobe,
   needsAudioCompatibility,
   probeMedia,
+  selectTranscodeAudioTrack,
   type FfmpegTranscoderResult
 } from './vlc'
 
@@ -82,7 +83,7 @@ export async function preparePlayback(url: string): Promise<PlaybackResult> {
   if (needsAudioCompatibility(activeMediaTracks) && ffmpegPath) {
     await playbackProxy.close()
     const started = await ffmpegTranscoder.start(ffmpegPath, url, {
-      audio: activeMediaTracks.audio.find((x) => x.default)?.ordinal ?? 0
+      audio: selectTranscodeAudioTrack(activeMediaTracks)?.ordinal ?? 0
     })
     return {
       ok: true,
@@ -172,8 +173,20 @@ export function registerPlaybackIpc(): void {
     MEDIA_HUB_CHANNELS.playbackSelectTracks,
     async (_event, selection = {}) => {
       if (!activeMediaUrl) throw new Error('No active media is available for track selection.')
+      // Every seek in compatibility mode restarts the transcode through
+      // here (see PlaybackOverlay's handleSeek), not just explicit track
+      // changes — without an explicit audio ordinal, this used to fall
+      // back to the container's literal first audio stream regardless of
+      // whether preparePlayback's initial start had deliberately avoided
+      // it (see selectTranscodeAudioTrack's own comment on the TrueHD/
+      // Atmos crash that fix exists for). Falling back the same way here
+      // keeps every restart just as safe as the very first one, not only
+      // the first.
+      const audio = Number.isInteger(selection.audio)
+        ? (selection.audio as number)
+        : (selectTranscodeAudioTrack(activeMediaTracks)?.ordinal ?? -1)
       const safe: PlaybackSelection = {
-        audio: Number.isInteger(selection.audio) ? (selection.audio as number) : -1,
+        audio,
         subtitle: Number.isInteger(selection.subtitle) ? (selection.subtitle as number) : -1,
         startTime: Math.max(0, Math.min(Number(selection.startTime) || 0, 86400))
       }

@@ -210,10 +210,39 @@ const DIRECT_AUDIO_CODECS = new Set([
   'pcm_s24le'
 ])
 
-export function needsAudioCompatibility(tracks: MediaTracks | undefined): boolean {
+// TrueHD (Dolby Atmos' underlying codec) and DTS(-HD MA) both live-
+// reproduced the same real crash: downmixing either through ffmpeg's
+// decoder into AAC eventually produced a packet Chromium's own decoder
+// rejected outright (PipelineStatus::PIPELINE_ERROR_DECODE), killing
+// playback partway in — verified against a real 4K remux, including that
+// avoiding ONLY truehd wasn't sufficient the first time this was fixed,
+// because the resulting fallback picked the dts track (present earlier in
+// the file's track list than a plain ac3 one) and hit the exact same
+// failure. Both are complex lossless-core-plus-extension codecs; a plain
+// lossy AC3/E-AC3 core track downmixes far more reliably in practice. Not
+// blocking either outright (sometimes the only audio track a release has),
+// but preferring a same-language AC3/E-AC3 alternative when one exists —
+// TrueHD/DTS-HD releases very commonly ship exactly that alongside the
+// lossless track specifically for this kind of compatibility gap.
+const RISKY_TRANSCODE_CODECS = new Set(['truehd', 'dts'])
+
+/** Picks which audio track compatibility-mode transcoding should actually
+ *  use — not always simply "the default track." See RISKY_TRANSCODE_CODECS. */
+export function selectTranscodeAudioTrack(tracks: MediaTracks | undefined): MediaTrack | undefined {
   const audio = tracks?.audio || []
-  if (!audio.length) return false
-  const selected = audio.find((x) => x.default) || audio[0]
+  if (!audio.length) return undefined
+  const preferred = audio.find((x) => x.default) || audio[0]
+  if (!RISKY_TRANSCODE_CODECS.has(preferred.codec)) return preferred
+  const saferSameLanguage = audio.find(
+    (t) => t !== preferred && t.language === preferred.language && !RISKY_TRANSCODE_CODECS.has(t.codec)
+  )
+  const saferAny = audio.find((t) => t !== preferred && !RISKY_TRANSCODE_CODECS.has(t.codec))
+  return saferSameLanguage || saferAny || preferred
+}
+
+export function needsAudioCompatibility(tracks: MediaTracks | undefined): boolean {
+  const selected = selectTranscodeAudioTrack(tracks)
+  if (!selected) return false
   return !DIRECT_AUDIO_CODECS.has(String(selected.codec || '').toLowerCase())
 }
 

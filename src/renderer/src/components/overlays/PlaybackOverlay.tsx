@@ -420,6 +420,22 @@ export function PlaybackOverlay() {
         }}
         onEnded={handleEnded}
         onVolumeChange={(e) => setVolume(e.currentTarget.volume)}
+        onError={() => {
+          // Previously silent: a mid-stream decode failure (confirmed
+          // live — PipelineStatus::PIPELINE_ERROR_DECODE from a TrueHD/
+          // Atmos downmix, see selectTranscodeAudioTrack) left the player
+          // frozen with audio and video both dead and no feedback at all.
+          // The raw pipeline error is developer-facing jargon, not
+          // something to show verbatim — logged for diagnosis, with a
+          // plain, actionable message for the person watching.
+          console.error('[playback] video element error', videoRef.current?.error)
+          pushNotification({
+            tone: 'error',
+            message:
+              'Playback stopped unexpectedly and could not continue. Try playing again — a different audio track may avoid the issue.'
+          })
+          stopPlayback()
+        }}
       >
         {activeSubtitleTrackUrl && (
           <track kind="subtitles" src={activeSubtitleTrackUrl} default label="Subtitles" />
