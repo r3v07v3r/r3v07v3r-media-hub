@@ -74,7 +74,12 @@
 
 .cropX {
   position: relative;
-  overflow-x: auto;
+  /* No scroll on this row (unlike Continue Watching/AI Picks, which keep
+     theirs) — .pill already flex-grows/shrinks to fill the row's real
+     width; overflow-x:hidden is only ever reached if a window is narrower
+     than 7 pills' combined min-width can shrink to, in which case the
+     rightmost pills clip rather than becoming reachable via scroll. */
+  overflow-x: hidden;
   overflow-y: visible;
 }
 

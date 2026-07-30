@@ -1,6 +1,12 @@
 .dashboard {
   height: 100%;
   min-height: 0;
+  /* Home must never scroll, at any width — if its own content (or a
+     narrower-than-designed window) doesn't fit, it gets clipped locally
+     here instead of making AppShell's shared .main scroll container
+     (overflow-y:auto — every OTHER routed page still legitimately needs
+     that) kick in for the whole page. */
+  overflow: hidden;
   display: grid;
   /* Reference composition target (see public/reference/dashboard-
      reference.png): the assistant/orb column and the telemetry column
@@ -94,7 +100,10 @@
       "picks"
       "continue"
       "mood";
-    overflow-y: auto;
+    /* No page-level scroll at this width either (see the base rule's own
+       comment) — five stacked sections plainly can't all fit without
+       either scrolling or clipping below the fold; clipping is the
+       explicit choice here, not an oversight. */
   }
 }
 
