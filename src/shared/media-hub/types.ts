@@ -138,6 +138,8 @@ export interface PlaybackResult {
   compatibility?: boolean
   engine?: string
   autoReason?: string
+  /** Set when the source video's own codec (e.g. HEVC) is one Chromium's software decoder doesn't reliably handle — video is only ever stream-copied here, never transcoded, so this can't be fixed server-side yet. Surfaced as an upfront warning rather than letting the person hit an unexplained mid-stream decode crash. */
+  videoCodecWarning?: string
 }
 
 // Tracked-show entry as persisted (normalizeTitle shape) — matches

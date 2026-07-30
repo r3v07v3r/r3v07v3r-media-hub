@@ -6,19 +6,23 @@
   justify-content: center;
   /* Refinement pass: more vertical breathing room between the orb,
      status line, and recommendation buttons — orb size and button size
-     are both untouched, only the space around them grows. Kept modest
-     (not the full ~40% increase that would read as "more spacious")
-     since .panel's height is capped by its grid row and has
-     overflow:hidden — too much added gap/padding would clip the
-     orb/buttons rather than add visible breathing room. */
+     are both untouched, only the space around them grows. */
   gap: 18px;
   padding: 18px 10px;
   min-width: 0;
-  /* Explicit floor, not 0 — overflow:hidden below would otherwise zero
-     out this item's automatic minimum size and collapse its auto-sized
+  /* Explicit floor, not 0 — this item's automatic minimum size would
+     otherwise be based on its content and could collapse its auto-sized
      grid row to nothing at the stacked (<1100px) breakpoint. */
   min-height: 300px;
-  overflow: hidden;
+  /* Deliberately NOT overflow:hidden: the orb is 302px (plus its halo/
+     trail bleed further still via negative insets — see .orbHalo/
+     .orbTrail below) against a 260px grid column, so it's supposed to
+     spill past this cell's own box on every side and read as floating
+     over the page rather than boxed — the same bleed-past-your-own-cell
+     treatment MoodBrowser's .section already uses to run under the nav
+     rail. .dashboard (HomeDashboard.module.css) still clips at the real
+     page edge, so this can't cause the page itself to scroll. */
+  overflow: visible;
 }
 
 /* ---------- Orb ----------

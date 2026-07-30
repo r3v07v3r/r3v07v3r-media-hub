@@ -39,6 +39,7 @@ import {
   needsAudioCompatibility,
   probeMedia,
   selectTranscodeAudioTrack,
+  videoCodecCompatibilityWarning,
   type FfmpegTranscoderResult
 } from './vlc'
 
@@ -80,6 +81,7 @@ export async function preparePlayback(url: string): Promise<PlaybackResult> {
   activeMediaUrl = url
   await ffmpegTranscoder.stop()
   activeMediaTracks = await probeMedia(ffprobePath, url)
+  const videoCodecWarning = videoCodecCompatibilityWarning(activeMediaTracks)
   if (needsAudioCompatibility(activeMediaTracks) && ffmpegPath) {
     await playbackProxy.close()
     const started = await ffmpegTranscoder.start(ffmpegPath, url, {
@@ -90,6 +92,7 @@ export async function preparePlayback(url: string): Promise<PlaybackResult> {
       player: 'embedded',
       tracks: activeMediaTracks,
       autoReason: 'Audio was converted for browser compatibility.',
+      videoCodecWarning,
       ...started
     }
   }
@@ -98,6 +101,7 @@ export async function preparePlayback(url: string): Promise<PlaybackResult> {
     player: 'embedded',
     compatibility: false,
     tracks: activeMediaTracks,
+    videoCodecWarning,
     url: await playbackProxy.register(url)
   }
 }

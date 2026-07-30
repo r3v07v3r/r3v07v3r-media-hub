@@ -728,6 +728,11 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         setPlaybackResult(played)
         setPlaybackTracks(played.tracks)
         setPlaybackMedia(media)
+        // Video is only ever stream-copied (see vlc.ts's videoCodecCompatibilityWarning) —
+        // surfaced upfront so a decode failure minutes in isn't the first anyone hears of it.
+        if (played.videoCodecWarning) {
+          pushNotification({ tone: 'warning', message: played.videoCodecWarning })
+        }
         return true
       } catch (error) {
         pushNotification({

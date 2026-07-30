@@ -234,7 +234,8 @@ export function selectTranscodeAudioTrack(tracks: MediaTracks | undefined): Medi
   const preferred = audio.find((x) => x.default) || audio[0]
   if (!RISKY_TRANSCODE_CODECS.has(preferred.codec)) return preferred
   const saferSameLanguage = audio.find(
-    (t) => t !== preferred && t.language === preferred.language && !RISKY_TRANSCODE_CODECS.has(t.codec)
+    (t) =>
+      t !== preferred && t.language === preferred.language && !RISKY_TRANSCODE_CODECS.has(t.codec)
   )
   const saferAny = audio.find((t) => t !== preferred && !RISKY_TRANSCODE_CODECS.has(t.codec))
   return saferSameLanguage || saferAny || preferred
@@ -244,6 +245,28 @@ export function needsAudioCompatibility(tracks: MediaTracks | undefined): boolea
   const selected = selectTranscodeAudioTrack(tracks)
   if (!selected) return false
   return !DIRECT_AUDIO_CODECS.has(String(selected.codec || '').toLowerCase())
+}
+
+// Video is only ever stream-copied (see buildFfmpegArguments's `-c:v copy`
+// and playback.ts's direct-proxy path) — there is no video transcode path
+// in this app at all, so a source encoded in a codec Chromium's own
+// (software) decoder can't handle has no fallback. Confirmed live: HEVC
+// sources produced everything from silent "audio only, no picture" to a
+// mid-stream PIPELINE_ERROR_DECODE crash partway through playback,
+// depending on the specific stream — both symptoms trace back to the same
+// gap, not two separate bugs. Building real video transcoding is real,
+// riskier work (CPU cost, hardware-accel detection, quality tradeoffs) —
+// not attempted here. This only detects the risk upfront so the person
+// gets one clear message before pressing play, instead of a confusing
+// crash (or a permanently frozen frame) minutes in with no explanation.
+const RISKY_VIDEO_CODECS = new Set(['hevc', 'h265', 'vc1', 'mpeg2video', 'mpeg4'])
+
+export function videoCodecCompatibilityWarning(
+  tracks: MediaTracks | undefined
+): string | undefined {
+  const codec = String(tracks?.video?.[0]?.codec || '').toLowerCase()
+  if (!RISKY_VIDEO_CODECS.has(codec)) return undefined
+  return `This title's video (${codec.toUpperCase()}) may not play reliably in this app — some players can't decode it at all, others only partway through. There's no built-in conversion for video yet, only audio.`
 }
 
 function findInTree(root: string, name: string, depth = 4): string {

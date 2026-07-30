@@ -34,8 +34,18 @@
      1920x1080 viewport edge. 280px is the largest floor that keeps
      every mood pill fully on-screen with a small safety margin; see the
      .section comment in RecommendationCarousel.module.css for the
-     matching card-size tradeoff this required. */
-  grid-template-rows: minmax(520px, 1fr) minmax(280px, auto) auto;
+     matching card-size tradeoff this required.
+
+     Floor trimmed 520px -> 480px: on a real (non-maximized-1080p)
+     desktop window this row's 520px floor plus row 2's paired-with-
+     RecommendationCarousel 280px floor left too little of .dashboard's
+     actual box for row 3, clipping a few px off the bottom of the mood
+     pills even though row 3 itself only needs ~190px. Row 1 (the hero)
+     has real slack to give up here — unlike row 2, its floor isn't
+     paired against another component's own min-height, so trimming it
+     doesn't risk the same overlap regression the row-2 comment above
+     describes. */
+  grid-template-rows: minmax(480px, 1fr) minmax(280px, auto) auto;
   /* ContinueWatchingPanel shares "hero" (see its own .module.css) and
      self-aligns to the top-right corner of that cell — a floating
      glass card over the hero's art, not a separate opaque column.
@@ -51,9 +61,9 @@
      its own gets the same "closer together" read without that
      conflict. */
   grid-template-areas:
-    "assistant hero hero"
-    "picks picks status"
-    "mood mood mood";
+    'assistant hero hero'
+    'picks picks status'
+    'mood mood mood';
   /* 10-foot-interface pass: trimmed 16px -> 12px. Row 2 grew ~76px
      taller to fit the larger cards/performance panel (see the
      grid-template-rows comment above); reclaiming a few px per gap
@@ -95,11 +105,11 @@
     grid-template-columns: 1fr;
     grid-template-rows: repeat(5, auto);
     grid-template-areas:
-      "assistant"
-      "hero"
-      "picks"
-      "continue"
-      "mood";
+      'assistant'
+      'hero'
+      'picks'
+      'continue'
+      'mood';
     /* No page-level scroll at this width either (see the base rule's own
        comment) — five stacked sections plainly can't all fit without
        either scrolling or clipping below the fold; clipping is the
@@ -113,11 +123,11 @@
 @media (max-width: 767px) {
   .dashboard {
     grid-template-areas:
-      "assistant"
-      "hero"
-      "continue"
-      "picks"
-      "mood";
+      'assistant'
+      'hero'
+      'continue'
+      'picks'
+      'mood';
     /* Bottom nav gets its own row in AppShell's mobile grid (never
        overlaps .main), so this only needs normal breathing room, not
        clearance padding for a floating bar. The compensating calc term
