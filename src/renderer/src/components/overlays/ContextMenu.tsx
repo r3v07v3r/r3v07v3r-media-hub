@@ -9,7 +9,7 @@ export function ContextMenu() {
   const {
     contextMenu,
     closeContextMenu,
-    startPlayback,
+    startPartyPlayback,
     toggleMyList,
     myList,
     markContinueWatching,
@@ -44,7 +44,7 @@ export function ContextMenu() {
   const top = Math.min(y, window.innerHeight - 320)
 
   const items: { icon: string; label: string; onSelect: () => void }[] = [
-    { icon: 'play', label: 'Play', onSelect: () => startPlayback(media) },
+    { icon: 'play', label: 'Play', onSelect: () => startPartyPlayback(media) },
     {
       icon: saved ? 'check' : 'plus',
       label: saved ? 'Remove from My List' : 'Add to My List',

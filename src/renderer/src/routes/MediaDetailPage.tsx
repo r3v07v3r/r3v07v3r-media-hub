@@ -46,7 +46,7 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
     myList,
     toggleMyList,
     continueWatching,
-    startPlayback,
+    startPartyPlayback,
     catalog,
     pushNotification,
     openDetail
@@ -217,7 +217,8 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
   }, [episodes, watchedKeys])
 
   const selectedSeason =
-    selectedSeasonOverride ?? (seasons.length ? ((nextEpisode ?? episodes[0])?.season ?? seasons[0]) : null)
+    selectedSeasonOverride ??
+    (seasons.length ? ((nextEpisode ?? episodes[0])?.season ?? seasons[0]) : null)
 
   useRestoreBrowsingOrigin(metaStatus !== 'loading')
 
@@ -237,9 +238,13 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
 
   function handlePlay(season?: number, episode?: number): void {
     if (!media) return
-    startPlayback(
+    startPartyPlayback(
       config.isEpisodic
-        ? { ...media, seasonNumber: season ?? nextEpisode?.season ?? 1, episodeNumber: episode ?? nextEpisode?.episode ?? 1 }
+        ? {
+            ...media,
+            seasonNumber: season ?? nextEpisode?.season ?? 1,
+            episodeNumber: episode ?? nextEpisode?.episode ?? 1
+          }
         : media
     )
   }
@@ -313,8 +318,16 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
   if (metaStatus === 'loading' && !media) {
     return (
       <div className={styles.page}>
-        <ContextBackButton origin={browsingOrigin} fallbackLabel={config.label} onBack={handleBack} />
-        <div className={styles.loadingState} aria-busy="true" aria-label={`Loading ${config.label.toLowerCase()} details`}>
+        <ContextBackButton
+          origin={browsingOrigin}
+          fallbackLabel={config.label}
+          onBack={handleBack}
+        />
+        <div
+          className={styles.loadingState}
+          aria-busy="true"
+          aria-label={`Loading ${config.label.toLowerCase()} details`}
+        >
           <div className={styles.loadingBackdrop} />
           <div className={styles.loadingLine} style={{ width: '38%' }} />
           <div className={styles.loadingLine} style={{ width: '58%' }} />
@@ -327,10 +340,16 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
   if (!media) {
     return (
       <div className={styles.page}>
-        <ContextBackButton origin={browsingOrigin} fallbackLabel={config.label} onBack={handleBack} />
+        <ContextBackButton
+          origin={browsingOrigin}
+          fallbackLabel={config.label}
+          onBack={handleBack}
+        />
         <div className={styles.errorState} role="alert">
           <h1>Couldn&apos;t load this title</h1>
-          <p>It may no longer be in your catalog, or the media hub backend couldn&apos;t be reached.</p>
+          <p>
+            It may no longer be in your catalog, or the media hub backend couldn&apos;t be reached.
+          </p>
         </div>
       </div>
     )
@@ -350,7 +369,9 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
         onToggleTrailer={() => setShowTrailer((v) => !v)}
         inMyList={inMyList}
         onToggleMyList={() => toggleMyList(media)}
-        onPlay={() => handlePlay(continueEntry?.media.seasonNumber, continueEntry?.media.episodeNumber)}
+        onPlay={() =>
+          handlePlay(continueEntry?.media.seasonNumber, continueEntry?.media.episodeNumber)
+        }
       />
 
       <div className={styles.main}>
@@ -377,7 +398,12 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
             />
           </>
         ) : (
-          <NextToPlayPanel media={media} nextEpisode={null} allWatched={false} onPlay={() => handlePlay()} />
+          <NextToPlayPanel
+            media={media}
+            nextEpisode={null}
+            allWatched={false}
+            onPlay={() => handlePlay()}
+          />
         )}
         <AboutPanel media={media} config={config} />
       </div>
@@ -390,7 +416,9 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
           continueEntry={continueEntry}
           inMyList={inMyList}
           onToggleMyList={() => toggleMyList(media)}
-          onOpenLastWatched={() => handlePlay(continueEntry?.media.seasonNumber, continueEntry?.media.episodeNumber)}
+          onOpenLastWatched={() =>
+            handlePlay(continueEntry?.media.seasonNumber, continueEntry?.media.episodeNumber)
+          }
         />
         <GenresPanel genres={media.genres} onSelectGenre={handleGenreSelect} />
         <SimilarPanel

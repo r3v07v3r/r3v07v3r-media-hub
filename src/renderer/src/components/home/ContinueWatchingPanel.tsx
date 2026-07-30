@@ -19,7 +19,7 @@ export interface ContinueWatchingPanelProps {
 export function ContinueWatchingPanel({ kindFilter }: ContinueWatchingPanelProps = {}) {
   const {
     continueWatching: allContinueWatching,
-    startPlayback,
+    startPartyPlayback,
     markContinueWatching,
     removeContinueWatching,
     openDetail
@@ -58,7 +58,7 @@ export function ContinueWatchingPanel({ kindFilter }: ContinueWatchingPanelProps
                   type="button"
                   className={`${styles.thumbButton} animated-edge`}
                   data-media-id={m.id}
-                  onClick={() => (isDone ? openDetail(m) : startPlayback(m))}
+                  onClick={() => (isDone ? openDetail(m) : startPartyPlayback(m))}
                   aria-label={isDone ? `Open details for ${m.title}` : `Resume ${m.title}`}
                 >
                   <ArtworkImage
@@ -129,7 +129,7 @@ export function ContinueWatchingPanel({ kindFilter }: ContinueWatchingPanelProps
                     <button
                       type="button"
                       className={styles.hoverActionButton}
-                      onClick={() => startPlayback(m)}
+                      onClick={() => startPartyPlayback(m)}
                       aria-label={`Resume ${m.title}`}
                     >
                       <Icon name="play" />
@@ -138,7 +138,7 @@ export function ContinueWatchingPanel({ kindFilter }: ContinueWatchingPanelProps
                   <button
                     type="button"
                     className={styles.hoverActionButton}
-                    onClick={() => startPlayback({ ...m, progressPercentage: 0 })}
+                    onClick={() => startPartyPlayback({ ...m, progressPercentage: 0 })}
                     aria-label={`Restart ${m.title}`}
                   >
                     <Icon name="refresh" />

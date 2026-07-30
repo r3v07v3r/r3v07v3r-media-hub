@@ -38,8 +38,18 @@ export function PlaybackOverlay() {
     setPlaybackTracks: setTracks,
     stopPlayback,
     pushNotification,
-    mediaHubSettings
+    mediaHubSettings,
+    partyStatus,
+    partyPendingSeek,
+    consumePartyPendingSeek
   } = useAppState()
+  const isPartyHost = Boolean(partyStatus?.inParty && partyStatus.role === 'host')
+  // While following, local play/pause/seek controls are disabled (see the
+  // control-row buttons and handleSeek/togglePlay's own early-returns
+  // below) — the wire protocol only host-gates `seek` server-side (see
+  // watchParty.ts's party:playback-action handler), so this UI-layer lock
+  // is what actually keeps a follower from fighting the host's control.
+  const followingParty = Boolean(partyStatus?.inParty && partyStatus.role === 'client')
   const videoRef = useRef<HTMLVideoElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const closeRef = useRef<HTMLButtonElement>(null)
@@ -103,11 +113,18 @@ export function PlaybackOverlay() {
   }, [trackedMediaId, playbackMedia])
 
   const togglePlay = useCallback(() => {
+    if (followingParty) return
     const video = videoRef.current
     if (!video) return
-    if (video.paused) video.play().catch(() => {})
+    const willPlay = video.paused
+    if (willPlay) video.play().catch(() => {})
     else video.pause()
-  }, [])
+    if (isPartyHost) {
+      window.api?.mediaHub?.party
+        .playbackAction({ type: willPlay ? 'play' : 'pause' })
+        .catch(() => {})
+    }
+  }, [followingParty, isPartyHost])
 
   // Real OS-level window fullscreen (via the main process's
   // BrowserWindow.setFullScreen), not the DOM Fullscreen API on this
@@ -195,13 +212,15 @@ export function PlaybackOverlay() {
       .catch(() => {})
   }, [playbackMedia])
 
-  const handleSeek = useCallback(
-    (event: React.MouseEvent<HTMLDivElement>) => {
+  // Shared by the scrubber click (handleSeek), the initial catch-up seek
+  // when joining a party mid-title (partyPendingSeek), and the follower-
+  // apply effect below for incoming seek/position corrections — all three
+  // just need to land on an absolute target time, none of them care how
+  // it got computed.
+  const performSeek = useCallback(
+    (target: number) => {
       const video = videoRef.current
-      if (!video || !duration || !Number.isFinite(duration)) return
-      const rect = event.currentTarget.getBoundingClientRect()
-      const fraction = Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width))
-      const target = fraction * duration
+      if (!video) return
 
       if (!result?.compatibility) {
         // Direct/proxied playback (playback.ts forwards real Range/
@@ -235,7 +254,24 @@ export function PlaybackOverlay() {
           })
         })
     },
-    [duration, result, pushNotification, applyShiftedSubtitle]
+    [result, pushNotification, applyShiftedSubtitle, setResult, setTracks]
+  )
+
+  const handleSeek = useCallback(
+    (event: React.MouseEvent<HTMLDivElement>) => {
+      if (followingParty) return
+      if (!duration || !Number.isFinite(duration)) return
+      const rect = event.currentTarget.getBoundingClientRect()
+      const fraction = Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width))
+      const target = fraction * duration
+      performSeek(target)
+      if (isPartyHost) {
+        window.api?.mediaHub?.party
+          .playbackAction({ type: 'seek', position: target })
+          .catch(() => {})
+      }
+    },
+    [duration, performSeek, followingParty, isPartyHost]
   )
 
   async function selectTrack(kindKey: 'audio' | 'subtitle', ordinal: number) {
@@ -378,6 +414,67 @@ export function PlaybackOverlay() {
     }
   }, [result?.url, targetBufferSeconds, tracks])
 
+  // Joining a party mid-title (or the host starting a fresh one) leaves an
+  // absolute catch-up position in AppStateContext's partyPendingSeek —
+  // consumed here once the stream is actually ready to play rather than
+  // the instant it's set, since seeking before that would just race the
+  // buffering-gate effect above.
+  useEffect(() => {
+    if (partyPendingSeek === null || !bufferingReady) return
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    performSeek(partyPendingSeek)
+    consumePartyPendingSeek()
+  }, [partyPendingSeek, bufferingReady, performSeek, consumePartyPendingSeek])
+
+  // Follower side of party-synced playback: the host is the only one who
+  // ever calls party.playbackAction (see togglePlay/handleSeek above and
+  // the drift-correction interval below), so every message received here
+  // genuinely originated from the host and should just be applied
+  // directly — no further host/client branching needed.
+  useEffect(() => {
+    if (!followingParty) return
+    const api = window.api?.mediaHub?.party
+    if (!api) return
+    return api.onEvent((event) => {
+      if (event.type !== 'message') return
+      const msg = event.message as { type?: string; position?: number }
+      const video = videoRef.current
+      if (!video) return
+      if (msg.type === 'play') video.play().catch(() => {})
+      else if (msg.type === 'pause') video.pause()
+      else if (msg.type === 'seek') performSeek(Number(msg.position) || 0)
+      else if (msg.type === 'position' && !result?.compatibility) {
+        // Direct/proxied playback only — a plain currentTime nudge is
+        // cheap there. In compatibility mode, performSeek's "seek" means
+        // restarting the ffmpeg transcode from scratch (see its own
+        // comment), which is far too disruptive to run automatically on
+        // routine drift between two independently-buffered streams; an
+        // explicit host 'seek' still applies in compat mode above, this
+        // periodic soft-correction just doesn't.
+        const target = Number(msg.position) || 0
+        const currentAbsolute = streamStartOffsetRef.current + video.currentTime
+        if (Math.abs(currentAbsolute - target) > 2) performSeek(target)
+      }
+    })
+  }, [followingParty, performSeek])
+
+  // Host side: keeps followers roughly in sync even without an explicit
+  // seek (natural playback drift, a follower who briefly stalled) — see
+  // the 'position' branch above for the follower's own >2s correction
+  // threshold.
+  useEffect(() => {
+    if (!isPartyHost) return
+    const api = window.api?.mediaHub?.party
+    if (!api) return
+    const interval = setInterval(() => {
+      const video = videoRef.current
+      if (!video || video.paused) return
+      const position = streamStartOffsetRef.current + video.currentTime
+      api.playbackAction({ type: 'position', position }).catch(() => {})
+    }, 10000)
+    return () => clearInterval(interval)
+  }, [isPartyHost])
+
   // AppStateContext's startPlayback only ever sets playbackMedia once a
   // real PlaybackResult is already resolved — see that function's own
   // comment. There's no in-between "resolving"/"no-source"/"error" state
@@ -464,144 +561,151 @@ export function PlaybackOverlay() {
       >
         {result.autoReason && <span className={styles.playerAutoNote}>{result.autoReason}</span>}
 
-          <div className={styles.playerScrubberTrack} onClick={handleSeek}>
-            <div
-              className={styles.playerScrubberFill}
-              style={{ width: `${duration ? (currentTime / duration) * 100 : 0}%` }}
-            />
-          </div>
+        <div
+          className={`${styles.playerScrubberTrack} ${followingParty ? styles.playerScrubberLocked : ''}`}
+          onClick={handleSeek}
+        >
+          <div
+            className={styles.playerScrubberFill}
+            style={{ width: `${duration ? (currentTime / duration) * 100 : 0}%` }}
+          />
+        </div>
 
-          <div className={styles.playerButtonRow}>
-            <button
-              type="button"
-              className={styles.playerIconButton}
-              onClick={togglePlay}
-              aria-label={playing ? 'Pause' : 'Play'}
-            >
-              <Icon name={playing ? 'pause' : 'play'} size={15} />
-            </button>
+        <div className={styles.playerButtonRow}>
+          <button
+            type="button"
+            className={styles.playerIconButton}
+            onClick={togglePlay}
+            disabled={followingParty}
+            aria-label={playing ? 'Pause' : 'Play'}
+          >
+            <Icon name={playing ? 'pause' : 'play'} size={15} />
+          </button>
 
-            <span className={styles.playerTimeLabel}>
-              {formatTime(currentTime)} / {formatTime(duration)}
+          <span className={styles.playerTimeLabel}>
+            {formatTime(currentTime)} / {formatTime(duration)}
+          </span>
+
+          <span className={styles.playerTitleLabel}>
+            {playbackMedia.title}
+            {playbackMedia.episodeTitle ? ` — ${playbackMedia.episodeTitle}` : ''}
+          </span>
+
+          {followingParty && (
+            <span className={styles.playerPartyBadge}>
+              <Icon name="people" size={12} /> Host is controlling playback
             </span>
+          )}
 
-            <span className={styles.playerTitleLabel}>
-              {playbackMedia.title}
-              {playbackMedia.episodeTitle ? ` — ${playbackMedia.episodeTitle}` : ''}
-            </span>
+          <input
+            type="range"
+            min={0}
+            max={1}
+            step={0.05}
+            value={volume}
+            className={styles.playerVolumeRange}
+            onChange={(e) => {
+              const v = Number(e.target.value)
+              setVolume(v)
+              if (videoRef.current) videoRef.current.volume = v
+            }}
+            aria-label="Volume"
+          />
 
-            <input
-              type="range"
-              min={0}
-              max={1}
-              step={0.05}
-              value={volume}
-              className={styles.playerVolumeRange}
-              onChange={(e) => {
-                const v = Number(e.target.value)
-                setVolume(v)
-                if (videoRef.current) videoRef.current.volume = v
-              }}
-              aria-label="Volume"
-            />
-
-            {audioTracks.length > 1 && (
-              <div className={styles.playerMenuWrap}>
-                <button
-                  type="button"
-                  className={styles.playerIconButton}
-                  onClick={() => setOpenMenu(openMenu === 'audio' ? null : 'audio')}
-                  aria-label="Audio track"
-                >
-                  <Icon name="waveform" size={15} />
-                </button>
-                {openMenu === 'audio' && (
-                  <div className={styles.playerMenu}>
-                    <div className={styles.playerMenuHeading}>Audio</div>
-                    {audioTracks.map((t) => (
-                      <button
-                        key={t.ordinal}
-                        type="button"
-                        className={`${styles.playerMenuItem} ${t.default ? styles.playerMenuItemActive : ''}`}
-                        onClick={() => selectTrack('audio', t.ordinal)}
-                      >
-                        {t.label}
-                        {t.default && <Icon name="check" size={12} />}
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
-
+          {audioTracks.length > 1 && (
             <div className={styles.playerMenuWrap}>
               <button
                 type="button"
                 className={styles.playerIconButton}
-                onClick={() => (openMenu === 'subtitles' ? setOpenMenu(null) : searchSubtitles())}
-                aria-label="Subtitles"
+                onClick={() => setOpenMenu(openMenu === 'audio' ? null : 'audio')}
+                aria-label="Audio track"
               >
-                <Icon name="info" size={15} />
+                <Icon name="waveform" size={15} />
               </button>
-              {openMenu === 'subtitles' && (
+              {openMenu === 'audio' && (
                 <div className={styles.playerMenu}>
-                  <div className={styles.playerMenuHeading}>Embedded</div>
-                  {subtitleTracks.length === 0 && (
-                    <span className={styles.playerMenuItem}>None</span>
-                  )}
-                  {subtitleTracks.map((t) => (
+                  <div className={styles.playerMenuHeading}>Audio</div>
+                  {audioTracks.map((t) => (
                     <button
                       key={t.ordinal}
                       type="button"
-                      className={styles.playerMenuItem}
-                      onClick={() => selectTrack('subtitle', t.ordinal)}
+                      className={`${styles.playerMenuItem} ${t.default ? styles.playerMenuItemActive : ''}`}
+                      onClick={() => selectTrack('audio', t.ordinal)}
                     >
                       {t.label}
-                    </button>
-                  ))}
-                  <div className={styles.playerMenuHeading}>OpenSubtitles</div>
-                  {subtitleResults === null && (
-                    <span className={styles.playerMenuItem}>Searching…</span>
-                  )}
-                  {subtitleResults?.length === 0 && (
-                    <span className={styles.playerMenuItem}>No results</span>
-                  )}
-                  {subtitleResults?.map((s) => (
-                    <button
-                      key={s.id}
-                      type="button"
-                      className={styles.playerMenuItem}
-                      onClick={() => applySubtitle(s.fileId)}
-                    >
-                      {s.language.toUpperCase()} — {s.releaseName || s.fileName}
+                      {t.default && <Icon name="check" size={12} />}
                     </button>
                   ))}
                 </div>
               )}
             </div>
+          )}
 
-            <button
-              type="button"
-              className={`${styles.playerIconButton} ${styles.playerFitButton}`}
-              onClick={cycleFitMode}
-              aria-label={`Picture fit: ${fitModeLabel} (click to change)`}
-              title={`Picture fit: ${fitModeLabel}`}
-            >
-              <Icon name="aspect-ratio" size={15} />
-              <span className={styles.playerFitLabel}>{fitModeLabel}</span>
-            </button>
-
+          <div className={styles.playerMenuWrap}>
             <button
               type="button"
               className={styles.playerIconButton}
-              onClick={handleToggleFullscreen}
-              aria-label={isFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
+              onClick={() => (openMenu === 'subtitles' ? setOpenMenu(null) : searchSubtitles())}
+              aria-label="Subtitles"
             >
-              <Icon name={isFullscreen ? 'collapse' : 'expand'} size={15} />
+              <Icon name="info" size={15} />
             </button>
+            {openMenu === 'subtitles' && (
+              <div className={styles.playerMenu}>
+                <div className={styles.playerMenuHeading}>Embedded</div>
+                {subtitleTracks.length === 0 && <span className={styles.playerMenuItem}>None</span>}
+                {subtitleTracks.map((t) => (
+                  <button
+                    key={t.ordinal}
+                    type="button"
+                    className={styles.playerMenuItem}
+                    onClick={() => selectTrack('subtitle', t.ordinal)}
+                  >
+                    {t.label}
+                  </button>
+                ))}
+                <div className={styles.playerMenuHeading}>OpenSubtitles</div>
+                {subtitleResults === null && (
+                  <span className={styles.playerMenuItem}>Searching…</span>
+                )}
+                {subtitleResults?.length === 0 && (
+                  <span className={styles.playerMenuItem}>No results</span>
+                )}
+                {subtitleResults?.map((s) => (
+                  <button
+                    key={s.id}
+                    type="button"
+                    className={styles.playerMenuItem}
+                    onClick={() => applySubtitle(s.fileId)}
+                  >
+                    {s.language.toUpperCase()} — {s.releaseName || s.fileName}
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
+
+          <button
+            type="button"
+            className={`${styles.playerIconButton} ${styles.playerFitButton}`}
+            onClick={cycleFitMode}
+            aria-label={`Picture fit: ${fitModeLabel} (click to change)`}
+            title={`Picture fit: ${fitModeLabel}`}
+          >
+            <Icon name="aspect-ratio" size={15} />
+            <span className={styles.playerFitLabel}>{fitModeLabel}</span>
+          </button>
+
+          <button
+            type="button"
+            className={styles.playerIconButton}
+            onClick={handleToggleFullscreen}
+            aria-label={isFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
+          >
+            <Icon name={isFullscreen ? 'collapse' : 'expand'} size={15} />
+          </button>
         </div>
       </div>
+    </div>
   )
 }
-

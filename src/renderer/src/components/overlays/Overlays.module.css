@@ -51,7 +51,7 @@
   padding: 20px 28px;
 }
 .modalArt::after {
-  content: "";
+  content: '';
   position: absolute;
   inset: 0;
   background: linear-gradient(180deg, transparent 40%, rgba(4, 7, 13, 0.92) 100%);
@@ -285,6 +285,12 @@
   background: linear-gradient(90deg, var(--accent-blue), var(--accent-violet));
   pointer-events: none;
 }
+/* Following a party host: the scrubber click handler already no-ops (see
+   handleSeek), this is just the visual half of that lock. */
+.playerScrubberLocked {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
 .playerButtonRow {
   display: flex;
   align-items: center;
@@ -304,6 +310,23 @@
 .playerIconButton svg {
   width: 16px;
   height: 16px;
+}
+.playerIconButton:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.playerPartyBadge {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border-radius: 14px;
+  background: rgba(56, 229, 255, 0.12);
+  border: 1px solid rgba(56, 229, 255, 0.35);
+  color: var(--accent-cyan);
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
 }
 /* Fit-mode toggle needs room for both the icon and its current-mode
    label — everything else in this row is icon-only inside a fixed 34px

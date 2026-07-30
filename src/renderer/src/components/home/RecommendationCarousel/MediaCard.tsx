@@ -17,7 +17,7 @@ const MATCH_CLASS: Record<string, string> = {
 }
 
 export function MediaCard({ media }: { media: MediaItem }) {
-  const { openDetail, startPlayback, openContextMenu, continueWatching, resolvingMedia } =
+  const { openDetail, startPartyPlayback, openContextMenu, continueWatching, resolvingMedia } =
     useAppState()
   const artwork = resolveArtwork(media)
   const watchStatus = getWatchStatus(media, continueWatching)
@@ -62,7 +62,7 @@ export function MediaCard({ media }: { media: MediaItem }) {
           className={styles.playButton}
           onClick={(e) => {
             e.stopPropagation()
-            startPlayback(media)
+            startPartyPlayback(media)
           }}
           disabled={isResolving}
           aria-busy={isResolving}
@@ -72,7 +72,11 @@ export function MediaCard({ media }: { media: MediaItem }) {
               : `Play ${media.title}`
           }
         >
-          {isResolving ? <span className={styles.playButtonSpinner} aria-hidden="true" /> : <Icon name="play" />}
+          {isResolving ? (
+            <span className={styles.playButtonSpinner} aria-hidden="true" />
+          ) : (
+            <Icon name="play" />
+          )}
         </button>
         <button
           type="button"

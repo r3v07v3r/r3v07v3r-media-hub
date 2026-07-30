@@ -23,6 +23,7 @@ import {
 import { CONTINUE_WATCHING, USER_PROFILES } from '@renderer/data/mockData'
 import type {
   MediaHubSettingsSnapshot,
+  MediaKind,
   MediaTracks,
   PartyHostResult,
   PartyMode,
@@ -245,8 +246,16 @@ interface AppStateValue {
   // supports.
   setPlaybackResult: Dispatch<SetStateAction<PlaybackResult | null>>
   setPlaybackTracks: Dispatch<SetStateAction<MediaTracks | null>>
-  startPlayback: (media: MediaItem) => Promise<void>
+  startPlayback: (media: MediaItem) => Promise<boolean>
   stopPlayback: () => void
+  /** Same as startPlayback, but (host only) also announces the title to the party so followers resolve their own stream of it. */
+  startPartyPlayback: (
+    media: MediaItem,
+    opts?: { season?: number; episode?: number }
+  ) => Promise<void>
+  /** Absolute position (seconds) a follower should seek to once their own independently-resolved stream is ready — set from an incoming `nowPlaying` announcement, consumed once by PlaybackOverlay. */
+  partyPendingSeek: number | null
+  consumePartyPendingSeek: () => void
 
   contextMenu: { x: number; y: number; media: MediaItem } | null
   openContextMenu: (x: number, y: number, media: MediaItem) => void
@@ -284,6 +293,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   const [partyQueue, setPartyQueue] = useState<PartyQueueEntry[]>([])
   const [partyHostCode, setPartyHostCode] = useState<string | null>(null)
   const [partyPanelOpen, setPartyPanelOpen] = useState(false)
+  const [partyPendingSeek, setPartyPendingSeek] = useState<number | null>(null)
   const [myList, setMyList] = useState<Set<string>>(new Set())
   const [continueWatching, setContinueWatching] =
     useState<ContinueWatchingItem[]>(CONTINUE_WATCHING)
@@ -676,13 +686,13 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   // playable PlaybackResult in hand; a no-source or error outcome just
   // pushes a notification and leaves the person exactly where they were.
   const startPlayback = useCallback(
-    async (media: MediaItem) => {
+    async (media: MediaItem): Promise<boolean> => {
       if (mediaHubSettings && !mediaHubSettings.torboxConnected) {
         pushNotification({
           tone: 'warning',
           message: 'Connect TorBox in Settings to start playback.'
         })
-        return
+        return false
       }
       const api = window.api?.mediaHub
       if (!api) {
@@ -690,7 +700,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
           tone: 'error',
           message: "Playback isn't available outside the desktop app."
         })
-        return
+        return false
       }
       setContextMenu(null)
       const kind = media.mediaKind ?? (media.mediaType === 'series' ? 'series' : 'movie')
@@ -711,18 +721,20 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
               ? "This title wasn't cached yet, so TorBox has started downloading it — try again in a few minutes."
               : 'No sources were found for this title yet — try again later.'
           })
-          return
+          return false
         }
         setResolvingMedia({ id: media.id, stage: 'buffering' })
         const played = await api.stream.play(resolved.best, mediaId)
         setPlaybackResult(played)
         setPlaybackTracks(played.tracks)
         setPlaybackMedia(media)
+        return true
       } catch (error) {
         pushNotification({
           tone: 'error',
           message: error instanceof Error ? error.message : 'Playback failed to start.'
         })
+        return false
       } finally {
         setResolvingMedia(null)
       }
@@ -734,6 +746,81 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     setPlaybackResult(null)
     setPlaybackTracks(null)
   }, [])
+
+  // Host-only: same resolve+play as startPlayback, then (once a real
+  // stream is actually playing) announces the title to the party so every
+  // follower resolves their OWN independent stream of it — see
+  // watchParty.ts's party:now-playing handler, which only ever broadcasts
+  // outward and never echoes back to the host's own renderer, so the host
+  // applies this to itself via the plain startPlayback call above rather
+  // than waiting on its own announcement.
+  const startPartyPlayback = useCallback(
+    async (media: MediaItem, opts?: { season?: number; episode?: number }) => {
+      const season = opts?.season ?? media.seasonNumber
+      const episode = opts?.episode ?? media.episodeNumber
+      const target = opts ? { ...media, seasonNumber: season, episodeNumber: episode } : media
+      const started = await startPlayback(target)
+      if (!started) return
+      const api = window.api?.mediaHub?.party
+      if (!api || !partyStatus?.inParty || partyStatus.role !== 'host') return
+      const kind = media.mediaKind ?? (media.mediaType === 'series' ? 'series' : 'movie')
+      api
+        .nowPlaying({
+          infoHash: '',
+          sources: [],
+          mediaId: buildMediaId(kind, media.id, season, episode),
+          item: { id: media.id, type: kind, title: media.title, poster: media.posterUrl ?? '' },
+          season,
+          episode,
+          position: 0
+        })
+        .catch(() => {})
+    },
+    [startPlayback, partyStatus]
+  )
+
+  // Follower side of the above: unwrap an incoming `nowPlaying` (see
+  // watchParty.ts's handlePartyMessage — every message type other than
+  // suggest/vote falls through to the generic `{type:'message', message}`
+  // relay, so this is only ever received by clients, never echoed to the
+  // host that sent it) into a real MediaItem via the same catalog:meta +
+  // catalogItemToMediaItem path MediaDetailPage would use, then plays it
+  // through the ordinary startPlayback — each party member genuinely
+  // resolves their own stream from their own TorBox account; only this
+  // metadata + the play/pause/seek control signals below are ever shared.
+  useEffect(() => {
+    const api = window.api?.mediaHub?.party
+    if (!api) return
+    return api.onEvent((event) => {
+      if (event.type !== 'message' || partyStatus?.role !== 'client') return
+      const msg = event.message as {
+        type?: string
+        item?: { id?: string; type?: string; title?: string; poster?: string }
+        season?: number
+        episode?: number
+        position?: number
+      }
+      if (msg?.type !== 'nowPlaying' || !msg.item?.id || !msg.item.type) return
+      const catalogApi = window.api?.mediaHub?.catalog
+      if (!catalogApi) return
+      catalogApi
+        .meta(msg.item.type as MediaKind, msg.item.id)
+        .then((catalogItem) => {
+          const media = catalogItemToMediaItem(catalogItem)
+          setPartyPendingSeek(Number(msg.position) || 0)
+          return startPlayback(
+            msg.season !== undefined || msg.episode !== undefined
+              ? { ...media, seasonNumber: msg.season, episodeNumber: msg.episode }
+              : media
+          )
+        })
+        .catch(() => {
+          pushNotification({ tone: 'error', message: "Couldn't load what the host is playing." })
+        })
+    })
+  }, [partyStatus, startPlayback, pushNotification])
+
+  const consumePartyPendingSeek = useCallback(() => setPartyPendingSeek(null), [])
 
   const openContextMenu = useCallback(
     (x: number, y: number, media: MediaItem) => setContextMenu({ x, y, media }),
@@ -879,6 +966,9 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       setPlaybackTracks,
       startPlayback,
       stopPlayback,
+      startPartyPlayback,
+      partyPendingSeek,
+      consumePartyPendingSeek,
       contextMenu,
       openContextMenu,
       closeContextMenu,
@@ -948,6 +1038,9 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       setPlaybackTracks,
       startPlayback,
       stopPlayback,
+      startPartyPlayback,
+      partyPendingSeek,
+      consumePartyPendingSeek,
       contextMenu,
       openContextMenu,
       closeContextMenu,
