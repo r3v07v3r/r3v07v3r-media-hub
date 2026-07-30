@@ -1,9 +1,10 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useAppState } from '@renderer/context/AppStateContext'
 import { Icon } from '@renderer/components/icons/Icon'
 import { AboutUpdateSection } from './AboutUpdateSection'
 import { MediaServicesSection } from './MediaServicesSection'
 import { MediaHubSettingsSections } from './MediaHubSettingsSections'
+import type { ProfilePublic } from '@shared/media-hub/types'
 import styles from './Settings.module.css'
 
 const PLAYBACK_BUFFER_OPTIONS: { value: string; label: string }[] = [
@@ -90,6 +91,170 @@ function ToggleRow({
   )
 }
 
+/** Inline add/edit form shown below the profile grid — one component for
+ *  both create and edit, since the fields are identical apart from a
+ *  Delete button and pre-filled values in edit mode. */
+function ProfileForm({
+  target,
+  activeProfileId,
+  profileCount,
+  onClose
+}: {
+  target: ProfilePublic | null // null = creating a new profile
+  activeProfileId: string
+  profileCount: number
+  onClose: () => void
+}) {
+  const { createProfile, updateProfile, deleteProfile } = useAppState()
+  const [name, setName] = useState(target?.name ?? '')
+  const [isKid, setIsKid] = useState(target?.isKid ?? false)
+  const [pin, setPin] = useState('')
+  const [removePin, setRemovePin] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+
+  const isEdit = Boolean(target)
+  const isActive = target?.id === activeProfileId
+  const canDelete = isEdit && !isActive && profileCount > 1
+
+  async function handleSave() {
+    if (pin && !/^\d{4,8}$/.test(pin)) {
+      setError('PIN must be 4-8 digits.')
+      return
+    }
+    setBusy(true)
+    setError(null)
+    try {
+      if (target) {
+        await updateProfile({
+          id: target.id,
+          name,
+          isKid,
+          pin: removePin ? null : pin || undefined
+        })
+      } else {
+        await createProfile({ name, isKid, pin: pin || undefined })
+      }
+      onClose()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not save this profile.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function handleDelete() {
+    if (!target) return
+    setBusy(true)
+    setError(null)
+    try {
+      await deleteProfile(target.id)
+      onClose()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not delete this profile.')
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className={styles.profileForm}>
+      <div className={styles.profileFormRow}>
+        <div className={styles.field}>
+          <span className={styles.fieldLabel}>Name</span>
+          <input
+            className={styles.fieldInput}
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            maxLength={40}
+            autoFocus
+          />
+        </div>
+        <div className={styles.field}>
+          <span className={styles.fieldLabel}>{target?.hasPin ? 'New PIN' : 'PIN (optional)'}</span>
+          <input
+            className={styles.fieldInput}
+            type="password"
+            inputMode="numeric"
+            value={pin}
+            disabled={removePin}
+            onChange={(e) => setPin(e.target.value.replace(/\D/g, '').slice(0, 8))}
+            placeholder={target?.hasPin ? 'Keep current PIN' : '4-8 digits'}
+          />
+        </div>
+      </div>
+
+      <div className={styles.row} style={{ padding: 0 }}>
+        <div className={styles.rowText}>
+          <span className={styles.rowTitle}>Kids profile</span>
+        </div>
+        <button
+          type="button"
+          role="switch"
+          aria-checked={isKid}
+          aria-label="Kids profile"
+          className={`${styles.switch} ${isKid ? styles.switchOn : ''}`}
+          onClick={() => setIsKid((v) => !v)}
+        >
+          <span className={styles.switchThumb} />
+        </button>
+      </div>
+
+      {target?.hasPin && (
+        <div className={styles.row} style={{ padding: 0 }}>
+          <div className={styles.rowText}>
+            <span className={styles.rowTitle}>Remove PIN</span>
+          </div>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={removePin}
+            aria-label="Remove PIN"
+            className={`${styles.switch} ${removePin ? styles.switchOn : ''}`}
+            onClick={() => setRemovePin((v) => !v)}
+          >
+            <span className={styles.switchThumb} />
+          </button>
+        </div>
+      )}
+
+      {error && (
+        <span className={`${styles.statusMessage} ${styles.statusError}`}>{error}</span>
+      )}
+
+      <div className={styles.profileFormActions}>
+        {isEdit && (
+          <button
+            type="button"
+            className={styles.profileDeleteButton}
+            disabled={!canDelete || busy}
+            onClick={handleDelete}
+            title={
+              isActive
+                ? 'Switch to a different profile before deleting this one'
+                : !canDelete
+                  ? 'At least one profile must remain'
+                  : undefined
+            }
+          >
+            Delete
+          </button>
+        )}
+        <button type="button" className={styles.testButton} onClick={onClose} disabled={busy}>
+          Cancel
+        </button>
+        <button
+          type="button"
+          className={styles.saveButton}
+          onClick={handleSave}
+          disabled={busy || !name.trim()}
+        >
+          {isEdit ? 'Save' : 'Add profile'}
+        </button>
+      </div>
+    </div>
+  )
+}
+
 export default function SettingsPage() {
   const {
     performancePanelVisible,
@@ -98,10 +263,13 @@ export default function SettingsPage() {
     setIsOffline,
     profiles,
     activeProfileId,
-    setActiveProfileId,
+    switchProfile,
     mediaHubSettings,
     refreshMediaHubSettings
   } = useAppState()
+  // null = no form open, 'new' = create form, otherwise the id of the
+  // profile being edited.
+  const [editingProfile, setEditingProfile] = useState<string | 'new' | null>(null)
 
   async function handleSetPlaybackBuffer(preset: string) {
     await window.api?.mediaHub?.settings.setPlaybackBuffer(preset)
@@ -186,7 +354,7 @@ export default function SettingsPage() {
                   key={p.id}
                   type="button"
                   className={`${styles.profileCard} ${active ? styles.profileCardActive : ''}`}
-                  onClick={() => setActiveProfileId(p.id)}
+                  onClick={() => switchProfile(p.id)}
                   aria-pressed={active}
                 >
                   <span
@@ -199,15 +367,63 @@ export default function SettingsPage() {
                   </span>
                   <span className={styles.profileName}>{p.name}</span>
                   {p.isKid && <span className={styles.profileBadge}>Kids</span>}
+                  {p.hasPin && (
+                    <span className={styles.profileBadge} aria-label="PIN-locked">
+                      <Icon name="lock" size={10} />
+                    </span>
+                  )}
                   {active && (
                     <span className={styles.profileCheck} aria-hidden="true">
                       <Icon name="check" size={12} />
                     </span>
                   )}
+                  <span
+                    role="button"
+                    tabIndex={0}
+                    aria-label={`Edit ${p.name}`}
+                    className={styles.profileEditButton}
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      setEditingProfile(p.id)
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault()
+                        e.stopPropagation()
+                        setEditingProfile(p.id)
+                      }
+                    }}
+                  >
+                    <Icon name="edit" size={11} />
+                  </span>
                 </button>
               )
             })}
+            <button
+              type="button"
+              className={styles.profileCardAdd}
+              onClick={() => setEditingProfile('new')}
+            >
+              <span className={styles.profileCardAddIcon}>
+                <Icon name="plus" size={18} />
+              </span>
+              <span className={styles.profileName}>Add Profile</span>
+            </button>
           </div>
+
+          <p className={styles.profileNote}>
+            Watch history is currently shared across all profiles — per-profile history is
+            not built yet.
+          </p>
+
+          {editingProfile && (
+            <ProfileForm
+              target={editingProfile === 'new' ? null : profiles.find((p) => p.id === editingProfile) || null}
+              activeProfileId={activeProfileId}
+              profileCount={profiles.length}
+              onClose={() => setEditingProfile(null)}
+            />
+          )}
         </section>
       </div>
     </div>

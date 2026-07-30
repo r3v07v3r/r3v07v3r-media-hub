@@ -4,6 +4,7 @@ import { AIResponsePanel } from './AIResponsePanel'
 import { ContextMenu } from './ContextMenu'
 import { NotificationLayer } from './NotificationLayer'
 import { OfflineBanner } from './OfflineBanner'
+import { ProfilePinPrompt } from '@renderer/components/profiles/ProfilePinPrompt'
 
 export function GlobalOverlays() {
   const { playbackMedia } = useAppState()
@@ -29,6 +30,7 @@ export function GlobalOverlays() {
           effect. */}
       <PlaybackOverlay key={playbackMedia?.id ?? 'none'} />
       <NotificationLayer />
+      <ProfilePinPrompt />
     </div>
   )
 }

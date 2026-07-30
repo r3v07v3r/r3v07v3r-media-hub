@@ -239,6 +239,95 @@
   color: #04141f;
 }
 
+.profileEditButton {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  background: rgba(0, 0, 0, 0.35);
+  opacity: 0;
+  transition: opacity var(--transition-fast), color var(--transition-fast);
+}
+.profileCard:hover .profileEditButton,
+.profileEditButton:focus-visible {
+  opacity: 1;
+}
+.profileEditButton:hover {
+  color: var(--text-primary);
+}
+
+.profileCardAdd {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 96px;
+  padding: 14px 10px;
+  border-radius: var(--radius-medium);
+  border: 1px dashed var(--border-subtle);
+  color: var(--text-muted);
+  transition: border-color var(--transition-fast), color var(--transition-fast);
+}
+.profileCardAdd:hover {
+  border-color: var(--border-active);
+  color: var(--text-primary);
+}
+.profileCardAddIcon {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  border: 1px dashed var(--border-subtle);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.profileForm {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border-subtle);
+}
+.profileFormRow {
+  display: flex;
+  gap: 10px;
+}
+.profileFormActions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 4px;
+}
+.profileDeleteButton {
+  padding: 8px 16px;
+  border-radius: var(--radius-pill);
+  font-size: 12.5px;
+  font-weight: 700;
+  color: #ff8a7a;
+  background: rgba(255, 90, 90, 0.1);
+  border: 1px solid rgba(255, 90, 90, 0.3);
+  margin-right: auto;
+}
+.profileDeleteButton:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.profileNote {
+  font-size: 11.5px;
+  color: var(--text-muted);
+  line-height: 1.4;
+  margin-top: 2px;
+}
+
 /* ---------- Media server / download client config rows ---------- */
 .serviceRow {
   display: flex;

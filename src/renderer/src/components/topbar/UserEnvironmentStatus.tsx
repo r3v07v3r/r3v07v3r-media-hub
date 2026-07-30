@@ -8,7 +8,7 @@ import { Icon } from '@renderer/components/icons/Icon'
 import styles from './TopUtilityBar.module.css'
 
 export function UserEnvironmentStatus() {
-  const { profiles, activeProfileId, setActiveProfileId } = useAppState()
+  const { profiles, activeProfileId, switchProfile } = useAppState()
   const { time, date } = useClock()
   const weather = useWeather()
   const [menuOpen, setMenuOpen] = useState(false)
@@ -76,7 +76,7 @@ export function UserEnvironmentStatus() {
                 aria-current={p.id === activeProfileId}
                 className={styles.profileMenuItem}
                 onClick={() => {
-                  setActiveProfileId(p.id)
+                  switchProfile(p.id)
                   setMenuOpen(false)
                 }}
               >

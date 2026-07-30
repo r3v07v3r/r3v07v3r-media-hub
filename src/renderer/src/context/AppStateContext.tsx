@@ -21,7 +21,12 @@ import {
   UIActivityState
 } from '@renderer/types'
 import { CONTINUE_WATCHING, USER_PROFILES } from '@renderer/data/mockData'
-import type { MediaHubSettingsSnapshot, MediaTracks, PlaybackResult } from '@shared/media-hub/types'
+import type {
+  MediaHubSettingsSnapshot,
+  MediaTracks,
+  PlaybackResult,
+  ProfilePublic
+} from '@shared/media-hub/types'
 import {
   mediaItemToTrackablePayload,
   catalogItemToMediaItem
@@ -53,11 +58,35 @@ function mediaKindToDetailPath(media: MediaItem): string {
   return `/${segment}/${media.id}`
 }
 
+/** Only used when window.api.mediaHub is unavailable (e.g. rendered outside
+ *  Electron) — real profile data comes from main/media-hub/profiles.ts via
+ *  refreshProfiles below, matching every other "real backend, mock
+ *  fallback" pattern already used in this file (catalog, home feed, ...). */
+const FALLBACK_PROFILES: ProfilePublic[] = USER_PROFILES.map((p) => ({
+  id: p.id,
+  name: p.name,
+  avatarInitial: p.avatarInitial,
+  avatarTint: p.avatarTint,
+  isKid: Boolean(p.isKid),
+  hasPin: false
+}))
+
 interface AppStateValue {
-  // Profiles
-  profiles: typeof USER_PROFILES
+  // Profiles — real backend-persisted data (main/media-hub/profiles.ts).
+  profiles: ProfilePublic[]
   activeProfileId: string
-  setActiveProfileId: (id: string) => void
+  /** Non-null while a PIN-locked profile is awaiting its PIN — render a prompt keyed on this. */
+  profilePinPrompt: ProfilePublic | null
+  switchProfile: (id: string, pin?: string) => void
+  cancelProfilePinPrompt: () => void
+  createProfile: (payload: { name: string; isKid?: boolean; pin?: string }) => Promise<void>
+  updateProfile: (payload: {
+    id: string
+    name?: string
+    isKid?: boolean
+    pin?: string | null
+  }) => Promise<void>
+  deleteProfile: (id: string) => Promise<void>
 
   // My List — a Set of media ids. Kept centrally so the hero, the
   // carousel, continue-watching, and the detail modal all agree on
@@ -221,7 +250,9 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   // so this provider always renders within a Router context.
   const location = useLocation()
   const navigate = useNavigate()
-  const [activeProfileId, setActiveProfileId] = useState(USER_PROFILES[0].id)
+  const [profiles, setProfiles] = useState<ProfilePublic[]>(FALLBACK_PROFILES)
+  const [activeProfileId, setActiveProfileIdState] = useState(FALLBACK_PROFILES[0].id)
+  const [profilePinPrompt, setProfilePinPrompt] = useState<ProfilePublic | null>(null)
   const [myList, setMyList] = useState<Set<string>>(new Set())
   const [continueWatching, setContinueWatching] =
     useState<ContinueWatchingItem[]>(CONTINUE_WATCHING)
@@ -295,6 +326,22 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     // below) flips back to false instead of staying stale.
     return window.api?.mediaHub?.torbox.onUnauthorized(() => refreshMediaHubSettings())
   }, [refreshMediaHubSettings])
+
+  const refreshProfiles = useCallback(() => {
+    const api = window.api?.mediaHub?.profiles
+    if (!api) return
+    api
+      .list()
+      .then(({ profiles: list, activeProfileId: active }) => {
+        setProfiles(list)
+        setActiveProfileIdState(active)
+      })
+      .catch(() => {})
+  }, [])
+
+  useEffect(() => {
+    refreshProfiles()
+  }, [refreshProfiles])
 
   const toggleMyList = useCallback((media: MediaItem) => {
     setMyList((prev) => {
@@ -377,6 +424,70 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   const dismissNotification = useCallback((id: string) => {
     setNotifications((prev) => prev.filter((x) => x.id !== id))
   }, [])
+
+  const cancelProfilePinPrompt = useCallback(() => setProfilePinPrompt(null), [])
+
+  const switchProfile = useCallback(
+    (id: string, pin?: string) => {
+      const target = profiles.find((p) => p.id === id)
+      if (!target) return
+      const api = window.api?.mediaHub?.profiles
+      if (!api) {
+        // No bridge (e.g. rendered outside Electron) — nothing to persist,
+        // just reflect the choice locally like every other mock fallback.
+        setActiveProfileIdState(id)
+        setProfilePinPrompt(null)
+        return
+      }
+      if (target.hasPin && pin === undefined) {
+        setProfilePinPrompt(target)
+        return
+      }
+      api
+        .setActive(id, pin)
+        .then(({ activeProfileId: active }) => {
+          setActiveProfileIdState(active)
+          setProfilePinPrompt(null)
+        })
+        .catch((error: unknown) => {
+          pushNotification({
+            tone: 'error',
+            message: error instanceof Error ? error.message : 'Could not switch profile.'
+          })
+        })
+    },
+    [profiles, pushNotification]
+  )
+
+  const createProfile = useCallback(
+    async (payload: { name: string; isKid?: boolean; pin?: string }) => {
+      const api = window.api?.mediaHub?.profiles
+      if (!api) throw new Error("Profiles aren't available outside the desktop app.")
+      await api.create(payload)
+      refreshProfiles()
+    },
+    [refreshProfiles]
+  )
+
+  const updateProfile = useCallback(
+    async (payload: { id: string; name?: string; isKid?: boolean; pin?: string | null }) => {
+      const api = window.api?.mediaHub?.profiles
+      if (!api) throw new Error("Profiles aren't available outside the desktop app.")
+      await api.update(payload)
+      refreshProfiles()
+    },
+    [refreshProfiles]
+  )
+
+  const deleteProfile = useCallback(
+    async (id: string) => {
+      const api = window.api?.mediaHub?.profiles
+      if (!api) throw new Error("Profiles aren't available outside the desktop app.")
+      await api.remove(id)
+      refreshProfiles()
+    },
+    [refreshProfiles]
+  )
 
   const closeAssistant = useCallback(() => {
     setAssistantState('idle')
@@ -582,9 +693,14 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
 
   const value = useMemo<AppStateValue>(
     () => ({
-      profiles: USER_PROFILES,
+      profiles,
       activeProfileId,
-      setActiveProfileId,
+      profilePinPrompt,
+      switchProfile,
+      cancelProfilePinPrompt,
+      createProfile,
+      updateProfile,
+      deleteProfile,
       myList,
       toggleMyList,
       continueWatching,
@@ -638,7 +754,14 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       uiActivity
     }),
     [
+      profiles,
       activeProfileId,
+      profilePinPrompt,
+      switchProfile,
+      cancelProfilePinPrompt,
+      createProfile,
+      updateProfile,
+      deleteProfile,
       myList,
       toggleMyList,
       continueWatching,

@@ -89,7 +89,9 @@ const PATHS: Record<string, string> = {
   // "how the picture sits inside the frame" regardless of which mode is
   // currently active, rather than needing a different icon per mode.
   'aspect-ratio':
-    '<rect x="3.5" y="4.5" width="17" height="15" rx="1.5"/><rect x="7.5" y="8" width="9" height="8" rx="1"/>'
+    '<rect x="3.5" y="4.5" width="17" height="15" rx="1.5"/><rect x="7.5" y="8" width="9" height="8" rx="1"/>',
+  lock: '<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7.5a4 4 0 0 1 8 0V11"/>',
+  edit: '<path d="M4 20h4L18.5 9.5a2.1 2.1 0 0 0-3-3L5 17v3z"/><path d="M13.5 7.5l3 3"/>'
 }
 
 interface IconProps {
