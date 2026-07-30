@@ -1,14 +1,14 @@
-@import "@fontsource/inter/400.css";
-@import "@fontsource/inter/500.css";
-@import "@fontsource/inter/600.css";
-@import "@fontsource/inter/700.css";
-@import "@fontsource/rajdhani/400.css";
-@import "@fontsource/rajdhani/500.css";
-@import "@fontsource/rajdhani/600.css";
-@import "@fontsource/rajdhani/700.css";
-@import "@fontsource/orbitron/500.css";
-@import "@fontsource/orbitron/700.css";
-@import "@fontsource/orbitron/900.css";
+@import '@fontsource/inter/400.css';
+@import '@fontsource/inter/500.css';
+@import '@fontsource/inter/600.css';
+@import '@fontsource/inter/700.css';
+@import '@fontsource/rajdhani/400.css';
+@import '@fontsource/rajdhani/500.css';
+@import '@fontsource/rajdhani/600.css';
+@import '@fontsource/rajdhani/700.css';
+@import '@fontsource/orbitron/500.css';
+@import '@fontsource/orbitron/700.css';
+@import '@fontsource/orbitron/900.css';
 
 /* ---------- Design tokens (spec section 13) ---------- */
 :root {
@@ -41,9 +41,9 @@
   --transition-fast: 160ms ease;
   --transition-standard: 280ms cubic-bezier(0.2, 0.8, 0.2, 1);
 
-  --font-body: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  --font-display: "Rajdhani", var(--font-body);
-  --font-brand: "Orbitron", var(--font-body);
+  --font-body: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-display: 'Rajdhani', var(--font-body);
+  --font-brand: 'Orbitron', var(--font-body);
 
   color-scheme: dark;
 
@@ -75,7 +75,7 @@
    real angle (0deg -> 360deg) instead of snapping — required for the
    rotating conic-gradient edge energy used by .animated-edge. */
 @property --edge-angle {
-  syntax: "<angle>";
+  syntax: '<angle>';
   inherits: false;
   initial-value: 0deg;
 }
@@ -133,7 +133,7 @@ body {
    low-opacity and blended with "overlay" so it reads as texture, not
    visible static. */
 body::after {
-  content: "";
+  content: '';
   position: fixed;
   inset: 0;
   z-index: 999;
@@ -181,7 +181,9 @@ ul {
 .glass-panel {
   background: linear-gradient(145deg, rgba(18, 26, 42, 0.78), rgba(5, 10, 19, 0.64));
   border: 1px solid rgba(143, 183, 224, 0.2);
-  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.42), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  box-shadow:
+    0 20px 50px rgba(0, 0, 0, 0.42),
+    inset 0 1px 0 rgba(255, 255, 255, 0.05);
   backdrop-filter: blur(22px);
   -webkit-backdrop-filter: blur(22px);
 }
@@ -202,7 +204,7 @@ ul {
   isolation: isolate;
 }
 .animated-edge::before {
-  content: "";
+  content: '';
   position: absolute;
   inset: -1px;
   z-index: 5;
@@ -217,7 +219,9 @@ ul {
     rgba(165, 89, 255, 0.65) 335deg,
     transparent 360deg
   );
-  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
   -webkit-mask-composite: xor;
   mask-composite: exclude;
   pointer-events: none;
@@ -287,12 +291,17 @@ ul {
   overflow: hidden;
 }
 .light-sweep::after {
-  content: "";
+  content: '';
   position: absolute;
   inset: 0;
   z-index: 4;
   pointer-events: none;
-  background: linear-gradient(115deg, transparent 42%, rgba(255, 255, 255, 0.16) 50%, transparent 58%);
+  background: linear-gradient(
+    115deg,
+    transparent 42%,
+    rgba(255, 255, 255, 0.16) 50%,
+    transparent 58%
+  );
   transform: translateX(-130%);
   transition: transform 750ms var(--ease-smooth);
 }
@@ -355,6 +364,19 @@ ul {
 [data-motion-suspended='true'] *,
 [data-motion-suspended='true'] *::before,
 [data-motion-suspended='true'] *::after {
+  animation-play-state: paused !important;
+}
+/* Settings > More Options' "UI animations" toggle — a standing user
+   preference, layered alongside (not replacing) the automatic suspend
+   above: both can be true independently, and either one pausing is
+   enough. Unlike motion-suspended this can stay on for an entire
+   session, so it's even more important than the automatic case that the
+   data-motion-exempt carve-out below still wins for one-shot entrances —
+   otherwise a toast/dialog fading in would just never finish while the
+   toggle is off. */
+[data-motion-user-disabled='true'] *,
+[data-motion-user-disabled='true'] *::before,
+[data-motion-user-disabled='true'] *::after {
   animation-play-state: paused !important;
 }
 /* Carve-out for GlobalOverlays.tsx's data-motion-exempt wrapper — one-shot

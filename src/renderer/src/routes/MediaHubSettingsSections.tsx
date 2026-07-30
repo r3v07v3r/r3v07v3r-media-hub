@@ -50,7 +50,7 @@ function ConnectionBadge({ connected }: { connected: boolean }) {
  * connect; the backend never hands the token back, so there's nothing to
  * pre-fill once connected, only a "Connected" state + Disconnect.
  */
-function TorBoxSection() {
+export function TorBoxSection() {
   const { mediaHubSettings, refreshMediaHubSettings } = useAppState()
   const [token, setToken] = useState('')
   const [status, setStatus] = useState<Status>({ kind: 'idle' })
@@ -138,7 +138,7 @@ function TorBoxSection() {
 
 /** TMDB — optional richer artwork/metadata lookups layered on top of the
  *  Simkl/Kitsu/Cinemeta catalog data. Same token-connect shape as TorBox. */
-function TmdbSection() {
+export function TmdbSection() {
   const { mediaHubSettings, refreshMediaHubSettings } = useAppState()
   const [apiKey, setApiKey] = useState('')
   const [status, setStatus] = useState<Status>({ kind: 'idle' })
@@ -232,7 +232,7 @@ function TmdbSection() {
  * (see MediaHubSettingsSnapshot) — fetched here from simkl.status()
  * directly, same as MAL below.
  */
-function SimklSection() {
+export function SimklSection() {
   const { mediaHubSettings, refreshMediaHubSettings } = useAppState()
   const [clientId, setClientId] = useState('')
   const [status, setStatus] = useState<SimklStatus | null>(null)
@@ -426,7 +426,7 @@ function SimklSection() {
  * preview/apply reconcile step to catch drift between MAL and local
  * watch history.
  */
-function MalSection() {
+export function MalSection() {
   const [clientId, setClientId] = useState('')
   const [clientSecret, setClientSecret] = useState('')
   const [status, setStatus] = useState<MalStatus | null>(null)
@@ -603,7 +603,7 @@ function MalSection() {
 }
 
 /** OpenSubtitles — powers the subtitle search/apply flow in PlaybackOverlay. */
-function OpenSubtitlesSection() {
+export function OpenSubtitlesSection() {
   const { mediaHubSettings, refreshMediaHubSettings } = useAppState()
   const [apiKey, setApiKey] = useState('')
   const [username, setUsername] = useState('')
@@ -721,7 +721,7 @@ function OpenSubtitlesSection() {
  * PartyButton/PartyPanel use — one source of truth, so hosting/joining
  * from here is immediately reflected in the topbar and vice versa.
  */
-function WatchPartySection() {
+export function WatchPartySection() {
   const { partyStatus, partyHostCode, hostParty, joinParty, leaveParty } = useAppState()
   const [name, setName] = useState('')
   const [joinCode, setJoinCode] = useState('')
@@ -835,37 +835,5 @@ function WatchPartySection() {
         </>
       )}
     </section>
-  )
-}
-
-/**
- * All media-hub backend connection sections, in one place so SettingsPage
- * only needs one import — added alongside (never replacing)
- * MediaServicesSection's pre-existing Jellyfin/Sonarr/Radarr/qBittorrent
- * rows, per this integration's scoping decision to leave that scaffolding
- * untouched.
- */
-export function MediaHubSettingsSections() {
-  if (!window.api?.mediaHub) {
-    return (
-      <section className={`${styles.section} glass-panel`} aria-labelledby="settings-mediahub">
-        <h2 id="settings-mediahub" className={styles.sectionTitle}>
-          TorBox &amp; Companion Services
-        </h2>
-        <p className={styles.statusMessage}>
-          Running outside the Electron shell — these can&apos;t be configured here.
-        </p>
-      </section>
-    )
-  }
-  return (
-    <>
-      <TorBoxSection />
-      <SimklSection />
-      <MalSection />
-      <OpenSubtitlesSection />
-      <TmdbSection />
-      <WatchPartySection />
-    </>
   )
 }

@@ -25,45 +25,58 @@
   margin-bottom: 20px;
 }
 
-/* 11 independent <section> cards (About & Updates, Performance, Network,
-   Media Services, TorBox, TMDB, Simkl, MAL, OpenSubtitles, Watch Party,
-   Profiles — see SettingsPage.tsx / AboutUpdateSection.tsx /
-   MediaServicesSection.tsx / MediaHubSettingsSections.tsx) tile the
-   available area left-to-right instead of stacking in one long vertical
-   scroll: flex-direction:column + flex-wrap:wrap stacks each fixed-width
-   .section top to bottom until it would exceed this container's height,
-   then starts a new column to the right — the same "reflow into balanced
-   columns" idea the old CSS multi-column version used, just rotated 90°
-   so the overflow (and the scrollbar) is horizontal instead of vertical.
-   That needs THIS element to have a bounded height to wrap against
-   (flex:1/min-height:0 off .wrap's own fixed height) — sized-to-content
-   like the old column-width version would defeat the wrap entirely, since
-   there'd be no ceiling to wrap against and everything would just stack
-   in one infinitely tall column. Mouse-wheel scrolling here is handled by
-   SettingsPage.tsx's own wheel listener (a plain vertical wheel has no
-   vertical overflow to act on otherwise). */
+/* 13 independent <section> cards (About & Updates, Performance, Network,
+   Media Services, TorBox, TMDB, Simkl, MAL, OpenSubtitles, More Options,
+   Watch Party, Profiles — see SettingsPage.tsx / AboutUpdateSection.tsx /
+   MediaServicesSection.tsx / MediaHubSettingsSections.tsx) are grouped into
+   four deliberately-sized columns (narrow/wide/medium/strong below) rather
+   than auto-reflowing wherever they happen to fit — which section lives in
+   which column is decided once at the SettingsPage.tsx call site (wrapping
+   each group in the matching .column* div), not by content height like the
+   previous flex-wrap version. Each column scrolls its own overflow
+   independently; SettingsPage.tsx's wheel listener only redirects a plain
+   vertical wheel into panning .tileArea horizontally once the column under
+   the cursor has no more vertical room left to give it. */
 .tileArea {
   flex: 1;
   min-height: 0;
   display: flex;
-  flex-direction: column;
-  flex-wrap: wrap;
-  align-content: flex-start;
+  flex-direction: row;
+  align-items: flex-start;
   gap: 20px;
   overflow-x: auto;
   overflow-y: hidden;
   padding-bottom: 14px;
 }
 
-.section {
-  width: 400px;
+.column {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
   flex: 0 0 auto;
-  /* A section taller than .tileArea's own height (e.g. Media Servers &
-     Downloads, with four service rows) can't wrap early to a new column —
-     flex-wrap only starts a new column when an item doesn't fit in the
-     REMAINING space of the current one, not when a single item exceeds the
-     container's full height. Without its own scroll it would just get
-     clipped at the bottom by .tileArea's overflow-y:hidden. */
+  height: 100%;
+  overflow-y: auto;
+}
+.columnNarrow {
+  width: 400px;
+}
+.columnWide {
+  width: 460px;
+}
+.columnMedium {
+  width: 400px;
+}
+.columnStrong {
+  width: 420px;
+}
+
+.section {
+  width: 100%;
+  flex: 0 0 auto;
+  /* A section taller than its own column (e.g. Media Servers & Downloads,
+     with four service rows) still gets its own scroll as a fallback, since
+     a column only reflows what doesn't fit ACROSS sections, not within
+     one that's individually taller than the whole column. */
   max-height: 100%;
   overflow-y: auto;
   border-radius: var(--radius-large);
@@ -119,6 +132,17 @@
   line-height: 1.4;
 }
 
+/* Read-only value display (LAN IP, hostname) — same slot a switch/segment
+   group would occupy in a row, but nothing to interact with. */
+.rowValue {
+  flex: 0 0 auto;
+  font-family: var(--font-display);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
 .switch {
   position: relative;
   flex: 0 0 auto;
@@ -129,7 +153,9 @@
   border-radius: var(--radius-pill);
   background: rgba(255, 255, 255, 0.12);
   border: 1px solid var(--border-subtle);
-  transition: background var(--transition-fast), border-color var(--transition-fast);
+  transition:
+    background var(--transition-fast),
+    border-color var(--transition-fast);
 }
 .switchOn {
   background: linear-gradient(90deg, var(--accent-blue), var(--accent-violet));
@@ -165,7 +191,9 @@
   font-size: 12px;
   font-weight: 600;
   color: var(--text-muted);
-  transition: color var(--transition-fast), background var(--transition-fast);
+  transition:
+    color var(--transition-fast),
+    background var(--transition-fast);
 }
 .segmentButtonActive {
   color: #fff;
@@ -189,7 +217,9 @@
   border-radius: var(--radius-medium);
   border: 1px solid var(--border-subtle);
   background: rgba(255, 255, 255, 0.02);
-  transition: border-color var(--transition-fast), background var(--transition-fast);
+  transition:
+    border-color var(--transition-fast),
+    background var(--transition-fast);
 }
 .profileCard:hover {
   border-color: var(--border-active);
@@ -252,7 +282,9 @@
   color: var(--text-muted);
   background: rgba(0, 0, 0, 0.35);
   opacity: 0;
-  transition: opacity var(--transition-fast), color var(--transition-fast);
+  transition:
+    opacity var(--transition-fast),
+    color var(--transition-fast);
 }
 .profileCard:hover .profileEditButton,
 .profileEditButton:focus-visible {
@@ -273,7 +305,9 @@
   border-radius: var(--radius-medium);
   border: 1px dashed var(--border-subtle);
   color: var(--text-muted);
-  transition: border-color var(--transition-fast), color var(--transition-fast);
+  transition:
+    border-color var(--transition-fast),
+    color var(--transition-fast);
 }
 .profileCardAdd:hover {
   border-color: var(--border-active);
@@ -402,7 +436,9 @@
   color: var(--text-primary);
   background: rgba(56, 193, 255, 0.12);
   border: 1px solid var(--border-subtle);
-  transition: border-color var(--transition-fast), background var(--transition-fast);
+  transition:
+    border-color var(--transition-fast),
+    background var(--transition-fast);
 }
 .testButton:hover {
   border-color: var(--border-active);
@@ -480,7 +516,9 @@
   font-size: 12px;
   font-weight: 600;
   color: var(--text-secondary);
-  transition: background var(--transition-fast), color var(--transition-fast);
+  transition:
+    background var(--transition-fast),
+    color var(--transition-fast);
 }
 .channelButtonActive {
   color: #04141f;

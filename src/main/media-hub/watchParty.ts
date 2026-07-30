@@ -24,7 +24,6 @@
 // worker's existing protocol.
 
 import crypto from 'node:crypto'
-import os from 'node:os'
 import { WebSocket, WebSocketServer } from 'ws'
 import { MEDIA_HUB_CHANNELS } from '../../shared/media-hub/ipc-channels'
 import type {
@@ -51,6 +50,7 @@ import {
 import { encrypt, partySyncCredentials, readSettings, writeSettings } from './settingsStore'
 import { sendToRenderer } from './rendererBridge'
 import { attemptPortMapping } from './upnp'
+import { getLocalLanIp } from './network'
 
 // A decrypted (or relay-envelope) message off the wire. Deliberately loose
 // (mirrors the original's untyped `msg`/`envelope` objects) — every handler
@@ -123,16 +123,6 @@ type PartyState =
   PartyStateHostDirect | PartyStateHostRelay | PartyStateClientDirect | PartyStateClientRelay
 
 let party: PartyState | null = null
-
-function getLocalLanIp(): string {
-  const interfaces = os.networkInterfaces()
-  for (const name of Object.keys(interfaces)) {
-    for (const iface of interfaces[name] || []) {
-      if (iface.family === 'IPv4' && !iface.internal) return iface.address
-    }
-  }
-  return '127.0.0.1'
-}
 
 function partyMemberSummaries(): PartyMemberSummary[] {
   const current = party

@@ -22,6 +22,7 @@ import type {
   MediaHubSettingsSnapshot,
   MediaKind,
   MediaTracks,
+  NetworkInfoResult,
   PartyEventPayload,
   PartyHostResult,
   PartyMode,
@@ -124,7 +125,9 @@ const api = {
       setSubtitleLanguage: (language: string): Promise<{ subtitleLanguage: string }> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.settingsSetSubtitleLanguage, language),
       setPlaybackBuffer: (preset: string): Promise<{ playbackBuffer: string }> =>
-        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.settingsSetPlaybackBuffer, preset)
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.settingsSetPlaybackBuffer, preset),
+      setUiAnimations: (enabled: boolean): Promise<{ uiAnimationsEnabled: boolean }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.settingsSetUiAnimations, enabled)
     },
 
     account: {
@@ -273,7 +276,13 @@ const api = {
         compatibility: boolean,
         selection?: PlaybackSelection
       ): Promise<SubtitlesApplyResult> =>
-        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.subtitlesApply, { fileId, compatibility, selection })
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.subtitlesApply, { fileId, compatibility, selection }),
+      clearCache: (): Promise<{ ok: true; freedBytes: number }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.subtitlesClearCache)
+    },
+
+    network: {
+      info: (): Promise<NetworkInfoResult> => ipcRenderer.invoke(MEDIA_HUB_CHANNELS.networkInfo)
     },
 
     party: {

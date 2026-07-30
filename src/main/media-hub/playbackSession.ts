@@ -54,7 +54,7 @@ let activeMediaUrl = ''
 let activeMediaTracks: MediaTracks = { video: [], audio: [], subtitle: [], probed: false }
 let activeSubtitlePath = ''
 
-function subtitleCacheDir(): string {
+export function subtitleCacheDir(): string {
   return path.join(app.getPath('userData'), 'subtitles-cache')
 }
 
@@ -206,6 +206,31 @@ export function registerPlaybackIpc(): void {
     async (_event, seconds) => {
       if (!activeMediaUrl) return null
       return captureFrame(ffmpegPath, activeMediaUrl, Number(seconds) || 0)
+    }
+  )
+
+  handle<undefined, { ok: true; freedBytes: number }>(
+    MEDIA_HUB_CHANNELS.subtitlesClearCache,
+    () => {
+      const dir = subtitleCacheDir()
+      let freedBytes = 0
+      let entries: string[] = []
+      try {
+        entries = fs.readdirSync(dir)
+      } catch {
+        return { ok: true, freedBytes: 0 }
+      }
+      for (const entry of entries) {
+        const filePath = path.join(dir, entry)
+        try {
+          freedBytes += fs.statSync(filePath).size
+          fs.unlinkSync(filePath)
+        } catch {
+          // Best-effort — a file already gone or locked shouldn't fail the
+          // whole clear, same as any other cache-clear operation.
+        }
+      }
+      return { ok: true, freedBytes }
     }
   )
 }

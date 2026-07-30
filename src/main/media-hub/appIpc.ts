@@ -67,6 +67,16 @@ export function registerAppIpc(): void {
     }
   )
 
+  handle<unknown, { uiAnimationsEnabled: boolean }>(
+    MEDIA_HUB_CHANNELS.settingsSetUiAnimations,
+    (_event, value) => {
+      const settings = readSettings()
+      settings.uiAnimationsEnabled = value !== false
+      writeSettings(settings)
+      return { uiAnimationsEnabled: settings.uiAnimationsEnabled }
+    }
+  )
+
   handle<undefined, { ok: true }>(MEDIA_HUB_CHANNELS.logout, async () => {
     await stopPlayback()
     writeSettings(logoutSettings(readSettings()))

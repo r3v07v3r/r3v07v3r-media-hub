@@ -41,22 +41,28 @@ export function publicSettings(settings: Record<string, unknown> = {}): MediaHub
     subtitleLanguage: String(settings.subtitleLanguage || 'en'),
     partySyncUrl: String(settings.partySyncUrl || ''),
     updateChannel: normalizeUpdateChannel(settings.updateChannel),
-    playbackBuffer: normalizePlaybackBuffer(settings.playbackBuffer)
+    playbackBuffer: normalizePlaybackBuffer(settings.playbackBuffer),
+    uiAnimationsEnabled: settings.uiAnimationsEnabled !== false
   }
 }
 
 /**
  * Narrower projection used on logout — only theme, update channel, and
  * playback buffering survive; every account/service-identifying field is
- * intentionally dropped. Playback buffering is a device/connection
- * preference, not account data, so it belongs alongside theme here.
+ * intentionally dropped. Playback buffering (and the UI-animations toggle
+ * alongside it) is a device/connection preference, not account data, so it
+ * belongs here too.
  */
 export function logoutSettings(
   settings: Record<string, unknown> = {}
-): Pick<MediaHubPublicSettings, 'theme' | 'updateChannel' | 'playbackBuffer'> {
+): Pick<
+  MediaHubPublicSettings,
+  'theme' | 'updateChannel' | 'playbackBuffer' | 'uiAnimationsEnabled'
+> {
   return {
     theme: normalizeTheme(settings.theme),
     updateChannel: normalizeUpdateChannel(settings.updateChannel),
-    playbackBuffer: normalizePlaybackBuffer(settings.playbackBuffer)
+    playbackBuffer: normalizePlaybackBuffer(settings.playbackBuffer),
+    uiAnimationsEnabled: settings.uiAnimationsEnabled !== false
   }
 }

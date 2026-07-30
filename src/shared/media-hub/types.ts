@@ -260,6 +260,8 @@ export interface MediaHubPublicSettings {
   updateChannel: UpdateChannel
   /** How long to buffer ahead before playback starts — see shared/media-hub/playbackBuffer.ts. */
   playbackBuffer: string
+  /** Decorative UI animation (idle ambient motion, not playback itself) — layered alongside, not replacing, the automatic motion-suspend-during-playback behavior in global.css. */
+  uiAnimationsEnabled: boolean
 }
 
 export interface MediaHubSettingsSnapshot extends MediaHubPublicSettings {
@@ -425,6 +427,11 @@ export type PartyPlaybackAction =
   | { type: 'play' | 'pause' }
   | { type: 'seek'; position: number }
   | { type: 'position'; position: number }
+
+export interface NetworkInfoResult {
+  lanIp: string
+  hostname: string
+}
 
 // ---------------------------------------------------------------------
 // Auto-update

@@ -14,6 +14,7 @@ export const MEDIA_HUB_CHANNELS = {
   settingsSetTheme: 'mediahub:settings:set-theme',
   settingsSetSubtitleLanguage: 'mediahub:settings:set-subtitle-language',
   settingsSetPlaybackBuffer: 'mediahub:settings:set-playback-buffer',
+  settingsSetUiAnimations: 'mediahub:settings:set-ui-animations',
   logout: 'mediahub:account:logout',
   torboxConnect: 'mediahub:torbox:connect',
   torboxDisconnect: 'mediahub:torbox:disconnect',
@@ -68,6 +69,10 @@ export const MEDIA_HUB_CHANNELS = {
   osDisconnect: 'mediahub:os:disconnect',
   subtitlesSearch: 'mediahub:subtitles:search',
   subtitlesApply: 'mediahub:subtitles:apply',
+  subtitlesClearCache: 'mediahub:subtitles:clear-cache',
+
+  // Network
+  networkInfo: 'mediahub:network:info',
 
   // Watch Party
   partyHost: 'mediahub:party:host',

@@ -4,6 +4,7 @@ import { TopUtilityBar } from '@renderer/components/topbar/TopUtilityBar'
 import { SidebarNavigation } from '@renderer/components/sidebar/SidebarNavigation'
 import { GlobalOverlays } from '@renderer/components/overlays/GlobalOverlays'
 import { useMotionSuspended } from '@renderer/hooks/useMotionSuspended'
+import { useMotionUserDisabled } from '@renderer/hooks/useMotionUserDisabled'
 import styles from './AppShell.module.css'
 
 export function AppShell({ children }: { children: React.ReactNode }) {
@@ -17,6 +18,14 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     document.documentElement.dataset.motionSuspended = motionSuspended ? 'true' : 'false'
   }, [motionSuspended])
+
+  // Same idea, driven by the standing Settings > More Options toggle
+  // instead of the automatic hidden/playing check above — see
+  // useMotionUserDisabled's own comment.
+  const motionUserDisabled = useMotionUserDisabled()
+  useEffect(() => {
+    document.documentElement.dataset.motionUserDisabled = motionUserDisabled ? 'true' : 'false'
+  }, [motionUserDisabled])
 
   return (
     <div className={styles.shell}>

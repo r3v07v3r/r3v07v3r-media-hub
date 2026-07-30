@@ -3,9 +3,22 @@ import { useAppState } from '@renderer/context/AppStateContext'
 import { Icon } from '@renderer/components/icons/Icon'
 import { AboutUpdateSection } from './AboutUpdateSection'
 import { MediaServicesSection } from './MediaServicesSection'
-import { MediaHubSettingsSections } from './MediaHubSettingsSections'
-import type { ProfilePublic } from '@shared/media-hub/types'
+import {
+  TorBoxSection,
+  TmdbSection,
+  SimklSection,
+  MalSection,
+  OpenSubtitlesSection,
+  WatchPartySection
+} from './MediaHubSettingsSections'
+import type { NetworkInfoResult, ProfilePublic } from '@shared/media-hub/types'
 import styles from './Settings.module.css'
+
+function formatBytes(bytes: number): string {
+  if (bytes <= 0) return '0 MB'
+  const mb = bytes / (1024 * 1024)
+  return mb >= 1 ? `${mb.toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`
+}
 
 const PLAYBACK_BUFFER_OPTIONS: { value: string; label: string }[] = [
   { value: 'auto', label: 'Auto' },
@@ -217,9 +230,7 @@ function ProfileForm({
         </div>
       )}
 
-      {error && (
-        <span className={`${styles.statusMessage} ${styles.statusError}`}>{error}</span>
-      )}
+      {error && <span className={`${styles.statusMessage} ${styles.statusError}`}>{error}</span>}
 
       <div className={styles.profileFormActions}>
         {isEdit && (
@@ -255,6 +266,81 @@ function ProfileForm({
   )
 }
 
+/** UI-animations toggle (layers onto global.css's `[data-motion-user-
+ *  disabled]` rule via useMotionUserDisabled, see AppShell.tsx) + a real
+ *  subtitle-cache-clear button (walks subtitles-cache/ on disk and reports
+ *  the actual bytes freed) — the "quick, meaningful" More Options picked
+ *  over hardware-accel/video-quality, which have no real mechanism in this
+ *  app's TorBox-sourced (not locally re-encoded per quality) pipeline. */
+function MoreOptionsSection() {
+  const { mediaHubSettings, refreshMediaHubSettings } = useAppState()
+  const [clearStatus, setClearStatus] = useState<{
+    kind: 'idle' | 'busy' | 'ok' | 'error'
+    message?: string
+  }>({ kind: 'idle' })
+
+  async function handleToggleAnimations(enabled: boolean) {
+    await window.api?.mediaHub?.settings.setUiAnimations(enabled)
+    refreshMediaHubSettings()
+  }
+
+  async function handleClearSubtitleCache() {
+    const api = window.api?.mediaHub?.subtitles
+    if (!api) return
+    setClearStatus({ kind: 'busy' })
+    try {
+      const result = await api.clearCache()
+      setClearStatus({ kind: 'ok', message: `Freed ${formatBytes(result.freedBytes)}.` })
+    } catch (error) {
+      setClearStatus({
+        kind: 'error',
+        message: error instanceof Error ? error.message : 'Could not clear the cache.'
+      })
+    }
+  }
+
+  return (
+    <section className={`${styles.section} glass-panel`} aria-labelledby="settings-more">
+      <h2 id="settings-more" className={styles.sectionTitle}>
+        More Options
+      </h2>
+      <ToggleRow
+        icon="sparkle"
+        title="UI animations"
+        description="Decorative ambient motion (sidebar highlights, background drift). Playback already pauses these automatically — this turns them off everywhere, all the time."
+        checked={mediaHubSettings?.uiAnimationsEnabled ?? true}
+        onChange={handleToggleAnimations}
+      />
+      <div className={styles.row}>
+        <div className={styles.rowIcon} aria-hidden="true">
+          <Icon name="trash" size={17} />
+        </div>
+        <div className={styles.rowText}>
+          <span className={styles.rowTitle}>Subtitle cache</span>
+          <span className={styles.rowDescription}>
+            Downloaded subtitle files kept on disk for compatibility-mode playback.
+          </span>
+        </div>
+        <button
+          type="button"
+          className={styles.testButton}
+          onClick={handleClearSubtitleCache}
+          disabled={clearStatus.kind === 'busy'}
+        >
+          {clearStatus.kind === 'busy' ? 'Clearing…' : 'Clear cache'}
+        </button>
+      </div>
+      {clearStatus.kind !== 'idle' && clearStatus.kind !== 'busy' && (
+        <span
+          className={`${styles.statusMessage} ${clearStatus.kind === 'ok' ? styles.statusOk : styles.statusError}`}
+        >
+          {clearStatus.message}
+        </span>
+      )}
+    </section>
+  )
+}
+
 export default function SettingsPage() {
   const {
     performancePanelVisible,
@@ -270,18 +356,28 @@ export default function SettingsPage() {
   // null = no form open, 'new' = create form, otherwise the id of the
   // profile being edited.
   const [editingProfile, setEditingProfile] = useState<string | 'new' | null>(null)
+  const [networkInfo, setNetworkInfo] = useState<NetworkInfoResult | null>(null)
+
+  useEffect(() => {
+    window.api?.mediaHub?.network
+      .info()
+      .then(setNetworkInfo)
+      .catch(() => {})
+  }, [])
 
   async function handleSetPlaybackBuffer(preset: string) {
     await window.api?.mediaHub?.settings.setPlaybackBuffer(preset)
     refreshMediaHubSettings()
   }
 
-  // Sections tile left-to-right instead of stacking in one long vertical
-  // scroll (see .tileArea in Settings.module.css) — a plain vertical mouse
-  // wheel has nothing to act on there (no vertical overflow), so it has to
-  // be translated into horizontal scrolling explicitly. A native listener,
-  // not React's onWheel: React attaches wheel handlers as passive by
-  // default, and preventDefault on a passive listener is a silent no-op
+  // Columns tile left-to-right instead of stacking everything in one long
+  // vertical scroll (see .tileArea/.column in Settings.module.css) — a
+  // plain vertical mouse wheel has nothing to act on over .tileArea itself
+  // (only overflow-x), so it's translated into horizontal panning UNLESS
+  // the column under the cursor still has real vertical room to give it,
+  // in which case that column's own native scroll wins instead. A native
+  // listener, not React's onWheel: React attaches wheel handlers as passive
+  // by default, and preventDefault on a passive listener is a silent no-op
   // (plus a console warning) — this needs to actually stop the page from
   // trying to rubber-band-scroll vertically instead.
   const tileAreaRef = useRef<HTMLDivElement>(null)
@@ -290,6 +386,13 @@ export default function SettingsPage() {
     if (!el) return
     function onWheel(e: WheelEvent): void {
       if (e.deltaY === 0) return
+      const column = (e.target as HTMLElement).closest(`.${styles.column}`) as HTMLElement | null
+      if (column) {
+        const canScrollDown =
+          e.deltaY > 0 && column.scrollTop + column.clientHeight < column.scrollHeight - 1
+        const canScrollUp = e.deltaY < 0 && column.scrollTop > 0
+        if (canScrollDown || canScrollUp) return
+      }
       e.preventDefault()
       el!.scrollLeft += e.deltaY
     }
@@ -302,129 +405,160 @@ export default function SettingsPage() {
       <h1 className={styles.heading}>Settings</h1>
 
       <div className={styles.tileArea} ref={tileAreaRef}>
-        <AboutUpdateSection />
+        <div className={`${styles.column} ${styles.columnNarrow}`}>
+          <AboutUpdateSection />
 
-        <section className={`${styles.section} glass-panel`} aria-labelledby="settings-perf">
-          <h2 id="settings-perf" className={styles.sectionTitle}>
-            Performance &amp; Display
-          </h2>
-          <ToggleRow
-            icon="cpu"
-            title="System performance panel"
-            description="Show live CPU, GPU, RAM, and network gauges on the Home dashboard."
-            checked={performancePanelVisible}
-            onChange={setPerformancePanelVisible}
-          />
-          <SegmentedRow
-            icon="clock"
-            title="Playback buffer"
-            description="How long to buffer before playback starts. Higher settings help on a slow or unstable connection at the cost of a longer wait to start."
-            value={mediaHubSettings?.playbackBuffer ?? 'auto'}
-            options={PLAYBACK_BUFFER_OPTIONS}
-            onChange={handleSetPlaybackBuffer}
-          />
-        </section>
+          <section className={`${styles.section} glass-panel`} aria-labelledby="settings-perf">
+            <h2 id="settings-perf" className={styles.sectionTitle}>
+              Performance &amp; Display
+            </h2>
+            <ToggleRow
+              icon="cpu"
+              title="System performance panel"
+              description="Show live CPU, GPU, RAM, and network gauges on the Home dashboard."
+              checked={performancePanelVisible}
+              onChange={setPerformancePanelVisible}
+            />
+            <SegmentedRow
+              icon="clock"
+              title="Playback buffer"
+              description="How long to buffer before playback starts. Higher settings help on a slow or unstable connection at the cost of a longer wait to start."
+              value={mediaHubSettings?.playbackBuffer ?? 'auto'}
+              options={PLAYBACK_BUFFER_OPTIONS}
+              onChange={handleSetPlaybackBuffer}
+            />
+          </section>
 
-        <section className={`${styles.section} glass-panel`} aria-labelledby="settings-network">
-          <h2 id="settings-network" className={styles.sectionTitle}>
-            Network
-          </h2>
-          <ToggleRow
-            icon={isOffline ? 'wifi-off' : 'wifi'}
-            title="Simulate offline mode"
-            description="Preview how R3 behaves without a network connection."
-            checked={isOffline}
-            onChange={setIsOffline}
-          />
-        </section>
+          <section className={`${styles.section} glass-panel`} aria-labelledby="settings-network">
+            <h2 id="settings-network" className={styles.sectionTitle}>
+              Network
+            </h2>
+            <ToggleRow
+              icon={isOffline ? 'wifi-off' : 'wifi'}
+              title="Simulate offline mode"
+              description="Preview how R3 behaves without a network connection."
+              checked={isOffline}
+              onChange={setIsOffline}
+            />
+            <div className={styles.row}>
+              <div className={styles.rowIcon} aria-hidden="true">
+                <Icon name="net" size={17} />
+              </div>
+              <div className={styles.rowText}>
+                <span className={styles.rowTitle}>Local network address</span>
+                <span className={styles.rowDescription}>
+                  What Watch Party shares on your LAN when hosting directly.
+                </span>
+              </div>
+              <span className={styles.rowValue}>{networkInfo?.lanIp ?? '—'}</span>
+            </div>
+          </section>
+        </div>
 
-        <MediaServicesSection />
+        <div className={`${styles.column} ${styles.columnWide}`}>
+          <MediaServicesSection />
+        </div>
 
-        <MediaHubSettingsSections />
+        <div className={`${styles.column} ${styles.columnMedium}`}>
+          <TorBoxSection />
+          <TmdbSection />
+          <SimklSection />
+          <MalSection />
+          <OpenSubtitlesSection />
+          <MoreOptionsSection />
+        </div>
 
-        <section className={`${styles.section} glass-panel`} aria-labelledby="settings-profiles">
-          <h2 id="settings-profiles" className={styles.sectionTitle}>
-            Profiles
-          </h2>
-          <div className={styles.profileGrid}>
-            {profiles.map((p) => {
-              const active = p.id === activeProfileId
-              return (
-                <button
-                  key={p.id}
-                  type="button"
-                  className={`${styles.profileCard} ${active ? styles.profileCardActive : ''}`}
-                  onClick={() => switchProfile(p.id)}
-                  aria-pressed={active}
-                >
-                  <span
-                    className={styles.profileAvatar}
-                    style={{
-                      background: `linear-gradient(135deg, ${p.avatarTint[0]}, ${p.avatarTint[1]})`
-                    }}
+        <div className={`${styles.column} ${styles.columnStrong}`}>
+          <WatchPartySection />
+
+          <section className={`${styles.section} glass-panel`} aria-labelledby="settings-profiles">
+            <h2 id="settings-profiles" className={styles.sectionTitle}>
+              Profiles
+            </h2>
+            <div className={styles.profileGrid}>
+              {profiles.map((p) => {
+                const active = p.id === activeProfileId
+                return (
+                  <button
+                    key={p.id}
+                    type="button"
+                    className={`${styles.profileCard} ${active ? styles.profileCardActive : ''}`}
+                    onClick={() => switchProfile(p.id)}
+                    aria-pressed={active}
                   >
-                    {p.avatarInitial}
-                  </span>
-                  <span className={styles.profileName}>{p.name}</span>
-                  {p.isKid && <span className={styles.profileBadge}>Kids</span>}
-                  {p.hasPin && (
-                    <span className={styles.profileBadge} aria-label="PIN-locked">
-                      <Icon name="lock" size={10} />
+                    <span
+                      className={styles.profileAvatar}
+                      style={{
+                        background: `linear-gradient(135deg, ${p.avatarTint[0]}, ${p.avatarTint[1]})`
+                      }}
+                    >
+                      {p.avatarInitial}
                     </span>
-                  )}
-                  {active && (
-                    <span className={styles.profileCheck} aria-hidden="true">
-                      <Icon name="check" size={12} />
-                    </span>
-                  )}
-                  <span
-                    role="button"
-                    tabIndex={0}
-                    aria-label={`Edit ${p.name}`}
-                    className={styles.profileEditButton}
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      setEditingProfile(p.id)
-                    }}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' || e.key === ' ') {
-                        e.preventDefault()
+                    <span className={styles.profileName}>{p.name}</span>
+                    {p.isKid && <span className={styles.profileBadge}>Kids</span>}
+                    {p.hasPin && (
+                      <span className={styles.profileBadge} aria-label="PIN-locked">
+                        <Icon name="lock" size={10} />
+                      </span>
+                    )}
+                    {active && (
+                      <span className={styles.profileCheck} aria-hidden="true">
+                        <Icon name="check" size={12} />
+                      </span>
+                    )}
+                    <span
+                      role="button"
+                      tabIndex={0}
+                      aria-label={`Edit ${p.name}`}
+                      className={styles.profileEditButton}
+                      onClick={(e) => {
                         e.stopPropagation()
                         setEditingProfile(p.id)
-                      }
-                    }}
-                  >
-                    <Icon name="edit" size={11} />
-                  </span>
-                </button>
-              )
-            })}
-            <button
-              type="button"
-              className={styles.profileCardAdd}
-              onClick={() => setEditingProfile('new')}
-            >
-              <span className={styles.profileCardAddIcon}>
-                <Icon name="plus" size={18} />
-              </span>
-              <span className={styles.profileName}>Add Profile</span>
-            </button>
-          </div>
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          e.preventDefault()
+                          e.stopPropagation()
+                          setEditingProfile(p.id)
+                        }
+                      }}
+                    >
+                      <Icon name="edit" size={11} />
+                    </span>
+                  </button>
+                )
+              })}
+              <button
+                type="button"
+                className={styles.profileCardAdd}
+                onClick={() => setEditingProfile('new')}
+              >
+                <span className={styles.profileCardAddIcon}>
+                  <Icon name="plus" size={18} />
+                </span>
+                <span className={styles.profileName}>Add Profile</span>
+              </button>
+            </div>
 
-          <p className={styles.profileNote}>
-            Watch history is currently shared across all profiles — per-profile history is
-            not built yet.
-          </p>
+            <p className={styles.profileNote}>
+              Watch history is currently shared across all profiles — per-profile history is not
+              built yet.
+            </p>
 
-          {editingProfile && (
-            <ProfileForm
-              target={editingProfile === 'new' ? null : profiles.find((p) => p.id === editingProfile) || null}
-              activeProfileId={activeProfileId}
-              profileCount={profiles.length}
-              onClose={() => setEditingProfile(null)}
-            />
-          )}
-        </section>
+            {editingProfile && (
+              <ProfileForm
+                target={
+                  editingProfile === 'new'
+                    ? null
+                    : profiles.find((p) => p.id === editingProfile) || null
+                }
+                activeProfileId={activeProfileId}
+                profileCount={profiles.length}
+                onClose={() => setEditingProfile(null)}
+              />
+            )}
+          </section>
+        </div>
       </div>
     </div>
   )
