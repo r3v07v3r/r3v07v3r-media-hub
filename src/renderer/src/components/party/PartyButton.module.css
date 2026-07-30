@@ -1,0 +1,53 @@
+.button {
+  position: relative;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  border: 1px solid transparent;
+  transition:
+    color var(--transition-fast),
+    background var(--transition-fast),
+    border-color var(--transition-fast);
+}
+.button:hover {
+  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.06);
+}
+.button.active {
+  color: var(--accent-cyan);
+  border-color: rgba(56, 229, 255, 0.35);
+  background: rgba(56, 229, 255, 0.08);
+}
+.button[aria-pressed='true'] {
+  box-shadow: 0 0 0 3px rgba(56, 229, 255, 0.25);
+}
+.icon {
+  width: 17px;
+  height: 17px;
+}
+.badge {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 3px;
+  border-radius: 8px;
+  background: var(--accent-cyan);
+  color: #04141c;
+  font-family: var(--font-display);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 16px;
+  text-align: center;
+}
+
+.separator {
+  width: 1px;
+  height: 30px;
+  background: var(--border-subtle);
+}

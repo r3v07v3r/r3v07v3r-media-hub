@@ -5,6 +5,7 @@ import { ContextMenu } from './ContextMenu'
 import { NotificationLayer } from './NotificationLayer'
 import { OfflineBanner } from './OfflineBanner'
 import { ProfilePinPrompt } from '@renderer/components/profiles/ProfilePinPrompt'
+import { PartyPanel } from '@renderer/components/party/PartyPanel'
 
 export function GlobalOverlays() {
   const { playbackMedia } = useAppState()
@@ -29,6 +30,7 @@ export function GlobalOverlays() {
           natural initial values instead of being manually reset by an
           effect. */}
       <PlaybackOverlay key={playbackMedia?.id ?? 'none'} />
+      <PartyPanel />
       <NotificationLayer />
       <ProfilePinPrompt />
     </div>

@@ -5,6 +5,7 @@ import { useAppState } from '@renderer/context/AppStateContext'
 import { useClock } from '@renderer/hooks/useClock'
 import { useWeather } from '@renderer/hooks/useWeather'
 import { Icon } from '@renderer/components/icons/Icon'
+import { PartyButton } from '@renderer/components/party/PartyButton'
 import styles from './TopUtilityBar.module.css'
 
 export function UserEnvironmentStatus() {
@@ -35,6 +36,8 @@ export function UserEnvironmentStatus() {
 
   return (
     <div className={styles.status}>
+      <PartyButton />
+
       <div className={styles.weather} aria-live="off">
         <Icon name="weather" className={styles.weatherIcon} />
         {weather.loading ? (

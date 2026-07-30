@@ -24,6 +24,10 @@ import { CONTINUE_WATCHING, USER_PROFILES } from '@renderer/data/mockData'
 import type {
   MediaHubSettingsSnapshot,
   MediaTracks,
+  PartyHostResult,
+  PartyMode,
+  PartyQueueEntry,
+  PartyStatusResult,
   PlaybackResult,
   ProfilePublic
 } from '@shared/media-hub/types'
@@ -87,6 +91,29 @@ interface AppStateValue {
     pin?: string | null
   }) => Promise<void>
   deleteProfile: (id: string) => Promise<void>
+
+  // Watch Party — one shared slice so the topbar button/panel and the
+  // Settings card can never disagree about whether we're in a party (see
+  // main/media-hub/watchParty.ts for the real backend this is wired to).
+  partyStatus: PartyStatusResult | null
+  partyQueue: PartyQueueEntry[]
+  /** Only known right after hosting (party:host's own response — party:status never returns it) — cleared on leave. */
+  partyHostCode: string | null
+  partyPanelOpen: boolean
+  setPartyPanelOpen: Dispatch<SetStateAction<boolean>>
+  refreshPartyStatus: () => void
+  hostParty: (name: string, mode?: PartyMode) => Promise<PartyHostResult>
+  joinParty: (code: string, name: string) => Promise<void>
+  leaveParty: () => Promise<void>
+  suggestToParty: (item: {
+    id: string
+    type?: string
+    title?: string
+    poster?: string
+    year?: string
+  }) => Promise<void>
+  voteQueue: (queueId: string, direction: 1 | -1) => Promise<void>
+  removeFromQueue: (queueId: string) => Promise<void>
 
   // My List — a Set of media ids. Kept centrally so the hero, the
   // carousel, continue-watching, and the detail modal all agree on
@@ -253,6 +280,10 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   const [profiles, setProfiles] = useState<ProfilePublic[]>(FALLBACK_PROFILES)
   const [activeProfileId, setActiveProfileIdState] = useState(FALLBACK_PROFILES[0].id)
   const [profilePinPrompt, setProfilePinPrompt] = useState<ProfilePublic | null>(null)
+  const [partyStatus, setPartyStatus] = useState<PartyStatusResult | null>(null)
+  const [partyQueue, setPartyQueue] = useState<PartyQueueEntry[]>([])
+  const [partyHostCode, setPartyHostCode] = useState<string | null>(null)
+  const [partyPanelOpen, setPartyPanelOpen] = useState(false)
   const [myList, setMyList] = useState<Set<string>>(new Set())
   const [continueWatching, setContinueWatching] =
     useState<ContinueWatchingItem[]>(CONTINUE_WATCHING)
@@ -342,6 +373,35 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     refreshProfiles()
   }, [refreshProfiles])
+
+  const refreshPartyStatus = useCallback(() => {
+    const api = window.api?.mediaHub?.party
+    if (!api) return
+    api
+      .status()
+      .then(setPartyStatus)
+      .catch(() => {})
+    api
+      .queue()
+      .then(({ queue }) => setPartyQueue(queue))
+      .catch(() => {})
+  }, [])
+
+  useEffect(() => {
+    const api = window.api?.mediaHub?.party
+    if (!api) return
+    refreshPartyStatus()
+    return api.onEvent((event) => {
+      if (event.type === 'party-state') {
+        setPartyStatus((prev) => (prev ? { ...prev, members: event.members } : prev))
+      } else if (event.type === 'queue-sync') {
+        setPartyQueue(event.queue)
+      } else if (event.type === 'host-disconnected') {
+        setPartyHostCode(null)
+        refreshPartyStatus()
+      }
+    })
+  }, [refreshPartyStatus])
 
   const toggleMyList = useCallback((media: MediaItem) => {
     setMyList((prev) => {
@@ -487,6 +547,71 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       refreshProfiles()
     },
     [refreshProfiles]
+  )
+
+  const hostParty = useCallback(
+    async (name: string, mode?: PartyMode) => {
+      const api = window.api?.mediaHub?.party
+      if (!api) throw new Error("Watch Party isn't available outside the desktop app.")
+      const result = await api.host(name, mode)
+      setPartyHostCode(result.code)
+      setPartyPanelOpen(true)
+      refreshPartyStatus()
+      return result
+    },
+    [refreshPartyStatus]
+  )
+
+  const joinParty = useCallback(
+    async (code: string, name: string) => {
+      const api = window.api?.mediaHub?.party
+      if (!api) throw new Error("Watch Party isn't available outside the desktop app.")
+      await api.join(code, name)
+      setPartyHostCode(null)
+      setPartyPanelOpen(true)
+      refreshPartyStatus()
+    },
+    [refreshPartyStatus]
+  )
+
+  const leaveParty = useCallback(async () => {
+    const api = window.api?.mediaHub?.party
+    if (!api) throw new Error("Watch Party isn't available outside the desktop app.")
+    await api.leave()
+    setPartyHostCode(null)
+    setPartyPanelOpen(false)
+    setPartyStatus(null)
+    setPartyQueue([])
+  }, [])
+
+  const suggestToParty = useCallback(
+    async (item: { id: string; type?: string; title?: string; poster?: string; year?: string }) => {
+      const api = window.api?.mediaHub?.party
+      if (!api) throw new Error("Watch Party isn't available outside the desktop app.")
+      await api.suggest(item)
+      refreshPartyStatus()
+    },
+    [refreshPartyStatus]
+  )
+
+  const voteQueue = useCallback(
+    async (queueId: string, direction: 1 | -1) => {
+      const api = window.api?.mediaHub?.party
+      if (!api) return
+      await api.vote(queueId, direction)
+      refreshPartyStatus()
+    },
+    [refreshPartyStatus]
+  )
+
+  const removeFromQueue = useCallback(
+    async (queueId: string) => {
+      const api = window.api?.mediaHub?.party
+      if (!api) return
+      await api.remove(queueId)
+      refreshPartyStatus()
+    },
+    [refreshPartyStatus]
   )
 
   const closeAssistant = useCallback(() => {
@@ -701,6 +826,18 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       createProfile,
       updateProfile,
       deleteProfile,
+      partyStatus,
+      partyQueue,
+      partyHostCode,
+      partyPanelOpen,
+      setPartyPanelOpen,
+      refreshPartyStatus,
+      hostParty,
+      joinParty,
+      leaveParty,
+      suggestToParty,
+      voteQueue,
+      removeFromQueue,
       myList,
       toggleMyList,
       continueWatching,
@@ -762,6 +899,17 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       createProfile,
       updateProfile,
       deleteProfile,
+      partyStatus,
+      partyQueue,
+      partyHostCode,
+      partyPanelOpen,
+      refreshPartyStatus,
+      hostParty,
+      joinParty,
+      leaveParty,
+      suggestToParty,
+      voteQueue,
+      removeFromQueue,
       myList,
       toggleMyList,
       continueWatching,

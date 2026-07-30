@@ -54,6 +54,9 @@ const PATHS: Record<string, string> = {
   x: '<path d="M5 5l14 14M19 5L5 19"/>',
   'thumbs-down':
     '<path d="M7 14V3M3 14h3.2a2 2 0 0 1 1.9 1.4l1 3.1a2 2 0 0 0 3.8-.9v-3.6H18a2 2 0 0 0 2-2.4l-1.3-6A2 2 0 0 0 16.7 4H7"/>',
+  'thumbs-up':
+    '<path d="M17 10v11M21 10h-3.2a2 2 0 0 1-1.9-1.4l-1-3.1a2 2 0 0 0-3.8.9v3.6H6a2 2 0 0 0-2 2.4l1.3 6A2 2 0 0 0 7.3 20H17"/>',
+  copy: '<rect x="8.5" y="8.5" width="12" height="12" rx="1.8"/><path d="M15.5 8.5V5.8A1.8 1.8 0 0 0 13.7 4H5.8A1.8 1.8 0 0 0 4 5.8v7.9a1.8 1.8 0 0 0 1.8 1.8h2.7"/>',
   'more-horizontal':
     '<circle cx="5" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="19" cy="12" r="1.4" fill="currentColor" stroke="none"/>',
   info: '<circle cx="12" cy="12" r="8.5"/><path d="M12 11v5.5"/><circle cx="12" cy="7.7" r="1" fill="currentColor" stroke="none"/>',
@@ -80,10 +83,8 @@ const PATHS: Record<string, string> = {
   filter:
     '<path d="M4 6h5.5M13.5 6H20M4 12h9.5M17.5 12H20M4 18h3.5M11.5 18H20"/><circle cx="11.5" cy="6" r="2" fill="currentColor" stroke="none"/><circle cx="15.5" cy="12" r="2" fill="currentColor" stroke="none"/><circle cx="9.5" cy="18" r="2" fill="currentColor" stroke="none"/>',
   sort: '<path d="M6 4v16M6 4l-3 3M6 4l3 3M18 20V4M18 20l-3-3M18 20l3-3"/>',
-  expand:
-    '<path d="M9 4H4v5M15 4h5v5M9 20H4v-5M15 20h5v-5"/>',
-  collapse:
-    '<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>',
+  expand: '<path d="M9 4H4v5M15 4h5v5M9 20H4v-5M15 20h5v-5"/>',
+  collapse: '<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>',
   // Fit-mode toggle (Fit / Fill / Stretch) — an outer frame (the player
   // window) with an inner one (the video content) so the glyph reads as
   // "how the picture sits inside the frame" regardless of which mode is

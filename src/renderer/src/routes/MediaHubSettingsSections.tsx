@@ -3,7 +3,6 @@ import { useAppState } from '@renderer/context/AppStateContext'
 import { Icon } from '@renderer/components/icons/Icon'
 import type {
   MalReconcilePreview,
-  PartyStatusResult,
   SimklPinStart,
   SimklStatus,
   MalStatus
@@ -717,43 +716,23 @@ function OpenSubtitlesSection() {
  * from Settings and isn't part of this section; this just covers getting
  * into (or out of) a party, the same "configuration surface" scope as
  * every other section on this page.
+ *
+ * Reads/writes the same AppStateContext party slice the topbar's
+ * PartyButton/PartyPanel use — one source of truth, so hosting/joining
+ * from here is immediately reflected in the topbar and vice versa.
  */
 function WatchPartySection() {
-  const [status, setStatus] = useState<PartyStatusResult | null>(null)
+  const { partyStatus, partyHostCode, hostParty, joinParty, leaveParty } = useAppState()
   const [name, setName] = useState('')
   const [joinCode, setJoinCode] = useState('')
-  const [hostResult, setHostResult] = useState<{ code: string } | null>(null)
   const [actionStatus, setActionStatus] = useState<Status>({ kind: 'idle' })
 
-  useEffect(() => {
-    const api = window.api?.mediaHub
-    if (!api) return
-    api.party
-      .status()
-      .then(setStatus)
-      .catch(() => {})
-    return api.party.onEvent((event) => {
-      if (event.type === 'party-state' || event.type === 'host-disconnected') {
-        api.party
-          .status()
-          .then(setStatus)
-          .catch(() => {})
-      }
-    })
-  }, [])
-
   async function host() {
-    const api = window.api?.mediaHub
-    if (!api || !name.trim()) return
+    if (!name.trim()) return
     setActionStatus({ kind: 'busy' })
     try {
-      const result = await api.party.host(name.trim())
-      setHostResult({ code: result.code })
+      await hostParty(name.trim())
       setActionStatus({ kind: 'idle' })
-      api.party
-        .status()
-        .then(setStatus)
-        .catch(() => {})
     } catch (error) {
       setActionStatus({
         kind: 'error',
@@ -763,16 +742,11 @@ function WatchPartySection() {
   }
 
   async function join() {
-    const api = window.api?.mediaHub
-    if (!api || !joinCode.trim() || !name.trim()) return
+    if (!joinCode.trim() || !name.trim()) return
     setActionStatus({ kind: 'busy' })
     try {
-      await api.party.join(joinCode.trim(), name.trim())
+      await joinParty(joinCode.trim(), name.trim())
       setActionStatus({ kind: 'idle' })
-      api.party
-        .status()
-        .then(setStatus)
-        .catch(() => {})
     } catch (error) {
       setActionStatus({
         kind: 'error',
@@ -782,19 +756,12 @@ function WatchPartySection() {
   }
 
   async function leave() {
-    const api = window.api?.mediaHub
-    if (!api) return
     setActionStatus({ kind: 'busy' })
-    await api.party.leave().catch(() => {})
-    setHostResult(null)
+    await leaveParty().catch(() => {})
     setActionStatus({ kind: 'idle' })
-    api.party
-      .status()
-      .then(setStatus)
-      .catch(() => {})
   }
 
-  const inParty = status?.inParty ?? false
+  const inParty = partyStatus?.inParty ?? false
 
   return (
     <section className={`${styles.section} glass-panel`} aria-labelledby="settings-party">
@@ -810,14 +777,14 @@ function WatchPartySection() {
       {inParty ? (
         <>
           <p className={styles.rowDescription}>
-            {status?.role === 'host' ? 'Hosting' : 'Joined'} as {status?.selfName}
-            {hostResult && (
+            {partyStatus?.role === 'host' ? 'Hosting' : 'Joined'} as {partyStatus?.selfName}
+            {partyHostCode && (
               <>
                 {' '}
-                — code <strong>{hostResult.code}</strong>
+                — code <strong>{partyHostCode}</strong>
               </>
             )}
-            {status?.members?.length ? ` · ${status.members.length} in the party` : ''}
+            {partyStatus?.members?.length ? ` · ${partyStatus.members.length} in the party` : ''}
           </p>
           <div className={styles.serviceActions}>
             <button type="button" className={styles.testButton} onClick={leave}>
