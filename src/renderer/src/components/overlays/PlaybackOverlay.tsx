@@ -62,7 +62,16 @@ export function PlaybackOverlay() {
   const [duration, setDuration] = useState(0)
   const [volume, setVolume] = useState(1)
   const [controlsVisible, setControlsVisible] = useState(true)
-  const [openMenu, setOpenMenu] = useState<'audio' | 'subtitles' | null>(null)
+  const [openMenu, setOpenMenu] = useState<'audio' | 'subtitles' | 'quality' | null>(null)
+  // Mirrors activeSelectionRef.current.upscaleHeight for rendering purposes
+  // (the ref itself doesn't trigger a re-render on change) — 0 means "off".
+  const [appliedUpscaleHeight, setAppliedUpscaleHeight] = useState(0)
+  // True only while an explicit quality-menu pick is in flight — separate
+  // from bufferingReady (which covers the actual restart's own re-buffer,
+  // shown automatically once the new stream URL lands) so the button shows
+  // "Applying…" the moment it's clicked, before the restart itself even
+  // starts producing a response to react to.
+  const [applyingQuality, setApplyingQuality] = useState(false)
   const [subtitleResults, setSubtitleResults] = useState<SubtitleResult[] | null>(null)
   const [activeSubtitleTrackUrl, setActiveSubtitleTrackUrl] = useState<string | null>(null)
   const [isFullscreen, setIsFullscreen] = useState(false)
@@ -287,6 +296,7 @@ export function PlaybackOverlay() {
         .then((response) => {
           if (!response) return
           activeSelectionRef.current = response.selection
+          setAppliedUpscaleHeight(response.selection.upscaleHeight ?? 0)
           setResult((prev) => (prev ? { ...prev, ...response.selection, url: response.url } : prev))
           setTracks(response.tracks)
         })
@@ -297,7 +307,7 @@ export function PlaybackOverlay() {
           })
         })
     },
-    [result, pushNotification, applyShiftedSubtitle, setResult, setTracks]
+    [result, pushNotification, applyShiftedSubtitle, setResult, setTracks, setAppliedUpscaleHeight]
   )
 
   // Host only: re-evaluates the ready-set for `requestId` — called both
@@ -466,6 +476,7 @@ export function PlaybackOverlay() {
       if (!response) return
       streamStartOffsetRef.current = startTime
       activeSelectionRef.current = response.selection
+      setAppliedUpscaleHeight(response.selection.upscaleHeight ?? 0)
       applyShiftedSubtitle()
       // A new transcode session means a new stream URL — the <video> src
       // effect below picks this up and reloads from `startTime`.
@@ -477,6 +488,43 @@ export function PlaybackOverlay() {
         message: error instanceof Error ? error.message : 'Could not change tracks.'
       })
     }
+    setOpenMenu(null)
+  }
+
+  // Local-only, never broadcast to the party (see watchParty.ts — only
+  // seek/seek-sync/seek-waiting/seek-go are host-gated) — this changes
+  // picture quality, not playback position, so every party member (host
+  // or follower) independently decides it for their own stream without
+  // needing anyone else's involvement, exactly like an audio-track switch
+  // already works. Reuses the same restart path as selectTrack/performSeek
+  // above rather than a separate endpoint, so it automatically survives
+  // every later seek/track-change the same way (see playbackSession.ts's
+  // select-tracks handler treating upscaleHeight as sticky selection state).
+  async function applyUpscale(height: number) {
+    if (!playbackMedia) return
+    const video = videoRef.current
+    const startTime = streamStartOffsetRef.current + (video?.currentTime ?? 0)
+    setApplyingQuality(true)
+    try {
+      const response = await window.api?.mediaHub?.playback.selectTracks({
+        ...activeSelectionRef.current,
+        startTime,
+        upscaleHeight: height
+      })
+      if (!response) return
+      streamStartOffsetRef.current = startTime
+      activeSelectionRef.current = response.selection
+      setAppliedUpscaleHeight(response.selection.upscaleHeight ?? 0)
+      applyShiftedSubtitle()
+      setResult((prev) => (prev ? { ...prev, ...response.selection, url: response.url } : prev))
+      setTracks(response.tracks)
+    } catch (error) {
+      pushNotification({
+        tone: 'error',
+        message: error instanceof Error ? error.message : 'Could not change video quality.'
+      })
+    }
+    setApplyingQuality(false)
     setOpenMenu(null)
   }
 
@@ -517,6 +565,7 @@ export function PlaybackOverlay() {
 
   const audioTracks = useMemo<MediaTrack[]>(() => tracks?.audio ?? [], [tracks])
   const subtitleTracks = useMemo<MediaTrack[]>(() => tracks?.subtitle ?? [], [tracks])
+  const upscaleSuggestion = result?.upscaleSuggestion
   const fitModeLabel = { contain: 'Fit', cover: 'Fill', fill: 'Stretch' }[fitMode]
 
   // The actual "let it buffer for a while on a bad connection" gate — the
@@ -926,6 +975,50 @@ export function PlaybackOverlay() {
               </div>
             )}
           </div>
+
+          {upscaleSuggestion && (
+            <div className={styles.playerMenuWrap}>
+              <button
+                type="button"
+                className={styles.playerIconButton}
+                onClick={() => setOpenMenu(openMenu === 'quality' ? null : 'quality')}
+                aria-label="Video quality"
+                disabled={applyingQuality}
+              >
+                <Icon name="expand" size={15} />
+              </button>
+              {openMenu === 'quality' && (
+                <div className={styles.playerMenu}>
+                  <div className={styles.playerMenuHeading}>
+                    {applyingQuality
+                      ? 'Applying…'
+                      : `Upscale from ${upscaleSuggestion.sourceHeight}p`}
+                  </div>
+                  <button
+                    type="button"
+                    className={`${styles.playerMenuItem} ${appliedUpscaleHeight === 0 ? styles.playerMenuItemActive : ''}`}
+                    onClick={() => applyUpscale(0)}
+                    disabled={applyingQuality}
+                  >
+                    Original quality
+                    {appliedUpscaleHeight === 0 && <Icon name="check" size={12} />}
+                  </button>
+                  {upscaleSuggestion.options.map((h) => (
+                    <button
+                      key={h}
+                      type="button"
+                      className={`${styles.playerMenuItem} ${appliedUpscaleHeight === h ? styles.playerMenuItemActive : ''}`}
+                      onClick={() => applyUpscale(h)}
+                      disabled={applyingQuality}
+                    >
+                      {h}p{h === upscaleSuggestion.recommended ? ' (Recommended)' : ''}
+                      {appliedUpscaleHeight === h && <Icon name="check" size={12} />}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
 
           <button
             type="button"

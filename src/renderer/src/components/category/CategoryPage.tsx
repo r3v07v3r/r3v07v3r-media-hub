@@ -121,7 +121,7 @@ export function CategoryPage({ config }: { config: CategoryConfig }) {
       <CompactAIAssistant kinds={[config.kind]} />
 
       <FeaturedHero items={heroItems} />
-      <ContinueWatchingPanel kindFilter={config.kind} />
+      <ContinueWatchingPanel kindFilter={config.kind} className={styles.continuePanel} />
       <RecommendationCarousel />
 
       <div className={styles.filterbarArea}>

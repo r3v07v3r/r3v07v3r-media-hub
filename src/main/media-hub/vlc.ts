@@ -49,7 +49,12 @@ import http from 'node:http'
 import net from 'node:net'
 import path from 'node:path'
 
-import type { MediaTrack, MediaTracks, PlaybackSelection } from '../../shared/media-hub/types'
+import type {
+  MediaTrack,
+  MediaTracks,
+  PlaybackSelection,
+  UpscaleSuggestion
+} from '../../shared/media-hub/types'
 import { getPlaybackBufferSeconds } from '../../shared/media-hub/playbackBuffer'
 import { isAllowedRemoteMediaUrl } from './playback'
 import { readSettings } from './settingsStore'
@@ -75,7 +80,8 @@ function cleanSelection(value: unknown, fallback = -1): number {
 export function buildFfmpegArguments(
   remoteUrl: string,
   selection: PlaybackSelection = {},
-  videoEncoder?: string
+  videoEncoder?: string,
+  targetHeight?: number
 ): string[] {
   if (!isAllowedRemoteMediaUrl(remoteUrl)) {
     throw new Error('Compatibility mode requires a valid HTTPS media URL.')
@@ -144,7 +150,15 @@ export function buildFfmpegArguments(
     // frames to the (still hardware-accelerated) encoder — a small,
     // well-understood CPU cost for broad compatibility, not a full
     // software encode.
-    args.push('-vf', 'format=yuv420p')
+    // Plain `scale` (software, CPU-side) rather than an encoder-specific
+    // GPU filter (e.g. scale_cuda) — decode here is already software (the
+    // format conversion above requires it), so a GPU scale filter would
+    // need its own hwaccel decode path per encoder vendor for no real
+    // benefit; resizing itself is cheap relative to the encode step it's
+    // already paying for. `-2` keeps width even and aspect-ratio-correct.
+    const videoFilters = ['format=yuv420p']
+    if (targetHeight && targetHeight > 0) videoFilters.push(`scale=-2:${targetHeight}`)
+    args.push('-vf', videoFilters.join(','))
     args.push('-c:v', videoEncoder, ...(VIDEO_ENCODER_ARGS[videoEncoder] || []))
   } else {
     args.push('-c:v', 'copy')
@@ -213,6 +227,8 @@ export function parseMediaTracks(payload: FfprobePayload = {}): MediaTracks {
     const type = stream.codec_type
     if (type !== 'video' && type !== 'audio' && type !== 'subtitle') continue
     const ordinal = result[type].length
+    const width = Number(stream.width)
+    const height = Number(stream.height)
     result[type].push({
       ordinal,
       index: Number(stream.index),
@@ -220,7 +236,9 @@ export function parseMediaTracks(payload: FfprobePayload = {}): MediaTracks {
       language: String(stream.tags?.language || ''),
       title: String(stream.tags?.title || ''),
       label: mediaLabel(stream, type, ordinal),
-      default: Boolean(stream.disposition?.default)
+      default: Boolean(stream.disposition?.default),
+      ...(type === 'video' && Number.isFinite(width) && width > 0 ? { width } : {}),
+      ...(type === 'video' && Number.isFinite(height) && height > 0 ? { height } : {})
     })
   }
   return result
@@ -294,6 +312,35 @@ export function videoCodecCompatibilityWarning(
   const codec = String(tracks?.video?.[0]?.codec || '').toLowerCase()
   if (!RISKY_VIDEO_CODECS.has(codec)) return undefined
   return `This title's video (${codec.toUpperCase()}) may not play reliably in this app — some players can't decode it at all, others only partway through. Settings > More Options has an experimental video-conversion option that may help, if your machine has a working hardware encoder.`
+}
+
+// Independent of codec compatibility above — a perfectly playable H.264
+// source can still just be low-resolution. Only offered up to 1080p
+// sources; a title already above that isn't what "make it look better"
+// is asking for. Candidates stop at 4K since that's the practical ceiling
+// for the hardware encoders this app ever uses (see HW_VIDEO_ENCODER_CANDIDATES) —
+// nothing here claims to add detail that isn't in the source, just resizes it
+// (plain `scale`, no AI/DNN filter is bundled — see buildFfmpegArguments).
+const UPSCALE_HEIGHT_CANDIDATES = [1080, 1440, 2160]
+
+export function videoResolutionUpscaleSuggestion(
+  tracks: MediaTracks | undefined,
+  screenHeight?: number,
+  preferredHeight?: number
+): UpscaleSuggestion | undefined {
+  const sourceHeight = tracks?.video?.[0]?.height
+  if (!sourceHeight || sourceHeight > 1080) return undefined
+  const options = UPSCALE_HEIGHT_CANDIDATES.filter((h) => h > sourceHeight)
+  if (options.length === 0) return undefined
+  if (preferredHeight && options.includes(preferredHeight)) {
+    return { sourceHeight, options, recommended: preferredHeight }
+  }
+  const screen = Number(screenHeight)
+  const recommended =
+    Number.isFinite(screen) && screen > 0
+      ? (options.find((h) => h >= screen) ?? options[options.length - 1])
+      : options[0]
+  return { sourceHeight, options, recommended }
 }
 
 function findInTree(root: string, name: string, depth = 4): string {
@@ -600,7 +647,8 @@ export interface FfmpegTranscoder {
     ffmpegPath: string,
     remoteUrl: string,
     selection?: PlaybackSelection,
-    videoEncoder?: string
+    videoEncoder?: string,
+    targetHeight?: number
   ) => Promise<FfmpegTranscoderResult>
   stop: () => Promise<void>
 }
@@ -674,13 +722,14 @@ export function createFfmpegTranscoder({
     ffmpegPath: string,
     remoteUrl: string,
     selection: PlaybackSelection = {},
-    videoEncoder?: string
+    videoEncoder?: string,
+    targetHeight?: number
   ): Promise<FfmpegTranscoderResult> {
     if (!ffmpegPath) throw new Error('Compatibility mode is unavailable (ffmpeg not found).')
     await stop()
     const port = await freePort()
     const token = randomBytes(32).toString('hex')
-    const args = buildFfmpegArguments(remoteUrl, selection, videoEncoder)
+    const args = buildFfmpegArguments(remoteUrl, selection, videoEncoder, targetHeight)
     child = spawnImpl(ffmpegPath, args, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] })
     const spawned = child
 
@@ -823,7 +872,21 @@ export function createFfmpegTranscoder({
       activeServer.listen(port, '127.0.0.1', () => resolve())
     })
 
-    await readyPromise
+    try {
+      await readyPromise
+    } catch (error) {
+      // A timeout/failure here previously left `spawned` running forever —
+      // the next start() call's own stop() would eventually reap it, but
+      // only if something ever called start() again; a caller that just
+      // shows the error and gives up left it orphaned indefinitely (found
+      // live: a stray ffmpeg.exe still holding a network connection and
+      // over a GB of memory, well after its triggering attempt had failed).
+      if (!spawned.killed) spawned.kill()
+      activeServer.close()
+      if (server === activeServer) server = null
+      if (child === spawned) child = null
+      throw error
+    }
     return {
       url: `http://127.0.0.1:${port}${expectedPath}`,
       engine: 'ffmpeg audio compatibility (video copy)',

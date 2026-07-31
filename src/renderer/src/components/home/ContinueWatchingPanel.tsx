@@ -14,9 +14,14 @@ export interface ContinueWatchingPanelProps {
    *  an in-progress series. Home omits this (unchanged: every kind mixed
    *  together, matching the reference composition). */
   kindFilter?: CategoryKind
+  /** Appended after styles.panel, so callers can override max-height (or
+   *  anything else) without this component needing to know why. Added for
+   *  CategoryPage.module.css's .continuePanel — see its own comment for
+   *  the real bug (unbounded panel height) this exists to fix. */
+  className?: string
 }
 
-export function ContinueWatchingPanel({ kindFilter }: ContinueWatchingPanelProps = {}) {
+export function ContinueWatchingPanel({ kindFilter, className }: ContinueWatchingPanelProps = {}) {
   const {
     continueWatching: allContinueWatching,
     startPartyPlayback,
@@ -34,7 +39,10 @@ export function ContinueWatchingPanel({ kindFilter }: ContinueWatchingPanelProps
   )
 
   return (
-    <aside className={styles.panel} aria-label="Continue watching">
+    <aside
+      className={className ? `${styles.panel} ${className}` : styles.panel}
+      aria-label="Continue watching"
+    >
       <div className={styles.panelGlow} aria-hidden="true" />
       <h2 className={styles.heading}>
         <Icon name="clock" />

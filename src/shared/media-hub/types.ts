@@ -106,6 +106,16 @@ export interface MediaTrack {
   title: string
   label: string
   default: boolean
+  /** Video tracks only (ffprobe never reports these for audio/subtitle streams) — used for the upscale suggestion below, not currently shown in the UI otherwise. */
+  width?: number
+  height?: number
+}
+
+/** Computed once per title (see vlc.ts's videoResolutionUpscaleSuggestion) when the source's own resolution is 1080p or below — surfaced regardless of codec/transcode-path, since upscaling is an independent axis from codec compatibility. `recommended` defaults to the user's last-chosen height (see MediaHubRawSettings.preferredUpscaleHeight) when that's still a valid option for this title, otherwise the option closest to this machine's screen resolution. */
+export interface UpscaleSuggestion {
+  sourceHeight: number
+  options: number[]
+  recommended: number
 }
 
 export interface MediaTracks {
@@ -128,6 +138,8 @@ export interface PlaybackSelection {
   subtitle?: number
   startTime?: number
   externalSubtitlePath?: string
+  /** 0 (or omitted) means "no change to whatever's already active" — every restart (seek, track change, subtitle apply) round-trips through this same selection object, so upscale state has to stay sticky across all of them, not just the call that turned it on. Explicitly 0 from the player's own "Off" menu item is what actually turns it back off. */
+  upscaleHeight?: number
 }
 
 export interface PlaybackResult {
@@ -140,6 +152,8 @@ export interface PlaybackResult {
   autoReason?: string
   /** Set when the source video's own codec (e.g. HEVC) is one Chromium's software decoder doesn't reliably handle — video is only ever stream-copied here, never transcoded, so this can't be fixed server-side yet. Surfaced as an upfront warning rather than letting the person hit an unexplained mid-stream decode crash. */
   videoCodecWarning?: string
+  /** Present whenever the source is 1080p or below, independent of videoCodecWarning/compatibility above — see UpscaleSuggestion. */
+  upscaleSuggestion?: UpscaleSuggestion
 }
 
 // Tracked-show entry as persisted (normalizeTitle shape) — matches
@@ -266,6 +280,8 @@ export interface MediaHubPublicSettings {
   uiAnimationsEnabled: boolean
   /** Opt-in, off by default: re-encode video (not just audio) via a real hardware encoder when a source's video codec isn't one Chromium can reliably decode (see vlc.ts's detectVideoEncoder). Silently has no effect if no working hardware encoder is found on this machine — never falls back to a software encoder. */
   videoTranscodeEnabled: boolean
+  /** Last height the player's own quality menu was set to (see UpscaleSuggestion) — remembered so the next applicable title's suggestion defaults to it instead of always recomputing from screen size. Global to this install, not per-profile — same scope as every other setting here (playbackBuffer, videoTranscodeEnabled, etc.), which don't have per-profile scoping either. Undefined until the person has picked one at least once. */
+  preferredUpscaleHeight?: number
 }
 
 export interface MediaHubSettingsSnapshot extends MediaHubPublicSettings {

@@ -36,6 +36,39 @@
   padding: 10px 26px 16px calc(26px + var(--nav-rail-width, 285px) * 0.8);
 }
 
+/* ContinueWatchingPanel's own max-height (calc(100% - 56px), see
+   ContinueWatchingPanel.module.css) needs a DEFINITE percentage basis from
+   its "hero" grid-area's height — true on Home (.dashboard is a fixed,
+   non-scrolling box with explicit row sizing), but not here: .page above
+   is deliberately indefinite-height (min-height: 100%, grows to fit the
+   filter bar + results below and scrolls inside .main instead of a second
+   nested scroll container). With no definite height to resolve against,
+   the hero row's 1fr also never gets real bonus space to stretch into —
+   it just sits at its 520px floor regardless of window size — but CSS
+   grid still doesn't treat that as "definite" for a descendant's
+   percentage max-height. Real bug found live: the panel's max-height
+   silently computed to none, so its list rendered every Continue
+   Watching item completely unclamped instead of the intended scrollable
+   handful, spilling straight through the hero's own background art into
+   the plain page background below it.
+
+   Fixed with a plain px value instead of a percentage — 520px is this
+   page's own declared hero-row floor above (not a guess; it's the same
+   number in grid-template-rows), and 56px is the same margin/breathing-
+   room term the base component's own calc() already uses on Home, just
+   applied against a value that's actually known ahead of time here.
+
+   !important is deliberate, not a shortcut: .panel and .continuePanel are
+   two different CSS Modules files, so both compile to single hashed class
+   selectors of EQUAL specificity — without this, whichever module happens
+   to bundle later would silently win, which is exactly the kind of
+   footgun that led to the max-height bug being invisible in the first
+   place. This is a one-property, well-contained override of a specific
+   other file's default for a documented reason, not a broad escape hatch. */
+.continuePanel {
+  max-height: 464px !important;
+}
+
 .filterbarArea {
   grid-area: filterbar;
   display: flex;
