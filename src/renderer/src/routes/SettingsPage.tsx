@@ -9,7 +9,8 @@ import {
   SimklSection,
   MalSection,
   OpenSubtitlesSection,
-  WatchPartySection
+  WatchPartySection,
+  R3PartySyncSection
 } from './MediaHubSettingsSections'
 import type { NetworkInfoResult, ProfilePublic } from '@shared/media-hub/types'
 import styles from './Settings.module.css'
@@ -482,6 +483,7 @@ export default function SettingsPage() {
 
         <div className={`${styles.column} ${styles.columnStrong}`}>
           <WatchPartySection />
+          <R3PartySyncSection />
 
           <section className={`${styles.section} glass-panel`} aria-labelledby="settings-profiles">
             <h2 id="settings-profiles" className={styles.sectionTitle}>

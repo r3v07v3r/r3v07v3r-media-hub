@@ -1,0 +1,14 @@
+name = "r3-party-sync"
+main = "src/index.ts"
+compatibility_date = "2025-06-01"
+
+# One Durable Object instance per party room (see src/room.ts) — this is
+# what requires the Workers Paid plan ($5/mo); Durable Objects aren't
+# available on the free tier.
+[[durable_objects.bindings]]
+name = "ROOMS"
+class_name = "PartyRoom"
+
+[[migrations]]
+tag = "v1"
+new_classes = ["PartyRoom"]

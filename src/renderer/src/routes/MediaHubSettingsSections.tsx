@@ -5,7 +5,8 @@ import type {
   MalReconcilePreview,
   SimklPinStart,
   SimklStatus,
-  MalStatus
+  MalStatus,
+  PartyMode
 } from '@shared/media-hub/types'
 import styles from './Settings.module.css'
 
@@ -711,6 +712,115 @@ export function OpenSubtitlesSection() {
 }
 
 /**
+ * R3-Party-Sync — an optional external relay (self-hosted, see
+ * party-sync-worker/ in the repo) that Watch Party can host through
+ * instead of a direct LAN/WAN connection, for when a host's router won't
+ * cooperate with UPnP/NAT-PMP. Configuring this here just unlocks the
+ * "Relay" option in WatchPartySection below — it doesn't itself start or
+ * join a party.
+ */
+export function R3PartySyncSection() {
+  const { mediaHubSettings, refreshMediaHubSettings } = useAppState()
+  const [url, setUrl] = useState('')
+  const [inviteKey, setInviteKey] = useState('')
+  const [status, setStatus] = useState<Status>({ kind: 'idle' })
+  const connected = mediaHubSettings?.partySyncConnected ?? false
+
+  async function connect() {
+    const api = window.api?.mediaHub
+    if (!api || !url.trim() || !inviteKey.trim()) return
+    setStatus({ kind: 'busy' })
+    try {
+      const result = await api.party.syncConnect(url.trim(), inviteKey.trim())
+      if (result.ok) {
+        setInviteKey('')
+        setStatus({ kind: 'ok', message: result.message || 'Connected.' })
+        refreshMediaHubSettings()
+      } else {
+        setStatus({ kind: 'error', message: result.message || 'Could not connect.' })
+      }
+    } catch (error) {
+      setStatus({
+        kind: 'error',
+        message: error instanceof Error ? error.message : 'Connect failed.'
+      })
+    }
+  }
+
+  async function disconnect() {
+    const api = window.api?.mediaHub
+    if (!api) return
+    setStatus({ kind: 'busy' })
+    await api.party.syncDisconnect().catch(() => {})
+    setUrl('')
+    setStatus({ kind: 'idle' })
+    refreshMediaHubSettings()
+  }
+
+  return (
+    <section className={`${styles.section} glass-panel`} aria-labelledby="settings-party-sync">
+      <div className={styles.serviceHead}>
+        <h2 id="settings-party-sync" className={styles.sectionTitle} style={{ marginBottom: 0 }}>
+          R3-Party-Sync
+        </h2>
+        <ConnectionBadge connected={connected} />
+      </div>
+      <p className={styles.rowDescription} style={{ marginBottom: 10 }}>
+        A relay worker you deploy yourself (see party-sync-worker/ in the repo) so Watch Party can
+        connect over the internet even when a router won&apos;t forward a port automatically.
+      </p>
+      {connected ? (
+        <>
+          <p className={styles.rowDescription}>{mediaHubSettings?.partySyncUrl}</p>
+          <div className={styles.serviceActions}>
+            <button type="button" className={styles.testButton} onClick={disconnect}>
+              Disconnect
+            </button>
+            <StatusLine status={status} />
+          </div>
+        </>
+      ) : (
+        <>
+          <div className={styles.serviceFields}>
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>Worker URL</span>
+              <input
+                className={styles.fieldInput}
+                type="text"
+                placeholder="https://r3-party-sync.your-name.workers.dev"
+                value={url}
+                onChange={(e) => setUrl(e.target.value)}
+              />
+            </label>
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>Invite key</span>
+              <input
+                className={styles.fieldInput}
+                type="password"
+                placeholder="••••••••••••"
+                value={inviteKey}
+                onChange={(e) => setInviteKey(e.target.value)}
+              />
+            </label>
+          </div>
+          <div className={styles.serviceActions} style={{ marginTop: 10 }}>
+            <button
+              type="button"
+              className={styles.testButton}
+              onClick={connect}
+              disabled={!url.trim() || !inviteKey.trim() || status.kind === 'busy'}
+            >
+              {status.kind === 'busy' ? 'Connecting…' : 'Connect'}
+            </button>
+            <StatusLine status={status} />
+          </div>
+        </>
+      )}
+    </section>
+  )
+}
+
+/**
  * Watch Party — setup/connection controls only (host/join/leave, current
  * members). The live in-session queue/voting UI is a separate concern
  * from Settings and isn't part of this section; this just covers getting
@@ -722,16 +832,19 @@ export function OpenSubtitlesSection() {
  * from here is immediately reflected in the topbar and vice versa.
  */
 export function WatchPartySection() {
-  const { partyStatus, partyHostCode, hostParty, joinParty, leaveParty } = useAppState()
+  const { partyStatus, partyHostCode, mediaHubSettings, hostParty, joinParty, leaveParty } =
+    useAppState()
   const [name, setName] = useState('')
   const [joinCode, setJoinCode] = useState('')
+  const [mode, setMode] = useState<PartyMode>('direct')
   const [actionStatus, setActionStatus] = useState<Status>({ kind: 'idle' })
+  const relayReady = mediaHubSettings?.partySyncConnected ?? false
 
   async function host() {
     if (!name.trim()) return
     setActionStatus({ kind: 'busy' })
     try {
-      await hostParty(name.trim())
+      await hostParty(name.trim(), relayReady ? mode : 'direct')
       setActionStatus({ kind: 'idle' })
     } catch (error) {
       setActionStatus({
@@ -816,6 +929,28 @@ export function WatchPartySection() {
               />
             </label>
           </div>
+          {!joinCode.trim() && relayReady && (
+            <div className={styles.segmentGroup} role="radiogroup" aria-label="Party mode">
+              <button
+                type="button"
+                role="radio"
+                aria-checked={mode === 'direct'}
+                className={`${styles.segmentButton} ${mode === 'direct' ? styles.segmentButtonActive : ''}`}
+                onClick={() => setMode('direct')}
+              >
+                Direct
+              </button>
+              <button
+                type="button"
+                role="radio"
+                aria-checked={mode === 'relay'}
+                className={`${styles.segmentButton} ${mode === 'relay' ? styles.segmentButtonActive : ''}`}
+                onClick={() => setMode('relay')}
+              >
+                Relay
+              </button>
+            </div>
+          )}
           <div className={styles.serviceActions} style={{ marginTop: 10 }}>
             <button
               type="button"
