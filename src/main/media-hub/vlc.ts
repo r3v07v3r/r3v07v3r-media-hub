@@ -132,6 +132,19 @@ export function buildFfmpegArguments(
   // -noaccurate_seek was added to fix, for a worse-than-marginal gain in
   // seek precision on a feature that doesn't need to be used by default.
   if (videoEncoder) {
+    // HEVC sources (the whole reason this path exists) are very commonly
+    // 10-bit (Main10 profile) — feeding that straight into an H.264
+    // encoder expecting 8-bit 4:2:0 is a well-known real-world failure
+    // mode, confirmed live here: without this filter, ffmpeg exited
+    // immediately with no video produced at all against a real 10-bit
+    // HEVC source, despite the exact same encoder working perfectly
+    // against an 8-bit synthetic test pattern. This forces a normal
+    // software decode + pixel-format conversion to a format every
+    // candidate encoder in VIDEO_ENCODER_ARGS accepts, before handing
+    // frames to the (still hardware-accelerated) encoder — a small,
+    // well-understood CPU cost for broad compatibility, not a full
+    // software encode.
+    args.push('-vf', 'format=yuv420p')
     args.push('-c:v', videoEncoder, ...(VIDEO_ENCODER_ARGS[videoEncoder] || []))
   } else {
     args.push('-c:v', 'copy')

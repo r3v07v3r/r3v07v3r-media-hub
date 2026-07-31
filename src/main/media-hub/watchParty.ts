@@ -323,6 +323,8 @@ interface PartyNowPlayingArgs {
 interface PartyPlaybackActionArgs {
   type?: string
   position?: number
+  requestId?: string
+  waitingIds?: string[]
 }
 
 interface PartySyncConnectArgs {
@@ -720,9 +722,28 @@ export function registerWatchPartyIpc(): void {
       const current = party
       if (!current) return { ok: false }
       const action = payload || {}
-      if (action.type === 'seek' && current.role !== 'host')
-        throw new Error('Only the host can seek.')
-      const event = { type: action.type, position: Number(action.position) }
+      // Same host-only gate as a plain 'seek' — these three are all part
+      // of the same host-coordinates-a-seek flow (see PlaybackOverlay's
+      // checkPartySeekReady/handleSeek), 'ready' is the one message in
+      // this group any party member can send (a client reporting its own
+      // buffer is ready).
+      if (
+        (action.type === 'seek' ||
+          action.type === 'seek-sync' ||
+          action.type === 'seek-waiting' ||
+          action.type === 'seek-go') &&
+        current.role !== 'host'
+      ) {
+        throw new Error('Only the host can control party seeking.')
+      }
+      // Explicit per-field pass-through (not a blind spread of `action`)
+      // — this gets re-serialized straight onto the network to every
+      // other party member, so only the fields each message type
+      // actually needs ever leave this process.
+      const event: Record<string, unknown> = { type: action.type }
+      if (Number.isFinite(action.position)) event.position = Number(action.position)
+      if (typeof action.requestId === 'string') event.requestId = action.requestId
+      if (Array.isArray(action.waitingIds)) event.waitingIds = action.waitingIds.map(String)
       partyBroadcast(encryptMessage(current.secret, event))
       return { ok: true }
     }

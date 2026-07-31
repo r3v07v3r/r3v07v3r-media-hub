@@ -98,9 +98,51 @@ export function PlaybackOverlay() {
   const streamStartOffsetRef = useRef(0)
   const activeSelectionRef = useRef<PlaybackSelection>({})
 
+  // Synced-seek protocol (see shared/media-hub/types.ts's PartyPlaybackAction
+  // for the wire messages) — when the host seeks, nobody actually resumes
+  // playing until every party member has finished re-buffering at the new
+  // position, so a slow connection doesn't leave everyone else watching
+  // ahead of (or behind) it. `activeSyncRequestId` is non-null on BOTH the
+  // host and every follower for the duration of one such wait.
+  const [activeSyncRequestId, setActiveSyncRequestId] = useState<string | null>(null)
+  // Null = no sync wait in progress. Empty array = waiting, but nobody
+  // named yet (host hasn't computed the list, or it just emptied out).
+  const [syncWaitingNames, setSyncWaitingNames] = useState<string[] | null>(null)
+  // Mirrors activeSyncRequestId for the OLD (non-party) buffering-gate
+  // effect below to read without needing it in that effect's own
+  // dependency array — adding it there would tear down and restart that
+  // effect (losing its buffering progress) on every sync-state change,
+  // not just on a genuine new segment.
+  const activeSyncRequestIdRef = useRef<string | null>(null)
+  useEffect(() => {
+    activeSyncRequestIdRef.current = activeSyncRequestId
+  }, [activeSyncRequestId])
+  // Host only: who has reported their buffer ready for the CURRENT
+  // requestId. A Set, not derived from partyStatus, because members can
+  // report in before checkPartySeekReady has ever run.
+  const syncReadyIdsRef = useRef<Set<string>>(new Set())
+  const syncTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const SYNC_TIMEOUT_MS = 20000
+  const SYNC_PLAY_DELAY_MS = 1500
+
   const trackedMediaId = playbackMedia?.id
   const kind =
     playbackMedia?.mediaKind ?? (playbackMedia?.mediaType === 'series' ? 'series' : 'movie')
+  const targetBufferSeconds = getPlaybackBufferSeconds(mediaHubSettings?.playbackBuffer)
+
+  // Tears down whatever sync-seek wait is in progress, on both the host
+  // (who owns the ready-tracking) and a follower (who just needed to know
+  // whether one was active). Called when a wait resolves normally, times
+  // out, or a fresh seek supersedes it.
+  const clearSyncSeek = useCallback(() => {
+    setActiveSyncRequestId(null)
+    setSyncWaitingNames(null)
+    syncReadyIdsRef.current = new Set()
+    if (syncTimeoutRef.current) {
+      clearTimeout(syncTimeoutRef.current)
+      syncTimeoutRef.current = null
+    }
+  }, [])
 
   // Stop the backend's playback session (closes the proxy / kills any
   // ffmpeg transcoder) whenever the overlay closes, whether via the close
@@ -109,8 +151,9 @@ export function PlaybackOverlay() {
     if (!playbackMedia) return
     return () => {
       window.api?.mediaHub?.playback.stop().catch(() => {})
+      clearSyncSeek()
     }
-  }, [trackedMediaId, playbackMedia])
+  }, [trackedMediaId, playbackMedia, clearSyncSeek])
 
   const togglePlay = useCallback(() => {
     if (followingParty) return
@@ -257,6 +300,111 @@ export function PlaybackOverlay() {
     [result, pushNotification, applyShiftedSubtitle, setResult, setTracks]
   )
 
+  // Host only: re-evaluates the ready-set for `requestId` — called both
+  // when a follower's 'ready' message arrives and when the host's own
+  // buffer becomes ready (see reportSyncReady below). Once every current
+  // party member is accounted for (or `force`, from the safety timeout in
+  // handleSeek), releases everyone together: broadcasts 'seek-go', then —
+  // after SYNC_PLAY_DELAY_MS, applied identically here on the host's own
+  // side — actually resumes. That delay is the "give the message a moment
+  // to actually cross the network" cushion; without it the host (zero
+  // network hop for itself) would visibly start before anyone else.
+  const checkPartySeekReady = useCallback(
+    (requestId: string, force = false) => {
+      // A stale/duplicate invocation for a request that's already been
+      // superseded (resolved, or replaced by a newer seek) must not act —
+      // otherwise a late re-entry here could re-broadcast 'seek-waiting'
+      // (and re-set the local banner) after 'seek-go' already released
+      // everyone for this requestId.
+      if (activeSyncRequestIdRef.current !== requestId) return
+      const members = partyStatus?.members ?? []
+      const waiting = members.filter((m) => !syncReadyIdsRef.current.has(m.id))
+      if (waiting.length > 0 && !force) {
+        setSyncWaitingNames(waiting.map((m) => m.name))
+        window.api?.mediaHub?.party
+          .playbackAction({ type: 'seek-waiting', requestId, waitingIds: waiting.map((m) => m.id) })
+          .catch(() => {})
+        return
+      }
+      window.api?.mediaHub?.party.playbackAction({ type: 'seek-go', requestId }).catch(() => {})
+      clearSyncSeek()
+      setTimeout(() => {
+        videoRef.current?.play().catch(() => {})
+      }, SYNC_PLAY_DELAY_MS)
+    },
+    [partyStatus, clearSyncSeek]
+  )
+
+  // Reports THIS device's own buffer as ready for `requestId` — the host
+  // tracks its own readiness locally with no network round trip (same
+  // reasoning as nowPlaying/playbackAction never echoing back to their own
+  // sender), a follower has to tell the host over the wire since only the
+  // host aggregates the ready-set.
+  const reportSyncReady = useCallback(
+    (requestId: string) => {
+      if (isPartyHost) {
+        syncReadyIdsRef.current.add(partyStatus?.selfId || '')
+        checkPartySeekReady(requestId)
+      } else {
+        window.api?.mediaHub?.party.playbackAction({ type: 'ready', requestId }).catch(() => {})
+      }
+    },
+    [isPartyHost, partyStatus, checkPartySeekReady]
+  )
+
+  // Waits for THIS device's own buffer to reach the configured target
+  // ahead of the (already-seeked) playhead, then reports ready — a
+  // deliberately separate effect from the plain buffering-gate below
+  // (which auto-plays on its own) since during a sync wait nobody should
+  // auto-play until reportSyncReady's eventual 'seek-go' says so.
+  //
+  // Also keyed on result?.url, not just activeSyncRequestId: in
+  // compatibility mode, performSeek's ffmpeg restart (selectTracks) is
+  // asynchronous, so activeSyncRequestId is set well before the new
+  // segment's URL actually lands on the <video> element — for that brief
+  // window, video.buffered/currentTime still describe the OLD segment
+  // (fully buffered, from before the seek). Verified live: without this,
+  // an immediate unconditional check reported ready instantly using that
+  // stale data, and the eventual seek-go arrived before the new segment
+  // had loaded anything at all, leaving that device's own .play() call
+  // stuck with nothing to play. Direct/proxied mode has no such gap
+  // (performSeek sets currentTime synchronously), so it alone is allowed
+  // the immediate check — compatibility mode waits for a real 'progress'
+  // event against the segment that's actually current.
+  useEffect(() => {
+    const requestId = activeSyncRequestId
+    if (!requestId) return
+    const video = videoRef.current
+    if (!video) return
+    let settled = false
+    const tryReport = (force = false): void => {
+      if (settled || !video) return
+      const buffered = video.buffered
+      const bufferedEnd = buffered.length ? buffered.end(buffered.length - 1) : 0
+      const totalDuration =
+        tracks?.durationSeconds && Number.isFinite(tracks.durationSeconds)
+          ? tracks.durationSeconds
+          : video.duration
+      const fullyBuffered = Number.isFinite(totalDuration) && bufferedEnd >= totalDuration - 0.25
+      const haveEnough =
+        force || fullyBuffered || bufferedEnd - video.currentTime >= targetBufferSeconds
+      if (!haveEnough) return
+      settled = true
+      reportSyncReady(requestId)
+    }
+    const onProgress = () => tryReport()
+    video.addEventListener('progress', onProgress)
+    video.addEventListener('canplaythrough', onProgress)
+    const maxWait = setTimeout(() => tryReport(true), 20000)
+    if (!result?.compatibility) tryReport()
+    return () => {
+      settled = true
+      clearTimeout(maxWait)
+      video.removeEventListener('progress', onProgress)
+      video.removeEventListener('canplaythrough', onProgress)
+    }
+  }, [activeSyncRequestId, result?.url, result?.compatibility, targetBufferSeconds, tracks, reportSyncReady])
+
   const handleSeek = useCallback(
     (event: React.MouseEvent<HTMLDivElement>) => {
       if (followingParty) return
@@ -264,14 +412,41 @@ export function PlaybackOverlay() {
       const rect = event.currentTarget.getBoundingClientRect()
       const fraction = Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width))
       const target = fraction * duration
-      performSeek(target)
-      if (isPartyHost) {
+      if (isPartyHost && partyStatus?.inParty) {
+        const requestId = crypto.randomUUID()
+        videoRef.current?.pause()
+        clearSyncSeek()
+        performSeek(target)
+        setActiveSyncRequestId(requestId)
+        setSyncWaitingNames(
+          (partyStatus.members ?? []).filter((m) => m.id !== partyStatus.selfId).map((m) => m.name)
+        )
         window.api?.mediaHub?.party
-          .playbackAction({ type: 'seek', position: target })
+          .playbackAction({ type: 'seek-sync', position: target, requestId })
           .catch(() => {})
+        // Safety net — one stuck/disconnected peer shouldn't hold the
+        // whole party's playback hostage forever.
+        syncTimeoutRef.current = setTimeout(() => {
+          checkPartySeekReady(requestId, true)
+        }, SYNC_TIMEOUT_MS)
+      } else {
+        performSeek(target)
+        if (isPartyHost) {
+          window.api?.mediaHub?.party
+            .playbackAction({ type: 'seek', position: target })
+            .catch(() => {})
+        }
       }
     },
-    [duration, performSeek, followingParty, isPartyHost]
+    [
+      duration,
+      performSeek,
+      followingParty,
+      isPartyHost,
+      partyStatus,
+      clearSyncSeek,
+      checkPartySeekReady
+    ]
   )
 
   async function selectTrack(kindKey: 'audio' | 'subtitle', ordinal: number) {
@@ -344,8 +519,6 @@ export function PlaybackOverlay() {
   const subtitleTracks = useMemo<MediaTrack[]>(() => tracks?.subtitle ?? [], [tracks])
   const fitModeLabel = { contain: 'Fit', cover: 'Fill', fill: 'Stretch' }[fitMode]
 
-  const targetBufferSeconds = getPlaybackBufferSeconds(mediaHubSettings?.playbackBuffer)
-
   // The actual "let it buffer for a while on a bad connection" gate — the
   // <video> element no longer autoplays (see `playing`'s initial value
   // above); instead this waits until enough of the CURRENT segment has
@@ -390,7 +563,13 @@ export function PlaybackOverlay() {
       if (!haveEnough) return
       settled = true
       setBufferingReady(true)
-      video.play().catch(() => {})
+      // A synced host-initiated seek (see handleSeek/checkPartySeekReady)
+      // owns the decision of when to actually play in that case — the
+      // dedicated sync-wait effect above reports readiness instead, and
+      // this gate's own job here is done once bufferingReady is set.
+      if (!activeSyncRequestIdRef.current) {
+        video.play().catch(() => {})
+      }
     }
 
     const onProgress = () => tryStart()
@@ -437,7 +616,12 @@ export function PlaybackOverlay() {
     if (!api) return
     return api.onEvent((event) => {
       if (event.type !== 'message') return
-      const msg = event.message as { type?: string; position?: number }
+      const msg = event.message as {
+        type?: string
+        position?: number
+        requestId?: string
+        waitingIds?: string[]
+      }
       const video = videoRef.current
       if (!video) return
       if (msg.type === 'play') video.play().catch(() => {})
@@ -454,9 +638,28 @@ export function PlaybackOverlay() {
         const target = Number(msg.position) || 0
         const currentAbsolute = streamStartOffsetRef.current + video.currentTime
         if (Math.abs(currentAbsolute - target) > 2) performSeek(target)
+      } else if (msg.type === 'seek-sync' && msg.requestId) {
+        // Land at the new position and hold there — reportSyncReady (via
+        // the dedicated sync-wait effect above, keyed on
+        // activeSyncRequestId) is what actually tells the host this
+        // device is ready; only 'seek-go' below is allowed to resume it.
+        video.pause()
+        clearSyncSeek()
+        performSeek(Number(msg.position) || 0)
+        setActiveSyncRequestId(msg.requestId)
+      } else if (msg.type === 'seek-waiting' && msg.requestId === activeSyncRequestIdRef.current) {
+        const names = (msg.waitingIds || [])
+          .map((id) => partyStatus?.members?.find((m) => m.id === id)?.name)
+          .filter((name): name is string => Boolean(name))
+        setSyncWaitingNames(names)
+      } else if (msg.type === 'seek-go' && msg.requestId === activeSyncRequestIdRef.current) {
+        clearSyncSeek()
+        setTimeout(() => {
+          videoRef.current?.play().catch(() => {})
+        }, SYNC_PLAY_DELAY_MS)
       }
     })
-  }, [followingParty, performSeek])
+  }, [followingParty, performSeek, clearSyncSeek, partyStatus])
 
   // Host side: keeps followers roughly in sync even without an explicit
   // seek (natural playback drift, a follower who briefly stalled) — see
@@ -474,6 +677,27 @@ export function PlaybackOverlay() {
     }, 10000)
     return () => clearInterval(interval)
   }, [isPartyHost])
+
+  // Host side of the synced-seek protocol: the only place a follower's
+  // 'ready' message (see the dedicated sync-wait effect above, which
+  // sends it once THIS device is host, or over the wire when it isn't)
+  // actually gets acted on — without this, checkPartySeekReady would
+  // never see anyone but the host itself report in, and every sync-seek
+  // would silently ride out its full SYNC_TIMEOUT_MS instead of releasing
+  // as soon as everyone genuinely catches up.
+  useEffect(() => {
+    if (!isPartyHost) return
+    const api = window.api?.mediaHub?.party
+    if (!api) return
+    return api.onEvent((event) => {
+      if (event.type !== 'message') return
+      const msg = event.message as { type?: string; requestId?: string }
+      if (msg.type !== 'ready' || !msg.requestId || msg.requestId !== activeSyncRequestIdRef.current)
+        return
+      syncReadyIdsRef.current.add(event.from)
+      checkPartySeekReady(msg.requestId)
+    })
+  }, [isPartyHost, checkPartySeekReady])
 
   // AppStateContext's startPlayback only ever sets playbackMedia once a
   // real PlaybackResult is already resolved — see that function's own
@@ -539,11 +763,29 @@ export function PlaybackOverlay() {
         )}
       </video>
 
-      {!bufferingReady && (
+      {!bufferingReady ? (
         <div className={styles.playerBuffering} aria-live="polite">
           <span className={styles.playerBufferingSpinner} aria-hidden="true" />
           <span>Buffering…</span>
         </div>
+      ) : (
+        // Gated on activeSyncRequestId, not just syncWaitingNames alone —
+        // clearSyncSeek() always nulls both together, but a late/duplicate
+        // 'seek-waiting' broadcast racing the 'seek-go' that resolves the
+        // same request could otherwise re-set syncWaitingNames a moment
+        // after resolution. Requiring the requestId to still be active
+        // closes that off regardless of message-ordering edge cases.
+        activeSyncRequestId !== null &&
+        syncWaitingNames !== null && (
+          <div className={styles.playerBuffering} aria-live="polite">
+            <span className={styles.playerBufferingSpinner} aria-hidden="true" />
+            <span>
+              {syncWaitingNames.length > 0
+                ? `Waiting for ${syncWaitingNames.join(', ')} to finish buffering…`
+                : 'Starting together…'}
+            </span>
+          </div>
+        )
       )}
 
       <button

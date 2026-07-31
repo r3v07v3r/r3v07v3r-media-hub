@@ -431,6 +431,24 @@ export type PartyPlaybackAction =
   | { type: 'play' | 'pause' }
   | { type: 'seek'; position: number }
   | { type: 'position'; position: number }
+  // Synced-seek protocol (host-only to send, like 'seek' above): host
+  // announces a seek and holds everyone at paused-and-buffering instead
+  // of playing immediately, so a slow connection doesn't watch alone
+  // ahead of (or behind) everyone else.
+  | { type: 'seek-sync'; position: number; requestId: string }
+  // Client -> host (and, via the same relay, visible to every other
+  // client too): "my own buffer for this seek is ready." The host is the
+  // only one who actually acts on this (aggregating everyone's
+  // readiness) — see PlaybackOverlay's checkPartySeekReady.
+  | { type: 'ready'; requestId: string }
+  // Host -> everyone: UI-only status update naming who it's still
+  // waiting on, so followers can render the same "waiting for X" banner
+  // the host sees, not just a generic spinner.
+  | { type: 'seek-waiting'; requestId: string; waitingIds: string[] }
+  // Host -> everyone: released together (after a short fixed delay on
+  // every peer, including the host, to give this message itself time to
+  // actually arrive over the network before anyone starts playing).
+  | { type: 'seek-go'; requestId: string }
 
 export interface NetworkInfoResult {
   lanIp: string
