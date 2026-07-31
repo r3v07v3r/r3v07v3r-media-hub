@@ -28,6 +28,7 @@ import {
   normalizeTmdbCollectionPart,
   type RawApiPayload
 } from './core'
+import { buildGroupedAnimeVideos, groupAnimeCatalog, groupAnimeSearchResults } from './animeSeasons'
 
 const catalogUrls: Record<'movie' | 'series', string> = {
   movie: 'https://v3-cinemeta.strem.io/catalog/movie/top.json',
@@ -100,7 +101,10 @@ async function kitsuCatalog(): Promise<CatalogItem[]> {
     pages.push(...(await Promise.all([0, 20, 40, 60, 80].map((step) => kitsuPage(offset + step)))))
     if (offset < 900) await new Promise((resolve) => setTimeout(resolve, 350))
   }
-  return dedupeCatalog(pages)
+  // Kitsu has no franchise concept — each season/cour is its own top-level
+  // entry (see animeSeasons.ts's header) — so multi-season anime would
+  // otherwise show up as one catalog tile per season instead of per show.
+  return groupAnimeCatalog(dedupeCatalog(pages))
 }
 
 /**
@@ -219,16 +223,41 @@ export async function metadata(type: MediaKind, id: string): Promise<CatalogItem
     }
   }
 
+  // A grouped anime's own per-id fetch above has no franchise knowledge of
+  // its own — groupedIds only ever exists on the CATALOG-list entry (see
+  // groupAnimeCatalog in animeSeasons.ts), never on a fresh
+  // normalizeKitsuAnime() result — so it's picked up here from that cached
+  // list, then used to build the real multi-season episode list in place
+  // of whatever single-season data the fetch above produced on its own.
+  if (type === 'anime' && !item.groupedIds) {
+    const catalogEntry = (
+      db.getCache<CatalogItem[]>('catalog:v2:anime', { allowExpired: true }) || []
+    ).find((x) => String(x.id) === String(resolvedId))
+    if (catalogEntry?.groupedIds?.length) item.groupedIds = catalogEntry.groupedIds
+  }
+  if (type === 'anime' && item.groupedIds?.length) {
+    try {
+      item.videos = await buildGroupedAnimeVideos(item, tmdbCredentials().apiKey)
+    } catch (error) {
+      logError('anime:grouped-videos', error)
+    }
+  }
+
   db.putCache(cacheKey, item, 24 * 60 * 60 * 1000)
   return item
 }
 
-/** Free-text anime search against Kitsu. */
+/** Free-text anime search against Kitsu. Grouped the same way the browse
+ *  catalog is (see kitsuCatalog) — a searched multi-season franchise not
+ *  popular enough to be in the top-1000 crawl would otherwise show every
+ *  season as its own result here regardless of that fix. A search result
+ *  set is small (20 items max) so this never needs the crawl's own
+ *  candidate-bucket pre-filtering cost concern. */
 async function kitsuSearch(query: string): Promise<CatalogItem[]> {
   const result = await fetchJson<RawApiPayload>(
     `https://kitsu.io/api/edge/anime?filter%5Btext%5D=${encodeURIComponent(query)}&page%5Blimit%5D=20`
   )
-  return (result.data || []).map(normalizeKitsuAnime)
+  return groupAnimeSearchResults((result.data || []).map(normalizeKitsuAnime))
 }
 
 /** Free-text movie/series search against Simkl. */

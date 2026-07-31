@@ -35,6 +35,13 @@ function key(season: number, episode: number): string {
   return `${season}:${episode}`
 }
 
+// TMDB's own convention for a show's specials/OVAs is a season numbered 0
+// (see animeSeasons.ts's buildGroupedAnimeVideos) — labeled distinctly here
+// rather than as a literal "Season 0", which would read as a bug.
+function seasonLabel(season: number): string {
+  return season === 0 ? 'Specials' : `Season ${season}`
+}
+
 export function EpisodesSection({
   mediaId,
   episodes,
@@ -176,7 +183,7 @@ export function EpisodesSection({
                   className={`${styles.seasonPill} ${isActive ? styles.seasonPillActive : ''}`}
                   onClick={() => onSelectSeason(s)}
                 >
-                  Season {s}
+                  {seasonLabel(s)}
                 </button>
                 {isActive && (
                   <button
@@ -188,7 +195,7 @@ export function EpisodesSection({
                     className={styles.seasonMenuTrigger}
                     aria-haspopup="menu"
                     aria-expanded={menuOpen}
-                    aria-label={`Season ${s} actions`}
+                    aria-label={`${seasonLabel(s)} actions`}
                     onClick={() => toggleSeasonMenu(s)}
                   >
                     <Icon name="chevron-down" size={12} />

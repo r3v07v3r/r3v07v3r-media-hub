@@ -51,6 +51,15 @@ export interface CatalogItem {
   genres: string[]
   videos: Episode[]
   trailers: Trailer[]
+  /** Anime only — sibling Kitsu ids confirmed (via a shared TheTVDB series
+   *  id, see animeSeasons.ts) to be later seasons of the same franchise as
+   *  this item, sorted by season ascending, excluding this item's own id.
+   *  Kitsu models each season/cour as its own top-level resource with no
+   *  franchise grouping at all, unlike Simkl (series/movie), which already
+   *  returns one id for a whole show — this is what lets the catalog grid
+   *  collapse multi-season anime into one tile instead of one per season,
+   *  and lets metadata() build a real multi-season episode list for it. */
+  groupedIds?: string[]
 }
 
 // TorBox `mylist` items matched against the cached catalogs by parsed
