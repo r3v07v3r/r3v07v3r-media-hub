@@ -264,6 +264,8 @@ export interface MediaHubPublicSettings {
   playbackBuffer: string
   /** Decorative UI animation (idle ambient motion, not playback itself) — layered alongside, not replacing, the automatic motion-suspend-during-playback behavior in global.css. */
   uiAnimationsEnabled: boolean
+  /** Opt-in, off by default: re-encode video (not just audio) via a real hardware encoder when a source's video codec isn't one Chromium can reliably decode (see vlc.ts's detectVideoEncoder). Silently has no effect if no working hardware encoder is found on this machine — never falls back to a software encoder. */
+  videoTranscodeEnabled: boolean
 }
 
 export interface MediaHubSettingsSnapshot extends MediaHubPublicSettings {

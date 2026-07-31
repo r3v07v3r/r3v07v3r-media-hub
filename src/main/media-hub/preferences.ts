@@ -42,27 +42,32 @@ export function publicSettings(settings: Record<string, unknown> = {}): MediaHub
     partySyncUrl: String(settings.partySyncUrl || ''),
     updateChannel: normalizeUpdateChannel(settings.updateChannel),
     playbackBuffer: normalizePlaybackBuffer(settings.playbackBuffer),
-    uiAnimationsEnabled: settings.uiAnimationsEnabled !== false
+    uiAnimationsEnabled: settings.uiAnimationsEnabled !== false,
+    // Opt-in, unlike uiAnimationsEnabled above: this spins up a real
+    // hardware-encoder probe + CPU/GPU cost the first time it's actually
+    // used, so it defaults off rather than on.
+    videoTranscodeEnabled: settings.videoTranscodeEnabled === true
   }
 }
 
 /**
  * Narrower projection used on logout — only theme, update channel, and
  * playback buffering survive; every account/service-identifying field is
- * intentionally dropped. Playback buffering (and the UI-animations toggle
- * alongside it) is a device/connection preference, not account data, so it
- * belongs here too.
+ * intentionally dropped. Playback buffering (and the UI-animations/video-
+ * transcode toggles alongside it) is a device/connection preference, not
+ * account data, so it belongs here too.
  */
 export function logoutSettings(
   settings: Record<string, unknown> = {}
 ): Pick<
   MediaHubPublicSettings,
-  'theme' | 'updateChannel' | 'playbackBuffer' | 'uiAnimationsEnabled'
+  'theme' | 'updateChannel' | 'playbackBuffer' | 'uiAnimationsEnabled' | 'videoTranscodeEnabled'
 > {
   return {
     theme: normalizeTheme(settings.theme),
     updateChannel: normalizeUpdateChannel(settings.updateChannel),
     playbackBuffer: normalizePlaybackBuffer(settings.playbackBuffer),
-    uiAnimationsEnabled: settings.uiAnimationsEnabled !== false
+    uiAnimationsEnabled: settings.uiAnimationsEnabled !== false,
+    videoTranscodeEnabled: settings.videoTranscodeEnabled === true
   }
 }

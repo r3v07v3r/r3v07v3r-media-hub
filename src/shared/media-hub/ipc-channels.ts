@@ -15,6 +15,7 @@ export const MEDIA_HUB_CHANNELS = {
   settingsSetSubtitleLanguage: 'mediahub:settings:set-subtitle-language',
   settingsSetPlaybackBuffer: 'mediahub:settings:set-playback-buffer',
   settingsSetUiAnimations: 'mediahub:settings:set-ui-animations',
+  settingsSetVideoTranscode: 'mediahub:settings:set-video-transcode',
   logout: 'mediahub:account:logout',
   torboxConnect: 'mediahub:torbox:connect',
   torboxDisconnect: 'mediahub:torbox:disconnect',

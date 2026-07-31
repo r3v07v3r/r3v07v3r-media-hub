@@ -30,10 +30,12 @@ import { handle } from './ipcGuard'
 import { logError, redactUrls } from './logger'
 import { srtToVtt } from './opensubtitles'
 import { createPlaybackProxy } from './playback'
+import { readSettings } from './settingsStore'
 import { osDownloadSubtitleText } from './subtitlesService'
 import {
   captureFrame,
   createFfmpegTranscoder,
+  detectVideoEncoder,
   findFfmpeg,
   findFfprobe,
   needsAudioCompatibility,
@@ -72,27 +74,42 @@ function clearActiveSubtitle(): void {
 
 /**
  * Probes `url` and starts embedded playback for it: either directly (via
- * the playback proxy) or, if the source's audio codec isn't
- * browser-compatible, by transcoding audio through ffmpeg (video passes
- * through untouched — see vlc.ts's header comment). Also used by
- * torbox.ts's play:stream/library:play handlers.
+ * the playback proxy) or, by transcoding through ffmpeg — always audio
+ * when the source's audio codec isn't browser-compatible, and (opt-in,
+ * see Settings > More Options' "Convert incompatible video") video too
+ * when the source's video codec is one Chromium can't reliably decode
+ * and a real hardware encoder is actually available on this machine
+ * (see vlc.ts's detectVideoEncoder — never falls back to a software
+ * encoder). Also used by torbox.ts's play:stream/library:play handlers.
  */
 export async function preparePlayback(url: string): Promise<PlaybackResult> {
   activeMediaUrl = url
   await ffmpegTranscoder.stop()
   activeMediaTracks = await probeMedia(ffprobePath, url)
   const videoCodecWarning = videoCodecCompatibilityWarning(activeMediaTracks)
-  if (needsAudioCompatibility(activeMediaTracks) && ffmpegPath) {
+  let videoEncoder: string | undefined
+  if (videoCodecWarning && ffmpegPath && readSettings().videoTranscodeEnabled) {
+    videoEncoder = (await detectVideoEncoder(ffmpegPath)) ?? undefined
+  }
+  if ((needsAudioCompatibility(activeMediaTracks) || videoEncoder) && ffmpegPath) {
     await playbackProxy.close()
-    const started = await ffmpegTranscoder.start(ffmpegPath, url, {
-      audio: selectTranscodeAudioTrack(activeMediaTracks)?.ordinal ?? 0
-    })
+    const started = await ffmpegTranscoder.start(
+      ffmpegPath,
+      url,
+      { audio: selectTranscodeAudioTrack(activeMediaTracks)?.ordinal ?? 0 },
+      videoEncoder
+    )
     return {
       ok: true,
       player: 'embedded',
       tracks: activeMediaTracks,
-      autoReason: 'Audio was converted for browser compatibility.',
-      videoCodecWarning,
+      autoReason: videoEncoder
+        ? 'Video and audio were converted for compatibility.'
+        : 'Audio was converted for browser compatibility.',
+      // Actually addressed by the video-transcode path above, so no need
+      // to warn about it too — still surfaced when audio-only compatibility
+      // mode ran instead (opted out, or no working hardware encoder found).
+      videoCodecWarning: videoEncoder ? undefined : videoCodecWarning,
       ...started
     }
   }

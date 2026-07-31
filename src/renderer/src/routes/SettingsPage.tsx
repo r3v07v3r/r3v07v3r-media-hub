@@ -284,6 +284,11 @@ function MoreOptionsSection() {
     refreshMediaHubSettings()
   }
 
+  async function handleToggleVideoTranscode(enabled: boolean) {
+    await window.api?.mediaHub?.settings.setVideoTranscode(enabled)
+    refreshMediaHubSettings()
+  }
+
   async function handleClearSubtitleCache() {
     const api = window.api?.mediaHub?.subtitles
     if (!api) return
@@ -310,6 +315,13 @@ function MoreOptionsSection() {
         description="Decorative ambient motion (sidebar highlights, background drift). Playback already pauses these automatically — this turns them off everywhere, all the time."
         checked={mediaHubSettings?.uiAnimationsEnabled ?? true}
         onChange={handleToggleAnimations}
+      />
+      <ToggleRow
+        icon="cpu"
+        title="Convert incompatible video (experimental)"
+        description="For titles whose video format doesn't play reliably here (e.g. HEVC). Only runs if a real hardware encoder is found on this machine — off by default, and silently has no effect otherwise. Off, you'll still get a warning instead of an unexplained crash."
+        checked={mediaHubSettings?.videoTranscodeEnabled ?? false}
+        onChange={handleToggleVideoTranscode}
       />
       <div className={styles.row}>
         <div className={styles.rowIcon} aria-hidden="true">

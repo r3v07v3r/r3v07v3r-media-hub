@@ -48,6 +48,7 @@ export interface MediaHubRawSettings {
   updateChannel?: string
   playbackBuffer?: string
   uiAnimationsEnabled?: boolean
+  videoTranscodeEnabled?: boolean
   profiles?: ProfileRecord[]
   activeProfileId?: string
   [key: string]: unknown

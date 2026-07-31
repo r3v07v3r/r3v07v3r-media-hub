@@ -74,7 +74,8 @@ function cleanSelection(value: unknown, fallback = -1): number {
  */
 export function buildFfmpegArguments(
   remoteUrl: string,
-  selection: PlaybackSelection = {}
+  selection: PlaybackSelection = {},
+  videoEncoder?: string
 ): string[] {
   if (!isAllowedRemoteMediaUrl(remoteUrl)) {
     throw new Error('Compatibility mode requires a valid HTTPS media URL.')
@@ -123,7 +124,19 @@ export function buildFfmpegArguments(
   if (startTime > 0) args.push('-noaccurate_seek', '-ss', String(Math.floor(startTime)))
   args.push('-i', remoteUrl)
   args.push('-map', '0:v:0', '-map', audio >= 0 ? `0:a:${audio}` : '0:a:0')
-  args.push('-c:v', 'copy', '-c:a', 'aac', '-b:a', '192k', '-ac', '2', '-ar', '48000')
+  // Opt-in video path (see detectVideoEncoder) — otherwise the same
+  // stream-copy this file's header explains was the right default. Seek
+  // stays keyframe-snapped for both streams either way (-noaccurate_seek
+  // above): re-encoded video technically COULD support frame-accurate
+  // seeking, but that would only reopen the exact audio-behind-video race
+  // -noaccurate_seek was added to fix, for a worse-than-marginal gain in
+  // seek precision on a feature that doesn't need to be used by default.
+  if (videoEncoder) {
+    args.push('-c:v', videoEncoder, ...(VIDEO_ENCODER_ARGS[videoEncoder] || []))
+  } else {
+    args.push('-c:v', 'copy')
+  }
+  args.push('-c:a', 'aac', '-b:a', '192k', '-ac', '2', '-ar', '48000')
   args.push('-movflags', 'frag_keyframe+empty_moov+default_base_moof')
   args.push('-f', 'mp4', 'pipe:1')
   return args
@@ -247,18 +260,19 @@ export function needsAudioCompatibility(tracks: MediaTracks | undefined): boolea
   return !DIRECT_AUDIO_CODECS.has(String(selected.codec || '').toLowerCase())
 }
 
-// Video is only ever stream-copied (see buildFfmpegArguments's `-c:v copy`
-// and playback.ts's direct-proxy path) — there is no video transcode path
-// in this app at all, so a source encoded in a codec Chromium's own
-// (software) decoder can't handle has no fallback. Confirmed live: HEVC
+// Video is stream-copied by default (see buildFfmpegArguments's `-c:v
+// copy` and playback.ts's direct-proxy path), so a source encoded in a
+// codec Chromium's own (software) decoder can't handle has no fallback
+// unless the person has opted into Settings > More Options' "Convert
+// incompatible video" AND a real hardware encoder is actually found on
+// their machine (see detectVideoEncoder) — off by default, since it's new
+// and not every machine has working hardware encode. Confirmed live: HEVC
 // sources produced everything from silent "audio only, no picture" to a
 // mid-stream PIPELINE_ERROR_DECODE crash partway through playback,
 // depending on the specific stream — both symptoms trace back to the same
-// gap, not two separate bugs. Building real video transcoding is real,
-// riskier work (CPU cost, hardware-accel detection, quality tradeoffs) —
-// not attempted here. This only detects the risk upfront so the person
-// gets one clear message before pressing play, instead of a confusing
-// crash (or a permanently frozen frame) minutes in with no explanation.
+// gap, not two separate bugs. This detects the risk upfront so the person
+// gets one clear message before pressing play (mentioning the opt-in
+// fix), instead of a confusing crash minutes in with no explanation.
 const RISKY_VIDEO_CODECS = new Set(['hevc', 'h265', 'vc1', 'mpeg2video', 'mpeg4'])
 
 export function videoCodecCompatibilityWarning(
@@ -266,7 +280,7 @@ export function videoCodecCompatibilityWarning(
 ): string | undefined {
   const codec = String(tracks?.video?.[0]?.codec || '').toLowerCase()
   if (!RISKY_VIDEO_CODECS.has(codec)) return undefined
-  return `This title's video (${codec.toUpperCase()}) may not play reliably in this app — some players can't decode it at all, others only partway through. There's no built-in conversion for video yet, only audio.`
+  return `This title's video (${codec.toUpperCase()}) may not play reliably in this app — some players can't decode it at all, others only partway through. Settings > More Options has an experimental video-conversion option that may help, if your machine has a working hardware encoder.`
 }
 
 function findInTree(root: string, name: string, depth = 4): string {
@@ -439,6 +453,116 @@ export function captureFrame(
   })
 }
 
+// Hardware H.264 encoders ffmpeg was built with support for, in priority
+// order — verified live against this project's own dev hardware (an
+// NVIDIA RTX 4080 + AMD integrated graphics): h264_nvenc, h264_amf, and
+// h264_mf all produced valid, comfortably-real-time output at 1080p30
+// (10s of synthetic 1080p30 test content encoded in ~1-1.6s wall-clock
+// via each). h264_qsv correctly FAILED outright — no Intel Quick Sync
+// hardware present on that machine — which is exactly why
+// detectVideoEncoder below does a real functional probe per candidate
+// instead of trusting `ffmpeg -encoders`' compile-time list (which lists
+// h264_qsv here too, despite it being unusable). Per-encoder args are
+// ffmpeg-wiki-documented real-time/low-latency defaults, not exhaustively
+// tuned per vendor — only whichever of these actually works on a given
+// machine is ever used, so an unverified vendor's args cost that machine
+// nothing.
+const HW_VIDEO_ENCODER_CANDIDATES = ['h264_nvenc', 'h264_qsv', 'h264_amf', 'h264_mf']
+
+const VIDEO_ENCODER_ARGS: Record<string, string[]> = {
+  h264_nvenc: [
+    '-preset',
+    'p4',
+    '-tune',
+    'll',
+    '-rc',
+    'vbr',
+    '-cq',
+    '23',
+    '-b:v',
+    '8M',
+    '-maxrate',
+    '12M',
+    '-bufsize',
+    '16M'
+  ],
+  h264_qsv: ['-preset', 'fast', '-b:v', '8M', '-maxrate', '12M'],
+  h264_amf: ['-quality', 'speed', '-rc', 'vbr_latency', '-b:v', '8M', '-maxrate', '12M'],
+  h264_mf: ['-b:v', '8M']
+}
+
+let cachedVideoEncoder: string | null | undefined
+
+/** Real functional probe, not just "is it compiled in" — a tiny real
+ *  encode job against one candidate, since a hardware encoder can be
+ *  compiled into ffmpeg but still fail immediately at runtime on
+ *  hardware that doesn't support it (see HW_VIDEO_ENCODER_CANDIDATES'
+ *  own comment on h264_qsv). */
+function probeVideoEncoder(
+  ffmpegPath: string,
+  encoder: string,
+  { execFileImpl = execFile }: ExecFileImplOptions = {}
+): Promise<boolean> {
+  return new Promise((resolve) => {
+    execFileImpl(
+      ffmpegPath,
+      [
+        '-hide_banner',
+        '-loglevel',
+        'error',
+        '-f',
+        'lavfi',
+        '-i',
+        'testsrc=duration=0.5:size=320x240:rate=10',
+        '-c:v',
+        encoder,
+        ...(VIDEO_ENCODER_ARGS[encoder] || []),
+        '-f',
+        'null',
+        '-'
+      ],
+      { windowsHide: true, timeout: 8000 },
+      (error) => resolve(!error)
+    )
+  })
+}
+
+/**
+ * Cached (module-level, resolved once per app run — hardware capability
+ * doesn't change mid-session) result of probing HW_VIDEO_ENCODER_CANDIDATES
+ * in priority order. Only ever consulted when a source's video codec has
+ * already been flagged (see videoCodecCompatibilityWarning) AND the
+ * person has opted in via Settings' video-transcode toggle — this never
+ * runs for ordinary playback, and never falls back to a software
+ * encoder (this ffmpeg build has none — see the file header for why the
+ * original VLC/software-VP8 attempt was abandoned): if nothing in the
+ * candidate list actually works, this returns null and playback falls
+ * back to the existing copy-mode-plus-warning behavior untouched.
+ */
+export async function detectVideoEncoder(
+  ffmpegPath: string,
+  options: ExecFileImplOptions = {}
+): Promise<string | null> {
+  if (cachedVideoEncoder !== undefined) return cachedVideoEncoder
+  if (!ffmpegPath) {
+    cachedVideoEncoder = null
+    return null
+  }
+  for (const candidate of HW_VIDEO_ENCODER_CANDIDATES) {
+    if (await probeVideoEncoder(ffmpegPath, candidate, options)) {
+      cachedVideoEncoder = candidate
+      return cachedVideoEncoder
+    }
+  }
+  cachedVideoEncoder = null
+  return null
+}
+
+/** Test-only: detectVideoEncoder's cache would otherwise make repeat probes within the same process a no-op. */
+export function resetVideoEncoderCache(): void {
+  cachedVideoEncoder = undefined
+}
+
 function freePort(): Promise<number> {
   return new Promise((resolve, reject) => {
     const server = net.createServer()
@@ -462,7 +586,8 @@ export interface FfmpegTranscoder {
   start: (
     ffmpegPath: string,
     remoteUrl: string,
-    selection?: PlaybackSelection
+    selection?: PlaybackSelection,
+    videoEncoder?: string
   ) => Promise<FfmpegTranscoderResult>
   stop: () => Promise<void>
 }
@@ -535,13 +660,14 @@ export function createFfmpegTranscoder({
   async function start(
     ffmpegPath: string,
     remoteUrl: string,
-    selection: PlaybackSelection = {}
+    selection: PlaybackSelection = {},
+    videoEncoder?: string
   ): Promise<FfmpegTranscoderResult> {
     if (!ffmpegPath) throw new Error('Compatibility mode is unavailable (ffmpeg not found).')
     await stop()
     const port = await freePort()
     const token = randomBytes(32).toString('hex')
-    const args = buildFfmpegArguments(remoteUrl, selection)
+    const args = buildFfmpegArguments(remoteUrl, selection, videoEncoder)
     child = spawnImpl(ffmpegPath, args, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] })
     const spawned = child
 

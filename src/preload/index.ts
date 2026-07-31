@@ -127,7 +127,9 @@ const api = {
       setPlaybackBuffer: (preset: string): Promise<{ playbackBuffer: string }> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.settingsSetPlaybackBuffer, preset),
       setUiAnimations: (enabled: boolean): Promise<{ uiAnimationsEnabled: boolean }> =>
-        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.settingsSetUiAnimations, enabled)
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.settingsSetUiAnimations, enabled),
+      setVideoTranscode: (enabled: boolean): Promise<{ videoTranscodeEnabled: boolean }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.settingsSetVideoTranscode, enabled)
     },
 
     account: {

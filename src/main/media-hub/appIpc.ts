@@ -77,6 +77,16 @@ export function registerAppIpc(): void {
     }
   )
 
+  handle<unknown, { videoTranscodeEnabled: boolean }>(
+    MEDIA_HUB_CHANNELS.settingsSetVideoTranscode,
+    (_event, value) => {
+      const settings = readSettings()
+      settings.videoTranscodeEnabled = value === true
+      writeSettings(settings)
+      return { videoTranscodeEnabled: settings.videoTranscodeEnabled }
+    }
+  )
+
   handle<undefined, { ok: true }>(MEDIA_HUB_CHANNELS.logout, async () => {
     await stopPlayback()
     writeSettings(logoutSettings(readSettings()))
