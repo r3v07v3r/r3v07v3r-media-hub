@@ -28,7 +28,7 @@ import {
   normalizeTmdbCollectionPart,
   type RawApiPayload
 } from './core'
-import { buildGroupedAnimeVideos, groupAnimeCatalog, groupAnimeSearchResults } from './animeSeasons'
+import { buildGroupedAnimeVideos, groupAnimeCatalog } from './animeSeasons'
 
 const catalogUrls: Record<'movie' | 'series', string> = {
   movie: 'https://v3-cinemeta.strem.io/catalog/movie/top.json',
@@ -104,6 +104,10 @@ async function kitsuCatalog(): Promise<CatalogItem[]> {
   // Kitsu has no franchise concept — each season/cour is its own top-level
   // entry (see animeSeasons.ts's header) — so multi-season anime would
   // otherwise show up as one catalog tile per season instead of per show.
+  // groupAnimeCatalog checks every item directly (no title-match shortcut,
+  // see its own header for why that isn't reliable enough) — a full,
+  // uncached crawl now takes a few minutes rather than tens of seconds as
+  // a result, but only on the 6h cache refresh below, never on a page load.
   return groupAnimeCatalog(dedupeCatalog(pages))
 }
 
@@ -257,7 +261,7 @@ async function kitsuSearch(query: string): Promise<CatalogItem[]> {
   const result = await fetchJson<RawApiPayload>(
     `https://kitsu.io/api/edge/anime?filter%5Btext%5D=${encodeURIComponent(query)}&page%5Blimit%5D=20`
   )
-  return groupAnimeSearchResults((result.data || []).map(normalizeKitsuAnime))
+  return groupAnimeCatalog((result.data || []).map(normalizeKitsuAnime))
 }
 
 /** Free-text movie/series search against Simkl. */

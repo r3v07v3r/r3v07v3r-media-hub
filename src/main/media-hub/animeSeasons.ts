@@ -18,53 +18,39 @@
 // ("Specials") entry, which is where OVAs/specials come from here rather
 // than any new categorization of our own.
 //
-// Two-tier by necessity: the anime catalog crawl (see kitsuCatalog in
-// catalog.ts) walks ~1000 entries. Checking every single one against
-// Kitsu's mappings endpoint just to find the ~50-150 that are actually
-// multi-season would be both slow and impolite to Kitsu's API. A free,
-// zero-API-call title heuristic buckets CANDIDATES first; only buckets with
-// 2+ members ever cost a mappings fetch. A false-positive bucket (two
-// unrelated titles whose stripped names happen to collide) just costs one
-// extra, harmless fetch — real grouping only ever happens when confirmed by
-// one of the two signals below, so a heuristic miss can never merge two
-// things that don't actually belong together.
+// Every item in the catalog is checked directly — no title-matching
+// pre-filter. An earlier version bucketed candidates by a stripped title
+// first (only checking pairs that shared a stem like "Title"/"Title 2") to
+// avoid the cost of querying Kitsu's mappings endpoint for all ~1000 crawled
+// entries. That missed real cases: Prince of Tennis's sequel is titled "Shin
+// Tennis no Ouji-sama" ("The New Prince of Tennis") — a wholly different
+// Japanese title, not "Prince of Tennis 2" — so no title heuristic would
+// ever bucket them together. Checking every item costs more upfront (see
+// kitsuCatalog's own comment on the resulting crawl time) but is the only
+// way to not silently miss franchises like this one.
 //
-// Confirmed live that the TVDB mapping alone isn't always enough: Boku no
-// Hero Academia seasons 1-3 (Kitsu ids 11469/12268/13881) all map to TVDB
-// series 305074 with season suffixes 1/2/3, but seasons 4-6 (41971/43108/
-// 45240) have NO thetvdb mapping in Kitsu's data at all — a real coverage
-// gap on newer entries, not a bug. Kitsu's OWN sequel/prequel relationship
+// Confirmed live that the TVDB mapping alone isn't always enough either:
+// Boku no Hero Academia seasons 1-3 (Kitsu ids 11469/12268/13881) all map to
+// TVDB series 305074 with season suffixes 1/2/3, but seasons 4-6 (41971/
+// 43108/45240) have NO thetvdb mapping in Kitsu's data at all — a real
+// coverage gap on newer entries. Kitsu's OWN sequel/prequel relationship
 // graph (already fetched elsewhere for the unrelated "related titles" rail
 // — see filterAnimeRelationships) still links season 3 -> season 4 directly
 // by Kitsu id even when the external TVDB cross-reference is missing, so
-// it's used here as a second confirmation signal via union-find: two bucket
-// members merge if they share a TVDB series id OR one's relationships
-// include a sequel/prequel edge to the other. Members confirmed only via
-// the relationship graph (no TVDB season number) sort after the
-// TVDB-confirmed ones, ordered among themselves by ascending Kitsu id —
-// Kitsu ids are assigned roughly in upload order, which in practice tracks
-// real release order for sequels closely enough to use as a fallback.
+// it's used here as a second confirmation signal via a single global
+// union-find over the whole item set: two items merge if they share a
+// TVDB series id, or one's relationships include a sequel/prequel edge to
+// the other. Items confirmed only via the relationship graph (no TVDB
+// season number) sort after every TVDB-confirmed one in their group,
+// ordered among themselves by ascending Kitsu id — Kitsu ids are assigned
+// roughly in upload order, which in practice tracks real release order for
+// sequels closely enough to use as a fallback.
 
 import type { CatalogItem, Episode } from '../../shared/media-hub/types'
 import { fetchJson } from './httpClient'
 import { logError } from './logger'
 import { getDatabase } from './dbState'
 import { normalizeKitsuAnime, type RawApiPayload } from './core'
-
-// Deliberately broad, not precise — see this file's header comment on why
-// an over-eager strip here costs at most one harmless extra fetch, never a
-// wrong merge. Covers "Title 2".."Title 99", "Title II"/"Title III" (roman
-// numerals up to X), and "Title: Season 2"/"Title Part 2"/"Title 2nd Season".
-const TRAILING_SEASON_MARKER =
-  /(?:[:\-–—]?\s*(?:season|part|cour)\s*\d+\s*$|[:\-–—]?\s*\d+(?:st|nd|rd|th)\s*season\s*$|\s+(?:[2-9]|[1-9]\d)\s*$|\s+(?:ii|iii|iv|v|vi|vii|viii|ix|x)\s*$)/i
-
-export function animeGroupKey(title: string): string {
-  const stripped = String(title || '')
-    .trim()
-    .replace(TRAILING_SEASON_MARKER, '')
-    .trim()
-  return (stripped || title).toLowerCase().replace(/[^a-z0-9]+/g, '')
-}
 
 export interface TvdbMapping {
   seriesId: string
@@ -183,8 +169,8 @@ interface SequelEdge {
 /** Cached (24h) sequel/prequel edges for one Kitsu anime id — confirmed
  *  live these are declared reciprocally (season 4 lists a "prequel" edge to
  *  season 3 AND season 3 independently lists a "sequel" edge to season 4),
- *  so checking only a single isolated item's own outgoing edges against
- *  its bucket siblings is enough; no need to also check incoming edges. */
+ *  so checking only a single item's own outgoing edges against the rest of
+ *  the catalog is enough; no need to also check incoming edges. */
 async function kitsuSequelEdges(kitsuId: string): Promise<SequelEdge[]> {
   const key = `kitsu:edges:${kitsuId}`
   const db = getDatabase()
@@ -214,19 +200,34 @@ async function kitsuSequelEdges(kitsuId: string): Promise<SequelEdge[]> {
   }
 }
 
-/** Union-find over one candidate bucket's members: merges two items when
- *  they share a confirmed TVDB series id, or (only for whichever items
- *  that leaves isolated) when one declares a direct sequel/prequel edge to
- *  another bucket member — see this file's header for why both signals
- *  are needed. Canonical item within each resulting group is whichever has
- *  the lowest known season number; items with no TVDB season number of
- *  their own (only ever reachable via the relationship-edge signal) sort
- *  after every TVDB-confirmed one, ordered by ascending Kitsu id. */
-async function resolveBucket(
-  bucket: CatalogItem[],
-  mappingByItemId: Map<string, TvdbMapping | null>
-): Promise<CatalogItem[]> {
-  const parent = bucket.map((_, i) => i)
+/**
+ * Groups a flat Kitsu item list — the full ~1000-entry popularity crawl
+ * (kitsuCatalog) or a small search result set (kitsuSearch) — into one tile
+ * per franchise. Every item is checked directly (see this file's header for
+ * why a title-matching pre-filter isn't good enough); non-canonical group
+ * members are dropped from the returned array entirely, not just hidden —
+ * their ids live on the canonical item's groupedIds instead, for
+ * buildGroupedAnimeVideos to fetch on demand when that title's detail page
+ * is actually opened.
+ */
+export async function groupAnimeCatalog(items: CatalogItem[]): Promise<CatalogItem[]> {
+  const idToIndex = new Map(items.map((item, i) => [item.id, i] as const))
+  const mappingByItemId = new Map<string, TvdbMapping | null>()
+
+  // Paced in batches of 20, same politeness convention the crawl itself
+  // already uses — every item pays for this fetch now, not just candidates
+  // from a title match, so a full crawl genuinely takes minutes rather than
+  // seconds; only the 6h-cached refresh pays that cost, not page loads.
+  for (let i = 0; i < items.length; i += 20) {
+    const batch = items.slice(i, i + 20)
+    const mappings = await Promise.all(
+      batch.map((item) => kitsuTvdbMapping(item.id.replace(/^kitsu:/, '')))
+    )
+    batch.forEach((item, idx) => mappingByItemId.set(item.id, mappings[idx]))
+    if (i + 20 < items.length) await new Promise((resolve) => setTimeout(resolve, 350))
+  }
+
+  const parent = items.map((_, i) => i)
   function find(i: number): number {
     while (parent[i] !== i) {
       parent[i] = parent[parent[i]]
@@ -240,45 +241,51 @@ async function resolveBucket(
     if (ra !== rb) parent[ra] = rb
   }
 
-  const idToIndex = new Map(bucket.map((item, i) => [item.id, i] as const))
   const seriesToIndex = new Map<string, number>()
-  for (let i = 0; i < bucket.length; i++) {
-    const mapping = mappingByItemId.get(bucket[i].id)
+  for (let i = 0; i < items.length; i++) {
+    const mapping = mappingByItemId.get(items[i].id)
     if (!mapping) continue
     const existing = seriesToIndex.get(mapping.seriesId)
     if (existing !== undefined) union(existing, i)
     else seriesToIndex.set(mapping.seriesId, i)
   }
 
-  // Only chase the relationship graph for members with no TVDB mapping of
-  // their own — the common case (a fully TVDB-mapped franchise) never
-  // pays for this extra fetch at all. Deliberately gated on "has no TVDB
-  // mapping" rather than "currently isolated": a member can already be
-  // merged into a group via a SIBLING's edge (e.g. season 6 -> season 5)
+  // Only chase the relationship graph for items with no TVDB mapping of
+  // their own — the common case (a fully TVDB-mapped franchise) never pays
+  // for this extra fetch. Deliberately gated on "has no TVDB mapping"
+  // rather than "currently isolated in the union-find": an item can already
+  // be merged into a group via a SIBLING's edge (e.g. season 6 -> season 5)
   // while still being the only one whose OWN edges hold the missing link
   // back to the TVDB-confirmed group (season 4 -> season 3) — skipping it
   // just because it "looks" merged already would silently leave two real
   // sub-groups of the same franchise unmerged. Confirmed live this way:
   // Boku no Hero Academia season 4 has no TVDB mapping and both a prequel
   // edge to season 3 (TVDB-confirmed) and a sequel edge to season 5 (also
-  // TVDB-less) — checking every TVDB-less member unconditionally, not just
-  // ones still isolated at the moment they're checked, is what actually
-  // closes that chain regardless of which order the bucket happens to be
-  // in. Redundant unions here are harmless no-ops.
-  for (let i = 0; i < bucket.length; i++) {
-    if (mappingByItemId.get(bucket[i].id)) continue
-    const edges = await kitsuSequelEdges(bucket[i].id.replace(/^kitsu:/, ''))
-    for (const edge of edges) {
-      const destIndex = idToIndex.get(`kitsu:${edge.destId}`)
-      if (destIndex !== undefined) union(i, destIndex)
-    }
+  // TVDB-less) — checking every TVDB-less item unconditionally, not just
+  // ones still isolated when checked, is what actually closes that chain
+  // regardless of processing order. Redundant unions here are harmless.
+  const needsEdgeCheck = items.filter((item) => !mappingByItemId.get(item.id))
+  for (let i = 0; i < needsEdgeCheck.length; i += 20) {
+    const batch = needsEdgeCheck.slice(i, i + 20)
+    const edgesBatch = await Promise.all(
+      batch.map((item) => kitsuSequelEdges(item.id.replace(/^kitsu:/, '')))
+    )
+    batch.forEach((item, idx) => {
+      const srcIndex = idToIndex.get(item.id)
+      if (srcIndex === undefined) return
+      for (const edge of edgesBatch[idx]) {
+        const destIndex = idToIndex.get(`kitsu:${edge.destId}`)
+        if (destIndex !== undefined) union(srcIndex, destIndex)
+      }
+    })
+    if (i + 20 < needsEdgeCheck.length) await new Promise((resolve) => setTimeout(resolve, 350))
   }
 
   const groups = new Map<number, { item: CatalogItem; season: number | null }[]>()
-  for (let i = 0; i < bucket.length; i++) {
+  for (let i = 0; i < items.length; i++) {
     const root = find(i)
     const list = groups.get(root) || []
-    list.push({ item: bucket[i], season: mappingByItemId.get(bucket[i].id)?.season ?? null })
+    list.push({ item: items[i], season: mappingByItemId.get(items[i].id)?.season ?? null })
     groups.set(root, list)
   }
 
@@ -292,82 +299,12 @@ async function resolveBucket(
       if (a.season !== null && b.season !== null) return a.season - b.season
       if (a.season !== null) return -1
       if (b.season !== null) return 1
-      return (
-        Number(a.item.id.replace(/^kitsu:/, '')) - Number(b.item.id.replace(/^kitsu:/, ''))
-      )
+      return Number(a.item.id.replace(/^kitsu:/, '')) - Number(b.item.id.replace(/^kitsu:/, ''))
     })
     const [canonical, ...siblings] = group
     result.push({ ...canonical.item, groupedIds: siblings.map((s) => s.item.id) })
   }
   return result
-}
-
-/**
- * Groups a small anime result set (e.g. a search result — at most 20 items)
- * WITHOUT the title-heuristic pre-filter groupAnimeCatalog needs to keep
- * the full 1000-item crawl affordable. Real gap found live: Prince of
- * Tennis's sequel is titled "Shin Tennis no Ouji-sama" ("The New Prince of
- * Tennis") — a wholly different Japanese title, not "Prince of Tennis 2" —
- * so the title-strip heuristic never even buckets them together, and the
- * TVDB/relationship confirmation this file relies on never runs at all. A
- * search result set is small enough to just confirm every item directly.
- */
-export async function groupAnimeSearchResults(items: CatalogItem[]): Promise<CatalogItem[]> {
-  const mappings = await Promise.all(
-    items.map((item) => kitsuTvdbMapping(item.id.replace(/^kitsu:/, '')))
-  )
-  const mappingByItemId = new Map<string, TvdbMapping | null>()
-  items.forEach((item, i) => mappingByItemId.set(item.id, mappings[i]))
-  return resolveBucket(items, mappingByItemId)
-}
-
-/**
- * Groups a flat Kitsu catalog (one entry per season/cour) into one tile per
- * franchise. See this file's header for the two-tier heuristic-then-confirm
- * approach. Non-canonical group members are dropped from the returned
- * array entirely (not just hidden) — their ids live on the canonical item's
- * groupedIds instead, for buildGroupedAnimeVideos to fetch on demand when
- * that title's detail page is actually opened.
- */
-export async function groupAnimeCatalog(items: CatalogItem[]): Promise<CatalogItem[]> {
-  const buckets = new Map<string, CatalogItem[]>()
-  for (const item of items) {
-    const key = animeGroupKey(item.title)
-    const bucket = buckets.get(key)
-    if (bucket) bucket.push(item)
-    else buckets.set(key, [item])
-  }
-
-  const singles: CatalogItem[] = []
-  const candidateBuckets: CatalogItem[][] = []
-  for (const bucket of buckets.values()) {
-    if (bucket.length === 1) singles.push(bucket[0])
-    else candidateBuckets.push(bucket)
-  }
-
-  const candidateItems = candidateBuckets.flat()
-  const mappingByItemId = new Map<string, TvdbMapping | null>()
-  // Paced in batches of 20, same politeness convention kitsuCatalog already
-  // uses for the main crawl — candidate buckets are a small fraction of
-  // the full catalog, but a popular franchise pass could still be a few
-  // hundred items deep.
-  for (let i = 0; i < candidateItems.length; i += 20) {
-    const batch = candidateItems.slice(i, i + 20)
-    const mappings = await Promise.all(
-      batch.map((item) => kitsuTvdbMapping(item.id.replace(/^kitsu:/, '')))
-    )
-    batch.forEach((item, idx) => mappingByItemId.set(item.id, mappings[idx]))
-    if (i + 20 < candidateItems.length) {
-      await new Promise((resolve) => setTimeout(resolve, 350))
-    }
-  }
-
-  const grouped: CatalogItem[] = []
-  for (const bucket of candidateBuckets) {
-    grouped.push(...(await resolveBucket(bucket, mappingByItemId)))
-  }
-
-  return [...singles, ...grouped]
 }
 
 /**
