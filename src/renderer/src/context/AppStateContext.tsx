@@ -100,6 +100,18 @@ interface AppStateValue {
   partyQueue: PartyQueueEntry[]
   /** Only known right after hosting (party:host's own response — party:status never returns it) — cleared on leave. */
   partyHostCode: string | null
+  /** Whether hosting's own best-effort UPnP router port-mapping succeeded
+   *  (see watchParty.ts's attemptPortMapping) — null before/after hosting,
+   *  never re-derivable from party:status. false means the party code is
+   *  only reachable by someone on this same network; UPnP genuinely fails
+   *  on a lot of real routers (disabled, unsupported, or the ISP uses
+   *  CGNAT), so this is disclosed rather than silently discovered only
+   *  when a remote join times out. */
+  partyWanAvailable: boolean | null
+  /** The local port the party server is actually listening on — surfaced
+   *  alongside partyWanAvailable so a host who wants to try manual router
+   *  port-forwarding instead has the number they'd need. */
+  partyHostPort: number | null
   partyPanelOpen: boolean
   setPartyPanelOpen: Dispatch<SetStateAction<boolean>>
   refreshPartyStatus: () => void
@@ -292,6 +304,8 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   const [partyStatus, setPartyStatus] = useState<PartyStatusResult | null>(null)
   const [partyQueue, setPartyQueue] = useState<PartyQueueEntry[]>([])
   const [partyHostCode, setPartyHostCode] = useState<string | null>(null)
+  const [partyWanAvailable, setPartyWanAvailable] = useState<boolean | null>(null)
+  const [partyHostPort, setPartyHostPort] = useState<number | null>(null)
   const [partyPanelOpen, setPartyPanelOpen] = useState(false)
   const [partyPendingSeek, setPartyPendingSeek] = useState<number | null>(null)
   const [myList, setMyList] = useState<Set<string>>(new Set())
@@ -408,6 +422,8 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         setPartyQueue(event.queue)
       } else if (event.type === 'host-disconnected') {
         setPartyHostCode(null)
+        setPartyWanAvailable(null)
+        setPartyHostPort(null)
         refreshPartyStatus()
       }
     })
@@ -565,6 +581,8 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       if (!api) throw new Error("Watch Party isn't available outside the desktop app.")
       const result = await api.host(name, mode)
       setPartyHostCode(result.code)
+      setPartyWanAvailable(result.wanAvailable ?? false)
+      setPartyHostPort(result.port ?? null)
       setPartyPanelOpen(true)
       refreshPartyStatus()
       return result
@@ -578,6 +596,8 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       if (!api) throw new Error("Watch Party isn't available outside the desktop app.")
       await api.join(code, name)
       setPartyHostCode(null)
+      setPartyWanAvailable(null)
+      setPartyHostPort(null)
       setPartyPanelOpen(true)
       refreshPartyStatus()
     },
@@ -589,6 +609,8 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     if (!api) throw new Error("Watch Party isn't available outside the desktop app.")
     await api.leave()
     setPartyHostCode(null)
+    setPartyWanAvailable(null)
+    setPartyHostPort(null)
     setPartyPanelOpen(false)
     setPartyStatus(null)
     setPartyQueue([])
@@ -921,6 +943,8 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       partyStatus,
       partyQueue,
       partyHostCode,
+      partyWanAvailable,
+      partyHostPort,
       partyPanelOpen,
       setPartyPanelOpen,
       refreshPartyStatus,
@@ -997,6 +1021,8 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       partyStatus,
       partyQueue,
       partyHostCode,
+      partyWanAvailable,
+      partyHostPort,
       partyPanelOpen,
       refreshPartyStatus,
       hostParty,

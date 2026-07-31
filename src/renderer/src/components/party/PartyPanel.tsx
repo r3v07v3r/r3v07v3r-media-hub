@@ -10,6 +10,8 @@ export function PartyPanel() {
     partyStatus,
     partyQueue,
     partyHostCode,
+    partyWanAvailable,
+    partyHostPort,
     partyPanelOpen,
     setPartyPanelOpen,
     hostParty,
@@ -108,6 +110,22 @@ export function PartyPanel() {
                   <Icon name="copy" size={13} />
                 </button>
               </div>
+            )}
+            {/* Only known right after hosting (see AppStateContext's
+                partyWanAvailable) — this is the actual, honest answer to
+                "will this work for someone outside my network," disclosed
+                upfront instead of only surfacing as a mystery timeout on
+                the other end once someone tries and fails to join. */}
+            {isHost && partyWanAvailable !== null && (
+              <span
+                className={
+                  partyWanAvailable ? styles.reachabilityGood : styles.reachabilityWarning
+                }
+              >
+                {partyWanAvailable
+                  ? 'Reachable over the internet — anyone with this code can join.'
+                  : `Only reachable on your own network — your router didn't open a port automatically. Forward port ${partyHostPort ?? '(shown when hosting)'} (TCP) to this PC to allow joining from elsewhere, or make sure whoever's joining is on the same Wi-Fi/network as you.`}
+              </span>
             )}
           </div>
 
