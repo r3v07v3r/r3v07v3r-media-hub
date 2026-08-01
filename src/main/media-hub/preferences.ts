@@ -47,7 +47,10 @@ export function publicSettings(settings: Record<string, unknown> = {}): MediaHub
     // Opt-in, unlike uiAnimationsEnabled above: this spins up a real
     // hardware-encoder probe + CPU/GPU cost the first time it's actually
     // used, so it defaults off rather than on.
-    videoTranscodeEnabled: settings.videoTranscodeEnabled === true
+    videoTranscodeEnabled: settings.videoTranscodeEnabled === true,
+    hideWatchedDefault: settings.hideWatchedDefault === true,
+    hideCompletedDefault: settings.hideCompletedDefault === true,
+    hideDislikedDefault: settings.hideDislikedDefault === true
   }
 }
 
@@ -62,13 +65,23 @@ export function logoutSettings(
   settings: Record<string, unknown> = {}
 ): Pick<
   MediaHubPublicSettings,
-  'theme' | 'updateChannel' | 'playbackBuffer' | 'uiAnimationsEnabled' | 'videoTranscodeEnabled'
+  | 'theme'
+  | 'updateChannel'
+  | 'playbackBuffer'
+  | 'uiAnimationsEnabled'
+  | 'videoTranscodeEnabled'
+  | 'hideWatchedDefault'
+  | 'hideCompletedDefault'
+  | 'hideDislikedDefault'
 > {
   return {
     theme: normalizeTheme(settings.theme),
     updateChannel: normalizeUpdateChannel(settings.updateChannel),
     playbackBuffer: normalizePlaybackBuffer(settings.playbackBuffer),
     uiAnimationsEnabled: settings.uiAnimationsEnabled !== false,
-    videoTranscodeEnabled: settings.videoTranscodeEnabled === true
+    videoTranscodeEnabled: settings.videoTranscodeEnabled === true,
+    hideWatchedDefault: settings.hideWatchedDefault === true,
+    hideCompletedDefault: settings.hideCompletedDefault === true,
+    hideDislikedDefault: settings.hideDislikedDefault === true
   }
 }

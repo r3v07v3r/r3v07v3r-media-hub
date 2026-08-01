@@ -34,6 +34,16 @@ export interface CategoryFilterState {
    *  derived from whatever values actually appear in the loaded catalog,
    *  never a hardcoded guess at the backend's vocabulary. */
   status: string | null
+  /** Hide anything already (fully or partially) watched, completed, or
+   *  disliked — see applyWatchStateFilters below. Unlike every other field
+   *  here, these three don't default to "off"/unset on a fresh page visit:
+   *  CategoryPage seeds them from the person's global Settings default
+   *  (MediaHubPublicSettings.hideWatchedDefault etc.) the first time the
+   *  page mounts with no explicit value in the URL, then normal URL
+   *  round-tripping takes over once they've been touched on this page. */
+  hideWatched: boolean
+  hideCompleted: boolean
+  hideDisliked: boolean
   sort: SortKey
 }
 
@@ -46,6 +56,9 @@ export const DEFAULT_FILTER_STATE: CategoryFilterState = {
   episodeLengthBucket: null,
   episodesBucket: null,
   status: null,
+  hideWatched: false,
+  hideCompleted: false,
+  hideDisliked: false,
   sort: 'trending'
 }
 
@@ -67,7 +80,32 @@ const SORT_KEYS = new Set<SortKey>([
  * cross-page state channel. See CategoryPage.tsx's use of these via
  * react-router's useSearchParams.
  */
-export function filterStateFromSearchParams(params: URLSearchParams): CategoryFilterState {
+export interface HideStateDefaults {
+  hideWatched: boolean
+  hideCompleted: boolean
+  hideDisliked: boolean
+}
+
+export const NO_HIDE_DEFAULTS: HideStateDefaults = {
+  hideWatched: false,
+  hideCompleted: false,
+  hideDisliked: false
+}
+
+/**
+ * `hideDefaults` (the person's global Settings default for these three
+ * toggles) only applies when the URL says nothing about them at all — a
+ * fresh visit to /movies with no query string. Once CategoryPage's
+ * onChange has ever fired (including toggling one back off, which
+ * filterStateToSearchParams always writes explicitly as '0', never omits —
+ * see that function's comment), the URL is the sole source of truth, so an
+ * explicit "off" can't silently snap back to a global "on" default on the
+ * next render.
+ */
+export function filterStateFromSearchParams(
+  params: URLSearchParams,
+  hideDefaults: HideStateDefaults = NO_HIDE_DEFAULTS
+): CategoryFilterState {
   const sort = params.get('sort')
   return {
     genre: params.get('genre'),
@@ -78,6 +116,15 @@ export function filterStateFromSearchParams(params: URLSearchParams): CategoryFi
     episodeLengthBucket: params.get('epLength'),
     episodesBucket: params.get('epCount'),
     status: params.get('status'),
+    hideWatched: params.has('hideWatched')
+      ? params.get('hideWatched') === '1'
+      : hideDefaults.hideWatched,
+    hideCompleted: params.has('hideCompleted')
+      ? params.get('hideCompleted') === '1'
+      : hideDefaults.hideCompleted,
+    hideDisliked: params.has('hideDisliked')
+      ? params.get('hideDisliked') === '1'
+      : hideDefaults.hideDisliked,
     sort: sort && SORT_KEYS.has(sort as SortKey) ? (sort as SortKey) : 'trending'
   }
 }
@@ -92,6 +139,13 @@ export function filterStateToSearchParams(filters: CategoryFilterState): URLSear
   if (filters.episodeLengthBucket) params.set('epLength', filters.episodeLengthBucket)
   if (filters.episodesBucket) params.set('epCount', filters.episodesBucket)
   if (filters.status) params.set('status', filters.status)
+  // Always written explicitly (unlike every filter above, which omits a
+  // falsy/unset value) — see filterStateFromSearchParams's comment on why
+  // an explicit "off" has to survive the round trip instead of being
+  // indistinguishable from "never set."
+  params.set('hideWatched', filters.hideWatched ? '1' : '0')
+  params.set('hideCompleted', filters.hideCompleted ? '1' : '0')
+  params.set('hideDisliked', filters.hideDisliked ? '1' : '0')
   if (filters.sort !== 'trending') params.set('sort', filters.sort)
   return params
 }
@@ -183,11 +237,26 @@ export function availableStatuses(items: MediaItem[]): string[] {
   return Array.from(set).sort((a, b) => a.localeCompare(b))
 }
 
+/** Just the watched/completed/disliked predicate, factored out so search
+ *  results (which bypass every other category filter — genre/year/rating
+ *  etc. don't apply to a search query) can still respect these three. */
+export function applyWatchStateFilters(
+  items: MediaItem[],
+  filters: Pick<CategoryFilterState, 'hideWatched' | 'hideCompleted' | 'hideDisliked'>
+): MediaItem[] {
+  return items.filter((item) => {
+    if (filters.hideWatched && item.watched) return false
+    if (filters.hideCompleted && item.completed) return false
+    if (filters.hideDisliked && item.disliked) return false
+    return true
+  })
+}
+
 export function applyCategoryFilters(
   items: MediaItem[],
   filters: CategoryFilterState
 ): MediaItem[] {
-  return items.filter((item) => {
+  return applyWatchStateFilters(items, filters).filter((item) => {
     if (filters.genre && !item.genres.includes(filters.genre)) return false
     if (filters.year && String(item.releaseYear ?? '') !== filters.year) return false
     if (filters.minRating != null && (item.communityRating ?? 0) < filters.minRating) return false
@@ -236,4 +305,3 @@ export function sortMediaItems(items: MediaItem[], sort: SortKey): MediaItem[] {
   }
   return arr
 }
-

@@ -9,7 +9,7 @@
 
 import { app, BrowserWindow, clipboard, shell } from 'electron'
 import { MEDIA_HUB_CHANNELS } from '../../shared/media-hub/ipc-channels'
-import type { MediaHubSettingsSnapshot } from '../../shared/media-hub/types'
+import type { MediaHubPublicSettings, MediaHubSettingsSnapshot } from '../../shared/media-hub/types'
 import { handle } from './ipcGuard'
 import { ffmpegPath, stopPlayback } from './playbackSession'
 import { normalizeTheme, publicSettings, logoutSettings, THEMES } from './preferences'
@@ -98,6 +98,34 @@ export function registerAppIpc(): void {
       return { partyDisplayName: settings.partyDisplayName }
     }
   )
+
+  handle<
+    Partial<
+      Pick<
+        MediaHubPublicSettings,
+        'hideWatchedDefault' | 'hideCompletedDefault' | 'hideDislikedDefault'
+      >
+    >,
+    Pick<
+      MediaHubPublicSettings,
+      'hideWatchedDefault' | 'hideCompletedDefault' | 'hideDislikedDefault'
+    >
+  >(MEDIA_HUB_CHANNELS.settingsSetHideDefaults, (_event, value) => {
+    const settings = readSettings()
+    const partial = value || {}
+    if ('hideWatchedDefault' in partial)
+      settings.hideWatchedDefault = partial.hideWatchedDefault === true
+    if ('hideCompletedDefault' in partial)
+      settings.hideCompletedDefault = partial.hideCompletedDefault === true
+    if ('hideDislikedDefault' in partial)
+      settings.hideDislikedDefault = partial.hideDislikedDefault === true
+    writeSettings(settings)
+    return {
+      hideWatchedDefault: settings.hideWatchedDefault === true,
+      hideCompletedDefault: settings.hideCompletedDefault === true,
+      hideDislikedDefault: settings.hideDislikedDefault === true
+    }
+  })
 
   handle<undefined, { ok: true }>(MEDIA_HUB_CHANNELS.logout, async () => {
     await stopPlayback()

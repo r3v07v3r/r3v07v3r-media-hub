@@ -39,6 +39,7 @@ import {
 } from '@renderer/lib/mediaHub/adapters'
 import {
   useMediaHubBrowseCatalog,
+  useMediaHubDislikedIds,
   useMediaHubHomeFeed,
   useMediaHubWatchedIds
 } from '@renderer/lib/mediaHub/hooks'
@@ -138,6 +139,13 @@ interface AppStateValue {
   // round trip.
   myList: Set<string>
   toggleMyList: (media: MediaItem) => void
+
+  // "Not interested" — mirrors myList's shape/optimistic-update pattern
+  // exactly, backed by the media-hub backend's local disliked store
+  // (disliked:add/remove) instead of tracking:toggle. Drives
+  // MediaItem.disliked (see adapters.ts) and the Hide Disliked filter.
+  dislikedIds: Set<string>
+  toggleDisliked: (media: MediaItem) => void
 
   // Continue Watching — seeded from the media-hub backend's
   // home:personalized (episode-level watch tracking, not a mock array —
@@ -319,11 +327,27 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   const [partyPanelOpen, setPartyPanelOpen] = useState(false)
   const [partyPendingSeek, setPartyPendingSeek] = useState<number | null>(null)
   const [myList, setMyList] = useState<Set<string>>(new Set())
+  const [dislikedIds, setDislikedIds] = useState<Set<string>>(new Set())
   const [continueWatching, setContinueWatching] =
     useState<ContinueWatchingItem[]>(CONTINUE_WATCHING)
   const homeFeed = useMediaHubHomeFeed()
   const watchedIdsResult = useMediaHubWatchedIds()
-  const browseCatalog = useMediaHubBrowseCatalog(myList, watchedIdsResult.watchedIds)
+  const dislikedIdsResult = useMediaHubDislikedIds()
+  const browseCatalog = useMediaHubBrowseCatalog(
+    myList,
+    watchedIdsResult.watchedIds,
+    watchedIdsResult.history,
+    dislikedIds
+  )
+
+  // Reseeds local optimistic state whenever a fresh disliked:list fetch
+  // resolves (initial load, or a manual dislikedIdsResult.refresh()) — same
+  // "backend snapshot resets local optimistic edits" tradeoff myList/
+  // homeFeed above already accepts, not treated differently here.
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setDislikedIds(dislikedIdsResult.dislikedIds)
+  }, [dislikedIdsResult.dislikedIds])
   const [mediaHubSettings, setMediaHubSettings] = useState<MediaHubSettingsSnapshot | null>(null)
   const [assistantState, setAssistantState] = useState<AssistantState>('idle')
   const [assistantQuery, setAssistantQuery] = useState('')
@@ -460,6 +484,29 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       // refresh, not a broken UI in the moment.
     })
   }, [])
+
+  const toggleDisliked = useCallback(
+    (media: MediaItem) => {
+      const api = window.api?.mediaHub
+      setDislikedIds((prev) => {
+        const next = new Set(prev)
+        if (next.has(media.id)) {
+          next.delete(media.id)
+          api?.disliked.remove(media.id).catch(() => {})
+        } else {
+          next.add(media.id)
+          const payload = mediaItemToTrackablePayload(media)
+          api?.disliked.add(payload).catch(() => {})
+        }
+        return next
+      })
+      // Recommendations exclude disliked ids server-side (see tracking.ts's
+      // home:personalized) — refresh so a newly-disliked item actually drops
+      // out of the rail instead of lingering until some unrelated refetch.
+      homeFeed.refresh()
+    },
+    [homeFeed]
+  )
 
   const markContinueWatching = useCallback(
     (id: string, watched: boolean) => {
@@ -758,8 +805,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       // all — confirmed live, `mediaId`'s kitsuId:season:episode form
       // returned zero results even for a title with real, cached releases
       // under the correct kitsuId:episode form.
-      const resolveId =
-        kind === 'anime' ? `${media.id}:${media.episodeNumber ?? 1}` : mediaId
+      const resolveId = kind === 'anime' ? `${media.id}:${media.episodeNumber ?? 1}` : mediaId
       setResolvingMedia({ id: media.id, stage: 'searching' })
       try {
         const resolved = await api.stream.resolve(kind, resolveId)
@@ -1001,7 +1047,14 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
           setCategorySearch({
             kind,
             query,
-            results: items.map((item) => catalogItemToMediaItem(item, { trackedIds: myList })),
+            results: items.map((item) =>
+              catalogItemToMediaItem(item, {
+                trackedIds: myList,
+                watchedIds: watchedIdsResult.watchedIds,
+                history: watchedIdsResult.history,
+                dislikedIds
+              })
+            ),
             loading: false,
             error: false
           })
@@ -1011,7 +1064,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
           setCategorySearch({ kind, query, results: [], loading: false, error: true })
         })
     },
-    [myList]
+    [myList, watchedIdsResult.watchedIds, watchedIdsResult.history, dislikedIds]
   )
 
   const clearCategorySearch = useCallback(() => {
@@ -1054,6 +1107,8 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       removeFromQueue,
       myList,
       toggleMyList,
+      dislikedIds,
+      toggleDisliked,
       continueWatching,
       markContinueWatching,
       removeContinueWatching,
@@ -1133,6 +1188,8 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       removeFromQueue,
       myList,
       toggleMyList,
+      dislikedIds,
+      toggleDisliked,
       continueWatching,
       markContinueWatching,
       removeContinueWatching,

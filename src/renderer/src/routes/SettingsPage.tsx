@@ -290,6 +290,21 @@ function MoreOptionsSection() {
     refreshMediaHubSettings()
   }
 
+  async function handleToggleHideWatched(enabled: boolean) {
+    await window.api?.mediaHub?.settings.setHideDefaults({ hideWatchedDefault: enabled })
+    refreshMediaHubSettings()
+  }
+
+  async function handleToggleHideCompleted(enabled: boolean) {
+    await window.api?.mediaHub?.settings.setHideDefaults({ hideCompletedDefault: enabled })
+    refreshMediaHubSettings()
+  }
+
+  async function handleToggleHideDisliked(enabled: boolean) {
+    await window.api?.mediaHub?.settings.setHideDefaults({ hideDislikedDefault: enabled })
+    refreshMediaHubSettings()
+  }
+
   async function handleClearSubtitleCache() {
     const api = window.api?.mediaHub?.subtitles
     if (!api) return
@@ -323,6 +338,27 @@ function MoreOptionsSection() {
         description="For titles whose video format doesn't play reliably here (e.g. HEVC). Only runs if a real hardware encoder is found on this machine — off by default, and silently has no effect otherwise. Off, you'll still get a warning instead of an unexplained crash."
         checked={mediaHubSettings?.videoTranscodeEnabled ?? false}
         onChange={handleToggleVideoTranscode}
+      />
+      <ToggleRow
+        icon="eye-off"
+        title="Hide watched by default"
+        description="Movies you've watched, and series/anime you've started, are hidden from Movies/Series/Anime browsing and Mood Browser out of the box. Overridable per-page from that page's filter bar."
+        checked={mediaHubSettings?.hideWatchedDefault ?? false}
+        onChange={handleToggleHideWatched}
+      />
+      <ToggleRow
+        icon="check"
+        title="Hide completed by default"
+        description="Series/anime where every aired episode has been watched are hidden by default. A show you're still partway through stays visible."
+        checked={mediaHubSettings?.hideCompletedDefault ?? false}
+        onChange={handleToggleHideCompleted}
+      />
+      <ToggleRow
+        icon="thumbs-down"
+        title="Hide disliked by default"
+        description="Anything marked “Not interested” (see a title's context menu) is hidden by default, everywhere it would otherwise appear."
+        checked={mediaHubSettings?.hideDislikedDefault ?? false}
+        onChange={handleToggleHideDisliked}
       />
       <div className={styles.row}>
         <div className={styles.rowIcon} aria-hidden="true">

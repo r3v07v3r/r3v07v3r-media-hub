@@ -9,6 +9,7 @@ import { resolveArtwork } from '@renderer/lib/artwork'
 import { ArtworkImage } from '@renderer/components/media/ArtworkImage'
 import { WatchStatusBadge } from '@renderer/components/media/WatchStatusBadge'
 import { getWatchStatus } from '@renderer/lib/mediaHub/watchStatus'
+import { applyWatchStateFilters } from '@renderer/lib/mediaHub/categoryFilters'
 import styles from './MoodBrowser.module.css'
 
 export function MoodBrowser() {
@@ -19,7 +20,8 @@ export function MoodBrowser() {
     toggleCombinedMood,
     openDetail,
     catalog,
-    continueWatching
+    continueWatching,
+    mediaHubSettings
   } = useAppState()
   const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const reducedMotion = useReducedMotion()
@@ -31,8 +33,15 @@ export function MoodBrowser() {
 
   const results = useMemo(() => {
     if (activeMoods.length === 0) return []
-    return catalog.filter((m) => m.moods?.some((mood) => activeMoods.includes(mood)))
-  }, [activeMoods, catalog])
+    const matched = catalog.filter((m) => m.moods?.some((mood) => activeMoods.includes(mood)))
+    // No per-page override here (unlike the Movies/Series/Anime filter bar)
+    // — Mood Browser just reflects the person's global Settings default.
+    return applyWatchStateFilters(matched, {
+      hideWatched: mediaHubSettings?.hideWatchedDefault ?? false,
+      hideCompleted: mediaHubSettings?.hideCompletedDefault ?? false,
+      hideDisliked: mediaHubSettings?.hideDislikedDefault ?? false
+    })
+  }, [activeMoods, catalog, mediaHubSettings])
 
   function selectMood(id: string, combine: boolean) {
     if (combine) {

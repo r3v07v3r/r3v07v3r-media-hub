@@ -119,6 +119,10 @@ export interface MediaHubDatabase {
   ): TrackedItem
   unmarkWatched(id: string | number, season?: number, episode?: number): boolean
   history(): HistoryEntry[]
+  dislike(item: Partial<CatalogItem> & { id: unknown }, now?: Date): TrackedItem
+  undislike(id: string | number): boolean
+  isDisliked(id: string | number): boolean
+  disliked(): TrackedItem[]
   preferredGenres(limit?: number): string[]
   putCache<T>(key: string, payload: T, ttlMs: number): void
   getCache<T>(key: string, opts?: { allowExpired?: boolean }): T | null
@@ -136,6 +140,10 @@ interface PreparedQueries {
   watched: StatementSync
   unwatch: StatementSync
   history: StatementSync
+  dislike: StatementSync
+  undislike: StatementSync
+  isDisliked: StatementSync
+  disliked: StatementSync
   putCache: StatementSync
   getCache: StatementSync
   lastEpisode: StatementSync
@@ -171,6 +179,14 @@ export function createDatabase(filename: string): MediaHubDatabase {
     payload_json TEXT NOT NULL,
     expires_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS disliked(
+    content_id TEXT PRIMARY KEY,
+    type TEXT NOT NULL,
+    title TEXT NOT NULL,
+    poster TEXT,
+    metadata_json TEXT NOT NULL,
+    disliked_at TEXT NOT NULL
   );
   CREATE INDEX IF NOT EXISTS idx_history_content ON watch_history(content_id, watched_at DESC);`)
 
@@ -211,6 +227,14 @@ export function createDatabase(filename: string): MediaHubDatabase {
     history: sql.prepare(
       'SELECT metadata_json,season,episode,watched_at FROM watch_history ORDER BY watched_at DESC'
     ),
+    dislike: sql.prepare(
+      `INSERT INTO disliked(content_id,type,title,poster,metadata_json,disliked_at)
+       VALUES(@id,@type,@title,@poster,@json,@now)
+       ON CONFLICT(content_id) DO UPDATE SET type=excluded.type,title=excluded.title,poster=excluded.poster,metadata_json=excluded.metadata_json`
+    ),
+    undislike: sql.prepare('DELETE FROM disliked WHERE content_id=?'),
+    isDisliked: sql.prepare('SELECT 1 FROM disliked WHERE content_id=?'),
+    disliked: sql.prepare('SELECT metadata_json FROM disliked ORDER BY disliked_at DESC'),
     putCache: sql.prepare(
       `INSERT INTO catalog_cache(cache_key,payload_json,expires_at,updated_at) VALUES(?,?,?,?)
        ON CONFLICT(cache_key) DO UPDATE SET payload_json=excluded.payload_json,expires_at=excluded.expires_at,updated_at=excluded.updated_at`
@@ -310,6 +334,49 @@ export function createDatabase(filename: string): MediaHubDatabase {
             watchedAt: row.watched_at as string
           } as HistoryEntry
         })
+      } catch (error) {
+        return fail(error as Error)
+      }
+    },
+
+    dislike(item, now = new Date()) {
+      try {
+        const value = normalizeTitle(item)
+        q.dislike.run({
+          id: value.id,
+          type: value.type,
+          title: value.title,
+          poster: value.poster,
+          json: JSON.stringify(value),
+          now: now.toISOString()
+        })
+        return value
+      } catch (error) {
+        return fail(error as Error)
+      }
+    },
+
+    undislike(id) {
+      try {
+        return q.undislike.run(String(id)).changes > 0
+      } catch (error) {
+        return fail(error as Error)
+      }
+    },
+
+    isDisliked(id) {
+      try {
+        return Boolean(q.isDisliked.get(String(id)))
+      } catch (error) {
+        return fail(error as Error)
+      }
+    },
+
+    disliked() {
+      try {
+        return q.disliked
+          .all()
+          .map((r) => parse<TrackedItem>((r as Row).metadata_json as string, {} as TrackedItem))
       } catch (error) {
         return fail(error as Error)
       }

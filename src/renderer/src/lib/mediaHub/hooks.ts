@@ -10,7 +10,7 @@
 // meant to silently present mock data as if it were live.
 
 import { useCallback, useEffect, useState } from 'react'
-import type { CatalogItem, MediaKind } from '@shared/media-hub/types'
+import type { CatalogItem, HistoryEntry, MediaKind } from '@shared/media-hub/types'
 import type { MediaItem, Recommendation } from '@renderer/types'
 import { CATALOG } from '@renderer/data/mockData'
 import {
@@ -60,7 +60,9 @@ export interface BrowseCatalogResult {
  */
 export function useMediaHubBrowseCatalog(
   trackedIds: Set<string>,
-  watchedIds: Set<string>
+  watchedIds: Set<string>,
+  history: HistoryEntry[] = [],
+  dislikedIds: Set<string> = new Set()
 ): BrowseCatalogResult {
   const [items, setItems] = useState<CatalogItem[] | null>(null)
   // Lazily derived from bridge presence (a constant for this component's
@@ -105,7 +107,9 @@ export function useMediaHubBrowseCatalog(
 
   if (items && items.length) {
     return {
-      items: items.map((item) => catalogItemToMediaItem(item, { trackedIds, watchedIds })),
+      items: items.map((item) =>
+        catalogItemToMediaItem(item, { trackedIds, watchedIds, history, dislikedIds })
+      ),
       loading,
       live: true,
       settled,
@@ -123,6 +127,11 @@ export interface WatchedIdsResult {
    *  "completed" once it's no longer sitting in Continue Watching — see
    *  lib/mediaHub/watchStatus.ts, the one place that combines the two). */
   watchedIds: Set<string>
+  /** The raw per-episode history behind watchedIds above — needed wherever
+   *  a series/anime's real completion state (every aired episode watched,
+   *  not just "started") has to be computed, since a flat id set can't
+   *  tell that apart. See adapters.ts's isSeriesCompleted. */
+  history: HistoryEntry[]
   refresh: () => void
 }
 
@@ -136,6 +145,7 @@ export interface WatchedIdsResult {
  */
 export function useMediaHubWatchedIds(): WatchedIdsResult {
   const [watchedIds, setWatchedIds] = useState<Set<string>>(new Set())
+  const [history, setHistory] = useState<HistoryEntry[]>([])
   const [generation, setGeneration] = useState(0)
 
   useEffect(() => {
@@ -147,6 +157,7 @@ export function useMediaHubWatchedIds(): WatchedIdsResult {
       .then((result) => {
         if (cancelled) return
         setWatchedIds(new Set(result.history.map((h) => h.id)))
+        setHistory(result.history)
       })
       .catch(() => {})
     return () => {
@@ -154,7 +165,41 @@ export function useMediaHubWatchedIds(): WatchedIdsResult {
     }
   }, [generation])
 
-  return { watchedIds, refresh: () => setGeneration((g) => g + 1) }
+  return { watchedIds, history, refresh: () => setGeneration((g) => g + 1) }
+}
+
+export interface DislikedIdsResult {
+  dislikedIds: Set<string>
+  refresh: () => void
+}
+
+/**
+ * disliked:list's ids, reduced the same way useMediaHubWatchedIds reduces
+ * tracking:list's history — a flat, kind-agnostic lookup every catalog-
+ * sourced MediaItem needs for its `disliked` field (see
+ * CatalogItemAdapterContext.dislikedIds).
+ */
+export function useMediaHubDislikedIds(): DislikedIdsResult {
+  const [dislikedIds, setDislikedIds] = useState<Set<string>>(new Set())
+  const [generation, setGeneration] = useState(0)
+
+  useEffect(() => {
+    let cancelled = false
+    const api = window.api?.mediaHub
+    if (!api) return
+    api.disliked
+      .list()
+      .then((result) => {
+        if (cancelled) return
+        setDislikedIds(new Set(result.disliked.map((d) => d.id)))
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [generation])
+
+  return { dislikedIds, refresh: () => setGeneration((g) => g + 1) }
 }
 
 export interface HomeFeedResult {

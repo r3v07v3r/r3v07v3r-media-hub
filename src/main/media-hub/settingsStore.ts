@@ -51,6 +51,9 @@ export interface MediaHubRawSettings {
   uiAnimationsEnabled?: boolean
   videoTranscodeEnabled?: boolean
   preferredUpscaleHeight?: number
+  hideWatchedDefault?: boolean
+  hideCompletedDefault?: boolean
+  hideDislikedDefault?: boolean
   profiles?: ProfileRecord[]
   activeProfileId?: string
   [key: string]: unknown

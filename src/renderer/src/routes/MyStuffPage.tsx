@@ -7,11 +7,21 @@ import { resolveArtwork } from '@renderer/lib/artwork'
 import { ArtworkImage } from '@renderer/components/media/ArtworkImage'
 import { WatchStatusBadge } from '@renderer/components/media/WatchStatusBadge'
 import { getWatchStatus } from '@renderer/lib/mediaHub/watchStatus'
+import { applyWatchStateFilters } from '@renderer/lib/mediaHub/categoryFilters'
 import styles from './MyStuff.module.css'
 
 export default function MyStuffPage() {
-  const { myList, toggleMyList, openDetail, catalog, continueWatching } = useAppState()
-  const items = catalog.filter((m) => myList.has(m.id))
+  const { myList, toggleMyList, openDetail, catalog, continueWatching, mediaHubSettings } =
+    useAppState()
+  // Global default only, no per-page override here — same as Mood Browser.
+  const items = applyWatchStateFilters(
+    catalog.filter((m) => myList.has(m.id)),
+    {
+      hideWatched: mediaHubSettings?.hideWatchedDefault ?? false,
+      hideCompleted: mediaHubSettings?.hideCompletedDefault ?? false,
+      hideDisliked: mediaHubSettings?.hideDislikedDefault ?? false
+    }
+  )
   useRestoreBrowsingOrigin(true)
 
   if (items.length === 0) {

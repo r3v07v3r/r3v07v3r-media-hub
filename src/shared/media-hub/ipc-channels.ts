@@ -17,6 +17,7 @@ export const MEDIA_HUB_CHANNELS = {
   settingsSetUiAnimations: 'mediahub:settings:set-ui-animations',
   settingsSetVideoTranscode: 'mediahub:settings:set-video-transcode',
   settingsSetPartyDisplayName: 'mediahub:settings:set-party-display-name',
+  settingsSetHideDefaults: 'mediahub:settings:set-hide-defaults',
   logout: 'mediahub:account:logout',
   torboxConnect: 'mediahub:torbox:connect',
   torboxDisconnect: 'mediahub:torbox:disconnect',
@@ -41,6 +42,9 @@ export const MEDIA_HUB_CHANNELS = {
   trackingMarkWatched: 'mediahub:tracking:mark-watched',
   trackingUnmarkWatched: 'mediahub:tracking:unmark-watched',
   trackingMarkSeasonWatched: 'mediahub:tracking:mark-season-watched',
+  dislikedList: 'mediahub:disliked:list',
+  dislikedAdd: 'mediahub:disliked:add',
+  dislikedRemove: 'mediahub:disliked:remove',
 
   // Streaming / playback
   streamResolve: 'mediahub:stream:resolve',

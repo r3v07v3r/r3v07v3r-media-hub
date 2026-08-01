@@ -98,9 +98,17 @@ function withRealArtwork(item: MediaItem): MediaItem {
 function movie(
   partial: Omit<
     MediaItem,
-    'id' | 'mediaType' | 'watched' | 'completed' | 'inMyList' | 'genres' | 'artTint' | 'initials'
+    | 'id'
+    | 'mediaType'
+    | 'watched'
+    | 'completed'
+    | 'disliked'
+    | 'inMyList'
+    | 'genres'
+    | 'artTint'
+    | 'initials'
   > &
-    Partial<Pick<MediaItem, 'watched' | 'completed' | 'inMyList'>> & {
+    Partial<Pick<MediaItem, 'watched' | 'completed' | 'disliked' | 'inMyList'>> & {
       genres: string[]
       artTint: [string, string]
       initials: string
@@ -111,6 +119,7 @@ function movie(
     mediaType: 'movie',
     watched: false,
     completed: false,
+    disliked: false,
     inMyList: false,
     ...partial
   })
@@ -119,9 +128,17 @@ function movie(
 function series(
   partial: Omit<
     MediaItem,
-    'id' | 'mediaType' | 'watched' | 'completed' | 'inMyList' | 'genres' | 'artTint' | 'initials'
+    | 'id'
+    | 'mediaType'
+    | 'watched'
+    | 'completed'
+    | 'disliked'
+    | 'inMyList'
+    | 'genres'
+    | 'artTint'
+    | 'initials'
   > &
-    Partial<Pick<MediaItem, 'watched' | 'completed' | 'inMyList'>> & {
+    Partial<Pick<MediaItem, 'watched' | 'completed' | 'disliked' | 'inMyList'>> & {
       genres: string[]
       artTint: [string, string]
       initials: string
@@ -132,6 +149,7 @@ function series(
     mediaType: 'series',
     watched: false,
     completed: false,
+    disliked: false,
     inMyList: false,
     ...partial
   })
@@ -151,12 +169,13 @@ function anime(
     | 'mediaKind'
     | 'watched'
     | 'completed'
+    | 'disliked'
     | 'inMyList'
     | 'genres'
     | 'artTint'
     | 'initials'
   > &
-    Partial<Pick<MediaItem, 'watched' | 'completed' | 'inMyList'>> & {
+    Partial<Pick<MediaItem, 'watched' | 'completed' | 'disliked' | 'inMyList'>> & {
       genres: string[]
       artTint: [string, string]
       initials: string
@@ -168,6 +187,7 @@ function anime(
     mediaKind: 'anime',
     watched: false,
     completed: false,
+    disliked: false,
     inMyList: false,
     ...partial
   })

@@ -47,7 +47,10 @@ export interface MediaItem {
   progressPercentage?: number
   remainingMinutes?: number
   watched: boolean
+  /** Series/anime: every currently-aired episode has been watched (movies: same as `watched`) — see catalogItemToMediaItem's use of episodeWatchState. A show that's caught up but still airing counts as completed for filtering purposes; a show you're partway through does not. */
   completed: boolean
+  /** Explicit "Not interested" (see ContextMenu's dislike action) — persisted locally, independent of watched/completed. */
+  disliked: boolean
   inMyList: boolean
   playbackUrl?: string
   availableServices?: string[]

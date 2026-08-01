@@ -12,6 +12,8 @@ export function ContextMenu() {
     startPartyPlayback,
     toggleMyList,
     myList,
+    toggleDisliked,
+    dislikedIds,
     markContinueWatching,
     pushNotification,
     openDetail
@@ -39,6 +41,7 @@ export function ContextMenu() {
   if (!contextMenu) return null
   const { media, x, y } = contextMenu
   const saved = myList.has(media.id)
+  const disliked = dislikedIds.has(media.id)
 
   const left = Math.min(x, window.innerWidth - 224)
   const top = Math.min(y, window.innerHeight - 320)
@@ -57,12 +60,16 @@ export function ContextMenu() {
     },
     {
       icon: 'thumbs-down',
-      label: 'Not interested',
-      onSelect: () =>
+      label: disliked ? 'Remove dislike' : 'Not interested',
+      onSelect: () => {
+        toggleDisliked(media)
         pushNotification({
           tone: 'info',
-          message: `Got it — you'll see less like "${media.title}".`
+          message: disliked
+            ? `You'll see "${media.title}" again.`
+            : `Got it — "${media.title}" won't show up in recommendations, and you can hide it from browsing with the Hide Disliked filter.`
         })
+      }
     },
     {
       icon: 'grid',

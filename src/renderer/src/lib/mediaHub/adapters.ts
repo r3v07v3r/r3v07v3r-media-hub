@@ -11,10 +11,12 @@
 import type {
   CatalogItem,
   ContinueWatchingEntry,
+  HistoryEntry,
   MediaKind,
   TrackedItem,
   TrackedItemEnriched
 } from '@shared/media-hub/types'
+import { episodeWatchState } from '@shared/media-hub/catalog-logic'
 import type { MediaItem, MediaType, Recommendation } from '@renderer/types'
 import { initialsFromTitle, tintFromSeed } from './tint'
 
@@ -120,8 +122,28 @@ function genresToMoods(genres: string[]): string[] {
 export interface CatalogItemAdapterContext {
   /** ids currently tracked/saved (from tracking:list or home:personalized's `tracked`) — drives MediaItem.inMyList. */
   trackedIds?: Set<string>
-  /** ids with at least one watched entry (from tracking:list's `history`) — drives MediaItem.watched/completed for catalog rows (Continue Watching uses its own richer completion signal, see continueWatchingEntryToItem). */
+  /** ids with at least one watched entry (from tracking:list's `history`) — drives MediaItem.watched (movies: fully accurate; series/anime: "started", not "finished" — see `completed` below). */
   watchedIds?: Set<string>
+  /** The full per-episode watch history (same source as watchedIds, unflattened) — needed to compute a series/anime's real completion state via episodeWatchState, which watchedIds alone (just an id set) can't do. Undefined is treated as "no history known yet", not "nothing watched" — see completed's fallback below. */
+  history?: HistoryEntry[]
+  /** ids explicitly marked "Not interested" (from disliked:list) — drives MediaItem.disliked. */
+  dislikedIds?: Set<string>
+}
+
+/** A series/anime counts as complete once every already-aired episode has
+ *  been watched — a still-airing show the person is fully caught up on
+ *  counts too (nothing new to watch right now), but a show they're
+ *  partway through does not. Unaired/future episodes (Cinemeta includes
+ *  these in `videos`) are excluded from the total so a currently-airing
+ *  show isn't permanently unwatchable-to-complete. */
+function isSeriesCompleted(item: CatalogItem, history: HistoryEntry[]): boolean {
+  const now = Date.now()
+  const aired = (item.videos || []).filter(
+    (v) => !v.released || new Date(v.released).getTime() <= now
+  )
+  if (!aired.length) return false
+  const state = episodeWatchState(aired, history, item.id)
+  return state.total > 0 && state.watchedCount >= state.total
 }
 
 /** Season/episode counts for series+anime, derived from CatalogItem.videos
@@ -149,6 +171,8 @@ export function catalogItemToMediaItem(
   context: CatalogItemAdapterContext = {}
 ): MediaItem {
   const watched = context.watchedIds?.has(item.id) ?? false
+  const completed = item.type === 'movie' ? watched : isSeriesCompleted(item, context.history ?? [])
+  const disliked = context.dislikedIds?.has(item.id) ?? false
   const { totalSeasons, totalEpisodes } = seasonEpisodeCounts(item.videos)
   return {
     id: item.id,
@@ -169,7 +193,8 @@ export function catalogItemToMediaItem(
     totalEpisodes,
     status: item.status || undefined,
     watched,
-    completed: watched,
+    completed,
+    disliked,
     inMyList: context.trackedIds?.has(item.id) ?? false,
     artTint: tintFromSeed(item.id || item.title),
     initials: initialsFromTitle(item.title)

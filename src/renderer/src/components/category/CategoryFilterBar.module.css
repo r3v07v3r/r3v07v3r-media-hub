@@ -52,6 +52,30 @@
   color: var(--text-primary);
 }
 
+.toggle {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  padding: 6px 12px;
+  border-radius: var(--radius-small);
+  border: 1px solid var(--border-subtle);
+  white-space: nowrap;
+  transition:
+    border-color var(--transition-fast),
+    color var(--transition-fast),
+    background var(--transition-fast);
+}
+.toggle:hover {
+  border-color: var(--border-active);
+}
+.toggleActive {
+  color: var(--accent-cyan);
+  border-color: var(--accent-cyan);
+  background: rgba(56, 193, 255, 0.12);
+}
+
 .spacer {
   flex: 1 1 auto;
 }

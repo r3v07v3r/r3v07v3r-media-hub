@@ -24,9 +24,11 @@ import { CategoryConfig } from '@renderer/lib/mediaHub/categoryConfig'
 import {
   matchesCategoryKind,
   applyCategoryFilters,
+  applyWatchStateFilters,
   sortMediaItems,
   filterStateFromSearchParams,
-  filterStateToSearchParams
+  filterStateToSearchParams,
+  type HideStateDefaults
 } from '@renderer/lib/mediaHub/categoryFilters'
 import { useRestoreBrowsingOrigin } from '@renderer/lib/mediaHub/useRestoreBrowsingOrigin'
 import { CompactAIAssistant } from '@renderer/components/home/CompactAIAssistant'
@@ -48,7 +50,8 @@ export function CategoryPage({ config }: { config: CategoryConfig }) {
     categorySearch,
     clearCategorySearch,
     runCategorySearch,
-    browsingOrigin
+    browsingOrigin,
+    mediaHubSettings
   } = useAppState()
   // Filters live in the URL, not component state — this is what makes
   // "restore my filters" (the detail page's contextual back button) just
@@ -62,9 +65,21 @@ export function CategoryPage({ config }: { config: CategoryConfig }) {
   // renders the way a plain string does, and the lint rule wants a plain
   // expression in the dependency array rather than a method call there.
   const searchParamsString = searchParams.toString()
+  // Only takes effect on a fresh page visit with nothing in the URL yet —
+  // see filterStateFromSearchParams's doc comment for why an explicit
+  // per-page override, once made, can never silently fall back to this.
+  const hideDefaults: HideStateDefaults = useMemo(
+    () => ({
+      hideWatched: mediaHubSettings?.hideWatchedDefault ?? false,
+      hideCompleted: mediaHubSettings?.hideCompletedDefault ?? false,
+      hideDisliked: mediaHubSettings?.hideDislikedDefault ?? false
+    }),
+    [mediaHubSettings]
+  )
   const filters = useMemo(
-    () => filterStateFromSearchParams(searchParams),
-    [searchParamsString] // eslint-disable-line react-hooks/exhaustive-deps -- see comment above
+    () => filterStateFromSearchParams(searchParams, hideDefaults),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on searchParamsString, see comment above
+    [searchParamsString, hideDefaults]
   )
   function setFilters(next: typeof filters): void {
     setSearchParams(filterStateToSearchParams(next), { replace: true })
@@ -83,6 +98,15 @@ export function CategoryPage({ config }: { config: CategoryConfig }) {
   const isSearchActive =
     categorySearch.kind === config.kind && categorySearch.query.trim().length > 0
 
+  // Search results bypass genre/year/rating/etc (a search query has its own
+  // meaning independent of the browse filters) but still honor hide-
+  // watched/completed/disliked — those three are a standing "don't show me
+  // this" preference, not a browse-specific narrowing.
+  const filteredSearchResults = useMemo(
+    () => applyWatchStateFilters(categorySearch.results, filters),
+    [categorySearch.results, filters]
+  )
+
   const heroItems = useMemo(() => kindItems.slice(0, 6), [kindItems])
 
   // Enough of the grid needs to already be rendered for the restore step
@@ -96,10 +120,10 @@ export function CategoryPage({ config }: { config: CategoryConfig }) {
   // clears — see isSearchActive above).
   const restoreVisibleCount = useMemo(() => {
     if (!browsingOrigin?.focusedItemId) return undefined
-    const activeList = isSearchActive ? categorySearch.results : filteredSorted
+    const activeList = isSearchActive ? filteredSearchResults : filteredSorted
     const idx = activeList.findIndex((item) => item.id === browsingOrigin.focusedItemId)
     return idx >= 0 ? Math.ceil((idx + 1) / 30) * 30 : undefined
-  }, [browsingOrigin, isSearchActive, categorySearch.results, filteredSorted])
+  }, [browsingOrigin, isSearchActive, filteredSearchResults, filteredSorted])
 
   // Catalog data is fetched once, globally (AppStateContext), not
   // per-page — by the time this page remounts after a detail-page visit,
@@ -155,7 +179,7 @@ export function CategoryPage({ config }: { config: CategoryConfig }) {
               </button>
             </div>
             <MediaGrid
-              items={categorySearch.results}
+              items={filteredSearchResults}
               loading={categorySearch.loading}
               error={categorySearch.error}
               onRetry={() => runCategorySearch(config.kind, categorySearch.query)}

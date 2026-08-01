@@ -16,6 +16,7 @@ import { app } from 'electron'
 import type {
   CatalogItem,
   ConnectResult,
+  DislikedListResult,
   HistoryEntry,
   HomePersonalizedResult,
   MarkWatchedResult,
@@ -166,6 +167,20 @@ export function registerTrackingIpc(): void {
     }
   )
 
+  handle<undefined, DislikedListResult>(MEDIA_HUB_CHANNELS.dislikedList, async () => {
+    return { disliked: getDatabase().disliked() }
+  })
+
+  handle<TrackableItem, { disliked: boolean }>(MEDIA_HUB_CHANNELS.dislikedAdd, (_e, item) => {
+    getDatabase().dislike(item)
+    return { disliked: true }
+  })
+
+  handle<{ id: string }, { disliked: boolean }>(MEDIA_HUB_CHANNELS.dislikedRemove, (_e, payload) => {
+    getDatabase().undislike(payload.id)
+    return { disliked: false }
+  })
+
   handle<undefined, HomePersonalizedResult>(MEDIA_HUB_CHANNELS.homePersonalized, async () => {
     const [movies, series, anime] = await Promise.all(
       (['movie', 'series', 'anime'] as const).map((kind) => catalogData(kind).catch(() => []))
@@ -178,12 +193,14 @@ export function registerTrackingIpc(): void {
     const tracked = db.tracked()
     const watchedIds = new Set(history.map((x) => String(x.id)))
     const trackedIds = new Set(tracked.map((x) => String(x.id)))
+    const dislikedIds = new Set(db.disliked().map((x) => String(x.id)))
     const genres = db.preferredGenres(4)
     const recommendations = all
       .filter(
         (x) =>
           !watchedIds.has(String(x.id)) &&
           !trackedIds.has(String(x.id)) &&
+          !dislikedIds.has(String(x.id)) &&
           (genres.length === 0 || x.genres.some((g) => genres.includes(g)))
       )
       .slice(0, 18)

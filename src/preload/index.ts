@@ -12,6 +12,7 @@ import type {
   BootstrapResult,
   CatalogItem,
   ConnectResult,
+  DislikedListResult,
   HomePersonalizedResult,
   LibraryItem,
   MalReconcileApplyResult,
@@ -131,7 +132,18 @@ const api = {
       setVideoTranscode: (enabled: boolean): Promise<{ videoTranscodeEnabled: boolean }> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.settingsSetVideoTranscode, enabled),
       setPartyDisplayName: (name: string): Promise<{ partyDisplayName: string }> =>
-        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.settingsSetPartyDisplayName, name)
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.settingsSetPartyDisplayName, name),
+      setHideDefaults: (
+        partial: Partial<{
+          hideWatchedDefault: boolean
+          hideCompletedDefault: boolean
+          hideDislikedDefault: boolean
+        }>
+      ): Promise<{
+        hideWatchedDefault: boolean
+        hideCompletedDefault: boolean
+        hideDislikedDefault: boolean
+      }> => ipcRenderer.invoke(MEDIA_HUB_CHANNELS.settingsSetHideDefaults, partial)
     },
 
     account: {
@@ -196,6 +208,14 @@ const api = {
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.trackingUnmarkWatched, payload),
       markSeasonWatched: (payload: MarkSeasonWatchedPayload): Promise<MarkWatchedResult> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.trackingMarkSeasonWatched, payload)
+    },
+
+    disliked: {
+      list: (): Promise<DislikedListResult> => ipcRenderer.invoke(MEDIA_HUB_CHANNELS.dislikedList),
+      add: (item: TrackableItem): Promise<{ disliked: boolean }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.dislikedAdd, item),
+      remove: (id: string): Promise<{ disliked: boolean }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.dislikedRemove, { id })
     },
 
     stream: {

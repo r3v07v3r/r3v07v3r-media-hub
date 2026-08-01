@@ -219,6 +219,10 @@ export interface TrackingListResult {
   history: HistoryEntry[]
 }
 
+export interface DislikedListResult {
+  disliked: TrackedItem[]
+}
+
 export interface HomePersonalizedResult {
   tracked: TrackedItem[]
   updates: TrackedUpdate[]
@@ -293,6 +297,10 @@ export interface MediaHubPublicSettings {
   videoTranscodeEnabled: boolean
   /** Last height the player's own quality menu was set to (see UpscaleSuggestion) — remembered so the next applicable title's suggestion defaults to it instead of always recomputing from screen size. Global to this install, not per-profile — same scope as every other setting here (playbackBuffer, videoTranscodeEnabled, etc.), which don't have per-profile scoping either. Undefined until the person has picked one at least once. */
   preferredUpscaleHeight?: number
+  /** Default state for the Movies/Series/Anime pages' "Hide Watched/Completed/Disliked" filters (see categoryFilters.ts) — a browse page starts from these unless the person has explicitly toggled that filter on this page before (see CategoryPage.tsx), and Home's Mood Browser / My Stuff apply them directly with no per-page override. Device/browsing preference, not account data — survives logout like uiAnimationsEnabled/videoTranscodeEnabled. */
+  hideWatchedDefault: boolean
+  hideCompletedDefault: boolean
+  hideDislikedDefault: boolean
 }
 
 export interface MediaHubSettingsSnapshot extends MediaHubPublicSettings {

@@ -65,6 +65,7 @@ export function CategoryFilterBar({
 
   function reset() {
     onChange({
+      ...filters,
       genre: null,
       year: null,
       minRating: null,
@@ -72,8 +73,7 @@ export function CategoryFilterBar({
       seasonsBucket: null,
       episodeLengthBucket: null,
       episodesBucket: null,
-      status: null,
-      sort: filters.sort
+      status: null
     })
   }
 
@@ -208,6 +208,36 @@ export function CategoryFilterBar({
           ))}
         </select>
       )}
+
+      <button
+        type="button"
+        className={`${styles.toggle} ${filters.hideWatched ? styles.toggleActive : ''}`}
+        aria-pressed={filters.hideWatched}
+        onClick={() => set('hideWatched', !filters.hideWatched)}
+      >
+        <Icon name="eye-off" size={12} />
+        Hide Watched
+      </button>
+
+      <button
+        type="button"
+        className={`${styles.toggle} ${filters.hideCompleted ? styles.toggleActive : ''}`}
+        aria-pressed={filters.hideCompleted}
+        onClick={() => set('hideCompleted', !filters.hideCompleted)}
+      >
+        <Icon name="check" size={12} />
+        Hide Completed
+      </button>
+
+      <button
+        type="button"
+        className={`${styles.toggle} ${filters.hideDisliked ? styles.toggleActive : ''}`}
+        aria-pressed={filters.hideDisliked}
+        onClick={() => set('hideDisliked', !filters.hideDisliked)}
+      >
+        <Icon name="thumbs-down" size={12} />
+        Hide Disliked
+      </button>
 
       <span className={styles.spacer} />
 
