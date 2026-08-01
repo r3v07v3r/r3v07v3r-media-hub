@@ -100,6 +100,19 @@ function isFiniteNumber(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value)
 }
 
+// `Number(x) || fallback` would silently turn a real season/episode 0
+// (season 0 is the specials convention) into the fallback — 0 is falsy in
+// JS, not "missing". Only a genuinely non-numeric/absent value should fall
+// back, so this checks finiteness instead of truthiness.
+function numberOr(value: unknown, fallback: number): number {
+  const n = Number(value)
+  return Number.isFinite(n) ? n : fallback
+}
+
+function episodePositionKey(x: { season?: number; episode?: number; number?: number }): string {
+  return `${numberOr(x.season, 1)}:${numberOr(x.episode ?? x.number, 1)}`
+}
+
 export function episodeWatchState(
   episodes: { season?: number; episode?: number; number?: number }[],
   history: HistoryEntry[],
@@ -116,9 +129,7 @@ export function episodeWatchState(
       .map((x) => `${x.season}:${x.episode}`)
   )
   const watchedKeys = new Set(
-    (episodes || [])
-      .map((x) => `${Number(x.season) || 1}:${Number(x.episode ?? x.number) || 1}`)
-      .filter((x) => watched.has(x))
+    (episodes || []).map(episodePositionKey).filter((x) => watched.has(x))
   )
   const watchedCount = watchedKeys.size
   const total = (episodes || []).length
@@ -127,9 +138,7 @@ export function episodeWatchState(
     watchedCount,
     total,
     percent: total ? Math.round((watchedCount / total) * 100) : 0,
-    nextIndex: (episodes || []).findIndex(
-      (x) => !watchedKeys.has(`${Number(x.season) || 1}:${Number(x.episode ?? x.number) || 1}`)
-    )
+    nextIndex: (episodes || []).findIndex((x) => !watchedKeys.has(episodePositionKey(x)))
   }
 }
 

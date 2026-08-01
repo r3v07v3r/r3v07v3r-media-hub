@@ -133,6 +133,36 @@ function normalizeTrailers(values?: (string | RawTrailerInput)[]): Trailer[] {
     .filter((x) => /^[\w-]{6,20}$/.test(x.source))
 }
 
+// `Number(x) || fallback` would silently turn a real season/episode 0
+// (season 0 is Cinemeta's own specials convention) into the fallback — 0
+// is falsy in JS, not "missing". Only a genuinely non-numeric/absent
+// value should fall back.
+function numberOr(value: unknown, fallback: number): number {
+  const n = Number(value)
+  return Number.isFinite(n) ? n : fallback
+}
+
+// Cinemeta's raw video entries use `.name` for the episode title (never
+// `.title`) — a blind pass-through of `meta.videos` left every episode
+// title falling back to "Episode N" in the UI, found live via Heroes
+// showing "Episode 1" instead of "Genesis". `.overview`/`.description`,
+// `.released`/`.firstAired`, and `.episode`/`.number` are all genuinely
+// duplicated by Cinemeta itself, so those don't need remapping.
+function normalizeMetaVideo(v: RawApiPayload): Episode {
+  const season = numberOr(v.season, 1)
+  const episode = numberOr(v.episode ?? v.number, 1)
+  return {
+    id: v.id || `${season}:${episode}`,
+    season,
+    episode,
+    number: episode,
+    title: v.title || v.name || `Episode ${episode}`,
+    released: v.released || v.firstAired || '',
+    description: v.description || v.overview || '',
+    thumbnail: v.thumbnail || ''
+  }
+}
+
 export function normalizeMeta(meta: RawApiPayload, fallbackType?: MediaKind): CatalogItem {
   return {
     id: meta.id || meta.imdb_id,
@@ -147,7 +177,7 @@ export function normalizeMeta(meta: RawApiPayload, fallbackType?: MediaKind): Ca
     rating: String(meta.imdbRating || meta.rating || ''),
     runtime: String(meta.runtime || ''),
     genres: Array.isArray(meta.genres) ? meta.genres : Array.isArray(meta.genre) ? meta.genre : [],
-    videos: Array.isArray(meta.videos) ? meta.videos : [],
+    videos: Array.isArray(meta.videos) ? meta.videos.map(normalizeMetaVideo) : [],
     trailers: normalizeTrailers(meta.trailers || meta.trailerStreams)
   }
 }

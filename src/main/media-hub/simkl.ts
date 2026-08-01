@@ -100,6 +100,15 @@ function episodeBlock(playback: PlaybackPosition): SimklEpisodeRef {
   return { number: playback.episode }
 }
 
+// `x || 1` would silently turn a real season 0 (Simkl's own specials
+// convention) into season 1, misreporting specials-watched to the user's
+// real Simkl account under the wrong season — 0 is falsy in JS, not
+// "missing". Only a genuinely non-numeric/absent value should fall back.
+function numberOr(value: unknown, fallback: number): number {
+  const n = Number(value)
+  return Number.isFinite(n) ? n : fallback
+}
+
 /**
  * Body for a single "mark as watched" call. Movies push a bare ref; shows
  * and anime nest a single episode under a season (defaulting to season 1
@@ -113,7 +122,7 @@ export function historyPayload(
   if (item.type === 'movie') return { movies: [ref] }
   const entry: SimklShowRef = {
     ...ref,
-    seasons: [{ number: playback.season || 1, episodes: [episodeBlock(playback)] }]
+    seasons: [{ number: numberOr(playback.season, 1), episodes: [episodeBlock(playback)] }]
   }
   return item.type === 'anime' ? { anime: [entry] } : { shows: [entry] }
 }
@@ -127,7 +136,9 @@ export function seasonHistoryPayload(
   const ref = mediaRef(item)
   const entry: SimklShowRef = {
     ...ref,
-    seasons: [{ number: season || 1, episodes: episodeNumbers.map((number) => ({ number })) }]
+    seasons: [
+      { number: numberOr(season, 1), episodes: episodeNumbers.map((number) => ({ number })) }
+    ]
   }
   return item.type === 'anime' ? { anime: [entry] } : { shows: [entry] }
 }
@@ -144,7 +155,7 @@ export function scrobblePayload(
   return {
     progress,
     [key]: ref,
-    episode: { season: playback.season || 1, number: playback.episode || 1 }
+    episode: { season: numberOr(playback.season, 1), number: numberOr(playback.episode, 1) }
   } as SimklScrobblePayload
 }
 
@@ -199,8 +210,8 @@ export function watchedFromAllItems(
         entries.push({
           id: imdb,
           type: 'series' as MediaKind,
-          season: Number(season.number) || 1,
-          episode: Number(ep.number) || 0,
+          season: numberOr(season.number, 1),
+          episode: numberOr(ep.number, 0),
           watchedAt: ep.watched_at
         })
       }

@@ -61,8 +61,15 @@ function normalizeTitle(item: TrackInput): TrackedItem {
   }
 }
 
+// `Number(v.season) || 1` would silently turn a real season 0 (the
+// specials convention) into season 1 — 0 is falsy in JS, not "missing".
 function episodePosition(v: EpisodeLike): EpisodePosition {
-  return { season: Number(v.season) || 1, episode: Number(v.episode ?? v.number) || 0 }
+  const season = Number(v.season)
+  const episode = Number(v.episode ?? v.number)
+  return {
+    season: Number.isFinite(season) ? season : 1,
+    episode: Number.isFinite(episode) ? episode : 0
+  }
 }
 
 function compareEpisode(a: EpisodePosition, b: EpisodePosition): number {

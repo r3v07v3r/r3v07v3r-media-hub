@@ -151,14 +151,24 @@ export async function catalogData(kind: MediaKind, force = false): Promise<Catal
   return items
 }
 
+// `season || 1` would silently turn a real season 0 (Simkl's own specials
+// convention, same as TMDB's) into season 1 — 0 is falsy in JS, not
+// "missing". Only a genuinely non-numeric/absent value should fall back.
+function numberOr(value: unknown, fallback: number): number {
+  const n = Number(value)
+  return Number.isFinite(n) ? n : fallback
+}
+
 /** Normalizes one raw Simkl `/tv/episodes/:id` entry into our Episode shape. */
 function simklEpisode(record: RawApiPayload, parentId: string): Episode {
+  const season = numberOr(record.season, 1)
+  const episode = numberOr(record.episode, 1)
   return {
-    id: `${parentId}:${record.season || 1}:${record.episode || 1}`,
-    season: Number(record.season) || 1,
-    episode: Number(record.episode) || 1,
-    number: Number(record.episode) || 1,
-    title: record.title || `Episode ${record.episode || 1}`,
+    id: `${parentId}:${season}:${episode}`,
+    season,
+    episode,
+    number: episode,
+    title: record.title || `Episode ${episode}`,
     released: record.date || '',
     description: record.description || '',
     thumbnail: record.img ? `https://simkl.in/episodes/${record.img}_w.jpg` : ''

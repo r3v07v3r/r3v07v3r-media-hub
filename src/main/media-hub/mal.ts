@@ -73,7 +73,7 @@ export function localWatchedEpisodeCounts(history: HistoryEntry[]): Record<strin
     const id = String(entry.id || '')
     if (!id.startsWith('kitsu:') || !Number.isFinite(entry.episode)) continue
     if (!bucket.has(id)) bucket.set(id, new Set())
-    bucket.get(id)!.add(`${entry.season || 1}:${entry.episode}`)
+    bucket.get(id)!.add(`${Number.isFinite(entry.season) ? entry.season : 1}:${entry.episode}`)
   }
   const counts: Record<string, number> = {}
   for (const [id, set] of bucket) counts[id] = set.size
