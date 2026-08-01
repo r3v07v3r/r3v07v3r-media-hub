@@ -408,7 +408,8 @@ export function registerWatchPartyIpc(): void {
       })
       return {
         ok: true,
-        code: encodeRelayShareCode({ relay: { url: creds.url, roomId }, secret, name })
+        code: encodeRelayShareCode({ relay: { url: creds.url, roomId }, secret, name }),
+        wanAvailable: true
       }
     }
 
