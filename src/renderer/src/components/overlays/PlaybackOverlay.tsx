@@ -231,16 +231,7 @@ export function PlaybackOverlay() {
   useEffect(() => {
     if (!playbackMedia) return
     closeRef.current?.focus()
-    function onKey(e: KeyboardEvent) {
-      if (e.key === 'Escape') stopPlayback()
-      if (e.key === ' ') {
-        e.preventDefault()
-        togglePlay()
-      }
-    }
-    document.addEventListener('keydown', onKey)
-    return () => document.removeEventListener('keydown', onKey)
-  }, [playbackMedia, stopPlayback, togglePlay])
+  }, [playbackMedia])
 
   const resetControlsTimer = useCallback(() => {
     setControlsVisible(true)
@@ -425,13 +416,13 @@ export function PlaybackOverlay() {
     }
   }, [activeSyncRequestId, result?.url, result?.compatibility, targetBufferSeconds, tracks, reportSyncReady])
 
-  const handleSeek = useCallback(
-    (event: React.MouseEvent<HTMLDivElement>) => {
-      if (followingParty && !canControl) return
-      if (!duration || !Number.isFinite(duration)) return
-      const rect = event.currentTarget.getBoundingClientRect()
-      const fraction = Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width))
-      const target = fraction * duration
+  // Shared by the scrubber click (handleSeek) and the ←/→ 15s nudge
+  // (seekRelative) — both just need to land on an absolute target time via
+  // the same party-aware path (a full host-coordinated seek-sync when
+  // hosting, a plain broadcast seek otherwise), so this is the one place
+  // that logic lives.
+  const seekToTarget = useCallback(
+    (target: number) => {
       if (isPartyHost && partyStatus?.inParty) {
         const requestId = crypto.randomUUID()
         videoRef.current?.pause()
@@ -458,17 +449,65 @@ export function PlaybackOverlay() {
         }
       }
     },
-    [
-      duration,
-      performSeek,
-      followingParty,
-      canControl,
-      isPartyHost,
-      partyStatus,
-      clearSyncSeek,
-      checkPartySeekReady
-    ]
+    [performSeek, isPartyHost, canControl, partyStatus, clearSyncSeek, checkPartySeekReady]
   )
+
+  const handleSeek = useCallback(
+    (event: React.MouseEvent<HTMLDivElement>) => {
+      if (followingParty && !canControl) return
+      if (!duration || !Number.isFinite(duration)) return
+      const rect = event.currentTarget.getBoundingClientRect()
+      const fraction = Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width))
+      seekToTarget(fraction * duration)
+    },
+    [duration, followingParty, canControl, seekToTarget]
+  )
+
+  // ←/→ nudge the playhead 15s — the same clamped-to-[0,duration] target
+  // both the mouse scrubber and party sync already expect; reusing
+  // seekToTarget keeps this respecting the same host/follower rules as
+  // every other way of seeking (locked out entirely while following
+  // unless the host has turned on shared control).
+  const seekRelative = useCallback(
+    (deltaSeconds: number) => {
+      if (followingParty && !canControl) return
+      if (!duration || !Number.isFinite(duration)) return
+      const target = Math.min(duration, Math.max(0, currentTime + deltaSeconds))
+      seekToTarget(target)
+    },
+    [duration, currentTime, followingParty, canControl, seekToTarget]
+  )
+
+  useEffect(() => {
+    if (!playbackMedia) return
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') {
+        // Mirror standard video-player UX: the first Escape only backs out
+        // of fullscreen (this is real OS-level BrowserWindow fullscreen, not
+        // the DOM Fullscreen API, so the OS doesn't do this for us). Only a
+        // second Escape, once already windowed, closes the player.
+        if (isFullscreen) {
+          handleToggleFullscreen()
+        } else {
+          stopPlayback()
+        }
+      }
+      if (e.key === ' ') {
+        e.preventDefault()
+        togglePlay()
+      }
+      if (e.key === 'ArrowRight') {
+        e.preventDefault()
+        seekRelative(15)
+      }
+      if (e.key === 'ArrowLeft') {
+        e.preventDefault()
+        seekRelative(-15)
+      }
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [playbackMedia, stopPlayback, togglePlay, seekRelative, isFullscreen, handleToggleFullscreen])
 
   async function selectTrack(kindKey: 'audio' | 'subtitle', ordinal: number) {
     if (!playbackMedia || trackChangeBusy) return
@@ -590,6 +629,44 @@ export function PlaybackOverlay() {
     }
     setOpenMenu(null)
   }
+
+  // "Always have subtitles" — automatically fetches and applies an
+  // OpenSubtitles match as soon as this title starts, same as clicking the
+  // Subtitles menu and picking the first result manually would, so
+  // there's always something on screen without that manual step. Uses the
+  // exact same search (already scoped server-side to the user's
+  // subtitleLanguage setting — see subtitlesService.ts) and apply path the
+  // Subtitles menu itself uses; the person can still switch to an embedded
+  // track or a different OpenSubtitles result afterward via that menu.
+  // Runs once per title: this component remounts fresh per playbackMedia
+  // (see GlobalOverlays.tsx's `key={playbackMedia?.id}`), so an empty
+  // dependency array is genuinely "once per session," not just "once
+  // ever." Best-effort — no subtitles found is a normal, silent outcome,
+  // not something worth an error toast for.
+  useEffect(() => {
+    if (!playbackMedia) return
+    let cancelled = false
+    const api = window.api?.mediaHub
+    if (!api) return
+    api.subtitles
+      .search(
+        { id: playbackMedia.id, type: kind, title: playbackMedia.title },
+        { season: playbackMedia.seasonNumber, episode: playbackMedia.episodeNumber }
+      )
+      .then(async (results) => {
+        if (cancelled || !results?.length) return
+        setSubtitleResults(results)
+        const applied = await api.subtitles.apply(results[0].fileId, false)
+        if (cancelled || !applied?.vttDataUrl) return
+        subtitleVttRef.current = decodeVttDataUrl(applied.vttDataUrl)
+        applyShiftedSubtitle()
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const audioTracks = useMemo<MediaTrack[]>(() => tracks?.audio ?? [], [tracks])
   const subtitleTracks = useMemo<MediaTrack[]>(() => tracks?.subtitle ?? [], [tracks])
