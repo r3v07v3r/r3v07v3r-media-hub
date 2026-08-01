@@ -87,6 +87,8 @@ export const MEDIA_HUB_CHANNELS = {
   partyQueue: 'mediahub:party:queue',
   partyNowPlaying: 'mediahub:party:now-playing',
   partyPlaybackAction: 'mediahub:party:playback-action',
+  partySetMemberControl: 'mediahub:party:set-member-control',
+  partyRequestPlay: 'mediahub:party:request-play',
   partySyncConnect: 'mediahub:party-sync:connect',
   partySyncDisconnect: 'mediahub:party-sync:disconnect',
   partyEvent: 'mediahub:party:event', // push event

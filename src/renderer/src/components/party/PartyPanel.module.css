@@ -133,6 +133,15 @@
   background: rgba(56, 229, 255, 0.12);
 }
 
+.memberControlToggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
 .queueRow {
   display: flex;
   align-items: center;

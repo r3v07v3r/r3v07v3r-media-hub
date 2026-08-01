@@ -79,6 +79,7 @@ interface PartyStateHostDirect {
   hostName: string
   queue: PartyQueueEntry[]
   upnpStop?: () => void
+  allowMemberControl: boolean
 }
 
 interface PartyStateHostRelay {
@@ -93,6 +94,7 @@ interface PartyStateHostRelay {
   selfName: string
   hostName: string
   queue: PartyQueueEntry[]
+  allowMemberControl: boolean
 }
 
 interface PartyStateClientDirect {
@@ -105,6 +107,7 @@ interface PartyStateClientDirect {
   hostName: string
   selfId: string
   queue: PartyQueueEntry[]
+  allowMemberControl: boolean
 }
 
 interface PartyStateClientRelay {
@@ -117,6 +120,7 @@ interface PartyStateClientRelay {
   hostName: string
   selfId: string
   queue: PartyQueueEntry[]
+  allowMemberControl: boolean
 }
 
 type PartyState =
@@ -149,9 +153,17 @@ function broadcastPartyState(): void {
   const current = party
   if (!current || current.role !== 'host') return
   const members = partyMemberSummaries()
-  const payload = encryptMessage(current.secret, { type: 'party-state', members })
+  const payload = encryptMessage(current.secret, {
+    type: 'party-state',
+    members,
+    allowMemberControl: current.allowMemberControl
+  })
   partyBroadcast(payload)
-  sendToRenderer(MEDIA_HUB_CHANNELS.partyEvent, { type: 'party-state', members })
+  sendToRenderer(MEDIA_HUB_CHANNELS.partyEvent, {
+    type: 'party-state',
+    members,
+    allowMemberControl: current.allowMemberControl
+  })
 }
 
 function broadcastQueue(): void {
@@ -164,6 +176,13 @@ function broadcastQueue(): void {
 
 function handlePartyMessage(fromId: string, msg: PartyMessage): void {
   const current = party
+  if (current?.role === 'host' && msg?.type === 'play-request') {
+    sendToRenderer(MEDIA_HUB_CHANNELS.partyEvent, {
+      type: 'play-request',
+      item: msg.item as { id: string; type: string; title: string; poster?: string }
+    })
+    return
+  }
   if (current?.role === 'host' && (msg?.type === 'suggest' || msg?.type === 'vote')) {
     const event: PartyQueueEvent =
       msg.type === 'vote'
@@ -186,7 +205,7 @@ function handlePartyMessage(fromId: string, msg: PartyMessage): void {
     broadcastQueue()
     return
   }
-  if (current?.role === 'host' && msg?.type === 'seek') return
+  if (current?.role === 'host' && msg?.type === 'seek' && !current.allowMemberControl) return
   if (current?.role === 'host' && current.mode !== 'relay') {
     const payload = encryptMessage(current.secret, { ...msg, from: fromId })
     for (const [id, m] of current.members) {
@@ -370,7 +389,8 @@ export function registerWatchPartyIpc(): void {
         hostId,
         selfName: name,
         hostName: name,
-        queue: []
+        queue: [],
+        allowMemberControl: false
       }
       party = hostRelayState
       ws.on('message', (raw) => {
@@ -434,7 +454,8 @@ export function registerWatchPartyIpc(): void {
       hostId,
       selfName: name,
       hostName: name,
-      queue: []
+      queue: [],
+      allowMemberControl: false
     }
     party = hostDirectState
     wss.on('connection', (ws) => {
@@ -501,7 +522,8 @@ export function registerWatchPartyIpc(): void {
         selfName: displayName,
         hostName: parsed.name || '',
         selfId: '',
-        queue: []
+        queue: [],
+        allowMemberControl: false
       }
       party = clientRelayState
       ws.on('message', (raw) => {
@@ -520,8 +542,16 @@ export function registerWatchPartyIpc(): void {
         if (!msg) return
         if (msg.type === 'party-state') {
           const members = (msg.members as PartyMemberSummary[]) || []
-          if (party?.role === 'client') party.members = members
-          sendToRenderer(MEDIA_HUB_CHANNELS.partyEvent, { type: 'party-state', members })
+          const allowMemberControl = Boolean(msg.allowMemberControl)
+          if (party?.role === 'client') {
+            party.members = members
+            party.allowMemberControl = allowMemberControl
+          }
+          sendToRenderer(MEDIA_HUB_CHANNELS.partyEvent, {
+            type: 'party-state',
+            members,
+            allowMemberControl
+          })
           return
         }
         if (msg.type === 'queue-sync') {
@@ -539,7 +569,13 @@ export function registerWatchPartyIpc(): void {
           sendToRenderer(MEDIA_HUB_CHANNELS.partyEvent, { type: 'host-disconnected' })
           return
         }
-        if (!envelope.isHost && (msg.type === 'nowPlaying' || msg.type === 'seek')) return
+        if (!envelope.isHost && msg.type === 'nowPlaying') return
+        if (
+          !envelope.isHost &&
+          msg.type === 'seek' &&
+          !(party?.role === 'client' && party.allowMemberControl)
+        )
+          return
         handlePartyMessage(envelope.isHost ? 'host' : String(envelope.connId || ''), msg)
       })
       ws.on('close', () => {
@@ -579,7 +615,8 @@ export function registerWatchPartyIpc(): void {
       selfName: displayName,
       hostName: parsed.name || '',
       selfId: '',
-      queue: []
+      queue: [],
+      allowMemberControl: false
     }
     party = clientDirectState
     connectedWs.on('message', (raw) => {
@@ -591,8 +628,16 @@ export function registerWatchPartyIpc(): void {
       }
       if (msg.type === 'party-state') {
         const members = (msg.members as PartyMemberSummary[]) || []
-        if (party?.role === 'client') party.members = members
-        sendToRenderer(MEDIA_HUB_CHANNELS.partyEvent, { type: 'party-state', members })
+        const allowMemberControl = Boolean(msg.allowMemberControl)
+        if (party?.role === 'client') {
+          party.members = members
+          party.allowMemberControl = allowMemberControl
+        }
+        sendToRenderer(MEDIA_HUB_CHANNELS.partyEvent, {
+          type: 'party-state',
+          members,
+          allowMemberControl
+        })
         return
       }
       if (msg.type === 'queue-sync') {
@@ -628,9 +673,41 @@ export function registerWatchPartyIpc(): void {
       members: partyMemberSummaries(),
       selfId: current.role === 'host' ? current.hostId : current.selfId || '',
       selfName: current.selfName || '',
-      hostName: current.hostName || ''
+      hostName: current.hostName || '',
+      allowMemberControl: Boolean(current.allowMemberControl)
     }
   })
+
+  handle<{ allow?: boolean }, { ok: true }>(
+    MEDIA_HUB_CHANNELS.partySetMemberControl,
+    (_e, payload) => {
+      const current = party
+      if (!current || current.role !== 'host') throw new Error('Only the host can change this.')
+      current.allowMemberControl = Boolean(payload?.allow)
+      broadcastPartyState()
+      return { ok: true }
+    }
+  )
+
+  handle<{ item?: PartyQueueEntry['item'] }, { ok: true }>(
+    MEDIA_HUB_CHANNELS.partyRequestPlay,
+    (_e, payload) => {
+      const current = party
+      if (!current) throw new Error('You are not in a party.')
+      const item = payload?.item
+      if (!item?.id || !item.type) throw new Error('Nothing to play.')
+      const event = {
+        type: 'play-request' as const,
+        item: { id: item.id, type: item.type, title: item.title, poster: item.poster || '' }
+      }
+      if (current.role === 'host') {
+        sendToRenderer(MEDIA_HUB_CHANNELS.partyEvent, { type: 'play-request', item: event.item })
+      } else {
+        partyBroadcast(encryptMessage(current.secret, event))
+      }
+      return { ok: true }
+    }
+  )
 
   handle<PartySuggestArgs, { ok: true }>(MEDIA_HUB_CHANNELS.partySuggest, (_e, item) => {
     const current = party

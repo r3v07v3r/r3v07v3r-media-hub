@@ -313,6 +313,14 @@ const api = {
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.partyNowPlaying, payload),
       playbackAction: (action: PartyPlaybackAction): Promise<{ ok: boolean }> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.partyPlaybackAction, action),
+      setMemberControl: (allow: boolean): Promise<{ ok: true }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.partySetMemberControl, { allow }),
+      requestPlay: (item: {
+        id: string
+        type: string
+        title: string
+        poster?: string
+      }): Promise<{ ok: true }> => ipcRenderer.invoke(MEDIA_HUB_CHANNELS.partyRequestPlay, { item }),
       syncConnect: (url: string, inviteKey: string): Promise<ConnectResult> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.partySyncConnect, { url, inviteKey }),
       syncDisconnect: (): Promise<{ ok: true }> =>

@@ -21,6 +21,8 @@ export function PartyPanel() {
     leaveParty,
     voteQueue,
     removeFromQueue,
+    requestPartyPlay,
+    setPartyMemberControl,
     pushNotification
   } = useAppState()
 
@@ -151,6 +153,16 @@ export function PartyPanel() {
                 </li>
               ))}
             </ul>
+            {isHost && (
+              <label className={styles.memberControlToggle}>
+                <input
+                  type="checkbox"
+                  checked={Boolean(partyStatus?.allowMemberControl)}
+                  onChange={(e) => setPartyMemberControl(e.target.checked)}
+                />
+                Anyone can control playback
+              </label>
+            )}
           </div>
 
           {partyQueue.length > 0 && (
@@ -163,6 +175,14 @@ export function PartyPanel() {
                     <li key={entry.queueId} className={styles.queueRow}>
                       <span className={styles.queueTitle}>{entry.item.title}</span>
                       <div className={styles.queueActions}>
+                        <button
+                          type="button"
+                          className={styles.voteButton}
+                          onClick={() => requestPartyPlay(entry.item)}
+                          aria-label={`Play ${entry.item.title}`}
+                        >
+                          <Icon name="play" size={12} />
+                        </button>
                         <button
                           type="button"
                           className={styles.voteButton}

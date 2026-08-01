@@ -436,13 +436,16 @@ export interface PartyStatusResult {
   selfId?: string
   selfName?: string
   hostName?: string
+  /** Host-controlled: when true, every member's own play/pause/seek controls apply and sync to the group, not just the host's. */
+  allowMemberControl?: boolean
 }
 
 export type PartyEventPayload =
-  | { type: 'party-state'; members: PartyMemberSummary[] }
+  | { type: 'party-state'; members: PartyMemberSummary[]; allowMemberControl?: boolean }
   | { type: 'queue-sync'; queue: PartyQueueEntry[] }
   | { type: 'message'; from: string; message: unknown }
   | { type: 'host-disconnected' }
+  | { type: 'play-request'; item: { id: string; type: string; title: string; poster?: string } }
 
 export interface PartyNowPlayingPayload {
   infoHash: string

@@ -22,6 +22,7 @@ import {
 } from '@renderer/types'
 import { CONTINUE_WATCHING, USER_PROFILES } from '@renderer/data/mockData'
 import type {
+  CatalogItem,
   MediaHubSettingsSnapshot,
   MediaKind,
   MediaTracks,
@@ -268,6 +269,15 @@ interface AppStateValue {
   /** Absolute position (seconds) a follower should seek to once their own independently-resolved stream is ready — set from an incoming `nowPlaying` announcement, consumed once by PlaybackOverlay. */
   partyPendingSeek: number | null
   consumePartyPendingSeek: () => void
+  /** Host-only, broadcast to every member: unlocks everyone's own play/pause/seek controls instead of just the host's. */
+  setPartyMemberControl: (allow: boolean) => Promise<void>
+  /** Any member can call this to start a suggested queue item playing for the whole party — the host resolves and starts it (directly if this device IS the host, otherwise by asking the host over the party channel). */
+  requestPartyPlay: (item: {
+    id: string
+    type: string
+    title: string
+    poster?: string
+  }) => Promise<void>
 
   contextMenu: { x: number; y: number; media: MediaItem } | null
   openContextMenu: (x: number, y: number, media: MediaItem) => void
@@ -417,7 +427,15 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     refreshPartyStatus()
     return api.onEvent((event) => {
       if (event.type === 'party-state') {
-        setPartyStatus((prev) => (prev ? { ...prev, members: event.members } : prev))
+        setPartyStatus((prev) =>
+          prev
+            ? {
+                ...prev,
+                members: event.members,
+                allowMemberControl: event.allowMemberControl ?? prev.allowMemberControl
+              }
+            : prev
+        )
       } else if (event.type === 'queue-sync') {
         setPartyQueue(event.queue)
       } else if (event.type === 'host-disconnected') {
@@ -847,6 +865,71 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     })
   }, [partyStatus, startPlayback, pushNotification])
 
+  // A suggestion only ever carries {id, type, title, poster} — no episode —
+  // so a series/anime suggestion is inherently ambiguous about which
+  // episode to start. Defaulting to S1E1 (rather than leaving season/
+  // episode undefined) matters here specifically: an undefined
+  // season/episode against a multi-episode torrent leaves stream:play with
+  // no way to pick which file inside it to serve, silently failing to
+  // produce a playable stream at all. Movies have no such ambiguity.
+  const startSuggestedPlayback = useCallback(
+    (catalogItem: CatalogItem) => {
+      const media = catalogItemToMediaItem(catalogItem)
+      return startPartyPlayback(
+        media.mediaKind === 'movie' ? media : { ...media, seasonNumber: 1, episodeNumber: 1 }
+      )
+    },
+    [startPartyPlayback]
+  )
+
+  // Host side of "any member can play a suggestion" (see PartyPanel's
+  // queue Play button): a non-host member's play-request arrives here
+  // exactly like the nowPlaying unwrap above, then starts for real via
+  // the normal startPartyPlayback — so it's announced to everyone else
+  // the same as if the host had picked it themselves.
+  useEffect(() => {
+    if (partyStatus?.role !== 'host') return
+    const api = window.api?.mediaHub?.party
+    if (!api) return
+    return api.onEvent((event) => {
+      if (event.type !== 'play-request') return
+      const catalogApi = window.api?.mediaHub?.catalog
+      if (!catalogApi || !event.item.id || !event.item.type) return
+      catalogApi
+        .meta(event.item.type as MediaKind, event.item.id)
+        .then(startSuggestedPlayback)
+        .catch(() => {
+          pushNotification({ tone: 'error', message: "Couldn't load that suggestion." })
+        })
+    })
+  }, [partyStatus, startSuggestedPlayback, pushNotification])
+
+  const setPartyMemberControl = useCallback(async (allow: boolean) => {
+    const api = window.api?.mediaHub?.party
+    if (!api) return
+    await api.setMemberControl(allow)
+  }, [])
+
+  const requestPartyPlay = useCallback(
+    async (item: { id: string; type: string; title: string; poster?: string }) => {
+      const api = window.api?.mediaHub?.party
+      if (!api) return
+      if (partyStatus?.role === 'host') {
+        const catalogApi = window.api?.mediaHub?.catalog
+        if (!catalogApi) return
+        try {
+          const catalogItem = await catalogApi.meta(item.type as MediaKind, item.id)
+          await startSuggestedPlayback(catalogItem)
+        } catch {
+          pushNotification({ tone: 'error', message: "Couldn't load that suggestion." })
+        }
+        return
+      }
+      await api.requestPlay(item)
+    },
+    [partyStatus, startSuggestedPlayback, pushNotification]
+  )
+
   const consumePartyPendingSeek = useCallback(() => setPartyPendingSeek(null), [])
 
   const openContextMenu = useCallback(
@@ -998,6 +1081,8 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       startPartyPlayback,
       partyPendingSeek,
       consumePartyPendingSeek,
+      setPartyMemberControl,
+      requestPartyPlay,
       contextMenu,
       openContextMenu,
       closeContextMenu,
@@ -1072,6 +1157,8 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       startPartyPlayback,
       partyPendingSeek,
       consumePartyPendingSeek,
+      setPartyMemberControl,
+      requestPartyPlay,
       contextMenu,
       openContextMenu,
       closeContextMenu,

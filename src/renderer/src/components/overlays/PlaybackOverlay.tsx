@@ -50,6 +50,10 @@ export function PlaybackOverlay() {
   // watchParty.ts's party:playback-action handler), so this UI-layer lock
   // is what actually keeps a follower from fighting the host's control.
   const followingParty = Boolean(partyStatus?.inParty && partyStatus.role === 'client')
+  // Host-toggled (see PartyPanel's "Anyone can control playback" switch):
+  // when on, a follower's own play/pause/seek stop being locked out and
+  // start broadcasting too, same as the host's always have.
+  const canControl = Boolean(followingParty && partyStatus?.allowMemberControl)
   const videoRef = useRef<HTMLVideoElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const closeRef = useRef<HTMLButtonElement>(null)
@@ -165,18 +169,18 @@ export function PlaybackOverlay() {
   }, [trackedMediaId, playbackMedia, clearSyncSeek])
 
   const togglePlay = useCallback(() => {
-    if (followingParty) return
+    if (followingParty && !canControl) return
     const video = videoRef.current
     if (!video) return
     const willPlay = video.paused
     if (willPlay) video.play().catch(() => {})
     else video.pause()
-    if (isPartyHost) {
+    if (isPartyHost || canControl) {
       window.api?.mediaHub?.party
         .playbackAction({ type: willPlay ? 'play' : 'pause' })
         .catch(() => {})
     }
-  }, [followingParty, isPartyHost])
+  }, [followingParty, canControl, isPartyHost])
 
   // Real OS-level window fullscreen (via the main process's
   // BrowserWindow.setFullScreen), not the DOM Fullscreen API on this
@@ -417,7 +421,7 @@ export function PlaybackOverlay() {
 
   const handleSeek = useCallback(
     (event: React.MouseEvent<HTMLDivElement>) => {
-      if (followingParty) return
+      if (followingParty && !canControl) return
       if (!duration || !Number.isFinite(duration)) return
       const rect = event.currentTarget.getBoundingClientRect()
       const fraction = Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width))
@@ -441,7 +445,7 @@ export function PlaybackOverlay() {
         }, SYNC_TIMEOUT_MS)
       } else {
         performSeek(target)
-        if (isPartyHost) {
+        if (isPartyHost || canControl) {
           window.api?.mediaHub?.party
             .playbackAction({ type: 'seek', position: target })
             .catch(() => {})
@@ -452,6 +456,7 @@ export function PlaybackOverlay() {
       duration,
       performSeek,
       followingParty,
+      canControl,
       isPartyHost,
       partyStatus,
       clearSyncSeek,
@@ -654,13 +659,17 @@ export function PlaybackOverlay() {
     consumePartyPendingSeek()
   }, [partyPendingSeek, bufferingReady, performSeek, consumePartyPendingSeek])
 
-  // Follower side of party-synced playback: the host is the only one who
-  // ever calls party.playbackAction (see togglePlay/handleSeek above and
-  // the drift-correction interval below), so every message received here
-  // genuinely originated from the host and should just be applied
-  // directly — no further host/client branching needed.
+  // Applies an incoming play/pause/seek/position action to this device's
+  // own video. Normally only a follower ever receives these (the host is
+  // the sole broadcaster) — but once the host turns on "Anyone can
+  // control playback" (see PartyPanel), any member's action reaches
+  // everyone else including the host, so this runs for the host too in
+  // that case. The wire protocol guarantees a sender never gets its own
+  // broadcast echoed back, so there's no risk of a member's own seek
+  // bouncing back and re-applying to itself.
   useEffect(() => {
-    if (!followingParty) return
+    if (!partyStatus?.inParty) return
+    if (partyStatus.role === 'host' && !partyStatus.allowMemberControl) return
     const api = window.api?.mediaHub?.party
     if (!api) return
     return api.onEvent((event) => {
@@ -708,7 +717,7 @@ export function PlaybackOverlay() {
         }, SYNC_PLAY_DELAY_MS)
       }
     })
-  }, [followingParty, performSeek, clearSyncSeek, partyStatus])
+  }, [performSeek, clearSyncSeek, partyStatus, result?.compatibility])
 
   // Host side: keeps followers roughly in sync even without an explicit
   // seek (natural playback drift, a follower who briefly stalled) — see
@@ -853,7 +862,7 @@ export function PlaybackOverlay() {
         {result.autoReason && <span className={styles.playerAutoNote}>{result.autoReason}</span>}
 
         <div
-          className={`${styles.playerScrubberTrack} ${followingParty ? styles.playerScrubberLocked : ''}`}
+          className={`${styles.playerScrubberTrack} ${followingParty && !canControl ? styles.playerScrubberLocked : ''}`}
           onClick={handleSeek}
         >
           <div
@@ -867,7 +876,7 @@ export function PlaybackOverlay() {
             type="button"
             className={styles.playerIconButton}
             onClick={togglePlay}
-            disabled={followingParty}
+            disabled={followingParty && !canControl}
             aria-label={playing ? 'Pause' : 'Play'}
           >
             <Icon name={playing ? 'pause' : 'play'} size={15} />
@@ -882,7 +891,7 @@ export function PlaybackOverlay() {
             {playbackMedia.episodeTitle ? ` — ${playbackMedia.episodeTitle}` : ''}
           </span>
 
-          {followingParty && (
+          {followingParty && !canControl && (
             <span className={styles.playerPartyBadge}>
               <Icon name="people" size={12} /> Host is controlling playback
             </span>
