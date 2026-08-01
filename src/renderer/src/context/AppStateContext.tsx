@@ -747,7 +747,16 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       const mediaId = buildMediaId(kind, media.id, media.seasonNumber, media.episodeNumber)
       setResolvingMedia({ id: media.id, stage: 'searching' })
       try {
-        const resolved = await api.stream.resolve(kind, media.id)
+        // For series/anime, the stream search itself needs to know which
+        // episode is wanted, not just which show — passing the bare show
+        // id here (found live, via a "No matching video file" error)
+        // meant the addon had no episode context at all and could rank a
+        // completely different season's pack as "best", which then had no
+        // file matching the actually-requested episode at play time.
+        // `mediaId` already encodes season/episode (same value stream.play
+        // uses below) via the same imdbId:season:episode convention the
+        // addon protocol itself expects.
+        const resolved = await api.stream.resolve(kind, mediaId)
         if (!resolved.best) {
           // `queued` (see StreamResolveResult's own doc comment) means a
           // real torrent existed but nothing was cached yet, and the

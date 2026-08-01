@@ -67,6 +67,12 @@ export function PlaybackOverlay() {
   const [volume, setVolume] = useState(1)
   const [controlsVisible, setControlsVisible] = useState(true)
   const [openMenu, setOpenMenu] = useState<'audio' | 'subtitles' | 'quality' | null>(null)
+  // Guards against clicking a second track while the first is still
+  // restarting ffmpeg (a real crash found live: the second request's
+  // stop() kills the first one's not-yet-ready process, which then
+  // reports itself as a failure) — see vlc.ts's generation tracking for
+  // the same protection at the backend layer too.
+  const [trackChangeBusy, setTrackChangeBusy] = useState(false)
   // Mirrors activeSelectionRef.current.upscaleHeight for rendering purposes
   // (the ref itself doesn't trigger a re-render on change) — 0 means "off".
   const [appliedUpscaleHeight, setAppliedUpscaleHeight] = useState(0)
@@ -465,13 +471,14 @@ export function PlaybackOverlay() {
   )
 
   async function selectTrack(kindKey: 'audio' | 'subtitle', ordinal: number) {
-    if (!playbackMedia) return
+    if (!playbackMedia || trackChangeBusy) return
     const video = videoRef.current
     // During compatibility mode, video.currentTime is relative to the
     // current transcode segment (see streamStartOffsetRef's definition
     // above) — the absolute position is the segment's own start offset
     // plus that relative time, not the relative time alone.
     const startTime = streamStartOffsetRef.current + (video?.currentTime ?? 0)
+    setTrackChangeBusy(true)
     try {
       const response = await window.api?.mediaHub?.playback.selectTracks({
         audio: kindKey === 'audio' ? ordinal : undefined,
@@ -488,12 +495,28 @@ export function PlaybackOverlay() {
       setResult((prev) => (prev ? { ...prev, ...response.selection, url: response.url } : prev))
       setTracks(response.tracks)
     } catch (error) {
-      pushNotification({
-        tone: 'error',
-        message: error instanceof Error ? error.message : 'Could not change tracks.'
-      })
+      // A rapid second track/quality change while the first was still
+      // restarting ffmpeg supersedes it server-side (see vlc.ts's
+      // generation tracking) — the newer request already applied
+      // correctly, so the older one silently losing the race isn't a
+      // real failure worth alarming over. Checked via the message text,
+      // not `error.name` — Electron's IPC error round-trip reconstructs a
+      // plain `Error` on this side, so a thrown error's original `.name`
+      // only survives inside the reconstructed `.message` string, not as
+      // this object's own `.name` (confirmed live: `.name` here is always
+      // just "Error").
+      const isSuperseded =
+        error instanceof Error && error.message.includes('SupersededTranscodeError')
+      if (!isSuperseded) {
+        pushNotification({
+          tone: 'error',
+          message: error instanceof Error ? error.message : 'Could not change tracks.'
+        })
+      }
+    } finally {
+      setTrackChangeBusy(false)
+      setOpenMenu(null)
     }
-    setOpenMenu(null)
   }
 
   // Local-only, never broadcast to the party (see watchParty.ts — only
@@ -931,6 +954,7 @@ export function PlaybackOverlay() {
                       type="button"
                       className={`${styles.playerMenuItem} ${t.default ? styles.playerMenuItemActive : ''}`}
                       onClick={() => selectTrack('audio', t.ordinal)}
+                      disabled={trackChangeBusy}
                     >
                       {t.label}
                       {t.default && <Icon name="check" size={12} />}
@@ -960,6 +984,7 @@ export function PlaybackOverlay() {
                     type="button"
                     className={styles.playerMenuItem}
                     onClick={() => selectTrack('subtitle', t.ordinal)}
+                    disabled={trackChangeBusy}
                   >
                     {t.label}
                   </button>

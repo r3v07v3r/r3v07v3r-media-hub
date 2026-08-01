@@ -692,6 +692,11 @@ export function createFfmpegTranscoder({
 }: CreateFfmpegTranscoderOptions = {}): FfmpegTranscoder {
   let child: ChildProcess | null = null
   let server: http.Server | null = null
+  // Bumped once per start() call — lets a still-starting call recognize
+  // it's been superseded by a newer one (e.g. clicking a second track
+  // change before the first has finished restarting ffmpeg) rather than
+  // reporting the kill stop() issues on its behalf as a genuine failure.
+  let generation = 0
 
   async function stop(): Promise<void> {
     if (server) {
@@ -726,6 +731,13 @@ export function createFfmpegTranscoder({
     targetHeight?: number
   ): Promise<FfmpegTranscoderResult> {
     if (!ffmpegPath) throw new Error('Compatibility mode is unavailable (ffmpeg not found).')
+    // Bumped *before* stop() deliberately — stop() kills and awaits the
+    // previous child's exit, which runs that child's own exit handler
+    // (registered back when IT called start()) synchronously within this
+    // await. That handler needs to already see the new generation to
+    // recognize itself as superseded; bumping after stop() would still
+    // show it the old generation and misreport a real crash instead.
+    const myGeneration = ++generation
     await stop()
     const port = await freePort()
     const token = randomBytes(32).toString('hex')
@@ -812,6 +824,18 @@ export function createFfmpegTranscoder({
       })
       spawned.once('exit', (code) => {
         if (ready) return
+        // A newer start() call already issued the stop() that killed this
+        // process (e.g. a second track change clicked before the first
+        // finished restarting ffmpeg) — that supersession is the newer
+        // call's own doing, not a failure of this one, so don't report it
+        // as "ffmpeg exited before producing video" for a request nobody
+        // is still waiting on the normal way.
+        if (myGeneration !== generation) {
+          const superseded = new Error('Superseded by a newer track/quality change.')
+          superseded.name = 'SupersededTranscodeError'
+          reject(superseded)
+          return
+        }
         // A short/low-bitrate clip can finish under READY_BYTES entirely —
         // if ffmpeg exited having produced *some* real output, that's
         // still a legitimate success, not a failure.
