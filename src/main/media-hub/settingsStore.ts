@@ -43,6 +43,7 @@ export interface MediaHubRawSettings {
   osToken?: string
   partySyncUrl?: string
   partySyncInviteKey?: string
+  partyDisplayName?: string
   theme?: string
   subtitleLanguage?: string
   updateChannel?: string

@@ -832,19 +832,32 @@ export function R3PartySyncSection() {
  * from here is immediately reflected in the topbar and vice versa.
  */
 export function WatchPartySection() {
-  const { partyStatus, partyHostCode, mediaHubSettings, hostParty, joinParty, leaveParty } =
-    useAppState()
-  const [name, setName] = useState('')
+  const {
+    partyStatus,
+    partyHostCode,
+    mediaHubSettings,
+    refreshMediaHubSettings,
+    hostParty,
+    joinParty,
+    leaveParty
+  } = useAppState()
+  const [nameEdited, setNameEdited] = useState<string | null>(null)
+  const name = nameEdited ?? mediaHubSettings?.partyDisplayName ?? ''
   const [joinCode, setJoinCode] = useState('')
   const [mode, setMode] = useState<PartyMode>('direct')
   const [actionStatus, setActionStatus] = useState<Status>({ kind: 'idle' })
   const relayReady = mediaHubSettings?.partySyncConnected ?? false
+
+  function rememberName(value: string): void {
+    window.api?.mediaHub?.settings.setPartyDisplayName(value).then(() => refreshMediaHubSettings())
+  }
 
   async function host() {
     if (!name.trim()) return
     setActionStatus({ kind: 'busy' })
     try {
       await hostParty(name.trim(), relayReady ? mode : 'direct')
+      rememberName(name.trim())
       setActionStatus({ kind: 'idle' })
     } catch (error) {
       setActionStatus({
@@ -859,6 +872,7 @@ export function WatchPartySection() {
     setActionStatus({ kind: 'busy' })
     try {
       await joinParty(joinCode.trim(), name.trim())
+      rememberName(name.trim())
       setActionStatus({ kind: 'idle' })
     } catch (error) {
       setActionStatus({
@@ -915,7 +929,7 @@ export function WatchPartySection() {
                 className={styles.fieldInput}
                 type="text"
                 value={name}
-                onChange={(e) => setName(e.target.value)}
+                onChange={(e) => setNameEdited(e.target.value)}
               />
             </label>
             <label className={styles.field}>

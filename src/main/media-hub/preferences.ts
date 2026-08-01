@@ -40,6 +40,7 @@ export function publicSettings(settings: Record<string, unknown> = {}): MediaHub
     simklClientId: String(settings.simklClientId || ''),
     subtitleLanguage: String(settings.subtitleLanguage || 'en'),
     partySyncUrl: String(settings.partySyncUrl || ''),
+    partyDisplayName: String(settings.partyDisplayName || ''),
     updateChannel: normalizeUpdateChannel(settings.updateChannel),
     playbackBuffer: normalizePlaybackBuffer(settings.playbackBuffer),
     uiAnimationsEnabled: settings.uiAnimationsEnabled !== false,

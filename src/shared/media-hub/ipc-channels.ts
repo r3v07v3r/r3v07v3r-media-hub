@@ -16,6 +16,7 @@ export const MEDIA_HUB_CHANNELS = {
   settingsSetPlaybackBuffer: 'mediahub:settings:set-playback-buffer',
   settingsSetUiAnimations: 'mediahub:settings:set-ui-animations',
   settingsSetVideoTranscode: 'mediahub:settings:set-video-transcode',
+  settingsSetPartyDisplayName: 'mediahub:settings:set-party-display-name',
   logout: 'mediahub:account:logout',
   torboxConnect: 'mediahub:torbox:connect',
   torboxDisconnect: 'mediahub:torbox:disconnect',

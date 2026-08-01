@@ -129,7 +129,9 @@ const api = {
       setUiAnimations: (enabled: boolean): Promise<{ uiAnimationsEnabled: boolean }> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.settingsSetUiAnimations, enabled),
       setVideoTranscode: (enabled: boolean): Promise<{ videoTranscodeEnabled: boolean }> =>
-        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.settingsSetVideoTranscode, enabled)
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.settingsSetVideoTranscode, enabled),
+      setPartyDisplayName: (name: string): Promise<{ partyDisplayName: string }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.settingsSetPartyDisplayName, name)
     },
 
     account: {

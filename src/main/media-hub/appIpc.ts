@@ -87,6 +87,18 @@ export function registerAppIpc(): void {
     }
   )
 
+  handle<unknown, { partyDisplayName: string }>(
+    MEDIA_HUB_CHANNELS.settingsSetPartyDisplayName,
+    (_event, value) => {
+      const settings = readSettings()
+      settings.partyDisplayName = String(value || '')
+        .trim()
+        .slice(0, 40)
+      writeSettings(settings)
+      return { partyDisplayName: settings.partyDisplayName }
+    }
+  )
+
   handle<undefined, { ok: true }>(MEDIA_HUB_CHANNELS.logout, async () => {
     await stopPlayback()
     writeSettings(logoutSettings(readSettings()))

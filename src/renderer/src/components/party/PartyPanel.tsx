@@ -14,6 +14,8 @@ export function PartyPanel() {
     partyHostPort,
     partyPanelOpen,
     setPartyPanelOpen,
+    mediaHubSettings,
+    refreshMediaHubSettings,
     hostParty,
     joinParty,
     leaveParty,
@@ -22,7 +24,8 @@ export function PartyPanel() {
     pushNotification
   } = useAppState()
 
-  const [name, setName] = useState('')
+  const [nameEdited, setNameEdited] = useState<string | null>(null)
+  const name = nameEdited ?? mediaHubSettings?.partyDisplayName ?? ''
   const [joinCode, setJoinCode] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -43,12 +46,17 @@ export function PartyPanel() {
     }
   }
 
+  function rememberName(value: string): void {
+    window.api?.mediaHub?.settings.setPartyDisplayName(value).then(() => refreshMediaHubSettings())
+  }
+
   async function submitHost() {
     if (!name.trim() || busy) return
     setBusy(true)
     setError(null)
     try {
       await hostParty(name.trim())
+      rememberName(name.trim())
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not start a party.')
     } finally {
@@ -62,6 +70,7 @@ export function PartyPanel() {
     setError(null)
     try {
       await joinParty(joinCode.trim(), name.trim())
+      rememberName(name.trim())
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not join that party.')
     } finally {
@@ -201,7 +210,7 @@ export function PartyPanel() {
               className={styles.fieldInput}
               type="text"
               value={name}
-              onChange={(e) => setName(e.target.value)}
+              onChange={(e) => setNameEdited(e.target.value)}
             />
           </label>
           <label className={styles.field}>

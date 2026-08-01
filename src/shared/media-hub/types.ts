@@ -282,6 +282,8 @@ export interface MediaHubPublicSettings {
   simklClientId: string
   subtitleLanguage: string
   partySyncUrl: string
+  /** Last display name used to host or join a Watch Party — remembered so it doesn't need retyping each time. */
+  partyDisplayName: string
   updateChannel: UpdateChannel
   /** How long to buffer ahead before playback starts — see shared/media-hub/playbackBuffer.ts. */
   playbackBuffer: string
