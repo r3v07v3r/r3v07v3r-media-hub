@@ -465,21 +465,37 @@ export function selectVideoFile(
     const ePad = String(episode).padStart(2, '0')
     const patterns = [
       new RegExp(`S(?:${season}|${sPad})[ ._-]*E(?:${episode}|${ePad})(?:\\D|$)`, 'i'),
-      new RegExp(`(?:^|[ ._-])(?:${season}|${sPad})x(?:${episode}|${ePad})(?:[ ._-]|$)`, 'i')
+      new RegExp(`(?:^|[ ._-])(?:${season}|${sPad})x(?:${episode}|${ePad})(?:[ ._-]|$)`, 'i'),
+      // Anime fansub convention: a lone episode number after a dash, no
+      // season marker anywhere (fansub groups essentially never encode
+      // season — it's implicit) — e.g. "[SubsPlease] Show - 05 (1080p)
+      // [HASH].mkv". Found live: this is the *normal* single-episode
+      // release shape, not an edge case — SxxExx/1x05 patterns above never
+      // match it at all. Restricted to season 1 since a bare "- 05" in a
+      // later season's own release would be genuinely ambiguous with a
+      // season-1 episode of the same number.
+      ...(season === 1
+        ? [new RegExp(`-\\s*0*${episode}(?:v\\d)?(?:[ ._[(]|$)`, 'i')]
+        : [])
     ]
-    const match = candidates
-      .filter((f) => patterns.some((p) => p.test(f.name || f.short_name || '')))
-      .sort((a, b) => (b.size || 0) - (a.size || 0))[0]
+    const filtered = candidates.filter((f) => patterns.some((p) => p.test(f.name || f.short_name || '')))
+    // A torrent with only one video file at all has no ambiguity to guess
+    // wrong about, regardless of what its name looks like — this is the
+    // normal shape for a single-episode fansub release, unlike the
+    // multi-file season-pack case the comment below is actually guarding
+    // against.
+    if (!filtered.length && candidates.length === 1) return candidates[0]
+    const match = filtered.sort((a, b) => (b.size || 0) - (a.size || 0))[0]
     // Deliberately NOT falling back to "largest video file in the torrent"
-    // here, unlike the movie path below — a season-pack torrent's file
-    // names not matching any expected pattern means we genuinely don't
-    // know which file is the requested episode, and guessing "biggest
-    // file" reliably picks a DIFFERENT, usually longer episode (a finale,
-    // a double-length episode, ...) instead of erroring. Live-reported bug:
-    // requesting a specific episode played a different, longer one instead
-    // of failing loudly — this fallback returning ANY video file in the
-    // pack whenever the season/episode patterns didn't match is exactly
-    // that failure mode.
+    // for a torrent with MULTIPLE files, unlike the movie path below — a
+    // season-pack torrent's file names not matching any expected pattern
+    // means we genuinely don't know which file is the requested episode,
+    // and guessing "biggest file" reliably picks a DIFFERENT, usually
+    // longer episode (a finale, a double-length episode, ...) instead of
+    // erroring. Live-reported bug: requesting a specific episode played a
+    // different, longer one instead of failing loudly — this fallback
+    // returning ANY video file in the pack whenever the season/episode
+    // patterns didn't match is exactly that failure mode.
     return match || null
   }
   return candidates.sort((a, b) => (b.size || 0) - (a.size || 0))[0] || null

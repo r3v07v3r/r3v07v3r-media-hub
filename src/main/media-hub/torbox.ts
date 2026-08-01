@@ -80,6 +80,29 @@ async function torbox<T = unknown>(
   return torboxFetch<T>(url, { headers: { Authorization: `Bearer ${auth}` } })
 }
 
+/** Queries one P2P scraper add-on and returns only its infoHash-bearing candidates. Best-effort: a failed/timed-out add-on shouldn't take the other one (or the whole resolve) down with it — see streamResolve's own comment on why two add-ons are queried at all. */
+async function fetchAddonStreams(url: string): Promise<StreamCandidate[]> {
+  try {
+    const result = await fetchJson<{ streams?: StreamCandidate[] }>(url)
+    return (result.streams || []).filter((s) => /^[a-f0-9]{40}$/i.test(s.infoHash || ''))
+  } catch {
+    return []
+  }
+}
+
+/** First-seen-wins dedupe across multiple add-ons' results — the same real torrent is often indexed by more than one, and rankStreams should only ever see it once. */
+function dedupeByInfoHash(streams: StreamCandidate[]): StreamCandidate[] {
+  const seen = new Set<string>()
+  const result: StreamCandidate[] = []
+  for (const s of streams) {
+    const hash = s.infoHash.toLowerCase()
+    if (seen.has(hash)) continue
+    seen.add(hash)
+    result.push(s)
+  }
+  return result
+}
+
 interface StreamResolvePayload {
   type: string
   id: string
@@ -140,17 +163,32 @@ export function registerTorBoxIpc(): void {
       const key = `stream:v1:${type}:${id}`
       const db = getDatabase()
       try {
+        // Two independent P2P scraper add-ons, queried in parallel and
+        // merged — found live: Comet alone returned nothing for a
+        // brand-new/low-profile anime that Torrentio (which scrapes
+        // NyaaSi, the dedicated anime tracker) had real results for.
+        // Each is best-effort on its own (a failure/timeout from one
+        // shouldn't block whatever the other found) — see
+        // fetchAddonStreams. Merged before the checkcached call below so
+        // both sources get the same authoritative "is this actually
+        // playable right now" check against the user's real TorBox
+        // account, and so rankStreams picks the single best candidate
+        // across both rather than preferring one source outright.
+        //
         // meteorfortheweebs.midnightignite.me (the domain this originally
         // pointed to) now 301-redirects here — the "Meteor" add-on it ran
         // was retired in favor of "Comet", a different add-on with an
         // unrelated config schema (see cometConfigPath's own doc comment).
         const config = cometConfigPath()
-        const meteor = await fetchJson<{ streams?: StreamCandidate[] }>(
-          `https://cometfortheweebs.midnightignite.me/${config}/stream/${type}/${encodeURIComponent(id)}.json`
-        )
-        const discovered = (meteor.streams || []).filter((s) =>
-          /^[a-f0-9]{40}$/i.test(s.infoHash || '')
-        )
+        const [comet, torrentio] = await Promise.all([
+          fetchAddonStreams(
+            `https://cometfortheweebs.midnightignite.me/${config}/stream/${type}/${encodeURIComponent(id)}.json`
+          ),
+          fetchAddonStreams(
+            `https://torrentio.strem.fun/stream/${type}/${encodeURIComponent(id)}.json`
+          )
+        ])
+        const discovered = dedupeByInfoHash([...comet, ...torrentio])
         if (!discovered.length) return { streams: [], best: null }
         const hashes = [...new Set(discovered.map((s) => s.infoHash.toLowerCase()))].slice(0, 100)
         const cached = await torboxFetch<{

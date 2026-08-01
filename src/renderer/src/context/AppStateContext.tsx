@@ -745,18 +745,24 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       setContextMenu(null)
       const kind = media.mediaKind ?? (media.mediaType === 'series' ? 'series' : 'movie')
       const mediaId = buildMediaId(kind, media.id, media.seasonNumber, media.episodeNumber)
+      // For series, the stream search itself needs to know which episode is
+      // wanted, not just which show — passing the bare show id (found
+      // live, via a "No matching video file" error) meant the addon had no
+      // episode context at all and could rank a completely different
+      // season's pack as "best". `mediaId`'s imdbId:season:episode is
+      // exactly the convention Cinemeta-style addons expect for this.
+      //
+      // Anime doesn't work the same way: Kitsu ids are already scoped to a
+      // single season/cour (there's no cross-season id the way IMDb has),
+      // so anime addons expect kitsuId:episode with NO season segment at
+      // all — confirmed live, `mediaId`'s kitsuId:season:episode form
+      // returned zero results even for a title with real, cached releases
+      // under the correct kitsuId:episode form.
+      const resolveId =
+        kind === 'anime' ? `${media.id}:${media.episodeNumber ?? 1}` : mediaId
       setResolvingMedia({ id: media.id, stage: 'searching' })
       try {
-        // For series/anime, the stream search itself needs to know which
-        // episode is wanted, not just which show — passing the bare show
-        // id here (found live, via a "No matching video file" error)
-        // meant the addon had no episode context at all and could rank a
-        // completely different season's pack as "best", which then had no
-        // file matching the actually-requested episode at play time.
-        // `mediaId` already encodes season/episode (same value stream.play
-        // uses below) via the same imdbId:season:episode convention the
-        // addon protocol itself expects.
-        const resolved = await api.stream.resolve(kind, mediaId)
+        const resolved = await api.stream.resolve(kind, resolveId)
         if (!resolved.best) {
           // `queued` (see StreamResolveResult's own doc comment) means a
           // real torrent existed but nothing was cached yet, and the
