@@ -27,6 +27,20 @@ export default defineConfig({
       alias: {
         '@shared': resolve('src/shared')
       }
+    },
+    build: {
+      // `sandbox: true` (see main/index.ts) runs the preload script through
+      // Electron's sandboxed loader, which only resolves `electron` itself
+      // at runtime (verified live) — a plain `require("@electron-toolkit/
+      // preload")` left as an external, as electron-vite defaults every
+      // package.json dependency to, throws "module not found" and the
+      // whole preload (so window.api) silently never loads. Bundling this
+      // one dependency inline instead keeps it self-contained; `electron`
+      // stays external since the sandboxed loader provides that one
+      // specially.
+      externalizeDeps: {
+        exclude: ['@electron-toolkit/preload']
+      }
     }
   },
   renderer: {

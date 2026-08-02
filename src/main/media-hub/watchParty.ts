@@ -52,6 +52,20 @@ import { sendToRenderer } from './rendererBridge'
 import { attemptPortMapping } from './upnp'
 import { getLocalLanIp } from './network'
 
+// Every message this protocol actually sends (hello/welcome/leave/
+// party-state/queue-sync/playback actions) is small encrypted JSON — 64KB is
+// generous headroom for any of them, never large enough to be a real memory-
+// exhaustion vector from a malicious peer/relay/host. Applied to every `ws`
+// constructor in this file (client and server) so it protects both
+// directions: a joining member against a malicious host, and a host against
+// a malicious member.
+const MAX_PARTY_MESSAGE_BYTES = 64 * 1024
+// A generous ceiling for a *watch* party, not a hard product limit — mainly
+// a backstop against a leaked/guessed party code being used to pile on
+// unbounded connections (each one holds a live socket + a Map entry on the
+// host for as long as it stays open).
+const MAX_PARTY_MEMBERS = 32
+
 // A decrypted (or relay-envelope) message off the wire. Deliberately loose
 // (mirrors the original's untyped `msg`/`envelope` objects) — every handler
 // below narrows on `type` before touching any other field.
@@ -256,7 +270,9 @@ function connectPartyWs(
   name: string
 ): Promise<WebSocket> {
   return new Promise((resolve, reject) => {
-    const ws = new WebSocket(`ws://${endpoint.ip}:${endpoint.port}`)
+    const ws = new WebSocket(`ws://${endpoint.ip}:${endpoint.port}`, {
+      maxPayload: MAX_PARTY_MESSAGE_BYTES
+    })
     const timer = setTimeout(() => {
       ws.terminate()
       reject(new Error('Connection timed out.'))
@@ -289,7 +305,7 @@ function connectRelayWs(
     const wsUrl = `${relayUrl.replace(/^http/, 'ws')}/party/${encodeURIComponent(roomId)}${
       token ? `?token=${encodeURIComponent(token)}` : ''
     }`
-    const ws = new WebSocketImpl(wsUrl)
+    const ws = new WebSocketImpl(wsUrl, undefined, { maxPayload: MAX_PARTY_MESSAGE_BYTES })
     const timer = setTimeout(() => {
       ws.terminate?.()
       reject(new Error('R3-Party-Sync connection timed out.'))
@@ -405,6 +421,7 @@ export function registerWatchPartyIpc(): void {
         if (!msg) return
         const fromId = String(envelope.connId || '')
         if (msg.type === 'hello') {
+          if (!members.has(fromId) && members.size >= MAX_PARTY_MEMBERS) return
           members.set(fromId, {
             id: fromId,
             name: String(msg.name || 'Guest').slice(0, 40) || 'Guest',
@@ -435,7 +452,11 @@ export function registerWatchPartyIpc(): void {
 
     const secret = crypto.randomBytes(24).toString('base64url')
     const wss = await new Promise<WebSocketServer>((resolve, reject) => {
-      const server = new WebSocketServer({ host: '0.0.0.0', port: 0 })
+      const server = new WebSocketServer({
+        host: '0.0.0.0',
+        port: 0,
+        maxPayload: MAX_PARTY_MESSAGE_BYTES
+      })
       server.once('listening', () => resolve(server))
       server.once('error', reject)
     })
@@ -467,6 +488,10 @@ export function registerWatchPartyIpc(): void {
           return
         }
         if (msg.type === 'hello' && !memberId) {
+          if (members.size >= MAX_PARTY_MEMBERS) {
+            ws.close()
+            return
+          }
           memberId = createMemberId()
           members.set(memberId, {
             id: memberId,
