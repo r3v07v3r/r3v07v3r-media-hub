@@ -1,6 +1,7 @@
 import { ipcMain } from 'electron'
 import Store from 'electron-store'
 import { DEFAULT_SERVICE_SETTINGS, IPC_CHANNELS, ServiceSettings } from '../../shared/ipc-types'
+import { assertTrustedSender } from './trustedSender'
 
 interface StoreSchema {
   services: ServiceSettings
@@ -18,12 +19,31 @@ const store = new Store<StoreSchema>({
 })
 
 export function registerSettingsIpc(): void {
-  ipcMain.handle(IPC_CHANNELS.settingsGet, () => {
+  ipcMain.handle(IPC_CHANNELS.settingsGet, (event) => {
+    assertTrustedSender(event)
     return store.get('services')
   })
 
-  ipcMain.handle(IPC_CHANNELS.settingsSet, (_event, next: ServiceSettings) => {
+  ipcMain.handle(IPC_CHANNELS.settingsSet, (event, next: ServiceSettings) => {
+    assertTrustedSender(event)
+    if (!isServiceSettings(next)) throw new Error('Invalid service settings.')
     store.set('services', next)
     return store.get('services')
+  })
+}
+
+function isServiceSettings(value: unknown): value is ServiceSettings {
+  if (!value || typeof value !== 'object') return false
+  return Object.keys(DEFAULT_SERVICE_SETTINGS).every((id) => {
+    const config = (value as Record<string, unknown>)[id]
+    if (!config || typeof config !== 'object') return false
+    const candidate = config as Record<string, unknown>
+    return (
+      typeof candidate.baseUrl === 'string' &&
+      candidate.baseUrl.length <= 2048 &&
+      typeof candidate.apiKey === 'string' &&
+      candidate.apiKey.length <= 4096 &&
+      typeof candidate.enabled === 'boolean'
+    )
   })
 }

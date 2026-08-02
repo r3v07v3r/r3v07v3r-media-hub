@@ -1,5 +1,5 @@
 import { protocol, net } from 'electron'
-import { join, normalize } from 'path'
+import { isAbsolute, join, normalize, relative } from 'path'
 import { pathToFileURL } from 'url'
 
 // The renderer is full of root-absolute asset references ("/media/...",
@@ -40,7 +40,8 @@ export function registerAppSchemeHandler(): void {
 
     const filePath = normalize(join(RENDERER_ROOT, relativePath))
     // Guard against escaping RENDERER_ROOT via a crafted "../" path.
-    if (!filePath.startsWith(normalize(RENDERER_ROOT))) {
+    const pathFromRoot = relative(RENDERER_ROOT, filePath)
+    if (pathFromRoot.startsWith('..') || isAbsolute(pathFromRoot)) {
       return new Response('Forbidden', { status: 403 })
     }
     return net.fetch(pathToFileURL(filePath).toString())
