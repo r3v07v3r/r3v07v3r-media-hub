@@ -2,6 +2,7 @@ import { ipcMain, WebContents } from 'electron'
 import { Worker } from 'worker_threads'
 import { join } from 'path'
 import { IPC_CHANNELS, SystemSnapshot } from '../../shared/ipc-types'
+import { assertTrustedSender } from './trustedSender'
 
 const EMPTY_SNAPSHOT: SystemSnapshot = {
   cpu: { loadPercent: 0, speedGHz: null, cores: 0, temperatureC: null },
@@ -22,13 +23,18 @@ const subscribers = new Set<WebContents>()
 function ensureWorker(): Worker {
   if (worker) return worker
   worker = new Worker(join(__dirname, 'telemetryWorker.js'))
-  worker.on('message', (message: { type: 'snapshot'; snapshot: SystemSnapshot } | { type: 'error'; message: string }) => {
-    if (message.type !== 'snapshot') return
-    latestSnapshot = message.snapshot
-    for (const wc of subscribers) {
-      if (!wc.isDestroyed()) wc.send(IPC_CHANNELS.systemSnapshot, message.snapshot)
+  worker.on(
+    'message',
+    (
+      message: { type: 'snapshot'; snapshot: SystemSnapshot } | { type: 'error'; message: string }
+    ) => {
+      if (message.type !== 'snapshot') return
+      latestSnapshot = message.snapshot
+      for (const wc of subscribers) {
+        if (!wc.isDestroyed()) wc.send(IPC_CHANNELS.systemSnapshot, message.snapshot)
+      }
     }
-  })
+  )
   // A crashed worker just means telemetry goes stale (latestSnapshot stops
   // updating) rather than taking the app down — the gauges freeze at their
   // last value instead of erroring, matching how a single failed
@@ -58,17 +64,20 @@ function dropSubscriber(sender: WebContents): void {
 }
 
 export function registerTelemetryIpc(): void {
-  ipcMain.handle(IPC_CHANNELS.systemSnapshot, async () => {
+  ipcMain.handle(IPC_CHANNELS.systemSnapshot, async (event) => {
+    assertTrustedSender(event)
     ensureWorker()
     return latestSnapshot
   })
 
   ipcMain.on('system:subscribe', (event) => {
+    assertTrustedSender(event)
     subscribers.add(event.sender)
     ensureWorker()
     event.sender.once('destroyed', () => dropSubscriber(event.sender))
   })
   ipcMain.on('system:unsubscribe', (event) => {
+    assertTrustedSender(event)
     dropSubscriber(event.sender)
   })
 }
