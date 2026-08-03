@@ -269,6 +269,10 @@ interface AppStateValue {
   setPlaybackTracks: Dispatch<SetStateAction<MediaTracks | null>>
   startPlayback: (media: MediaItem) => Promise<boolean>
   stopPlayback: () => void
+  /** Re-fetches both watch-status sources (tracking:list's history and home:personalized's continueWatching) — call after anything changes what tracking:list reports for an id, so grids/badges/Continue Watching/next-episode don't go stale until some unrelated refetch happens to pick it up. Same pair markContinueWatching below already refreshes after a manual toggle. */
+  refreshWatchStatus: () => void
+  /** Bumped every time refreshWatchStatus() runs — MediaDetailPage keeps its own separate per-episode `history` fetch (tracking:list scoped to just the current id, for its watchedKeys/nextEpisode computation) and has no other way to know a mark-watched happened elsewhere, e.g. PlaybackOverlay's 80%-progress auto-mark. Depend on this in any effect that needs to re-fetch when watch status changes anywhere in the app. */
+  watchStatusVersion: number
   /** Same as startPlayback, but (host only) also announces the title to the party so followers resolve their own stream of it. */
   startPartyPlayback: (
     media: MediaItem,
@@ -853,6 +857,13 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     setPlaybackTracks(null)
   }, [])
 
+  const [watchStatusVersion, setWatchStatusVersion] = useState(0)
+  const refreshWatchStatus = useCallback(() => {
+    homeFeed.refresh()
+    watchedIdsResult.refresh()
+    setWatchStatusVersion((v) => v + 1)
+  }, [homeFeed, watchedIdsResult])
+
   // Host-only: same resolve+play as startPlayback, then (once a real
   // stream is actually playing) announces the title to the party so every
   // follower resolves their OWN independent stream of it — see
@@ -1148,6 +1159,8 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       setPlaybackTracks,
       startPlayback,
       stopPlayback,
+      refreshWatchStatus,
+      watchStatusVersion,
       startPartyPlayback,
       partyPendingSeek,
       consumePartyPendingSeek,
@@ -1226,6 +1239,8 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       setPlaybackTracks,
       startPlayback,
       stopPlayback,
+      refreshWatchStatus,
+      watchStatusVersion,
       startPartyPlayback,
       partyPendingSeek,
       consumePartyPendingSeek,

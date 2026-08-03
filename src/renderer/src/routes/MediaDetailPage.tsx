@@ -49,7 +49,8 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
     startPartyPlayback,
     catalog,
     pushNotification,
-    openDetail
+    openDetail,
+    watchStatusVersion
   } = useAppState()
 
   const [catalogItem, setCatalogItem] = useState<CatalogItem | null>(null)
@@ -169,7 +170,11 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
     return () => {
       cancelled = true
     }
-  }, [id])
+    // watchStatusVersion: this page's own history fetch is scoped to just
+    // `id` and has no other way to learn about a mark-watched that happened
+    // elsewhere (PlaybackOverlay's 80%-progress auto-mark, in particular) —
+    // see AppStateContext's watchStatusVersion doc comment.
+  }, [id, watchStatusVersion])
 
   const media = useMemo<MediaItem | null>(() => {
     if (catalogItem) return catalogItemToMediaItem(catalogItem, { trackedIds: myList })

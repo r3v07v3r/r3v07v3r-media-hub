@@ -66,6 +66,7 @@ export function PlaybackOverlay() {
     setPlaybackResult: setResult,
     setPlaybackTracks: setTracks,
     stopPlayback,
+    refreshWatchStatus,
     pushNotification,
     mediaHubSettings,
     partyStatus,
@@ -318,8 +319,10 @@ export function PlaybackOverlay() {
     }
   }, [resetControlsTimer])
 
-  const handleEnded = useCallback(() => {
-    setPlaying(false)
+  // Shared by the 80%-progress effect below and handleEnded — whichever
+  // fires first wins, markedWatchedRef stops the other from double-marking
+  // (and from double-refreshing watch status).
+  const markWatchedNow = useCallback(() => {
     if (!playbackMedia || markedWatchedRef.current) return
     markedWatchedRef.current = true
     const api = window.api?.mediaHub
@@ -329,8 +332,24 @@ export function PlaybackOverlay() {
         item: mediaItemToTrackablePayload(playbackMedia),
         playback: { season: playbackMedia.seasonNumber, episode: playbackMedia.episodeNumber }
       })
+      .then(() => refreshWatchStatus())
       .catch(() => {})
-  }, [playbackMedia])
+  }, [playbackMedia, refreshWatchStatus])
+
+  const handleEnded = useCallback(() => {
+    setPlaying(false)
+    markWatchedNow()
+  }, [markWatchedNow])
+
+  // Counts an episode watched at 80% rather than waiting for 'ended' — the
+  // last stretch is often credits/recap, and marking here means
+  // watchedIds/continueWatching (and therefore "next episode") are already
+  // correct by the time someone closes this overlay, not only after
+  // playback actually finishes.
+  useEffect(() => {
+    if (!duration || currentTime / duration < 0.8) return
+    markWatchedNow()
+  }, [currentTime, duration, markWatchedNow])
 
   // Shared by the scrubber click (handleSeek), the initial catch-up seek
   // when joining a party mid-title (partyPendingSeek), and the follower-
