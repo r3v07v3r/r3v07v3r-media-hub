@@ -53,6 +53,7 @@ export const MEDIA_HUB_CHANNELS = {
   playbackSelectTracks: 'mediahub:playback:select-tracks',
   playbackStop: 'mediahub:playback:stop',
   playbackThumbnail: 'mediahub:playback:thumbnail',
+  playbackSkipTimes: 'mediahub:playback:skip-times',
   libraryList: 'mediahub:library:list',
   libraryPlay: 'mediahub:library:play',
 

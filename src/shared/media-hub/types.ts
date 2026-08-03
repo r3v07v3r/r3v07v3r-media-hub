@@ -401,6 +401,17 @@ export interface SubtitleResult {
   hearingImpaired: boolean
 }
 
+export interface SkipInterval {
+  start: number
+  end: number
+}
+
+/** Anime-only (see main/media-hub/aniskip.ts) — undefined fields mean no known skip window for that segment, not "unknown/loading". */
+export interface SkipTimes {
+  intro?: SkipInterval
+  credits?: SkipInterval
+}
+
 export interface SubtitlesApplyResult {
   ok: true
   compatibility: boolean

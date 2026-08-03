@@ -6,8 +6,21 @@ import { Icon } from '@renderer/components/icons/Icon'
 import { mediaItemToTrackablePayload } from '@renderer/lib/mediaHub/adapters'
 import { decodeVttDataUrl, encodeVttDataUrl, shiftVttCues } from '@renderer/lib/mediaHub/vttShift'
 import { getPlaybackBufferSeconds } from '@shared/media-hub/playbackBuffer'
-import type { MediaTrack, PlaybackSelection, SubtitleResult } from '@shared/media-hub/types'
+import type {
+  MediaTrack,
+  PlaybackSelection,
+  SkipTimes,
+  SubtitleResult
+} from '@shared/media-hub/types'
 import styles from './Overlays.module.css'
+
+// Coarse enough that dragging across the scrubber only spawns a handful of
+// real ffmpeg captures rather than one per pixel of mouse movement — see
+// handleScrubberHover's own comment for why that matters.
+const THUMBNAIL_BUCKET_SECONDS = 5
+// Matches captureFrame's own `-vf scale=160:-1` in vlc.ts — the CSS box is
+// sized off this same constant so the two never drift out of sync.
+const SCRUB_PREVIEW_WIDTH = 160
 
 function formatTime(seconds: number): string {
   if (!Number.isFinite(seconds) || seconds < 0) seconds = 0
@@ -84,6 +97,17 @@ export function PlaybackOverlay() {
   const [applyingQuality, setApplyingQuality] = useState(false)
   const [subtitleResults, setSubtitleResults] = useState<SubtitleResult[] | null>(null)
   const [activeSubtitleTrackUrl, setActiveSubtitleTrackUrl] = useState<string | null>(null)
+  // Anime-only (see main/media-hub/aniskip.ts — no equivalent free source
+  // exists for movies/series) — null until fetched, and stays null forever
+  // when nothing was found for this episode, which is the normal case for
+  // most episodes of most shows.
+  const [skipTimes, setSkipTimes] = useState<SkipTimes | null>(null)
+  // Guards the fetch to exactly once per title: `duration` can legitimately
+  // change again later (a seek/track-change restart in compatibility mode
+  // re-fires onLoadedMetadata), but the skip windows for this same episode
+  // don't change, so only the FIRST time duration becomes known should
+  // trigger the request.
+  const skipTimesFetchedRef = useRef(false)
   const [isFullscreen, setIsFullscreen] = useState(false)
   // How the video fills the player frame: 'contain' (default, letterboxed,
   // nothing cropped), 'cover' (fills the frame, crops whatever overflows),
@@ -116,6 +140,28 @@ export function PlaybackOverlay() {
   // choice back to default.
   const streamStartOffsetRef = useRef(0)
   const activeSelectionRef = useRef<PlaybackSelection>({})
+
+  // Scrubbing thumbnail preview — hovering the seek bar shows the frame at
+  // that position. `time`/`x` update on every mousemove (cheap, just local
+  // math); the actual thumbnail fetch (mediahub:playback:thumbnail, a real
+  // ffmpeg -ss capture against the remote source — see vlc.ts's
+  // captureFrame) is debounced and bucketed to whole THUMBNAIL_BUCKET_SECONDS
+  // so dragging the mouse across the bar doesn't spawn one ffmpeg process
+  // per pixel: TorBox and most debrid sources cap concurrent connections
+  // per link, and this capture is a separate connection from whatever
+  // playback (direct or compatibility-mode) is already using that same link.
+  const [scrubPreview, setScrubPreview] = useState<{
+    time: number
+    x: number
+    thumbnail: string | null
+  } | null>(null)
+  const thumbnailCacheRef = useRef<Map<number, string | null>>(new Map())
+  const scrubDebounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  // Bumped on every hover move and on mouse-leave — lets a slow in-flight
+  // capture recognize it's stale (the pointer moved to a different bucket,
+  // or left the bar entirely) before it overwrites the preview with an
+  // answer for a position nobody's hovering over anymore.
+  const scrubRequestIdRef = useRef(0)
 
   // Synced-seek protocol (see shared/media-hub/types.ts's PartyPlaybackAction
   // for the wire messages) — when the host seeks, nobody actually resumes
@@ -414,7 +460,14 @@ export function PlaybackOverlay() {
       video.removeEventListener('progress', onProgress)
       video.removeEventListener('canplaythrough', onProgress)
     }
-  }, [activeSyncRequestId, result?.url, result?.compatibility, targetBufferSeconds, tracks, reportSyncReady])
+  }, [
+    activeSyncRequestId,
+    result?.url,
+    result?.compatibility,
+    targetBufferSeconds,
+    tracks,
+    reportSyncReady
+  ])
 
   // Shared by the scrubber click (handleSeek) and the ←/→ 15s nudge
   // (seekRelative) — both just need to land on an absolute target time via
@@ -462,6 +515,67 @@ export function PlaybackOverlay() {
     },
     [duration, followingParty, canControl, seekToTarget]
   )
+
+  // Informational only — shows what's at a hovered position regardless of
+  // whether this person could actually seek there (same as the mouse
+  // position/time label already did before this), so no followingParty/
+  // canControl gate here unlike handleSeek itself.
+  const handleScrubberHover = useCallback(
+    (event: React.MouseEvent<HTMLDivElement>) => {
+      if (!duration || !Number.isFinite(duration)) return
+      const rect = event.currentTarget.getBoundingClientRect()
+      const fraction = Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width))
+      const time = fraction * duration
+      // Clamped so the preview's centered thumbnail (SCRUB_PREVIEW_WIDTH
+      // wide) never overhangs past the track's own edges — `time`/the
+      // label above stay exact, only the popup's horizontal position is
+      // adjusted.
+      const halfPreview = SCRUB_PREVIEW_WIDTH / 2
+      const x =
+        rect.width > SCRUB_PREVIEW_WIDTH
+          ? Math.min(Math.max(fraction * rect.width, halfPreview), rect.width - halfPreview)
+          : rect.width / 2
+      const bucket = Math.round(time / THUMBNAIL_BUCKET_SECONDS) * THUMBNAIL_BUCKET_SECONDS
+      const cached = thumbnailCacheRef.current.get(bucket)
+
+      setScrubPreview({ time, x, thumbnail: cached ?? null })
+
+      if (scrubDebounceRef.current) clearTimeout(scrubDebounceRef.current)
+      if (cached !== undefined) return // already fetched (or confirmed empty) for this bucket
+
+      const requestId = ++scrubRequestIdRef.current
+      scrubDebounceRef.current = setTimeout(() => {
+        const api = window.api?.mediaHub
+        if (!api) return
+        api.playback
+          .thumbnail(bucket)
+          .then((dataUrl) => {
+            thumbnailCacheRef.current.set(bucket, dataUrl)
+            if (scrubRequestIdRef.current !== requestId) return // superseded by a later hover
+            setScrubPreview((prev) =>
+              prev &&
+              Math.round(prev.time / THUMBNAIL_BUCKET_SECONDS) * THUMBNAIL_BUCKET_SECONDS === bucket
+                ? { ...prev, thumbnail: dataUrl }
+                : prev
+            )
+          })
+          .catch(() => {})
+      }, 250)
+    },
+    [duration]
+  )
+
+  const handleScrubberLeave = useCallback(() => {
+    if (scrubDebounceRef.current) clearTimeout(scrubDebounceRef.current)
+    scrubRequestIdRef.current++
+    setScrubPreview(null)
+  }, [])
+
+  useEffect(() => {
+    return () => {
+      if (scrubDebounceRef.current) clearTimeout(scrubDebounceRef.current)
+    }
+  }, [])
 
   // ←/→ nudge the playhead 15s — the same clamped-to-[0,duration] target
   // both the mouse scrubber and party sync already expect; reusing
@@ -668,6 +782,40 @@ export function PlaybackOverlay() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  // Skip Intro/Credits — anime only (see aniskip.ts's own header comment
+  // for why there's no equivalent for movies/series). Aniskip's API
+  // requires a real episodeLengthSeconds (confirmed live: omitting it is a
+  // 400, not a "search without it"), so this waits for `duration` to
+  // actually be known rather than firing on mount like the subtitle
+  // search above does.
+  useEffect(() => {
+    if (!playbackMedia || kind !== 'anime') return
+    if (!duration || skipTimesFetchedRef.current) return
+    skipTimesFetchedRef.current = true
+    const api = window.api?.mediaHub
+    if (!api) return
+    api.playback
+      .skipTimes(playbackMedia.id, playbackMedia.episodeNumber ?? 1, duration)
+      .then(setSkipTimes)
+      .catch(() => {})
+  }, [playbackMedia, kind, duration])
+
+  const skipIntroWindow =
+    skipTimes?.intro && currentTime >= skipTimes.intro.start && currentTime < skipTimes.intro.end
+      ? skipTimes.intro
+      : null
+  const skipCreditsWindow =
+    skipTimes?.credits &&
+    currentTime >= skipTimes.credits.start &&
+    currentTime < skipTimes.credits.end
+      ? skipTimes.credits
+      : null
+
+  function handleSkip(target: number) {
+    if (followingParty && !canControl) return
+    seekToTarget(target)
+  }
+
   const audioTracks = useMemo<MediaTrack[]>(() => tracks?.audio ?? [], [tracks])
   const subtitleTracks = useMemo<MediaTrack[]>(() => tracks?.subtitle ?? [], [tracks])
   const upscaleSuggestion = result?.upscaleSuggestion
@@ -850,7 +998,11 @@ export function PlaybackOverlay() {
     return api.onEvent((event) => {
       if (event.type !== 'message') return
       const msg = event.message as { type?: string; requestId?: string }
-      if (msg.type !== 'ready' || !msg.requestId || msg.requestId !== activeSyncRequestIdRef.current)
+      if (
+        msg.type !== 'ready' ||
+        !msg.requestId ||
+        msg.requestId !== activeSyncRequestIdRef.current
+      )
         return
       syncReadyIdsRef.current.add(event.from)
       checkPartySeekReady(msg.requestId)
@@ -956,6 +1108,20 @@ export function PlaybackOverlay() {
         <Icon name="x" size={17} />
       </button>
 
+      {/* Independent of controlsVisible — the whole point is to be
+          clickable during the intro/credits window without first having to
+          move the mouse to reveal the control bar. */}
+      {(skipIntroWindow || skipCreditsWindow) && (
+        <button
+          type="button"
+          className={styles.skipButton}
+          onClick={() => handleSkip((skipIntroWindow ?? skipCreditsWindow)!.end)}
+        >
+          {skipIntroWindow ? 'Skip Intro' : 'Skip Credits'}
+          <Icon name="chevron" size={14} />
+        </button>
+      )}
+
       <div
         className={`${styles.playerControls} ${!controlsVisible ? styles.playerControlsHidden : ''}`}
       >
@@ -964,11 +1130,29 @@ export function PlaybackOverlay() {
         <div
           className={`${styles.playerScrubberTrack} ${followingParty && !canControl ? styles.playerScrubberLocked : ''}`}
           onClick={handleSeek}
+          onMouseMove={handleScrubberHover}
+          onMouseLeave={handleScrubberLeave}
         >
           <div
             className={styles.playerScrubberFill}
             style={{ width: `${duration ? (currentTime / duration) * 100 : 0}%` }}
           />
+          {scrubPreview && (
+            <div
+              className={styles.scrubPreview}
+              style={{ left: `${scrubPreview.x}px` }}
+              aria-hidden="true"
+            >
+              <div className={styles.scrubPreviewThumb}>
+                {scrubPreview.thumbnail ? (
+                  <img src={scrubPreview.thumbnail} alt="" className={styles.scrubPreviewImage} />
+                ) : (
+                  <div className={styles.scrubPreviewPlaceholder} />
+                )}
+              </div>
+              <span className={styles.scrubPreviewTime}>{formatTime(scrubPreview.time)}</span>
+            </div>
+          )}
         </div>
 
         <div className={styles.playerButtonRow}>

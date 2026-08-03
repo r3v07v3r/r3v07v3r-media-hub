@@ -12,6 +12,7 @@
 // finished setting up the database — see index.ts), so the order below
 // just follows the domain grouping used elsewhere in this port.
 
+import { registerAniskipIpc } from '../media-hub/aniskip'
 import { registerAppIpc } from '../media-hub/appIpc'
 import { registerAutoUpdateIpc } from '../media-hub/autoUpdate'
 import { registerCatalogIpc } from '../media-hub/catalog'
@@ -36,4 +37,5 @@ export function registerMediaHubIpc(): void {
   registerWatchPartyIpc()
   registerProfilesIpc()
   registerNetworkIpc()
+  registerAniskipIpc()
 }

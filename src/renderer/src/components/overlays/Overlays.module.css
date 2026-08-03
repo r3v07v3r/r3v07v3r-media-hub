@@ -208,6 +208,37 @@
   border: 1px solid rgba(255, 255, 255, 0.2);
 }
 
+/* Skip Intro/Credits (anime only) — deliberately NOT tied to
+   controlsVisible (see PlaybackOverlay's own comment): it needs to be
+   clickable the moment the window opens, not only after the person moves
+   the mouse to reveal the rest of the control bar. */
+.skipButton {
+  position: absolute;
+  right: 24px;
+  bottom: 100px;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 16px;
+  border-radius: var(--radius-medium);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  background: rgba(20, 24, 34, 0.88);
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
+  animation: fadeIn var(--transition-standard);
+}
+.skipButton:hover {
+  background: rgba(35, 40, 54, 0.92);
+  border-color: rgba(255, 255, 255, 0.35);
+}
+.skipButton svg {
+  width: 14px;
+  height: 14px;
+}
+
 /* ---------- Real video player (PlaybackOverlay) ---------- */
 .videoSurface {
   position: absolute;
@@ -290,6 +321,54 @@
 .playerScrubberLocked {
   cursor: not-allowed;
   opacity: 0.6;
+}
+/* Hover preview — positioned by JS (PlaybackOverlay's scrubPreview.x, in
+   pixels from the track's own left edge), centered via translateX. Sits
+   above the track, never intercepts pointer events itself so hovering the
+   preview box doesn't interrupt the track's own mousemove/mouseleave. */
+.scrubPreview {
+  position: absolute;
+  bottom: calc(100% + 10px);
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  pointer-events: none;
+}
+.scrubPreviewThumb {
+  width: 160px;
+  aspect-ratio: 16 / 9;
+  border-radius: var(--radius-small);
+  overflow: hidden;
+  background: rgba(10, 15, 25, 0.9);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+}
+.scrubPreviewImage {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.scrubPreviewPlaceholder {
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0.06),
+    rgba(255, 255, 255, 0.14),
+    rgba(255, 255, 255, 0.06)
+  );
+}
+.scrubPreviewTime {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--text-primary);
+  background: rgba(10, 15, 25, 0.85);
+  padding: 2px 7px;
+  border-radius: var(--radius-small);
+  white-space: nowrap;
 }
 .playerButtonRow {
   display: flex;

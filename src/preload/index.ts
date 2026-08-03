@@ -40,6 +40,7 @@ import type {
   SimklPinStart,
   SimklPollResult,
   SimklStatus,
+  SkipTimes,
   StreamCandidate,
   StreamResolveResult,
   SubtitleResult,
@@ -246,7 +247,17 @@ const api = {
       }> => ipcRenderer.invoke(MEDIA_HUB_CHANNELS.playbackSelectTracks, selection),
       stop: (): Promise<{ ok: true }> => ipcRenderer.invoke(MEDIA_HUB_CHANNELS.playbackStop),
       thumbnail: (seconds: number): Promise<string | null> =>
-        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.playbackThumbnail, seconds)
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.playbackThumbnail, seconds),
+      skipTimes: (
+        kitsuId: string,
+        episode: number,
+        episodeLengthSeconds: number
+      ): Promise<SkipTimes | null> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.playbackSkipTimes, {
+          kitsuId,
+          episode,
+          episodeLengthSeconds
+        })
     },
 
     library: {
@@ -340,7 +351,8 @@ const api = {
         type: string
         title: string
         poster?: string
-      }): Promise<{ ok: true }> => ipcRenderer.invoke(MEDIA_HUB_CHANNELS.partyRequestPlay, { item }),
+      }): Promise<{ ok: true }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.partyRequestPlay, { item }),
       syncConnect: (url: string, inviteKey: string): Promise<ConnectResult> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.partySyncConnect, { url, inviteKey }),
       syncDisconnect: (): Promise<{ ok: true }> =>
