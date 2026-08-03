@@ -67,6 +67,16 @@ export function registerAppIpc(): void {
     }
   )
 
+  handle<unknown, { autoSubtitlesEnabled: boolean }>(
+    MEDIA_HUB_CHANNELS.settingsSetAutoSubtitles,
+    (_event, value) => {
+      const settings = readSettings()
+      settings.autoSubtitlesEnabled = value !== false
+      writeSettings(settings)
+      return { autoSubtitlesEnabled: settings.autoSubtitlesEnabled }
+    }
+  )
+
   handle<unknown, { uiAnimationsEnabled: boolean }>(
     MEDIA_HUB_CHANNELS.settingsSetUiAnimations,
     (_event, value) => {

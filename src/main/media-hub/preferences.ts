@@ -43,6 +43,7 @@ export function publicSettings(settings: Record<string, unknown> = {}): MediaHub
     partyDisplayName: String(settings.partyDisplayName || ''),
     updateChannel: normalizeUpdateChannel(settings.updateChannel),
     playbackBuffer: normalizePlaybackBuffer(settings.playbackBuffer),
+    autoSubtitlesEnabled: settings.autoSubtitlesEnabled !== false,
     uiAnimationsEnabled: settings.uiAnimationsEnabled !== false,
     // Opt-in, unlike uiAnimationsEnabled above: this spins up a real
     // hardware-encoder probe + CPU/GPU cost the first time it's actually
@@ -68,6 +69,7 @@ export function logoutSettings(
   | 'theme'
   | 'updateChannel'
   | 'playbackBuffer'
+  | 'autoSubtitlesEnabled'
   | 'uiAnimationsEnabled'
   | 'videoTranscodeEnabled'
   | 'hideWatchedDefault'
@@ -78,6 +80,7 @@ export function logoutSettings(
     theme: normalizeTheme(settings.theme),
     updateChannel: normalizeUpdateChannel(settings.updateChannel),
     playbackBuffer: normalizePlaybackBuffer(settings.playbackBuffer),
+    autoSubtitlesEnabled: settings.autoSubtitlesEnabled !== false,
     uiAnimationsEnabled: settings.uiAnimationsEnabled !== false,
     videoTranscodeEnabled: settings.videoTranscodeEnabled === true,
     hideWatchedDefault: settings.hideWatchedDefault === true,

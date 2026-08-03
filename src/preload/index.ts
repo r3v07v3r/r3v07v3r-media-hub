@@ -128,6 +128,8 @@ const api = {
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.settingsSetSubtitleLanguage, language),
       setPlaybackBuffer: (preset: string): Promise<{ playbackBuffer: string }> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.settingsSetPlaybackBuffer, preset),
+      setAutoSubtitles: (enabled: boolean): Promise<{ autoSubtitlesEnabled: boolean }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.settingsSetAutoSubtitles, enabled),
       setUiAnimations: (enabled: boolean): Promise<{ uiAnimationsEnabled: boolean }> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.settingsSetUiAnimations, enabled),
       setVideoTranscode: (enabled: boolean): Promise<{ videoTranscodeEnabled: boolean }> =>
@@ -257,7 +259,9 @@ const api = {
           kitsuId,
           episode,
           episodeLengthSeconds
-        })
+        }),
+      extractSubtitle: (ordinal: number): Promise<string | null> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.playbackExtractSubtitle, ordinal)
     },
 
     library: {

@@ -513,6 +513,77 @@ export function captureFrame(
   })
 }
 
+// Text-based subtitle codecs ffmpeg's webvtt muxer can actually convert —
+// image-based ones (PGS/"hdmv_pgs_subtitle", VobSub/"dvd_subtitle", DVB)
+// are bitmap frames, not text, and ffmpeg has no OCR step to turn those
+// into WebVTT cues. Used to decide which embedded subtitle tracks the
+// player's menu can offer at all (see extractSubtitleTrack below) rather
+// than letting someone pick one that can only ever silently fail.
+export const TEXT_SUBTITLE_CODECS = new Set([
+  'subrip',
+  'srt',
+  'ass',
+  'ssa',
+  'mov_text',
+  'webvtt',
+  'text'
+])
+
+/**
+ * Pulls one embedded subtitle stream out of the remote source and converts
+ * it to WebVTT text via ffmpeg's own muxer — no video re-encoding, no
+ * compatibility-mode restart involved. This is genuinely the fix for a
+ * real dead-end found live: PlaybackOverlay's "Embedded" subtitle menu
+ * used to call playback:select-tracks (the ffmpeg-restart path), but
+ * buildFfmpegArguments never actually read `selection.subtitle` at all —
+ * see this file's own header comment on why embedded subtitle *burning*
+ * was removed when compatibility mode switched to `-c:v copy` (that
+ * required re-encoding video, which copy mode by definition doesn't do).
+ * Selecting a menu item that silently did nothing is a worse experience
+ * than not offering it, so this is the real fix, not a workaround:
+ * extract-and-overlay via the same already-working WebVTT `<track>`
+ * mechanism the OpenSubtitles flow already uses, instead of trying to
+ * burn it into the transcode.
+ *
+ * `ordinal` is this stream's position among *subtitle* streams only (the
+ * same convention `-map 0:a:N` already uses for audio elsewhere in this
+ * file) — matches MediaTrack.ordinal from parseMediaTracks below.
+ *
+ * Unlike captureFrame's `-frames:v 1` early-exit, there's no way to bail
+ * out early here: ffmpeg has to demux through the *entire* remote file to
+ * collect every subtitle cue, since containers interleave all their
+ * streams together rather than storing each one contiguously. On a fast
+ * cached/debrid link this is normally well under a minute; the generous
+ * timeout below is a backstop for a genuinely slow connection, not the
+ * expected case.
+ */
+export function extractSubtitleTrack(
+  ffmpegPath: string,
+  remoteUrl: string,
+  ordinal: number,
+  { execFileImpl = execFile, timeout = 300000 }: ExecFileImplOptions = {}
+): Promise<string | null> {
+  if (
+    !ffmpegPath ||
+    !isAllowedRemoteMediaUrl(remoteUrl) ||
+    !Number.isInteger(ordinal) ||
+    ordinal < 0
+  ) {
+    return Promise.resolve(null)
+  }
+  return new Promise((resolve) => {
+    execFileImpl(
+      ffmpegPath,
+      ['-i', remoteUrl, '-map', `0:s:${ordinal}`, '-f', 'webvtt', '-'],
+      { windowsHide: true, timeout, maxBuffer: 8 * 1024 * 1024, encoding: 'utf8' },
+      (error, stdout) => {
+        if (error || !stdout || !stdout.trim()) return resolve(null)
+        resolve(stdout)
+      }
+    )
+  })
+}
+
 // Hardware H.264 encoders ffmpeg was built with support for, in priority
 // order — verified live against this project's own dev hardware (an
 // NVIDIA RTX 4080 + AMD integrated graphics): h264_nvenc, h264_amf, and

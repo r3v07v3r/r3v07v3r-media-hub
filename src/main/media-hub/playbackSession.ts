@@ -36,6 +36,7 @@ import {
   captureFrame,
   createFfmpegTranscoder,
   detectVideoEncoder,
+  extractSubtitleTrack,
   findFfmpeg,
   findFfprobe,
   needsAudioCompatibility,
@@ -371,6 +372,14 @@ export function registerPlaybackIpc(): void {
     async (_event, seconds) => {
       if (!activeMediaUrl) return null
       return captureFrame(ffmpegPath, activeMediaUrl, Number(seconds) || 0)
+    }
+  )
+
+  handle<number | undefined, string | null>(
+    MEDIA_HUB_CHANNELS.playbackExtractSubtitle,
+    async (_event, ordinal) => {
+      if (!activeMediaUrl) return null
+      return extractSubtitleTrack(ffmpegPath, activeMediaUrl, Number(ordinal))
     }
   )
 

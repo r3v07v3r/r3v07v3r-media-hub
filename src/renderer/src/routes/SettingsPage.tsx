@@ -27,6 +27,22 @@ const PLAYBACK_BUFFER_OPTIONS: { value: string; label: string }[] = [
   { value: 'maximum', label: 'Maximum' }
 ]
 
+// ISO 639-1 codes accepted by OpenSubtitles' `languages` search param (and
+// by appIpc.ts's own subtitleLanguage validator regex) — the six most
+// requested languages, not an exhaustive list of everything OpenSubtitles
+// supports.
+// Short labels, not full language names — six full words don't fit
+// alongside the row's title/description in this column's fixed width (see
+// PLAYBACK_BUFFER_OPTIONS above, which stays short for the same reason).
+const SUBTITLE_LANGUAGE_OPTIONS: { value: string; label: string }[] = [
+  { value: 'en', label: 'EN' },
+  { value: 'es', label: 'ES' },
+  { value: 'fr', label: 'FR' },
+  { value: 'de', label: 'DE' },
+  { value: 'ja', label: 'JA' },
+  { value: 'ko', label: 'KO' }
+]
+
 function SegmentedRow({
   icon,
   title,
@@ -419,6 +435,16 @@ export default function SettingsPage() {
     refreshMediaHubSettings()
   }
 
+  async function handleSetAutoSubtitles(enabled: boolean) {
+    await window.api?.mediaHub?.settings.setAutoSubtitles(enabled)
+    refreshMediaHubSettings()
+  }
+
+  async function handleSetSubtitleLanguage(language: string) {
+    await window.api?.mediaHub?.settings.setSubtitleLanguage(language)
+    refreshMediaHubSettings()
+  }
+
   // Columns tile left-to-right instead of stacking everything in one long
   // vertical scroll (see .tileArea/.column in Settings.module.css) — a
   // plain vertical mouse wheel has nothing to act on over .tileArea itself
@@ -475,6 +501,30 @@ export default function SettingsPage() {
               value={mediaHubSettings?.playbackBuffer ?? 'auto'}
               options={PLAYBACK_BUFFER_OPTIONS}
               onChange={handleSetPlaybackBuffer}
+            />
+          </section>
+
+          <section
+            className={`${styles.section} glass-panel`}
+            aria-labelledby="settings-subtitles"
+          >
+            <h2 id="settings-subtitles" className={styles.sectionTitle}>
+              Subtitles
+            </h2>
+            <ToggleRow
+              icon="eye"
+              title="Show subtitles automatically"
+              description="Fetch and apply a matching subtitle as soon as a title starts playing."
+              checked={mediaHubSettings?.autoSubtitlesEnabled ?? true}
+              onChange={handleSetAutoSubtitles}
+            />
+            <SegmentedRow
+              icon="planet"
+              title="Subtitle language"
+              description="Language to search for, both automatically and in the Subtitles menu."
+              value={mediaHubSettings?.subtitleLanguage ?? 'en'}
+              options={SUBTITLE_LANGUAGE_OPTIONS}
+              onChange={handleSetSubtitleLanguage}
             />
           </section>
 

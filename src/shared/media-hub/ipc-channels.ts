@@ -14,6 +14,7 @@ export const MEDIA_HUB_CHANNELS = {
   settingsSetTheme: 'mediahub:settings:set-theme',
   settingsSetSubtitleLanguage: 'mediahub:settings:set-subtitle-language',
   settingsSetPlaybackBuffer: 'mediahub:settings:set-playback-buffer',
+  settingsSetAutoSubtitles: 'mediahub:settings:set-auto-subtitles',
   settingsSetUiAnimations: 'mediahub:settings:set-ui-animations',
   settingsSetVideoTranscode: 'mediahub:settings:set-video-transcode',
   settingsSetPartyDisplayName: 'mediahub:settings:set-party-display-name',
@@ -54,6 +55,7 @@ export const MEDIA_HUB_CHANNELS = {
   playbackStop: 'mediahub:playback:stop',
   playbackThumbnail: 'mediahub:playback:thumbnail',
   playbackSkipTimes: 'mediahub:playback:skip-times',
+  playbackExtractSubtitle: 'mediahub:playback:extract-subtitle',
   libraryList: 'mediahub:library:list',
   libraryPlay: 'mediahub:library:play',
 

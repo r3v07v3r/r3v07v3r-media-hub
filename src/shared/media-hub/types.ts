@@ -299,6 +299,11 @@ export interface MediaHubPublicSettings {
   updateChannel: UpdateChannel
   /** How long to buffer ahead before playback starts — see shared/media-hub/playbackBuffer.ts. */
   playbackBuffer: string
+  /** On by default: fetches and applies an OpenSubtitles match (in
+   *  `subtitleLanguage` below) automatically as soon as a title starts,
+   *  same as picking the first OpenSubtitles search result manually would
+   *  — see PlaybackOverlay.tsx's own "Always have subtitles" effect. */
+  autoSubtitlesEnabled: boolean
   /** Decorative UI animation (idle ambient motion, not playback itself) — layered alongside, not replacing, the automatic motion-suspend-during-playback behavior in global.css. */
   uiAnimationsEnabled: boolean
   /** Opt-in, off by default: re-encode video (not just audio) via a real hardware encoder when a source's video codec isn't one Chromium can reliably decode (see vlc.ts's detectVideoEncoder). Silently has no effect if no working hardware encoder is found on this machine — never falls back to a software encoder. */

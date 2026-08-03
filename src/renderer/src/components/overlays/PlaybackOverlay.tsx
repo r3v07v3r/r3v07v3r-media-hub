@@ -22,6 +22,22 @@ const THUMBNAIL_BUCKET_SECONDS = 5
 // sized off this same constant so the two never drift out of sync.
 const SCRUB_PREVIEW_WIDTH = 160
 
+// Mirrors vlc.ts's own TEXT_SUBTITLE_CODECS (main-process-only, so not
+// importable here directly — see this codebase's established "small local
+// duplication over a cross-module shared util" convention). Image-based
+// codecs (PGS/VobSub/DVB) can't be extracted as WebVTT text at all, so
+// those embedded tracks are shown but disabled rather than offered as if
+// they'd work.
+const TEXT_SUBTITLE_CODECS = new Set([
+  'subrip',
+  'srt',
+  'ass',
+  'ssa',
+  'mov_text',
+  'webvtt',
+  'text'
+])
+
 function formatTime(seconds: number): string {
   if (!Number.isFinite(seconds) || seconds < 0) seconds = 0
   const h = Math.floor(seconds / 3600)
@@ -97,6 +113,11 @@ export function PlaybackOverlay() {
   const [applyingQuality, setApplyingQuality] = useState(false)
   const [subtitleResults, setSubtitleResults] = useState<SubtitleResult[] | null>(null)
   const [activeSubtitleTrackUrl, setActiveSubtitleTrackUrl] = useState<string | null>(null)
+  // Non-null while an embedded-subtitle extraction (extractSubtitleTrack,
+  // see applyEmbeddedSubtitle) is in flight — separate from
+  // trackChangeBusy, which is specifically about the ffmpeg-restart path
+  // this doesn't use.
+  const [extractingSubtitleOrdinal, setExtractingSubtitleOrdinal] = useState<number | null>(null)
   // Anime-only (see main/media-hub/aniskip.ts — no equivalent free source
   // exists for movies/series) — null until fetched, and stays null forever
   // when nothing was found for this episode, which is the normal case for
@@ -623,7 +644,13 @@ export function PlaybackOverlay() {
     return () => document.removeEventListener('keydown', onKey)
   }, [playbackMedia, stopPlayback, togglePlay, seekRelative, isFullscreen, handleToggleFullscreen])
 
-  async function selectTrack(kindKey: 'audio' | 'subtitle', ordinal: number) {
+  // Audio only — embedded *subtitle* selection used to also go through
+  // here (a `kindKey: 'audio' | 'subtitle'` parameter), but that path was
+  // dead: buildFfmpegArguments never read `selection.subtitle` at all (see
+  // applyEmbeddedSubtitle's own comment for the real, working replacement).
+  // Narrowed to just audio so this function can't quietly regrow that same
+  // "looks wired up, does nothing" trap.
+  async function selectTrack(ordinal: number) {
     if (!playbackMedia || trackChangeBusy) return
     const video = videoRef.current
     // During compatibility mode, video.currentTime is relative to the
@@ -634,8 +661,7 @@ export function PlaybackOverlay() {
     setTrackChangeBusy(true)
     try {
       const response = await window.api?.mediaHub?.playback.selectTracks({
-        audio: kindKey === 'audio' ? ordinal : undefined,
-        subtitle: kindKey === 'subtitle' ? ordinal : undefined,
+        audio: ordinal,
         startTime
       })
       if (!response) return
@@ -744,6 +770,44 @@ export function PlaybackOverlay() {
     setOpenMenu(null)
   }
 
+  // The "Embedded" subtitle menu used to route through selectTrack('subtitle',
+  // ordinal) — a real dead end found live: that path restarts ffmpeg via
+  // playback:select-tracks, but buildFfmpegArguments never actually reads
+  // `selection.subtitle` (embedded-subtitle *burning* was removed when
+  // compatibility mode switched to `-c:v copy` — see vlc.ts's own header
+  // comment), so clicking it silently did nothing. This is the real fix:
+  // extract that stream as WebVTT (mediahub:playback:extract-subtitle, no
+  // transcode restart involved) and apply it through the exact same
+  // <track> mechanism the OpenSubtitles flow above already uses. Can take
+  // a while on a slow connection (see extractSubtitleTrack's own comment
+  // on why there's no early exit), so this tracks its own busy state
+  // rather than reusing trackChangeBusy, which is specifically about the
+  // ffmpeg-restart path this doesn't use.
+  async function applyEmbeddedSubtitle(track: MediaTrack) {
+    if (extractingSubtitleOrdinal !== null) return
+    setExtractingSubtitleOrdinal(track.ordinal)
+    try {
+      const vtt = await window.api?.mediaHub?.playback.extractSubtitle(track.ordinal)
+      if (!vtt) {
+        pushNotification({
+          tone: 'error',
+          message: `Could not load "${track.label}" — no subtitle data was found.`
+        })
+        return
+      }
+      subtitleVttRef.current = vtt
+      applyShiftedSubtitle()
+    } catch (error) {
+      pushNotification({
+        tone: 'error',
+        message: error instanceof Error ? error.message : 'Could not load that subtitle.'
+      })
+    } finally {
+      setExtractingSubtitleOrdinal(null)
+      setOpenMenu(null)
+    }
+  }
+
   // "Always have subtitles" — automatically fetches and applies an
   // OpenSubtitles match as soon as this title starts, same as clicking the
   // Subtitles menu and picking the first result manually would, so
@@ -752,6 +816,9 @@ export function PlaybackOverlay() {
   // subtitleLanguage setting — see subtitlesService.ts) and apply path the
   // Subtitles menu itself uses; the person can still switch to an embedded
   // track or a different OpenSubtitles result afterward via that menu.
+  // Gated on the autoSubtitlesEnabled preference (on by default — see
+  // preferences.ts's publicSettings) so someone who'd rather pick manually
+  // via the Subtitles menu can turn this off.
   // Runs once per title: this component remounts fresh per playbackMedia
   // (see GlobalOverlays.tsx's `key={playbackMedia?.id}`), so an empty
   // dependency array is genuinely "once per session," not just "once
@@ -759,6 +826,7 @@ export function PlaybackOverlay() {
   // not something worth an error toast for.
   useEffect(() => {
     if (!playbackMedia) return
+    if (mediaHubSettings?.autoSubtitlesEnabled === false) return
     let cancelled = false
     const api = window.api?.mediaHub
     if (!api) return
@@ -1214,7 +1282,7 @@ export function PlaybackOverlay() {
                       key={t.ordinal}
                       type="button"
                       className={`${styles.playerMenuItem} ${t.default ? styles.playerMenuItemActive : ''}`}
-                      onClick={() => selectTrack('audio', t.ordinal)}
+                      onClick={() => selectTrack(t.ordinal)}
                       disabled={trackChangeBusy}
                     >
                       {t.label}
@@ -1239,17 +1307,27 @@ export function PlaybackOverlay() {
               <div className={styles.playerMenu}>
                 <div className={styles.playerMenuHeading}>Embedded</div>
                 {subtitleTracks.length === 0 && <span className={styles.playerMenuItem}>None</span>}
-                {subtitleTracks.map((t) => (
-                  <button
-                    key={t.ordinal}
-                    type="button"
-                    className={styles.playerMenuItem}
-                    onClick={() => selectTrack('subtitle', t.ordinal)}
-                    disabled={trackChangeBusy}
-                  >
-                    {t.label}
-                  </button>
-                ))}
+                {subtitleTracks.map((t) => {
+                  const isTextBased = TEXT_SUBTITLE_CODECS.has(t.codec.toLowerCase())
+                  const isExtracting = extractingSubtitleOrdinal === t.ordinal
+                  return (
+                    <button
+                      key={t.ordinal}
+                      type="button"
+                      className={styles.playerMenuItem}
+                      onClick={() => applyEmbeddedSubtitle(t)}
+                      disabled={!isTextBased || extractingSubtitleOrdinal !== null}
+                      title={
+                        isTextBased
+                          ? undefined
+                          : 'Image-based subtitle format — not supported'
+                      }
+                    >
+                      {isExtracting ? `Loading “${t.label}”…` : t.label}
+                      {!isTextBased && ' (unsupported)'}
+                    </button>
+                  )
+                })}
                 <div className={styles.playerMenuHeading}>OpenSubtitles</div>
                 {subtitleResults === null && (
                   <span className={styles.playerMenuItem}>Searching…</span>

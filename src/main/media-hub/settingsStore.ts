@@ -48,6 +48,7 @@ export interface MediaHubRawSettings {
   subtitleLanguage?: string
   updateChannel?: string
   playbackBuffer?: string
+  autoSubtitlesEnabled?: boolean
   uiAnimationsEnabled?: boolean
   videoTranscodeEnabled?: boolean
   preferredUpscaleHeight?: number
