@@ -37,6 +37,7 @@ import {
   enrichTorBoxItem,
   rankStreams,
   selectVideoFile,
+  titleMatchesRelease,
   validateTorBoxToken,
   type RawApiPayload,
   type TorBoxFile
@@ -90,6 +91,21 @@ async function fetchAddonStreams(url: string): Promise<StreamCandidate[]> {
   }
 }
 
+/**
+ * The best available free text naming what a stream candidate actually
+ * is, for title-matching (see titleMatchesRelease). The two add-ons don't
+ * agree on where this lives: Torrentio puts the real release/torrent name
+ * as `.title`'s first line (`.name` is just "Torrentio\n1080p", useless for
+ * this); Comet leaves `.title` undefined and puts it in `.description`
+ * instead (`.name` is similarly just "[TORRENT] Comet 2160p" — confirmed
+ * live comparing a real Comet-sourced candidate against a real
+ * Torrentio-sourced one for the same search).
+ */
+function streamReleaseText(stream: StreamCandidate): string {
+  const text = stream.title || (stream.description as string | undefined) || stream.name || ''
+  return text.split('\n')[0]
+}
+
 /** First-seen-wins dedupe across multiple add-ons' results — the same real torrent is often indexed by more than one, and rankStreams should only ever see it once. */
 function dedupeByInfoHash(streams: StreamCandidate[]): StreamCandidate[] {
   const seen = new Set<string>()
@@ -106,6 +122,11 @@ function dedupeByInfoHash(streams: StreamCandidate[]): StreamCandidate[] {
 interface StreamResolvePayload {
   type: string
   id: string
+  /** The catalog title being searched for — optional (older callers/tests
+   *  may omit it), in which case no title-based filtering happens at all.
+   *  See titleMatchesRelease's own doc comment for what this guards
+   *  against. */
+  title?: string
 }
 
 interface PlayStreamPayload {
@@ -157,7 +178,7 @@ export function registerTorBoxIpc(): void {
 
   handle<StreamResolvePayload, StreamResolveResult>(
     MEDIA_HUB_CHANNELS.streamResolve,
-    async (_e, { type, id }) => {
+    async (_e, { type, id, title }) => {
       const auth = getTorBoxToken()
       if (!auth) throw new Error('TorBox is not connected.')
       const key = `stream:v1:${type}:${id}`
@@ -188,8 +209,19 @@ export function registerTorBoxIpc(): void {
             `https://torrentio.strem.fun/stream/${type}/${encodeURIComponent(id)}.json`
           )
         ])
-        const discovered = dedupeByInfoHash([...comet, ...torrentio])
-        if (!discovered.length) return { streams: [], best: null }
+        const discoveredRaw = dedupeByInfoHash([...comet, ...torrentio])
+        if (!discoveredRaw.length) return { streams: [], best: null }
+        // Guards against a P2P scraper add-on's own "exact match" flag
+        // being wrong for a franchise with several similarly-prefixed
+        // entries (found live — see titleMatchesRelease's own doc
+        // comment). Only ever narrows the pool, never replaces it with
+        // nothing: a release-name shape this heuristic can't parse
+        // cleanly falls back to the full unfiltered list rather than
+        // turning a real, working result into a dead end.
+        const titleFiltered = title
+          ? discoveredRaw.filter((s) => titleMatchesRelease(streamReleaseText(s), title))
+          : discoveredRaw
+        const discovered = titleFiltered.length ? titleFiltered : discoveredRaw
         const hashes = [...new Set(discovered.map((s) => s.infoHash.toLowerCase()))].slice(0, 100)
         const cached = await torboxFetch<{
           data?: { hash?: string }[] | Record<string, unknown>
@@ -304,11 +336,29 @@ export function registerTorBoxIpc(): void {
       const episode = Number(parts.at(-1))
       const season = Number(parts.at(-2))
       const episodic = parts.length >= 3 && Number.isFinite(season) && Number.isFinite(episode)
-      const file = selectVideoFile(
-        (item.files || []) as TorBoxFile[],
-        episodic ? season : undefined,
-        episodic ? episode : undefined
-      )
+      const files = (item.files || []) as TorBoxFile[]
+      // Prefer the scraper add-on's own fileIdx (Torrentio provides it,
+      // Comet doesn't — see StreamCandidate.fileIdx's own doc comment)
+      // over selectVideoFile's filename-regex guessing, but only when it
+      // actually resolves to a real video file in TorBox's own listing —
+      // found live: on a large batch torrent (e.g. a "Complete Series"
+      // pack), the regex guess can miss entirely even though the add-on
+      // already told us exactly which file. Falls back to the regex guess
+      // whenever the index doesn't line up, rather than trusting it
+      // blindly (TorBox's own file ordering isn't guaranteed to match the
+      // add-on's).
+      const videoExt = /\.(mkv|mp4|avi|mov|webm|m4v|ts)$/i
+      const hintedIdx = Number(stream?.fileIdx)
+      const hinted =
+        Number.isInteger(hintedIdx) &&
+        hintedIdx >= 0 &&
+        files[hintedIdx] &&
+        videoExt.test(files[hintedIdx].name || files[hintedIdx].short_name || '')
+          ? files[hintedIdx]
+          : null
+      const file =
+        hinted ||
+        selectVideoFile(files, episodic ? season : undefined, episodic ? episode : undefined)
       if (!file) throw new Error('No matching video file was found in the TorBox torrent.')
       const result = await torboxFetch<{ data?: string | { url?: string; download_url?: string } }>(
         `${TORBOX}/torrents/requestdl?token=${encodeURIComponent(auth)}&torrent_id=${encodeURIComponent(item.id)}&file_id=${encodeURIComponent(String(file.id))}&redirect=false`

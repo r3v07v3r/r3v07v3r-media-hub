@@ -93,6 +93,14 @@ export interface StreamCandidate {
   cached?: boolean
   compatible?: boolean
   exact?: boolean
+  /** The scraper add-on's own index into the torrent's file list for the
+   *  specific episode/file this candidate is for — Torrentio provides this
+   *  directly (Comet's results don't). Preferred over selectVideoFile's
+   *  filename-regex guessing when it lines up with a real video file in
+   *  TorBox's own listing (see torbox.ts's play:stream handler) — the
+   *  guessing is the fallback, not the first resort, since a large batch
+   *  torrent's filenames aren't always confidently parseable. */
+  fileIdx?: number
   [key: string]: unknown
 }
 

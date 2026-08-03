@@ -808,7 +808,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       const resolveId = kind === 'anime' ? `${media.id}:${media.episodeNumber ?? 1}` : mediaId
       setResolvingMedia({ id: media.id, stage: 'searching' })
       try {
-        const resolved = await api.stream.resolve(kind, resolveId)
+        const resolved = await api.stream.resolve(kind, resolveId, media.title)
         if (!resolved.best) {
           // `queued` (see StreamResolveResult's own doc comment) means a
           // real torrent existed but nothing was cached yet, and the

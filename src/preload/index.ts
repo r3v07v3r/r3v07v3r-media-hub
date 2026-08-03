@@ -220,8 +220,8 @@ const api = {
     },
 
     stream: {
-      resolve: (type: string, id: string): Promise<StreamResolveResult> =>
-        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.streamResolve, { type, id }),
+      resolve: (type: string, id: string, title?: string): Promise<StreamResolveResult> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.streamResolve, { type, id, title }),
       play: (stream: StreamCandidate, mediaId?: string): Promise<PlaybackResult> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.playStream, { stream, mediaId })
     },

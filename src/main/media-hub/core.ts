@@ -397,6 +397,25 @@ function mediaKey(value: string): string {
     .toLowerCase()
 }
 
+/**
+ * Whether a raw release name (a torrent's own declared name, a file path,
+ * or similar free text) is plausibly a release of `requestedTitle`, not a
+ * different-but-related title — see torbox.ts's streamResolve, which found
+ * live that a P2P scraper add-on's own "exact match" flag isn't reliable
+ * for a franchise with several similarly-prefixed entries: a "Dragon Ball
+ * Z Complete Series" batch torrent came back flagged exact for a request
+ * for "Dragon Ball" (a different, if related, show/catalog id). Reuses
+ * enrichTorBoxItem's own parseReleaseName + mediaKey pipeline and requires
+ * an EXACT match after normalization, not a substring check — substring
+ * inclusion is exactly what fails here, since "dragonball" is a substring
+ * of "dragonballz" too.
+ */
+export function titleMatchesRelease(releaseText: string, requestedTitle: string): boolean {
+  if (!requestedTitle.trim()) return true
+  const parsed = parseReleaseName(releaseText)
+  return mediaKey(parsed.title) === mediaKey(requestedTitle)
+}
+
 export function enrichTorBoxItem(raw: RawApiPayload, catalog: CatalogItem[] = []): LibraryItem {
   const parsed = parseReleaseName(librarySourceName(raw))
   const key = mediaKey(parsed.title)
@@ -474,11 +493,11 @@ export function selectVideoFile(
       // match it at all. Restricted to season 1 since a bare "- 05" in a
       // later season's own release would be genuinely ambiguous with a
       // season-1 episode of the same number.
-      ...(season === 1
-        ? [new RegExp(`-\\s*0*${episode}(?:v\\d)?(?:[ ._[(]|$)`, 'i')]
-        : [])
+      ...(season === 1 ? [new RegExp(`-\\s*0*${episode}(?:v\\d)?(?:[ ._[(]|$)`, 'i')] : [])
     ]
-    const filtered = candidates.filter((f) => patterns.some((p) => p.test(f.name || f.short_name || '')))
+    const filtered = candidates.filter((f) =>
+      patterns.some((p) => p.test(f.name || f.short_name || ''))
+    )
     // A torrent with only one video file at all has no ambiguity to guess
     // wrong about, regardless of what its name looks like — this is the
     // normal shape for a single-episode fansub release, unlike the
