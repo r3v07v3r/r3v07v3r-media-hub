@@ -846,9 +846,20 @@ export function createFfmpegTranscoder({
           reject(new Error(`ffmpeg exited before producing video (code ${code}).`))
         }
       })
-      setTimeout(() => {
-        if (!ready) reject(new Error('Compatibility mode did not start producing video in time.'))
-      }, 25000)
+      // A real hardware video re-encode (videoEncoder set — see
+      // playbackSession.ts's videoTranscodeEnabled gate) is fundamentally
+      // heavier than this mode's normal audio-only transcode (stream-copy
+      // video, just re-encode audio) — found live: a fixed 25s budget that
+      // works fine for audio-only reliably timed out for a real video
+      // re-encode on the same machine/source, even though it eventually
+      // would have produced output. Audio-only mode keeps the original,
+      // already-proven 25s; video re-encoding gets more room.
+      setTimeout(
+        () => {
+          if (!ready) reject(new Error('Compatibility mode did not start producing video in time.'))
+        },
+        videoEncoder ? 60000 : 25000
+      )
     })
     readyPromise.catch(() => {})
 
