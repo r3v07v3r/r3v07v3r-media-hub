@@ -71,7 +71,9 @@ export function PlaybackOverlay() {
     mediaHubSettings,
     partyStatus,
     partyPendingSeek,
-    consumePartyPendingSeek
+    consumePartyPendingSeek,
+    partyPanelOpen,
+    setPartyPanelOpen
   } = useAppState()
   const isPartyHost = Boolean(partyStatus?.inParty && partyStatus.role === 'host')
   // While following, local play/pause/seek controls are disabled (see the
@@ -1019,8 +1021,19 @@ export function PlaybackOverlay() {
       if (!video) return
       if (msg.type === 'play') video.play().catch(() => {})
       else if (msg.type === 'pause') video.pause()
-      else if (msg.type === 'seek') performSeek(Number(msg.position) || 0)
-      else if (msg.type === 'position') {
+      else if (msg.type === 'seek') {
+        // Cancels any still-pending join-time catch-up seek (see
+        // partyPendingSeek's own effect below) — without this, a real seek
+        // that arrives before this device's buffer ever became ready
+        // (partyPendingSeek only gets consumed once bufferingReady flips
+        // true) gets silently overwritten the moment buffering DOES catch
+        // up: the stale catch-up effect fires afterward with the OLD
+        // position from whenever this device joined, snapping playback
+        // back to it — confirmed live, reliably landing back at 0. A live
+        // seek always supersedes "catch up to where things were on join."
+        consumePartyPendingSeek()
+        performSeek(Number(msg.position) || 0)
+      } else if (msg.type === 'position') {
         // Direct/proxied playback: a plain currentTime nudge is cheap, so
         // correct on any noticeable (>2s) drift. Compatibility mode has no
         // such cheap nudge — performSeek there means restarting the ffmpeg
@@ -1051,8 +1064,12 @@ export function PlaybackOverlay() {
         // the dedicated sync-wait effect above, keyed on
         // activeSyncRequestId) is what actually tells the host this
         // device is ready; only 'seek-go' below is allowed to resume it.
+        // consumePartyPendingSeek here for the same reason as the plain
+        // 'seek' branch above — a still-pending join-time catch-up seek
+        // must not be allowed to fire later and undo this.
         video.pause()
         clearSyncSeek()
+        consumePartyPendingSeek()
         performSeek(Number(msg.position) || 0)
         setActiveSyncRequestId(msg.requestId)
       } else if (msg.type === 'seek-waiting' && msg.requestId === activeSyncRequestIdRef.current) {
@@ -1067,7 +1084,7 @@ export function PlaybackOverlay() {
         }, SYNC_PLAY_DELAY_MS)
       }
     })
-  }, [performSeek, clearSyncSeek, partyStatus, result?.compatibility])
+  }, [performSeek, clearSyncSeek, partyStatus, result?.compatibility, consumePartyPendingSeek])
 
   // Host side: keeps followers roughly in sync even without an explicit
   // seek (natural playback drift, a follower who briefly stalled) — see
@@ -1425,6 +1442,19 @@ export function PlaybackOverlay() {
                 </div>
               )}
             </div>
+          )}
+
+          {partyStatus?.inParty && (
+            <button
+              type="button"
+              className={styles.playerIconButton}
+              onClick={() => setPartyPanelOpen((v) => !v)}
+              aria-pressed={partyPanelOpen}
+              aria-label={`Watch Party — ${partyStatus.members?.length ?? 0} watching`}
+              title="Watch Party — members, invite code, and suggestions"
+            >
+              <Icon name="people" size={15} />
+            </button>
           )}
 
           <button
