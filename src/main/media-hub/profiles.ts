@@ -100,6 +100,39 @@ function verifyPin(record: ProfileRecord, pin: string): boolean {
   return a.length === b.length && crypto.timingSafeEqual(a, b)
 }
 
+// A 4-digit PIN is only 10,000 combinations — with nothing gating repeated
+// attempts, a script could brute-force it via profilesVerifyPin/
+// profilesSetActive in well under a second, defeating the PIN-lock's whole
+// point (see this file's own header comment on what it's meant to gate:
+// a casual "confirm it's really you" check, not something meant to survive
+// a determined attacker, but it should at least survive a trivial loop).
+// In-memory and per-profile, not persisted: resets on app restart, which is
+// fine for this threat model and avoids a settings-schema change.
+const MAX_PIN_ATTEMPTS = 5
+const PIN_LOCKOUT_MS = 30_000
+const pinAttempts = new Map<string, { count: number; lockedUntil: number }>()
+
+function assertNotLockedOut(profileId: string): void {
+  const state = pinAttempts.get(profileId)
+  if (!state || state.lockedUntil <= Date.now()) return
+  const seconds = Math.ceil((state.lockedUntil - Date.now()) / 1000)
+  throw new Error(`Too many incorrect PIN attempts. Try again in ${seconds}s.`)
+}
+
+function recordPinAttempt(profileId: string, ok: boolean): void {
+  if (ok) {
+    pinAttempts.delete(profileId)
+    return
+  }
+  const state = pinAttempts.get(profileId) ?? { count: 0, lockedUntil: 0 }
+  state.count += 1
+  if (state.count >= MAX_PIN_ATTEMPTS) {
+    state.lockedUntil = Date.now() + PIN_LOCKOUT_MS
+    state.count = 0
+  }
+  pinAttempts.set(profileId, state)
+}
+
 interface SetActiveArgs {
   id?: string
   pin?: string
@@ -148,8 +181,11 @@ export function registerProfilesIpc(): void {
       const id = String(payload?.id || '')
       const target = profiles.find((p) => p.id === id)
       if (!target) throw new Error('That profile no longer exists.')
-      if (target.pinHash && !verifyPin(target, String(payload?.pin || ''))) {
-        throw new Error('Incorrect PIN.')
+      if (target.pinHash) {
+        assertNotLockedOut(id)
+        const ok = verifyPin(target, String(payload?.pin || ''))
+        recordPinAttempt(id, ok)
+        if (!ok) throw new Error('Incorrect PIN.')
       }
       const settings = readSettings()
       settings.activeProfileId = id
@@ -231,6 +267,7 @@ export function registerProfilesIpc(): void {
     const settings = readSettings()
     settings.profiles = remaining
     writeSettings(settings)
+    pinAttempts.delete(id)
     return { profiles: remaining.map(toPublic), activeProfileId }
   })
 
@@ -238,9 +275,13 @@ export function registerProfilesIpc(): void {
     MEDIA_HUB_CHANNELS.profilesVerifyPin,
     (_event, payload) => {
       const { profiles } = ensureProfiles()
-      const target = profiles.find((p) => p.id === String(payload?.id || ''))
+      const id = String(payload?.id || '')
+      const target = profiles.find((p) => p.id === id)
       if (!target) return { ok: false }
-      return { ok: verifyPin(target, String(payload?.pin || '')) }
+      assertNotLockedOut(id)
+      const ok = verifyPin(target, String(payload?.pin || ''))
+      recordPinAttempt(id, ok)
+      return { ok }
     }
   )
 }
