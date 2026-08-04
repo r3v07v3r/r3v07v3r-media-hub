@@ -1020,17 +1020,32 @@ export function PlaybackOverlay() {
       if (msg.type === 'play') video.play().catch(() => {})
       else if (msg.type === 'pause') video.pause()
       else if (msg.type === 'seek') performSeek(Number(msg.position) || 0)
-      else if (msg.type === 'position' && !result?.compatibility) {
-        // Direct/proxied playback only — a plain currentTime nudge is
-        // cheap there. In compatibility mode, performSeek's "seek" means
-        // restarting the ffmpeg transcode from scratch (see its own
-        // comment), which is far too disruptive to run automatically on
-        // routine drift between two independently-buffered streams; an
-        // explicit host 'seek' still applies in compat mode above, this
-        // periodic soft-correction just doesn't.
+      else if (msg.type === 'position') {
+        // Direct/proxied playback: a plain currentTime nudge is cheap, so
+        // correct on any noticeable (>2s) drift. Compatibility mode has no
+        // such cheap nudge — performSeek there means restarting the ffmpeg
+        // transcode from scratch (see its own comment) — so this used to
+        // skip compat mode entirely to avoid restarting over routine
+        // jitter. That left a real, permanently-uncorrected gap: each
+        // party member resolves and streams their OWN independent copy of
+        // the source (see startPartyPlayback), and buildFfmpegArguments's
+        // own -noaccurate_seek keyframe-snap (see its comment) means every
+        // seek lands each person on the *nearest keyframe in their own
+        // file* — which differs release to release, sometimes by several
+        // seconds — not the literal requested position. With no
+        // correction at all in compat mode, that per-person snap became a
+        // permanent offset from everyone else, confirmed live (seek felt
+        // instant locally, other members stayed audibly/visibly behind
+        // forever after). A wider 6s threshold here still leaves single-
+        // keyframe-interval noise alone (restarting the transcode over a
+        // couple of seconds of expected snap error would be more
+        // disruptive than the drift itself) while actually correcting a
+        // real, sustained desync within one ~10s correction cycle instead
+        // of never.
         const target = Number(msg.position) || 0
         const currentAbsolute = streamStartOffsetRef.current + video.currentTime
-        if (Math.abs(currentAbsolute - target) > 2) performSeek(target)
+        const driftThreshold = result?.compatibility ? 6 : 2
+        if (Math.abs(currentAbsolute - target) > driftThreshold) performSeek(target)
       } else if (msg.type === 'seek-sync' && msg.requestId) {
         // Land at the new position and hold there — reportSyncReady (via
         // the dedicated sync-wait effect above, keyed on
