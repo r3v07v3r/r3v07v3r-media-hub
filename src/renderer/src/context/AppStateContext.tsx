@@ -455,15 +455,22 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     refreshPartyStatus()
     return api.onEvent((event) => {
       if (event.type === 'party-state') {
-        setPartyStatus((prev) =>
-          prev
-            ? {
-                ...prev,
-                members: event.members,
-                allowMemberControl: event.allowMemberControl ?? prev.allowMemberControl
-              }
-            : prev
-        )
+        // Was a local merge keyed off the previous state (`prev ? {...} :
+        // prev`) — silently a no-op whenever `partyStatus` hadn't finished
+        // its first load yet (a real window: refreshPartyStatus() below is
+        // itself async, and a party-state push — e.g. the host toggling
+        // "anyone can control playback" moments after someone joins — can
+        // easily land before that first fetch resolves). The dropped
+        // update was never retried, so allowMemberControl could stay wrong
+        // client-side for the rest of the session even though the host's
+        // own toggle and the main process's own party state were both
+        // correct — confirmed as the real cause of a live report where a
+        // member couldn't seek despite the host having enabled it.
+        // Refetching the authoritative status instead of merging a partial
+        // event locally is a few hundred ms slower but can't go stale this
+        // way, and also picks up every other field (role, selfId, ...)
+        // consistently rather than only members/allowMemberControl.
+        refreshPartyStatus()
       } else if (event.type === 'queue-sync') {
         setPartyQueue(event.queue)
       } else if (event.type === 'host-disconnected') {

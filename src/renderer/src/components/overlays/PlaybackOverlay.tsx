@@ -105,6 +105,14 @@ export function PlaybackOverlay() {
   // reports itself as a failure) — see vlc.ts's generation tracking for
   // the same protection at the backend layer too.
   const [trackChangeBusy, setTrackChangeBusy] = useState(false)
+  // Which audio ordinal selectTrack() is currently applying — display only
+  // (trackChangeBusy alone already gates re-entrancy correctly). Without
+  // this the audio menu gave zero visible feedback while a track change
+  // was in flight (an ffmpeg restart in compatibility mode routinely takes
+  // several seconds, longer on a slow connection) — a real, live-reported
+  // "it says loading but nothing happens" complaint that was really just
+  // "no indication anything is happening at all," not a hang.
+  const [pendingAudioOrdinal, setPendingAudioOrdinal] = useState<number | null>(null)
   // Mirrors activeSelectionRef.current.upscaleHeight for rendering purposes
   // (the ref itself doesn't trigger a re-render on change) — 0 means "off".
   const [appliedUpscaleHeight, setAppliedUpscaleHeight] = useState(0)
@@ -115,6 +123,17 @@ export function PlaybackOverlay() {
   // starts producing a response to react to.
   const [applyingQuality, setApplyingQuality] = useState(false)
   const [subtitleResults, setSubtitleResults] = useState<SubtitleResult[] | null>(null)
+  // Which OpenSubtitles fileId applySubtitle() is currently downloading and
+  // converting — display only, but a real gap without it: unlike the
+  // embedded-subtitle path (extractingSubtitleOrdinal) and audio track
+  // switch (pendingAudioOrdinal), this menu previously gave zero feedback
+  // while an OpenSubtitles download+SRT-to-VTT conversion was in flight,
+  // AND had no re-entrancy guard — a second click (same item or a
+  // different one) while the first was still running fired a second
+  // concurrent apply. A live-reported "subtitles say loading but never
+  // change" complaint was, at least in part, this: no visible sign
+  // anything was happening at all.
+  const [pendingSubtitleFileId, setPendingSubtitleFileId] = useState<number | null>(null)
   const [activeSubtitleTrackUrl, setActiveSubtitleTrackUrl] = useState<string | null>(null)
   // Non-null while an embedded-subtitle extraction (extractSubtitleTrack,
   // see applyEmbeddedSubtitle) is in flight — separate from
@@ -213,6 +232,12 @@ export function PlaybackOverlay() {
   const syncTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const SYNC_TIMEOUT_MS = 20000
   const SYNC_PLAY_DELAY_MS = 1500
+  // Follower-side drift catch-up: whenever a mild speed nudge (see the
+  // 'position' correction branch below) is active, this clears it back to
+  // normal speed once the party ends or the component unmounts — without
+  // it, leaving a party mid-nudge could strand the video permanently
+  // playing at 1.1x/0.9x.
+  const catchUpRateTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const trackedMediaId = playbackMedia?.id
   const kind =
@@ -241,6 +266,10 @@ export function PlaybackOverlay() {
     return () => {
       window.api?.mediaHub?.playback.stop().catch(() => {})
       clearSyncSeek()
+      if (catchUpRateTimeoutRef.current) {
+        clearTimeout(catchUpRateTimeoutRef.current)
+        catchUpRateTimeoutRef.current = null
+      }
     }
   }, [trackedMediaId, playbackMedia, clearSyncSeek])
 
@@ -363,6 +392,16 @@ export function PlaybackOverlay() {
       const video = videoRef.current
       if (!video) return
 
+      // Any explicit seek supersedes an in-progress drift catch-up nudge
+      // (see the 'position' correction branch below) — leaving a stale
+      // speed adjustment running after landing on a fresh position would
+      // just introduce new drift instead of fixing any.
+      if (catchUpRateTimeoutRef.current) {
+        clearTimeout(catchUpRateTimeoutRef.current)
+        catchUpRateTimeoutRef.current = null
+      }
+      video.playbackRate = 1
+
       if (!result?.compatibility) {
         // Direct/proxied playback (playback.ts forwards real Range/
         // Content-Length headers) genuinely supports currentTime seeks.
@@ -377,6 +416,24 @@ export function PlaybackOverlay() {
       // real way to "seek" is what selectTrack() already does for track
       // changes: restart the ffmpeg transcode from a new -ss position and
       // load the fresh stream it produces.
+      //
+      // The offset/currentTime update below is optimistic — applied before
+      // the restart is known to succeed, so the scrubber/time label feel
+      // instant instead of waiting on a multi-second ffmpeg spin-up. On
+      // failure this MUST be reverted, not left pointing at `target`: a
+      // real, live-reported bug otherwise, where the scrubber kept
+      // showing the new position forever while the <video> element kept
+      // playing the untouched old stream (the restart never actually
+      // swapped it in) — nothing else in the app could tell that apart
+      // from a genuinely successful seek. In a solo session that was a
+      // confusing display glitch; in a watch party it was worse — the
+      // host's own periodic position broadcasts (see the 'position'
+      // correction branch below) kept reporting this false position as
+      // truth, so a follower who DID seek successfully had nothing
+      // truthful to self-correct against and the party stayed desynced
+      // — one side playing from the old spot, the other from the new one
+      // — for the rest of the session.
+      const previousOffset = streamStartOffsetRef.current
       streamStartOffsetRef.current = target
       setCurrentTime(target)
       applyShiftedSubtitle()
@@ -390,6 +447,9 @@ export function PlaybackOverlay() {
           setTracks(response.tracks)
         })
         .catch((error: unknown) => {
+          streamStartOffsetRef.current = previousOffset
+          setCurrentTime(previousOffset)
+          applyShiftedSubtitle()
           pushNotification({
             tone: 'error',
             message: error instanceof Error ? error.message : 'Could not seek.'
@@ -680,6 +740,7 @@ export function PlaybackOverlay() {
     // plus that relative time, not the relative time alone.
     const startTime = streamStartOffsetRef.current + (video?.currentTime ?? 0)
     setTrackChangeBusy(true)
+    setPendingAudioOrdinal(ordinal)
     try {
       const response = await window.api?.mediaHub?.playback.selectTracks({
         audio: ordinal,
@@ -715,6 +776,7 @@ export function PlaybackOverlay() {
       }
     } finally {
       setTrackChangeBusy(false)
+      setPendingAudioOrdinal(null)
       setOpenMenu(null)
     }
   }
@@ -772,6 +834,8 @@ export function PlaybackOverlay() {
   }
 
   async function applySubtitle(fileId: number) {
+    if (pendingSubtitleFileId !== null) return
+    setPendingSubtitleFileId(fileId)
     try {
       const applied = await window.api?.mediaHub?.subtitles.apply(fileId, false)
       if (applied?.vttDataUrl) {
@@ -787,8 +851,10 @@ export function PlaybackOverlay() {
         tone: 'error',
         message: error instanceof Error ? error.message : 'Could not load that subtitle.'
       })
+    } finally {
+      setPendingSubtitleFileId(null)
+      setOpenMenu(null)
     }
-    setOpenMenu(null)
   }
 
   // The "Embedded" subtitle menu used to route through selectTrack('subtitle',
@@ -1057,8 +1123,47 @@ export function PlaybackOverlay() {
         // of never.
         const target = Number(msg.position) || 0
         const currentAbsolute = streamStartOffsetRef.current + video.currentTime
+        const drift = target - currentAbsolute
         const driftThreshold = result?.compatibility ? 6 : 2
-        if (Math.abs(currentAbsolute - target) > driftThreshold) performSeek(target)
+        if (Math.abs(drift) > driftThreshold) {
+          if (catchUpRateTimeoutRef.current) {
+            clearTimeout(catchUpRateTimeoutRef.current)
+            catchUpRateTimeoutRef.current = null
+          }
+          video.playbackRate = 1
+          performSeek(target)
+        } else if (Math.abs(drift) > 0.75) {
+          // Moderate drift, below the hard-seek threshold: nudge speed
+          // instead of restarting — a live-reported request, since a full
+          // restart (an ffmpeg respawn in compat mode, or just a jarring
+          // jump in direct mode) is far more disruptive than a barely-
+          // noticeable 10% speed change for a few seconds. Chromium
+          // preserves pitch by default on a playbackRate change, so this
+          // doesn't chipmunk the audio.
+          //
+          // Fixed, short nudge window (4s) rather than computing "however
+          // long it takes to fully close this gap at a 10% differential" —
+          // a real bug caught live: that math means 40+ real seconds of
+          // audibly-sped-up playback to close a mere 4s gap, nothing like
+          // the "barely noticeable" nudge this was meant to be. A bounded
+          // nudge instead makes a partial dent and lets the next periodic
+          // 'position' broadcast (~10s later) reassess and nudge again if
+          // drift remains — several small, safe corrections converging
+          // over a few cycles, never one long, increasingly-noticeable
+          // speed change committed to upfront.
+          video.playbackRate = drift > 0 ? 1.1 : 0.9
+          if (catchUpRateTimeoutRef.current) clearTimeout(catchUpRateTimeoutRef.current)
+          catchUpRateTimeoutRef.current = setTimeout(() => {
+            if (videoRef.current) videoRef.current.playbackRate = 1
+            catchUpRateTimeoutRef.current = null
+          }, 4000)
+        } else if (video.playbackRate !== 1) {
+          if (catchUpRateTimeoutRef.current) {
+            clearTimeout(catchUpRateTimeoutRef.current)
+            catchUpRateTimeoutRef.current = null
+          }
+          video.playbackRate = 1
+        }
       } else if (msg.type === 'seek-sync' && msg.requestId) {
         // Land at the new position and hold there — reportSyncReady (via
         // the dedicated sync-wait effect above, keyed on
@@ -1336,7 +1441,7 @@ export function PlaybackOverlay() {
                       onClick={() => selectTrack(t.ordinal)}
                       disabled={trackChangeBusy}
                     >
-                      {t.label}
+                      {pendingAudioOrdinal === t.ordinal ? `Loading "${t.label}"…` : t.label}
                       {t.default && <Icon name="check" size={12} />}
                     </button>
                   ))}
@@ -1392,8 +1497,11 @@ export function PlaybackOverlay() {
                     type="button"
                     className={styles.playerMenuItem}
                     onClick={() => applySubtitle(s.fileId)}
+                    disabled={pendingSubtitleFileId !== null}
                   >
-                    {s.language.toUpperCase()} — {s.releaseName || s.fileName}
+                    {pendingSubtitleFileId === s.fileId
+                      ? 'Loading…'
+                      : `${s.language.toUpperCase()} — ${s.releaseName || s.fileName}`}
                   </button>
                 ))}
               </div>
