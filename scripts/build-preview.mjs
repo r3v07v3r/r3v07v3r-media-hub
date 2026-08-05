@@ -11,9 +11,10 @@
 //      the tag here doesn't weaken anything real.
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { execFileSync } from 'node:child_process'
 
-const ROOT = new URL('..', import.meta.url).pathname
+const ROOT = fileURLToPath(new URL('..', import.meta.url))
 const HTML_PATH = join(ROOT, 'preview-dist/index.html')
 const PUBLIC_DIR = join(ROOT, 'src/renderer/public')
 const TMDB_CACHE_DIR = join(ROOT, '.tmdb-cache')

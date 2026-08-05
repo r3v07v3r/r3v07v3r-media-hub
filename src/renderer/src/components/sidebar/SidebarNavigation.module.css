@@ -312,10 +312,35 @@
   align-items: center;
   justify-content: center;
   color: inherit;
+  /* Resting items had zero visual weight of their own — a bare icon
+     floating in space, with all of the rail's glow/energy reserved for
+     the one active item (see .itemActive .iconWrap below). A faint
+     glassy ring even at rest gives every control its own physical
+     presence (matching the rest of this HUD's glass-panel language)
+     instead of only the active item looking like part of the same
+     surface. Deliberately much dimmer than the active glow — this reads
+     as "idle hardware," not a second active state. */
+  background: radial-gradient(circle at 35% 30%, rgba(120, 190, 255, 0.08), transparent 72%);
+  box-shadow: inset 0 0 0 1px rgba(148, 180, 220, 0.16);
   transition:
     box-shadow var(--transition-standard),
     background var(--transition-standard),
     transform var(--transition-standard);
+}
+/* Hover feedback beyond the existing text-color change — brightens the
+   same resting ring and nudges the icon forward slightly, reusing
+   .iconWrap's own transform transition rather than adding a new one.
+   Kept off .item's box (see .item:hover's own comment on why a
+   rectangular hover fill doesn't work against the organic boundary) —
+   this circular badge sits well inside the wave at every point along the
+   rail, so it doesn't have that problem. */
+.item:hover .iconWrap,
+.item:focus-visible .iconWrap {
+  background: radial-gradient(circle at 35% 30%, rgba(120, 190, 255, 0.16), transparent 72%);
+  box-shadow:
+    inset 0 0 0 1px rgba(170, 205, 240, 0.32),
+    0 0 16px 1px rgba(94, 193, 255, 0.22);
+  transform: scale(1.05);
 }
 .iconWrap svg {
   /* Scaled with the 44px -> 56px badge (kept the same ~45% fill ratio)
