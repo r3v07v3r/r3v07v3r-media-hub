@@ -213,8 +213,27 @@
   position: absolute;
   /* Pooled toward the bottom rather than centered — the reference's
      pills read as floating just above a glowing light source beneath
-     them, not lit evenly from the middle. */
-  top: 82%;
+     them, not lit evenly from the middle.
+
+     Bug fix: this row is the last one in HomeDashboard's fixed 3-row
+     grid, and .dashboard clips with overflow:hidden (it must — see that
+     rule's own comment on why Home can never page-scroll). At the very
+     common 1080px-tall window heights ultra-wide monitors run in
+     fullscreen (2560x1080, 3440x1080, ...), the grid's tuned-for-1920x1080
+     row budget leaves only ~45-55px of real clearance below the pill's
+     own box before hitting that hard clip — this halo's old 82%/157%
+     pooled roughly 71px below the pill, comfortably past that, so the
+     glow's soft blur-out got guillotined by a hard flat edge instead of
+     fading to nothing, reading as "the blur is cut off" / the pills
+     "floating" with no visible light pooled beneath them. (Taller
+     windows, e.g. 1440p, had enough slack that this never showed up —
+     confirmed via getBoundingClientRect + real screenshots at both
+     heights.) 66%/128% keeps the same "pooled low, not centered"
+     character and the same connecting bleed toward neighboring pills,
+     just with less overshoot (~37px below the pill) so it fades out on
+     its own well inside that worst-case clearance instead of getting
+     clipped. */
+  top: 66%;
   left: 50%;
   translate: -50% -50%;
   z-index: -1;
@@ -227,7 +246,7 @@
      stale (too small, not reaching the capsule's own edge) the moment a
      pill grows past its 224px starting basis. */
   width: 112%;
-  height: 157%;
+  height: 128%;
   border-radius: 50%;
   background: radial-gradient(circle, hsla(var(--hue), 95%, 65%, 0.48), transparent 70%);
   filter: blur(24px);

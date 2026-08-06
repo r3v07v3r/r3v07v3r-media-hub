@@ -59,7 +59,7 @@ function SegmentedRow({
   onChange: (v: string) => void
 }) {
   return (
-    <div className={styles.row}>
+    <div className={`${styles.row} ${styles.rowSegmented}`}>
       <div className={styles.rowIcon} aria-hidden="true">
         <Icon name={icon} size={17} />
       </div>

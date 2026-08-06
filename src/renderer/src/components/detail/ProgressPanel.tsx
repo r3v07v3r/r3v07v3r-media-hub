@@ -12,6 +12,17 @@ export interface ProgressPanelProps {
   inMyList: boolean
   onToggleMyList: () => void
   onOpenLastWatched: () => void
+  /** Used in the config.isEpisodic:false branch only — media.watched/
+   *  completed can't be trusted here (see MediaDetailPage's own comment on
+   *  why: the catalogItemToMediaItem call that builds `media` never gets
+   *  watchedIds/history), so the caller passes the real value (derived
+   *  from its own tracking:list fetch) and the toggle handler for it
+   *  directly. Still required from every caller (not just movie pages) —
+   *  this component has exactly one call site today and keeping both
+   *  props unconditional there is simpler than threading an optional
+   *  pair through just for a branch this page's other kind never hits. */
+  movieWatched: boolean
+  onToggleMovieWatched: (watched: boolean) => void
 }
 
 /**
@@ -34,7 +45,9 @@ export function ProgressPanel({
   continueEntry,
   inMyList,
   onToggleMyList,
-  onOpenLastWatched
+  onOpenLastWatched,
+  movieWatched,
+  onToggleMovieWatched
 }: ProgressPanelProps) {
   return (
     <section className={`${styles.panel} glass-panel`} aria-label="Tracked and progress">
@@ -100,10 +113,20 @@ export function ProgressPanel({
         </>
       ) : (
         <div className={styles.movieStats}>
-          <span className={styles.movieStatLine}>
-            {media.completed ? 'Watched' : media.progressPercentage ? `${media.progressPercentage}% watched` : 'Not started'}
-          </span>
-          {media.remainingMinutes != null && !media.completed && (
+          <button
+            type="button"
+            className={`${styles.watchedToggle} ${movieWatched ? styles.watchedToggleActive : ''}`}
+            aria-pressed={movieWatched}
+            onClick={() => onToggleMovieWatched(!movieWatched)}
+          >
+            <Icon name={movieWatched ? 'check' : 'eye'} size={13} />
+            {movieWatched
+              ? 'Watched'
+              : media.progressPercentage
+                ? `${media.progressPercentage}% watched`
+                : 'Not started'}
+          </button>
+          {media.remainingMinutes != null && !movieWatched && (
             <span className={styles.movieStatLine}>{media.remainingMinutes}m remaining</span>
           )}
           {continueEntry?.lastPlayedAt && (

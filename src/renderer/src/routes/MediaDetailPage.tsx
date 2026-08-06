@@ -50,7 +50,8 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
     catalog,
     pushNotification,
     openDetail,
-    watchStatusVersion
+    watchStatusVersion,
+    refreshWatchStatus
   } = useAppState()
 
   const [catalogItem, setCatalogItem] = useState<CatalogItem | null>(null)
@@ -215,15 +216,32 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
     [continueWatching, id]
   )
 
+  // media.watched/completed come from catalogItemToMediaItem(catalogItem,
+  // {trackedIds: myList}) above, which — unlike the full context the home/
+  // category grids build with — never passes watchedIds/history, so those
+  // fields are unconditionally false here. `history` (this page's own
+  // tracking:list fetch, already filtered to this exact id) is the real
+  // source of truth for a movie's watched state instead.
+  const movieWatched = history.length > 0
+
   const nextEpisode = useMemo(() => {
     if (!episodes.length) return null
-    const firstUnwatched = episodes.find((e) => !watchedKeys.has(episodeKey(e.season, e.episode)))
+    // e.unplayable excludes disambiguateVideos' synthetic Specials entries
+    // (see its own doc comment in core.ts) — they have no real (season,
+    // episode) coordinate the scraper/TorBox pipeline can resolve a
+    // stream for, so they must never become the auto-selected "next
+    // episode" / play target even though they're first in sort order.
+    const firstUnwatched = episodes.find(
+      (e) => !e.unplayable && !watchedKeys.has(episodeKey(e.season, e.episode))
+    )
     return firstUnwatched ?? null
   }, [episodes, watchedKeys])
 
   const selectedSeason =
     selectedSeasonOverride ??
-    (seasons.length ? ((nextEpisode ?? episodes[0])?.season ?? seasons[0]) : null)
+    (seasons.length
+      ? ((nextEpisode ?? episodes.find((e) => !e.unplayable) ?? episodes[0])?.season ?? seasons[0])
+      : null)
 
   useRestoreBrowsingOrigin(metaStatus !== 'loading')
 
@@ -279,6 +297,40 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
   }
 
   /**
+   * Same primitive as handleMarkEpisodeWatched, minus a season/episode —
+   * movies have no per-episode granularity, so `playback` is omitted
+   * entirely rather than sent as {season: undefined, episode: undefined}.
+   *
+   * Also calls refreshWatchStatus() (handleMarkEpisodeWatched/
+   * handleMarkSeasonWatched above don't) — this page's own `history`
+   * state is enough to keep ProgressPanel's toggle itself correct, but
+   * the catalog grids (watchedIdsResult) and personalized rails
+   * (homeFeed) this toggle also affects have no other way to learn about
+   * it, the same reasoning toggleMyList's own refreshWatchStatus-adjacent
+   * fix (AppStateContext) already applies to following a title.
+   */
+  async function handleToggleMovieWatched(watched: boolean): Promise<void> {
+    const api = window.api?.mediaHub
+    if (!api || !media) return
+    const item = {
+      id: media.id,
+      type: kind,
+      title: media.title,
+      poster: media.posterUrl ?? '',
+      year: media.releaseYear ? String(media.releaseYear) : ''
+    }
+    const call = watched ? api.tracking.markWatched : api.tracking.unmarkWatched
+    try {
+      await call({ item })
+      const refreshed = await api.tracking.list()
+      setHistory(refreshed.history.filter((h) => h.id === media.id))
+      refreshWatchStatus()
+    } catch {
+      pushNotification({ tone: 'error', message: 'Could not update watched status.' })
+    }
+  }
+
+  /**
    * "Mark season watched" has a real batch IPC (tracking:mark-season-watched
    * — one Simkl sync call for every episode in the season, see
    * main/media-hub/tracking.ts). "Mark season unwatched" has no batch
@@ -290,7 +342,12 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
   async function handleMarkSeasonWatched(season: number, watched: boolean): Promise<void> {
     const api = window.api?.mediaHub
     if (!api || !media) return
-    const seasonEpisodes = episodes.filter((e) => e.season === season)
+    // e.unplayable (see disambiguateVideos in core.ts) has no real
+    // (season, episode) coordinate — sending it through markSeasonWatched/
+    // unmarkWatched would push a fabricated (0, -N) pair into local
+    // history and Simkl sync for a promotional clip that was never a real
+    // episode.
+    const seasonEpisodes = episodes.filter((e) => e.season === season && !e.unplayable)
     if (seasonEpisodes.length === 0) return
     const item = {
       id: media.id,
@@ -402,14 +459,11 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
               status={metaStatus}
             />
           </>
-        ) : (
-          <NextToPlayPanel
-            media={media}
-            nextEpisode={null}
-            allWatched={false}
-            onPlay={() => handlePlay()}
-          />
-        )}
+        ) : null}
+        {/* Movies skip NextToPlayPanel entirely (no isEpisodic branch above)
+            — its movie-specific "Ready to Watch"/"Resume Watching" variant
+            was just a second Play button duplicating the hero's own, per
+            the user's own request. */}
         <AboutPanel media={media} config={config} />
       </div>
 
@@ -424,6 +478,8 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
           onOpenLastWatched={() =>
             handlePlay(continueEntry?.media.seasonNumber, continueEntry?.media.episodeNumber)
           }
+          movieWatched={movieWatched}
+          onToggleMovieWatched={handleToggleMovieWatched}
         />
         <GenresPanel genres={media.genres} onSelectGenre={handleGenreSelect} />
         <SimilarPanel

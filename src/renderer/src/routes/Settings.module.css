@@ -120,6 +120,35 @@
   min-width: 0;
 }
 
+/* SegmentedRow's control (3 buffer options, 6 subtitle-language options)
+   is flex:0 0 auto — it never shrinks — so sharing one line with
+   .rowIcon + .rowText in this panel's fixed width squeezed .rowText's
+   min-width:0 down to almost nothing, wrapping the description into a
+   near-unreadable single-word-per-line column (found live via the
+   Playback Buffer / Subtitle Language rows). Wrapping the segment group
+   onto its own full-width line below the label — flex-basis:100% is the
+   standard way to force a flex-wrap child onto a fresh line regardless
+   of exact container width — gives both the description AND the control
+   their own full row width instead of fighting over shared space.
+   ToggleRow's switch stays inline (46px is narrow enough to never cause
+   this), so this only applies to the segmented variant. */
+.rowSegmented {
+  flex-wrap: wrap;
+}
+.rowSegmented .segmentGroup {
+  /* Bug fix: .segmentGroup's base rule is flex:0 0 auto (flex-shrink:0),
+     so a plain 100% basis plus this 50px margin-left added 50px of real
+     overflow past the row's own width — flex-shrink:0 means it can't
+     contract to absorb the margin the way it would if shrinking were
+     allowed. calc() bakes the margin into the basis itself instead, so
+     the box's total width (content + margin) lands at exactly 100% of
+     the row. */
+  flex-basis: calc(100% - 50px);
+  /* Aligns under the title/description text, not under the icon —
+     36px icon width + this row's own 14px gap. */
+  margin-left: 50px;
+}
+
 .rowTitle {
   font-size: 14px;
   font-weight: 600;

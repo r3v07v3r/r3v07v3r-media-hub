@@ -174,6 +174,15 @@ export function EpisodesSection({
           {seasons.map((s) => {
             const isActive = s === selectedSeason
             const menuOpen = seasonMenuOpen === s
+            // A season made up entirely of disambiguateVideos' synthetic
+            // Specials entries (see core.ts) has nothing "Mark season
+            // watched/unwatched" can act on — onMarkSeason's own
+            // seasonEpisodes filter now excludes e.unplayable, so calling
+            // it here would just silently no-op on an empty list. Hiding
+            // the trigger (and so the menu it opens) for that case instead
+            // of leaving a dead control, per the same reasoning that hid
+            // the per-row Play/watched buttons for these entries.
+            const hasPlayableEpisodes = episodes.some((e) => e.season === s && !e.unplayable)
             return (
               <div key={s} className={styles.seasonItem}>
                 <button
@@ -185,7 +194,7 @@ export function EpisodesSection({
                 >
                   {seasonLabel(s)}
                 </button>
-                {isActive && (
+                {isActive && hasPlayableEpisodes && (
                   <button
                     type="button"
                     ref={(el) => {
@@ -277,31 +286,37 @@ export function EpisodesSection({
                   <span className={styles.nextBadge}>Next</span>
                 ) : null}
               </div>
-              <button
-                type="button"
-                className={styles.playRowButton}
-                onClick={() => {
-                  setPendingKey(key(ep.season, ep.episode))
-                  onPlay(ep)
-                }}
-                disabled={isShowResolving && pendingKey === key(ep.season, ep.episode)}
-                aria-busy={isShowResolving && pendingKey === key(ep.season, ep.episode)}
-                aria-label={`Play ${ep.title || `episode ${ep.episode}`}`}
-              >
-                {isShowResolving && pendingKey === key(ep.season, ep.episode) ? (
-                  <span className={styles.playRowSpinner} aria-hidden="true" />
-                ) : (
-                  <Icon name="play" size={13} />
-                )}
-              </button>
-              <button
-                type="button"
-                className={styles.watchedToggle}
-                onClick={() => onMarkWatched(ep, !watched)}
-                aria-label={watched ? `Mark episode ${ep.episode} unwatched` : `Mark episode ${ep.episode} watched`}
-              >
-                <Icon name={watched ? 'eye-off' : 'eye'} size={13} />
-              </button>
+              {!ep.unplayable && (
+                <button
+                  type="button"
+                  className={styles.playRowButton}
+                  onClick={() => {
+                    setPendingKey(key(ep.season, ep.episode))
+                    onPlay(ep)
+                  }}
+                  disabled={isShowResolving && pendingKey === key(ep.season, ep.episode)}
+                  aria-busy={isShowResolving && pendingKey === key(ep.season, ep.episode)}
+                  aria-label={`Play ${ep.title || `episode ${ep.episode}`}`}
+                >
+                  {isShowResolving && pendingKey === key(ep.season, ep.episode) ? (
+                    <span className={styles.playRowSpinner} aria-hidden="true" />
+                  ) : (
+                    <Icon name="play" size={13} />
+                  )}
+                </button>
+              )}
+              {!ep.unplayable && (
+                <button
+                  type="button"
+                  className={styles.watchedToggle}
+                  onClick={() => onMarkWatched(ep, !watched)}
+                  aria-label={
+                    watched ? `Mark episode ${ep.episode} unwatched` : `Mark episode ${ep.episode} watched`
+                  }
+                >
+                  <Icon name={watched ? 'eye-off' : 'eye'} size={13} />
+                </button>
+              )}
             </li>
           )
         })}

@@ -163,6 +163,64 @@ function normalizeMetaVideo(v: RawApiPayload): Episode {
   }
 }
 
+// Bug fix: Cinemeta sometimes reuses the exact same `id`/`season`/`episode`
+// for a real numbered episode AND one or more unrelated bonus/promotional
+// featurettes — found live via Star Trek: Strange New Worlds, where a
+// "Inside The Series" preview clip and two other featurettes all carry the
+// literal same id/season/episode as S1E1 itself. Since EpisodesSection
+// keys its list on `ep.id` and filters by `ep.season === selectedSeason`,
+// those collisions manifested as: the featurettes' watched state bleeding
+// onto the real episode (episodeKey is season:episode, shared by all four),
+// and — the visible symptom — React warning about duplicate list keys and
+// then, on the next season switch, some of the stale featurette rows
+// sticking around instead of being replaced by the new season's episodes
+// (duplicate keys leave React's reconciliation unable to tell which fiber
+// belongs to which item, which is exactly the kind of "leftover rows"
+// glitch React's own docs warn is undefined behavior).
+//
+// Applied once, centrally, to every source that assembles an episode list
+// (Cinemeta-normalized, the Simkl fallback fetch, and grouped-anime's own
+// TMDB-backed build — see catalog.ts's metadata()) rather than duplicated
+// per-source, so any of them exhibiting this same upstream-data quirk gets
+// the same protection. The FIRST video seen for a given season+episode is
+// assumed to be the real one (every case observed so far lists the genuine
+// episode before any stray duplicate) and is left untouched; every later
+// duplicate is moved into season 0 — this app's existing "Specials" bucket
+// (see EpisodesSection's seasonLabel) — with a disambiguated id and a
+// negative episode number, which can never collide with a real,
+// positively-numbered special Cinemeta itself already tags as season 0.
+//
+// unplayable:true is the important part beyond just dodging the id/key
+// collision: (season:0, episode:-1) isn't a real coordinate the scraper/
+// TorBox pipeline can resolve a stream for, and season 0 sorts before
+// every real season — so left unmarked, one of these would become
+// MediaDetailPage's `nextEpisode`/default selected season (the first
+// unwatched entry in season+episode order) and "Next to Play" would try
+// to play a promotional clip that doesn't exist as a playable file. Every
+// consumer that picks a play/next target (MediaDetailPage's nextEpisode
+// and its episodes[0] fallback, EpisodesSection's Play button) must skip
+// entries with this flag; they're informational list entries only.
+export function disambiguateVideos(videos: Episode[]): Episode[] {
+  const seen = new Set<string>()
+  let extraCount = 0
+  return videos.map((v) => {
+    const dedupeKey = `${v.season}:${v.episode}`
+    if (!seen.has(dedupeKey)) {
+      seen.add(dedupeKey)
+      return v
+    }
+    extraCount += 1
+    return {
+      ...v,
+      season: 0,
+      episode: -extraCount,
+      number: -extraCount,
+      id: `${v.id}:extra${extraCount}`,
+      unplayable: true
+    }
+  })
+}
+
 export function normalizeMeta(meta: RawApiPayload, fallbackType?: MediaKind): CatalogItem {
   return {
     id: meta.id || meta.imdb_id,

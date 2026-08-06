@@ -121,8 +121,34 @@
   display: flex;
   flex-direction: column;
   gap: 6px;
+  align-items: flex-start;
 }
 .movieStatLine {
   font-size: 13.5px;
   color: var(--text-secondary);
+}
+
+/* Same "toggle chip" pattern as .followChip above, sized up slightly
+   since this is the primary status display for a movie (not a small
+   header-row accent) and needs room for its icon. */
+.watchedToggle {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 14px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border-subtle);
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  transition: all var(--transition-fast);
+}
+.watchedToggle:hover {
+  border-color: var(--border-active);
+  color: var(--text-primary);
+}
+.watchedToggleActive {
+  color: var(--accent-green);
+  border-color: rgba(39, 230, 154, 0.4);
+  background: rgba(39, 230, 154, 0.08);
 }
