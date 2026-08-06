@@ -217,13 +217,22 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
 
   const nextEpisode = useMemo(() => {
     if (!episodes.length) return null
-    const firstUnwatched = episodes.find((e) => !watchedKeys.has(episodeKey(e.season, e.episode)))
+    // e.unplayable excludes disambiguateVideos' synthetic Specials entries
+    // (see its own doc comment in core.ts) — they have no real (season,
+    // episode) coordinate the scraper/TorBox pipeline can resolve a
+    // stream for, so they must never become the auto-selected "next
+    // episode" / play target even though they're first in sort order.
+    const firstUnwatched = episodes.find(
+      (e) => !e.unplayable && !watchedKeys.has(episodeKey(e.season, e.episode))
+    )
     return firstUnwatched ?? null
   }, [episodes, watchedKeys])
 
   const selectedSeason =
     selectedSeasonOverride ??
-    (seasons.length ? ((nextEpisode ?? episodes[0])?.season ?? seasons[0]) : null)
+    (seasons.length
+      ? ((nextEpisode ?? episodes.find((e) => !e.unplayable) ?? episodes[0])?.season ?? seasons[0])
+      : null)
 
   useRestoreBrowsingOrigin(metaStatus !== 'loading')
 

@@ -28,6 +28,13 @@ export interface Episode {
   released: string
   description?: string
   thumbnail?: string
+  /** Set by disambiguateVideos (core.ts) for a duplicate-id/season/episode
+   *  entry it moved into the synthetic "Specials" bucket — a promotional
+   *  clip or similar with no real (season, episode) coordinate the
+   *  scraper/TorBox pipeline can resolve a stream for. Consumers that pick
+   *  a "next episode" or a play target must skip these; they're
+   *  informational list entries only. */
+  unplayable?: boolean
 }
 
 // The canonical normalized catalog item — union of every field any of the

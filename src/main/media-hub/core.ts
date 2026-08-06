@@ -189,6 +189,17 @@ function normalizeMetaVideo(v: RawApiPayload): Episode {
 // (see EpisodesSection's seasonLabel) — with a disambiguated id and a
 // negative episode number, which can never collide with a real,
 // positively-numbered special Cinemeta itself already tags as season 0.
+//
+// unplayable:true is the important part beyond just dodging the id/key
+// collision: (season:0, episode:-1) isn't a real coordinate the scraper/
+// TorBox pipeline can resolve a stream for, and season 0 sorts before
+// every real season — so left unmarked, one of these would become
+// MediaDetailPage's `nextEpisode`/default selected season (the first
+// unwatched entry in season+episode order) and "Next to Play" would try
+// to play a promotional clip that doesn't exist as a playable file. Every
+// consumer that picks a play/next target (MediaDetailPage's nextEpisode
+// and its episodes[0] fallback, EpisodesSection's Play button) must skip
+// entries with this flag; they're informational list entries only.
 export function disambiguateVideos(videos: Episode[]): Episode[] {
   const seen = new Set<string>()
   let extraCount = 0
@@ -199,7 +210,14 @@ export function disambiguateVideos(videos: Episode[]): Episode[] {
       return v
     }
     extraCount += 1
-    return { ...v, season: 0, episode: -extraCount, number: -extraCount, id: `${v.id}:extra${extraCount}` }
+    return {
+      ...v,
+      season: 0,
+      episode: -extraCount,
+      number: -extraCount,
+      id: `${v.id}:extra${extraCount}`,
+      unplayable: true
+    }
   })
 }
 

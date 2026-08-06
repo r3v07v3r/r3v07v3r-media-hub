@@ -277,23 +277,25 @@ export function EpisodesSection({
                   <span className={styles.nextBadge}>Next</span>
                 ) : null}
               </div>
-              <button
-                type="button"
-                className={styles.playRowButton}
-                onClick={() => {
-                  setPendingKey(key(ep.season, ep.episode))
-                  onPlay(ep)
-                }}
-                disabled={isShowResolving && pendingKey === key(ep.season, ep.episode)}
-                aria-busy={isShowResolving && pendingKey === key(ep.season, ep.episode)}
-                aria-label={`Play ${ep.title || `episode ${ep.episode}`}`}
-              >
-                {isShowResolving && pendingKey === key(ep.season, ep.episode) ? (
-                  <span className={styles.playRowSpinner} aria-hidden="true" />
-                ) : (
-                  <Icon name="play" size={13} />
-                )}
-              </button>
+              {!ep.unplayable && (
+                <button
+                  type="button"
+                  className={styles.playRowButton}
+                  onClick={() => {
+                    setPendingKey(key(ep.season, ep.episode))
+                    onPlay(ep)
+                  }}
+                  disabled={isShowResolving && pendingKey === key(ep.season, ep.episode)}
+                  aria-busy={isShowResolving && pendingKey === key(ep.season, ep.episode)}
+                  aria-label={`Play ${ep.title || `episode ${ep.episode}`}`}
+                >
+                  {isShowResolving && pendingKey === key(ep.season, ep.episode) ? (
+                    <span className={styles.playRowSpinner} aria-hidden="true" />
+                  ) : (
+                    <Icon name="play" size={13} />
+                  )}
+                </button>
+              )}
               <button
                 type="button"
                 className={styles.watchedToggle}

@@ -202,7 +202,18 @@ export async function metadata(type: MediaKind, id: string): Promise<CatalogItem
   const cacheKey = `meta:v3:${type}:${resolvedId}`
   const db = getDatabase()
   const cached = db.getCache<CatalogItem>(cacheKey)
-  if (cached) return cached
+  // Re-running disambiguateVideos here (not just on the fresh-fetch path
+  // below) matters for anyone upgrading into this fix: their existing 24h
+  // cache entries were written by the old code and would otherwise keep
+  // serving the duplicate-id videos this whole change exists to remove
+  // until each entry's TTL happens to expire on its own. The function is
+  // idempotent — an already-disambiguated list has no remaining
+  // season/episode duplicates for it to find on a second pass — so this
+  // is safe to apply unconditionally rather than needing a cache-key
+  // version bump (which would force-refetch every cached title instead
+  // of just re-running a cheap, pure, synchronous transform on data
+  // that's already there).
+  if (cached) return { ...cached, videos: disambiguateVideos(cached.videos) }
 
   let item: CatalogItem
   try {
