@@ -166,7 +166,24 @@ export function DetailHero({
             disabled={!trailerControls.ready || !trailerControls.duration}
             aria-label="Seek trailer"
           />
-          <span className={styles.trailerTime}>{formatTime(trailerControls.duration)}</span>
+          <span className={`${styles.trailerTime} ${styles.trailerDuration}`}>
+            {formatTime(trailerControls.duration)}
+          </span>
+          {/* .content's own "Close Trailer" button is the only other way
+              to exit — but .content gets pointer-events:none while
+              contentFaded, so during actual playback that button was
+              completely unreachable without first pausing. This control
+              bar is never faded (only .content is), so it's the one place
+              a close action is guaranteed reachable regardless of
+              play/pause state. */}
+          <button
+            type="button"
+            className={styles.trailerClose}
+            onClick={onToggleTrailer}
+            aria-label="Close trailer"
+          >
+            <Icon name="x" size={13} />
+          </button>
         </div>
       )}
 

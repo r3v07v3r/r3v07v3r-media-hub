@@ -108,8 +108,31 @@
   color: var(--text-secondary);
   min-width: 34px;
 }
-.trailerTime:last-child {
+/* Bug fix: this was `.trailerTime:last-child` — broke the moment a close
+   button (added after this span, see DetailHero.tsx) became the bar's
+   real last child, silently dropping the duration label's right-align.
+   An explicit class doesn't depend on sibling order. */
+.trailerDuration {
   text-align: right;
+}
+.trailerClose {
+  flex: 0 0 auto;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-secondary);
+  transition: color var(--transition-fast), background var(--transition-fast);
+}
+.trailerClose:hover {
+  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.1);
+}
+.trailerClose svg {
+  width: 12px;
+  height: 12px;
 }
 .trailerScrub {
   flex: 1;

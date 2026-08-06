@@ -50,7 +50,8 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
     catalog,
     pushNotification,
     openDetail,
-    watchStatusVersion
+    watchStatusVersion,
+    refreshWatchStatus
   } = useAppState()
 
   const [catalogItem, setCatalogItem] = useState<CatalogItem | null>(null)
@@ -299,6 +300,14 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
    * Same primitive as handleMarkEpisodeWatched, minus a season/episode —
    * movies have no per-episode granularity, so `playback` is omitted
    * entirely rather than sent as {season: undefined, episode: undefined}.
+   *
+   * Also calls refreshWatchStatus() (handleMarkEpisodeWatched/
+   * handleMarkSeasonWatched above don't) — this page's own `history`
+   * state is enough to keep ProgressPanel's toggle itself correct, but
+   * the catalog grids (watchedIdsResult) and personalized rails
+   * (homeFeed) this toggle also affects have no other way to learn about
+   * it, the same reasoning toggleMyList's own refreshWatchStatus-adjacent
+   * fix (AppStateContext) already applies to following a title.
    */
   async function handleToggleMovieWatched(watched: boolean): Promise<void> {
     const api = window.api?.mediaHub
@@ -315,6 +324,7 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
       await call({ item })
       const refreshed = await api.tracking.list()
       setHistory(refreshed.history.filter((h) => h.id === media.id))
+      refreshWatchStatus()
     } catch {
       pushNotification({ tone: 'error', message: 'Could not update watched status.' })
     }
