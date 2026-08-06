@@ -138,8 +138,14 @@ export interface CatalogItemAdapterContext {
  *  show isn't permanently unwatchable-to-complete. */
 function isSeriesCompleted(item: CatalogItem, history: HistoryEntry[]): boolean {
   const now = Date.now()
+  // v.unplayable (see disambiguateVideos in core.ts) is a synthetic
+  // Specials entry with no real episode behind it — its watched controls
+  // are hidden, so it can never appear in `history`. Counting it toward
+  // `aired` would mean state.watchedCount could never reach state.total,
+  // permanently blocking a series from showing as complete even after
+  // every real episode is watched.
   const aired = (item.videos || []).filter(
-    (v) => !v.released || new Date(v.released).getTime() <= now
+    (v) => !v.unplayable && (!v.released || new Date(v.released).getTime() <= now)
   )
   if (!aired.length) return false
   const state = episodeWatchState(aired, history, item.id)
@@ -157,11 +163,17 @@ function seasonEpisodeCounts(videos: CatalogItem['videos'] | undefined): {
   totalSeasons?: number
   totalEpisodes?: number
 } {
-  if (!videos || videos.length === 0) return {}
-  const seasons = new Set(videos.map((v) => v.season).filter((s) => Number.isFinite(s)))
+  // v.unplayable entries (disambiguateVideos, core.ts) are synthetic —
+  // promotional clips reassigned into a fabricated season 0, not real
+  // episodes — so they're excluded here too, or they'd inflate both the
+  // episode count and (by introducing a season that wouldn't otherwise
+  // exist) the season count.
+  const playable = (videos || []).filter((v) => !v.unplayable)
+  if (playable.length === 0) return {}
+  const seasons = new Set(playable.map((v) => v.season).filter((s) => Number.isFinite(s)))
   return {
     totalSeasons: seasons.size || undefined,
-    totalEpisodes: videos.length
+    totalEpisodes: playable.length
   }
 }
 
