@@ -482,19 +482,39 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     })
   }, [refreshPartyStatus])
 
-  const toggleMyList = useCallback((media: MediaItem) => {
-    setMyList((prev) => {
-      const next = new Set(prev)
-      if (next.has(media.id)) next.delete(media.id)
-      else next.add(media.id)
-      return next
-    })
-    window.api?.mediaHub?.tracking.toggle(mediaItemToTrackablePayload(media)).catch(() => {
-      // Best-effort — the optimistic local toggle above already reflects
-      // the user's intent; a failed write just means it won't survive a
-      // refresh, not a broken UI in the moment.
-    })
-  }, [])
+  const toggleMyList = useCallback(
+    (media: MediaItem) => {
+      setMyList((prev) => {
+        const next = new Set(prev)
+        if (next.has(media.id)) next.delete(media.id)
+        else next.add(media.id)
+        return next
+      })
+      // Bug fix: this used to skip the homeFeed.refresh() every other
+      // tracking mutation here (toggleDisliked, markContinueWatching,
+      // refreshWatchStatus) calls after its own write. Without it, a
+      // home:personalized fetch already in flight for an unrelated reason
+      // (e.g. another tab's mount, a mark-watched refresh) has nothing to
+      // supersede it — useMediaHubHomeFeed only cancels a stale in-flight
+      // fetch when refresh() bumps its generation. That stale fetch can
+      // resolve *after* this toggle's own optimistic Set update, and the
+      // "reseed myList from homeFeed.trackedIds" effect above then
+      // overwrites the optimistic change back to the pre-toggle value —
+      // found live as "clicking Follow doesn't stick." Calling refresh()
+      // here, same as the sibling mutations, ensures any such stale fetch
+      // gets cancelled and a fresh one (reflecting this toggle's already-
+      // completed, synchronous db write) supersedes it.
+      window.api?.mediaHub?.tracking
+        .toggle(mediaItemToTrackablePayload(media))
+        .then(() => homeFeed.refresh())
+        .catch(() => {
+          // Best-effort — the optimistic local toggle above already reflects
+          // the user's intent; a failed write just means it won't survive a
+          // refresh, not a broken UI in the moment.
+        })
+    },
+    [homeFeed]
+  )
 
   const toggleDisliked = useCallback(
     (media: MediaItem) => {

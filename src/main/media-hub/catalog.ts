@@ -20,6 +20,7 @@ import { isValidCatalogKind } from './security'
 import { encrypt, readSettings, tmdbCredentials, writeSettings } from './settingsStore'
 import {
   dedupeCatalog,
+  disambiguateVideos,
   filterAnimeRelationships,
   normalizeKitsuAnime,
   normalizeMeta,
@@ -256,6 +257,11 @@ export async function metadata(type: MediaKind, id: string): Promise<CatalogItem
       logError('anime:grouped-videos', error)
     }
   }
+
+  // Applied once here rather than per-source (Cinemeta/Simkl-fallback/
+  // grouped-anime all assign item.videos above) — see disambiguateVideos'
+  // own doc comment for why this is needed and what it does.
+  item.videos = disambiguateVideos(item.videos)
 
   db.putCache(cacheKey, item, 24 * 60 * 60 * 1000)
   return item
