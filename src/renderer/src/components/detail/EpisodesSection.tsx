@@ -296,14 +296,18 @@ export function EpisodesSection({
                   )}
                 </button>
               )}
-              <button
-                type="button"
-                className={styles.watchedToggle}
-                onClick={() => onMarkWatched(ep, !watched)}
-                aria-label={watched ? `Mark episode ${ep.episode} unwatched` : `Mark episode ${ep.episode} watched`}
-              >
-                <Icon name={watched ? 'eye-off' : 'eye'} size={13} />
-              </button>
+              {!ep.unplayable && (
+                <button
+                  type="button"
+                  className={styles.watchedToggle}
+                  onClick={() => onMarkWatched(ep, !watched)}
+                  aria-label={
+                    watched ? `Mark episode ${ep.episode} unwatched` : `Mark episode ${ep.episode} watched`
+                  }
+                >
+                  <Icon name={watched ? 'eye-off' : 'eye'} size={13} />
+                </button>
+              )}
             </li>
           )
         })}

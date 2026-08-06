@@ -299,7 +299,12 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
   async function handleMarkSeasonWatched(season: number, watched: boolean): Promise<void> {
     const api = window.api?.mediaHub
     if (!api || !media) return
-    const seasonEpisodes = episodes.filter((e) => e.season === season)
+    // e.unplayable (see disambiguateVideos in core.ts) has no real
+    // (season, episode) coordinate — sending it through markSeasonWatched/
+    // unmarkWatched would push a fabricated (0, -N) pair into local
+    // history and Simkl sync for a promotional clip that was never a real
+    // episode.
+    const seasonEpisodes = episodes.filter((e) => e.season === season && !e.unplayable)
     if (seasonEpisodes.length === 0) return
     const item = {
       id: media.id,
