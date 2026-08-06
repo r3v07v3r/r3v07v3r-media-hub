@@ -11,6 +11,19 @@
   isolation: isolate;
 }
 
+/* Movies have nothing below the hero competing for room (no Next-to-Play/
+   episode list — MediaDetailPage skips those for config.isEpisodic:false),
+   so the hero can afford to be noticeably bigger, and the trailer more
+   prominent, than the shared series/anime height. Top padding trimmed too
+   — pulls the title closer to the hero's own top edge per "move up to the
+   top border so the trailer is very visible" rather than sitting at the
+   same ~40px inset a series page needs room for its season/episode chrome
+   underneath. */
+.heroMovie {
+  height: 640px;
+  padding-top: 22px;
+}
+
 .artLayer {
   position: absolute;
   inset: 0;
@@ -21,6 +34,19 @@
   -webkit-mask-image: linear-gradient(to right, transparent 0%, rgba(0, 0, 0, 0.68) 24%, black 55%),
     linear-gradient(to top, transparent 0%, black 42%);
   -webkit-mask-composite: source-in;
+  transition: mask-image var(--transition-standard, 0.25s ease), -webkit-mask-image var(--transition-standard, 0.25s ease);
+}
+/* This mask exists to fade the left/bottom edges so .content's text stays
+   readable against the backdrop image — confirmed live that it was still
+   applying to the trailer too, dimming it on exactly the side/edge that
+   text used to occupy even though .contentFaded has already removed that
+   text. Nothing left to protect while actually playing, so the mask is
+   dropped entirely for that window — verified via a real screenshot that
+   this is what was making the playing trailer look washed out on its
+   left half instead of "very visible" per the request. */
+.artLayerUnmasked {
+  mask-image: none;
+  -webkit-mask-image: none;
 }
 .artImageWrap {
   width: 100%;
@@ -33,6 +59,87 @@
   width: 100%;
   height: 100%;
   border: none;
+}
+
+/* Custom control bar for the trailer (play/pause + scrub) — the iframe
+   itself is embedded with controls=0 (see DetailHero.tsx), so this is the
+   only way to play/pause/seek it. Deliberately NOT inside .artLayer
+   (which is aria-hidden — fine for a decorative backdrop image, wrong for
+   real interactive controls) and given its own stacking context above the
+   video/scrims but below nothing else that needs to receive clicks while
+   the trailer is open. */
+.trailerControls {
+  position: absolute;
+  left: 32px;
+  right: 32px;
+  bottom: 20px;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  border-radius: var(--radius-pill);
+  background: rgba(6, 10, 18, 0.55);
+  backdrop-filter: blur(10px);
+  border: 1px solid var(--border-subtle);
+}
+.trailerPlayPause {
+  flex: 0 0 auto;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  background: linear-gradient(135deg, var(--accent-blue), var(--accent-violet));
+}
+.trailerPlayPause:disabled {
+  opacity: 0.6;
+}
+.trailerPlayPause svg {
+  width: 13px;
+  height: 13px;
+}
+.trailerTime {
+  flex: 0 0 auto;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-secondary);
+  min-width: 34px;
+}
+.trailerTime:last-child {
+  text-align: right;
+}
+.trailerScrub {
+  flex: 1;
+  min-width: 0;
+  appearance: none;
+  height: 4px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.18);
+  outline: none;
+}
+.trailerScrub::-webkit-slider-thumb {
+  appearance: none;
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 0 0 3px rgba(94, 140, 255, 0.5);
+  cursor: pointer;
+}
+.trailerScrub::-moz-range-thumb {
+  width: 13px;
+  height: 13px;
+  border: none;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 0 0 3px rgba(94, 140, 255, 0.5);
+  cursor: pointer;
+}
+.trailerScrub:disabled {
+  opacity: 0.5;
 }
 
 .artScrimLeft {
@@ -55,6 +162,19 @@
   flex-direction: column;
   gap: 11px;
   max-width: 560px;
+  opacity: 1;
+  transition: opacity var(--transition-standard, 0.25s ease);
+}
+/* Applied while the trailer is actively playing (not merely open — see
+   DetailHero.tsx's contentFaded) so the video underneath isn't fighting
+   the title/description/button stack for attention. Pausing or closing
+   the trailer removes this class and the fade reverses. pointer-events:
+   none matters here, not just the opacity — without it these buttons
+   (Play, Trailer, My List, Suggest to Party) stay fully clickable while
+   invisible. */
+.contentFaded {
+  opacity: 0;
+  pointer-events: none;
 }
 
 .label {
@@ -204,6 +324,10 @@
 @media (max-width: 1439px) {
   .hero {
     padding: 26px 24px;
+  }
+  .heroMovie {
+    height: 560px;
+    padding-top: 18px;
   }
   .content {
     max-width: 480px;

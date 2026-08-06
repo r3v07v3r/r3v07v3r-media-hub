@@ -1,6 +1,6 @@
 'use client'
 
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import type { MediaItem } from '@renderer/types'
 import type { ContinueWatchingItem } from '@renderer/types'
 import type { Episode, Trailer } from '@shared/media-hub/types'
@@ -9,7 +9,19 @@ import { useAppState } from '@renderer/context/AppStateContext'
 import { Icon } from '@renderer/components/icons/Icon'
 import { resolveArtwork } from '@renderer/lib/artwork'
 import { ArtworkImage } from '@renderer/components/media/ArtworkImage'
+import { useYoutubeEmbedControls } from '@renderer/hooks/useYoutubeEmbedControls'
 import styles from './DetailHero.module.css'
+
+function formatTime(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds < 0) return '0:00'
+  const total = Math.floor(seconds)
+  const h = Math.floor(total / 3600)
+  const m = Math.floor((total % 3600) / 60)
+  const s = total % 60
+  const mm = h > 0 ? String(m).padStart(2, '0') : String(m)
+  const ss = String(s).padStart(2, '0')
+  return h > 0 ? `${h}:${mm}:${ss}` : `${mm}:${ss}`
+}
 
 export interface DetailHeroProps {
   media: MediaItem
@@ -41,6 +53,17 @@ export function DetailHero({
   const hasProgress = !!continueEntry && !continueEntry.media.completed
   const isResolving = resolvingMedia?.id === media.id
   const [suggesting, setSuggesting] = useState(false)
+
+  const trailerFrameRef = useRef<HTMLIFrameElement>(null)
+  const trailerActive = showTrailer && !!trailer
+  const trailerControls = useYoutubeEmbedControls(trailerFrameRef, trailerActive)
+  // Fades the title/description/actions out once the trailer is actually
+  // playing (not just open — autoplay takes a beat to actually start) and
+  // brings them back on pause, not only on close, since a person pausing
+  // to read something is exactly the moment they want this text back too.
+  // Closing the trailer (trailerActive turning false) always restores it,
+  // both directly here and via the hook resetting `playing` to false.
+  const contentFaded = trailerActive && trailerControls.playing
 
   const playLabel = useMemo(() => {
     if (isResolving) {
@@ -81,12 +104,26 @@ export function DetailHero({
   }
 
   return (
-    <section className={styles.hero} aria-label={`${media.title} details`}>
-      <div className={styles.artLayer} aria-hidden="true">
+    <section
+      className={`${styles.hero} ${!config.isEpisodic ? styles.heroMovie : ''}`}
+      aria-label={`${media.title} details`}
+    >
+      <div
+        className={`${styles.artLayer} ${contentFaded ? styles.artLayerUnmasked : ''}`}
+        aria-hidden="true"
+      >
+        {/* controls=0 + our own control bar below (rendered outside this
+            aria-hidden layer, since — unlike the backdrop image/raw video
+            — those controls are real interactive UI a screen reader needs
+            to see). enablejsapi=1 is what makes the embed accept the
+            postMessage commands useYoutubeEmbedControls sends; verified
+            live against a real embed before wiring this up (see that
+            hook's own doc comment). */}
         {showTrailer && trailer ? (
           <iframe
+            ref={trailerFrameRef}
             className={styles.trailerFrame}
-            src={`https://www.youtube-nocookie.com/embed/${trailer.source}?autoplay=1`}
+            src={`https://www.youtube-nocookie.com/embed/${trailer.source}?autoplay=1&enablejsapi=1&controls=0&modestbranding=1&rel=0`}
             title={`${media.title} trailer`}
             allow="autoplay; encrypted-media"
             allowFullScreen
@@ -106,7 +143,34 @@ export function DetailHero({
         <div className={styles.artScrimBottom} />
       </div>
 
-      <div className={styles.content}>
+      {trailerActive && (
+        <div className={styles.trailerControls}>
+          <button
+            type="button"
+            className={styles.trailerPlayPause}
+            onClick={trailerControls.togglePlay}
+            disabled={!trailerControls.ready}
+            aria-label={trailerControls.playing ? 'Pause trailer' : 'Play trailer'}
+          >
+            <Icon name={trailerControls.playing ? 'pause' : 'play'} size={15} />
+          </button>
+          <span className={styles.trailerTime}>{formatTime(trailerControls.currentTime)}</span>
+          <input
+            type="range"
+            className={styles.trailerScrub}
+            min={0}
+            max={trailerControls.duration || 0}
+            step={0.1}
+            value={Math.min(trailerControls.currentTime, trailerControls.duration || 0)}
+            onChange={(e) => trailerControls.seek(Number(e.target.value))}
+            disabled={!trailerControls.ready || !trailerControls.duration}
+            aria-label="Seek trailer"
+          />
+          <span className={styles.trailerTime}>{formatTime(trailerControls.duration)}</span>
+        </div>
+      )}
+
+      <div className={`${styles.content} ${contentFaded ? styles.contentFaded : ''}`}>
         <span className={styles.label}>Featured {config.label}</span>
         <h1 className={styles.title}>
           {media.title}

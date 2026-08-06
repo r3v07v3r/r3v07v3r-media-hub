@@ -215,6 +215,14 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
     [continueWatching, id]
   )
 
+  // media.watched/completed come from catalogItemToMediaItem(catalogItem,
+  // {trackedIds: myList}) above, which — unlike the full context the home/
+  // category grids build with — never passes watchedIds/history, so those
+  // fields are unconditionally false here. `history` (this page's own
+  // tracking:list fetch, already filtered to this exact id) is the real
+  // source of truth for a movie's watched state instead.
+  const movieWatched = history.length > 0
+
   const nextEpisode = useMemo(() => {
     if (!episodes.length) return null
     // e.unplayable excludes disambiguateVideos' synthetic Specials entries
@@ -280,6 +288,31 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
     const call = watched ? api.tracking.markWatched : api.tracking.unmarkWatched
     try {
       await call({ item, playback: { season: episode.season, episode: episode.episode } })
+      const refreshed = await api.tracking.list()
+      setHistory(refreshed.history.filter((h) => h.id === media.id))
+    } catch {
+      pushNotification({ tone: 'error', message: 'Could not update watched status.' })
+    }
+  }
+
+  /**
+   * Same primitive as handleMarkEpisodeWatched, minus a season/episode —
+   * movies have no per-episode granularity, so `playback` is omitted
+   * entirely rather than sent as {season: undefined, episode: undefined}.
+   */
+  async function handleToggleMovieWatched(watched: boolean): Promise<void> {
+    const api = window.api?.mediaHub
+    if (!api || !media) return
+    const item = {
+      id: media.id,
+      type: kind,
+      title: media.title,
+      poster: media.posterUrl ?? '',
+      year: media.releaseYear ? String(media.releaseYear) : ''
+    }
+    const call = watched ? api.tracking.markWatched : api.tracking.unmarkWatched
+    try {
+      await call({ item })
       const refreshed = await api.tracking.list()
       setHistory(refreshed.history.filter((h) => h.id === media.id))
     } catch {
@@ -416,14 +449,11 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
               status={metaStatus}
             />
           </>
-        ) : (
-          <NextToPlayPanel
-            media={media}
-            nextEpisode={null}
-            allWatched={false}
-            onPlay={() => handlePlay()}
-          />
-        )}
+        ) : null}
+        {/* Movies skip NextToPlayPanel entirely (no isEpisodic branch above)
+            — its movie-specific "Ready to Watch"/"Resume Watching" variant
+            was just a second Play button duplicating the hero's own, per
+            the user's own request. */}
         <AboutPanel media={media} config={config} />
       </div>
 
@@ -438,6 +468,8 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
           onOpenLastWatched={() =>
             handlePlay(continueEntry?.media.seasonNumber, continueEntry?.media.episodeNumber)
           }
+          movieWatched={movieWatched}
+          onToggleMovieWatched={handleToggleMovieWatched}
         />
         <GenresPanel genres={media.genres} onSelectGenre={handleGenreSelect} />
         <SimilarPanel

@@ -10,18 +10,20 @@ import styles from './NextToPlayPanel.module.css'
 
 export interface NextToPlayPanelProps {
   media: MediaItem
-  /** Series/anime only — null for movies (see the movie-specific resume
-   *  variant below) and null when every known episode is already
-   *  watched. */
+  /** Series/anime only — MediaDetailPage no longer renders this panel for
+   *  movies at all (its old movie-specific "Ready to Watch"/"Resume
+   *  Watching" variant below just duplicated the hero's own Play button).
+   *  Null here now means either "every known episode is watched" (see
+   *  allWatched) or "no episode data for this title yet." */
   nextEpisode: Episode | null
   allWatched: boolean
   onPlay: (episode?: Episode) => void
 }
 
 /**
- * Series/anime: the next unwatched episode (or "you're all caught up").
- * Movies get a resume-focused variant instead of an empty episode card —
- * per spec, never show a fake/empty episode panel for a movie.
+ * Series/anime only: the next unwatched episode, "you're all caught up,"
+ * or — when there's no episode data at all yet — a generic play/resume
+ * card for the title itself rather than an empty episode panel.
  */
 export function NextToPlayPanel({ media, nextEpisode, allWatched, onPlay }: NextToPlayPanelProps) {
   const artwork = resolveArtwork(media)
@@ -30,7 +32,7 @@ export function NextToPlayPanel({ media, nextEpisode, allWatched, onPlay }: Next
   const resolveLabel = resolvingMedia?.stage === 'buffering' ? 'Buffering…' : 'Searching…'
 
   if (!nextEpisode && !allWatched) {
-    // Movie path, or a series/anime this app has no episode data for yet.
+    // No episode data available for this series/anime yet.
     return (
       <section className={`${styles.panel} glass-panel`} aria-label="Playback">
         <span className={styles.heading}>
