@@ -136,7 +136,14 @@
   flex-wrap: wrap;
 }
 .rowSegmented .segmentGroup {
-  flex-basis: 100%;
+  /* Bug fix: .segmentGroup's base rule is flex:0 0 auto (flex-shrink:0),
+     so a plain 100% basis plus this 50px margin-left added 50px of real
+     overflow past the row's own width — flex-shrink:0 means it can't
+     contract to absorb the margin the way it would if shrinking were
+     allowed. calc() bakes the margin into the basis itself instead, so
+     the box's total width (content + margin) lands at exactly 100% of
+     the row. */
+  flex-basis: calc(100% - 50px);
   /* Aligns under the title/description text, not under the icon —
      36px icon width + this row's own 14px gap. */
   margin-left: 50px;
