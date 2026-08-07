@@ -37,6 +37,7 @@ export interface MediaHubRawSettings {
   malRefreshToken?: string
   malTokenExpiresAt?: number
   tmdbApiKey?: string
+  omdbApiKey?: string
   osApiKey?: string
   osUsername?: string
   osPassword?: string
@@ -198,6 +199,14 @@ export interface TmdbCredentials {
 
 export function tmdbCredentials(): TmdbCredentials {
   return { apiKey: decrypt(readSettings().tmdbApiKey) }
+}
+
+export interface OmdbCredentials {
+  apiKey: string
+}
+
+export function omdbCredentials(): OmdbCredentials {
+  return { apiKey: decrypt(readSettings().omdbApiKey) }
 }
 
 export interface OsCredentials {

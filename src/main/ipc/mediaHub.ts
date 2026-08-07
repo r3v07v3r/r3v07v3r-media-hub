@@ -18,6 +18,7 @@ import { registerAutoUpdateIpc } from '../media-hub/autoUpdate'
 import { registerCatalogIpc } from '../media-hub/catalog'
 import { registerMalIpc } from '../media-hub/malSync'
 import { registerNetworkIpc } from '../media-hub/network'
+import { registerOmdbIpc } from '../media-hub/omdb'
 import { registerPlaybackIpc } from '../media-hub/playbackSession'
 import { registerProfilesIpc } from '../media-hub/profiles'
 import { registerSubtitlesIpc } from '../media-hub/subtitlesService'
@@ -38,4 +39,5 @@ export function registerMediaHubIpc(): void {
   registerProfilesIpc()
   registerNetworkIpc()
   registerAniskipIpc()
+  registerOmdbIpc()
 }

@@ -168,6 +168,12 @@ const api = {
       disconnect: (): Promise<{ ok: true }> => ipcRenderer.invoke(MEDIA_HUB_CHANNELS.tmdbDisconnect)
     },
 
+    omdb: {
+      connect: (apiKey: string): Promise<ConnectResult> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.omdbConnect, apiKey),
+      disconnect: (): Promise<{ ok: true }> => ipcRenderer.invoke(MEDIA_HUB_CHANNELS.omdbDisconnect)
+    },
+
     clipboard: {
       write: (value: string): Promise<{ ok: true }> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.clipboardWrite, value)

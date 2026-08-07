@@ -29,12 +29,14 @@ function Gauge({ value, max, label, color }: { value: number; max: number; label
 /**
  * Only ever renders sources the item's own data actually has — no
  * invented ratings, and gauges adapt to however many are present rather
- * than leaving empty placeholder circles for a source with no value (see
- * this file's own note: communityRating/imdbRating are the same parsed
- * number for real backend data today — see adapters.ts's
- * catalogItemToMediaItem — not two independent sources yet, though the
- * type and this panel both support them being distinct once/if the
- * backend integration adds a second one).
+ * than leaving empty placeholder circles for a source with no value.
+ * communityRating/imdbRating are still the same parsed number for real
+ * backend data today (see adapters.ts's catalogItemToMediaItem) — not two
+ * independent sources yet, though the type and this panel both support
+ * them being distinct once/if the backend integration adds a second one.
+ * rottenTomatoesRating IS a genuinely independent third source (OMDb) —
+ * present only for movies/series with OMDb connected and a Rotten Tomatoes
+ * entry on file; never present for anime (see catalog.ts's metadata()).
  */
 export function RatingsPanel({ media }: { media: MediaItem }) {
   const gauges: { value: number; max: number; label: string; color: string }[] = []
@@ -46,6 +48,14 @@ export function RatingsPanel({ media }: { media: MediaItem }) {
   }
   if (media.imdbRating) {
     gauges.push({ value: media.imdbRating, max: 10, label: 'IMDb', color: 'var(--accent-cyan)' })
+  }
+  if (media.rottenTomatoesRating !== undefined) {
+    gauges.push({
+      value: media.rottenTomatoesRating,
+      max: 100,
+      label: 'Rotten Tomatoes',
+      color: 'var(--accent-orange)'
+    })
   }
 
   if (gauges.length === 0) return null

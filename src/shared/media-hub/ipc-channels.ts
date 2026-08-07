@@ -25,6 +25,8 @@ export const MEDIA_HUB_CHANNELS = {
   torboxUnauthorized: 'mediahub:torbox:unauthorized', // push event
   tmdbConnect: 'mediahub:tmdb:connect',
   tmdbDisconnect: 'mediahub:tmdb:disconnect',
+  omdbConnect: 'mediahub:omdb:connect',
+  omdbDisconnect: 'mediahub:omdb:disconnect',
   clipboardWrite: 'mediahub:clipboard:write',
   openExternal: 'mediahub:open:external',
   updateCheck: 'mediahub:update:check',

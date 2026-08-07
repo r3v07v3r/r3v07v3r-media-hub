@@ -201,6 +201,7 @@ export function catalogItemToMediaItem(
     moods: genresToMoods(item.genres),
     communityRating: parseRating(item.rating),
     imdbRating: parseRating(item.rating),
+    rottenTomatoesRating: parseRating(item.rottenTomatoesRating || ''),
     totalSeasons,
     totalEpisodes,
     status: item.status || undefined,

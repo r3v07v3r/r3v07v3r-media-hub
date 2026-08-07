@@ -224,6 +224,96 @@ export function TmdbSection() {
   )
 }
 
+/** OMDb — optional Rotten Tomatoes critic scores layered onto the movie/
+ *  series ratings panel. Same token-connect shape as TMDB; never applies
+ *  to anime (see catalog.ts's metadata()), so its "Connected" state only
+ *  ever affects movie/series detail pages. */
+export function OmdbSection() {
+  const { mediaHubSettings, refreshMediaHubSettings } = useAppState()
+  const [apiKey, setApiKey] = useState('')
+  const [status, setStatus] = useState<Status>({ kind: 'idle' })
+  const connected = mediaHubSettings?.omdbConnected ?? false
+
+  async function connect() {
+    const api = window.api?.mediaHub
+    if (!api || !apiKey.trim()) return
+    setStatus({ kind: 'busy' })
+    try {
+      const result = await api.omdb.connect(apiKey.trim())
+      if (result.ok) {
+        setApiKey('')
+        setStatus({ kind: 'ok', message: 'Connected.' })
+        refreshMediaHubSettings()
+      } else {
+        setStatus({ kind: 'error', message: result.message || 'Could not connect.' })
+      }
+    } catch (error) {
+      setStatus({
+        kind: 'error',
+        message: error instanceof Error ? error.message : 'Connect failed.'
+      })
+    }
+  }
+
+  async function disconnect() {
+    const api = window.api?.mediaHub
+    if (!api) return
+    setStatus({ kind: 'busy' })
+    await api.omdb.disconnect().catch(() => {})
+    setStatus({ kind: 'idle' })
+    refreshMediaHubSettings()
+  }
+
+  return (
+    <section className={`${styles.section} glass-panel`} aria-labelledby="settings-omdb">
+      <div className={styles.serviceHead}>
+        <h2 id="settings-omdb" className={styles.sectionTitle} style={{ marginBottom: 0 }}>
+          OMDb
+        </h2>
+        <ConnectionBadge connected={connected} />
+      </div>
+      <p className={styles.rowDescription} style={{ marginBottom: 10 }}>
+        Optional — adds Rotten Tomatoes scores to the ratings panel for movies and series (no anime
+        coverage). Get a free key at omdbapi.com/apikey.aspx.
+      </p>
+      {connected ? (
+        <div className={styles.serviceActions}>
+          <button type="button" className={styles.testButton} onClick={disconnect}>
+            Disconnect
+          </button>
+          <StatusLine status={status} />
+        </div>
+      ) : (
+        <>
+          <div className={styles.serviceFields}>
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>OMDb API Key</span>
+              <input
+                className={styles.fieldInput}
+                type="password"
+                placeholder="••••••••••••"
+                value={apiKey}
+                onChange={(e) => setApiKey(e.target.value)}
+              />
+            </label>
+          </div>
+          <div className={styles.serviceActions} style={{ marginTop: 10 }}>
+            <button
+              type="button"
+              className={styles.testButton}
+              onClick={connect}
+              disabled={!apiKey.trim() || status.kind === 'busy'}
+            >
+              {status.kind === 'busy' ? 'Connecting…' : 'Connect'}
+            </button>
+            <StatusLine status={status} />
+          </div>
+        </>
+      )}
+    </section>
+  )
+}
+
 /**
  * Simkl — watch-history tracking/scrobbling, device-code OAuth (the same
  * flow Simkl's own apps use): start() returns a short user code + a

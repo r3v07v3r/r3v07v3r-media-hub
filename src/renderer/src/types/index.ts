@@ -29,6 +29,11 @@ export interface MediaItem {
   moods?: string[]
   communityRating?: number
   imdbRating?: number
+  /** Rotten Tomatoes critic score, 0-100 — see adapters.ts's
+   *  catalogItemToMediaItem. Movie/series only, and only when OMDb is
+   *  connected and has a Rotten Tomatoes entry for this title; undefined
+   *  otherwise (never a guessed value). */
+  rottenTomatoesRating?: number
   matchPercentage?: number
   seasonNumber?: number
   episodeNumber?: number

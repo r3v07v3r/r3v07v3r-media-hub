@@ -30,6 +30,7 @@ import {
   type RawApiPayload
 } from './core'
 import { buildGroupedAnimeVideos, groupAnimeCatalog, kitsuRealEpisodes } from './animeSeasons'
+import { omdbRottenTomatoesRating } from './omdb'
 
 const catalogUrls: Record<'movie' | 'series', string> = {
   movie: 'https://v3-cinemeta.strem.io/catalog/movie/top.json',
@@ -278,6 +279,18 @@ export async function metadata(type: MediaKind, id: string): Promise<CatalogItem
     const kitsuId = String(resolvedId).replace(/^kitsu:/, '').split(':')[0]
     const real = await kitsuRealEpisodes(kitsuId, item.id)
     if (real.length) item.videos = real
+  }
+
+  // Movie/series only — by this point resolvedId is a real IMDb id (either
+  // Cinemeta's own meta.id, or resolveSimklId's live IMDb lookup above), and
+  // OMDb is the only one of this app's metadata sources with any Rotten
+  // Tomatoes coverage. Anime is skipped: Kitsu ids have no IMDb mapping
+  // fetched anywhere in this app, and OMDb/RT have essentially no anime
+  // coverage even when a mapping exists, so there's nothing worth the extra
+  // round trip. omdbRottenTomatoesRating already no-ops (returns undefined)
+  // when OMDb isn't connected, so this is always safe to call unconditionally.
+  if (type !== 'anime') {
+    item.rottenTomatoesRating = await omdbRottenTomatoesRating(String(resolvedId))
   }
 
   // Applied once here rather than per-source (Cinemeta/Simkl-fallback/

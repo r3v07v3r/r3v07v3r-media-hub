@@ -17,6 +17,7 @@ import { normalizePlaybackBuffer } from '../../shared/media-hub/playbackBuffer'
 import { isAllowedExternalUrl } from './security'
 import {
   getTorBoxToken,
+  omdbCredentials,
   osConnected,
   partySyncCredentials,
   readSettings,
@@ -32,6 +33,7 @@ export function registerAppIpc(): void {
     themes: THEMES,
     torboxConnected: Boolean(getTorBoxToken()),
     tmdbConnected: Boolean(tmdbCredentials().apiKey),
+    omdbConnected: Boolean(omdbCredentials().apiKey),
     osConnected: osConnected(),
     partySyncConnected: Boolean(partySyncCredentials().url && partySyncCredentials().inviteKey),
     ffmpegAvailable: Boolean(ffmpegPath)

@@ -6,6 +6,7 @@ import { MediaServicesSection } from './MediaServicesSection'
 import {
   TorBoxSection,
   TmdbSection,
+  OmdbSection,
   SimklSection,
   MalSection,
   OpenSubtitlesSection,
@@ -561,6 +562,7 @@ export default function SettingsPage() {
         <div className={`${styles.column} ${styles.columnMedium}`}>
           <TorBoxSection />
           <TmdbSection />
+          <OmdbSection />
           <SimklSection />
           <MalSection />
           <OpenSubtitlesSection />

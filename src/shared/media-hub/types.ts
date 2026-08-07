@@ -54,6 +54,14 @@ export interface CatalogItem {
   status?: string
   description: string
   rating: string
+  /** Rotten Tomatoes critic score (0-100, as a plain number string, e.g.
+   *  "87" — no "%" suffix, matching `rating`'s own bare-number convention),
+   *  from OMDb (see main/media-hub/omdb.ts). Movie/series only — OMDb has no
+   *  meaningful anime coverage, and anime CatalogItems have no real IMDb id
+   *  to query it with anyway (see metadata()'s own gating in catalog.ts).
+   *  Undefined whenever OMDb isn't connected or has no Rotten Tomatoes
+   *  entry for this title, never a guessed/invented value. */
+  rottenTomatoesRating?: string
   runtime: string
   genres: string[]
   videos: Episode[]
@@ -328,6 +336,7 @@ export interface MediaHubSettingsSnapshot extends MediaHubPublicSettings {
   themes: Theme[]
   torboxConnected: boolean
   tmdbConnected: boolean
+  omdbConnected: boolean
   osConnected: boolean
   partySyncConnected: boolean
   ffmpegAvailable: boolean
