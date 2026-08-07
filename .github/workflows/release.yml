@@ -1,0 +1,59 @@
+name: Release
+
+# Automates what was previously a manual step: build the Windows installer
+# and publish it as a GitHub Release so electron-updater (see
+# electron-builder.yml's `publish` block) actually has something newer to
+# find. Runs on every push to main, but only builds/publishes when
+# package.json's version doesn't already have a release — otherwise every
+# ordinary code push (most of which don't bump the version) would attempt
+# a duplicate release and fail on the second one.
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Check whether this version is already released
+        id: check
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          if gh release view "v$VERSION" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            echo "Already released — skipping build."
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install dependencies
+        if: steps.check.outputs.exists == 'false'
+        run: npm ci
+
+      - name: Build
+        if: steps.check.outputs.exists == 'false'
+        run: npm run build
+
+      - name: Publish to GitHub Releases
+        if: steps.check.outputs.exists == 'false'
+        run: npx electron-builder --win --publish always
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
