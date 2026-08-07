@@ -50,7 +50,7 @@ import type { CatalogItem, Episode } from '../../shared/media-hub/types'
 import { fetchJson } from './httpClient'
 import { logError } from './logger'
 import { getDatabase } from './dbState'
-import { normalizeKitsuAnime, type RawApiPayload } from './core'
+import { normalizeKitsuAnime, normalizeKitsuEpisode, type RawApiPayload } from './core'
 
 export interface TvdbMapping {
   seriesId: string
@@ -157,6 +157,56 @@ async function tmdbSeasonEpisodes(
     return episodes
   } catch (error) {
     logError('anime:tmdb-season', error)
+    return []
+  }
+}
+
+/** One page (Kitsu's own page[limit] ceiling — confirmed live, page[limit]=100
+ *  returns HTTP 400) of a Kitsu anime's real per-episode data (title,
+ *  synopsis, thumbnail, air date). Kitsu's own /anime/{id} record only
+ *  exposes an episodeCount number, never the episodes themselves — this
+ *  hits the separate /episodes sub-resource, which does. `meta.count` in
+ *  the response is Kitsu's own authoritative total, more trustworthy than
+ *  episodeCount (which can be null/estimated for an ongoing show). */
+async function kitsuEpisodePage(
+  kitsuId: string,
+  offset: number,
+  parentId: string
+): Promise<{ episodes: Episode[]; total: number }> {
+  const result = await fetchJson<RawApiPayload>(
+    `https://kitsu.io/api/edge/anime/${encodeURIComponent(kitsuId)}/episodes?page%5Blimit%5D=20&page%5Boffset%5D=${offset}&sort=number`
+  )
+  const episodes = (result.data || []).map((record: RawApiPayload) =>
+    normalizeKitsuEpisode(record, parentId)
+  )
+  const total = Number(result.meta?.count) || episodes.length
+  return { episodes, total }
+}
+
+/**
+ * Walks a Kitsu anime's full real episode list — 20 per page, up to 5 pages
+ * fetched concurrently per batch with the same 350ms politeness pacing
+ * kitsuCatalog/groupAnimeCatalog already use elsewhere in this codebase.
+ * Returns `[]` (not an error) on any failure, including a title with no
+ * /episodes coverage on Kitsu at all — every caller treats an empty result
+ * as "fall back to the synthesized placeholder episodes," never as a hard
+ * failure.
+ */
+export async function kitsuRealEpisodes(kitsuId: string, parentId: string): Promise<Episode[]> {
+  try {
+    const first = await kitsuEpisodePage(kitsuId, 0, parentId)
+    const episodes = [...first.episodes]
+    const offsets: number[] = []
+    for (let o = 20; o < first.total; o += 20) offsets.push(o)
+    for (let i = 0; i < offsets.length; i += 5) {
+      const batch = offsets.slice(i, i + 5)
+      const pages = await Promise.all(batch.map((o) => kitsuEpisodePage(kitsuId, o, parentId)))
+      episodes.push(...pages.flatMap((p) => p.episodes))
+      if (i + 5 < offsets.length) await new Promise((resolve) => setTimeout(resolve, 350))
+    }
+    return episodes.sort((a, b) => a.season - b.season || a.episode - b.episode)
+  } catch (error) {
+    logError('anime:episodes', error)
     return []
   }
 }
@@ -311,12 +361,13 @@ export async function groupAnimeCatalog(items: CatalogItem[]): Promise<CatalogIt
  * Builds the full multi-season episode list for a grouped anime's detail
  * page. canonical.groupedIds (set by groupAnimeCatalog) gives the sibling
  * ids in season order; the canonical item itself is always season 1 of the
- * group by construction. Tries the TMDB bridge for real per-episode data;
- * any season TMDB can't resolve falls back to that specific Kitsu id's own
- * synthesized placeholder episodes, renumbered to its real position in the
- * group instead of the hardcoded season 1 normalizeKitsuAnime always
- * assigns on its own — a season is never dropped outright just because
- * TMDB didn't have it.
+ * group by construction. Tries the TMDB bridge for real per-episode data
+ * first; any season TMDB can't resolve (no TVDB mapping, or no TMDB key
+ * configured) falls back to that specific Kitsu id's own real /episodes
+ * data (kitsuRealEpisodes) renumbered to its real position in the group,
+ * and only if Kitsu has no /episodes coverage for it either falls back
+ * again to normalizeKitsuAnime's synthesized "Episode N" placeholders — a
+ * season is never dropped outright just because TMDB didn't have it.
  */
 export async function buildGroupedAnimeVideos(
   canonical: CatalogItem,
@@ -339,18 +390,23 @@ export async function buildGroupedAnimeVideos(
       ? await tmdbSeasonEpisodes(tmdbTvId, seasonNumber, apiKey, parentId)
       : []
     if (!episodes.length) {
-      try {
-        const result = await fetchJson<RawApiPayload>(
-          `https://kitsu.io/api/edge/anime/${encodeURIComponent(kitsuIds[i])}`
-        )
-        const fallbackItem = normalizeKitsuAnime(result.data || {})
-        episodes = fallbackItem.videos.map((v) => ({
-          ...v,
-          id: `${parentId}:${seasonNumber}:${v.episode}`,
-          season: seasonNumber
-        }))
-      } catch (error) {
-        logError('anime:season-fallback', error)
+      const real = await kitsuRealEpisodes(kitsuIds[i], parentId)
+      if (real.length) {
+        episodes = real.map((v) => ({ ...v, id: `${parentId}:${seasonNumber}:${v.episode}`, season: seasonNumber }))
+      } else {
+        try {
+          const result = await fetchJson<RawApiPayload>(
+            `https://kitsu.io/api/edge/anime/${encodeURIComponent(kitsuIds[i])}`
+          )
+          const fallbackItem = normalizeKitsuAnime(result.data || {})
+          episodes = fallbackItem.videos.map((v) => ({
+            ...v,
+            id: `${parentId}:${seasonNumber}:${v.episode}`,
+            season: seasonNumber
+          }))
+        } catch (error) {
+          logError('anime:season-fallback', error)
+        }
       }
     }
     videos.push(...episodes)

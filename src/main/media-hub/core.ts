@@ -250,7 +250,9 @@ export function normalizeKitsuEpisode(record: RawApiPayload, parentId: string): 
     episode,
     number: episode,
     title: a.canonicalTitle || a.titles?.en_us || a.titles?.en || `Episode ${episode}`,
-    released: a.airdate || ''
+    released: a.airdate || '',
+    description: a.synopsis || a.description || '',
+    thumbnail: a.thumbnail?.original || ''
   }
 }
 

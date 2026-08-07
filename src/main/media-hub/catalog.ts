@@ -29,7 +29,7 @@ import {
   normalizeTmdbCollectionPart,
   type RawApiPayload
 } from './core'
-import { buildGroupedAnimeVideos, groupAnimeCatalog } from './animeSeasons'
+import { buildGroupedAnimeVideos, groupAnimeCatalog, kitsuRealEpisodes } from './animeSeasons'
 
 const catalogUrls: Record<'movie' | 'series', string> = {
   movie: 'https://v3-cinemeta.strem.io/catalog/movie/top.json',
@@ -267,6 +267,17 @@ export async function metadata(type: MediaKind, id: string): Promise<CatalogItem
     } catch (error) {
       logError('anime:grouped-videos', error)
     }
+  } else if (type === 'anime' && item.videos.length) {
+    // Ungrouped (single-season) anime: item.videos above is still
+    // normalizeKitsuAnime's synthesized "Episode N" placeholder list —
+    // Kitsu's own /anime/{id} record never carries real per-episode data,
+    // only episodeCount. Real titles/thumbnails/synopses live on Kitsu's
+    // separate /episodes sub-resource (see kitsuRealEpisodes) — try that
+    // before falling back to keeping the placeholders, same as the grouped
+    // path already does per-season.
+    const kitsuId = String(resolvedId).replace(/^kitsu:/, '').split(':')[0]
+    const real = await kitsuRealEpisodes(kitsuId, item.id)
+    if (real.length) item.videos = real
   }
 
   // Applied once here rather than per-source (Cinemeta/Simkl-fallback/
