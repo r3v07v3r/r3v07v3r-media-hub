@@ -52,6 +52,27 @@ jobs:
         if: steps.check.outputs.exists == 'false'
         run: npm run build
 
+      # Created here rather than left for electron-builder to create
+      # on-the-fly: electron-builder uploads the installer and its
+      # .blockmap concurrently, and when the release doesn't exist yet each
+      # upload independently races to create it — GitHub's API intermittently
+      # rejects the loser of that race with a 422 ("Published releases must
+      # have a valid tag") even though the tag it just created is real,
+      # confirmed live on this workflow's first run. Pre-creating the release
+      # (and its tag) as its own step means electron-builder always finds an
+      # existing release to attach assets to instead of racing to create one.
+      - name: Create GitHub release
+        if: steps.check.outputs.exists == 'false'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "v${{ steps.check.outputs.version }}" \
+            --repo "${{ github.repository }}" \
+            --target "${{ github.sha }}" \
+            --title "${{ steps.check.outputs.version }}" \
+            --notes "Automated build."
+
       - name: Publish to GitHub Releases
         if: steps.check.outputs.exists == 'false'
         run: npx electron-builder --win --publish always
