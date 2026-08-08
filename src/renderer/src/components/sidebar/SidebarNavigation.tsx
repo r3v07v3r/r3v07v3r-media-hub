@@ -24,17 +24,20 @@ const MOBILE_PRIMARY_IDS = ['home', 'movies', 'tv', 'anime', 'mystuff']
 // symmetrical — it should read as organic rather than as a rounded
 // rectangle.
 //
-// Note what this path is NOT: it is not a container. Menu rows are free
-// to overlap it, and on the lower items they do (the reference design
-// does the same — its "Downloads" label sits well outside the curve).
-// That's why the panel's own fill is a soft CSS wash on .rail::before
-// that fades out rather than a shape clipped to this path: with no edge
-// there is nothing for a label or the active capsule to visibly cross,
-// which is what previously forced the rail wide and the curve flat.
+// The curve must stay CLEAR of the label column. An earlier version let
+// it cross the lower rows on the grounds that the reference image does
+// exactly that at its "Downloads" row — but in the running app a thin
+// bright line straight through a word just reads as the word being cut
+// in half, so the wave's real excursions now happen above the first row
+// and below the last, and alongside the rows it only bows gently. The
+// items occupy roughly 13%-85% of the rail's height; between those the
+// path is held right of x=226 (see the clearance check in the commit
+// message for the measured margin at each row).
 const RAIL_EDGE_PATH =
-  'M0,0 C46,8 112,30 146,66 C182,106 212,142 224,196 C236,252 238,300 228,346 ' +
-  'C218,392 200,418 194,458 C188,500 200,532 206,572 C212,614 206,650 192,690 ' +
-  'C178,730 156,772 128,818 C98,868 54,932 0,1000'
+  'M0,0 C30,2 96,26 150,62 C196,92 226,108 232,132 ' +
+  'C240,168 242,232 240,300 C238,368 228,430 226,500 ' +
+  'C224,566 232,626 238,690 C242,748 240,802 236,850 ' +
+  'C232,898 214,946 178,978 C142,1000 78,1000 0,1000'
 
 // Decorative points riding the contour — not menu items. `left` is a
 // percentage of the rail's width, which lands them on the curve at ANY
@@ -86,12 +89,6 @@ export function SidebarNavigation() {
     () => typeof window !== 'undefined' && window.innerWidth < 768
   )
   const [moreOpen, setMoreOpen] = useState(false)
-  const [indicator, setIndicator] = useState<{
-    top: number
-    height: number
-    left: number
-    width: number
-  } | null>(null)
   const navRef = useRef<HTMLElement>(null)
   const listRef = useRef<HTMLUListElement>(null)
 
@@ -148,104 +145,34 @@ export function SidebarNavigation() {
     return () => document.removeEventListener('keydown', onKeyDown)
   }, [isMobile])
 
-  // Two jobs, both driven by the rail's REAL measured geometry rather
-  // than numbers duplicated from the stylesheet:
-  //
-  //  1. --nav-rail-width, published on <html> so components that aren't
-  //     siblings of this one can react to the rail (MoodBrowser bleeds
-  //     its pill row underneath it; AppShell's .main offsets by it).
-  //     Previously this was a hardcoded 285/90 kept in sync by hand with
-  //     .rail / .rail.collapsed — measuring instead means a CSS width
-  //     change can't silently desync the rest of the layout, and it also
-  //     tracks the width *during* the collapse transition rather than
-  //     snapping to the end value. Zero on mobile: the rail is a bottom
-  //     bar there, so there's no left column to bleed under.
-  //  2. The active capsule's position — a single element that slides
-  //     between rows, so switching pages reads as one continuous
-  //     movement instead of a highlight blinking out here and in there.
-  //     offsetTop is relative to .rail (the nearest positioned ancestor).
+  // Publishes --nav-rail-width on <html> so components that aren't
+  // siblings of this one can react to the rail (MoodBrowser bleeds its
+  // pill row underneath it; AppShell's .main offsets by it). This was
+  // once a hardcoded 285/90 kept in sync by hand with .rail /
+  // .rail.collapsed — measuring instead means a CSS width change can't
+  // silently desync the rest of the layout, and it tracks the width
+  // *during* the collapse transition rather than snapping to the end
+  // value. Zero on mobile: the rail is a bottom bar there, so there's no
+  // left column to bleed under.
   const measure = useCallback(() => {
     const nav = navRef.current
     if (!nav) return
-    const navBox = nav.getBoundingClientRect()
-    const width = isMobile ? 0 : Math.round(navBox.width)
+    const width = isMobile ? 0 : Math.round(nav.getBoundingClientRect().width)
     document.documentElement.style.setProperty('--nav-rail-width', `${width}px`)
-
-    const activeLink = nav.querySelector<HTMLElement>('a[data-nav-item][aria-current="page"]')
-    const row = activeLink?.closest('li')
-    if (!row || isMobile) {
-      setIndicator((prev) => (prev === null ? prev : null))
-      return
-    }
-    // The capsule is exactly the active row's own box — which is why
-    // .list lays its rows out at their content width rather than
-    // stretching them, so the capsule hugs each row the way the
-    // reference's does rather than being one width sized for the longest
-    // label.
-    //
-    // Measured as a delta of two bounding rects, NOT via offsetTop /
-    // offsetLeft. Those are relative to the nearest POSITIONED ancestor,
-    // so the moment .list gained `position: relative` (it needs it to sit
-    // above the contour's z-index) every row's offset started being
-    // measured from the list rather than from .rail — which the capsule
-    // is positioned against. The first row's offsets are 0,0 in that
-    // frame, so the capsule parked itself in the rail's top-left corner.
-    // Rect deltas don't care which ancestor happens to be positioned.
-    const rowBox = row.getBoundingClientRect()
-    const next = {
-      top: rowBox.top - navBox.top,
-      height: rowBox.height,
-      left: rowBox.left - navBox.left,
-      width: rowBox.width
-    }
-    setIndicator((prev) =>
-      prev &&
-      Math.abs(prev.top - next.top) < 0.5 &&
-      Math.abs(prev.height - next.height) < 0.5 &&
-      Math.abs(prev.left - next.left) < 0.5 &&
-      Math.abs(prev.width - next.width) < 0.5
-        ? prev
-        : next
-    )
   }, [isMobile])
 
   useLayoutEffect(() => {
     measure()
-  }, [measure, pathname, collapsed])
+  }, [measure, collapsed])
 
-  // Covers everything a layout effect on [pathname, collapsed] can't see:
-  // the width transition mid-flight, the vh-driven sizing in the
-  // stylesheet responding to a window resize, and labels reflowing.
-  //
-  // The ROWS have to be observed, not just the rail. The rail's width is
-  // a fixed value in CSS, so observing it alone never fires when a row's
-  // own content changes size — and one such change happens on every cold
-  // load: the labels are measured in a fallback face, then Rajdhani
-  // finishes loading and every label reflows narrower. The capsule kept
-  // the wider pre-font measurement and ended up 12px wider than its row,
-  // which AppShell's sidebar column then clipped (that column computes
-  // overflow-x: auto, so anything past the rail's width is silently cut).
+  // Catches the collapse transition mid-flight and the vh-driven sizing
+  // in the stylesheet responding to a window resize.
   useEffect(() => {
     const nav = navRef.current
     if (!nav) return
     const observer = new ResizeObserver(() => measure())
     observer.observe(nav)
-    nav.querySelectorAll('li').forEach((row) => observer.observe(row))
     return () => observer.disconnect()
-  }, [measure, pathname, collapsed, isMobile])
-
-  // Belt and braces for the same font-load reflow: ResizeObserver covers
-  // it, but this fires once the faces are actually ready regardless of
-  // whether the row's box changed by a full device pixel.
-  useEffect(() => {
-    if (!document.fonts?.ready) return
-    let cancelled = false
-    document.fonts.ready.then(() => {
-      if (!cancelled) measure()
-    })
-    return () => {
-      cancelled = true
-    }
   }, [measure])
 
   // Closing the More sheet on route change keeps it from staying open
@@ -322,16 +249,25 @@ export function SidebarNavigation() {
               off smoothly." A gradient down the stroke does both: zero
               opacity at both ends, with the peaks placed at the top
               bend, the widest point and the lower swell. */}
+          {/* Asymmetric on purpose. The top now fades in over a much
+              longer run (0 -> 0.2 -> 0.8 across the first quarter rather
+              than reaching 0.92 by 18%), so the line emerges from
+              nothing instead of arriving already lit. The bottom holds
+              its brightness far longer before going out (0.62 at 82%,
+              still 0.24 at 96%) — the previous fade started early enough
+              that the whole lower third read as dying away. */}
           <linearGradient id="railEdgeGrad" x1="0" y1="0" x2="0" y2="1">
             <stop offset="0%" stopColor="#6ed2ff" stopOpacity="0" />
-            <stop offset="7%" stopColor="#8fddff" stopOpacity="0.42" />
-            <stop offset="18%" stopColor="#a6e6ff" stopOpacity="0.92" />
-            <stop offset="30%" stopColor="#7fd4ff" stopOpacity="0.7" />
-            <stop offset="45%" stopColor="#5fb8ff" stopOpacity="0.36" />
-            <stop offset="58%" stopColor="#8ec8ff" stopOpacity="0.62" />
-            <stop offset="70%" stopColor="#9d9cff" stopOpacity="0.5" />
-            <stop offset="84%" stopColor="#6ed2ff" stopOpacity="0.3" />
-            <stop offset="94%" stopColor="#6ed2ff" stopOpacity="0.1" />
+            <stop offset="9%" stopColor="#8fddff" stopOpacity="0.08" />
+            <stop offset="17%" stopColor="#8fddff" stopOpacity="0.24" />
+            <stop offset="26%" stopColor="#a6e6ff" stopOpacity="0.8" />
+            <stop offset="36%" stopColor="#7fd4ff" stopOpacity="0.68" />
+            <stop offset="48%" stopColor="#5fb8ff" stopOpacity="0.42" />
+            <stop offset="60%" stopColor="#8ec8ff" stopOpacity="0.66" />
+            <stop offset="72%" stopColor="#9d9cff" stopOpacity="0.62" />
+            <stop offset="82%" stopColor="#6ed2ff" stopOpacity="0.62" />
+            <stop offset="90%" stopColor="#6ed2ff" stopOpacity="0.44" />
+            <stop offset="96%" stopColor="#6ed2ff" stopOpacity="0.24" />
             <stop offset="100%" stopColor="#6ed2ff" stopOpacity="0" />
           </linearGradient>
         </defs>
@@ -385,23 +321,6 @@ export function SidebarNavigation() {
           aria-hidden="true"
         />
       ))}
-
-      {/* Which destination you're on, stated by a glowing capsule behind
-          the row. One element whose box transitions, so moving between
-          pages reads as the capsule gliding down the rail rather than
-          disappearing and reappearing. */}
-      {indicator && (
-        <span
-          className={styles.activePill}
-          style={{
-            top: `${indicator.top}px`,
-            height: `${indicator.height}px`,
-            left: `${indicator.left}px`,
-            width: `${indicator.width}px`
-          }}
-          aria-hidden="true"
-        />
-      )}
 
       <button
         type="button"
