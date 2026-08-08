@@ -458,6 +458,16 @@ export interface PartyMemberSummary {
   id: string
   name: string
   isHost: boolean
+  /** Whether this member currently has a player open on the party's title.
+   *  Being IN a party and WATCHING it are different things — someone can
+   *  join and keep browsing, still be resolving their own stream, have had
+   *  their resolve fail, or have closed the player and stayed for the chat.
+   *  The synced-seek quorum has to wait only on members who can actually
+   *  answer it; before this existed it waited on the whole roster, so any
+   *  non-watching member stalled every seek until the 20s safety timeout
+   *  fired. Undefined means "not reported yet" and is treated as watching,
+   *  so a member on an older build is never silently excluded. */
+  watching?: boolean
 }
 
 export interface PartyQueueEntry {
@@ -536,6 +546,10 @@ export type PartyPlaybackAction =
   // only one who actually acts on this (aggregating everyone's
   // readiness) — see PlaybackOverlay's checkPartySeekReady.
   | { type: 'ready'; requestId: string }
+  // Presence, not control: any member may send it, like 'ready'. Announced
+  // when a player mounts/unmounts so the host knows who the seek quorum can
+  // legitimately wait on.
+  | { type: 'watching'; watching: boolean }
   // Host -> everyone: UI-only status update naming who it's still
   // waiting on, so followers can render the same "waiting for X" banner
   // the host sees, not just a generic spinner.

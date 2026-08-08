@@ -75,6 +75,8 @@ interface PartyHostMember {
   id: string
   name: string
   isHost: boolean
+  /** See PartyMemberSummary.watching. Undefined until the member reports. */
+  watching?: boolean
   // Only ever set for direct-mode host members (each has its own inbound
   // ws); relay-mode host members are reached through the single relay ws
   // instead, so this stays undefined/null for them — see partyBroadcast.
@@ -146,7 +148,12 @@ function partyMemberSummaries(): PartyMemberSummary[] {
   const current = party
   if (!current) return []
   if (current.role === 'host') {
-    return [...current.members.values()].map((m) => ({ id: m.id, name: m.name, isHost: m.isHost }))
+    return [...current.members.values()].map((m) => ({
+      id: m.id,
+      name: m.name,
+      isHost: m.isHost,
+      watching: m.watching
+    }))
   }
   return current.members || []
 }
@@ -190,6 +197,19 @@ function broadcastQueue(): void {
 
 function handlePartyMessage(fromId: string, msg: PartyMessage): void {
   const current = party
+  // Presence. Host-side only bookkeeping: record whether this member has a
+  // player open, then push the updated roster so every client's seek quorum
+  // (see checkPartySeekReady in PlaybackOverlay.tsx) agrees on who can
+  // actually be waited on. Not gated on host-control — this is a member
+  // reporting its own state, exactly like 'ready'.
+  if (current?.role === 'host' && msg?.type === 'watching') {
+    const member = current.members.get(fromId)
+    if (member) {
+      member.watching = msg.watching === true
+      broadcastPartyState()
+    }
+    return
+  }
   if (current?.role === 'host' && msg?.type === 'play-request') {
     sendToRenderer(MEDIA_HUB_CHANNELS.partyEvent, {
       type: 'play-request',
@@ -361,6 +381,7 @@ interface PartyNowPlayingArgs {
 
 interface PartyPlaybackActionArgs {
   type?: string
+  watching?: boolean
   position?: number
   requestId?: string
   waitingIds?: string[]
@@ -860,6 +881,14 @@ export function registerWatchPartyIpc(): void {
       // checkPartySeekReady/handleSeek), 'ready' is the one message in
       // this group any party member can send (a client reporting its own
       // buffer is ready).
+      // The host's own presence can't arrive by message — nothing echoes
+      // back to its sender — so it's applied to its own roster entry here.
+      if (action.type === 'watching' && current.role === 'host') {
+        const self = current.members.get(current.hostId)
+        if (self) self.watching = action.watching === true
+        broadcastPartyState()
+        return { ok: true }
+      }
       if (
         (action.type === 'seek' ||
           action.type === 'seek-sync' ||
@@ -874,6 +903,7 @@ export function registerWatchPartyIpc(): void {
       // other party member, so only the fields each message type
       // actually needs ever leave this process.
       const event: Record<string, unknown> = { type: action.type }
+      if (typeof action.watching === 'boolean') event.watching = action.watching
       if (Number.isFinite(action.position)) event.position = Number(action.position)
       if (typeof action.requestId === 'string') event.requestId = action.requestId
       if (Array.isArray(action.waitingIds)) event.waitingIds = action.waitingIds.map(String)

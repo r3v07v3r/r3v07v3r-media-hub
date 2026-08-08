@@ -28,15 +28,7 @@ const SCRUB_PREVIEW_WIDTH = 160
 // codecs (PGS/VobSub/DVB) can't be extracted as WebVTT text at all, so
 // those embedded tracks are shown but disabled rather than offered as if
 // they'd work.
-const TEXT_SUBTITLE_CODECS = new Set([
-  'subrip',
-  'srt',
-  'ass',
-  'ssa',
-  'mov_text',
-  'webvtt',
-  'text'
-])
+const TEXT_SUBTITLE_CODECS = new Set(['subrip', 'srt', 'ass', 'ssa', 'mov_text', 'webvtt', 'text'])
 
 function formatTime(seconds: number): string {
   if (!Number.isFinite(seconds) || seconds < 0) seconds = 0
@@ -263,7 +255,16 @@ export function PlaybackOverlay() {
   // button, Escape, or the title changing out from under it.
   useEffect(() => {
     if (!playbackMedia) return
+    // Presence for the synced-seek quorum. Being in a party and watching it
+    // are different things, and the host can only wait on members who can
+    // actually answer — see PartyMemberSummary.watching. Announced from
+    // here specifically because this effect already brackets the exact
+    // window in which a player exists to respond.
+    window.api?.mediaHub?.party.playbackAction({ type: 'watching', watching: true }).catch(() => {})
     return () => {
+      window.api?.mediaHub?.party
+        .playbackAction({ type: 'watching', watching: false })
+        .catch(() => {})
       window.api?.mediaHub?.playback.stop().catch(() => {})
       clearSyncSeek()
       if (catchUpRateTimeoutRef.current) {
@@ -443,7 +444,26 @@ export function PlaybackOverlay() {
           if (!response) return
           activeSelectionRef.current = response.selection
           setAppliedUpscaleHeight(response.selection.upscaleHeight ?? 0)
-          setResult((prev) => (prev ? { ...prev, ...response.selection, url: response.url } : prev))
+          setResult((prev) =>
+            prev
+              ? {
+                  ...prev,
+                  ...response.selection,
+                  url: response.url,
+                  // The response IS an FfmpegTranscoderResult (compatibility: true,
+                  // plus the engine) — carrying those over is not cosmetic. A title
+                  // whose audio was already browser-compatible plays DIRECT, with
+                  // compatibility:false; switching audio track starts a real ffmpeg
+                  // transcode, but spreading only `selection` left the flag reading
+                  // false. Every party-sync path branches on it (the sync-wait
+                  // effect's immediate-vs-progress check, performSeek's
+                  // currentTime-vs-restart choice), so that member silently stopped
+                  // following seeks from then on, with no error.
+                  compatibility: response.compatibility,
+                  engine: response.engine
+                }
+              : prev
+          )
           setTracks(response.tracks)
         })
         .catch((error: unknown) => {
@@ -477,7 +497,14 @@ export function PlaybackOverlay() {
       // everyone for this requestId.
       if (activeSyncRequestIdRef.current !== requestId) return
       const members = partyStatus?.members ?? []
-      const waiting = members.filter((m) => !syncReadyIdsRef.current.has(m.id))
+      // `watching !== false` rather than `=== true`: undefined means a
+      // member hasn't reported yet (older build, or the message is still in
+      // flight), and excluding them on that basis could release a seek
+      // before someone who IS watching has buffered. Only an explicit
+      // "not watching" is skipped.
+      const waiting = members.filter(
+        (m) => m.watching !== false && !syncReadyIdsRef.current.has(m.id)
+      )
       if (waiting.length > 0 && !force) {
         setSyncWaitingNames(waiting.map((m) => m.name))
         window.api?.mediaHub?.party
@@ -585,7 +612,9 @@ export function PlaybackOverlay() {
         performSeek(target)
         setActiveSyncRequestId(requestId)
         setSyncWaitingNames(
-          (partyStatus.members ?? []).filter((m) => m.id !== partyStatus.selfId).map((m) => m.name)
+          (partyStatus.members ?? [])
+            .filter((m) => m.id !== partyStatus.selfId && m.watching !== false)
+            .map((m) => m.name)
         )
         window.api?.mediaHub?.party
           .playbackAction({ type: 'seek-sync', position: target, requestId })
@@ -753,7 +782,26 @@ export function PlaybackOverlay() {
       applyShiftedSubtitle()
       // A new transcode session means a new stream URL — the <video> src
       // effect below picks this up and reloads from `startTime`.
-      setResult((prev) => (prev ? { ...prev, ...response.selection, url: response.url } : prev))
+      setResult((prev) =>
+        prev
+          ? {
+              ...prev,
+              ...response.selection,
+              url: response.url,
+              // The response IS an FfmpegTranscoderResult (compatibility: true,
+              // plus the engine) — carrying those over is not cosmetic. A title
+              // whose audio was already browser-compatible plays DIRECT, with
+              // compatibility:false; switching audio track starts a real ffmpeg
+              // transcode, but spreading only `selection` left the flag reading
+              // false. Every party-sync path branches on it (the sync-wait
+              // effect's immediate-vs-progress check, performSeek's
+              // currentTime-vs-restart choice), so that member silently stopped
+              // following seeks from then on, with no error.
+              compatibility: response.compatibility,
+              engine: response.engine
+            }
+          : prev
+      )
       setTracks(response.tracks)
     } catch (error) {
       // A rapid second track/quality change while the first was still
@@ -806,7 +854,26 @@ export function PlaybackOverlay() {
       activeSelectionRef.current = response.selection
       setAppliedUpscaleHeight(response.selection.upscaleHeight ?? 0)
       applyShiftedSubtitle()
-      setResult((prev) => (prev ? { ...prev, ...response.selection, url: response.url } : prev))
+      setResult((prev) =>
+        prev
+          ? {
+              ...prev,
+              ...response.selection,
+              url: response.url,
+              // The response IS an FfmpegTranscoderResult (compatibility: true,
+              // plus the engine) — carrying those over is not cosmetic. A title
+              // whose audio was already browser-compatible plays DIRECT, with
+              // compatibility:false; switching audio track starts a real ffmpeg
+              // transcode, but spreading only `selection` left the flag reading
+              // false. Every party-sync path branches on it (the sync-wait
+              // effect's immediate-vs-progress check, performSeek's
+              // currentTime-vs-restart choice), so that member silently stopped
+              // following seeks from then on, with no error.
+              compatibility: response.compatibility,
+              engine: response.engine
+            }
+          : prev
+      )
       setTracks(response.tracks)
     } catch (error) {
       pushNotification({
@@ -1474,9 +1541,7 @@ export function PlaybackOverlay() {
                       onClick={() => applyEmbeddedSubtitle(t)}
                       disabled={!isTextBased || extractingSubtitleOrdinal !== null}
                       title={
-                        isTextBased
-                          ? undefined
-                          : 'Image-based subtitle format — not supported'
+                        isTextBased ? undefined : 'Image-based subtitle format — not supported'
                       }
                     >
                       {isExtracting ? `Loading “${t.label}”…` : t.label}
