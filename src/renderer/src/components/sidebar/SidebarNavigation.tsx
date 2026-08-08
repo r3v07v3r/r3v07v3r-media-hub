@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Link, useLocation } from 'react-router-dom'
 import { NAV_ITEMS } from '@renderer/data/mockData'
 import { Icon } from '@renderer/components/icons/Icon'
@@ -11,58 +11,159 @@ import styles from './SidebarNavigation.module.css'
 // sheet.
 const MOBILE_PRIMARY_IDS = ['home', 'movies', 'tv', 'anime', 'mystuff']
 
+// Seven undifferentiated rows read as one long undifferentiated list —
+// nothing tells you that Home/Movies/Series/Anime are "where content
+// lives" while My Stuff/Downloads are "your own things" and Settings is
+// housekeeping. Grouping is by first-id-of-a-group rather than a nested
+// data structure so NAV_ITEMS stays a flat list (it's also consumed as
+// one by the mobile filter above and by anything else importing it) —
+// adding a nav item only needs an entry there, and only needs touching
+// this constant if it should start a NEW group.
+const GROUP_STARTS = new Set(['mystuff', 'settings'])
+
+const COLLAPSE_STORAGE_KEY = 'r3.nav.collapsed'
+
+// localStorage throws (not returns null) in a few real contexts — a
+// packaged Electron renderer with storage partitioning off, or the
+// browser preview build running from a sandboxed null origin. A nav rail
+// that can't remember a preference is a much smaller problem than a nav
+// rail that crashes the app, so both sides are defensive.
+function readStoredCollapsed(): boolean | null {
+  try {
+    const raw = window.localStorage.getItem(COLLAPSE_STORAGE_KEY)
+    return raw === null ? null : raw === 'true'
+  } catch {
+    return null
+  }
+}
+function writeStoredCollapsed(value: boolean): void {
+  try {
+    window.localStorage.setItem(COLLAPSE_STORAGE_KEY, String(value))
+  } catch {
+    /* preference simply won't persist — not worth surfacing */
+  }
+}
+
 export function SidebarNavigation() {
   const pathname = useLocation().pathname
-  const [collapsed, setCollapsed] = useState(false)
-  const [userOverride, setUserOverride] = useState(false)
-  const [isMobile, setIsMobile] = useState(false)
+  // The stored preference doubles as the "has the person ever chosen?"
+  // flag: absent means the width-driven auto-collapse below still owns
+  // the state, present means their choice wins until they change it.
+  const [collapsed, setCollapsed] = useState(
+    () => readStoredCollapsed() ?? (typeof window !== 'undefined' && window.innerWidth < 1100)
+  )
+  const [userOverride, setUserOverride] = useState(() => readStoredCollapsed() !== null)
+  const [isMobile, setIsMobile] = useState(
+    () => typeof window !== 'undefined' && window.innerWidth < 768
+  )
   const [moreOpen, setMoreOpen] = useState(false)
+  const [indicator, setIndicator] = useState<{ top: number; height: number } | null>(null)
+  const navRef = useRef<HTMLElement>(null)
   const listRef = useRef<HTMLUListElement>(null)
 
-  // Auto-collapse to an icon-only rail at the tablet breakpoint and below
-  // (<1100px — spec section 16's "Compact desktop 1100-1439px / Tablet
-  // 768-1099px" boundary), unless the person has explicitly toggled it —
-  // a manual choice should stick until they change it again, not get
-  // silently overridden by the next resize.
+  // One matchMedia-driven effect for both breakpoints instead of two
+  // separate resize listeners recomputing on every pixel of a window
+  // drag: the queries only fire when a boundary is actually crossed.
+  //   <1100px  — auto-collapse to an icon rail (spec section 16's
+  //              "Compact desktop 1100-1439 / Tablet 768-1099" boundary),
+  //              unless the person has explicitly toggled it.
+  //   <768px   — the rail stops being a rail at all and becomes a fixed
+  //              bottom bar with a trimmed item set (MOBILE_PRIMARY_IDS),
+  //              which is why this is tracked separately from `collapsed`
+  //              rather than treated as "even narrower" (spec section 8/9).
   useEffect(() => {
-    function apply() {
-      if (userOverride) return
-      setCollapsed(window.innerWidth < 1100)
+    const compact = window.matchMedia('(max-width: 1099px)')
+    const mobile = window.matchMedia('(max-width: 767px)')
+    function sync() {
+      setIsMobile(mobile.matches)
+      if (!userOverride) setCollapsed(compact.matches)
     }
-    apply()
-    window.addEventListener('resize', apply)
-    return () => window.removeEventListener('resize', apply)
+    sync()
+    compact.addEventListener('change', sync)
+    mobile.addEventListener('change', sync)
+    return () => {
+      compact.removeEventListener('change', sync)
+      mobile.removeEventListener('change', sync)
+    }
   }, [userOverride])
 
-  // Below 768px the rail becomes a fixed bottom nav with a trimmed item
-  // set (see MOBILE_PRIMARY_IDS) — tracked separately from `collapsed`
-  // since mobile isn't just a narrower icon rail, it's a different nav
-  // shape entirely (spec section 8/9).
+  // Ctrl/Cmd+B — the standard "toggle the sidebar" binding (VS Code,
+  // Slack, Notion). The rail's own toggle button is small and lives in a
+  // corner; this makes the collapse a first-class action for anyone who
+  // reaches for the keyboard. Skipped while typing so it can't fire from
+  // the topbar's search field.
   useEffect(() => {
-    function apply() {
-      setIsMobile(window.innerWidth < 768)
+    if (isMobile) return
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key !== 'b' && e.key !== 'B') return
+      if (!(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey) return
+      const el = document.activeElement
+      if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) return
+      if (el instanceof HTMLElement && el.isContentEditable) return
+      e.preventDefault()
+      setUserOverride(true)
+      setCollapsed((v) => {
+        writeStoredCollapsed(!v)
+        return !v
+      })
     }
-    apply()
-    window.addEventListener('resize', apply)
-    return () => window.removeEventListener('resize', apply)
-  }, [])
+    document.addEventListener('keydown', onKeyDown)
+    return () => document.removeEventListener('keydown', onKeyDown)
+  }, [isMobile])
 
-  // Publishes the rail's real rendered width as a CSS variable other
-  // components can read — MoodBrowser uses it to bleed its pill row
-  // underneath this rail (per the reference), which only works if that
-  // negative margin matches the rail's actual current width rather than
-  // a guess. Zero on mobile: the rail moves to a bottom bar there, so
-  // there's no left column left to bleed under. Lives on <html> (not a
-  // local CSS module var) since the two components aren't siblings.
-  useEffect(() => {
-    // Third refinement pass: expanded rail 220px -> 285px (see .rail in
-    // SidebarNavigation.module.css) — kept in sync here since this is
-    // the value MoodBrowser reads to know how far it can bleed left.
-    // Collapsed 84 -> 90: matches .rail.collapsed's own width bump (see
-    // that rule's comment — the icon orb didn't actually fit in 84px).
-    const width = isMobile ? 0 : collapsed ? 90 : 285
+  // Two jobs, both driven by the rail's REAL measured geometry rather
+  // than numbers duplicated from the stylesheet:
+  //
+  //  1. --nav-rail-width, published on <html> so components that aren't
+  //     siblings of this one can react to the rail (MoodBrowser bleeds
+  //     its pill row underneath it; AppShell's .main offsets by it).
+  //     Previously this was a hardcoded 285/90 kept in sync by hand with
+  //     .rail / .rail.collapsed — measuring instead means a CSS width
+  //     change can't silently desync the rest of the layout, and it also
+  //     tracks the width *during* the collapse transition rather than
+  //     snapping to the end value. Zero on mobile: the rail is a bottom
+  //     bar there, so there's no left column to bleed under.
+  //  2. The active indicator's position — a single element that slides
+  //     between items, so switching pages reads as one continuous
+  //     movement instead of a glow blinking out here and in there.
+  //     offsetTop is relative to .rail (the nearest positioned ancestor).
+  const measure = useCallback(() => {
+    const nav = navRef.current
+    if (!nav) return
+    const width = isMobile ? 0 : Math.round(nav.getBoundingClientRect().width)
     document.documentElement.style.setProperty('--nav-rail-width', `${width}px`)
-  }, [collapsed, isMobile])
+
+    const activeLink = nav.querySelector<HTMLElement>('a[data-nav-item][aria-current="page"]')
+    const row = activeLink?.closest('li')
+    if (!row || isMobile) {
+      setIndicator((prev) => (prev === null ? prev : null))
+      return
+    }
+    // Half the row's height, vertically centred — a marker shorter than
+    // the row itself reads as pointing at it, where a full-height bar
+    // reads as a border.
+    const next = { top: row.offsetTop + row.offsetHeight * 0.25, height: row.offsetHeight * 0.5 }
+    setIndicator((prev) =>
+      prev && Math.abs(prev.top - next.top) < 0.5 && Math.abs(prev.height - next.height) < 0.5
+        ? prev
+        : next
+    )
+  }, [isMobile])
+
+  useLayoutEffect(() => {
+    measure()
+  }, [measure, pathname, collapsed])
+
+  // Covers everything a layout effect on [pathname, collapsed] can't see:
+  // the width transition mid-flight, font loading reflowing labels, and
+  // the vh-driven sizing in the stylesheet responding to a window resize.
+  useEffect(() => {
+    const nav = navRef.current
+    if (!nav) return
+    const observer = new ResizeObserver(() => measure())
+    observer.observe(nav)
+    return () => observer.disconnect()
+  }, [measure])
 
   // Closing the More sheet on route change keeps it from staying open
   // after the person taps through to a page — adjusted during render
@@ -80,26 +181,44 @@ export function SidebarNavigation() {
   const overflowItems = isMobile
     ? NAV_ITEMS.filter((item) => !MOBILE_PRIMARY_IDS.includes(item.id))
     : []
-  const overflowActive = overflowItems.some((item) =>
-    item.href === '/' ? pathname === '/' : pathname.startsWith(item.href)
+  const isActive = (href: string) => (href === '/' ? pathname === '/' : pathname.startsWith(href))
+  const overflowActive = overflowItems.some((item) => isActive(item.href))
+
+  // Roving tabindex: the whole rail is ONE tab stop, and arrows move
+  // within it — the standard pattern for a navigation list, and the
+  // difference between "Tab once to reach the content" and "Tab seven
+  // times past every destination". The active item is the one that keeps
+  // tabindex=0 (falling back to the first) so returning to the rail
+  // lands where you already are.
+  const focusableIndex = Math.max(
+    0,
+    primaryItems.findIndex((item) => isActive(item.href))
   )
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLUListElement>) {
     const items = Array.from(
       listRef.current?.querySelectorAll<HTMLAnchorElement>('a[data-nav-item]') ?? []
     )
+    if (items.length === 0) return
     const currentIndex = items.findIndex((el) => el === document.activeElement)
+    let nextIndex: number | null = null
     if (e.key === 'ArrowDown' || e.key === 'ArrowRight') {
-      e.preventDefault()
-      items[(currentIndex + 1 + items.length) % items.length]?.focus()
+      nextIndex = (currentIndex + 1 + items.length) % items.length
     } else if (e.key === 'ArrowUp' || e.key === 'ArrowLeft') {
-      e.preventDefault()
-      items[(currentIndex - 1 + items.length) % items.length]?.focus()
+      nextIndex = (currentIndex - 1 + items.length) % items.length
+    } else if (e.key === 'Home') {
+      nextIndex = 0
+    } else if (e.key === 'End') {
+      nextIndex = items.length - 1
     }
+    if (nextIndex === null) return
+    e.preventDefault()
+    items[nextIndex]?.focus()
   }
 
   return (
     <nav
+      ref={navRef}
       className={`${styles.rail} ${collapsed ? styles.collapsed : ''}`}
       aria-label="Main navigation"
     >
@@ -254,28 +373,52 @@ export function SidebarNavigation() {
         aria-hidden="true"
       />
 
+      {/* The one piece of state the rail was missing at a glance: which
+          destination you're on, readable from the shell's own edge rather
+          than only from the item's glow. Because it's a single element
+          whose top/height transition, moving between pages reads as the
+          marker travelling down the rail. */}
+      {indicator && (
+        <span
+          className={styles.activeIndicator}
+          style={{ top: `${indicator.top}px`, height: `${indicator.height}px` }}
+          aria-hidden="true"
+        />
+      )}
+
       <button
         type="button"
         className={styles.toggle}
         onClick={() => {
           setUserOverride(true)
-          setCollapsed((v) => !v)
+          setCollapsed((v) => {
+            writeStoredCollapsed(!v)
+            return !v
+          })
         }}
         aria-label={collapsed ? 'Expand navigation' : 'Collapse navigation'}
+        aria-keyshortcuts="Control+B"
+        title={`${collapsed ? 'Expand' : 'Collapse'} navigation (Ctrl+B)`}
         aria-expanded={!collapsed}
       >
-        <Icon name={collapsed ? 'chevron' : 'chevron-left'} size={15} />
+        <Icon name={collapsed ? 'chevron' : 'chevron-left'} size={16} />
       </button>
       <ul className={styles.list} ref={listRef} onKeyDown={handleKeyDown}>
-        {primaryItems.map((item) => {
-          const active = item.href === '/' ? pathname === '/' : pathname.startsWith(item.href)
-          return (
+        {primaryItems.map((item, index) => {
+          const active = isActive(item.href)
+          const startsGroup = !isMobile && index > 0 && GROUP_STARTS.has(item.id)
+          return [
+            startsGroup ? (
+              <li key={`sep-${item.id}`} className={styles.divider} role="separator" />
+            ) : null,
             <li key={item.id}>
               <Link
                 to={item.href}
                 data-nav-item
+                tabIndex={index === focusableIndex ? 0 : -1}
                 className={`${styles.item} ${active ? styles.itemActive : ''}`}
                 aria-current={active ? 'page' : undefined}
+                aria-label={collapsed && !isMobile ? item.label : undefined}
               >
                 <span className={styles.iconWrap}>
                   {active && <span className={styles.iconHalo} aria-hidden="true" />}
@@ -290,13 +433,17 @@ export function SidebarNavigation() {
                   {active && <span className={styles.dot} aria-hidden="true" />}
                 </span>
                 {collapsed && !isMobile && (
-                  <span className={styles.tooltip} role="tooltip">
+                  // aria-hidden + the aria-label above rather than
+                  // role="tooltip": the label text is already the link's
+                  // accessible name, so exposing this too made every
+                  // collapsed item announce its name twice.
+                  <span className={styles.tooltip} aria-hidden="true">
                     {item.label}
                   </span>
                 )}
               </Link>
             </li>
-          )
+          ]
         })}
         {isMobile && (
           <li className={styles.moreWrap}>
@@ -319,8 +466,7 @@ export function SidebarNavigation() {
             {moreOpen && (
               <div className={`${styles.moreSheet} glass-panel`} role="menu">
                 {overflowItems.map((item) => {
-                  const active =
-                    item.href === '/' ? pathname === '/' : pathname.startsWith(item.href)
+                  const active = isActive(item.href)
                   return (
                     <Link
                       key={item.id}
