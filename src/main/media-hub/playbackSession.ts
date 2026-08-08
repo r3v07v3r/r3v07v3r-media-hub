@@ -47,6 +47,11 @@ import {
   type FfmpegTranscoderResult
 } from './vlc'
 
+/** Ceiling for a FORCED video re-encode (see preparePlayback). 1080p is
+ *  the point where a real-time encode reliably starts inside the startup
+ *  budget on ordinary hardware; 2160p routinely did not. */
+const TRANSCODE_MAX_HEIGHT = 1080
+
 export const ffmpegPath = findFfmpeg()
 export const ffprobePath = findFfprobe()
 
@@ -153,12 +158,28 @@ export async function preparePlayback(url: string): Promise<PlaybackResult> {
   if ((needsAudioCompatibility(activeMediaTracks) || activeVideoEncoder) && ffmpegPath) {
     directModeActive = false
     await playbackProxy.close()
+    // Cap the height when we're FORCED to re-encode video. Re-encoding
+    // 2160p in real time is what made 4K HEVC titles unplayable: ffmpeg
+    // never produced its first bytes inside even the extended 60s startup
+    // budget, so the title failed outright. Scaling to 1080p first cuts
+    // the encoder's pixel rate by ~4x and is invisible on any normal
+    // display at normal viewing distance — a 1080p stream that starts is
+    // strictly better than a 2160p one that never does.
+    //
+    // Only applies on the re-encode path (activeVideoEncoder set); a
+    // stream-copy is untouched and still delivers the source resolution
+    // exactly. An explicit upscale preference still wins, since that's the
+    // person deliberately asking for a specific output height.
+    const sourceHeight = Number(activeMediaTracks.video?.[0]?.height) || 0
+    const encodeHeight =
+      activeUpscaleHeight ??
+      (sourceHeight > TRANSCODE_MAX_HEIGHT ? TRANSCODE_MAX_HEIGHT : undefined)
     const started = await ffmpegTranscoder.start(
       ffmpegPath,
       url,
       { audio: selectTranscodeAudioTrack(activeMediaTracks)?.ordinal ?? 0 },
       activeVideoEncoder,
-      activeUpscaleHeight
+      encodeHeight
     )
     return {
       ok: true,

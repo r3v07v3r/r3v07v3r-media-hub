@@ -127,6 +127,27 @@ export function buildFfmpegArguments(
   // playback occasionally starting up to one keyframe-interval earlier
   // than the literal position clicked, which is far less noticeable than a
   // sustained A/V desync.
+  // Cap how much of the container ffmpeg inspects before it starts work.
+  // These MUST come before -i to apply to the input.
+  //
+  // Found live, and it's the reason "movies don't play" on some titles: a
+  // full Blu-ray remux can carry ~90 streams (one video, PCM audio, and
+  // 60+ hdmv_pgs_subtitle tracks). ffmpeg's stream-info pass tries to
+  // find codec parameters for every one of them, and each PGS track needs
+  // real data pulled over the network to do it — so it burned the entire
+  // 60s startup budget emitting "Could not find codec parameters for
+  // stream 89 ... Consider increasing the value for the 'analyzeduration'
+  // (0) and 'probesize' (5000000)" and never produced a single byte of
+  // video. The transcode itself was fine; it never got to start.
+  //
+  // We already know exactly which streams we want (the -map pair below),
+  // so exhaustively analysing the rest buys nothing. 3MB / 3s is far more
+  // than enough to identify one video and one audio track, and it bounds
+  // startup on a pathological container instead of letting it scale with
+  // the track count. -fpsprobesize 0 skips the separate frame-rate
+  // estimation pass, which is what emitted the "not enough frames to
+  // estimate rate" warnings on those same subtitle streams.
+  args.push('-probesize', '3000000', '-analyzeduration', '3000000', '-fpsprobesize', '0')
   if (startTime > 0) args.push('-noaccurate_seek', '-ss', String(Math.floor(startTime)))
   args.push('-i', remoteUrl)
   args.push('-map', '0:v:0', '-map', audio >= 0 ? `0:a:${audio}` : '0:a:0')

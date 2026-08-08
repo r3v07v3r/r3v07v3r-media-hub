@@ -46,20 +46,92 @@ export function createRoomCode(random: () => number = Math.random): string {
   return `${value.slice(0, 3)}-${value.slice(3)}`
 }
 
+/** Every human-readable field a scraper puts the release details in.
+ *  `description` is the important one and was previously read by nothing:
+ *  Comet returns a generic `name` ("[TORRENT] Comet 2160p") and an empty
+ *  `title`, and puts the actual filename, codecs, audio format and size
+ *  in `description` — e.g. "Interstellar.2014.2160p.PROPER.IMAX.REMUX.DV.
+ *  HDR10+.TrueHD.7.1.Atmos-...mkv ... 💾 63.0 GB". Scoring on name alone
+ *  meant every candidate looked identical apart from the resolution. */
+function streamText(stream: StreamCandidate): string {
+  return `${stream.name || ''} ${stream.title || ''} ${stream.description || ''}`.toLowerCase()
+}
+
 function streamResolution(stream: StreamCandidate): number {
-  const text = `${stream.name || ''} ${stream.title || ''}`.toLowerCase()
+  const text = streamText(stream)
   if (/2160|4k/.test(text)) return 2160
   if (/1080/.test(text)) return 1080
   if (/720/.test(text)) return 720
   return stream.resolution || 0
 }
 
+/** How hostile a release is to *streaming*, as opposed to how good it
+ *  looks. Disc remuxes are the top of the quality pile and the bottom of
+ *  the playability one: a real one seen live here carried ~90 streams —
+ *  one video, PCM 24-bit 7.1 audio, and 60+ hdmv_pgs_subtitle tracks.
+ *  Lossless audio guarantees the compatibility transcoder engages, and
+ *  ffmpeg then has to identify every one of those tracks over the network
+ *  before it emits a single byte. It never finished inside even the
+ *  extended 60s startup budget, so the title simply would not play —
+ *  while a perfectly good x264 release of the same film sat lower in the
+ *  ranking purely because the remux was 2160p.
+ *
+ *  Matched on the release name, which is the same text streamResolution
+ *  already reads. Deliberately narrow: only the markers that actually
+ *  imply a disc-sized, many-track, lossless-audio package. "BluRay" alone
+ *  is NOT one of them — an ordinary BluRay-sourced x264 encode is exactly
+ *  what we want to pick. */
+function streamingPenalty(stream: StreamCandidate): number {
+  const text = streamText(stream)
+  let penalty = 0
+  // Disc-remux and lossless-audio markers. "BluRay" alone is deliberately
+  // absent — an ordinary BluRay-sourced x264/x265 encode is exactly what
+  // we want to pick; it's the untouched disc streams that hurt.
+  if (/remux|bdmv|\bpcm\b|truehd|dts-hd|dts hd|dtshd|dts-x|atmos|lossless/.test(text)) {
+    penalty += REMUX_PENALTY
+  }
+  // Size, when the scraper reports it. An independent signal from the
+  // markers above and a blunt one: whatever a 60GB file is, it is not the
+  // right thing to start streaming in a few seconds. Caught live at
+  // "💾 63.0 GB".
+  const size = text.match(/([\d.]+)\s*gb\b/)
+  if (size && Number(size[1]) > OVERSIZED_GB) penalty += REMUX_PENALTY
+  // Codec the embedded player cannot decode itself. The <video> element is
+  // Chromium's, which handles H.264 natively but not HEVC — so an HEVC
+  // pick forces a full video RE-ENCODE rather than the cheap stream-copy
+  // (audio-only) path, and re-encoding 2160p HEVC in real time is what
+  // was still blowing the 60s startup budget even after the remuxes were
+  // ranked out. An H.264 release plays essentially instantly by
+  // comparison, which is worth more than the extra resolution.
+  if (/hevc|h\.?265|x265/.test(text)) penalty += HEVC_PENALTY
+  return penalty
+}
+
+/** Sized to sit between the resolution term (max ~4320) and the `cached`
+ *  gate (20000) on purpose: big enough that a remux always loses to a
+ *  normal release regardless of resolution, small enough that a CACHED
+ *  remux still beats an UNCACHED web encode — an uncached candidate can't
+ *  be played right now at all, so it's not the better answer. */
+const REMUX_PENALTY = 8000
+
+/** Above this, a file is a disc image in all but name. Both penalties can
+ *  apply at once (16000 total), which still stays under the `cached`
+ *  gate — a cached monster is preferred to an uncached anything, because
+ *  the uncached one can't be played at all right now. */
+const OVERSIZED_GB = 25
+
+/** Bigger than the largest resolution term (2160) on purpose: a 1080p
+ *  H.264 release that plays immediately beats a 2160p HEVC one that has
+ *  to be re-encoded before the first frame appears. */
+const HEVC_PENALTY = 6000
+
 export function rankStreams(streams: StreamCandidate[]): StreamCandidate[] {
   const score = (s: StreamCandidate): number =>
     (s.exact === false ? 0 : 100000) +
     (s.cached === false ? 0 : 20000) +
     (s.compatible === false ? -50000 : 10000) +
-    streamResolution(s)
+    streamResolution(s) -
+    streamingPenalty(s)
   return [...streams].sort((a, b) => score(b) - score(a))
 }
 
