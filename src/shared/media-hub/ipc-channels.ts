@@ -94,6 +94,7 @@ export const MEDIA_HUB_CHANNELS = {
   partyRemove: 'mediahub:party:remove',
   partyVote: 'mediahub:party:vote',
   partyQueue: 'mediahub:party:queue',
+  partyPreparing: 'mediahub:party:preparing',
   partyNowPlaying: 'mediahub:party:now-playing',
   partyPlaybackAction: 'mediahub:party:playback-action',
   partySetMemberControl: 'mediahub:party:set-member-control',

@@ -278,6 +278,8 @@ interface AppStateValue {
     media: MediaItem,
     opts?: { season?: number; episode?: number }
   ) => Promise<void>
+  /** Follower-only: the title the host is currently getting ready, from the moment they pick it until this member's own stream actually starts. Null when nothing is pending. Drives PartyLoadingOverlay. */
+  partyPreparing: { title: string; poster: string } | null
   /** Absolute position (seconds) a follower should seek to once their own independently-resolved stream is ready — set from an incoming `nowPlaying` announcement, consumed once by PlaybackOverlay. */
   partyPendingSeek: number | null
   consumePartyPendingSeek: () => void
@@ -311,6 +313,14 @@ interface AppStateValue {
   uiActivity: UIActivityState
 }
 
+// Generous on purpose: this is not "how long a load should take", it's
+// the point past which a follower is certainly waiting on a host that is
+// never going to answer. A cold stream search plus a buffer wait can
+// legitimately run well over a minute on a slow link, and cutting the
+// card off early would be worse than leaving it a while — it would look
+// like the party had started without them.
+const PARTY_PREPARING_TIMEOUT_MS = 3 * 60 * 1000
+
 const AppStateContext = createContext<AppStateValue | null>(null)
 
 let notifId = 0
@@ -330,6 +340,9 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   const [partyHostPort, setPartyHostPort] = useState<number | null>(null)
   const [partyPanelOpen, setPartyPanelOpen] = useState(false)
   const [partyPendingSeek, setPartyPendingSeek] = useState<number | null>(null)
+  const [partyPreparing, setPartyPreparing] = useState<{ title: string; poster: string } | null>(
+    null
+  )
   const [myList, setMyList] = useState<Set<string>>(new Set())
   const [dislikedIds, setDislikedIds] = useState<Set<string>>(new Set())
   const [continueWatching, setContinueWatching] =
@@ -903,11 +916,39 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       const season = opts?.season ?? media.seasonNumber
       const episode = opts?.episode ?? media.episodeNumber
       const target = opts ? { ...media, seasonNumber: season, episodeNumber: episode } : media
+      const partyApi = window.api?.mediaHub?.party
+      const isHosting = !!partyApi && !!partyStatus?.inParty && partyStatus.role === 'host'
+      const partyKind = media.mediaKind ?? (media.mediaType === 'series' ? 'series' : 'movie')
+      // Announce BEFORE resolving, not after. startPlayback below is a
+      // stream search plus a buffer wait — seconds, sometimes many — and
+      // the nowPlaying announcement can only go out once it finishes,
+      // because only then is there something real to announce. That left
+      // every other member's app completely inert for the whole window
+      // with no sign anything was happening. This tells them immediately.
+      // Fire-and-forget on purpose: a follower's loading card is not worth
+      // delaying or failing the host's own playback over.
+      if (isHosting) {
+        partyApi
+          .preparing({
+            item: {
+              id: media.id,
+              type: partyKind,
+              title: media.title,
+              poster: media.posterUrl ?? ''
+            }
+          })
+          .catch(() => {})
+      }
       const started = await startPlayback(target)
-      if (!started) return
-      const api = window.api?.mediaHub?.party
-      if (!api || !partyStatus?.inParty || partyStatus.role !== 'host') return
-      const kind = media.mediaKind ?? (media.mediaType === 'series' ? 'series' : 'movie')
+      if (!started) {
+        // The host found no source, so no nowPlaying is ever coming —
+        // release the followers rather than leaving them spinning.
+        if (isHosting) partyApi.preparing({ item: null }).catch(() => {})
+        return
+      }
+      const api = partyApi
+      if (!api || !isHosting) return
+      const kind = partyKind
       api
         .nowPlaying({
           infoHash: '',
@@ -944,9 +985,32 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         episode?: number
         position?: number
       }
+      // "The host has picked something and is working on it" — arrives
+      // well before nowPlaying (see PartyPreparingPayload). This is the
+      // only thing a follower has to go on until their own stream starts,
+      // so it stays up across BOTH waits: the host's resolve and then
+      // this member's own.
+      if (msg?.type === 'preparing' && msg.item?.title) {
+        setPartyPreparing({ title: msg.item.title, poster: msg.item.poster || '' })
+        return
+      }
+      if (msg?.type === 'preparing-cancelled') {
+        setPartyPreparing(null)
+        pushNotification({
+          tone: 'warning',
+          message: "The host couldn't start that title."
+        })
+        return
+      }
       if (msg?.type !== 'nowPlaying' || !msg.item?.id || !msg.item.type) return
       const catalogApi = window.api?.mediaHub?.catalog
       if (!catalogApi) return
+      // Covers the case where a follower joins (or the message is missed)
+      // after the host already sent `preparing` — nowPlaying implies a
+      // load is in progress regardless of what came before it.
+      setPartyPreparing(
+        (prev) => prev ?? { title: msg.item?.title || '', poster: msg.item?.poster || '' }
+      )
       catalogApi
         .meta(msg.item.type as MediaKind, msg.item.id)
         .then((catalogItem) => {
@@ -961,8 +1025,35 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         .catch(() => {
           pushNotification({ tone: 'error', message: "Couldn't load what the host is playing." })
         })
+        // Cleared on EVERY outcome, not just success: startPlayback
+        // resolves false for a no-source or TorBox-not-connected result
+        // without throwing, and that path has to release the card too.
+        .finally(() => setPartyPreparing(null))
     })
   }, [partyStatus, startPlayback, pushNotification])
+
+  // Last-resort release. Every ordinary path clears the card explicitly,
+  // but all of them depend on the host still being alive to send the
+  // message that ends the wait — if it quits or drops mid-resolve, none
+  // of them ever fire and the follower is left staring at a spinner.
+  useEffect(() => {
+    if (!partyPreparing) return
+    const timer = setTimeout(() => setPartyPreparing(null), PARTY_PREPARING_TIMEOUT_MS)
+    return () => clearTimeout(timer)
+  }, [partyPreparing])
+
+  // Leaving the party (or the host disconnecting) ends any wait too —
+  // nothing is coming. Adjusted during render (React's documented
+  // "reset state when a prop changes" pattern, same as the More-sheet
+  // reset in SidebarNavigation) rather than in an effect: an effect here
+  // both costs an extra render pass and trips
+  // react-hooks/set-state-in-effect.
+  const [preparingInParty, setPreparingInParty] = useState(!!partyStatus?.inParty)
+  const inPartyNow = !!partyStatus?.inParty
+  if (preparingInParty !== inPartyNow) {
+    setPreparingInParty(inPartyNow)
+    if (!inPartyNow && partyPreparing) setPartyPreparing(null)
+  }
 
   // A suggestion only ever carries {id, type, title, poster} — no episode —
   // so a series/anime suggestion is inherently ambiguous about which
@@ -1189,6 +1280,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       refreshWatchStatus,
       watchStatusVersion,
       startPartyPlayback,
+      partyPreparing,
       partyPendingSeek,
       consumePartyPendingSeek,
       setPartyMemberControl,
@@ -1269,6 +1361,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       refreshWatchStatus,
       watchStatusVersion,
       startPartyPlayback,
+      partyPreparing,
       partyPendingSeek,
       consumePartyPendingSeek,
       setPartyMemberControl,

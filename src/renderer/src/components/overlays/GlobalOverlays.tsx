@@ -6,6 +6,7 @@ import { NotificationLayer } from './NotificationLayer'
 import { OfflineBanner } from './OfflineBanner'
 import { ProfilePinPrompt } from '@renderer/components/profiles/ProfilePinPrompt'
 import { PartyPanel } from '@renderer/components/party/PartyPanel'
+import { PartyLoadingOverlay } from '@renderer/components/party/PartyLoadingOverlay'
 
 export function GlobalOverlays() {
   const { playbackMedia } = useAppState()
@@ -31,6 +32,7 @@ export function GlobalOverlays() {
           effect. */}
       <PlaybackOverlay key={playbackMedia?.id ?? 'none'} />
       <PartyPanel />
+      <PartyLoadingOverlay />
       <NotificationLayer />
       <ProfilePinPrompt />
     </div>

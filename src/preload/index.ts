@@ -28,6 +28,7 @@ import type {
   PartyHostResult,
   PartyMode,
   PartyNowPlayingPayload,
+  PartyPreparingPayload,
   PartyPlaybackAction,
   PartyQueueEntry,
   PartyStatusResult,
@@ -350,6 +351,8 @@ const api = {
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.partyVote, { queueId, direction }),
       queue: (): Promise<{ queue: PartyQueueEntry[] }> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.partyQueue),
+      preparing: (payload: PartyPreparingPayload): Promise<{ ok: true }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.partyPreparing, payload),
       nowPlaying: (payload: PartyNowPlayingPayload): Promise<{ ok: true }> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.partyNowPlaying, payload),
       playbackAction: (action: PartyPlaybackAction): Promise<{ ok: boolean }> =>

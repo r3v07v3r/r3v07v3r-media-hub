@@ -129,9 +129,7 @@ export function PartyPanel() {
                 the other end once someone tries and fails to join. */}
             {isHost && partyWanAvailable !== null && (
               <span
-                className={
-                  partyWanAvailable ? styles.reachabilityGood : styles.reachabilityWarning
-                }
+                className={partyWanAvailable ? styles.reachabilityGood : styles.reachabilityWarning}
               >
                 {partyWanAvailable
                   ? 'Reachable over the internet — anyone with this code can join.'

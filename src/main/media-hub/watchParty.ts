@@ -345,6 +345,10 @@ interface PartyVoteArgs {
   direction?: number
 }
 
+interface PartyPreparingArgs {
+  item?: { id?: string; type?: string; title?: string; poster?: string } | null
+}
+
 interface PartyNowPlayingArgs {
   infoHash?: string
   sources?: string[]
@@ -794,6 +798,32 @@ export function registerWatchPartyIpc(): void {
   })
 
   handle(MEDIA_HUB_CHANNELS.partyQueue, () => ({ queue: party?.queue || [] }))
+
+  // Host-only, and deliberately fire-and-forget from the renderer's point
+  // of view: this goes out BEFORE the host has resolved anything, so it
+  // must not be able to delay or fail the host's own playback start. Same
+  // explicit per-field copy as nowPlaying below — this is re-serialized
+  // straight onto the network, so only the fields followers actually need
+  // to render a "loading" card ever leave this process.
+  handle<PartyPreparingArgs, { ok: true }>(MEDIA_HUB_CHANNELS.partyPreparing, (_e, payload) => {
+    const current = party
+    if (!current || current.role !== 'host')
+      throw new Error('Only the host can start party playback.')
+    const item = payload?.item
+    const event = item
+      ? {
+          type: 'preparing' as const,
+          item: {
+            id: String(item.id || ''),
+            type: String(item.type || ''),
+            title: String(item.title || ''),
+            poster: String(item.poster || '')
+          }
+        }
+      : { type: 'preparing-cancelled' as const }
+    partyBroadcast(encryptMessage(current.secret, event))
+    return { ok: true }
+  })
 
   handle<PartyNowPlayingArgs, { ok: true }>(MEDIA_HUB_CHANNELS.partyNowPlaying, (_e, payload) => {
     const current = party

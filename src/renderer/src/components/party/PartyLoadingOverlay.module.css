@@ -1,0 +1,103 @@
+/* Follower-facing "the host is starting something" card.
+
+   Deliberately NOT a full-screen blocking backdrop: nothing here is
+   modal. The wait can legitimately run a minute or more on a cold stream
+   search, and locking someone out of their own app for that long — when
+   the only thing happening is somebody else's resolve — would be worse
+   than the silence this replaces. It sits in a corner, says what's
+   coming, and gets out of the way. */
+.card {
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 18px 14px 14px;
+  border-radius: var(--radius-medium);
+  max-width: min(360px, calc(100vw - 48px));
+  animation: partyLoadingIn 320ms var(--ease-smooth, ease-out);
+  pointer-events: none;
+}
+@keyframes partyLoadingIn {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.poster {
+  width: 44px;
+  height: 66px;
+  flex: 0 0 auto;
+  border-radius: var(--radius-small);
+  object-fit: cover;
+  background: rgba(120, 160, 210, 0.12);
+}
+
+.text {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.label {
+  font-family: var(--font-display);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--accent-cyan);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  /* Titles are arbitrary length and this card is deliberately narrow —
+     clamp rather than let a long one push the layout around. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hint {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.spinner {
+  width: 12px;
+  height: 12px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  border: 2px solid rgba(56, 229, 255, 0.25);
+  border-top-color: var(--accent-cyan);
+  animation: partyLoadingSpin 0.8s linear infinite;
+}
+@keyframes partyLoadingSpin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (max-width: 767px) {
+  .card {
+    right: 12px;
+    left: 12px;
+    /* Clear of the fixed bottom nav bar, which is ~86px tall — measured
+       at 400x820 the card cleared it by only 2px at 88px, close enough to
+       read as touching. */
+    bottom: calc(100px + env(safe-area-inset-bottom));
+    max-width: none;
+  }
+}

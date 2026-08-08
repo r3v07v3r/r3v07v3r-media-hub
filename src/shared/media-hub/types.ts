@@ -495,6 +495,23 @@ export type PartyEventPayload =
   | { type: 'host-disconnected' }
   | { type: 'play-request'; item: { id: string; type: string; title: string; poster?: string } }
 
+/** Sent by the host the moment someone picks a title, BEFORE the host has
+ *  resolved a stream for it.
+ *
+ *  `nowPlaying` can only be announced once the host's own resolve has
+ *  finished, because that's when there's something real to announce — and
+ *  resolving means a stream search plus a buffer wait, which is easily
+ *  several seconds. For that whole window every other member's app sat
+ *  completely inert with nothing to indicate anything was happening. This
+ *  is the "we're starting something, hold on" signal that fills it.
+ *
+ *  A null `item` means "stop waiting" — the host's own resolve failed, so
+ *  no nowPlaying is ever coming. Without it a failed host resolve would
+ *  leave every follower showing a loading state forever. */
+export interface PartyPreparingPayload {
+  item: { id: string; type: string; title: string; poster?: string } | null
+}
+
 export interface PartyNowPlayingPayload {
   infoHash: string
   sources: string[]
