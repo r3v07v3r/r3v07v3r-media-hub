@@ -11,16 +11,6 @@ import styles from './SidebarNavigation.module.css'
 // sheet.
 const MOBILE_PRIMARY_IDS = ['home', 'movies', 'tv', 'anime', 'mystuff']
 
-// Seven undifferentiated rows read as one long undifferentiated list —
-// nothing tells you that Home/Movies/Series/Anime are "where content
-// lives" while My Stuff/Downloads are "your own things" and Settings is
-// housekeeping. Grouping is by first-id-of-a-group rather than a nested
-// data structure so NAV_ITEMS stays a flat list (it's also consumed as
-// one by the mobile filter above and by anything else importing it) —
-// adding a nav item only needs an entry there, and only needs touching
-// this constant if it should start a NEW group.
-const GROUP_STARTS = new Set(['mystuff', 'settings'])
-
 const COLLAPSE_STORAGE_KEY = 'r3.nav.collapsed'
 
 // localStorage throws (not returns null) in a few real contexts — a
@@ -57,7 +47,12 @@ export function SidebarNavigation() {
     () => typeof window !== 'undefined' && window.innerWidth < 768
   )
   const [moreOpen, setMoreOpen] = useState(false)
-  const [indicator, setIndicator] = useState<{ top: number; height: number } | null>(null)
+  const [indicator, setIndicator] = useState<{
+    top: number
+    height: number
+    left: number
+    width: number
+  } | null>(null)
   const navRef = useRef<HTMLElement>(null)
   const listRef = useRef<HTMLUListElement>(null)
 
@@ -123,9 +118,9 @@ export function SidebarNavigation() {
   //     tracks the width *during* the collapse transition rather than
   //     snapping to the end value. Zero on mobile: the rail is a bottom
   //     bar there, so there's no left column to bleed under.
-  //  2. The active indicator's position — a single element that slides
+  //  2. The active pill's position — a single element that slides
   //     between items, so switching pages reads as one continuous
-  //     movement instead of a glow blinking out here and in there.
+  //     movement instead of a highlight blinking out here and in there.
   //     offsetTop is relative to .rail (the nearest positioned ancestor).
   const measure = useCallback(() => {
     const nav = navRef.current
@@ -139,12 +134,25 @@ export function SidebarNavigation() {
       setIndicator((prev) => (prev === null ? prev : null))
       return
     }
-    // Half the row's height, vertically centred — a marker shorter than
-    // the row itself reads as pointing at it, where a full-height bar
-    // reads as a border.
-    const next = { top: row.offsetTop + row.offsetHeight * 0.25, height: row.offsetHeight * 0.5 }
+    // The pill is exactly the row's own box — which is why .list lays its
+    // rows out at their content width (align-items: flex-start) rather
+    // than stretching them: a fixed-width pill has to be wide enough for
+    // "Downloads", and at that width it overhung the organic boundary on
+    // the rows where the wave pulls inward. Hugging each row means the
+    // pill is only ever as wide as that row actually needs, and it stays
+    // inside the shape everywhere.
+    const next = {
+      top: row.offsetTop,
+      height: row.offsetHeight,
+      left: row.offsetLeft,
+      width: row.offsetWidth
+    }
     setIndicator((prev) =>
-      prev && Math.abs(prev.top - next.top) < 0.5 && Math.abs(prev.height - next.height) < 0.5
+      prev &&
+      Math.abs(prev.top - next.top) < 0.5 &&
+      Math.abs(prev.height - next.height) < 0.5 &&
+      Math.abs(prev.left - next.left) < 0.5 &&
+      Math.abs(prev.width - next.width) < 0.5
         ? prev
         : next
     )
@@ -254,8 +262,16 @@ export function SidebarNavigation() {
                 left too translucent. 10-foot-interface pass: nudged once
                 more (0.8 -> 0.86, 0.52 -> 0.58) — "strengthen glass shell
                 visibility." */}
-            <stop offset="0%" stopColor="#0a1220" stopOpacity="0.86" />
-            <stop offset="65%" stopColor="#050a14" stopOpacity="0.58" />
+            {/* Reference pass: pulled back down (0.86/0.58 -> 0.5/0.2).
+                The shell there is barely more than a tint over the page
+                with a bright line drawn on it, and the dense fill was
+                what made a label or pill crossing the boundary look
+                broken — with the fill this light there's no hard panel
+                edge for anything to visibly cross. The edge stroke
+                (.railShapeEdge) was brightened to take over defining the
+                silhouette. */}
+            <stop offset="0%" stopColor="#0a1220" stopOpacity="0.5" />
+            <stop offset="65%" stopColor="#050a14" stopOpacity="0.2" />
             <stop offset="100%" stopColor="#050a14" stopOpacity="0" />
           </linearGradient>
           {/* Third pass: faint pooled glow near the item column — see
@@ -297,32 +313,32 @@ export function SidebarNavigation() {
         </defs>
         <path
           className={styles.railShapeFill}
-          d="M0,0 C60,0 148,22 172,62 C202,110 230,142 230,190 C230,238 192,254 175,288 C160,318 165,358 178,394 C190,430 196,460 180,495 C168,524 165,556 178,590 C190,620 196,650 180,686 C168,716 165,746 175,776 C185,810 197,850 186,894 C176,930 140,960 90,980 C50,995 20,1000 0,1000 Z"
+          d="M0,0 C60,0 148,22 172,62 C202,110 230,142 230,190 C230,238 210,256 204,288 C198,318 202,358 208,394 C214,430 219,460 209,495 C201,524 202,556 208,590 C214,620 219,650 209,686 C201,716 202,746 207,776 C213,810 220,850 210,894 C200,930 154,962 94,982 C50,995 20,1000 0,1000 Z"
           fill="url(#railFillGrad)"
         />
         <path
           className={styles.railShapeShadow}
-          d="M0,0 C60,0 148,22 172,62 C202,110 230,142 230,190 C230,238 192,254 175,288 C160,318 165,358 178,394 C190,430 196,460 180,495 C168,524 165,556 178,590 C190,620 196,650 180,686 C168,716 165,746 175,776 C185,810 197,850 186,894 C176,930 140,960 90,980 C50,995 20,1000 0,1000 Z"
+          d="M0,0 C60,0 148,22 172,62 C202,110 230,142 230,190 C230,238 210,256 204,288 C198,318 202,358 208,394 C214,430 219,460 209,495 C201,524 202,556 208,590 C214,620 219,650 209,686 C201,716 202,746 207,776 C213,810 220,850 210,894 C200,930 154,962 94,982 C50,995 20,1000 0,1000 Z"
           fill="url(#railInnerShadow)"
         />
         <path
           className={styles.railShapeSheen}
-          d="M0,0 C60,0 148,22 172,62 C202,110 230,142 230,190 C230,238 192,254 175,288 C160,318 165,358 178,394 C190,430 196,460 180,495 C168,524 165,556 178,590 C190,620 196,650 180,686 C168,716 165,746 175,776 C185,810 197,850 186,894 C176,930 140,960 90,980 C50,995 20,1000 0,1000 Z"
+          d="M0,0 C60,0 148,22 172,62 C202,110 230,142 230,190 C230,238 210,256 204,288 C198,318 202,358 208,394 C214,430 219,460 209,495 C201,524 202,556 208,590 C214,620 219,650 209,686 C201,716 202,746 207,776 C213,810 220,850 210,894 C200,930 154,962 94,982 C50,995 20,1000 0,1000 Z"
           fill="url(#railGlassSheen)"
         />
         <path
           className={styles.railShapeInnerGlow}
-          d="M0,0 C60,0 148,22 172,62 C202,110 230,142 230,190 C230,238 192,254 175,288 C160,318 165,358 178,394 C190,430 196,460 180,495 C168,524 165,556 178,590 C190,620 196,650 180,686 C168,716 165,746 175,776 C185,810 197,850 186,894 C176,930 140,960 90,980 C50,995 20,1000 0,1000 Z"
+          d="M0,0 C60,0 148,22 172,62 C202,110 230,142 230,190 C230,238 210,256 204,288 C198,318 202,358 208,394 C214,430 219,460 209,495 C201,524 202,556 208,590 C214,620 219,650 209,686 C201,716 202,746 207,776 C213,810 220,850 210,894 C200,930 154,962 94,982 C50,995 20,1000 0,1000 Z"
           fill="url(#railInnerGlowGrad)"
         />
         <path
           className={styles.railShapeEdge}
-          d="M0,0 C60,0 148,22 172,62 C202,110 230,142 230,190 C230,238 192,254 175,288 C160,318 165,358 178,394 C190,430 196,460 180,495 C168,524 165,556 178,590 C190,620 196,650 180,686 C168,716 165,746 175,776 C185,810 197,850 186,894 C176,930 140,960 90,980 C50,995 20,1000 0,1000"
+          d="M0,0 C60,0 148,22 172,62 C202,110 230,142 230,190 C230,238 210,256 204,288 C198,318 202,358 208,394 C214,430 219,460 209,495 C201,524 202,556 208,590 C214,620 219,650 209,686 C201,716 202,746 207,776 C213,810 220,850 210,894 C200,930 154,962 94,982 C50,995 20,1000 0,1000"
           vectorEffect="non-scaling-stroke"
         />
         <path
           className={styles.railShapeTravel}
-          d="M0,0 C60,0 148,22 172,62 C202,110 230,142 230,190 C230,238 192,254 175,288 C160,318 165,358 178,394 C190,430 196,460 180,495 C168,524 165,556 178,590 C190,620 196,650 180,686 C168,716 165,746 175,776 C185,810 197,850 186,894 C176,930 140,960 90,980 C50,995 20,1000 0,1000"
+          d="M0,0 C60,0 148,22 172,62 C202,110 230,142 230,190 C230,238 210,256 204,288 C198,318 202,358 208,394 C214,430 219,460 209,495 C201,524 202,556 208,590 C214,620 219,650 209,686 C201,716 202,746 207,776 C213,810 220,850 210,894 C200,930 154,962 94,982 C50,995 20,1000 0,1000"
           pathLength={1}
           vectorEffect="non-scaling-stroke"
         />
@@ -331,7 +347,7 @@ export function SidebarNavigation() {
             energy highlights" (plural), not just one lone cyan dash. */}
         <path
           className={styles.railShapeTravel2}
-          d="M0,0 C60,0 148,22 172,62 C202,110 230,142 230,190 C230,238 192,254 175,288 C160,318 165,358 178,394 C190,430 196,460 180,495 C168,524 165,556 178,590 C190,620 196,650 180,686 C168,716 165,746 175,776 C185,810 197,850 186,894 C176,930 140,960 90,980 C50,995 20,1000 0,1000"
+          d="M0,0 C60,0 148,22 172,62 C202,110 230,142 230,190 C230,238 210,256 204,288 C198,318 202,358 208,394 C214,430 219,460 209,495 C201,524 202,556 208,590 C214,620 219,650 209,686 C201,716 202,746 207,776 C213,810 220,850 210,894 C200,930 154,962 94,982 C50,995 20,1000 0,1000"
           pathLength={1}
           vectorEffect="non-scaling-stroke"
         />
@@ -341,7 +357,7 @@ export function SidebarNavigation() {
             loop). "Add occasional brighter travelling highlights." */}
         <path
           className={styles.railShapeTravel3}
-          d="M0,0 C60,0 148,22 172,62 C202,110 230,142 230,190 C230,238 192,254 175,288 C160,318 165,358 178,394 C190,430 196,460 180,495 C168,524 165,556 178,590 C190,620 196,650 180,686 C168,716 165,746 175,776 C185,810 197,850 186,894 C176,930 140,960 90,980 C50,995 20,1000 0,1000"
+          d="M0,0 C60,0 148,22 172,62 C202,110 230,142 230,190 C230,238 210,256 204,288 C198,318 202,358 208,394 C214,430 219,460 209,495 C201,524 202,556 208,590 C214,620 219,650 209,686 C201,716 202,746 207,776 C213,810 220,850 210,894 C200,930 154,962 94,982 C50,995 20,1000 0,1000"
           pathLength={1}
           vectorEffect="non-scaling-stroke"
         />
@@ -352,36 +368,41 @@ export function SidebarNavigation() {
           point-along-path animation. Positioned near the boundary's x at
           each node's approximate height rather than a fixed right:-3px,
           since the boundary is now a wave, not a straight edge. */}
-      {/* left values are absolute px matching the boundary's rendered
-          position, NOT percentages — because the SVG stretches
-          non-uniformly (preserveAspectRatio="none"), a percentage here
-          wouldn't track the curve the way it does for `top`. Rescaled
-          proportionally to the rail's new 285px width (was tuned for
-          220px: 172px, 178px) so the nodes still land on the boundary
-          rather than drifting into open space now that the shell is
-          wider. */}
+      {/* `left` is a percentage of the rail's width, which lands these on
+          the boundary at ANY rail width. preserveAspectRatio="none" does
+          make the SVG stretch non-uniformly, but only the VERTICAL axis
+          is decoupled from the viewBox — horizontally x_px is exactly
+          (x_viewBox / 245) x railWidth, so a percentage tracks the curve
+          precisely. These were previously absolute px, re-tuned by hand
+          on every width change (220 -> 285 -> 230), which is what kept
+          leaving them stranded off the curve; 78.2% / 81.1% are the same
+          two points the 285px-era values described. */}
       <span
         key={`node-a-${pathname}`}
         className={`${styles.railNode} ${styles.railNodePulse}`}
-        style={{ top: '19%', left: '223px', ['--node-delay' as string]: '0s' }}
+        style={{ top: '19%', left: '78.2%', ['--node-delay' as string]: '0s' }}
         aria-hidden="true"
       />
       <span
         key={`node-b-${pathname}`}
         className={`${styles.railNode} ${styles.railNodePulse}`}
-        style={{ top: '59%', left: '231px', ['--node-delay' as string]: '0.6s' }}
+        style={{ top: '59%', left: '81.1%', ['--node-delay' as string]: '0.6s' }}
         aria-hidden="true"
       />
 
-      {/* The one piece of state the rail was missing at a glance: which
-          destination you're on, readable from the shell's own edge rather
-          than only from the item's glow. Because it's a single element
-          whose top/height transition, moving between pages reads as the
-          marker travelling down the rail. */}
+      {/* Which destination you're on, stated by a lit pill behind the row
+          rather than only by the icon's glow. One element whose top and
+          height transition, so moving between pages reads as the pill
+          travelling down the rail. */}
       {indicator && (
         <span
-          className={styles.activeIndicator}
-          style={{ top: `${indicator.top}px`, height: `${indicator.height}px` }}
+          className={styles.activePill}
+          style={{
+            top: `${indicator.top}px`,
+            height: `${indicator.height}px`,
+            left: `${indicator.left}px`,
+            width: `${indicator.width}px`
+          }}
           aria-hidden="true"
         />
       )}
@@ -406,11 +427,7 @@ export function SidebarNavigation() {
       <ul className={styles.list} ref={listRef} onKeyDown={handleKeyDown}>
         {primaryItems.map((item, index) => {
           const active = isActive(item.href)
-          const startsGroup = !isMobile && index > 0 && GROUP_STARTS.has(item.id)
-          return [
-            startsGroup ? (
-              <li key={`sep-${item.id}`} className={styles.divider} role="separator" />
-            ) : null,
+          return (
             <li key={item.id}>
               <Link
                 to={item.href}
@@ -422,11 +439,10 @@ export function SidebarNavigation() {
               >
                 <span className={styles.iconWrap}>
                   {active && <span className={styles.iconHalo} aria-hidden="true" />}
-                  {/* 10-foot-interface pass: default strokeWidth (1.6) read as
-                      thin/washed-out at the larger 56px badge size — bumped to
-                      2.1 so the glyph itself carries real visual weight,
-                      matching "increase icon visibility and stroke weight." */}
-                  <Icon name={item.icon} strokeWidth={2.1} />
+                  {/* 2.1 was tuned to keep the glyph from looking thin inside a
+                      56px badge; at the reference's ~40px badge that same weight
+                      reads as heavy and closes up the icons' interiors. */}
+                  <Icon name={item.icon} strokeWidth={1.7} />
                 </span>
                 <span className={styles.label}>
                   {item.label}
@@ -443,7 +459,7 @@ export function SidebarNavigation() {
                 )}
               </Link>
             </li>
-          ]
+          )
         })}
         {isMobile && (
           <li className={styles.moreWrap}>

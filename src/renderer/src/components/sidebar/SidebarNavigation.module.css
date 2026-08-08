@@ -15,12 +15,18 @@
      --nav-row-pad, NOT the min-height below (56 + 2x13 = 82px already
      exceeded the old 64px floor, so min-height never once drove the
      layout — worth knowing before tuning any of these). Seven of those
-     rows plus the group dividers is what has to fit the sidebar column,
-     which is the window height minus the topbar. */
-  --nav-badge: clamp(38px, 5.9vh, 56px);
-  --nav-row-pad: clamp(5px, 1.15vh, 12px);
-  --nav-row-gap: clamp(6px, 1.7vh, 16px);
-  --nav-row-height: clamp(44px, 5vh, 56px);
+     rows is what has to fit the sidebar column, which is the window
+     height minus the topbar.
+
+     Reference pass: the target is a compact ~64px row pitch built from a
+     ~40px badge in a shallow pill, not the 102px pitch the 10-foot values
+     produced — so the badge and the row padding both come down hard and
+     the gap carries most of the rhythm. */
+  --nav-badge: clamp(32px, 4.2vh, 40px);
+  --nav-row-pad: clamp(3px, 0.55vh, 5px);
+  --nav-row-gap: clamp(8px, 1.6vh, 15px);
+  --nav-row-height: clamp(38px, 4.6vh, 44px);
+  --nav-pad: 20px;
   /* Content-sized, NOT height:100% — this is the actual fix for "the nav
      must be vertically centered." AppShell's .sidebar wrapper already
      has `justify-content: safe center` specifically to centre this rail
@@ -36,14 +42,20 @@
      with a huge dead zone above/below the items. */
   display: flex;
   flex-direction: column;
-  /* Third refinement pass: "not a small floating menu, but a large
-     curved glass control surface" — widened ~30% (220px -> 285px). The
-     organic SVG boundary below maps its viewBox onto this element's own
-     box with preserveAspectRatio="none" (see the JSX comment), so this
-     single width change is also what makes the blob shape, the edge
-     wave, and the travelling highlights all scale up together — no path
-     geometry needs to change for the shell to read as physically bigger. */
-  width: 285px;
+  /* The organic SVG boundary below maps its viewBox onto this element's
+     own box with preserveAspectRatio="none" (see the JSX comment), so
+     this single width value is also what scales the blob shape, the edge
+     wave and the travelling highlights together — no path geometry needs
+     to change for the shell to resize.
+     Third refinement pass had widened this 220px -> 285px for "a large
+     curved glass control surface." The reference pass pulls it back to
+     230px: at 285 the rail was 18% of a 1600px window for seven links,
+     and the design it's being matched against gives the same job ~230px
+     of a comparable frame. Everything else on screen follows this number
+     automatically (--nav-rail-width is measured, not hardcoded — see
+     SidebarNavigation.tsx), including MoodBrowser's under-rail bleed,
+     which is proportional and so stays correctly tucked. */
+  width: 230px;
   /* 10-foot-interface pass: a touch more outer breathing room to match
      the bigger 56px icon badges below — the shell's own presence should
      scale with its contents, not just its contents growing inside a
@@ -54,7 +66,7 @@
      item sat inside that taper — "Settings"'s label visibly extended
      past the shell's own edge into open space. The rail is content-sized,
      so padding is what pushes the taper zone below the final row. */
-  padding: 20px 22px clamp(34px, 6vh, 58px);
+  padding: 20px var(--nav-pad) clamp(34px, 6vh, 58px);
   /* The old linear-gradient panel fill is gone — .railShapeFill (the
      closed blob path in the SVG below) is now what paints the panel's
      dark translucent body, shaped to the organic boundary instead of a
@@ -137,13 +149,14 @@
    against. */
 .railShapeEdge {
   fill: none;
-  /* 10-foot-interface pass: "strengthen glass shell visibility" — the
-     dim baseline edge nudged up (0.28 -> 0.4 opacity, 1.2 -> 1.5 width)
-     so the shell's own silhouette reads clearly even where none of the
-     travelling highlights currently sit, rather than depending on those
-     moving accents to define the shape at all. */
-  stroke: rgba(130, 175, 220, 0.4);
-  stroke-width: 1.5;
+  /* Reference pass: this line IS the rail's edge now, rather than a dim
+     hint that the fill behind it was really defining. Brighter and blue
+     rather than grey, thinner, and with its own bloom — which is also
+     what lets the fill drop back (see #railFillGrad in the JSX) without
+     the shell losing its silhouette. */
+  stroke: rgba(120, 195, 255, 0.72);
+  stroke-width: 1.2;
+  filter: drop-shadow(0 0 5px rgba(70, 165, 255, 0.55));
 }
 /* One or two short bright segments travelling the boundary — "isolated
    moving cyan energy highlights," not a fully-lit outline. A short dash
@@ -256,30 +269,53 @@
   }
 }
 
-/* Single travelling marker for the active destination, riding the rail's
-   own left edge. Positioned from JS (see SidebarNavigation.tsx's
-   `measure`) against .rail's box, which is why it lives here rather than
-   inside .list — the left edge is the shell's straight screen-side edge,
-   the one boundary that's the same at every height, so unlike a hover
-   rectangle it can never poke out past the organic right-hand wave.
-   Transitioning top/height is what makes changing pages read as the
-   marker sliding to the new item instead of blinking between them. */
-.activeIndicator {
+/* The active destination's pill. A single element positioned from JS
+   (see `measure` in SidebarNavigation.tsx) against .rail's box rather
+   than one background per item, so changing pages slides the pill to the
+   new row instead of blinking it out here and in there.
+   It stops well short of the rail's right edge (--nav-pill-right) for
+   two reasons: it's the shape the reference uses, and it keeps the pill
+   clear of the organic boundary's pinch points, which a full-width
+   background would cross. */
+.activePill {
   position: absolute;
-  left: 5px;
-  width: 3px;
+  /* top/left/width/height all come from the active row's own box (see
+     `measure` in SidebarNavigation.tsx) — the pill IS that box, so it
+     can't drift out of alignment with the hover wash, which uses the
+     same box via inset:0 on .item::before. */
   border-radius: var(--radius-pill);
-  background: linear-gradient(180deg, var(--accent-cyan), var(--accent-violet));
-  box-shadow: 0 0 12px 1px rgba(56, 193, 255, 0.7);
-  z-index: 3;
+  background: linear-gradient(
+    90deg,
+    rgba(46, 128, 255, 0.32),
+    rgba(70, 110, 235, 0.14) 62%,
+    rgba(70, 110, 235, 0) 100%
+  );
+  box-shadow:
+    inset 0 0 0 1px rgba(122, 186, 255, 0.38),
+    0 0 24px rgba(40, 120, 255, 0.3);
+  z-index: 2;
   pointer-events: none;
   transition:
     top var(--transition-standard),
-    height var(--transition-standard);
+    height var(--transition-standard),
+    left var(--transition-standard),
+    width var(--transition-standard);
+}
+/* Collapsed there's no label for a pill to run under, and the active
+   badge's own filled circle already carries the state — a pill around a
+   lone icon just reads as a second, competing ring. */
+.collapsed .activePill {
+  display: none;
 }
 
 .toggle {
-  align-self: flex-end;
+  /* Left, lined up with the icon badges below — NOT flex-end. The blob's
+     boundary is at its narrowest across the rail's top (the path opens
+     from x=0 and only reaches its bulge around the first item), so a
+     right-aligned control up here sat visibly outside the glass. The
+     left column is inside the shape at every height. */
+  align-self: flex-start;
+  margin-left: 14px;
   /* Was a 32px muted chevron with no surface of its own, floating in the
      rail's top corner — easy to miss entirely, and the only way to find
      the collapse action. Given the same faint glass ring the resting
@@ -310,6 +346,7 @@
 }
 .collapsed .toggle {
   align-self: center;
+  margin-left: 0;
 }
 
 .list {
@@ -333,48 +370,31 @@
      so there's no leftover column space for this to grow into; it would
      be a no-op at best and confusing to read at worst. */
   flex: 0 0 auto;
+  /* Rows size to their own content instead of stretching to the rail's
+     full width. This is what lets the active pill hug each row (see
+     `measure` in SidebarNavigation.tsx): stretched rows would force one
+     pill width wide enough for the longest label, which overhangs the
+     organic boundary on the rows where the wave pulls inward. */
+  align-items: flex-start;
 }
-
-/* Three groups, not one seven-item wall: content destinations (Home /
-   Movies / Series / Anime), your own things (My Stuff / Downloads), and
-   housekeeping (Settings) — see GROUP_STARTS in SidebarNavigation.tsx.
-   A hairline that fades out to the right rather than a full-width rule:
-   the shell's right boundary is a wave, so a rule that ran the full item
-   width would cross it at the pinch points. Fading to nothing well
-   before then keeps the separator inside the glass at every height. */
-.divider {
-  height: 1px;
-  margin: 2px 0 2px 8px;
-  background: linear-gradient(
-    90deg,
-    rgba(148, 190, 235, 0.02) 0%,
-    rgba(148, 190, 235, 0.28) 18%,
-    rgba(148, 190, 235, 0) 62%
-  );
-}
-.collapsed .divider {
-  margin: 2px 12px;
-  background: linear-gradient(
-    90deg,
-    rgba(148, 190, 235, 0) 0%,
-    rgba(148, 190, 235, 0.26) 50%,
-    rgba(148, 190, 235, 0) 100%
-  );
+.collapsed .list {
+  align-items: center;
 }
 
 .item {
   position: relative;
   display: flex;
   align-items: center;
-  gap: 16px;
-  /* 10-foot-interface pass: more internal breathing room to match the
-     56px icon badge (12px 14px -> 13px 16px, min-height 52 -> 64). The
-     vertical half is on the rail's height-responsive scale because it,
-     not min-height, is what adds to the badge to make a row (see the
+  gap: 11px;
+  /* The vertical half is on the rail's height-responsive scale because
+     it, not min-height, is what adds to the badge to make a row (see the
      note on --nav-row-pad); min-height is now only a floor for the
      degenerate case of a very short window. */
-  padding: var(--nav-row-pad) 16px;
-  border-radius: var(--radius-medium);
+  /* Asymmetric: a longer tail after the label than before the badge, so
+     the pill reads as trailing off past the word rather than clamping
+     tight around it. */
+  padding: var(--nav-row-pad) 15px var(--nav-row-pad) 12px;
+  border-radius: var(--radius-pill);
   min-height: var(--nav-row-height);
   /* var(--text-muted) (#6f7889) read as genuinely faded against this
      panel's dark glass fill — nowhere near enough contrast for a primary
@@ -401,13 +421,15 @@
 .item::before {
   content: '';
   position: absolute;
+  /* Exactly the row's box — the same box .activePill is given — so
+     hovering a row previews the shape the pill will take if you click. */
   inset: 0;
-  border-radius: var(--radius-medium);
+  border-radius: var(--radius-pill);
   background: linear-gradient(
     90deg,
     rgba(94, 193, 255, 0.15),
     rgba(94, 193, 255, 0.05) 34%,
-    transparent 62%
+    transparent 78%
   );
   opacity: 0;
   pointer-events: none;
@@ -432,7 +454,12 @@
      pushing the last item off the bottom of the column. */
   width: var(--nav-badge);
   height: var(--nav-badge);
-  border-radius: 50%;
+  /* Reference pass: resting badges are rounded SQUARES with a hairline
+     outline, and only the active one is a filled circle — that contrast
+     is most of what distinguishes the active row at a glance, so the
+     radius is animated along with everything else and the square/circle
+     swap reads as the badge morphing rather than restyling. */
+  border-radius: 13px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -450,11 +477,12 @@
      item showed a badge at all, so the column read as one glowing orb
      and six loose floating glyphs rather than a row of matching
      controls. Still comfortably dimmer than the active treatment. */
-  background: radial-gradient(circle at 35% 30%, rgba(120, 190, 255, 0.14), transparent 72%);
-  box-shadow: inset 0 0 0 1px rgba(148, 180, 220, 0.3);
+  background: none;
+  box-shadow: inset 0 0 0 1px rgba(150, 186, 226, 0.24);
   transition:
     box-shadow var(--transition-standard),
     background var(--transition-standard),
+    border-radius var(--transition-standard),
     transform var(--transition-standard);
 }
 /* Hover feedback beyond the existing text-color change — brightens the
@@ -474,19 +502,20 @@
    down to this dimmer resting-hover treatment. */
 .item:hover:not(.itemActive) .iconWrap,
 .item:focus-visible:not(.itemActive) .iconWrap {
-  background: radial-gradient(circle at 35% 30%, rgba(120, 190, 255, 0.16), transparent 72%);
+  background: radial-gradient(circle at 35% 30%, rgba(120, 190, 255, 0.14), transparent 72%);
   box-shadow:
-    inset 0 0 0 1px rgba(170, 205, 240, 0.32),
-    0 0 16px 1px rgba(94, 193, 255, 0.22);
-  transform: scale(1.05);
+    inset 0 0 0 1px rgba(174, 208, 242, 0.44),
+    0 0 14px 1px rgba(94, 193, 255, 0.18);
 }
 .iconWrap svg {
-  /* Held at the same ~45% fill ratio the 56px badge was tuned to, now
-     expressed against --nav-badge so it tracks automatically — see the
-     Icon call in SidebarNavigation.tsx for the matching strokeWidth bump
-     (1.6 -> 2.1) that keeps the glyph from reading as thin/washed-out. */
-  width: calc(var(--nav-badge) * 0.45);
-  height: calc(var(--nav-badge) * 0.45);
+  /* Expressed as a ratio of --nav-badge so it tracks the badge
+     automatically — see the Icon call in SidebarNavigation.tsx for the
+     matching strokeWidth, which is tuned to this size.
+     Reference pass: 0.45 -> 0.5. That ratio was set against a 56px badge
+     where 45% still left a 25px glyph; at 40px it produced an 18px icon
+     that read as undersized inside its own outline. */
+  width: calc(var(--nav-badge) * 0.5);
+  height: calc(var(--nav-badge) * 0.5);
   position: relative;
   z-index: 1;
 }
@@ -504,16 +533,18 @@
      — "strengthen active Home glow" is called out explicitly this pass,
      on top of the third pass's own increase. Expressed as a ratio of
      --nav-badge (0.3 x 56px = the same ~17px) so the halo shrinks with
-     the badge on short windows instead of swamping it. */
-  inset: calc(var(--nav-badge) * -0.3);
+     the badge on short windows instead of swamping it.
+
+     Reference pass: pulled in (-0.3 -> -0.22) and taken to a single blue
+     bloom. The violet second ring belonged to the old 56px orb, which
+     was carrying the active state on its own; now that a pill sits
+     behind the whole row, a two-colour halo competes with it for the
+     same job and muddies the badge's edge at this smaller size. */
+  inset: calc(var(--nav-badge) * -0.22);
   z-index: 0;
   border-radius: 50%;
-  background:
-    radial-gradient(circle, rgba(56, 193, 255, 0.38), transparent 60%),
-    radial-gradient(circle, rgba(141, 77, 255, 0.3), transparent 78%);
-  box-shadow:
-    0 0 0 1px rgba(120, 200, 255, 0.6),
-    0 0 34px 7px rgba(56, 193, 255, 0.62);
+  background: radial-gradient(circle, rgba(56, 160, 255, 0.42), transparent 66%);
+  box-shadow: 0 0 22px 4px rgba(48, 140, 255, 0.55);
   animation: iconHaloPulse 3.6s ease-in-out infinite;
 }
 @keyframes iconHaloPulse {
@@ -535,12 +566,26 @@
      extra 0.82 opacity on top of it just compounded the low-contrast
      "faded menu" look. Active vs. resting is now purely a color change
      (see .itemActive below), not color-times-opacity. */
-  font-size: 16px;
-  font-weight: 500;
+  /* Reference pass: the nav labels are set like the app's own section
+     headings — display face, uppercase, tracked out, small — rather than
+     as 16px sentence-case body text. Same recipe as .heading in
+     MoodBrowser.module.css, so the rail now speaks the interface's
+     existing typographic language instead of its own. */
+  font-family: var(--font-display);
+  /* 12.5/1.05 rather than 13/1.3: the longest label ("Downloads") sets
+     how wide the active pill has to be, and at the larger setting that
+     pill overhung the organic boundary on its own row by a few pixels —
+     measured, not estimated. Trimming half a point and a quarter of the
+     tracking buys ~7px there and is imperceptible on the labels
+     themselves. */
+  font-size: 12.5px;
+  font-weight: 600;
+  letter-spacing: 1.05px;
+  text-transform: uppercase;
   white-space: nowrap;
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 7px;
   /* Keeps the text above .item::before's hover wash — both are z-index
      auto, so tree order decides and the pseudo-element comes first. */
   position: relative;
@@ -560,12 +605,16 @@
      a wider glow spread, so it reads as a deliberate status light next
      to the label rather than a small tick mark. 10-foot-interface pass:
      one more step (7px -> 8px) to keep pace with the larger label text
-     next to it. */
-  width: 8px;
-  height: 8px;
+     next to it.
+
+     Reference pass: back down to 6px alongside the smaller 13px label —
+     it trails the word as a status light, so it should read as smaller
+     than the type it follows, not the same size. */
+  width: 6px;
+  height: 6px;
   border-radius: 50%;
   background: var(--accent-cyan);
-  box-shadow: 0 0 12px 1.5px var(--accent-cyan);
+  box-shadow: 0 0 10px 1.5px var(--accent-cyan);
 }
 
 .itemActive {
@@ -578,19 +627,17 @@
   font-weight: 600;
 }
 .itemActive .iconWrap {
-  background: linear-gradient(135deg, rgba(24, 169, 255, 0.46), rgba(141, 77, 255, 0.46));
-  /* Third refinement pass: "larger glowing circular icon container,
-     stronger cyan/blue bloom, subtle purple secondary glow" — a slight
-     scale-up on top of the shared 56px badge size, a brighter cyan core
-     ring/bloom, and a wider, dimmer violet ring layered outside it so
-     the two colors read as separate glows rather than one blended tone.
-     10-foot-interface pass: pushed further still (both box-shadow
-     layers brighter/wider) per "strengthen active Home glow." */
-  transform: scale(1.1);
+  /* The one badge that's a circle (see .iconWrap's radius comment). */
+  border-radius: 50%;
+  background: linear-gradient(140deg, rgba(46, 150, 255, 0.95), rgba(56, 96, 230, 0.85));
+  /* No scale-up any more: the badge used to be the ONLY marker of the
+     active row, so it grew to earn the attention. With the pill behind
+     the row doing that job, a badge that also changes size makes the row
+     appear to jump as the pill slides in under it — the fill and the
+     square-to-circle morph carry it. */
   box-shadow:
-    0 0 0 1.5px rgba(94, 193, 255, 0.58),
-    0 0 34px rgba(56, 193, 255, 0.6),
-    0 0 56px 10px rgba(141, 77, 255, 0.44);
+    0 0 0 1.5px rgba(120, 195, 255, 0.65),
+    0 0 20px rgba(50, 150, 255, 0.65);
   color: #fff;
 }
 
@@ -646,16 +693,19 @@
   /* The organic blob shape is art-directed for a tall vertical rail —
      at the wide-short bottom-bar shape it would just be a horizontal
      smear, so it's hidden in favor of the plain top border above. The
-     travelling active marker rides the rail's vertical left edge and has
-     nothing to ride here; the bar's own active item styling covers it. */
+     sliding active pill is sized to a vertical rail's rows and has
+     nothing to slide along here; the bar's own active item styling
+     covers it. */
   .railShape,
   .railNode,
-  .activeIndicator,
-  .divider {
+  .activePill {
     display: none;
   }
   .list {
     flex-direction: row;
+    /* Undo the desktop rail's content-width rows — the bottom bar's
+       columns must stretch to share the width (see .list > li below). */
+    align-items: stretch;
     /* Exactly 5 primary items + More (spec section 8) — fits without
        horizontal scrolling, unlike the old all-9-items row. */
     justify-content: space-around;
