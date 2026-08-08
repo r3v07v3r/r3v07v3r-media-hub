@@ -81,6 +81,16 @@ let activeUpscaleHeight: number | undefined
 // whether transitioning INTO ffmpeg needs the extra teardown grace period.
 let directModeActive = false
 
+// Set once a video re-encode has actually failed to start on this
+// machine. The fallback below recovers playback, but only after burning
+// the full startup budget waiting — and the outcome doesn't change from
+// one title to the next, so paying that again on every play would be a
+// pointless 60s tax. Remembering it turns the second and later plays
+// straight into the stream-copy path. Deliberately session-scoped (not
+// persisted): hardware, drivers and the encoder set can change between
+// runs, so a restart re-tests rather than writing the machine off.
+let videoEncodeUnusable = false
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
@@ -141,7 +151,12 @@ export async function preparePlayback(url: string): Promise<PlaybackResult> {
   activeVideoEncoderReason = undefined
   activeUpscaleHeight = undefined
   const videoCodecWarning = videoCodecCompatibilityWarning(activeMediaTracks)
-  if (videoCodecWarning && ffmpegPath && readSettings().videoTranscodeEnabled) {
+  if (
+    videoCodecWarning &&
+    ffmpegPath &&
+    !videoEncodeUnusable &&
+    readSettings().videoTranscodeEnabled
+  ) {
     activeVideoEncoder = (await detectVideoEncoder(ffmpegPath)) ?? undefined
     if (activeVideoEncoder) activeVideoEncoderReason = 'codec'
   }
@@ -174,13 +189,37 @@ export async function preparePlayback(url: string): Promise<PlaybackResult> {
     const encodeHeight =
       activeUpscaleHeight ??
       (sourceHeight > TRANSCODE_MAX_HEIGHT ? TRANSCODE_MAX_HEIGHT : undefined)
-    const started = await ffmpegTranscoder.start(
-      ffmpegPath,
-      url,
-      { audio: selectTranscodeAudioTrack(activeMediaTracks)?.ordinal ?? 0 },
-      activeVideoEncoder,
-      encodeHeight
-    )
+    const audioSelection = { audio: selectTranscodeAudioTrack(activeMediaTracks)?.ordinal ?? 0 }
+    let started: FfmpegTranscoderResult
+    try {
+      started = await ffmpegTranscoder.start(
+        ffmpegPath,
+        url,
+        audioSelection,
+        activeVideoEncoder,
+        encodeHeight
+      )
+    } catch (error) {
+      // A video RE-ENCODE that won't start must never take playback down
+      // with it. "Convert incompatible video" is an opt-in, explicitly
+      // experimental setting, and on a 2160p HEVC source it reliably blew
+      // the whole 60s startup budget without emitting a frame — so with
+      // it on, every 4K title simply failed to play, while the very same
+      // title plays in ~13s by stream-copying the video and converting
+      // only the audio (verified live: hevc 3840x2160, HDR intact).
+      //
+      // Chromium decodes HEVC itself, which is what makes the fallback
+      // viable rather than a consolation prize: the copy path preserves
+      // the source resolution and HDR metadata exactly, where a
+      // successful re-encode would have thrown both away.
+      if (!activeVideoEncoder) throw error
+      logError('playback:transcode', `video re-encode failed, retrying stream-copy: ${error}`)
+      videoEncodeUnusable = true
+      activeVideoEncoder = undefined
+      activeVideoEncoderReason = undefined
+      await ffmpegTranscoder.stop()
+      started = await ffmpegTranscoder.start(ffmpegPath, url, audioSelection, undefined, undefined)
+    }
     return {
       ok: true,
       player: 'embedded',

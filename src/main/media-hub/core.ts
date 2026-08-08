@@ -96,14 +96,11 @@ function streamingPenalty(stream: StreamCandidate): number {
   // "💾 63.0 GB".
   const size = text.match(/([\d.]+)\s*gb\b/)
   if (size && Number(size[1]) > OVERSIZED_GB) penalty += REMUX_PENALTY
-  // Codec the embedded player cannot decode itself. The <video> element is
-  // Chromium's, which handles H.264 natively but not HEVC — so an HEVC
-  // pick forces a full video RE-ENCODE rather than the cheap stream-copy
-  // (audio-only) path, and re-encoding 2160p HEVC in real time is what
-  // was still blowing the 60s startup budget even after the remuxes were
-  // ranked out. An H.264 release plays essentially instantly by
-  // comparison, which is worth more than the extra resolution.
-  if (/hevc|h\.?265|x265/.test(text)) penalty += HEVC_PENALTY
+  // Deliberately NO codec penalty. An earlier version demoted HEVC here,
+  // on the theory that it forces a re-encode — but Chromium decodes HEVC
+  // natively, so the stream-copy path handles it fine (verified live:
+  // 3840x2160 hevc, playing in 13s). Demoting it would only have pushed
+  // 4K HDR releases down the ranking for no gain.
   return penalty
 }
 
@@ -119,11 +116,6 @@ const REMUX_PENALTY = 8000
  *  gate — a cached monster is preferred to an uncached anything, because
  *  the uncached one can't be played at all right now. */
 const OVERSIZED_GB = 25
-
-/** Bigger than the largest resolution term (2160) on purpose: a 1080p
- *  H.264 release that plays immediately beats a 2160p HEVC one that has
- *  to be re-encoded before the first frame appears. */
-const HEVC_PENALTY = 6000
 
 export function rankStreams(streams: StreamCandidate[]): StreamCandidate[] {
   const score = (s: StreamCandidate): number =>
