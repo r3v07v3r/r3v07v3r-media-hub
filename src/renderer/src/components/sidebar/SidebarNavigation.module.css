@@ -1,106 +1,126 @@
+/* ---------------------------------------------------------------------
+   Left navigation rail.
+
+   Built to the design brief as an organic, asymmetric glass panel on the
+   viewport's left edge — NOT a conventional sidebar. Three ideas carry
+   the whole thing, and it's worth stating them before the numbers:
+
+   1. The panel body is a soft CSS wash that FADES OUT, on all four
+      sides. It is not a shape clipped to the curve. That is what lets
+      menu rows overlap the contour freely (the reference design does
+      exactly this — its "Downloads" label sits well outside the curve),
+      and it's why the rail can be ~9% of the viewport instead of being
+      widened until the longest label fit inside a clipped edge.
+   2. The luminous curve is a contour, not a border. It rides its own
+      SVG, fades to nothing at both ends, and is deliberately uneven in
+      brightness.
+   3. Hierarchy comes from transparency, glow and contour — not from
+      borders or blocks of colour. Resting rows have no container at all.
+   --------------------------------------------------------------------- */
+
 .rail {
   position: relative;
-  /* The rail's own sizing scale, in one place so the badge, the row
-     height and the spacing between rows can't drift apart — and, more to
-     the point, so they can all respond to the window's HEIGHT together.
-     The previous fixed 56/64/20 were tuned for a tall desktop window and
-     added up to a rail taller than the sidebar column on anything short
-     (a 1000x800 window clipped Settings off the bottom entirely). The
-     clamp upper bounds are exactly those tuned values, so a full-height
-     desktop or a TV is pixel-for-pixel what the 10-foot pass produced;
-     shorter windows scale down toward a still-comfortable badge size
-     instead of overflowing.
-
-     What actually sets a row's height is --nav-badge + twice
-     --nav-row-pad, NOT the min-height below (56 + 2x13 = 82px already
-     exceeded the old 64px floor, so min-height never once drove the
-     layout — worth knowing before tuning any of these). Seven of those
-     rows is what has to fit the sidebar column, which is the window
-     height minus the topbar.
-
-     Reference pass: the target is a compact ~64px row pitch built from a
-     ~40px badge in a shallow pill, not the 102px pitch the 10-foot values
-     produced — so the badge and the row padding both come down hard and
-     the gap carries most of the rhythm. */
-  --nav-badge: clamp(32px, 4.2vh, 40px);
+  /* The rail's sizing scale in one place. What actually sets a row's
+     height is --nav-icon-box + twice --nav-row-pad, NOT min-height —
+     worth knowing before tuning any of these. The brief asks for a 64px
+     row pitch, which is --nav-icon-box (40) + 2x--nav-row-pad (5) + the
+     gap (14). The vh terms only engage on short windows, so a normal
+     desktop gets the briefed numbers exactly. */
+  --nav-icon-box: clamp(30px, 3.4vh, 36px);
   --nav-row-pad: clamp(3px, 0.55vh, 5px);
-  --nav-row-gap: clamp(8px, 1.6vh, 15px);
+  --nav-row-gap: clamp(8px, 1.7vh, 18px);
   --nav-row-height: clamp(38px, 4.6vh, 44px);
-  --nav-pad: 20px;
-  /* Content-sized, NOT height:100% — this is the actual fix for "the nav
-     must be vertically centered." AppShell's .sidebar wrapper already
-     has `justify-content: safe center` specifically to centre this rail
-     within the full sidebar column (see the comment there), but that
-     only has any effect if .rail itself doesn't already consume the
-     full column height — a flex item sized to 100% of its container
-     leaves no leftover space for "center" to distribute. Letting .rail
-     size to its own content (toggle + item list + padding) is what lets
-     the wrapper's centering actually work, AND — since .railShape below
-     maps its viewBox onto *this* element's own box, not the column's —
-     it also makes the organic wave trace tightly around the real
-     content instead of being stretched thin across the whole column
-     with a huge dead zone above/below the items. */
+  --nav-label-size: 10.5px;
+  --nav-label-track: 0.5px;
+  /* Distance from the viewport edge to the icon column. .rail's own
+     padding plus .item's is what the brief calls "content should begin
+     roughly 25-35px from the left edge". */
+  --nav-pad: 12px;
+  /* Selection timing. The shared --transition-standard token is 280ms,
+     which overshoots the brief's 150-220ms window for selection feedback
+     by about 27%, so the capsule glide and the badge's square-to-circle
+     morph get their own duration rather than borrowing that token. The
+     rail's collapse animation still uses --transition-standard: that's a
+     layout change, not selection feedback, and the brief's window
+     doesn't apply to it. */
+  --nav-select-transition: 200ms var(--ease-reactive, cubic-bezier(0.16, 1, 0.3, 1));
+
   display: flex;
   flex-direction: column;
-  /* The organic SVG boundary below maps its viewBox onto this element's
-     own box with preserveAspectRatio="none" (see the JSX comment), so
-     this single width value is also what scales the blob shape, the edge
-     wave and the travelling highlights together — no path geometry needs
-     to change for the shell to resize.
-     Third refinement pass had widened this 220px -> 285px for "a large
-     curved glass control surface." The reference pass pulls it back to
-     230px: at 285 the rail was 18% of a 1600px window for seven links,
-     and the design it's being matched against gives the same job ~230px
-     of a comparable frame. Everything else on screen follows this number
-     automatically (--nav-rail-width is measured, not hardcoded — see
-     SidebarNavigation.tsx), including MoodBrowser's under-rail bleed,
-     which is proportional and so stays correctly tucked. */
-  width: 230px;
-  /* 10-foot-interface pass: a touch more outer breathing room to match
-     the bigger 56px icon badges below — the shell's own presence should
-     scale with its contents, not just its contents growing inside a
-     fixed frame.
-     Bottom padding 32px -> 58px: the blob's boundary tapers hard back to
-     x=0 over its last ~10% of height (see the path's `186,894 C176,930
-     140,960 90,980` tail), and with only 32px below the list the LAST
-     item sat inside that taper — "Settings"'s label visibly extended
-     past the shell's own edge into open space. The rail is content-sized,
-     so padding is what pushes the taper zone below the final row. */
-  padding: 20px var(--nav-pad) clamp(34px, 6vh, 58px);
-  /* The old linear-gradient panel fill is gone — .railShapeFill (the
-     closed blob path in the SVG below) is now what paints the panel's
-     dark translucent body, shaped to the organic boundary instead of a
-     rectangle. */
+
+  /* ~9% of a 1920px viewport, per the brief's "keep the panel
+     intentionally narrow ... so the application content remains the
+     focus". Everything downstream follows this automatically:
+     --nav-rail-width is measured from the rendered element rather than
+     hardcoded (see SidebarNavigation.tsx), so MoodBrowser's under-rail
+     bleed and AppShell's main-column offset both track it. */
+  width: 174px;
+
+  /* Generous top/bottom padding is doing real work, not just breathing
+     room: the SVG contour maps its viewBox onto THIS element's box, so
+     the padding is what gives the curve room to enter and leave the
+     frame smoothly above the first row and below the last. Without it
+     the curve would start and stop hard against the items. */
+  padding: clamp(20px, 4.4vh, 42px) var(--nav-pad) clamp(34px, 9vh, 88px);
+
   transition: width var(--transition-standard);
   overflow: visible;
 }
-.rail.collapsed {
-  /* Sized to actually fit the icon orb (see .iconWrap) plus a little
-     breathing room — was 84px with .rail's own 22px/side padding still
-     applied (content box only 40px), so the 56px icon was *already*
-     wider than the space nominally reserved for it before the item's own
-     16px/side padding on top of that even entered the picture: the orb
-     was overflowing this rail's own box, not sized to it. Derived from
-     --nav-badge rather than hardcoded now that the badge is viewport-
-     height-responsive: 17px of padding a side means the content box is
-     exactly the badge, with the active item's glow (see .iconHalo's
-     inset) free to bloom outward beyond that as it already does. */
-  width: calc(var(--nav-badge) + 34px);
-  padding: 20px 17px clamp(28px, 4.6vh, 42px);
+
+/* The glass surface, as its OWN layer rather than a background on .rail.
+   That distinction is load-bearing: the surface has to be masked so it
+   dissolves into the page instead of ending at an edge, and a mask on
+   .rail would apply to the entire subtree — it visibly dimmed the
+   luminous contour and the labels, since both sit in the region the
+   horizontal fade attenuates. Painting the glass into a pseudo-element
+   confines the mask to the glass. */
+.rail::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background: linear-gradient(
+    90deg,
+    rgba(16, 28, 42, 0.82) 0%,
+    rgba(14, 26, 40, 0.68) 46%,
+    rgba(8, 18, 30, 0.4) 76%,
+    rgba(8, 18, 30, 0) 100%
+  );
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  /* Taper on BOTH axes, composited together. The vertical fade alone
+     isn't enough: backdrop-filter applies to the element's whole
+     rectangle and its blur has a hard edge at those bounds no matter how
+     the background gradient fades, so a vertical-only mask left a
+     straight vertical seam down the rail's right side — exactly the
+     rectangular silhouette this design is avoiding. Intersecting a
+     horizontal fade with the vertical one dissolves the blur on every
+     side. */
+  -webkit-mask-image:
+    linear-gradient(180deg, transparent 0%, #000 10%, #000 84%, transparent 100%),
+    linear-gradient(90deg, #000 0%, #000 58%, transparent 100%);
+  -webkit-mask-composite: source-in;
+  mask-image:
+    linear-gradient(180deg, transparent 0%, #000 10%, #000 84%, transparent 100%),
+    linear-gradient(90deg, #000 0%, #000 58%, transparent 100%);
+  mask-composite: intersect;
 }
-/* The icon is the only thing left once the label is hidden (see
-   `.collapsed .label` below) — the item's own label-oriented horizontal
-   padding/gap has nothing to space out anymore and was pushing the orb
-   past the rail's own edge. Centering a bare 56px icon in the space
-   .rail.collapsed's padding above now sets aside for it, instead of
-   inheriting `.item`'s unconditional 16px/16px. */
+
+.rail.collapsed {
+  /* Icons only. Sized to the icon box plus even padding either side, so
+     the column of badges sits centred at any --nav-icon-box value. */
+  width: calc(var(--nav-icon-box) + 40px);
+  --nav-pad: 20px;
+}
 .collapsed .item {
-  padding: 13px 0;
+  padding: var(--nav-row-pad) 0;
   gap: 0;
   justify-content: center;
 }
 
-/* ---------- Organic blob shape ---------- */
+/* ---------- Luminous contour ---------- */
+
 .railShape {
   position: absolute;
   inset: 0;
@@ -108,64 +128,28 @@
   height: 100%;
   overflow: visible;
   pointer-events: none;
-  z-index: 1;
+  /* Below the capsule and the items (see .activePill / .list). The
+     contour passes BEHIND the rows it crosses, which is what makes the
+     overlap read as glass over light rather than a collision. */
+  z-index: 2;
 }
-.railShapeFill {
-  /* Fill color/opacity comes from the gradient def in the JSX (fades
-     toward the shape's outer edge) — nothing to override here. Third
-     pass darkened the gradient's own stops directly (see JSX) for "more
-     visible internal darkness," rather than adding an opacity layer
-     here that would also dim the sheen/glow layers sitting on top. */
-}
-/* Glass depth pass: sheen (top-left highlight) + shadow (bottom-right
-   pool) layered on top of the base fill, both masked to the exact same
-   organic boundary — this is what reads as "futuristic hardware," not a
-   flat tinted panel. */
-.railShapeSheen {
-  mix-blend-mode: screen;
-}
-.railShapeShadow {
-  mix-blend-mode: multiply;
-}
-/* Third pass: a faint, slow-breathing inner glow pooled near the item
-   column — "faint inner glow" as its own distinct layer from the
-   corner sheen/shadow above, reading as ambient light living inside the
-   glass rather than a surface reflection. */
-.railShapeInnerGlow {
-  mix-blend-mode: screen;
-  animation: railInnerGlowBreathe 7s ease-in-out infinite;
-}
-@keyframes railInnerGlowBreathe {
-  0%,
-  100% {
-    opacity: 0.7;
-  }
-  50% {
-    opacity: 1;
-  }
-}
-/* Mostly dim — per spec, NOT a uniform bright cyan border. This is the
-   quiet baseline the isolated moving highlight (below) stands out
-   against. */
+
 .railShapeEdge {
   fill: none;
-  /* Reference pass: this line IS the rail's edge now, rather than a dim
-     hint that the fill behind it was really defining. Brighter and blue
-     rather than grey, thinner, and with its own bloom — which is also
-     what lets the fill drop back (see #railFillGrad in the JSX) without
-     the shell losing its silhouette. */
-  stroke: rgba(120, 195, 255, 0.72);
-  stroke-width: 1.2;
-  filter: drop-shadow(0 0 5px rgba(70, 165, 255, 0.55));
+  /* Stroke colour comes from the vertical gradient defined in the JSX —
+     that's what tapers the line to nothing at both ends and keeps it
+     from being uniformly bright. A flat `stroke` here would override the
+     presentation attribute, so the gradient is referenced from CSS. */
+  stroke: url(#railEdgeGrad);
+  stroke-width: 1.1;
+  filter: drop-shadow(0 0 4px rgba(50, 180, 255, 0.8))
+    drop-shadow(0 0 10px rgba(60, 130, 255, 0.35));
 }
-/* One or two short bright segments travelling the boundary — "isolated
-   moving cyan energy highlights," not a fully-lit outline. A short dash
-   (0.05 of the path length) riding a slow dashoffset loop, rather than
-   the near-solid 0.035/1 trace the previous full-line design used. */
+
 .railShapeTravel {
   fill: none;
   stroke: #8fe3ff;
-  stroke-width: 2.2;
+  stroke-width: 1.8;
   stroke-linecap: round;
   stroke-dasharray: 0.05 0.5;
   filter: drop-shadow(0 0 6px rgba(148, 214, 255, 0.95));
@@ -176,18 +160,14 @@
     stroke-dashoffset: -1;
   }
 }
-/* Second highlight — dimmer, violet, slower and offset so the two never
-   visually merge into one continuous bright line (which would defeat
-   "isolated moving highlights"). Reinforces the HUD-hardware feel over
-   a single decorative dash. */
 .railShapeTravel2 {
   fill: none;
   stroke: #a988ff;
-  stroke-width: 1.6;
+  stroke-width: 1.3;
   stroke-linecap: round;
   stroke-dasharray: 0.035 0.62;
   stroke-dashoffset: -0.4;
-  opacity: 0.75;
+  opacity: 0.7;
   filter: drop-shadow(0 0 5px rgba(163, 138, 255, 0.7));
   animation: railTravel2 var(--motion-idle-slow, 11s) linear infinite;
 }
@@ -196,15 +176,13 @@
     stroke-dashoffset: -1.4;
   }
 }
-/* Third highlight — reads as an occasional brighter pulse rather than a
-   third continuously-visible line: longer, slower cycle with most of
-   its travel at low opacity and a brief bright flare (via the keyframe,
-   not just position) once per loop, so the boundary occasionally
-   "flashes" brighter without adding a third permanently-lit dash. */
+/* Reads as an occasional brighter pulse rather than a third
+   continuously-visible line: most of its travel is at zero opacity with
+   one brief flare per loop. */
 .railShapeTravel3 {
   fill: none;
   stroke: #bdf0ff;
-  stroke-width: 2.6;
+  stroke-width: 2.1;
   stroke-linecap: round;
   stroke-dasharray: 0.03 0.97;
   filter: drop-shadow(0 0 7px rgba(189, 240, 255, 0.9));
@@ -228,154 +206,150 @@
   }
 }
 
+/* ---------- Decorative edge nodes ---------- */
+
 .railNode {
   position: absolute;
-  width: 7px;
-  height: 7px;
+  width: 4px;
+  height: 4px;
   border-radius: 50%;
   background: #d6efff;
-  box-shadow: 0 0 10px 2px rgba(94, 193, 255, 0.9);
-  transform: translateY(-50%);
-  z-index: 2;
+  box-shadow: 0 0 10px 2px rgba(94, 193, 255, 0.85);
+  transform: translate(-50%, -50%);
+  z-index: 3;
   pointer-events: none;
-  animation: railNodeBreathe var(--motion-breathe, 4.5s) var(--ease-organic, ease-in-out) infinite;
-  animation-delay: var(--node-delay, 0s);
+  /* BOTH animations in one declaration, and this is not cosmetic: they
+     used to live in two single-class rules (.railNode and .railNodePulse)
+     that were applied to the same element. Equal specificity meant the
+     later `animation:` SHORTHAND won every animation-* longhand — so
+     animation-name became railNodeBurst, iteration-count reset to 1 and
+     delay reset to 0s, and railNodeBreathe never ran at all. The nodes
+     fired one burst in unison on mount and then sat perfectly static,
+     with the staggered per-node durations and delays in EDGE_NODES
+     (SidebarNavigation.tsx) dead on arrival. Verified against
+     getComputedStyle: animationName was railNodeBurst alone.
+     The two animate disjoint properties — breathe drives opacity and
+     transform, burst drives box-shadow — so running them together
+     composes rather than fights. The burst is one-shot and restarts on
+     navigation because the element is remounted by its key={pathname}. */
+  animation:
+    railNodeBreathe var(--node-duration, 4s) var(--ease-organic, ease-in-out) infinite,
+    railNodeBurst 900ms var(--ease-reactive, ease-out);
+  animation-delay: var(--node-delay, 0s), 0s;
 }
 @keyframes railNodeBreathe {
   0%,
   100% {
-    opacity: 0.65;
-    transform: translateY(-50%) scale(1);
+    opacity: 0.55;
+    transform: translate(-50%, -50%) scale(0.85);
   }
   50% {
     opacity: 1;
-    transform: translateY(-50%) scale(1.25);
+    transform: translate(-50%, -50%) scale(1.1);
   }
 }
-/* One-shot brighter burst fired when the active nav item changes — the
-   spine "reacting" to navigation rather than only idling. */
-.railNodePulse {
-  animation: railNodeBurst 900ms var(--ease-reactive, ease-out);
-}
+/* One-shot brighter burst when the active destination changes — the
+   contour reacting to navigation rather than only idling. Declared in
+   .railNode's animation list above; there is deliberately no separate
+   class for it, since that separation is exactly what silently killed
+   the breathing animation. */
 @keyframes railNodeBurst {
   0% {
-    box-shadow: 0 0 10px 2px rgba(94, 193, 255, 0.9);
+    box-shadow: 0 0 10px 2px rgba(94, 193, 255, 0.85);
   }
   35% {
-    box-shadow: 0 0 22px 8px rgba(148, 214, 255, 1);
+    box-shadow: 0 0 20px 7px rgba(148, 214, 255, 1);
   }
   100% {
-    box-shadow: 0 0 10px 2px rgba(94, 193, 255, 0.9);
+    box-shadow: 0 0 10px 2px rgba(94, 193, 255, 0.85);
   }
 }
 
-/* The active destination's pill. A single element positioned from JS
-   (see `measure` in SidebarNavigation.tsx) against .rail's box rather
-   than one background per item, so changing pages slides the pill to the
-   new row instead of blinking it out here and in there.
-   It stops well short of the rail's right edge (--nav-pill-right) for
-   two reasons: it's the shape the reference uses, and it keeps the pill
-   clear of the organic boundary's pinch points, which a full-width
-   background would cross. */
+/* ---------- Active capsule ---------- */
+
+/* top/left/width/height all come from the active row's own box (see
+   `measure` in SidebarNavigation.tsx), so the capsule can't drift out of
+   alignment with the hover wash, which uses that same box via inset:0 on
+   .item::before. Transitioning the box is what makes changing pages read
+   as the capsule gliding to the new row. */
 .activePill {
   position: absolute;
-  /* top/left/width/height all come from the active row's own box (see
-     `measure` in SidebarNavigation.tsx) — the pill IS that box, so it
-     can't drift out of alignment with the hover wash, which uses the
-     same box via inset:0 on .item::before. */
-  border-radius: var(--radius-pill);
-  background: linear-gradient(
-    90deg,
-    rgba(46, 128, 255, 0.32),
-    rgba(70, 110, 235, 0.14) 62%,
-    rgba(70, 110, 235, 0) 100%
+  border-radius: 24px;
+  /* The brief's values, lifted roughly 1.5x. At the literal numbers
+     (0.25/0.12 fill, 0.15 border) the capsule was invisible against
+     this app's background, which is considerably darker and busier than
+     a flat mockup — the effect only reads once it can compete with the
+     hero artwork bleeding in behind the rail. Still well short of a
+     solid block: the hierarchy is meant to come from glow, not fill. */
+  background: radial-gradient(
+    circle at 20% 50%,
+    rgba(32, 146, 235, 0.38),
+    rgba(18, 74, 124, 0.2) 62%,
+    rgba(15, 60, 100, 0.04) 100%
   );
+  border: 1px solid rgba(80, 180, 255, 0.26);
   box-shadow:
-    inset 0 0 0 1px rgba(122, 186, 255, 0.38),
-    0 0 24px rgba(40, 120, 255, 0.3);
-  z-index: 2;
+    inset 0 0 20px rgba(24, 140, 230, 0.18),
+    0 0 22px rgba(24, 130, 255, 0.14);
+  z-index: 4;
   pointer-events: none;
   transition:
-    top var(--transition-standard),
-    height var(--transition-standard),
-    left var(--transition-standard),
-    width var(--transition-standard);
+    top var(--nav-select-transition),
+    height var(--nav-select-transition),
+    left var(--nav-select-transition),
+    width var(--nav-select-transition);
 }
-/* Collapsed there's no label for a pill to run under, and the active
-   badge's own filled circle already carries the state — a pill around a
-   lone icon just reads as a second, competing ring. */
+/* Collapsed there's no label for a capsule to run under, and the active
+   icon's own bubble already carries the state — a capsule around a lone
+   icon just reads as a second, competing ring. */
 .collapsed .activePill {
   display: none;
 }
 
 .toggle {
-  /* Left, lined up with the icon badges below — NOT flex-end. The blob's
-     boundary is at its narrowest across the rail's top (the path opens
-     from x=0 and only reaches its bulge around the first item), so a
-     right-aligned control up here sat visibly outside the glass. The
-     left column is inside the shape at every height. */
+  /* Left, lined up with the icon column — NOT flex-end. The contour is
+     at its narrowest across the rail's top, so a right-aligned control
+     up here sits outside the glass. */
   align-self: flex-start;
-  margin-left: 14px;
-  /* Was a 32px muted chevron with no surface of its own, floating in the
-     rail's top corner — easy to miss entirely, and the only way to find
-     the collapse action. Given the same faint glass ring the resting
-     icon badges wear so it reads as a control, and a real hover state. */
-  width: 34px;
-  height: 34px;
-  min-width: 34px;
+  margin-left: 6px;
+  width: 28px;
+  height: 28px;
+  min-width: 28px;
   border-radius: 50%;
   display: flex;
   align-items: center;
   justify-content: center;
-  color: var(--text-secondary);
-  background: rgba(140, 180, 225, 0.05);
-  box-shadow: inset 0 0 0 1px rgba(148, 180, 220, 0.18);
+  color: rgba(200, 215, 230, 0.5);
+  z-index: 5;
   margin-bottom: 10px;
   transition:
     color var(--transition-fast),
-    background var(--transition-fast),
-    box-shadow var(--transition-fast);
+    background var(--transition-fast);
 }
 .toggle:hover,
 .toggle:focus-visible {
-  color: var(--text-primary);
-  background: rgba(94, 193, 255, 0.14);
-  box-shadow:
-    inset 0 0 0 1px rgba(120, 200, 255, 0.42),
-    0 0 14px rgba(56, 193, 255, 0.28);
+  color: rgba(235, 245, 255, 0.92);
+  background: rgba(100, 180, 255, 0.08);
 }
 .collapsed .toggle {
   align-self: center;
   margin-left: 0;
 }
 
+/* ---------- Rows ---------- */
+
 .list {
   display: flex;
   flex-direction: column;
-  /* Third refinement pass: "increase vertical spacing between navigation
-     items" / "comfortable and premium rather than compressed" — opened
-     back up (1px -> 14px) now that the enlarged shell (see .rail above)
-     has genuine room to spare. This also does double duty on task 1
-     ("increase the height of the organic nav shape"): the SVG boundary
-     maps to .rail's own content-driven height, so a taller item list is
-     what actually makes the shape occupy more vertical space, not a
-     separate manual height override. */
-  /* 10-foot-interface pass: "increase spacing between navigation items"
-     — 14px -> 20px now that the icon badges below have grown to 56px;
-     matching the larger, more physically-present control. Now expressed
-     through the rail's shared height-responsive scale (see --nav-row-gap
-     on .rail), whose upper bound is that same 20px. */
   gap: var(--nav-row-gap);
-  /* No flex:1 — .rail is content-sized now (see .rail's comment above),
-     so there's no leftover column space for this to grow into; it would
-     be a no-op at best and confusing to read at worst. */
   flex: 0 0 auto;
-  /* Rows size to their own content instead of stretching to the rail's
-     full width. This is what lets the active pill hug each row (see
-     `measure` in SidebarNavigation.tsx): stretched rows would force one
-     pill width wide enough for the longest label, which overhangs the
-     organic boundary on the rows where the wave pulls inward. */
+  /* Rows size to their own content rather than stretching to the rail's
+     width, so the active capsule hugs each row the way the reference's
+     does instead of being one width sized for the longest label. */
   align-items: flex-start;
+  /* Above the contour and the capsule. */
+  position: relative;
+  z-index: 5;
 }
 .collapsed .list {
   align-items: center;
@@ -385,52 +359,45 @@
   position: relative;
   display: flex;
   align-items: center;
-  gap: 11px;
-  /* The vertical half is on the rail's height-responsive scale because
-     it, not min-height, is what adds to the badge to make a row (see the
-     note on --nav-row-pad); min-height is now only a floor for the
-     degenerate case of a very short window. */
-  /* Asymmetric: a longer tail after the label than before the badge, so
-     the pill reads as trailing off past the word rather than clamping
-     tight around it. */
-  padding: var(--nav-row-pad) 15px var(--nav-row-pad) 12px;
-  border-radius: var(--radius-pill);
+  /* The brief's 16-20px icon-to-text gap.
+
+     Every horizontal number in this rule is constrained by one hard
+     limit: the widest row (the active "Downloads", which alone carries
+     the trailing dot) must fit inside --nav-rail-width. AppShell's
+     .sidebar column has overflow-y:auto, and per the CSS overflow spec
+     that forces its computed overflow-x to `auto` as well — so the
+     column CLIPS at the rail's width. It was silently cutting the
+     capsule's tail and the entire indicator dot off-screen
+     (clientWidth 174 vs scrollWidth 206). The type and icon sizes below
+     are set so the row fits with room to spare; verify with
+     scrollWidth === clientWidth on the sidebar after changing any of
+     them, not by eye — the clip is invisible, it just quietly removes
+     whatever doesn't fit. */
+  gap: 16px;
+  /* Asymmetric: a longer tail after the label than before the icon, so
+     the capsule reads as trailing off past the word rather than clamping
+     tight around it. The 14px left pad puts the icon column 26px from
+     the viewport edge (--nav-pad 12 + 14), inside the brief's "content
+     should begin roughly 25-35px from the left edge". */
+  padding: var(--nav-row-pad) 10px var(--nav-row-pad) 14px;
+  border-radius: 24px;
   min-height: var(--nav-row-height);
-  /* var(--text-muted) (#6f7889) read as genuinely faded against this
-     panel's dark glass fill — nowhere near enough contrast for a primary
-     navigation surface. Bumped to a brighter cool grey-blue so resting
-     items still read clearly one tier below the active item, instead of
-     nearly disappearing into the background. */
-  color: #c7d0e0;
+  /* The brief's resting colour. Deliberately low-contrast: resting rows
+     should recede so the selected one carries the hierarchy. */
+  color: rgba(200, 215, 230, 0.55);
   transition:
     color var(--transition-fast),
     background var(--transition-fast);
 }
-/* Hover/focus wash. The reason this is a gradient and not a background
-   rectangle: .item is a plain flex row sized to the rail's rectangular
-   padding box, but the rail's real boundary is the organic wavy edge
-   drawn behind it (see .railShapeFill in the JSX), which pulls inward at
-   several heights. A solid fill sat on .item's own box regardless, so
-   wherever the wave dipped in it visibly poked out past the panel's
-   edge — which is why hover previously had NO surface treatment at all,
-   only a text-colour change that barely registers on a nav this large.
-   A gradient that's fully transparent by 62% of the row's width is
-   already gone well before the boundary's narrowest pinch (~192px of the
-   285px rail), so it reads as light pooling under the row without ever
-   having an edge to escape through. */
+/* Hover/focus wash — the same box the capsule will occupy, so hovering a
+   row previews the shape clicking it produces. Kept very faint per the
+   brief; the colour change is the primary feedback. */
 .item::before {
   content: '';
   position: absolute;
-  /* Exactly the row's box — the same box .activePill is given — so
-     hovering a row previews the shape the pill will take if you click. */
   inset: 0;
-  border-radius: var(--radius-pill);
-  background: linear-gradient(
-    90deg,
-    rgba(94, 193, 255, 0.15),
-    rgba(94, 193, 255, 0.05) 34%,
-    transparent 78%
-  );
+  border-radius: 24px;
+  background: rgba(100, 180, 255, 0.05);
   opacity: 0;
   pointer-events: none;
   transition: opacity var(--transition-fast);
@@ -440,205 +407,129 @@
   opacity: 1;
 }
 .item:hover {
-  color: var(--text-primary);
+  color: rgba(235, 245, 255, 0.92);
 }
 
 .iconWrap {
   position: relative;
   flex: 0 0 auto;
-  /* 10-foot-interface pass: "icon containers from approximately 44px to
-     56px" — the nav should read as a real physical control surface from
-     a couch, not a compact desktop menu. Now the top of the rail's
-     shared height-responsive scale (see --nav-badge on .rail) rather
-     than a fixed 56px, so a short window shrinks the badge instead of
-     pushing the last item off the bottom of the column. */
-  width: var(--nav-badge);
-  height: var(--nav-badge);
-  /* Reference pass: resting badges are rounded SQUARES with a hairline
-     outline, and only the active one is a filled circle — that contrast
-     is most of what distinguishes the active row at a glance, so the
-     radius is animated along with everything else and the square/circle
-     swap reads as the badge morphing rather than restyling. */
-  border-radius: 13px;
+  width: var(--nav-icon-box);
+  height: var(--nav-icon-box);
+  border-radius: 12px;
   display: flex;
   align-items: center;
   justify-content: center;
-  color: inherit;
-  /* Resting items had zero visual weight of their own — a bare icon
-     floating in space, with all of the rail's glow/energy reserved for
-     the one active item (see .itemActive .iconWrap below). A faint
-     glassy ring even at rest gives every control its own physical
-     presence (matching the rest of this HUD's glass-panel language)
-     instead of only the active item looking like part of the same
-     surface. Deliberately much dimmer than the active glow — this reads
-     as "idle hardware," not a second active state.
-     Strengthened (0.08/0.16 -> 0.14/0.3): at those original alphas the
-     ring was effectively invisible in the rendered app — only the active
-     item showed a badge at all, so the column read as one glowing orb
-     and six loose floating glyphs rather than a row of matching
-     controls. Still comfortably dimmer than the active treatment. */
+  color: rgba(220, 235, 250, 0.8);
   background: none;
-  box-shadow: inset 0 0 0 1px rgba(150, 186, 226, 0.24);
+  /* A hairline only — enough to give each control a physical presence
+     without becoming the bordered button the brief rules out. */
+  box-shadow: inset 0 0 0 1px rgba(150, 186, 226, 0.22);
   transition:
-    box-shadow var(--transition-standard),
-    background var(--transition-standard),
-    border-radius var(--transition-standard),
-    transform var(--transition-standard);
+    box-shadow var(--nav-select-transition),
+    background var(--nav-select-transition),
+    border-radius var(--nav-select-transition),
+    color var(--nav-select-transition);
 }
-/* Hover feedback beyond the existing text-color change — brightens the
-   same resting ring and nudges the icon forward slightly, reusing
-   .iconWrap's own transform transition rather than adding a new one.
-   Kept off .item's box (see .item:hover's own comment on why a
-   rectangular hover fill doesn't work against the organic boundary) —
-   this circular badge sits well inside the wave at every point along the
-   rail, so it doesn't have that problem.
-
-   :not(.itemActive) matters here, not just for tidiness: this selector's
-   specificity (.item + :hover/:focus-visible + .iconWrap, 3 components)
-   is already higher than plain `.itemActive .iconWrap` (2 components)
-   below, so without the exclusion, hovering or keyboard-focusing the
-   currently active nav item would win over — and downgrade — its own
-   stronger active glow (bigger scale, brighter dual-color box-shadow)
-   down to this dimmer resting-hover treatment. */
+/* :not(.itemActive) is load-bearing, not tidiness: this selector's
+   specificity (.item + :hover + .iconWrap) already exceeds plain
+   `.itemActive .iconWrap`, so without the exclusion, hovering the active
+   row would win over — and downgrade — its own bubble treatment. */
 .item:hover:not(.itemActive) .iconWrap,
 .item:focus-visible:not(.itemActive) .iconWrap {
-  background: radial-gradient(circle at 35% 30%, rgba(120, 190, 255, 0.14), transparent 72%);
+  color: rgba(245, 250, 255, 0.95);
   box-shadow:
-    inset 0 0 0 1px rgba(174, 208, 242, 0.44),
-    0 0 14px 1px rgba(94, 193, 255, 0.18);
+    inset 0 0 0 1px rgba(174, 208, 242, 0.4),
+    0 0 14px 1px rgba(94, 193, 255, 0.16);
 }
 .iconWrap svg {
-  /* Expressed as a ratio of --nav-badge so it tracks the badge
-     automatically — see the Icon call in SidebarNavigation.tsx for the
-     matching strokeWidth, which is tuned to this size.
-     Reference pass: 0.45 -> 0.5. That ratio was set against a 56px badge
-     where 45% still left a 25px glyph; at 40px it produced an 18px icon
-     that read as undersized inside its own outline. */
-  width: calc(var(--nav-badge) * 0.5);
-  height: calc(var(--nav-badge) * 0.5);
+  /* 0.58 of the box lands the glyph at the brief's 20-22px. */
+  width: calc(var(--nav-icon-box) * 0.58);
+  height: calc(var(--nav-icon-box) * 0.58);
   position: relative;
   z-index: 1;
 }
 
-/* Luminous halo ring around the active item's icon — a portal-like glow
-   rather than the flat tinted-circle-only treatment used before. Third
-   pass: widened reach (-9px -> -13px inset) and a second, larger violet
-   ring added underneath the existing cyan one — "stronger cyan/blue
-   bloom" plus "subtle purple secondary glow" as two distinct layers,
-   matching .itemActive .iconWrap's own two-color box-shadow above. */
-.iconHalo {
-  position: absolute;
-  /* 10-foot-interface pass: widened further (-13px -> -17px) to match
-     the bigger 56px badge, and both the fill and box-shadow strengthened
-     — "strengthen active Home glow" is called out explicitly this pass,
-     on top of the third pass's own increase. Expressed as a ratio of
-     --nav-badge (0.3 x 56px = the same ~17px) so the halo shrinks with
-     the badge on short windows instead of swamping it.
-
-     Reference pass: pulled in (-0.3 -> -0.22) and taken to a single blue
-     bloom. The violet second ring belonged to the old 56px orb, which
-     was carrying the active state on its own; now that a pill sits
-     behind the whole row, a two-colour halo competes with it for the
-     same job and muddies the badge's edge at this smaller size. */
-  inset: calc(var(--nav-badge) * -0.22);
-  z-index: 0;
-  border-radius: 50%;
-  background: radial-gradient(circle, rgba(56, 160, 255, 0.42), transparent 66%);
-  box-shadow: 0 0 22px 4px rgba(48, 140, 255, 0.55);
-  animation: iconHaloPulse 3.6s ease-in-out infinite;
-}
-@keyframes iconHaloPulse {
-  0%,
-  100% {
-    opacity: 0.75;
-    transform: scale(0.97);
-  }
-  50% {
-    opacity: 1;
-    transform: scale(1.05);
-  }
-}
-
 .label {
-  /* 10-foot-interface pass: "increase label size slightly" — 14.5px ->
-     16px. No opacity dimming here anymore — .item's own resting color
-     (#c7d0e0) already carries the muted/active hierarchy, so stacking an
-     extra 0.82 opacity on top of it just compounded the low-contrast
-     "faded menu" look. Active vs. resting is now purely a color change
-     (see .itemActive below), not color-times-opacity. */
-  /* Reference pass: the nav labels are set like the app's own section
-     headings — display face, uppercase, tracked out, small — rather than
-     as 16px sentence-case body text. Same recipe as .heading in
-     MoodBrowser.module.css, so the rail now speaks the interface's
-     existing typographic language instead of its own. */
+  /* Display face, uppercase, tracked — the same recipe as the app's own
+     section headings, so the rail speaks the interface's existing
+     typographic language.
+     NO text-shadow on resting labels: an outline around the text was
+     called out explicitly as wrong. The only text glow in this component
+     is the active row's, below, and that is a bloom rather than an
+     outline. */
   font-family: var(--font-display);
-  /* 12.5/1.05 rather than 13/1.3: the longest label ("Downloads") sets
-     how wide the active pill has to be, and at the larger setting that
-     pill overhung the organic boundary on its own row by a few pixels —
-     measured, not estimated. Trimming half a point and a quarter of the
-     tracking buys ~7px there and is imperceptible on the labels
-     themselves. */
-  font-size: 12.5px;
+  font-size: var(--nav-label-size);
   font-weight: 600;
-  letter-spacing: 1.05px;
+  letter-spacing: var(--nav-label-track);
   text-transform: uppercase;
   white-space: nowrap;
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  /* Keeps the text above .item::before's hover wash — both are z-index
-     auto, so tree order decides and the pseudo-element comes first. */
   position: relative;
-  /* The panel behind these labels is deliberately translucent, so what's
-     underneath them changes with the page — over the hero's bright
-     artwork the resting colour alone was washing out. A tight dark
-     shadow costs nothing on the dark glass and holds the text together
-     over anything brighter. */
-  text-shadow: 0 1px 3px rgba(0, 6, 16, 0.65);
 }
 .collapsed .label {
   display: none;
 }
 
+/* The pin-point indicator at the far right of the selected row, which is
+   what visually ties the row to the luminous contour. Its own element
+   (not a child of .label) so this gap is independent of the text's
+   layout. */
 .dot {
-  /* Third refinement pass: a clearer active indicator — 5px -> 7px with
-     a wider glow spread, so it reads as a deliberate status light next
-     to the label rather than a small tick mark. 10-foot-interface pass:
-     one more step (7px -> 8px) to keep pace with the larger label text
-     next to it.
-
-     Reference pass: back down to 6px alongside the smaller 13px label —
-     it trails the word as a status light, so it should read as smaller
-     than the type it follows, not the same size. */
-  width: 6px;
-  height: 6px;
+  width: 5px;
+  height: 5px;
+  min-width: 5px;
   border-radius: 50%;
-  background: var(--accent-cyan);
-  box-shadow: 0 0 10px 1.5px var(--accent-cyan);
+  /* No margin of its own — .item is a flex row, so the row's `gap`
+     already separates the dot from the label. Setting both stacked two
+     spacings on top of each other and made the widest row overrun the
+     rail (and the column silently clips past that width). */
+  background: #53d8ff;
+  box-shadow:
+    0 0 5px #53d8ff,
+    0 0 10px rgba(83, 216, 255, 0.6);
 }
+.collapsed .dot {
+  display: none;
+}
+
+/* ---------- Selected row ---------- */
 
 .itemActive {
-  color: var(--text-primary);
+  color: #eaf4ff;
 }
-/* Active vs. resting was carried by colour alone, which the translucent
-   panel keeps undercutting depending on what's behind it — weight is the
-   one hierarchy cue the backdrop can't wash out. */
+/* "The glow behind the text of the current menu item" — a bloom around
+   the glyphs, not an outline hugging them, which is why the offsets are
+   zero and the blur radii are large. */
 .itemActive .label {
-  font-weight: 600;
+  color: #eaf4ff;
+  text-shadow:
+    0 0 10px rgba(90, 190, 255, 0.55),
+    0 0 22px rgba(60, 150, 255, 0.32);
 }
+
+/* The crystal bubble: a clear glass sphere with light passing through
+   it, picking up a blue highlight at the top-right and refracting to a
+   warm orange at the bottom-left.
+   The two offset INSET shadows are what produce that — an inset shadow
+   offset up-and-left is drawn against the bottom-right inner wall and
+   vice versa, so `inset -5px 5px` lights the top-right rim and
+   `inset 5px -5px` lights the bottom-left. The background stays nearly
+   clear (that's the "crystal clear" part); the rim carries the colour. */
 .itemActive .iconWrap {
-  /* The one badge that's a circle (see .iconWrap's radius comment). */
   border-radius: 50%;
-  background: linear-gradient(140deg, rgba(46, 150, 255, 0.95), rgba(56, 96, 230, 0.85));
-  /* No scale-up any more: the badge used to be the ONLY marker of the
-     active row, so it grew to earn the attention. With the pill behind
-     the row doing that job, a badge that also changes size makes the row
-     appear to jump as the pill slides in under it — the fill and the
-     square-to-circle morph carry it. */
+  background:
+    radial-gradient(circle at 68% 22%, rgba(212, 243, 255, 0.42), rgba(212, 243, 255, 0) 44%),
+    radial-gradient(circle at 26% 80%, rgba(255, 146, 52, 0.34), rgba(255, 146, 52, 0) 52%),
+    /* Barely-there interior — the "crystal clear" part. An earlier,
+       heavier version of this stop was what made the bubble read as a
+       grey disc with tinted edges instead of as clear glass. */
+    radial-gradient(circle at 50% 50%, rgba(14, 38, 66, 0.14), rgba(10, 24, 44, 0) 76%);
   box-shadow:
-    0 0 0 1.5px rgba(120, 195, 255, 0.65),
-    0 0 20px rgba(50, 150, 255, 0.65);
-  color: #fff;
+    inset -6px 6px 13px rgba(140, 215, 255, 0.44),
+    inset 6px -6px 13px rgba(255, 150, 58, 0.42),
+    inset 0 0 0 1px rgba(185, 225, 255, 0.34),
+    0 0 18px rgba(64, 168, 255, 0.3),
+    0 3px 22px rgba(255, 130, 46, 0.16);
+  color: #eaf8ff;
 }
 
 .tooltip {
@@ -662,17 +553,41 @@
   opacity: 1;
 }
 
-/* Mobile: bottom nav bar, per spec section 16.
+/* Compact desktop: the brief's 1200-1599px band. Same design, less of
+   it — the rail narrows and the type and spacing come in with it, so the
+   widest row still clears the column's horizontal clip (see the note on
+   .item's `gap`).
+
+   Position matters: this block sits AFTER the base .rail/.item rules on
+   purpose. A media query adds no specificity, so when it lived near the
+   top of the file its `.item` declarations lost to the base `.item` rule
+   further down and the compact gap/padding silently never applied —
+   which is what pushed the widest row 5px past the rail here. It must
+   also stay BEFORE the mobile block below, since 767px also satisfies
+   this query and the bottom bar has to win. */
+@media (max-width: 1599px) {
+  .rail {
+    width: 144px;
+    --nav-pad: 10px;
+    --nav-icon-box: clamp(28px, 3.2vh, 30px);
+    --nav-label-size: 9.5px;
+    --nav-label-track: 0.4px;
+  }
+  .item {
+    gap: 12px;
+    padding: var(--nav-row-pad) 8px var(--nav-row-pad) 12px;
+  }
+}
+
+/* ---------- Mobile: bottom bar (spec section 16) ----------
    Selectors here also target `.rail.collapsed` / `.collapsed .label`
    explicitly and repeat every property those rules set — a plain
    `.rail`/`.label` selector inside this media query has LOWER
    specificity than the unconditional `.rail.collapsed` /
-   `.collapsed .label` rules above, so without this the desktop/tablet
-   auto-collapse state (which the resize-driven JS still applies below
-   1200px) would win and squash the bottom bar down to an 84px icon
-   nub with hidden labels regardless of source order. Mobile always
-   renders the full bottom bar; the collapse toggle is hidden here and
-   irrelevant to this layout. */
+   `.collapsed .label` rules above, so without this the desktop
+   auto-collapse state (which the JS still applies below 1200px) would
+   win and squash the bottom bar into an icon nub with hidden labels
+   regardless of source order. */
 @media (max-width: 767px) {
   .rail,
   .rail.collapsed {
@@ -683,19 +598,22 @@
     justify-content: space-between;
     padding: 8px 10px;
     padding-bottom: max(8px, env(safe-area-inset-bottom));
-    border-right: none;
     border-top: 1px solid var(--border-subtle);
-    clip-path: none;
+    /* The desktop rail's faded glass surface is art-directed for a tall
+       left-edge panel; across a wide short bar it'd read as an arbitrary
+       gradient, so the bar takes a plain flat surface instead. */
+    background: var(--panel-strong);
+  }
+  .rail::before {
+    display: none;
   }
   .toggle {
     display: none;
   }
-  /* The organic blob shape is art-directed for a tall vertical rail —
-     at the wide-short bottom-bar shape it would just be a horizontal
-     smear, so it's hidden in favor of the plain top border above. The
-     sliding active pill is sized to a vertical rail's rows and has
-     nothing to slide along here; the bar's own active item styling
-     covers it. */
+  /* The contour and its nodes are art-directed for a tall vertical rail
+     — at the bottom bar's shape they'd just be a horizontal smear. The
+     sliding capsule is sized to a vertical rail's rows and has nothing
+     to slide along here; the bar's own active styling covers it. */
   .railShape,
   .railNode,
   .activePill {
@@ -703,23 +621,19 @@
   }
   .list {
     flex-direction: row;
-    /* Undo the desktop rail's content-width rows — the bottom bar's
-       columns must stretch to share the width (see .list > li below). */
+    /* Undo the desktop rail's content-width rows — the bar's columns
+       must stretch to share the width (see .list > li below). */
     align-items: stretch;
-    /* Exactly 5 primary items + More (spec section 8) — fits without
-       horizontal scrolling, unlike the old all-9-items row. */
     justify-content: space-around;
     width: 100%;
     gap: 2px;
     position: relative;
   }
   /* Equal, shrinkable columns. Without this the row's width was the sum
-     of six intrinsic item widths — each holding a full-size desktop icon
-     badge — which came to more than a phone viewport, so the "More"
-     button was pushed off the right edge and clipped away by .shell's
-     overflow:hidden (verified at 400px wide: only a sliver of it was on
-     screen). flex-basis:0 makes the six share whatever width there is
-     instead of demanding their content width. */
+     of six intrinsic item widths, which exceeded a phone viewport, so
+     the "More" button was pushed off the right edge and clipped away by
+     .shell's overflow:hidden (verified at 400px wide). flex-basis:0
+     makes the six share whatever width there is. */
   .list > li {
     flex: 1 1 0;
     min-width: 0;
@@ -730,14 +644,10 @@
   }
   .item,
   .moreButton,
-  /* Same reason as `.rail.collapsed` and `.collapsed .label` above:
-     `.collapsed .item` (added for the desktop icon-rail fit — see that
-     rule) is two classes (0,2,0) vs. plain `.item` here (0,1,0), so
-     without restating it explicitly this would win over the bottom bar's
-     own column layout on mobile, since `collapsed` is still true here
-     (same <1100px effect that drives the desktop rail also fires below
-     768px — only `isMobile`, a separate check, decides which JSX/layout
-     actually renders). */
+  /* Same specificity reason as `.rail.collapsed` above: `.collapsed
+     .item` is two classes vs. plain `.item` here, and `collapsed` is
+     still true at this width (the <1200px effect also fires below 768;
+     only `isMobile`, a separate check, decides which layout renders). */
   .collapsed .item {
     flex-direction: column;
     gap: 3px;
@@ -754,9 +664,9 @@
   .item::before {
     display: none;
   }
-  /* The bar has to fit six columns across a phone, so the badge drops to
-     a touch-sized 40px here rather than inheriting the 10-foot rail's
-     --nav-badge (which is what overflowed the row). */
+  /* The bar has to fit six columns across a phone, so the icon box drops
+     to a touch-sized 40px here rather than inheriting the rail's
+     --nav-icon-box. */
   .iconWrap {
     width: 40px;
     height: 40px;
@@ -765,22 +675,20 @@
     width: 20px;
     height: 20px;
   }
-  .iconHalo {
-    inset: -7px;
-  }
-  .itemActive .iconWrap {
-    transform: none;
-  }
   .label,
   .collapsed .label {
     display: block;
-    /* 9.5px was below the point where the labels are actually readable
-       on a phone; 11px still fits six columns at 360px. */
+    /* 9.5px was below the point where these are readable on a phone;
+       11px still fits six columns at 320px. */
     font-size: 11px;
-    text-shadow: none;
+    letter-spacing: 0.3px;
     max-width: 100%;
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+  .dot,
+  .collapsed .dot {
+    display: none;
   }
   .tooltip {
     display: none;
@@ -827,7 +735,7 @@
 }
 
 /* Hide the More sheet/button entirely above mobile — it's a mobile-only
-   concept, the full item list renders on tablet/desktop instead. */
+   concept; the full item list renders on tablet/desktop instead. */
 @media (min-width: 768px) {
   .moreWrap {
     display: none;

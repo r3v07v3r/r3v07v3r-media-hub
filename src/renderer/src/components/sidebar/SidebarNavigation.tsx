@@ -11,6 +11,45 @@ import styles from './SidebarNavigation.module.css'
 // sheet.
 const MOBILE_PRIMARY_IDS = ['home', 'movies', 'tv', 'anime', 'mystuff']
 
+// The luminous contour, in the SVG's own 245x1000 space. Written once and
+// reused by every layer that traces it (the static edge plus the three
+// travelling highlights) — it previously existed as eight hand-copied
+// duplicates of the same `d` string, which is exactly the kind of thing
+// that drifts the moment one of them is edited.
+//
+// Shape, per the design brief: enters from the viewport edge at the top
+// and curves outward, reaches its widest through the upper-middle, draws
+// back in around the middle, swells slightly again lower down, then
+// sweeps back toward the viewport edge at the bottom. Deliberately not
+// symmetrical — it should read as organic rather than as a rounded
+// rectangle.
+//
+// Note what this path is NOT: it is not a container. Menu rows are free
+// to overlap it, and on the lower items they do (the reference design
+// does the same — its "Downloads" label sits well outside the curve).
+// That's why the panel's own fill is a soft CSS wash on .rail::before
+// that fades out rather than a shape clipped to this path: with no edge
+// there is nothing for a label or the active capsule to visibly cross,
+// which is what previously forced the rail wide and the curve flat.
+const RAIL_EDGE_PATH =
+  'M0,0 C46,8 112,30 146,66 C182,106 212,142 224,196 C236,252 238,300 228,346 ' +
+  'C218,392 200,418 194,458 C188,500 200,532 206,572 C212,614 206,650 192,690 ' +
+  'C178,730 156,772 128,818 C98,868 54,932 0,1000'
+
+// Decorative points riding the contour — not menu items. `left` is a
+// percentage of the rail's width, which lands them on the curve at ANY
+// rail width: preserveAspectRatio="none" decouples only the VERTICAL
+// axis from the viewBox, so horizontally x_px is exactly
+// (x_viewBox / 245) x railWidth and a percentage tracks it precisely.
+// These were absolute px until they had to be re-tuned by hand on every
+// width change, which is what kept stranding them off the curve.
+// Durations are deliberately unequal so the three never pulse in unison.
+const EDGE_NODES = [
+  { top: '26%', left: '95.5%', delay: '0s', duration: '3.4s' },
+  { top: '47%', left: '79.5%', delay: '1.1s', duration: '4.6s' },
+  { top: '70%', left: '77.5%', delay: '2.2s', duration: '4s' }
+]
+
 const COLLAPSE_STORAGE_KEY = 'r3.nav.collapsed'
 
 // localStorage throws (not returns null) in a few real contexts — a
@@ -40,7 +79,7 @@ export function SidebarNavigation() {
   // flag: absent means the width-driven auto-collapse below still owns
   // the state, present means their choice wins until they change it.
   const [collapsed, setCollapsed] = useState(
-    () => readStoredCollapsed() ?? (typeof window !== 'undefined' && window.innerWidth < 1100)
+    () => readStoredCollapsed() ?? (typeof window !== 'undefined' && window.innerWidth < 1200)
   )
   const [userOverride, setUserOverride] = useState(() => readStoredCollapsed() !== null)
   const [isMobile, setIsMobile] = useState(
@@ -59,15 +98,18 @@ export function SidebarNavigation() {
   // One matchMedia-driven effect for both breakpoints instead of two
   // separate resize listeners recomputing on every pixel of a window
   // drag: the queries only fire when a boundary is actually crossed.
-  //   <1100px  — auto-collapse to an icon rail (spec section 16's
-  //              "Compact desktop 1100-1439 / Tablet 768-1099" boundary),
-  //              unless the person has explicitly toggled it.
+  //   <1200px  — auto-collapse to an icon-only rail, unless the person
+  //              has explicitly toggled it. (The brief puts the collapse
+  //              here rather than at the old 1100px: between 1200 and
+  //              1599 the expanded rail is already running at its
+  //              narrower compact width, and below 1200 there isn't room
+  //              for labels at a size worth reading.)
   //   <768px   — the rail stops being a rail at all and becomes a fixed
   //              bottom bar with a trimmed item set (MOBILE_PRIMARY_IDS),
   //              which is why this is tracked separately from `collapsed`
   //              rather than treated as "even narrower" (spec section 8/9).
   useEffect(() => {
-    const compact = window.matchMedia('(max-width: 1099px)')
+    const compact = window.matchMedia('(max-width: 1199px)')
     const mobile = window.matchMedia('(max-width: 767px)')
     function sync() {
       setIsMobile(mobile.matches)
@@ -118,14 +160,15 @@ export function SidebarNavigation() {
   //     tracks the width *during* the collapse transition rather than
   //     snapping to the end value. Zero on mobile: the rail is a bottom
   //     bar there, so there's no left column to bleed under.
-  //  2. The active pill's position — a single element that slides
-  //     between items, so switching pages reads as one continuous
+  //  2. The active capsule's position — a single element that slides
+  //     between rows, so switching pages reads as one continuous
   //     movement instead of a highlight blinking out here and in there.
   //     offsetTop is relative to .rail (the nearest positioned ancestor).
   const measure = useCallback(() => {
     const nav = navRef.current
     if (!nav) return
-    const width = isMobile ? 0 : Math.round(nav.getBoundingClientRect().width)
+    const navBox = nav.getBoundingClientRect()
+    const width = isMobile ? 0 : Math.round(navBox.width)
     document.documentElement.style.setProperty('--nav-rail-width', `${width}px`)
 
     const activeLink = nav.querySelector<HTMLElement>('a[data-nav-item][aria-current="page"]')
@@ -134,18 +177,26 @@ export function SidebarNavigation() {
       setIndicator((prev) => (prev === null ? prev : null))
       return
     }
-    // The pill is exactly the row's own box — which is why .list lays its
-    // rows out at their content width (align-items: flex-start) rather
-    // than stretching them: a fixed-width pill has to be wide enough for
-    // "Downloads", and at that width it overhung the organic boundary on
-    // the rows where the wave pulls inward. Hugging each row means the
-    // pill is only ever as wide as that row actually needs, and it stays
-    // inside the shape everywhere.
+    // The capsule is exactly the active row's own box — which is why
+    // .list lays its rows out at their content width rather than
+    // stretching them, so the capsule hugs each row the way the
+    // reference's does rather than being one width sized for the longest
+    // label.
+    //
+    // Measured as a delta of two bounding rects, NOT via offsetTop /
+    // offsetLeft. Those are relative to the nearest POSITIONED ancestor,
+    // so the moment .list gained `position: relative` (it needs it to sit
+    // above the contour's z-index) every row's offset started being
+    // measured from the list rather than from .rail — which the capsule
+    // is positioned against. The first row's offsets are 0,0 in that
+    // frame, so the capsule parked itself in the rail's top-left corner.
+    // Rect deltas don't care which ancestor happens to be positioned.
+    const rowBox = row.getBoundingClientRect()
     const next = {
-      top: row.offsetTop,
-      height: row.offsetHeight,
-      left: row.offsetLeft,
-      width: row.offsetWidth
+      top: rowBox.top - navBox.top,
+      height: rowBox.height,
+      left: rowBox.left - navBox.left,
+      width: rowBox.width
     }
     setIndicator((prev) =>
       prev &&
@@ -163,14 +214,38 @@ export function SidebarNavigation() {
   }, [measure, pathname, collapsed])
 
   // Covers everything a layout effect on [pathname, collapsed] can't see:
-  // the width transition mid-flight, font loading reflowing labels, and
-  // the vh-driven sizing in the stylesheet responding to a window resize.
+  // the width transition mid-flight, the vh-driven sizing in the
+  // stylesheet responding to a window resize, and labels reflowing.
+  //
+  // The ROWS have to be observed, not just the rail. The rail's width is
+  // a fixed value in CSS, so observing it alone never fires when a row's
+  // own content changes size — and one such change happens on every cold
+  // load: the labels are measured in a fallback face, then Rajdhani
+  // finishes loading and every label reflows narrower. The capsule kept
+  // the wider pre-font measurement and ended up 12px wider than its row,
+  // which AppShell's sidebar column then clipped (that column computes
+  // overflow-x: auto, so anything past the rail's width is silently cut).
   useEffect(() => {
     const nav = navRef.current
     if (!nav) return
     const observer = new ResizeObserver(() => measure())
     observer.observe(nav)
+    nav.querySelectorAll('li').forEach((row) => observer.observe(row))
     return () => observer.disconnect()
+  }, [measure, pathname, collapsed, isMobile])
+
+  // Belt and braces for the same font-load reflow: ResizeObserver covers
+  // it, but this fires once the faces are actually ready regardless of
+  // whether the row's box changed by a full device pixel.
+  useEffect(() => {
+    if (!document.fonts?.ready) return
+    let cancelled = false
+    document.fonts.ready.then(() => {
+      if (!cancelled) measure()
+    })
+    return () => {
+      cancelled = true
+    }
   }, [measure])
 
   // Closing the More sheet on route change keeps it from staying open
@@ -230,22 +305,10 @@ export function SidebarNavigation() {
       className={`${styles.rail} ${collapsed ? styles.collapsed : ''}`}
       aria-label="Main navigation"
     >
-      {/* Organic panel shape — reference target: a real SVG blob with a
-          convex/concave right boundary (bulging out to ~230px around
-          Home, drawing back in between items), not a clipped rectangle
-          with a decorative line on top. viewBox 0-245 x / 0-1000 y with
-          preserveAspectRatio="none" lets the same normalized wave map
-          onto the rail's actual full-height pixel box — narrowed from the
-          original 260 (a ~6% proportional zoom, not a path edit) so every
-          point along the curve sits further right in real pixels, giving
-          the item column more breathing room where the wave dips inward
-          without reshaping it. Three passes over the identical boundary
-          curve: a filled region (the panel body itself — x=0/top/bottom
-          are the screen's own straight edges, only the right side is
-          organic) sitting behind everything, a dim static stroke tracing
-          just that wavy boundary, and a bright short-dash stroke
-          animating along it — "mostly a dim edge with isolated moving
-          cyan energy highlights," not a uniform glowing border. */}
+      {/* Only the luminous contour lives in the SVG now. The panel body
+          itself is a CSS wash on .rail (see its background/mask) rather
+          than a filled path, so the glass fades out instead of ending at
+          a hard edge — see RAIL_EDGE_PATH's comment for why that matters. */}
       <svg
         className={styles.railShape}
         viewBox="0 0 245 1000"
@@ -253,147 +316,80 @@ export function SidebarNavigation() {
         aria-hidden="true"
       >
         <defs>
-          <linearGradient id="railFillGrad" x1="0" y1="0" x2="1" y2="0">
-            {/* Third refinement pass: "more visible internal darkness" —
-                both stops deepened (0.7 -> 0.8, 0.42 -> 0.52) so the
-                shell's body reads as genuinely dense glass/hardware
-                rather than a light tint, especially now that it's
-                physically bigger and has more area to read as flat if
-                left too translucent. 10-foot-interface pass: nudged once
-                more (0.8 -> 0.86, 0.52 -> 0.58) — "strengthen glass shell
-                visibility." */}
-            {/* Reference pass: pulled back down (0.86/0.58 -> 0.5/0.2).
-                The shell there is barely more than a tint over the page
-                with a bright line drawn on it, and the dense fill was
-                what made a label or pill crossing the boundary look
-                broken — with the fill this light there's no hard panel
-                edge for anything to visibly cross. The edge stroke
-                (.railShapeEdge) was brightened to take over defining the
-                silhouette. */}
-            <stop offset="0%" stopColor="#0a1220" stopOpacity="0.5" />
-            <stop offset="65%" stopColor="#050a14" stopOpacity="0.2" />
-            <stop offset="100%" stopColor="#050a14" stopOpacity="0" />
-          </linearGradient>
-          {/* Third pass: faint pooled glow near the item column — see
-              .railShapeInnerGlow (SidebarNavigation.module.css) for the
-              breathing animation. Off-center toward the icons (not a
-              plain centered radial) so it reads as light the controls
-              themselves are casting, not a generic panel backlight. */}
-          <radialGradient id="railInnerGlowGrad" cx="26%" cy="52%" r="60%">
-            <stop offset="0%" stopColor="#5ec8ff" stopOpacity="0.22" />
-            <stop offset="55%" stopColor="#5ec8ff" stopOpacity="0.07" />
-            <stop offset="100%" stopColor="#5ec8ff" stopOpacity="0" />
-          </radialGradient>
-          {/* Premium HUD finish, not a flat web-sidebar panel: a soft
-              diagonal sheen near the top-left (glass "internal
-              reflection") and a matching dark pool along the bottom-right
-              (an "inner shadow" read, since a literal inset box-shadow
-              can't follow this organic boundary). Both painted with the
-              same closed blob path as railShapeFill, just with a
-              different gradient on top. */}
-          {/* Third pass: nudged toward a more distinctly blue tint
-              (#dff2ff -> #bfe6ff) and a touch brighter — "subtle blue
-              reflection" called out explicitly this pass, vs. the
-              previous near-white sheen.
-              10-foot-interface pass: "strengthen inner reflection" — the
-              sheen was reading as a faint hint at TV distance. Brightened
-              the peak stop and pushed the falloff further down the shell
-              (22%/55% -> 30%/62%) so the reflection reads as a real glass
-              highlight band rather than a thin edge glow. */}
-          <linearGradient id="railGlassSheen" x1="0" y1="0" x2="0.7" y2="1">
-            <stop offset="0%" stopColor="#bfe6ff" stopOpacity="0.32" />
-            <stop offset="30%" stopColor="#bfe6ff" stopOpacity="0.1" />
-            <stop offset="62%" stopColor="#bfe6ff" stopOpacity="0" />
-          </linearGradient>
-          <linearGradient id="railInnerShadow" x1="0" y1="1" x2="0.4" y2="0.3">
-            <stop offset="0%" stopColor="#000000" stopOpacity="0.38" />
-            <stop offset="45%" stopColor="#000000" stopOpacity="0.12" />
-            <stop offset="80%" stopColor="#000000" stopOpacity="0" />
+          {/* The contour must not be uniformly bright, and it must taper
+              out rather than stopping dead at the top and bottom of the
+              rail — "the flowing curve of light round the menu tapering
+              off smoothly." A gradient down the stroke does both: zero
+              opacity at both ends, with the peaks placed at the top
+              bend, the widest point and the lower swell. */}
+          <linearGradient id="railEdgeGrad" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="#6ed2ff" stopOpacity="0" />
+            <stop offset="7%" stopColor="#8fddff" stopOpacity="0.42" />
+            <stop offset="18%" stopColor="#a6e6ff" stopOpacity="0.92" />
+            <stop offset="30%" stopColor="#7fd4ff" stopOpacity="0.7" />
+            <stop offset="45%" stopColor="#5fb8ff" stopOpacity="0.36" />
+            <stop offset="58%" stopColor="#8ec8ff" stopOpacity="0.62" />
+            <stop offset="70%" stopColor="#9d9cff" stopOpacity="0.5" />
+            <stop offset="84%" stopColor="#6ed2ff" stopOpacity="0.3" />
+            <stop offset="94%" stopColor="#6ed2ff" stopOpacity="0.1" />
+            <stop offset="100%" stopColor="#6ed2ff" stopOpacity="0" />
           </linearGradient>
         </defs>
         <path
-          className={styles.railShapeFill}
-          d="M0,0 C60,0 148,22 172,62 C202,110 230,142 230,190 C230,238 210,256 204,288 C198,318 202,358 208,394 C214,430 219,460 209,495 C201,524 202,556 208,590 C214,620 219,650 209,686 C201,716 202,746 207,776 C213,810 220,850 210,894 C200,930 154,962 94,982 C50,995 20,1000 0,1000 Z"
-          fill="url(#railFillGrad)"
-        />
-        <path
-          className={styles.railShapeShadow}
-          d="M0,0 C60,0 148,22 172,62 C202,110 230,142 230,190 C230,238 210,256 204,288 C198,318 202,358 208,394 C214,430 219,460 209,495 C201,524 202,556 208,590 C214,620 219,650 209,686 C201,716 202,746 207,776 C213,810 220,850 210,894 C200,930 154,962 94,982 C50,995 20,1000 0,1000 Z"
-          fill="url(#railInnerShadow)"
-        />
-        <path
-          className={styles.railShapeSheen}
-          d="M0,0 C60,0 148,22 172,62 C202,110 230,142 230,190 C230,238 210,256 204,288 C198,318 202,358 208,394 C214,430 219,460 209,495 C201,524 202,556 208,590 C214,620 219,650 209,686 C201,716 202,746 207,776 C213,810 220,850 210,894 C200,930 154,962 94,982 C50,995 20,1000 0,1000 Z"
-          fill="url(#railGlassSheen)"
-        />
-        <path
-          className={styles.railShapeInnerGlow}
-          d="M0,0 C60,0 148,22 172,62 C202,110 230,142 230,190 C230,238 210,256 204,288 C198,318 202,358 208,394 C214,430 219,460 209,495 C201,524 202,556 208,590 C214,620 219,650 209,686 C201,716 202,746 207,776 C213,810 220,850 210,894 C200,930 154,962 94,982 C50,995 20,1000 0,1000 Z"
-          fill="url(#railInnerGlowGrad)"
-        />
-        <path
           className={styles.railShapeEdge}
-          d="M0,0 C60,0 148,22 172,62 C202,110 230,142 230,190 C230,238 210,256 204,288 C198,318 202,358 208,394 C214,430 219,460 209,495 C201,524 202,556 208,590 C214,620 219,650 209,686 C201,716 202,746 207,776 C213,810 220,850 210,894 C200,930 154,962 94,982 C50,995 20,1000 0,1000"
+          d={RAIL_EDGE_PATH}
           vectorEffect="non-scaling-stroke"
         />
+        {/* Short bright segments travelling the contour — "isolated
+            moving energy highlights," not a fully-lit outline. A short
+            dash riding a slow dashoffset loop. */}
         <path
           className={styles.railShapeTravel}
-          d="M0,0 C60,0 148,22 172,62 C202,110 230,142 230,190 C230,238 210,256 204,288 C198,318 202,358 208,394 C214,430 219,460 209,495 C201,524 202,556 208,590 C214,620 219,650 209,686 C201,716 202,746 207,776 C213,810 220,850 210,894 C200,930 154,962 94,982 C50,995 20,1000 0,1000"
+          d={RAIL_EDGE_PATH}
           pathLength={1}
           vectorEffect="non-scaling-stroke"
         />
-        {/* A second, dimmer, violet-tinted highlight travelling the same
-            boundary at a different offset/speed — "occasional travelling
-            energy highlights" (plural), not just one lone cyan dash. */}
+        {/* A second, dimmer, violet-tinted highlight at a different
+            offset and speed so the two never merge into one continuous
+            bright line. */}
         <path
           className={styles.railShapeTravel2}
-          d="M0,0 C60,0 148,22 172,62 C202,110 230,142 230,190 C230,238 210,256 204,288 C198,318 202,358 208,394 C214,430 219,460 209,495 C201,524 202,556 208,590 C214,620 219,650 209,686 C201,716 202,746 207,776 C213,810 220,850 210,894 C200,930 154,962 94,982 C50,995 20,1000 0,1000"
+          d={RAIL_EDGE_PATH}
           pathLength={1}
           vectorEffect="non-scaling-stroke"
         />
-        {/* Third highlight — a slower, occasional brighter flare rather
-            than a third always-visible dash (see .railShapeTravel3's
-            keyframe: mostly transparent, one brief bright pulse per
-            loop). "Add occasional brighter travelling highlights." */}
+        {/* Third: an occasional brighter flare rather than a third
+            always-visible dash — mostly transparent, with one brief
+            bright pulse per loop. */}
         <path
           className={styles.railShapeTravel3}
-          d="M0,0 C60,0 148,22 172,62 C202,110 230,142 230,190 C230,238 210,256 204,288 C198,318 202,358 208,394 C214,430 219,460 209,495 C201,524 202,556 208,590 C214,620 219,650 209,686 C201,716 202,746 207,776 C213,810 220,850 210,894 C200,930 154,962 94,982 C50,995 20,1000 0,1000"
+          d={RAIL_EDGE_PATH}
           pathLength={1}
           vectorEffect="non-scaling-stroke"
         />
       </svg>
-      {/* key={pathname} replays the breathe + one-shot burst keyframes on
-          every route change — "the spine reacting when the active nav
-          item changes" (motion spec section 4) without a full custom
-          point-along-path animation. Positioned near the boundary's x at
-          each node's approximate height rather than a fixed right:-3px,
-          since the boundary is now a wave, not a straight edge. */}
-      {/* `left` is a percentage of the rail's width, which lands these on
-          the boundary at ANY rail width. preserveAspectRatio="none" does
-          make the SVG stretch non-uniformly, but only the VERTICAL axis
-          is decoupled from the viewBox — horizontally x_px is exactly
-          (x_viewBox / 245) x railWidth, so a percentage tracks the curve
-          precisely. These were previously absolute px, re-tuned by hand
-          on every width change (220 -> 285 -> 230), which is what kept
-          leaving them stranded off the curve; 78.2% / 81.1% are the same
-          two points the 285px-era values described. */}
-      <span
-        key={`node-a-${pathname}`}
-        className={`${styles.railNode} ${styles.railNodePulse}`}
-        style={{ top: '19%', left: '78.2%', ['--node-delay' as string]: '0s' }}
-        aria-hidden="true"
-      />
-      <span
-        key={`node-b-${pathname}`}
-        className={`${styles.railNode} ${styles.railNodePulse}`}
-        style={{ top: '59%', left: '81.1%', ['--node-delay' as string]: '0.6s' }}
-        aria-hidden="true"
-      />
 
-      {/* Which destination you're on, stated by a lit pill behind the row
-          rather than only by the icon's glow. One element whose top and
-          height transition, so moving between pages reads as the pill
-          travelling down the rail. */}
+      {/* key={pathname} replays the one-shot burst keyframe on every
+          route change — the contour reacting when the active destination
+          changes (motion spec section 4). */}
+      {EDGE_NODES.map((node, i) => (
+        <span
+          key={`node-${i}-${pathname}`}
+          className={styles.railNode}
+          style={{
+            top: node.top,
+            left: node.left,
+            ['--node-delay' as string]: node.delay,
+            ['--node-duration' as string]: node.duration
+          }}
+          aria-hidden="true"
+        />
+      ))}
+
+      {/* Which destination you're on, stated by a glowing capsule behind
+          the row. One element whose box transitions, so moving between
+          pages reads as the capsule gliding down the rail rather than
+          disappearing and reappearing. */}
       {indicator && (
         <span
           className={styles.activePill}
@@ -422,7 +418,7 @@ export function SidebarNavigation() {
         title={`${collapsed ? 'Expand' : 'Collapse'} navigation (Ctrl+B)`}
         aria-expanded={!collapsed}
       >
-        <Icon name={collapsed ? 'chevron' : 'chevron-left'} size={16} />
+        <Icon name={collapsed ? 'chevron' : 'chevron-left'} size={14} />
       </button>
       <ul className={styles.list} ref={listRef} onKeyDown={handleKeyDown}>
         {primaryItems.map((item, index) => {
@@ -438,16 +434,17 @@ export function SidebarNavigation() {
                 aria-label={collapsed && !isMobile ? item.label : undefined}
               >
                 <span className={styles.iconWrap}>
-                  {active && <span className={styles.iconHalo} aria-hidden="true" />}
-                  {/* 2.1 was tuned to keep the glyph from looking thin inside a
-                      56px badge; at the reference's ~40px badge that same weight
-                      reads as heavy and closes up the icons' interiors. */}
+                  {/* Thin-line glyphs, per the brief — the weight is tuned
+                      to the ~20px rendered size, not to the badge. */}
                   <Icon name={item.icon} strokeWidth={1.7} />
                 </span>
-                <span className={styles.label}>
-                  {item.label}
-                  {active && <span className={styles.dot} aria-hidden="true" />}
-                </span>
+                <span className={styles.label}>{item.label}</span>
+                {/* Its own element rather than a child of the label: the
+                    brief puts this pin-point at the far right of the
+                    selected row, visually connecting it to the luminous
+                    contour, so its distance from the text has to be
+                    controlled independently of the text's own layout. */}
+                {active && <span className={styles.dot} aria-hidden="true" />}
                 {collapsed && !isMobile && (
                   // aria-hidden + the aria-label above rather than
                   // role="tooltip": the label text is already the link's
@@ -471,13 +468,10 @@ export function SidebarNavigation() {
               aria-haspopup="true"
             >
               <span className={styles.iconWrap}>
-                {overflowActive && <span className={styles.iconHalo} aria-hidden="true" />}
                 <Icon name="more-horizontal" />
               </span>
-              <span className={styles.label}>
-                More
-                {overflowActive && <span className={styles.dot} aria-hidden="true" />}
-              </span>
+              <span className={styles.label}>More</span>
+              {overflowActive && <span className={styles.dot} aria-hidden="true" />}
             </button>
             {moreOpen && (
               <div className={`${styles.moreSheet} glass-panel`} role="menu">
