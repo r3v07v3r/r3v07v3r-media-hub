@@ -53,8 +53,16 @@
      focus". Everything downstream follows this automatically:
      --nav-rail-width is measured from the rendered element rather than
      hardcoded (see SidebarNavigation.tsx), so MoodBrowser's under-rail
-     bleed and AppShell's main-column offset both track it. */
-  width: 174px;
+     bleed and AppShell's main-column offset both track it.
+
+     174px -> 190px (about 9.9% of 1920). The extra 16px is entirely
+     curve room: the labels are laid out from the left edge, so widening
+     the rail doesn't move them, it just opens up the gap between where
+     the text ends and where the panel does. At 174 the contour had only
+     ~11px of horizontal room to wave in once it had to clear the label
+     column, which flattened it into a near-straight line; this roughly
+     doubles that. */
+  width: 190px;
 
   /* Generous top/bottom padding is doing real work, not just breathing
      room: the SVG contour maps its viewBox onto THIS element's box, so
@@ -512,7 +520,7 @@
    this query and the bottom bar has to win. */
 @media (max-width: 1599px) {
   .rail {
-    width: 144px;
+    width: 160px;
     --nav-pad: 10px;
     --nav-icon-box: clamp(28px, 3.2vh, 30px);
     --nav-label-size: 9.5px;

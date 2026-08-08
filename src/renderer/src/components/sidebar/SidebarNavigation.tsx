@@ -33,11 +33,21 @@ const MOBILE_PRIMARY_IDS = ['home', 'movies', 'tv', 'anime', 'mystuff']
 // items occupy roughly 13%-85% of the rail's height; between those the
 // path is held right of x=226 (see the clearance check in the commit
 // message for the measured margin at each row).
+// The binding constraint is the COMPACT width, not the wide one: at
+// 160px the rows end ~134px out, so the path has to stay right of
+// x=216 in viewBox space (216/245 x 160 = 141px) to clear them. That same
+// floor at 190px sits at 167px, which is why widening the rail buys wave
+// room without moving anything else — the labels are laid out from the
+// left, so they don't follow the width.
+// Peaks are held at 241 rather than the full 245 so the stroke's glow
+// has somewhere to bloom before AppShell's sidebar column clips at the
+// rail's edge.
 const RAIL_EDGE_PATH =
-  'M0,0 C30,2 96,26 150,62 C196,92 226,108 232,132 ' +
-  'C240,168 242,232 240,300 C238,368 228,430 226,500 ' +
-  'C224,566 232,626 238,690 C242,748 240,802 236,850 ' +
-  'C232,898 214,946 178,978 C142,1000 78,1000 0,1000'
+  'M0,0 C26,2 90,20 146,54 C198,86 230,106 236,136 ' +
+  'C241,176 236,228 226,278 C218,326 216,372 218,420 ' +
+  'C220,470 228,512 234,558 C239,604 236,652 226,700 ' +
+  'C218,748 216,792 222,844 C228,890 212,944 176,976 ' +
+  'C140,1000 76,1000 0,1000'
 
 // Decorative points riding the contour — not menu items. `left` is a
 // percentage of the rail's width, which lands them on the curve at ANY
@@ -48,9 +58,9 @@ const RAIL_EDGE_PATH =
 // width change, which is what kept stranding them off the curve.
 // Durations are deliberately unequal so the three never pulse in unison.
 const EDGE_NODES = [
-  { top: '26%', left: '95.5%', delay: '0s', duration: '3.4s' },
-  { top: '47%', left: '79.5%', delay: '1.1s', duration: '4.6s' },
-  { top: '70%', left: '77.5%', delay: '2.2s', duration: '4s' }
+  { top: '20%', left: '97.5%', delay: '0s', duration: '3.4s' },
+  { top: '40%', left: '88.5%', delay: '1.1s', duration: '4.6s' },
+  { top: '73%', left: '89%', delay: '2.2s', duration: '4s' }
 ]
 
 const COLLAPSE_STORAGE_KEY = 'r3.nav.collapsed'
