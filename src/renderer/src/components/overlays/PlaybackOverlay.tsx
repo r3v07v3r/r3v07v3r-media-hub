@@ -230,6 +230,17 @@ export function PlaybackOverlay() {
   // it, leaving a party mid-nudge could strand the video permanently
   // playing at 1.1x/0.9x.
   const catchUpRateTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // Whether the buffer gate should actually START playing once it is
+  // satisfied. True for a normal first load (that SHOULD auto-play); set to
+  // false by a restart that happens while the video is paused — changing
+  // audio track or quality tears down and restarts ffmpeg, and the gate
+  // that follows would otherwise resume playback the person never asked
+  // for. In a party that is worse than an annoyance: the host pauses to
+  // talk, a follower switches audio language, and seconds later that
+  // follower alone starts playing again — and a follower without
+  // allowMemberControl cannot pause themselves back, because togglePlay
+  // early-returns for them.
+  const resumeAfterRestartRef = useRef(true)
 
   const trackedMediaId = playbackMedia?.id
   const kind =
@@ -467,6 +478,19 @@ export function PlaybackOverlay() {
           setTracks(response.tracks)
         })
         .catch((error: unknown) => {
+          // A newer seek/track change that superseded this one is NOT a
+          // failure — the newer request already applied its own offset and
+          // is the truth now. Rolling back here would overwrite it with a
+          // stale value while ffmpeg actually runs at the newer position,
+          // leaving the scrubber, the time label and the subtitle shift all
+          // reading minutes away from what is on screen, and the member
+          // desynced from the party with a developer-jargon toast on top.
+          // Same detection as selectTrack's own handler, and for the same
+          // reason: Electron's IPC round-trip rebuilds a plain Error, so the
+          // original .name only survives inside .message.
+          if (error instanceof Error && error.message.includes('SupersededTranscodeError')) {
+            return
+          }
           streamStartOffsetRef.current = previousOffset
           setCurrentTime(previousOffset)
           applyShiftedSubtitle()
@@ -768,6 +792,8 @@ export function PlaybackOverlay() {
     // above) — the absolute position is the segment's own start offset
     // plus that relative time, not the relative time alone.
     const startTime = streamStartOffsetRef.current + (video?.currentTime ?? 0)
+    // A restart resumes only if we were actually playing when it started.
+    resumeAfterRestartRef.current = !(video?.paused ?? false)
     setTrackChangeBusy(true)
     setPendingAudioOrdinal(ordinal)
     try {
@@ -842,6 +868,9 @@ export function PlaybackOverlay() {
     if (!playbackMedia) return
     const video = videoRef.current
     const startTime = streamStartOffsetRef.current + (video?.currentTime ?? 0)
+    // Same restart, same rule as selectTrack: don't resume something the
+    // person had paused.
+    resumeAfterRestartRef.current = !(video?.paused ?? false)
     setApplyingQuality(true)
     try {
       const response = await window.api?.mediaHub?.playback.selectTracks({
@@ -1092,7 +1121,10 @@ export function PlaybackOverlay() {
       // dedicated sync-wait effect above reports readiness instead, and
       // this gate's own job here is done once bufferingReady is set.
       if (!activeSyncRequestIdRef.current) {
-        video.play().catch(() => {})
+        if (resumeAfterRestartRef.current) video.play().catch(() => {})
+        // Consumed: only the restart that set it is affected, so an
+        // ordinary later load still auto-plays.
+        resumeAfterRestartRef.current = true
       }
     }
 
