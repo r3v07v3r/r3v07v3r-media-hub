@@ -67,7 +67,7 @@ export function DetailHero({
 
   const playLabel = useMemo(() => {
     if (isResolving) {
-      return resolvingMedia?.stage === 'buffering' ? 'Buffering…' : 'Searching…'
+      return resolvingMedia?.stage === 'buffering' ? 'Preparing…' : 'Searching…'
     }
     if (hasProgress) {
       return config.isEpisodic
@@ -78,7 +78,14 @@ export function DetailHero({
       return `Play S${nextEpisode.season} E${nextEpisode.episode}`
     }
     return 'Play'
-  }, [isResolving, resolvingMedia?.stage, hasProgress, config.isEpisodic, continueEntry, nextEpisode])
+  }, [
+    isResolving,
+    resolvingMedia?.stage,
+    hasProgress,
+    config.isEpisodic,
+    continueEntry,
+    nextEpisode
+  ])
 
   async function handleSuggestToParty(): Promise<void> {
     const api = window.api?.mediaHub

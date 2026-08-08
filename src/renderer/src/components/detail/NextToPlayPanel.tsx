@@ -29,7 +29,7 @@ export function NextToPlayPanel({ media, nextEpisode, allWatched, onPlay }: Next
   const artwork = resolveArtwork(media)
   const { resolvingMedia } = useAppState()
   const isResolving = resolvingMedia?.id === media.id
-  const resolveLabel = resolvingMedia?.stage === 'buffering' ? 'Buffering…' : 'Searching…'
+  const resolveLabel = resolvingMedia?.stage === 'buffering' ? 'Preparing…' : 'Searching…'
 
   if (!nextEpisode && !allWatched) {
     // No episode data available for this series/anime yet.
@@ -50,8 +50,17 @@ export function NextToPlayPanel({ media, nextEpisode, allWatched, onPlay }: Next
           <div className={styles.movieInfo}>
             <span className={styles.title}>{media.title}</span>
             {media.progressPercentage ? (
-              <div className={styles.progressTrack} role="progressbar" aria-valuenow={media.progressPercentage} aria-valuemin={0} aria-valuemax={100}>
-                <div className={styles.progressFill} style={{ width: `${media.progressPercentage}%` }} />
+              <div
+                className={styles.progressTrack}
+                role="progressbar"
+                aria-valuenow={media.progressPercentage}
+                aria-valuemin={0}
+                aria-valuemax={100}
+              >
+                <div
+                  className={styles.progressFill}
+                  style={{ width: `${media.progressPercentage}%` }}
+                />
               </div>
             ) : (
               media.runtimeMinutes && <span className={styles.meta}>{media.runtimeMinutes}m</span>
@@ -79,7 +88,9 @@ export function NextToPlayPanel({ media, nextEpisode, allWatched, onPlay }: Next
           <Icon name="check" size={14} />
           Next to Play
         </span>
-        <p className={styles.caughtUp}>You&apos;re all caught up — every known episode is watched.</p>
+        <p className={styles.caughtUp}>
+          You&apos;re all caught up — every known episode is watched.
+        </p>
       </section>
     )
   }
@@ -99,8 +110,12 @@ export function NextToPlayPanel({ media, nextEpisode, allWatched, onPlay }: Next
           className={styles.thumb}
         />
         <div className={styles.movieInfo}>
-          <span className={styles.title}>{nextEpisode.title || `Episode ${nextEpisode.episode}`}</span>
-          {nextEpisode.description && <p className={styles.description}>{nextEpisode.description}</p>}
+          <span className={styles.title}>
+            {nextEpisode.title || `Episode ${nextEpisode.episode}`}
+          </span>
+          {nextEpisode.description && (
+            <p className={styles.description}>{nextEpisode.description}</p>
+          )}
         </div>
         <button
           type="button"
