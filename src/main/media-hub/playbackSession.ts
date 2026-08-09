@@ -224,6 +224,10 @@ export async function preparePlayback(url: string): Promise<PlaybackResult> {
       ok: true,
       player: 'embedded',
       tracks: activeMediaTracks,
+      // What ffmpeg was actually told to play — not the container's own
+      // default, which selectTranscodeAudioTrack may well have declined.
+      // The player marks its audio menu from this.
+      selection: { ...audioSelection, upscaleHeight: activeUpscaleHeight ?? 0 },
       autoReason: activeVideoEncoder
         ? 'Video and audio were converted for compatibility.'
         : 'Audio was converted for browser compatibility.',
@@ -241,6 +245,15 @@ export async function preparePlayback(url: string): Promise<PlaybackResult> {
     player: 'embedded',
     compatibility: false,
     tracks: activeMediaTracks,
+    // Nothing is selecting anything here — the browser demuxes the file
+    // itself and plays whichever audio stream the container marks default
+    // (falling back to the first). Reported so the player's audio menu can
+    // still mark the track being heard; picking a different one is what
+    // switches this title into compatibility mode.
+    selection: {
+      audio: (activeMediaTracks.audio.find((t) => t.default) ?? activeMediaTracks.audio[0])
+        ?.ordinal
+    },
     videoCodecWarning,
     upscaleSuggestion,
     url: await playbackProxy.register(url)

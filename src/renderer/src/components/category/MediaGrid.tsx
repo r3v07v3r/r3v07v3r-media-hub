@@ -19,6 +19,46 @@ import styles from './MediaGrid.module.css'
 
 const BATCH = 30
 
+/** Above this much overlap, a new list counts as the same browse set with
+ *  an edit applied rather than a different list entirely. */
+const SAME_LIST_OVERLAP = 0.8
+
+/**
+ * How a newly-arrived `items` array relates to the one it replaced.
+ *
+ * - `same`: identical titles in identical order — the array is merely a
+ *   fresh derivation upstream, and nothing about the view should move.
+ * - `edited`: mostly the same titles, a few added or removed (someone
+ *   marked one watched while a hide filter is on). The person is still
+ *   looking at the same list and should keep their place.
+ * - `different`: a new filter, sort, or search. Genuinely a fresh result
+ *   list, and starting at the top with one batch is right.
+ *
+ * Ids are unique within a list (see hooks.ts's dedupeById), so the
+ * position-wise comparison is exact. Costs one pass, and only when the
+ * array identity already differed.
+ */
+function listChange(prev: MediaItem[], next: MediaItem[]): 'same' | 'edited' | 'different' {
+  if (prev === next) return 'same'
+  if (prev.length === next.length) {
+    let identical = true
+    for (let i = 0; i < prev.length; i++) {
+      if (prev[i].id !== next[i].id) {
+        identical = false
+        break
+      }
+    }
+    if (identical) return 'same'
+  }
+  if (!prev.length || !next.length) return 'different'
+  const prevIds = new Set(prev.map((item) => item.id))
+  let shared = 0
+  for (const item of next) {
+    if (prevIds.has(item.id)) shared++
+  }
+  return shared / Math.min(prev.length, next.length) >= SAME_LIST_OVERLAP ? 'edited' : 'different'
+}
+
 export interface MediaGridProps {
   items: MediaItem[]
   loading?: boolean
@@ -60,20 +100,42 @@ export function MediaGrid({
     itemsLengthRef.current = items.length
   }, [items.length])
 
-  // A new `items` array (a filter/sort change, a different search result
-  // set) starts back at one batch rather than staying wherever the old
-  // list's scroll position had grown to — otherwise switching to a much
-  // shorter filtered set could leave visibleCount referencing rows that
-  // no longer exist, and switching to a different set entirely should
-  // read as a fresh result list, not a continuation of the last one's
-  // reveal progress. Adjusted during render (React's own "reset state
-  // when a prop changes" pattern — the same one SidebarNavigation.tsx's
+  // A genuinely different result list (a filter/sort change, a new search)
+  // starts back at one batch rather than staying wherever the old list's
+  // scroll position had grown to — otherwise switching to a much shorter
+  // filtered set could leave visibleCount referencing rows that no longer
+  // exist, and switching to a different set entirely should read as a
+  // fresh result list, not a continuation of the last one's reveal
+  // progress. Adjusted during render (React's own "reset state when a
+  // prop changes" pattern — the same one SidebarNavigation.tsx's
   // moreOpenForPathname uses) rather than in an effect, which would cost
   // an extra render pass for what's otherwise a synchronous derivation.
+  //
+  // Keyed on the list's CONTENTS, not the array's identity. Identity alone
+  // was wrong in a way the person actually feels: this list is re-derived
+  // upstream (catalog -> kindItems -> filteredSorted) whenever anything
+  // about a title changes, so marking one card watched from its own
+  // context menu handed down a new array holding the very same titles in
+  // the very same order — and collapsed a grid scrolled hundreds of cards
+  // deep back to 30, which the browser then clamps the scroll position
+  // for. And when a hide-watched/completed/disliked filter is on, that
+  // same action really does remove a title, so an exact-equality check
+  // alone would still collapse the grid for exactly the people most
+  // likely to be marking things watched while browsing. Hence three
+  // outcomes rather than two — see listChange.
   const [itemsForReset, setItemsForReset] = useState(items)
   if (itemsForReset !== items) {
     setItemsForReset(items)
-    setVisibleCount(BATCH)
+    const change = listChange(itemsForReset, items)
+    if (change === 'different') {
+      setVisibleCount(BATCH)
+    } else if (change === 'edited') {
+      // Hold the person's place: keep roughly as many rows mounted as
+      // before, so the container's height barely moves and there's
+      // nothing for the browser to clamp. Still bounded by the new
+      // length, which is the safety the original reset existed for.
+      setVisibleCount((count) => Math.min(Math.max(count, BATCH), items.length))
+    }
   }
 
   // A plain ref + a separate effect keyed on some dependency doesn't

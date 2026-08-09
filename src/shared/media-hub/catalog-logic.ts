@@ -178,6 +178,143 @@ export function airingStatus(
   return 'unknown'
 }
 
+// ---------------------------------------------------------------------
+// "Similar titles" ranking.
+//
+// This replaces what "Similar" used to mean in this app, which was the
+// TMDB *collection* — i.e. the franchise. Asking for titles similar to
+// "Dune" and being shown "Dune: Part Two" isn't a recommendation, it's a
+// table of contents; and since most movies belong to no collection at
+// all, the panel was empty far more often than not.
+//
+// Similar here means what a person means by it: same sort of thing —
+// genre first, then era and standing. Kept pure and in shared/ so it can
+// rank a locally-cached catalog with no API key and no network at all,
+// which is what makes the panel work for everyone rather than only for
+// people who have connected TMDB.
+// ---------------------------------------------------------------------
+
+/** The subject of the comparison. A CatalogItem satisfies this. */
+export interface SimilarSource {
+  id: string
+  title: string
+  genres?: string[]
+  year?: string
+}
+
+/** Sequel/instalment markers — the word right after a shared title stem
+ *  that tells you the two titles are the same story continuing, not two
+ *  comparable stories. Roman numerals stop at X deliberately: past that
+ *  the risk of eating a real word ("L", "C", "D", "M" are all valid
+ *  numerals) outweighs the vanishingly rare 11th instalment. */
+const SEQUEL_MARKERS = new Set([
+  'part',
+  'chapter',
+  'episode',
+  'volume',
+  'vol',
+  'ii',
+  'iii',
+  'iv',
+  'v',
+  'vi',
+  'vii',
+  'viii',
+  'ix',
+  'x'
+])
+
+function titleWords(value: string): string[] {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .split(' ')
+    .filter(Boolean)
+}
+
+/**
+ * Whether two titles look like instalments of one franchise rather than
+ * two separate works. Deliberately conservative — a false positive here
+ * silently hides a legitimate suggestion, so a bare shared first word is
+ * never enough on its own.
+ *
+ * One title's words must be a prefix of the other's, AND either the
+ * shared stem is at least two words ("John Wick" / "John Wick Chapter 4")
+ * or the very next word is a sequel marker or a number ("Dune" / "Dune
+ * Part Two"). That's what keeps "Up" from swallowing "Up in the Air"
+ * while still catching the cases that actually annoy people.
+ */
+export function isLikelyFranchiseSibling(a: string, b: string): boolean {
+  const left = titleWords(a)
+  const right = titleWords(b)
+  if (!left.length || !right.length) return false
+  const [short, long] = left.length <= right.length ? [left, right] : [right, left]
+  if (short.length === long.length) return false
+  for (let i = 0; i < short.length; i++) {
+    if (short[i] !== long[i]) return false
+  }
+  if (short.length >= 2) return true
+  const next = long[short.length]
+  return SEQUEL_MARKERS.has(next) || /^\d+$/.test(next)
+}
+
+function genreOverlap(a: string[], b: string[]): number {
+  if (!a.length || !b.length) return 0
+  const set = new Set(a.map((x) => String(x).toLowerCase()))
+  let shared = 0
+  for (const genre of b) {
+    if (set.has(String(genre).toLowerCase())) shared++
+  }
+  // Cosine-style rather than a raw count, so an item tagged with eight
+  // genres doesn't outrank a genuinely closer match tagged with two just
+  // by casting a wider net.
+  return shared / Math.sqrt(a.length * b.length)
+}
+
+/**
+ * Ranks `pool` by how similar each entry is to `source`, most similar
+ * first. Requires at least one shared genre — with no genre in common
+ * there's no honest claim of similarity left to make, and padding the
+ * list out with whatever else is popular is worse than a short list.
+ *
+ * Genre agreement dominates; release era and audience rating only order
+ * titles that are already comparable. Franchise instalments and the
+ * source itself are excluded (see isLikelyFranchiseSibling).
+ */
+export function rankSimilarTitles(
+  source: SimilarSource,
+  pool: CatalogItem[],
+  limit = 12
+): CatalogItem[] {
+  const sourceGenres = (source.genres || []).filter(Boolean)
+  if (!sourceGenres.length) return []
+  const sourceYear = Number.parseInt(String(source.year || ''), 10)
+
+  const scored: { item: CatalogItem; score: number }[] = []
+  for (const item of pool) {
+    if (!item?.id || item.id === source.id) continue
+    if (isLikelyFranchiseSibling(source.title, item.title)) continue
+    const overlap = genreOverlap(sourceGenres, item.genres || [])
+    if (overlap <= 0) continue
+
+    const year = Number.parseInt(String(item.year || ''), 10)
+    const era =
+      Number.isFinite(sourceYear) && Number.isFinite(year)
+        ? 1 / (1 + Math.abs(sourceYear - year) / 10)
+        : 0
+    const rating = Math.min(Math.max(Number.parseFloat(item.rating) || 0, 0), 10) / 10
+
+    scored.push({ item, score: overlap * 10 + era * 1.5 + rating })
+  }
+
+  return scored
+    .sort((a, b) => b.score - a.score || String(a.item.title).localeCompare(String(b.item.title)))
+    .slice(0, Math.max(0, limit))
+    .map((x) => x.item)
+}
+
 export function subtitlesInadequate(
   tracks: { language?: string; label?: string }[] | undefined
 ): boolean {

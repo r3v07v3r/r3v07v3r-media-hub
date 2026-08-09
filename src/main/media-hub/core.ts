@@ -423,19 +423,46 @@ export function filterAnimeRelationships(payload: RawApiPayload = {}): CatalogIt
   return entries
 }
 
-export function normalizeTmdbCollectionPart(part: RawApiPayload, imdbId: string): CatalogItem {
+/**
+ * One TMDB movie/tv record as a CatalogItem, keyed by the IMDb id the
+ * caller has already resolved (every id in this app is IMDb-keyed, and
+ * TMDB's own numeric id is useless to the rest of it).
+ *
+ * Handles both shapes from the one function because TMDB names the same
+ * fields differently per media type — `title`/`release_date` for movies,
+ * `name`/`first_air_date` for tv — and the similar-titles path (see
+ * catalog.ts) needs both.
+ *
+ * `genres` is passed in rather than read off the record: list endpoints
+ * return `genre_ids`, not names, so resolving them needs TMDB's separate
+ * genre dictionary, which is the caller's job to fetch and cache once.
+ */
+export function normalizeTmdbTitle(
+  record: RawApiPayload,
+  imdbId: string,
+  type: 'movie' | 'series',
+  genres: string[] = []
+): CatalogItem {
+  const date = String(
+    (type === 'series' ? record.first_air_date : record.release_date) || ''
+  ).slice(0, 4)
   return {
     id: imdbId,
-    type: 'movie',
-    title: part.title || part.original_title || 'Untitled',
-    poster: part.poster_path ? `https://image.tmdb.org/t/p/w500${part.poster_path}` : '',
-    background: '',
+    type,
+    title:
+      (type === 'series' ? record.name || record.original_name : record.title) ||
+      record.original_title ||
+      'Untitled',
+    poster: record.poster_path ? `https://image.tmdb.org/t/p/w500${record.poster_path}` : '',
+    background: record.backdrop_path
+      ? `https://image.tmdb.org/t/p/w780${record.backdrop_path}`
+      : '',
     logo: '',
-    year: String(part.release_date || '').slice(0, 4),
-    description: part.overview || '',
-    rating: String(part.vote_average || ''),
+    year: date,
+    description: record.overview || '',
+    rating: String(record.vote_average || ''),
     runtime: '',
-    genres: [],
+    genres,
     videos: [],
     trailers: []
   }

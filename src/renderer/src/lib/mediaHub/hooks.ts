@@ -9,7 +9,7 @@
 // loaded; false (with a mock/empty fallback) otherwise — the UI is never
 // meant to silently present mock data as if it were live.
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { CatalogItem, HistoryEntry, MediaKind } from '@shared/media-hub/types'
 import type { MediaItem, Recommendation } from '@renderer/types'
 import { CATALOG } from '@renderer/data/mockData'
@@ -20,6 +20,14 @@ import {
 } from './adapters'
 
 const CATALOG_KINDS: MediaKind[] = ['movie', 'series', 'anime']
+
+// Module-level so the optional parameters below default to a STABLE
+// identity. A `= []` / `= new Set()` default constructs a fresh value on
+// every call, which would silently defeat the memo it feeds — the kind of
+// thing that reintroduces a fixed bug by way of an innocent-looking new
+// call site.
+const NO_HISTORY: HistoryEntry[] = []
+const NO_IDS: Set<string> = new Set()
 
 function dedupeById(items: CatalogItem[]): CatalogItem[] {
   const seen = new Set<string>()
@@ -61,8 +69,8 @@ export interface BrowseCatalogResult {
 export function useMediaHubBrowseCatalog(
   trackedIds: Set<string>,
   watchedIds: Set<string>,
-  history: HistoryEntry[] = [],
-  dislikedIds: Set<string> = new Set()
+  history: HistoryEntry[] = NO_HISTORY,
+  dislikedIds: Set<string> = NO_IDS
 ): BrowseCatalogResult {
   const [items, setItems] = useState<CatalogItem[] | null>(null)
   // Lazily derived from bridge presence (a constant for this component's
@@ -105,18 +113,43 @@ export function useMediaHubBrowseCatalog(
 
   const refresh = useCallback(() => setGeneration((g) => g + 1), [])
 
-  if (items && items.length) {
-    return {
-      items: items.map((item) =>
-        catalogItemToMediaItem(item, { trackedIds, watchedIds, history, dislikedIds })
-      ),
-      loading,
-      live: true,
-      settled,
-      refresh
-    }
-  }
-  return { items: CATALOG, loading, live: false, settled, refresh }
+  // Memoised, and NOT computed inline in the return below. This mapping
+  // used to run on every render, handing back a brand-new array each time
+  // — which made AppStateContext's own context-value useMemo useless
+  // (`browseCatalog.items` is one of its dependencies, so it "changed" on
+  // every render) and pushed a new `catalog` identity to every consumer.
+  //
+  // That was a real, visible bug, not just wasted work: CategoryPage
+  // derives kindItems -> filteredSorted from `catalog`, and MediaGrid
+  // resets its lazy reveal batch back to 30 whenever the `items` prop is a
+  // new array. So any unrelated app state change — opening a card's
+  // context menu, a toast appearing — collapsed a grid the person had
+  // scrolled hundreds of cards into back down to one batch, and the
+  // browser clamped the now-impossible scroll position. It read as the
+  // page flashing and jumping upward.
+  //
+  // Every dependency here is genuinely stable: `items` is useState, and
+  // the caller's arguments are useState values or module constants (see
+  // EMPTY_HOME_FEED and NO_HISTORY/NO_IDS above, which is why the
+  // defaults are hoisted). So this recomputes when the data actually
+  // changes and not otherwise.
+  const mapped = useMemo(
+    () =>
+      items?.length
+        ? items.map((item) =>
+            catalogItemToMediaItem(item, { trackedIds, watchedIds, history, dislikedIds })
+          )
+        : null,
+    [items, trackedIds, watchedIds, history, dislikedIds]
+  )
+
+  return useMemo(
+    () =>
+      mapped
+        ? { items: mapped, loading, live: true, settled, refresh }
+        : { items: CATALOG, loading, live: false, settled, refresh },
+    [mapped, loading, settled, refresh]
+  )
 }
 
 export interface WatchedIdsResult {
@@ -165,7 +198,13 @@ export function useMediaHubWatchedIds(): WatchedIdsResult {
     }
   }, [generation])
 
-  return { watchedIds, history, refresh: () => setGeneration((g) => g + 1) }
+  // Stable `refresh` and a memoised result object, for the same reason
+  // useMediaHubBrowseCatalog above memoises its own: AppStateContext holds
+  // this whole object in a useCallback dependency array
+  // (`refreshWatchStatus`), which in turn sits in the context value's
+  // dependency array — a fresh object here defeated both.
+  const refresh = useCallback(() => setGeneration((g) => g + 1), [])
+  return useMemo(() => ({ watchedIds, history, refresh }), [watchedIds, history, refresh])
 }
 
 export interface DislikedIdsResult {
@@ -199,7 +238,8 @@ export function useMediaHubDislikedIds(): DislikedIdsResult {
     }
   }, [generation])
 
-  return { dislikedIds, refresh: () => setGeneration((g) => g + 1) }
+  const refresh = useCallback(() => setGeneration((g) => g + 1), [])
+  return useMemo(() => ({ dislikedIds, refresh }), [dislikedIds, refresh])
 }
 
 export interface HomeFeedResult {
@@ -277,10 +317,14 @@ export function useMediaHubHomeFeed(): HomeFeedResult {
     }
   }, [generation])
 
-  return {
-    ...(state ?? EMPTY_HOME_FEED),
-    loading,
-    live: state !== null,
-    refresh: () => setGeneration((g) => g + 1)
-  }
+  const refresh = useCallback(() => setGeneration((g) => g + 1), [])
+  return useMemo(
+    () => ({
+      ...(state ?? EMPTY_HOME_FEED),
+      loading,
+      live: state !== null,
+      refresh
+    }),
+    [state, loading, refresh]
+  )
 }

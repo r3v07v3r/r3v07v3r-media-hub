@@ -186,6 +186,18 @@ export interface PlaybackResult {
   videoCodecWarning?: string
   /** Present whenever the source is 1080p or below, independent of videoCodecWarning/compatibility above — see UpscaleSuggestion. */
   upscaleSuggestion?: UpscaleSuggestion
+  /** What is actually being played right now: which audio ordinal, which
+   *  upscale height, where the current segment starts.
+   *
+   *  The player has no other way to know. In compatibility mode the audio
+   *  track is chosen by selectTranscodeAudioTrack, which deliberately
+   *  declines the container's own default when its codec is one that
+   *  crashes the decode pipeline (TrueHD/Atmos) — so "the default track"
+   *  and "the track you are hearing" are routinely different titles.
+   *  Without this the audio menu had nothing to mark as current except
+   *  ffprobe's `default` disposition, which is a property of the FILE, not
+   *  of this session, and never moved when someone picked another track. */
+  selection?: PlaybackSelection
 }
 
 // Tracked-show entry as persisted (normalizeTitle shape) — matches

@@ -359,6 +359,36 @@ export function PlaybackOverlay() {
     setActiveSubtitleTrackUrl(encodeVttDataUrl(shifted))
   }, [])
 
+  // Turns the subtitle track on. This is not belt-and-braces — without it
+  // subtitles never appeared at all, no matter which source they came
+  // from (OpenSubtitles, an extracted embedded track, or the automatic
+  // "always have subtitles" fetch).
+  //
+  // The <track> below carries `default`, but that attribute is only ever
+  // consulted by the media element's own resource-selection algorithm,
+  // which runs when the element loads its media. Every <track> here is
+  // added by React AFTER the <video> already exists, so that algorithm has
+  // long since finished and the new TextTrack is created in mode
+  // 'disabled' — parsed, cued, and invisible. Nothing else in this
+  // renderer touches textTracks, so the cues had no way to ever be shown.
+  //
+  // Re-armed on `loadeddata` as well as on mount: compatibility mode swaps
+  // the element's src on every seek and track change, and reloading the
+  // media resets every text track back to 'disabled' again.
+  useEffect(() => {
+    const video = videoRef.current
+    if (!video || !activeSubtitleTrackUrl) return
+    const show = (): void => {
+      for (let i = 0; i < video.textTracks.length; i++) {
+        const track = video.textTracks[i]
+        if (track.kind === 'subtitles' || track.kind === 'captions') track.mode = 'showing'
+      }
+    }
+    show()
+    video.addEventListener('loadeddata', show)
+    return () => video.removeEventListener('loadeddata', show)
+  }, [activeSubtitleTrackUrl, result?.url])
+
   useEffect(() => {
     if (!playbackMedia) return
     closeRef.current?.focus()
@@ -486,6 +516,7 @@ export function PlaybackOverlay() {
                   // effect's immediate-vs-progress check, performSeek's
                   // currentTime-vs-restart choice), so that member silently stopped
                   // following seeks from then on, with no error.
+                  selection: response.selection,
                   compatibility: response.compatibility,
                   engine: response.engine
                 }
@@ -839,6 +870,7 @@ export function PlaybackOverlay() {
               // effect's immediate-vs-progress check, performSeek's
               // currentTime-vs-restart choice), so that member silently stopped
               // following seeks from then on, with no error.
+              selection: response.selection,
               compatibility: response.compatibility,
               engine: response.engine
             }
@@ -914,6 +946,7 @@ export function PlaybackOverlay() {
               // effect's immediate-vs-progress check, performSeek's
               // currentTime-vs-restart choice), so that member silently stopped
               // following seeks from then on, with no error.
+              selection: response.selection,
               compatibility: response.compatibility,
               engine: response.engine
             }
@@ -1085,6 +1118,15 @@ export function PlaybackOverlay() {
 
   const audioTracks = useMemo<MediaTrack[]>(() => tracks?.audio ?? [], [tracks])
   const subtitleTracks = useMemo<MediaTrack[]>(() => tracks?.subtitle ?? [], [tracks])
+  // Which audio track is actually being heard, reported by the backend on
+  // every start and every restart (see PlaybackResult.selection). The menu
+  // used to mark `track.default` instead — ffprobe's disposition flag,
+  // which describes the FILE and never changes. That was wrong twice over:
+  // it could point at a track selectTranscodeAudioTrack had deliberately
+  // refused to use, and picking a different track left the tick exactly
+  // where it was, so a switch that worked perfectly still looked like
+  // nothing had happened.
+  const activeAudioOrdinal = result?.selection?.audio
   const upscaleSuggestion = result?.upscaleSuggestion
   const fitModeLabel = { contain: 'Fit', cover: 'Fill', fill: 'Stretch' }[fitMode]
 
@@ -1470,7 +1512,18 @@ export function PlaybackOverlay() {
         }}
       >
         {activeSubtitleTrackUrl && (
-          <track kind="subtitles" src={activeSubtitleTrackUrl} default label="Subtitles" />
+          // Keyed on the URL so a re-shifted or replaced subtitle mounts a
+          // genuinely new element rather than having its `src` swapped
+          // underneath the existing TextTrack, whose already-parsed cues
+          // are not guaranteed to be discarded when that happens. The
+          // effect above is what actually makes it visible.
+          <track
+            key={activeSubtitleTrackUrl}
+            kind="subtitles"
+            src={activeSubtitleTrackUrl}
+            default
+            label="Subtitles"
+          />
         )}
       </video>
 
@@ -1610,18 +1663,21 @@ export function PlaybackOverlay() {
               {openMenu === 'audio' && (
                 <div className={styles.playerMenu}>
                   <div className={styles.playerMenuHeading}>Audio</div>
-                  {audioTracks.map((t) => (
-                    <button
-                      key={t.ordinal}
-                      type="button"
-                      className={`${styles.playerMenuItem} ${t.default ? styles.playerMenuItemActive : ''}`}
-                      onClick={() => selectTrack(t.ordinal)}
-                      disabled={trackChangeBusy}
-                    >
-                      {pendingAudioOrdinal === t.ordinal ? `Loading "${t.label}"…` : t.label}
-                      {t.default && <Icon name="check" size={12} />}
-                    </button>
-                  ))}
+                  {audioTracks.map((t) => {
+                    const isActive = activeAudioOrdinal === t.ordinal
+                    return (
+                      <button
+                        key={t.ordinal}
+                        type="button"
+                        className={`${styles.playerMenuItem} ${isActive ? styles.playerMenuItemActive : ''}`}
+                        onClick={() => selectTrack(t.ordinal)}
+                        disabled={trackChangeBusy || isActive}
+                      >
+                        {pendingAudioOrdinal === t.ordinal ? `Loading "${t.label}"…` : t.label}
+                        {isActive && <Icon name="check" size={12} />}
+                      </button>
+                    )
+                  })}
                 </div>
               )}
             </div>

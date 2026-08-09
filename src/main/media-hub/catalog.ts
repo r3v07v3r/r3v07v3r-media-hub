@@ -5,9 +5,18 @@
 // original is preserved exactly: catalogData's try-primary-source →
 // Cinemeta-fallback (non-anime only) → stale-cache → rethrow chain,
 // metadata's try-live → stale-catalog-entry (+ Simkl episode refetch for
-// series) fallback, and relatedAnime/relatedMovie's try → log → stale-cache
+// series) fallback, and relatedAnime/similarTitles' try → log → stale-cache
 // fallback. Do not simplify or drop any of these branches without
 // re-auditing against the source app.
+//
+// One thing here is deliberately NOT a 1:1 port any more: "related
+// titles". The original resolved a movie's TMDB collection — its
+// franchise — which meant the Similar panel offered you the sequel to
+// the film you were already looking at, and offered nothing at all for
+// the majority of films that belong to no collection, for series, or for
+// anyone without a TMDB key. See similarTitles below for what it does
+// instead, and why the franchise lookup is still here doing the opposite
+// job.
 
 import type { CatalogItem, ConnectResult, Episode, MediaKind } from '../../shared/media-hub/types'
 import { MEDIA_HUB_CHANNELS } from '../../shared/media-hub/ipc-channels'
@@ -26,9 +35,10 @@ import {
   normalizeMeta,
   normalizeSimklCatalog,
   normalizeSimklSearchResult,
-  normalizeTmdbCollectionPart,
+  normalizeTmdbTitle,
   type RawApiPayload
 } from './core'
+import { isLikelyFranchiseSibling, rankSimilarTitles } from '../../shared/media-hub/catalog-logic'
 import { buildGroupedAnimeVideos, groupAnimeCatalog, kitsuRealEpisodes } from './animeSeasons'
 import { omdbRottenTomatoesRating } from './omdb'
 
@@ -352,64 +362,258 @@ function tmdbId(value: unknown): number | null {
   return Number.isInteger(n) && n > 0 ? n : null
 }
 
+/** How many suggestions the similar-titles panel is willing to show. Also
+ *  the cap on TMDB external-id lookups per title, since each candidate
+ *  costs one request to turn a TMDB id into the IMDb id everything else
+ *  in this app is keyed by. */
+const SIMILAR_LIMIT = 12
+
+/** Cached (30d) TMDB genre-id → name dictionary for one media type. TMDB's
+ *  list endpoints return `genre_ids` rather than names, and this mapping
+ *  changes about never, so it's fetched once and reused. Returns an empty
+ *  map on failure — genres are enrichment here, not something worth
+ *  failing a suggestion list over. */
+async function tmdbGenreNames(apiKey: string, kind: 'movie' | 'tv'): Promise<Map<number, string>> {
+  const key = `tmdb:genres:v1:${kind}`
+  const db = getDatabase()
+  const cached = db.getCache<[number, string][]>(key)
+  if (cached) return new Map(cached)
+  try {
+    const result = await fetchJson<RawApiPayload>(
+      `https://api.themoviedb.org/3/genre/${kind}/list?api_key=${encodeURIComponent(apiKey)}`
+    )
+    const pairs: [number, string][] = (result.genres || [])
+      .map((g: RawApiPayload) => [tmdbId(g.id), String(g.name || '')] as [number | null, string])
+      .filter((pair): pair is [number, string] => pair[0] !== null && Boolean(pair[1]))
+    db.putCache(key, pairs, 30 * 24 * 60 * 60 * 1000)
+    return new Map(pairs)
+  } catch (error) {
+    logError('catalog:tmdb:genres', error)
+    return new Map()
+  }
+}
+
 /**
- * Cached (7d) TMDB movie-collection siblings for one IMDb id. Requires a
- * connected TMDB API key (returns `[]`, not an error, when absent — same
- * "no-op when unconfigured" convention as simklWatchedHistory). Resolves
- * IMDb → TMDB movie id → collection id → collection parts, then re-resolves
- * each part back to an IMDb id (dropping parts that fail to resolve) since
- * every other id in this app is IMDb-keyed. Falls back to a stale cache
- * entry (or `[]`) on error rather than failing the caller.
+ * TMDB's own "if you liked this, try these" for one IMDb id — the
+ * genre/style/audience-overlap notion of similar, which is what the panel
+ * is actually asking for.
+ *
+ * Two endpoints supply the pool — /recommendations (behavioural, the
+ * better list, but sparse on obscure titles) and /similar (keyword- and
+ * genre-driven, noisier, but it always has something) — and the pool is
+ * then re-ranked here by genre agreement rather than trusting either
+ * endpoint's own order.
+ *
+ * Franchise instalments are subtracted using the collection this title
+ * belongs to — the exact lookup that USED to be the whole answer here,
+ * now doing the opposite job. TMDB happily recommends "John Wick: Chapter
+ * 4" to someone looking at "John Wick", and that is precisely the result
+ * this panel is not for.
+ *
+ * Returns `[]` (never throws) when TMDB isn't connected, the title can't
+ * be found, or anything fails — the caller falls back to local ranking.
  */
-async function relatedMovie(imdbId: string): Promise<CatalogItem[]> {
+async function tmdbSimilar(kind: 'movie' | 'series', imdbId: string): Promise<CatalogItem[]> {
   const { apiKey } = tmdbCredentials()
   if (!apiKey) return []
-  const key = `related:v1:movie:${imdbId}`
-  const db = getDatabase()
-  const cached = db.getCache<CatalogItem[]>(key)
-  if (cached) return cached
+  const path = kind === 'series' ? 'tv' : 'movie'
+  const auth = `api_key=${encodeURIComponent(apiKey)}`
 
   try {
     const found = await fetchJson<RawApiPayload>(
-      `https://api.themoviedb.org/3/find/${encodeURIComponent(imdbId)}?api_key=${encodeURIComponent(apiKey)}&external_source=imdb_id`
+      `https://api.themoviedb.org/3/find/${encodeURIComponent(imdbId)}?${auth}&external_source=imdb_id`
     )
-    const tmdbMovieId = tmdbId(found.movie_results?.[0]?.id)
-    if (!tmdbMovieId) return []
+    const results = kind === 'series' ? found.tv_results : found.movie_results
+    const sourceId = tmdbId(results?.[0]?.id)
+    if (!sourceId) return []
 
-    const detail = await fetchJson<RawApiPayload>(
-      `https://api.themoviedb.org/3/movie/${tmdbMovieId}?api_key=${encodeURIComponent(apiKey)}`
-    )
-    const collectionId = tmdbId(detail.belongs_to_collection?.id)
-    if (!collectionId) return []
+    // Franchise siblings to subtract. Movies only — TMDB models
+    // collections for films, and a tv show's "franchise" has no equivalent
+    // field, so there's nothing to look up for series.
+    const excluded = new Set<number>([sourceId])
+    if (kind === 'movie') {
+      try {
+        const detail = await fetchJson<RawApiPayload>(
+          `https://api.themoviedb.org/3/movie/${sourceId}?${auth}`
+        )
+        const collectionId = tmdbId(detail.belongs_to_collection?.id)
+        if (collectionId) {
+          const collection = await fetchJson<RawApiPayload>(
+            `https://api.themoviedb.org/3/collection/${collectionId}?${auth}`
+          )
+          for (const part of collection.parts || []) {
+            const id = tmdbId(part.id)
+            if (id) excluded.add(id)
+          }
+        }
+      } catch (error) {
+        // A missing exclusion list degrades the result, it doesn't
+        // invalidate it — the title heuristic below still catches the
+        // obvious instalments.
+        logError('catalog:similar:collection', error)
+      }
+    }
 
-    const collection = await fetchJson<RawApiPayload>(
-      `https://api.themoviedb.org/3/collection/${collectionId}?api_key=${encodeURIComponent(apiKey)}`
-    )
-    const parts: RawApiPayload[] = (collection.parts || []).filter(
-      (p: RawApiPayload) => tmdbId(p.id) && tmdbId(p.id) !== tmdbMovieId
-    )
+    const [recommended, alike] = await Promise.all([
+      fetchJson<RawApiPayload>(
+        `https://api.themoviedb.org/3/${path}/${sourceId}/recommendations?${auth}`
+      ).catch(() => ({}) as RawApiPayload),
+      fetchJson<RawApiPayload>(
+        `https://api.themoviedb.org/3/${path}/${sourceId}/similar?${auth}`
+      ).catch(() => ({}) as RawApiPayload)
+    ])
 
-    const resolved = (
+    const genreNames = await tmdbGenreNames(apiKey, path)
+    const namedGenres = (record: RawApiPayload): string[] =>
+      (record.genre_ids || [])
+        .map((g: unknown) => genreNames.get(Number(g)))
+        .filter((x: string | undefined): x is string => Boolean(x))
+
+    // TMDB provides the candidate POOL; this app's own criterion decides
+    // the ORDER. /recommendations is behavioural ("people who watched this
+    // also watched"), which is a good pool but pulls toward the same
+    // universe and the same stars rather than the same kind of film;
+    // /similar is keyword- and genre-driven but noisier. Merged and then
+    // re-ranked by genre agreement, they answer the question actually
+    // being asked — same sort of thing — using the identical scorer the
+    // no-API-key path uses, so both paths agree on what "similar" means.
+    // Ranking here also means the external-id lookups below are spent on
+    // the twelve titles that will actually be shown.
+    const source = results?.[0] ?? {}
+    const sourceTitle = String(source.title || source.name || source.original_title || '')
+    const seen = new Set<string>()
+    const pool: CatalogItem[] = []
+    for (const record of [...(recommended.results || []), ...(alike.results || [])]) {
+      const id = tmdbId(record.id)
+      const key = `tmdb:${id}`
+      if (!id || excluded.has(id) || seen.has(key)) continue
+      // Belt to the collection's braces: a franchise whose instalments TMDB
+      // never grouped into a collection (and every tv show, which has no
+      // collection concept at all) is only caught by the title.
+      if (sourceTitle && isLikelyFranchiseSibling(sourceTitle, String(record.title || record.name)))
+        continue
+      seen.add(key)
+      pool.push(normalizeTmdbTitle(record, key, kind, namedGenres(record)))
+    }
+    if (!pool.length) return []
+
+    const ranked = rankSimilarTitles(
+      {
+        id: `tmdb:${sourceId}`,
+        title: sourceTitle,
+        genres: namedGenres(source),
+        year: String((kind === 'series' ? source.first_air_date : source.release_date) || '').slice(
+          0,
+          4
+        )
+      },
+      pool,
+      SIMILAR_LIMIT
+    )
+    // No genre signal to rank by (a title TMDB has no genres for) — the
+    // merged pool is still a real answer, so fall back to its own order
+    // rather than showing nothing.
+    const chosen = ranked.length ? ranked : pool.slice(0, SIMILAR_LIMIT)
+
+    // One external-ids request each, concurrently. A candidate with no
+    // IMDb id is dropped rather than shown: every route, artwork lookup
+    // and stream search in this app is IMDb-keyed, so it would open a
+    // detail page that can't resolve anything.
+    return (
       await Promise.all(
-        parts.map(async (part): Promise<CatalogItem | null> => {
+        chosen.map(async (item): Promise<CatalogItem | null> => {
           try {
-            const partId = tmdbId(part.id)
-            if (!partId) return null
+            const id = tmdbId(item.id.replace('tmdb:', ''))
+            if (!id) return null
             const external = await fetchJson<RawApiPayload>(
-              `https://api.themoviedb.org/3/movie/${partId}/external_ids?api_key=${encodeURIComponent(apiKey)}`
+              `https://api.themoviedb.org/3/${path}/${id}/external_ids?${auth}`
             )
-            return external.imdb_id ? normalizeTmdbCollectionPart(part, external.imdb_id) : null
+            if (!external.imdb_id) return null
+            return { ...item, id: String(external.imdb_id) }
           } catch {
             return null
           }
         })
       )
     ).filter((x): x is CatalogItem => Boolean(x))
-
-    db.putCache(key, resolved, 7 * 24 * 60 * 60 * 1000)
-    return resolved
   } catch (error) {
-    logError('catalog:related:movie', error)
+    logError('catalog:similar:tmdb', error)
+    return []
+  }
+}
+
+/**
+ * Similar titles ranked out of this app's OWN cached catalog, by genre
+ * overlap (see rankSimilarTitles). No API key, no network — which is the
+ * point: TMDB is optional in this app, and before this the whole panel
+ * was dead without it.
+ *
+ * The pool is whatever the browse catalog already holds for this kind, so
+ * the suggestions are titles the person can actually open and play, not
+ * ones this app has no catalog entry for.
+ */
+async function localSimilar(
+  kind: MediaKind,
+  id: string,
+  exclude: Set<string> = new Set()
+): Promise<CatalogItem[]> {
+  const db = getDatabase()
+  const pool = db.getCache<CatalogItem[]>(`catalog:v2:${kind}`, { allowExpired: true }) || []
+  if (!pool.length) return []
+  // The catalog entry first — it's already in hand. metadata() is the
+  // fallback for a title reached from search or a party suggestion, which
+  // never passed through the browse catalog; it's itself cached 24h.
+  let source = pool.find((item) => item.id === id) || null
+  if (!source) {
+    try {
+      source = await metadata(kind, id)
+    } catch (error) {
+      logError('catalog:similar:meta', error)
+      return []
+    }
+  }
+  const candidates = exclude.size ? pool.filter((item) => !exclude.has(item.id)) : pool
+  return rankSimilarTitles(source, candidates, SIMILAR_LIMIT)
+}
+
+/**
+ * Cached (7d) similar titles for one catalog id: TMDB's recommendations
+ * when TMDB is connected, otherwise (or when TMDB has nothing) a
+ * genre-ranked pull from the local catalog. Falls back to a stale cache
+ * entry rather than failing the caller, matching relatedAnime above.
+ *
+ * Anime skips TMDB entirely — Kitsu ids have no IMDb mapping anywhere in
+ * this app (see metadata()'s own gating), so there's nothing to look a
+ * TMDB record up by. Kitsu's genre/category titles are already on the
+ * catalog entry, so local ranking works for anime unchanged — and Kitsu's
+ * franchise relationship graph (relatedAnime, which is what this rail
+ * used to show outright) becomes the exclusion list, exactly the job
+ * TMDB's collection does on the movie path above. A sequel is not a
+ * suggestion.
+ */
+async function similarTitles(kind: MediaKind, id: string): Promise<CatalogItem[]> {
+  const key = `similar:v1:${kind}:${id}`
+  const db = getDatabase()
+  const cached = db.getCache<CatalogItem[]>(key)
+  if (cached) return cached
+
+  try {
+    const remote = kind === 'anime' ? [] : await tmdbSimilar(kind, id)
+    const exclude =
+      kind === 'anime'
+        ? new Set((await relatedAnime(id)).map((item) => item.id).filter(Boolean))
+        : new Set<string>()
+    const result = remote.length ? remote : await localSimilar(kind, id, exclude)
+    // A real answer is stable for a week. An empty one usually isn't a
+    // fact about the title — it's a catalog that hadn't been fetched yet,
+    // or TMDB having a bad moment — so it gets a short TTL instead of
+    // being locked in for seven days. Still cached, so a genuinely
+    // suggestion-less title doesn't re-run the whole lookup on every
+    // visit the way the old code did.
+    db.putCache(key, result, result.length ? 7 * 24 * 60 * 60 * 1000 : 60 * 60 * 1000)
+    return result
+  } catch (error) {
+    logError('catalog:similar', error)
     return db.getCache<CatalogItem[]>(key, { allowExpired: true }) || []
   }
 }
@@ -461,9 +665,8 @@ export function registerCatalogIpc(): void {
   handle<CatalogRelatedPayload, CatalogItem[]>(
     MEDIA_HUB_CHANNELS.catalogRelated,
     async (_e, { type, id }) => {
-      if (type === 'anime') return relatedAnime(id)
-      if (type === 'movie') return relatedMovie(id)
-      return []
+      if (!isValidCatalogKind(type)) return []
+      return similarTitles(type, id)
     }
   )
 

@@ -7,7 +7,7 @@ import { ArtworkImage } from '@renderer/components/media/ArtworkImage'
 import styles from './SimilarPanel.module.css'
 
 export interface SimilarPanelProps {
-  status: 'loading' | 'ready' | 'error' | 'unsupported'
+  status: 'loading' | 'ready' | 'error'
   items: MediaItem[]
   config: DetailAdapterConfig
   onSelect: (item: MediaItem) => void
@@ -15,26 +15,15 @@ export interface SimilarPanelProps {
 }
 
 /**
- * catalog:related has no series branch at all (see catalog.ts's
- * registerCatalogIpc — it returns [] unconditionally for that kind), so
- * this panel has an honest fourth state beyond loading/ready/error:
- * "unsupported," which explains the real backend gap instead of quietly
- * rendering an empty "no similar titles" panel that looks like a
- * yes-or-no answer about the catalog rather than a missing capability.
+ * Titles in the same vein as this one — genre and style, not the same
+ * franchise (see catalog.ts's similarTitles).
+ *
+ * There used to be a fourth "unsupported" state here explaining that
+ * series had no backend support for this. Every kind is supported now, so
+ * the honest remaining states are just loading/ready/error plus a real
+ * empty result.
  */
 export function SimilarPanel({ status, items, config, onSelect, onViewAll }: SimilarPanelProps) {
-  if (status === 'unsupported') {
-    return (
-      <section className={`${styles.panel} glass-panel`} aria-label="Similar titles">
-        <h2 className={styles.heading}>Similar {config.pluralLabel}</h2>
-        <p className={styles.note}>
-          Similar-title suggestions aren&apos;t available for series yet — the media hub backend only
-          supports this for movies and anime today.
-        </p>
-      </section>
-    )
-  }
-
   if (status === 'loading') {
     return (
       <section className={`${styles.panel} glass-panel`} aria-busy="true" aria-label="Loading similar titles">

@@ -58,7 +58,7 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
   const [metaStatus, setMetaStatus] = useState<FetchStatus>('loading')
 
   const [related, setRelated] = useState<MediaItem[]>([])
-  const [relatedStatus, setRelatedStatus] = useState<FetchStatus | 'unsupported'>('loading')
+  const [relatedStatus, setRelatedStatus] = useState<FetchStatus>('loading')
 
   const [history, setHistory] = useState<HistoryEntry[]>([])
   // Only the setter is used — nothing in this page shows a separate
@@ -110,15 +110,10 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
   // either never blocks the hero/about/episode sections from rendering.
   useEffect(() => {
     if (!id) return
-    if (kind === 'series') {
-      // catalog:related has no series branch at all (registerCatalogIpc
-      // returns [] unconditionally for this kind) — not attempting the
-      // call is more honest than firing a request guaranteed to come back
-      // empty and rendering that as "no similar series exist."
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      setRelatedStatus('unsupported')
-      return
-    }
+    // Every kind goes through this now. catalog:related used to return []
+    // unconditionally for series, so this skipped the call entirely and
+    // rendered a "not supported yet" note; similarTitles ranks series the
+    // same way it ranks everything else (see catalog.ts).
     let cancelled = false
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setRelatedStatus('loading')
@@ -483,7 +478,7 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
         />
         <GenresPanel genres={media.genres} onSelectGenre={handleGenreSelect} />
         <SimilarPanel
-          status={kind === 'series' ? 'unsupported' : relatedStatus}
+          status={relatedStatus}
           items={related}
           config={config}
           onSelect={(item) => openDetail(item, media.title)}
