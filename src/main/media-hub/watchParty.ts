@@ -382,6 +382,7 @@ interface PartyNowPlayingArgs {
 interface PartyPlaybackActionArgs {
   type?: string
   watching?: boolean
+  paused?: boolean
   position?: number
   requestId?: string
   waitingIds?: string[]
@@ -904,6 +905,7 @@ export function registerWatchPartyIpc(): void {
       // actually needs ever leave this process.
       const event: Record<string, unknown> = { type: action.type }
       if (typeof action.watching === 'boolean') event.watching = action.watching
+      if (typeof action.paused === 'boolean') event.paused = action.paused
       if (Number.isFinite(action.position)) event.position = Number(action.position)
       if (typeof action.requestId === 'string') event.requestId = action.requestId
       if (Array.isArray(action.waitingIds)) event.waitingIds = action.waitingIds.map(String)

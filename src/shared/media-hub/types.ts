@@ -535,7 +535,11 @@ export interface PartyNowPlayingPayload {
 export type PartyPlaybackAction =
   | { type: 'play' | 'pause' }
   | { type: 'seek'; position: number }
-  | { type: 'position'; position: number }
+  // Host heartbeat. `paused` makes it self-describing: without it a
+  // follower cannot tell "the host is paused" from "the host went away",
+  // and would keep extrapolating a position nobody is at. See
+  // shared/media-hub/partySync.ts.
+  | { type: 'position'; position: number; paused?: boolean }
   // Synced-seek protocol (host-only to send, like 'seek' above): host
   // announces a seek and holds everyone at paused-and-buffering instead
   // of playing immediately, so a slow connection doesn't watch alone

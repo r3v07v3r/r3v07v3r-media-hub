@@ -6,6 +6,12 @@ import { Icon } from '@renderer/components/icons/Icon'
 import { mediaItemToTrackablePayload } from '@renderer/lib/mediaHub/adapters'
 import { decodeVttDataUrl, encodeVttDataUrl, shiftVttCues } from '@renderer/lib/mediaHub/vttShift'
 import { getPlaybackBufferSeconds } from '@shared/media-hub/playbackBuffer'
+import {
+  expectedHostPosition,
+  isSampleUsable,
+  syncCorrection,
+  type HostPositionSample
+} from '@shared/media-hub/partySync'
 import type {
   MediaTrack,
   PlaybackSelection,
@@ -223,13 +229,12 @@ export function PlaybackOverlay() {
   const syncReadyIdsRef = useRef<Set<string>>(new Set())
   const syncTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const SYNC_TIMEOUT_MS = 20000
+  // Heartbeat interval. Halved from 10s now that followers extrapolate
+  // between beats rather than only correcting on arrival: each one is a
+  // fresh fix that resets accumulated estimation error, and the payload is
+  // a few dozen bytes.
+  const HOST_HEARTBEAT_MS = 5000
   const SYNC_PLAY_DELAY_MS = 1500
-  // Follower-side drift catch-up: whenever a mild speed nudge (see the
-  // 'position' correction branch below) is active, this clears it back to
-  // normal speed once the party ends or the component unmounts — without
-  // it, leaving a party mid-nudge could strand the video permanently
-  // playing at 1.1x/0.9x.
-  const catchUpRateTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   // Whether the buffer gate should actually START playing once it is
   // satisfied. True for a normal first load (that SHOULD auto-play); set to
   // false by a restart that happens while the video is paused — changing
@@ -241,6 +246,10 @@ export function PlaybackOverlay() {
   // allowMemberControl cannot pause themselves back, because togglePlay
   // early-returns for them.
   const resumeAfterRestartRef = useRef(true)
+  // Follower's last known fix on the host's position, stamped with the
+  // LOCAL clock on arrival — see partySync.ts for why arrival time rather
+  // than a host-sent wall clock.
+  const hostFixRef = useRef<HostPositionSample | null>(null)
 
   const trackedMediaId = playbackMedia?.id
   const kind =
@@ -278,10 +287,6 @@ export function PlaybackOverlay() {
         .catch(() => {})
       window.api?.mediaHub?.playback.stop().catch(() => {})
       clearSyncSeek()
-      if (catchUpRateTimeoutRef.current) {
-        clearTimeout(catchUpRateTimeoutRef.current)
-        catchUpRateTimeoutRef.current = null
-      }
     }
   }, [trackedMediaId, playbackMedia, clearSyncSeek])
 
@@ -408,10 +413,6 @@ export function PlaybackOverlay() {
       // (see the 'position' correction branch below) — leaving a stale
       // speed adjustment running after landing on a fresh position would
       // just introduce new drift instead of fixing any.
-      if (catchUpRateTimeoutRef.current) {
-        clearTimeout(catchUpRateTimeoutRef.current)
-        catchUpRateTimeoutRef.current = null
-      }
       video.playbackRate = 1
 
       if (!result?.compatibility) {
@@ -1179,6 +1180,7 @@ export function PlaybackOverlay() {
       const msg = event.message as {
         type?: string
         position?: number
+        paused?: boolean
         requestId?: string
         waitingIds?: string[]
       }
@@ -1220,48 +1222,17 @@ export function PlaybackOverlay() {
         // disruptive than the drift itself) while actually correcting a
         // real, sustained desync within one ~10s correction cycle instead
         // of never.
-        const target = Number(msg.position) || 0
-        const currentAbsolute = streamStartOffsetRef.current + video.currentTime
-        const drift = target - currentAbsolute
-        const driftThreshold = result?.compatibility ? 6 : 2
-        if (Math.abs(drift) > driftThreshold) {
-          if (catchUpRateTimeoutRef.current) {
-            clearTimeout(catchUpRateTimeoutRef.current)
-            catchUpRateTimeoutRef.current = null
-          }
-          video.playbackRate = 1
-          performSeek(target)
-        } else if (Math.abs(drift) > 0.75) {
-          // Moderate drift, below the hard-seek threshold: nudge speed
-          // instead of restarting — a live-reported request, since a full
-          // restart (an ffmpeg respawn in compat mode, or just a jarring
-          // jump in direct mode) is far more disruptive than a barely-
-          // noticeable 10% speed change for a few seconds. Chromium
-          // preserves pitch by default on a playbackRate change, so this
-          // doesn't chipmunk the audio.
-          //
-          // Fixed, short nudge window (4s) rather than computing "however
-          // long it takes to fully close this gap at a 10% differential" —
-          // a real bug caught live: that math means 40+ real seconds of
-          // audibly-sped-up playback to close a mere 4s gap, nothing like
-          // the "barely noticeable" nudge this was meant to be. A bounded
-          // nudge instead makes a partial dent and lets the next periodic
-          // 'position' broadcast (~10s later) reassess and nudge again if
-          // drift remains — several small, safe corrections converging
-          // over a few cycles, never one long, increasingly-noticeable
-          // speed change committed to upfront.
-          video.playbackRate = drift > 0 ? 1.1 : 0.9
-          if (catchUpRateTimeoutRef.current) clearTimeout(catchUpRateTimeoutRef.current)
-          catchUpRateTimeoutRef.current = setTimeout(() => {
-            if (videoRef.current) videoRef.current.playbackRate = 1
-            catchUpRateTimeoutRef.current = null
-          }, 4000)
-        } else if (video.playbackRate !== 1) {
-          if (catchUpRateTimeoutRef.current) {
-            clearTimeout(catchUpRateTimeoutRef.current)
-            catchUpRateTimeoutRef.current = null
-          }
-          video.playbackRate = 1
+        // Record the fix; the steering loop below does the correcting.
+        // Deliberately NOT corrected here: acting only on arrival means a
+        // follower is uncorrected for the entire gap between heartbeats,
+        // and compares a value that is already one network hop stale
+        // against its own current position — a systematic backward pull.
+        // Stamping arrival on the local clock and extrapolating from it
+        // removes both problems (see partySync.ts).
+        hostFixRef.current = {
+          mediaTime: Number(msg.position) || 0,
+          arrivedAt: performance.now(),
+          paused: msg.paused === true
         }
       } else if (msg.type === 'seek-sync' && msg.requestId) {
         // Land at the new position and hold there — reportSyncReady (via
@@ -1290,6 +1261,59 @@ export function PlaybackOverlay() {
     })
   }, [performSeek, clearSyncSeek, partyStatus, result?.compatibility, consumePartyPendingSeek])
 
+  // Follower side: steers toward where the host is RIGHT NOW, using the
+  // last fix extrapolated forward (see partySync.ts). Runs on its own
+  // timer rather than only when a heartbeat lands, which is the whole
+  // point of extrapolating — corrections happen continuously instead of
+  // once every few seconds against an already-stale number.
+  //
+  // Rate nudges are inaudible and self-correcting, so this converges
+  // smoothly; a hard seek is reserved for a gap too large to close by
+  // speed alone (and, in compatibility mode, is expensive enough that its
+  // threshold stays deliberately wide — see HARD_SEEK_SECONDS).
+  useEffect(() => {
+    if (!followingParty) return
+    const tick = setInterval(() => {
+      const video = videoRef.current
+      if (!video || video.paused) return
+      // A synced seek owns positioning while it's in flight.
+      if (activeSyncRequestIdRef.current) return
+      const now = performance.now()
+      const fix = hostFixRef.current
+      if (!isSampleUsable(fix, now)) {
+        // No trustworthy fix — coast at normal speed rather than steering
+        // toward a stale one.
+        if (video.playbackRate !== 1) video.playbackRate = 1
+        return
+      }
+      if (fix!.paused) {
+        if (video.playbackRate !== 1) video.playbackRate = 1
+        return
+      }
+      const expected = expectedHostPosition(fix!, now)
+      const local = streamStartOffsetRef.current + video.currentTime
+      const correction = syncCorrection(local, expected, !!result?.compatibility)
+      if (correction.action === 'seek') {
+        video.playbackRate = 1
+        // The fix keeps advancing while the seek lands, so aim at where the
+        // host will be, not where it was when we decided to move.
+        performSeek(expectedHostPosition(fix!, performance.now()))
+      } else if (correction.action === 'rate') {
+        if (video.playbackRate !== correction.rate) video.playbackRate = correction.rate
+      } else if (video.playbackRate !== 1) {
+        video.playbackRate = 1
+      }
+    }, 1000)
+    // Captured now rather than read in the cleanup: by teardown the ref may
+    // already point at a different (or no) element, and the one this effect
+    // actually steered is the one that must not be left off-speed.
+    const steered = videoRef.current
+    return () => {
+      clearInterval(tick)
+      if (steered && steered.playbackRate !== 1) steered.playbackRate = 1
+    }
+  }, [followingParty, result?.compatibility, performSeek])
+
   // Host side: keeps followers roughly in sync even without an explicit
   // seek (natural playback drift, a follower who briefly stalled) — see
   // the 'position' branch above for the follower's own >2s correction
@@ -1300,10 +1324,15 @@ export function PlaybackOverlay() {
     if (!api) return
     const interval = setInterval(() => {
       const video = videoRef.current
-      if (!video || video.paused) return
+      if (!video) return
       const position = streamStartOffsetRef.current + video.currentTime
-      api.playbackAction({ type: 'position', position }).catch(() => {})
-    }, 10000)
+      // Sent even while PAUSED, unlike before. Followers extrapolate
+      // forward from the last heartbeat (see partySync.ts), so silence is
+      // ambiguous to them — "host paused" and "host fell off the network"
+      // look identical, and one of those means they should keep coasting.
+      // Saying so explicitly costs a few bytes every few seconds.
+      api.playbackAction({ type: 'position', position, paused: video.paused }).catch(() => {})
+    }, HOST_HEARTBEAT_MS)
     return () => clearInterval(interval)
   }, [isPartyHost])
 
