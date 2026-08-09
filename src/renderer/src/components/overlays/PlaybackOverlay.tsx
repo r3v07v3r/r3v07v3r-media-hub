@@ -286,7 +286,21 @@ export function PlaybackOverlay() {
       window.api?.mediaHub?.party
         .playbackAction({ type: 'watching', watching: false })
         .catch(() => {})
-      window.api?.mediaHub?.playback.stop().catch(() => {})
+      // Deliberately NOT stopping the backend here. This cleanup runs
+      // whenever the TITLE changes, not only when playback ends — the
+      // overlay is keyed on playbackMedia.id — and by then the next
+      // title's session already exists, because startPlayback creates it
+      // before committing the new media. There is only ONE global backend
+      // session, so stopping here tore down the session that had just
+      // been created: direct playback 404'd instantly with "Playback
+      // stopped unexpectedly", and compatibility mode failed on the first
+      // seek with "No active media is available". It bit every party
+      // title change, on the host and every follower alike.
+      //
+      // Teardown belongs to stopPlayback() in AppStateContext, which is
+      // the single funnel for every real close (Escape, the close button,
+      // the video error handler); app quit is handled separately by
+      // main/index.ts's before-quit.
       clearSyncSeek()
     }
   }, [trackedMediaId, playbackMedia, clearSyncSeek])

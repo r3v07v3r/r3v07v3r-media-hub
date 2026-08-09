@@ -892,6 +892,11 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     [mediaHubSettings, pushNotification]
   )
   const stopPlayback = useCallback(() => {
+    // The one place that genuinely means "playback is over" — every close
+    // path routes through here. PlaybackOverlay's unmount deliberately no
+    // longer does this; see the comment there for why doing it per-title
+    // destroyed the session that had just been created.
+    window.api?.mediaHub?.playback.stop().catch(() => {})
     setPlaybackMedia(null)
     setPlaybackResult(null)
     setPlaybackTracks(null)
