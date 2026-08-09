@@ -71,7 +71,8 @@ export function PlaybackOverlay() {
     partyPendingSeek,
     consumePartyPendingSeek,
     partyPanelOpen,
-    setPartyPanelOpen
+    setPartyPanelOpen,
+    partyHostCode
   } = useAppState()
   const isPartyHost = Boolean(partyStatus?.inParty && partyStatus.role === 'host')
   // While following, local play/pause/seek controls are disabled (see the
@@ -1313,6 +1314,40 @@ export function PlaybackOverlay() {
       if (steered && steered.playbackRate !== 1) steered.playbackRate = 1
     }
   }, [followingParty, result?.compatibility, performSeek])
+
+  // Publishes what this device is watching to the friends group. The main
+  // process decides whether it actually goes out (see friends.ts — sharing
+  // is opt-in, and with it off the field is omitted entirely rather than
+  // sent as null, so "not sharing" and "not watching" look identical to
+  // everyone else). Cleared on unmount so closing the player takes the
+  // activity down rather than leaving a stale "still watching" behind.
+  useEffect(() => {
+    const api = window.api?.mediaHub?.friends
+    if (!api || !playbackMedia) return
+    const publish = (): void => {
+      const video = videoRef.current
+      api
+        .setActivity({
+          mediaId: playbackMedia.id,
+          kind,
+          title: playbackMedia.title,
+          poster: playbackMedia.posterUrl ?? '',
+          position: streamStartOffsetRef.current + (video?.currentTime ?? 0),
+          paused: video?.paused ?? true,
+          // Only meaningful while actually hosting — this is what lets a
+          // friend be offered "join their party" rather than just "watch
+          // this too".
+          partyCode: isPartyHost ? (partyHostCode ?? undefined) : undefined
+        })
+        .catch(() => {})
+    }
+    publish()
+    const timer = setInterval(publish, 20000)
+    return () => {
+      clearInterval(timer)
+      api.setActivity(null).catch(() => {})
+    }
+  }, [playbackMedia, kind, isPartyHost, partyHostCode])
 
   // Host side: keeps followers roughly in sync even without an explicit
   // seek (natural playback drift, a follower who briefly stalled) — see

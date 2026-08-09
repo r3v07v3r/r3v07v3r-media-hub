@@ -27,6 +27,8 @@ import type {
   PartyEventPayload,
   PartyHostResult,
   PartyMode,
+  FriendActivity,
+  FriendsStatus,
   PartyNowPlayingPayload,
   PartyPreparingPayload,
   PartyPlaybackAction,
@@ -372,6 +374,21 @@ const api = {
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.partySyncDisconnect),
       onEvent: (onEvent: (payload: PartyEventPayload) => void): (() => void) =>
         subscribe<PartyEventPayload>(MEDIA_HUB_CHANNELS.partyEvent, onEvent)
+    },
+
+    friends: {
+      status: (): Promise<FriendsStatus> => ipcRenderer.invoke(MEDIA_HUB_CHANNELS.friendsStatus),
+      create: (): Promise<{ ok: true; code: string }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.friendsCreate),
+      join: (code: string): Promise<{ ok: true }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.friendsJoin, { code }),
+      leave: (): Promise<{ ok: true }> => ipcRenderer.invoke(MEDIA_HUB_CHANNELS.friendsLeave),
+      setSharing: (sharing: boolean): Promise<{ ok: true }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.friendsSetSharing, { sharing }),
+      setActivity: (activity: FriendActivity | null): Promise<{ ok: true }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.friendsSetActivity, { activity }),
+      onEvent: (onEvent: (payload: FriendsStatus) => void): (() => void) =>
+        subscribe<FriendsStatus>(MEDIA_HUB_CHANNELS.friendsEvent, onEvent)
     },
 
     window: {

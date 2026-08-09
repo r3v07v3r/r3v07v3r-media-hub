@@ -25,6 +25,7 @@ import { registerSubtitlesIpc } from '../media-hub/subtitlesService'
 import { registerTorBoxIpc } from '../media-hub/torbox'
 import { registerTrackingIpc } from '../media-hub/tracking'
 import { registerWatchPartyIpc } from '../media-hub/watchParty'
+import { registerFriendsIpc, restoreFriendsGroup } from '../media-hub/friends'
 
 export function registerMediaHubIpc(): void {
   registerAppIpc()
@@ -36,6 +37,10 @@ export function registerMediaHubIpc(): void {
   registerSubtitlesIpc()
   registerPlaybackIpc()
   registerWatchPartyIpc()
+  registerFriendsIpc()
+  // A saved group reconnects on its own — a friends group is meant to be
+  // always-on, so it must not require anyone to open a panel first.
+  restoreFriendsGroup()
   registerProfilesIpc()
   registerNetworkIpc()
   registerAniskipIpc()

@@ -45,6 +45,17 @@ export interface MediaHubRawSettings {
   partySyncUrl?: string
   partySyncInviteKey?: string
   partyDisplayName?: string
+  /** Stable per-install identity for friends groups. The relay's connId
+   *  changes every connection, so presence needs something durable to
+   *  recognise the same person by. Not a secret and never leaves the
+   *  group's encrypted channel. */
+  friendId?: string
+  /** The friends group this install belongs to, as a v2 relay share code. */
+  friendsGroupCode?: string
+  /** Opt-in: publish what this device is watching to the group. Off means
+   *  the activity field is omitted entirely, so "not sharing" is
+   *  indistinguishable from "not watching". */
+  friendsShareActivity?: boolean
   theme?: string
   subtitleLanguage?: string
   updateChannel?: string

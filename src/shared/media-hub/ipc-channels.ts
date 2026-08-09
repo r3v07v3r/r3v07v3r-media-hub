@@ -99,6 +99,13 @@ export const MEDIA_HUB_CHANNELS = {
   partyPlaybackAction: 'mediahub:party:playback-action',
   partySetMemberControl: 'mediahub:party:set-member-control',
   partyRequestPlay: 'mediahub:party:request-play',
+  friendsStatus: 'mediahub:friends:status',
+  friendsCreate: 'mediahub:friends:create',
+  friendsJoin: 'mediahub:friends:join',
+  friendsLeave: 'mediahub:friends:leave',
+  friendsSetSharing: 'mediahub:friends:set-sharing',
+  friendsSetActivity: 'mediahub:friends:set-activity',
+  friendsEvent: 'mediahub:friends:event', // push event
   partySyncConnect: 'mediahub:party-sync:connect',
   partySyncDisconnect: 'mediahub:party-sync:disconnect',
   partyEvent: 'mediahub:party:event', // push event

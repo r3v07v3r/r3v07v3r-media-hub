@@ -316,7 +316,9 @@ interface ConnectRelayOptions {
   WebSocketImpl?: typeof WebSocket
 }
 
-function connectRelayWs(
+/** Shared with friends.ts, which opens a long-lived connection to a group
+ *  room using exactly the same relay protocol. */
+export function connectRelayWs(
   relayUrl: string,
   roomId: string,
   { token = '', secret = '', helloName = '', WebSocketImpl = WebSocket }: ConnectRelayOptions = {}

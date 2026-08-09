@@ -1,0 +1,210 @@
+/* Friends group section inside the Watch Party panel. Intentionally reuses
+   the panel's existing spacing/typography language rather than inventing a
+   second look for the same surface. */
+
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.sectionHead {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.sectionLabel {
+  font-family: var(--font-display);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 1.1px;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.connState {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.dotOnline,
+.dotOffline {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  margin-left: auto;
+}
+.dotOnline {
+  background: var(--accent-green);
+  box-shadow: 0 0 8px var(--accent-green);
+}
+.dotOffline {
+  background: var(--accent-yellow);
+  box-shadow: 0 0 8px var(--accent-yellow);
+}
+
+.hint {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+.toggleRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.joinRow {
+  display: flex;
+  gap: 8px;
+}
+
+.input {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 8px 10px;
+  border-radius: var(--radius-small);
+  background: rgba(10, 18, 32, 0.7);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-primary);
+  font-size: 12px;
+}
+.input:focus-visible {
+  outline: 2px solid var(--accent-cyan);
+  outline-offset: 1px;
+}
+
+.primaryButton,
+.secondaryButton,
+.leaveButton,
+.joinButton {
+  border-radius: var(--radius-pill);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 8px 14px;
+  transition:
+    background var(--transition-fast),
+    color var(--transition-fast);
+}
+
+.primaryButton {
+  background: linear-gradient(135deg, var(--accent-blue), var(--accent-violet));
+  color: #fff;
+}
+.primaryButton:hover:not(:disabled) {
+  filter: brightness(1.1);
+}
+
+.secondaryButton {
+  background: rgba(140, 180, 225, 0.1);
+  color: var(--text-primary);
+  border: 1px solid var(--border-subtle);
+}
+.secondaryButton:hover:not(:disabled) {
+  background: rgba(94, 193, 255, 0.16);
+}
+
+.leaveButton {
+  background: none;
+  color: var(--text-secondary);
+  border: 1px solid var(--border-subtle);
+}
+.leaveButton:hover:not(:disabled) {
+  color: var(--accent-magenta);
+  border-color: var(--accent-magenta);
+}
+
+.primaryButton:disabled,
+.secondaryButton:disabled,
+.leaveButton:disabled,
+.joinButton:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.friendList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.friend {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.avatar {
+  width: 30px;
+  height: 30px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 700;
+  color: #fff;
+  background: linear-gradient(135deg, rgba(24, 169, 255, 0.6), rgba(141, 77, 255, 0.6));
+}
+
+.friendText {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.friendName {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.friendActivity,
+.friendIdle {
+  font-size: 11px;
+  /* A long title must not push the Join button off the panel. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.friendActivity {
+  color: var(--accent-cyan);
+}
+.friendIdle {
+  color: var(--text-muted);
+}
+
+.joinButton {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 12px;
+  background: rgba(39, 230, 154, 0.14);
+  color: var(--accent-green);
+  border: 1px solid rgba(39, 230, 154, 0.4);
+}
+.joinButton:hover:not(:disabled) {
+  background: rgba(39, 230, 154, 0.24);
+}
+
+.footerRow {
+  display: flex;
+  gap: 8px;
+}
+.footerRow > * {
+  flex: 1 1 0;
+}

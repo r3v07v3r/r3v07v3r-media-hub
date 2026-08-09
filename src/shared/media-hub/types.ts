@@ -586,3 +586,38 @@ export interface UpdateCheckResult {
   state: UpdateState
   version: string
 }
+
+/** What a friend is watching, shared only when they've opted in. */
+export interface FriendActivity {
+  mediaId: string
+  kind: string
+  title: string
+  poster?: string
+  /** Absolute position in seconds — lets the UI show "34 min in". */
+  position: number
+  paused: boolean
+  /** Present when this friend is joinable right now. Carried in the
+   *  announcement so the UI can offer "join their party" without a round
+   *  trip; absent means they're watching but not hosting anything. */
+  partyCode?: string
+}
+
+/** One member of a friends group, as this device currently sees them.
+ *  Soft state with a TTL — see friends.ts, presence is announced, never
+ *  authoritative. */
+export interface FriendPresence {
+  friendId: string
+  name: string
+  activity: FriendActivity | null
+}
+
+export interface FriendsStatus {
+  inGroup: boolean
+  code?: string
+  selfId?: string
+  /** Whether the persistent relay socket is up right now. */
+  connected?: boolean
+  /** This device's own opt-in for publishing what it's watching. */
+  sharing: boolean
+  friends: FriendPresence[]
+}
