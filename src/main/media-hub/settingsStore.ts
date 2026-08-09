@@ -58,6 +58,7 @@ export interface MediaHubRawSettings {
   friendsShareActivity?: boolean
   theme?: string
   subtitleLanguage?: string
+  audioLanguage?: string
   updateChannel?: string
   playbackBuffer?: string
   autoSubtitlesEnabled?: boolean

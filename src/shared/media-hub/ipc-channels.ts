@@ -13,6 +13,7 @@ export const MEDIA_HUB_CHANNELS = {
   settingsGet: 'mediahub:settings:get',
   settingsSetTheme: 'mediahub:settings:set-theme',
   settingsSetSubtitleLanguage: 'mediahub:settings:set-subtitle-language',
+  settingsSetAudioLanguage: 'mediahub:settings:set-audio-language',
   settingsSetPlaybackBuffer: 'mediahub:settings:set-playback-buffer',
   settingsSetAutoSubtitles: 'mediahub:settings:set-auto-subtitles',
   settingsSetUiAnimations: 'mediahub:settings:set-ui-animations',

@@ -59,6 +59,21 @@ export function registerAppIpc(): void {
     }
   )
 
+  handle<unknown, { audioLanguage: string }>(
+    MEDIA_HUB_CHANNELS.settingsSetAudioLanguage,
+    (_event, value) => {
+      const settings = readSettings()
+      // Same validation shape as subtitleLanguage above — a bare language
+      // tag, nothing that could reach a URL or a filesystem path.
+      settings.audioLanguage = (String(value || 'en')
+        .trim()
+        .toLowerCase()
+        .match(/^[a-z-]{2,10}$/) || ['en'])[0]
+      writeSettings(settings)
+      return { audioLanguage: settings.audioLanguage }
+    }
+  )
+
   handle<unknown, { playbackBuffer: string }>(
     MEDIA_HUB_CHANNELS.settingsSetPlaybackBuffer,
     (_event, value) => {

@@ -56,6 +56,7 @@ import type {
   UpscaleSuggestion
 } from '../../shared/media-hub/types'
 import { getPlaybackBufferSeconds } from '../../shared/media-hub/playbackBuffer'
+import { languageMatches } from '../../shared/media-hub/language'
 import { isAllowedRemoteMediaUrl } from './playback'
 import { readSettings } from './settingsStore'
 
@@ -291,25 +292,63 @@ const DIRECT_AUDIO_CODECS = new Set([
 // lossless track specifically for this kind of compatibility gap.
 const RISKY_TRANSCODE_CODECS = new Set(['truehd', 'dts'])
 
-/** Picks which audio track compatibility-mode transcoding should actually
- *  use — not always simply "the default track." See RISKY_TRANSCODE_CODECS. */
-export function selectTranscodeAudioTrack(tracks: MediaTracks | undefined): MediaTrack | undefined {
+/**
+ * Picks which audio track to actually play.
+ *
+ * LANGUAGE COMES FIRST. This used to be "the track marked default, or the
+ * first one" with no notion of language at all — so a release carrying
+ * English and French, with French marked default in the container, played
+ * French. That is not a preference the file gets to make; it is the whole
+ * point of having more than one audio track. Reported live: a film played
+ * with French audio when English was sitting right there.
+ *
+ * Within the wanted language the old codec logic still applies unchanged
+ * (see RISKY_TRANSCODE_CODECS) — the choice is "the best English track",
+ * not "English at any cost". If the file has no track in the wanted
+ * language, it falls back to exactly what it did before, because at that
+ * point there is nothing to prefer.
+ */
+export function selectTranscodeAudioTrack(
+  tracks: MediaTracks | undefined,
+  preferredLanguage = 'en'
+): MediaTrack | undefined {
   const audio = tracks?.audio || []
   if (!audio.length) return undefined
-  const preferred = audio.find((x) => x.default) || audio[0]
+  const wanted = audio.filter((t) => languageMatches(t.language, preferredLanguage))
+  const pool = wanted.length ? wanted : audio
+  const preferred = pool.find((x) => x.default) || pool[0]
   if (!RISKY_TRANSCODE_CODECS.has(preferred.codec)) return preferred
-  const saferSameLanguage = audio.find(
+  const saferSameLanguage = pool.find(
     (t) =>
       t !== preferred && t.language === preferred.language && !RISKY_TRANSCODE_CODECS.has(t.codec)
   )
-  const saferAny = audio.find((t) => t !== preferred && !RISKY_TRANSCODE_CODECS.has(t.codec))
+  const saferAny = pool.find((t) => t !== preferred && !RISKY_TRANSCODE_CODECS.has(t.codec))
   return saferSameLanguage || saferAny || preferred
 }
 
-export function needsAudioCompatibility(tracks: MediaTracks | undefined): boolean {
-  const selected = selectTranscodeAudioTrack(tracks)
+/**
+ * Whether ffmpeg has to be involved at all.
+ *
+ * Two reasons now, not one. The original: the audio codec isn't something
+ * the browser can decode. The new one: the track we want is not the one
+ * the browser would play on its own. Direct playback hands the file
+ * straight to Chromium, which has no audio-track selection API — it plays
+ * whatever the container marks default and there is no way to ask it for
+ * anything else. So when the wanted track is not that one, going through
+ * ffmpeg is the only way to honour the choice at all. It costs a remux on
+ * exactly the multi-language releases where the alternative is playing
+ * the wrong language.
+ */
+export function needsAudioCompatibility(
+  tracks: MediaTracks | undefined,
+  preferredLanguage = 'en'
+): boolean {
+  const selected = selectTranscodeAudioTrack(tracks, preferredLanguage)
   if (!selected) return false
-  return !DIRECT_AUDIO_CODECS.has(String(selected.codec || '').toLowerCase())
+  if (!DIRECT_AUDIO_CODECS.has(String(selected.codec || '').toLowerCase())) return true
+  const audio = tracks?.audio || []
+  const browserWouldPlay = audio.find((t) => t.default) || audio[0]
+  return Boolean(browserWouldPlay) && browserWouldPlay.ordinal !== selected.ordinal
 }
 
 // Video is stream-copied by default (see buildFfmpegArguments's `-c:v

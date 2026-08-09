@@ -329,6 +329,12 @@ export interface MediaHubPublicSettings {
   theme: string
   simklClientId: string
   subtitleLanguage: string
+  /** Which audio track to play when a release carries more than one, and
+   *  which releases to prefer when several exist. Separate from
+   *  `subtitleLanguage` on purpose: "Japanese audio, English subtitles" is
+   *  the normal way to watch anime, and a single combined setting couldn't
+   *  express it. Defaults to English. */
+  audioLanguage: string
   partySyncUrl: string
   /** Last display name used to host or join a Watch Party — remembered so it doesn't need retyping each time. */
   partyDisplayName: string

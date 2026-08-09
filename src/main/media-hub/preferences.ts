@@ -39,6 +39,7 @@ export function publicSettings(settings: Record<string, unknown> = {}): MediaHub
     theme: normalizeTheme(settings.theme),
     simklClientId: String(settings.simklClientId || ''),
     subtitleLanguage: String(settings.subtitleLanguage || 'en'),
+    audioLanguage: String(settings.audioLanguage || 'en'),
     partySyncUrl: String(settings.partySyncUrl || ''),
     partyDisplayName: String(settings.partyDisplayName || ''),
     updateChannel: normalizeUpdateChannel(settings.updateChannel),

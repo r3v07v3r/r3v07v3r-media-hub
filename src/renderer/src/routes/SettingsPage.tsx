@@ -446,6 +446,11 @@ export default function SettingsPage() {
     refreshMediaHubSettings()
   }
 
+  async function handleSetAudioLanguage(language: string) {
+    await window.api?.mediaHub?.settings.setAudioLanguage(language)
+    refreshMediaHubSettings()
+  }
+
   // Columns tile left-to-right instead of stacking everything in one long
   // vertical scroll (see .tileArea/.column in Settings.module.css) — a
   // plain vertical mouse wheel has nothing to act on over .tileArea itself
@@ -526,6 +531,18 @@ export default function SettingsPage() {
               value={mediaHubSettings?.subtitleLanguage ?? 'en'}
               options={SUBTITLE_LANGUAGE_OPTIONS}
               onChange={handleSetSubtitleLanguage}
+            />
+            {/* Separate from the subtitle language directly above, because
+                they genuinely differ for a lot of viewing — Japanese audio
+                with English subtitles is the normal way to watch most of
+                what's in the Anime section. */}
+            <SegmentedRow
+              icon="waveform"
+              title="Audio language"
+              description="Preferred spoken language. Used to pick the audio track when a release has several, and to avoid dubbed releases when an original-language one exists."
+              value={mediaHubSettings?.audioLanguage ?? 'en'}
+              options={SUBTITLE_LANGUAGE_OPTIONS}
+              onChange={handleSetAudioLanguage}
             />
           </section>
 

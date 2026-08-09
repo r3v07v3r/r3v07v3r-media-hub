@@ -27,6 +27,7 @@ import {
   subtitlesInadequate
 } from '../../shared/media-hub/catalog-logic'
 import { releaseTextMentionsExecutable } from '../../shared/media-hub/unsafeFiles'
+import { releaseLacksPreferredLanguage } from '../../shared/media-hub/language'
 
 export { airingStatus, episodeWatchState, filterCatalog, isItemWatched, subtitlesInadequate }
 
@@ -134,18 +135,41 @@ export function isUnsafeStream(stream: StreamCandidate): boolean {
   return releaseTextMentionsExecutable(streamText(stream))
 }
 
-/** Drops releases advertising executables, then ranks what's left. */
-export function rankSafeStreams(streams: StreamCandidate[]): StreamCandidate[] {
-  return rankStreams(streams.filter((s) => !isUnsafeStream(s)))
+/** Drops releases advertising executables, then ranks what's left with the
+ *  person's audio-language preference applied. */
+export function rankSafeStreams(
+  streams: StreamCandidate[],
+  preferredLanguage = 'en'
+): StreamCandidate[] {
+  return rankStreams(
+    streams.filter((s) => !isUnsafeStream(s)),
+    preferredLanguage
+  )
 }
 
-export function rankStreams(streams: StreamCandidate[]): StreamCandidate[] {
+/**
+ * What a release in the wrong language costs it.
+ *
+ * Large enough that no resolution or cache advantage can outweigh it — a
+ * 4K French dub must never beat a 1080p English copy — but a penalty
+ * rather than an exclusion, because if the only copy of a film in
+ * existence is the French dub, playing it beats playing nothing. It just
+ * has to lose to anything English.
+ */
+const WRONG_LANGUAGE_PENALTY = 40000
+
+export function rankStreams(streams: StreamCandidate[], preferredLanguage = 'en'): StreamCandidate[] {
   const score = (s: StreamCandidate): number =>
     (s.exact === false ? 0 : 100000) +
     (s.cached === false ? 0 : 20000) +
     (s.compatible === false ? -50000 : 10000) +
     streamResolution(s) -
-    streamingPenalty(s)
+    streamingPenalty(s) -
+    // Reported live: a film played with French audio and French subtitles.
+    // Track selection can't fix that one — a dub is a different release,
+    // and there was no English in the file to select. It has to be settled
+    // here, when the release is chosen.
+    (releaseLacksPreferredLanguage(streamText(s), preferredLanguage) ? WRONG_LANGUAGE_PENALTY : 0)
   return [...streams].sort((a, b) => score(b) - score(a))
 }
 

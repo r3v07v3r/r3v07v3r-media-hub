@@ -235,10 +235,12 @@ export function registerTorBoxIpc(): void {
             ? cached.data.map((x) => String(x.hash || x).toLowerCase())
             : Object.keys(cached.data || {}).map((x) => x.toLowerCase())
         )
+        const audioLanguage = readSettings().audioLanguage || 'en'
         const streams = rankSafeStreams(
           discovered
             .filter((s) => available.has(s.infoHash.toLowerCase()))
-            .map((s) => ({ ...s, cached: true, compatible: true }))
+            .map((s) => ({ ...s, cached: true, compatible: true })),
+          audioLanguage
         )
         if (streams.length) {
           const result: StreamResolveResult = { streams, best: streams[0] }
@@ -261,7 +263,7 @@ export function registerTorBoxIpc(): void {
         // same honest "nothing available yet" result as before this
         // existed, rather than surfacing a harder error for what's meant
         // to be a fallback path.
-        const candidate = rankSafeStreams(discovered)[0]
+        const candidate = rankSafeStreams(discovered, audioLanguage)[0]
         let queued = false
         if (candidate) {
           try {

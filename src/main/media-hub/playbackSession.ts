@@ -164,13 +164,18 @@ export async function preparePlayback(url: string): Promise<PlaybackResult> {
   // lookup and a filter/sort over a 3-item array, never touches ffmpeg, so
   // it's always cheap to compute and safe to surface on every title.
   const settings = readSettings()
+  // Which language to play when the file offers a choice. Consulted below
+  // both for picking the track AND for deciding whether ffmpeg is needed
+  // at all — direct playback hands the file to Chromium, which has no way
+  // to be told which audio track to use.
+  const audioLanguage = settings.audioLanguage || 'en'
   const screenHeight = screen.getPrimaryDisplay()?.workAreaSize?.height
   const upscaleSuggestion = videoResolutionUpscaleSuggestion(
     activeMediaTracks,
     screenHeight,
     settings.preferredUpscaleHeight
   )
-  if ((needsAudioCompatibility(activeMediaTracks) || activeVideoEncoder) && ffmpegPath) {
+  if ((needsAudioCompatibility(activeMediaTracks, audioLanguage) || activeVideoEncoder) && ffmpegPath) {
     directModeActive = false
     await playbackProxy.close()
     // Cap the height when we're FORCED to re-encode video. Re-encoding
@@ -189,7 +194,9 @@ export async function preparePlayback(url: string): Promise<PlaybackResult> {
     const encodeHeight =
       activeUpscaleHeight ??
       (sourceHeight > TRANSCODE_MAX_HEIGHT ? TRANSCODE_MAX_HEIGHT : undefined)
-    const audioSelection = { audio: selectTranscodeAudioTrack(activeMediaTracks)?.ordinal ?? 0 }
+    const audioSelection = {
+      audio: selectTranscodeAudioTrack(activeMediaTracks, audioLanguage)?.ordinal ?? 0
+    }
     let started: FfmpegTranscoderResult
     try {
       started = await ffmpegTranscoder.start(
@@ -247,13 +254,11 @@ export async function preparePlayback(url: string): Promise<PlaybackResult> {
     tracks: activeMediaTracks,
     // Nothing is selecting anything here — the browser demuxes the file
     // itself and plays whichever audio stream the container marks default
-    // (falling back to the first). Reported so the player's audio menu can
-    // still mark the track being heard; picking a different one is what
-    // switches this title into compatibility mode.
-    selection: {
-      audio: (activeMediaTracks.audio.find((t) => t.default) ?? activeMediaTracks.audio[0])
-        ?.ordinal
-    },
+    // (falling back to the first). Reaching this branch at all means that
+    // track IS the one we wanted, since needsAudioCompatibility above
+    // routes to ffmpeg whenever it isn't. Reported so the player's audio
+    // menu can mark the track actually being heard.
+    selection: { audio: selectTranscodeAudioTrack(activeMediaTracks, audioLanguage)?.ordinal },
     videoCodecWarning,
     upscaleSuggestion,
     url: await playbackProxy.register(url)
@@ -365,7 +370,7 @@ export function registerPlaybackIpc(): void {
       // the first.
       const audio = Number.isInteger(selection.audio)
         ? (selection.audio as number)
-        : (selectTranscodeAudioTrack(activeMediaTracks)?.ordinal ?? -1)
+        : (selectTranscodeAudioTrack(activeMediaTracks, readSettings().audioLanguage || 'en')?.ordinal ?? -1)
       // upscaleHeight is deliberately NOT defaulted the way audio/subtitle
       // are above: undefined here means "this call wasn't about quality at
       // all" (an ordinary seek re-sending the renderer's last known
