@@ -72,7 +72,12 @@ export function FriendsSection() {
               const api = window.api?.mediaHub?.friends
               if (!api) return
               const { code } = await api.create()
-              await navigator.clipboard?.writeText(code).catch(() => {})
+              // The app's own clipboard IPC, not navigator.clipboard: the
+              // renderer runs on a custom app:// origin where the browser
+              // Clipboard API is denied write permission outright ("Write
+              // permission denied"). PartyPanel's own copy button uses the
+              // same IPC.
+              await window.api?.mediaHub?.clipboard.write(code)
               pushNotification({ tone: 'success', message: 'Group created — code copied.' })
             }, 'Could not create the group.')
           }
@@ -181,7 +186,7 @@ export function FriendsSection() {
           disabled={busy}
           onClick={() =>
             run(async () => {
-              await navigator.clipboard?.writeText(status.code || '')
+              await window.api?.mediaHub?.clipboard.write(status.code || '')
               pushNotification({ tone: 'success', message: 'Group code copied.' })
             }, 'Could not copy the code.')
           }
