@@ -621,3 +621,16 @@ export interface FriendsStatus {
   sharing: boolean
   friends: FriendPresence[]
 }
+
+/** Direct messages between friends, relayed through the group channel.
+ *  Addressed by `toFriendId` — the relay fans out to everyone, so the
+ *  recipient filters. There is nothing secret in them beyond what the
+ *  group secret already protects. */
+export type FriendMessage =
+  // "Let me watch with you." Sent to someone who is watching but has no
+  // party open, since a solo watcher has no code to hand out until asked.
+  | { type: 'friend-join-request'; fromFriendId: string; toFriendId: string; fromName: string }
+  // The answer, carrying a party the requester can actually join.
+  | { type: 'friend-join-offer'; fromFriendId: string; toFriendId: string; partyCode: string }
+  // Politely declining — they stopped watching, or hosting failed.
+  | { type: 'friend-join-declined'; fromFriendId: string; toFriendId: string; reason: string }

@@ -26,7 +26,12 @@ import crypto from 'node:crypto'
 import type WebSocket from 'ws'
 
 import { MEDIA_HUB_CHANNELS } from '../../shared/media-hub/ipc-channels'
-import type { FriendPresence, FriendsStatus, FriendActivity } from '../../shared/media-hub/types'
+import type {
+  FriendMessage,
+  FriendPresence,
+  FriendsStatus,
+  FriendActivity
+} from '../../shared/media-hub/types'
 import { decodeShareCode, encodeRelayShareCode, decryptMessage, encryptMessage } from './party'
 import { handle } from './ipcGuard'
 import { logError } from './logger'
@@ -247,7 +252,24 @@ async function openSocket(): Promise<void> {
       // not an envelope — fall through and try to decrypt as-is
     }
     const msg = decryptMessage(current.secret, body) as Record<string, unknown> | null
-    if (msg && msg.type === 'friend-presence') recordPresence(msg, ageMs)
+    if (!msg) return
+    if (msg.type === 'friend-presence') {
+      recordPresence(msg, ageMs)
+      return
+    }
+    // Peer-to-peer requests. Addressed messages are filtered here rather
+    // than in the renderer so a device never even sees traffic meant for
+    // someone else. Replayed (retained) copies are dropped: a join request
+    // is a live intent, and answering a stale one would drag someone into
+    // a party they asked about minutes ago.
+    if (
+      ageMs === 0 &&
+      typeof msg.type === 'string' &&
+      msg.type.startsWith('friend-join-') &&
+      msg.toFriendId === current.friendId
+    ) {
+      sendToRenderer(MEDIA_HUB_CHANNELS.friendsMessage, msg as unknown as FriendMessage)
+    }
   })
   const onGone = (): void => {
     if (!state || state !== current) return
@@ -398,6 +420,21 @@ export function registerFriendsIpc(): void {
       // already published rather than leaving it visible for an interval.
       announce()
       pushStatus()
+      return { ok: true }
+    }
+  )
+
+  handle<{ message?: FriendMessage }, { ok: true }>(
+    MEDIA_HUB_CHANNELS.friendsSend,
+    (_e, payload) => {
+      const current = state
+      const message = payload?.message
+      if (!current || !current.ws || !message) throw new Error('Not connected to a friends group.')
+      // Stamped here rather than trusted from the renderer, so a message
+      // always genuinely identifies its sender.
+      current.ws.send(
+        encryptMessage(current.secret, { ...message, fromFriendId: current.friendId })
+      )
       return { ok: true }
     }
   )

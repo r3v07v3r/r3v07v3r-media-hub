@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import { useAppState } from '@renderer/context/AppStateContext'
+import { catalogItemToMediaItem } from '@renderer/lib/mediaHub/adapters'
+import type { MediaKind } from '@shared/media-hub/types'
 import { Icon } from '@renderer/components/icons/Icon'
 import type { FriendsStatus } from '@shared/media-hub/types'
 import styles from './FriendsSection.module.css'
@@ -19,7 +21,13 @@ function formatPosition(seconds: number): string {
 }
 
 export function FriendsSection() {
-  const { pushNotification } = useAppState()
+  const { pushNotification, joinParty, startPlayback, mediaHubSettings } = useAppState()
+  // Which friend's "join or just watch?" choice is currently open. The
+  // brief was to ASK each time rather than guess — the two outcomes are
+  // genuinely different (locked together vs. watching the same thing
+  // independently) and neither is the obvious default.
+  const [choosing, setChoosing] = useState<string | null>(null)
+  const [awaiting, setAwaiting] = useState<string | null>(null)
   const [status, setStatus] = useState<FriendsStatus | null>(null)
   const [joinCode, setJoinCode] = useState('')
   const [busy, setBusy] = useState(false)
@@ -35,6 +43,24 @@ export function FriendsSection() {
       .catch(() => {})
     return api.onEvent(setStatus)
   }, [])
+
+  // The other half of joining a SOLO watcher: we asked, they spun up a
+  // party on demand, and this is the answer coming back.
+  useEffect(() => {
+    const api = window.api?.mediaHub?.friends
+    if (!api) return
+    return api.onMessage((message) => {
+      if (message.type === 'friend-join-offer') {
+        setAwaiting(null)
+        joinParty(message.partyCode, mediaHubSettings?.partyDisplayName || 'A friend').catch(() => {
+          pushNotification({ tone: 'error', message: 'Could not join that party.' })
+        })
+      } else if (message.type === 'friend-join-declined') {
+        setAwaiting(null)
+        pushNotification({ tone: 'warning', message: message.reason })
+      }
+    })
+  }, [joinParty, mediaHubSettings, pushNotification])
 
   const run = useCallback(
     async (fn: () => Promise<unknown>, failure: string) => {
@@ -155,24 +181,70 @@ export function FriendsSection() {
                   <span className={styles.friendIdle}>Not watching anything</span>
                 )}
               </span>
-              {/* Joinable only when they're actually hosting something — see
-                  FriendActivity.partyCode. Watching alone isn't joinable
-                  yet; that flow comes next. */}
-              {f.activity?.partyCode ? (
-                <button
-                  type="button"
-                  className={styles.joinButton}
-                  disabled={busy}
-                  onClick={() =>
-                    run(async () => {
-                      await window.api?.mediaHub?.party.join(f.activity!.partyCode!, '')
-                      pushNotification({ tone: 'success', message: `Joined ${f.name}'s party.` })
-                    }, 'Could not join that party.')
-                  }
-                >
-                  <Icon name="play" size={12} />
-                  Join
-                </button>
+              {f.activity ? (
+                awaiting === f.friendId ? (
+                  <span className={styles.awaiting}>Asking…</span>
+                ) : choosing === f.friendId ? (
+                  <span className={styles.choiceRow}>
+                    <button
+                      type="button"
+                      className={styles.joinButton}
+                      disabled={busy}
+                      onClick={() =>
+                        run(async () => {
+                          setChoosing(null)
+                          const api = window.api?.mediaHub?.friends
+                          // Already hosting: join straight away. Watching
+                          // alone: ask, and they'll create one for us.
+                          if (f.activity?.partyCode) {
+                            await joinParty(
+                              f.activity.partyCode,
+                              mediaHubSettings?.partyDisplayName || 'A friend'
+                            )
+                          } else {
+                            setAwaiting(f.friendId)
+                            await api?.send({
+                              type: 'friend-join-request',
+                              toFriendId: f.friendId,
+                              fromFriendId: '',
+                              fromName: mediaHubSettings?.partyDisplayName || 'A friend'
+                            })
+                          }
+                        }, 'Could not join them.')
+                      }
+                    >
+                      Join party
+                    </button>
+                    <button
+                      type="button"
+                      className={styles.secondaryButton}
+                      disabled={busy}
+                      onClick={() =>
+                        run(async () => {
+                          setChoosing(null)
+                          // Same title, own playback — nothing synced.
+                          const meta = await window.api?.mediaHub?.catalog.meta(
+                            (f.activity!.kind || 'movie') as MediaKind,
+                            f.activity!.mediaId
+                          )
+                          if (meta) await startPlayback(catalogItemToMediaItem(meta))
+                        }, 'Could not start that title.')
+                      }
+                    >
+                      Watch too
+                    </button>
+                  </span>
+                ) : (
+                  <button
+                    type="button"
+                    className={styles.joinButton}
+                    disabled={busy}
+                    onClick={() => setChoosing(f.friendId)}
+                  >
+                    <Icon name="play" size={12} />
+                    Watch
+                  </button>
+                )
               ) : null}
             </li>
           ))}

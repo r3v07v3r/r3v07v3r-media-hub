@@ -208,3 +208,25 @@
 .footerRow > * {
   flex: 1 1 0;
 }
+
+/* The "join party or just watch too?" choice, shown in place of the
+   single Watch button once a friend is tapped. Deliberately inline rather
+   than a modal: it's a two-option question about one row, and a dialog
+   over the party panel would be a lot of ceremony for it. */
+.choiceRow {
+  display: flex;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+.choiceRow .joinButton,
+.choiceRow .secondaryButton {
+  padding: 6px 10px;
+  white-space: nowrap;
+}
+
+.awaiting {
+  flex: 0 0 auto;
+  font-size: 11px;
+  color: var(--text-secondary);
+  font-style: italic;
+}

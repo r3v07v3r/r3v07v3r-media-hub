@@ -1060,6 +1060,84 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     if (!inPartyNow && partyPreparing) setPartyPreparing(null)
   }
 
+  // Read through refs inside the join-request handler below, so that
+  // subscription doesn't tear down and re-establish every time playback
+  // position or settings change — it only cares about their values at the
+  // moment a request actually arrives.
+  const playbackMediaRef = useRef(playbackMedia)
+  const hostPartyRef = useRef(hostParty)
+  const mediaHubSettingsRef = useRef(mediaHubSettings)
+  useEffect(() => {
+    playbackMediaRef.current = playbackMedia
+    hostPartyRef.current = hostParty
+    mediaHubSettingsRef.current = mediaHubSettings
+  }, [playbackMedia, hostParty, mediaHubSettings])
+
+  // Answering "can I watch with you?" from a friend. Lives here rather
+  // than in the friends UI because it needs the things only this context
+  // has: whether we're actually playing something, and the ability to
+  // start hosting.
+  //
+  // This is what makes a SOLO watcher joinable at all. Someone watching
+  // alone has no party and therefore no code to publish, so a friend has
+  // nothing to click — the party is created on demand, only when somebody
+  // actually asks, rather than forcing everyone to host speculatively.
+  useEffect(() => {
+    const api = window.api?.mediaHub?.friends
+    if (!api) return
+    return api.onMessage((message) => {
+      if (message.type !== 'friend-join-request') return
+      const decline = (reason: string): void => {
+        api
+          .send({
+            type: 'friend-join-declined',
+            toFriendId: message.fromFriendId,
+            fromFriendId: '',
+            reason
+          })
+          .catch(() => {})
+      }
+      if (!playbackMediaRef.current) {
+        decline("They aren't watching anything right now.")
+        return
+      }
+      // Already hosting — hand over the code we've got rather than
+      // tearing down a party other people may already be in.
+      if (partyStatus?.inParty && partyStatus.role === 'host' && partyHostCode) {
+        api
+          .send({
+            type: 'friend-join-offer',
+            toFriendId: message.fromFriendId,
+            fromFriendId: '',
+            partyCode: partyHostCode
+          })
+          .catch(() => {})
+        return
+      }
+      if (partyStatus?.inParty) {
+        decline("They're already in someone else's party.")
+        return
+      }
+      hostPartyRef
+        .current(mediaHubSettingsRef.current?.partyDisplayName || 'A friend', 'relay')
+        .then((result) => {
+          api
+            .send({
+              type: 'friend-join-offer',
+              toFriendId: message.fromFriendId,
+              fromFriendId: '',
+              partyCode: result.code
+            })
+            .catch(() => {})
+          pushNotification({
+            tone: 'info',
+            message: `${message.fromName} is joining your watch party.`
+          })
+        })
+        .catch(() => decline('They could not start a party just now.'))
+    })
+  }, [partyStatus, partyHostCode, pushNotification])
+
   // A suggestion only ever carries {id, type, title, poster} — no episode —
   // so a series/anime suggestion is inherently ambiguous about which
   // episode to start. Defaulting to S1E1 (rather than leaving season/

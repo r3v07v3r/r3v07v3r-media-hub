@@ -105,7 +105,9 @@ export const MEDIA_HUB_CHANNELS = {
   friendsLeave: 'mediahub:friends:leave',
   friendsSetSharing: 'mediahub:friends:set-sharing',
   friendsSetActivity: 'mediahub:friends:set-activity',
+  friendsSend: 'mediahub:friends:send',
   friendsEvent: 'mediahub:friends:event', // push event
+  friendsMessage: 'mediahub:friends:message', // push event — peer-to-peer requests
   partySyncConnect: 'mediahub:party-sync:connect',
   partySyncDisconnect: 'mediahub:party-sync:disconnect',
   partyEvent: 'mediahub:party:event', // push event

@@ -28,6 +28,7 @@ import type {
   PartyHostResult,
   PartyMode,
   FriendActivity,
+  FriendMessage,
   FriendsStatus,
   PartyNowPlayingPayload,
   PartyPreparingPayload,
@@ -387,8 +388,12 @@ const api = {
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.friendsSetSharing, { sharing }),
       setActivity: (activity: FriendActivity | null): Promise<{ ok: true }> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.friendsSetActivity, { activity }),
+      send: (message: FriendMessage): Promise<{ ok: true }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.friendsSend, { message }),
       onEvent: (onEvent: (payload: FriendsStatus) => void): (() => void) =>
-        subscribe<FriendsStatus>(MEDIA_HUB_CHANNELS.friendsEvent, onEvent)
+        subscribe<FriendsStatus>(MEDIA_HUB_CHANNELS.friendsEvent, onEvent),
+      onMessage: (onEvent: (payload: FriendMessage) => void): (() => void) =>
+        subscribe<FriendMessage>(MEDIA_HUB_CHANNELS.friendsMessage, onEvent)
     },
 
     window: {
