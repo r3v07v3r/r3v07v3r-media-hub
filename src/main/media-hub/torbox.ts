@@ -35,7 +35,7 @@ import { handle } from './ipcGuard'
 import {
   cometConfigPath,
   enrichTorBoxItem,
-  rankStreams,
+  rankSafeStreams,
   selectVideoFile,
   titleMatchesRelease,
   validateTorBoxToken,
@@ -235,7 +235,7 @@ export function registerTorBoxIpc(): void {
             ? cached.data.map((x) => String(x.hash || x).toLowerCase())
             : Object.keys(cached.data || {}).map((x) => x.toLowerCase())
         )
-        const streams = rankStreams(
+        const streams = rankSafeStreams(
           discovered
             .filter((s) => available.has(s.infoHash.toLowerCase()))
             .map((s) => ({ ...s, cached: true, compatible: true }))
@@ -261,7 +261,7 @@ export function registerTorBoxIpc(): void {
         // same honest "nothing available yet" result as before this
         // existed, rather than surfacing a harder error for what's meant
         // to be a fallback path.
-        const candidate = rankStreams(discovered)[0]
+        const candidate = rankSafeStreams(discovered)[0]
         let queued = false
         if (candidate) {
           try {

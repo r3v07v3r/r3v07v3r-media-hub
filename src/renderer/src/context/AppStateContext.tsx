@@ -620,6 +620,19 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     setNotifications((prev) => prev.filter((x) => x.id !== id))
   }, [])
 
+  // A refused download is never routine — it's either something hostile
+  // reaching for the disk or a bug in this app, and both are worth saying
+  // out loud rather than only writing to a log nobody reads. Warning tone
+  // rather than error: nothing is broken, the guard did its job.
+  useEffect(() => {
+    return window.api?.mediaHub?.downloads?.onBlocked((item) => {
+      pushNotification({
+        tone: 'warning',
+        message: `Blocked a download: "${item.filename}" from ${item.host}. ${item.reason}`
+      })
+    })
+  }, [pushNotification])
+
   const cancelProfilePinPrompt = useCallback(() => setProfilePinPrompt(null), [])
 
   const switchProfile = useCallback(

@@ -1,12 +1,13 @@
 {
   "name": "r3v07v3r-media-hub",
-  "version": "1.0.72",
+  "version": "1.0.73",
   "description": "Standalone TorBox-powered Movies, Series and Anime desktop client",
   "main": "./out/main/index.js",
   "author": "R3v07v3R",
   "scripts": {
     "format": "prettier --write .",
     "lint": "eslint --cache .",
+    "test": "tsx tests/unsafeFiles.test.ts",
     "typecheck:node": "tsc --noEmit -p tsconfig.node.json --composite false",
     "typecheck:web": "tsc --noEmit -p tsconfig.web.json --composite false",
     "typecheck": "npm run typecheck:node && npm run typecheck:web",

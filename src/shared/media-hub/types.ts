@@ -174,6 +174,15 @@ export interface PlaybackSelection {
   upscaleHeight?: number
 }
 
+/** A download the app refused to write to disk (see main/media-hub/downloadGuard.ts). */
+export interface BlockedDownload {
+  filename: string
+  reason: string
+  /** Host it came from. Deliberately not the full URL — a debrid download
+   *  link carries an access token in its query string. */
+  host: string
+}
+
 export interface PlaybackResult {
   ok: true
   player: 'embedded'

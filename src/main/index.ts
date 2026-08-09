@@ -12,6 +12,7 @@ import { getDatabase, setDatabase } from './media-hub/dbState'
 import { setActiveWindow, sendToRenderer } from './media-hub/rendererBridge'
 import { isAllowedExternalUrl } from './media-hub/security'
 import { setupAutoUpdater } from './media-hub/autoUpdate'
+import { installDownloadGuard } from './media-hub/downloadGuard'
 import { closeParty } from './media-hub/watchParty'
 import { stopPlayback } from './media-hub/playbackSession'
 import { MEDIA_HUB_CHANNELS } from '../shared/media-hub/ipc-channels'
@@ -142,6 +143,10 @@ function createWindow(): void {
 // Some APIs can only be used after this event occurs.
 app.whenReady().then(() => {
   registerAppSchemeHandler()
+
+  // Before any window exists, so there is no window-shaped gap at startup
+  // during which a download could slip through unguarded.
+  installDownloadGuard()
 
   // Set app user model id for windows
   electronApp.setAppUserModelId('com.electron')

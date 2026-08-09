@@ -26,6 +26,7 @@ import {
   isItemWatched,
   subtitlesInadequate
 } from '../../shared/media-hub/catalog-logic'
+import { releaseTextMentionsExecutable } from '../../shared/media-hub/unsafeFiles'
 
 export { airingStatus, episodeWatchState, filterCatalog, isItemWatched, subtitlesInadequate }
 
@@ -116,6 +117,27 @@ const REMUX_PENALTY = 8000
  *  gate — a cached monster is preferred to an uncached anything, because
  *  the uncached one can't be played at all right now. */
 const OVERSIZED_GB = 25
+
+/**
+ * Whether a release advertises executable content — its own name, or the
+ * file listing some scraper add-ons put in `description` (see streamText).
+ *
+ * A media centre has no use for a torrent containing a .exe, and "film
+ * plus dropper" is a standard delivery on public trackers, so this is a
+ * hard exclusion rather than a ranking penalty: no quality score should
+ * ever be able to outweigh it. Applied at discovery, which is what keeps
+ * such a torrent from being submitted to TorBox in the first place —
+ * once submitted, the whole payload gets fetched into the person's
+ * account whether this app ever plays a byte of it or not.
+ */
+export function isUnsafeStream(stream: StreamCandidate): boolean {
+  return releaseTextMentionsExecutable(streamText(stream))
+}
+
+/** Drops releases advertising executables, then ranks what's left. */
+export function rankSafeStreams(streams: StreamCandidate[]): StreamCandidate[] {
+  return rankStreams(streams.filter((s) => !isUnsafeStream(s)))
+}
 
 export function rankStreams(streams: StreamCandidate[]): StreamCandidate[] {
   const score = (s: StreamCandidate): number =>

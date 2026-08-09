@@ -116,6 +116,10 @@ export const MEDIA_HUB_CHANNELS = {
   windowToggleFullscreen: 'mediahub:window:toggle-fullscreen',
   windowFullscreenChanged: 'mediahub:window:fullscreen-changed', // push event
 
+  // Downloads
+  downloadBlocked: 'mediahub:download:blocked', // push event — a file was refused
+  downloadBlockedList: 'mediahub:download:blocked-list',
+
   // Profiles
   profilesList: 'mediahub:profiles:list',
   profilesGetActive: 'mediahub:profiles:get-active',

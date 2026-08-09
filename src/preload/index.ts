@@ -9,6 +9,7 @@ import {
 } from '../shared/ipc-types'
 import { MEDIA_HUB_CHANNELS } from '../shared/media-hub/ipc-channels'
 import type {
+  BlockedDownload,
   BootstrapResult,
   CatalogItem,
   ConnectResult,
@@ -164,6 +165,14 @@ const api = {
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.torboxDisconnect),
       onUnauthorized: (onEvent: () => void): (() => void) =>
         subscribe<undefined>(MEDIA_HUB_CHANNELS.torboxUnauthorized, () => onEvent())
+    },
+
+    downloads: {
+      /** Everything the download guard has refused this run. */
+      blocked: (): Promise<BlockedDownload[]> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.downloadBlockedList),
+      onBlocked: (onEvent: (item: BlockedDownload) => void): (() => void) =>
+        subscribe<BlockedDownload>(MEDIA_HUB_CHANNELS.downloadBlocked, onEvent)
     },
 
     tmdb: {
