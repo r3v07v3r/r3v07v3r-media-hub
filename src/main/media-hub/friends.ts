@@ -151,12 +151,16 @@ function replyToNewcomer(): void {
   }, 400)
 }
 
-function recordPresence(msg: Record<string, unknown>): void {
+/** `ageMs` is non-zero only for state REPLAYED by the relay on connect
+ *  (see room.ts's `retained` envelope). It is subtracted from lastSeen so
+ *  the TTL still measures how long ago the member actually spoke — a
+ *  9-minute-old replay must not reset their clock as if it were fresh. */
+function recordPresence(msg: Record<string, unknown>, ageMs = 0): void {
   const current = state
   if (!current) return
   const friendId = String(msg.friendId || '')
   if (!friendId || friendId === current.friendId) return
-  if (!current.presence.has(friendId)) replyToNewcomer()
+  if (!current.presence.has(friendId) && ageMs === 0) replyToNewcomer()
   const activity = (msg.activity as FriendActivity | undefined) || null
   current.presence.set(friendId, {
     friendId,
@@ -175,7 +179,7 @@ function recordPresence(msg: Record<string, unknown>): void {
           partyCode: activity.partyCode ? String(activity.partyCode).slice(0, 400) : undefined
         }
       : null,
-    lastSeen: Date.now()
+    lastSeen: Date.now() - Math.max(0, ageMs)
   })
   pushStatus()
 }
@@ -224,15 +228,26 @@ async function openSocket(): Promise<void> {
     // Same relay envelope the party client already speaks: the worker wraps
     // each message as {type:'relay', body} and never decrypts the body.
     let body = String(raw)
+    let ageMs = 0
     try {
-      const envelope = JSON.parse(body) as { type?: string; body?: string }
-      if (envelope?.type === 'relay' && typeof envelope.body === 'string') body = envelope.body
-      else if (envelope?.type === 'assigned') return
+      const envelope = JSON.parse(body) as { type?: string; body?: string; ageMs?: number }
+      if (envelope?.type === 'relay' && typeof envelope.body === 'string') {
+        body = envelope.body
+      } else if (envelope?.type === 'retained' && typeof envelope.body === 'string') {
+        // State the relay held for a member who was already here — this is
+        // what lets a joiner see the room immediately instead of waiting
+        // out everyone's announce interval. The relay cannot read it, so
+        // it stamps how long it has held it and we age it accordingly.
+        body = envelope.body
+        ageMs = Number(envelope.ageMs) || 0
+      } else if (envelope?.type === 'assigned') {
+        return
+      }
     } catch {
       // not an envelope — fall through and try to decrypt as-is
     }
     const msg = decryptMessage(current.secret, body) as Record<string, unknown> | null
-    if (msg && msg.type === 'friend-presence') recordPresence(msg)
+    if (msg && msg.type === 'friend-presence') recordPresence(msg, ageMs)
   })
   const onGone = (): void => {
     if (!state || state !== current) return

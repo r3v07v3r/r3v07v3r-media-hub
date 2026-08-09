@@ -590,6 +590,12 @@ export function registerWatchPartyIpc(): void {
           if (party?.role === 'client') party.selfId = String(envelope.connId || '')
           return
         }
+        // `retained` (the relay replaying a member's last message on
+        // connect — see the worker's room.ts) is deliberately IGNORED for
+        // parties. It exists for friends-group presence, where stale state
+        // is still useful; replaying a minutes-old nowPlaying or position
+        // into live playback would be actively wrong. A party's own
+        // late-join path (nowPlaying + partyPendingSeek) already covers it.
         if (envelope.type !== 'relay') return
         const msg = decryptMessage(parsed.secret, envelope.body || '') as PartyMessage | null
         if (!msg) return
