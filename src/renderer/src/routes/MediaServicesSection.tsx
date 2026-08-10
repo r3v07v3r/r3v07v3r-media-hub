@@ -27,7 +27,7 @@ const SECRET_LABEL: Record<ServiceId, string> = {
 
 type TestState = { status: 'idle' | 'testing' | 'ok' | 'error'; message?: string }
 
-function ServiceRow({
+function ServiceCard({
   id,
   config,
   onChange
@@ -45,9 +45,9 @@ function ServiceRow({
   }
 
   return (
-    <div className={styles.serviceRow}>
+    <section className={`${styles.section} ${styles.serviceCard} glass-panel`}>
       <div className={styles.serviceHead}>
-        <span className={styles.serviceName}>{SERVICE_LABELS[id]}</span>
+        <h3 className={styles.serviceName}>{SERVICE_LABELS[id]}</h3>
         <button
           type="button"
           role="switch"
@@ -104,7 +104,7 @@ function ServiceRow({
           {(test.status === 'ok' || test.status === 'error') && test.message}
         </span>
       </div>
-    </div>
+    </section>
   )
 }
 
@@ -156,33 +156,34 @@ export function MediaServicesSection() {
   const bridgeMissing = !window.api?.settings
 
   return (
-    <section className={`${styles.section} glass-panel`} aria-labelledby="settings-services">
-      <h2 id="settings-services" className={styles.sectionTitle}>
-        Media Servers &amp; Downloads
-      </h2>
+    <>
       {bridgeMissing && (
-        <p className={styles.statusMessage} style={{ marginBottom: 10 }}>
+        <p className={styles.serviceNotice}>
           Running outside the Electron shell — settings can&apos;t be saved or tested here.
         </p>
       )}
       {(Object.keys(settings) as ServiceId[]).map((id) => (
-        <ServiceRow
+        <ServiceCard
           key={id}
           id={id}
           config={settings[id]}
           onChange={(next) => updateService(id, next)}
         />
       ))}
-      <div className={styles.saveBar}>
+      <div className={`${styles.serviceSaveCard} glass-panel`}>
+        <div>
+          <strong>Service changes</strong>
+          <span>{dirty ? 'Changes are ready to save.' : 'Everything is up to date.'}</span>
+        </div>
         <button
           type="button"
           className={styles.saveButton}
           onClick={handleSave}
           disabled={!dirty || saving || bridgeMissing}
         >
-          {saving ? 'Saving…' : 'Save'}
+          {saving ? 'Saving…' : 'Save changes'}
         </button>
       </div>
-    </section>
+    </>
   )
 }
