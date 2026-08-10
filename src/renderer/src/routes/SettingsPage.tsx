@@ -29,6 +29,23 @@ const PLAYBACK_BUFFER_OPTIONS: { value: string; label: string }[] = [
   { value: 'maximum', label: 'Maximum' }
 ]
 
+const QUALITY_OPTIONS = [
+  { value: '0', label: 'Any' },
+  { value: '480', label: '480p' },
+  { value: '720', label: '720p' },
+  { value: '1080', label: '1080p' },
+  { value: '1440', label: '1440p' },
+  { value: '2160', label: '4K' }
+]
+const SIZE_OPTIONS = [
+  { value: '0', label: 'Any' },
+  { value: '1', label: '1 GB' },
+  { value: '2', label: '2 GB' },
+  { value: '5', label: '5 GB' },
+  { value: '10', label: '10 GB' },
+  { value: '20', label: '20 GB' }
+]
+
 // ISO 639-1 codes accepted by OpenSubtitles' `languages` search param (and
 // by appIpc.ts's own subtitleLanguage validator regex) — the six most
 // requested languages, not an exhaustive list of everything OpenSubtitles
@@ -447,6 +464,12 @@ export default function SettingsPage() {
   // profile being edited.
   const [editingProfile, setEditingProfile] = useState<string | 'new' | null>(null)
   const [networkInfo, setNetworkInfo] = useState<NetworkInfoResult | null>(null)
+  const [speedTest, setSpeedTest] = useState<{
+    kind: 'idle' | 'busy' | 'ok' | 'error'
+    message?: string
+    quality?: number
+    size?: number
+  }>({ kind: 'idle' })
   const runAction = useAsyncAction()
 
   async function saveSetting(scope: string, action: () => Promise<unknown>) {
@@ -491,6 +514,40 @@ export default function SettingsPage() {
     const api = window.api?.mediaHub
     if (api)
       await saveSetting('settings.audio-language', () => api.settings.setAudioLanguage(language))
+  }
+
+  async function setStreamLimits(maxStreamResolution: number, maxStreamSizeGb: number) {
+    const api = window.api?.mediaHub
+    if (api)
+      await saveSetting('settings.stream-limits', () =>
+        api.settings.setStreamLimits({ maxStreamResolution, maxStreamSizeGb })
+      )
+  }
+
+  async function runSpeedTest() {
+    const api = window.api?.mediaHub
+    if (!api) return
+    setSpeedTest({ kind: 'busy' })
+    try {
+      const result = await api.network.speedTest(window.screen.height * window.devicePixelRatio)
+      await api.settings.setStreamLimits({
+        maxStreamResolution: result.recommendedResolution,
+        maxStreamSizeGb: result.recommendedSizeGb,
+        connectionSpeedMbps: result.speedMbps
+      })
+      await refreshMediaHubSettings()
+      setSpeedTest({
+        kind: 'ok',
+        message: `${result.speedMbps} Mbps measured using ${formatBytes(result.testedBytes)}. Recommended limits applied; you can change them below.`,
+        quality: result.recommendedResolution,
+        size: result.recommendedSizeGb
+      })
+    } catch (error) {
+      setSpeedTest({
+        kind: 'error',
+        message: error instanceof Error ? error.message : 'Could not test this connection.'
+      })
+    }
   }
 
   // Columns tile left-to-right instead of stacking everything in one long
@@ -596,6 +653,51 @@ export default function SettingsPage() {
               checked={isOffline}
               onChange={setIsOffline}
             />
+            <SegmentedRow
+              icon="display"
+              title="Maximum video quality"
+              description={`Avoid releases sharper than this display needs.${speedTest.quality ? ` ${speedTest.quality}p recommended by the last test.` : ''}`}
+              value={String(mediaHubSettings?.maxStreamResolution ?? 0)}
+              options={QUALITY_OPTIONS}
+              onChange={(value) =>
+                setStreamLimits(Number(value), mediaHubSettings?.maxStreamSizeGb ?? 0)
+              }
+            />
+            <SegmentedRow
+              icon="download"
+              title="Maximum download size"
+              description={`Prefer releases at or below this size.${speedTest.size ? ` ${speedTest.size} GB recommended by the last test.` : ''}`}
+              value={String(mediaHubSettings?.maxStreamSizeGb ?? 0)}
+              options={SIZE_OPTIONS}
+              onChange={(value) =>
+                setStreamLimits(mediaHubSettings?.maxStreamResolution ?? 0, Number(value))
+              }
+            />
+            <div className={styles.row}>
+              <div className={styles.rowIcon} aria-hidden="true">
+                <Icon name="gauge" size={17} />
+              </div>
+              <div className={styles.rowText}>
+                <span className={styles.rowTitle}>Connection recommendation</span>
+                <span className={styles.rowDescription}>
+                  Runs only when requested and downloads about 1 MB. It considers this screen and
+                  saves suggested limits without locking them.
+                </span>
+              </div>
+              <button
+                type="button"
+                className={styles.testButton}
+                disabled={speedTest.kind === 'busy'}
+                onClick={runSpeedTest}
+              >
+                {speedTest.kind === 'busy' ? 'Testing…' : mediaHubSettings?.connectionSpeedMbps ? 'Retest' : 'Run test'}
+              </button>
+            </div>
+            {(speedTest.message || mediaHubSettings?.connectionSpeedMbps) && (
+              <span className={`${styles.statusMessage} ${speedTest.kind === 'error' ? styles.statusError : styles.statusOk}`}>
+                {speedTest.message || `Last result: ${mediaHubSettings?.connectionSpeedMbps} Mbps.`}
+              </span>
+            )}
             <div className={styles.row}>
               <div className={styles.rowIcon} aria-hidden="true">
                 <Icon name="net" size={17} />

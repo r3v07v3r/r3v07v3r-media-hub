@@ -114,6 +114,26 @@ export function registerAppIpc(): void {
     }
   )
 
+  handle<
+    { maxStreamResolution?: number; maxStreamSizeGb?: number; connectionSpeedMbps?: number },
+    { maxStreamResolution: number; maxStreamSizeGb: number; connectionSpeedMbps?: number }
+  >(MEDIA_HUB_CHANNELS.settingsSetStreamLimits, (_event, value) => {
+    const settings = readSettings()
+    const resolutions = new Set([0, 480, 720, 1080, 1440, 2160])
+    const resolution = Number(value?.maxStreamResolution)
+    const size = Number(value?.maxStreamSizeGb)
+    if (resolutions.has(resolution)) settings.maxStreamResolution = resolution
+    if (Number.isFinite(size) && size >= 0 && size <= 1000) settings.maxStreamSizeGb = size
+    const speed = Number(value?.connectionSpeedMbps)
+    if (Number.isFinite(speed) && speed > 0) settings.connectionSpeedMbps = speed
+    writeSettings(settings)
+    return {
+      maxStreamResolution: Number(settings.maxStreamResolution) || 0,
+      maxStreamSizeGb: Number(settings.maxStreamSizeGb) || 0,
+      connectionSpeedMbps: Number(settings.connectionSpeedMbps) || undefined
+    }
+  })
+
   handle<unknown, { partyDisplayName: string }>(
     MEDIA_HUB_CHANNELS.settingsSetPartyDisplayName,
     (_event, value) => {

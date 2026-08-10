@@ -221,7 +221,12 @@ export function registerTorBoxIpc(): void {
     async (_e, { type, id, title }) => {
       const auth = getTorBoxToken()
       if (!auth) throw new Error('TorBox is not connected.')
-      const key = `stream:v1:${type}:${id}`
+      const preferences = readSettings()
+      const limits = {
+        maxResolution: Number(preferences.maxStreamResolution) || 0,
+        maxSizeGb: Number(preferences.maxStreamSizeGb) || 0
+      }
+      const key = `stream:v2:${type}:${id}:${limits.maxResolution}:${limits.maxSizeGb}`
       const db = getDatabase()
       try {
         // Two independent P2P scraper add-ons, queried in parallel and
@@ -275,12 +280,13 @@ export function registerTorBoxIpc(): void {
             ? cached.data.map((x) => String(x.hash || x).toLowerCase())
             : Object.keys(cached.data || {}).map((x) => x.toLowerCase())
         )
-        const audioLanguage = readSettings().audioLanguage || 'en'
+        const audioLanguage = preferences.audioLanguage || 'en'
         const streams = rankSafeStreams(
           discovered
             .filter((s) => available.has(s.infoHash.toLowerCase()))
             .map((s) => ({ ...s, cached: true, compatible: true })),
-          audioLanguage
+          audioLanguage,
+          limits
         )
         if (streams.length) {
           const result: StreamResolveResult = { streams, best: streams[0] }
@@ -303,7 +309,7 @@ export function registerTorBoxIpc(): void {
         // same honest "nothing available yet" result as before this
         // existed, rather than surfacing a harder error for what's meant
         // to be a fallback path.
-        const candidate = rankSafeStreams(discovered, audioLanguage)[0]
+        const candidate = rankSafeStreams(discovered, audioLanguage, limits)[0]
         let queued = false
         if (candidate) {
           try {

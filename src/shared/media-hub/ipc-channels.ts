@@ -18,6 +18,7 @@ export const MEDIA_HUB_CHANNELS = {
   settingsSetAutoSubtitles: 'mediahub:settings:set-auto-subtitles',
   settingsSetUiAnimations: 'mediahub:settings:set-ui-animations',
   settingsSetVideoTranscode: 'mediahub:settings:set-video-transcode',
+  settingsSetStreamLimits: 'mediahub:settings:set-stream-limits',
   settingsSetPartyDisplayName: 'mediahub:settings:set-party-display-name',
   settingsSetHideDefaults: 'mediahub:settings:set-hide-defaults',
   logout: 'mediahub:account:logout',
@@ -89,6 +90,7 @@ export const MEDIA_HUB_CHANNELS = {
 
   // Network
   networkInfo: 'mediahub:network:info',
+  networkSpeedTest: 'mediahub:network:speed-test',
 
   // Watch Party
   partyHost: 'mediahub:party:host',

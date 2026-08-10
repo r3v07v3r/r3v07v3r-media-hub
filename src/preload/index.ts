@@ -13,6 +13,7 @@ import type {
   BootstrapResult,
   CatalogItem,
   ConnectResult,
+  ConnectionTestResult,
   DislikedListResult,
   HomePersonalizedResult,
   LibraryItem,
@@ -162,6 +163,12 @@ const api = {
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.settingsSetUiAnimations, enabled),
       setVideoTranscode: (enabled: boolean): Promise<{ videoTranscodeEnabled: boolean }> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.settingsSetVideoTranscode, enabled),
+      setStreamLimits: (limits: {
+        maxStreamResolution: number
+        maxStreamSizeGb: number
+        connectionSpeedMbps?: number
+      }): Promise<MediaHubSettingsSnapshot> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.settingsSetStreamLimits, limits),
       setPartyDisplayName: (name: string): Promise<{ partyDisplayName: string }> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.settingsSetPartyDisplayName, name),
       setHideDefaults: (
@@ -371,7 +378,9 @@ const api = {
     },
 
     network: {
-      info: (): Promise<NetworkInfoResult> => ipcRenderer.invoke(MEDIA_HUB_CHANNELS.networkInfo)
+      info: (): Promise<NetworkInfoResult> => ipcRenderer.invoke(MEDIA_HUB_CHANNELS.networkInfo),
+      speedTest: (screenHeight: number): Promise<ConnectionTestResult> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.networkSpeedTest, { screenHeight })
     },
 
     party: {
