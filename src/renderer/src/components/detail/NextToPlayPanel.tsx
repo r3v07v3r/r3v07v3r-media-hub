@@ -29,7 +29,7 @@ export function NextToPlayPanel({ media, nextEpisode, allWatched, onPlay }: Next
   const artwork = resolveArtwork(media)
   const { resolvingMedia } = useAppState()
   const isResolving = resolvingMedia?.id === media.id
-  const resolveLabel = resolvingMedia?.stage === 'buffering' ? 'Preparing…' : 'Searching…'
+  const resolveLabel = resolvingMedia?.stage === 'resolving' ? 'Searching…' : 'Preparing…'
 
   if (!nextEpisode && !allWatched) {
     // No episode data available for this series/anime yet.

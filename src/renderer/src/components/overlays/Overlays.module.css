@@ -132,6 +132,120 @@
 }
 
 /* ---------- Playback overlay ---------- */
+.preparationCard {
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  z-index: 950;
+  width: min(360px, calc(100vw - 32px));
+  padding: 18px;
+  border: 1px solid rgba(95, 224, 255, 0.24);
+  background: rgba(8, 15, 26, 0.94);
+  box-shadow:
+    0 18px 52px rgba(0, 0, 0, 0.46),
+    0 0 32px rgba(35, 190, 231, 0.08);
+  animation: toastIn 180ms ease-out both;
+}
+.preparationHeader {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.preparationHeading {
+  min-width: 0;
+}
+.preparationSpinner {
+  width: 30px;
+  height: 30px;
+  flex: 0 0 auto;
+  border: 2px solid rgba(95, 224, 255, 0.18);
+  border-top-color: var(--color-cyan, #5fe0ff);
+  border-radius: 50%;
+  animation: playerBufferingSpin 0.8s linear infinite;
+}
+.preparationEyebrow,
+.preparationTitle {
+  display: block;
+}
+.preparationEyebrow {
+  margin-bottom: 2px;
+  color: var(--color-cyan, #5fe0ff);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+.preparationTitle {
+  overflow: hidden;
+  color: #fff;
+  font-size: 15px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.preparationStages {
+  display: grid;
+  gap: 8px;
+  margin: 16px 0;
+  padding: 0;
+  list-style: none;
+}
+.preparationStage {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  color: rgba(214, 226, 239, 0.46);
+  font-size: 12px;
+  transition: color 160ms ease;
+}
+.preparationStageIcon {
+  display: grid;
+  width: 20px;
+  height: 20px;
+  place-items: center;
+  border: 1px solid rgba(214, 226, 239, 0.18);
+  border-radius: 50%;
+  font-size: 9px;
+  font-weight: 700;
+}
+.preparationStageComplete {
+  color: rgba(214, 226, 239, 0.7);
+}
+.preparationStageComplete .preparationStageIcon {
+  color: #74e4b0;
+  border-color: rgba(116, 228, 176, 0.35);
+}
+.preparationStageActive {
+  color: #fff;
+}
+.preparationStageActive .preparationStageIcon {
+  color: #07131e;
+  border-color: var(--color-cyan, #5fe0ff);
+  background: var(--color-cyan, #5fe0ff);
+  box-shadow: 0 0 14px rgba(95, 224, 255, 0.32);
+}
+.preparationCancel {
+  width: 100%;
+  padding: 8px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 8px;
+  color: rgba(255, 255, 255, 0.78);
+  background: rgba(255, 255, 255, 0.05);
+  cursor: pointer;
+}
+.preparationCancel:hover,
+.preparationCancel:focus-visible {
+  color: #fff;
+  border-color: rgba(95, 224, 255, 0.4);
+  outline: none;
+}
+@media (max-width: 640px) {
+  .preparationCard {
+    right: 16px;
+    bottom: 82px;
+    left: 16px;
+    width: auto;
+  }
+}
 .playback {
   position: fixed;
   inset: 0;
