@@ -449,6 +449,7 @@ function MoreOptionsSection() {
 }
 
 export default function SettingsPage() {
+  const tileAreaRef = useRef<HTMLDivElement>(null)
   const {
     performancePanelVisible,
     setPerformancePanelVisible,
@@ -550,275 +551,344 @@ export default function SettingsPage() {
     }
   }
 
-  // Columns tile left-to-right instead of stacking everything in one long
-  // vertical scroll (see .tileArea/.column in Settings.module.css) — a
-  // plain vertical mouse wheel has nothing to act on over .tileArea itself
-  // (only overflow-x), so it's translated into horizontal panning UNLESS
-  // the column under the cursor still has real vertical room to give it,
-  // in which case that column's own native scroll wins instead. A native
-  // listener, not React's onWheel: React attaches wheel handlers as passive
-  // by default, and preventDefault on a passive listener is a silent no-op
-  // (plus a console warning) — this needs to actually stop the page from
-  // trying to rubber-band-scroll vertically instead.
-  const tileAreaRef = useRef<HTMLDivElement>(null)
   useEffect(() => {
-    const el = tileAreaRef.current
-    if (!el) return
-    function onWheel(e: WheelEvent): void {
-      if (e.deltaY === 0) return
-      const column = (e.target as HTMLElement).closest(`.${styles.column}`) as HTMLElement | null
-      if (column) {
-        const canScrollDown =
-          e.deltaY > 0 && column.scrollTop + column.clientHeight < column.scrollHeight - 1
-        const canScrollUp = e.deltaY < 0 && column.scrollTop > 0
-        if (canScrollDown || canScrollUp) return
-      }
-      e.preventDefault()
-      el!.scrollLeft += e.deltaY
+    const scroller = tileAreaRef.current
+    if (!scroller) return
+
+    const handleWheel = (event: WheelEvent) => {
+      if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return
+      event.preventDefault()
+      scroller.scrollBy({ left: event.deltaY, behavior: 'auto' })
     }
-    el.addEventListener('wheel', onWheel, { passive: false })
-    return () => el.removeEventListener('wheel', onWheel)
+
+    scroller.addEventListener('wheel', handleWheel, { passive: false })
+    return () => scroller.removeEventListener('wheel', handleWheel)
   }, [])
 
   return (
     <div className={styles.wrap}>
-      <h1 className={styles.heading}>Settings</h1>
+      <div className={styles.pageHeader}>
+        <div>
+          <h1 className={styles.heading}>Settings</h1>
+          <p className={styles.headingDescription}>
+            Manage playback, services, and your R3 experience.
+          </p>
+        </div>
+        <nav className={styles.categoryNav} aria-label="Settings categories">
+          <a href="#settings-general">General</a>
+          <a href="#settings-playback">Playback</a>
+          <a href="#settings-services">Services</a>
+          <a href="#settings-accounts">Accounts</a>
+          <a href="#settings-community">Community</a>
+        </nav>
+      </div>
 
       <div className={styles.tileArea} ref={tileAreaRef}>
-        <div className={`${styles.column} ${styles.columnNarrow}`}>
-          <AboutUpdateSection />
+        <section
+          id="settings-general"
+          className={styles.settingsGroup}
+          aria-labelledby="settings-general-title"
+        >
+          <header className={styles.groupHeader}>
+            <span className={styles.groupEyebrow}>Essentials</span>
+            <h2 id="settings-general-title">General</h2>
+            <p>App updates, display preferences, and everyday behavior.</p>
+          </header>
+          <div className={styles.groupGrid}>
+            <AboutUpdateSection />
 
-          <section className={`${styles.section} glass-panel`} aria-labelledby="settings-perf">
-            <h2 id="settings-perf" className={styles.sectionTitle}>
-              Performance &amp; Display
-            </h2>
-            <ToggleRow
-              icon="cpu"
-              title="System performance panel"
-              description="Show live CPU, GPU, RAM, and network gauges on the Home dashboard."
-              checked={performancePanelVisible}
-              onChange={setPerformancePanelVisible}
-            />
-            <SegmentedRow
-              icon="clock"
-              title="Playback buffer"
-              description="How long to buffer before playback starts. Higher settings help on a slow or unstable connection at the cost of a longer wait to start."
-              value={mediaHubSettings?.playbackBuffer ?? 'auto'}
-              options={PLAYBACK_BUFFER_OPTIONS}
-              onChange={handleSetPlaybackBuffer}
-            />
-          </section>
+            <section className={`${styles.section} glass-panel`} aria-labelledby="settings-perf">
+              <h2 id="settings-perf" className={styles.sectionTitle}>
+                Performance &amp; Display
+              </h2>
+              <ToggleRow
+                icon="cpu"
+                title="System performance panel"
+                description="Show live CPU, GPU, RAM, and network gauges on the Home dashboard."
+                checked={performancePanelVisible}
+                onChange={setPerformancePanelVisible}
+              />
+              <SegmentedRow
+                icon="clock"
+                title="Playback buffer"
+                description="How long to buffer before playback starts. Higher settings help on a slow or unstable connection at the cost of a longer wait to start."
+                value={mediaHubSettings?.playbackBuffer ?? 'auto'}
+                options={PLAYBACK_BUFFER_OPTIONS}
+                onChange={handleSetPlaybackBuffer}
+              />
+            </section>
 
-          <section className={`${styles.section} glass-panel`} aria-labelledby="settings-subtitles">
-            <h2 id="settings-subtitles" className={styles.sectionTitle}>
-              Subtitles
-            </h2>
-            <ToggleRow
-              icon="eye"
-              title="Show subtitles automatically"
-              description="Fetch and apply a matching subtitle as soon as a title starts playing."
-              checked={mediaHubSettings?.autoSubtitlesEnabled ?? true}
-              onChange={handleSetAutoSubtitles}
-            />
-            <SegmentedRow
-              icon="planet"
-              title="Subtitle language"
-              description="Language to search for, both automatically and in the Subtitles menu."
-              value={mediaHubSettings?.subtitleLanguage ?? 'en'}
-              options={SUBTITLE_LANGUAGE_OPTIONS}
-              onChange={handleSetSubtitleLanguage}
-            />
-            {/* Separate from the subtitle language directly above, because
+            <MoreOptionsSection />
+          </div>
+        </section>
+
+        <section
+          id="settings-playback"
+          className={styles.settingsGroup}
+          aria-labelledby="settings-playback-title"
+        >
+          <header className={styles.groupHeader}>
+            <span className={styles.groupEyebrow}>Watching</span>
+            <h2 id="settings-playback-title">Playback</h2>
+            <p>Choose language, quality, and connection preferences.</p>
+          </header>
+          <div className={styles.groupGrid}>
+            <section
+              className={`${styles.section} glass-panel`}
+              aria-labelledby="settings-subtitles"
+            >
+              <h2 id="settings-subtitles" className={styles.sectionTitle}>
+                Subtitles
+              </h2>
+              <ToggleRow
+                icon="eye"
+                title="Show subtitles automatically"
+                description="Fetch and apply a matching subtitle as soon as a title starts playing."
+                checked={mediaHubSettings?.autoSubtitlesEnabled ?? true}
+                onChange={handleSetAutoSubtitles}
+              />
+              <SegmentedRow
+                icon="planet"
+                title="Subtitle language"
+                description="Language to search for, both automatically and in the Subtitles menu."
+                value={mediaHubSettings?.subtitleLanguage ?? 'en'}
+                options={SUBTITLE_LANGUAGE_OPTIONS}
+                onChange={handleSetSubtitleLanguage}
+              />
+              {/* Separate from the subtitle language directly above, because
                 they genuinely differ for a lot of viewing — Japanese audio
                 with English subtitles is the normal way to watch most of
                 what's in the Anime section. */}
-            <SegmentedRow
-              icon="waveform"
-              title="Audio language"
-              description="Preferred spoken language. Used to pick the audio track when a release has several, and to avoid dubbed releases when an original-language one exists."
-              value={mediaHubSettings?.audioLanguage ?? 'en'}
-              options={SUBTITLE_LANGUAGE_OPTIONS}
-              onChange={handleSetAudioLanguage}
-            />
-          </section>
+              <SegmentedRow
+                icon="waveform"
+                title="Audio language"
+                description="Preferred spoken language. Used to pick the audio track when a release has several, and to avoid dubbed releases when an original-language one exists."
+                value={mediaHubSettings?.audioLanguage ?? 'en'}
+                options={SUBTITLE_LANGUAGE_OPTIONS}
+                onChange={handleSetAudioLanguage}
+              />
+            </section>
 
-          <section className={`${styles.section} glass-panel`} aria-labelledby="settings-network">
-            <h2 id="settings-network" className={styles.sectionTitle}>
-              Network
-            </h2>
-            <ToggleRow
-              icon={isOffline ? 'wifi-off' : 'wifi'}
-              title="Simulate offline mode"
-              description="Preview how R3 behaves without a network connection."
-              checked={isOffline}
-              onChange={setIsOffline}
-            />
-            <SegmentedRow
-              icon="display"
-              title="Maximum video quality"
-              description={`Avoid releases sharper than this display needs.${speedTest.quality ? ` ${speedTest.quality}p recommended by the last test.` : ''}`}
-              value={String(mediaHubSettings?.maxStreamResolution ?? 0)}
-              options={QUALITY_OPTIONS}
-              onChange={(value) =>
-                setStreamLimits(Number(value), mediaHubSettings?.maxStreamSizeGb ?? 0)
-              }
-            />
-            <SegmentedRow
-              icon="download"
-              title="Maximum download size"
-              description={`Prefer releases at or below this size.${speedTest.size ? ` ${speedTest.size} GB recommended by the last test.` : ''}`}
-              value={String(mediaHubSettings?.maxStreamSizeGb ?? 0)}
-              options={SIZE_OPTIONS}
-              onChange={(value) =>
-                setStreamLimits(mediaHubSettings?.maxStreamResolution ?? 0, Number(value))
-              }
-            />
-            <div className={styles.row}>
-              <div className={styles.rowIcon} aria-hidden="true">
-                <Icon name="gauge" size={17} />
+            <section className={`${styles.section} glass-panel`} aria-labelledby="settings-network">
+              <h2 id="settings-network" className={styles.sectionTitle}>
+                Network
+              </h2>
+              <ToggleRow
+                icon={isOffline ? 'wifi-off' : 'wifi'}
+                title="Simulate offline mode"
+                description="Preview how R3 behaves without a network connection."
+                checked={isOffline}
+                onChange={setIsOffline}
+              />
+              <SegmentedRow
+                icon="display"
+                title="Maximum video quality"
+                description={`Avoid releases sharper than this display needs.${speedTest.quality ? ` ${speedTest.quality}p recommended by the last test.` : ''}`}
+                value={String(mediaHubSettings?.maxStreamResolution ?? 0)}
+                options={QUALITY_OPTIONS}
+                onChange={(value) =>
+                  setStreamLimits(Number(value), mediaHubSettings?.maxStreamSizeGb ?? 0)
+                }
+              />
+              <SegmentedRow
+                icon="download"
+                title="Maximum download size"
+                description={`Prefer releases at or below this size.${speedTest.size ? ` ${speedTest.size} GB recommended by the last test.` : ''}`}
+                value={String(mediaHubSettings?.maxStreamSizeGb ?? 0)}
+                options={SIZE_OPTIONS}
+                onChange={(value) =>
+                  setStreamLimits(mediaHubSettings?.maxStreamResolution ?? 0, Number(value))
+                }
+              />
+              <div className={styles.row}>
+                <div className={styles.rowIcon} aria-hidden="true">
+                  <Icon name="gauge" size={17} />
+                </div>
+                <div className={styles.rowText}>
+                  <span className={styles.rowTitle}>Connection recommendation</span>
+                  <span className={styles.rowDescription}>
+                    Runs only when requested and downloads about 1 MB. It considers this screen and
+                    saves suggested limits without locking them.
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  className={styles.testButton}
+                  disabled={speedTest.kind === 'busy'}
+                  onClick={runSpeedTest}
+                >
+                  {speedTest.kind === 'busy'
+                    ? 'Testing…'
+                    : mediaHubSettings?.connectionSpeedMbps
+                      ? 'Retest'
+                      : 'Run test'}
+                </button>
               </div>
-              <div className={styles.rowText}>
-                <span className={styles.rowTitle}>Connection recommendation</span>
-                <span className={styles.rowDescription}>
-                  Runs only when requested and downloads about 1 MB. It considers this screen and
-                  saves suggested limits without locking them.
+              {(speedTest.message || mediaHubSettings?.connectionSpeedMbps) && (
+                <span
+                  className={`${styles.statusMessage} ${speedTest.kind === 'error' ? styles.statusError : styles.statusOk}`}
+                >
+                  {speedTest.message ||
+                    `Last result: ${mediaHubSettings?.connectionSpeedMbps} Mbps.`}
                 </span>
+              )}
+              <div className={styles.row}>
+                <div className={styles.rowIcon} aria-hidden="true">
+                  <Icon name="net" size={17} />
+                </div>
+                <div className={styles.rowText}>
+                  <span className={styles.rowTitle}>Local network address</span>
+                  <span className={styles.rowDescription}>
+                    What Watch Party shares on your LAN when hosting directly.
+                  </span>
+                </div>
+                <span className={styles.rowValue}>{networkInfo?.lanIp ?? '—'}</span>
               </div>
-              <button
-                type="button"
-                className={styles.testButton}
-                disabled={speedTest.kind === 'busy'}
-                onClick={runSpeedTest}
-              >
-                {speedTest.kind === 'busy' ? 'Testing…' : mediaHubSettings?.connectionSpeedMbps ? 'Retest' : 'Run test'}
-              </button>
-            </div>
-            {(speedTest.message || mediaHubSettings?.connectionSpeedMbps) && (
-              <span className={`${styles.statusMessage} ${speedTest.kind === 'error' ? styles.statusError : styles.statusOk}`}>
-                {speedTest.message || `Last result: ${mediaHubSettings?.connectionSpeedMbps} Mbps.`}
-              </span>
-            )}
-            <div className={styles.row}>
-              <div className={styles.rowIcon} aria-hidden="true">
-                <Icon name="net" size={17} />
-              </div>
-              <div className={styles.rowText}>
-                <span className={styles.rowTitle}>Local network address</span>
-                <span className={styles.rowDescription}>
-                  What Watch Party shares on your LAN when hosting directly.
-                </span>
-              </div>
-              <span className={styles.rowValue}>{networkInfo?.lanIp ?? '—'}</span>
-            </div>
-          </section>
-        </div>
+            </section>
+          </div>
+        </section>
 
-        <div className={`${styles.column} ${styles.columnWide}`}>
-          <MediaServicesSection />
-        </div>
+        <section
+          id="settings-services"
+          className={styles.settingsGroup}
+          aria-labelledby="settings-services-title"
+        >
+          <header className={styles.groupHeader}>
+            <span className={styles.groupEyebrow}>Library</span>
+            <h2 id="settings-services-title">Media services</h2>
+            <p>Connect servers, download clients, and your streaming provider.</p>
+          </header>
+          <div className={`${styles.groupGrid} ${styles.groupGridWide}`}>
+            <MediaServicesSection />
+            <TorBoxSection />
+          </div>
+        </section>
 
-        <div className={`${styles.column} ${styles.columnMedium}`}>
-          <TorBoxSection />
-          <TmdbSection />
-          <OmdbSection />
-          <SimklSection />
-          <MalSection />
-          <OpenSubtitlesSection />
-          <MoreOptionsSection />
-        </div>
+        <section
+          id="settings-accounts"
+          className={styles.settingsGroup}
+          aria-labelledby="settings-accounts-title"
+        >
+          <header className={styles.groupHeader}>
+            <span className={styles.groupEyebrow}>Connections</span>
+            <h2 id="settings-accounts-title">Accounts &amp; metadata</h2>
+            <p>Link discovery, tracking, artwork, and subtitle providers.</p>
+          </header>
+          <div className={styles.groupGrid}>
+            <TmdbSection />
+            <OmdbSection />
+            <SimklSection />
+            <MalSection />
+            <OpenSubtitlesSection />
+          </div>
+        </section>
 
-        <div className={`${styles.column} ${styles.columnStrong}`}>
-          <WatchPartySection />
-          <R3PartySyncSection />
+        <section
+          id="settings-community"
+          className={styles.settingsGroup}
+          aria-labelledby="settings-community-title"
+        >
+          <header className={styles.groupHeader}>
+            <span className={styles.groupEyebrow}>People</span>
+            <h2 id="settings-community-title">Community &amp; profiles</h2>
+            <p>Set up shared viewing and choose who is watching.</p>
+          </header>
+          <div className={styles.groupGrid}>
+            <WatchPartySection />
+            <R3PartySyncSection />
 
-          <section className={`${styles.section} glass-panel`} aria-labelledby="settings-profiles">
-            <h2 id="settings-profiles" className={styles.sectionTitle}>
-              Profiles
-            </h2>
-            <div className={styles.profileGrid}>
-              {profiles.map((p) => {
-                const active = p.id === activeProfileId
-                return (
-                  <button
-                    key={p.id}
-                    type="button"
-                    className={`${styles.profileCard} ${active ? styles.profileCardActive : ''}`}
-                    onClick={() => switchProfile(p.id)}
-                    aria-pressed={active}
-                  >
-                    <span
-                      className={styles.profileAvatar}
-                      style={{
-                        background: `linear-gradient(135deg, ${p.avatarTint[0]}, ${p.avatarTint[1]})`
-                      }}
+            <section
+              className={`${styles.section} glass-panel`}
+              aria-labelledby="settings-profiles"
+            >
+              <h2 id="settings-profiles" className={styles.sectionTitle}>
+                Profiles
+              </h2>
+              <div className={styles.profileGrid}>
+                {profiles.map((p) => {
+                  const active = p.id === activeProfileId
+                  return (
+                    <button
+                      key={p.id}
+                      type="button"
+                      className={`${styles.profileCard} ${active ? styles.profileCardActive : ''}`}
+                      onClick={() => switchProfile(p.id)}
+                      aria-pressed={active}
                     >
-                      {p.avatarInitial}
-                    </span>
-                    <span className={styles.profileName}>{p.name}</span>
-                    {p.isKid && <span className={styles.profileBadge}>Kids</span>}
-                    {p.hasPin && (
-                      <span className={styles.profileBadge} aria-label="PIN-locked">
-                        <Icon name="lock" size={10} />
+                      <span
+                        className={styles.profileAvatar}
+                        style={{
+                          background: `linear-gradient(135deg, ${p.avatarTint[0]}, ${p.avatarTint[1]})`
+                        }}
+                      >
+                        {p.avatarInitial}
                       </span>
-                    )}
-                    {active && (
-                      <span className={styles.profileCheck} aria-hidden="true">
-                        <Icon name="check" size={12} />
-                      </span>
-                    )}
-                    <span
-                      role="button"
-                      tabIndex={0}
-                      aria-label={`Edit ${p.name}`}
-                      className={styles.profileEditButton}
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        setEditingProfile(p.id)
-                      }}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter' || e.key === ' ') {
-                          e.preventDefault()
+                      <span className={styles.profileName}>{p.name}</span>
+                      {p.isKid && <span className={styles.profileBadge}>Kids</span>}
+                      {p.hasPin && (
+                        <span className={styles.profileBadge} aria-label="PIN-locked">
+                          <Icon name="lock" size={10} />
+                        </span>
+                      )}
+                      {active && (
+                        <span className={styles.profileCheck} aria-hidden="true">
+                          <Icon name="check" size={12} />
+                        </span>
+                      )}
+                      <span
+                        role="button"
+                        tabIndex={0}
+                        aria-label={`Edit ${p.name}`}
+                        className={styles.profileEditButton}
+                        onClick={(e) => {
                           e.stopPropagation()
                           setEditingProfile(p.id)
-                        }
-                      }}
-                    >
-                      <Icon name="edit" size={11} />
-                    </span>
-                  </button>
-                )
-              })}
-              <button
-                type="button"
-                className={styles.profileCardAdd}
-                onClick={() => setEditingProfile('new')}
-              >
-                <span className={styles.profileCardAddIcon}>
-                  <Icon name="plus" size={18} />
-                </span>
-                <span className={styles.profileName}>Add Profile</span>
-              </button>
-            </div>
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' || e.key === ' ') {
+                            e.preventDefault()
+                            e.stopPropagation()
+                            setEditingProfile(p.id)
+                          }
+                        }}
+                      >
+                        <Icon name="edit" size={11} />
+                      </span>
+                    </button>
+                  )
+                })}
+                <button
+                  type="button"
+                  className={styles.profileCardAdd}
+                  onClick={() => setEditingProfile('new')}
+                >
+                  <span className={styles.profileCardAddIcon}>
+                    <Icon name="plus" size={18} />
+                  </span>
+                  <span className={styles.profileName}>Add Profile</span>
+                </button>
+              </div>
 
-            <p className={styles.profileNote}>
-              Watch history is currently shared across all profiles — per-profile history is not
-              built yet.
-            </p>
+              <p className={styles.profileNote}>
+                Watch history is currently shared across all profiles — per-profile history is not
+                built yet.
+              </p>
 
-            {editingProfile && (
-              <ProfileForm
-                target={
-                  editingProfile === 'new'
-                    ? null
-                    : profiles.find((p) => p.id === editingProfile) || null
-                }
-                activeProfileId={activeProfileId}
-                profileCount={profiles.length}
-                onClose={() => setEditingProfile(null)}
-              />
-            )}
-          </section>
-        </div>
+              {editingProfile && (
+                <ProfileForm
+                  target={
+                    editingProfile === 'new'
+                      ? null
+                      : profiles.find((p) => p.id === editingProfile) || null
+                  }
+                  activeProfileId={activeProfileId}
+                  profileCount={profiles.length}
+                  onClose={() => setEditingProfile(null)}
+                />
+              )}
+            </section>
+          </div>
+        </section>
       </div>
     </div>
   )

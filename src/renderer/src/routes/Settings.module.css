@@ -11,76 +11,188 @@
      without the bleed, instead of rendering under the nav rail. This page
      was missing that term entirely (see HomeDashboard.module.css /
      CategoryPage.module.css for the same pattern already in place). */
-  padding: 28px 32px 40px calc(32px + var(--nav-rail-width, 285px) * 0.8);
+  padding: 28px 32px 0 calc(32px + var(--nav-rail-width, 285px) * 0.8);
+}
+
+.pageHeader {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 28px;
+  padding-bottom: 18px;
+  border-bottom: 1px solid var(--border-subtle);
 }
 
 .heading {
-  flex: 0 0 auto;
   font-family: var(--font-display);
   font-weight: 300;
   letter-spacing: 3px;
   text-transform: uppercase;
   font-size: 24px;
   color: var(--text-primary);
-  margin-bottom: 20px;
+  margin: 0 0 5px;
 }
 
-/* 13 independent <section> cards (About & Updates, Performance, Network,
-   Media Services, TorBox, TMDB, Simkl, MAL, OpenSubtitles, More Options,
-   Watch Party, Profiles — see SettingsPage.tsx / AboutUpdateSection.tsx /
-   MediaServicesSection.tsx / MediaHubSettingsSections.tsx) are grouped into
-   four deliberately-sized columns (narrow/wide/medium/strong below) rather
-   than auto-reflowing wherever they happen to fit — which section lives in
-   which column is decided once at the SettingsPage.tsx call site (wrapping
-   each group in the matching .column* div), not by content height like the
-   previous flex-wrap version. Each column scrolls its own overflow
-   independently; SettingsPage.tsx's wheel listener only redirects a plain
-   vertical wheel into panning .tileArea horizontally once the column under
-   the cursor has no more vertical room left to give it. */
+.headingDescription {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.categoryNav {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px;
+  overflow-x: auto;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-pill);
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.categoryNav a {
+  padding: 7px 12px;
+  border-radius: var(--radius-pill);
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  transition:
+    color var(--transition-fast),
+    background var(--transition-fast);
+}
+
+.categoryNav a:hover,
+.categoryNav a:focus-visible {
+  color: var(--text-primary);
+  background: rgba(56, 193, 255, 0.12);
+  outline: none;
+}
+
+/* The settings canvas flows horizontally like a shelf. A category is a
+   visual chapter rather than a rigid page-sized column; its cards pack into
+   two rows and naturally use more horizontal space when the chapter has
+   more controls. */
 .tileArea {
   flex: 1;
   min-height: 0;
   display: flex;
   flex-direction: row;
-  align-items: flex-start;
-  gap: 20px;
+  align-items: stretch;
+  gap: 28px;
   overflow-x: auto;
   overflow-y: hidden;
-  padding-bottom: 14px;
+  scroll-behavior: smooth;
+  scroll-snap-type: x proximity;
+  overscroll-behavior-inline: contain;
+  padding: 24px max(8vw, 100px) 24px 0;
 }
 
-.column {
+.settingsGroup {
+  flex: 0 0 auto;
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  min-width: 780px;
+  max-width: none;
+  gap: 14px;
+  scroll-margin-left: 0;
+  scroll-snap-align: start;
+}
+
+.groupHeader {
+  position: relative;
   flex: 0 0 auto;
-  height: 100%;
-  overflow-y: auto;
+  padding: 2px 6px 10px;
 }
-.columnNarrow {
-  width: 400px;
+
+.groupHeader::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  left: 6px;
+  width: 44px;
+  height: 2px;
+  border-radius: var(--radius-pill);
+  background: linear-gradient(90deg, var(--accent-blue), var(--accent-violet));
 }
-.columnWide {
-  width: 460px;
+
+.groupEyebrow {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--accent-blue);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 1.4px;
+  text-transform: uppercase;
 }
-.columnMedium {
-  width: 400px;
+
+.groupHeader h2 {
+  margin: 0 0 7px;
+  color: var(--text-primary);
+  font-family: var(--font-display);
+  font-size: 17px;
+  letter-spacing: 0.5px;
 }
-.columnStrong {
-  width: 420px;
+
+.groupHeader p {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.groupGrid {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-auto-flow: column;
+  grid-template-rows: repeat(2, max-content);
+  grid-auto-columns: 380px;
+  align-content: start;
+  align-items: start;
+  gap: 14px;
+}
+
+.groupGridWide {
+  grid-auto-columns: 400px;
 }
 
 .section {
   width: 100%;
-  flex: 0 0 auto;
-  /* A section taller than its own column (e.g. Media Servers & Downloads,
-     with four service rows) still gets its own scroll as a fallback, since
-     a column only reflows what doesn't fit ACROSS sections, not within
-     one that's individually taller than the whole column. */
-  max-height: 100%;
-  overflow-y: auto;
   border-radius: var(--radius-large);
   padding: 18px 20px;
+  transition:
+    transform var(--transition-fast),
+    border-color var(--transition-fast),
+    box-shadow var(--transition-fast);
+}
+
+.section:hover {
+  transform: translateY(-2px);
+  border-color: rgba(56, 193, 255, 0.24);
+  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.16);
+}
+
+@media (max-width: 1250px) {
+  .pageHeader {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 14px;
+  }
+
+  .categoryNav {
+    max-width: 100%;
+  }
+
+  .settingsGroup {
+    min-width: 720px;
+  }
+
+  .groupGrid,
+  .groupGridWide {
+    grid-auto-columns: 350px;
+  }
 }
 
 .sectionTitle {
@@ -392,15 +504,11 @@
 }
 
 /* ---------- Media server / download client config rows ---------- */
-.serviceRow {
+.serviceCard {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  padding: 14px 0;
-  border-bottom: 1px solid var(--border-subtle);
-}
-.serviceRow:last-child {
-  border-bottom: none;
+  overflow: visible;
 }
 
 .serviceHead {
@@ -411,6 +519,8 @@
 
 .serviceName {
   flex: 1;
+  margin: 0;
+  font-family: var(--font-display);
   font-size: 14px;
   font-weight: 600;
   color: var(--text-primary);
@@ -492,10 +602,44 @@
   color: var(--text-muted);
 }
 
-.saveBar {
+.serviceNotice {
+  grid-row: 1 / -1;
+  align-self: start;
+  max-width: 280px;
+  margin: 0;
+  padding: 12px 14px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-medium);
+  color: var(--text-muted);
+  background: rgba(255, 255, 255, 0.035);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.serviceSaveCard {
   display: flex;
-  justify-content: flex-end;
-  margin-top: 4px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  min-height: 78px;
+  padding: 16px 18px;
+  border-radius: var(--radius-large);
+}
+
+.serviceSaveCard div {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.serviceSaveCard strong {
+  color: var(--text-primary);
+  font-size: 13px;
+}
+
+.serviceSaveCard span {
+  color: var(--text-muted);
+  font-size: 11.5px;
 }
 .saveButton {
   padding: 8px 18px;
