@@ -1,6 +1,14 @@
 .section {
   grid-area: mood;
-  position: relative;
+  /* Keep the mood controls anchored to the visible bottom edge when the
+     shell's shared main container has a scroll offset. Home normally fits
+     inside one viewport, but compact window heights can still make .main
+     scroll; `sticky` preserves this section's grid footprint while ensuring
+     the controls never travel away with that scroll. Unlike `fixed`, it also
+     remains correctly constrained above the dedicated mobile bottom-nav row. */
+  position: sticky;
+  bottom: 0;
+  z-index: 10;
   display: flex;
   flex-direction: column;
   min-width: 0;

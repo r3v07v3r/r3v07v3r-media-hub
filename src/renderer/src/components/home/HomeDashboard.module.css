@@ -6,7 +6,11 @@
      here instead of making AppShell's shared .main scroll container
      (overflow-y:auto — every OTHER routed page still legitimately needs
      that) kick in for the whole page. */
-  overflow: hidden;
+  /* `clip` keeps the same hard no-scroll boundary as `hidden` without
+     creating an intermediate scroll container. That distinction lets the
+     sticky MoodBrowser anchor against AppShell's real .main scroller rather
+     than getting trapped inside this non-scrolling wrapper. */
+  overflow: clip;
   display: grid;
   /* Reference composition target (see public/reference/dashboard-
      reference.png): the assistant/orb column and the telemetry column
