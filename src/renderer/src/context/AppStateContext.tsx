@@ -38,6 +38,12 @@ import {
   catalogItemToMediaItem
 } from '@renderer/lib/mediaHub/adapters'
 import {
+  PlaybackPreparationCancelledError,
+  playbackPreparationErrorMessage,
+  runPlaybackPreparationStage,
+  type PlaybackPreparationStage
+} from '@renderer/lib/mediaHub/playbackPreparation'
+import {
   useMediaHubBrowseCatalog,
   useMediaHubDislikedIds,
   useMediaHubHomeFeed,
@@ -256,7 +262,8 @@ interface AppStateValue {
   // shared slot (only one title can be starting at a time) — a Play
   // button anywhere in the app compares its own media.id against it to
   // know whether IT is the one currently loading.
-  resolvingMedia: { id: string; stage: 'searching' | 'buffering' } | null
+  resolvingMedia: { id: string; title: string; stage: PlaybackPreparationStage } | null
+  cancelPlaybackPreparation: () => void
   playbackMedia: MediaItem | null
   playbackResult: PlaybackResult | null
   playbackTracks: MediaTracks | null
@@ -331,7 +338,6 @@ function sameJson(a: unknown, b: unknown): boolean {
 
 const AppStateContext = createContext<AppStateValue | null>(null)
 
-
 export function AppStateProvider({ children }: { children: React.ReactNode }) {
   // Safe to call here: App.tsx nests <AppStateProvider> inside <HashRouter>,
   // so this provider always renders within a Router context.
@@ -380,8 +386,13 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   const [browsingOrigin, setBrowsingOrigin] = useState<BrowsingOrigin | null>(null)
   const [resolvingMedia, setResolvingMedia] = useState<{
     id: string
-    stage: 'searching' | 'buffering'
+    title: string
+    stage: PlaybackPreparationStage
   } | null>(null)
+  const playbackPreparationRef = useRef<{ generation: number; controller: AbortController } | null>(
+    null
+  )
+  const playbackPreparationGeneration = useRef(0)
   const [playbackMedia, setPlaybackMedia] = useState<MediaItem | null>(null)
   const [playbackResult, setPlaybackResult] = useState<PlaybackResult | null>(null)
   const [playbackTracks, setPlaybackTracks] = useState<MediaTracks | null>(null)
@@ -470,9 +481,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     // so stringifying them is far cheaper than the render it avoids.
     api
       .status()
-      .then((next) =>
-        setPartyStatus((prev) => (prev && sameJson(prev, next) ? prev : next))
-      )
+      .then((next) => setPartyStatus((prev) => (prev && sameJson(prev, next) ? prev : next)))
       .catch(() => {})
     api
       .queue()
@@ -855,6 +864,19 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   // (and therefore the overlay) is only ever set once there's a real,
   // playable PlaybackResult in hand; a no-source or error outcome just
   // pushes a notification and leaves the person exactly where they were.
+  const cancelPlaybackPreparation = useCallback(() => {
+    const pending = playbackPreparationRef.current
+    if (!pending) return
+    pending.controller.abort()
+    playbackPreparationRef.current = null
+    setResolvingMedia(null)
+    // A stream:play IPC request may have reached the main process already.
+    // Stop is idempotent and prevents a late result leaving an orphan proxy
+    // or ffmpeg process behind after the UI has cancelled it.
+    window.api?.mediaHub?.playback.stop().catch(() => {})
+  }, [])
+
+  const startPlaybackRef = useRef<(media: MediaItem) => Promise<boolean>>(async () => false)
   const startPlayback = useCallback(
     async (media: MediaItem): Promise<boolean> => {
       if (mediaHubSettings && !mediaHubSettings.torboxConnected) {
@@ -873,6 +895,12 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         return false
       }
       closeContextMenu()
+      cancelPlaybackPreparation()
+      const generation = ++playbackPreparationGeneration.current
+      const controller = new AbortController()
+      playbackPreparationRef.current = { generation, controller }
+      const isCurrent = (): boolean =>
+        playbackPreparationRef.current?.generation === generation && !controller.signal.aborted
       const kind = media.mediaKind ?? (media.mediaType === 'series' ? 'series' : 'movie')
       const mediaId = buildMediaId(kind, media.id, media.seasonNumber, media.episodeNumber)
       // For series, the stream search itself needs to know which episode is
@@ -889,9 +917,16 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       // returned zero results even for a title with real, cached releases
       // under the correct kitsuId:episode form.
       const resolveId = kind === 'anime' ? `${media.id}:${media.episodeNumber ?? 1}` : mediaId
-      setResolvingMedia({ id: media.id, stage: 'searching' })
+      setResolvingMedia({ id: media.id, title: media.title, stage: 'resolving' })
       try {
-        const resolved = await api.stream.resolve(kind, resolveId, media.title)
+        const resolved = await runPlaybackPreparationStage(
+          api.stream.resolve(kind, resolveId, media.title),
+          'resolving',
+          30_000,
+          controller.signal
+        )
+        if (!isCurrent()) return false
+        setResolvingMedia({ id: media.id, title: media.title, stage: 'safety-checking' })
         if (!resolved.best) {
           // `queued` (see StreamResolveResult's own doc comment) means a
           // real torrent existed but nothing was cached yet, and the
@@ -907,8 +942,26 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
           })
           return false
         }
-        setResolvingMedia({ id: media.id, stage: 'buffering' })
-        const played = await api.stream.play(resolved.best, mediaId)
+        setResolvingMedia({ id: media.id, title: media.title, stage: 'buffering' })
+        const playTask = api.stream.play(resolved.best, mediaId)
+        // If cancellation/timeout wins the race, a late successful IPC result
+        // must not leave its newly-created backend playback session running.
+        void playTask.then(
+          () => {
+            if (!isCurrent()) api.playback.stop().catch(() => {})
+          },
+          () => {
+            // The awaited, deadline-bounded branch below owns user feedback.
+          }
+        )
+        const played = await runPlaybackPreparationStage(
+          playTask,
+          'buffering',
+          45_000,
+          controller.signal
+        )
+        if (!isCurrent()) return false
+        setResolvingMedia({ id: media.id, title: media.title, stage: 'starting' })
         setPlaybackResult(played)
         setPlaybackTracks(played.tracks)
         setPlaybackMedia(media)
@@ -919,17 +972,30 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         }
         return true
       } catch (error) {
+        if (error instanceof PlaybackPreparationCancelledError) return false
         pushNotification({
           tone: 'error',
-          message: error instanceof Error ? error.message : 'Playback failed to start.'
+          message: playbackPreparationErrorMessage(error),
+          action: {
+            label: 'Retry',
+            run: () => {
+              void startPlaybackRef.current(media)
+            }
+          }
         })
         return false
       } finally {
-        setResolvingMedia(null)
+        if (playbackPreparationRef.current?.generation === generation) {
+          playbackPreparationRef.current = null
+          setResolvingMedia(null)
+        }
       }
     },
-    [mediaHubSettings, pushNotification, closeContextMenu]
+    [mediaHubSettings, pushNotification, closeContextMenu, cancelPlaybackPreparation]
   )
+  useEffect(() => {
+    startPlaybackRef.current = startPlayback
+  }, [startPlayback])
   const stopPlayback = useCallback(() => {
     // The one place that genuinely means "playback is over" — every close
     // path routes through here. PlaybackOverlay's unmount deliberately no
@@ -1244,7 +1310,6 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
 
   const consumePartyPendingSeek = useCallback(() => setPartyPendingSeek(null), [])
 
-
   const toggleCombinedMood = useCallback((moodId: string) => {
     setCombinedMoods((prev) =>
       prev.includes(moodId) ? prev.filter((m) => m !== moodId) : [...prev, moodId]
@@ -1386,6 +1451,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       openDetail,
       clearBrowsingOrigin,
       resolvingMedia,
+      cancelPlaybackPreparation,
       playbackMedia,
       playbackResult,
       playbackTracks,
@@ -1465,6 +1531,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       openDetail,
       clearBrowsingOrigin,
       resolvingMedia,
+      cancelPlaybackPreparation,
       playbackMedia,
       playbackResult,
       playbackTracks,

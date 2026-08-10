@@ -7,6 +7,7 @@ import { OfflineBanner } from './OfflineBanner'
 import { ProfilePinPrompt } from '@renderer/components/profiles/ProfilePinPrompt'
 import { PartyPanel } from '@renderer/components/party/PartyPanel'
 import { PartyLoadingOverlay } from '@renderer/components/party/PartyLoadingOverlay'
+import { PlaybackPreparationOverlay } from './PlaybackPreparationOverlay'
 
 export function GlobalOverlays() {
   const { playbackMedia } = useAppState()
@@ -25,6 +26,7 @@ export function GlobalOverlays() {
       <OfflineBanner />
       <AIResponsePanel />
       <ContextMenu />
+      <PlaybackPreparationOverlay />
       {/* Keyed on the title's id so opening a new title (or "Restart") is a
           fresh mount — PlaybackOverlay's local playback state (status,
           currentTime, subtitle selection, etc.) then just starts from its

@@ -67,7 +67,7 @@ export function DetailHero({
 
   const playLabel = useMemo(() => {
     if (isResolving) {
-      return resolvingMedia?.stage === 'buffering' ? 'Preparing…' : 'Searching…'
+      return resolvingMedia?.stage === 'resolving' ? 'Searching…' : 'Preparing…'
     }
     if (hasProgress) {
       return config.isEpisodic

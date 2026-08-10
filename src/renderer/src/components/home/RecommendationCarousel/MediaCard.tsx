@@ -68,7 +68,7 @@ export function MediaCard({ media }: { media: MediaItem }) {
           aria-busy={isResolving}
           aria-label={
             isResolving
-              ? `${resolvingMedia?.stage === 'buffering' ? 'Preparing' : 'Searching'} ${media.title}`
+              ? `${resolvingMedia?.stage === 'resolving' ? 'Searching' : 'Preparing'} ${media.title}`
               : `Play ${media.title}`
           }
         >
