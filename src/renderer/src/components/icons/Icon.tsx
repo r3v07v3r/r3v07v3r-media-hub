@@ -19,6 +19,7 @@ const PATHS: Record<string, string> = {
   mic: '<rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21M8.5 21h7"/>',
   weather:
     '<circle cx="9" cy="10.5" r="4"/><path d="M9 3v1.4M9 15.6V17M3 10.5h1.4M12.6 10.5H14M4.9 5.9l1 1M12.1 5.9l-1 1M4.9 15.1l1-1M12.1 15.1l-1-1"/><path d="M11 16.5h6a3 3 0 0 0 .6-5.94A5 5 0 0 0 8.2 8.9"/>',
+  notification: '<path d="M18 9a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"/><path d="M10 21h4"/>',
   'play-outline': '<circle cx="12" cy="12" r="8.5"/><path d="M10 8.5l6 3.5-6 3.5v-7z"/>',
   stack:
     '<path d="M12 3.5l8.5 4.4L12 12.3 3.5 7.9 12 3.5z"/><path d="M3.5 12.1l8.5 4.4 8.5-4.4M3.5 16.3l8.5 4.4 8.5-4.4"/>',

@@ -45,6 +45,45 @@
   flex: 0 0 auto;
   white-space: nowrap;
 }
+.notificationButton {
+  position: relative;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--accent-cyan);
+  border: 1px solid rgba(56, 229, 255, 0.32);
+  background: rgba(56, 229, 255, 0.08);
+  transition:
+    color var(--transition-fast),
+    background var(--transition-fast),
+    box-shadow var(--transition-fast);
+}
+.notificationButton:hover {
+  color: #fff;
+  background: rgba(56, 229, 255, 0.15);
+}
+.notificationButton[aria-pressed='true'] {
+  box-shadow: 0 0 0 3px rgba(56, 229, 255, 0.25);
+}
+.notificationBadge {
+  position: absolute;
+  top: -5px;
+  right: -6px;
+  min-width: 17px;
+  height: 17px;
+  padding: 0 4px;
+  border-radius: 9px;
+  background: var(--accent-cyan);
+  color: #04141c;
+  font-family: var(--font-display);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 17px;
+  text-align: center;
+}
 .avatarButton {
   position: relative;
   width: 40px;
@@ -58,10 +97,12 @@
   font-size: 15px;
   color: #fff;
   border: 1px solid var(--border-subtle);
-  transition: box-shadow var(--transition-fast), transform var(--transition-fast);
+  transition:
+    box-shadow var(--transition-fast),
+    transform var(--transition-fast);
 }
 .avatarButton:hover,
-.avatarButton[aria-expanded="true"] {
+.avatarButton[aria-expanded='true'] {
   box-shadow: 0 0 0 3px rgba(56, 229, 255, 0.25);
 }
 .avatarButton:active {
@@ -95,7 +136,7 @@
   background: rgba(255, 255, 255, 0.06);
   color: var(--text-primary);
 }
-.profileMenuItem[aria-current="true"] {
+.profileMenuItem[aria-current='true'] {
   color: var(--text-primary);
   background: rgba(56, 229, 255, 0.1);
 }

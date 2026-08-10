@@ -6,6 +6,7 @@ import { useClock } from '@renderer/hooks/useClock'
 import { useWeather } from '@renderer/hooks/useWeather'
 import { Icon } from '@renderer/components/icons/Icon'
 import { PartyButton } from '@renderer/components/party/PartyButton'
+import { SyncNotificationButton } from './SyncNotificationButton'
 import styles from './TopUtilityBar.module.css'
 
 export function UserEnvironmentStatus() {
@@ -36,6 +37,7 @@ export function UserEnvironmentStatus() {
 
   return (
     <div className={styles.status}>
+      <SyncNotificationButton />
       <PartyButton />
 
       <div className={styles.weather} aria-live="off">
