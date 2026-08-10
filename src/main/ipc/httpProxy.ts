@@ -108,8 +108,6 @@ export function registerHttpProxyIpc(): void {
           body: finalBody,
           signal: controller.signal
         })
-        clearTimeout(timer)
-
         const contentType = res.headers.get('content-type') ?? ''
         const data = contentType.includes('application/json')
           ? await res.json().catch(() => undefined)
@@ -127,9 +125,14 @@ export function registerHttpProxyIpc(): void {
           setCookie: cookies.length ? cookies.join('; ') : undefined
         }
       } catch (err) {
-        clearTimeout(timer)
         const message = err instanceof Error ? err.message : 'Unknown network error'
         return { ok: false, status: 0, error: message }
+      } finally {
+        // Keep the timeout alive while consuming the response body too.
+        // fetch() resolves as soon as the headers arrive, so clearing here
+        // any earlier would let a server stall res.json()/res.text()
+        // indefinitely after sending a quick set of headers.
+        clearTimeout(timer)
       }
     }
   )
