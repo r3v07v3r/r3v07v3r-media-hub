@@ -1,4 +1,4 @@
-import { HashRouter, Routes, Route, Navigate } from 'react-router-dom'
+import { HashRouter, Routes, Route, Navigate, useParams } from 'react-router-dom'
 import { AppStateProvider } from '@renderer/context/AppStateContext'
 import { OverlayProvider } from '@renderer/context/OverlayContext'
 import { AppShell } from '@renderer/components/layout/AppShell'
@@ -11,6 +11,11 @@ import MyStuffPage from '@renderer/routes/MyStuffPage'
 import DownloadsPage from '@renderer/routes/DownloadsPage'
 import SettingsPage from '@renderer/routes/SettingsPage'
 import { ReferenceOverlay } from '@renderer/components/debug/ReferenceOverlay'
+
+function LegacyTvShowDetailRedirect() {
+  const { id } = useParams()
+  return <Navigate to={`/series/${encodeURIComponent(id ?? '')}`} replace />
+}
 
 // HashRouter rather than BrowserRouter — the production build loads
 // dist/renderer/index.html directly off disk via file://, which has no
@@ -42,9 +47,14 @@ export default function App() {
                 real instead of 404ing, without adding a second routing
                 pattern (react-router's own <Navigate>, not a new mechanism). */}
               <Route path="/tv-shows" element={<Navigate to="/series" replace />} />
+              <Route path="/tv-shows/:id" element={<LegacyTvShowDetailRedirect />} />
               <Route path="/my-stuff" element={<MyStuffPage />} />
               <Route path="/downloads" element={<DownloadsPage />} />
               <Route path="/settings" element={<SettingsPage />} />
+              {/* A stale bookmark or malformed external deep link should
+                  recover to a usable screen instead of rendering an empty
+                  application shell. */}
+              <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>
           </AppShell>
           {/* Dev/QA-only pixel-alignment tool (spec: F8 toggle, F9/F10/F11

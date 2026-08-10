@@ -4,6 +4,7 @@ import { useEffect, useRef } from 'react'
 import { useAppState } from '@renderer/context/AppStateContext'
 import { useOverlayActions, useOverlayState } from '@renderer/context/OverlayContext'
 import { Icon } from '@renderer/components/icons/Icon'
+import { positionFloatingPanel } from '@renderer/lib/floatingPanel'
 import styles from './Overlays.module.css'
 
 export function ContextMenu() {
@@ -46,8 +47,7 @@ export function ContextMenu() {
   const saved = myList.has(media.id)
   const disliked = dislikedIds.has(media.id)
 
-  const left = Math.min(x, window.innerWidth - 224)
-  const top = Math.min(y, window.innerHeight - 320)
+  const { left, top } = positionFloatingPanel(x, y, 224, 320, window.innerWidth, window.innerHeight)
 
   const items: { icon: string; label: string; onSelect: () => void }[] = [
     { icon: 'play', label: 'Play', onSelect: () => startPartyPlayback(media) },
