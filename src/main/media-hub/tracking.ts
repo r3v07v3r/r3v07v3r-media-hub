@@ -195,7 +195,27 @@ async function computeMovieDiscrepancies(): Promise<WatchStatusDiscrepancy[]> {
       remoteWatched: remote
     })
   }
-  return out
+  // Simkl's all-items response can contain only an IMDb id for a movie, so
+  // remote-only rows otherwise wind up displaying that id with no artwork.
+  // Resolve the same cached metadata used by the detail page before handing
+  // the review list to the renderer. Keep the history values as fallbacks so
+  // a single unavailable metadata request never hides a discrepancy.
+  return Promise.all(
+    out.map(async (discrepancy) => {
+      try {
+        const detail = await metadata('movie', discrepancy.id)
+        return {
+          ...discrepancy,
+          title: detail.title || discrepancy.title,
+          poster: detail.poster || discrepancy.poster,
+          year: detail.year || discrepancy.year
+        }
+      } catch (error) {
+        logError('reconcile:metadata', error)
+        return discrepancy
+      }
+    })
+  )
 }
 
 /** Registers every `tracking:*`, `home:personalized`, and `simkl:*` IPC handler. Call once during main-process startup. */
