@@ -25,6 +25,18 @@ export function NotificationLayer() {
         <div key={n.id} className={`${styles.toast} glass-panel`} role="status">
           <span className={`${styles.toastDot} ${DOT_CLASS[n.tone]}`} aria-hidden="true" />
           <span className={styles.toastMessage}>{n.message}</span>
+          {n.action && (
+            <button
+              type="button"
+              className={styles.toastAction}
+              onClick={() => {
+                dismissNotification(n.id)
+                n.action?.run()
+              }}
+            >
+              {n.action.label}
+            </button>
+          )}
           <button
             type="button"
             className={styles.toastClose}

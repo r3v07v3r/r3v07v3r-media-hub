@@ -137,6 +137,10 @@ export interface AppNotification {
   tone: 'info' | 'success' | 'warning' | 'error'
   message: string
   createdAt: number
+  action?: {
+    label: string
+    run: () => void
+  }
 }
 
 export type MatchTier = 'excellent' | 'good' | 'fair' | 'low'
