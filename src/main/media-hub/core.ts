@@ -67,6 +67,22 @@ function streamResolution(stream: StreamCandidate): number {
   return stream.resolution || 0
 }
 
+function streamSizeGb(stream: StreamCandidate): number | null {
+  const text = streamText(stream)
+  const match = text.match(/([\d.]+)\s*(tb|gb|mb)\b/)
+  if (match) {
+    const amount = Number(match[1])
+    return match[2] === 'tb' ? amount * 1024 : match[2] === 'mb' ? amount / 1024 : amount
+  }
+  const bytes = Number(stream.size || stream.sizeBytes)
+  return Number.isFinite(bytes) && bytes > 0 ? bytes / 1024 ** 3 : null
+}
+
+export interface StreamLimits {
+  maxResolution?: number
+  maxSizeGb?: number
+}
+
 /** How hostile a release is to *streaming*, as opposed to how good it
  *  looks. Disc remuxes are the top of the quality pile and the bottom of
  *  the playability one: a real one seen live here carried ~90 streams —
@@ -139,12 +155,10 @@ export function isUnsafeStream(stream: StreamCandidate): boolean {
  *  person's audio-language preference applied. */
 export function rankSafeStreams(
   streams: StreamCandidate[],
-  preferredLanguage = 'en'
+  preferredLanguage = 'en',
+  limits: StreamLimits = {}
 ): StreamCandidate[] {
-  return rankStreams(
-    streams.filter((s) => !isUnsafeStream(s)),
-    preferredLanguage
-  )
+  return rankStreams(streams.filter((s) => !isUnsafeStream(s)), preferredLanguage, limits)
 }
 
 /**
@@ -158,7 +172,11 @@ export function rankSafeStreams(
  */
 const WRONG_LANGUAGE_PENALTY = 40000
 
-export function rankStreams(streams: StreamCandidate[], preferredLanguage = 'en'): StreamCandidate[] {
+export function rankStreams(
+  streams: StreamCandidate[],
+  preferredLanguage = 'en',
+  limits: StreamLimits = {}
+): StreamCandidate[] {
   const score = (s: StreamCandidate): number =>
     (s.exact === false ? 0 : 100000) +
     (s.cached === false ? 0 : 20000) +
@@ -170,7 +188,15 @@ export function rankStreams(streams: StreamCandidate[], preferredLanguage = 'en'
     // and there was no English in the file to select. It has to be settled
     // here, when the release is chosen.
     (releaseLacksPreferredLanguage(streamText(s), preferredLanguage) ? WRONG_LANGUAGE_PENALTY : 0)
-  return [...streams].sort((a, b) => score(b) - score(a))
+  const withinLimits = streams.filter((stream) => {
+    const resolution = streamResolution(stream)
+    const size = streamSizeGb(stream)
+    return (
+      (!limits.maxResolution || !resolution || resolution <= limits.maxResolution) &&
+      (!limits.maxSizeGb || size === null || size <= limits.maxSizeGb)
+    )
+  })
+  return [...withinLimits].sort((a, b) => score(b) - score(a))
 }
 
 export function validateTorBoxToken(token: unknown): boolean {

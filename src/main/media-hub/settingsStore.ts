@@ -64,6 +64,9 @@ export interface MediaHubRawSettings {
   autoSubtitlesEnabled?: boolean
   uiAnimationsEnabled?: boolean
   videoTranscodeEnabled?: boolean
+  maxStreamResolution?: number
+  maxStreamSizeGb?: number
+  connectionSpeedMbps?: number
   preferredUpscaleHeight?: number
   hideWatchedDefault?: boolean
   hideCompletedDefault?: boolean

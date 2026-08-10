@@ -50,6 +50,10 @@ export function publicSettings(settings: Record<string, unknown> = {}): MediaHub
     // hardware-encoder probe + CPU/GPU cost the first time it's actually
     // used, so it defaults off rather than on.
     videoTranscodeEnabled: settings.videoTranscodeEnabled === true,
+    maxStreamResolution: Number(settings.maxStreamResolution) || 0,
+    maxStreamSizeGb: Number(settings.maxStreamSizeGb) || 0,
+    connectionSpeedMbps:
+      Number(settings.connectionSpeedMbps) > 0 ? Number(settings.connectionSpeedMbps) : undefined,
     hideWatchedDefault: settings.hideWatchedDefault === true,
     hideCompletedDefault: settings.hideCompletedDefault === true,
     hideDislikedDefault: settings.hideDislikedDefault === true
@@ -73,6 +77,9 @@ export function logoutSettings(
   | 'autoSubtitlesEnabled'
   | 'uiAnimationsEnabled'
   | 'videoTranscodeEnabled'
+  | 'maxStreamResolution'
+  | 'maxStreamSizeGb'
+  | 'connectionSpeedMbps'
   | 'hideWatchedDefault'
   | 'hideCompletedDefault'
   | 'hideDislikedDefault'
@@ -84,6 +91,10 @@ export function logoutSettings(
     autoSubtitlesEnabled: settings.autoSubtitlesEnabled !== false,
     uiAnimationsEnabled: settings.uiAnimationsEnabled !== false,
     videoTranscodeEnabled: settings.videoTranscodeEnabled === true,
+    maxStreamResolution: Number(settings.maxStreamResolution) || 0,
+    maxStreamSizeGb: Number(settings.maxStreamSizeGb) || 0,
+    connectionSpeedMbps:
+      Number(settings.connectionSpeedMbps) > 0 ? Number(settings.connectionSpeedMbps) : undefined,
     hideWatchedDefault: settings.hideWatchedDefault === true,
     hideCompletedDefault: settings.hideCompletedDefault === true,
     hideDislikedDefault: settings.hideDislikedDefault === true
