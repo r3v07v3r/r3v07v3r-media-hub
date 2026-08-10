@@ -40,17 +40,32 @@
 // it's used here as a second confirmation signal via a single global
 // union-find over the whole item set: two items merge if they share a
 // TVDB series id, or one's relationships include a sequel/prequel edge to
-// the other. Items confirmed only via the relationship graph (no TVDB
-// season number) sort after every TVDB-confirmed one in their group,
-// ordered among themselves by ascending Kitsu id — Kitsu ids are assigned
-// roughly in upload order, which in practice tracks real release order for
-// sequels closely enough to use as a fallback.
+// the other.
+//
+// That coverage gap turned out to be large, not an edge case: measured
+// live against a real user's crawled catalog (the anime catalog audit,
+// 2026-08-10), only 591 of 1,070 TVDB-mapping lookups resolved — 45% of
+// crawled anime have no TheTVDB mapping at all. AniList's own relations
+// graph (see anilist.ts) is a THIRD signal added for exactly that gap —
+// structurally the same shape as Kitsu's own graph (a relationship-type
+// label, no season ordinal of its own), from a different provider, so
+// anything it confirms that Kitsu's own graph missed closes a real hole;
+// anything both confirm is a harmless redundant union.
+//
+// Ordering within a group now has three tiers, poorest signal last:
+// TheTVDB's own real season number first; AniList's broadcast season+year
+// (a real chronological signal, see anilistSeasonOrderKey) for members
+// TheTVDB couldn't number but AniList could still place on a timeline;
+// ascending Kitsu id — assigned roughly in upload order, which in practice
+// tracks real release order closely enough — as the last resort when
+// neither external source has anything to say.
 
 import type { CatalogItem, Episode } from '../../shared/media-hub/types'
 import { fetchJson } from './httpClient'
 import { logError } from './logger'
 import { getDatabase } from './dbState'
 import { normalizeKitsuAnime, normalizeKitsuEpisode, type RawApiPayload } from './core'
+import { anilistTitleInfo, cacheAnilistIdFromMappings, cachedAnilistId } from './anilist'
 
 export interface TvdbMapping {
   seriesId: string
@@ -86,6 +101,13 @@ export async function kitsuTvdbMapping(kitsuId: string): Promise<TvdbMapping | n
     const mapping: TvdbMapping =
       seriesId && Number.isInteger(season) && season >= 0 ? { seriesId, season } : NO_TVDB_MAPPING
     db.putCache(key, mapping, 30 * 24 * 60 * 60 * 1000)
+    // Side effect, not a second request: the same /mappings response also
+    // carries an `anilist/anime` entry for most non-obscure titles (see
+    // anilist.ts), which groupAnimeCatalog's needsEdgeCheck step below
+    // reads back for free — every crawled item's AniList id is already
+    // warm in cache by the time it's needed, whether or not TheTVDB
+    // mapped this particular item.
+    cacheAnilistIdFromMappings(kitsuId, result as { data?: RawApiPayload[] })
     return mapping.seriesId ? mapping : null
   } catch (error) {
     logError('anime:tvdb-mapping', error)
@@ -331,11 +353,65 @@ export async function groupAnimeCatalog(items: CatalogItem[]): Promise<CatalogIt
     if (i + 20 < needsEdgeCheck.length) await new Promise((resolve) => setTimeout(resolve, 350))
   }
 
-  const groups = new Map<number, { item: CatalogItem; season: number | null }[]>()
+  // A second attempt at the exact same question, from a different
+  // provider — see anilist.ts's own header for why this exists and how
+  // its scope/rate-limiting/caching stay inside AniList's terms. Kitsu's
+  // own relationship graph above is edge-only too, so anything AniList
+  // confirms that Kitsu's own graph missed closes a real gap; anything
+  // it also confirms is a harmless redundant union, same as the Kitsu
+  // pass's own comment already notes for itself.
+  //
+  // Every crawled item's AniList id (TVDB-mapped or not) is already warm
+  // in cache as a side effect of the TVDB-mapping pass above, so the
+  // reverse lookup below can resolve an edge target to a crawled item
+  // even when that target WAS TVDB-mapped — matching the Kitsu-edges
+  // pass's own "only the source needs to be unmapped, not the
+  // destination" scoping.
+  const anilistIdByItemId = new Map<string, number>()
+  for (const item of items) {
+    const anilistId = cachedAnilistId(item.id.replace(/^kitsu:/, ''))
+    if (anilistId) anilistIdByItemId.set(item.id, anilistId)
+  }
+  const itemIndexByAnilistId = new Map<number, number>()
+  for (const [itemId, anilistId] of anilistIdByItemId) {
+    const index = idToIndex.get(itemId)
+    if (index !== undefined) itemIndexByAnilistId.set(anilistId, index)
+  }
+
+  const anilistOrderKeyByItemId = new Map<string, number>()
+  const anilistLookupIds = needsEdgeCheck
+    .map((item) => anilistIdByItemId.get(item.id))
+    .filter((id): id is number => Boolean(id))
+  if (anilistLookupIds.length) {
+    const info = await anilistTitleInfo(anilistLookupIds)
+    for (const item of needsEdgeCheck) {
+      const anilistId = anilistIdByItemId.get(item.id)
+      if (!anilistId) continue
+      const srcIndex = idToIndex.get(item.id)
+      const titleInfo = info.get(anilistId)
+      if (!titleInfo || srcIndex === undefined) continue
+      if (titleInfo.seasonOrderKey !== null) {
+        anilistOrderKeyByItemId.set(item.id, titleInfo.seasonOrderKey)
+      }
+      for (const edge of titleInfo.chainEdges) {
+        const destIndex = itemIndexByAnilistId.get(edge.targetAnilistId)
+        if (destIndex !== undefined) union(srcIndex, destIndex)
+      }
+    }
+  }
+
+  const groups = new Map<
+    number,
+    { item: CatalogItem; season: number | null; anilistOrderKey: number | null }[]
+  >()
   for (let i = 0; i < items.length; i++) {
     const root = find(i)
     const list = groups.get(root) || []
-    list.push({ item: items[i], season: mappingByItemId.get(items[i].id)?.season ?? null })
+    list.push({
+      item: items[i],
+      season: mappingByItemId.get(items[i].id)?.season ?? null,
+      anilistOrderKey: anilistOrderKeyByItemId.get(items[i].id) ?? null
+    })
     groups.set(root, list)
   }
 
@@ -346,9 +422,22 @@ export async function groupAnimeCatalog(items: CatalogItem[]): Promise<CatalogIt
       continue
     }
     group.sort((a, b) => {
+      // Tier 1: a real TheTVDB season number, when both sides have one.
       if (a.season !== null && b.season !== null) return a.season - b.season
       if (a.season !== null) return -1
       if (b.season !== null) return 1
+      // Tier 2: AniList's own broadcast season+year — a real chronological
+      // signal, closer to the truth than Kitsu's upload-order id below —
+      // for the members TheTVDB couldn't season-number but AniList could
+      // still place on a timeline.
+      if (a.anilistOrderKey !== null && b.anilistOrderKey !== null) {
+        return a.anilistOrderKey - b.anilistOrderKey
+      }
+      if (a.anilistOrderKey !== null) return -1
+      if (b.anilistOrderKey !== null) return 1
+      // Tier 3: last resort — Kitsu ids are assigned roughly in upload
+      // order, which in practice tracks real release order for sequels
+      // closely enough to use once nothing else is known.
       return Number(a.item.id.replace(/^kitsu:/, '')) - Number(b.item.id.replace(/^kitsu:/, ''))
     })
     const [canonical, ...siblings] = group
