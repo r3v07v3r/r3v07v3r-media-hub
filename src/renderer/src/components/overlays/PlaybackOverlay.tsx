@@ -199,6 +199,21 @@ export function PlaybackOverlay() {
   // choice back to default.
   const streamStartOffsetRef = useRef(0)
   const activeSelectionRef = useRef<PlaybackSelection>({})
+  // Every ffmpeg restart (seek, track change, quality change) is a
+  // multi-second round trip — spawn ffmpeg, wait for real bytes — with
+  // nothing stopping a second one from being fired before the first
+  // resolves (found live: clicking around the scrubber a few times while
+  // hunting for a resume point). The main process already tracks its own
+  // generation to stop a superseded restart from reporting a false
+  // failure (see vlc.ts), but nothing on this side stopped a SUCCESSFUL
+  // late response from an older, already-superseded request from landing
+  // after the newer one and overwriting it — pointing the <video> element
+  // at a URL for an ffmpeg process that had already been killed. That's
+  // what made rapid seeking feel broken/unresponsive and could leave
+  // playback stuck. Bumped by performSeek/selectTrack/applyUpscale right
+  // before each restart request; their response handlers check it's still
+  // current before applying anything.
+  const transcodeGenerationRef = useRef(0)
 
   // Scrubbing thumbnail preview — hovering the seek bar shows the frame at
   // that position. `time`/`x` update on every mousemove (cheap, just local
@@ -623,9 +638,15 @@ export function PlaybackOverlay() {
       streamStartOffsetRef.current = target
       setCurrentTime(target)
       applyShiftedSubtitle()
+      const myGeneration = ++transcodeGenerationRef.current
       window.api?.mediaHub?.playback
         .selectTracks({ ...activeSelectionRef.current, startTime: target })
         .then((response) => {
+          // A newer seek/track/quality change was fired after this one —
+          // see transcodeGenerationRef's own comment. That newer request
+          // already applied its own state (and its own <video> url); this
+          // response describes an ffmpeg session that's already dead.
+          if (transcodeGenerationRef.current !== myGeneration) return
           if (!response) return
           activeSelectionRef.current = response.selection
           setAppliedUpscaleHeight(response.selection.upscaleHeight ?? 0)
@@ -663,7 +684,10 @@ export function PlaybackOverlay() {
           // Same detection as selectTrack's own handler, and for the same
           // reason: Electron's IPC round-trip rebuilds a plain Error, so the
           // original .name only survives inside .message.
-          if (error instanceof Error && error.message.includes('SupersededTranscodeError')) {
+          if (
+            transcodeGenerationRef.current !== myGeneration ||
+            (error instanceof Error && error.message.includes('SupersededTranscodeError'))
+          ) {
             return
           }
           streamStartOffsetRef.current = previousOffset
@@ -992,11 +1016,17 @@ export function PlaybackOverlay() {
     resumeAfterRestartRef.current = !(video?.paused ?? false)
     setTrackChangeBusy(true)
     setPendingAudioOrdinal(ordinal)
+    const myGeneration = ++transcodeGenerationRef.current
     try {
       const response = await window.api?.mediaHub?.playback.selectTracks({
         audio: ordinal,
         startTime
       })
+      // A newer seek/track/quality change was fired while this one was
+      // still restarting ffmpeg — see transcodeGenerationRef's own
+      // comment. Applying this response now would stomp the newer
+      // request's state with a URL for an already-dead ffmpeg session.
+      if (transcodeGenerationRef.current !== myGeneration) return
       if (!response) return
       streamStartOffsetRef.current = startTime
       activeSelectionRef.current = response.selection
@@ -1038,7 +1068,8 @@ export function PlaybackOverlay() {
       // this object's own `.name` (confirmed live: `.name` here is always
       // just "Error").
       const isSuperseded =
-        error instanceof Error && error.message.includes('SupersededTranscodeError')
+        transcodeGenerationRef.current !== myGeneration ||
+        (error instanceof Error && error.message.includes('SupersededTranscodeError'))
       if (!isSuperseded) {
         pushNotification({
           tone: 'error',
@@ -1069,12 +1100,16 @@ export function PlaybackOverlay() {
     // person had paused.
     resumeAfterRestartRef.current = !(video?.paused ?? false)
     setApplyingQuality(true)
+    const myGeneration = ++transcodeGenerationRef.current
     try {
       const response = await window.api?.mediaHub?.playback.selectTracks({
         ...activeSelectionRef.current,
         startTime,
         upscaleHeight: height
       })
+      // See transcodeGenerationRef's own comment — a newer restart request
+      // already won, this one describes an already-dead ffmpeg session.
+      if (transcodeGenerationRef.current !== myGeneration) return
       if (!response) return
       streamStartOffsetRef.current = startTime
       activeSelectionRef.current = response.selection
@@ -1103,10 +1138,15 @@ export function PlaybackOverlay() {
       )
       setTracks(response.tracks)
     } catch (error) {
-      pushNotification({
-        tone: 'error',
-        message: error instanceof Error ? error.message : 'Could not change video quality.'
-      })
+      const isSuperseded =
+        transcodeGenerationRef.current !== myGeneration ||
+        (error instanceof Error && error.message.includes('SupersededTranscodeError'))
+      if (!isSuperseded) {
+        pushNotification({
+          tone: 'error',
+          message: error instanceof Error ? error.message : 'Could not change video quality.'
+        })
+      }
     }
     setApplyingQuality(false)
     setOpenMenu(null)
