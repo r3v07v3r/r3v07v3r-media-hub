@@ -392,6 +392,18 @@ export function PlaybackOverlay() {
   // Re-armed on `loadeddata` as well as on mount: compatibility mode swaps
   // the element's src on every seek and track change, and reloading the
   // media resets every text track back to 'disabled' again.
+  //
+  // Also re-armed on the textTracks list's own `addtrack` event — found
+  // live: picking a subtitle mid-playback (no seek, no src change, so
+  // `loadeddata` never fires again) raced the browser's own track
+  // registration. Inserting the <track> element into the DOM doesn't add
+  // it to video.textTracks synchronously; that happens via a queued task,
+  // which this effect's synchronous `show()` call could easily run before.
+  // The result: the call landed too early, found nothing to switch on, and
+  // the subtitle silently never appeared — with nothing left to give it a
+  // second try. `addtrack` fires exactly when the browser actually
+  // registers the new TextTrack, so `show()` always gets a call after that
+  // point regardless of timing.
   useEffect(() => {
     const video = videoRef.current
     if (!video || !activeSubtitleTrackUrl) return
@@ -403,7 +415,11 @@ export function PlaybackOverlay() {
     }
     show()
     video.addEventListener('loadeddata', show)
-    return () => video.removeEventListener('loadeddata', show)
+    video.textTracks.addEventListener('addtrack', show)
+    return () => {
+      video.removeEventListener('loadeddata', show)
+      video.textTracks.removeEventListener('addtrack', show)
+    }
   }, [activeSubtitleTrackUrl, result?.url])
 
   useEffect(() => {
