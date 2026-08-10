@@ -1,3 +1,4 @@
+import { useMemo } from 'react'
 import { Link } from 'react-router-dom'
 import { useAppState } from '@renderer/context/AppStateContext'
 import { Icon } from '@renderer/components/icons/Icon'
@@ -14,13 +15,24 @@ export default function MyStuffPage() {
   const { myList, toggleMyList, openDetail, catalog, continueWatching, mediaHubSettings } =
     useAppState()
   // Global default only, no per-page override here — same as Mood Browser.
-  const items = applyWatchStateFilters(
-    catalog.filter((m) => myList.has(m.id)),
-    {
-      hideWatched: mediaHubSettings?.hideWatchedDefault ?? false,
-      hideCompleted: mediaHubSettings?.hideCompletedDefault ?? false,
-      hideDisliked: mediaHubSettings?.hideDislikedDefault ?? false
-    }
+  //
+  // Memoised because this page subscribes to the whole app context: without
+  // it, a full pass over the catalog (which can be well over a thousand
+  // entries) re-ran on every unrelated state change — a toast appearing, a
+  // context menu opening. CategoryPage and MoodBrowser already memoise
+  // their equivalents; this was the last one that didn't, and it only
+  // started paying off once `catalog` itself became identity-stable.
+  const items = useMemo(
+    () =>
+      applyWatchStateFilters(
+        catalog.filter((m) => myList.has(m.id)),
+        {
+          hideWatched: mediaHubSettings?.hideWatchedDefault ?? false,
+          hideCompleted: mediaHubSettings?.hideCompletedDefault ?? false,
+          hideDisliked: mediaHubSettings?.hideDislikedDefault ?? false
+        }
+      ),
+    [catalog, myList, mediaHubSettings]
   )
   useRestoreBrowsingOrigin(true)
 

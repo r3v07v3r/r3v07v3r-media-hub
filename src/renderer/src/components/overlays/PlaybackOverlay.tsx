@@ -1710,7 +1710,11 @@ export function PlaybackOverlay() {
                         isTextBased ? undefined : 'Image-based subtitle format — not supported'
                       }
                     >
-                      {isExtracting ? `Loading “${t.label}”…` : t.label}
+                      {/* Honest about the wait: pulling an embedded track
+                          out means demuxing the whole remote file, which
+                          on a large one is tens of seconds, not instant.
+                          Saying "Loading…" alone reads as a hang. */}
+                      {isExtracting ? `Extracting “${t.label}” — this can take a while…` : t.label}
                       {!isTextBased && ' (unsupported)'}
                     </button>
                   )

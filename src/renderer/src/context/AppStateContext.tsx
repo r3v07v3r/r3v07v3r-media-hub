@@ -50,6 +50,7 @@ import {
   deriveBrowsingLabel,
   type BrowsingOrigin
 } from '@renderer/lib/mediaHub/browsingContext'
+import { useOverlayActions } from '@renderer/context/OverlayContext'
 
 /** movie/series/anime -> the route each one's detail page lives at — the
  *  same plural/singular forms App.tsx's own /movies, /series, /anime
@@ -219,7 +220,6 @@ interface AppStateValue {
   clearCategorySearch: () => void
 
   // Toasts
-  notifications: AppNotification[]
   pushNotification: (n: Omit<AppNotification, 'id' | 'createdAt'>) => void
   dismissNotification: (id: string) => void
 
@@ -293,7 +293,6 @@ interface AppStateValue {
     poster?: string
   }) => Promise<void>
 
-  contextMenu: { x: number; y: number; media: MediaItem } | null
   openContextMenu: (x: number, y: number, media: MediaItem) => void
   closeContextMenu: () => void
 
@@ -321,9 +320,17 @@ interface AppStateValue {
 // like the party had started without them.
 const PARTY_PREPARING_TIMEOUT_MS = 3 * 60 * 1000
 
+/** Structural equality for the small, flat IPC payloads this file holds in
+ *  state (party status, party queue). Deliberately not a deep-equality
+ *  library: these are plain JSON round-tripped across the process
+ *  boundary, so key order is stable and a stringify comparison is both
+ *  correct and cheaper than the re-render it prevents. */
+function sameJson(a: unknown, b: unknown): boolean {
+  return JSON.stringify(a) === JSON.stringify(b)
+}
+
 const AppStateContext = createContext<AppStateValue | null>(null)
 
-let notifId = 0
 
 export function AppStateProvider({ children }: { children: React.ReactNode }) {
   // Safe to call here: App.tsx nests <AppStateProvider> inside <HashRouter>,
@@ -369,7 +376,6 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   const [assistantState, setAssistantState] = useState<AssistantState>('idle')
   const [assistantQuery, setAssistantQuery] = useState('')
   const [assistantResponse, setAssistantResponse] = useState<string | null>(null)
-  const [notifications, setNotifications] = useState<AppNotification[]>([])
   const [performancePanelVisible, setPerformancePanelVisible] = useState(true)
   const [browsingOrigin, setBrowsingOrigin] = useState<BrowsingOrigin | null>(null)
   const [resolvingMedia, setResolvingMedia] = useState<{
@@ -379,9 +385,6 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   const [playbackMedia, setPlaybackMedia] = useState<MediaItem | null>(null)
   const [playbackResult, setPlaybackResult] = useState<PlaybackResult | null>(null)
   const [playbackTracks, setPlaybackTracks] = useState<MediaTracks | null>(null)
-  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; media: MediaItem } | null>(
-    null
-  )
   const [activeMood, setActiveMood] = useState<string | null>(null)
   const [combinedMoods, setCombinedMoods] = useState<string[]>([])
   const [isOffline, setIsOffline] = useState(false)
@@ -392,7 +395,11 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     loading: false,
     error: false
   })
-  const timers = useRef<ReturnType<typeof setTimeout>[]>([])
+  // The assistant's simulated think-time. A ref rather than state so a
+  // second query replaces the first instead of racing it, and so an
+  // unmount can cancel a pending one — the previous version was an
+  // append-only array nothing ever read or cleared.
+  const assistantTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   // Guards against an in-flight search resolving after a newer one
   // started (or after clearCategorySearch) — only the most recent call's
   // result is ever applied.
@@ -452,13 +459,24 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   const refreshPartyStatus = useCallback(() => {
     const api = window.api?.mediaHub?.party
     if (!api) return
+    // Keep the previous object when nothing actually changed. This refetches
+    // on EVERY incoming party-state message (see the effect below for why
+    // refetching beats merging), and each response is freshly deserialized
+    // from IPC — so without this comparison an unchanged party still handed
+    // down a new identity, re-rendering every consumer and tearing down and
+    // re-establishing two IPC subscriptions each time. During an active
+    // party that churn runs continuously, which is exactly when the machine
+    // is already busy decoding video. The payloads are small flat objects,
+    // so stringifying them is far cheaper than the render it avoids.
     api
       .status()
-      .then(setPartyStatus)
+      .then((next) =>
+        setPartyStatus((prev) => (prev && sameJson(prev, next) ? prev : next))
+      )
       .catch(() => {})
     api
       .queue()
-      .then(({ queue }) => setPartyQueue(queue))
+      .then(({ queue }) => setPartyQueue((prev) => (sameJson(prev, queue) ? prev : queue)))
       .catch(() => {})
   }, [])
 
@@ -606,19 +624,14 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     [continueWatching, homeFeed]
   )
 
-  const pushNotification = useCallback((n: Omit<AppNotification, 'id' | 'createdAt'>) => {
-    notifId += 1
-    const id = `n-${notifId}`
-    setNotifications((prev) => [...prev, { ...n, id, createdAt: Date.now() }])
-    const t = setTimeout(() => {
-      setNotifications((prev) => prev.filter((x) => x.id !== id))
-    }, 4200)
-    timers.current.push(t)
-  }, [])
-
-  const dismissNotification = useCallback((id: string) => {
-    setNotifications((prev) => prev.filter((x) => x.id !== id))
-  }, [])
+  // Toasts and the card menu live in OverlayProvider (see
+  // context/OverlayContext.tsx). These four are stable for the life of the
+  // app, so re-exporting them in this context keeps every existing
+  // `useAppState().pushNotification` call site working, without putting the
+  // notifications array — which changes constantly — back into this
+  // context’s value and re-rendering all 43 subscribers for a toast.
+  const { pushNotification, dismissNotification, openContextMenu, closeContextMenu } =
+    useOverlayActions()
 
   // A refused download is never routine — it's either something hostile
   // reaching for the disk or a bug in this app, and both are worth saying
@@ -769,9 +782,22 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   )
 
   const closeAssistant = useCallback(() => {
+    // Cancel the pending think-time too, or a closed assistant reopens
+    // itself a second later with the answer to a question nobody is
+    // waiting for any more.
+    if (assistantTimer.current) {
+      clearTimeout(assistantTimer.current)
+      assistantTimer.current = null
+    }
     setAssistantState('idle')
     setAssistantResponse(null)
     setAssistantQuery('')
+  }, [])
+
+  useEffect(() => {
+    return () => {
+      if (assistantTimer.current) clearTimeout(assistantTimer.current)
+    }
   }, [])
 
   // Centralized here (every "open a title" call site — card, hero,
@@ -806,10 +832,10 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
           activeMood
         })
       setBrowsingOrigin(captureBrowsingOrigin(route, label))
-      setContextMenu(null)
+      closeContextMenu()
       navigate(mediaKindToDetailPath(media))
     },
-    [location.pathname, location.search, categorySearch, activeMood, navigate]
+    [location.pathname, location.search, categorySearch, activeMood, navigate, closeContextMenu]
   )
   const clearBrowsingOrigin = useCallback(() => setBrowsingOrigin(null), [])
 
@@ -846,7 +872,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         })
         return false
       }
-      setContextMenu(null)
+      closeContextMenu()
       const kind = media.mediaKind ?? (media.mediaType === 'series' ? 'series' : 'movie')
       const mediaId = buildMediaId(kind, media.id, media.seasonNumber, media.episodeNumber)
       // For series, the stream search itself needs to know which episode is
@@ -902,7 +928,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         setResolvingMedia(null)
       }
     },
-    [mediaHubSettings, pushNotification]
+    [mediaHubSettings, pushNotification, closeContextMenu]
   )
   const stopPlayback = useCallback(() => {
     // The one place that genuinely means "playback is over" — every close
@@ -1218,11 +1244,6 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
 
   const consumePartyPendingSeek = useCallback(() => setPartyPendingSeek(null), [])
 
-  const openContextMenu = useCallback(
-    (x: number, y: number, media: MediaItem) => setContextMenu({ x, y, media }),
-    []
-  )
-  const closeContextMenu = useCallback(() => setContextMenu(null), [])
 
   const toggleCombinedMood = useCallback((moodId: string) => {
     setCombinedMoods((prev) =>
@@ -1234,7 +1255,8 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     setAssistantQuery(query)
     setAssistantState('processing')
     setAssistantResponse(null)
-    const t1 = setTimeout(() => {
+    if (assistantTimer.current) clearTimeout(assistantTimer.current)
+    assistantTimer.current = setTimeout(() => {
       setAssistantState('responding')
       setAssistantResponse(
         query.trim()
@@ -1242,7 +1264,6 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
           : `I didn't catch a question there — try asking about a genre, mood, or title.`
       )
     }, 1100)
-    timers.current.push(t1)
   }, [])
 
   // The backend itself requires >=2 characters (main/media-hub/catalog.ts's
@@ -1357,7 +1378,6 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       categorySearch,
       runCategorySearch,
       clearCategorySearch,
-      notifications,
       pushNotification,
       dismissNotification,
       performancePanelVisible,
@@ -1381,7 +1401,6 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       consumePartyPendingSeek,
       setPartyMemberControl,
       requestPartyPlay,
-      contextMenu,
       openContextMenu,
       closeContextMenu,
       activeMood,
@@ -1439,7 +1458,6 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       categorySearch,
       runCategorySearch,
       clearCategorySearch,
-      notifications,
       pushNotification,
       dismissNotification,
       performancePanelVisible,
@@ -1462,7 +1480,6 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       consumePartyPendingSeek,
       setPartyMemberControl,
       requestPartyPlay,
-      contextMenu,
       openContextMenu,
       closeContextMenu,
       activeMood,

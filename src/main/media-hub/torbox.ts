@@ -32,6 +32,7 @@ import { MEDIA_HUB_CHANNELS } from '../../shared/media-hub/ipc-channels'
 import { getDatabase } from './dbState'
 import { fetchJson, type HttpError } from './httpClient'
 import { handle } from './ipcGuard'
+import { logError } from './logger'
 import {
   cometConfigPath,
   enrichTorBoxItem,
@@ -79,6 +80,44 @@ async function torbox<T = unknown>(
     if (v !== undefined) url.searchParams.set(k, String(v))
   })
   return torboxFetch<T>(url, { headers: { Authorization: `Bearer ${auth}` } })
+}
+
+/** How long a resolved TorBox library entry stays usable without asking
+ *  again. Its id and file list don't change once the torrent exists; the
+ *  only thing that invalidates it is the person deleting it from their
+ *  TorBox account, which the retry in play:stream recovers from. */
+const TORBOX_ITEM_TTL_MS = 6 * 60 * 60 * 1000
+
+/**
+ * The caller's TorBox library entry for one info-hash.
+ *
+ * `/torrents/mylist` has no by-hash query, so finding one torrent means
+ * pulling up to a thousand of them and scanning — a request that sat in
+ * the critical path of every single play and grew with the library. Since
+ * that response describes every torrent, not just the wanted one, one
+ * fetch is used to warm the whole set: a play, a second play of anything
+ * else, and a resume all hit the cache.
+ *
+ * `force` skips the cache, for the one case that can go stale — see
+ * play:stream's retry.
+ */
+async function torboxItemForHash(hash: string, force = false): Promise<RawApiPayload | null> {
+  const db = getDatabase()
+  const key = (h: string): string => `torbox:item:v1:${h}`
+  if (!force) {
+    const cached = db.getCache<RawApiPayload>(key(hash))
+    if (cached) return cached
+  }
+  const existing = await torbox<RawApiPayload>('/torrents/mylist', { limit: 1000 })
+  const list: RawApiPayload[] = Array.isArray(existing.data) ? existing.data : []
+  let match: RawApiPayload | null = null
+  for (const entry of list) {
+    const entryHash = String(entry?.hash || '').toLowerCase()
+    if (!entryHash) continue
+    db.putCache(key(entryHash), entry, TORBOX_ITEM_TTL_MS)
+    if (entryHash === hash) match = entry
+  }
+  return match
 }
 
 /** Queries one P2P scraper add-on and returns only its infoHash-bearing candidates. Best-effort: a failed/timed-out add-on shouldn't take the other one (or the whole resolve) down with it — see streamResolve's own comment on why two add-ons are queried at all. */
@@ -309,67 +348,82 @@ export function registerTorBoxIpc(): void {
       if (!/^[a-f0-9]{40}$/.test(hash)) {
         throw new Error('The selected source has no valid torrent hash.')
       }
-      const existing = await torbox<RawApiPayload>('/torrents/mylist', { limit: 1000 })
-      let item = (existing.data || []).find(
-        (x: RawApiPayload) => String(x.hash || '').toLowerCase() === hash
-      )
-      if (!item) {
-        const magnet = new URL('magnet:')
-        magnet.searchParams.set('xt', `urn:btih:${hash}`)
-        for (const tracker of sanitizeTrackers(stream.sources)) {
-          magnet.searchParams.append('tr', tracker)
+      // Wrapped so the whole lookup can be repeated once against a fresh
+      // listing: a cached library entry describes a torrent that existed a
+      // moment ago, and the one thing that invalidates it — the person
+      // deleting it from their TorBox account — only shows up as a failure
+      // at requestdl. Only that second attempt pays the full-library fetch.
+      const resolveDownloadUrl = async (force: boolean): Promise<string> => {
+        let item = await torboxItemForHash(hash, force)
+        if (!item) {
+          const magnet = new URL('magnet:')
+          magnet.searchParams.set('xt', `urn:btih:${hash}`)
+          for (const tracker of sanitizeTrackers(stream.sources)) {
+            magnet.searchParams.append('tr', tracker)
+          }
+          const form = new FormData()
+          form.append('magnet', magnet.toString())
+          form.append('add_only_if_cached', 'true')
+          const created = await torboxFetch<{ data?: { torrent_id?: unknown } }>(
+            `${TORBOX}/torrents/createtorrent`,
+            { method: 'POST', headers: { Authorization: `Bearer ${auth}` }, body: form }
+          )
+          const torrentId = created.data?.torrent_id
+          const fetched = await torbox<RawApiPayload>('/torrents/mylist', {
+            id: torrentId,
+            bypass_cache: true
+          })
+          item = Array.isArray(fetched.data) ? fetched.data[0] : fetched.data
         }
-        const form = new FormData()
-        form.append('magnet', magnet.toString())
-        form.append('add_only_if_cached', 'true')
-        const created = await torboxFetch<{ data?: { torrent_id?: unknown } }>(
-          `${TORBOX}/torrents/createtorrent`,
-          { method: 'POST', headers: { Authorization: `Bearer ${auth}` }, body: form }
+        if (!item) throw new Error('TorBox could not prepare the cached torrent.')
+        const parts = String(mediaId || '').split(':')
+        const episode = Number(parts.at(-1))
+        const season = Number(parts.at(-2))
+        const episodic = parts.length >= 3 && Number.isFinite(season) && Number.isFinite(episode)
+        const files = (item.files || []) as TorBoxFile[]
+        // Prefer the scraper add-on's own fileIdx (Torrentio provides it,
+        // Comet doesn't — see StreamCandidate.fileIdx's own doc comment)
+        // over selectVideoFile's filename-regex guessing, but only when it
+        // actually resolves to a real video file in TorBox's own listing —
+        // found live: on a large batch torrent (e.g. a "Complete Series"
+        // pack), the regex guess can miss entirely even though the add-on
+        // already told us exactly which file. Falls back to the regex guess
+        // whenever the index doesn't line up, rather than trusting it
+        // blindly (TorBox's own file ordering isn't guaranteed to match the
+        // add-on's).
+        const videoExt = /\.(mkv|mp4|avi|mov|webm|m4v|ts)$/i
+        const hintedIdx = Number(stream?.fileIdx)
+        const hinted =
+          Number.isInteger(hintedIdx) &&
+          hintedIdx >= 0 &&
+          files[hintedIdx] &&
+          videoExt.test(files[hintedIdx].name || files[hintedIdx].short_name || '')
+            ? files[hintedIdx]
+            : null
+        const file =
+          hinted ||
+          selectVideoFile(files, episodic ? season : undefined, episodic ? episode : undefined)
+        if (!file) throw new Error('No matching video file was found in the TorBox torrent.')
+        const result = await torboxFetch<{
+          data?: string | { url?: string; download_url?: string }
+        }>(
+          `${TORBOX}/torrents/requestdl?token=${encodeURIComponent(auth)}&torrent_id=${encodeURIComponent(item.id)}&file_id=${encodeURIComponent(String(file.id))}&redirect=false`
         )
-        const torrentId = created.data?.torrent_id
-        const fetched = await torbox<RawApiPayload>('/torrents/mylist', {
-          id: torrentId,
-          bypass_cache: true
-        })
-        item = Array.isArray(fetched.data) ? fetched.data[0] : fetched.data
+        const url =
+          typeof result.data === 'string'
+            ? result.data
+            : result.data?.url || result.data?.download_url
+        if (!url) throw new Error('TorBox did not return a playable URL.')
+        return url
       }
-      if (!item) throw new Error('TorBox could not prepare the cached torrent.')
-      const parts = String(mediaId || '').split(':')
-      const episode = Number(parts.at(-1))
-      const season = Number(parts.at(-2))
-      const episodic = parts.length >= 3 && Number.isFinite(season) && Number.isFinite(episode)
-      const files = (item.files || []) as TorBoxFile[]
-      // Prefer the scraper add-on's own fileIdx (Torrentio provides it,
-      // Comet doesn't — see StreamCandidate.fileIdx's own doc comment)
-      // over selectVideoFile's filename-regex guessing, but only when it
-      // actually resolves to a real video file in TorBox's own listing —
-      // found live: on a large batch torrent (e.g. a "Complete Series"
-      // pack), the regex guess can miss entirely even though the add-on
-      // already told us exactly which file. Falls back to the regex guess
-      // whenever the index doesn't line up, rather than trusting it
-      // blindly (TorBox's own file ordering isn't guaranteed to match the
-      // add-on's).
-      const videoExt = /\.(mkv|mp4|avi|mov|webm|m4v|ts)$/i
-      const hintedIdx = Number(stream?.fileIdx)
-      const hinted =
-        Number.isInteger(hintedIdx) &&
-        hintedIdx >= 0 &&
-        files[hintedIdx] &&
-        videoExt.test(files[hintedIdx].name || files[hintedIdx].short_name || '')
-          ? files[hintedIdx]
-          : null
-      const file =
-        hinted ||
-        selectVideoFile(files, episodic ? season : undefined, episodic ? episode : undefined)
-      if (!file) throw new Error('No matching video file was found in the TorBox torrent.')
-      const result = await torboxFetch<{ data?: string | { url?: string; download_url?: string } }>(
-        `${TORBOX}/torrents/requestdl?token=${encodeURIComponent(auth)}&torrent_id=${encodeURIComponent(item.id)}&file_id=${encodeURIComponent(String(file.id))}&redirect=false`
-      )
-      const url =
-        typeof result.data === 'string'
-          ? result.data
-          : result.data?.url || result.data?.download_url
-      if (!url) throw new Error('TorBox did not return a playable URL.')
+
+      let url: string
+      try {
+        url = await resolveDownloadUrl(false)
+      } catch (error) {
+        logError('torbox:play:retry', error)
+        url = await resolveDownloadUrl(true)
+      }
       return preparePlayback(url)
     }
   )

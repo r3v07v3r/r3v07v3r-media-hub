@@ -1,6 +1,6 @@
 'use client'
 
-import { useAppState } from '@renderer/context/AppStateContext'
+import { useOverlayActions, useOverlayState } from '@renderer/context/OverlayContext'
 import { Icon } from '@renderer/components/icons/Icon'
 import styles from './Overlays.module.css'
 
@@ -12,7 +12,12 @@ const DOT_CLASS: Record<string, string> = {
 }
 
 export function NotificationLayer() {
-  const { notifications, dismissNotification } = useAppState()
+  // Reads the overlay context directly rather than the app-wide one: this
+  // is one of only two components that need the toast list, and keeping it
+  // out of AppStateContext is what stops a toast re-rendering the entire
+  // app (see context/OverlayContext.tsx).
+  const { notifications } = useOverlayState()
+  const { dismissNotification } = useOverlayActions()
 
   return (
     <div className={styles.notifications} aria-live="polite" aria-relevant="additions">

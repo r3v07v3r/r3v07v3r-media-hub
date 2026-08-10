@@ -15,6 +15,7 @@ import type { MediaItem, Recommendation } from '@renderer/types'
 import { CATALOG } from '@renderer/data/mockData'
 import {
   catalogItemToMediaItem,
+  indexHistoryById,
   catalogItemToRecommendation,
   continueWatchingEntryToItem
 } from './adapters'
@@ -113,6 +114,11 @@ export function useMediaHubBrowseCatalog(
 
   const refresh = useCallback(() => setGeneration((g) => g + 1), [])
 
+  // Grouped once per history change rather than re-derived per item.
+  // catalogItemToMediaItem's completion check would otherwise filter the
+  // whole history for every entry — see CatalogItemAdapterContext.historyById.
+  const historyById = useMemo(() => indexHistoryById(history), [history])
+
   // Memoised, and NOT computed inline in the return below. This mapping
   // used to run on every render, handing back a brand-new array each time
   // — which made AppStateContext's own context-value useMemo useless
@@ -137,10 +143,10 @@ export function useMediaHubBrowseCatalog(
     () =>
       items?.length
         ? items.map((item) =>
-            catalogItemToMediaItem(item, { trackedIds, watchedIds, history, dislikedIds })
+            catalogItemToMediaItem(item, { trackedIds, watchedIds, historyById, dislikedIds })
           )
         : null,
-    [items, trackedIds, watchedIds, history, dislikedIds]
+    [items, trackedIds, watchedIds, historyById, dislikedIds]
   )
 
   return useMemo(

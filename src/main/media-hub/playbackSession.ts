@@ -91,6 +91,15 @@ let directModeActive = false
 // runs, so a restart re-tests rather than writing the machine off.
 let videoEncodeUnusable = false
 
+// Embedded subtitle tracks already pulled out of the current media, keyed
+// by URL and stream ordinal. Extraction has to demux the WHOLE remote file
+// (subtitle cues are interleaved throughout a container, so there is no
+// early exit — see extractSubtitleTrack), which on a large file is a real
+// wait. Doing it twice for the same track is pure waste: the cues cannot
+// have changed. Cleared with the session, since the URL it is keyed by is
+// only valid for that session anyway.
+const extractedSubtitles = new Map<string, Promise<string | null>>()
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
@@ -143,6 +152,7 @@ function clearActiveSubtitle(): void {
  */
 export async function preparePlayback(url: string): Promise<PlaybackResult> {
   activeMediaUrl = url
+  extractedSubtitles.clear()
   await ffmpegTranscoder.stop()
   activeMediaTracks = await probeMedia(ffprobePath, url)
   // Fresh title — none of the previous one's sticky transcode state
@@ -273,6 +283,7 @@ export async function stopPlayback(): Promise<void> {
   activeVideoEncoderReason = undefined
   activeUpscaleHeight = undefined
   directModeActive = false
+  extractedSubtitles.clear()
   clearActiveSubtitle()
   await Promise.all([playbackProxy.close(), ffmpegTranscoder.stop()])
 }
@@ -457,7 +468,29 @@ export function registerPlaybackIpc(): void {
     MEDIA_HUB_CHANNELS.playbackExtractSubtitle,
     async (_event, ordinal) => {
       if (!activeMediaUrl) return null
-      return extractSubtitleTrack(ffmpegPath, activeMediaUrl, Number(ordinal))
+      const index = Number(ordinal)
+      const key = `${activeMediaUrl}::${index}`
+      const memo = extractedSubtitles.get(key)
+      if (memo !== undefined) return memo
+      // Two callers can want the same track at once (a re-click while the
+      // first is still running, a party member following a subtitle
+      // change). Sharing the in-flight promise means one demux, not two —
+      // and this demux walks the entire remote file (see
+      // extractSubtitleTrack), so a duplicate is genuinely expensive.
+      const pending = extractSubtitleTrack(ffmpegPath, activeMediaUrl, index)
+      extractedSubtitles.set(key, pending)
+      try {
+        const result = await pending
+        // Only a real result is worth keeping — a failure may well have
+        // been a transient network problem, and caching `null` would make
+        // the track permanently unavailable for this session.
+        if (result) extractedSubtitles.set(key, Promise.resolve(result))
+        else extractedSubtitles.delete(key)
+        return result
+      } catch (error) {
+        extractedSubtitles.delete(key)
+        throw error
+      }
     }
   )
 

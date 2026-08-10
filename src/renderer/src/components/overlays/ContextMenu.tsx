@@ -2,13 +2,16 @@
 
 import { useEffect, useRef } from 'react'
 import { useAppState } from '@renderer/context/AppStateContext'
+import { useOverlayActions, useOverlayState } from '@renderer/context/OverlayContext'
 import { Icon } from '@renderer/components/icons/Icon'
 import styles from './Overlays.module.css'
 
 export function ContextMenu() {
+  // The open menu itself comes from the overlay context — see
+  // OverlayContext.tsx for why it no longer lives in the app-wide one.
+  const { contextMenu } = useOverlayState()
+  const { closeContextMenu } = useOverlayActions()
   const {
-    contextMenu,
-    closeContextMenu,
     startPartyPlayback,
     toggleMyList,
     myList,

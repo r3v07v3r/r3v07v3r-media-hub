@@ -126,8 +126,33 @@ export interface CatalogItemAdapterContext {
   watchedIds?: Set<string>
   /** The full per-episode watch history (same source as watchedIds, unflattened) — needed to compute a series/anime's real completion state via episodeWatchState, which watchedIds alone (just an id set) can't do. Undefined is treated as "no history known yet", not "nothing watched" — see completed's fallback below. */
   history?: HistoryEntry[]
+  /** `history` pre-grouped by content id (see indexHistoryById). Strictly an
+   *  optimisation, and only worth it when converting many items at once —
+   *  which is the normal case, since the whole catalog goes through this.
+   *
+   *  Without it, every item re-filters the ENTIRE history to find its own
+   *  entries, so mapping the catalog costs O(items x history): with a
+   *  thousand-plus anime entries and a real viewing history that is a
+   *  measurable pause on something as small as adding one title to My List
+   *  (which replaces the tracked-id set and so re-derives everything).
+   *  Supplying the index makes it O(items + history). */
+  historyById?: ReadonlyMap<string, HistoryEntry[]>
   /** ids explicitly marked "Not interested" (from disliked:list) — drives MediaItem.disliked. */
   dislikedIds?: Set<string>
+}
+
+/** Groups a flat watch history by content id, once, for callers about to
+ *  convert a batch of items (see CatalogItemAdapterContext.historyById).
+ *  Ids are stringified to match episodeWatchState's own comparison. */
+export function indexHistoryById(history: HistoryEntry[]): Map<string, HistoryEntry[]> {
+  const index = new Map<string, HistoryEntry[]>()
+  for (const entry of history) {
+    const key = String(entry?.id ?? '')
+    const bucket = index.get(key)
+    if (bucket) bucket.push(entry)
+    else index.set(key, [entry])
+  }
+  return index
 }
 
 /** A series/anime counts as complete once every already-aired episode has
@@ -183,7 +208,12 @@ export function catalogItemToMediaItem(
   context: CatalogItemAdapterContext = {}
 ): MediaItem {
   const watched = context.watchedIds?.has(item.id) ?? false
-  const completed = item.type === 'movie' ? watched : isSeriesCompleted(item, context.history ?? [])
+  // Prefer the pre-grouped index when the caller supplied one — same
+  // answer, without re-scanning the whole history for every single item.
+  const ownHistory = context.historyById
+    ? (context.historyById.get(item.id) ?? [])
+    : (context.history ?? [])
+  const completed = item.type === 'movie' ? watched : isSeriesCompleted(item, ownHistory)
   const disliked = context.dislikedIds?.has(item.id) ?? false
   const { totalSeasons, totalEpisodes } = seasonEpisodeCounts(item.videos)
   return {
