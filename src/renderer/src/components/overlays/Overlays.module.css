@@ -521,6 +521,11 @@
   font-weight: 600;
   white-space: nowrap;
 }
+.playerPartyBadgeWarning {
+  color: #ffd166;
+  background: rgba(255, 209, 102, 0.12);
+  border-color: rgba(255, 209, 102, 0.4);
+}
 /* Fit-mode toggle needs room for both the icon and its current-mode
    label — everything else in this row is icon-only inside a fixed 34px
    circle, which has no space for text. */
