@@ -14,6 +14,7 @@ import {
 } from '@shared/media-hub/partySync'
 import type {
   MediaTrack,
+  PlaybackPositionResult,
   PlaybackSelection,
   SkipTimes,
   SubtitleResult
@@ -27,6 +28,11 @@ const THUMBNAIL_BUCKET_SECONDS = 5
 // Matches captureFrame's own `-vf scale=160:-1` in vlc.ts — the CSS box is
 // sized off this same constant so the two never drift out of sync.
 const SCRUB_PREVIEW_WIDTH = 160
+// How often the resume bookmark is re-saved while playing — frequent
+// enough that a crash or force-quit (which skips every other save point:
+// pause, close, natural end) still leaves something recent to come back
+// to, infrequent enough that it's a trivial background cost.
+const RESUME_SAVE_INTERVAL_MS = 20_000
 
 // Mirrors vlc.ts's own TEXT_SUBTITLE_CODECS (main-process-only, so not
 // importable here directly — see this codebase's established "small local
@@ -161,6 +167,17 @@ export function PlaybackOverlay() {
   // compatibility mode each begin their own fresh buffer-up).
   const [bufferingReady, setBufferingReady] = useState(false)
   const markedWatchedRef = useRef(false)
+  // Resume position — where this title left off last time, fetched once
+  // per title/episode (see the fetch effect below) and applied at most
+  // once (resumeAppliedRef). currentPositionRef mirrors currentTime/
+  // duration into a ref, not just the state that already exists for
+  // them, specifically so the save-on-close effect's cleanup function can
+  // read the LATEST value at the moment of teardown — a cleanup closure
+  // only sees whatever was in scope when the effect last ran, which is
+  // not necessarily the current position.
+  const [resumePosition, setResumePosition] = useState<PlaybackPositionResult | null>(null)
+  const resumeAppliedRef = useRef(false)
+  const currentPositionRef = useRef({ time: 0, duration: 0 })
   const hideControlsTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   // The ORIGINAL, un-shifted subtitle VTT text (absolute-timeline cue
   // times, exactly as OpenSubtitles/srtToVtt produced it) — kept
@@ -429,10 +446,99 @@ export function PlaybackOverlay() {
       .catch(() => {})
   }, [playbackMedia, refreshWatchStatus])
 
+  // This component only remounts on a change to playbackMedia.id (see
+  // GlobalOverlays.tsx's `key`), not on an episode change within the same
+  // series, so switching episodes needs its own reset — otherwise the
+  // PREVIOUS episode's resume position (and its "already applied" flag)
+  // would still be sitting in state for the render or two before the
+  // fetch effect below resolves a fresh one, and could get applied to the
+  // wrong episode. React's own "reset state when a prop changes" pattern
+  // (the same one MediaGrid.tsx's reveal-batch reset and
+  // SidebarNavigation.tsx's moreOpenForPathname use) — done during
+  // render, not in an effect, so there's no window where stale state is
+  // visible even for one commit.
+  const resumeKey = trackedMediaId
+    ? `${trackedMediaId}:${playbackMedia?.seasonNumber ?? ''}:${playbackMedia?.episodeNumber ?? ''}`
+    : null
+  const [resumeKeyForReset, setResumeKeyForReset] = useState(resumeKey)
+  if (resumeKeyForReset !== resumeKey) {
+    setResumeKeyForReset(resumeKey)
+    setResumePosition(null)
+  }
+
+  // Fetches the saved resume position for this exact title/episode.
+  useEffect(() => {
+    // Refs are only safe to mutate outside render (event handlers,
+    // effects) — this is the ref half of the same per-episode reset the
+    // render-time block above handles for resumePosition's own state.
+    resumeAppliedRef.current = false
+    if (!playbackMedia) return
+    const api = window.api?.mediaHub
+    if (!api) return
+    let cancelled = false
+    api.tracking
+      .getPosition({
+        id: playbackMedia.id,
+        playback: { season: playbackMedia.seasonNumber, episode: playbackMedia.episodeNumber }
+      })
+      .then((result) => {
+        if (!cancelled) setResumePosition(result)
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [trackedMediaId, playbackMedia?.seasonNumber, playbackMedia?.episodeNumber])
+
+  useEffect(() => {
+    currentPositionRef.current.duration = duration
+  }, [duration])
+
+  const savePositionNow = useCallback(() => {
+    if (!playbackMedia) return
+    const { time, duration: total } = currentPositionRef.current
+    if (!Number.isFinite(time) || time <= 0) return
+    window.api?.mediaHub?.tracking
+      .savePosition({
+        id: playbackMedia.id,
+        playback: { season: playbackMedia.seasonNumber, episode: playbackMedia.episodeNumber },
+        positionSeconds: time,
+        durationSeconds: Number.isFinite(total) && total > 0 ? total : undefined
+      })
+      .catch(() => {})
+  }, [playbackMedia])
+
+  // Periodic, so a crash or force-quit — which skips every other save
+  // point below — still leaves a recent bookmark rather than nothing.
+  useEffect(() => {
+    if (!playing) return
+    const timer = setInterval(savePositionNow, RESUME_SAVE_INTERVAL_MS)
+    return () => clearInterval(timer)
+  }, [playing, savePositionNow])
+
+  // The other save points: pausing, and closing/unmounting this overlay
+  // however that happens (Escape, the close button, the video error
+  // handler, or the title changing out from under it — see the teardown
+  // effect above). A cleanup function, not an explicit call at each close
+  // site, so every one of those paths is covered uniformly instead of
+  // needing to remember to add this at each of them. Reads
+  // currentPositionRef rather than the `currentTime`/`duration` state
+  // directly — a cleanup closure only sees what was in scope when the
+  // effect last (re)ran, and the ref is what stays current right up to
+  // the moment of teardown.
+  useEffect(() => {
+    return () => savePositionNow()
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- deliberately only re-armed per title/episode, see savePositionNow's own deps
+  }, [trackedMediaId, playbackMedia?.seasonNumber, playbackMedia?.episodeNumber])
+
   const handleEnded = useCallback(() => {
     setPlaying(false)
     markWatchedNow()
-  }, [markWatchedNow])
+    // Reads as "finished" territory to savePlaybackPosition's own >=90%
+    // check (database.ts), which clears any bookmark rather than storing
+    // one pointing at the last few seconds.
+    savePositionNow()
+  }, [markWatchedNow, savePositionNow])
 
   // Counts an episode watched at 80% rather than waiting for 'ended' — the
   // last stretch is often credits/recap, and marking here means
@@ -549,6 +655,27 @@ export function PlaybackOverlay() {
     },
     [result, pushNotification, applyShiftedSubtitle, setResult, setTracks, setAppliedUpscaleHeight]
   )
+
+  // Applies the resume position once the stream is actually ready to
+  // accept a seek — reuses performSeek, the same landing mechanism the
+  // scrubber, party catch-up seeks, and drift corrections all already go
+  // through, rather than a second bespoke "start at position N" path.
+  //
+  // Gated on `!followingParty`: a party FOLLOWER is positioned by the
+  // party itself (see partyPendingSeek's own effect below), which already
+  // lands them on the HOST's live position — this must not also fire and
+  // fight that with the follower's own, likely different, saved position.
+  // A solo watcher or the party HOST has no such authority to defer to,
+  // so their own resume position applies normally. That is the whole of
+  // "host takes preference in a party": the host's playback (including
+  // where IT resumes from) is what a follower ends up watching, and the
+  // follower's own bookmark is simply never consulted.
+  useEffect(() => {
+    if (!bufferingReady || followingParty) return
+    if (resumeAppliedRef.current || !resumePosition) return
+    resumeAppliedRef.current = true
+    performSeek(resumePosition.positionSeconds)
+  }, [bufferingReady, followingParty, resumePosition, performSeek])
 
   // Host only: re-evaluates the ready-set for `requestId` — called both
   // when a follower's 'ready' message arrives and when the host's own
@@ -1478,10 +1605,18 @@ export function PlaybackOverlay() {
         src={result.url}
         onClick={togglePlay}
         onPlay={() => setPlaying(true)}
-        onPause={() => setPlaying(false)}
-        onTimeUpdate={(e) =>
-          setCurrentTime(streamStartOffsetRef.current + e.currentTarget.currentTime)
-        }
+        onPause={() => {
+          setPlaying(false)
+          savePositionNow()
+        }}
+        onTimeUpdate={(e) => {
+          const absolute = streamStartOffsetRef.current + e.currentTarget.currentTime
+          setCurrentTime(absolute)
+          // Mirrors currentTime/duration into a ref for the save-on-close
+          // effect's cleanup, which can't rely on this render's state —
+          // see currentPositionRef's own comment.
+          currentPositionRef.current.time = absolute
+        }}
         onLoadedMetadata={(e) => {
           // Compatibility mode's fragmented-stream duration climbs as
           // more of the stream arrives rather than being known upfront

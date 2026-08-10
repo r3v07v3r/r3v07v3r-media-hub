@@ -36,6 +36,7 @@ import type {
   PartyPlaybackAction,
   PartyQueueEntry,
   PartyStatusResult,
+  PlaybackPositionResult,
   PlaybackResult,
   PlaybackSelection,
   ProfilePublic,
@@ -79,6 +80,18 @@ interface MarkSeasonWatchedPayload {
   item: SimklPushItem
   season?: number
   episodes?: Array<{ season?: number; episode: number }>
+}
+
+interface GetPositionPayload {
+  id: string
+  playback?: PlaybackPosition
+}
+
+interface SavePositionPayload {
+  id: string
+  playback?: PlaybackPosition
+  positionSeconds: number
+  durationSeconds?: number
 }
 
 /** Subscribes to a push-only (main -> renderer) event channel; returns an unsubscribe function. Unlike system.subscribe, these channels have no corresponding "start sending" message — main pushes opportunistically whenever the underlying event occurs, so this is a plain listener wrapper. */
@@ -231,7 +244,11 @@ const api = {
       unmarkWatched: (payload: MarkWatchedPayload): Promise<MarkWatchedResult> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.trackingUnmarkWatched, payload),
       markSeasonWatched: (payload: MarkSeasonWatchedPayload): Promise<MarkWatchedResult> =>
-        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.trackingMarkSeasonWatched, payload)
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.trackingMarkSeasonWatched, payload),
+      getPosition: (payload: GetPositionPayload): Promise<PlaybackPositionResult | null> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.trackingGetPosition, payload),
+      savePosition: (payload: SavePositionPayload): Promise<{ ok: true }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.trackingSavePosition, payload)
     },
 
     disliked: {

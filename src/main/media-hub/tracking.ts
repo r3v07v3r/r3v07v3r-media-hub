@@ -20,6 +20,7 @@ import type {
   HistoryEntry,
   HomePersonalizedResult,
   MarkWatchedResult,
+  PlaybackPositionResult,
   SimklPinStart,
   SimklPollResult,
   SimklStatus,
@@ -85,6 +86,18 @@ interface MarkSeasonWatchedPayload {
 interface ScrobbleStartPayload {
   item: SimklPushItem
   playback?: PlaybackPosition
+}
+
+interface GetPositionPayload {
+  id: string
+  playback?: PlaybackPosition
+}
+
+interface SavePositionPayload {
+  id: string
+  playback?: PlaybackPosition
+  positionSeconds: number
+  durationSeconds?: number
 }
 
 /** Minimal shape this port reads from Simkl's `/oauth/pin/:userCode` poll response. */
@@ -164,6 +177,25 @@ export function registerTrackingIpc(): void {
         )
       )
       return { ok: true, ...simklResult, ...(await pushMalProgress(item)) }
+    }
+  )
+
+  // Local-only — no Simkl/MAL sync, unlike every mark-watched handler
+  // above. A resume position is a per-device convenience, not a watch
+  // event with any meaning to a tracking service; nothing else in this
+  // app's account-sync surface has a concept of "seconds into a title,"
+  // and inventing one just to push a position upstream isn't worth the
+  // API surface for what's meant to be entirely local.
+  handle<GetPositionPayload, PlaybackPositionResult | null>(
+    MEDIA_HUB_CHANNELS.trackingGetPosition,
+    (_e, { id, playback }) => getDatabase().getPlaybackPosition(id, playback)
+  )
+
+  handle<SavePositionPayload, { ok: true }>(
+    MEDIA_HUB_CHANNELS.trackingSavePosition,
+    (_e, { id, playback, positionSeconds, durationSeconds }) => {
+      getDatabase().savePlaybackPosition(id, playback, positionSeconds, durationSeconds)
+      return { ok: true }
     }
   )
 

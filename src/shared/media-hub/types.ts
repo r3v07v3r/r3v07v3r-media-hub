@@ -305,6 +305,15 @@ export interface MarkWatchedResult {
   malError?: string
 }
 
+/** A resume bookmark for one movie/episode — where playback left off last
+ *  time, in seconds, plus the duration it was measured against (so a
+ *  consumer can sanity-check the position still makes sense if the same
+ *  title somehow resolves to a different-length source next time). */
+export interface PlaybackPositionResult {
+  positionSeconds: number
+  durationSeconds: number | null
+}
+
 // ---------------------------------------------------------------------
 // Profiles
 // ---------------------------------------------------------------------

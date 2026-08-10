@@ -125,6 +125,51 @@ async function closeDirectProxyBeforeTranscode(): Promise<void> {
   if (wasDirect) await sleep(500)
 }
 
+/**
+ * Starts (or restarts) the ffmpeg transcoder for the current title, with
+ * the same recovery preparePlayback's own initial start already had: if a
+ * FORCED video re-encode fails to start, that must never take playback
+ * down with it — trip the circuit breaker, drop the encoder, and retry as
+ * a stream-copy, instead of leaving the caller with a bare rejected
+ * promise and the same doomed encoder still armed for next time.
+ *
+ * Before this, only the very FIRST start of a title (preparePlayback) had
+ * that recovery — every RESTART (a seek, a subtitle apply, a track/
+ * quality change) called ffmpegTranscoder.start() directly, inheriting
+ * whatever `activeVideoEncoder` preparePlayback had armed, with no catch
+ * at all. Reported live: a title played fine, then failed with an error a
+ * few seconds after a pause/resume (which restarts the transcode the
+ * same way a seek does — see handleSeek's own comment) — and then
+ * wouldn't play again at all. The re-encode failing on THAT restart
+ * (not necessarily on the title's very first start) never set
+ * videoEncodeUnusable, so every later restart, and every fresh
+ * preparePlayback() from clicking Play again, kept re-arming and
+ * retrying the identical doomed re-encode — each one burning up to the
+ * full 60s startup budget before failing the exact same way again.
+ */
+async function startTranscodeWithFallback(
+  selection: PlaybackSelection,
+  targetHeight?: number
+): Promise<FfmpegTranscoderResult> {
+  try {
+    return await ffmpegTranscoder.start(
+      ffmpegPath,
+      activeMediaUrl,
+      selection,
+      activeVideoEncoder,
+      targetHeight
+    )
+  } catch (error) {
+    if (!activeVideoEncoder) throw error
+    logError('playback:transcode', `video re-encode failed on restart, retrying stream-copy: ${error}`)
+    videoEncodeUnusable = true
+    activeVideoEncoder = undefined
+    activeVideoEncoderReason = undefined
+    await ffmpegTranscoder.stop()
+    return ffmpegTranscoder.start(ffmpegPath, activeMediaUrl, selection, undefined, targetHeight)
+  }
+}
+
 export function subtitleCacheDir(): string {
   return path.join(app.getPath('userData'), 'subtitles-cache')
 }
@@ -207,36 +252,18 @@ export async function preparePlayback(url: string): Promise<PlaybackResult> {
     const audioSelection = {
       audio: selectTranscodeAudioTrack(activeMediaTracks, audioLanguage)?.ordinal ?? 0
     }
-    let started: FfmpegTranscoderResult
-    try {
-      started = await ffmpegTranscoder.start(
-        ffmpegPath,
-        url,
-        audioSelection,
-        activeVideoEncoder,
-        encodeHeight
-      )
-    } catch (error) {
-      // A video RE-ENCODE that won't start must never take playback down
-      // with it. "Convert incompatible video" is an opt-in, explicitly
-      // experimental setting, and on a 2160p HEVC source it reliably blew
-      // the whole 60s startup budget without emitting a frame — so with
-      // it on, every 4K title simply failed to play, while the very same
-      // title plays in ~13s by stream-copying the video and converting
-      // only the audio (verified live: hevc 3840x2160, HDR intact).
-      //
-      // Chromium decodes HEVC itself, which is what makes the fallback
-      // viable rather than a consolation prize: the copy path preserves
-      // the source resolution and HDR metadata exactly, where a
-      // successful re-encode would have thrown both away.
-      if (!activeVideoEncoder) throw error
-      logError('playback:transcode', `video re-encode failed, retrying stream-copy: ${error}`)
-      videoEncodeUnusable = true
-      activeVideoEncoder = undefined
-      activeVideoEncoderReason = undefined
-      await ffmpegTranscoder.stop()
-      started = await ffmpegTranscoder.start(ffmpegPath, url, audioSelection, undefined, undefined)
-    }
+    // "Convert incompatible video" is an opt-in, explicitly experimental
+    // setting, and on a 2160p HEVC source it reliably blew the whole 60s
+    // startup budget without emitting a frame — so with it on, every 4K
+    // title simply failed to play, while the very same title plays in
+    // ~13s by stream-copying the video and converting only the audio
+    // (verified live: hevc 3840x2160, HDR intact). Chromium decodes HEVC
+    // itself, which is what makes the fallback viable rather than a
+    // consolation prize: the copy path preserves the source resolution
+    // and HDR metadata exactly, where a successful re-encode would have
+    // thrown both away. Recovery itself lives in
+    // startTranscodeWithFallback, shared with every restart path below.
+    const started = await startTranscodeWithFallback(audioSelection, encodeHeight)
     return {
       ok: true,
       player: 'embedded',
@@ -335,13 +362,7 @@ export function registerPlaybackIpc(): void {
       // the same remote link, one of which stalls out.
       await closeDirectProxyBeforeTranscode()
       directModeActive = false
-      const started = await ffmpegTranscoder.start(
-        ffmpegPath,
-        activeMediaUrl,
-        safe,
-        activeVideoEncoder,
-        activeUpscaleHeight
-      )
+      const started = await startTranscodeWithFallback(safe, activeUpscaleHeight)
       // `started.compatibility` is already `true` (FfmpegTranscoderResult), so
       // it isn't repeated here — TS flags a literal + spread of the same key
       // as an error (TS2783) even though the original JS had no such issue.
@@ -355,13 +376,7 @@ export function registerPlaybackIpc(): void {
       if (!activeMediaUrl) throw new Error('No active media is available for compatibility mode.')
       await closeDirectProxyBeforeTranscode()
       directModeActive = false
-      const started = await ffmpegTranscoder.start(
-        ffmpegPath,
-        activeMediaUrl,
-        selection,
-        activeVideoEncoder,
-        activeUpscaleHeight
-      )
+      const started = await startTranscodeWithFallback(selection, activeUpscaleHeight)
       return { tracks: activeMediaTracks, ...started }
     }
   )
@@ -440,13 +455,7 @@ export function registerPlaybackIpc(): void {
       // grace delay in exactly this transition (and only this one).
       await closeDirectProxyBeforeTranscode()
       directModeActive = false
-      const started = await ffmpegTranscoder.start(
-        ffmpegPath,
-        activeMediaUrl,
-        safe,
-        activeVideoEncoder,
-        activeUpscaleHeight
-      )
+      const started = await startTranscodeWithFallback(safe, activeUpscaleHeight)
       return { tracks: activeMediaTracks, selection: safe, ...started }
     }
   )

@@ -46,6 +46,8 @@ export const MEDIA_HUB_CHANNELS = {
   trackingMarkWatched: 'mediahub:tracking:mark-watched',
   trackingUnmarkWatched: 'mediahub:tracking:unmark-watched',
   trackingMarkSeasonWatched: 'mediahub:tracking:mark-season-watched',
+  trackingGetPosition: 'mediahub:tracking:get-position',
+  trackingSavePosition: 'mediahub:tracking:save-position',
   dislikedList: 'mediahub:disliked:list',
   dislikedAdd: 'mediahub:disliked:add',
   dislikedRemove: 'mediahub:disliked:remove',

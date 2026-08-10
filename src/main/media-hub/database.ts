@@ -108,6 +108,11 @@ function fail(error: Error): never {
   throw new Error('Local database error: ' + error.message)
 }
 
+export interface PlaybackPositionResult {
+  positionSeconds: number
+  durationSeconds: number | null
+}
+
 export interface MediaHubDatabase {
   track(item: Partial<CatalogItem> & { id: unknown }, now?: Date): TrackedItem
   untrack(id: string | number): boolean
@@ -124,6 +129,18 @@ export interface MediaHubDatabase {
   isDisliked(id: string | number): boolean
   disliked(): TrackedItem[]
   preferredGenres(limit?: number): string[]
+  /** Upserts a resume bookmark for one movie/episode, or clears it —
+   *  see the implementation's own comment for exactly which. */
+  savePlaybackPosition(
+    contentId: string | number,
+    playback: { season?: number; episode?: number } | undefined,
+    positionSeconds: number,
+    durationSeconds?: number
+  ): void
+  getPlaybackPosition(
+    contentId: string | number,
+    playback?: { season?: number; episode?: number }
+  ): PlaybackPositionResult | null
   putCache<T>(key: string, payload: T, ttlMs: number): void
   getCache<T>(key: string, opts?: { allowExpired?: boolean }): T | null
   trackedUpdates(details: CatalogItem[], now?: Date): TrackedUpdate[]
@@ -147,6 +164,9 @@ interface PreparedQueries {
   putCache: StatementSync
   getCache: StatementSync
   lastEpisode: StatementSync
+  savePosition: StatementSync
+  clearPosition: StatementSync
+  getPosition: StatementSync
 }
 
 export function createDatabase(filename: string): MediaHubDatabase {
@@ -187,6 +207,15 @@ export function createDatabase(filename: string): MediaHubDatabase {
     poster TEXT,
     metadata_json TEXT NOT NULL,
     disliked_at TEXT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS playback_positions(
+    position_key TEXT PRIMARY KEY,
+    content_id TEXT NOT NULL,
+    season INTEGER,
+    episode INTEGER,
+    position_seconds REAL NOT NULL,
+    duration_seconds REAL,
+    updated_at TEXT NOT NULL
   );
   CREATE INDEX IF NOT EXISTS idx_history_content ON watch_history(content_id, watched_at DESC);`)
 
@@ -271,6 +300,15 @@ export function createDatabase(filename: string): MediaHubDatabase {
     getCache: sql.prepare('SELECT payload_json,expires_at FROM catalog_cache WHERE cache_key=?'),
     lastEpisode: sql.prepare(
       'SELECT season,episode FROM watch_history WHERE content_id=? AND season IS NOT NULL ORDER BY season DESC,episode DESC LIMIT 1'
+    ),
+    savePosition: sql.prepare(
+      `INSERT INTO playback_positions(position_key,content_id,season,episode,position_seconds,duration_seconds,updated_at)
+       VALUES(@key,@id,@season,@episode,@position,@duration,@now)
+       ON CONFLICT(position_key) DO UPDATE SET position_seconds=excluded.position_seconds,duration_seconds=excluded.duration_seconds,updated_at=excluded.updated_at`
+    ),
+    clearPosition: sql.prepare('DELETE FROM playback_positions WHERE position_key=?'),
+    getPosition: sql.prepare(
+      'SELECT position_seconds,duration_seconds FROM playback_positions WHERE position_key=?'
     )
   }
 
@@ -422,6 +460,61 @@ export function createDatabase(filename: string): MediaHubDatabase {
         .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
         .slice(0, limit)
         .map((x) => x[0])
+    },
+
+    // Below this many seconds in, there's nothing meaningful to resume —
+    // saving (and later re-seeking to) the first few seconds would be a
+    // worse experience than just starting fresh, since a tiny seek still
+    // pays a real restart cost in compatibility mode.
+    savePlaybackPosition(contentId, playback, positionSeconds, durationSeconds) {
+      try {
+        const id = String(contentId)
+        const season = Number.isFinite(playback?.season) ? (playback!.season as number) : null
+        const episode = Number.isFinite(playback?.episode) ? (playback!.episode as number) : null
+        const key = `${id}:${season ?? 'movie'}:${episode ?? 'movie'}`
+        const nearStart = positionSeconds < 20
+        // >=90% through reads as "finished" the same way the 80% auto-mark
+        // (adapters.ts/PlaybackOverlay's own markWatchedNow) already treats
+        // it as watched — once someone's essentially done, Play should
+        // start the title over next time, not re-offer the last few
+        // minutes of credits.
+        const nearEnd =
+          Number.isFinite(durationSeconds) &&
+          (durationSeconds as number) > 0 &&
+          positionSeconds / (durationSeconds as number) >= 0.9
+        if (nearStart || nearEnd) {
+          q.clearPosition.run(key)
+          return
+        }
+        q.savePosition.run({
+          key,
+          id,
+          season,
+          episode,
+          position: positionSeconds,
+          duration: typeof durationSeconds === 'number' && Number.isFinite(durationSeconds) ? durationSeconds : null,
+          now: new Date().toISOString()
+        })
+      } catch {
+        // Best-effort — a failed resume-position write must never surface
+        // to the player; worst case, the next play just starts from 0.
+      }
+    },
+
+    getPlaybackPosition(contentId, playback) {
+      try {
+        const season = Number.isFinite(playback?.season) ? (playback!.season as number) : null
+        const episode = Number.isFinite(playback?.episode) ? (playback!.episode as number) : null
+        const key = `${String(contentId)}:${season ?? 'movie'}:${episode ?? 'movie'}`
+        const row = q.getPosition.get(key) as Row | undefined
+        if (!row) return null
+        return {
+          positionSeconds: row.position_seconds as number,
+          durationSeconds: (row.duration_seconds as number | null) ?? null
+        }
+      } catch {
+        return null
+      }
     },
 
     putCache<T>(key: string, payload: T, ttlMs: number): void {
