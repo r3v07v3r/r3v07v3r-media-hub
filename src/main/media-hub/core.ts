@@ -366,7 +366,32 @@ export function normalizeKitsuEpisode(record: RawApiPayload, parentId: string): 
   }
 }
 
-export function normalizeKitsuAnime(record: RawApiPayload): CatalogItem {
+/**
+ * `lightweight` shrinks the two placeholder fields nothing at crawl time
+ * ever reads (`id`, `title`) down to empty strings, instead of the
+ * templated `"kitsu:12345:1:37"` / `"Episode 37"` this always generated.
+ *
+ * The array itself — one entry per episode, with real `season`/`episode`
+ * numbers — is NOT skipped or shortened, even though the browse grid only
+ * ever reads its `.length` (see CatalogItem.episodeCounts' doc comment):
+ * those positions are also how a browse-grid "Completed" badge gets
+ * computed (adapters.ts's isSeriesCompleted, via episodeWatchState
+ * matching real watch-history season/episode pairs against this list) —
+ * an empty array here would make every anime in the browse grid read as
+ * "0 episodes aired," permanently hiding a completed badge someone
+ * actually earned. Traced deliberately before shipping this: an earlier
+ * version of this change did exactly that and would have shipped a real
+ * regression.
+ *
+ * Defaults to false (full placeholder objects) because two real callers
+ * still show the `title`/`id` text: metadata()'s per-title fetch, whose
+ * placeholders are a genuine last-resort fallback if even
+ * kitsuRealEpisodes comes back empty (see catalog.ts), and
+ * buildGroupedAnimeVideos's equivalent per-season fallback
+ * (animeSeasons.ts). Only the CRAWL paths — the ~1000-title popularity
+ * crawl and free-text search — pass `lightweight: true`.
+ */
+export function normalizeKitsuAnime(record: RawApiPayload, lightweight = false): CatalogItem {
   const a = record.attributes || {}
   const id = `kitsu:${record.id}`
   const count = Number(a.episodeCount) || 0
@@ -387,11 +412,11 @@ export function normalizeKitsuAnime(record: RawApiPayload): CatalogItem {
     runtime: a.episodeLength ? `${a.episodeLength} min` : '',
     genres: Array.isArray(a.genres) ? a.genres : [],
     videos: Array.from({ length: count }, (_, i) => ({
-      id: `${id}:1:${i + 1}`,
+      id: lightweight ? '' : `${id}:1:${i + 1}`,
       season: 1,
       episode: i + 1,
       number: i + 1,
-      title: `Episode ${i + 1}`,
+      title: lightweight ? '' : `Episode ${i + 1}`,
       released: ''
     })),
     trailers: normalizeTrailers(a.youtubeVideoId ? [a.youtubeVideoId] : [])

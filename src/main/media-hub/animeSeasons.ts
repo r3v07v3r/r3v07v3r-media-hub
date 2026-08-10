@@ -352,9 +352,39 @@ export async function groupAnimeCatalog(items: CatalogItem[]): Promise<CatalogIt
       return Number(a.item.id.replace(/^kitsu:/, '')) - Number(b.item.id.replace(/^kitsu:/, ''))
     })
     const [canonical, ...siblings] = group
-    result.push({ ...canonical.item, groupedIds: siblings.map((s) => s.item.id) })
+    result.push({
+      ...canonical.item,
+      groupedIds: siblings.map((s) => s.item.id),
+      episodeCounts: combineGroupEpisodeCounts(group.map((g) => g.item))
+    })
   }
   return result
+}
+
+/**
+ * The real combined season/episode totals for a grouped anime — every
+ * member of a group is one real franchise season, so the group's true
+ * totals are the member count and the sum of each member's own episode
+ * count.
+ *
+ * Before this, a grouped multi-season show's browse-grid badge silently
+ * showed only its canonical member's own (season-1-of-itself) count,
+ * because nothing combined the group — see CatalogItem.episodeCounts'
+ * own doc comment. Pulled out as its own pure function (no network, no
+ * database) so this arithmetic is directly testable without needing to
+ * exercise groupAnimeCatalog's TVDB-mapping/union-find machinery.
+ */
+export function combineGroupEpisodeCounts(members: CatalogItem[]): {
+  totalSeasons: number
+  totalEpisodes: number
+} {
+  return {
+    totalSeasons: members.length,
+    totalEpisodes: members.reduce(
+      (sum, member) => sum + (member.episodeCounts?.totalEpisodes ?? member.videos.length),
+      0
+    )
+  }
 }
 
 /**

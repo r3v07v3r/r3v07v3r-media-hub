@@ -206,6 +206,35 @@ export function createDatabase(filename: string): MediaHubDatabase {
     sql.exec('ALTER TABLE tracked ADD COLUMN baseline_episode INTEGER NOT NULL DEFAULT 0')
   }
 
+  // Reclaims rows nothing has read in a long time. `catalog_cache` had no
+  // eviction at all before this — every distinct key (a stream resolution,
+  // a title's metadata, a TVDB mapping, ...) accumulated forever, for the
+  // life of the install; a real user's database, inspected for the anime
+  // catalog audit this fixes, already carried 298 expired rows with entire
+  // categories (every related:v1:anime:*, meta:v3:anime:*, tmdb:season:*
+  // entry) 100% expired and never reclaimed.
+  //
+  // NOT `WHERE expires_at < now` — getCache's `allowExpired: true` callers
+  // (catalogData, metadata, similarTitles, localSimilar, relatedAnime, the
+  // TorBox stream-resolve cache, Simkl's watched-history cache — eight
+  // sites in total) deliberately serve an EXPIRED row as an emergency
+  // fallback when a live refresh fails, e.g. the network is down right
+  // when the app starts. Deleting a row the instant it expires would
+  // quietly disarm that fallback for anyone who restarts between a normal
+  // TTL lapse and their next successful refresh — turning "offline, but
+  // here's the last good answer" into "offline, here's nothing." The grace
+  // window below is generous specifically so that still works: it only
+  // reclaims rows that have been unrefreshed for a full month, well past
+  // every TTL in this app (the longest, the Kitsu/TMDB id-mapping caches,
+  // is itself 30 days) and past any realistic length of time offline.
+  const CACHE_PRUNE_GRACE_MS = 30 * 24 * 60 * 60 * 1000
+  try {
+    sql.prepare('DELETE FROM catalog_cache WHERE expires_at < ?').run(Date.now() - CACHE_PRUNE_GRACE_MS)
+  } catch {
+    // Best-effort, same convention as every other cache operation in this
+    // file — a failed prune must not stop the app from opening its database.
+  }
+
   const q: PreparedQueries = {
     track: sql.prepare(
       `INSERT INTO tracked(content_id,type,title,poster,metadata_json,tracked_at,baseline_season,baseline_episode)

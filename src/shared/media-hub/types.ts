@@ -75,6 +75,28 @@ export interface CatalogItem {
    *  collapse multi-season anime into one tile instead of one per season,
    *  and lets metadata() build a real multi-season episode list for it. */
   groupedIds?: string[]
+  /**
+   * Grouped anime only — an override for the season/episode counts the
+   * browse grid shows, when `videos` alone would under-report them.
+   *
+   * A grouped multi-season anime's canonical CatalogItem (see
+   * groupedIds above) still carries only its OWN season's placeholder
+   * episodes in `videos` — the other seasons' episodes belong to sibling
+   * ids that were folded into `groupedIds`, not merged into `videos`.
+   * Deriving the browse-grid count from `videos.length` for a grouped
+   * item therefore only ever reported its first season's episode count,
+   * and `videos`' single synthesized season (always `season: 1`) meant
+   * the season-count badge always read "1" too, regardless of how many
+   * seasons the franchise actually has. This carries the real combined
+   * totals instead, computed once at grouping time (animeSeasons.ts's
+   * groupAnimeCatalog) from every member's own episode count.
+   *
+   * Optional and additive: every other normalizer (Cinemeta, Simkl,
+   * TMDB), and every ungrouped anime, leaves this undefined, and
+   * adapters.ts's seasonEpisodeCounts falls back to deriving from
+   * `videos` exactly as it always did whenever it's absent.
+   */
+  episodeCounts?: { totalSeasons: number; totalEpisodes: number }
 }
 
 // TorBox `mylist` items matched against the cached catalogs by parsed

@@ -184,10 +184,21 @@ function isSeriesCompleted(item: CatalogItem, history: HistoryEntry[]): boolean 
  *  undefined counts (not 0) when there's no episode list at all, so the
  *  UI can tell "no episode data available" apart from "confirmed zero
  *  episodes." */
-function seasonEpisodeCounts(videos: CatalogItem['videos'] | undefined): {
+function seasonEpisodeCounts(
+  videos: CatalogItem['videos'] | undefined,
+  episodeCounts: CatalogItem['episodeCounts']
+): {
   totalSeasons?: number
   totalEpisodes?: number
 } {
+  // A grouped anime's `videos` only ever covers its own (first) season —
+  // see CatalogItem.episodeCounts' own doc comment for why — so when a
+  // normalizer has supplied the real combined totals directly, trust
+  // that instead of under-counting from `videos`. Ungrouped anime and
+  // every other normalizer (Cinemeta, Simkl, TMDB) never set this, so
+  // they fall through to the exact derivation this function always did.
+  if (episodeCounts) return episodeCounts
+
   // v.unplayable entries (disambiguateVideos, core.ts) are synthetic —
   // promotional clips reassigned into a fabricated season 0, not real
   // episodes — so they're excluded here too, or they'd inflate both the
@@ -215,7 +226,7 @@ export function catalogItemToMediaItem(
     : (context.history ?? [])
   const completed = item.type === 'movie' ? watched : isSeriesCompleted(item, ownHistory)
   const disliked = context.dislikedIds?.has(item.id) ?? false
-  const { totalSeasons, totalEpisodes } = seasonEpisodeCounts(item.videos)
+  const { totalSeasons, totalEpisodes } = seasonEpisodeCounts(item.videos, item.episodeCounts)
   return {
     id: item.id,
     mediaType: toMediaType(item.type),

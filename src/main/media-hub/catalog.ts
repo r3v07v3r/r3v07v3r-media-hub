@@ -103,7 +103,7 @@ async function kitsuPage(offset: number): Promise<CatalogItem[]> {
           .filter(Boolean)
       }
     }))
-    .map(normalizeKitsuAnime)
+    .map((record) => normalizeKitsuAnime(record, true))
 }
 
 /** Walks Kitsu's popularity ranking 1000 entries deep (5 pages of 20 fetched concurrently per 100-offset batch, 350ms between batches to stay polite to the API). */
@@ -322,7 +322,7 @@ async function kitsuSearch(query: string): Promise<CatalogItem[]> {
   const result = await fetchJson<RawApiPayload>(
     `https://kitsu.io/api/edge/anime?filter%5Btext%5D=${encodeURIComponent(query)}&page%5Blimit%5D=20`
   )
-  return groupAnimeCatalog((result.data || []).map(normalizeKitsuAnime))
+  return groupAnimeCatalog((result.data || []).map((record) => normalizeKitsuAnime(record, true)))
 }
 
 /** Free-text movie/series search against Simkl. */
