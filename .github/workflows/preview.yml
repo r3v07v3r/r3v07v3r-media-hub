@@ -1,0 +1,124 @@
+name: Preview
+
+# Builds and publishes a Preview-channel release on every push to `preview`
+# — the fast-iteration loop: merge, get a build, install it via the
+# Preview channel toggle in Settings (see AboutUpdateSection.tsx, which
+# flips electron-updater's `allowPrerelease` flag). Promoting a build to
+# the Stable channel is a separate, manual step — see
+# promote-to-stable.yml — never automatic from here.
+#
+# Versioning: package.json's committed version on `preview` is always a
+# clean MAJOR.MINOR.PATCH — "the version currently in progress, to become
+# the next Stable release." This workflow never commits to package.json;
+# it only computes an EPHEMERAL build version, `<that version>-preview.N`
+# (N = this workflow's own run number, so it's always strictly
+# increasing), applies it to package.json in this checkout only, and
+# publishes the build under that tag. The committed version on `preview`
+# only ever moves when promote-to-stable.yml bumps it after a release, or
+# when a MAJOR/MINOR bump is made by hand — this workflow only ever reads
+# it, never writes it back.
+on:
+  push:
+    branches: [preview]
+
+concurrency:
+  group: preview-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  preview:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      # run_number is only reused when a failed run of THIS SAME run is
+      # re-run (GitHub keeps run_number, bumps run_attempt instead) — the
+      # exists-check below exists for exactly that case, not for the
+      # ordinary case (every fresh push gets a fresh, never-before-seen
+      # number).
+      - name: Compute this build's Preview version
+        id: version
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          BASE=$(node -p "require('./package.json').version")
+          VERSION="${BASE}-preview.${{ github.run_number }}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          if gh release view "v$VERSION" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            echo "v$VERSION already exists — skipping (this is a re-run)."
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Never committed — package.json in the actual `preview` branch stays
+      # at its clean base version. Only this checkout, and therefore only
+      # the app binary this specific job produces, carries the suffixed
+      # build version (electron-builder reads it from here for both
+      # app.getVersion() at runtime and the release tag/filename).
+      - name: Apply the build version (this checkout only)
+        if: steps.version.outputs.exists == 'false'
+        shell: bash
+        run: |
+          node -e "
+            const fs = require('fs');
+            const p = require('./package.json');
+            p.version = '${{ steps.version.outputs.version }}';
+            fs.writeFileSync('package.json', JSON.stringify(p, null, 2) + '\n');
+          "
+
+      - name: Install dependencies
+        if: steps.version.outputs.exists == 'false'
+        run: npm ci
+
+      - name: Build
+        if: steps.version.outputs.exists == 'false'
+        run: npm run build
+
+      # Same pre-create-as-draft pattern as the old release.yml, and the
+      # same reason: electron-builder uploading multiple assets to a
+      # release that doesn't exist yet races to create it, which GitHub's
+      # API intermittently 422s on. --prerelease is what actually puts
+      # this on the Preview channel — electron-updater's allowPrerelease
+      # flag (Stable = false, Preview = true) is the only thing that reads
+      # it, filtering which releases each channel ever sees.
+      - name: Create GitHub release (draft prerelease)
+        if: steps.version.outputs.exists == 'false'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "v${{ steps.version.outputs.version }}" \
+            --repo "${{ github.repository }}" \
+            --target "${{ github.sha }}" \
+            --title "${{ steps.version.outputs.version }}" \
+            --notes "Automated Preview build." \
+            --prerelease \
+            --draft
+
+      - name: Build installer and upload assets to the draft
+        if: steps.version.outputs.exists == 'false'
+        run: npx electron-builder --win --publish always
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Only now does the release (and its assets) become visible to
+      # electron-updater — atomically, with everything already attached.
+      - name: Publish release
+        if: steps.version.outputs.exists == 'false'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release edit "v${{ steps.version.outputs.version }}" \
+            --repo "${{ github.repository }}" \
+            --draft=false

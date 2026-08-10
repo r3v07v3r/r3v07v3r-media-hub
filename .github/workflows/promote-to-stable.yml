@@ -1,0 +1,135 @@
+name: Promote Preview to Stable
+
+# The manual half of the release pipeline: run this by hand (Actions tab
+# → Promote Preview to Stable → Run workflow) whenever the current tip of
+# `preview` is ready to go out to everyone on the Stable channel.
+#
+# What it does, in order:
+#   1. Reads `preview`'s current committed version (e.g. 1.0.84) — see
+#      preview.yml's own header comment for why that's always a clean,
+#      unsuffixed version rather than something this workflow needs to
+#      compute.
+#   2. Fast-forwards `stable` to `preview`'s tip. Deliberately --ff-only,
+#      not a merge commit: `stable` should always be a strict ancestor-or-
+#      equal of `preview` (nothing is ever committed to `stable` directly
+#      outside this workflow), so a fast-forward is the only case that's
+#      ever expected to happen. If it can't fast-forward, something is
+#      wrong upstream of this workflow and it should fail loudly rather
+#      than silently create a merge commit that papers over it.
+#   3. Builds and publishes v<version> as a real (non-prerelease) GitHub
+#      release from `stable` — electron-updater's Stable channel (see
+#      AboutUpdateSection.tsx / autoUpdate.ts's allowPrerelease=false) only
+#      ever considers non-prerelease releases, so this is what those users
+#      actually receive.
+#   4. Bumps `preview`'s committed version to the next patch (e.g. 1.0.85)
+#      so the next ordinary merge starts a fresh Preview build cycle
+#      instead of re-publishing the version that was just released.
+#
+# MAJOR/MINOR bumps are never automatic — edit preview's package.json by
+# hand (e.g. 1.0.85 → 1.1.0) whenever that's warranted; this workflow only
+# ever increments PATCH.
+on:
+  workflow_dispatch: {}
+
+concurrency:
+  group: promote-to-stable
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  promote:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: preview
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Read the version being promoted
+        id: version
+        shell: bash
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Refuse to re-promote an already-released version
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if gh release view "v${{ steps.version.outputs.version }}" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            echo "::error::v${{ steps.version.outputs.version }} is already released. Merge something new into preview (which bumps its version) before promoting again."
+            exit 1
+          fi
+
+      - name: Configure git identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Fast-forward stable to preview's tip
+        run: |
+          git fetch origin stable
+          git checkout -B stable origin/stable
+          git merge --ff-only origin/preview
+          git push origin stable
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      # Same pre-create-as-draft, undraft-last pattern as preview.yml —
+      # see that file's own comment for why. No --prerelease here: this is
+      # what makes the release visible to the Stable channel.
+      - name: Create GitHub release (draft)
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "v${{ steps.version.outputs.version }}" \
+            --repo "${{ github.repository }}" \
+            --target stable \
+            --title "${{ steps.version.outputs.version }}" \
+            --notes "Promoted from Preview." \
+            --draft
+
+      - name: Build installer and upload assets to the draft
+        run: npx electron-builder --win --publish always
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release edit "v${{ steps.version.outputs.version }}" \
+            --repo "${{ github.repository }}" \
+            --draft=false
+
+      - name: Bump preview to the next patch version
+        shell: bash
+        run: |
+          git checkout -B preview origin/preview
+          NEXT=$(node -e "
+            const [maj, min, pat] = '${{ steps.version.outputs.version }}'.split('.').map(Number);
+            console.log(\`\${maj}.\${min}.\${pat + 1}\`);
+          ")
+          node -e "
+            const fs = require('fs');
+            const p = require('./package.json');
+            p.version = '$NEXT';
+            fs.writeFileSync('package.json', JSON.stringify(p, null, 2) + '\n');
+          "
+          git add package.json
+          git commit -m "Bump version to $NEXT after releasing v${{ steps.version.outputs.version }}"
+          git push origin preview
