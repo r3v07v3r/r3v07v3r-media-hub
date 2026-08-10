@@ -281,8 +281,17 @@ const api = {
     stream: {
       resolve: (type: string, id: string, title?: string): Promise<StreamResolveResult> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.streamResolve, { type, id, title }),
-      play: (stream: StreamCandidate, mediaId?: string): Promise<PlaybackResult> =>
-        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.playStream, { stream, mediaId })
+      // `type`/`resolveId` are optional and only used so the main process
+      // can remember "the stream that actually worked" under the exact key
+      // stream:resolve looked it up by (see torbox.ts's lastStreamKey) —
+      // omit them and playback still works, it just won't get remembered.
+      play: (
+        stream: StreamCandidate,
+        mediaId?: string,
+        type?: string,
+        resolveId?: string
+      ): Promise<PlaybackResult> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.playStream, { stream, mediaId, type, resolveId })
     },
 
     playback: {

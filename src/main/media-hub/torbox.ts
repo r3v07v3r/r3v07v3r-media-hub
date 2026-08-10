@@ -172,6 +172,26 @@ interface StreamResolvePayload {
 interface PlayStreamPayload {
   stream: StreamCandidate
   mediaId?: string
+  /** Same `type`/`id` stream:resolve was called with — NOT always equal to
+   *  `mediaId` (anime's resolveId omits the season segment mediaId always
+   *  has, see streamId.ts's own comment). Threaded through separately so
+   *  play:stream can remember "the stream that actually worked" under the
+   *  exact key stream:resolve will look it up by next time — see
+   *  LAST_STREAM_TTL_MS's own comment for why. */
+  type?: string
+  resolveId?: string
+}
+
+/** How long play:stream's "last stream that actually worked for this
+ *  title/episode" memory lives — see stream:resolve's own fast-path
+ *  comment for what reads it. Long enough to matter for a real resume days
+ *  later (the whole point), safe to be this generous because it's always
+ *  re-verified live with a single-hash checkcached before ever being
+ *  trusted, never assumed still good. */
+const LAST_STREAM_TTL_MS = 14 * 24 * 60 * 60 * 1000
+
+function lastStreamKey(type: string, id: string): string {
+  return `laststream:v1:${type}:${id}`
 }
 
 /** Registers app:bootstrap, torbox:connect/disconnect, stream:resolve, play:stream, and library:list/play. */
@@ -228,6 +248,54 @@ export function registerTorBoxIpc(): void {
       }
       const key = `stream:v2:${type}:${id}:${limits.maxResolution}:${limits.maxSizeGb}`
       const db = getDatabase()
+      const audioLanguage = preferences.audioLanguage || 'en'
+
+      // Fast path 1: an identical resolve (same title/episode, same
+      // quality/size limits) already ran within the last hour. The answer
+      // was already being cached below — it just was never actually READ
+      // here, only ever pulled as a last-resort fallback when the fresh
+      // search below threw. That's the actual reason replaying or resuming
+      // something just watched re-ran the full two-addon search plus a
+      // TorBox checkcached call every single time, instead of reusing an
+      // answer that hadn't changed.
+      const recent = db.getCache<StreamResolveResult>(key)
+      if (recent) return recent
+
+      // Fast path 2: the stream that actually played last time for this
+      // exact title/episode — regardless of how long ago, up to
+      // LAST_STREAM_TTL_MS — re-verified with a single-hash checkcached
+      // (cheap: one TorBox call, no P2P add-ons at all) rather than trusted
+      // blindly, since TorBox's cache or the person's own quality/size
+      // limits can both have moved on since. This is the "remember where
+      // it played from last and try that first" path.
+      const remembered = db.getCache<StreamCandidate>(lastStreamKey(type, id))
+      if (remembered && rankSafeStreams([remembered], audioLanguage, limits).length) {
+        try {
+          const verified = await torboxFetch<{
+            data?: { hash?: string }[] | Record<string, unknown>
+          }>(`${TORBOX}/torrents/checkcached?format=object&list_files=true`, {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${auth}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ hashes: [remembered.infoHash] })
+          })
+          const stillCached = Array.isArray(verified.data)
+            ? verified.data.some(
+                (x) => String(x.hash || x).toLowerCase() === remembered.infoHash.toLowerCase()
+              )
+            : Object.keys(verified.data || {}).some(
+                (h) => h.toLowerCase() === remembered.infoHash.toLowerCase()
+              )
+          if (stillCached) {
+            const result: StreamResolveResult = { streams: [remembered], best: remembered }
+            db.putCache(key, result, 60 * 60 * 1000)
+            return result
+          }
+        } catch {
+          // Best-effort — falls through to the full search below exactly
+          // like every other TorBox call in this handler.
+        }
+      }
+
       try {
         // Two independent P2P scraper add-ons, queried in parallel and
         // merged — found live: Comet alone returned nothing for a
@@ -280,7 +348,6 @@ export function registerTorBoxIpc(): void {
             ? cached.data.map((x) => String(x.hash || x).toLowerCase())
             : Object.keys(cached.data || {}).map((x) => x.toLowerCase())
         )
-        const audioLanguage = preferences.audioLanguage || 'en'
         const streams = rankSafeStreams(
           discovered
             .filter((s) => available.has(s.infoHash.toLowerCase()))
@@ -349,7 +416,7 @@ export function registerTorBoxIpc(): void {
 
   handle<PlayStreamPayload, PlaybackResult>(
     MEDIA_HUB_CHANNELS.playStream,
-    async (_e, { stream, mediaId }) => {
+    async (_e, { stream, mediaId, type, resolveId }) => {
       const auth = getTorBoxToken()
       const hash = String(stream?.infoHash || '').toLowerCase()
       if (!/^[a-f0-9]{40}$/.test(hash)) {
@@ -442,7 +509,16 @@ export function registerTorBoxIpc(): void {
         logError('torbox:play:retry', error)
         url = await resolveDownloadUrl(true)
       }
-      return preparePlayback(url)
+      const result = await preparePlayback(url)
+      // Only remembered once playback actually started — see
+      // stream:resolve's own "fast path 2" comment for where this gets
+      // read back. Records the stream that was ACTUALLY used, which isn't
+      // always stream:resolve's own top pick (a manual choice from the
+      // stream picker lands here too).
+      if (type && resolveId) {
+        getDatabase().putCache(lastStreamKey(type, resolveId), stream, LAST_STREAM_TTL_MS)
+      }
+      return result
     }
   )
 
