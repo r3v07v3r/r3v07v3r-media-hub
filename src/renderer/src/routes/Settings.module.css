@@ -199,6 +199,28 @@
   }
 }
 
+@media (max-width: 1250px) {
+  .pageHeader {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 14px;
+  }
+
+  .categoryNav {
+    max-width: 100%;
+  }
+
+  .settingsGroup {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+
+  .groupGrid,
+  .groupGridWide {
+    grid-template-columns: 1fr;
+  }
+}
+
 .sectionTitle {
   font-family: var(--font-display);
   font-size: 12.5px;
