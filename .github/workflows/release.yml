@@ -61,7 +61,18 @@ jobs:
       # confirmed live on this workflow's first run. Pre-creating the release
       # (and its tag) as its own step means electron-builder always finds an
       # existing release to attach assets to instead of racing to create one.
-      - name: Create GitHub release
+      #
+      # --draft: a published (non-draft) release is visible to
+      # electron-updater the instant it exists, but its assets — the
+      # installer, its .blockmap, and latest.yml, which electron-builder
+      # uploads in that order — take the next several minutes of this job
+      # to actually appear. Confirmed live: a real user's client polled
+      # for updates in exactly that window and 404'd on latest.yml, which
+      # genuinely did not exist yet even though the release itself already
+      # did. Keeping it a draft until every asset is up (see "Publish
+      # release" below) means a client checking mid-build sees the
+      # PREVIOUS release as latest instead — no update found, not a 404.
+      - name: Create GitHub release (draft)
         if: steps.check.outputs.exists == 'false'
         shell: bash
         env:
@@ -71,10 +82,23 @@ jobs:
             --repo "${{ github.repository }}" \
             --target "${{ github.sha }}" \
             --title "${{ steps.check.outputs.version }}" \
-            --notes "Automated build."
+            --notes "Automated build." \
+            --draft
 
-      - name: Publish to GitHub Releases
+      - name: Build installer and upload assets to the draft
         if: steps.check.outputs.exists == 'false'
         run: npx electron-builder --win --publish always
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Only now does the release (and its assets) become visible to
+      # electron-updater — atomically, with everything already attached.
+      - name: Publish release
+        if: steps.check.outputs.exists == 'false'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release edit "v${{ steps.check.outputs.version }}" \
+            --repo "${{ github.repository }}" \
+            --draft=false

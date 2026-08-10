@@ -70,4 +70,14 @@ publish:
   provider: github
   owner: R3v07v3R
   repo: r3v07v3r-media-hub
-  releaseType: release
+  # Draft, not release — release.yml's own final step un-drafts it once
+  # every asset (installer, blockmap, latest.yml) has actually finished
+  # uploading. A draft release doesn't appear in GitHub's "latest release"
+  # query, which is exactly what electron-updater polls — so a client that
+  # checks for updates while a build is still in flight sees the PREVIOUS
+  # release as latest and simply finds no update yet, instead of finding
+  # this one and 404ing on whichever asset hasn't uploaded yet. Confirmed
+  # live: v1.0.77's release existed and was already "latest" for the ~3.5
+  # minutes between its creation and latest.yml's upload finishing,
+  # long enough for a real user's client to poll in that exact window.
+  releaseType: draft
