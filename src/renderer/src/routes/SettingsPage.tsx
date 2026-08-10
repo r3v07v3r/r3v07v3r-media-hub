@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useAppState } from '@renderer/context/AppStateContext'
 import { Icon } from '@renderer/components/icons/Icon'
+import { useAsyncAction } from '@renderer/hooks/useAsyncAction'
 import { AboutUpdateSection } from './AboutUpdateSection'
 import { MediaServicesSection } from './MediaServicesSection'
 import {
@@ -296,30 +297,53 @@ function MoreOptionsSection() {
     kind: 'idle' | 'busy' | 'ok' | 'error'
     message?: string
   }>({ kind: 'idle' })
+  const runAction = useAsyncAction()
+
+  async function saveSetting(scope: string, action: () => Promise<unknown>) {
+    const result = await runAction({
+      scope,
+      action,
+      errorMessage: "Couldn't save that setting.",
+      successMessage: 'Setting saved.',
+      retry: true
+    })
+    if (result.ok) refreshMediaHubSettings()
+  }
 
   async function handleToggleAnimations(enabled: boolean) {
-    await window.api?.mediaHub?.settings.setUiAnimations(enabled)
-    refreshMediaHubSettings()
+    const api = window.api?.mediaHub
+    if (api)
+      await saveSetting('settings.ui-animations', () => api.settings.setUiAnimations(enabled))
   }
 
   async function handleToggleVideoTranscode(enabled: boolean) {
-    await window.api?.mediaHub?.settings.setVideoTranscode(enabled)
-    refreshMediaHubSettings()
+    const api = window.api?.mediaHub
+    if (api)
+      await saveSetting('settings.video-transcode', () => api.settings.setVideoTranscode(enabled))
   }
 
   async function handleToggleHideWatched(enabled: boolean) {
-    await window.api?.mediaHub?.settings.setHideDefaults({ hideWatchedDefault: enabled })
-    refreshMediaHubSettings()
+    const api = window.api?.mediaHub
+    if (api)
+      await saveSetting('settings.hide-watched', () =>
+        api.settings.setHideDefaults({ hideWatchedDefault: enabled })
+      )
   }
 
   async function handleToggleHideCompleted(enabled: boolean) {
-    await window.api?.mediaHub?.settings.setHideDefaults({ hideCompletedDefault: enabled })
-    refreshMediaHubSettings()
+    const api = window.api?.mediaHub
+    if (api)
+      await saveSetting('settings.hide-completed', () =>
+        api.settings.setHideDefaults({ hideCompletedDefault: enabled })
+      )
   }
 
   async function handleToggleHideDisliked(enabled: boolean) {
-    await window.api?.mediaHub?.settings.setHideDefaults({ hideDislikedDefault: enabled })
-    refreshMediaHubSettings()
+    const api = window.api?.mediaHub
+    if (api)
+      await saveSetting('settings.hide-disliked', () =>
+        api.settings.setHideDefaults({ hideDislikedDefault: enabled })
+      )
   }
 
   async function handleClearSubtitleCache() {
@@ -423,6 +447,18 @@ export default function SettingsPage() {
   // profile being edited.
   const [editingProfile, setEditingProfile] = useState<string | 'new' | null>(null)
   const [networkInfo, setNetworkInfo] = useState<NetworkInfoResult | null>(null)
+  const runAction = useAsyncAction()
+
+  async function saveSetting(scope: string, action: () => Promise<unknown>) {
+    const result = await runAction({
+      scope,
+      action,
+      errorMessage: "Couldn't save that setting.",
+      successMessage: 'Setting saved.',
+      retry: true
+    })
+    if (result.ok) refreshMediaHubSettings()
+  }
 
   useEffect(() => {
     window.api?.mediaHub?.network
@@ -432,23 +468,29 @@ export default function SettingsPage() {
   }, [])
 
   async function handleSetPlaybackBuffer(preset: string) {
-    await window.api?.mediaHub?.settings.setPlaybackBuffer(preset)
-    refreshMediaHubSettings()
+    const api = window.api?.mediaHub
+    if (api)
+      await saveSetting('settings.playback-buffer', () => api.settings.setPlaybackBuffer(preset))
   }
 
   async function handleSetAutoSubtitles(enabled: boolean) {
-    await window.api?.mediaHub?.settings.setAutoSubtitles(enabled)
-    refreshMediaHubSettings()
+    const api = window.api?.mediaHub
+    if (api)
+      await saveSetting('settings.auto-subtitles', () => api.settings.setAutoSubtitles(enabled))
   }
 
   async function handleSetSubtitleLanguage(language: string) {
-    await window.api?.mediaHub?.settings.setSubtitleLanguage(language)
-    refreshMediaHubSettings()
+    const api = window.api?.mediaHub
+    if (api)
+      await saveSetting('settings.subtitle-language', () =>
+        api.settings.setSubtitleLanguage(language)
+      )
   }
 
   async function handleSetAudioLanguage(language: string) {
-    await window.api?.mediaHub?.settings.setAudioLanguage(language)
-    refreshMediaHubSettings()
+    const api = window.api?.mediaHub
+    if (api)
+      await saveSetting('settings.audio-language', () => api.settings.setAudioLanguage(language))
   }
 
   // Columns tile left-to-right instead of stacking everything in one long
@@ -510,10 +552,7 @@ export default function SettingsPage() {
             />
           </section>
 
-          <section
-            className={`${styles.section} glass-panel`}
-            aria-labelledby="settings-subtitles"
-          >
+          <section className={`${styles.section} glass-panel`} aria-labelledby="settings-subtitles">
             <h2 id="settings-subtitles" className={styles.sectionTitle}>
               Subtitles
             </h2>

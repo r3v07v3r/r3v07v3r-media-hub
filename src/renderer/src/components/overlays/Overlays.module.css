@@ -647,6 +647,16 @@
 .toastMessage {
   flex: 1;
 }
+.toastAction {
+  flex: 0 0 auto;
+  color: var(--accent-cyan);
+  font-weight: 700;
+  font-size: 12px;
+  padding: 4px 2px;
+}
+.toastAction:hover {
+  color: var(--text-primary);
+}
 .toastClose {
   flex: 0 0 auto;
   color: var(--text-muted);

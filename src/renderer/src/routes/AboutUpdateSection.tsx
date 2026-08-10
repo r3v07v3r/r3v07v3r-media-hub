@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useAppState } from '@renderer/context/AppStateContext'
 import { Icon } from '@renderer/components/icons/Icon'
+import { useAsyncAction } from '@renderer/hooks/useAsyncAction'
 import type { UpdateChannel, UpdateState, UpdateStatusPayload } from '@shared/media-hub/types'
 import styles from './Settings.module.css'
 
@@ -25,6 +26,7 @@ export function AboutUpdateSection() {
   const { mediaHubSettings, refreshMediaHubSettings } = useAppState()
   const [status, setStatus] = useState<UpdateStatusPayload | null>(null)
   const [checking, setChecking] = useState(false)
+  const runAction = useAsyncAction()
 
   useEffect(() => {
     const api = window.api?.mediaHub
@@ -50,14 +52,27 @@ export function AboutUpdateSection() {
   }
 
   async function handleInstall() {
-    await window.api?.mediaHub?.update.install().catch(() => {})
+    const api = window.api?.mediaHub
+    if (!api) return
+    await runAction({
+      scope: 'update.install',
+      action: () => api.update.install(),
+      errorMessage: "Couldn't restart to install the update.",
+      retry: true
+    })
   }
 
   async function handleSetChannel(channel: UpdateChannel) {
     const api = window.api?.mediaHub
     if (!api || channel === mediaHubSettings?.updateChannel) return
-    await api.update.setChannel(channel).catch(() => {})
-    refreshMediaHubSettings()
+    const result = await runAction({
+      scope: 'update.set-channel',
+      action: () => api.update.setChannel(channel),
+      errorMessage: "Couldn't change the update channel.",
+      successMessage: `Update channel changed to ${channel}.`,
+      retry: true
+    })
+    if (result.ok) refreshMediaHubSettings()
   }
 
   const version = mediaHubSettings?.appVersion
@@ -125,7 +140,9 @@ export function AboutUpdateSection() {
               style={{ marginTop: 8 }}
             >
               {STATE_LABEL[status.state]}
-              {status.state === 'downloading' && status.percent !== undefined && ` ${status.percent}%`}
+              {status.state === 'downloading' &&
+                status.percent !== undefined &&
+                ` ${status.percent}%`}
               {(status.state === 'available' || status.state === 'ready') &&
                 status.version &&
                 ` (v${status.version})`}
