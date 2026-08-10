@@ -69,6 +69,8 @@ export type SyncCorrection =
 /** Where the host is right now, extrapolated from its last known fix.
  *  A paused host doesn't advance, so its reported position stands. */
 export function expectedHostPosition(sample: HostPositionSample, now: number): number {
+  if (!Number.isFinite(sample.mediaTime)) return 0
+  if (!Number.isFinite(now) || !Number.isFinite(sample.arrivedAt)) return sample.mediaTime
   if (sample.paused) return sample.mediaTime
   // Guard against a non-monotonic or rewound clock producing a negative
   // elapsed time, which would predict the host moving backwards.
@@ -78,7 +80,18 @@ export function expectedHostPosition(sample: HostPositionSample, now: number): n
 
 /** True when a fix is recent enough to steer by. */
 export function isSampleUsable(sample: HostPositionSample | null, now: number): boolean {
-  return !!sample && now - sample.arrivedAt <= SAMPLE_MAX_AGE_MS
+  if (
+    !sample ||
+    !Number.isFinite(now) ||
+    !Number.isFinite(sample.arrivedAt) ||
+    !Number.isFinite(sample.mediaTime)
+  )
+    return false
+  const age = now - sample.arrivedAt
+  // A negative age means the monotonic clock was reset (for example after
+  // a renderer suspension/reload). Treat that sample as stale rather than
+  // trusting it indefinitely until the new clock catches up.
+  return age >= 0 && age <= SAMPLE_MAX_AGE_MS
 }
 
 /**
@@ -99,6 +112,10 @@ export function syncCorrection(
   expected: number,
   compatibility: boolean
 ): SyncCorrection {
+  // Never let corrupt/partial wire data turn into playbackRate=NaN or a
+  // seek to an invalid time. The next valid heartbeat will recover without
+  // disturbing responsive local playback in the meantime.
+  if (!Number.isFinite(localPosition) || !Number.isFinite(expected)) return { action: 'none' }
   const error = localPosition - expected
   const hardLimit = compatibility ? HARD_SEEK_SECONDS.compatibility : HARD_SEEK_SECONDS.direct
   if (Math.abs(error) > hardLimit) return { action: 'seek', position: expected }

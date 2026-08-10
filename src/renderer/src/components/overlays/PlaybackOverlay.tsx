@@ -232,6 +232,12 @@ export function PlaybackOverlay() {
   // Null = no sync wait in progress. Empty array = waiting, but nobody
   // named yet (host hasn't computed the list, or it just emptied out).
   const [syncWaitingNames, setSyncWaitingNames] = useState<string[] | null>(null)
+  // Small, honest feedback loop for followers: local controls stay instant,
+  // while this reports whether the background clock is locked, gently
+  // correcting drift, or waiting for a fresh host heartbeat.
+  const [partySyncNotice, setPartySyncNotice] = useState<'synced' | 'correcting' | 'delayed'>(
+    'delayed'
+  )
   // Mirrors activeSyncRequestId for the OLD (non-party) buffering-gate
   // effect below to read without needing it in that effect's own
   // dependency array — adding it there would tear down and restart that
@@ -1484,24 +1490,31 @@ export function PlaybackOverlay() {
         // No trustworthy fix — coast at normal speed rather than steering
         // toward a stale one.
         if (video.playbackRate !== 1) video.playbackRate = 1
+        setPartySyncNotice('delayed')
         return
       }
       if (fix!.paused) {
         if (video.playbackRate !== 1) video.playbackRate = 1
+        setPartySyncNotice('synced')
         return
       }
       const expected = expectedHostPosition(fix!, now)
       const local = streamStartOffsetRef.current + video.currentTime
       const correction = syncCorrection(local, expected, !!result?.compatibility)
       if (correction.action === 'seek') {
+        setPartySyncNotice('correcting')
         video.playbackRate = 1
         // The fix keeps advancing while the seek lands, so aim at where the
         // host will be, not where it was when we decided to move.
         performSeek(expectedHostPosition(fix!, performance.now()))
       } else if (correction.action === 'rate') {
+        setPartySyncNotice('correcting')
         if (video.playbackRate !== correction.rate) video.playbackRate = correction.rate
       } else if (video.playbackRate !== 1) {
         video.playbackRate = 1
+        setPartySyncNotice('synced')
+      } else {
+        setPartySyncNotice('synced')
       }
     }, 1000)
     // Captured now rather than read in the cleanup: by teardown the ref may
@@ -1783,6 +1796,22 @@ export function PlaybackOverlay() {
           {followingParty && !canControl && (
             <span className={styles.playerPartyBadge}>
               <Icon name="people" size={12} /> Host is controlling playback
+            </span>
+          )}
+
+          {followingParty && (
+            <span
+              className={`${styles.playerPartyBadge} ${
+                partySyncNotice === 'delayed' ? styles.playerPartyBadgeWarning : ''
+              }`}
+              aria-live="polite"
+            >
+              <Icon name={partySyncNotice === 'synced' ? 'check' : 'refresh'} size={12} />
+              {partySyncNotice === 'synced'
+                ? 'In sync'
+                : partySyncNotice === 'correcting'
+                  ? 'Correcting sync…'
+                  : 'Waiting for host sync…'}
             </span>
           )}
 
