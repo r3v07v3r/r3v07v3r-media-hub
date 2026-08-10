@@ -557,6 +557,15 @@ export default function SettingsPage() {
 
     const handleWheel = (event: WheelEvent) => {
       if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return
+      const group = (event.target as HTMLElement).closest(
+        `.${styles.settingsGroup}`
+      ) as HTMLElement | null
+      if (group) {
+        const canScrollDown =
+          event.deltaY > 0 && group.scrollTop + group.clientHeight < group.scrollHeight - 1
+        const canScrollUp = event.deltaY < 0 && group.scrollTop > 0
+        if (canScrollDown || canScrollUp) return
+      }
       event.preventDefault()
       scroller.scrollBy({ left: event.deltaY, behavior: 'auto' })
     }
@@ -575,11 +584,21 @@ export default function SettingsPage() {
           </p>
         </div>
         <nav className={styles.categoryNav} aria-label="Settings categories">
-          <a href="#settings-general">General</a>
-          <a href="#settings-playback">Playback</a>
-          <a href="#settings-services">Services</a>
-          <a href="#settings-accounts">Accounts</a>
-          <a href="#settings-community">Community</a>
+          {[
+            ['settings-general', 'General'],
+            ['settings-playback', 'Playback'],
+            ['settings-services', 'Services'],
+            ['settings-accounts', 'Accounts'],
+            ['settings-community', 'Community']
+          ].map(([id, label]) => (
+            <button
+              key={id}
+              type="button"
+              onClick={() => document.getElementById(id)?.scrollIntoView({ behavior: 'smooth' })}
+            >
+              {label}
+            </button>
+          ))}
         </nav>
       </div>
 

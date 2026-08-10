@@ -51,7 +51,7 @@
   background: rgba(255, 255, 255, 0.035);
 }
 
-.categoryNav a {
+.categoryNav button {
   padding: 7px 12px;
   border-radius: var(--radius-pill);
   color: var(--text-secondary);
@@ -63,8 +63,8 @@
     background var(--transition-fast);
 }
 
-.categoryNav a:hover,
-.categoryNav a:focus-visible {
+.categoryNav button:hover,
+.categoryNav button:focus-visible {
   color: var(--text-primary);
   background: rgba(56, 193, 255, 0.12);
   outline: none;
@@ -94,8 +94,12 @@
   display: flex;
   flex-direction: column;
   min-width: 780px;
+  min-height: 0;
   max-width: none;
   gap: 14px;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+  padding-right: 6px;
   scroll-margin-left: 0;
   scroll-snap-align: start;
 }
