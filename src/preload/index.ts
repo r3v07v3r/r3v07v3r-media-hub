@@ -43,9 +43,12 @@ import type {
   ProfilesListResult,
   ProfileSetActiveResult,
   ProfileVerifyPinResult,
+  ReconcileCheckResult,
+  ReconcileResolution,
   SimklPinStart,
   SimklPollResult,
   SimklStatus,
+  WatchStatusDiscrepancy,
   SkipTimes,
   StreamCandidate,
   StreamResolveResult,
@@ -92,6 +95,11 @@ interface SavePositionPayload {
   playback?: PlaybackPosition
   positionSeconds: number
   durationSeconds?: number
+}
+
+interface ReconcileResolvePayload {
+  discrepancy: WatchStatusDiscrepancy
+  resolution: ReconcileResolution
 }
 
 /** Subscribes to a push-only (main -> renderer) event channel; returns an unsubscribe function. Unlike system.subscribe, these channels have no corresponding "start sending" message — main pushes opportunistically whenever the underlying event occurs, so this is a plain listener wrapper. */
@@ -248,7 +256,11 @@ const api = {
       getPosition: (payload: GetPositionPayload): Promise<PlaybackPositionResult | null> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.trackingGetPosition, payload),
       savePosition: (payload: SavePositionPayload): Promise<{ ok: true }> =>
-        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.trackingSavePosition, payload)
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.trackingSavePosition, payload),
+      reconcileCheck: (): Promise<ReconcileCheckResult> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.trackingReconcileCheck),
+      reconcileResolve: (payload: ReconcileResolvePayload): Promise<{ ok: true }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.trackingReconcileResolve, payload)
     },
 
     disliked: {

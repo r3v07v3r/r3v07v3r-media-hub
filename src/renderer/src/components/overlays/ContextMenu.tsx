@@ -59,7 +59,7 @@ export function ContextMenu() {
     {
       icon: 'check',
       label: media.watched ? 'Mark unwatched' : 'Mark watched',
-      onSelect: () => markContinueWatching(media.id, !media.watched)
+      onSelect: () => markContinueWatching(media.id, !media.watched, media)
     },
     {
       icon: 'thumbs-down',

@@ -315,6 +315,40 @@ export interface PlaybackPositionResult {
 }
 
 // ---------------------------------------------------------------------
+// Watch-status reconciliation — movies only for now (see
+// main/media-hub/tracking.ts's computeMovieDiscrepancies for why). The
+// local database is the source of truth for what the app displays (see
+// trackingList/homePersonalized), so this exists purely to catch and let
+// someone resolve the rarer case where the local record and Simkl's own
+// remote record genuinely disagree — a mark that never successfully
+// pushed, a watch recorded from another device, or similar.
+// ---------------------------------------------------------------------
+
+export interface WatchStatusDiscrepancy {
+  id: string
+  type: MediaKind
+  title: string
+  poster: string
+  year: string
+  /** Whether EACH side currently considers this watched — always exactly
+   *  one true and one false; a discrepancy where both agree is never
+   *  surfaced in the first place. */
+  localWatched: boolean
+  remoteWatched: boolean
+}
+
+export interface ReconcileCheckResult {
+  /** False when the cooldown window (see tracking.ts) skipped this check
+   *  entirely — no Simkl request was made, `discrepancies` is always `[]`
+   *  in that case and callers should treat it as "nothing new to show,"
+   *  not "confirmed everything agrees." */
+  ran: boolean
+  discrepancies: WatchStatusDiscrepancy[]
+}
+
+export type ReconcileResolution = 'use-local' | 'use-remote' | 'ignore'
+
+// ---------------------------------------------------------------------
 // Profiles
 // ---------------------------------------------------------------------
 

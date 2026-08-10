@@ -4,6 +4,7 @@ import { AIResponsePanel } from './AIResponsePanel'
 import { ContextMenu } from './ContextMenu'
 import { NotificationLayer } from './NotificationLayer'
 import { OfflineBanner } from './OfflineBanner'
+import { SyncReviewPanel } from './SyncReviewPanel'
 import { ProfilePinPrompt } from '@renderer/components/profiles/ProfilePinPrompt'
 import { PartyPanel } from '@renderer/components/party/PartyPanel'
 import { PartyLoadingOverlay } from '@renderer/components/party/PartyLoadingOverlay'
@@ -36,6 +37,7 @@ export function GlobalOverlays() {
       <PartyPanel />
       <PartyLoadingOverlay />
       <NotificationLayer />
+      <SyncReviewPanel />
       <ProfilePinPrompt />
     </div>
   )

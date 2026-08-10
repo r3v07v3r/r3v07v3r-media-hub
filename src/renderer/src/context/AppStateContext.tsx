@@ -31,7 +31,9 @@ import type {
   PartyQueueEntry,
   PartyStatusResult,
   PlaybackResult,
-  ProfilePublic
+  ProfilePublic,
+  ReconcileResolution,
+  WatchStatusDiscrepancy
 } from '@shared/media-hub/types'
 import {
   mediaItemToTrackablePayload,
@@ -162,8 +164,19 @@ interface AppStateValue {
   // row" write through to the real tracking:mark-watched/tracking:toggle
   // handlers (best-effort — local state updates immediately either way).
   continueWatching: ContinueWatchingItem[]
-  markContinueWatching: (id: string, watched: boolean) => void
+  /** `media` is required for anything not currently sitting in the
+   *  Continue Watching row (a fully-watched title, or one never started)
+   *  — see markContinueWatching's own implementation comment for why. */
+  markContinueWatching: (id: string, watched: boolean, media?: MediaItem) => void
   removeContinueWatching: (id: string) => void
+
+  // Watch-status reconciliation — see tracking.ts's own header comment.
+  // Movies only, surfaced a few seconds after startup when the local and
+  // Simkl records disagree; never auto-applied in either direction.
+  syncDiscrepancies: WatchStatusDiscrepancy[]
+  syncReviewOpen: boolean
+  setSyncReviewOpen: Dispatch<SetStateAction<boolean>>
+  resolveSyncDiscrepancy: (discrepancy: WatchStatusDiscrepancy, resolution: ReconcileResolution) => void
 
   // The flat "browse everything" pool (movies + series + anime, real
   // catalog:list data when available, mockData's CATALOG fallback
@@ -580,7 +593,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   )
 
   const markContinueWatching = useCallback(
-    (id: string, watched: boolean) => {
+    (id: string, watched: boolean, media?: MediaItem) => {
       const entry = continueWatching.find((c) => c.media.id === id)
       setContinueWatching((prev) =>
         prev.map((c) =>
@@ -598,9 +611,21 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         )
       )
       const api = window.api?.mediaHub
-      if (!api || !entry) return
-      const item = mediaItemToTrackablePayload(entry.media)
-      const playback = { season: entry.media.seasonNumber, episode: entry.media.episodeNumber }
+      // `entry` only exists for a title currently "in progress" — the
+      // Continue Watching row DROPS a title the moment it's fully
+      // watched, so the single most common reason to call this
+      // (un-marking something you didn't actually finish, exactly the
+      // reported case) is also the one where `entry` is guaranteed
+      // absent. Before this, that meant the whole call silently no-op'd
+      // below — the optimistic update above updated nothing real (no
+      // matching row to map over) and the IPC call never fired, so
+      // nothing anywhere ever actually changed. `media`, passed by every
+      // caller that already has the full item in hand (ContextMenu.tsx),
+      // covers exactly that gap.
+      const source = media ?? entry?.media
+      if (!api || !source) return
+      const item = mediaItemToTrackablePayload(source)
+      const playback = { season: source.seasonNumber, episode: source.episodeNumber }
       const call = watched ? api.tracking.markWatched : api.tracking.unmarkWatched
       call({ item, playback })
         .then(() => {
@@ -654,6 +679,58 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       })
     })
   }, [pushNotification])
+
+  // Watch-status reconciliation — see tracking.ts's own header comment on
+  // why this only ever runs occasionally and never on the critical path
+  // of opening the app: fired once, a few seconds after mount, so it
+  // never competes with the app actually becoming usable, and the main
+  // process itself enforces a cooldown between real attempts (see
+  // RECONCILE_COOLDOWN_MS) regardless of how often this effect happens to
+  // run — repeatedly closing and reopening the app can't turn into
+  // repeated Simkl requests.
+  const [syncDiscrepancies, setSyncDiscrepancies] = useState<WatchStatusDiscrepancy[]>([])
+  const [syncReviewOpen, setSyncReviewOpen] = useState(false)
+
+  useEffect(() => {
+    const api = window.api?.mediaHub?.tracking
+    if (!api) return
+    const timer = setTimeout(() => {
+      api
+        .reconcileCheck()
+        .then((result) => {
+          if (!result.discrepancies.length) return
+          setSyncDiscrepancies(result.discrepancies)
+          pushNotification({
+            tone: 'info',
+            message:
+              result.discrepancies.length === 1
+                ? `"${result.discrepancies[0].title}" is out of sync with Simkl.`
+                : `${result.discrepancies.length} titles are out of sync with Simkl.`,
+            action: { label: 'Review', run: () => setSyncReviewOpen(true) }
+          })
+        })
+        .catch(() => {})
+    }, 8000)
+    return () => clearTimeout(timer)
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- deliberately once per app session, not re-armed by pushNotification identity
+  }, [])
+
+  const resolveSyncDiscrepancy = useCallback(
+    (discrepancy: WatchStatusDiscrepancy, resolution: ReconcileResolution) => {
+      // Optimistic — the list is meant to shrink as each item is handled,
+      // and there is no useful "undo" state to roll back to on failure;
+      // worst case, a failed resolve simply resurfaces on the next check.
+      setSyncDiscrepancies((prev) => prev.filter((d) => d.id !== discrepancy.id))
+      window.api?.mediaHub?.tracking
+        .reconcileResolve({ discrepancy, resolution })
+        .then(() => {
+          watchedIdsResult.refresh()
+          homeFeed.refresh()
+        })
+        .catch(() => {})
+    },
+    [watchedIdsResult, homeFeed]
+  )
 
   const cancelProfilePinPrompt = useCallback(() => setProfilePinPrompt(null), [])
 
@@ -1475,7 +1552,11 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       toggleCombinedMood,
       isOffline,
       setIsOffline,
-      uiActivity
+      uiActivity,
+      syncDiscrepancies,
+      syncReviewOpen,
+      setSyncReviewOpen,
+      resolveSyncDiscrepancy
     }),
     [
       profiles,
@@ -1553,7 +1634,10 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       combinedMoods,
       toggleCombinedMood,
       isOffline,
-      uiActivity
+      uiActivity,
+      syncDiscrepancies,
+      syncReviewOpen,
+      resolveSyncDiscrepancy
     ]
   )
 

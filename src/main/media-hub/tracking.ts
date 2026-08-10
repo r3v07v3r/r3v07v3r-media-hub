@@ -21,11 +21,14 @@ import type {
   HomePersonalizedResult,
   MarkWatchedResult,
   PlaybackPositionResult,
+  ReconcileCheckResult,
+  ReconcileResolution,
   SimklPinStart,
   SimklPollResult,
   SimklStatus,
   TrackedItemEnriched,
-  TrackingListResult
+  TrackingListResult,
+  WatchStatusDiscrepancy
 } from '../../shared/media-hub/types'
 import { MEDIA_HUB_CHANNELS } from '../../shared/media-hub/ipc-channels'
 import { airingStatus, continueWatchingList } from './core'
@@ -107,12 +110,115 @@ interface SimklPinPollResponse {
   message?: string
 }
 
+// ---------------------------------------------------------------------
+// Watch-status reconciliation.
+//
+// trackingList/homePersonalized above deliberately stopped referencing
+// Simkl on every ordinary read (see that comment) — the local database
+// is now the sole source of truth for what the app displays. This is the
+// other half of that design: a separate, occasional, explicitly-
+// triggered pass that DOES look at Simkl, specifically to catch and
+// offer to fix the cases where the two genuinely disagree (a mark that
+// never successfully pushed while offline, a watch recorded from another
+// device, or similar) — surfaced for review, never silently applied in
+// either direction, since guessing wrong would mean either erasing a
+// real watch or fabricating one.
+//
+// MOVIES ONLY, for now. A movie's watched state is a clean boolean on
+// both sides, which is exactly what makes it tractable to diff safely.
+// A series/anime's state is a whole watched-episode SET, and diffing
+// that meaningfully (a person genuinely 40 episodes into two different,
+// legitimately-diverged watch orders across two devices is not the same
+// kind of "wrong" as one missing local write) is a materially harder
+// problem that deserves its own design — and anime already has a
+// dedicated, deeper reconciler for exactly that in malSync.ts. Scoping
+// this pass to movies means it's simple enough to reason about
+// completely rather than half-solving the harder case.
+
+/** How long a real reconciliation attempt (success or failure) suppresses
+ *  the next one. Opening and closing the app repeatedly — during testing,
+ *  or just in normal use — must not turn into repeated Simkl requests;
+ *  this is deliberately a floor on ATTEMPTS, not on confirmed successes,
+ *  so a broken connection doesn't get hammered either. */
+const RECONCILE_COOLDOWN_MS = 5 * 60 * 1000
+const RECONCILE_COOLDOWN_KEY = 'reconcile:cooldown:v1'
+/** Ids someone has explicitly said to stop asking about — kept far longer
+ *  than the cooldown above (this is a decision, not a rate limit), but
+ *  not forever: 90 days gives a genuinely stale dismissal a chance to
+ *  resurface rather than being silently suppressed for the life of the
+ *  install. */
+const RECONCILE_IGNORED_KEY = 'reconcile:ignored:v1'
+const RECONCILE_IGNORED_TTL_MS = 90 * 24 * 60 * 60 * 1000
+
+function ignoredReconcileIds(): Set<string> {
+  return new Set(getDatabase().getCache<string[]>(RECONCILE_IGNORED_KEY) || [])
+}
+
+function addIgnoredReconcileId(id: string): void {
+  const ids = ignoredReconcileIds()
+  ids.add(id)
+  getDatabase().putCache(RECONCILE_IGNORED_KEY, [...ids], RECONCILE_IGNORED_TTL_MS)
+}
+
+/** The actual diff. Local and remote are each reduced to "which movie ids
+ *  does this side consider watched," and only ids where the two sides
+ *  disagree are returned — an id watched (or not) on both sides is
+ *  already in agreement and never surfaced. */
+async function computeMovieDiscrepancies(): Promise<WatchStatusDiscrepancy[]> {
+  const ignored = ignoredReconcileIds()
+  const localMovies = new Map(
+    getDatabase()
+      .history()
+      .filter((h) => h.type === 'movie')
+      .map((h) => [h.id, h] as const)
+  )
+  const remoteMovies = new Map(
+    (await simklWatchedHistory())
+      .filter((h) => h.type === 'movie')
+      .map((h) => [h.id, h] as const)
+  )
+  const ids = new Set([...localMovies.keys(), ...remoteMovies.keys()])
+  const out: WatchStatusDiscrepancy[] = []
+  for (const id of ids) {
+    if (ignored.has(id)) continue
+    const local = localMovies.has(id)
+    const remote = remoteMovies.has(id)
+    if (local === remote) continue
+    const source = localMovies.get(id) || remoteMovies.get(id)
+    out.push({
+      id,
+      type: 'movie',
+      title: source?.title || id,
+      poster: source?.poster || '',
+      year: source?.year || '',
+      localWatched: local,
+      remoteWatched: remote
+    })
+  }
+  return out
+}
+
 /** Registers every `tracking:*`, `home:personalized`, and `simkl:*` IPC handler. Call once during main-process startup. */
 export function registerTrackingIpc(): void {
   handle<undefined, TrackingListResult>(MEDIA_HUB_CHANNELS.trackingList, async () => {
     const db = getDatabase()
     const trackedItems = db.tracked()
-    const history = [...db.history(), ...(await simklWatchedHistory())]
+    // Local history ONLY — no live/cached Simkl merge here. This used to
+    // fold in simklWatchedHistory() unconditionally, which is cached for
+    // 20 minutes (see simklClient.ts) and can therefore keep reporting a
+    // title as watched for up to 20 minutes after a real, successful
+    // local unmark (which DOES push a Simkl removal — see
+    // trackingUnmarkWatched below — but that push doesn't invalidate this
+    // OTHER read's stale cache). Reported live: a movie the person had
+    // deliberately un-marked kept reading back as "Watched" on every
+    // refresh, because every refresh re-merged in the same stale Simkl
+    // snapshot and silently overrode the local, correct answer. The local
+    // database is the source of truth for what this app displays;
+    // reconciling it against Simkl/MAL is now a deliberate, separate,
+    // rate-limited background pass (see reconcileWatchStatus below) that
+    // surfaces disagreements for review instead of one side silently
+    // winning on every ordinary read.
+    const history = db.history()
     const details = (
       await Promise.all(
         trackedItems
@@ -199,6 +305,55 @@ export function registerTrackingIpc(): void {
     }
   )
 
+  // Renderer-triggered (a few seconds after startup, and rate-limited by
+  // the cooldown regardless of how often it's called — see this file's
+  // own header comment on why) rather than main-process-scheduled: the
+  // renderer already owns exactly when "the app has settled in and this
+  // won't compete with anything the person is actively doing" is true.
+  handle<undefined, ReconcileCheckResult>(MEDIA_HUB_CHANNELS.trackingReconcileCheck, async () => {
+    if (!simklCredentials().accessToken) return { ran: false, discrepancies: [] }
+    const db = getDatabase()
+    if (db.getCache(RECONCILE_COOLDOWN_KEY)) return { ran: false, discrepancies: [] }
+    db.putCache(RECONCILE_COOLDOWN_KEY, true, RECONCILE_COOLDOWN_MS)
+    try {
+      return { ran: true, discrepancies: await computeMovieDiscrepancies() }
+    } catch (error) {
+      logError('tracking:reconcile', error)
+      return { ran: true, discrepancies: [] }
+    }
+  })
+
+  handle<{ discrepancy: WatchStatusDiscrepancy; resolution: ReconcileResolution }, { ok: true }>(
+    MEDIA_HUB_CHANNELS.trackingReconcileResolve,
+    async (_e, { discrepancy, resolution }) => {
+      if (resolution === 'ignore') {
+        addIgnoredReconcileId(discrepancy.id)
+        return { ok: true }
+      }
+      const item: SimklPushItem = {
+        id: discrepancy.id,
+        type: discrepancy.type,
+        title: discrepancy.title,
+        year: discrepancy.year
+      }
+      const db = getDatabase()
+      if (resolution === 'use-local') {
+        // Local's answer is the one to keep — push it to Simkl so the
+        // remote side matches instead of drifting further.
+        if (discrepancy.localWatched) {
+          await syncSimklHistory('/sync/history', historyPayload(item))
+        } else {
+          await syncSimklHistory('/sync/history/remove', historyPayload(item))
+        }
+      } else {
+        // Simkl's answer is the one to keep — update the local record to match.
+        if (discrepancy.remoteWatched) db.markWatched(item)
+        else db.unmarkWatched(item.id)
+      }
+      return { ok: true }
+    }
+  )
+
   handle<undefined, DislikedListResult>(MEDIA_HUB_CHANNELS.dislikedList, async () => {
     return { disliked: getDatabase().disliked() }
   })
@@ -221,7 +376,11 @@ export function registerTrackingIpc(): void {
     if (!all.length) throw new Error('All catalog sources are currently unavailable.')
 
     const db = getDatabase()
-    const history: HistoryEntry[] = [...db.history(), ...(await simklWatchedHistory())]
+    // Local only — see trackingList's own comment above for why: a live/
+    // cached Simkl merge here means Continue Watching and the
+    // recommendation filter can both keep treating a freshly-unmarked
+    // title as watched for up to 20 minutes.
+    const history: HistoryEntry[] = db.history()
     const tracked = db.tracked()
     const watchedIds = new Set(history.map((x) => String(x.id)))
     const trackedIds = new Set(tracked.map((x) => String(x.id)))
