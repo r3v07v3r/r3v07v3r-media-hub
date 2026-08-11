@@ -1052,10 +1052,29 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
             // The awaited, deadline-bounded branch below owns user feedback.
           }
         )
+        // This one IPC call (stream:play) covers the whole real critical
+        // path for starting a title, not just the transcode: TorBox's own
+        // requestdl round trip, torbox.ts's retry-once wrapper around it
+        // (a full second attempt, on top of the first, when the initial
+        // link comes back not-yet-servable), then preparePlayback's own
+        // probeMedia (up to 15s — probeMedia's own execFile timeout) and,
+        // when the source needs it, a real ffmpeg transcode start (up to
+        // 25s for audio-only compatibility mode, or 60s when a forced
+        // video re-encode is engaged — see createFfmpegTranscoder's own
+        // budget in vlc.ts). Summed, that worst case alone already reaches
+        // or exceeds the previous 45s budget here — found live as the
+        // actual cause of "playback fails and I have to try again": this
+        // stage was timing out and showing an error for a start that the
+        // backend would have finished seconds later, throwing away
+        // real progress and forcing a full from-scratch retry (new probe,
+        // new transcode) instead of just waiting a bit longer for one
+        // already under way. 90s gives real margin over that summed worst
+        // case while the ordinary fast path (a few seconds) is completely
+        // unaffected — this is a ceiling, not a typical wait.
         const played = await runPlaybackPreparationStage(
           playTask,
           'buffering',
-          45_000,
+          90_000,
           controller.signal
         )
         if (!isCurrent()) return false
