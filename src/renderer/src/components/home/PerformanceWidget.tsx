@@ -89,7 +89,7 @@ function GaugeStack({ metrics }: { metrics: ReturnType<typeof usePerformanceMetr
 }
 
 export function PerformanceWidget() {
-  const { performancePanelVisible } = useAppState()
+  const { mediaHubSettings } = useAppState()
   const metrics = usePerformanceMetrics()
   const [expanded, setExpanded] = useState(false)
   const [isCompact, setIsCompact] = useState(false)
@@ -103,7 +103,7 @@ export function PerformanceWidget() {
     return () => window.removeEventListener('resize', apply)
   }, [])
 
-  if (!performancePanelVisible) return null
+  if (mediaHubSettings?.performancePanelVisible === false) return null
 
   const maxLoad = Math.round(Math.max(metrics.cpu, metrics.gpu, metrics.ram))
   // Edge brightens under load rather than staying a fixed intensity

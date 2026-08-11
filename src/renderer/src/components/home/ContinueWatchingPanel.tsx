@@ -181,12 +181,6 @@ export function ContinueWatchingPanel({ kindFilter, className }: ContinueWatchin
           })}
         </ul>
       )}
-
-      <div className={styles.footer}>
-        <button type="button" className={styles.viewAll}>
-          View All
-        </button>
-      </div>
     </aside>
   )
 }

@@ -885,11 +885,19 @@ export function registerWatchPartyIpc(): void {
       const current = party
       if (!current) return { ok: false }
       const action = payload || {}
-      // Same host-only gate as a plain 'seek' — these three are all part
-      // of the same host-coordinates-a-seek flow (see PlaybackOverlay's
-      // checkPartySeekReady/handleSeek), 'ready' is the one message in
-      // this group any party member can send (a client reporting its own
-      // buffer is ready).
+      // seek-sync/seek-waiting/seek-go are the host-coordinated seek-quorum
+      // flow (see PlaybackOverlay's checkPartySeekReady/handleSeek) — only
+      // the host ever initiates that flow, so those three stay host-only
+      // here. Plain 'seek' is NOT part of that group: it's the ordinary
+      // broadcast a member sends after allowMemberControl lets them control
+      // playback locally (see PlaybackOverlay's seekToTarget), and the
+      // actual permission check for it is enforced host-side, on receipt,
+      // in handlePartyMessage's `!current.allowMemberControl` gate — not
+      // here on the sender. Blocking it here too (as this used to) meant a
+      // member's seek could never even reach the host, silently defeating
+      // "Anyone can control playback" for seeking specifically. 'ready' is
+      // the one message in this group any party member can send (a client
+      // reporting its own buffer is ready).
       // The host's own presence can't arrive by message — nothing echoes
       // back to its sender — so it's applied to its own roster entry here.
       if (action.type === 'watching' && current.role === 'host') {
@@ -899,8 +907,7 @@ export function registerWatchPartyIpc(): void {
         return { ok: true }
       }
       if (
-        (action.type === 'seek' ||
-          action.type === 'seek-sync' ||
+        (action.type === 'seek-sync' ||
           action.type === 'seek-waiting' ||
           action.type === 'seek-go') &&
         current.role !== 'host'

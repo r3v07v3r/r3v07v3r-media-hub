@@ -413,6 +413,8 @@ export interface MediaHubPublicSettings {
   autoSubtitlesEnabled: boolean
   /** Decorative UI animation (idle ambient motion, not playback itself) — layered alongside, not replacing, the automatic motion-suspend-during-playback behavior in global.css. */
   uiAnimationsEnabled: boolean
+  /** Whether the Home dashboard's live CPU/GPU/RAM/network gauges (PerformanceWidget) are shown. Device/UI preference, not account data — survives logout like uiAnimationsEnabled. */
+  performancePanelVisible: boolean
   /** Opt-in, off by default: re-encode video (not just audio) via a real hardware encoder when a source's video codec isn't one Chromium can reliably decode (see vlc.ts's detectVideoEncoder). Silently has no effect if no working hardware encoder is found on this machine — never falls back to a software encoder. */
   videoTranscodeEnabled: boolean
   /** Upper bounds used when choosing a release. Zero means unrestricted. */

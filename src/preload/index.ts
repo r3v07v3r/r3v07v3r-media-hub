@@ -161,6 +161,10 @@ const api = {
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.settingsSetAutoSubtitles, enabled),
       setUiAnimations: (enabled: boolean): Promise<{ uiAnimationsEnabled: boolean }> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.settingsSetUiAnimations, enabled),
+      setPerformancePanelVisible: (
+        enabled: boolean
+      ): Promise<{ performancePanelVisible: boolean }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.settingsSetPerformancePanelVisible, enabled),
       setVideoTranscode: (enabled: boolean): Promise<{ videoTranscodeEnabled: boolean }> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.settingsSetVideoTranscode, enabled),
       setStreamLimits: (limits: {

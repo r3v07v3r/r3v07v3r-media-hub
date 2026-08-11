@@ -49,6 +49,20 @@ export function ContextMenu() {
 
   const { left, top } = positionFloatingPanel(x, y, 224, 320, window.innerWidth, window.innerHeight)
 
+  // A movie's watched state is a single toggle with no season/episode
+  // needed. A series/anime card only carries real season/episode numbers
+  // when it came from Continue Watching (see continueWatchingEntryToItem in
+  // lib/mediaHub/adapters.ts) — a plain browse-grid card never has them.
+  // Marking watched/unwatched without them used to write a bogus
+  // `id:movie:movie` history row (and push an equally bogus "season 1,
+  // episode undefined" entry to Simkl) instead of tracking anything real —
+  // found live. Per-episode marking already exists and works correctly on
+  // the title's own detail page (EpisodesSection); this menu item is
+  // limited to the cases it can actually represent correctly rather than
+  // silently corrupting the rest.
+  const canToggleWatched =
+    media.mediaType === 'movie' || (media.seasonNumber != null && media.episodeNumber != null)
+
   const items: { icon: string; label: string; onSelect: () => void }[] = [
     { icon: 'play', label: 'Play', onSelect: () => startPartyPlayback(media) },
     {
@@ -56,11 +70,15 @@ export function ContextMenu() {
       label: saved ? 'Remove from My List' : 'Add to My List',
       onSelect: () => toggleMyList(media)
     },
-    {
-      icon: 'check',
-      label: media.watched ? 'Mark unwatched' : 'Mark watched',
-      onSelect: () => markContinueWatching(media.id, !media.watched, media)
-    },
+    ...(canToggleWatched
+      ? [
+          {
+            icon: 'check',
+            label: media.watched ? 'Mark unwatched' : 'Mark watched',
+            onSelect: () => markContinueWatching(media.id, !media.watched, media)
+          }
+        ]
+      : []),
     {
       icon: 'thumbs-down',
       label: disliked ? 'Remove dislike' : 'Not interested',

@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useAppState } from '@renderer/context/AppStateContext'
 import { catalogItemToMediaItem } from '@renderer/lib/mediaHub/adapters'
 import type { MediaKind } from '@shared/media-hub/types'
@@ -11,6 +11,16 @@ import styles from './FriendsSection.module.css'
 /** "34 min in" — friendlier than a timestamp for a position someone else
  *  is at, and deliberately coarse: it updates on their announce interval,
  *  so second-level precision would only ever be stale. */
+// A friend-join-request has no wire-level cancel or ack — the only replies
+// are 'friend-join-offer'/'friend-join-declined', both dependent on the
+// other side's client actually being reachable (found live: it can show
+// online from a stale presence row up to PRESENCE_TTL_MS after they've
+// really gone, or the relay can drop the message with no NACK). Without
+// this, "Asking…" had no way out at all short of closing and reopening the
+// panel. 20s is generous for a same-network round trip but short enough
+// that giving up doesn't feel like waiting on a hang.
+const FRIEND_JOIN_REQUEST_TIMEOUT_MS = 20_000
+
 function formatPosition(seconds: number): string {
   const total = Math.max(0, Math.round(seconds))
   const h = Math.floor(total / 3600)
@@ -31,6 +41,30 @@ export function FriendsSection() {
   const [status, setStatus] = useState<FriendsStatus | null>(null)
   const [joinCode, setJoinCode] = useState('')
   const [busy, setBusy] = useState(false)
+  const awaitingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const clearAwaitingTimeout = useCallback(() => {
+    if (awaitingTimeoutRef.current) {
+      clearTimeout(awaitingTimeoutRef.current)
+      awaitingTimeoutRef.current = null
+    }
+  }, [])
+
+  // Safety net for a request nobody ever answers — see
+  // FRIEND_JOIN_REQUEST_TIMEOUT_MS's own comment.
+  const armAwaitingTimeout = useCallback(
+    (friendId: string, friendName: string) => {
+      clearAwaitingTimeout()
+      awaitingTimeoutRef.current = setTimeout(() => {
+        awaitingTimeoutRef.current = null
+        setAwaiting((current) => (current === friendId ? null : current))
+        pushNotification({ tone: 'warning', message: `${friendName} didn't respond — try again.` })
+      }, FRIEND_JOIN_REQUEST_TIMEOUT_MS)
+    },
+    [clearAwaitingTimeout, pushNotification]
+  )
+
+  useEffect(() => clearAwaitingTimeout, [clearAwaitingTimeout])
 
   // The main process pushes a fresh status on every change (join, leave,
   // presence arriving, someone ageing out), so this doesn't poll.
@@ -51,16 +85,18 @@ export function FriendsSection() {
     if (!api) return
     return api.onMessage((message) => {
       if (message.type === 'friend-join-offer') {
+        clearAwaitingTimeout()
         setAwaiting(null)
         joinParty(message.partyCode, mediaHubSettings?.partyDisplayName || 'A friend').catch(() => {
           pushNotification({ tone: 'error', message: 'Could not join that party.' })
         })
       } else if (message.type === 'friend-join-declined') {
+        clearAwaitingTimeout()
         setAwaiting(null)
         pushNotification({ tone: 'warning', message: message.reason })
       }
     })
-  }, [joinParty, mediaHubSettings, pushNotification])
+  }, [joinParty, mediaHubSettings, pushNotification, clearAwaitingTimeout])
 
   const run = useCallback(
     async (fn: () => Promise<unknown>, failure: string) => {
@@ -183,7 +219,17 @@ export function FriendsSection() {
               </span>
               {f.activity ? (
                 awaiting === f.friendId ? (
-                  <span className={styles.awaiting}>Asking…</span>
+                  <button
+                    type="button"
+                    className={styles.awaiting}
+                    onClick={() => {
+                      clearAwaitingTimeout()
+                      setAwaiting(null)
+                    }}
+                    title="Cancel — no answer yet"
+                  >
+                    Asking… (cancel)
+                  </button>
                 ) : choosing === f.friendId ? (
                   <span className={styles.choiceRow}>
                     <button
@@ -203,12 +249,19 @@ export function FriendsSection() {
                             )
                           } else {
                             setAwaiting(f.friendId)
-                            await api?.send({
-                              type: 'friend-join-request',
-                              toFriendId: f.friendId,
-                              fromFriendId: '',
-                              fromName: mediaHubSettings?.partyDisplayName || 'A friend'
-                            })
+                            armAwaitingTimeout(f.friendId, f.name)
+                            try {
+                              await api?.send({
+                                type: 'friend-join-request',
+                                toFriendId: f.friendId,
+                                fromFriendId: '',
+                                fromName: mediaHubSettings?.partyDisplayName || 'A friend'
+                              })
+                            } catch (error) {
+                              clearAwaitingTimeout()
+                              setAwaiting(null)
+                              throw error
+                            }
                           }
                         }, 'Could not join them.')
                       }

@@ -766,7 +766,7 @@ export function OpenSubtitlesSection() {
               />
             </label>
             <label className={styles.field}>
-              <span className={styles.fieldLabel}>Username (optional)</span>
+              <span className={styles.fieldLabel}>Username</span>
               <input
                 className={styles.fieldInput}
                 type="text"
@@ -775,7 +775,7 @@ export function OpenSubtitlesSection() {
               />
             </label>
             <label className={styles.field}>
-              <span className={styles.fieldLabel}>Password (optional)</span>
+              <span className={styles.fieldLabel}>Password</span>
               <input
                 className={styles.fieldInput}
                 type="password"
@@ -789,7 +789,14 @@ export function OpenSubtitlesSection() {
               type="button"
               className={styles.testButton}
               onClick={connect}
-              disabled={!apiKey.trim() || status.kind === 'busy'}
+              // OpenSubtitles' download endpoint (unlike search) requires a
+              // real logged-in session — see subtitlesService.ts's
+              // osLoginWith — so all three fields are genuinely required,
+              // not just the API key. These used to be labeled "(optional)"
+              // while the backend rejected a connect attempt without them
+              // every time; fixed by requiring what's actually required
+              // instead of promising less than that.
+              disabled={!apiKey.trim() || !username.trim() || !password.trim() || status.kind === 'busy'}
             >
               {status.kind === 'busy' ? 'Connecting…' : 'Connect'}
             </button>

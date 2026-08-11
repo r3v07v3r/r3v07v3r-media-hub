@@ -242,11 +242,6 @@ interface AppStateValue {
   pushNotification: (n: Omit<AppNotification, 'id' | 'createdAt'>) => void
   dismissNotification: (id: string) => void
 
-  // Global "reduced visual chrome" toggle exposed via Settings, separate
-  // from the OS prefers-reduced-motion signal.
-  performancePanelVisible: boolean
-  setPerformancePanelVisible: (v: boolean) => void
-
   // "Opening a title" navigates to its real detail page (/movies/:id,
   // /series/:id, /anime/:id) rather than opening a modal over the current
   // page — openDetail captures a BrowsingOrigin snapshot of wherever it
@@ -395,7 +390,6 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   const [assistantState, setAssistantState] = useState<AssistantState>('idle')
   const [assistantQuery, setAssistantQuery] = useState('')
   const [assistantResponse, setAssistantResponse] = useState<string | null>(null)
-  const [performancePanelVisible, setPerformancePanelVisible] = useState(true)
   const [browsingOrigin, setBrowsingOrigin] = useState<BrowsingOrigin | null>(null)
   const [resolvingMedia, setResolvingMedia] = useState<{
     id: string
@@ -502,6 +496,20 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       .catch(() => {})
   }, [])
 
+  // Toasts and the card menu live in OverlayProvider (see
+  // context/OverlayContext.tsx). These four are stable for the life of the
+  // app, so re-exporting them in this context keeps every existing
+  // `useAppState().pushNotification` call site working, without putting the
+  // notifications array — which changes constantly — back into this
+  // context’s value and re-rendering all 43 subscribers for a toast.
+  // Declared here (rather than right before its first use further down) so
+  // every effect in this component, including the party-status one right
+  // below, can reference pushNotification — the lint rule that enforces
+  // hook-result declare-before-use ordering doesn't care that a closure
+  // only actually reads it later, at event time.
+  const { pushNotification, dismissNotification, openContextMenu, closeContextMenu } =
+    useOverlayActions()
+
   useEffect(() => {
     const api = window.api?.mediaHub?.party
     if (!api) return
@@ -531,9 +539,14 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         setPartyWanAvailable(null)
         setPartyHostPort(null)
         refreshPartyStatus()
+        // Found live: this silently dropped a member back to the "Host a
+        // party / Join a party" form with zero indication anything had
+        // happened — the analogous 'preparing-cancelled' failure below
+        // already does the right thing here.
+        pushNotification({ tone: 'warning', message: 'Lost connection to the party host.' })
       }
     })
-  }, [refreshPartyStatus])
+  }, [refreshPartyStatus, pushNotification])
 
   const toggleMyList = useCallback(
     (media: MediaItem) => {
@@ -624,6 +637,23 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       // covers exactly that gap.
       const source = media ?? entry?.media
       if (!api || !source) return
+      // A series/anime title has no single valid watched/unwatched key
+      // without a real episode to attach it to — see ContextMenu.tsx's own
+      // guard on this, which is the normal caller and where the person
+      // actually gets told why (this function runs well before
+      // pushNotification is in scope in this component — see its own
+      // comment further down — so this backstop stays silent, same as the
+      // `!api || !source` guard right above it). Without this, a future
+      // caller missing that same check would write a bogus `id:movie:movie`
+      // history row (and an equally bogus Simkl entry) instead of tracking
+      // anything real. Movies are unaffected — season/episode were never
+      // meaningful for them.
+      if (
+        source.mediaType !== 'movie' &&
+        (source.seasonNumber == null || source.episodeNumber == null)
+      ) {
+        return
+      }
       const item = mediaItemToTrackablePayload(source)
       const playback = { season: source.seasonNumber, episode: source.episodeNumber }
       const call = watched ? api.tracking.markWatched : api.tracking.unmarkWatched
@@ -657,15 +687,6 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     },
     [continueWatching, homeFeed]
   )
-
-  // Toasts and the card menu live in OverlayProvider (see
-  // context/OverlayContext.tsx). These four are stable for the life of the
-  // app, so re-exporting them in this context keeps every existing
-  // `useAppState().pushNotification` call site working, without putting the
-  // notifications array — which changes constantly — back into this
-  // context’s value and re-rendering all 43 subscribers for a toast.
-  const { pushNotification, dismissNotification, openContextMenu, closeContextMenu } =
-    useOverlayActions()
 
   // A refused download is never routine — it's either something hostile
   // reaching for the disk or a bug in this app, and both are worth saying
@@ -1031,10 +1052,29 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
             // The awaited, deadline-bounded branch below owns user feedback.
           }
         )
+        // This one IPC call (stream:play) covers the whole real critical
+        // path for starting a title, not just the transcode: TorBox's own
+        // requestdl round trip, torbox.ts's retry-once wrapper around it
+        // (a full second attempt, on top of the first, when the initial
+        // link comes back not-yet-servable), then preparePlayback's own
+        // probeMedia (up to 15s — probeMedia's own execFile timeout) and,
+        // when the source needs it, a real ffmpeg transcode start (up to
+        // 25s for audio-only compatibility mode, or 60s when a forced
+        // video re-encode is engaged — see createFfmpegTranscoder's own
+        // budget in vlc.ts). Summed, that worst case alone already reaches
+        // or exceeds the previous 45s budget here — found live as the
+        // actual cause of "playback fails and I have to try again": this
+        // stage was timing out and showing an error for a start that the
+        // backend would have finished seconds later, throwing away
+        // real progress and forcing a full from-scratch retry (new probe,
+        // new transcode) instead of just waiting a bit longer for one
+        // already under way. 90s gives real margin over that summed worst
+        // case while the ordinary fast path (a few seconds) is completely
+        // unaffected — this is a ceiling, not a typical wait.
         const played = await runPlaybackPreparationStage(
           playTask,
           'buffering',
-          45_000,
+          90_000,
           controller.signal
         )
         if (!isCurrent()) return false
@@ -1225,9 +1265,19 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   // of them ever fire and the follower is left staring at a spinner.
   useEffect(() => {
     if (!partyPreparing) return
-    const timer = setTimeout(() => setPartyPreparing(null), PARTY_PREPARING_TIMEOUT_MS)
+    const timer = setTimeout(() => {
+      setPartyPreparing(null)
+      // Unlike every other path that clears this card (success, the
+      // 'preparing-cancelled' message, a resolve failure), this one has no
+      // real explanation to give beyond "it took too long" — but silently
+      // vanishing after a 3-minute wait is still worse than saying that.
+      pushNotification({
+        tone: 'warning',
+        message: "The host's title never started — try again."
+      })
+    }, PARTY_PREPARING_TIMEOUT_MS)
     return () => clearTimeout(timer)
-  }, [partyPreparing])
+  }, [partyPreparing, pushNotification])
 
   // Leaving the party (or the host disconnecting) ends any wait too —
   // nothing is coming. Adjusted during render (React's documented
@@ -1522,8 +1572,6 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       clearCategorySearch,
       pushNotification,
       dismissNotification,
-      performancePanelVisible,
-      setPerformancePanelVisible,
       browsingOrigin,
       openDetail,
       clearBrowsingOrigin,
@@ -1607,7 +1655,6 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       clearCategorySearch,
       pushNotification,
       dismissNotification,
-      performancePanelVisible,
       browsingOrigin,
       openDetail,
       clearBrowsingOrigin,

@@ -17,6 +17,7 @@ export const MEDIA_HUB_CHANNELS = {
   settingsSetPlaybackBuffer: 'mediahub:settings:set-playback-buffer',
   settingsSetAutoSubtitles: 'mediahub:settings:set-auto-subtitles',
   settingsSetUiAnimations: 'mediahub:settings:set-ui-animations',
+  settingsSetPerformancePanelVisible: 'mediahub:settings:set-performance-panel-visible',
   settingsSetVideoTranscode: 'mediahub:settings:set-video-transcode',
   settingsSetStreamLimits: 'mediahub:settings:set-stream-limits',
   settingsSetPartyDisplayName: 'mediahub:settings:set-party-display-name',
