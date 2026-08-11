@@ -214,6 +214,19 @@ export function PlaybackOverlay() {
   // before each restart request; their response handlers check it's still
   // current before applying anything.
   const transcodeGenerationRef = useRef(0)
+  // Same stale-response problem as transcodeGenerationRef above, one layer
+  // up: there are three independent ways a subtitle can get applied here
+  // (the "Always have subtitles" auto-fetch on mount, a manual OpenSubtitles
+  // pick, and an embedded-track extraction), and nothing stopped a slow
+  // one's late result from landing after a faster, newer choice and
+  // silently overwriting it — found live: extracting an embedded track can
+  // take tens of seconds (no early exit — see applyEmbeddedSubtitle's own
+  // comment), which is easily enough time to open the menu and pick a fast
+  // OpenSubtitles result instead, only to have the abandoned embedded
+  // extraction quietly replace it once it finally finishes. Same fix as
+  // transcodeGenerationRef: bumped by all three writers before they start,
+  // checked before any of them actually apply their result.
+  const subtitleGenerationRef = useRef(0)
 
   // Scrubbing thumbnail preview — hovering the seek bar shows the frame at
   // that position. `time`/`x` update on every mousemove (cheap, just local
@@ -1170,8 +1183,12 @@ export function PlaybackOverlay() {
   async function applySubtitle(fileId: number) {
     if (pendingSubtitleFileId !== null) return
     setPendingSubtitleFileId(fileId)
+    const myGeneration = ++subtitleGenerationRef.current
     try {
       const applied = await window.api?.mediaHub?.subtitles.apply(fileId, false)
+      // A newer subtitle pick (or the auto-fetch) already won — see
+      // subtitleGenerationRef's own comment.
+      if (subtitleGenerationRef.current !== myGeneration) return
       if (applied?.vttDataUrl) {
         // Store the ORIGINAL absolute-timeline VTT, then apply it shifted
         // by whatever offset the current segment is already at (applying
@@ -1181,6 +1198,7 @@ export function PlaybackOverlay() {
         applyShiftedSubtitle()
       }
     } catch (error) {
+      if (subtitleGenerationRef.current !== myGeneration) return
       pushNotification({
         tone: 'error',
         message: error instanceof Error ? error.message : 'Could not load that subtitle.'
@@ -1207,8 +1225,13 @@ export function PlaybackOverlay() {
   async function applyEmbeddedSubtitle(track: MediaTrack) {
     if (extractingSubtitleOrdinal !== null) return
     setExtractingSubtitleOrdinal(track.ordinal)
+    const myGeneration = ++subtitleGenerationRef.current
     try {
       const vtt = await window.api?.mediaHub?.playback.extractSubtitle(track.ordinal)
+      // A newer subtitle pick (or the auto-fetch) already won while this
+      // demux — tens of seconds on a large file, no early exit — was still
+      // running. See subtitleGenerationRef's own comment.
+      if (subtitleGenerationRef.current !== myGeneration) return
       if (!vtt) {
         pushNotification({
           tone: 'error',
@@ -1219,6 +1242,7 @@ export function PlaybackOverlay() {
       subtitleVttRef.current = vtt
       applyShiftedSubtitle()
     } catch (error) {
+      if (subtitleGenerationRef.current !== myGeneration) return
       pushNotification({
         tone: 'error',
         message: error instanceof Error ? error.message : 'Could not load that subtitle.'
@@ -1249,6 +1273,12 @@ export function PlaybackOverlay() {
     if (!playbackMedia) return
     if (mediaHubSettings?.autoSubtitlesEnabled === false) return
     let cancelled = false
+    // Bumped up front, before the search/apply round trip even starts —
+    // see subtitleGenerationRef's own comment. A manual pick made while
+    // this is still in flight (very plausible: it's two sequential network
+    // calls) must win over this auto-fetch's own eventual result, not the
+    // other way around.
+    const myGeneration = ++subtitleGenerationRef.current
     const api = window.api?.mediaHub
     if (!api) return
     api.subtitles
@@ -1257,10 +1287,11 @@ export function PlaybackOverlay() {
         { season: playbackMedia.seasonNumber, episode: playbackMedia.episodeNumber }
       )
       .then(async (results) => {
-        if (cancelled || !results?.length) return
+        if (cancelled || subtitleGenerationRef.current !== myGeneration || !results?.length) return
         setSubtitleResults(results)
         const applied = await api.subtitles.apply(results[0].fileId, false)
-        if (cancelled || !applied?.vttDataUrl) return
+        if (cancelled || subtitleGenerationRef.current !== myGeneration || !applied?.vttDataUrl)
+          return
         subtitleVttRef.current = decodeVttDataUrl(applied.vttDataUrl)
         applyShiftedSubtitle()
       })
