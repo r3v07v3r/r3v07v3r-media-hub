@@ -332,20 +332,6 @@
   height: 11px;
 }
 
-.footer {
-  flex: 0 0 auto;
-  margin-top: 10px;
-  text-align: center;
-}
-.viewAll {
-  font-size: 12px;
-  color: var(--accent-cyan);
-  padding: 6px;
-}
-.viewAll:hover {
-  text-decoration: underline;
-}
-
 .empty {
   flex: 1;
   display: flex;
