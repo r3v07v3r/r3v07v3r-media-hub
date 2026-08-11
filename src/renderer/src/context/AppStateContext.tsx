@@ -496,6 +496,20 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       .catch(() => {})
   }, [])
 
+  // Toasts and the card menu live in OverlayProvider (see
+  // context/OverlayContext.tsx). These four are stable for the life of the
+  // app, so re-exporting them in this context keeps every existing
+  // `useAppState().pushNotification` call site working, without putting the
+  // notifications array — which changes constantly — back into this
+  // context’s value and re-rendering all 43 subscribers for a toast.
+  // Declared here (rather than right before its first use further down) so
+  // every effect in this component, including the party-status one right
+  // below, can reference pushNotification — the lint rule that enforces
+  // hook-result declare-before-use ordering doesn't care that a closure
+  // only actually reads it later, at event time.
+  const { pushNotification, dismissNotification, openContextMenu, closeContextMenu } =
+    useOverlayActions()
+
   useEffect(() => {
     const api = window.api?.mediaHub?.party
     if (!api) return
@@ -525,9 +539,14 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         setPartyWanAvailable(null)
         setPartyHostPort(null)
         refreshPartyStatus()
+        // Found live: this silently dropped a member back to the "Host a
+        // party / Join a party" form with zero indication anything had
+        // happened — the analogous 'preparing-cancelled' failure below
+        // already does the right thing here.
+        pushNotification({ tone: 'warning', message: 'Lost connection to the party host.' })
       }
     })
-  }, [refreshPartyStatus])
+  }, [refreshPartyStatus, pushNotification])
 
   const toggleMyList = useCallback(
     (media: MediaItem) => {
@@ -668,15 +687,6 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     },
     [continueWatching, homeFeed]
   )
-
-  // Toasts and the card menu live in OverlayProvider (see
-  // context/OverlayContext.tsx). These four are stable for the life of the
-  // app, so re-exporting them in this context keeps every existing
-  // `useAppState().pushNotification` call site working, without putting the
-  // notifications array — which changes constantly — back into this
-  // context’s value and re-rendering all 43 subscribers for a toast.
-  const { pushNotification, dismissNotification, openContextMenu, closeContextMenu } =
-    useOverlayActions()
 
   // A refused download is never routine — it's either something hostile
   // reaching for the disk or a bug in this app, and both are worth saying
@@ -1236,9 +1246,19 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   // of them ever fire and the follower is left staring at a spinner.
   useEffect(() => {
     if (!partyPreparing) return
-    const timer = setTimeout(() => setPartyPreparing(null), PARTY_PREPARING_TIMEOUT_MS)
+    const timer = setTimeout(() => {
+      setPartyPreparing(null)
+      // Unlike every other path that clears this card (success, the
+      // 'preparing-cancelled' message, a resolve failure), this one has no
+      // real explanation to give beyond "it took too long" — but silently
+      // vanishing after a 3-minute wait is still worse than saying that.
+      pushNotification({
+        tone: 'warning',
+        message: "The host's title never started — try again."
+      })
+    }, PARTY_PREPARING_TIMEOUT_MS)
     return () => clearTimeout(timer)
-  }, [partyPreparing])
+  }, [partyPreparing, pushNotification])
 
   // Leaving the party (or the host disconnecting) ends any wait too —
   // nothing is coming. Adjusted during render (React's documented
