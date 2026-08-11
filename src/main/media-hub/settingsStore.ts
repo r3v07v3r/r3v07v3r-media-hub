@@ -63,6 +63,7 @@ export interface MediaHubRawSettings {
   playbackBuffer?: string
   autoSubtitlesEnabled?: boolean
   uiAnimationsEnabled?: boolean
+  performancePanelVisible?: boolean
   videoTranscodeEnabled?: boolean
   maxStreamResolution?: number
   maxStreamSizeGb?: number

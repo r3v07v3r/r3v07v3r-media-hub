@@ -104,6 +104,16 @@ export function registerAppIpc(): void {
     }
   )
 
+  handle<unknown, { performancePanelVisible: boolean }>(
+    MEDIA_HUB_CHANNELS.settingsSetPerformancePanelVisible,
+    (_event, value) => {
+      const settings = readSettings()
+      settings.performancePanelVisible = value !== false
+      writeSettings(settings)
+      return { performancePanelVisible: settings.performancePanelVisible }
+    }
+  )
+
   handle<unknown, { videoTranscodeEnabled: boolean }>(
     MEDIA_HUB_CHANNELS.settingsSetVideoTranscode,
     (_event, value) => {

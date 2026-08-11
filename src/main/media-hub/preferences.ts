@@ -46,6 +46,7 @@ export function publicSettings(settings: Record<string, unknown> = {}): MediaHub
     playbackBuffer: normalizePlaybackBuffer(settings.playbackBuffer),
     autoSubtitlesEnabled: settings.autoSubtitlesEnabled !== false,
     uiAnimationsEnabled: settings.uiAnimationsEnabled !== false,
+    performancePanelVisible: settings.performancePanelVisible !== false,
     // Opt-in, unlike uiAnimationsEnabled above: this spins up a real
     // hardware-encoder probe + CPU/GPU cost the first time it's actually
     // used, so it defaults off rather than on.
@@ -76,6 +77,7 @@ export function logoutSettings(
   | 'playbackBuffer'
   | 'autoSubtitlesEnabled'
   | 'uiAnimationsEnabled'
+  | 'performancePanelVisible'
   | 'videoTranscodeEnabled'
   | 'maxStreamResolution'
   | 'maxStreamSizeGb'
@@ -90,6 +92,7 @@ export function logoutSettings(
     playbackBuffer: normalizePlaybackBuffer(settings.playbackBuffer),
     autoSubtitlesEnabled: settings.autoSubtitlesEnabled !== false,
     uiAnimationsEnabled: settings.uiAnimationsEnabled !== false,
+    performancePanelVisible: settings.performancePanelVisible !== false,
     videoTranscodeEnabled: settings.videoTranscodeEnabled === true,
     maxStreamResolution: Number(settings.maxStreamResolution) || 0,
     maxStreamSizeGb: Number(settings.maxStreamSizeGb) || 0,

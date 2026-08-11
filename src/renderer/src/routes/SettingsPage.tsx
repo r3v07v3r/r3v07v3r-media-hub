@@ -451,8 +451,6 @@ function MoreOptionsSection() {
 export default function SettingsPage() {
   const tileAreaRef = useRef<HTMLDivElement>(null)
   const {
-    performancePanelVisible,
-    setPerformancePanelVisible,
     isOffline,
     setIsOffline,
     profiles,
@@ -490,6 +488,14 @@ export default function SettingsPage() {
       .then(setNetworkInfo)
       .catch(() => {})
   }, [])
+
+  async function handleTogglePerformancePanel(enabled: boolean) {
+    const api = window.api?.mediaHub
+    if (api)
+      await saveSetting('settings.performance-panel', () =>
+        api.settings.setPerformancePanelVisible(enabled)
+      )
+  }
 
   async function handleSetPlaybackBuffer(preset: string) {
     const api = window.api?.mediaHub
@@ -624,8 +630,8 @@ export default function SettingsPage() {
                 icon="cpu"
                 title="System performance panel"
                 description="Show live CPU, GPU, RAM, and network gauges on the Home dashboard."
-                checked={performancePanelVisible}
-                onChange={setPerformancePanelVisible}
+                checked={mediaHubSettings?.performancePanelVisible ?? true}
+                onChange={handleTogglePerformancePanel}
               />
               <SegmentedRow
                 icon="clock"
