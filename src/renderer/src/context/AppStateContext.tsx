@@ -242,11 +242,6 @@ interface AppStateValue {
   pushNotification: (n: Omit<AppNotification, 'id' | 'createdAt'>) => void
   dismissNotification: (id: string) => void
 
-  // Global "reduced visual chrome" toggle exposed via Settings, separate
-  // from the OS prefers-reduced-motion signal.
-  performancePanelVisible: boolean
-  setPerformancePanelVisible: (v: boolean) => void
-
   // "Opening a title" navigates to its real detail page (/movies/:id,
   // /series/:id, /anime/:id) rather than opening a modal over the current
   // page — openDetail captures a BrowsingOrigin snapshot of wherever it
@@ -395,7 +390,6 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   const [assistantState, setAssistantState] = useState<AssistantState>('idle')
   const [assistantQuery, setAssistantQuery] = useState('')
   const [assistantResponse, setAssistantResponse] = useState<string | null>(null)
-  const [performancePanelVisible, setPerformancePanelVisible] = useState(true)
   const [browsingOrigin, setBrowsingOrigin] = useState<BrowsingOrigin | null>(null)
   const [resolvingMedia, setResolvingMedia] = useState<{
     id: string
@@ -624,6 +618,23 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       // covers exactly that gap.
       const source = media ?? entry?.media
       if (!api || !source) return
+      // A series/anime title has no single valid watched/unwatched key
+      // without a real episode to attach it to — see ContextMenu.tsx's own
+      // guard on this, which is the normal caller and where the person
+      // actually gets told why (this function runs well before
+      // pushNotification is in scope in this component — see its own
+      // comment further down — so this backstop stays silent, same as the
+      // `!api || !source` guard right above it). Without this, a future
+      // caller missing that same check would write a bogus `id:movie:movie`
+      // history row (and an equally bogus Simkl entry) instead of tracking
+      // anything real. Movies are unaffected — season/episode were never
+      // meaningful for them.
+      if (
+        source.mediaType !== 'movie' &&
+        (source.seasonNumber == null || source.episodeNumber == null)
+      ) {
+        return
+      }
       const item = mediaItemToTrackablePayload(source)
       const playback = { season: source.seasonNumber, episode: source.episodeNumber }
       const call = watched ? api.tracking.markWatched : api.tracking.unmarkWatched
@@ -1522,8 +1533,6 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       clearCategorySearch,
       pushNotification,
       dismissNotification,
-      performancePanelVisible,
-      setPerformancePanelVisible,
       browsingOrigin,
       openDetail,
       clearBrowsingOrigin,
@@ -1607,7 +1616,6 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       clearCategorySearch,
       pushNotification,
       dismissNotification,
-      performancePanelVisible,
       browsingOrigin,
       openDetail,
       clearBrowsingOrigin,
