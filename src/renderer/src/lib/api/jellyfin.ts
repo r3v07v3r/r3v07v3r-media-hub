@@ -36,10 +36,17 @@ function authHeaders(config: ServiceConfig): Record<string, string> {
 
 export async function testConnection(config: ServiceConfig): Promise<ConnectionTestResult> {
   if (!config.baseUrl.trim()) return { ok: false, message: 'Server URL is required' }
+  if (!config.apiKey.trim()) return { ok: false, message: 'API Key is required' }
   const base = normalizeBaseUrl(config.baseUrl)
+  // /System/Info/Public is deliberately unauthenticated (Jellyfin exposes it
+  // so a login screen can show the server name pre-auth) — it returns 200
+  // regardless of whether the API key is valid, so it can never actually
+  // test the credential. /System/Info is the same shape but requires a
+  // valid token, which is the whole point of a "Test connection" button.
   const res = await proxyFetch<JellyfinSystemInfo>({
-    url: `${base}/System/Info/Public`,
-    method: 'GET'
+    url: `${base}/System/Info`,
+    method: 'GET',
+    headers: authHeaders(config)
   })
   if (!res.ok)
     return { ok: false, message: res.error ?? `Server responded with status ${res.status}` }
