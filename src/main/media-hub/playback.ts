@@ -153,6 +153,42 @@ export function createPlaybackProxy({
     throw new Error('Playback source redirected too many times.')
   }
 
+  // vlc.ts's ffmpeg transcoder gets `-reconnect`/`-reconnect_on_network_error`
+  // for exactly this reason ("Streaming/debrid sources can drop the
+  // connection briefly under load"), but that protection never covered
+  // direct/proxied playback (no ffmpeg involved) — every distinct byte
+  // range Chromium's <video> element asks for is its own fresh request
+  // through this proxy, and a single failed upstream fetch here (before
+  // any response has gone to the client) turned straight into a 502,
+  // which the <video> element surfaces as a hard error that closes the
+  // whole player — a transient blip on the MORE common playback path
+  // (direct/proxied is used whenever a title doesn't need transcoding)
+  // forcing a full "click Play again" restart, exactly the kind of
+  // failure ffmpeg's own reconnect flags exist to absorb on its path.
+  // Bounded to the pre-response window only: once headers are already
+  // sent, a failure has to surface immediately (see the caller) — there is
+  // no way to retry a fetch whose response Chromium has already started
+  // consuming without a Range-aware resume this proxy doesn't implement.
+  async function fetchUpstreamWithRetry(
+    remoteUrl: string,
+    options: RequestInit
+  ): Promise<Response> {
+    const attempts = 3
+    for (let attempt = 1; attempt <= attempts; attempt++) {
+      try {
+        return await safeFetch(remoteUrl, options)
+      } catch (error) {
+        const isLastAttempt = attempt === attempts
+        const aborted = (error as { name?: string } | undefined)?.name === 'AbortError'
+        if (aborted || isLastAttempt) throw error
+        await new Promise((resolve) => setTimeout(resolve, 300 * attempt))
+      }
+    }
+    // Unreachable — the loop above always returns or throws — but keeps
+    // this function's return type honest without a non-null assertion.
+    throw new Error('Playback source could not be reached.')
+  }
+
   async function listen(): Promise<void> {
     if (server) return
     server = http.createServer(async (req: IncomingMessage, res: ServerResponse) => {
@@ -175,7 +211,10 @@ export function createPlaybackProxy({
         if (req.headers.range) headers.Range = req.headers.range as string
         const controller = new AbortController()
         res.on('close', () => controller.abort())
-        const upstream = await safeFetch(session.remoteUrl, { headers, signal: controller.signal })
+        const upstream = await fetchUpstreamWithRetry(session.remoteUrl, {
+          headers,
+          signal: controller.signal
+        })
         if (!isAllowedRemoteMediaUrl(upstream.url || session.remoteUrl)) {
           res.writeHead(502, { 'cache-control': 'no-store' })
           res.end()
