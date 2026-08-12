@@ -53,6 +53,7 @@ export function publicSettings(settings: Record<string, unknown> = {}): MediaHub
     videoTranscodeEnabled: settings.videoTranscodeEnabled === true,
     maxStreamResolution: Number(settings.maxStreamResolution) || 0,
     maxStreamSizeGb: Number(settings.maxStreamSizeGb) || 0,
+    streamCacheMaxGb: Number(settings.streamCacheMaxGb) || 0,
     connectionSpeedMbps:
       Number(settings.connectionSpeedMbps) > 0 ? Number(settings.connectionSpeedMbps) : undefined,
     hideWatchedDefault: settings.hideWatchedDefault === true,
@@ -81,6 +82,7 @@ export function logoutSettings(
   | 'videoTranscodeEnabled'
   | 'maxStreamResolution'
   | 'maxStreamSizeGb'
+  | 'streamCacheMaxGb'
   | 'connectionSpeedMbps'
   | 'hideWatchedDefault'
   | 'hideCompletedDefault'
@@ -96,6 +98,7 @@ export function logoutSettings(
     videoTranscodeEnabled: settings.videoTranscodeEnabled === true,
     maxStreamResolution: Number(settings.maxStreamResolution) || 0,
     maxStreamSizeGb: Number(settings.maxStreamSizeGb) || 0,
+    streamCacheMaxGb: Number(settings.streamCacheMaxGb) || 0,
     connectionSpeedMbps:
       Number(settings.connectionSpeedMbps) > 0 ? Number(settings.connectionSpeedMbps) : undefined,
     hideWatchedDefault: settings.hideWatchedDefault === true,

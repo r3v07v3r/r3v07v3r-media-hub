@@ -991,7 +991,7 @@ export function PlaybackOverlay() {
         if (isFullscreen) {
           handleToggleFullscreen()
         } else {
-          stopPlayback()
+          stopPlayback(markedWatchedRef.current)
         }
       }
       if (e.key === ' ') {
@@ -1743,7 +1743,7 @@ export function PlaybackOverlay() {
             message:
               'Playback stopped unexpectedly and could not continue. Try playing again — a different audio track may avoid the issue.'
           })
-          stopPlayback()
+          stopPlayback(markedWatchedRef.current)
         }}
       >
         {activeSubtitleTrackUrl && (
@@ -1791,7 +1791,7 @@ export function PlaybackOverlay() {
         ref={closeRef}
         type="button"
         className={styles.playbackClose}
-        onClick={stopPlayback}
+        onClick={() => stopPlayback(markedWatchedRef.current)}
         aria-label="Close playback"
       >
         <Icon name="x" size={17} />
@@ -1947,29 +1947,43 @@ export function PlaybackOverlay() {
               <div className={styles.playerMenu}>
                 <div className={styles.playerMenuHeading}>Embedded</div>
                 {subtitleTracks.length === 0 && <span className={styles.playerMenuItem}>None</span>}
-                {subtitleTracks.map((t) => {
-                  const isTextBased = TEXT_SUBTITLE_CODECS.has(t.codec.toLowerCase())
-                  const isExtracting = extractingSubtitleOrdinal === t.ordinal
-                  return (
-                    <button
-                      key={t.ordinal}
-                      type="button"
-                      className={styles.playerMenuItem}
-                      onClick={() => applyEmbeddedSubtitle(t)}
-                      disabled={!isTextBased || extractingSubtitleOrdinal !== null}
-                      title={
-                        isTextBased ? undefined : 'Image-based subtitle format — not supported'
-                      }
-                    >
-                      {/* Honest about the wait: pulling an embedded track
-                          out means demuxing the whole remote file, which
-                          on a large one is tens of seconds, not instant.
-                          Saying "Loading…" alone reads as a hang. */}
-                      {isExtracting ? `Extracting “${t.label}” — this can take a while…` : t.label}
-                      {!isTextBased && ' (unsupported)'}
-                    </button>
-                  )
-                })}
+                {/* Extracting an embedded track needs the WHOLE file locally
+                    cached (cues are interleaved throughout the container —
+                    see streamCache.ts/extractSubtitleTracksBatch) — a cache
+                    size too small for this title's file means it can never
+                    become available, not just slow, so it's greyed out
+                    upfront rather than letting a click silently fail or (the
+                    bug this whole cache exists to fix) reopen a second
+                    connection to the debrid link to read past what's cached. */}
+                {subtitleTracks.length > 0 && !result?.embeddedSubtitlesAvailable && (
+                  <span className={styles.playerMenuItem} title="Settings → Stream cache size">
+                    Increase the stream cache size in Settings to enable embedded subtitles
+                  </span>
+                )}
+                {result?.embeddedSubtitlesAvailable &&
+                  subtitleTracks.map((t) => {
+                    const isTextBased = TEXT_SUBTITLE_CODECS.has(t.codec.toLowerCase())
+                    const isExtracting = extractingSubtitleOrdinal === t.ordinal
+                    return (
+                      <button
+                        key={t.ordinal}
+                        type="button"
+                        className={styles.playerMenuItem}
+                        onClick={() => applyEmbeddedSubtitle(t)}
+                        disabled={!isTextBased || extractingSubtitleOrdinal !== null}
+                        title={
+                          isTextBased ? undefined : 'Image-based subtitle format — not supported'
+                        }
+                      >
+                        {/* Honest about the wait: pulling an embedded track
+                            out means demuxing the whole cached file, which
+                            on a large one is tens of seconds, not instant.
+                            Saying "Loading…" alone reads as a hang. */}
+                        {isExtracting ? `Extracting “${t.label}” — this can take a while…` : t.label}
+                        {!isTextBased && ' (unsupported)'}
+                      </button>
+                    )
+                  })}
                 <div className={styles.playerMenuHeading}>OpenSubtitles</div>
                 {subtitleResults === null && (
                   <span className={styles.playerMenuItem}>Searching…</span>

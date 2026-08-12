@@ -20,6 +20,7 @@ export const MEDIA_HUB_CHANNELS = {
   settingsSetPerformancePanelVisible: 'mediahub:settings:set-performance-panel-visible',
   settingsSetVideoTranscode: 'mediahub:settings:set-video-transcode',
   settingsSetStreamLimits: 'mediahub:settings:set-stream-limits',
+  settingsSetStreamCacheSize: 'mediahub:settings:set-stream-cache-size',
   settingsSetPartyDisplayName: 'mediahub:settings:set-party-display-name',
   settingsSetHideDefaults: 'mediahub:settings:set-hide-defaults',
   logout: 'mediahub:account:logout',

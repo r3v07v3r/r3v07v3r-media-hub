@@ -180,12 +180,15 @@ app.whenReady().then(() => {
   })
 })
 
-// media-hub cleanup: stop any in-flight playback (closes the playback
-// proxy + kills a running VLC transcoder), leave/close any active Watch
-// Party, and close the SQLite handle. Ported from the original app's
-// `before-quit` handler.
+// media-hub cleanup: stop any in-flight playback (closes StreamCache +
+// kills a running ffmpeg transcoder), leave/close any active Watch Party,
+// and close the SQLite handle. Ported from the original app's `before-quit`
+// handler. deleteCache=true here (unlike an ordinary close mid-session,
+// which leaves the cache for a likely near-term resume — see
+// playbackSession.ts's stopPlayback): there's no future session left to
+// resume into once the app has actually quit.
 app.on('before-quit', () => {
-  stopPlayback().catch(() => {})
+  stopPlayback(true).catch(() => {})
   closeParty()
   try {
     getDatabase().close()

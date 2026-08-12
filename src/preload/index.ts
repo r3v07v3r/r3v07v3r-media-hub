@@ -173,6 +173,8 @@ const api = {
         connectionSpeedMbps?: number
       }): Promise<MediaHubSettingsSnapshot> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.settingsSetStreamLimits, limits),
+      setStreamCacheSize: (streamCacheMaxGb: number): Promise<{ streamCacheMaxGb: number }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.settingsSetStreamCacheSize, { streamCacheMaxGb }),
       setPartyDisplayName: (name: string): Promise<{ partyDisplayName: string }> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.settingsSetPartyDisplayName, name),
       setHideDefaults: (
@@ -317,7 +319,8 @@ const api = {
         engine: string
         compatibility: true
       }> => ipcRenderer.invoke(MEDIA_HUB_CHANNELS.playbackSelectTracks, selection),
-      stop: (): Promise<{ ok: true }> => ipcRenderer.invoke(MEDIA_HUB_CHANNELS.playbackStop),
+      stop: (options?: { watched?: boolean }): Promise<{ ok: true }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.playbackStop, options),
       thumbnail: (seconds: number): Promise<string | null> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.playbackThumbnail, seconds),
       skipTimes: (

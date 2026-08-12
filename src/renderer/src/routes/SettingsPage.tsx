@@ -45,6 +45,19 @@ const SIZE_OPTIONS = [
   { value: '10', label: '10 GB' },
   { value: '20', label: '20 GB' }
 ]
+// Floor matches streamCache.ts's own MIN_CACHE_BYTES (1.5GB, enforced
+// server-side regardless of what's picked here) — 2GB is the smallest
+// preset actually offered, comfortably above that floor. 0 = unbounded/
+// drive-limited (still subject to a free-space safety margin), not "off" —
+// the cache always runs, this only bounds how much disk it can use.
+const STREAM_CACHE_SIZE_OPTIONS = [
+  { value: '2', label: '2 GB' },
+  { value: '5', label: '5 GB' },
+  { value: '10', label: '10 GB' },
+  { value: '20', label: '20 GB' },
+  { value: '50', label: '50 GB' },
+  { value: '0', label: 'Unlimited' }
+]
 
 // ISO 639-1 codes accepted by OpenSubtitles' `languages` search param (and
 // by appIpc.ts's own subtitleLanguage validator regex) — the six most
@@ -609,6 +622,14 @@ export default function SettingsPage() {
       )
   }
 
+  async function setStreamCacheSize(streamCacheMaxGb: number) {
+    const api = window.api?.mediaHub
+    if (api)
+      await saveSetting('settings.stream-cache-size', () =>
+        api.settings.setStreamCacheSize(streamCacheMaxGb)
+      )
+  }
+
   async function runSpeedTest() {
     const api = window.api?.mediaHub
     if (!api) return
@@ -804,6 +825,14 @@ export default function SettingsPage() {
                 onChange={(value) =>
                   setStreamLimits(mediaHubSettings?.maxStreamResolution ?? 0, Number(value))
                 }
+              />
+              <SegmentedRow
+                icon="downloads"
+                title="Stream cache size"
+                description="How much local disk playback can use to buffer ahead and rewind without reopening a connection to the source. Larger also enables extracting embedded subtitle tracks, which needs the whole file cached."
+                value={String(mediaHubSettings?.streamCacheMaxGb ?? 10)}
+                options={STREAM_CACHE_SIZE_OPTIONS}
+                onChange={(value) => setStreamCacheSize(Number(value))}
               />
               <div className={styles.row}>
                 <div className={styles.rowIcon} aria-hidden="true">

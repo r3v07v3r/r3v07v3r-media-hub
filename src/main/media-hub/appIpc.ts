@@ -144,6 +144,23 @@ export function registerAppIpc(): void {
     }
   })
 
+  // Presets shown by SettingsPage's cache-size row; 0 is "unbounded/drive-
+  // limited" (still subject to streamCache.ts's own free-space safety
+  // margin), not "off" — the feature always runs, this only bounds it.
+  // Anything below streamCache.ts's own MIN_CACHE_BYTES floor is clamped
+  // up server-side there regardless of what's requested here.
+  handle<{ streamCacheMaxGb?: number }, { streamCacheMaxGb: number }>(
+    MEDIA_HUB_CHANNELS.settingsSetStreamCacheSize,
+    (_event, value) => {
+      const settings = readSettings()
+      const presets = new Set([0, 2, 5, 10, 20, 50])
+      const requested = Number(value?.streamCacheMaxGb)
+      if (presets.has(requested)) settings.streamCacheMaxGb = requested
+      writeSettings(settings)
+      return { streamCacheMaxGb: Number(settings.streamCacheMaxGb) || 0 }
+    }
+  )
+
   handle<unknown, { partyDisplayName: string }>(
     MEDIA_HUB_CHANNELS.settingsSetPartyDisplayName,
     (_event, value) => {
@@ -185,7 +202,10 @@ export function registerAppIpc(): void {
   })
 
   handle<undefined, { ok: true }>(MEDIA_HUB_CHANNELS.logout, async () => {
-    await stopPlayback()
+    // deleteCache=true: whatever was playing belonged to the account
+    // that's about to be logged out of, same reasoning as before-quit in
+    // main/index.ts — no session left to resume the cache into.
+    await stopPlayback(true)
     writeSettings(logoutSettings(readSettings()))
     return { ok: true }
   })
