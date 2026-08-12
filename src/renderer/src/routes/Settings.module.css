@@ -151,23 +151,20 @@
    in column 2 inflated row 1's height for column 1 too — leaving a huge
    gap under whatever short card happened to land in column 1's row 1 (e.g.
    "About & Updates" sitting well above "Performance & Display", found live
-   on the Settings page). Multi-column layout has no such shared tracks:
+   on the Settings page). flex-flow:column wrap has no such shared tracks:
    each column fills independently from its own content, so cards pack
-   snugly and only the balanced column-to-column height varies. */
+   snugly and only the balanced column-to-column height varies.
+   (A CSS multi-column layout — column-width/columns — was tried here first
+   and reverted: see useColumnPackGrid in SettingsPage.tsx for why neither
+   it nor plain flex-wrap can be left to size this box on their own, and
+   why the width below is set imperatively instead.) */
 .groupGrid {
   flex: 1;
   min-height: 0;
-  column-width: 380px;
-  column-gap: 14px;
-}
-
-.groupGridWide {
-  column-width: 400px;
-}
-
-.groupGrid > * {
-  break-inside: avoid;
-  margin-bottom: 14px;
+  display: flex;
+  flex-flow: column wrap;
+  align-content: flex-start;
+  gap: 14px;
 }
 
 .section {
@@ -186,6 +183,22 @@
   box-shadow: 0 14px 36px rgba(0, 0, 0, 0.16);
 }
 
+/* Must win over .section's own `width: 100%` — same specificity (one
+   class), so source order is the tiebreak, and this needs to come after.
+   Without it, each card stretches to 100% of .groupGrid's own width,
+   which useColumnPackGrid (SettingsPage.tsx) briefly sets to a large
+   scratch value while measuring — every card would then claim a whole
+   scratch-sized column of its own instead of the intended fixed
+   380/400px, and the measured "tight" width would balloon accordingly. */
+.groupGrid > * {
+  flex: 0 0 auto;
+  width: 380px;
+}
+
+.groupGridWide > * {
+  width: 400px;
+}
+
 @media (max-width: 1250px) {
   .pageHeader {
     align-items: flex-start;
@@ -202,9 +215,9 @@
     gap: 12px;
   }
 
-  .groupGrid,
-  .groupGridWide {
-    column-width: 350px;
+  .groupGrid > *,
+  .groupGridWide > * {
+    width: 350px;
   }
 }
 
