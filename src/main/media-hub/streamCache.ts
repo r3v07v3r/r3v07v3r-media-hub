@@ -597,6 +597,20 @@ export function createStreamCache({
   function seekHint(targetSeconds: number): void {
     const targetByte = byteForSeconds(targetSeconds)
     if (targetByte === undefined) return
+    // Move the retention window's center to the intended new playhead
+    // RIGHT NOW, synchronously — not only once ffmpeg's restarted process
+    // eventually issues a request that lands in serveRange. Without this,
+    // chunks runFill downloads at the new target get deleted by
+    // evictOutsideRetained() (still centered on the OLD position, since
+    // nothing told it the playhead is about to move) almost as fast as
+    // they're written. Found live: seeking forward played video but lost
+    // audio — video kept retrying its way to a chunk that survived just
+    // long enough, audio apparently didn't. Deliberately NOT done inside
+    // reposition() itself: that function also runs for incidental
+    // out-of-window reads (e.g. ffmpeg jumping to read Matroska Cues near
+    // EOF for its OWN seek-index purposes) that are not the real playhead
+    // and must not drag the retention window away from it.
+    highWatermarkByte = targetByte
     if (chunks.get(chunkIndexForByte(targetByte)) === 'ready') return
     if (isNearFillFrontier(targetByte)) return
     void reposition(chunkIndexForByte(targetByte) * CHUNK_BYTES)
