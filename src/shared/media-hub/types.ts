@@ -215,6 +215,8 @@ export interface PlaybackResult {
   autoReason?: string
   /** Set when the source video's own codec (e.g. HEVC) is one Chromium's software decoder doesn't reliably handle — video is only ever stream-copied here, never transcoded, so this can't be fixed server-side yet. Surfaced as an upfront warning rather than letting the person hit an unexplained mid-stream decode crash. */
   videoCodecWarning?: string
+  /** Set when ffprobe couldn't read this source's track info even after probeMedia's retry (tracks.probed is false) — audio-codec compatibility detection and the audio/subtitle track menus both depend on that data, so this playback is likely to have no sound and no track options. Surfaced upfront since that combination otherwise looks like silent, unexplained breakage rather than a one-off probe failure worth retrying. */
+  tracksWarning?: string
   /** Present whenever the source is 1080p or below, independent of videoCodecWarning/compatibility above — see UpscaleSuggestion. */
   upscaleSuggestion?: UpscaleSuggestion
   /** What is actually being played right now: which audio ordinal, which

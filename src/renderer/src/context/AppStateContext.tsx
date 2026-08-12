@@ -1087,6 +1087,13 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         if (played.videoCodecWarning) {
           pushNotification({ tone: 'warning', message: played.videoCodecWarning })
         }
+        // See preparePlayback's own comment: ffprobe failed even after its
+        // internal retry, so audio/subtitle track info is missing for this
+        // whole session — surfaced now rather than leaving silent no-sound,
+        // no-menu playback with no explanation.
+        if (played.tracksWarning) {
+          pushNotification({ tone: 'warning', message: played.tracksWarning })
+        }
         return true
       } catch (error) {
         if (error instanceof PlaybackPreparationCancelledError) return false

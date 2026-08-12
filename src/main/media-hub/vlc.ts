@@ -460,14 +460,12 @@ export interface ExecFileImplOptions {
   timeout?: number
 }
 
-export function probeMedia(
+function probeMediaOnce(
   ffprobePath: string,
   remoteUrl: string,
-  { execFileImpl = execFile, timeout = 15000 }: ExecFileImplOptions = {}
-): Promise<MediaTracks> {
-  if (!ffprobePath || !isAllowedRemoteMediaUrl(remoteUrl)) {
-    return Promise.resolve({ video: [], audio: [], subtitle: [], probed: false })
-  }
+  execFileImpl: typeof execFile,
+  timeout: number
+): Promise<MediaTracks | null> {
   return new Promise((resolve) => {
     execFileImpl(
       ffprobePath,
@@ -482,15 +480,51 @@ export function probeMedia(
       ],
       { windowsHide: true, timeout, maxBuffer: 4 * 1024 * 1024 },
       (error, stdout) => {
-        if (error) return resolve({ video: [], audio: [], subtitle: [], probed: false })
+        if (error) return resolve(null)
         try {
           resolve(parseMediaTracks(JSON.parse(String(stdout)) as FfprobePayload))
         } catch {
-          resolve({ video: [], audio: [], subtitle: [], probed: false })
+          resolve(null)
         }
       }
     )
   })
+}
+
+export async function probeMedia(
+  ffprobePath: string,
+  remoteUrl: string,
+  { execFileImpl = execFile, timeout = 15000 }: ExecFileImplOptions = {}
+): Promise<MediaTracks> {
+  if (!ffprobePath || !isAllowedRemoteMediaUrl(remoteUrl)) {
+    return { video: [], audio: [], subtitle: [], probed: false }
+  }
+  // One retry, same as torbox.ts's resolveDownloadUrl — a debrid link
+  // freshly handed off from requestdl routinely isn't quite servable yet
+  // (a slow/refused first connection, not a real timeout), and ffprobe
+  // failing on that first attempt looks identical to a genuinely dead
+  // link from here. Silently returning empty tracks on a transient miss
+  // used to mean the player fell back to direct playback with NO known
+  // audio track — audio, subtitles, and their whole selection menus all
+  // vanish with no error to explain why, since everything downstream keys
+  // off `tracks.audio`/`tracks.subtitle` being non-empty (see
+  // needsAudioCompatibility and preparePlayback's own selection below).
+  //
+  // The retry shares the SAME overall `timeout` budget rather than getting
+  // a fresh one — AppStateContext.tsx's 90s startPlayback deadline was
+  // already sized around probeMedia taking at most `timeout`, and doubling
+  // that unconditionally could tip a slow title (probe near the ceiling,
+  // then a forced video re-encode) over that deadline. A link that burns
+  // the whole budget on attempt one (a genuinely dead/very slow link) gets
+  // no retry; a fast failure (the freshly-issued-link case above) leaves
+  // most of the budget for a real second attempt.
+  const startedAt = Date.now()
+  const first = await probeMediaOnce(ffprobePath, remoteUrl, execFileImpl, timeout)
+  if (first) return first
+  const remaining = timeout - (Date.now() - startedAt)
+  if (remaining < 2000) return { video: [], audio: [], subtitle: [], probed: false }
+  const second = await probeMediaOnce(ffprobePath, remoteUrl, execFileImpl, remaining)
+  return second ?? { video: [], audio: [], subtitle: [], probed: false }
 }
 
 export function findFfmpeg(): string {
