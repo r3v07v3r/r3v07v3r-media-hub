@@ -206,6 +206,14 @@ export async function preparePlayback(url: string): Promise<PlaybackResult> {
   activeVideoEncoderReason = undefined
   activeUpscaleHeight = undefined
   const videoCodecWarning = videoCodecCompatibilityWarning(activeMediaTracks)
+  // probeMedia already retries once internally — reaching here with
+  // `probed: false` means both attempts failed, so audio-codec detection
+  // below has nothing to work with and silently takes the "no compatibility
+  // issue found" branch. Told upfront rather than leaving no sound/no track
+  // menus with no explanation (see probeMedia's own comment).
+  const tracksWarning = activeMediaTracks.probed
+    ? undefined
+    : "Couldn't read this file's audio/subtitle track info — playback may have no sound or subtitle options. Try playing again."
   if (
     videoCodecWarning &&
     ffmpegPath &&
@@ -279,6 +287,7 @@ export async function preparePlayback(url: string): Promise<PlaybackResult> {
       // to warn about it too — still surfaced when audio-only compatibility
       // mode ran instead (opted out, or no working hardware encoder found).
       videoCodecWarning: activeVideoEncoder ? undefined : videoCodecWarning,
+      tracksWarning,
       upscaleSuggestion,
       ...started
     }
@@ -297,6 +306,7 @@ export async function preparePlayback(url: string): Promise<PlaybackResult> {
     // menu can mark the track actually being heard.
     selection: { audio: selectTranscodeAudioTrack(activeMediaTracks, audioLanguage)?.ordinal },
     videoCodecWarning,
+    tracksWarning,
     upscaleSuggestion,
     url: await playbackProxy.register(url)
   }
