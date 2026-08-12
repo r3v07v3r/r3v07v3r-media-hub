@@ -146,20 +146,28 @@
   line-height: 1.5;
 }
 
+/* A CSS Grid's row tracks are shared across every column, so with the
+   previous grid-auto-flow:column + fixed-row-count approach, one tall card
+   in column 2 inflated row 1's height for column 1 too — leaving a huge
+   gap under whatever short card happened to land in column 1's row 1 (e.g.
+   "About & Updates" sitting well above "Performance & Display", found live
+   on the Settings page). Multi-column layout has no such shared tracks:
+   each column fills independently from its own content, so cards pack
+   snugly and only the balanced column-to-column height varies. */
 .groupGrid {
   flex: 1;
   min-height: 0;
-  display: grid;
-  grid-auto-flow: column;
-  grid-template-rows: repeat(2, max-content);
-  grid-auto-columns: 380px;
-  align-content: start;
-  align-items: start;
-  gap: 14px;
+  column-width: 380px;
+  column-gap: 14px;
 }
 
 .groupGridWide {
-  grid-auto-columns: 400px;
+  column-width: 400px;
+}
+
+.groupGrid > * {
+  break-inside: avoid;
+  margin-bottom: 14px;
 }
 
 .section {
@@ -191,33 +199,12 @@
 
   .settingsGroup {
     min-width: 720px;
-  }
-
-  .groupGrid,
-  .groupGridWide {
-    grid-auto-columns: 350px;
-  }
-}
-
-@media (max-width: 1250px) {
-  .pageHeader {
-    align-items: flex-start;
-    flex-direction: column;
-    gap: 14px;
-  }
-
-  .categoryNav {
-    max-width: 100%;
-  }
-
-  .settingsGroup {
-    grid-template-columns: 1fr;
     gap: 12px;
   }
 
   .groupGrid,
   .groupGridWide {
-    grid-template-columns: 1fr;
+    column-width: 350px;
   }
 }
 
@@ -629,10 +616,8 @@
 }
 
 .serviceNotice {
-  grid-row: 1 / -1;
-  align-self: start;
   max-width: 280px;
-  margin: 0;
+  margin: 0 0 14px;
   padding: 12px 14px;
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-medium);
