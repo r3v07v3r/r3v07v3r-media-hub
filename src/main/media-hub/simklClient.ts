@@ -63,6 +63,8 @@ export async function simklPublicRequest<T = unknown>(
   })
 }
 
+const WATCHED_HISTORY_CACHE_KEY = 'simkl:watched:v1'
+
 /**
  * Flattened, cached view of everything Simkl reports as watched for the
  * connected account (movies + show episodes). Returns `[]` (not an error)
@@ -72,7 +74,7 @@ export async function simklPublicRequest<T = unknown>(
  */
 export async function simklWatchedHistory(): Promise<HistoryEntry[]> {
   if (!simklCredentials().accessToken) return []
-  const key = 'simkl:watched:v1'
+  const key = WATCHED_HISTORY_CACHE_KEY
   const db = getDatabase()
   const cached = db.getCache<HistoryEntry[]>(key)
   if (cached) return cached
@@ -91,4 +93,21 @@ export async function simklWatchedHistory(): Promise<HistoryEntry[]> {
     logError('simkl:watched-history', error)
     return db.getCache<HistoryEntry[]>(key, { allowExpired: true }) || []
   }
+}
+
+/**
+ * Forces the next simklWatchedHistory() call to refetch instead of reusing
+ * its 20-minute cache. Needed after a "keep local" reconcile resolution
+ * pushes a change to Simkl directly (bypassing this module's own request
+ * path) — without this, the stale cached snapshot still disagrees with the
+ * now-correct remote account, and the same discrepancy resurfaces on every
+ * later reconcile check until the cache happens to expire on its own.
+ * Rewrites the existing payload with an already-elapsed TTL rather than
+ * deleting it outright, so the error-path "fall back to stale cache"
+ * behavior above still has real data to fall back to if the refetch fails.
+ */
+export function invalidateSimklWatchedCache(): void {
+  const db = getDatabase()
+  const existing = db.getCache<HistoryEntry[]>(WATCHED_HISTORY_CACHE_KEY, { allowExpired: true })
+  db.putCache(WATCHED_HISTORY_CACHE_KEY, existing ?? [], 0)
 }

@@ -46,7 +46,12 @@ import {
   type PlaybackPosition,
   type SimklPushItem
 } from './simkl'
-import { simklRequest, simklUrl, simklWatchedHistory } from './simklClient'
+import {
+  invalidateSimklWatchedCache,
+  simklRequest,
+  simklUrl,
+  simklWatchedHistory
+} from './simklClient'
 
 /** Result of a single "push this watch-state change to Simkl" attempt, merged into every mark/unmark handler's response. */
 interface SimklSyncResult {
@@ -360,11 +365,19 @@ export function registerTrackingIpc(): void {
       if (resolution === 'use-local') {
         // Local's answer is the one to keep — push it to Simkl so the
         // remote side matches instead of drifting further.
-        if (discrepancy.localWatched) {
-          await syncSimklHistory('/sync/history', historyPayload(item))
-        } else {
-          await syncSimklHistory('/sync/history/remove', historyPayload(item))
-        }
+        const result = discrepancy.localWatched
+          ? await syncSimklHistory('/sync/history', historyPayload(item))
+          : await syncSimklHistory('/sync/history/remove', historyPayload(item))
+        // The push above bypasses simklWatchedHistory()'s own request path,
+        // so its 20-minute cache never learns about it. Left alone, the next
+        // reconcile check keeps comparing against the stale pre-push
+        // snapshot and re-reports the exact discrepancy this just resolved
+        // — every launch, until the cache happens to expire on its own. On
+        // failure, leave the cache as-is: it's still an accurate reflection
+        // of Simkl, and the discrepancy correctly resurfacing is how a
+        // failed resolve is meant to be retried (see AppStateContext's
+        // resolveSyncDiscrepancy comment).
+        if (result.simklSynced) invalidateSimklWatchedCache()
       } else {
         // Simkl's answer is the one to keep — update the local record to match.
         if (discrepancy.remoteWatched) db.markWatched(item)
