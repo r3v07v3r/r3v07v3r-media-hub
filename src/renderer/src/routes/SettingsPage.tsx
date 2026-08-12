@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { useAppState } from '@renderer/context/AppStateContext'
 import { Icon } from '@renderer/components/icons/Icon'
 import { useAsyncAction } from '@renderer/hooks/useAsyncAction'
@@ -448,8 +448,86 @@ function MoreOptionsSection() {
   )
 }
 
+/**
+ * Sizes one settings category's .groupGrid/.settingsGroup pair to exactly
+ * fit however many columns its cards actually pack into.
+ *
+ * .groupGrid is `display:flex; flex-flow:column wrap` (see
+ * Settings.module.css) so each column fills independently from its own
+ * content — no shared row tracks, no gap under a short card sitting next
+ * to a tall one. But flex-wrap's column count is inherently "however many
+ * fit in the available width," and .settingsGroup is a scroll container
+ * (overflow-y: auto — needed so an oversized category scrolls internally
+ * instead of blowing out the page). Per the CSS Sizing spec, a scroll
+ * container's intrinsic size (width:auto, or explicit max-content) is its
+ * own specified size, not whatever its content needs — that's the entire
+ * point of overflow:auto. Left alone, extra columns don't widen the
+ * category; they get silently clipped and trapped in a nested horizontal
+ * scrollbar next to the outer shelf's own scroll, invisible unless you go
+ * looking (caught in PR review on the change that introduced this
+ * masonry layout, confirmed live: "Media services" and "Accounts" both
+ * needed 3 columns and got capped at .settingsGroup's 780px min-width
+ * instead, hiding the rest of their cards off the right edge). A CSS
+ * multi-column layout (column-width) was tried first and hits the exact
+ * same wall for the exact same reason.
+ *
+ * A literal pixel width isn't an intrinsic-sizing keyword, so it isn't
+ * subject to that rule. This measures the real column-packed layout
+ * (briefly unconstrained by width, so flex-wrap finds its natural column
+ * count from the category's available height alone) and locks the result
+ * in as an explicit width on both the grid and its containing category —
+ * all inside useLayoutEffect, so the oversized scratch state it passes
+ * through is never painted.
+ */
+function useColumnPackGrid<TGroup extends HTMLElement = HTMLElement>() {
+  const gridRef = useRef<HTMLDivElement>(null)
+  const groupRef = useRef<TGroup>(null)
+
+  useLayoutEffect(() => {
+    const grid = gridRef.current
+    const group = groupRef.current
+    if (!grid || !group) return
+
+    function pack(): void {
+      const grid = gridRef.current
+      const group = groupRef.current
+      if (!grid || !group) return
+      const cards = Array.from(grid.children) as HTMLElement[]
+      if (!cards.length) return
+      // Scratch width: comfortably more than any real category could need,
+      // so every card lands in whatever column its height naturally puts
+      // it in, unclipped.
+      grid.style.width = `${Math.max(4000, cards.length * 500)}px`
+      const gridLeft = grid.getBoundingClientRect().left
+      const tight = Math.ceil(
+        Math.max(...cards.map((c) => c.getBoundingClientRect().right)) - gridLeft
+      )
+      grid.style.width = `${tight}px`
+      // +12: .settingsGroup's own padding-right (6px) plus a little slop
+      // for the scrollbar overflow-y:auto can introduce.
+      group.style.width = `${tight + 12}px`
+    }
+
+    pack()
+    window.addEventListener('resize', pack)
+    const observer = new MutationObserver(pack)
+    observer.observe(grid, { childList: true })
+    return () => {
+      window.removeEventListener('resize', pack)
+      observer.disconnect()
+    }
+  }, [])
+
+  return { gridRef, groupRef }
+}
+
 export default function SettingsPage() {
   const tileAreaRef = useRef<HTMLDivElement>(null)
+  const generalPack = useColumnPackGrid<HTMLElement>()
+  const playbackPack = useColumnPackGrid<HTMLElement>()
+  const servicesPack = useColumnPackGrid<HTMLElement>()
+  const accountsPack = useColumnPackGrid<HTMLElement>()
+  const communityPack = useColumnPackGrid<HTMLElement>()
   const {
     isOffline,
     setIsOffline,
@@ -611,6 +689,7 @@ export default function SettingsPage() {
       <div className={styles.tileArea} ref={tileAreaRef}>
         <section
           id="settings-general"
+          ref={generalPack.groupRef}
           className={styles.settingsGroup}
           aria-labelledby="settings-general-title"
         >
@@ -619,7 +698,7 @@ export default function SettingsPage() {
             <h2 id="settings-general-title">General</h2>
             <p>App updates, display preferences, and everyday behavior.</p>
           </header>
-          <div className={styles.groupGrid}>
+          <div ref={generalPack.gridRef} className={styles.groupGrid}>
             <AboutUpdateSection />
 
             <section className={`${styles.section} glass-panel`} aria-labelledby="settings-perf">
@@ -649,6 +728,7 @@ export default function SettingsPage() {
 
         <section
           id="settings-playback"
+          ref={playbackPack.groupRef}
           className={styles.settingsGroup}
           aria-labelledby="settings-playback-title"
         >
@@ -657,7 +737,7 @@ export default function SettingsPage() {
             <h2 id="settings-playback-title">Playback</h2>
             <p>Choose language, quality, and connection preferences.</p>
           </header>
-          <div className={styles.groupGrid}>
+          <div ref={playbackPack.gridRef} className={styles.groupGrid}>
             <section
               className={`${styles.section} glass-panel`}
               aria-labelledby="settings-subtitles"
@@ -775,6 +855,7 @@ export default function SettingsPage() {
 
         <section
           id="settings-services"
+          ref={servicesPack.groupRef}
           className={styles.settingsGroup}
           aria-labelledby="settings-services-title"
         >
@@ -783,7 +864,10 @@ export default function SettingsPage() {
             <h2 id="settings-services-title">Media services</h2>
             <p>Connect servers, download clients, and your streaming provider.</p>
           </header>
-          <div className={`${styles.groupGrid} ${styles.groupGridWide}`}>
+          <div
+            ref={servicesPack.gridRef}
+            className={`${styles.groupGrid} ${styles.groupGridWide}`}
+          >
             <MediaServicesSection />
             <TorBoxSection />
           </div>
@@ -791,6 +875,7 @@ export default function SettingsPage() {
 
         <section
           id="settings-accounts"
+          ref={accountsPack.groupRef}
           className={styles.settingsGroup}
           aria-labelledby="settings-accounts-title"
         >
@@ -799,7 +884,7 @@ export default function SettingsPage() {
             <h2 id="settings-accounts-title">Accounts &amp; metadata</h2>
             <p>Link discovery, tracking, artwork, and subtitle providers.</p>
           </header>
-          <div className={styles.groupGrid}>
+          <div ref={accountsPack.gridRef} className={styles.groupGrid}>
             <TmdbSection />
             <OmdbSection />
             <SimklSection />
@@ -810,6 +895,7 @@ export default function SettingsPage() {
 
         <section
           id="settings-community"
+          ref={communityPack.groupRef}
           className={styles.settingsGroup}
           aria-labelledby="settings-community-title"
         >
@@ -818,7 +904,7 @@ export default function SettingsPage() {
             <h2 id="settings-community-title">Community &amp; profiles</h2>
             <p>Set up shared viewing and choose who is watching.</p>
           </header>
-          <div className={styles.groupGrid}>
+          <div ref={communityPack.gridRef} className={styles.groupGrid}>
             <WatchPartySection />
             <R3PartySyncSection />
 
