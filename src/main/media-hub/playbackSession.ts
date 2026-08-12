@@ -207,13 +207,19 @@ export async function preparePlayback(url: string): Promise<PlaybackResult> {
   activeUpscaleHeight = undefined
   const videoCodecWarning = videoCodecCompatibilityWarning(activeMediaTracks)
   // probeMedia already retries once internally — reaching here with
-  // `probed: false` means both attempts failed, so audio-codec detection
-  // below has nothing to work with and silently takes the "no compatibility
-  // issue found" branch. Told upfront rather than leaving no sound/no track
-  // menus with no explanation (see probeMedia's own comment).
-  const tracksWarning = activeMediaTracks.probed
-    ? undefined
-    : "Couldn't read this file's audio/subtitle track info — playback may have no sound or subtitle options. Try playing again."
+  // `probed: false` while ffprobePath IS set means both attempts genuinely
+  // failed (a bad/slow link), so audio-codec detection below has nothing
+  // to work with and silently takes the "no compatibility issue found"
+  // branch. Told upfront rather than leaving no sound/no track menus with
+  // no explanation (see probeMedia's own comment). Gated on ffprobePath so
+  // this doesn't fire on every single title on a machine where ffprobe
+  // just isn't installed/bundled at all (findFfprobe returned '') — that's
+  // a standing environment gap "try playing again" can't fix, not a
+  // one-off transient failure worth telling anyone about per-title.
+  const tracksWarning =
+    activeMediaTracks.probed || !ffprobePath
+      ? undefined
+      : "Couldn't read this file's audio/subtitle track info — playback may have no sound or subtitle options. Try playing again."
   if (
     videoCodecWarning &&
     ffmpegPath &&

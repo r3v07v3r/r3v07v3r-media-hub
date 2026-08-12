@@ -509,9 +509,21 @@ export async function probeMedia(
   // vanish with no error to explain why, since everything downstream keys
   // off `tracks.audio`/`tracks.subtitle` being non-empty (see
   // needsAudioCompatibility and preparePlayback's own selection below).
+  //
+  // The retry shares the SAME overall `timeout` budget rather than getting
+  // a fresh one — AppStateContext.tsx's 90s startPlayback deadline was
+  // already sized around probeMedia taking at most `timeout`, and doubling
+  // that unconditionally could tip a slow title (probe near the ceiling,
+  // then a forced video re-encode) over that deadline. A link that burns
+  // the whole budget on attempt one (a genuinely dead/very slow link) gets
+  // no retry; a fast failure (the freshly-issued-link case above) leaves
+  // most of the budget for a real second attempt.
+  const startedAt = Date.now()
   const first = await probeMediaOnce(ffprobePath, remoteUrl, execFileImpl, timeout)
   if (first) return first
-  const second = await probeMediaOnce(ffprobePath, remoteUrl, execFileImpl, timeout)
+  const remaining = timeout - (Date.now() - startedAt)
+  if (remaining < 2000) return { video: [], audio: [], subtitle: [], probed: false }
+  const second = await probeMediaOnce(ffprobePath, remoteUrl, execFileImpl, remaining)
   return second ?? { video: [], audio: [], subtitle: [], probed: false }
 }
 
