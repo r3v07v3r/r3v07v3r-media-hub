@@ -219,6 +219,8 @@ export interface PlaybackResult {
   tracksWarning?: string
   /** Present whenever the source is 1080p or below, independent of videoCodecWarning/compatibility above — see UpscaleSuggestion. */
   upscaleSuggestion?: UpscaleSuggestion
+  /** Whether the configured stream-cache size (Settings > Stream cache size) is large enough to eventually hold this whole title locally — embedded-subtitle extraction needs the whole file (cues are interleaved throughout the container), so a small cache means it's never available for this title, not just slow. The player greys out the "Embedded" subtitle menu when this is false rather than letting a click silently fail or reopen a second connection to the debrid link. */
+  embeddedSubtitlesAvailable: boolean
   /** What is actually being played right now: which audio ordinal, which
    *  upscale height, where the current segment starts.
    *
@@ -422,6 +424,8 @@ export interface MediaHubPublicSettings {
   /** Upper bounds used when choosing a release. Zero means unrestricted. */
   maxStreamResolution: number
   maxStreamSizeGb: number
+  /** How much local disk the local rolling playback cache (streamCache.ts) may use — separate from maxStreamSizeGb above, which filters which releases get selected, not how they're cached once playing. Zero means unbounded/drive-limited (still subject to a free-space safety margin). */
+  streamCacheMaxGb: number
   /** Last measured downstream speed. Informational; the test is only run on demand. */
   connectionSpeedMbps?: number
   /** Last height the player's own quality menu was set to (see UpscaleSuggestion) — remembered so the next applicable title's suggestion defaults to it instead of always recomputing from screen size. Global to this install, not per-profile — same scope as every other setting here (playbackBuffer, videoTranscodeEnabled, etc.), which don't have per-profile scoping either. Undefined until the person has picked one at least once. */

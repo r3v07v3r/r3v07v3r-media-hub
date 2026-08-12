@@ -59,6 +59,7 @@ import { getPlaybackBufferSeconds } from '../../shared/media-hub/playbackBuffer'
 import { languageMatches } from '../../shared/media-hub/language'
 import { isAllowedRemoteMediaUrl } from './playback'
 import { readSettings } from './settingsStore'
+import { isOwnCacheUrl } from './streamCache'
 
 /** Compatibility-stream token: 64 lowercase hex chars, same shape as the playback-proxy token. */
 export function isValidCompatibilityToken(value: unknown): boolean {
@@ -75,8 +76,16 @@ function cleanSelection(value: unknown, fallback = -1): number {
  * copies video untouched, transcodes only audio to AAC, muxed into a
  * fragmented MP4 written to stdout (the caller pipes that to an HTTP
  * response — see createFfmpegTranscoder below). `remoteUrl` is
- * re-validated against `isAllowedRemoteMediaUrl` here as defense in depth
- * immediately before every spawn, same as the rest of this file.
+ * re-validated here as defense in depth immediately before every spawn,
+ * same as the rest of this file — either a genuine public HTTPS media URL
+ * (`isAllowedRemoteMediaUrl`), or streamCache.ts's own local loopback
+ * server (`isOwnCacheUrl`), which every ffmpeg invocation now actually
+ * targets (see preparePlayback in playbackSession.ts). The loopback
+ * exception is deliberately narrow: `isOwnCacheUrl` only accepts a token
+ * StreamCache itself minted and currently has registered — a bare
+ * `127.0.0.1` shape match alone is never sufficient. This is the one place
+ * in the stream-cache feature that touches the app's SSRF boundary; do not
+ * widen it without re-auditing against playback.ts's own header comment.
  */
 export function buildFfmpegArguments(
   remoteUrl: string,
@@ -84,7 +93,7 @@ export function buildFfmpegArguments(
   videoEncoder?: string,
   targetHeight?: number
 ): string[] {
-  if (!isAllowedRemoteMediaUrl(remoteUrl)) {
+  if (!isAllowedRemoteMediaUrl(remoteUrl) && !isOwnCacheUrl(remoteUrl)) {
     throw new Error('Compatibility mode requires a valid HTTPS media URL.')
   }
 
@@ -574,7 +583,7 @@ export function captureFrame(
 ): Promise<string | null> {
   if (
     !ffmpegPath ||
-    !isAllowedRemoteMediaUrl(remoteUrl) ||
+    (!isAllowedRemoteMediaUrl(remoteUrl) && !isOwnCacheUrl(remoteUrl)) ||
     !Number.isFinite(seconds) ||
     seconds < 0
   ) {
@@ -624,11 +633,12 @@ export const TEXT_SUBTITLE_CODECS = new Set([
 ])
 
 /**
- * Pulls one embedded subtitle stream out of the remote source and converts
- * it to WebVTT text via ffmpeg's own muxer — no video re-encoding, no
- * compatibility-mode restart involved. This is genuinely the fix for a
- * real dead-end found live: PlaybackOverlay's "Embedded" subtitle menu
- * used to call playback:select-tracks (the ffmpeg-restart path), but
+ * Pulls every text-based embedded subtitle stream out of the source and
+ * converts each to WebVTT text via ffmpeg's own muxer, in ONE ffmpeg
+ * invocation — no video re-encoding, no compatibility-mode restart
+ * involved. This is genuinely the fix for a real dead-end found live:
+ * PlaybackOverlay's "Embedded" subtitle menu used to call
+ * playback:select-tracks (the ffmpeg-restart path), but
  * buildFfmpegArguments never actually read `selection.subtitle` at all —
  * see this file's own header comment on why embedded subtitle *burning*
  * was removed when compatibility mode switched to `-c:v copy` (that
@@ -639,42 +649,75 @@ export const TEXT_SUBTITLE_CODECS = new Set([
  * mechanism the OpenSubtitles flow already uses, instead of trying to
  * burn it into the transcode.
  *
- * `ordinal` is this stream's position among *subtitle* streams only (the
+ * `ordinals` are each stream's position among *subtitle* streams only (the
  * same convention `-map 0:a:N` already uses for audio elsewhere in this
  * file) — matches MediaTrack.ordinal from parseMediaTracks below.
  *
- * Unlike captureFrame's `-frames:v 1` early-exit, there's no way to bail
- * out early here: ffmpeg has to demux through the *entire* remote file to
- * collect every subtitle cue, since containers interleave all their
- * streams together rather than storing each one contiguously. On a fast
- * cached/debrid link this is normally well under a minute; the generous
- * timeout below is a backstop for a genuinely slow connection, not the
- * expected case.
+ * Batched rather than one call per track: subtitle cues are interleaved
+ * throughout the container, so extracting even ONE track means ffmpeg has
+ * to demux through the entire file — doing that once for every track
+ * instead of once per track is the whole point (each `-map`/`-f webvtt`
+ * pair writes to its own extra pipe fd, all from a single read of the
+ * source). Only called against streamCache.ts's local cache URL once
+ * StreamCache reports fullRetentionReady() — extracting against the
+ * remote debrid URL directly would reopen exactly the second connection
+ * this whole feature exists to eliminate (see streamCache.ts's own header
+ * comment). The generous timeout is a backstop for a genuinely slow local
+ * disk read, not the expected case.
  */
-export function extractSubtitleTrack(
+export function extractSubtitleTracksBatch(
   ffmpegPath: string,
-  remoteUrl: string,
-  ordinal: number,
-  { execFileImpl = execFile, timeout = 300000 }: ExecFileImplOptions = {}
-): Promise<string | null> {
+  cacheUrl: string,
+  ordinals: number[],
+  { spawnImpl = spawn, timeout = 300000 }: { spawnImpl?: typeof spawn; timeout?: number } = {}
+): Promise<Map<number, string>> {
+  const results = new Map<number, string>()
+  const validOrdinals = [...new Set(ordinals)].filter((o) => Number.isInteger(o) && o >= 0)
   if (
     !ffmpegPath ||
-    !isAllowedRemoteMediaUrl(remoteUrl) ||
-    !Number.isInteger(ordinal) ||
-    ordinal < 0
+    (!isAllowedRemoteMediaUrl(cacheUrl) && !isOwnCacheUrl(cacheUrl)) ||
+    !validOrdinals.length
   ) {
-    return Promise.resolve(null)
+    return Promise.resolve(results)
   }
   return new Promise((resolve) => {
-    execFileImpl(
-      ffmpegPath,
-      ['-i', remoteUrl, '-map', `0:s:${ordinal}`, '-f', 'webvtt', '-'],
-      { windowsHide: true, timeout, maxBuffer: 8 * 1024 * 1024, encoding: 'utf8' },
-      (error, stdout) => {
-        if (error || !stdout || !stdout.trim()) return resolve(null)
-        resolve(stdout)
+    const args = ['-loglevel', 'warning', '-i', cacheUrl]
+    validOrdinals.forEach((ordinal, i) => {
+      args.push('-map', `0:s:${ordinal}`, '-f', 'webvtt', `pipe:${3 + i}`)
+    })
+    const stdio: Array<'ignore' | 'pipe'> = [
+      'ignore',
+      'ignore',
+      'pipe',
+      ...validOrdinals.map(() => 'pipe' as const)
+    ]
+    let child: ChildProcess
+    try {
+      child = spawnImpl(ffmpegPath, args, { windowsHide: true, stdio })
+    } catch {
+      resolve(results)
+      return
+    }
+    const buffers = new Map<number, Buffer[]>(validOrdinals.map((o) => [o, []]))
+    validOrdinals.forEach((ordinal, i) => {
+      const stream = child.stdio[3 + i]
+      stream?.on('data', (chunk: Buffer) => {
+        buffers.get(ordinal)?.push(chunk)
+      })
+    })
+    const timer = setTimeout(() => {
+      child.kill()
+    }, timeout)
+    const finish = (): void => {
+      clearTimeout(timer)
+      for (const ordinal of validOrdinals) {
+        const text = Buffer.concat(buffers.get(ordinal) ?? []).toString('utf8')
+        if (text.trim()) results.set(ordinal, text)
       }
-    )
+      resolve(results)
+    }
+    child.once('error', finish)
+    child.once('exit', finish)
   })
 }
 

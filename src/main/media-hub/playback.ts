@@ -90,8 +90,95 @@ export function isAllowedRemoteMediaUrl(value: unknown): boolean {
   }
 }
 
-function defaultResolveHost(host: string): Promise<string[]> {
+export function defaultResolveHost(host: string): Promise<string[]> {
   return dns.lookup(host, { all: true }).then((rows) => rows.map((row) => row.address))
+}
+
+/**
+ * Re-validates the URL syntactically, then performs a *fresh* DNS
+ * resolution and rejects if any resolved address is private. This is the
+ * DNS-rebinding defense: a hostname that passed the syntactic check earlier
+ * (e.g. at registration time) could since have been repointed at a private
+ * address, so every fetch (including every redirect hop) must re-resolve
+ * and re-check, not just re-check the hostname string.
+ *
+ * Extracted from createPlaybackProxy's own closure so streamCache.ts's
+ * upstream fetch can reuse the exact same audited check instead of
+ * duplicating it — the SSRF boundary must stay in exactly one place.
+ */
+export async function assertPublicMediaUrl(
+  urlValue: string,
+  resolveHost: (host: string) => Promise<string[]> = defaultResolveHost
+): Promise<void> {
+  if (!isAllowedRemoteMediaUrl(urlValue)) {
+    throw new Error('Playback requires a valid public HTTPS media URL.')
+  }
+  const url = new URL(urlValue)
+  const addresses = await resolveHost(url.hostname)
+  if (!addresses.length || addresses.some(isPrivateAddress)) {
+    throw new Error('Playback source resolved to a private network address.')
+  }
+}
+
+/** Follows redirects manually, re-validating (assertPublicMediaUrl) at every hop. */
+export async function safeFetchMedia(
+  urlValue: string,
+  options: RequestInit,
+  fetchImpl: typeof fetch = globalThis.fetch,
+  resolveHost: (host: string) => Promise<string[]> = defaultResolveHost
+): Promise<Response> {
+  let current = urlValue
+  for (let redirects = 0; redirects <= 5; redirects++) {
+    await assertPublicMediaUrl(current, resolveHost)
+    const response = await fetchImpl(current, { ...options, redirect: 'manual' })
+    if (![301, 302, 303, 307, 308].includes(response.status)) {
+      return response
+    }
+    const location = response.headers.get('location')
+    if (!location) {
+      throw new Error('Playback redirect did not include a destination.')
+    }
+    current = new URL(location, current).toString()
+  }
+  throw new Error('Playback source redirected too many times.')
+}
+
+// vlc.ts's ffmpeg transcoder gets `-reconnect`/`-reconnect_on_network_error`
+// for exactly this reason ("Streaming/debrid sources can drop the
+// connection briefly under load"), but that protection never covered
+// direct/proxied playback (no ffmpeg involved) — every distinct byte
+// range Chromium's <video> element asks for is its own fresh request
+// through this proxy, and a single failed upstream fetch here (before
+// any response has gone to the client) turned straight into a 502,
+// which the <video> element surfaces as a hard error that closes the
+// whole player — a transient blip on the MORE common playback path
+// (direct/proxied is used whenever a title doesn't need transcoding)
+// forcing a full "click Play again" restart, exactly the kind of
+// failure ffmpeg's own reconnect flags exist to absorb on its path.
+// Bounded to the pre-response window only: once headers are already
+// sent, a failure has to surface immediately (see the caller) — there is
+// no way to retry a fetch whose response Chromium has already started
+// consuming without a Range-aware resume this proxy doesn't implement.
+export async function fetchMediaWithRetry(
+  remoteUrl: string,
+  options: RequestInit,
+  fetchImpl: typeof fetch = globalThis.fetch,
+  resolveHost: (host: string) => Promise<string[]> = defaultResolveHost
+): Promise<Response> {
+  const attempts = 3
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      return await safeFetchMedia(remoteUrl, options, fetchImpl, resolveHost)
+    } catch (error) {
+      const isLastAttempt = attempt === attempts
+      const aborted = (error as { name?: string } | undefined)?.name === 'AbortError'
+      if (aborted || isLastAttempt) throw error
+      await new Promise((resolve) => setTimeout(resolve, 300 * attempt))
+    }
+  }
+  // Unreachable — the loop above always returns or throws — but keeps
+  // this function's return type honest without a non-null assertion.
+  throw new Error('Playback source could not be reached.')
 }
 
 interface PlaybackSession {
@@ -119,74 +206,11 @@ export function createPlaybackProxy({
   let origin = ''
   const sessions = new Map<string, PlaybackSession>()
 
-  // Re-validates the URL syntactically, then performs a *fresh* DNS
-  // resolution and rejects if any resolved address is private. This is
-  // the DNS-rebinding defense: a hostname that passed the syntactic check
-  // earlier (e.g. at registration time) could since have been repointed at
-  // a private address, so every fetch (including every redirect hop) must
-  // re-resolve and re-check, not just re-check the hostname string.
-  async function assertPublic(urlValue: string): Promise<void> {
-    if (!isAllowedRemoteMediaUrl(urlValue)) {
-      throw new Error('Playback requires a valid public HTTPS media URL.')
-    }
-    const url = new URL(urlValue)
-    const addresses = await resolveHost(url.hostname)
-    if (!addresses.length || addresses.some(isPrivateAddress)) {
-      throw new Error('Playback source resolved to a private network address.')
-    }
-  }
-
-  async function safeFetch(urlValue: string, options: RequestInit): Promise<Response> {
-    let current = urlValue
-    for (let redirects = 0; redirects <= 5; redirects++) {
-      await assertPublic(current)
-      const response = await fetchImpl(current, { ...options, redirect: 'manual' })
-      if (![301, 302, 303, 307, 308].includes(response.status)) {
-        return response
-      }
-      const location = response.headers.get('location')
-      if (!location) {
-        throw new Error('Playback redirect did not include a destination.')
-      }
-      current = new URL(location, current).toString()
-    }
-    throw new Error('Playback source redirected too many times.')
-  }
-
-  // vlc.ts's ffmpeg transcoder gets `-reconnect`/`-reconnect_on_network_error`
-  // for exactly this reason ("Streaming/debrid sources can drop the
-  // connection briefly under load"), but that protection never covered
-  // direct/proxied playback (no ffmpeg involved) — every distinct byte
-  // range Chromium's <video> element asks for is its own fresh request
-  // through this proxy, and a single failed upstream fetch here (before
-  // any response has gone to the client) turned straight into a 502,
-  // which the <video> element surfaces as a hard error that closes the
-  // whole player — a transient blip on the MORE common playback path
-  // (direct/proxied is used whenever a title doesn't need transcoding)
-  // forcing a full "click Play again" restart, exactly the kind of
-  // failure ffmpeg's own reconnect flags exist to absorb on its path.
-  // Bounded to the pre-response window only: once headers are already
-  // sent, a failure has to surface immediately (see the caller) — there is
-  // no way to retry a fetch whose response Chromium has already started
-  // consuming without a Range-aware resume this proxy doesn't implement.
   async function fetchUpstreamWithRetry(
     remoteUrl: string,
     options: RequestInit
   ): Promise<Response> {
-    const attempts = 3
-    for (let attempt = 1; attempt <= attempts; attempt++) {
-      try {
-        return await safeFetch(remoteUrl, options)
-      } catch (error) {
-        const isLastAttempt = attempt === attempts
-        const aborted = (error as { name?: string } | undefined)?.name === 'AbortError'
-        if (aborted || isLastAttempt) throw error
-        await new Promise((resolve) => setTimeout(resolve, 300 * attempt))
-      }
-    }
-    // Unreachable — the loop above always returns or throws — but keeps
-    // this function's return type honest without a non-null assertion.
-    throw new Error('Playback source could not be reached.')
+    return fetchMediaWithRetry(remoteUrl, options, fetchImpl, resolveHost)
   }
 
   async function listen(): Promise<void> {

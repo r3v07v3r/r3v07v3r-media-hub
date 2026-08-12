@@ -7,7 +7,7 @@
   "scripts": {
     "format": "prettier --write .",
     "lint": "eslint --cache .",
-    "test": "tsx tests/unsafeFiles.test.ts && tsx tests/language.test.ts && tsx tests/streamSelection.test.ts && tsx tests/floatingPanel.test.ts && tsx tests/playbackPreparation.test.ts && tsx tests/animeCatalogStorage.test.ts && tsx tests/databasePruning.test.ts && tsx tests/anilist.test.ts && tsx tests/playbackPosition.test.ts && tsx tests/partySync.test.ts",
+    "test": "tsx tests/unsafeFiles.test.ts && tsx tests/language.test.ts && tsx tests/streamSelection.test.ts && tsx tests/floatingPanel.test.ts && tsx tests/playbackPreparation.test.ts && tsx tests/animeCatalogStorage.test.ts && tsx tests/databasePruning.test.ts && tsx tests/anilist.test.ts && tsx tests/playbackPosition.test.ts && tsx tests/partySync.test.ts && tsx tests/streamCache.test.ts",
     "typecheck:node": "tsc --noEmit -p tsconfig.node.json --composite false",
     "typecheck:web": "tsc --noEmit -p tsconfig.web.json --composite false",
     "typecheck": "npm run typecheck:node && npm run typecheck:web",

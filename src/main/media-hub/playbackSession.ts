@@ -1,6 +1,6 @@
 // Ported from r3v07v3r-media-hub's src/main.cjs (subtitleCacheDir/
 // clearActiveSubtitle/preparePlayback/stopPlayback, the module-level
-// activeMediaUrl/activeMediaTracks/activeSubtitlePath/playbackProxy/
+// activeMediaUrl/activeMediaTracks/activeSubtitlePath/streamCache/
 // ffmpegTranscoder/ffprobePath/ffmpegPath singletons, and the
 // subtitles:apply/playback:compatibility/playback:select-tracks/
 // playback:stop/playback:thumbnail IPC handlers). Active playback is
@@ -13,6 +13,12 @@
 // re-run their own executable discovery. Compatibility-mode transcoding
 // used to shell out to a separately-installed VLC — see vlc.ts's header
 // comment for why that's now ffmpeg (bundled with the app) instead.
+//
+// streamCache.ts is the sole owner of the upstream connection to a title's
+// remote debrid link — the direct-proxy/ffmpeg connection-swap dance that
+// used to live here (closeDirectProxyBeforeTranscode, directModeActive) is
+// gone: both playback modes now read from that one local cache server, so
+// switching between them never touches the remote link at all.
 
 import { app, screen } from 'electron'
 import crypto from 'node:crypto'
@@ -29,19 +35,20 @@ import type {
 import { handle } from './ipcGuard'
 import { logError, redactUrls } from './logger'
 import { srtToVtt } from './opensubtitles'
-import { createPlaybackProxy } from './playback'
 import { readSettings, writeSettings } from './settingsStore'
+import { createStreamCache, MIN_CACHE_BYTES, pruneIdleSessions } from './streamCache'
 import { osDownloadSubtitleText } from './subtitlesService'
 import {
   captureFrame,
   createFfmpegTranscoder,
   detectVideoEncoder,
-  extractSubtitleTrack,
+  extractSubtitleTracksBatch,
   findFfmpeg,
   findFfprobe,
   needsAudioCompatibility,
   probeMedia,
   selectTranscodeAudioTrack,
+  TEXT_SUBTITLE_CODECS,
   videoCodecCompatibilityWarning,
   videoResolutionUpscaleSuggestion,
   type FfmpegTranscoderResult
@@ -55,12 +62,30 @@ const TRANSCODE_MAX_HEIGHT = 1080
 export const ffmpegPath = findFfmpeg()
 export const ffprobePath = findFfprobe()
 
-const playbackProxy = createPlaybackProxy()
+// The sole owner of the upstream connection to the current title's remote
+// link (see streamCache.ts's own header comment). Both playback modes now
+// read from its local cache server: ffmpeg's `-i` in compatibility mode,
+// and the <video> element directly in direct mode — there is no longer a
+// "direct proxy vs ffmpeg" connection-swap to coordinate, since neither of
+// them ever touches the remote link themselves anymore.
+const streamCache = createStreamCache()
+// Disk-hygiene backstop for a title that was closed before being marked
+// watched (its cache is deliberately left in place for a likely near-term
+// resume — see stopPlayback's own comment) — runs once at startup and then
+// hourly so a cache dir from days ago doesn't sit around forever.
+void pruneIdleSessions()
+setInterval(() => void pruneIdleSessions(), 60 * 60 * 1000)
+
 const ffmpegTranscoder = createFfmpegTranscoder({
   onLog: (line) => logError('ffmpeg:stderr', redactUrls(line.trim()))
 })
 
 let activeMediaUrl = ''
+// StreamCache's local server URL for the current title — what ffmpeg's
+// `-i` and the direct-mode <video> element actually read from. Distinct
+// from activeMediaUrl (the real, remote debrid link), which only probeMedia
+// and streamCache.start() itself ever touch directly.
+let activeCacheUrl = ''
 let activeMediaTracks: MediaTracks = { video: [], audio: [], subtitle: [], probed: false }
 let activeSubtitlePath = ''
 // Sticky across every ffmpeg restart for the current title (seek, track
@@ -75,11 +100,6 @@ let activeSubtitlePath = ''
 let activeVideoEncoder: string | undefined
 let activeVideoEncoderReason: 'codec' | 'upscale' | undefined
 let activeUpscaleHeight: number | undefined
-// True only while the direct/proxied (non-ffmpeg) path is actually serving
-// the current title — set in preparePlayback's direct-passthrough branch,
-// cleared the moment anything switches to ffmpeg. Used below to decide
-// whether transitioning INTO ffmpeg needs the extra teardown grace period.
-let directModeActive = false
 
 // Set once a video re-encode has actually failed to start on this
 // machine. The fallback below recovers playback, but only after burning
@@ -91,38 +111,30 @@ let directModeActive = false
 // runs, so a restart re-tests rather than writing the machine off.
 let videoEncodeUnusable = false
 
-// Embedded subtitle tracks already pulled out of the current media, keyed
-// by URL and stream ordinal. Extraction has to demux the WHOLE remote file
-// (subtitle cues are interleaved throughout a container, so there is no
-// early exit — see extractSubtitleTrack), which on a large file is a real
-// wait. Doing it twice for the same track is pure waste: the cues cannot
-// have changed. Cleared with the session, since the URL it is keyed by is
-// only valid for that session anyway.
-const extractedSubtitles = new Map<string, Promise<string | null>>()
+// The whole-file, all-text-tracks batch subtitle extraction for the current
+// title (see extractSubtitleTracksBatch's own comment on why batched) —
+// computed at most once per title, on first request, and shared by every
+// ordinal the subtitle menu asks for afterward. Only runs once
+// streamCache.fullRetentionReady() — extracting against a not-yet-fully-
+// cached title would mean reading past what's locally available, which is
+// exactly the second-connection risk this whole feature exists to remove
+// (see playbackExtractSubtitle's own handler below). Cleared with the
+// session, same as before.
+let subtitleBatchPromise: Promise<Map<number, string>> | null = null
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms))
-}
+/** 10GB until the person visits Settings — deliberately not "unbounded" as
+ *  the out-of-the-box default, since nobody should have their disk start
+ *  filling up before ever touching a cache-size setting. An explicit `0`
+ *  (the settings UI's own "unbounded/drive-limited" preset) is different
+ *  from "never configured" and is honored as-is. */
+const DEFAULT_STREAM_CACHE_MAX_BYTES = 10 * 1024 * 1024 * 1024
 
-/**
- * Closes the direct proxy and, if it was actually the thing serving this
- * title, gives the remote source a moment to notice before ffmpeg opens a
- * fresh connection to the same link. Found live: TorBox (like most debrid/
- * streaming sources — see vlc.ts's own note on this) caps concurrent
- * connections per link; our local proxy server fully closing doesn't
- * guarantee the *upstream* fetch it was making has been torn down on
- * TorBox's end yet (the abort is wired to the local response's 'close'
- * event, not to server shutdown directly), so starting ffmpeg immediately
- * after can race that teardown and stall out entirely (confirmed live:
- * "did not start producing video in time" on the very first upscale/seek
- * out of direct mode). Already-in-compatibility-mode restarts (the far
- * more common case — every ordinary seek) never had this problem and
- * shouldn't pay the delay: playbackProxy.close() is a no-op there.
- */
-async function closeDirectProxyBeforeTranscode(): Promise<void> {
-  const wasDirect = directModeActive
-  await playbackProxy.close()
-  if (wasDirect) await sleep(500)
+function resolveStreamCacheMaxBytes(): number {
+  const raw = readSettings().streamCacheMaxGb
+  if (raw === undefined || raw === null) return DEFAULT_STREAM_CACHE_MAX_BYTES
+  const gb = Number(raw)
+  if (!Number.isFinite(gb) || gb <= 0) return 0 // explicit unbounded/drive-limited
+  return Math.max(MIN_CACHE_BYTES, gb * 1024 * 1024 * 1024)
 }
 
 /**
@@ -151,10 +163,17 @@ async function startTranscodeWithFallback(
   selection: PlaybackSelection,
   targetHeight?: number
 ): Promise<FfmpegTranscoderResult> {
+  // Every restart (seek/track/quality change) proactively repositions
+  // StreamCache's sequential fetch toward the new position first — by the
+  // time ffmpeg's own -ss lands against the local cache moments later, the
+  // bytes it wants are already there or arriving, instead of ffmpeg's
+  // first read discovering the gap itself. Best-effort/non-blocking (see
+  // streamCache.ts's own comment) — never anything to await here.
+  if (Number.isFinite(selection.startTime)) streamCache.seekHint(Number(selection.startTime))
   try {
     return await ffmpegTranscoder.start(
       ffmpegPath,
-      activeMediaUrl,
+      activeCacheUrl,
       selection,
       activeVideoEncoder,
       targetHeight
@@ -166,7 +185,7 @@ async function startTranscodeWithFallback(
     activeVideoEncoder = undefined
     activeVideoEncoderReason = undefined
     await ffmpegTranscoder.stop()
-    return ffmpegTranscoder.start(ffmpegPath, activeMediaUrl, selection, undefined, targetHeight)
+    return ffmpegTranscoder.start(ffmpegPath, activeCacheUrl, selection, undefined, targetHeight)
   }
 }
 
@@ -186,20 +205,35 @@ function clearActiveSubtitle(): void {
 }
 
 /**
- * Probes `url` and starts embedded playback for it: either directly (via
- * the playback proxy) or, by transcoding through ffmpeg — always audio
- * when the source's audio codec isn't browser-compatible, and (opt-in,
- * see Settings > More Options' "Convert incompatible video") video too
- * when the source's video codec is one Chromium can't reliably decode
- * and a real hardware encoder is actually available on this machine
- * (see vlc.ts's detectVideoEncoder — never falls back to a software
- * encoder). Also used by torbox.ts's play:stream/library:play handlers.
+ * Probes `url` and starts embedded playback for it: either directly (the
+ * <video> element reading straight from StreamCache's local cache server)
+ * or, by transcoding through ffmpeg (also reading from that same local
+ * server, never the remote link itself) — always audio when the source's
+ * audio codec isn't browser-compatible, and (opt-in, see Settings > More
+ * Options' "Convert incompatible video") video too when the source's video
+ * codec is one Chromium can't reliably decode and a real hardware encoder
+ * is actually available on this machine (see vlc.ts's detectVideoEncoder —
+ * never falls back to a software encoder). Also used by torbox.ts's
+ * play:stream/library:play handlers.
  */
 export async function preparePlayback(url: string): Promise<PlaybackResult> {
   activeMediaUrl = url
-  extractedSubtitles.clear()
+  subtitleBatchPromise = null
   await ffmpegTranscoder.stop()
   activeMediaTracks = await probeMedia(ffprobePath, url)
+  // StreamCache becomes the sole owner of the upstream connection to `url`
+  // from here on — probeMedia above is the one remote touch that happens
+  // BEFORE it (sequential, already complete by this point, so it never
+  // overlaps with StreamCache's own connection). Started even for a title
+  // that turns out not to need ffmpeg at all: direct-mode playback below
+  // reads from this same local server instead of proxying the remote link
+  // per-Range-request the way the old playbackProxy did.
+  const cacheResult = await streamCache.start(
+    url,
+    activeMediaTracks.durationSeconds,
+    resolveStreamCacheMaxBytes()
+  )
+  activeCacheUrl = cacheResult.url
   // Fresh title — none of the previous one's sticky transcode state
   // carries over (a new upscale suggestion gets computed below either way).
   activeVideoEncoder = undefined
@@ -245,8 +279,6 @@ export async function preparePlayback(url: string): Promise<PlaybackResult> {
     settings.preferredUpscaleHeight
   )
   if ((needsAudioCompatibility(activeMediaTracks, audioLanguage) || activeVideoEncoder) && ffmpegPath) {
-    directModeActive = false
-    await playbackProxy.close()
     // Cap the height when we're FORCED to re-encode video. Re-encoding
     // 2160p in real time is what made 4K HEVC titles unplayable: ffmpeg
     // never produced its first bytes inside even the extended 60s startup
@@ -295,10 +327,10 @@ export async function preparePlayback(url: string): Promise<PlaybackResult> {
       videoCodecWarning: activeVideoEncoder ? undefined : videoCodecWarning,
       tracksWarning,
       upscaleSuggestion,
+      embeddedSubtitlesAvailable: cacheResult.fullRetention,
       ...started
     }
   }
-  directModeActive = true
   return {
     ok: true,
     player: 'embedded',
@@ -314,21 +346,35 @@ export async function preparePlayback(url: string): Promise<PlaybackResult> {
     videoCodecWarning,
     tracksWarning,
     upscaleSuggestion,
-    url: await playbackProxy.register(url)
+    embeddedSubtitlesAvailable: cacheResult.fullRetention,
+    // The <video> element reads straight from StreamCache's local server —
+    // no separate proxy registration step needed, unlike the old
+    // playbackProxy.register(url) (which opened its own connection to the
+    // remote link per Range request Chromium made).
+    url: activeCacheUrl
   }
 }
 
-/** Clears active playback state (URL/tracks/subtitle file) and tears down the playback proxy and any running ffmpeg transcoder. */
-export async function stopPlayback(): Promise<void> {
+/** Clears active playback state (URL/tracks/subtitle file), and tears down
+ *  StreamCache and any running ffmpeg transcoder. `deleteCache` (passed
+ *  from the renderer's real close, gated on the title having already
+ *  crossed the 80%-watched mark — see PlaybackOverlay's markedWatchedRef)
+ *  deletes the title's cache directory outright rather than leaving it for
+ *  the idle sweep; otherwise the cache is left on disk for a likely
+ *  near-term resume. */
+export async function stopPlayback(deleteCache = false): Promise<void> {
   activeMediaUrl = ''
+  activeCacheUrl = ''
   activeMediaTracks = { video: [], audio: [], subtitle: [], probed: false }
   activeVideoEncoder = undefined
   activeVideoEncoderReason = undefined
   activeUpscaleHeight = undefined
-  directModeActive = false
-  extractedSubtitles.clear()
+  subtitleBatchPromise = null
   clearActiveSubtitle()
-  await Promise.all([playbackProxy.close(), ffmpegTranscoder.stop()])
+  await Promise.all([
+    deleteCache ? streamCache.deleteSession() : streamCache.stop(),
+    ffmpegTranscoder.stop()
+  ])
 }
 
 interface SubtitlesApplyPayload {
@@ -371,13 +417,6 @@ export function registerPlaybackIpc(): void {
         startTime: Math.max(0, Math.min(Number(selection?.startTime) || 0, 86400)),
         externalSubtitlePath: filePath
       }
-      // Close the still-open direct connection BEFORE opening the new
-      // ffmpeg one, not after — see closeDirectProxyBeforeTranscode's own
-      // comment for why this order (and the grace delay when it applies)
-      // matters: a real bug found live, two simultaneous connections to
-      // the same remote link, one of which stalls out.
-      await closeDirectProxyBeforeTranscode()
-      directModeActive = false
       const started = await startTranscodeWithFallback(safe, activeUpscaleHeight)
       // `started.compatibility` is already `true` (FfmpegTranscoderResult), so
       // it isn't repeated here — TS flags a literal + spread of the same key
@@ -390,8 +429,6 @@ export function registerPlaybackIpc(): void {
     MEDIA_HUB_CHANNELS.playbackCompatibility,
     async (_event, selection = {}) => {
       if (!activeMediaUrl) throw new Error('No active media is available for compatibility mode.')
-      await closeDirectProxyBeforeTranscode()
-      directModeActive = false
       const started = await startTranscodeWithFallback(selection, activeUpscaleHeight)
       return { tracks: activeMediaTracks, ...started }
     }
@@ -457,65 +494,59 @@ export function registerPlaybackIpc(): void {
         startTime: Math.max(0, Math.min(Number(selection.startTime) || 0, 86400)),
         upscaleHeight: activeUpscaleHeight ?? 0
       }
-      // Closing the direct connection before opening ffmpeg's (not after)
-      // matters most right here — this handler is now reachable from
-      // *direct* playback too (a title under 1080p, never having gone
-      // through compatibility mode before, upscaled via the quality menu),
-      // where the old code path's ordering left both connections open
-      // simultaneously against the same remote link. Verified live: with
-      // the old after-the-fact close, upscaling a title still on direct
-      // playback reliably hit "did not start producing video in time";
-      // TorBox (like most debrid/streaming sources) caps concurrent
-      // connections per link, and the still-open direct one was eating the
-      // new one's slot. closeDirectProxyBeforeTranscode also adds a short
-      // grace delay in exactly this transition (and only this one).
-      await closeDirectProxyBeforeTranscode()
-      directModeActive = false
+      // This handler is reachable from *direct* playback too (a title
+      // under 1080p, never having gone through compatibility mode before,
+      // upscaled via the quality menu) — no connection-swap coordination
+      // needed here anymore, unlike the old playbackProxy/ffmpeg split:
+      // both direct-mode and ffmpeg read from the SAME already-running
+      // StreamCache local server, so switching between them never touches
+      // the remote link at all.
       const started = await startTranscodeWithFallback(safe, activeUpscaleHeight)
       return { tracks: activeMediaTracks, selection: safe, ...started }
     }
   )
 
-  handle<undefined, { ok: true }>(MEDIA_HUB_CHANNELS.playbackStop, async () => {
-    await stopPlayback()
-    return { ok: true }
-  })
+  handle<{ watched?: boolean } | undefined, { ok: true }>(
+    MEDIA_HUB_CHANNELS.playbackStop,
+    async (_event, payload) => {
+      await stopPlayback(Boolean(payload?.watched))
+      return { ok: true }
+    }
+  )
 
   handle<number | undefined, string | null>(
     MEDIA_HUB_CHANNELS.playbackThumbnail,
     async (_event, seconds) => {
-      if (!activeMediaUrl) return null
-      return captureFrame(ffmpegPath, activeMediaUrl, Number(seconds) || 0)
+      if (!activeCacheUrl) return null
+      return captureFrame(ffmpegPath, activeCacheUrl, Number(seconds) || 0)
     }
   )
 
   handle<number | undefined, string | null>(
     MEDIA_HUB_CHANNELS.playbackExtractSubtitle,
     async (_event, ordinal) => {
-      if (!activeMediaUrl) return null
+      if (!activeCacheUrl) return null
       const index = Number(ordinal)
-      const key = `${activeMediaUrl}::${index}`
-      const memo = extractedSubtitles.get(key)
-      if (memo !== undefined) return memo
-      // Two callers can want the same track at once (a re-click while the
-      // first is still running, a party member following a subtitle
-      // change). Sharing the in-flight promise means one demux, not two —
-      // and this demux walks the entire remote file (see
-      // extractSubtitleTrack), so a duplicate is genuinely expensive.
-      const pending = extractSubtitleTrack(ffmpegPath, activeMediaUrl, index)
-      extractedSubtitles.set(key, pending)
-      try {
-        const result = await pending
-        // Only a real result is worth keeping — a failure may well have
-        // been a transient network problem, and caching `null` would make
-        // the track permanently unavailable for this session.
-        if (result) extractedSubtitles.set(key, Promise.resolve(result))
-        else extractedSubtitles.delete(key)
-        return result
-      } catch (error) {
-        extractedSubtitles.delete(key)
-        throw error
+      if (!Number.isInteger(index) || index < 0) return null
+      // Only reachable once the WHOLE file is locally cached — extracting
+      // against a not-yet-fully-cached title would mean ffmpeg reading past
+      // what's actually on disk, i.e. StreamCache repositioning its one
+      // upstream connection specifically to serve this, mid-playback. The
+      // renderer already greys out the "Embedded" subtitle menu in this
+      // case (see PlaybackOverlay's fullRetentionReady check); this is the
+      // defensive backstop, not the primary gate.
+      if (!streamCache.fullRetentionReady()) return null
+      // Two callers can want a track at once (a re-click, a party member
+      // following a subtitle change) — sharing the in-flight batch promise
+      // means one demux for every track this title has, not one per call.
+      if (!subtitleBatchPromise) {
+        const textOrdinals = activeMediaTracks.subtitle
+          .filter((t) => TEXT_SUBTITLE_CODECS.has(t.codec))
+          .map((t) => t.ordinal)
+        subtitleBatchPromise = extractSubtitleTracksBatch(ffmpegPath, activeCacheUrl, textOrdinals)
       }
+      const batch = await subtitleBatchPromise
+      return batch.get(index) ?? null
     }
   )
 

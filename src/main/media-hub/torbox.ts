@@ -492,9 +492,9 @@ export function registerTorBoxIpc(): void {
         // reported cached but isn't actually servable yet (found live: a
         // freshly-completed download returning a non-HTTPS/malformed URL
         // on the first requestdl right after checkcached said it was
-        // ready) — preparePlayback's own playbackProxy would reject this
-        // exact same URL downstream anyway, just several stages later and
-        // with a confusing raw error. Failing here instead means it's
+        // ready) — preparePlayback's own streamCache.start() would reject
+        // this exact same URL downstream anyway, just several stages later
+        // and with a confusing raw error. Failing here instead means it's
         // caught by the retry-once wrapper below, in the same click.
         if (!isAllowedRemoteMediaUrl(url)) {
           throw new Error('TorBox returned a link that was not ready yet.')

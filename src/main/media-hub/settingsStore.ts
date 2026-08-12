@@ -69,6 +69,15 @@ export interface MediaHubRawSettings {
   maxStreamSizeGb?: number
   connectionSpeedMbps?: number
   preferredUpscaleHeight?: number
+  /** How much local disk streamCache.ts is allowed to use for the local
+   *  rolling playback cache (see playbackSession.ts's
+   *  resolveStreamCacheMaxBytes). Distinct from maxStreamSizeGb above,
+   *  which filters which torrent releases get selected, not how they're
+   *  cached once playing. 0 means unbounded/drive-limited (still subject
+   *  to streamCache.ts's own free-space safety margin); undefined means
+   *  "never configured," which defaults to a moderate 10GB rather than
+   *  silently unbounded. */
+  streamCacheMaxGb?: number
   hideWatchedDefault?: boolean
   hideCompletedDefault?: boolean
   hideDislikedDefault?: boolean

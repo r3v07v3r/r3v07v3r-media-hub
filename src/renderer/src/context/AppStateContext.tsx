@@ -283,7 +283,8 @@ interface AppStateValue {
   setPlaybackResult: Dispatch<SetStateAction<PlaybackResult | null>>
   setPlaybackTracks: Dispatch<SetStateAction<MediaTracks | null>>
   startPlayback: (media: MediaItem) => Promise<boolean>
-  stopPlayback: () => void
+  /** `watched` deletes this title's local stream cache outright on close instead of leaving it for the idle sweep — see PlaybackOverlay's markedWatchedRef, which is the only thing that should ever pass true. */
+  stopPlayback: (watched?: boolean) => void
   /** Re-fetches both watch-status sources (tracking:list's history and home:personalized's continueWatching) — call after anything changes what tracking:list reports for an id, so grids/badges/Continue Watching/next-episode don't go stale until some unrelated refetch happens to pick it up. Same pair markContinueWatching below already refreshes after a manual toggle. */
   refreshWatchStatus: () => void
   /** Bumped every time refreshWatchStatus() runs — MediaDetailPage keeps its own separate per-episode `history` fetch (tracking:list scoped to just the current id, for its watchedKeys/nextEpisode computation) and has no other way to know a mark-watched happened elsewhere, e.g. PlaybackOverlay's 80%-progress auto-mark. Depend on this in any effect that needs to re-fetch when watch status changes anywhere in the app. */
@@ -1120,12 +1121,16 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     startPlaybackRef.current = startPlayback
   }, [startPlayback])
-  const stopPlayback = useCallback(() => {
+  const stopPlayback = useCallback((watched?: boolean) => {
     // The one place that genuinely means "playback is over" — every close
     // path routes through here. PlaybackOverlay's unmount deliberately no
     // longer does this; see the comment there for why doing it per-title
-    // destroyed the session that had just been created.
-    window.api?.mediaHub?.playback.stop().catch(() => {})
+    // destroyed the session that had just been created. `watched` (passed
+    // from PlaybackOverlay's markedWatchedRef at its three real-close call
+    // sites) tells the backend whether to delete this title's local
+    // stream-cache directory outright rather than leaving it for the idle
+    // sweep — see playbackSession.ts's stopPlayback.
+    window.api?.mediaHub?.playback.stop({ watched }).catch(() => {})
     setPlaybackMedia(null)
     setPlaybackResult(null)
     setPlaybackTracks(null)
