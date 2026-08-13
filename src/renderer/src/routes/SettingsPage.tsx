@@ -154,7 +154,11 @@ function CacheSizeRow({
   }
 
   function commitDraft(): void {
-    const parsed = Math.round(Number(draft))
+    // Number('') is 0, not NaN — an abandoned edit (cleared the field,
+    // clicked away) would otherwise silently commit as "unbounded", not
+    // get rejected and restored like any other invalid input.
+    const trimmed = draft.trim()
+    const parsed = trimmed === '' ? NaN : Math.round(Number(trimmed))
     if (Number.isFinite(parsed) && parsed >= 0 && String(parsed) !== String(valueGb)) {
       onChange(parsed)
     } else {
