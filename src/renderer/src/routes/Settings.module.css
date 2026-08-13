@@ -285,6 +285,13 @@
   /* Aligns under the title/description text, not under the icon —
      36px icon width + this row's own 14px gap. */
   margin-left: 50px;
+  /* Bug fix: with flex-shrink:0 on the buttons/field inside, a preset
+     row wider than the panel (6 quality options, or the cache presets
+     plus the custom GB field) rendered past the panel edge instead of
+     stopping at it. Letting the buttons wrap onto additional lines
+     keeps the whole control inside the row's own width. */
+  flex-wrap: wrap;
+  max-width: 100%;
 }
 
 .rowTitle {
