@@ -291,20 +291,29 @@ export function createStreamCache({
     return totalBytes / durationSeconds
   }
 
+  // Lowest chunk index in [0, totalBytes) that ISN'T 'ready' yet, or null
+  // if totalBytes is unknown or every chunk in range already is. Only ever
+  // called right as a fill reaches EOF (not per-chunk), so the O(chunk
+  // count) scan is fine. Shared by hasFullCoverage (is there a gap at
+  // all) and runFill's own post-EOF continuation (where is the gap, so it
+  // can be filled instead of left behind).
+  function firstMissingChunkIndex(): number | null {
+    if (totalBytes === null) return null
+    const lastIndex = chunkIndexForByte(totalBytes - 1)
+    for (let i = 0; i <= lastIndex; i++) {
+      if (chunks.get(i) !== 'ready') return i
+    }
+    return null
+  }
+
   // Whether EVERY chunk from byte 0 through totalBytes-1 is actually
   // 'ready' — not just "the most recent fill reached EOF". A seek that
   // aborts the initial front-to-back fill before it finishes, followed by
   // a later ranged fill that reaches EOF from its own (later) starting
   // point, must NOT be read as "the whole file is cached": the skipped
-  // middle chunks are still missing. Only ever called right as a fill
-  // reaches EOF (not per-chunk), so the O(chunk count) scan is fine.
+  // middle chunks are still missing.
   function hasFullCoverage(): boolean {
-    if (totalBytes === null) return false
-    const lastIndex = chunkIndexForByte(totalBytes - 1)
-    for (let i = 0; i <= lastIndex; i++) {
-      if (chunks.get(i) !== 'ready') return false
-    }
-    return true
+    return totalBytes !== null && firstMissingChunkIndex() === null
   }
 
   function notifyFullRetentionReady(): void {
@@ -500,6 +509,29 @@ export function createStreamCache({
           if (hasFullCoverage()) {
             downloadComplete = true
             notifyFullRetentionReady()
+            return
+          }
+          // Reached EOF without full coverage — a seek aborted the
+          // original front-to-back fill before it got here, so an earlier
+          // range is still missing (that's exactly what hasFullCoverage
+          // caught). Only worth chasing down in fullRetention mode: that's
+          // the only case anything (whole-file subtitle extraction) is
+          // actually waiting on full coverage ever being reached — for an
+          // ordinary windowed cache, gaps outside the retention window are
+          // intentional (evicted), not a bug to fix. Continuing under the
+          // SAME generation (not through reposition(), which exists for
+          // the abort-then-reconnect case — this fetch just completed
+          // cleanly, nothing to wait out) means one more contiguous read
+          // from the gap through EOF, which covers every later gap too
+          // since a fill is sequential once started. If another seek
+          // interrupts this pass, its own reposition() bumps generation
+          // and this continuation naturally stops at the next check, same
+          // as any other superseded fill.
+          if (fullRetention) {
+            const gapIndex = firstMissingChunkIndex()
+            if (gapIndex !== null) {
+              void runFill(gapIndex * CHUNK_BYTES, myGeneration)
+            }
           }
           return
         }
