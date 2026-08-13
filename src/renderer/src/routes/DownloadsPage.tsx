@@ -9,6 +9,14 @@ import { ComingSoonSection } from '@renderer/components/placeholder/ComingSoonSe
 import { Icon } from '@renderer/components/icons/Icon'
 import styles from './Downloads.module.css'
 
+/** How often the Cached Streams list re-polls while this page stays
+ *  mounted — an active session keeps writing (cachedBytes growing) or can
+ *  stop (isActive flipping) at any moment, so a single mount-time snapshot
+ *  goes stale almost immediately if the person just leaves this page open.
+ *  Cheap enough to poll this often: it's a local directory read, not a
+ *  network call, unlike the qBittorrent/Sonarr/Radarr queries above. */
+const CACHE_POLL_INTERVAL_MS = 4000
+
 function formatBytes(n: number): string {
   if (!n) return '0 MB'
   const mb = n / 1024 / 1024
@@ -174,6 +182,24 @@ export default function DownloadsPage() {
     return () => {
       cancelled = true
     }
+  }, [])
+
+  // Keeps cachedBytes/isActive fresh while this page stays open — see
+  // CACHE_POLL_INTERVAL_MS's own comment on why a one-time snapshot isn't
+  // enough. Separate from the mount-time load effect above (which also
+  // covers the external qBittorrent/Sonarr/Radarr queries — no reason to
+  // re-poll those on this same interval).
+  useEffect(() => {
+    if (!window.api?.mediaHub) return
+    const id = setInterval(() => {
+      window.api?.mediaHub.streamCache
+        .list()
+        .then(setCacheEntries)
+        .catch(() => {
+          // Best-effort — leaves the list exactly as it was until the next tick.
+        })
+    }, CACHE_POLL_INTERVAL_MS)
+    return () => clearInterval(id)
   }, [])
 
   const handleDeleteCacheEntry = (token: string): void => {
