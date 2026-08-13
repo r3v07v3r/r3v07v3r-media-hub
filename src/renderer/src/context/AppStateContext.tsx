@@ -1042,7 +1042,14 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
           return false
         }
         setResolvingMedia({ id: media.id, title: media.title, stage: 'buffering' })
-        const playTask = api.stream.play(resolved.best, mediaId, kind, resolveId)
+        const playTask = api.stream.play(resolved.best, mediaId, kind, resolveId, {
+          catalogId: media.id,
+          title: media.title,
+          posterUrl: media.posterUrl,
+          mediaKind: kind,
+          seasonNumber: media.seasonNumber,
+          episodeNumber: media.episodeNumber
+        })
         // If cancellation/timeout wins the race, a late successful IPC result
         // must not leave its newly-created backend playback session running.
         void playTask.then(

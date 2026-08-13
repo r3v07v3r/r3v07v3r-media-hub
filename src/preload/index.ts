@@ -51,6 +51,8 @@ import type {
   SimklStatus,
   WatchStatusDiscrepancy,
   SkipTimes,
+  CacheSessionMeta,
+  StreamCacheEntry,
   StreamCandidate,
   StreamResolveResult,
   SubtitleResult,
@@ -302,9 +304,26 @@ const api = {
         stream: StreamCandidate,
         mediaId?: string,
         type?: string,
-        resolveId?: string
+        resolveId?: string,
+        meta?: CacheSessionMeta
       ): Promise<PlaybackResult> =>
-        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.playStream, { stream, mediaId, type, resolveId })
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.playStream, {
+          stream,
+          mediaId,
+          type,
+          resolveId,
+          catalogId: meta?.catalogId,
+          title: meta?.title,
+          posterUrl: meta?.posterUrl,
+          season: meta?.seasonNumber,
+          episode: meta?.episodeNumber
+        })
+    },
+
+    streamCache: {
+      list: (): Promise<StreamCacheEntry[]> => ipcRenderer.invoke(MEDIA_HUB_CHANNELS.streamCacheList),
+      delete: (token: string): Promise<{ ok: true }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.streamCacheDelete, { token })
     },
 
     playback: {

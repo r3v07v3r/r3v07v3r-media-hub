@@ -1,16 +1,100 @@
 import { useEffect, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { DEFAULT_SERVICE_SETTINGS, ServiceSettings } from '@shared/ipc-types'
+import type { StreamCacheEntry } from '@shared/media-hub/types'
 import { getTorrents, QbTorrent } from '@renderer/lib/api/qbittorrent'
 import { sonarrClient, radarrClient, ServarrQueueItem } from '@renderer/lib/api/servarr'
 import { isConfigured } from '@renderer/lib/api/types'
 import { ComingSoonSection } from '@renderer/components/placeholder/ComingSoonSection'
+import { Icon } from '@renderer/components/icons/Icon'
 import styles from './Downloads.module.css'
+
+/** How often the Cached Streams list re-polls while this page stays
+ *  mounted — an active session keeps writing (cachedBytes growing) or can
+ *  stop (isActive flipping) at any moment, so a single mount-time snapshot
+ *  goes stale almost immediately if the person just leaves this page open.
+ *  Cheap enough to poll this often: it's a local directory read, not a
+ *  network call, unlike the qBittorrent/Sonarr/Radarr queries above. */
+const CACHE_POLL_INTERVAL_MS = 4000
 
 function formatBytes(n: number): string {
   if (!n) return '0 MB'
   const mb = n / 1024 / 1024
   return mb > 1024 ? `${(mb / 1024).toFixed(1)} GB` : `${mb.toFixed(0)} MB`
+}
+
+/** Mirrors AppStateContext.tsx's mediaKindToDetailPath — this page only has
+ *  the bare catalogId/mediaKind from the cache manifest, not a full
+ *  MediaItem, so it can't reuse that helper (or openDetail) directly. */
+function cacheEntryDetailPath(entry: StreamCacheEntry): string | null {
+  if (!entry.catalogId || !entry.mediaKind) return null
+  const segment = entry.mediaKind === 'movie' ? 'movies' : entry.mediaKind
+  return `/${segment}/${entry.catalogId}`
+}
+
+function CacheStreamRow({
+  entry,
+  onDelete
+}: {
+  entry: StreamCacheEntry
+  onDelete: (token: string) => void
+}) {
+  const navigate = useNavigate()
+  const detailPath = cacheEntryDetailPath(entry)
+  const pct =
+    entry.totalBytes && entry.totalBytes > 0
+      ? Math.min(100, Math.round((entry.cachedBytes / entry.totalBytes) * 100))
+      : null
+  const sizeLabel = entry.totalBytes
+    ? `${formatBytes(entry.cachedBytes)} of ${formatBytes(entry.totalBytes)}`
+    : formatBytes(entry.cachedBytes)
+
+  return (
+    <div className={`${styles.item} ${styles.cacheItem}`}>
+      <div className={styles.cachePoster}>
+        {entry.posterUrl ? <img src={entry.posterUrl} alt="" /> : null}
+      </div>
+      <div className={styles.cacheBody}>
+        <div className={styles.itemHead}>
+          <span>{entry.title}</span>
+          {entry.isActive && <span className={styles.playingBadge}>Playing now</span>}
+        </div>
+        {entry.seasonNumber && (
+          <span className={styles.itemMeta}>
+            S{entry.seasonNumber} · Ep {entry.episodeNumber}
+          </span>
+        )}
+        {pct !== null && (
+          <div className={styles.progressTrack}>
+            <div className={styles.progressFill} style={{ width: `${pct}%` }} />
+          </div>
+        )}
+        <span className={styles.itemMeta}>{sizeLabel}</span>
+      </div>
+      {!entry.isActive && (
+        <div className={styles.cacheActions}>
+          {detailPath && (
+            <button
+              type="button"
+              className={styles.cacheActionButton}
+              onClick={() => navigate(detailPath)}
+              aria-label={`Watch ${entry.title}`}
+            >
+              <Icon name="play" />
+            </button>
+          )}
+          <button
+            type="button"
+            className={styles.cacheActionButton}
+            onClick={() => onDelete(entry.token)}
+            aria-label={`Delete cached copy of ${entry.title}`}
+          >
+            <Icon name="trash" />
+          </button>
+        </div>
+      )}
+    </div>
+  )
 }
 
 function TorrentRow({ t }: { t: QbTorrent }) {
@@ -64,6 +148,7 @@ export default function DownloadsPage() {
   const [torrentsLive, setTorrentsLive] = useState(false)
   const [sonarrQueue, setSonarrQueue] = useState<ServarrQueueItem[]>([])
   const [radarrQueue, setRadarrQueue] = useState<ServarrQueueItem[]>([])
+  const [cacheEntries, setCacheEntries] = useState<StreamCacheEntry[]>([])
   const [loaded, setLoaded] = useState(false)
 
   useEffect(() => {
@@ -77,10 +162,11 @@ export default function DownloadsPage() {
       if (cancelled) return
       setSettings(s)
 
-      const [qb, sonarr, radarr] = await Promise.all([
+      const [qb, sonarr, radarr, cache] = await Promise.all([
         getTorrents(s.qbittorrent),
         sonarrClient.getQueue(s.sonarr),
-        radarrClient.getQueue(s.radarr)
+        radarrClient.getQueue(s.radarr),
+        window.api.mediaHub.streamCache.list().catch(() => [] as StreamCacheEntry[])
       ])
       if (cancelled) return
       if (qb.ok) {
@@ -89,6 +175,7 @@ export default function DownloadsPage() {
       }
       if (sonarr.ok) setSonarrQueue(sonarr.data ?? [])
       if (radarr.ok) setRadarrQueue(radarr.data ?? [])
+      setCacheEntries(cache ?? [])
       setLoaded(true)
     }
     load()
@@ -97,6 +184,32 @@ export default function DownloadsPage() {
     }
   }, [])
 
+  // Keeps cachedBytes/isActive fresh while this page stays open — see
+  // CACHE_POLL_INTERVAL_MS's own comment on why a one-time snapshot isn't
+  // enough. Separate from the mount-time load effect above (which also
+  // covers the external qBittorrent/Sonarr/Radarr queries — no reason to
+  // re-poll those on this same interval).
+  useEffect(() => {
+    if (!window.api?.mediaHub) return
+    const id = setInterval(() => {
+      window.api?.mediaHub.streamCache
+        .list()
+        .then(setCacheEntries)
+        .catch(() => {
+          // Best-effort — leaves the list exactly as it was until the next tick.
+        })
+    }, CACHE_POLL_INTERVAL_MS)
+    return () => clearInterval(id)
+  }, [])
+
+  const handleDeleteCacheEntry = (token: string): void => {
+    setCacheEntries((prev) => prev.filter((e) => e.token !== token))
+    window.api?.mediaHub.streamCache.delete(token).catch(() => {
+      // Best-effort — a failed delete just leaves the row absent from this
+      // page's list until the next reload re-syncs it from disk.
+    })
+  }
+
   if (!loaded) return null
 
   const anyConfigured =
@@ -104,7 +217,7 @@ export default function DownloadsPage() {
     isConfigured(settings.sonarr) ||
     isConfigured(settings.radarr)
 
-  if (!anyConfigured) {
+  if (!anyConfigured && cacheEntries.length === 0) {
     return (
       <ComingSoonSection
         icon="downloads"
@@ -117,6 +230,20 @@ export default function DownloadsPage() {
   return (
     <div className={styles.wrap}>
       <h1 className={styles.heading}>Downloads</h1>
+
+      <section className={`${styles.section} glass-panel`}>
+        <h2 className={styles.sectionTitle}>
+          <span className={styles.liveDot} />
+          Cached Streams
+        </h2>
+        {cacheEntries.length === 0 ? (
+          <p className={styles.empty}>Nothing cached locally right now.</p>
+        ) : (
+          cacheEntries.map((entry) => (
+            <CacheStreamRow key={entry.token} entry={entry} onDelete={handleDeleteCacheEntry} />
+          ))
+        )}
+      </section>
 
       {isConfigured(settings.qbittorrent) && (
         <section className={`${styles.section} glass-panel`}>

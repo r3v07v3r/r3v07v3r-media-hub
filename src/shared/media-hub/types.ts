@@ -205,6 +205,28 @@ export interface BlockedDownload {
   host: string
 }
 
+/** Metadata attached to a stream-cache session at start() time (see
+ *  main/media-hub/streamCache.ts's meta.json) so the Downloads page can
+ *  show a poster/title for it instead of a bare opaque token. `catalogId`
+ *  is the bare catalog id (routable via /:segment/:id) — distinct from the
+ *  composite `imdbId:season:episode` key used for stream resolution. */
+export interface CacheSessionMeta {
+  title: string
+  posterUrl?: string
+  catalogId?: string
+  mediaKind?: 'movie' | 'series' | 'anime'
+  seasonNumber?: number
+  episodeNumber?: number
+}
+
+/** One entry in the Downloads page's "Cached Streams" list. */
+export interface StreamCacheEntry extends CacheSessionMeta {
+  token: string
+  cachedBytes: number
+  totalBytes: number | null
+  isActive: boolean
+}
+
 export interface PlaybackResult {
   ok: true
   player: 'embedded'

@@ -71,6 +71,8 @@ export const MEDIA_HUB_CHANNELS = {
   streamCacheClear: 'mediahub:playback:stream-cache-clear',
   libraryList: 'mediahub:library:list',
   libraryPlay: 'mediahub:library:play',
+  streamCacheList: 'mediahub:stream-cache:list',
+  streamCacheDelete: 'mediahub:stream-cache:delete',
 
   // Simkl
   simklStatus: 'mediahub:simkl:status',

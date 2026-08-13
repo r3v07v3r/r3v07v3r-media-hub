@@ -39,6 +39,7 @@ import { app } from 'electron'
 import { assertPublicMediaUrl, defaultResolveHost, fetchMediaWithRetry } from './playback'
 import { logError } from './logger'
 import { readSettings } from './settingsStore'
+import type { CacheSessionMeta, StreamCacheEntry } from '../../shared/media-hub/types'
 
 const CHUNK_BYTES = 4 * 1024 * 1024
 const HEAD_BYTES = 16 * 1024 * 1024
@@ -84,6 +85,15 @@ function sessionDir(root: string, token: string): string {
 
 function chunkFilePath(root: string, token: string, index: number): string {
   return path.join(sessionDir(root, token), `chunk-${index}.bin`)
+}
+
+function metaFilePath(root: string, token: string): string {
+  return path.join(sessionDir(root, token), 'meta.json')
+}
+
+interface StoredMeta extends CacheSessionMeta {
+  totalBytes: number | null
+  createdAt: number
 }
 
 export function chunkIndexForByte(byte: number, chunkBytes = CHUNK_BYTES): number {
@@ -208,8 +218,11 @@ export interface StreamCache {
   start(
     remoteUrl: string,
     durationSeconds: number | undefined,
-    maxBytes: number
+    maxBytes: number,
+    meta?: CacheSessionMeta
   ): Promise<StreamCacheStartResult>
+  /** Bare hex token of whatever session is currently loaded ('' when none) — lets the Downloads page's list/delete IPC handlers tell the live session apart from idle ones on disk (see listCacheSessions/deleteCacheSession below). */
+  getActiveToken(): string
   /** Called before every ffmpeg restart (a seek/track/quality change) — proactively repositions the sequential fetch so the new position is ready by the time the restarted reader asks for it, instead of reacting only once the request itself lands. Best-effort/non-blocking by design. */
   seekHint(targetSeconds: number): void
   isOwnCacheUrl(url: string): boolean
@@ -706,10 +719,30 @@ export function createStreamCache({
     })
   }
 
+  // Takes root/tok explicitly, same reasoning as writeChunk above — called
+  // fire-and-forget from start() right after cacheRoot/token are assigned
+  // for the new session, so a late-resolving call from a superseded
+  // generation must still only ever touch the session it was minted for.
+  async function writeMeta(
+    meta: CacheSessionMeta | undefined,
+    root: string,
+    forToken: string
+  ): Promise<void> {
+    if (!meta) return
+    try {
+      await fsp.mkdir(sessionDir(root, forToken), { recursive: true })
+      const stored: StoredMeta = { ...meta, totalBytes, createdAt: Date.now() }
+      await fsp.writeFile(metaFilePath(root, forToken), JSON.stringify(stored))
+    } catch (error) {
+      logError('streamCache:writeMeta', error)
+    }
+  }
+
   async function start(
     inputRemoteUrl: string,
     inputDurationSeconds: number | undefined,
-    inputMaxBytes: number
+    inputMaxBytes: number,
+    meta?: CacheSessionMeta
   ): Promise<StreamCacheStartResult> {
     await assertPublicMediaUrl(inputRemoteUrl, resolveHost)
     await stopInternal(false)
@@ -736,6 +769,7 @@ export function createStreamCache({
     await listen()
     totalBytes = await fetchTotalBytes()
     fullRetention = totalBytes !== null && maxBytes >= totalBytes
+    void writeMeta(meta, cacheRoot, token)
 
     const myGeneration = ++generation
     void runFill(0, myGeneration)
@@ -830,6 +864,17 @@ export function createStreamCache({
     // state that's already been cleared or replaced by the next title.
     settleFullRetentionWaiters(false)
     if (token) activeCacheTokens.delete(token)
+    // Cleared here, not just removed from activeCacheTokens above —
+    // getActiveToken() otherwise kept reporting this now-stopped session as
+    // the active one forever (until the next start() happened to overwrite
+    // it), which made listCacheSessions() mislabel a title that was merely
+    // closed-but-kept-for-resume as "Playing now" and made the Downloads
+    // page's delete handler refuse to delete it. Safe to clear
+    // unconditionally: start()'s own stopInternal(false) call immediately
+    // reassigns token on the very next line, so this is never observably
+    // empty there — only a real stop()/deleteSession() (closeServer: true,
+    // no follow-up start()) leaves it cleared.
+    token = ''
     if (closeServer && server) {
       const active = server
       server = null
@@ -856,6 +901,7 @@ export function createStreamCache({
 
   return {
     start,
+    getActiveToken: () => token,
     seekHint,
     isOwnCacheUrl,
     fullRetentionReady,
@@ -900,6 +946,66 @@ export async function pruneIdleSessions(maxAgeMs = 24 * 60 * 60 * 1000): Promise
       logError('streamCache:pruneIdleSessions', error)
     }
   }
+}
+
+/**
+ * Powers the Downloads page's "Cached Streams" list. Only directories with
+ * a readable `meta.json` are included — sessions started before this
+ * feature existed have none and are left for pruneIdleSessions' existing
+ * 24h backstop to clean up rather than showing up as unlabeled entries.
+ * Reads cacheRootDir() fresh (not any single instance's captured
+ * `cacheRoot`) so the list always reflects wherever the cache is CURRENTLY
+ * configured to live, same as pruneIdleSessions/clearAllSessions below.
+ */
+export async function listCacheSessions(activeToken: string): Promise<StreamCacheEntry[]> {
+  const root = cacheRootDir()
+  let entries: fs.Dirent[]
+  try {
+    entries = await fsp.readdir(root, { withFileTypes: true })
+  } catch {
+    return []
+  }
+  const result: StreamCacheEntry[] = []
+  for (const entry of entries) {
+    if (!entry.isDirectory() || !SESSION_TOKEN_RE.test(entry.name)) continue
+    const dir = path.join(root, entry.name)
+    try {
+      const raw = await fsp.readFile(metaFilePath(root, entry.name), 'utf8')
+      const meta = JSON.parse(raw) as StoredMeta
+      const files = await fsp.readdir(dir)
+      let cachedBytes = 0
+      for (const file of files) {
+        if (!file.startsWith('chunk-') || !file.endsWith('.bin')) continue
+        const stat = await fsp.stat(path.join(dir, file))
+        cachedBytes += stat.size
+      }
+      result.push({
+        token: entry.name,
+        title: meta.title,
+        posterUrl: meta.posterUrl,
+        catalogId: meta.catalogId,
+        mediaKind: meta.mediaKind,
+        seasonNumber: meta.seasonNumber,
+        episodeNumber: meta.episodeNumber,
+        cachedBytes,
+        totalBytes: meta.totalBytes,
+        isActive: entry.name === activeToken
+      })
+    } catch {
+      // No meta.json, or it's unreadable/corrupt — skip rather than show an unlabeled entry.
+    }
+  }
+  return result
+}
+
+/** Deletes an idle (non-active) session's directory outright — safe without
+ *  going through the live StreamCache instance since an idle directory has
+ *  no open server/fetch to tear down. Callers must check the token isn't
+ *  the currently active one first (see playbackSession.ts's IPC handler).
+ *  Reads cacheRootDir() fresh, same reasoning as listCacheSessions above. */
+export async function deleteCacheSession(token: string): Promise<void> {
+  if (!SESSION_TOKEN_RE.test(token)) throw new Error('Invalid cache session token.')
+  await fsp.rm(sessionDir(cacheRootDir(), token), { recursive: true, force: true })
 }
 
 /**

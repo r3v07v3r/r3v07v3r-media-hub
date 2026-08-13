@@ -180,6 +180,18 @@ interface PlayStreamPayload {
    *  LAST_STREAM_TTL_MS's own comment for why. */
   type?: string
   resolveId?: string
+  /** Renderer-supplied metadata for the stream-cache manifest (see
+   *  streamCache.ts's meta.json) — the Downloads page's "Cached Streams"
+   *  list reads this back. `catalogId` is the bare, routable catalog id;
+   *  distinct from `mediaId` above, which is the composite
+   *  `imdbId:season:episode` key used for stream resolution. All optional:
+   *  a play:stream call that omits them just means this session won't show
+   *  up with a title/poster in that list. */
+  catalogId?: string
+  title?: string
+  posterUrl?: string
+  season?: number
+  episode?: number
 }
 
 /** How long play:stream's "last stream that actually worked for this
@@ -416,7 +428,7 @@ export function registerTorBoxIpc(): void {
 
   handle<PlayStreamPayload, PlaybackResult>(
     MEDIA_HUB_CHANNELS.playStream,
-    async (_e, { stream, mediaId, type, resolveId }) => {
+    async (_e, { stream, mediaId, type, resolveId, catalogId, title, posterUrl, season, episode }) => {
       const auth = getTorBoxToken()
       const hash = String(stream?.infoHash || '').toLowerCase()
       if (!/^[a-f0-9]{40}$/.test(hash)) {
@@ -509,7 +521,19 @@ export function registerTorBoxIpc(): void {
         logError('torbox:play:retry', error)
         url = await resolveDownloadUrl(true)
       }
-      const result = await preparePlayback(url)
+      const result = await preparePlayback(
+        url,
+        title
+          ? {
+              title,
+              posterUrl,
+              catalogId,
+              mediaKind: type as 'movie' | 'series' | 'anime' | undefined,
+              seasonNumber: season,
+              episodeNumber: episode
+            }
+          : undefined
+      )
       // Only remembered once playback actually started — see
       // stream:resolve's own "fast path 2" comment for where this gets
       // read back. Records the stream that was ACTUALLY used, which isn't
@@ -547,6 +571,11 @@ export function registerTorBoxIpc(): void {
     const url =
       typeof result.data === 'string' ? result.data : result.data?.url || result.data?.download_url
     if (!url) throw new Error('TorBox did not return a playable URL.')
-    return preparePlayback(url)
+    // Best-effort only — the raw TorBox payload has no poster and its
+    // catalog match (see enrichTorBoxItem) isn't recomputed here, so this
+    // session shows up in the Downloads page's Cached Streams list with a
+    // release-name title and no artwork rather than not at all.
+    const title = String(item.name || item.filename || '').trim()
+    return preparePlayback(url, title ? { title, catalogId: item.metadataId } : undefined)
   })
 }
