@@ -174,6 +174,18 @@ const activeCacheTokens = new Set<string>()
 
 const OWN_CACHE_URL_RE = /^http:\/\/127\.0\.0\.1:\d+\/stream\/([a-f0-9]{64})$/
 
+// Same shape as the tokens minted above (crypto.randomBytes(32).toString
+// ('hex')) — pruneIdleSessions/clearAllSessions both walk whatever
+// directory the person has streamCacheDir pointed at, which (per the
+// folder picker's own validation) can be ANY writable directory of their
+// choosing, not necessarily one this app created from scratch. Without
+// this check, a chosen folder that happens to already contain its own
+// unrelated 'stream-cache' subfolder (someone else's data, a leftover
+// from something else entirely) would have every child directory treated
+// as a deletable session. Only ever touch entries that are actually
+// shaped like a token this module would have minted.
+const SESSION_TOKEN_RE = /^[a-f0-9]{64}$/
+
 export function isOwnCacheUrl(url: unknown): boolean {
   const match = OWN_CACHE_URL_RE.exec(String(url))
   return Boolean(match && activeCacheTokens.has(match[1]))
@@ -255,11 +267,24 @@ export function createStreamCache({
 
   const chunks = new Map<number, ChunkStatus>()
   const waiters = new Map<number, ChunkWaiter[]>()
-  // Resolved once fullRetentionReady() actually becomes true — see
-  // waitForFullRetentionReady, which playbackExtractSubtitle uses instead
-  // of failing immediately just because the whole file hasn't finished
-  // caching yet.
-  let fullRetentionWaiters: Array<() => void> = []
+  // Resolved once fullRetentionReady() actually becomes true (ready=true)
+  // OR once it's known that it never will for this session — torn down
+  // (a title change/stop) or downgraded out of fullRetention by disk
+  // pressure (ready=false in both cases) — see waitForFullRetentionReady,
+  // which playbackExtractSubtitle uses instead of failing immediately just
+  // because the whole file hasn't finished caching yet. The bool param
+  // matters: resolving every pending waiter as if it were a genuine
+  // success, even during teardown, would let playbackExtractSubtitle
+  // proceed against a session that's already gone or been replaced.
+  let fullRetentionWaiters: Array<(ready: boolean) => void> = []
+
+  /** The one place any of these waiters are ever resolved — keeps every call site honest about which outcome it's actually reporting. */
+  function settleFullRetentionWaiters(ready: boolean): void {
+    if (!fullRetentionWaiters.length) return
+    const pending = fullRetentionWaiters
+    fullRetentionWaiters = []
+    for (const resolve of pending) resolve(ready)
+  }
 
   function bytesPerSecond(): number | undefined {
     if (!durationSeconds || durationSeconds <= 0 || !totalBytes) return undefined
@@ -284,9 +309,7 @@ export function createStreamCache({
 
   function notifyFullRetentionReady(): void {
     if (!fullRetention || !downloadComplete) return
-    const pending = fullRetentionWaiters
-    fullRetentionWaiters = []
-    for (const resolve of pending) resolve()
+    settleFullRetentionWaiters(true)
   }
 
   function byteForSeconds(seconds: number): number | undefined {
@@ -354,6 +377,11 @@ export function createStreamCache({
     // guarantee anyway.
     if (fullRetention && lowOnDisk) {
       fullRetention = false
+      // Readiness is now provably impossible for this session — anyone
+      // already waiting in waitForFullRetentionReady must find out right
+      // now, not sit until their own (up to 20-minute) timeout expires
+      // when the outcome is already known.
+      settleFullRetentionWaiters(false)
       await evictOutsideRetained()
       return
     }
@@ -736,15 +764,21 @@ export function createStreamCache({
     if (!fullRetention) return Promise.resolve(false)
     return new Promise<boolean>((resolve) => {
       const timer = setTimeout(() => {
-        const i = fullRetentionWaiters.indexOf(resolveOnce)
+        const i = fullRetentionWaiters.indexOf(resolveWith)
         if (i >= 0) fullRetentionWaiters.splice(i, 1)
         resolve(fullRetentionReady())
       }, timeoutMs)
-      const resolveOnce = (): void => {
+      // `ready` here is exactly what settleFullRetentionWaiters passed —
+      // true only from notifyFullRetentionReady's genuine success path;
+      // false from teardown (title changed/stopped) or a disk-pressure
+      // downgrade out of fullRetention, both of which mean this session
+      // will never become ready and the caller must not proceed as if it
+      // had (see settleFullRetentionWaiters' own comment).
+      const resolveWith = (ready: boolean): void => {
         clearTimeout(timer)
-        resolve(true)
+        resolve(ready)
       }
-      fullRetentionWaiters.push(resolveOnce)
+      fullRetentionWaiters.push(resolveWith)
     })
   }
 
@@ -757,13 +791,12 @@ export function createStreamCache({
       diskCheckTimer = undefined
     }
     // Nobody waiting on THIS (now-ending) session's full-retention state
-    // should hang until their own timeout — resolve them now, one way or
-    // the other, same as any other teardown.
-    if (fullRetentionWaiters.length) {
-      const pending = fullRetentionWaiters
-      fullRetentionWaiters = []
-      for (const resolve of pending) resolve()
-    }
+    // should hang until their own timeout — and it must resolve as NOT
+    // ready: the session this waiter cares about is gone (title changed)
+    // or about to be (stop()), so proceeding as if it had actually
+    // finished caching would mean extracting against activeCacheUrl/track
+    // state that's already been cleared or replaced by the next title.
+    settleFullRetentionWaiters(false)
     if (token) activeCacheTokens.delete(token)
     if (closeServer && server) {
       const active = server
@@ -818,7 +851,8 @@ export async function pruneIdleSessions(maxAgeMs = 24 * 60 * 60 * 1000): Promise
   }
   const cutoff = Date.now() - maxAgeMs
   for (const entry of entries) {
-    if (!entry.isDirectory() || activeCacheTokens.has(entry.name)) continue
+    if (!entry.isDirectory() || !SESSION_TOKEN_RE.test(entry.name)) continue
+    if (activeCacheTokens.has(entry.name)) continue
     const dir = path.join(root, entry.name)
     try {
       const files = await fsp.readdir(dir)
@@ -858,7 +892,8 @@ export async function clearAllSessions(): Promise<number> {
   }
   let freedBytes = 0
   for (const entry of entries) {
-    if (!entry.isDirectory() || activeCacheTokens.has(entry.name)) continue
+    if (!entry.isDirectory() || !SESSION_TOKEN_RE.test(entry.name)) continue
+    if (activeCacheTokens.has(entry.name)) continue
     const dir = path.join(root, entry.name)
     try {
       const files = await fsp.readdir(dir)
