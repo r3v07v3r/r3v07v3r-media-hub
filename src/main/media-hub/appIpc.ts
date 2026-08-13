@@ -15,7 +15,7 @@ import { MEDIA_HUB_CHANNELS } from '../../shared/media-hub/ipc-channels'
 import type { MediaHubPublicSettings, MediaHubSettingsSnapshot } from '../../shared/media-hub/types'
 import { handle } from './ipcGuard'
 import { logError } from './logger'
-import { ffmpegPath, stopPlayback } from './playbackSession'
+import { ffmpegPath, hasActivePlayback, stopPlayback } from './playbackSession'
 import { normalizeTheme, publicSettings, logoutSettings, THEMES } from './preferences'
 import { normalizePlaybackBuffer } from '../../shared/media-hub/playbackBuffer'
 import { isAllowedExternalUrl } from './security'
@@ -186,6 +186,22 @@ export function registerAppIpc(): void {
   handle<undefined, { streamCacheDir?: string; cancelled?: boolean; error?: string }>(
     MEDIA_HUB_CHANNELS.settingsChooseStreamCacheDir,
     async (event) => {
+      // A live StreamCache instance keeps writing to whichever root it
+      // captured at start() regardless of a later setting change — and
+      // every list/prune/clear call only ever resolves the CURRENT
+      // setting, so an active session's directory left behind at the old
+      // location would never be reachable again once this changes.
+      // Refusing the change outright (rather than trying to relocate an
+      // in-flight download's directory out from under its own writer, or
+      // silently stranding it) is the safe option; the person just needs
+      // to stop playback first. Checked before even opening the picker so
+      // choosing a folder is never wasted effort.
+      if (hasActivePlayback()) {
+        return {
+          streamCacheDir: readSettings().streamCacheDir,
+          error: 'Stop playback before changing the cache location.'
+        }
+      }
       const win = BrowserWindow.fromWebContents(event.sender)
       const result = win
         ? await dialog.showOpenDialog(win, {
@@ -219,12 +235,10 @@ export function registerAppIpc(): void {
       // unreachable the instant the setting changes: listCacheSessions/
       // pruneIdleSessions/clearAllSessions only ever look at the CURRENT
       // setting, so they'd sit there indefinitely, potentially many
-      // gigabytes, with no path back to them. Only the currently-ACTIVE
-      // session (if playback is somehow running while this dialog is open)
-      // is left alone, same as every other clearAllSessions call site — it
-      // keeps writing to the location its own start() already captured
-      // until that title stops, at which point it's an ordinary idle
-      // directory the next folder-change or manual "Clear cache" reaches.
+      // gigabytes, with no path back to them. The hasActivePlayback()
+      // guard above means there's no active session to worry about
+      // preserving here — every directory clearAllSessions finds at this
+      // point is genuinely idle.
       await clearAllSessions()
       const settings = readSettings()
       settings.streamCacheDir = chosen
@@ -236,9 +250,15 @@ export function registerAppIpc(): void {
   handle<undefined, { streamCacheDir?: string }>(
     MEDIA_HUB_CHANNELS.settingsResetStreamCacheDir,
     async () => {
-      // Same reasoning as settingsChooseStreamCacheDir above — clear the
-      // (still-current-until-the-write-below) custom location before
-      // reverting to the default userData path, so it isn't stranded.
+      // Same reasoning as settingsChooseStreamCacheDir above — refuse
+      // while a session is actively writing to the current root, rather
+      // than stranding its directory once this reverts to the default.
+      if (hasActivePlayback()) {
+        throw new Error('Stop playback before changing the cache location.')
+      }
+      // Clears the (still-current-until-the-write-below) custom location
+      // before reverting to the default userData path, so it isn't
+      // stranded — see settingsChooseStreamCacheDir's own comment.
       await clearAllSessions()
       const settings = readSettings()
       delete settings.streamCacheDir

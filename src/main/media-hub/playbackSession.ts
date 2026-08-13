@@ -78,6 +78,18 @@ const SUBTITLE_CACHE_WAIT_MS = 20 * 60 * 1000
 export const ffmpegPath = findFfmpeg()
 export const ffprobePath = findFfprobe()
 
+/** True while a title is actively playing (has a live stream-cache
+ *  session) — see appIpc.ts's stream-cache-location handlers, which
+ *  refuse to change the cache folder while this is true rather than
+ *  leaving the active session's directory behind at the old location
+ *  with no way back to it (a live StreamCache instance keeps writing to
+ *  the root it captured at start() regardless of a later setting change,
+ *  and every list/prune/clear call only ever resolves the CURRENT
+ *  setting). */
+export function hasActivePlayback(): boolean {
+  return Boolean(streamCache.getActiveToken())
+}
+
 // The sole owner of the upstream connection to the current title's remote
 // link (see streamCache.ts's own header comment). Both playback modes now
 // read from its local cache server: ffmpeg's `-i` in compatibility mode,

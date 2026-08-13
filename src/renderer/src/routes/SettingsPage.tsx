@@ -754,7 +754,22 @@ export default function SettingsPage() {
 
   async function handleResetStreamCacheDir() {
     const api = window.api?.mediaHub?.settings
-    if (api) await saveSetting('settings.stream-cache-dir-reset', () => api.resetStreamCacheDir())
+    if (!api) return
+    setStreamCacheDirStatus({ kind: 'busy' })
+    try {
+      await api.resetStreamCacheDir()
+      setStreamCacheDirStatus({ kind: 'idle' })
+      await refreshMediaHubSettings()
+    } catch (error) {
+      // Own try/catch (not the generic saveSetting wrapper) so a specific
+      // refusal — e.g. "stop playback first" — reaches the person instead
+      // of saveSetting's fixed "Couldn't save that setting." Mirrors
+      // handleChooseStreamCacheDir's own handling just above.
+      setStreamCacheDirStatus({
+        kind: 'error',
+        message: error instanceof Error ? error.message : 'Could not reset the folder.'
+      })
+    }
   }
 
   async function handleClearStreamCache() {
