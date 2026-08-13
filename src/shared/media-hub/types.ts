@@ -424,8 +424,10 @@ export interface MediaHubPublicSettings {
   /** Upper bounds used when choosing a release. Zero means unrestricted. */
   maxStreamResolution: number
   maxStreamSizeGb: number
-  /** How much local disk the local rolling playback cache (streamCache.ts) may use — separate from maxStreamSizeGb above, which filters which releases get selected, not how they're cached once playing. Zero means unbounded/drive-limited (still subject to a free-space safety margin). */
-  streamCacheMaxGb: number
+  /** How much local disk the local rolling playback cache (streamCache.ts) may use — separate from maxStreamSizeGb above, which filters which releases get selected, not how they're cached once playing. Zero (an explicit choice) means unbounded/drive-limited (still subject to a free-space safety margin). Undefined means never configured — the backend's actual enforced default is 10GB (see playbackSession.ts's resolveStreamCacheMaxBytes), NOT unbounded, so this must stay undefined here rather than being coerced to 0 — the renderer falls back to the same 10 to display the true default. */
+  streamCacheMaxGb?: number
+  /** Folder the local rolling playback cache is stored under (e.g. a secondary drive) — undefined means the default app-data location. streamCache.ts always nests its own 'stream-cache' subfolder inside this. Changing it does not move already-cached data from the old location. */
+  streamCacheDir?: string
   /** Last measured downstream speed. Informational; the test is only run on demand. */
   connectionSpeedMbps?: number
   /** Last height the player's own quality menu was set to (see UpscaleSuggestion) — remembered so the next applicable title's suggestion defaults to it instead of always recomputing from screen size. Global to this install, not per-profile — same scope as every other setting here (playbackBuffer, videoTranscodeEnabled, etc.), which don't have per-profile scoping either. Undefined until the person has picked one at least once. */

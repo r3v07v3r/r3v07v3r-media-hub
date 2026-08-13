@@ -53,7 +53,20 @@ export function publicSettings(settings: Record<string, unknown> = {}): MediaHub
     videoTranscodeEnabled: settings.videoTranscodeEnabled === true,
     maxStreamResolution: Number(settings.maxStreamResolution) || 0,
     maxStreamSizeGb: Number(settings.maxStreamSizeGb) || 0,
-    streamCacheMaxGb: Number(settings.streamCacheMaxGb) || 0,
+    // Deliberately NOT `Number(x) || 0`: that coerces "never configured"
+    // (undefined) to the same 0 as "explicitly set to unbounded", and the
+    // renderer displays 0 as "Unlimited" — a real, confirmed bug where an
+    // unconfigured install showed "Unlimited" while the backend was
+    // actually enforcing its true 10GB default (resolveStreamCacheMaxBytes
+    // in playbackSession.ts, which reads the same raw settings directly
+    // and treats undefined/0 as genuinely different cases). Preserving
+    // undefined here lets the renderer's own `?? 10` fallback show the
+    // real default instead of a wrong one.
+    streamCacheMaxGb:
+      typeof settings.streamCacheMaxGb === 'number' && Number.isFinite(settings.streamCacheMaxGb)
+        ? settings.streamCacheMaxGb
+        : undefined,
+    streamCacheDir: typeof settings.streamCacheDir === 'string' ? settings.streamCacheDir : undefined,
     connectionSpeedMbps:
       Number(settings.connectionSpeedMbps) > 0 ? Number(settings.connectionSpeedMbps) : undefined,
     hideWatchedDefault: settings.hideWatchedDefault === true,
@@ -83,6 +96,7 @@ export function logoutSettings(
   | 'maxStreamResolution'
   | 'maxStreamSizeGb'
   | 'streamCacheMaxGb'
+  | 'streamCacheDir'
   | 'connectionSpeedMbps'
   | 'hideWatchedDefault'
   | 'hideCompletedDefault'
@@ -98,7 +112,20 @@ export function logoutSettings(
     videoTranscodeEnabled: settings.videoTranscodeEnabled === true,
     maxStreamResolution: Number(settings.maxStreamResolution) || 0,
     maxStreamSizeGb: Number(settings.maxStreamSizeGb) || 0,
-    streamCacheMaxGb: Number(settings.streamCacheMaxGb) || 0,
+    // Deliberately NOT `Number(x) || 0`: that coerces "never configured"
+    // (undefined) to the same 0 as "explicitly set to unbounded", and the
+    // renderer displays 0 as "Unlimited" — a real, confirmed bug where an
+    // unconfigured install showed "Unlimited" while the backend was
+    // actually enforcing its true 10GB default (resolveStreamCacheMaxBytes
+    // in playbackSession.ts, which reads the same raw settings directly
+    // and treats undefined/0 as genuinely different cases). Preserving
+    // undefined here lets the renderer's own `?? 10` fallback show the
+    // real default instead of a wrong one.
+    streamCacheMaxGb:
+      typeof settings.streamCacheMaxGb === 'number' && Number.isFinite(settings.streamCacheMaxGb)
+        ? settings.streamCacheMaxGb
+        : undefined,
+    streamCacheDir: typeof settings.streamCacheDir === 'string' ? settings.streamCacheDir : undefined,
     connectionSpeedMbps:
       Number(settings.connectionSpeedMbps) > 0 ? Number(settings.connectionSpeedMbps) : undefined,
     hideWatchedDefault: settings.hideWatchedDefault === true,

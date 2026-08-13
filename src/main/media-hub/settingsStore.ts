@@ -78,6 +78,16 @@ export interface MediaHubRawSettings {
    *  "never configured," which defaults to a moderate 10GB rather than
    *  silently unbounded. */
   streamCacheMaxGb?: number
+  /** Absolute path to a folder streamCache.ts should use INSTEAD of the
+   *  default (app.getPath('userData')) — e.g. a secondary drive with more
+   *  free space. streamCache.ts always nests its own 'stream-cache'
+   *  subfolder inside whatever this resolves to, so it never treats an
+   *  arbitrary user-chosen folder's other contents as its own to manage/
+   *  delete. undefined means "use the default location." Validated
+   *  (writable, real directory) before being saved — see appIpc.ts's
+   *  settingsChooseStreamCacheDir. Changing this does NOT move any
+   *  already-cached data from the old location. */
+  streamCacheDir?: string
   hideWatchedDefault?: boolean
   hideCompletedDefault?: boolean
   hideDislikedDefault?: boolean

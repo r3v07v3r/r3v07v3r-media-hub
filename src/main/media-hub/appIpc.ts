@@ -7,14 +7,19 @@
 // original — do not "improve" any of it without re-auditing against the
 // source app.
 
-import { app, BrowserWindow, clipboard, shell } from 'electron'
+import { app, BrowserWindow, clipboard, dialog, shell } from 'electron'
+import crypto from 'node:crypto'
+import fsp from 'node:fs/promises'
+import path from 'node:path'
 import { MEDIA_HUB_CHANNELS } from '../../shared/media-hub/ipc-channels'
 import type { MediaHubPublicSettings, MediaHubSettingsSnapshot } from '../../shared/media-hub/types'
 import { handle } from './ipcGuard'
+import { logError } from './logger'
 import { ffmpegPath, stopPlayback } from './playbackSession'
 import { normalizeTheme, publicSettings, logoutSettings, THEMES } from './preferences'
 import { normalizePlaybackBuffer } from '../../shared/media-hub/playbackBuffer'
 import { isAllowedExternalUrl } from './security'
+import { MIN_CACHE_BYTES } from './streamCache'
 import {
   getTorBoxToken,
   omdbCredentials,
@@ -144,22 +149,83 @@ export function registerAppIpc(): void {
     }
   })
 
-  // Presets shown by SettingsPage's cache-size row; 0 is "unbounded/drive-
-  // limited" (still subject to streamCache.ts's own free-space safety
-  // margin), not "off" — the feature always runs, this only bounds it.
-  // Anything below streamCache.ts's own MIN_CACHE_BYTES floor is clamped
-  // up server-side there regardless of what's requested here.
+  // Accepts any non-negative value, not just SettingsPage's quick-pick
+  // presets — the person can type their own (3, 12, 15, whatever). 0 is
+  // "unbounded/drive-limited" (still subject to streamCache.ts's own
+  // free-space safety margin), not "off" — the feature always runs, this
+  // only bounds it, and is left exactly as requested rather than clamped.
+  // Anything else is clamped into [MIN_CACHE_GB, 2000]: the floor mirrors
+  // streamCache.ts's own MIN_CACHE_BYTES exactly (re-clamped there
+  // regardless of what's saved here, so this is just for a sane UI value,
+  // not the actual enforcement point); 2000 is a sanity ceiling against a
+  // mistyped value (e.g. an extra zero), not a real limit.
+  const MIN_CACHE_GB = Math.ceil(MIN_CACHE_BYTES / (1024 * 1024 * 1024))
   handle<{ streamCacheMaxGb?: number }, { streamCacheMaxGb: number }>(
     MEDIA_HUB_CHANNELS.settingsSetStreamCacheSize,
     (_event, value) => {
       const settings = readSettings()
-      const presets = new Set([0, 2, 5, 10, 20, 50])
       const requested = Number(value?.streamCacheMaxGb)
-      if (presets.has(requested)) settings.streamCacheMaxGb = requested
+      if (Number.isFinite(requested) && requested >= 0) {
+        settings.streamCacheMaxGb =
+          requested === 0 ? 0 : Math.min(2000, Math.max(MIN_CACHE_GB, Math.round(requested)))
+      }
       writeSettings(settings)
       return { streamCacheMaxGb: Number(settings.streamCacheMaxGb) || 0 }
     }
   )
+
+  // Opens a native folder picker and, if the person actually chose a
+  // folder (not cancelled), validates it's genuinely writable — probing
+  // with a real write+delete inside the actual 'stream-cache' subfolder
+  // streamCache.ts will use, not just the chosen folder itself — before
+  // saving it. Does NOT move any already-cached data from the old
+  // location; that's surfaced in the settings description, not handled
+  // here, since silently relocating a possibly-large amount of data on a
+  // settings change would be a surprising, slow side effect of what looks
+  // like a simple picker.
+  handle<undefined, { streamCacheDir?: string; cancelled?: boolean; error?: string }>(
+    MEDIA_HUB_CHANNELS.settingsChooseStreamCacheDir,
+    async (event) => {
+      const win = BrowserWindow.fromWebContents(event.sender)
+      const result = win
+        ? await dialog.showOpenDialog(win, {
+            properties: ['openDirectory', 'createDirectory'],
+            title: 'Choose a folder for the stream cache'
+          })
+        : await dialog.showOpenDialog({
+            properties: ['openDirectory', 'createDirectory'],
+            title: 'Choose a folder for the stream cache'
+          })
+      const chosen = result.canceled ? undefined : result.filePaths[0]
+      if (!chosen) {
+        return { streamCacheDir: readSettings().streamCacheDir, cancelled: true }
+      }
+      const probeDir = path.join(chosen, 'stream-cache')
+      try {
+        await fsp.mkdir(probeDir, { recursive: true })
+        const probeFile = path.join(probeDir, `.write-test-${crypto.randomBytes(8).toString('hex')}`)
+        await fsp.writeFile(probeFile, 'ok')
+        await fsp.unlink(probeFile)
+      } catch (error) {
+        logError('settings:choose-stream-cache-dir', error)
+        return {
+          streamCacheDir: readSettings().streamCacheDir,
+          error: 'That folder is not writable.'
+        }
+      }
+      const settings = readSettings()
+      settings.streamCacheDir = chosen
+      writeSettings(settings)
+      return { streamCacheDir: chosen }
+    }
+  )
+
+  handle<undefined, { streamCacheDir?: string }>(MEDIA_HUB_CHANNELS.settingsResetStreamCacheDir, () => {
+    const settings = readSettings()
+    delete settings.streamCacheDir
+    writeSettings(settings)
+    return { streamCacheDir: undefined }
+  })
 
   handle<unknown, { partyDisplayName: string }>(
     MEDIA_HUB_CHANNELS.settingsSetPartyDisplayName,
