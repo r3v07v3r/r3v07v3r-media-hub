@@ -59,6 +59,13 @@ import {
  *  budget on ordinary hardware; 2160p routinely did not. */
 const TRANSCODE_MAX_HEIGHT = 1080
 
+/** How long playbackExtractSubtitle waits for streamCache's whole-file
+ *  caching to finish before giving up — see its own comment. Generous:
+ *  this is "how long until we admit caching genuinely isn't going to
+ *  finish soon," not a typical wait, and a large title on an ordinary
+ *  connection can legitimately take many minutes to fully download. */
+const SUBTITLE_CACHE_WAIT_MS = 20 * 60 * 1000
+
 export const ffmpegPath = findFfmpeg()
 export const ffprobePath = findFfprobe()
 
@@ -528,14 +535,21 @@ export function registerPlaybackIpc(): void {
       if (!activeCacheUrl) return null
       const index = Number(ordinal)
       if (!Number.isInteger(index) || index < 0) return null
-      // Only reachable once the WHOLE file is locally cached — extracting
-      // against a not-yet-fully-cached title would mean ffmpeg reading past
-      // what's actually on disk, i.e. StreamCache repositioning its one
-      // upstream connection specifically to serve this, mid-playback. The
-      // renderer already greys out the "Embedded" subtitle menu in this
-      // case (see PlaybackOverlay's fullRetentionReady check); this is the
-      // defensive backstop, not the primary gate.
-      if (!streamCache.fullRetentionReady()) return null
+      // Reachable as soon as the title QUALIFIES for fullRetention (the
+      // configured cache is large enough to eventually hold the whole
+      // file) — not only once caching has actually FINISHED. The renderer
+      // enables the "Embedded" subtitle menu the moment a title qualifies
+      // (see preparePlayback's embeddedSubtitlesAvailable), which is
+      // usually well before the download completes, so a straight
+      // fullRetentionReady() check here would routinely return null for a
+      // perfectly legitimate click during normal early playback — a
+      // confirmed, misleading "no subtitle data was found" error. Waiting
+      // (bounded) instead turns that into the same "Extracting… this can
+      // take a while" state the UI already shows for the whole call,
+      // rather than a false failure. Only a title that never qualifies for
+      // fullRetention at all (cache too small) returns immediately.
+      const ready = await streamCache.waitForFullRetentionReady(SUBTITLE_CACHE_WAIT_MS)
+      if (!ready) return null
       // Two callers can want a track at once (a re-click, a party member
       // following a subtitle change) — sharing the in-flight batch promise
       // means one demux for every track this title has, not one per call.

@@ -201,8 +201,10 @@ export interface StreamCache {
   /** Called before every ffmpeg restart (a seek/track/quality change) — proactively repositions the sequential fetch so the new position is ready by the time the restarted reader asks for it, instead of reacting only once the request itself lands. Best-effort/non-blocking by design. */
   seekHint(targetSeconds: number): void
   isOwnCacheUrl(url: string): boolean
-  /** True once fullRetention mode (see start) has reached EOF — the whole file is locally cached, so a single batched all-tracks subtitle extraction pass can run against it. */
+  /** True once fullRetention mode (see start) has verified full byte-range coverage — the whole file is locally cached, so a single batched all-tracks subtitle extraction pass can run against it. */
   fullRetentionReady(): boolean
+  /** Waits (bounded by timeoutMs) for fullRetentionReady() to become true, resolving true as soon as it does rather than only checking once. Resolves false immediately if this title was never in fullRetention mode to begin with. */
+  waitForFullRetentionReady(timeoutMs: number): Promise<boolean>
   /** Aborts the fetch and closes the local server; chunk files stay on disk (see pruneIdleSessions for the actual cleanup backstop). */
   stop(): Promise<void>
   /** stop() + delete the session's chunk directory. */
@@ -253,10 +255,38 @@ export function createStreamCache({
 
   const chunks = new Map<number, ChunkStatus>()
   const waiters = new Map<number, ChunkWaiter[]>()
+  // Resolved once fullRetentionReady() actually becomes true — see
+  // waitForFullRetentionReady, which playbackExtractSubtitle uses instead
+  // of failing immediately just because the whole file hasn't finished
+  // caching yet.
+  let fullRetentionWaiters: Array<() => void> = []
 
   function bytesPerSecond(): number | undefined {
     if (!durationSeconds || durationSeconds <= 0 || !totalBytes) return undefined
     return totalBytes / durationSeconds
+  }
+
+  // Whether EVERY chunk from byte 0 through totalBytes-1 is actually
+  // 'ready' — not just "the most recent fill reached EOF". A seek that
+  // aborts the initial front-to-back fill before it finishes, followed by
+  // a later ranged fill that reaches EOF from its own (later) starting
+  // point, must NOT be read as "the whole file is cached": the skipped
+  // middle chunks are still missing. Only ever called right as a fill
+  // reaches EOF (not per-chunk), so the O(chunk count) scan is fine.
+  function hasFullCoverage(): boolean {
+    if (totalBytes === null) return false
+    const lastIndex = chunkIndexForByte(totalBytes - 1)
+    for (let i = 0; i <= lastIndex; i++) {
+      if (chunks.get(i) !== 'ready') return false
+    }
+    return true
+  }
+
+  function notifyFullRetentionReady(): void {
+    if (!fullRetention || !downloadComplete) return
+    const pending = fullRetentionWaiters
+    fullRetentionWaiters = []
+    for (const resolve of pending) resolve()
   }
 
   function byteForSeconds(seconds: number): number | undefined {
@@ -310,8 +340,24 @@ export function createStreamCache({
       // statfs unsupported/unavailable on this platform — fall back to the
       // configured cap alone rather than blocking the feature entirely.
     }
-    const overCap = residentBytes > maxBytes
     const lowOnDisk = freeBytes < DISK_SAFETY_MARGIN_BYTES
+    // fullRetention (an unbounded/large-enough cap) means evictOutsideRetained
+    // is normally a deliberate no-op — the whole point is to keep everything
+    // for a later batched subtitle extraction. But that must never win over
+    // actually running out of disk: with nothing ever evicted, a title
+    // bigger than the free space left the fill downloading straight through
+    // the safety margin with no way to reclaim space or even stop. Once
+    // disk pressure hits, permanently drop out of fullRetention for this
+    // session — the ordinary windowed retention below then evicts normally,
+    // and fullRetentionReady() (fullRetention && downloadComplete) correctly
+    // stops promising whole-file coverage, which this session can no longer
+    // guarantee anyway.
+    if (fullRetention && lowOnDisk) {
+      fullRetention = false
+      await evictOutsideRetained()
+      return
+    }
+    const overCap = residentBytes > maxBytes
     if ((overCap || lowOnDisk) && aheadSeconds > 5) {
       // Never touched: pinned head/tail regions, or behindSeconds — rewind
       // capability is worth more than look-ahead depth, so ahead-window is
@@ -362,9 +408,14 @@ export function createStreamCache({
     })
   }
 
-  async function writeChunk(index: number, data: Buffer): Promise<void> {
-    await fsp.mkdir(sessionDir(cacheRoot, token), { recursive: true })
-    const finalPath = chunkFilePath(cacheRoot, token, index)
+  // Takes root/tok explicitly rather than reading the shared cacheRoot/
+  // token closure vars itself — see runFill's own comment on why: a
+  // superseded generation's in-flight write must land in (or be skippable
+  // against) whatever session WAS active when IT started, never whatever
+  // start()/reposition() has since reassigned those shared vars to.
+  async function writeChunk(root: string, tok: string, index: number, data: Buffer): Promise<void> {
+    await fsp.mkdir(sessionDir(root, tok), { recursive: true })
+    const finalPath = chunkFilePath(root, tok, index)
     const tmpPath = `${finalPath}.tmp`
     await fsp.writeFile(tmpPath, data)
     await fsp.rename(tmpPath, finalPath)
@@ -381,6 +432,20 @@ export function createStreamCache({
     // boundary — simpler than stitching partial chunk buffers, and the
     // redundant handful of KB is negligible against the connection saved.
     const alignedStart = index * CHUNK_BYTES
+    // Captured once, right now — not re-read from the shared closure vars
+    // at write time. abort() on generation change doesn't guarantee an
+    // in-flight reader.read() rejects promptly: a stale read can resolve
+    // with real data after start()/reposition() has already reassigned
+    // token/cacheRoot/cleared chunks for a NEW session (flagged in review,
+    // not something caught live — but a real race given read() isn't
+    // rechecked against generation until it resolves). Every generation
+    // check below re-verifies before touching shared state, and every
+    // write uses THESE captured values so even a late-resolving stale
+    // write can only ever land in the session it actually belongs to,
+    // never silently corrupt whatever session is active by the time it
+    // finally settles.
+    const myToken = token
+    const myCacheRoot = cacheRoot
     try {
       const headers: Record<string, string> = { Range: `bytes=${alignedStart}-` }
       const response = await fetchMediaWithRetry(
@@ -389,6 +454,7 @@ export function createStreamCache({
         fetchImpl,
         resolveHost
       )
+      if (generation !== myGeneration) return
       if (!response.body) return
       const reader = response.body.getReader()
       let buffered = Buffer.alloc(0)
@@ -396,21 +462,28 @@ export function createStreamCache({
       for (;;) {
         if (generation !== myGeneration) return
         const { done, value } = await reader.read()
+        if (generation !== myGeneration) return
         if (done) {
           if (buffered.length > 0) {
-            await writeChunk(index, buffered)
+            await writeChunk(myCacheRoot, myToken, index, buffered)
+            if (generation !== myGeneration) return
             markChunk(index, 'ready')
           }
-          downloadComplete = true
+          if (hasFullCoverage()) {
+            downloadComplete = true
+            notifyFullRetentionReady()
+          }
           return
         }
         buffered = Buffer.concat([buffered, Buffer.from(value)])
         bytePos += value.byteLength
         fillFrontierByte = bytePos
         while (buffered.length >= CHUNK_BYTES) {
+          if (generation !== myGeneration) return
           const chunkData = buffered.subarray(0, CHUNK_BYTES)
           buffered = Buffer.from(buffered.subarray(CHUNK_BYTES))
-          await writeChunk(index, chunkData)
+          await writeChunk(myCacheRoot, myToken, index, chunkData)
+          if (generation !== myGeneration) return
           markChunk(index, 'ready')
           await evictOutsideRetained()
           await squeezeForPressure()
@@ -646,6 +719,35 @@ export function createStreamCache({
     return fullRetention && downloadComplete
   }
 
+  /**
+   * Waits for fullRetentionReady() to become true, up to timeoutMs, instead
+   * of the caller failing immediately just because the whole file hasn't
+   * finished caching yet. playbackExtractSubtitle uses this rather than
+   * checking fullRetentionReady() once and giving up — the renderer already
+   * shows a real "Extracting… this can take a while" busy state for the
+   * whole duration of that call, so waiting here (bounded) turns what used
+   * to be an immediate, misleading "no subtitle data was found" error into
+   * the same wait the person already expects, or a real failure only if
+   * caching genuinely never finishes (a small/capped cache, or a title too
+   * big to ever qualify for fullRetention at all).
+   */
+  function waitForFullRetentionReady(timeoutMs: number): Promise<boolean> {
+    if (fullRetentionReady()) return Promise.resolve(true)
+    if (!fullRetention) return Promise.resolve(false)
+    return new Promise<boolean>((resolve) => {
+      const timer = setTimeout(() => {
+        const i = fullRetentionWaiters.indexOf(resolveOnce)
+        if (i >= 0) fullRetentionWaiters.splice(i, 1)
+        resolve(fullRetentionReady())
+      }, timeoutMs)
+      const resolveOnce = (): void => {
+        clearTimeout(timer)
+        resolve(true)
+      }
+      fullRetentionWaiters.push(resolveOnce)
+    })
+  }
+
   async function stopInternal(closeServer: boolean): Promise<void> {
     generation += 1
     currentAbort?.abort()
@@ -653,6 +755,14 @@ export function createStreamCache({
     if (diskCheckTimer) {
       clearInterval(diskCheckTimer)
       diskCheckTimer = undefined
+    }
+    // Nobody waiting on THIS (now-ending) session's full-retention state
+    // should hang until their own timeout — resolve them now, one way or
+    // the other, same as any other teardown.
+    if (fullRetentionWaiters.length) {
+      const pending = fullRetentionWaiters
+      fullRetentionWaiters = []
+      for (const resolve of pending) resolve()
     }
     if (token) activeCacheTokens.delete(token)
     if (closeServer && server) {
@@ -684,6 +794,7 @@ export function createStreamCache({
     seekHint,
     isOwnCacheUrl,
     fullRetentionReady,
+    waitForFullRetentionReady,
     stop,
     deleteSession
   }
