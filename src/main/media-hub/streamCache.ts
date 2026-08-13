@@ -38,6 +38,7 @@ import { app } from 'electron'
 
 import { assertPublicMediaUrl, defaultResolveHost, fetchMediaWithRetry } from './playback'
 import { logError } from './logger'
+import { readSettings } from './settingsStore'
 
 const CHUNK_BYTES = 4 * 1024 * 1024
 const HEAD_BYTES = 16 * 1024 * 1024
@@ -54,16 +55,35 @@ const CHUNK_WAIT_TIMEOUT_MS = 20_000
 /** Same TorBox-connection-teardown grace delay as playbackSession.ts's closeDirectProxyBeforeTranscode — the local proxy/fetch closing doesn't guarantee the upstream fetch has actually torn down on TorBox's end yet. */
 const RECONNECT_GRACE_MS = 500
 
+/**
+ * Where the whole chunk cache lives on disk. Defaults to
+ * app.getPath('userData'), same as every other on-disk cache in this app
+ * (subtitleCacheDir, the settings file) — but honors settingsStore.ts's
+ * streamCacheDir override (e.g. a secondary drive with more free space)
+ * when one is configured. Always nests a 'stream-cache' subfolder inside
+ * whatever base directory this resolves to, so a user-chosen folder's
+ * OTHER contents are never something this module reads, writes, or
+ * deletes — only its own subfolder.
+ */
 function cacheRootDir(): string {
-  return path.join(app.getPath('userData'), 'stream-cache')
+  const configured = readSettings().streamCacheDir
+  const base = typeof configured === 'string' && configured.trim() ? configured : app.getPath('userData')
+  return path.join(base, 'stream-cache')
 }
 
-function sessionDir(token: string): string {
-  return path.join(cacheRootDir(), token)
+// Take `root` explicitly rather than calling cacheRootDir() themselves:
+// a StreamCache instance captures its own root ONCE per start() (see
+// `cacheRoot` in the closure below) rather than re-reading the setting on
+// every single file operation — if the person changes the configured
+// folder mid-download, a session already in flight must keep writing to
+// wherever it started, not split its chunks across two directories.
+// Changing the folder only takes effect for the NEXT title played.
+function sessionDir(root: string, token: string): string {
+  return path.join(root, token)
 }
 
-function chunkFilePath(token: string, index: number): string {
-  return path.join(sessionDir(token), `chunk-${index}.bin`)
+function chunkFilePath(root: string, token: string, index: number): string {
+  return path.join(sessionDir(root, token), `chunk-${index}.bin`)
 }
 
 export function chunkIndexForByte(byte: number, chunkBytes = CHUNK_BYTES): number {
@@ -207,6 +227,9 @@ export function createStreamCache({
   randomBytesImpl = crypto.randomBytes
 }: CreateStreamCacheOptions = {}): StreamCache {
   let token = ''
+  // Captured once per start() — see sessionDir/chunkFilePath's own comment
+  // on why this isn't just re-read from settings on every file operation.
+  let cacheRoot = ''
   let server: http.Server | null = null
   let origin = ''
   let remoteUrl = ''
@@ -264,7 +287,7 @@ export function createStreamCache({
     for (const index of toEvict) {
       chunks.delete(index)
       try {
-        await fsp.unlink(chunkFilePath(token, index))
+        await fsp.unlink(chunkFilePath(cacheRoot, token, index))
       } catch {
         // Already gone, or never fully written — either way, nothing to clean up.
       }
@@ -281,7 +304,7 @@ export function createStreamCache({
     const residentBytes = chunks.size * CHUNK_BYTES
     let freeBytes = Number.POSITIVE_INFINITY
     try {
-      const stat = await fsp.statfs(cacheRootDir())
+      const stat = await fsp.statfs(cacheRoot)
       freeBytes = stat.bavail * stat.bsize
     } catch {
       // statfs unsupported/unavailable on this platform — fall back to the
@@ -340,8 +363,8 @@ export function createStreamCache({
   }
 
   async function writeChunk(index: number, data: Buffer): Promise<void> {
-    await fsp.mkdir(sessionDir(token), { recursive: true })
-    const finalPath = chunkFilePath(token, index)
+    await fsp.mkdir(sessionDir(cacheRoot, token), { recursive: true })
+    const finalPath = chunkFilePath(cacheRoot, token, index)
     const tmpPath = `${finalPath}.tmp`
     await fsp.writeFile(tmpPath, data)
     await fsp.rename(tmpPath, finalPath)
@@ -497,7 +520,7 @@ export function createStreamCache({
       const offsetInChunk = bytePos - chunkStartByte
       let data: Buffer
       try {
-        data = await fsp.readFile(chunkFilePath(token, index))
+        data = await fsp.readFile(chunkFilePath(cacheRoot, token, index))
       } catch (error) {
         logError('streamCache:readChunk', error)
         if (!res.headersSent) res.writeHead(502, { 'cache-control': 'no-store' })
@@ -559,6 +582,9 @@ export function createStreamCache({
     await stopInternal(false)
     token = randomBytesImpl(32).toString('hex')
     activeCacheTokens.add(token)
+    // Captured once here, not re-read per file operation — see
+    // sessionDir/chunkFilePath's own comment.
+    cacheRoot = cacheRootDir()
     remoteUrl = inputRemoteUrl
     durationSeconds = inputDurationSeconds
     // 0 from the settings UI means "unbounded/drive-limited" — represented
@@ -642,7 +668,7 @@ export function createStreamCache({
   }
 
   async function deleteSession(): Promise<void> {
-    const dir = token ? sessionDir(token) : ''
+    const dir = token ? sessionDir(cacheRoot, token) : ''
     await stop()
     if (dir) {
       try {
@@ -697,4 +723,45 @@ export async function pruneIdleSessions(maxAgeMs = 24 * 60 * 60 * 1000): Promise
       logError('streamCache:pruneIdleSessions', error)
     }
   }
+}
+
+/**
+ * Manual "Clear cache" button backing (see playbackSession.ts's
+ * streamCacheClear handler) — deletes every session directory under the
+ * CURRENT streamCacheDir setting except whichever one (if any) is actively
+ * playing right now, regardless of age (unlike pruneIdleSessions' 24h
+ * threshold). Reads cacheRootDir() fresh rather than any single instance's
+ * captured `cacheRoot`, since this is meant to act on wherever the person
+ * has the cache configured RIGHT NOW — if they just changed the folder,
+ * this clears the NEW location, not a stale one. Clearing the OLD location
+ * after switching folders is not handled here; nothing in this app tracks
+ * where a stream cache used to live once the setting has moved on.
+ */
+export async function clearAllSessions(): Promise<number> {
+  const root = cacheRootDir()
+  let entries: fs.Dirent[]
+  try {
+    entries = await fsp.readdir(root, { withFileTypes: true })
+  } catch {
+    return 0
+  }
+  let freedBytes = 0
+  for (const entry of entries) {
+    if (!entry.isDirectory() || activeCacheTokens.has(entry.name)) continue
+    const dir = path.join(root, entry.name)
+    try {
+      const files = await fsp.readdir(dir)
+      for (const file of files) {
+        try {
+          freedBytes += (await fsp.stat(path.join(dir, file))).size
+        } catch {
+          // Already gone — nothing to count.
+        }
+      }
+      await fsp.rm(dir, { recursive: true, force: true })
+    } catch (error) {
+      logError('streamCache:clearAllSessions', error)
+    }
+  }
+  return freedBytes
 }

@@ -117,6 +117,95 @@ function SegmentedRow({
   )
 }
 
+/**
+ * Like SegmentedRow, but for a value that isn't limited to a fixed preset
+ * list — the presets are quick-picks (highlighted when the current value
+ * matches one exactly), and the number field next to them accepts any
+ * non-negative integer GB directly (3, 12, 15, whatever). Committed on
+ * blur/Enter, not on every keystroke, so a half-typed value never fires a
+ * settings write.
+ */
+function CacheSizeRow({
+  icon,
+  title,
+  description,
+  valueGb,
+  presets,
+  onChange
+}: {
+  icon: string
+  title: string
+  description: string
+  valueGb: number
+  presets: { value: string; label: string }[]
+  onChange: (gb: number) => void
+}) {
+  const [draft, setDraft] = useState(String(valueGb))
+  // React's own "adjusting state when a prop changes" pattern — updated
+  // DURING render (not in an effect, which would cost an extra render
+  // pass) whenever valueGb genuinely changes from elsewhere (a preset
+  // click, another window, settings reload). Not while the person is
+  // actively typing: prevValueGb only moves when valueGb itself does, so
+  // an in-progress, not-yet-committed keystroke is never overwritten.
+  const [prevValueGb, setPrevValueGb] = useState(valueGb)
+  if (valueGb !== prevValueGb) {
+    setPrevValueGb(valueGb)
+    setDraft(String(valueGb))
+  }
+
+  function commitDraft(): void {
+    const parsed = Math.round(Number(draft))
+    if (Number.isFinite(parsed) && parsed >= 0 && String(parsed) !== String(valueGb)) {
+      onChange(parsed)
+    } else {
+      setDraft(String(valueGb))
+    }
+  }
+
+  return (
+    <div className={`${styles.row} ${styles.rowSegmented}`}>
+      <div className={styles.rowIcon} aria-hidden="true">
+        <Icon name={icon} size={17} />
+      </div>
+      <div className={styles.rowText}>
+        <span className={styles.rowTitle}>{title}</span>
+        <span className={styles.rowDescription}>{description}</span>
+      </div>
+      <div className={styles.segmentGroup} role="radiogroup" aria-label={title}>
+        {presets.map((option) => (
+          <button
+            key={option.value}
+            type="button"
+            role="radio"
+            aria-checked={String(valueGb) === option.value}
+            className={`${styles.segmentButton} ${String(valueGb) === option.value ? styles.segmentButtonActive : ''}`}
+            onClick={() => onChange(Number(option.value))}
+          >
+            {option.label}
+          </button>
+        ))}
+        <span className={styles.field} style={{ flex: '0 0 88px' }}>
+          <input
+            className={styles.fieldInput}
+            style={{ padding: '5px 10px', fontSize: 12, textAlign: 'right' }}
+            type="number"
+            inputMode="numeric"
+            min={0}
+            step={1}
+            aria-label={`Custom ${title} in GB`}
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onBlur={commitDraft}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
+            }}
+          />
+        </span>
+      </div>
+    </div>
+  )
+}
+
 function ToggleRow({
   icon,
   title,
@@ -560,6 +649,14 @@ export default function SettingsPage() {
     quality?: number
     size?: number
   }>({ kind: 'idle' })
+  const [streamCacheDirStatus, setStreamCacheDirStatus] = useState<{
+    kind: 'idle' | 'busy' | 'error'
+    message?: string
+  }>({ kind: 'idle' })
+  const [streamCacheClearStatus, setStreamCacheClearStatus] = useState<{
+    kind: 'idle' | 'busy' | 'ok' | 'error'
+    message?: string
+  }>({ kind: 'idle' })
   const runAction = useAsyncAction()
 
   async function saveSetting(scope: string, action: () => Promise<unknown>) {
@@ -628,6 +725,47 @@ export default function SettingsPage() {
       await saveSetting('settings.stream-cache-size', () =>
         api.settings.setStreamCacheSize(streamCacheMaxGb)
       )
+  }
+
+  async function handleChooseStreamCacheDir() {
+    const api = window.api?.mediaHub?.settings
+    if (!api) return
+    setStreamCacheDirStatus({ kind: 'busy' })
+    try {
+      const result = await api.chooseStreamCacheDir()
+      if (result.error) {
+        setStreamCacheDirStatus({ kind: 'error', message: result.error })
+        return
+      }
+      // A cancelled picker isn't an error — just nothing to report.
+      setStreamCacheDirStatus({ kind: 'idle' })
+      if (!result.cancelled) await refreshMediaHubSettings()
+    } catch (error) {
+      setStreamCacheDirStatus({
+        kind: 'error',
+        message: error instanceof Error ? error.message : 'Could not change the folder.'
+      })
+    }
+  }
+
+  async function handleResetStreamCacheDir() {
+    const api = window.api?.mediaHub?.settings
+    if (api) await saveSetting('settings.stream-cache-dir-reset', () => api.resetStreamCacheDir())
+  }
+
+  async function handleClearStreamCache() {
+    const api = window.api?.mediaHub?.playback
+    if (!api) return
+    setStreamCacheClearStatus({ kind: 'busy' })
+    try {
+      const result = await api.clearStreamCache()
+      setStreamCacheClearStatus({ kind: 'ok', message: `Freed ${formatBytes(result.freedBytes)}.` })
+    } catch (error) {
+      setStreamCacheClearStatus({
+        kind: 'error',
+        message: error instanceof Error ? error.message : 'Could not clear the cache.'
+      })
+    }
   }
 
   async function runSpeedTest() {
@@ -826,14 +964,76 @@ export default function SettingsPage() {
                   setStreamLimits(mediaHubSettings?.maxStreamResolution ?? 0, Number(value))
                 }
               />
-              <SegmentedRow
+              <CacheSizeRow
                 icon="downloads"
                 title="Stream cache size"
-                description="How much local disk playback can use to buffer ahead and rewind without reopening a connection to the source. Larger also enables extracting embedded subtitle tracks, which needs the whole file cached."
-                value={String(mediaHubSettings?.streamCacheMaxGb ?? 10)}
-                options={STREAM_CACHE_SIZE_OPTIONS}
-                onChange={(value) => setStreamCacheSize(Number(value))}
+                description="How much local disk playback can use to buffer ahead and rewind without reopening a connection to the source. Larger also enables extracting embedded subtitle tracks, which needs the whole file cached. Pick a preset or type your own value in GB."
+                valueGb={mediaHubSettings?.streamCacheMaxGb ?? 10}
+                presets={STREAM_CACHE_SIZE_OPTIONS}
+                onChange={setStreamCacheSize}
               />
+              <div className={styles.row}>
+                <div className={styles.rowIcon} aria-hidden="true">
+                  <Icon name="downloads" size={17} />
+                </div>
+                <div className={styles.rowText}>
+                  <span className={styles.rowTitle}>Stream cache location</span>
+                  <span className={styles.rowDescription}>
+                    {mediaHubSettings?.streamCacheDir || 'Default (app data folder)'} — useful for
+                    pointing it at a secondary drive. Changing this does not move data already
+                    cached at the old location.
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  className={styles.testButton}
+                  onClick={handleChooseStreamCacheDir}
+                  disabled={streamCacheDirStatus.kind === 'busy'}
+                >
+                  {streamCacheDirStatus.kind === 'busy' ? 'Choosing…' : 'Choose folder…'}
+                </button>
+                {mediaHubSettings?.streamCacheDir && (
+                  <button
+                    type="button"
+                    className={styles.testButton}
+                    onClick={handleResetStreamCacheDir}
+                  >
+                    Reset to default
+                  </button>
+                )}
+              </div>
+              {streamCacheDirStatus.kind === 'error' && (
+                <span className={`${styles.statusMessage} ${styles.statusError}`}>
+                  {streamCacheDirStatus.message}
+                </span>
+              )}
+              <div className={styles.row}>
+                <div className={styles.rowIcon} aria-hidden="true">
+                  <Icon name="trash" size={17} />
+                </div>
+                <div className={styles.rowText}>
+                  <span className={styles.rowTitle}>Stream cache</span>
+                  <span className={styles.rowDescription}>
+                    Buffered video data kept on disk for smooth seeking. Whatever is actively
+                    playing right now is never cleared.
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  className={styles.testButton}
+                  onClick={handleClearStreamCache}
+                  disabled={streamCacheClearStatus.kind === 'busy'}
+                >
+                  {streamCacheClearStatus.kind === 'busy' ? 'Clearing…' : 'Clear cache'}
+                </button>
+              </div>
+              {streamCacheClearStatus.kind !== 'idle' && streamCacheClearStatus.kind !== 'busy' && (
+                <span
+                  className={`${styles.statusMessage} ${streamCacheClearStatus.kind === 'ok' ? styles.statusOk : styles.statusError}`}
+                >
+                  {streamCacheClearStatus.message}
+                </span>
+              )}
               <div className={styles.row}>
                 <div className={styles.rowIcon} aria-hidden="true">
                   <Icon name="gauge" size={17} />

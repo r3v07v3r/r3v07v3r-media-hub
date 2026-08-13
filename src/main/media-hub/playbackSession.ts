@@ -36,7 +36,7 @@ import { handle } from './ipcGuard'
 import { logError, redactUrls } from './logger'
 import { srtToVtt } from './opensubtitles'
 import { readSettings, writeSettings } from './settingsStore'
-import { createStreamCache, MIN_CACHE_BYTES, pruneIdleSessions } from './streamCache'
+import { clearAllSessions, createStreamCache, MIN_CACHE_BYTES, pruneIdleSessions } from './streamCache'
 import { osDownloadSubtitleText } from './subtitlesService'
 import {
   captureFrame,
@@ -573,5 +573,10 @@ export function registerPlaybackIpc(): void {
       }
       return { ok: true, freedBytes }
     }
+  )
+
+  handle<undefined, { ok: true; freedBytes: number }>(
+    MEDIA_HUB_CHANNELS.streamCacheClear,
+    async () => ({ ok: true, freedBytes: await clearAllSessions() })
   )
 }

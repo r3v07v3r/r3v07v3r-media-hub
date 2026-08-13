@@ -54,6 +54,7 @@ export function publicSettings(settings: Record<string, unknown> = {}): MediaHub
     maxStreamResolution: Number(settings.maxStreamResolution) || 0,
     maxStreamSizeGb: Number(settings.maxStreamSizeGb) || 0,
     streamCacheMaxGb: Number(settings.streamCacheMaxGb) || 0,
+    streamCacheDir: typeof settings.streamCacheDir === 'string' ? settings.streamCacheDir : undefined,
     connectionSpeedMbps:
       Number(settings.connectionSpeedMbps) > 0 ? Number(settings.connectionSpeedMbps) : undefined,
     hideWatchedDefault: settings.hideWatchedDefault === true,
@@ -83,6 +84,7 @@ export function logoutSettings(
   | 'maxStreamResolution'
   | 'maxStreamSizeGb'
   | 'streamCacheMaxGb'
+  | 'streamCacheDir'
   | 'connectionSpeedMbps'
   | 'hideWatchedDefault'
   | 'hideCompletedDefault'
@@ -99,6 +101,7 @@ export function logoutSettings(
     maxStreamResolution: Number(settings.maxStreamResolution) || 0,
     maxStreamSizeGb: Number(settings.maxStreamSizeGb) || 0,
     streamCacheMaxGb: Number(settings.streamCacheMaxGb) || 0,
+    streamCacheDir: typeof settings.streamCacheDir === 'string' ? settings.streamCacheDir : undefined,
     connectionSpeedMbps:
       Number(settings.connectionSpeedMbps) > 0 ? Number(settings.connectionSpeedMbps) : undefined,
     hideWatchedDefault: settings.hideWatchedDefault === true,

@@ -175,6 +175,13 @@ const api = {
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.settingsSetStreamLimits, limits),
       setStreamCacheSize: (streamCacheMaxGb: number): Promise<{ streamCacheMaxGb: number }> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.settingsSetStreamCacheSize, { streamCacheMaxGb }),
+      chooseStreamCacheDir: (): Promise<{
+        streamCacheDir?: string
+        cancelled?: boolean
+        error?: string
+      }> => ipcRenderer.invoke(MEDIA_HUB_CHANNELS.settingsChooseStreamCacheDir),
+      resetStreamCacheDir: (): Promise<{ streamCacheDir?: string }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.settingsResetStreamCacheDir),
       setPartyDisplayName: (name: string): Promise<{ partyDisplayName: string }> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.settingsSetPartyDisplayName, name),
       setHideDefaults: (
@@ -334,7 +341,9 @@ const api = {
           episodeLengthSeconds
         }),
       extractSubtitle: (ordinal: number): Promise<string | null> =>
-        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.playbackExtractSubtitle, ordinal)
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.playbackExtractSubtitle, ordinal),
+      clearStreamCache: (): Promise<{ ok: true; freedBytes: number }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.streamCacheClear)
     },
 
     library: {

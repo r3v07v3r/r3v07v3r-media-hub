@@ -21,6 +21,8 @@ export const MEDIA_HUB_CHANNELS = {
   settingsSetVideoTranscode: 'mediahub:settings:set-video-transcode',
   settingsSetStreamLimits: 'mediahub:settings:set-stream-limits',
   settingsSetStreamCacheSize: 'mediahub:settings:set-stream-cache-size',
+  settingsChooseStreamCacheDir: 'mediahub:settings:choose-stream-cache-dir',
+  settingsResetStreamCacheDir: 'mediahub:settings:reset-stream-cache-dir',
   settingsSetPartyDisplayName: 'mediahub:settings:set-party-display-name',
   settingsSetHideDefaults: 'mediahub:settings:set-hide-defaults',
   logout: 'mediahub:account:logout',
@@ -66,6 +68,7 @@ export const MEDIA_HUB_CHANNELS = {
   playbackThumbnail: 'mediahub:playback:thumbnail',
   playbackSkipTimes: 'mediahub:playback:skip-times',
   playbackExtractSubtitle: 'mediahub:playback:extract-subtitle',
+  streamCacheClear: 'mediahub:playback:stream-cache-clear',
   libraryList: 'mediahub:library:list',
   libraryPlay: 'mediahub:library:play',
 
