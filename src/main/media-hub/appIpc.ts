@@ -19,7 +19,7 @@ import { ffmpegPath, stopPlayback } from './playbackSession'
 import { normalizeTheme, publicSettings, logoutSettings, THEMES } from './preferences'
 import { normalizePlaybackBuffer } from '../../shared/media-hub/playbackBuffer'
 import { isAllowedExternalUrl } from './security'
-import { MIN_CACHE_BYTES } from './streamCache'
+import { clearAllSessions, MIN_CACHE_BYTES } from './streamCache'
 import {
   getTorBoxToken,
   omdbCredentials,
@@ -213,6 +213,19 @@ export function registerAppIpc(): void {
           error: 'That folder is not writable.'
         }
       }
+      // Reads cacheRootDir() fresh, which still resolves to whatever
+      // streamCacheDir WAS (settings haven't been overwritten yet below) —
+      // without this, idle sessions cached under the old location become
+      // unreachable the instant the setting changes: listCacheSessions/
+      // pruneIdleSessions/clearAllSessions only ever look at the CURRENT
+      // setting, so they'd sit there indefinitely, potentially many
+      // gigabytes, with no path back to them. Only the currently-ACTIVE
+      // session (if playback is somehow running while this dialog is open)
+      // is left alone, same as every other clearAllSessions call site — it
+      // keeps writing to the location its own start() already captured
+      // until that title stops, at which point it's an ordinary idle
+      // directory the next folder-change or manual "Clear cache" reaches.
+      await clearAllSessions()
       const settings = readSettings()
       settings.streamCacheDir = chosen
       writeSettings(settings)
@@ -220,12 +233,19 @@ export function registerAppIpc(): void {
     }
   )
 
-  handle<undefined, { streamCacheDir?: string }>(MEDIA_HUB_CHANNELS.settingsResetStreamCacheDir, () => {
-    const settings = readSettings()
-    delete settings.streamCacheDir
-    writeSettings(settings)
-    return { streamCacheDir: undefined }
-  })
+  handle<undefined, { streamCacheDir?: string }>(
+    MEDIA_HUB_CHANNELS.settingsResetStreamCacheDir,
+    async () => {
+      // Same reasoning as settingsChooseStreamCacheDir above — clear the
+      // (still-current-until-the-write-below) custom location before
+      // reverting to the default userData path, so it isn't stranded.
+      await clearAllSessions()
+      const settings = readSettings()
+      delete settings.streamCacheDir
+      writeSettings(settings)
+      return { streamCacheDir: undefined }
+    }
+  )
 
   handle<unknown, { partyDisplayName: string }>(
     MEDIA_HUB_CHANNELS.settingsSetPartyDisplayName,
