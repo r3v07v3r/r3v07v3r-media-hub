@@ -97,6 +97,67 @@
   padding: 6px 0;
 }
 
+.cacheItem {
+  flex-direction: row;
+  align-items: center;
+  gap: 12px;
+}
+
+.cachePoster {
+  flex: 0 0 auto;
+  width: 42px;
+  aspect-ratio: 2 / 3;
+  border-radius: var(--radius-small);
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.06);
+}
+.cachePoster img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.cacheBody {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.playingBadge {
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  color: var(--accent-green);
+}
+
+.cacheActions {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 6px;
+}
+.cacheActionButton {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-secondary);
+  background: rgba(4, 8, 15, 0.5);
+  border: 1px solid var(--border-subtle);
+}
+.cacheActionButton:hover {
+  color: var(--text-primary);
+  border-color: var(--border-active);
+}
+.cacheActionButton svg {
+  width: 12px;
+  height: 12px;
+}
+
 .configureLink {
   font-size: 12px;
   color: var(--accent-cyan);

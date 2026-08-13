@@ -27,16 +27,25 @@ import path from 'node:path'
 
 import { MEDIA_HUB_CHANNELS } from '../../shared/media-hub/ipc-channels'
 import type {
+  CacheSessionMeta,
   MediaTracks,
   PlaybackResult,
   PlaybackSelection,
+  StreamCacheEntry,
   SubtitlesApplyResult
 } from '../../shared/media-hub/types'
 import { handle } from './ipcGuard'
 import { logError, redactUrls } from './logger'
 import { srtToVtt } from './opensubtitles'
 import { readSettings, writeSettings } from './settingsStore'
-import { clearAllSessions, createStreamCache, MIN_CACHE_BYTES, pruneIdleSessions } from './streamCache'
+import {
+  clearAllSessions,
+  createStreamCache,
+  deleteCacheSession,
+  listCacheSessions,
+  MIN_CACHE_BYTES,
+  pruneIdleSessions
+} from './streamCache'
 import { osDownloadSubtitleText } from './subtitlesService'
 import {
   captureFrame,
@@ -223,7 +232,10 @@ function clearActiveSubtitle(): void {
  * never falls back to a software encoder). Also used by torbox.ts's
  * play:stream/library:play handlers.
  */
-export async function preparePlayback(url: string): Promise<PlaybackResult> {
+export async function preparePlayback(
+  url: string,
+  cacheMeta?: CacheSessionMeta
+): Promise<PlaybackResult> {
   activeMediaUrl = url
   subtitleBatchPromise = null
   await ffmpegTranscoder.stop()
@@ -238,7 +250,8 @@ export async function preparePlayback(url: string): Promise<PlaybackResult> {
   const cacheResult = await streamCache.start(
     url,
     activeMediaTracks.durationSeconds,
-    resolveStreamCacheMaxBytes()
+    resolveStreamCacheMaxBytes(),
+    cacheMeta
   )
   activeCacheUrl = cacheResult.url
   // Fresh title — none of the previous one's sticky transcode state
@@ -561,6 +574,22 @@ export function registerPlaybackIpc(): void {
       }
       const batch = await subtitleBatchPromise
       return batch.get(index) ?? null
+    }
+  )
+
+  handle<undefined, StreamCacheEntry[]>(MEDIA_HUB_CHANNELS.streamCacheList, async () =>
+    listCacheSessions(streamCache.getActiveToken())
+  )
+
+  handle<{ token?: unknown } | undefined, { ok: true }>(
+    MEDIA_HUB_CHANNELS.streamCacheDelete,
+    async (_event, payload) => {
+      const token = String(payload?.token || '')
+      if (token && token === streamCache.getActiveToken()) {
+        throw new Error("Can't delete — this title is currently playing.")
+      }
+      await deleteCacheSession(token)
+      return { ok: true }
     }
   )
 
