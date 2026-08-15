@@ -29,9 +29,23 @@ assert.equal(
 // sample in the first fragment and nothing ever again.
 assert.equal(valueOf(base, '-map_chapters'), '-1', 'chapters are not muxed into the stream')
 
-// Both belong to the output, so they must come after -i — an -af placed
-// before the input would be parsed as an input option and silently ignored.
-for (const flag of ['-af', '-map_chapters']) {
+// A Dolby Vision source's RPU rides through stream-copy as in-band NAL
+// units regardless of this flag — what it controls is whether the mp4
+// muxer is ALLOWED to write the dvcC/dvvC box declaring that. Without it
+// the container silently disagrees with the bitstream it's carrying (RPU
+// present, nothing saying so); ffmpeg's own stderr names this exact flag
+// as the fix ("Not writing 'dvcC'/'dvvC' box. Requires -strict
+// unofficial.", logged on every compatibility-mode transcode of such a
+// source before this).
+assert.equal(valueOf(base, '-strict'), 'unofficial', 'the muxer is allowed to declare Dolby Vision')
+
+// All three belong to the output, so they must come after -i — an -af (or
+// -strict, or -map_chapters) placed before the input is parsed as an input
+// option and silently ignored. Verified live: -strict specifically only
+// took effect from the output side; placed before -i it did not error, it
+// just silently had no effect (confirmed by decoding the result and
+// checking for the dvcC/dvvC box).
+for (const flag of ['-af', '-map_chapters', '-strict']) {
   assert.ok(
     base.indexOf(flag) > base.indexOf('-i'),
     `${flag} is an output option and must follow -i`
@@ -59,6 +73,7 @@ assert.equal(valueOf(reencoded, '-vf'), 'format=yuv420p,scale=-2:1080')
 // so a seeked restart must be normalised the same way the first start was.
 const seeked = buildFfmpegArguments(SOURCE, { audio: 2, startTime: 640 })
 assert.equal(valueOf(seeked, '-af'), 'aresample=async=1:first_pts=0')
+assert.equal(valueOf(seeked, '-strict'), 'unofficial')
 assert.equal(valueOf(seeked, '-ss'), '640')
 assert.ok(seeked.includes('-noaccurate_seek'), 'keyframe-snapped seek is unchanged')
 assert.equal(valueOf(seeked, '-map'), '0:v:0')

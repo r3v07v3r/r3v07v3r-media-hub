@@ -633,6 +633,25 @@ export function registerPlaybackIpc(): void {
     }
   )
 
+  handle<{ code?: unknown; message?: unknown; currentTime?: unknown } | undefined, { ok: true }>(
+    MEDIA_HUB_CHANNELS.playbackReportClientError,
+    async (_event, payload) => {
+      // Pure logging, not diagnosis — the <video> element's MediaError is
+      // otherwise only ever visible in that one session's DevTools console
+      // (see PlaybackOverlay's onError), which made every prior report of
+      // "it crashed a few seconds in" un-investigable after the fact: only
+      // the main-process side of a crash (this file, streamCache.ts,
+      // vlc.ts) ever reached logs/media-hub.log. Forwarding the code/
+      // message here is what turns the NEXT occurrence into something
+      // diagnosable from the log alone.
+      logError(
+        'playback:client-error',
+        `MediaError code=${payload?.code} message=${JSON.stringify(payload?.message)} at t=${payload?.currentTime}s`
+      )
+      return { ok: true }
+    }
+  )
+
   handle<undefined, StreamCacheEntry[]>(MEDIA_HUB_CHANNELS.streamCacheList, async () =>
     listCacheSessions(streamCache.getActiveToken())
   )

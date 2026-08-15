@@ -235,6 +235,23 @@ export function buildFfmpegArguments(
   // source whose audio already starts at 0 the whole filter is a verified
   // no-op (byte-identical packet timing with and without it).
   args.push('-af', 'aresample=async=1:first_pts=0')
+  // Only matters on the stream-copy path (a re-encode always throws away
+  // HDR/DoVi metadata regardless), but harmless either way.
+  //
+  // A Dolby Vision source (profile 8 here — the HDR10-compatible base
+  // layer, the common case for a streaming-friendly remux) carries its RPU
+  // as in-band NAL units inside the copied HEVC bitstream itself — ffprobe
+  // reports it back as stream-level side data ("DOVI configuration
+  // record"), confirming those NALs really are there. The mp4 muxer's
+  // default strictness REFUSES to write the `dvcC`/`dvvC` box that
+  // declares the stream as Dolby Vision (the exact "Not writing 'dvcC'/
+  // 'dvvC' box. Requires -strict unofficial." line every compatibility-
+  // mode transcode logs), leaving the output an HEVC stream that contains
+  // Dolby Vision RPU NALs but never says so. `-strict unofficial` is what
+  // that logged message is naming as the fix — it makes the muxer write
+  // the box, so the container's declared codec profile actually matches
+  // the bitstream it's carrying instead of silently disagreeing with it.
+  args.push('-strict', 'unofficial')
   args.push('-movflags', 'frag_keyframe+empty_moov+default_base_moof')
   args.push('-f', 'mp4', 'pipe:1')
   return args
