@@ -865,6 +865,12 @@ export interface CreateFfmpegTranscoderOptions {
   spawnImpl?: typeof spawn
   randomBytes?: typeof crypto.randomBytes
   onLog?: (chunk: string) => void
+  /** Called about once a second while start() is still waiting to become
+   *  ready, with a user-facing line describing what it's waiting FOR. That
+   *  wait is up to 25s (audio-only) or 60s (video re-encode) of otherwise
+   *  completely silent time — the single biggest contributor to "it just
+   *  sat there preparing". */
+  onProgress?: (message: string) => void
 }
 
 /**
@@ -896,7 +902,8 @@ export interface CreateFfmpegTranscoderOptions {
 export function createFfmpegTranscoder({
   spawnImpl = spawn,
   randomBytes = crypto.randomBytes,
-  onLog = () => {}
+  onLog = () => {},
+  onProgress = () => {}
 }: CreateFfmpegTranscoderOptions = {}): FfmpegTranscoder {
   let child: ChildProcess | null = null
   let server: http.Server | null = null
@@ -1115,9 +1122,33 @@ export function createFfmpegTranscoder({
       activeServer.listen(port, '127.0.0.1', () => resolve())
     })
 
+    // Narrates the readiness wait above, which has two genuinely different
+    // phases worth telling apart: ffmpeg hasn't produced anything yet (it's
+    // still opening/analysing the source), versus it's producing fine and
+    // we're deliberately holding back to build the head start MIN_BUFFER_MS
+    // asks for. Cleared unconditionally below — this must never outlive the
+    // start() call that armed it.
+    const progressTimer = setInterval(() => {
+      if (ready) return
+      if (totalBytes < READY_BYTES) {
+        onProgress(
+          videoEncoder
+            ? 'Starting the video converter — this is the slow part on big files'
+            : 'Starting the audio converter'
+        )
+        return
+      }
+      const bufferedMs = Math.min(Date.now() - startedAt, MIN_BUFFER_MS)
+      onProgress(
+        `Buffering ${Math.round(bufferedMs / 1000)}s of ${Math.round(MIN_BUFFER_MS / 1000)}s before playing`
+      )
+    }, 1000)
+    progressTimer.unref?.()
+
     try {
       await readyPromise
     } catch (error) {
+      clearInterval(progressTimer)
       // A timeout/failure here previously left `spawned` running forever —
       // the next start() call's own stop() would eventually reap it, but
       // only if something ever called start() again; a caller that just
@@ -1130,6 +1161,7 @@ export function createFfmpegTranscoder({
       if (child === spawned) child = null
       throw error
     }
+    clearInterval(progressTimer)
     return {
       url: `http://127.0.0.1:${port}${expectedPath}`,
       engine: 'ffmpeg audio compatibility (video copy)',

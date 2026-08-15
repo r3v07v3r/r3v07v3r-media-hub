@@ -270,7 +270,17 @@ interface AppStateValue {
   // shared slot (only one title can be starting at a time) — a Play
   // button anywhere in the app compares its own media.id against it to
   // know whether IT is the one currently loading.
-  resolvingMedia: { id: string; title: string; stage: PlaybackPreparationStage } | null
+  // `detail` is main's live narration of whatever the current stage is
+  // actually doing right now (see PlaybackPrepareProgress) — the stage
+  // labels alone can't say "downloading 2.4 MB of 4 MB" or "converting
+  // TRUEHD audio", and the buffering stage in particular can legitimately
+  // run for a minute or more, which without this reads as a hang.
+  resolvingMedia: {
+    id: string
+    title: string
+    stage: PlaybackPreparationStage
+    detail?: string
+  } | null
   cancelPlaybackPreparation: () => void
   playbackMedia: MediaItem | null
   playbackResult: PlaybackResult | null
@@ -396,6 +406,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     id: string
     title: string
     stage: PlaybackPreparationStage
+    detail?: string
   } | null>(null)
   const playbackPreparationRef = useRef<{ generation: number; controller: AbortController } | null>(
     null
@@ -973,6 +984,19 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     // Stop is idempotent and prevents a late result leaving an orphan proxy
     // or ffmpeg process behind after the UI has cancelled it.
     window.api?.mediaHub?.playback.stop().catch(() => {})
+  }, [])
+
+  // Main narrates the long stages as it works through them (see
+  // PlaybackPrepareProgress). Subscribed for the app's whole lifetime
+  // rather than per-preparation: these arrive from a session that's
+  // already in flight, and a subscription set up alongside it would race
+  // the first few events. Anything that lands while nothing is being
+  // prepared — the identical ffmpeg restarts a seek performs mid-playback
+  // — falls through the `prev ? ... : prev` and changes nothing.
+  useEffect(() => {
+    return window.api?.mediaHub?.playback.onPrepareProgress((payload) => {
+      setResolvingMedia((prev) => (prev ? { ...prev, detail: payload.message } : prev))
+    })
   }, [])
 
   const startPlaybackRef = useRef<(media: MediaItem) => Promise<boolean>>(async () => false)

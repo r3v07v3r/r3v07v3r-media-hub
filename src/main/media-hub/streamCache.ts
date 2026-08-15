@@ -23,11 +23,21 @@
 // faststart MP4's front-loaded moov) and TAIL (a non-faststart MP4's
 // moov-at-end, or MKV's Cues-at-end — common on scene/P2P releases; a
 // front-only design would regress these), plus a rolling window around
-// wherever playback actually is right now. "Where playback is" is derived
-// from the highest byte offset the local server has actually been asked
-// for — ffmpeg/the <video> element naturally request roughly-sequential
-// ranges as playback advances, so that's a reliable proxy for the playhead
-// without needing an explicit position feed from the caller.
+// every position currently being READ.
+//
+// "Every position being read", not one global high-water mark. That
+// high-water mark was a real, reproduced bug: it only ever moved FORWARD
+// (Math.max), so the single incidental tail read every MKV demux does —
+// ffmpeg (or Chromium) jumping to the Cues/SeekHead near EOF before
+// playback even starts — permanently pinned the retention centre at the
+// end of the file. From then on evictOutsideRetained() deleted chunks
+// around the actual playhead as fast as the fill wrote them, so a title
+// played for as long as the pinned 16MB head lasted (a few seconds) and
+// then died: the reader's next chunk was gone, the fill kept re-fetching
+// and losing it, and the local server eventually answered 502 mid-body —
+// which the <video> element reports as a fatal error. Retaining a window
+// around each LIVE reader instead means the position actually being played
+// is never the one evicted, no matter what else reads the file.
 
 import crypto from 'node:crypto'
 import fs from 'node:fs'
@@ -38,6 +48,7 @@ import { app } from 'electron'
 
 import { assertPublicMediaUrl, defaultResolveHost, fetchMediaWithRetry } from './playback'
 import { logError } from './logger'
+import { formatMegabytes, reportPreparation } from './playbackProgress'
 import { readSettings } from './settingsStore'
 import type { CacheSessionMeta, StreamCacheEntry } from '../../shared/media-hub/types'
 
@@ -53,6 +64,14 @@ const DISK_CHECK_INTERVAL_MS = 15_000
 /** How far past the current fill frontier a request can land before it's treated as "just wait a beat" rather than "reposition the whole fetch." */
 const REPOSITION_THRESHOLD_BYTES = CHUNK_BYTES * 2
 const CHUNK_WAIT_TIMEOUT_MS = 20_000
+/** How much one connection must have actually streamed before its position
+ *  is trusted as the fallback retention centre for when no reader is live
+ *  at all. A container-metadata probe (MKV Cues near EOF, an MP4 moov)
+ *  reads a few MB and disconnects; real playback streams continuously —
+ *  this is what tells them apart, and it's why the old forward-only
+ *  high-water mark (see the module header) can no longer be dragged to the
+ *  end of the file by a probe. */
+const PLAYHEAD_MIN_SERVED_BYTES = CHUNK_BYTES * 2
 /** Same TorBox-connection-teardown grace delay as playbackSession.ts's closeDirectProxyBeforeTranscode — the local proxy/fetch closing doesn't guarantee the upstream fetch has actually torn down on TorBox's end yet. */
 const RECONNECT_GRACE_MS = 500
 
@@ -105,8 +124,12 @@ export interface RetentionParams {
   presentChunkIndices: Iterable<number>
   fullRetention: boolean
   totalBytes: number | null
-  /** Where playback actually is right now, in bytes — see the module header comment on why this is derived from the highest byte offset actually served rather than an explicit position feed. */
-  centerByte: number
+  /** Every position currently being read, in bytes — one per live reader,
+   *  plus the last known playhead as a fallback centre (see the module
+   *  header on why this is a set of positions and not one forward-only
+   *  high-water mark). Each gets its own behind/ahead window; the retained
+   *  set is their union with the pinned head/tail regions. */
+  centerBytes: number[]
   behindSeconds: number
   aheadSeconds: number
   /** undefined when duration/totalBytes aren't known yet — falls back to a fixed chunk-count window rather than a time-based one. */
@@ -130,7 +153,7 @@ export function computeRetainedChunkIndices(params: RetentionParams): Set<number
     presentChunkIndices,
     fullRetention,
     totalBytes,
-    centerByte,
+    centerBytes,
     behindSeconds,
     aheadSeconds,
     bytesPerSecond,
@@ -156,16 +179,22 @@ export function computeRetainedChunkIndices(params: RetentionParams): Set<number
     bytesPerSecond !== undefined ? Math.floor(bytesPerSecond * behindSeconds) : chunkBytes * 4
   const aheadBytes =
     bytesPerSecond !== undefined ? Math.floor(bytesPerSecond * aheadSeconds) : chunkBytes * 32
-  const windowStart = Math.max(0, centerByte - behindBytes)
-  const windowEnd = totalBytes
-    ? Math.min(totalBytes - 1, centerByte + aheadBytes)
-    : centerByte + aheadBytes
-  for (
-    let i = chunkIndexForByte(windowStart, chunkBytes);
-    i <= chunkIndexForByte(windowEnd, chunkBytes);
-    i++
-  ) {
-    out.add(i)
+  // One window per centre, unioned. Two readers (e.g. the <video> element
+  // playing while ffmpeg's demuxer probes elsewhere in the container) are
+  // both real positions someone is waiting on — keeping only one of them
+  // means the other's next chunk is evicted out from under it.
+  for (const centerByte of centerBytes) {
+    const windowStart = Math.max(0, centerByte - behindBytes)
+    const windowEnd = totalBytes
+      ? Math.min(totalBytes - 1, centerByte + aheadBytes)
+      : centerByte + aheadBytes
+    for (
+      let i = chunkIndexForByte(windowStart, chunkBytes);
+      i <= chunkIndexForByte(windowEnd, chunkBytes);
+      i++
+    ) {
+      out.add(i)
+    }
   }
 
   return out
@@ -280,6 +309,13 @@ export function createStreamCache({
 
   const chunks = new Map<number, ChunkStatus>()
   const waiters = new Map<number, ChunkWaiter[]>()
+  // Where each live reader of the local server currently is, keyed by a
+  // per-connection id (see serveRange). Every one of these is a retention
+  // centre for as long as that connection is open, and the entry is
+  // removed the moment it closes — which is what keeps an incidental
+  // metadata probe from having any lasting effect on what's retained.
+  const readerPositions = new Map<number, number>()
+  let readerSequence = 0
   // Resolved once fullRetentionReady() actually becomes true (ready=true)
   // OR once it's known that it never will for this session — torn down
   // (a title change/stop) or downgraded out of fullRetention by disk
@@ -345,7 +381,14 @@ export function createStreamCache({
       presentChunkIndices: chunks.keys(),
       fullRetention,
       totalBytes,
-      centerByte: highWatermarkByte,
+      // highWatermarkByte is always a centre, not just a fallback for when
+      // nothing is reading: seekHint() writes the intended NEW playhead
+      // there while the OLD ffmpeg process is still connected and reading
+      // the old position (the restart kills it moments later). Both have
+      // to be retained across that handover, or the chunks being fetched
+      // for the seek target are evicted before the restarted reader ever
+      // asks for them — the exact failure seekHint itself exists to fix.
+      centerBytes: [highWatermarkByte, ...readerPositions.values()],
       behindSeconds,
       aheadSeconds,
       bytesPerSecond: bytesPerSecond()
@@ -633,54 +676,102 @@ export function createStreamCache({
     })
 
     let bytePos = startByte
+    let servedBytes = 0
+    /** Which chunk index this connection has already re-fetched once after a
+     *  failed read — see the readFile catch below. */
+    let retriedIndex = -1
+    const readerId = ++readerSequence
     const aborted = { flag: false }
     req.on('close', () => {
       aborted.flag = true
+      // Dropped from the retention centres immediately, not only when the
+      // loop below next wakes up — it can be parked in a 20s waitForChunk,
+      // and a closed connection's position must not keep chunks pinned
+      // (or, worse, keep dragging the window away from a live reader).
+      readerPositions.delete(readerId)
     })
-    while (!aborted.flag) {
-      highWatermarkByte = Math.max(highWatermarkByte, bytePos)
-      const index = chunkIndexForByte(bytePos)
-      if (totalBytes !== null && bytePos >= totalBytes) {
-        res.end()
-        return
+    try {
+      while (!aborted.flag) {
+        // This connection's own window, kept alive for exactly as long as
+        // it is — see retainedChunkIndices.
+        readerPositions.set(readerId, bytePos)
+        const index = chunkIndexForByte(bytePos)
+        if (totalBytes !== null && bytePos >= totalBytes) {
+          res.end()
+          return
+        }
+        let status = chunks.get(index)
+        if (status === undefined) {
+          if (!isNearFillFrontier(bytePos)) await reposition(index * CHUNK_BYTES)
+          status = await waitForChunk(index)
+        } else if (status === 'pending') {
+          status = await waitForChunk(index)
+        }
+        if (status === 'failed' && !aborted.flag) {
+          // A 'failed' mark is sticky (waitForChunk returns it instantly),
+          // so a single transient upstream error — one dropped connection,
+          // one 20s wait that just missed — used to poison that byte range
+          // for the rest of the session: every later read of it hard-failed
+          // the stream even though a retry would have succeeded. Clear the
+          // mark and genuinely refetch once before giving up.
+          chunks.delete(index)
+          await reposition(index * CHUNK_BYTES)
+          status = await waitForChunk(index)
+        }
+        if (aborted.flag) {
+          res.end()
+          return
+        }
+        if (status !== 'ready') {
+          // Genuinely stuck (fetch failing repeatedly for this region) —
+          // surface as a real error rather than hanging the client forever.
+          if (!res.headersSent) res.writeHead(502, { 'cache-control': 'no-store' })
+          res.end()
+          return
+        }
+        const chunkStartByte = index * CHUNK_BYTES
+        const offsetInChunk = bytePos - chunkStartByte
+        let data: Buffer
+        try {
+          data = await fsp.readFile(chunkFilePath(cacheRoot, token, index))
+        } catch (error) {
+          logError('streamCache:readChunk', error)
+          // This chunk was 'ready' a moment ago, so the file went away
+          // under us — an eviction landing between the check and the read.
+          // Refetching once is far better than failing the stream: a 502
+          // here is fatal to the <video> element, and the bytes are
+          // trivially re-obtainable. Bounded to one retry per position so a
+          // genuinely unreadable cache still fails instead of spinning.
+          if (retriedIndex !== index) {
+            retriedIndex = index
+            chunks.delete(index)
+            await reposition(index * CHUNK_BYTES)
+            continue
+          }
+          if (!res.headersSent) res.writeHead(502, { 'cache-control': 'no-store' })
+          res.end()
+          return
+        }
+        const slice = offsetInChunk > 0 ? data.subarray(offsetInChunk) : data
+        const canContinue = res.write(slice)
+        bytePos = chunkStartByte + data.length
+        servedBytes += slice.length
+        // The fallback centre for when nothing is reading at all (between
+        // an ffmpeg restart's kill and reconnect, or between two of
+        // Chromium's own connections). Only adopted from a connection that
+        // has actually streamed a real amount, so a container-metadata
+        // probe — which reads a few MB near EOF and disconnects — can't
+        // leave the retention centre stranded at the end of the file the
+        // way the old forward-only high-water mark did.
+        if (servedBytes >= PLAYHEAD_MIN_SERVED_BYTES) highWatermarkByte = bytePos
+        if (!canContinue) {
+          await new Promise<void>((resolve) => res.once('drain', () => resolve()))
+        }
       }
-      let status = chunks.get(index)
-      if (status === undefined) {
-        if (!isNearFillFrontier(bytePos)) await reposition(index * CHUNK_BYTES)
-        status = await waitForChunk(index)
-      } else if (status === 'pending') {
-        status = await waitForChunk(index)
-      }
-      if (aborted.flag) {
-        res.end()
-        return
-      }
-      if (status !== 'ready') {
-        // Genuinely stuck (fetch failing repeatedly for this region) —
-        // surface as a real error rather than hanging the client forever.
-        if (!res.headersSent) res.writeHead(502, { 'cache-control': 'no-store' })
-        res.end()
-        return
-      }
-      const chunkStartByte = index * CHUNK_BYTES
-      const offsetInChunk = bytePos - chunkStartByte
-      let data: Buffer
-      try {
-        data = await fsp.readFile(chunkFilePath(cacheRoot, token, index))
-      } catch (error) {
-        logError('streamCache:readChunk', error)
-        if (!res.headersSent) res.writeHead(502, { 'cache-control': 'no-store' })
-        res.end()
-        return
-      }
-      const slice = offsetInChunk > 0 ? data.subarray(offsetInChunk) : data
-      const canContinue = res.write(slice)
-      bytePos = chunkStartByte + data.length
-      if (!canContinue) {
-        await new Promise<void>((resolve) => res.once('drain', () => resolve()))
-      }
+      res.end()
+    } finally {
+      readerPositions.delete(readerId)
     }
-    res.end()
   }
 
   async function listen(): Promise<void> {
@@ -765,8 +856,10 @@ export function createStreamCache({
     highWatermarkByte = 0
     chunks.clear()
     waiters.clear()
+    readerPositions.clear()
 
     await listen()
+    reportPreparation('connect', 'Connecting to the source')
     totalBytes = await fetchTotalBytes()
     fullRetention = totalBytes !== null && maxBytes >= totalBytes
     void writeMeta(meta, cacheRoot, token)
@@ -777,7 +870,23 @@ export function createStreamCache({
     // the <video> element doesn't land on nothing — mirrors the readiness
     // gate createFfmpegTranscoder already uses before its own start()
     // resolves (vlc.ts's READY_BYTES/MIN_BUFFER_MS).
-    await waitForChunk(0)
+    //
+    // On a slow link that first 4MB is a real wait with nothing else to
+    // show for it, so it's reported as it fills (fillFrontierByte is the
+    // live download position) rather than as one silent pause.
+    const firstChunk = waitForChunk(0)
+    const fillTicker = setInterval(() => {
+      reportPreparation(
+        'buffer',
+        `Downloading the start of the file — ${formatMegabytes(Math.min(fillFrontierByte, CHUNK_BYTES))} of ${formatMegabytes(CHUNK_BYTES)}`
+      )
+    }, 700)
+    fillTicker.unref?.()
+    try {
+      await firstChunk
+    } finally {
+      clearInterval(fillTicker)
+    }
 
     if (diskCheckTimer) clearInterval(diskCheckTimer)
     diskCheckTimer = setInterval(() => {
@@ -852,6 +961,9 @@ export function createStreamCache({
     generation += 1
     currentAbort?.abort()
     currentAbort = null
+    // This session's readers are no longer anything to retain around —
+    // whatever is still draining belongs to a session that's ending.
+    readerPositions.clear()
     if (diskCheckTimer) {
       clearInterval(diskCheckTimer)
       diskCheckTimer = undefined

@@ -38,6 +38,7 @@ import type {
   PartyQueueEntry,
   PartyStatusResult,
   PlaybackPositionResult,
+  PlaybackPrepareProgress,
   PlaybackResult,
   PlaybackSelection,
   ProfilePublic,
@@ -362,7 +363,13 @@ const api = {
       extractSubtitle: (ordinal: number): Promise<string | null> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.playbackExtractSubtitle, ordinal),
       clearStreamCache: (): Promise<{ ok: true; freedBytes: number }> =>
-        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.streamCacheClear)
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.streamCacheClear),
+      /** Live sub-status while `stream.play` is in flight — see
+       *  PlaybackPrepareProgress. Push-only; the preparation card is the
+       *  only consumer and it ignores anything that arrives outside a
+       *  preparation. */
+      onPrepareProgress: (onEvent: (payload: PlaybackPrepareProgress) => void): (() => void) =>
+        subscribe<PlaybackPrepareProgress>(MEDIA_HUB_CHANNELS.playbackPrepareProgress, onEvent)
     },
 
     library: {
