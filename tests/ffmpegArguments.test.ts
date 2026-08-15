@@ -67,12 +67,29 @@ assert.equal(
   'aresample=async=1:first_pts=0',
   'audio padding applies on the video re-encode path too'
 )
+assert.equal(valueOf(reencoded, '-strict'), 'unofficial')
 assert.equal(valueOf(reencoded, '-vf'), 'format=yuv420p,scale=-2:1080')
 
-// Every restart (seek, track change, subtitle apply) rebuilds these args,
-// so a seeked restart must be normalised the same way the first start was.
+// A genuine restart to the very top (startTime 0, no -ss at all) is a
+// "from-the-top start" exactly like preparePlayback's own first call —
+// still needs the padding fix, for the same file-authoring reason the base
+// case above does.
+const restartFromTop = buildFfmpegArguments(SOURCE, { audio: 1, startTime: 0 })
+assert.equal(valueOf(restartFromTop, '-af'), 'aresample=async=1:first_pts=0')
+assert.ok(!restartFromTop.includes('-ss'), 'startTime 0 never seeks at all')
+
+// A real seek (startTime > 0) is different: -noaccurate_seek's whole job is
+// to leave audio UNTRIMMED so it lands wherever the demuxer's seek
+// naturally does, matching copy-mode video's keyframe-snapped start — see
+// buildFfmpegArguments' own comment. first_pts=0 doesn't just pad, it can
+// also trim a real audio sample landing at a small negative offset after
+// its own origin is rebased, which would reintroduce exactly the
+// asymmetric-trim desync -noaccurate_seek exists to avoid, and `async=1`
+// alone is far too slow (1 sample/sec) to correct it back out. So the
+// padding filter must NOT be present here, even though every other
+// restart-time behaviour (seek flags, ordinal, -strict) is unchanged.
 const seeked = buildFfmpegArguments(SOURCE, { audio: 2, startTime: 640 })
-assert.equal(valueOf(seeked, '-af'), 'aresample=async=1:first_pts=0')
+assert.equal(valueOf(seeked, '-af'), undefined, 'a real seek never gets the from-the-top padding')
 assert.equal(valueOf(seeked, '-strict'), 'unofficial')
 assert.equal(valueOf(seeked, '-ss'), '640')
 assert.ok(seeked.includes('-noaccurate_seek'), 'keyframe-snapped seek is unchanged')
