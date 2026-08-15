@@ -639,7 +639,7 @@ export function PlaybackOverlay() {
   // just need to land on an absolute target time, none of them care how
   // it got computed.
   const performSeek = useCallback(
-    (target: number) => {
+    (target: number, options?: { onFailure?: () => void }) => {
       const video = videoRef.current
       if (!video) return
 
@@ -743,6 +743,17 @@ export function PlaybackOverlay() {
             tone: 'error',
             message: error instanceof Error ? error.message : 'Could not seek.'
           })
+          // A genuine (non-superseded) failure here means the <video>
+          // element's `src` never actually changed — for a normal seek
+          // that just leaves playback exactly where it was, but for the
+          // decode-error recovery below it means the element is STILL
+          // sitting in its original errored state with nothing left to
+          // fire another 'error' event and reach the notify+stop fallback
+          // there. Caught in review: without this, that specific failure
+          // combination left the overlay open on a permanently dead
+          // stream — a seek-failure toast on top of a frozen video with no
+          // further recovery possible.
+          options?.onFailure?.()
         })
     },
     [result, pushNotification, applyShiftedSubtitle, setResult, setTracks, setAppliedUpscaleHeight]
@@ -1823,7 +1834,13 @@ export function PlaybackOverlay() {
             // Same rule as selectTrack/applyUpscale's own restarts: only
             // auto-resume if playback was actually running when this hit.
             resumeAfterRestartRef.current = !(video?.paused ?? false)
-            performSeek(resumeAt)
+            // If the restart itself fails (ffmpeg times out, exits early,
+            // etc.), performSeek's own catch already reverts/notifies —
+            // this is what actually recovers the overlay afterward, since
+            // the <video> element's src never changed and nothing else
+            // will ever fire a second 'error' event to reach the fallback
+            // below on its own.
+            performSeek(resumeAt, { onFailure: () => stopPlayback(markedWatchedRef.current) })
             return
           }
           pushNotification({
