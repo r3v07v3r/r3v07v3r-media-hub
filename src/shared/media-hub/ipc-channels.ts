@@ -92,6 +92,8 @@ export const MEDIA_HUB_CHANNELS = {
   // OpenSubtitles
   osConnect: 'mediahub:os:connect',
   osDisconnect: 'mediahub:os:disconnect',
+  subdlConnect: 'mediahub:subdl:connect',
+  subdlDisconnect: 'mediahub:subdl:disconnect',
   subtitlesSearch: 'mediahub:subtitles:search',
   subtitlesApply: 'mediahub:subtitles:apply',
   subtitlesClearCache: 'mediahub:subtitles:clear-cache',

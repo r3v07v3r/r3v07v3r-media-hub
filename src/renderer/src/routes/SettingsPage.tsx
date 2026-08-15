@@ -10,6 +10,7 @@ import {
   OmdbSection,
   SimklSection,
   MalSection,
+  SubDLSection,
   OpenSubtitlesSection,
   WatchPartySection,
   R3PartySyncSection
@@ -1137,6 +1138,7 @@ export default function SettingsPage() {
             <OmdbSection />
             <SimklSection />
             <MalSection />
+            <SubDLSection />
             <OpenSubtitlesSection />
           </div>
         </section>

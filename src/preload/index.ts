@@ -57,6 +57,7 @@ import type {
   StreamCandidate,
   StreamResolveResult,
   SubtitleResult,
+  SubtitleSelection,
   SubtitlesApplyResult,
   TorBoxConnectResult,
   TrackingListResult,
@@ -412,18 +413,31 @@ const api = {
       disconnect: (): Promise<{ ok: true }> => ipcRenderer.invoke(MEDIA_HUB_CHANNELS.osDisconnect)
     },
 
+    subdl: {
+      connect: (apiKey: string): Promise<ConnectResult> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.subdlConnect, { apiKey }),
+      disconnect: (): Promise<{ ok: true }> => ipcRenderer.invoke(MEDIA_HUB_CHANNELS.subdlDisconnect)
+    },
+
     subtitles: {
       search: (
         item: OpenSubtitlesSearchItem,
         playback?: OpenSubtitlesSearchPlayback
       ): Promise<SubtitleResult[]> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.subtitlesSearch, { item, playback }),
+      // Takes the whole provider-identifying slice of the chosen result
+      // rather than a bare id: which field identifies a subtitle depends on
+      // the provider it came from (see SubtitleSelection).
       apply: (
-        fileId: number,
+        subtitle: SubtitleSelection,
         compatibility: boolean,
         selection?: PlaybackSelection
       ): Promise<SubtitlesApplyResult> =>
-        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.subtitlesApply, { fileId, compatibility, selection }),
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.subtitlesApply, {
+          ...subtitle,
+          compatibility,
+          selection
+        }),
       clearCache: (): Promise<{ ok: true; freedBytes: number }> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.subtitlesClearCache)
     },

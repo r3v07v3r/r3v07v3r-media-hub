@@ -26,6 +26,7 @@ import {
   osConnected,
   partySyncCredentials,
   readSettings,
+  subdlConnected,
   tmdbCredentials,
   writeSettings
 } from './settingsStore'
@@ -40,6 +41,7 @@ export function registerAppIpc(): void {
     tmdbConnected: Boolean(tmdbCredentials().apiKey),
     omdbConnected: Boolean(omdbCredentials().apiKey),
     osConnected: osConnected(),
+    subdlConnected: subdlConnected(),
     partySyncConnected: Boolean(partySyncCredentials().url && partySyncCredentials().inviteKey),
     ffmpegAvailable: Boolean(ffmpegPath)
   }))

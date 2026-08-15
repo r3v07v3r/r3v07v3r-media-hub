@@ -490,6 +490,7 @@ export interface MediaHubSettingsSnapshot extends MediaHubPublicSettings {
   tmdbConnected: boolean
   omdbConnected: boolean
   osConnected: boolean
+  subdlConnected: boolean
   partySyncConnected: boolean
   ffmpegAvailable: boolean
 }
@@ -571,9 +572,24 @@ export interface MalReconcileApplyResult {
   errors: { kitsuId?: string; malId?: number; error: string }[]
 }
 
+/** Which online subtitle service a SubtitleResult came from. The two are
+ *  searched together and merged into one list (see subtitlesService.ts), so
+ *  every result has to say where it came from — the download step differs
+ *  per provider and cannot be inferred from the row's other fields. */
+export type SubtitleProvider = 'opensubtitles' | 'subdl'
+
 export interface SubtitleResult {
   id: string
+  provider: SubtitleProvider
+  /** OpenSubtitles only — the integer file id posted to its /download
+   *  endpoint. 0 for SubDL results. */
   fileId: number
+  /** SubDL only — the root-relative archive path (`/subtitle/<id>.zip`)
+   *  resolved against dl.subdl.com at download time. '' for OpenSubtitles
+   *  results. Validated as an SSRF boundary before use, since it makes the
+   *  round trip through the renderer — see subdl.ts's
+   *  resolveSubdlDownloadUrl. */
+  downloadPath: string
   fileName: string
   language: string
   releaseName: string
@@ -581,6 +597,13 @@ export interface SubtitleResult {
   uploader: string
   hearingImpaired: boolean
 }
+
+/** The provider-identifying subset of a SubtitleResult that the renderer
+ *  hands back to subtitles:apply. Deliberately not the whole result: the
+ *  main process only needs to know which service to ask and for what, and
+ *  narrowing the payload keeps the rest of the row (display-only text) out
+ *  of the trust boundary entirely. */
+export type SubtitleSelection = Pick<SubtitleResult, 'provider' | 'fileId' | 'downloadPath'>
 
 export interface SkipInterval {
   start: number

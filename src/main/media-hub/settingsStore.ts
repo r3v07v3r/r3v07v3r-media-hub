@@ -42,6 +42,11 @@ export interface MediaHubRawSettings {
   osUsername?: string
   osPassword?: string
   osToken?: string
+  /** SubDL's free developer key. Unlike OpenSubtitles this is the ONLY
+   *  credential the provider needs: the key authenticates search, and the
+   *  archives it points at are fetched anonymously from dl.subdl.com, so
+   *  there is no username/password or session token to store. */
+  subdlApiKey?: string
   partySyncUrl?: string
   partySyncInviteKey?: string
   partyDisplayName?: string
@@ -264,6 +269,18 @@ export function osCredentials(): OsCredentials {
 export function osConnected(): boolean {
   const creds = osCredentials()
   return Boolean(creds.apiKey && creds.username && creds.password)
+}
+
+export interface SubdlCredentials {
+  apiKey: string
+}
+
+export function subdlCredentials(): SubdlCredentials {
+  return { apiKey: decrypt(readSettings().subdlApiKey) }
+}
+
+export function subdlConnected(): boolean {
+  return Boolean(subdlCredentials().apiKey)
 }
 
 export interface PartySyncCredentials {

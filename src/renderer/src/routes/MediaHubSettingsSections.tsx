@@ -693,6 +693,103 @@ export function MalSection() {
   )
 }
 
+/**
+ * SubDL — the other half of the subtitle search/apply flow in
+ * PlaybackOverlay, and the one to connect if only one gets connected.
+ *
+ * One field, because that is genuinely all it needs: the free key
+ * authenticates search (2000 requests/day), and the subtitle archives it
+ * points at are public files on dl.subdl.com fetched with no credential at
+ * all. That is the whole reason this provider is here — OpenSubtitles meters
+ * downloads at 5/day on a free account, which a single evening exhausts.
+ */
+export function SubDLSection() {
+  const { mediaHubSettings, refreshMediaHubSettings } = useAppState()
+  const [apiKey, setApiKey] = useState('')
+  const [status, setStatus] = useState<Status>({ kind: 'idle' })
+  const connected = mediaHubSettings?.subdlConnected ?? false
+
+  async function connect() {
+    const api = window.api?.mediaHub
+    if (!api || !apiKey.trim()) return
+    setStatus({ kind: 'busy' })
+    try {
+      const result = await api.subdl.connect(apiKey.trim())
+      if (result.ok) {
+        setApiKey('')
+        setStatus({ kind: 'ok', message: 'Connected.' })
+        refreshMediaHubSettings()
+      } else {
+        setStatus({ kind: 'error', message: result.message || 'Could not connect.' })
+      }
+    } catch (error) {
+      setStatus({
+        kind: 'error',
+        message: error instanceof Error ? error.message : 'Connect failed.'
+      })
+    }
+  }
+
+  async function disconnect() {
+    const api = window.api?.mediaHub
+    if (!api) return
+    setStatus({ kind: 'busy' })
+    await api.subdl.disconnect().catch(() => {})
+    setStatus({ kind: 'idle' })
+    refreshMediaHubSettings()
+  }
+
+  return (
+    <section className={`${styles.section} glass-panel`} aria-labelledby="settings-subdl">
+      <div className={styles.serviceHead}>
+        <h2 id="settings-subdl" className={styles.sectionTitle} style={{ marginBottom: 0 }}>
+          SubDL
+        </h2>
+        <ConnectionBadge connected={connected} />
+      </div>
+      <p className={styles.rowDescription} style={{ marginBottom: 10 }}>
+        Subtitle search inside the player, with no daily download limit. Get a free key at
+        subdl.com/panel/api — it is searched first when connected, so OpenSubtitles&apos; small free
+        download quota is only spent when SubDL has no match.
+      </p>
+      {connected ? (
+        <div className={styles.serviceActions}>
+          <button type="button" className={styles.testButton} onClick={disconnect}>
+            Disconnect
+          </button>
+          <StatusLine status={status} />
+        </div>
+      ) : (
+        <>
+          <div className={styles.serviceFields}>
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>SubDL API Key</span>
+              <input
+                className={styles.fieldInput}
+                type="password"
+                placeholder="••••••••••••"
+                value={apiKey}
+                onChange={(e) => setApiKey(e.target.value)}
+              />
+            </label>
+          </div>
+          <div className={styles.serviceActions} style={{ marginTop: 10 }}>
+            <button
+              type="button"
+              className={styles.testButton}
+              onClick={connect}
+              disabled={!apiKey.trim() || status.kind === 'busy'}
+            >
+              {status.kind === 'busy' ? 'Connecting…' : 'Connect'}
+            </button>
+            <StatusLine status={status} />
+          </div>
+        </>
+      )}
+    </section>
+  )
+}
+
 /** OpenSubtitles — powers the subtitle search/apply flow in PlaybackOverlay. */
 export function OpenSubtitlesSection() {
   const { mediaHubSettings, refreshMediaHubSettings } = useAppState()
@@ -743,7 +840,9 @@ export function OpenSubtitlesSection() {
         <ConnectionBadge connected={connected} />
       </div>
       <p className={styles.rowDescription} style={{ marginBottom: 10 }}>
-        Subtitle search inside the player, for titles without embedded subtitle tracks.
+        Subtitle search inside the player, for titles without embedded subtitle tracks. A free
+        account allows 5 subtitle downloads per day (1000 with their paid VIP), so connect SubDL
+        above as well — it is searched first and has no download limit.
       </p>
       {connected ? (
         <div className={styles.serviceActions}>
