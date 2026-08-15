@@ -36,6 +36,7 @@ import type {
 } from '../../shared/media-hub/types'
 import { handle } from './ipcGuard'
 import { logError, redactUrls } from './logger'
+import { reportPreparation } from './playbackProgress'
 import { srtToVtt } from './opensubtitles'
 import { readSettings, writeSettings } from './settingsStore'
 import {
@@ -105,7 +106,11 @@ void pruneIdleSessions()
 setInterval(() => void pruneIdleSessions(), 60 * 60 * 1000)
 
 const ffmpegTranscoder = createFfmpegTranscoder({
-  onLog: (line) => logError('ffmpeg:stderr', redactUrls(line.trim()))
+  onLog: (line) => logError('ffmpeg:stderr', redactUrls(line.trim())),
+  // Only ever visible during a title's initial preparation — the renderer
+  // ignores these while nothing is being prepared, so the identical
+  // restarts a seek/track change performs stay silent.
+  onProgress: (message) => reportPreparation('transcode', message)
 })
 
 let activeMediaUrl = ''
@@ -251,6 +256,7 @@ export async function preparePlayback(
   activeMediaUrl = url
   subtitleBatchPromise = null
   await ffmpegTranscoder.stop()
+  reportPreparation('probe', "Reading the file's audio and subtitle tracks")
   activeMediaTracks = await probeMedia(ffprobePath, url)
   // StreamCache becomes the sole owner of the upstream connection to `url`
   // from here on — probeMedia above is the one remote touch that happens
@@ -292,6 +298,11 @@ export async function preparePlayback(
     !videoEncodeUnusable &&
     readSettings().videoTranscodeEnabled
   ) {
+    // Worth naming: the very first title of a session pays a real
+    // functional probe per candidate encoder here (see detectVideoEncoder),
+    // which is seconds of apparently-nothing-happening before the
+    // transcode has even been asked to start.
+    reportPreparation('encoder', 'Looking for a hardware video encoder')
     activeVideoEncoder = (await detectVideoEncoder(ffmpegPath)) ?? undefined
     if (activeVideoEncoder) activeVideoEncoderReason = 'codec'
   }
@@ -341,6 +352,15 @@ export async function preparePlayback(
     // and HDR metadata exactly, where a successful re-encode would have
     // thrown both away. Recovery itself lives in
     // startTranscodeWithFallback, shared with every restart path below.
+    const audioCodec = activeMediaTracks.audio
+      .find((track) => track.ordinal === audioSelection.audio)
+      ?.codec?.toUpperCase()
+    reportPreparation(
+      'transcode',
+      activeVideoEncoder
+        ? `Converting video and ${audioCodec || 'the'} audio for this player`
+        : `Converting ${audioCodec || 'the'} audio for this player`
+    )
     const started = await startTranscodeWithFallback(audioSelection, encodeHeight)
     return {
       ok: true,

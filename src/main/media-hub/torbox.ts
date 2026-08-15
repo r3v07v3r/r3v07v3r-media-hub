@@ -47,6 +47,7 @@ import { sanitizeTrackers } from './security'
 import { catalogData } from './catalog'
 import { isAllowedRemoteMediaUrl } from './playback'
 import { preparePlayback } from './playbackSession'
+import { reportPreparation } from './playbackProgress'
 import {
   clearTorBoxToken,
   encrypt,
@@ -516,9 +517,11 @@ export function registerTorBoxIpc(): void {
 
       let url: string
       try {
+        reportPreparation('link', 'Asking TorBox for a playable link')
         url = await resolveDownloadUrl(false)
       } catch (error) {
         logError('torbox:play:retry', error)
+        reportPreparation('link', "That link wasn't ready — asking TorBox again")
         url = await resolveDownloadUrl(true)
       }
       const result = await preparePlayback(

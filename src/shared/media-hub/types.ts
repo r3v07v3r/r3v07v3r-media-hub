@@ -196,6 +196,29 @@ export interface PlaybackSelection {
   upscaleHeight?: number
 }
 
+/**
+ * Live sub-status for the preparation overlay's third step ("Preparing the
+ * stream"), pushed from main while `stream:play` is in flight.
+ *
+ * That one IPC call covers the entire real critical path for starting a
+ * title — TorBox link request, ffprobe, opening the source, filling the
+ * first chunks, and (when the source needs it) starting a transcode — and
+ * can legitimately take a minute or more on a big remux. Reported live as
+ * "it just sat on step 3": a single static label for that whole stretch is
+ * indistinguishable from the app having hung. These events say which piece
+ * is actually running right now, and how far through it is where that's
+ * measurable.
+ */
+export interface PlaybackPrepareProgress {
+  /** Which piece of the step is running. The renderer only renders
+   *  `message`; this is here so a future UI (or a log) can tell the phases
+   *  apart without parsing prose. */
+  step: 'link' | 'probe' | 'connect' | 'buffer' | 'encoder' | 'transcode'
+  /** Ready-to-show text, built in main (which is the only side that knows
+   *  the real byte counts, buffer settings and codec decisions). */
+  message: string
+}
+
 /** A download the app refused to write to disk (see main/media-hub/downloadGuard.ts). */
 export interface BlockedDownload {
   filename: string

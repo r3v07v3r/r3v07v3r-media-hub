@@ -37,7 +37,18 @@ export function PlaybackPreparationOverlay() {
               <span className={styles.preparationStageIcon} aria-hidden="true">
                 {completed ? <Icon name="check" size={12} /> : index + 1}
               </span>
-              {PLAYBACK_PREPARATION_LABELS[stage]}
+              <span className={styles.preparationStageText}>
+                {PLAYBACK_PREPARATION_LABELS[stage]}
+                {/* Only ever under the stage that's actually running, and
+                    only once main has said something about it — the stage
+                    labels are fixed, this is the live part (see
+                    PlaybackPrepareProgress). Steps 3 and 4 are where it
+                    matters: they cover a single IPC call that can run for
+                    a minute-plus on a large source. */}
+                {active && resolvingMedia.detail && (
+                  <span className={styles.preparationStageDetail}>{resolvingMedia.detail}</span>
+                )}
+              </span>
             </li>
           )
         })}

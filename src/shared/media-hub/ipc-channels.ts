@@ -65,6 +65,7 @@ export const MEDIA_HUB_CHANNELS = {
   playbackCompatibility: 'mediahub:playback:compatibility',
   playbackSelectTracks: 'mediahub:playback:select-tracks',
   playbackStop: 'mediahub:playback:stop',
+  playbackPrepareProgress: 'mediahub:playback:prepare-progress', // push event
   playbackThumbnail: 'mediahub:playback:thumbnail',
   playbackSkipTimes: 'mediahub:playback:skip-times',
   playbackExtractSubtitle: 'mediahub:playback:extract-subtitle',

@@ -197,10 +197,26 @@
   font-size: 12px;
   transition: color 160ms ease;
 }
+/* Wraps the label + its live detail line so the numbered icon stays a
+   single fixed-size column no matter how tall the detail gets. */
+.preparationStageText {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+.preparationStageDetail {
+  color: rgba(214, 226, 239, 0.62);
+  font-size: 11px;
+  line-height: 1.35;
+  /* Byte counts and codec names are short, but a source-supplied word
+     (a codec/track name) must never push the fixed-width card wider. */
+  overflow-wrap: anywhere;
+}
 .preparationStageIcon {
   display: grid;
   width: 20px;
   height: 20px;
+  flex-shrink: 0;
   place-items: center;
   border: 1px solid rgba(214, 226, 239, 0.18);
   border-radius: 50%;

@@ -41,7 +41,7 @@ check('fullRetention returns exactly the present set, ignoring every other param
     presentChunkIndices: present,
     fullRetention: true,
     totalBytes: 1,
-    centerByte: 0,
+    centerBytes: [0],
     behindSeconds: 30,
     aheadSeconds: 300,
     bytesPerSecond: undefined,
@@ -58,7 +58,7 @@ check('head region (chunks 0..3 at 16MB/4MB) is always retained regardless of pl
     presentChunkIndices: [],
     fullRetention: false,
     totalBytes,
-    centerByte: CHUNK * 500, // playhead in the middle, nowhere near the head
+    centerBytes: [CHUNK * 500], // playhead in the middle, nowhere near the head
     behindSeconds: 30,
     aheadSeconds: 300,
     bytesPerSecond: CHUNK, // 1 chunk/sec, so behind=30 chunks, ahead=300 chunks — won't reach chunk 0..3 from 500
@@ -76,7 +76,7 @@ check('tail region (last 4MB) is always retained regardless of playhead', () => 
     presentChunkIndices: [],
     fullRetention: false,
     totalBytes,
-    centerByte: CHUNK * 10, // playhead near the start, nowhere near the tail
+    centerBytes: [CHUNK * 10], // playhead near the start, nowhere near the tail
     behindSeconds: 30,
     aheadSeconds: 300,
     bytesPerSecond: CHUNK,
@@ -94,7 +94,7 @@ check('window follows the playhead: behind/ahead convert seconds to bytes via by
     presentChunkIndices: [],
     fullRetention: false,
     totalBytes,
-    centerByte,
+    centerBytes: [centerByte],
     behindSeconds: 10,
     aheadSeconds: 20,
     bytesPerSecond: CHUNK, // 1 chunk/sec — 10 chunks behind, 20 ahead
@@ -115,7 +115,7 @@ check('shrinking aheadSeconds shrinks the ahead edge but never the behind edge o
     presentChunkIndices: [],
     fullRetention: false,
     totalBytes,
-    centerByte,
+    centerBytes: [centerByte],
     behindSeconds: 30,
     aheadSeconds: 300,
     bytesPerSecond: CHUNK,
@@ -127,7 +127,7 @@ check('shrinking aheadSeconds shrinks the ahead edge but never the behind edge o
     presentChunkIndices: [],
     fullRetention: false,
     totalBytes,
-    centerByte,
+    centerBytes: [centerByte],
     behindSeconds: 30, // unchanged — squeezeForPressure never touches this
     aheadSeconds: 5, // squeezed under pressure
     bytesPerSecond: CHUNK,
@@ -146,7 +146,7 @@ check('no known bitrate falls back to a fixed chunk-count window instead of an e
     presentChunkIndices: [],
     fullRetention: false,
     totalBytes: null,
-    centerByte: CHUNK * 50,
+    centerBytes: [CHUNK * 50],
     behindSeconds: 30,
     aheadSeconds: 300,
     bytesPerSecond: undefined,
@@ -164,7 +164,7 @@ check('window never reads past totalBytes when known', () => {
     presentChunkIndices: [],
     fullRetention: false,
     totalBytes,
-    centerByte: CHUNK * 9,
+    centerBytes: [CHUNK * 9],
     behindSeconds: 30,
     aheadSeconds: 300, // would reach far past EOF if not clamped
     bytesPerSecond: CHUNK,
@@ -174,6 +174,53 @@ check('window never reads past totalBytes when known', () => {
   })
   assert.ok(retained.has(10), 'the last real chunk is retained')
   assert.ok(!retained.has(50), 'nothing past the file end is ever retained')
+})
+
+// The regression this whole multi-centre shape exists for — see
+// streamCache.ts's module header. Every MKV demux does one incidental read
+// near EOF (Cues/SeekHead); with a single forward-only centre that read
+// permanently moved the retention window to the end of the file and the
+// chunks around the real playhead were evicted as fast as they arrived,
+// killing playback a few seconds in.
+check('a concurrent tail probe never evicts the playhead window', () => {
+  const totalChunks = 1000
+  const totalBytes = CHUNK * totalChunks
+  const playhead = CHUNK * 40 // past the pinned 16MB head
+  const tailProbe = CHUNK * (totalChunks - 2) // ffmpeg reading Matroska Cues
+  const retained = computeRetainedChunkIndices({
+    presentChunkIndices: [],
+    fullRetention: false,
+    totalBytes,
+    centerBytes: [playhead, tailProbe],
+    behindSeconds: 30,
+    aheadSeconds: 300,
+    bytesPerSecond: CHUNK, // 1 chunk/sec
+    headBytes: HEAD,
+    tailBytes: TAIL,
+    chunkBytes: CHUNK
+  })
+  assert.ok(retained.has(40), 'the playhead chunk itself survives the tail probe')
+  assert.ok(retained.has(41), 'so does the chunk playback is about to need')
+  assert.ok(retained.has(70), 'and the ahead-window in front of the playhead')
+  assert.ok(retained.has(totalChunks - 2), "the probe's own position is retained too")
+})
+
+check('each centre gets its own window rather than one spanning window between them', () => {
+  const totalBytes = CHUNK * 1000
+  const retained = computeRetainedChunkIndices({
+    presentChunkIndices: [],
+    fullRetention: false,
+    totalBytes,
+    centerBytes: [CHUNK * 100, CHUNK * 800],
+    behindSeconds: 10,
+    aheadSeconds: 20,
+    bytesPerSecond: CHUNK,
+    headBytes: HEAD,
+    tailBytes: TAIL,
+    chunkBytes: CHUNK
+  })
+  assert.ok(retained.has(100) && retained.has(800), 'both centres are retained')
+  assert.ok(!retained.has(450), 'the gap between them is not retained')
 })
 
 console.log(`\n${pass} passed`)

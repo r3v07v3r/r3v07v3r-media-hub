@@ -53,6 +53,29 @@ function formatTime(seconds: number): string {
 }
 
 /**
+ * What to actually tell someone when the <video> element gives up.
+ *
+ * Every failure used to read as the same sentence, which sent people
+ * hunting for a different audio track even when the audio was fine and the
+ * stream had simply stopped arriving — the two have completely different
+ * fixes. MediaError's code is the only thing that distinguishes them from
+ * the renderer's side, so it's what picks the wording (the raw
+ * `MEDIA_ERR_*`/pipeline text stays in the console for diagnosis).
+ */
+function playbackErrorMessage(error: MediaError | null | undefined): string {
+  switch (error?.code) {
+    case 2: // MEDIA_ERR_NETWORK
+      return 'Playback stopped because the stream stopped arriving. The source may have dropped the connection — try playing again.'
+    case 3: // MEDIA_ERR_DECODE
+      return "Playback stopped because this file's audio or video couldn't be decoded. Try playing again and picking a different audio track."
+    case 4: // MEDIA_ERR_SRC_NOT_SUPPORTED
+      return "Playback stopped because this file's format isn't supported by the player. Try a different source for this title."
+    default:
+      return 'Playback stopped unexpectedly and could not continue. Try playing again — a different audio track may avoid the issue.'
+  }
+}
+
+/**
  * The real playback surface — renders the stream AppStateContext's
  * startPlayback already resolved (stream:resolve + stream:play, done
  * BEFORE this component ever mounts — see that function's own comment on
@@ -1736,12 +1759,12 @@ export function PlaybackOverlay() {
           // frozen with audio and video both dead and no feedback at all.
           // The raw pipeline error is developer-facing jargon, not
           // something to show verbatim — logged for diagnosis, with a
-          // plain, actionable message for the person watching.
+          // plain, actionable message (chosen from the error's own code —
+          // see playbackErrorMessage) for the person watching.
           console.error('[playback] video element error', videoRef.current?.error)
           pushNotification({
             tone: 'error',
-            message:
-              'Playback stopped unexpectedly and could not continue. Try playing again — a different audio track may avoid the issue.'
+            message: playbackErrorMessage(videoRef.current?.error)
           })
           stopPlayback(markedWatchedRef.current)
         }}
