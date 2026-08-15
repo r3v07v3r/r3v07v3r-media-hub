@@ -1240,12 +1240,15 @@ export function createFfmpegTranscoder({
       const requestedStart = rangeMatch ? Number(rangeMatch[1]) : 0
       if (requestedStart < historyStart || requestedStart > totalBytes) {
         // Outside the retained window (too old — evicted by
-        // MAX_HISTORY_BYTES) or nonsensical (past what's even been
+        // MAX_HISTORY_BYTES; see the pause-on-disconnect below, which
+        // exists specifically to keep this from being reachable in the
+        // normal reconnect case) or nonsensical (past what's even been
         // produced). There is no way to honestly answer this, and
         // substituting different bytes is exactly the bug being fixed
-        // here — an honest failure the element can recover from (it
-        // already treats a network-ish error as retryable) beats a silent
-        // one it can't detect at all.
+        // here — an honest failure the element can recover from
+        // (PlaybackOverlay's onError retries a network error the same way
+        // it retries a decode error) beats a silent one it can't detect
+        // at all.
         res.writeHead(416, { 'Content-Range': `bytes */${totalBytes}` })
         res.end()
         return
@@ -1283,6 +1286,13 @@ export function createFfmpegTranscoder({
         return
       }
       clientRes = res
+      // Undoes the pause the PREVIOUS client's disconnect applied below —
+      // a fresh connection has an empty send buffer regardless of why
+      // stdout was paused, so it's always safe to resume here.
+      if (stdoutPaused) {
+        stdoutPaused = false
+        spawned.stdout?.resume()
+      }
       res.on('drain', () => {
         if (stdoutPaused) {
           stdoutPaused = false
@@ -1292,14 +1302,26 @@ export function createFfmpegTranscoder({
       req.on('close', () => {
         if (clientRes !== res) return
         clientRes = null
-        // If stdout was paused waiting for *this* response to drain, no
-        // 'drain' event is ever coming now that it's gone — without this,
-        // stdout would stay paused forever (no more 'data' events at all),
-        // permanently stalling the session even though nothing is
-        // actually broken downstream.
-        if (stdoutPaused) {
-          stdoutPaused = false
-          spawned.stdout?.resume()
+        // Pausing here — rather than letting production run unattended,
+        // which is what this code did before — is what keeps a
+        // disconnect-then-reconnect gap (the <video> element does this on
+        // its own; see `history`'s own comment above) from ever being
+        // able to outrun MAX_HISTORY_BYTES and evict the exact offset the
+        // reconnect is about to ask for. Caught in review: the history/
+        // Range fix above stops a SATISFIABLE reconnect from being
+        // silently corrupted, but did nothing to stop an
+        // UNSATISFIABLE one (history evicted past what's retained) from
+        // arising in the first place — a slow-to-reconnect client against
+        // a high-bitrate source could still land in the clean-416-then-
+        // give-up case that leaves. Node not reading from the pipe means
+        // ffmpeg itself blocks on its own stdout write once the OS pipe's
+        // small buffer fills (observed ~64KB on Windows — see this file's
+        // own note above) — the whole transcode pipeline freezes with it,
+        // capping how far `totalBytes` can move during any gap to that
+        // same small amount instead of growing without limit.
+        if (!stdoutPaused) {
+          spawned.stdout?.pause()
+          stdoutPaused = true
         }
       })
     })
