@@ -161,6 +161,17 @@ export function buildFfmpegArguments(
   if (startTime > 0) args.push('-noaccurate_seek', '-ss', String(Math.floor(startTime)))
   args.push('-i', remoteUrl)
   args.push('-map', '0:v:0', '-map', audio >= 0 ? `0:a:${audio}` : '0:a:0')
+  // The -map pair above asks for exactly one video and one audio stream,
+  // but chapters are copied by a SEPARATE default (-map_chapters 0), and
+  // the mp4 muxer materializes an MKV's chapter list as a real third track
+  // (a QuickTime `text` track, which ffprobe reports back as
+  // `Data: bin_data`). Verified against the reported file: the first
+  // fragment carried a third traf holding one chapter sample and no
+  // fragment after it ever carried another — a track that produces exactly
+  // one sample and then goes silent forever, in a live stream the player
+  // is demuxing as it arrives. Nothing in this app reads chapters (there
+  // is no chapter UI), so this is pure risk with no upside.
+  args.push('-map_chapters', '-1')
   // Opt-in video path (see detectVideoEncoder) — otherwise the same
   // stream-copy this file's header explains was the right default. Seek
   // stays keyframe-snapped for both streams either way (-noaccurate_seek
@@ -195,6 +206,35 @@ export function buildFfmpegArguments(
     args.push('-c:v', 'copy')
   }
   args.push('-c:a', 'aac', '-b:a', '192k', '-ac', '2', '-ar', '48000')
+  // Fills the gap when the source's audio does not begin at the same
+  // instant as its video, which is what killed playback a couple of
+  // seconds in on the reported title.
+  //
+  // Measured on that exact file (a 4K remux whose four audio tracks all
+  // start at 1.008s while the video starts at 0): ffmpeg has no way to
+  // express "this track starts late" in a FRAGMENTED mp4 — an edit list
+  // is a moov-level construct and the head is written before any of the
+  // media exists — so the muxer absorbs the offset by inflating the FIRST
+  // audio sample's declared duration instead. The first fragment came out
+  // holding 44 AAC samples whose durations summed to 2.008s (one sample
+  // declared 52368/48000 = 1.091s, the rest a normal 1024) while carrying
+  // only 44*1024 = 0.939s of actually decodable audio, and the next
+  // fragment's audio then resumed at exactly 2.008s. So the container
+  // promises a continuous audio timeline that the samples cannot fill:
+  // roughly a second of it does not exist, and the player runs out of real
+  // audio right around the two-second mark — which is exactly where
+  // playback was dying.
+  //
+  // aresample pads that lead-in with genuine silence samples instead, so
+  // every sample keeps its true 1024-sample duration and the timeline is
+  // continuous from 0. It pads rather than shifts: real audio content
+  // stays on the same timestamps it always had (verified by comparing
+  // 100ms RMS envelopes of the output before and after — same content, no
+  // measurable drift), so this cannot desync a file that was already fine.
+  // `async=1` covers mid-stream discontinuities the same way, and on a
+  // source whose audio already starts at 0 the whole filter is a verified
+  // no-op (byte-identical packet timing with and without it).
+  args.push('-af', 'aresample=async=1:first_pts=0')
   args.push('-movflags', 'frag_keyframe+empty_moov+default_base_moof')
   args.push('-f', 'mp4', 'pipe:1')
   return args
