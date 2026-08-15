@@ -204,6 +204,11 @@ export function PlaybackOverlay() {
   // not necessarily the current position.
   const [resumePosition, setResumePosition] = useState<PlaybackPositionResult | null>(null)
   const resumeAppliedRef = useRef(false)
+  // Whether a compatibility-mode decode error has already triggered one
+  // automatic ffmpeg-restart retry for this title/episode — see onError
+  // below. One shot only: a genuine, unrecoverable stream defect (bad
+  // source track, real corruption) must not loop forever restarting.
+  const decodeErrorRetriedRef = useRef(false)
   const currentPositionRef = useRef({ time: 0, duration: 0 })
   const hideControlsTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   // The ORIGINAL, un-shifted subtitle VTT text (absolute-timeline cue
@@ -549,6 +554,7 @@ export function PlaybackOverlay() {
     // effects) — this is the ref half of the same per-episode reset the
     // render-time block above handles for resumePosition's own state.
     resumeAppliedRef.current = false
+    decodeErrorRetriedRef.current = false
     if (!playbackMedia) return
     const api = window.api?.mediaHub
     if (!api) return
@@ -1797,6 +1803,29 @@ export function PlaybackOverlay() {
               currentTime: videoRef.current?.currentTime
             })
             .catch(() => {})
+          // A decode error (code 3) in compatibility mode is often a
+          // transient artifact of the live ffmpeg-to-<video> relay rather
+          // than a genuinely broken source track — reproduced live: the
+          // exact same bytes this transcode produces decode cleanly end to
+          // end when served as a complete file instead of the live stream,
+          // so restarting the transcode fresh from here recovers most of
+          // the time. One shot per title/episode (decodeErrorRetriedRef) —
+          // a second decode error means this really is unrecoverable, and
+          // must fall through to the notify+stop below instead of looping.
+          if (
+            videoRef.current?.error?.code === 3 &&
+            result?.compatibility &&
+            !decodeErrorRetriedRef.current
+          ) {
+            decodeErrorRetriedRef.current = true
+            const video = videoRef.current
+            const resumeAt = streamStartOffsetRef.current + (video?.currentTime ?? 0)
+            // Same rule as selectTrack/applyUpscale's own restarts: only
+            // auto-resume if playback was actually running when this hit.
+            resumeAfterRestartRef.current = !(video?.paused ?? false)
+            performSeek(resumeAt)
+            return
+          }
           pushNotification({
             tone: 'error',
             message: playbackErrorMessage(videoRef.current?.error)
