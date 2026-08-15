@@ -29,9 +29,23 @@ assert.equal(
 // sample in the first fragment and nothing ever again.
 assert.equal(valueOf(base, '-map_chapters'), '-1', 'chapters are not muxed into the stream')
 
-// Both belong to the output, so they must come after -i — an -af placed
-// before the input would be parsed as an input option and silently ignored.
-for (const flag of ['-af', '-map_chapters']) {
+// A Dolby Vision source's RPU rides through stream-copy as in-band NAL
+// units regardless of this flag — what it controls is whether the mp4
+// muxer is ALLOWED to write the dvcC/dvvC box declaring that. Without it
+// the container silently disagrees with the bitstream it's carrying (RPU
+// present, nothing saying so); ffmpeg's own stderr names this exact flag
+// as the fix ("Not writing 'dvcC'/'dvvC' box. Requires -strict
+// unofficial.", logged on every compatibility-mode transcode of such a
+// source before this).
+assert.equal(valueOf(base, '-strict'), 'unofficial', 'the muxer is allowed to declare Dolby Vision')
+
+// All three belong to the output, so they must come after -i — an -af (or
+// -strict, or -map_chapters) placed before the input is parsed as an input
+// option and silently ignored. Verified live: -strict specifically only
+// took effect from the output side; placed before -i it did not error, it
+// just silently had no effect (confirmed by decoding the result and
+// checking for the dvcC/dvvC box).
+for (const flag of ['-af', '-map_chapters', '-strict']) {
   assert.ok(
     base.indexOf(flag) > base.indexOf('-i'),
     `${flag} is an output option and must follow -i`
@@ -53,12 +67,30 @@ assert.equal(
   'aresample=async=1:first_pts=0',
   'audio padding applies on the video re-encode path too'
 )
+assert.equal(valueOf(reencoded, '-strict'), 'unofficial')
 assert.equal(valueOf(reencoded, '-vf'), 'format=yuv420p,scale=-2:1080')
 
-// Every restart (seek, track change, subtitle apply) rebuilds these args,
-// so a seeked restart must be normalised the same way the first start was.
+// A genuine restart to the very top (startTime 0, no -ss at all) is a
+// "from-the-top start" exactly like preparePlayback's own first call —
+// still needs the padding fix, for the same file-authoring reason the base
+// case above does.
+const restartFromTop = buildFfmpegArguments(SOURCE, { audio: 1, startTime: 0 })
+assert.equal(valueOf(restartFromTop, '-af'), 'aresample=async=1:first_pts=0')
+assert.ok(!restartFromTop.includes('-ss'), 'startTime 0 never seeks at all')
+
+// A real seek (startTime > 0) is different: -noaccurate_seek's whole job is
+// to leave audio UNTRIMMED so it lands wherever the demuxer's seek
+// naturally does, matching copy-mode video's keyframe-snapped start — see
+// buildFfmpegArguments' own comment. first_pts=0 doesn't just pad, it can
+// also trim a real audio sample landing at a small negative offset after
+// its own origin is rebased, which would reintroduce exactly the
+// asymmetric-trim desync -noaccurate_seek exists to avoid, and `async=1`
+// alone is far too slow (1 sample/sec) to correct it back out. So the
+// padding filter must NOT be present here, even though every other
+// restart-time behaviour (seek flags, ordinal, -strict) is unchanged.
 const seeked = buildFfmpegArguments(SOURCE, { audio: 2, startTime: 640 })
-assert.equal(valueOf(seeked, '-af'), 'aresample=async=1:first_pts=0')
+assert.equal(valueOf(seeked, '-af'), undefined, 'a real seek never gets the from-the-top padding')
+assert.equal(valueOf(seeked, '-strict'), 'unofficial')
 assert.equal(valueOf(seeked, '-ss'), '640')
 assert.ok(seeked.includes('-noaccurate_seek'), 'keyframe-snapped seek is unchanged')
 assert.equal(valueOf(seeked, '-map'), '0:v:0')

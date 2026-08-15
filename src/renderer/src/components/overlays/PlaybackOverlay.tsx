@@ -1785,6 +1785,18 @@ export function PlaybackOverlay() {
           // plain, actionable message (chosen from the error's own code —
           // see playbackErrorMessage) for the person watching.
           console.error('[playback] video element error', videoRef.current?.error)
+          // Only reaches DevTools on its own (see console.error above) —
+          // forwarded to main so it lands in logs/media-hub.log too, since
+          // that's the one piece of a playback crash that was otherwise
+          // unrecoverable after the fact. Best-effort: this must never be
+          // why stopPlayback below doesn't run.
+          window.api?.mediaHub?.playback
+            .reportClientError({
+              code: videoRef.current?.error?.code,
+              message: videoRef.current?.error?.message,
+              currentTime: videoRef.current?.currentTime
+            })
+            .catch(() => {})
           pushNotification({
             tone: 'error',
             message: playbackErrorMessage(videoRef.current?.error)

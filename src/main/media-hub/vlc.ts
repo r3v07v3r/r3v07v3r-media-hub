@@ -231,10 +231,44 @@ export function buildFfmpegArguments(
   // stays on the same timestamps it always had (verified by comparing
   // 100ms RMS envelopes of the output before and after — same content, no
   // measurable drift), so this cannot desync a file that was already fine.
-  // `async=1` covers mid-stream discontinuities the same way, and on a
-  // source whose audio already starts at 0 the whole filter is a verified
-  // no-op (byte-identical packet timing with and without it).
-  args.push('-af', 'aresample=async=1:first_pts=0')
+  //
+  // Deliberately gated to startTime === 0, i.e. never on a seek. This
+  // defect is a property of THIS FILE's authoring — its audio tracks start
+  // 1.008s after its video at the file's own absolute t=0 — not something
+  // that recurs at arbitrary points midfile: at any interior -ss (see
+  // -noaccurate_seek above), both streams start whenever the demuxer's
+  // seek naturally lands, already close to each other with nothing to pad
+  // or trim. Applying first_pts=0 there too would fight that: it doesn't
+  // just pad, it can also TRIM real audio whose first post-seek sample
+  // lands at a small negative offset relative to its own rebased origin —
+  // exactly the kind of asymmetric trim -noaccurate_seek exists to avoid,
+  // and since `async=1` only nudges timing by up to 1 sample/sec, a trim
+  // introduced this way would desync for a long time rather than
+  // correcting quickly. Caught in review, not verified live — restricting
+  // this to the one case the original defect actually occurs in (a true
+  // from-the-top start) avoids the risk entirely rather than trying to
+  // prove the seek case is safe.
+  if (startTime === 0) args.push('-af', 'aresample=async=1:first_pts=0')
+  // Only matters on the stream-copy path (a re-encode always throws away
+  // HDR/DoVi metadata regardless), but harmless either way. Unconditional
+  // on startTime, unlike the filter above — this is a container-level
+  // metadata declaration, not a timestamp operation, so it carries no
+  // seek-desync risk.
+  //
+  // A Dolby Vision source (profile 8 here — the HDR10-compatible base
+  // layer, the common case for a streaming-friendly remux) carries its RPU
+  // as in-band NAL units inside the copied HEVC bitstream itself — ffprobe
+  // reports it back as stream-level side data ("DOVI configuration
+  // record"), confirming those NALs really are there. The mp4 muxer's
+  // default strictness REFUSES to write the `dvcC`/`dvvC` box that
+  // declares the stream as Dolby Vision (the exact "Not writing 'dvcC'/
+  // 'dvvC' box. Requires -strict unofficial." line every compatibility-
+  // mode transcode logs), leaving the output an HEVC stream that contains
+  // Dolby Vision RPU NALs but never says so. `-strict unofficial` is what
+  // that logged message is naming as the fix — it makes the muxer write
+  // the box, so the container's declared codec profile actually matches
+  // the bitstream it's carrying instead of silently disagreeing with it.
+  args.push('-strict', 'unofficial')
   args.push('-movflags', 'frag_keyframe+empty_moov+default_base_moof')
   args.push('-f', 'mp4', 'pipe:1')
   return args

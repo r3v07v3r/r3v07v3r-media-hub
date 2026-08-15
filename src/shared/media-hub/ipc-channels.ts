@@ -69,6 +69,12 @@ export const MEDIA_HUB_CHANNELS = {
   playbackThumbnail: 'mediahub:playback:thumbnail',
   playbackSkipTimes: 'mediahub:playback:skip-times',
   playbackExtractSubtitle: 'mediahub:playback:extract-subtitle',
+  // A <video> element's MediaError never reaches main on its own — the
+  // renderer's onError handler forwards it here purely so it lands in
+  // logs/media-hub.log (see PlaybackOverlay), since that's the one piece
+  // of a playback crash otherwise visible only in DevTools, on the one
+  // machine it happened on, for as long as that session stays open.
+  playbackReportClientError: 'mediahub:playback:report-client-error',
   streamCacheClear: 'mediahub:playback:stream-cache-clear',
   libraryList: 'mediahub:library:list',
   libraryPlay: 'mediahub:library:play',

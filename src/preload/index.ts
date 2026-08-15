@@ -363,6 +363,12 @@ const api = {
         }),
       extractSubtitle: (ordinal: number): Promise<string | null> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.playbackExtractSubtitle, ordinal),
+      reportClientError: (error: {
+        code?: number
+        message?: string
+        currentTime?: number
+      }): Promise<{ ok: true }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.playbackReportClientError, error),
       clearStreamCache: (): Promise<{ ok: true; freedBytes: number }> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.streamCacheClear),
       /** Live sub-status while `stream.play` is in flight — see
