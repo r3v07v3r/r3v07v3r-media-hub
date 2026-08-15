@@ -32,6 +32,7 @@ import type {
   PlaybackResult,
   PlaybackSelection,
   StreamCacheEntry,
+  SubtitleSelection,
   SubtitlesApplyResult
 } from '../../shared/media-hub/types'
 import { handle } from './ipcGuard'
@@ -47,7 +48,7 @@ import {
   MIN_CACHE_BYTES,
   pruneIdleSessions
 } from './streamCache'
-import { osDownloadSubtitleText } from './subtitlesService'
+import { downloadSubtitleText } from './subtitlesService'
 import {
   captureFrame,
   createFfmpegTranscoder,
@@ -430,9 +431,34 @@ export async function stopPlayback(deleteCache = false): Promise<void> {
 }
 
 interface SubtitlesApplyPayload {
+  provider?: unknown
   fileId?: unknown
+  downloadPath?: unknown
   compatibility?: unknown
   selection?: PlaybackSelection
+}
+
+/**
+ * Validates the untrusted subtitle selection coming back over IPC into a
+ * SubtitleSelection, or throws.
+ *
+ * Which field has to be valid depends on the provider, so the provider is
+ * checked first and the other field is discarded rather than trusted: a
+ * payload claiming `subdl` never reaches the OpenSubtitles download path on
+ * the strength of a fileId it also happened to carry. The archive path
+ * itself is re-validated at the point of use (subdl.ts's
+ * resolveSubdlDownloadUrl), which is the actual SSRF boundary — this only
+ * rejects the obviously malformed early, with a message the menu can show.
+ */
+function parseSubtitleSelection(payload: SubtitlesApplyPayload | undefined): SubtitleSelection {
+  if (payload?.provider === 'subdl') {
+    const downloadPath = String(payload?.downloadPath || '')
+    if (!downloadPath) throw new Error('Invalid subtitle selection.')
+    return { provider: 'subdl', fileId: 0, downloadPath }
+  }
+  const fileId = Number(payload?.fileId)
+  if (!Number.isInteger(fileId) || fileId <= 0) throw new Error('Invalid subtitle selection.')
+  return { provider: 'opensubtitles', fileId, downloadPath: '' }
 }
 
 type PlaybackCompatibilityResult = FfmpegTranscoderResult & { tracks: MediaTracks }
@@ -447,9 +473,7 @@ export function registerPlaybackIpc(): void {
     MEDIA_HUB_CHANNELS.subtitlesApply,
     async (_event, payload) => {
       if (!activeMediaUrl) throw new Error('No active media is available for subtitles.')
-      const id = Number(payload?.fileId)
-      if (!Number.isInteger(id) || id <= 0) throw new Error('Invalid subtitle selection.')
-      const srtText = await osDownloadSubtitleText(id)
+      const srtText = await downloadSubtitleText(parseSubtitleSelection(payload))
       if (!payload?.compatibility) {
         return {
           ok: true,

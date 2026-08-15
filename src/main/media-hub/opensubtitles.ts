@@ -61,6 +61,11 @@ export function normalizeSubtitleResult(entry: unknown): SubtitleResult {
   const file = a.files?.[0] || {}
   return {
     id: String(raw?.id || ''),
+    provider: 'opensubtitles',
+    // Empty for this provider: OpenSubtitles hands out a short-lived
+    // download link from its own /download endpoint rather than a stable
+    // archive path — see subdl.ts's normalizeSubdlResult for the contrast.
+    downloadPath: '',
     fileId: Number(file.file_id) || 0,
     fileName: String(file.file_name || ''),
     language: String(a.language || ''),

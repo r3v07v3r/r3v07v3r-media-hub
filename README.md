@@ -126,7 +126,8 @@ above. Metadata, tracking, subtitle, and relay services remain optional:
 | **OMDb**            | Additional movie and series ratings, including Rotten Tomatoes data where available. |
 | **Simkl**           | Account-based watch tracking and catalog enrichment.                                 |
 | **MyAnimeList**     | Anime list and progress synchronization.                                             |
-| **OpenSubtitles**   | Search for and automatically apply subtitles in your chosen language.                |
+| **SubDL**           | Search for and automatically apply subtitles, with no daily download limit.          |
+| **OpenSubtitles**   | The same, from a second catalogue (a free account allows 5 downloads per day).        |
 | **Jellyfin**        | Play content from an existing personal media library.                                |
 | **Sonarr / Radarr** | Connect series and movie management to the local download workflow.                  |
 | **qBittorrent**     | Supply and manage downloads for the local playback workflow.                         |
@@ -214,9 +215,14 @@ and download streams last.
 <details>
 <summary><strong>Subtitles do not appear automatically</strong></summary>
 
-Enable **Show subtitles automatically**, choose the correct subtitle language, and connect an
-OpenSubtitles account in Settings. You can still open the playback subtitle menu and search
+Enable **Show subtitles automatically**, choose the correct subtitle language, and connect
+SubDL and/or OpenSubtitles in Settings. You can still open the playback subtitle menu and search
 manually.
+
+Both providers are searched together and the results are shown in one list, tagged with the
+service each came from. SubDL is listed first because its downloads are unmetered, so the
+automatic fetch prefers it; OpenSubtitles allows only 5 downloads per day on a free account. If
+the menu says "No results", check that at least one of the two is still connected.
 
 </details>
 

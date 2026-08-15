@@ -151,17 +151,21 @@ export function PlaybackOverlay() {
   // starts producing a response to react to.
   const [applyingQuality, setApplyingQuality] = useState(false)
   const [subtitleResults, setSubtitleResults] = useState<SubtitleResult[] | null>(null)
-  // Which OpenSubtitles fileId applySubtitle() is currently downloading and
+  // Which search result's id applySubtitle() is currently downloading and
   // converting — display only, but a real gap without it: unlike the
   // embedded-subtitle path (extractingSubtitleOrdinal) and audio track
   // switch (pendingAudioOrdinal), this menu previously gave zero feedback
-  // while an OpenSubtitles download+SRT-to-VTT conversion was in flight,
-  // AND had no re-entrancy guard — a second click (same item or a
-  // different one) while the first was still running fired a second
-  // concurrent apply. A live-reported "subtitles say loading but never
-  // change" complaint was, at least in part, this: no visible sign
-  // anything was happening at all.
-  const [pendingSubtitleFileId, setPendingSubtitleFileId] = useState<number | null>(null)
+  // while a download+SRT-to-VTT conversion was in flight, AND had no
+  // re-entrancy guard — a second click (same item or a different one)
+  // while the first was still running fired a second concurrent apply. A
+  // live-reported "subtitles say loading but never change" complaint was,
+  // at least in part, this: no visible sign anything was happening at all.
+  //
+  // Keyed on the result's `id` rather than its fileId now that results come
+  // from two providers: fileId is an OpenSubtitles-only concept and is 0 on
+  // every SubDL row, so keying on it would have marked every SubDL row in
+  // the menu as pending at once.
+  const [pendingSubtitleId, setPendingSubtitleId] = useState<string | null>(null)
   const [activeSubtitleTrackUrl, setActiveSubtitleTrackUrl] = useState<string | null>(null)
   // Non-null while an embedded-subtitle extraction (extractSubtitleTrack,
   // see applyEmbeddedSubtitle) is in flight — separate from
@@ -1203,12 +1207,19 @@ export function PlaybackOverlay() {
     }
   }
 
-  async function applySubtitle(fileId: number) {
-    if (pendingSubtitleFileId !== null) return
-    setPendingSubtitleFileId(fileId)
+  async function applySubtitle(subtitle: SubtitleResult) {
+    if (pendingSubtitleId !== null) return
+    setPendingSubtitleId(subtitle.id)
     const myGeneration = ++subtitleGenerationRef.current
     try {
-      const applied = await window.api?.mediaHub?.subtitles.apply(fileId, false)
+      const applied = await window.api?.mediaHub?.subtitles.apply(
+        {
+          provider: subtitle.provider,
+          fileId: subtitle.fileId,
+          downloadPath: subtitle.downloadPath
+        },
+        false
+      )
       // A newer subtitle pick (or the auto-fetch) already won — see
       // subtitleGenerationRef's own comment.
       if (subtitleGenerationRef.current !== myGeneration) return
@@ -1227,7 +1238,7 @@ export function PlaybackOverlay() {
         message: error instanceof Error ? error.message : 'Could not load that subtitle.'
       })
     } finally {
-      setPendingSubtitleFileId(null)
+      setPendingSubtitleId(null)
       setOpenMenu(null)
     }
   }
@@ -1276,14 +1287,19 @@ export function PlaybackOverlay() {
     }
   }
 
-  // "Always have subtitles" — automatically fetches and applies an
-  // OpenSubtitles match as soon as this title starts, same as clicking the
+  // "Always have subtitles" — automatically fetches and applies an online
+  // subtitle match as soon as this title starts, same as clicking the
   // Subtitles menu and picking the first result manually would, so
   // there's always something on screen without that manual step. Uses the
   // exact same search (already scoped server-side to the user's
   // subtitleLanguage setting — see subtitlesService.ts) and apply path the
   // Subtitles menu itself uses; the person can still switch to an embedded
-  // track or a different OpenSubtitles result afterward via that menu.
+  // track or a different online result afterward via that menu.
+  //
+  // Taking results[0] means this prefers SubDL whenever it's connected and
+  // has a match, which is deliberate: mergeSubtitleResults orders it first
+  // precisely because an automatic per-title fetch would otherwise burn a
+  // free OpenSubtitles account's five daily downloads in five episodes.
   // Gated on the autoSubtitlesEnabled preference (on by default — see
   // preferences.ts's publicSettings) so someone who'd rather pick manually
   // via the Subtitles menu can turn this off.
@@ -1312,7 +1328,14 @@ export function PlaybackOverlay() {
       .then(async (results) => {
         if (cancelled || subtitleGenerationRef.current !== myGeneration || !results?.length) return
         setSubtitleResults(results)
-        const applied = await api.subtitles.apply(results[0].fileId, false)
+        const applied = await api.subtitles.apply(
+          {
+            provider: results[0].provider,
+            fileId: results[0].fileId,
+            downloadPath: results[0].downloadPath
+          },
+          false
+        )
         if (cancelled || subtitleGenerationRef.current !== myGeneration || !applied?.vttDataUrl)
           return
         subtitleVttRef.current = decodeVttDataUrl(applied.vttDataUrl)
@@ -2007,7 +2030,13 @@ export function PlaybackOverlay() {
                       </button>
                     )
                   })}
-                <div className={styles.playerMenuHeading}>OpenSubtitles</div>
+                {/* Was "OpenSubtitles" when that was the only provider. Now
+                    that the list merges both, the heading names the category
+                    and each row says which service it came from — which
+                    matters for more than curiosity: an OpenSubtitles row
+                    spends one of a free account's five daily downloads,
+                    a SubDL row costs nothing. */}
+                <div className={styles.playerMenuHeading}>Online subtitles</div>
                 {subtitleResults === null && (
                   <span className={styles.playerMenuItem}>Searching…</span>
                 )}
@@ -2019,12 +2048,14 @@ export function PlaybackOverlay() {
                     key={s.id}
                     type="button"
                     className={styles.playerMenuItem}
-                    onClick={() => applySubtitle(s.fileId)}
-                    disabled={pendingSubtitleFileId !== null}
+                    onClick={() => applySubtitle(s)}
+                    disabled={pendingSubtitleId !== null}
                   >
-                    {pendingSubtitleFileId === s.fileId
+                    {pendingSubtitleId === s.id
                       ? 'Loading…'
-                      : `${s.language.toUpperCase()} — ${s.releaseName || s.fileName}`}
+                      : `${s.language.toUpperCase()} — ${s.releaseName || s.fileName} · ${
+                          s.provider === 'subdl' ? 'SubDL' : 'OpenSubtitles'
+                        }`}
                   </button>
                 ))}
               </div>
