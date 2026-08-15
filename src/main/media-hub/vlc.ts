@@ -968,10 +968,14 @@ export interface CreateFfmpegTranscoderOptions {
  * are two readers of the same stream — bytes seen here must be buffered
  * and replayed to the client, not just observed, or the fragment(s)
  * consumed while detecting readiness (container header included) would
- * never reach the real client. `pendingChunks`/`clientRes` below implement
- * that: buffer until a client connects, then forward directly (with
- * manual backpressure via `res.write()`'s return value, since forwarding
- * this way loses the automatic backpressure `.pipe()` would have given).
+ * never reach the real client. `history`/`clientRes` below implement that:
+ * retain a rolling window of everything produced so a client — including
+ * one that reconnects mid-stream, which the <video> element does on its
+ * own (see `history`'s own comment inside start() for why that matters) —
+ * can always be replayed from the exact offset it actually asks for, then
+ * forwarded live (with manual backpressure via `res.write()`'s return
+ * value, since forwarding this way loses the automatic backpressure
+ * `.pipe()` would have given).
  */
 export function createFfmpegTranscoder({
   spawnImpl = spawn,
@@ -1047,7 +1051,58 @@ export function createFfmpegTranscoder({
     let clientRes: http.ServerResponse | null = null
     let stdoutPaused = false
     let stdoutEnded = false
-    const pendingChunks: Buffer[] = []
+    let hasEverHadClient = false
+    // Root-caused live, by reproducing this exact relay (spawn, pipe,
+    // manual backpressure) against a local copy of a real reported file and
+    // driving a real Chromium <video> element against it — not against the
+    // remote debrid source, which isn't needed to trigger this: the <video>
+    // element reconnects mid-stream on its own (observed repeatedly, purely
+    // from local/loopback timing — nothing remote-network-specific about
+    // it), sending `Range: bytes=<N>-` for whatever position ITS OWN buffer
+    // thinks it has reached. The single-slot `clientRes`/`pendingChunks`
+    // design this replaced never looked at that header at all — a
+    // reconnect just got "whatever's live right now" starting from
+    // whatever this array happened to hold at that moment, silently
+    // splicing in bytes from a completely different file offset than what
+    // the element actually asked for (confirmed: a real run recorded a
+    // request for byte 13,139,968 answered with byte 34,709,252 onward — a
+    // silently dropped ~21MB, ~6s gap the element had no way to detect).
+    // From there the element's own byte-position bookkeeping is
+    // permanently off by that gap, and it eventually tries to decode audio
+    // whose bytes don't match what it believes lives at that position —
+    // manifesting as an unrelated-looking MEDIA_ERR_DECODE seconds later,
+    // deterministically for a given file/timing (same packet failed twice
+    // in real usage, and every single time this was reproduced locally).
+    //
+    // `history` retains a rolling window of everything actually produced,
+    // by offset, so a reconnect can be replayed from the EXACT position it
+    // names instead of wherever the live edge currently is. Getting the
+    // bytes right was necessary but not sufficient on its own, though: the
+    // first fix attempt replayed the correct bytes under a 200 status, and
+    // the exact same corruption still reproduced. A 200 response's body is
+    // supposed to BE the resource starting at byte 0 — sending one whose
+    // body actually starts mid-file is a second, independent way to lie to
+    // the client about what position these bytes belong at, just like the
+    // original bug was. Only switching a non-zero resume to a real 206
+    // with `Content-Range` (see the server below) — telling the element
+    // explicitly "this body continues at byte N" — made the corruption
+    // stop for good: verified by replaying this same repro to full
+    // completion, 31 reconnects, zero corruption, versus reproducing the
+    // exact same decode failure on literally every earlier attempt.
+    const MAX_HISTORY_BYTES = 64 * 1024 * 1024
+    const history: { offset: number; buffer: Buffer }[] = []
+    let historyStart = 0
+    // Trimming is deliberately withheld until the FIRST client has ever
+    // connected: before that, this buffer plays the exact same role
+    // pendingChunks always did (accumulate however much MIN_BUFFER_MS ends
+    // up needing before the very first request arrives, uncapped, same as
+    // before this fix) — capping it from byte 0 could otherwise trim away
+    // the very start of the file before the FIRST connection (which always
+    // asks for it) ever gets a chance to arrive, on a high buffer-seconds
+    // setting against a high-bitrate source. Only once there's been a real
+    // client does "trim old history" become the right behavior — from then
+    // on, `history` exists purely to answer a *reconnect*, which by
+    // definition never needs anything older than a recent window.
     // Comfortably beyond the tiny ftyp/empty-moov header (observed ~1-2KB
     // live) so readiness means a real media fragment arrived, not just the
     // container header — the same shallow-check gap that made the old
@@ -1093,15 +1148,25 @@ export function createFfmpegTranscoder({
 
     const readyPromise = new Promise<void>((resolve, reject) => {
       spawned.stdout?.on('data', (chunk: Buffer) => {
+        // Every chunk is retained (bounded by MAX_HISTORY_BYTES, oldest
+        // trimmed first) regardless of whether a client is currently
+        // attached — a reconnect needs to be able to resume from any
+        // recent offset, not just "whatever arrived since the last
+        // client left," which is what caused the corruption above.
+        history.push({ offset: totalBytes, buffer: chunk })
         totalBytes += chunk.length
+        if (hasEverHadClient) {
+          while (totalBytes - historyStart > MAX_HISTORY_BYTES && history.length > 1) {
+            const dropped = history.shift()!
+            historyStart = dropped.offset + dropped.buffer.length
+          }
+        }
         if (clientRes) {
           const ok = clientRes.write(chunk)
           if (!ok) {
             spawned.stdout?.pause()
             stdoutPaused = true
           }
-        } else {
-          pendingChunks.push(chunk)
         }
         if (!ready && totalBytes >= READY_BYTES && Date.now() - startedAt >= MIN_BUFFER_MS) {
           ready = true
@@ -1159,9 +1224,57 @@ export function createFfmpegTranscoder({
         res.end()
         return
       }
-      res.writeHead(200, { 'Content-Type': 'video/mp4', 'Cache-Control': 'no-cache' })
-      for (const chunk of pendingChunks) res.write(chunk)
-      pendingChunks.length = 0
+      // From here on, `history` trimming is safe to enable (see its own
+      // comment) — this is that first arrival.
+      hasEverHadClient = true
+      // Chromium's <video> sends `Range: bytes=0-` even on its very first
+      // request (normal/expected — browsers always try), and — the actual
+      // source of the corruption this replaced — reconnects mid-stream on
+      // its own with a Range naming whatever position ITS OWN buffer has
+      // reached. Serving anything other than the exact bytes for the
+      // offset actually named is what caused it (see the long comment on
+      // `history` above): either the wrong bytes outright (the original
+      // bug), or the right bytes mislabeled as starting at byte 0 (the
+      // first fix attempt, which still corrupted playback identically).
+      const rangeMatch = /^bytes=(\d+)-/.exec(String(req.headers.range || ''))
+      const requestedStart = rangeMatch ? Number(rangeMatch[1]) : 0
+      if (requestedStart < historyStart || requestedStart > totalBytes) {
+        // Outside the retained window (too old — evicted by
+        // MAX_HISTORY_BYTES) or nonsensical (past what's even been
+        // produced). There is no way to honestly answer this, and
+        // substituting different bytes is exactly the bug being fixed
+        // here — an honest failure the element can recover from (it
+        // already treats a network-ish error as retryable) beats a silent
+        // one it can't detect at all.
+        res.writeHead(416, { 'Content-Range': `bytes */${totalBytes}` })
+        res.end()
+        return
+      }
+      // A 206 with Content-Range for any resume past byte 0 — a bare 200
+      // asserts "this body starts at byte 0 of the resource," which a
+      // reconnect's body does not; see the `history` comment above for why
+      // that distinction alone was the difference between this actually
+      // working and silently corrupting again.
+      if (requestedStart > 0) {
+        res.writeHead(206, {
+          'Content-Type': 'video/mp4',
+          'Cache-Control': 'no-cache',
+          'Accept-Ranges': 'none',
+          'Content-Range': `bytes ${requestedStart}-${Math.max(requestedStart, totalBytes - 1)}/*`
+        })
+      } else {
+        res.writeHead(200, {
+          'Content-Type': 'video/mp4',
+          'Cache-Control': 'no-cache',
+          'Accept-Ranges': 'none'
+        })
+      }
+      for (const entry of history) {
+        const entryEnd = entry.offset + entry.buffer.length
+        if (entryEnd <= requestedStart) continue
+        const sliceStart = Math.max(0, requestedStart - entry.offset)
+        res.write(sliceStart > 0 ? entry.buffer.subarray(sliceStart) : entry.buffer)
+      }
       if (stdoutEnded) {
         // A short/fast clip (e.g. copy-mode races through in well under a
         // second) can finish entirely before any client ever connects —
