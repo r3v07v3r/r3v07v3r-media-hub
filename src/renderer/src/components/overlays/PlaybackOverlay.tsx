@@ -204,6 +204,12 @@ export function PlaybackOverlay() {
   // not necessarily the current position.
   const [resumePosition, setResumePosition] = useState<PlaybackPositionResult | null>(null)
   const resumeAppliedRef = useRef(false)
+  // Whether a compatibility-mode decode (code 3) or network (code 2)
+  // error has already triggered one automatic ffmpeg-restart retry for
+  // this title/episode — see onError below. One shot only: a genuine,
+  // unrecoverable stream defect (bad source track, real corruption, a
+  // dead debrid link) must not loop forever restarting.
+  const transcodeErrorRetriedRef = useRef(false)
   const currentPositionRef = useRef({ time: 0, duration: 0 })
   const hideControlsTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   // The ORIGINAL, un-shifted subtitle VTT text (absolute-timeline cue
@@ -549,6 +555,7 @@ export function PlaybackOverlay() {
     // effects) — this is the ref half of the same per-episode reset the
     // render-time block above handles for resumePosition's own state.
     resumeAppliedRef.current = false
+    transcodeErrorRetriedRef.current = false
     if (!playbackMedia) return
     const api = window.api?.mediaHub
     if (!api) return
@@ -633,7 +640,7 @@ export function PlaybackOverlay() {
   // just need to land on an absolute target time, none of them care how
   // it got computed.
   const performSeek = useCallback(
-    (target: number) => {
+    (target: number, options?: { onFailure?: () => void }) => {
       const video = videoRef.current
       if (!video) return
 
@@ -737,6 +744,17 @@ export function PlaybackOverlay() {
             tone: 'error',
             message: error instanceof Error ? error.message : 'Could not seek.'
           })
+          // A genuine (non-superseded) failure here means the <video>
+          // element's `src` never actually changed — for a normal seek
+          // that just leaves playback exactly where it was, but for the
+          // decode-error recovery below it means the element is STILL
+          // sitting in its original errored state with nothing left to
+          // fire another 'error' event and reach the notify+stop fallback
+          // there. Caught in review: without this, that specific failure
+          // combination left the overlay open on a permanently dead
+          // stream — a seek-failure toast on top of a frozen video with no
+          // further recovery possible.
+          options?.onFailure?.()
         })
     },
     [result, pushNotification, applyShiftedSubtitle, setResult, setTracks, setAppliedUpscaleHeight]
@@ -1797,6 +1815,42 @@ export function PlaybackOverlay() {
               currentTime: videoRef.current?.currentTime
             })
             .catch(() => {})
+          // A decode error (code 3) in compatibility mode is often a
+          // transient artifact of the live ffmpeg-to-<video> relay rather
+          // than a genuinely broken source track — reproduced live: the
+          // exact same bytes this transcode produces decode cleanly end to
+          // end when served as a complete file instead of the live stream,
+          // so restarting the transcode fresh from here recovers most of
+          // the time. Network errors (code 2) get the same retry: the
+          // relay now answers a reconnect from the exact byte it asks for
+          // (see vlc.ts's `history`), but a reconnect whose requested byte
+          // has genuinely aged out of the retained window still ends in a
+          // clean, honest failure there rather than corrupted playback —
+          // and a fresh restart recovers that exactly the same way it
+          // recovers a decode error. One shot per title/episode
+          // (transcodeErrorRetriedRef) either way — a second failure means
+          // this really is unrecoverable, and must fall through to the
+          // notify+stop below instead of looping.
+          if (
+            (videoRef.current?.error?.code === 3 || videoRef.current?.error?.code === 2) &&
+            result?.compatibility &&
+            !transcodeErrorRetriedRef.current
+          ) {
+            transcodeErrorRetriedRef.current = true
+            const video = videoRef.current
+            const resumeAt = streamStartOffsetRef.current + (video?.currentTime ?? 0)
+            // Same rule as selectTrack/applyUpscale's own restarts: only
+            // auto-resume if playback was actually running when this hit.
+            resumeAfterRestartRef.current = !(video?.paused ?? false)
+            // If the restart itself fails (ffmpeg times out, exits early,
+            // etc.), performSeek's own catch already reverts/notifies —
+            // this is what actually recovers the overlay afterward, since
+            // the <video> element's src never changed and nothing else
+            // will ever fire a second 'error' event to reach the fallback
+            // below on its own.
+            performSeek(resumeAt, { onFailure: () => stopPlayback(markedWatchedRef.current) })
+            return
+          }
           pushNotification({
             tone: 'error',
             message: playbackErrorMessage(videoRef.current?.error)
