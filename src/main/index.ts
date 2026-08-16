@@ -15,6 +15,7 @@ import { setupAutoUpdater } from './media-hub/autoUpdate'
 import { installDownloadGuard } from './media-hub/downloadGuard'
 import { closeParty } from './media-hub/watchParty'
 import { stopPlayback } from './media-hub/playbackSession'
+import { shutdownPlayer } from './media-hub/playerBridge'
 import { MEDIA_HUB_CHANNELS } from '../shared/media-hub/ipc-channels'
 
 // Fixed 1920x1080 design canvas (spec section 1) — the composition is built
@@ -189,6 +190,11 @@ app.whenReady().then(() => {
 // resume into once the app has actually quit.
 app.on('before-quit', () => {
   stopPlayback(true).catch(() => {})
+  // mpv is a child process that outlives any single title deliberately (see
+  // playerBridge.ts) — quitting the app is the one point it must actually be
+  // torn down, or it survives as an orphan holding the window handle it was
+  // embedded into.
+  shutdownPlayer().catch(() => {})
   closeParty()
   try {
     getDatabase().close()

@@ -144,6 +144,27 @@ body::after {
   background-size: 140px 140px;
 }
 
+/* ---------- Player-overlay window ----------
+   This same bundle is loaded a second time, at #/player-overlay, into a
+   transparent always-on-top window layered over mpv's native video output (see
+   main/media-hub/playerWindow.ts). mpv draws *underneath* that window rather
+   than into an element inside it, so anything opaque in the document is a black
+   rectangle over the film. The attribute is set on <html> in main.tsx before
+   React's first paint — doing it from a component would still let one opaque
+   frame through.
+
+   The grain overlay has to go too: it is fixed across the viewport at z-index
+   999, so on this window it would tint the picture rather than the UI. */
+html[data-player-overlay],
+html[data-player-overlay] body,
+html[data-player-overlay] #root {
+  background: transparent !important;
+}
+
+html[data-player-overlay] body::after {
+  content: none;
+}
+
 button,
 input {
   font-family: inherit;

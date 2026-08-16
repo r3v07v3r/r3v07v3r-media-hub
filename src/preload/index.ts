@@ -65,6 +65,12 @@ import type {
   UpdateChannel,
   UpdateStatusPayload
 } from '../shared/media-hub/types'
+import type {
+  PlayerCommand,
+  PlayerSessionSnapshot,
+  PlayerStatePatch,
+  PlayerUiEvent
+} from '../shared/media-hub/player'
 import type { PlaybackPosition, SimklPushItem } from '../main/media-hub/simkl'
 import type {
   OpenSubtitlesSearchItem,
@@ -323,7 +329,8 @@ const api = {
     },
 
     streamCache: {
-      list: (): Promise<StreamCacheEntry[]> => ipcRenderer.invoke(MEDIA_HUB_CHANNELS.streamCacheList),
+      list: (): Promise<StreamCacheEntry[]> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.streamCacheList),
       delete: (token: string): Promise<{ ok: true }> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.streamCacheDelete, { token })
     },
@@ -379,6 +386,35 @@ const api = {
         subscribe<PlaybackPrepareProgress>(MEDIA_HUB_CHANNELS.playbackPrepareProgress, onEvent)
     },
 
+    /** The embedded mpv player. Consumed almost entirely by the player-overlay
+     *  window (a separate renderer — see main/media-hub/playerWindow.ts for why
+     *  the controls cannot live in the main window); the main window only
+     *  listens for onUiEvent, which is how the overlay reaches back into its
+     *  state. */
+    player: {
+      command: (command: PlayerCommand): Promise<{ ok: true }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.playerCommand, command),
+      uiEvent: (event: PlayerUiEvent): Promise<{ ok: true }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.playerUiEvent, event),
+      /** Pulled once when the overlay mounts — it comes up after the session
+       *  already exists, so there is nothing to wait for it to be pushed. */
+      snapshot: (): Promise<{
+        session: PlayerSessionSnapshot | null
+        state: PlayerStatePatch
+      }> => ipcRenderer.invoke(MEDIA_HUB_CHANNELS.playerSnapshot),
+      /** Observed mpv properties. A partial patch: an absent key means
+       *  unchanged, not null. */
+      onState: (onEvent: (patch: PlayerStatePatch) => void): (() => void) =>
+        subscribe<PlayerStatePatch>(MEDIA_HUB_CHANNELS.playerState, onEvent),
+      onSession: (onEvent: (snapshot: PlayerSessionSnapshot) => void): (() => void) =>
+        subscribe<PlayerSessionSnapshot>(MEDIA_HUB_CHANNELS.playerSession, onEvent),
+      /** Main-window side of the bridge: actions the overlay raised that belong
+       *  to this window's state (close the player, toast, refresh watch
+       *  status, open the party panel). */
+      onUiEvent: (onEvent: (event: PlayerUiEvent) => void): (() => void) =>
+        subscribe<PlayerUiEvent>(MEDIA_HUB_CHANNELS.playerUiEvent, onEvent)
+    },
+
     library: {
       list: (): Promise<LibraryItem[]> => ipcRenderer.invoke(MEDIA_HUB_CHANNELS.libraryList),
       play: (item: Record<string, unknown>): Promise<PlaybackResult> =>
@@ -422,7 +458,8 @@ const api = {
     subdl: {
       connect: (apiKey: string): Promise<ConnectResult> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.subdlConnect, { apiKey }),
-      disconnect: (): Promise<{ ok: true }> => ipcRenderer.invoke(MEDIA_HUB_CHANNELS.subdlDisconnect)
+      disconnect: (): Promise<{ ok: true }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.subdlDisconnect)
     },
 
     subtitles: {

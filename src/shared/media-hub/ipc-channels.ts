@@ -76,6 +76,38 @@ export const MEDIA_HUB_CHANNELS = {
   // machine it happened on, for as long as that session stays open.
   playbackReportClientError: 'mediahub:playback:report-client-error',
   streamCacheClear: 'mediahub:playback:stream-cache-clear',
+
+  // Embedded player (mpv) — see main/media-hub/playerBridge.ts.
+  //
+  // These exist because the player UI no longer lives in the main window.
+  // mpv renders into a native child window, which on Windows always sits
+  // above Chromium's web content, so the controls have to be a second,
+  // transparent, always-on-top BrowserWindow layered over it. That window is a
+  // separate renderer process with its own React tree and therefore no access
+  // to AppStateContext, so everything it needs crosses this boundary instead.
+  /** Overlay -> main. One request/response channel for every player operation
+   *  (pause, seek, track selection, volume, speed, subtitle add). Deliberately
+   *  a single discriminated-union channel rather than one channel per verb:
+   *  every one of them is validated in the same place before reaching mpv. */
+  playerCommand: 'mediahub:player:command',
+  /** Main -> overlay push. Observed mpv properties (time-pos, pause, duration,
+   *  cache state, track-list). Replaces the reads the renderer used to get for
+   *  free off the <video> element. */
+  playerState: 'mediahub:player:state', // push event
+  /** Main -> overlay push. The session snapshot the overlay cannot derive on
+   *  its own: which title is playing, its tracks, the settings that affect
+   *  playback, and the party status. */
+  playerSession: 'mediahub:player:session', // push event
+  /** Overlay -> main, request/response. The overlay mounts *after* the session
+   *  is already established, so it pulls the current session and player state
+   *  once on mount rather than waiting for the next change to be pushed.
+   *  Separate from playerSession above so no channel name is both an
+   *  ipcMain.handle target and a webContents.send target. */
+  playerSnapshot: 'mediahub:player:snapshot',
+  /** Overlay -> main -> main window. Actions whose effect belongs to the main
+   *  window's own state (close the player, raise a toast, refresh watch
+   *  status, open the party panel). */
+  playerUiEvent: 'mediahub:player:ui-event',
   libraryList: 'mediahub:library:list',
   libraryPlay: 'mediahub:library:play',
   streamCacheList: 'mediahub:stream-cache:list',

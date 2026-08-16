@@ -1,0 +1,165 @@
+/* Styles for the player-overlay window.
+ *
+ * Every rule here is constrained by one fact: mpv is drawing underneath this
+ * window, not behind an element inside it. Any opaque background is a black
+ * rectangle over the picture, so the surface itself is transparent and only the
+ * control chrome paints. `html`/`body` are made transparent in global.css for
+ * this route as well — a page background set anywhere up the tree would defeat
+ * the window's own transparency. */
+
+.surface {
+  position: fixed;
+  inset: 0;
+  /* No background — this is the see-through region over the video. */
+  background: transparent;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  font-family: var(--font-body, Inter, system-ui, sans-serif);
+  color: #fff;
+  overflow: hidden;
+}
+
+.controls {
+  margin: 0 24px 24px;
+  padding: 14px 18px 12px;
+  border-radius: 14px;
+  /* Semi-opaque rather than solid: the picture stays readable behind the bar,
+     which matters when the controls sit over a subtitle line. */
+  background: rgba(6, 10, 18, 0.72);
+  backdrop-filter: blur(14px);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.45);
+  transition:
+    opacity 220ms ease,
+    transform 220ms ease;
+}
+
+/* Faded, never unmounted and never window-hidden — see this route's header on
+   why toggling a transparent window's visibility is what causes flicker.
+   `visibility` (not `display`) so the transition can actually run. */
+.controlsHidden {
+  opacity: 0;
+  transform: translateY(12px);
+  visibility: hidden;
+}
+
+.title {
+  font-size: 15px;
+  font-weight: 600;
+  margin-bottom: 10px;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.6);
+}
+
+.scrubber {
+  position: relative;
+  height: 6px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.22);
+  cursor: pointer;
+  margin-bottom: 12px;
+}
+
+.scrubberFill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: 3px;
+  background: var(--accent, #4da3ff);
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.spacer {
+  flex: 1;
+}
+
+.button {
+  appearance: none;
+  border: none;
+  border-radius: 8px;
+  padding: 6px 12px;
+  font: inherit;
+  font-size: 14px;
+  color: #fff;
+  background: rgba(255, 255, 255, 0.12);
+  cursor: pointer;
+}
+
+.button:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+.time {
+  font-variant-numeric: tabular-nums;
+  font-size: 13px;
+  opacity: 0.85;
+}
+
+.menuWrap {
+  position: relative;
+}
+
+.menu {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  right: 0;
+  min-width: 220px;
+  padding: 6px;
+  border-radius: 10px;
+  background: rgba(10, 14, 22, 0.96);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
+  display: flex;
+  flex-direction: column;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.menuItem {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: #fff;
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  padding: 8px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.menuItem:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.buffering {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 20px;
+  border-radius: 12px;
+  background: rgba(6, 10, 18, 0.72);
+  font-size: 14px;
+}
+
+.spinner {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.25);
+  border-top-color: #fff;
+  animation: spin 800ms linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}

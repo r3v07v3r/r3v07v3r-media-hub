@@ -11,6 +11,8 @@ import MyStuffPage from '@renderer/routes/MyStuffPage'
 import DownloadsPage from '@renderer/routes/DownloadsPage'
 import SettingsPage from '@renderer/routes/SettingsPage'
 import { ReferenceOverlay } from '@renderer/components/debug/ReferenceOverlay'
+import PlayerOverlayWindow from '@renderer/routes/PlayerOverlayWindow'
+import { PLAYER_OVERLAY_ROUTE } from '@shared/media-hub/playerRoute'
 
 function LegacyTvShowDetailRedirect() {
   const { id } = useParams()
@@ -24,6 +26,17 @@ function LegacyTvShowDetailRedirect() {
 // server at all and behaves identically in dev (Vite server) and packaged
 // builds.
 export default function App() {
+  // The player-overlay window loads this same bundle, at the same origin, with
+  // only the hash differing — that is deliberate, because it is what lets that
+  // window pass the identical assertTrustedSender check (the comparison strips
+  // the hash). But it must NOT mount the app: AppShell + AppStateProvider would
+  // run a second copy of the catalog, its fetches and its party subscriptions
+  // in a window that only ever shows playback controls. Branching before the
+  // router, rather than adding a <Route>, is what keeps that from happening.
+  if (window.location.hash.startsWith(PLAYER_OVERLAY_ROUTE)) {
+    return <PlayerOverlayWindow />
+  }
+
   return (
     <HashRouter>
       {/* Above AppStateProvider on purpose: several of its own handlers
