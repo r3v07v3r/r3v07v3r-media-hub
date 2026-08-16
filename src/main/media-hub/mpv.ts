@@ -32,7 +32,9 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import crypto from 'node:crypto'
 import fs from 'node:fs'
+import fsp from 'node:fs/promises'
 import net from 'node:net'
+import os from 'node:os'
 import path from 'node:path'
 
 import type { MediaTrack, MediaTracks } from '../../shared/media-hub/types'
@@ -480,6 +482,87 @@ export interface LoadFileOptions {
   startSeconds?: number
   audioLanguage?: string
   subtitleLanguage?: string
+}
+
+/**
+ * Scrub-bar preview frames, via a throwaway second mpv process.
+ *
+ * Deliberately NOT the playing instance: mpv's screenshot commands capture the
+ * frame currently on screen, so using it would mean seeking the film the person
+ * is watching to wherever their cursor happens to be hovering.
+ *
+ * Replaces the ffmpeg `captureFrame` this used to call, and returns the same
+ * `data:image/jpeg;base64,...` contract so the renderer's cache and clamping
+ * are untouched. Reading it out of a temp file rather than a pipe is not a
+ * preference: mpv's encode mode writes to a real path, and it needs a real
+ * extension to pick the muxer.
+ *
+ * `--ovcopts=strict=-1` is required, not decorative. Without it MJPEG refuses
+ * limited-range YUV outright ("Non full-range YUV is non-standard") and mpv
+ * exits having written nothing at all — which looks exactly like a missing
+ * frame rather than a rejected one.
+ *
+ * Reads from StreamCache's local server, like every other consumer, so a
+ * preview never costs a second connection to the remote link.
+ */
+export async function captureThumbnail(
+  mpvExecutable: string,
+  url: string,
+  seconds: number,
+  { timeout = 10000, spawnImpl = spawn }: { timeout?: number; spawnImpl?: typeof spawn } = {}
+): Promise<string | null> {
+  if (!mpvExecutable || !Number.isFinite(seconds) || seconds < 0) return null
+  try {
+    assertPlayableUrl(url)
+  } catch {
+    return null
+  }
+
+  const target = path.join(
+    os.tmpdir(),
+    `r3-thumb-${process.pid}-${crypto.randomBytes(6).toString('hex')}.jpg`
+  )
+  try {
+    const exitCode = await new Promise<number>((resolve) => {
+      const child = spawnImpl(
+        mpvExecutable,
+        [
+          '--no-config',
+          '--load-scripts=no',
+          '--ytdl=no',
+          '--really-quiet',
+          '--no-audio',
+          '--frames=1',
+          `--start=${Math.floor(seconds)}`,
+          '--vf=scale=160:-2',
+          '--ovcopts=strict=-1',
+          `--o=${target}`,
+          url
+        ],
+        { windowsHide: true, stdio: 'ignore' }
+      )
+      const timer = setTimeout(() => {
+        child.kill()
+        resolve(-1)
+      }, timeout)
+      child.once('error', () => {
+        clearTimeout(timer)
+        resolve(-1)
+      })
+      child.once('exit', (code) => {
+        clearTimeout(timer)
+        resolve(code ?? -1)
+      })
+    })
+    if (exitCode === -1) return null
+    const bytes = await fsp.readFile(target)
+    if (!bytes.length) return null
+    return `data:image/jpeg;base64,${bytes.toString('base64')}`
+  } catch {
+    return null
+  } finally {
+    await fsp.rm(target, { force: true }).catch(() => {})
+  }
 }
 
 export const mpvPath = findMpv()

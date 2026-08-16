@@ -163,3 +163,9 @@
     transform: rotate(360deg);
   }
 }
+
+.volume {
+  width: 96px;
+  accent-color: var(--accent, #4da3ff);
+  cursor: pointer;
+}

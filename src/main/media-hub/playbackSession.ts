@@ -1,26 +1,27 @@
-// Ported from r3v07v3r-media-hub's src/main.cjs (subtitleCacheDir/
-// clearActiveSubtitle/preparePlayback/stopPlayback, the module-level
-// activeMediaUrl/activeMediaTracks/activeSubtitlePath/streamCache/
-// ffmpegTranscoder/ffprobePath/ffmpegPath singletons, and the
-// subtitles:apply/playback:compatibility/playback:select-tracks/
-// playback:stop/playback:thumbnail IPC handlers). Active playback is
-// intentionally kept as module-level singleton state, exactly as in the
-// original app: there is only ever one "now playing" session for the whole
-// app, not per-window/per-session state.
-//
-// `ffmpegPath`/`ffprobePath` are computed once at module load (same as the
-// original's module-level consts) and exported so other modules don't each
-// re-run their own executable discovery. Compatibility-mode transcoding
-// used to shell out to a separately-installed VLC — see vlc.ts's header
-// comment for why that's now ffmpeg (bundled with the app) instead.
+// Owns the "now playing" session: resolving a title's bytes into a local
+// StreamCache server and handing that to the embedded player, plus the
+// subtitle/thumbnail/cache IPC around it. Active playback is module-level
+// singleton state — there is only ever one now-playing session for the whole
+// app, not per-window state, and playerBridge.ts's mpv instance deliberately
+// matches that shape.
 //
 // streamCache.ts is the sole owner of the upstream connection to a title's
-// remote debrid link — the direct-proxy/ffmpeg connection-swap dance that
-// used to live here (closeDirectProxyBeforeTranscode, directModeActive) is
-// gone: both playback modes now read from that one local cache server, so
-// switching between them never touches the remote link at all.
+// remote debrid link. That has not changed with the playback engine, and is
+// not something mpv's own --cache replaces: it exists because TorBox caps
+// concurrent connections per link, and because a per-title on-disk cache is
+// what the Downloads page lists and what a later resume reuses. mpv, like the
+// <video> element before it, only ever reads from that one local server.
+//
+// What DID change: there is no transcode. The old pipeline probed the file with
+// ffprobe, decided whether Chromium could decode its audio, and if not (which
+// was most real releases — AC3/E-AC3/DTS are all outside what a <video> element
+// accepts) re-encoded audio through ffmpeg into a live fragmented-MP4 HTTP
+// stream, baking one chosen audio track into the bytes because the element has
+// no track-selection API. Every seek and every track change was a full restart
+// of that pipeline. mpv demuxes and decodes locally, so none of it is needed —
+// see mpv.ts's header.
 
-import { app, screen } from 'electron'
+import { app } from 'electron'
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -30,16 +31,15 @@ import type {
   CacheSessionMeta,
   MediaTracks,
   PlaybackResult,
-  PlaybackSelection,
   StreamCacheEntry,
   SubtitleSelection,
   SubtitlesApplyResult
 } from '../../shared/media-hub/types'
 import { handle } from './ipcGuard'
-import { logError, redactUrls } from './logger'
 import { reportPreparation } from './playbackProgress'
-import { srtToVtt } from './opensubtitles'
-import { readSettings, writeSettings } from './settingsStore'
+import { captureThumbnail, findMpv } from './mpv'
+import { addSubtitleFileToPlayer, startPlayerSession, stopPlayerSession } from './playerBridge'
+import { readSettings } from './settingsStore'
 import {
   clearAllSessions,
   createStreamCache,
@@ -49,36 +49,8 @@ import {
   pruneIdleSessions
 } from './streamCache'
 import { downloadSubtitleText } from './subtitlesService'
-import {
-  captureFrame,
-  createFfmpegTranscoder,
-  detectVideoEncoder,
-  extractSubtitleTracksBatch,
-  findFfmpeg,
-  findFfprobe,
-  needsAudioCompatibility,
-  probeMedia,
-  selectTranscodeAudioTrack,
-  TEXT_SUBTITLE_CODECS,
-  videoCodecCompatibilityWarning,
-  videoResolutionUpscaleSuggestion,
-  type FfmpegTranscoderResult
-} from './vlc'
 
-/** Ceiling for a FORCED video re-encode (see preparePlayback). 1080p is
- *  the point where a real-time encode reliably starts inside the startup
- *  budget on ordinary hardware; 2160p routinely did not. */
-const TRANSCODE_MAX_HEIGHT = 1080
-
-/** How long playbackExtractSubtitle waits for streamCache's whole-file
- *  caching to finish before giving up — see its own comment. Generous:
- *  this is "how long until we admit caching genuinely isn't going to
- *  finish soon," not a typical wait, and a large title on an ordinary
- *  connection can legitimately take many minutes to fully download. */
-const SUBTITLE_CACHE_WAIT_MS = 20 * 60 * 1000
-
-export const ffmpegPath = findFfmpeg()
-export const ffprobePath = findFfprobe()
+export const mpvPath = findMpv()
 
 /** True while a title is actively playing (has a live stream-cache
  *  session) — see appIpc.ts's stream-cache-location handlers, which
@@ -94,7 +66,7 @@ export function hasActivePlayback(): boolean {
 
 // The sole owner of the upstream connection to the current title's remote
 // link (see streamCache.ts's own header comment). Both playback modes now
-// read from its local cache server: ffmpeg's `-i` in compatibility mode,
+// read from its local cache server: the embedded player opens it directly,
 // and the <video> element directly in direct mode — there is no longer a
 // "direct proxy vs ffmpeg" connection-swap to coordinate, since neither of
 // them ever touches the remote link themselves anymore.
@@ -106,55 +78,17 @@ const streamCache = createStreamCache()
 void pruneIdleSessions()
 setInterval(() => void pruneIdleSessions(), 60 * 60 * 1000)
 
-const ffmpegTranscoder = createFfmpegTranscoder({
-  onLog: (line) => logError('ffmpeg:stderr', redactUrls(line.trim())),
-  // Only ever visible during a title's initial preparation — the renderer
-  // ignores these while nothing is being prepared, so the identical
-  // restarts a seek/track change performs stay silent.
-  onProgress: (message) => reportPreparation('transcode', message)
-})
-
 let activeMediaUrl = ''
-// StreamCache's local server URL for the current title — what ffmpeg's
-// `-i` and the direct-mode <video> element actually read from. Distinct
-// from activeMediaUrl (the real, remote debrid link), which only probeMedia
-// and streamCache.start() itself ever touch directly.
+// StreamCache's local server URL for the current title — what mpv actually
+// opens. Distinct from activeMediaUrl (the real, remote debrid link), which
+// only streamCache.start() ever touches directly. Thumbnail capture reads from
+// this one too, so it never costs a second connection to the remote link.
 let activeCacheUrl = ''
 let activeMediaTracks: MediaTracks = { video: [], audio: [], subtitle: [], probed: false }
+/** The external subtitle file (if any) written for the current title, deleted
+ *  with the session. Now handed to mpv via sub-add rather than to a transcode
+ *  restart that never read it. */
 let activeSubtitlePath = ''
-// Sticky across every ffmpeg restart for the current title (seek, track
-// change, subtitle apply, explicit quality change) — not just the call
-// that first resolved them. Before this, a seek during video-transcode
-// mode silently dropped back to `-c:v copy` because select-tracks never
-// knew an encoder was even in play; upscale would have had the exact same
-// gap. `activeVideoEncoderReason` distinguishes *why* the encoder is
-// engaged so turning upscale back off doesn't strand a codec-compatibility
-// re-encode running (or vice versa: turning it on for upscale-only reasons
-// shouldn't look like a codec fix was needed).
-let activeVideoEncoder: string | undefined
-let activeVideoEncoderReason: 'codec' | 'upscale' | undefined
-let activeUpscaleHeight: number | undefined
-
-// Set once a video re-encode has actually failed to start on this
-// machine. The fallback below recovers playback, but only after burning
-// the full startup budget waiting — and the outcome doesn't change from
-// one title to the next, so paying that again on every play would be a
-// pointless 60s tax. Remembering it turns the second and later plays
-// straight into the stream-copy path. Deliberately session-scoped (not
-// persisted): hardware, drivers and the encoder set can change between
-// runs, so a restart re-tests rather than writing the machine off.
-let videoEncodeUnusable = false
-
-// The whole-file, all-text-tracks batch subtitle extraction for the current
-// title (see extractSubtitleTracksBatch's own comment on why batched) —
-// computed at most once per title, on first request, and shared by every
-// ordinal the subtitle menu asks for afterward. Only runs once
-// streamCache.fullRetentionReady() — extracting against a not-yet-fully-
-// cached title would mean reading past what's locally available, which is
-// exactly the second-connection risk this whole feature exists to remove
-// (see playbackExtractSubtitle's own handler below). Cleared with the
-// session, same as before.
-let subtitleBatchPromise: Promise<Map<number, string>> | null = null
 
 /** 10GB until the person visits Settings — deliberately not "unbounded" as
  *  the out-of-the-box default, since nobody should have their disk start
@@ -169,58 +103,6 @@ function resolveStreamCacheMaxBytes(): number {
   const gb = Number(raw)
   if (!Number.isFinite(gb) || gb <= 0) return 0 // explicit unbounded/drive-limited
   return Math.max(MIN_CACHE_BYTES, gb * 1024 * 1024 * 1024)
-}
-
-/**
- * Starts (or restarts) the ffmpeg transcoder for the current title, with
- * the same recovery preparePlayback's own initial start already had: if a
- * FORCED video re-encode fails to start, that must never take playback
- * down with it — trip the circuit breaker, drop the encoder, and retry as
- * a stream-copy, instead of leaving the caller with a bare rejected
- * promise and the same doomed encoder still armed for next time.
- *
- * Before this, only the very FIRST start of a title (preparePlayback) had
- * that recovery — every RESTART (a seek, a subtitle apply, a track/
- * quality change) called ffmpegTranscoder.start() directly, inheriting
- * whatever `activeVideoEncoder` preparePlayback had armed, with no catch
- * at all. Reported live: a title played fine, then failed with an error a
- * few seconds after a pause/resume (which restarts the transcode the
- * same way a seek does — see handleSeek's own comment) — and then
- * wouldn't play again at all. The re-encode failing on THAT restart
- * (not necessarily on the title's very first start) never set
- * videoEncodeUnusable, so every later restart, and every fresh
- * preparePlayback() from clicking Play again, kept re-arming and
- * retrying the identical doomed re-encode — each one burning up to the
- * full 60s startup budget before failing the exact same way again.
- */
-async function startTranscodeWithFallback(
-  selection: PlaybackSelection,
-  targetHeight?: number
-): Promise<FfmpegTranscoderResult> {
-  // Every restart (seek/track/quality change) proactively repositions
-  // StreamCache's sequential fetch toward the new position first — by the
-  // time ffmpeg's own -ss lands against the local cache moments later, the
-  // bytes it wants are already there or arriving, instead of ffmpeg's
-  // first read discovering the gap itself. Best-effort/non-blocking (see
-  // streamCache.ts's own comment) — never anything to await here.
-  if (Number.isFinite(selection.startTime)) streamCache.seekHint(Number(selection.startTime))
-  try {
-    return await ffmpegTranscoder.start(
-      ffmpegPath,
-      activeCacheUrl,
-      selection,
-      activeVideoEncoder,
-      targetHeight
-    )
-  } catch (error) {
-    if (!activeVideoEncoder) throw error
-    logError('playback:transcode', `video re-encode failed on restart, retrying stream-copy: ${error}`)
-    videoEncodeUnusable = true
-    activeVideoEncoder = undefined
-    activeVideoEncoderReason = undefined
-    await ffmpegTranscoder.stop()
-    return ffmpegTranscoder.start(ffmpegPath, activeCacheUrl, selection, undefined, targetHeight)
-  }
 }
 
 export function subtitleCacheDir(): string {
@@ -255,155 +137,68 @@ export async function preparePlayback(
   cacheMeta?: CacheSessionMeta
 ): Promise<PlaybackResult> {
   activeMediaUrl = url
-  subtitleBatchPromise = null
-  await ffmpegTranscoder.stop()
-  reportPreparation('probe', "Reading the file's audio and subtitle tracks")
-  activeMediaTracks = await probeMedia(ffprobePath, url)
-  // StreamCache becomes the sole owner of the upstream connection to `url`
-  // from here on — probeMedia above is the one remote touch that happens
-  // BEFORE it (sequential, already complete by this point, so it never
-  // overlaps with StreamCache's own connection). Started even for a title
-  // that turns out not to need ffmpeg at all: direct-mode playback below
-  // reads from this same local server instead of proxying the remote link
-  // per-Range-request the way the old playbackProxy did.
+  // StreamCache is the sole owner of the upstream connection to `url`. It is
+  // started before the player opens anything, and mpv then reads only from its
+  // local server — never the remote link. That constraint has not changed with
+  // the engine: it exists because TorBox caps concurrent connections per link,
+  // and mpv's own --cache is a readahead window, not a per-title on-disk cache
+  // the Downloads page can list.
+  //
+  // Note what is NO LONGER here: an ffprobe pass against the remote link. It
+  // ran before the cache opened, deliberately sequential so the two never
+  // overlapped on that one connection. mpv reports the track list itself, so
+  // the remote link is now touched by exactly one thing.
+  reportPreparation('connect', 'Connecting to the source')
   const cacheResult = await streamCache.start(
     url,
-    activeMediaTracks.durationSeconds,
+    // Not known yet — the duration now arrives from mpv after the file opens,
+    // where ffprobe used to supply it before this call. streamCache.setDuration
+    // below closes that gap; until then the retention window uses its
+    // chunk-count fallback.
+    undefined,
     resolveStreamCacheMaxBytes(),
     cacheMeta
   )
   activeCacheUrl = cacheResult.url
-  // Fresh title — none of the previous one's sticky transcode state
-  // carries over (a new upscale suggestion gets computed below either way).
-  activeVideoEncoder = undefined
-  activeVideoEncoderReason = undefined
-  activeUpscaleHeight = undefined
-  const videoCodecWarning = videoCodecCompatibilityWarning(activeMediaTracks)
-  // probeMedia already retries once internally — reaching here with
-  // `probed: false` while ffprobePath IS set means both attempts genuinely
-  // failed (a bad/slow link), so audio-codec detection below has nothing
-  // to work with and silently takes the "no compatibility issue found"
-  // branch. Told upfront rather than leaving no sound/no track menus with
-  // no explanation (see probeMedia's own comment). Gated on ffprobePath so
-  // this doesn't fire on every single title on a machine where ffprobe
-  // just isn't installed/bundled at all (findFfprobe returned '') — that's
-  // a standing environment gap "try playing again" can't fix, not a
-  // one-off transient failure worth telling anyone about per-title.
-  const tracksWarning =
-    activeMediaTracks.probed || !ffprobePath
-      ? undefined
-      : "Couldn't read this file's audio/subtitle track info — playback may have no sound or subtitle options. Try playing again."
-  if (
-    videoCodecWarning &&
-    ffmpegPath &&
-    !videoEncodeUnusable &&
-    readSettings().videoTranscodeEnabled
-  ) {
-    // Worth naming: the very first title of a session pays a real
-    // functional probe per candidate encoder here (see detectVideoEncoder),
-    // which is seconds of apparently-nothing-happening before the
-    // transcode has even been asked to start.
-    reportPreparation('encoder', 'Looking for a hardware video encoder')
-    activeVideoEncoder = (await detectVideoEncoder(ffmpegPath)) ?? undefined
-    if (activeVideoEncoder) activeVideoEncoderReason = 'codec'
-  }
-  // Independent of the codec-compatibility path above — a screen-height
-  // lookup and a filter/sort over a 3-item array, never touches ffmpeg, so
-  // it's always cheap to compute and safe to surface on every title.
   const settings = readSettings()
-  // Which language to play when the file offers a choice. Consulted below
-  // both for picking the track AND for deciding whether ffmpeg is needed
-  // at all — direct playback hands the file to Chromium, which has no way
-  // to be told which audio track to use.
-  const audioLanguage = settings.audioLanguage || 'en'
-  const screenHeight = screen.getPrimaryDisplay()?.workAreaSize?.height
-  const upscaleSuggestion = videoResolutionUpscaleSuggestion(
-    activeMediaTracks,
-    screenHeight,
-    settings.preferredUpscaleHeight
-  )
-  if ((needsAudioCompatibility(activeMediaTracks, audioLanguage) || activeVideoEncoder) && ffmpegPath) {
-    // Cap the height when we're FORCED to re-encode video. Re-encoding
-    // 2160p in real time is what made 4K HEVC titles unplayable: ffmpeg
-    // never produced its first bytes inside even the extended 60s startup
-    // budget, so the title failed outright. Scaling to 1080p first cuts
-    // the encoder's pixel rate by ~4x and is invisible on any normal
-    // display at normal viewing distance — a 1080p stream that starts is
-    // strictly better than a 2160p one that never does.
-    //
-    // Only applies on the re-encode path (activeVideoEncoder set); a
-    // stream-copy is untouched and still delivers the source resolution
-    // exactly. An explicit upscale preference still wins, since that's the
-    // person deliberately asking for a specific output height.
-    const sourceHeight = Number(activeMediaTracks.video?.[0]?.height) || 0
-    const encodeHeight =
-      activeUpscaleHeight ??
-      (sourceHeight > TRANSCODE_MAX_HEIGHT ? TRANSCODE_MAX_HEIGHT : undefined)
-    const audioSelection = {
-      audio: selectTranscodeAudioTrack(activeMediaTracks, audioLanguage)?.ordinal ?? 0
-    }
-    // "Convert incompatible video" is an opt-in, explicitly experimental
-    // setting, and on a 2160p HEVC source it reliably blew the whole 60s
-    // startup budget without emitting a frame — so with it on, every 4K
-    // title simply failed to play, while the very same title plays in
-    // ~13s by stream-copying the video and converting only the audio
-    // (verified live: hevc 3840x2160, HDR intact). Chromium decodes HEVC
-    // itself, which is what makes the fallback viable rather than a
-    // consolation prize: the copy path preserves the source resolution
-    // and HDR metadata exactly, where a successful re-encode would have
-    // thrown both away. Recovery itself lives in
-    // startTranscodeWithFallback, shared with every restart path below.
-    const audioCodec = activeMediaTracks.audio
-      .find((track) => track.ordinal === audioSelection.audio)
-      ?.codec?.toUpperCase()
-    reportPreparation(
-      'transcode',
-      activeVideoEncoder
-        ? `Converting video and ${audioCodec || 'the'} audio for this player`
-        : `Converting ${audioCodec || 'the'} audio for this player`
-    )
-    const started = await startTranscodeWithFallback(audioSelection, encodeHeight)
-    return {
-      ok: true,
-      player: 'embedded',
-      tracks: activeMediaTracks,
-      // What ffmpeg was actually told to play — not the container's own
-      // default, which selectTranscodeAudioTrack may well have declined.
-      // The player marks its audio menu from this.
-      selection: { ...audioSelection, upscaleHeight: activeUpscaleHeight ?? 0 },
-      autoReason: activeVideoEncoder
-        ? 'Video and audio were converted for compatibility.'
-        : 'Audio was converted for browser compatibility.',
-      // Actually addressed by the video-transcode path above, so no need
-      // to warn about it too — still surfaced when audio-only compatibility
-      // mode ran instead (opted out, or no working hardware encoder found).
-      videoCodecWarning: activeVideoEncoder ? undefined : videoCodecWarning,
-      tracksWarning,
-      upscaleSuggestion,
-      embeddedSubtitlesAvailable: cacheResult.fullRetention,
-      ...started
-    }
-  }
+  reportPreparation('buffer', 'Opening the file')
+  // Everything the old branch below this point did — probing codecs, deciding
+  // whether ffmpeg was needed, picking a track to bake into `-map 0:a:N`,
+  // detecting a hardware encoder, capping the encode height — existed to work
+  // around a <video> element that can only be handed one audio track in a codec
+  // Chromium happens to decode. mpv demuxes and decodes the source as-is, so
+  // the whole decision collapses into opening the file.
+  //
+  // `alang`/`slang` express the language *preference*; mpv resolves it against
+  // the container itself and reports back which track it chose. That replaces
+  // selectTranscodeAudioTrack's job of picking a track AND its unfortunate
+  // second job of steering away from TrueHD/DTS, which existed only because
+  // downmixing those through ffmpeg produced packets Chromium's decoder
+  // rejected mid-playback. Nothing is downmixed now, so the best track is
+  // simply playable.
+  // Resume is not passed here: the overlay fetches the saved position and
+  // issues a seek once loaded, which is now instant and in-place. (mpv's
+  // `start` option would let the demuxer open AT the resume point instead of
+  // opening at 0 and repositioning — a real, if small, saving on StreamCache's
+  // first fill. Left for when resume moves into this call deliberately, rather
+  // than plumbed through unused.)
+  const { tracks } = await startPlayerSession(activeCacheUrl, {
+    audioLanguage: settings.audioLanguage || 'en',
+    subtitleLanguage: settings.subtitleLanguage || undefined
+  })
+  activeMediaTracks = tracks
+  // Now that mpv has opened the file, hand its duration to the cache so the
+  // retention window can size itself in bytes rather than chunk counts.
+  streamCache.setDuration(tracks.durationSeconds)
+
   return {
     ok: true,
     player: 'embedded',
-    compatibility: false,
     tracks: activeMediaTracks,
-    // Nothing is selecting anything here — the browser demuxes the file
-    // itself and plays whichever audio stream the container marks default
-    // (falling back to the first). Reaching this branch at all means that
-    // track IS the one we wanted, since needsAudioCompatibility above
-    // routes to ffmpeg whenever it isn't. Reported so the player's audio
-    // menu can mark the track actually being heard.
-    selection: { audio: selectTranscodeAudioTrack(activeMediaTracks, audioLanguage)?.ordinal },
-    videoCodecWarning,
-    tracksWarning,
-    upscaleSuggestion,
-    embeddedSubtitlesAvailable: cacheResult.fullRetention,
-    // The <video> element reads straight from StreamCache's local server —
-    // no separate proxy registration step needed, unlike the old
-    // playbackProxy.register(url) (which opened its own connection to the
-    // remote link per Range request Chromium made).
+    selection: { audio: activeMediaTracks.audio.find((track) => track.default)?.ordinal ?? 0 },
+    // The player reads from StreamCache's local server directly. Kept in the
+    // result because the Downloads page and the party-sync paths still key off
+    // it; the renderer no longer loads it into anything itself.
     url: activeCacheUrl
   }
 }
@@ -419,14 +214,14 @@ export async function stopPlayback(deleteCache = false): Promise<void> {
   activeMediaUrl = ''
   activeCacheUrl = ''
   activeMediaTracks = { video: [], audio: [], subtitle: [], probed: false }
-  activeVideoEncoder = undefined
-  activeVideoEncoderReason = undefined
-  activeUpscaleHeight = undefined
-  subtitleBatchPromise = null
   clearActiveSubtitle()
+  // Unloads the title and closes the control overlay, which is also what
+  // destroys mpv's embedded video window and reveals the app UI behind it. The
+  // mpv process itself stays alive and idle so the next title is a `loadfile`
+  // rather than a respawn.
   await Promise.all([
     deleteCache ? streamCache.deleteSession() : streamCache.stop(),
-    ffmpegTranscoder.stop()
+    stopPlayerSession()
   ])
 }
 
@@ -434,8 +229,6 @@ interface SubtitlesApplyPayload {
   provider?: unknown
   fileId?: unknown
   downloadPath?: unknown
-  compatibility?: unknown
-  selection?: PlaybackSelection
 }
 
 /**
@@ -461,124 +254,28 @@ function parseSubtitleSelection(payload: SubtitlesApplyPayload | undefined): Sub
   return { provider: 'opensubtitles', fileId, downloadPath: '' }
 }
 
-type PlaybackCompatibilityResult = FfmpegTranscoderResult & { tracks: MediaTracks }
-
-type PlaybackSelectTracksResult = FfmpegTranscoderResult & {
-  tracks: MediaTracks
-  selection: PlaybackSelection
-}
-
 export function registerPlaybackIpc(): void {
   handle<SubtitlesApplyPayload | undefined, SubtitlesApplyResult>(
     MEDIA_HUB_CHANNELS.subtitlesApply,
     async (_event, payload) => {
       if (!activeMediaUrl) throw new Error('No active media is available for subtitles.')
       const srtText = await downloadSubtitleText(parseSubtitleSelection(payload))
-      if (!payload?.compatibility) {
-        return {
-          ok: true,
-          compatibility: false,
-          vttDataUrl: `data:text/vtt;base64,${Buffer.from(srtToVtt(srtText)).toString('base64')}`
-        }
-      }
       clearActiveSubtitle()
       const dir = subtitleCacheDir()
       fs.mkdirSync(dir, { recursive: true })
       const filePath = path.join(dir, `${crypto.randomBytes(16).toString('hex')}.srt`)
       fs.writeFileSync(filePath, srtText, { mode: 0o600 })
       activeSubtitlePath = filePath
-      const selection = payload?.selection
-      const safe: PlaybackSelection = {
-        audio: Number.isInteger(selection?.audio) ? (selection?.audio as number) : -1,
-        startTime: Math.max(0, Math.min(Number(selection?.startTime) || 0, 86400)),
-        externalSubtitlePath: filePath
-      }
-      const started = await startTranscodeWithFallback(safe, activeUpscaleHeight)
-      // `started.compatibility` is already `true` (FfmpegTranscoderResult), so
-      // it isn't repeated here — TS flags a literal + spread of the same key
-      // as an error (TS2783) even though the original JS had no such issue.
-      return { ok: true, tracks: activeMediaTracks, ...started }
-    }
-  )
-
-  handle<PlaybackSelection | undefined, PlaybackCompatibilityResult>(
-    MEDIA_HUB_CHANNELS.playbackCompatibility,
-    async (_event, selection = {}) => {
-      if (!activeMediaUrl) throw new Error('No active media is available for compatibility mode.')
-      const started = await startTranscodeWithFallback(selection, activeUpscaleHeight)
-      return { tracks: activeMediaTracks, ...started }
-    }
-  )
-
-  handle<PlaybackSelection | undefined, PlaybackSelectTracksResult>(
-    MEDIA_HUB_CHANNELS.playbackSelectTracks,
-    async (_event, selection = {}) => {
-      if (!activeMediaUrl) throw new Error('No active media is available for track selection.')
-      // Every seek in compatibility mode restarts the transcode through
-      // here (see PlaybackOverlay's handleSeek), not just explicit track
-      // changes — without an explicit audio ordinal, this used to fall
-      // back to the container's literal first audio stream regardless of
-      // whether preparePlayback's initial start had deliberately avoided
-      // it (see selectTranscodeAudioTrack's own comment on the TrueHD/
-      // Atmos crash that fix exists for). Falling back the same way here
-      // keeps every restart just as safe as the very first one, not only
-      // the first.
-      const audio = Number.isInteger(selection.audio)
-        ? (selection.audio as number)
-        : (selectTranscodeAudioTrack(activeMediaTracks, readSettings().audioLanguage || 'en')?.ordinal ?? -1)
-      // upscaleHeight is deliberately NOT defaulted the way audio/subtitle
-      // are above: undefined here means "this call wasn't about quality at
-      // all" (an ordinary seek re-sending the renderer's last known
-      // selection) and must leave activeUpscaleHeight exactly as it was —
-      // only an explicit number (including 0, "turn it off") changes it.
-      // Every restart after the first quality-menu interaction re-echoes
-      // the same value on every subsequent seek too (it's just whatever
-      // was last returned) — only act when it's genuinely a change, so a
-      // plain seek doesn't re-probe the encoder or re-write settings.
-      if (
-        Number.isInteger(selection.upscaleHeight) &&
-        selection.upscaleHeight !== (activeUpscaleHeight ?? 0)
-      ) {
-        const requested = selection.upscaleHeight as number
-        if (requested > 0) {
-          if (!activeVideoEncoder) {
-            activeVideoEncoder = (await detectVideoEncoder(ffmpegPath)) ?? undefined
-            if (!activeVideoEncoder) {
-              throw new Error(
-                'No working hardware encoder was found on this machine — upscaling is unavailable.'
-              )
-            }
-            activeVideoEncoderReason = 'upscale'
-          }
-          activeUpscaleHeight = requested
-          const current = readSettings()
-          writeSettings({ ...current, preferredUpscaleHeight: requested })
-        } else {
-          // Turning off: only release the encoder too if upscale was the
-          // *only* reason it was engaged — a codec-driven re-encode (HEVC
-          // etc.) still needs it regardless of the quality choice.
-          activeUpscaleHeight = undefined
-          if (activeVideoEncoderReason === 'upscale') {
-            activeVideoEncoder = undefined
-            activeVideoEncoderReason = undefined
-          }
-        }
-      }
-      const safe: PlaybackSelection = {
-        audio,
-        subtitle: Number.isInteger(selection.subtitle) ? (selection.subtitle as number) : -1,
-        startTime: Math.max(0, Math.min(Number(selection.startTime) || 0, 86400)),
-        upscaleHeight: activeUpscaleHeight ?? 0
-      }
-      // This handler is reachable from *direct* playback too (a title
-      // under 1080p, never having gone through compatibility mode before,
-      // upscaled via the quality menu) — no connection-swap coordination
-      // needed here anymore, unlike the old playbackProxy/ffmpeg split:
-      // both direct-mode and ffmpeg read from the SAME already-running
-      // StreamCache local server, so switching between them never touches
-      // the remote link at all.
-      const started = await startTranscodeWithFallback(safe, activeUpscaleHeight)
-      return { tracks: activeMediaTracks, selection: safe, ...started }
+      // Handed straight to the player rather than converted or burned in. Both
+      // of the old branches are gone: the renderer no longer mounts a WebVTT
+      // <track> (so nothing calls srtToVtt, and with it goes the silent failure
+      // where an .ass or frame-based .sub came back from a provider, got
+      // `WEBVTT` stapled to the front, and produced a track with zero parseable
+      // cues that the app reported as success), and the compatibility branch
+      // that restarted the transcode with an `externalSubtitlePath`
+      // buildFfmpegArguments never actually read is gone with the transcode.
+      const ordinal = await addSubtitleFileToPlayer(filePath)
+      return { ok: true, ordinal }
     }
   )
 
@@ -594,82 +291,7 @@ export function registerPlaybackIpc(): void {
     MEDIA_HUB_CHANNELS.playbackThumbnail,
     async (_event, seconds) => {
       if (!activeCacheUrl) return null
-      return captureFrame(ffmpegPath, activeCacheUrl, Number(seconds) || 0)
-    }
-  )
-
-  handle<number | undefined, string | null>(
-    MEDIA_HUB_CHANNELS.playbackExtractSubtitle,
-    async (_event, ordinal) => {
-      if (!activeCacheUrl) return null
-      const index = Number(ordinal)
-      if (!Number.isInteger(index) || index < 0) return null
-      // Reachable as soon as the title QUALIFIES for fullRetention (the
-      // configured cache is large enough to eventually hold the whole
-      // file) — not only once caching has actually FINISHED. The renderer
-      // enables the "Embedded" subtitle menu the moment a title qualifies
-      // (see preparePlayback's embeddedSubtitlesAvailable), which is
-      // usually well before the download completes, so a straight
-      // fullRetentionReady() check here would routinely return null for a
-      // perfectly legitimate click during normal early playback — a
-      // confirmed, misleading "no subtitle data was found" error. Waiting
-      // (bounded) instead turns that into the same "Extracting… this can
-      // take a while" state the UI already shows for the whole call,
-      // rather than a false failure. Only a title that never qualifies for
-      // fullRetention at all (cache too small) returns immediately.
-      const ready = await streamCache.waitForFullRetentionReady(SUBTITLE_CACHE_WAIT_MS)
-      if (!ready) return null
-      // Two callers can want a track at once (a re-click, a party member
-      // following a subtitle change) — sharing the in-flight batch promise
-      // means one demux for every track this title has, not one per call.
-      if (!subtitleBatchPromise) {
-        const textOrdinals = activeMediaTracks.subtitle
-          .filter((t) => TEXT_SUBTITLE_CODECS.has(t.codec))
-          .map((t) => t.ordinal)
-        subtitleBatchPromise = extractSubtitleTracksBatch(ffmpegPath, activeCacheUrl, textOrdinals, {
-          // Not optional bookkeeping: this is what keeps ffmpeg's stderr
-          // pipe drained, without which the extraction deadlocks — see
-          // extractSubtitleTracksBatch's own comment.
-          onLog: (line) => logError('ffmpeg:stderr', redactUrls(line.trim()))
-        })
-      }
-      const batch = await subtitleBatchPromise
-      return batch.get(index) ?? null
-    }
-  )
-
-  handle<{ code?: unknown; message?: unknown; currentTime?: unknown } | undefined, { ok: true }>(
-    MEDIA_HUB_CHANNELS.playbackReportClientError,
-    async (_event, payload) => {
-      // Pure logging, not diagnosis — the <video> element's MediaError is
-      // otherwise only ever visible in that one session's DevTools console
-      // (see PlaybackOverlay's onError), which made every prior report of
-      // "it crashed a few seconds in" un-investigable after the fact: only
-      // the main-process side of a crash (this file, streamCache.ts,
-      // vlc.ts) ever reached logs/media-hub.log. Forwarding the code/
-      // message here is what turns the NEXT occurrence into something
-      // diagnosable from the log alone.
-      logError(
-        'playback:client-error',
-        `MediaError code=${payload?.code} message=${JSON.stringify(payload?.message)} at t=${payload?.currentTime}s`
-      )
-      return { ok: true }
-    }
-  )
-
-  handle<undefined, StreamCacheEntry[]>(MEDIA_HUB_CHANNELS.streamCacheList, async () =>
-    listCacheSessions(streamCache.getActiveToken())
-  )
-
-  handle<{ token?: unknown } | undefined, { ok: true }>(
-    MEDIA_HUB_CHANNELS.streamCacheDelete,
-    async (_event, payload) => {
-      const token = String(payload?.token || '')
-      if (token && token === streamCache.getActiveToken()) {
-        throw new Error("Can't delete — this title is currently playing.")
-      }
-      await deleteCacheSession(token)
-      return { ok: true }
+      return captureThumbnail(mpvPath, activeCacheUrl, Number(seconds) || 0)
     }
   )
 
@@ -695,6 +317,22 @@ export function registerPlaybackIpc(): void {
         }
       }
       return { ok: true, freedBytes }
+    }
+  )
+
+  handle<undefined, StreamCacheEntry[]>(MEDIA_HUB_CHANNELS.streamCacheList, async () =>
+    listCacheSessions(streamCache.getActiveToken())
+  )
+
+  handle<{ token?: unknown } | undefined, { ok: true }>(
+    MEDIA_HUB_CHANNELS.streamCacheDelete,
+    async (_event, payload) => {
+      const token = String(payload?.token || '')
+      if (token && token === streamCache.getActiveToken()) {
+        throw new Error("Can't delete — this title is currently playing.")
+      }
+      await deleteCacheSession(token)
+      return { ok: true }
     }
   )
 

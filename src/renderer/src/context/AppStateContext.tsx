@@ -176,7 +176,10 @@ interface AppStateValue {
   syncDiscrepancies: WatchStatusDiscrepancy[]
   syncReviewOpen: boolean
   setSyncReviewOpen: Dispatch<SetStateAction<boolean>>
-  resolveSyncDiscrepancy: (discrepancy: WatchStatusDiscrepancy, resolution: ReconcileResolution) => void
+  resolveSyncDiscrepancy: (
+    discrepancy: WatchStatusDiscrepancy,
+    resolution: ReconcileResolution
+  ) => void
 
   // The flat "browse everything" pool (movies + series + anime, real
   // catalog:list data when available, mockData's CATALOG fallback
@@ -1114,18 +1117,14 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         setPlaybackResult(played)
         setPlaybackTracks(played.tracks)
         setPlaybackMedia(media)
-        // Video is only ever stream-copied (see vlc.ts's videoCodecCompatibilityWarning) —
-        // surfaced upfront so a decode failure minutes in isn't the first anyone hears of it.
-        if (played.videoCodecWarning) {
-          pushNotification({ tone: 'warning', message: played.videoCodecWarning })
-        }
-        // See preparePlayback's own comment: ffprobe failed even after its
-        // internal retry, so audio/subtitle track info is missing for this
-        // whole session — surfaced now rather than leaving silent no-sound,
-        // no-menu playback with no explanation.
-        if (played.tracksWarning) {
-          pushNotification({ tone: 'warning', message: played.tracksWarning })
-        }
+        // The two upfront warnings that used to fire here are gone with the
+        // engine, not merely relocated. `videoCodecWarning` existed because
+        // video was only ever stream-copied to a <video> element, so an HEVC or
+        // VC-1 source could fail to decode minutes in; mpv decodes all of them.
+        // `tracksWarning` existed because a failed ffprobe left the session with
+        // no track data at all; the player reports its own track list, so if the
+        // file opened there is a real list, and if it did not, that is a hard
+        // error reported directly rather than a silent degradation.
         return true
       } catch (error) {
         if (error instanceof PlaybackPreparationCancelledError) return false
@@ -1173,6 +1172,63 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     watchedIdsResult.refresh()
     setWatchStatusVersion((v) => v + 1)
   }, [homeFeed, watchedIdsResult])
+
+  // The main-window half of the player bridge. The controls live in their own
+  // window now (mpv's native surface composites above web content, so they
+  // cannot be drawn over it in this one — see main/media-hub/playerWindow.ts),
+  // and that window has no access to this context. Anything it raises whose
+  // effect belongs to THIS window's state arrives here.
+  //
+  // mark-watched in particular stays on this side because it needs the full
+  // MediaItem to build its trackable payload, and that record lives here —
+  // shipping it across the boundary and back would be strictly worse.
+  // Held in refs, not dependencies: refreshWatchStatus's identity changes
+  // whenever the home feed or watched-ids query refreshes, and re-subscribing
+  // the IPC listener on every one of those would drop events raised in the gap.
+  const playbackMediaForEventsRef = useRef(playbackMedia)
+  const stopPlaybackRef = useRef(stopPlayback)
+  const refreshWatchStatusRef = useRef(refreshWatchStatus)
+  useEffect(() => {
+    playbackMediaForEventsRef.current = playbackMedia
+    stopPlaybackRef.current = stopPlayback
+    refreshWatchStatusRef.current = refreshWatchStatus
+  }, [playbackMedia, stopPlayback, refreshWatchStatus])
+  useEffect(() => {
+    const api = window.api?.mediaHub?.player
+    if (!api) return
+    return api.onUiEvent((event) => {
+      switch (event.type) {
+        case 'stop-playback':
+          stopPlaybackRef.current(event.watched)
+          return
+        case 'mark-watched': {
+          const media = playbackMediaForEventsRef.current
+          if (!media) return
+          window.api?.mediaHub?.tracking
+            .markWatched({
+              item: mediaItemToTrackablePayload(media),
+              playback: { season: media.seasonNumber, episode: media.episodeNumber }
+            })
+            .then(() => refreshWatchStatusRef.current())
+            .catch(() => {})
+          return
+        }
+        case 'refresh-watch-status':
+          refreshWatchStatusRef.current()
+          return
+        case 'notify':
+          pushNotification({ tone: event.tone, message: event.message })
+          return
+        case 'set-party-panel-open':
+          setPartyPanelOpen(event.open)
+          return
+        default:
+          // set-interactive never reaches the renderer — main handles it on
+          // the window itself.
+          return
+      }
+    })
+  }, [pushNotification])
 
   // Host-only: same resolve+play as startPlayback, then (once a real
   // stream is actually playing) announces the title to the party so every

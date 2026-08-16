@@ -228,6 +228,25 @@ export async function shutdownPlayer(): Promise<void> {
   await player.quit().catch(() => {})
 }
 
+/**
+ * Loads an external subtitle file and selects it. Used by the subtitles:apply
+ * flow once it has written the .srt to disk.
+ *
+ * mpv parses SRT directly, so nothing converts it first — the srtToVtt step the
+ * old `<track>` element required is gone, and with it the class of silent
+ * failure where an .ass or frame-based .sub came back from a provider, had
+ * `WEBVTT` stapled to the front, and produced a track with zero parseable cues
+ * that the app reported as a complete success.
+ */
+export async function addSubtitleFileToPlayer(filePath: string): Promise<number> {
+  if (!player.running) throw new Error('No title is currently playing.')
+  await player.command('sub-add', filePath, 'select')
+  // Report which ordinal it landed on so the menu can mark it active
+  // immediately, rather than waiting for the observed track-list push.
+  const sid = await player.get('sid').catch(() => undefined)
+  return ordinalForMpvTrackId(sid)
+}
+
 /** Windows: the decimal HWND mpv's --wid expects. Read unsigned because mpv is
  *  documented to assume a positive window id (mpv#10189). */
 function nativeWindowId(win: BrowserWindow): string {

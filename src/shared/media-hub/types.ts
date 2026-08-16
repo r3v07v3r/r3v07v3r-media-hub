@@ -254,30 +254,14 @@ export interface PlaybackResult {
   ok: true
   player: 'embedded'
   tracks: MediaTracks
+  /** StreamCache's local server URL for this title. The player opens it
+   *  directly; nothing in the renderer loads it anymore. */
   url: string
-  compatibility?: boolean
-  engine?: string
-  autoReason?: string
-  /** Set when the source video's own codec (e.g. HEVC) is one Chromium's software decoder doesn't reliably handle — video is only ever stream-copied here, never transcoded, so this can't be fixed server-side yet. Surfaced as an upfront warning rather than letting the person hit an unexplained mid-stream decode crash. */
-  videoCodecWarning?: string
-  /** Set when ffprobe couldn't read this source's track info even after probeMedia's retry (tracks.probed is false) — audio-codec compatibility detection and the audio/subtitle track menus both depend on that data, so this playback is likely to have no sound and no track options. Surfaced upfront since that combination otherwise looks like silent, unexplained breakage rather than a one-off probe failure worth retrying. */
-  tracksWarning?: string
-  /** Present whenever the source is 1080p or below, independent of videoCodecWarning/compatibility above — see UpscaleSuggestion. */
-  upscaleSuggestion?: UpscaleSuggestion
-  /** Whether the configured stream-cache size (Settings > Stream cache size) is large enough to eventually hold this whole title locally — embedded-subtitle extraction needs the whole file (cues are interleaved throughout the container), so a small cache means it's never available for this title, not just slow. The player greys out the "Embedded" subtitle menu when this is false rather than letting a click silently fail or reopen a second connection to the debrid link. */
-  embeddedSubtitlesAvailable: boolean
-  /** What is actually being played right now: which audio ordinal, which
-   *  upscale height, where the current segment starts.
-   *
-   *  The player has no other way to know. In compatibility mode the audio
-   *  track is chosen by selectTranscodeAudioTrack, which deliberately
-   *  declines the container's own default when its codec is one that
-   *  crashes the decode pipeline (TrueHD/Atmos) — so "the default track"
-   *  and "the track you are hearing" are routinely different titles.
-   *  Without this the audio menu had nothing to mark as current except
-   *  ffprobe's `default` disposition, which is a property of the FILE, not
-   *  of this session, and never moved when someone picked another track. */
-  selection?: PlaybackSelection
+  /** Which audio track the player resolved for this session. mpv picks it from
+   *  the language preference against the container, and "the container's
+   *  default" and "the track you are hearing" are routinely different, so the
+   *  audio menu has no other way to know what to mark. */
+  selection?: { audio?: number }
 }
 
 // Tracked-show entry as persisted (normalizeTitle shape) — matches
@@ -492,7 +476,10 @@ export interface MediaHubSettingsSnapshot extends MediaHubPublicSettings {
   osConnected: boolean
   subdlConnected: boolean
   partySyncConnected: boolean
-  ffmpegAvailable: boolean
+  /** Whether the bundled player binary was found (see mpv.ts's findMpv). Was
+   *  `ffmpegAvailable` while playback depended on an ffmpeg transcode; ffmpeg
+   *  is no longer involved in playing anything. */
+  playerAvailable: boolean
 }
 
 export interface ConnectResult {
@@ -616,13 +603,16 @@ export interface SkipTimes {
   credits?: SkipInterval
 }
 
+/** Applying a subtitle is now a one-way operation: the .srt is written to the
+ *  subtitle cache and handed to the player, which loads and selects it in
+ *  place. The old shape carried a `vttDataUrl` for the renderer to mount on a
+ *  <track> element, plus `url`/`engine`/`tracks` for the branch that restarted
+ *  the ffmpeg transcode to burn subtitles in — neither exists anymore. */
 export interface SubtitlesApplyResult {
   ok: true
-  compatibility: boolean
-  vttDataUrl?: string
-  tracks?: MediaTracks
-  url?: string
-  engine?: string
+  /** Ordinal of the newly added subtitle track, so the menu can mark it
+   *  active without waiting for the track-list push to arrive. */
+  ordinal: number
 }
 
 // ---------------------------------------------------------------------

@@ -1,5 +1,3 @@
-import { useAppState } from '@renderer/context/AppStateContext'
-import { PlaybackOverlay } from './PlaybackOverlay'
 import { AIResponsePanel } from './AIResponsePanel'
 import { ContextMenu } from './ContextMenu'
 import { NotificationLayer } from './NotificationLayer'
@@ -11,7 +9,6 @@ import { PartyLoadingOverlay } from '@renderer/components/party/PartyLoadingOver
 import { PlaybackPreparationOverlay } from './PlaybackPreparationOverlay'
 
 export function GlobalOverlays() {
-  const { playbackMedia } = useAppState()
   return (
     // data-motion-exempt: every one-shot mount/entrance animation in the
     // app (fadeIn, aiPanelIn, toastIn — see Overlays.module.css) lives
@@ -28,12 +25,12 @@ export function GlobalOverlays() {
       <AIResponsePanel />
       <ContextMenu />
       <PlaybackPreparationOverlay />
-      {/* Keyed on the title's id so opening a new title (or "Restart") is a
-          fresh mount — PlaybackOverlay's local playback state (status,
-          currentTime, subtitle selection, etc.) then just starts from its
-          natural initial values instead of being manually reset by an
-          effect. */}
-      <PlaybackOverlay key={playbackMedia?.id ?? 'none'} />
+      {/* The player itself is no longer here. mpv renders into a native child
+          window that composites above web content, so its controls live in
+          their own transparent window (see main/media-hub/playerWindow.ts) —
+          which also means the per-title `key` remount that used to reset the
+          player's local state is now that window's own concern, and the mpv
+          handle is no longer tied to any React lifecycle at all. */}
       <PartyPanel />
       <PartyLoadingOverlay />
       <NotificationLayer />

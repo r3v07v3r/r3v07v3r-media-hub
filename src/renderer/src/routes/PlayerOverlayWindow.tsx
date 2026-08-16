@@ -21,6 +21,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { PlayerWindowProvider, usePlayerWindow } from '@renderer/context/PlayerWindowContext'
+import { usePlayerTracking } from '@renderer/hooks/usePlayerTracking'
 import styles from './PlayerOverlayWindow.module.css'
 
 const CONTROLS_IDLE_MS = 3200
@@ -71,18 +72,99 @@ function PlayerControls() {
   const audioTracks = session?.tracks?.audio ?? []
   const subtitleTracks = session?.tracks?.subtitle ?? []
   const buffering = state.bufferingForCache === true
+  const volume = state.volume ?? 1
+
+  const tracking = usePlayerTracking({
+    media: session?.media ?? null,
+    timePos,
+    duration,
+    playing: !paused,
+    onMarkWatched: useCallback(() => ui({ type: 'mark-watched' }), [ui])
+  })
+
+  const seekTo = useCallback(
+    (seconds: number) => {
+      void command({ type: 'seek', seconds: Math.max(0, seconds) })
+    },
+    [command]
+  )
 
   const seekToFraction = (fraction: number): void => {
     if (!duration) return
-    void command({ type: 'seek', seconds: Math.max(0, Math.min(1, fraction)) * duration })
+    seekTo(Math.max(0, Math.min(1, fraction)) * duration)
   }
 
+  // Apply the saved resume position once the title is actually playing. Seeks
+  // are in-place now, so this no longer needs to wait for a buffering gate the
+  // way the <video> path did — the old code could not seek until enough of the
+  // (restartable) stream had buffered to make the seek meaningful.
+  useEffect(() => {
+    if (tracking.resumeSeconds === null || !duration) return
+    seekTo(tracking.resumeSeconds)
+    tracking.consumeResume()
+  }, [tracking, duration, seekTo])
+
+  // Saving on pause matters more than it looks: closing the player is the most
+  // common way a session ends, and someone very often pauses first.
+  const wasPausedRef = useRef(paused)
+  useEffect(() => {
+    if (paused && !wasPausedRef.current) tracking.savePositionNow()
+    wasPausedRef.current = paused
+  }, [paused, tracking])
+
+  // Natural end of the file. mpv reports this as a property rather than an
+  // event on an element, but the consequence is the same as the old onEnded.
+  useEffect(() => {
+    if (state.eofReached !== true) return
+    tracking.savePositionNow()
+    ui({ type: 'mark-watched' })
+  }, [state.eofReached, tracking, ui])
+
+  // A terminal playback failure. The old handler had a one-shot retry for
+  // decode/network errors, because a live ffmpeg-to-<video> relay produced
+  // transient decode failures that a restart usually cleared. There is no relay
+  // and no restart now, so an error here is a real error and is reported once.
+  useEffect(() => {
+    if (!state.error) return
+    ui({ tone: 'error', type: 'notify', message: `Playback failed: ${state.error}` })
+    ui({ type: 'stop-playback', watched: tracking.markedWatched() })
+  }, [state.error, tracking, ui])
+
+  const closePlayer = useCallback(() => {
+    ui({ type: 'stop-playback', watched: tracking.markedWatched() })
+  }, [tracking, ui])
+
+  // Real OS-level BrowserWindow fullscreen, not the DOM Fullscreen API — the
+  // main window owns it, and mpv follows automatically as its child. Unchanged
+  // from the old player except for which window asks.
+  const toggleFullscreen = useCallback(() => {
+    window.api?.mediaHub?.window?.toggleFullscreen().catch(() => {})
+  }, [])
+
+  useEffect(() => {
+    function onKey(event: KeyboardEvent): void {
+      if (event.key === ' ') {
+        event.preventDefault()
+        void command({ type: 'toggle-pause' })
+      } else if (event.key === 'ArrowRight') {
+        event.preventDefault()
+        seekTo(timePos + 15)
+      } else if (event.key === 'ArrowLeft') {
+        event.preventDefault()
+        seekTo(timePos - 15)
+      } else if (event.key === 'f') {
+        toggleFullscreen()
+      } else if (event.key === 'Escape') {
+        closePlayer()
+      }
+      revealControls()
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [command, seekTo, timePos, toggleFullscreen, closePlayer, revealControls])
+
   return (
-    <div
-      className={styles.surface}
-      onMouseMove={revealControls}
-      onDoubleClick={() => ui({ type: 'set-party-panel-open', open: false })}
-    >
+    <div className={styles.surface} onMouseMove={revealControls} onDoubleClick={toggleFullscreen}>
       {buffering && (
         <div className={styles.buffering} aria-live="polite">
           <span className={styles.spinner} aria-hidden="true" />
@@ -132,6 +214,19 @@ function PlayerControls() {
           </span>
 
           <div className={styles.spacer} />
+
+          <input
+            type="range"
+            min={0}
+            max={1}
+            step={0.05}
+            value={volume}
+            className={styles.volume}
+            onChange={(event) =>
+              void command({ type: 'set-volume', volume: Number(event.target.value) })
+            }
+            aria-label="Volume"
+          />
 
           {audioTracks.length > 1 && (
             <div className={styles.menuWrap}>
@@ -212,7 +307,7 @@ function PlayerControls() {
           <button
             type="button"
             className={styles.button}
-            onClick={() => ui({ type: 'stop-playback', watched: false })}
+            onClick={closePlayer}
             aria-label="Close player"
           >
             ✕

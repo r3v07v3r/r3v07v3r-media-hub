@@ -15,7 +15,7 @@ import { MEDIA_HUB_CHANNELS } from '../../shared/media-hub/ipc-channels'
 import type { MediaHubPublicSettings, MediaHubSettingsSnapshot } from '../../shared/media-hub/types'
 import { handle } from './ipcGuard'
 import { logError } from './logger'
-import { ffmpegPath, hasActivePlayback, stopPlayback } from './playbackSession'
+import { mpvPath, hasActivePlayback, stopPlayback } from './playbackSession'
 import { normalizeTheme, publicSettings, logoutSettings, THEMES } from './preferences'
 import { normalizePlaybackBuffer } from '../../shared/media-hub/playbackBuffer'
 import { isAllowedExternalUrl } from './security'
@@ -43,7 +43,7 @@ export function registerAppIpc(): void {
     osConnected: osConnected(),
     subdlConnected: subdlConnected(),
     partySyncConnected: Boolean(partySyncCredentials().url && partySyncCredentials().inviteKey),
-    ffmpegAvailable: Boolean(ffmpegPath)
+    playerAvailable: Boolean(mpvPath)
   }))
 
   handle<unknown, { theme: string }>(MEDIA_HUB_CHANNELS.settingsSetTheme, (_event, value) => {
@@ -221,7 +221,10 @@ export function registerAppIpc(): void {
       const probeDir = path.join(chosen, 'stream-cache')
       try {
         await fsp.mkdir(probeDir, { recursive: true })
-        const probeFile = path.join(probeDir, `.write-test-${crypto.randomBytes(8).toString('hex')}`)
+        const probeFile = path.join(
+          probeDir,
+          `.write-test-${crypto.randomBytes(8).toString('hex')}`
+        )
         await fsp.writeFile(probeFile, 'ok')
         await fsp.unlink(probeFile)
       } catch (error) {
