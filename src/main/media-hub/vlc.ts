@@ -743,7 +743,11 @@ export function extractSubtitleTracksBatch(
   ffmpegPath: string,
   cacheUrl: string,
   ordinals: number[],
-  { spawnImpl = spawn, timeout = 300000 }: { spawnImpl?: typeof spawn; timeout?: number } = {}
+  {
+    spawnImpl = spawn,
+    timeout = 300000,
+    onLog = () => {}
+  }: { spawnImpl?: typeof spawn; timeout?: number; onLog?: (chunk: string) => void } = {}
 ): Promise<Map<number, string>> {
   const results = new Map<number, string>()
   const validOrdinals = [...new Set(ordinals)].filter((o) => Number.isInteger(o) && o >= 0)
@@ -772,6 +776,29 @@ export function extractSubtitleTracksBatch(
       resolve(results)
       return
     }
+    // stderr is piped, so it MUST be drained. Nothing was reading it, and
+    // that is the whole reason embedded subtitles "never loaded" on some
+    // titles: ffmpeg blocks on write the moment the pipe buffer fills
+    // (Windows: 64KB — the same trap already documented on
+    // createFfmpegTranscoder below, hit here from the other direction), and
+    // demuxing an entire feature-length container at `-loglevel warning`
+    // clears 64KB easily on a container that warns per packet — exactly the
+    // `UDTA parsing failed retrying raw` / `timescale not set` /
+    // `File ended prematurely` chatter these sources produce. Blocked
+    // ffmpeg never exits, so the extra pipes yield nothing, so the whole
+    // call sat in the menu's "Extracting… this can take a while" state for
+    // the full five-minute timeout and then reported "no subtitle data was
+    // found". Reproduced directly: >64KB of undrained stderr and the child
+    // never delivers a byte on fd 3; drained, the same run finishes in
+    // milliseconds. Forwarded to onLog rather than dropped so those
+    // warnings still reach logs/media-hub.log, matching the transcoder.
+    child.stderr?.on('data', (chunk: Buffer) => {
+      try {
+        onLog(chunk.toString())
+      } catch {
+        // Logging must never break the extraction it is observing.
+      }
+    })
     const buffers = new Map<number, Buffer[]>(validOrdinals.map((o) => [o, []]))
     validOrdinals.forEach((ordinal, i) => {
       const stream = child.stdio[3 + i]

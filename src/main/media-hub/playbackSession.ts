@@ -626,7 +626,12 @@ export function registerPlaybackIpc(): void {
         const textOrdinals = activeMediaTracks.subtitle
           .filter((t) => TEXT_SUBTITLE_CODECS.has(t.codec))
           .map((t) => t.ordinal)
-        subtitleBatchPromise = extractSubtitleTracksBatch(ffmpegPath, activeCacheUrl, textOrdinals)
+        subtitleBatchPromise = extractSubtitleTracksBatch(ffmpegPath, activeCacheUrl, textOrdinals, {
+          // Not optional bookkeeping: this is what keeps ffmpeg's stderr
+          // pipe drained, without which the extraction deadlocks — see
+          // extractSubtitleTracksBatch's own comment.
+          onLog: (line) => logError('ffmpeg:stderr', redactUrls(line.trim()))
+        })
       }
       const batch = await subtitleBatchPromise
       return batch.get(index) ?? null
