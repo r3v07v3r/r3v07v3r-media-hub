@@ -43,12 +43,40 @@ function redactSecrets(value: string): string {
   )
 }
 
-/** Best-effort append-only error log. Never throws — logging must not be able to break the feature it's observing. Every line is redacted before it touches disk — this is the one choke point every logError call goes through, so a call site doesn't have to remember to do it itself (see redactUrls' one pre-existing manual use in playbackSession.ts, which this makes redundant but harmless). */
+/** How many stack frames to keep. Enough to name the throwing call and its
+ *  caller without turning the log into a wall of Electron internals. */
+const STACK_FRAMES = 6
+
+/**
+ * Best-effort append-only error log. Never throws — logging must not be able to
+ * break the feature it's observing. Every line is redacted before it touches
+ * disk — this is the one choke point every logError call goes through, so a
+ * call site doesn't have to remember to do it itself.
+ *
+ * Records the error's TYPE and STACK, not just its message. This is not
+ * gold-plating: a real playback failure was reported as the single line
+ * `[mediahub:play:stream] error accessing property` — a message thrown from
+ * Electron's native layer that appears in no JavaScript we ship or depend on,
+ * with nothing to say which of the dozen native calls in that handler raised
+ * it. A message alone is not diagnosable when the message isn't ours.
+ */
 export function logError(scope: string, error: unknown): void {
   try {
     const message = error instanceof Error ? error.message : String(error)
-    const safeMessage = redactSecrets(redactUrls(message))
-    const line = `${new Date().toISOString()} [${scope}] ${safeMessage}\n`
+    // `Error` for a plain throw is noise; anything else (TypeError, RangeError,
+    // an Electron-specific subclass) immediately narrows the search.
+    const kind =
+      error instanceof Error && error.name && error.name !== 'Error' ? `${error.name}: ` : ''
+    const safeMessage = redactSecrets(redactUrls(`${kind}${message}`))
+    let line = `${new Date().toISOString()} [${scope}] ${safeMessage}\n`
+    if (error instanceof Error && error.stack) {
+      const frames = error.stack
+        .split('\n')
+        .slice(1, 1 + STACK_FRAMES)
+        .map((frame) => `    ${redactSecrets(redactUrls(frame.trim()))}`)
+        .join('\n')
+      if (frames) line += `${frames}\n`
+    }
     fs.mkdirSync(path.dirname(logPath()), { recursive: true })
     fs.appendFileSync(logPath(), line)
   } catch {

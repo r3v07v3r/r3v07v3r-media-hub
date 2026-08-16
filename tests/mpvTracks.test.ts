@@ -10,6 +10,7 @@
 
 import assert from 'node:assert'
 import {
+  MpvPlayer,
   mpvTrackIdForOrdinal,
   ordinalForMpvTrackId,
   tracksFromMpvTrackList,
@@ -148,4 +149,117 @@ check('unknown track types and an empty list are handled', () => {
   assert.equal(tracksFromMpvTrackList().audio.length, 0)
 })
 
-console.log(`\n${pass} checks passed`)
+// --- loadFile's property writes -------------------------------------------
+// Regression guard for the bug that made every title fail to play. `start` is
+// one of mpv's *time*-typed options, and over JSON IPC those accept a string
+// ("0", "90", "00:01:30") and reject a number with MPV_ERROR_PROPERTY_ERROR —
+// whose message, "error accessing property", names neither the property nor the
+// reason. loadFile wrote it as a number on every call, so nothing ever loaded
+// and that opaque line was the only evidence.
+//
+// Driven through a fake socket rather than a real mpv: what matters is the
+// exact bytes put on the wire, which is where the bug was.
+
+async function checkAsync(name: string, fn: () => Promise<void>): Promise<void> {
+  try {
+    await fn()
+    pass++
+    console.log(`  ok  ${name}`)
+  } catch (error) {
+    console.log(`FAIL  ${name}
+      ${(error as Error).message}`)
+    process.exitCode = 1
+  }
+}
+
+/** An MpvPlayer wired to a stub socket that records what was written and
+ *  auto-answers every request, so awaited command() calls resolve. */
+function fakePlayer(replyError = 'success'): { player: MpvPlayer; sent: string[] } {
+  const sent: string[] = []
+  const player = new MpvPlayer()
+  ;(player as unknown as { socket: unknown }).socket = {
+    write(line: string) {
+      sent.push(line)
+      const { request_id: requestId } = JSON.parse(line) as { request_id: number }
+      queueMicrotask(() =>
+        (player as unknown as { onData(chunk: string): void }).onData(
+          `${JSON.stringify({ request_id: requestId, error: replyError, data: null })}
+`
+        )
+      )
+      return true
+    },
+    destroy() {
+      /* the stub owns no resources */
+    }
+  }
+  return { player, sent }
+}
+
+function writesFor(sent: string[], property: string): unknown[] {
+  return sent
+    .map((line) => JSON.parse(line) as { command: unknown[] })
+    .filter((msg) => msg.command[0] === 'set_property' && msg.command[1] === property)
+    .map((msg) => msg.command[2])
+}
+
+/** Starts a load without awaiting it — `file-loaded` never arrives on a fake
+ *  socket, so the returned promise is expected to reject on its own timeout
+ *  long after the assertions are done. Swallowed so it cannot surface as an
+ *  unhandled rejection and fail the run. */
+function startLoad(player: MpvPlayer, options: Parameters<MpvPlayer['loadFile']>[1]): void {
+  void player.loadFile('https://example.com/a.mkv', options).catch(() => {})
+}
+
+const settle = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 20))
+
+async function main(): Promise<void> {
+  await checkAsync('loadFile writes a non-zero start as a STRING, never a number', async () => {
+    const { player, sent } = fakePlayer()
+    startLoad(player, { startSeconds: 90 })
+    await settle()
+    const starts = writesFor(sent, 'start')
+    assert.deepEqual(starts, ['90'], `start was written as ${JSON.stringify(starts)}`)
+    assert.equal(typeof starts[0], 'string')
+  })
+
+  await checkAsync('loadFile omits start entirely when there is nowhere to resume', async () => {
+    for (const options of [{}, { startSeconds: 0 }, { startSeconds: Number.NaN }]) {
+      const { player, sent } = fakePlayer()
+      startLoad(player, options)
+      await settle()
+      assert.deepEqual(writesFor(sent, 'start'), [], `wrote start for ${JSON.stringify(options)}`)
+    }
+  })
+
+  await checkAsync('loadFile passes language preferences through as strings', async () => {
+    const { player, sent } = fakePlayer()
+    startLoad(player, { audioLanguage: 'en', subtitleLanguage: 'fr' })
+    await settle()
+    assert.deepEqual(writesFor(sent, 'alang'), ['en'])
+    assert.deepEqual(writesFor(sent, 'slang'), ['fr'])
+  })
+
+  await checkAsync('loadFile refuses a URL that fails the SSRF guard', async () => {
+    const { player } = fakePlayer()
+    await assert.rejects(
+      () => player.loadFile('file:///C:/Windows/win.ini'),
+      /valid HTTPS media URL/
+    )
+  })
+
+  await checkAsync('a rejected command names which call failed', async () => {
+    const { player } = fakePlayer('error accessing property')
+    // The bare mpv string is useless alone — this is precisely why the original
+    // failure needed a reproduction harness to locate at all.
+    await assert.rejects(
+      () => player.set('start', 0),
+      /error accessing property \(mpv: set_property start 0\)/
+    )
+  })
+
+  console.log(`
+${pass} checks passed`)
+}
+
+void main()
