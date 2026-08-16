@@ -87,7 +87,8 @@ const RECONNECT_GRACE_MS = 500
  */
 function cacheRootDir(): string {
   const configured = readSettings().streamCacheDir
-  const base = typeof configured === 'string' && configured.trim() ? configured : app.getPath('userData')
+  const base =
+    typeof configured === 'string' && configured.trim() ? configured : app.getPath('userData')
   return path.join(base, 'stream-cache')
 }
 
@@ -252,6 +253,22 @@ export interface StreamCache {
   ): Promise<StreamCacheStartResult>
   /** Bare hex token of whatever session is currently loaded ('' when none) — lets the Downloads page's list/delete IPC handlers tell the live session apart from idle ones on disk (see listCacheSessions/deleteCacheSession below). */
   getActiveToken(): string
+  /**
+   * Supplies the media duration after start(), which is what the retention
+   * window needs to convert its behind/ahead *seconds* into bytes.
+   *
+   * This exists because the duration now arrives later than it used to. ffprobe
+   * ran against the remote link BEFORE the cache opened, so start() already had
+   * a duration; mpv only reports one once it has opened the file, which is
+   * after. Until this is called, bytesPerSecond() returns undefined and
+   * computeRetainedChunkIndices falls back to its fixed chunk-count window
+   * (see its `bytesPerSecond !== undefined` branches) — correct, just less
+   * precisely sized, and only for the second or two before the file loads.
+   *
+   * Ignores anything that isn't a real positive number, so a live stream (mpv
+   * reports no duration at all) simply leaves the fallback in place.
+   */
+  setDuration(durationSeconds: number | undefined): void
   /** Called before every ffmpeg restart (a seek/track/quality change) — proactively repositions the sequential fetch so the new position is ready by the time the restarted reader asks for it, instead of reacting only once the request itself lands. Best-effort/non-blocking by design. */
   seekHint(targetSeconds: number): void
   isOwnCacheUrl(url: string): boolean
@@ -626,7 +643,10 @@ export function createStreamCache({
   }
 
   function isNearFillFrontier(byte: number): boolean {
-    return byte >= fillFrontierByte - CHUNK_BYTES && byte <= fillFrontierByte + REPOSITION_THRESHOLD_BYTES
+    return (
+      byte >= fillFrontierByte - CHUNK_BYTES &&
+      byte <= fillFrontierByte + REPOSITION_THRESHOLD_BYTES
+    )
   }
 
   async function fetchTotalBytes(): Promise<number | null> {
@@ -777,7 +797,9 @@ export function createStreamCache({
   async function listen(): Promise<void> {
     if (server) return
     server = http.createServer((req, res) => {
-      const match = /^\/stream\/([a-f0-9]{64})$/.exec(new URL(req.url ?? '', 'http://127.0.0.1').pathname)
+      const match = /^\/stream\/([a-f0-9]{64})$/.exec(
+        new URL(req.url ?? '', 'http://127.0.0.1').pathname
+      )
       if (!match || match[1] !== token || !['GET', 'HEAD'].includes(req.method ?? '')) {
         res.writeHead(404, { 'cache-control': 'no-store' })
         res.end()
@@ -848,7 +870,8 @@ export function createStreamCache({
     // as Infinity here (not clamped to the floor) so squeezeForPressure's
     // cap comparison and the fullRetention check below both read naturally;
     // only actual free-disk-space pressure ever squeezes an unbounded cache.
-    maxBytes = inputMaxBytes === 0 ? Number.POSITIVE_INFINITY : Math.max(MIN_CACHE_BYTES, inputMaxBytes)
+    maxBytes =
+      inputMaxBytes === 0 ? Number.POSITIVE_INFINITY : Math.max(MIN_CACHE_BYTES, inputMaxBytes)
     downloadComplete = false
     behindSeconds = DEFAULT_BEHIND_SECONDS
     aheadSeconds = DEFAULT_AHEAD_SECONDS
@@ -1014,6 +1037,10 @@ export function createStreamCache({
   return {
     start,
     getActiveToken: () => token,
+    setDuration: (value: number | undefined) => {
+      const seconds = Number(value)
+      if (Number.isFinite(seconds) && seconds > 0) durationSeconds = seconds
+    },
     seekHint,
     isOwnCacheUrl,
     fullRetentionReady,

@@ -23,3 +23,9 @@ out
 .ai/screenshots/current/*.png
 .ai/screenshots/current/*.jpg
 preview-dist/
+
+# Bundled mpv player — fetched by scripts/fetch-mpv.ts on postinstall rather
+# than committed like resources/ffmpeg-win, because mpv ships as one ~114MB
+# statically linked binary and GitHub hard-rejects any file over 100MB. The
+# pinned tag + sha256 in that script is what makes this reproducible.
+resources/mpv-win/

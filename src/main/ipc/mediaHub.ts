@@ -20,7 +20,8 @@ import { registerDownloadGuardIpc } from '../media-hub/downloadGuard'
 import { registerMalIpc } from '../media-hub/malSync'
 import { registerNetworkIpc } from '../media-hub/network'
 import { registerOmdbIpc } from '../media-hub/omdb'
-import { registerPlaybackIpc } from '../media-hub/playbackSession'
+import { registerPlaybackIpc, subtitleCacheDir } from '../media-hub/playbackSession'
+import { registerPlayerIpc } from '../media-hub/playerBridge'
 import { registerProfilesIpc } from '../media-hub/profiles'
 import { registerSubtitlesIpc } from '../media-hub/subtitlesService'
 import { registerTorBoxIpc } from '../media-hub/torbox'
@@ -37,6 +38,10 @@ export function registerMediaHubIpc(): void {
   registerMalIpc()
   registerSubtitlesIpc()
   registerPlaybackIpc()
+  // Passed as a getter rather than a value: subtitleCacheDir() reads
+  // app.getPath('userData'), which is only valid once the app is ready, and it
+  // is the sole directory add-subtitle-file is allowed to load from.
+  registerPlayerIpc({ subtitleCacheDir })
   registerWatchPartyIpc()
   registerFriendsIpc()
   // A saved group reconnects on its own — a friends group is meant to be
