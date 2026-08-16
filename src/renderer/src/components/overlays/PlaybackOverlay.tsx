@@ -151,6 +151,20 @@ export function PlaybackOverlay() {
   // starts producing a response to react to.
   const [applyingQuality, setApplyingQuality] = useState(false)
   const [subtitleResults, setSubtitleResults] = useState<SubtitleResult[] | null>(null)
+  // Why the online-subtitle search failed, or null when it didn't. The
+  // search used to swallow its error and render the empty list as a plain
+  // "No results", which threw away the one thing worth saying: the message
+  // main actually sends back is "Connect SubDL or OpenSubtitles in Settings
+  // to search for subtitles." Someone who hadn't connected a provider yet
+  // (or whose key had gone stale) was shown a menu that looked like a
+  // genuine miss for that title, with the fix stated only in a log file
+  // they'd have no reason to open. Doubles as the retry flag — see
+  // searchSubtitles.
+  const [subtitleSearchError, setSubtitleSearchError] = useState<string | null>(null)
+  // Re-entrancy guard for searchSubtitles. A ref, not state: it only has to
+  // stop a second in-flight search (the menu is a toggle and is easy to
+  // reopen mid-request), and nothing renders off it.
+  const subtitleSearchInFlightRef = useRef(false)
   // Which search result's id applySubtitle() is currently downloading and
   // converting — display only, but a real gap without it: unlike the
   // embedded-subtitle path (extractingSubtitleOrdinal) and audio track
@@ -1213,15 +1227,31 @@ export function PlaybackOverlay() {
   async function searchSubtitles() {
     if (!playbackMedia) return
     setOpenMenu('subtitles')
-    if (subtitleResults) return
+    // Only a search that actually SUCCEEDED is cached for the rest of the
+    // title. A failed one used to be cached too — `[]` is truthy, so the
+    // old `if (subtitleResults) return` pinned the menu to "No results"
+    // permanently. That is what makes "connect SubDL in Settings" appear
+    // not to work: the person does exactly what the error told them, comes
+    // back to the same still-playing title, and the menu never asks again.
+    // Reopening it after a failure now retries.
+    if (subtitleResults && !subtitleSearchError) return
+    if (subtitleSearchInFlightRef.current) return
+    subtitleSearchInFlightRef.current = true
+    setSubtitleSearchError(null)
+    setSubtitleResults(null)
     try {
       const results = await window.api?.mediaHub?.subtitles.search(
         { id: playbackMedia.id, type: kind, title: playbackMedia.title },
         { season: playbackMedia.seasonNumber, episode: playbackMedia.episodeNumber }
       )
       setSubtitleResults(results ?? [])
-    } catch {
+    } catch (error) {
       setSubtitleResults([])
+      setSubtitleSearchError(
+        error instanceof Error ? error.message : 'Could not search for subtitles.'
+      )
+    } finally {
+      subtitleSearchInFlightRef.current = false
     }
   }
 
@@ -2103,10 +2133,20 @@ export function PlaybackOverlay() {
                     spends one of a free account's five daily downloads,
                     a SubDL row costs nothing. */}
                 <div className={styles.playerMenuHeading}>Online subtitles</div>
-                {subtitleResults === null && (
+                {/* The real reason, not "No results" — the difference
+                    between "this title has no match" and "no provider is
+                    connected", which are the same picture otherwise. The
+                    menu retries on the next open, so this is actionable
+                    rather than terminal. */}
+                {subtitleSearchError && (
+                  <span className={styles.playerMenuItem} title={subtitleSearchError}>
+                    {subtitleSearchError}
+                  </span>
+                )}
+                {!subtitleSearchError && subtitleResults === null && (
                   <span className={styles.playerMenuItem}>Searching…</span>
                 )}
-                {subtitleResults?.length === 0 && (
+                {!subtitleSearchError && subtitleResults?.length === 0 && (
                   <span className={styles.playerMenuItem}>No results</span>
                 )}
                 {subtitleResults?.map((s) => (

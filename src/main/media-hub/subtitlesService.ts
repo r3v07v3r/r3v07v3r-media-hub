@@ -316,7 +316,9 @@ export function registerSubtitlesIpc(): void {
       const item = payload?.item || {}
       const playback = { ...payload?.playback, language }
 
-      if (!subdlConnected() && !osConnected()) {
+      const subdlOn = subdlConnected()
+      const osOn = osConnected()
+      if (!subdlOn && !osOn) {
         throw new Error('Connect SubDL or OpenSubtitles in Settings to search for subtitles.')
       }
 
@@ -325,10 +327,10 @@ export function registerSubtitlesIpc(): void {
       // a menu the other could still fill. A provider that is not connected
       // simply contributes nothing.
       const [subdlOutcome, osOutcome] = await Promise.allSettled([
-        subdlConnected()
+        subdlOn
           ? subdlSearch(subdlCredentials().apiKey, item, playback)
           : Promise.resolve<SubtitleResult[]>([]),
-        osConnected()
+        osOn
           ? (async () => {
               const params = buildSearchParams(item, playback)
               const query = new URLSearchParams(
@@ -348,8 +350,20 @@ export function registerSubtitlesIpc(): void {
       if (osOutcome.status === 'rejected') {
         logError('media-hub:subtitles:opensubtitles', osOutcome.reason)
       }
-      if (subdlOutcome.status === 'rejected' && osOutcome.status === 'rejected') {
-        throw subdlOutcome.reason
+
+      // Raised only when every CONNECTED provider failed — counting the
+      // not-connected one's resolved [] as a success would mask the real
+      // failure. That is not hypothetical: with only SubDL connected (the
+      // setup this provider exists to make viable), a bad key, an outage or
+      // a rate-limit came back as a bare "No results" in the menu while the
+      // actual reason went only to logs/media-hub.log, which is exactly the
+      // dead end that made "SubDL isn't loading" impossible to act on.
+      const failures = [
+        subdlOn && subdlOutcome.status === 'rejected' ? subdlOutcome.reason : undefined,
+        osOn && osOutcome.status === 'rejected' ? osOutcome.reason : undefined
+      ].filter((reason) => reason !== undefined)
+      if (failures.length === Number(subdlOn) + Number(osOn)) {
+        throw failures[0]
       }
 
       return mergeSubtitleResults(
