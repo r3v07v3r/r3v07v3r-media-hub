@@ -479,6 +479,26 @@ function forwardUiEvent(event: PlayerUiEvent): void {
     if (event.interactive) raisePlayerOverlay()
     return
   }
+  // The party panel renders in the MAIN window, which the video window covers:
+  // mpv is always-on-top and sized over the app's content area, so anything the
+  // main window draws during playback is invisible and unclickable. Opening the
+  // panel therefore has to hand the front to the app, and closing it gives the
+  // front back. This applies to any main-window UI reached from the player, not
+  // just this panel.
+  if (event.type === 'set-party-panel-open' && event.open) {
+    void player.set('ontop', false).catch(() => {})
+    const mainWindow = getActiveWindow()
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.moveTop()
+      mainWindow.focus()
+    }
+  }
+  if (event.type === 'party-panel-closed') {
+    void player.set('ontop', true).catch(() => {})
+    raiseOverlaySoon()
+    return
+  }
+
   // Everything else belongs to the main window's own React state, which this
   // process cannot touch — hand it over verbatim.
   sendToRenderer(MEDIA_HUB_CHANNELS.playerUiEvent, event)

@@ -445,7 +445,12 @@ function PlayerControls() {
             aria-label="Volume"
           />
 
-          {audioTracks.length > 1 && (
+          {/* Shown whenever the title has any audio at all, not only when it
+              has a choice. Hiding it for single-track files makes "this film has
+              one track" look identical to "the track list is broken", which is
+              exactly the doubt it caused. With one track the menu simply lists
+              that one, ticked. */}
+          {audioTracks.length > 0 && (
             <div className={styles.menuWrap}>
               <button
                 type="button"

@@ -126,6 +126,10 @@ export type PlayerUiEvent =
   | { type: 'refresh-watch-status' }
   | { type: 'notify'; tone: 'info' | 'error' | 'success'; message: string }
   | { type: 'set-party-panel-open'; open: boolean }
+  /** Main window -> main: the party panel has been closed, so the video can go
+   *  back on top. See playerBridge's handling of set-party-panel-open for why
+   *  the video has to be lowered at all. */
+  | { type: 'party-panel-closed' }
   /** Whether the overlay currently wants mouse input. False makes the window
    *  click-through so the video underneath receives the events instead — see
    *  playerWindow.ts's setOverlayInteractive. */
