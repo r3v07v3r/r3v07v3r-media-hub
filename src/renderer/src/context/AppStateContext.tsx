@@ -1182,6 +1182,21 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   // mark-watched in particular stays on this side because it needs the full
   // MediaItem to build its trackable payload, and that record lives here —
   // shipping it across the boundary and back would be strictly worse.
+  // Tells main the party panel has closed so the video can go back on top.
+  // Opening it lowered the video deliberately — mpv is always-on-top over this
+  // window's content area, so anything drawn here during playback is invisible
+  // and unclickable, which is why the Party button appeared to do nothing.
+  // Only fires while something is playing; outside playback there is nothing
+  // covering anything.
+  const partyPanelWasOpen = useRef(false)
+  useEffect(() => {
+    const wasOpen = partyPanelWasOpen.current
+    partyPanelWasOpen.current = partyPanelOpen
+    if (wasOpen && !partyPanelOpen && playbackMedia) {
+      window.api?.mediaHub?.player?.uiEvent({ type: 'party-panel-closed' }).catch(() => {})
+    }
+  }, [partyPanelOpen, playbackMedia])
+
   // Held in refs, not dependencies: refreshWatchStatus's identity changes
   // whenever the home feed or watched-ids query refreshes, and re-subscribing
   // the IPC listener on every one of those would drop events raised in the gap.
