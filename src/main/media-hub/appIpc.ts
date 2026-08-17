@@ -351,6 +351,21 @@ export function registerAppIpc(): void {
     return { fullScreen: win.isFullScreen() }
   })
 
+  // Leaves fullscreen and reports whether there was any to leave.
+  //
+  // Separate from the toggle above because Escape needs to know the difference:
+  // it exits fullscreen if there is one and closes the title otherwise, and
+  // asking a toggle to do that would mean deciding from the renderer's cached
+  // idea of the current state. Escape is the key people press when something
+  // has already gone wrong, so it must not be able to *enter* fullscreen
+  // because that cache was a frame stale.
+  handle<undefined, { wasFullScreen: boolean }>(MEDIA_HUB_CHANNELS.windowExitFullscreen, () => {
+    const win = getActiveWindow()
+    if (!win || win.isDestroyed() || !win.isFullScreen()) return { wasFullScreen: false }
+    win.setFullScreen(false)
+    return { wasFullScreen: true }
+  })
+
   // The player overlay is created mid-session and can therefore open into an
   // already-fullscreen window, so it reads the state once on mount rather than
   // assuming windowed and waiting for a change event that may never come.

@@ -40,6 +40,9 @@ const SCRUB_PREVIEW_WIDTH = 160
 /** How far a manual subtitle offset can be nudged per press. mpv applies it
  *  live; there is no re-render of anything. */
 const SUBTITLE_DELAY_STEP = 0.25
+/** How long a click on the picture waits to find out whether it is really the
+ *  first half of a double-click, which means fullscreen rather than play/pause. */
+const DOUBLE_CLICK_GRACE_MS = 220
 
 type Menu = 'audio' | 'subtitles' | 'fit' | null
 
@@ -195,6 +198,78 @@ function PlayerControls() {
     return api.onFullscreenChange(({ fullScreen: next }) => setFullScreen(next))
   }, [])
 
+  // Escape leaves fullscreen first, and only closes the title when there was no
+  // fullscreen to leave — so one press is never both.
+  //
+  // The decision is asked of main rather than read from `fullScreen` above.
+  // That state is accurate within a frame or two, but Escape is the key someone
+  // presses when something has already gone wrong, and answering from a stale
+  // cache could make it *enter* fullscreen instead. Anything that goes wrong on
+  // the way still closes the player, because a dead Escape is the one outcome
+  // that must not happen — see playerBridge's r3-stop for the same rule applied
+  // when mpv's window holds the focus instead of this one.
+  const handleEscape = useCallback(() => {
+    const api = window.api?.mediaHub?.window
+    if (!api) {
+      closePlayer()
+      return
+    }
+    api
+      .exitFullscreen()
+      .then(({ wasFullScreen }) => {
+        if (!wasFullScreen) closePlayer()
+      })
+      .catch(() => closePlayer())
+  }, [closePlayer])
+
+  // Click the picture to play/pause.
+  //
+  // Deferred rather than immediate, because double-clicking the picture already
+  // means fullscreen: without the grace period every trip to fullscreen would
+  // pause the film on the way. `detail > 1` is the second click of that pair
+  // arriving — it cancels the toggle this handler queued on the first one and
+  // leaves the double-click handler to do its work alone.
+  //
+  // This covers clicks while the controls are up. When they are hidden the
+  // window is click-through and the click reaches mpv instead, which is what
+  // its MBTN_LEFT binding is for (see mpv.ts's bindSafetyKeys).
+  const clickTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(
+    () => () => {
+      if (clickTimer.current) clearTimeout(clickTimer.current)
+    },
+    []
+  )
+  const handleSurfaceClick = useCallback(
+    (event: React.MouseEvent<HTMLDivElement>) => {
+      // The picture only. Clicks on the controls bar bubble up to here too, and
+      // the play button toggling twice per press is not a subtle bug. Locked
+      // party followers need no check — togglePlay already ignores them.
+      if (event.target !== event.currentTarget) return
+      if (clickTimer.current) {
+        clearTimeout(clickTimer.current)
+        clickTimer.current = null
+      }
+      if (event.detail > 1) return
+      clickTimer.current = setTimeout(() => {
+        clickTimer.current = null
+        party.togglePlay()
+      }, DOUBLE_CLICK_GRACE_MS)
+    },
+    [party]
+  )
+
+  // Fullscreen on double-click, under the same picture-only rule — this handler
+  // has always been on the surface, so before that rule an impatient
+  // double-press on any control threw the window into fullscreen.
+  const handleSurfaceDoubleClick = useCallback(
+    (event: React.MouseEvent<HTMLDivElement>) => {
+      if (event.target !== event.currentTarget) return
+      toggleFullscreen()
+    },
+    [toggleFullscreen]
+  )
+
   useEffect(() => {
     function onKey(event: KeyboardEvent): void {
       if (event.key === ' ') {
@@ -209,13 +284,13 @@ function PlayerControls() {
       } else if (event.key === 'f') {
         toggleFullscreen()
       } else if (event.key === 'Escape') {
-        closePlayer()
+        handleEscape()
       }
       revealControls()
     }
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
-  }, [party, seekTo, timePos, toggleFullscreen, closePlayer, revealControls])
+  }, [party, seekTo, timePos, toggleFullscreen, handleEscape, revealControls])
 
   // --- Skip intro/credits (anime only) -------------------------------------
   // Needs a real duration: Aniskip matches submissions by proximity to episode
@@ -370,7 +445,12 @@ function PlayerControls() {
   const activeSubtitleOrdinal = state.subtitleOrdinal ?? -1
 
   return (
-    <div className={styles.surface} onMouseMove={revealControls} onDoubleClick={toggleFullscreen}>
+    <div
+      className={styles.surface}
+      onMouseMove={revealControls}
+      onClick={handleSurfaceClick}
+      onDoubleClick={handleSurfaceDoubleClick}
+    >
       {buffering && (
         <div className={styles.buffering} aria-live="polite">
           <span className={styles.spinner} aria-hidden="true" />

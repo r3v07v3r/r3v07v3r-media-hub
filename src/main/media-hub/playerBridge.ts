@@ -176,10 +176,21 @@ async function attachObservers(): Promise<void> {
   player.on('client-message', (msg) => {
     const args = Array.isArray(msg.args) ? (msg.args as unknown[]) : []
     switch (String(args[0] ?? '')) {
-      case 'r3-stop':
+      case 'r3-stop': {
+        // Escape leaves fullscreen before it closes anything, so one press is
+        // never both. The overlay's own Escape follows the same rule via
+        // window:exit-fullscreen — this is the copy for when mpv's window has
+        // the focus instead, and the two must not disagree or Escape would mean
+        // different things depending on which window happened to be focused.
+        const mainWindow = getActiveWindow()
+        if (mainWindow && !mainWindow.isDestroyed() && mainWindow.isFullScreen()) {
+          mainWindow.setFullScreen(false)
+          return
+        }
         // Same path the overlay's close button takes.
         sendToRenderer(MEDIA_HUB_CHANNELS.playerUiEvent, { type: 'stop-playback', watched: false })
         return
+      }
       case 'r3-toggle-pause':
         void runCommand({ type: 'toggle-pause' }).catch(() => {})
         return

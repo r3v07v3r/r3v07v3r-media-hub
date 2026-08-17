@@ -160,6 +160,7 @@ export const MEDIA_HUB_CHANNELS = {
 
   // Window
   windowToggleFullscreen: 'mediahub:window:toggle-fullscreen',
+  windowExitFullscreen: 'mediahub:window:exit-fullscreen',
   windowIsFullscreen: 'mediahub:window:is-fullscreen',
   windowFullscreenChanged: 'mediahub:window:fullscreen-changed', // push event
 
