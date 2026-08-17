@@ -40,9 +40,6 @@ const SCRUB_PREVIEW_WIDTH = 160
 /** How far a manual subtitle offset can be nudged per press. mpv applies it
  *  live; there is no re-render of anything. */
 const SUBTITLE_DELAY_STEP = 0.25
-/** How long a click on the picture waits to find out whether it is really the
- *  first half of a double-click, which means fullscreen rather than play/pause. */
-const DOUBLE_CLICK_GRACE_MS = 220
 
 type Menu = 'audio' | 'subtitles' | 'fit' | null
 
@@ -222,52 +219,53 @@ function PlayerControls() {
       .catch(() => closePlayer())
   }, [closePlayer])
 
-  // Click the picture to play/pause.
+  // Click the picture to play/pause; double-click it for fullscreen.
   //
-  // Deferred rather than immediate, because double-clicking the picture already
-  // means fullscreen: without the grace period every trip to fullscreen would
-  // pause the film on the way. `detail > 1` is the second click of that pair
-  // arriving — it cancels the toggle this handler queued on the first one and
-  // leaves the double-click handler to do its work alone.
+  // The two gestures share a button, so the first click of a double-click is
+  // indistinguishable from a single one until the second either arrives or
+  // doesn't. This toggles immediately and lets the double-click handler put
+  // playback back, rather than holding the toggle until a double-click is ruled
+  // out. Deferring is the more obvious design and it cannot be made correct
+  // here: the deadline it needs is the platform's double-click interval, which
+  // is user-configurable (500ms by default on Windows) and not readable from a
+  // renderer. Any fixed guess shorter than it fires the toggle before the
+  // second click lands — so a plain double-click both pauses the film and goes
+  // fullscreen — and any guess long enough to be safe is a visible lag on every
+  // single click, which is the whole point of clicking the picture.
   //
-  // This covers clicks while the controls are up. When they are hidden the
-  // window is click-through and the click reaches mpv instead, which is what
-  // its MBTN_LEFT binding is for (see mpv.ts's bindSafetyKeys).
-  const clickTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
-  useEffect(
-    () => () => {
-      if (clickTimer.current) clearTimeout(clickTimer.current)
-    },
-    []
-  )
+  // Toggling twice leaves playback exactly where it started, costs one brief
+  // pause during a gesture that is about to redraw the whole window anyway, and
+  // stays coherent for a watch party: both toggles broadcast, so everyone ends
+  // up in the same state rather than the host alone.
+  //
+  // All of this covers clicks while the controls are up. When they are hidden
+  // the window is click-through and the click reaches mpv instead, which is
+  // what its MBTN_LEFT binding is for (see mpv.ts's bindSafetyKeys).
   const handleSurfaceClick = useCallback(
     (event: React.MouseEvent<HTMLDivElement>) => {
       // The picture only. Clicks on the controls bar bubble up to here too, and
       // the play button toggling twice per press is not a subtle bug. Locked
       // party followers need no check — togglePlay already ignores them.
       if (event.target !== event.currentTarget) return
-      if (clickTimer.current) {
-        clearTimeout(clickTimer.current)
-        clickTimer.current = null
-      }
+      // The second click of a double-click, which the handler below owns.
       if (event.detail > 1) return
-      clickTimer.current = setTimeout(() => {
-        clickTimer.current = null
-        party.togglePlay()
-      }, DOUBLE_CLICK_GRACE_MS)
+      party.togglePlay()
     },
     [party]
   )
 
-  // Fullscreen on double-click, under the same picture-only rule — this handler
-  // has always been on the surface, so before that rule an impatient
-  // double-press on any control threw the window into fullscreen.
+  // Same picture-only rule — this handler has always been on the surface, so
+  // before that rule an impatient double-press on any control threw the window
+  // into fullscreen.
   const handleSurfaceDoubleClick = useCallback(
     (event: React.MouseEvent<HTMLDivElement>) => {
       if (event.target !== event.currentTarget) return
+      // Undoes the toggle the first click of this pair already made: the
+      // gesture was "fullscreen", not "pause, then fullscreen".
+      party.togglePlay()
       toggleFullscreen()
     },
-    [toggleFullscreen]
+    [party, toggleFullscreen]
   )
 
   useEffect(() => {
