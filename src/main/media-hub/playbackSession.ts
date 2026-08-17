@@ -36,9 +36,15 @@ import type {
   SubtitlesApplyResult
 } from '../../shared/media-hub/types'
 import { handle } from './ipcGuard'
+import { getPlaybackBufferSeconds } from '../../shared/media-hub/playbackBuffer'
 import { reportPreparation } from './playbackProgress'
 import { captureThumbnail, findMpv } from './mpv'
-import { addSubtitleFileToPlayer, startPlayerSession, stopPlayerSession } from './playerBridge'
+import {
+  addSubtitleFileToPlayer,
+  pushSessionSnapshot,
+  startPlayerSession,
+  stopPlayerSession
+} from './playerBridge'
 import { readSettings } from './settingsStore'
 import {
   clearAllSessions,
@@ -65,11 +71,10 @@ export function hasActivePlayback(): boolean {
 }
 
 // The sole owner of the upstream connection to the current title's remote
-// link (see streamCache.ts's own header comment). Both playback modes now
-// read from its local cache server: the embedded player opens it directly,
-// and the <video> element directly in direct mode — there is no longer a
-// "direct proxy vs ffmpeg" connection-swap to coordinate, since neither of
-// them ever touches the remote link themselves anymore.
+// link (see streamCache.ts's own header comment). Everything downstream reads
+// from its local cache server — the player itself, and the throwaway mpv
+// process that captures scrub-bar thumbnails — so the remote link is opened
+// exactly once no matter what else needs bytes.
 const streamCache = createStreamCache()
 // Disk-hygiene backstop for a title that was closed before being marked
 // watched (its cache is deliberately left in place for a likely near-term
@@ -121,16 +126,13 @@ function clearActiveSubtitle(): void {
 }
 
 /**
- * Probes `url` and starts embedded playback for it: either directly (the
- * <video> element reading straight from StreamCache's local cache server)
- * or, by transcoding through ffmpeg (also reading from that same local
- * server, never the remote link itself) — always audio when the source's
- * audio codec isn't browser-compatible, and (opt-in, see Settings > More
- * Options' "Convert incompatible video") video too when the source's video
- * codec is one Chromium can't reliably decode and a real hardware encoder
- * is actually available on this machine (see vlc.ts's detectVideoEncoder —
- * never falls back to a software encoder). Also used by torbox.ts's
- * play:stream/library:play handlers.
+ * Starts playback of `url`: opens a StreamCache session for it and hands that
+ * cache's local server to the embedded player, which demuxes and decodes it
+ * directly. Also used by torbox.ts's play:stream/library:play handlers.
+ *
+ * There is no codec decision here anymore. The old version probed the file and
+ * branched into an ffmpeg transcode whenever Chromium could not decode its
+ * audio — which was most real releases — see this file's header.
  */
 export async function preparePlayback(
   url: string,
@@ -190,6 +192,34 @@ export async function preparePlayback(
   // Now that mpv has opened the file, hand its duration to the cache so the
   // retention window can size itself in bytes rather than chunk counts.
   streamCache.setDuration(tracks.durationSeconds)
+
+  // Tell the overlay window what it is playing. Its own state channel only
+  // carries mpv's properties — position, tracks, cache state — none of which
+  // say which title this is, so without this the control bar has a real
+  // scrubber above a blank name. `cacheMeta` already carries exactly these
+  // fields because the Downloads page lists cached sessions by them.
+  pushSessionSnapshot({
+    media: cacheMeta
+      ? {
+          id: cacheMeta.catalogId ?? '',
+          title: cacheMeta.title,
+          kind: cacheMeta.mediaKind ?? 'movie',
+          seasonNumber: cacheMeta.seasonNumber,
+          episodeNumber: cacheMeta.episodeNumber,
+          posterUrl: cacheMeta.posterUrl
+        }
+      : null,
+    tracks: activeMediaTracks,
+    // Resume is applied by the overlay itself (seeks are in-place now), so this
+    // is informational rather than something to act on.
+    resumeSeconds: 0,
+    settings: {
+      bufferSeconds: getPlaybackBufferSeconds(settings.playbackBuffer),
+      autoSubtitlesEnabled: settings.autoSubtitlesEnabled !== false,
+      subtitleLanguage: settings.subtitleLanguage || 'en',
+      audioLanguage: settings.audioLanguage || 'en'
+    }
+  })
 
   return {
     ok: true,

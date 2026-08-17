@@ -204,6 +204,8 @@ interface PendingRequest {
   resolve: (value: unknown) => void
   reject: (error: Error) => void
   timer: NodeJS.Timeout
+  /** The request this is waiting on, for error messages — see dispatch(). */
+  description: string
 }
 
 export interface MpvSpawnOptions {
@@ -350,8 +352,16 @@ export class MpvPlayer {
       this.pending.delete(requestId)
       clearTimeout(entry.timer)
       const error = message.error
-      if (typeof error === 'string' && error !== 'success') entry.reject(new Error(error))
-      else entry.resolve(message.data)
+      if (typeof error === 'string' && error !== 'success') {
+        // mpv's error strings name the failure mode but never the call —
+        // "error accessing property" is what you get for a bad value on ANY of
+        // them, with no clue which. That cost a full reproduction harness to
+        // pin down once already; the request is echoed back into the message so
+        // the next one is readable straight from the log.
+        entry.reject(new Error(`${error} (mpv: ${entry.description})`))
+      } else {
+        entry.resolve(message.data)
+      }
       return
     }
     if (message.event === 'property-change') {
@@ -376,16 +386,22 @@ export class MpvPlayer {
   command<T = unknown>(...args: Array<string | number | boolean>): Promise<T> {
     const socket = this.socket
     if (!socket) return Promise.reject(new Error('The player is not running.'))
+    // e.g. `set_property start 0` — enough to identify the call in a log
+    // without dumping a whole track-list into the line.
+    const description = args
+      .map((arg) => (typeof arg === 'string' ? arg : JSON.stringify(arg)))
+      .join(' ')
     return new Promise<T>((resolve, reject) => {
       const id = this.nextId++
       const timer = setTimeout(() => {
         this.pending.delete(id)
-        reject(new Error(`Player command timed out: ${String(args[0])}`))
+        reject(new Error(`Player command timed out: ${description}`))
       }, COMMAND_TIMEOUT_MS)
       this.pending.set(id, {
         resolve: resolve as (value: unknown) => void,
         reject,
-        timer
+        timer,
+        description
       })
       socket.write(`${JSON.stringify({ command: args, request_id: id })}\n`)
     })
@@ -444,10 +460,20 @@ export class MpvPlayer {
     assertPlayableUrl(url)
     if (audioLanguage) await this.set('alang', audioLanguage)
     if (subtitleLanguage) await this.set('slang', subtitleLanguage)
-    await this.set(
-      'start',
-      Number.isFinite(startSeconds) && (startSeconds as number) > 0 ? (startSeconds as number) : 0
-    )
+    // `start` MUST be written as a string, and only when there is somewhere to
+    // start from.
+    //
+    // It is one of mpv's *time*-typed options, and over JSON IPC those accept a
+    // string ("0", "90", "00:01:30") and reject a number outright with
+    // MPV_ERROR_PROPERTY_ERROR — whose message is the distinctly unhelpful
+    // "error accessing property", naming neither the property nor the reason.
+    // Writing it as a number failed every single loadFile, so no title played at
+    // all. (mpv agrees it is a string: `get_property start` returns "120", not
+    // 120.) Skipping the write entirely at 0 also avoids setting an option that
+    // says nothing — the default is already "play from the beginning".
+    if (Number.isFinite(startSeconds) && (startSeconds as number) > 0) {
+      await this.set('start', String(startSeconds))
+    }
     const loaded = this.once('file-loaded', 60000)
     await this.command('loadfile', url, 'replace')
     await loaded
