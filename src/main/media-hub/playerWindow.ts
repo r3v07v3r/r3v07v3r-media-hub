@@ -1,11 +1,11 @@
 // The transparent control surface layered over mpv's native video window.
 //
-// WHY A SECOND WINDOW. mpv is embedded into the main window via --wid, and on
-// Windows a native child window always composites above Chromium's web
-// content. There is no per-region transparency that would let the existing
-// React player UI draw on top of it inside one window. So the controls move to
-// their own frameless, transparent, always-on-top BrowserWindow whose bounds
-// track the main window's.
+// WHY A SECOND WINDOW. mpv draws into its own borderless, always-on-top window
+// sitting over the app's content area (see mpv.ts's WINDOWING note on why it is
+// not embedded with --wid). Nothing can be painted over that from inside the
+// main window, so the controls live here: a frameless, transparent,
+// always-on-top BrowserWindow whose bounds track the main window's, raised to a
+// higher always-on-top level than mpv so it reliably wins the z-order.
 //
 // The obvious worry with that shape is cost: Electron transparent overlays on
 // Windows have a reputation for flicker and for throttling whatever renders
@@ -44,11 +44,11 @@ export function sendToPlayerOverlay(channel: string, payload?: unknown): void {
 }
 
 /**
- * The overlay covers the main window's *content* area, not its outer frame:
- * mpv is embedded into the same client area via --wid, so anything else leaves
- * the controls offset from the picture they belong to. Measured during the
- * embedding spike, the two differ by the frame and menu-bar allowance, which
- * is exactly what getContentBounds accounts for and getBounds does not.
+ * The overlay covers the main window's *content* area, not its outer frame —
+ * the same rectangle mpv's window is positioned to, so the controls line up
+ * with the picture they belong to. The two differ by the frame and menu-bar
+ * allowance, which is exactly what getContentBounds accounts for and getBounds
+ * does not.
  */
 function contentBoundsOf(win: BrowserWindow): Electron.Rectangle {
   return win.getContentBounds()
@@ -117,6 +117,10 @@ export function openPlayerOverlay(parent: BrowserWindow): BrowserWindow {
     }
   })
   overlayWindow = win
+  // mpv's own window is also always-on-top (see mpv.ts's WINDOWING note), so a
+  // plain topmost flag is not enough to guarantee the controls sit above the
+  // video — both would be in the same band. A higher level wins outright.
+  win.setAlwaysOnTop(true, 'pop-up-menu')
 
   // The same navigation and permission guards the main window applies. Without
   // these, this window would be the weakest link of the two.
@@ -153,9 +157,9 @@ export function openPlayerOverlay(parent: BrowserWindow): BrowserWindow {
   const onBoundsChange = (): void => mirrorBounds()
   parent.on('resize', onBoundsChange)
   parent.on('move', onBoundsChange)
-  // Fullscreen is real OS-level BrowserWindow fullscreen (see appIpc.ts), and
-  // mpv follows it automatically as a child of the main window. The overlay is
-  // a separate top-level window, so it does not — it has to be told.
+  // Fullscreen is real OS-level BrowserWindow fullscreen (see appIpc.ts).
+  // Neither mpv's window nor this one is a child of the main window, so both
+  // have to be told; playerBridge.ts's trackWindow does the same for mpv.
   parent.on('enter-full-screen', onBoundsChange)
   parent.on('leave-full-screen', onBoundsChange)
   // The bounds are wrong for a frame or two immediately after a fullscreen
