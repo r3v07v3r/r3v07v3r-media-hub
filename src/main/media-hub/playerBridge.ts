@@ -186,7 +186,7 @@ export async function startPlayerSession(
       )
     }
     await player.start(mpvPath, {
-      wid: nativeWindowId(mainWindow),
+      bounds: mainWindow.getContentBounds(),
       onLog: (chunk) => {
         const line = chunk.trim()
         if (line) logError('mpv:stderr', line)
@@ -194,6 +194,7 @@ export async function startPlayerSession(
     })
     await attachObservers()
   }
+  trackWindow(mainWindow)
 
   openPlayerOverlay(mainWindow)
   await player.loadFile(url, {
@@ -212,6 +213,7 @@ export async function startPlayerSession(
  *  is also what destroys mpv's embedded video window, which is what makes the
  *  app UI behind it visible again. */
 export async function stopPlayerSession(): Promise<void> {
+  untrackWindow?.()
   pendingPatch = {}
   if (flushTimer) {
     clearTimeout(flushTimer)
@@ -247,10 +249,54 @@ export async function addSubtitleFileToPlayer(filePath: string): Promise<number>
   return ordinalForMpvTrackId(sid)
 }
 
-/** Windows: the decimal HWND mpv's --wid expects. Read unsigned because mpv is
- *  documented to assume a positive window id (mpv#10189). */
-function nativeWindowId(win: BrowserWindow): string {
-  return win.getNativeWindowHandle().readBigUInt64LE(0).toString()
+/**
+ * Keeps mpv's window glued to the app's content area.
+ *
+ * mpv is not embedded — it owns a borderless always-on-top window (see mpv.ts's
+ * WINDOWING note on why embedding does not work), which means nothing moves it
+ * for us. Every way the app window can change shape has to be mirrored, and it
+ * has to be hidden when the app is not on screen, or an always-on-top video
+ * window would sit over whatever the person switched to.
+ */
+let untrackWindow: (() => void) | null = null
+
+function trackWindow(mainWindow: BrowserWindow): void {
+  if (untrackWindow) return
+  const sync = (): void => {
+    if (mainWindow.isDestroyed()) return
+    void player.setBounds(mainWindow.getContentBounds())
+  }
+  // Fullscreen transitions report their final bounds a frame or two late on
+  // Windows, so re-sync once they have settled rather than trying to predict.
+  const syncSettled = (): void => {
+    setTimeout(sync, 120)
+  }
+  const hide = (): void => void player.setWindowVisible(false)
+  const show = (): void => {
+    void player.setWindowVisible(true)
+    sync()
+  }
+
+  mainWindow.on('resize', sync)
+  mainWindow.on('move', sync)
+  mainWindow.on('enter-full-screen', syncSettled)
+  mainWindow.on('leave-full-screen', syncSettled)
+  mainWindow.on('minimize', hide)
+  mainWindow.on('restore', show)
+  mainWindow.on('hide', hide)
+  mainWindow.on('show', show)
+
+  untrackWindow = () => {
+    mainWindow.off('resize', sync)
+    mainWindow.off('move', sync)
+    mainWindow.off('enter-full-screen', syncSettled)
+    mainWindow.off('leave-full-screen', syncSettled)
+    mainWindow.off('minimize', hide)
+    mainWindow.off('restore', show)
+    mainWindow.off('hide', hide)
+    mainWindow.off('show', show)
+    untrackWindow = null
+  }
 }
 
 // ---------------------------------------------------------------------------

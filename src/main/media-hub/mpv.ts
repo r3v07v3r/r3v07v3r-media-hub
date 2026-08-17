@@ -208,11 +208,24 @@ interface PendingRequest {
   description: string
 }
 
+/** Screen rectangle for mpv's own window, in physical pixels. */
+export interface MpvBounds {
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
 export interface MpvSpawnOptions {
-  /** Native window handle to embed into. Windows: the decimal HWND. */
-  wid?: string
+  /** Where to put mpv's window on screen. See the WINDOWING note on start(). */
+  bounds?: MpvBounds
   onLog?: (line: string) => void
   spawnImpl?: typeof spawn
+}
+
+function geometryFor(bounds: MpvBounds): string {
+  // mpv's own format: WxH+X+Y, all integers.
+  return `${Math.round(bounds.width)}x${Math.round(bounds.height)}+${Math.round(bounds.x)}+${Math.round(bounds.y)}`
 }
 
 const COMMAND_TIMEOUT_MS = 15000
@@ -243,7 +256,7 @@ export class MpvPlayer {
     if (!mpvPath) throw new Error('Playback is unavailable (mpv not found).')
     if (this.running) return
 
-    const { wid, onLog, spawnImpl = spawn } = options
+    const { bounds, onLog, spawnImpl = spawn } = options
     this.onLog = onLog ?? (() => {})
     this.pipeName = `r3-media-hub-mpv-${crypto.randomBytes(12).toString('hex')}`
 
@@ -269,6 +282,23 @@ export class MpvPlayer {
       '--osc=no',
       '--osd-level=0',
       '--hwdec=auto-safe',
+      // WINDOWING. mpv gets its OWN borderless, always-on-top window, sized and
+      // positioned over the app's content area — it is NOT embedded with --wid.
+      //
+      // Embedding was the original design and it does not work. mpv's child
+      // window renders BEHIND Chromium's content surface, so a title played
+      // with audio and a correct clock and no picture at all. Worth being
+      // precise about why that got shipped: the check that "verified" embedding
+      // read mpv's own `current-vo` and `osd-width` properties, which describe
+      // mpv's internal state and say nothing about whether its pixels reach the
+      // screen. A screenshot settles it in one look; two property reads do not.
+      //
+      // --focus-on=never keeps this window from stealing focus from the app,
+      // and the controls overlay is raised above it by window level (see
+      // playerWindow.ts).
+      '--no-border',
+      '--ontop',
+      '--focus-on=never',
       // StreamCache already owns the real buffer and the single upstream
       // connection to the debrid link; mpv only needs a modest readahead on top
       // of the local loopback server, and must not duplicate it onto disk.
@@ -276,7 +306,7 @@ export class MpvPlayer {
       '--cache-on-disk=no',
       '--msg-level=all=warn'
     ]
-    if (wid) args.push(`--wid=${wid}`)
+    if (bounds) args.push(`--geometry=${geometryFor(bounds)}`)
 
     const child = spawnImpl(mpvPath, args, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] })
     this.child = child
@@ -479,8 +509,24 @@ export class MpvPlayer {
     await loaded
   }
 
-  /** Unloads the current file, which is also what destroys the embedded video
-   *  window and reveals the app UI behind it. */
+  /** Moves/resizes mpv's window to follow the app. Runtime `geometry` writes
+   *  are honoured by mpv (verified: osd-width/height follow the new value), so
+   *  the player can track the app window without any native call on this side. */
+  async setBounds(bounds: MpvBounds): Promise<void> {
+    if (!this.socket) return
+    await this.set('geometry', geometryFor(bounds)).catch(() => {})
+  }
+
+  /** Hides/shows mpv's window without unloading the title — used when the app
+   *  is minimised or hidden, since an always-on-top video window would
+   *  otherwise sit over whatever the person switched to. */
+  async setWindowVisible(visible: boolean): Promise<void> {
+    if (!this.socket) return
+    await this.set('window-minimized', !visible).catch(() => {})
+  }
+
+  /** Unloads the current file, which is also what destroys mpv's video window
+   *  and reveals the app UI again. */
   async stopFile(): Promise<void> {
     if (!this.socket) return
     await this.command('stop').catch(() => {})
