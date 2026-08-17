@@ -219,8 +219,33 @@ export interface MpvBounds {
 export interface MpvSpawnOptions {
   /** Where to put mpv's window on screen. See the WINDOWING note on start(). */
   bounds?: MpvBounds
+  /** How far ahead to keep the demuxer reading — see BUFFERING on start(). */
+  bufferSeconds?: number
   onLog?: (line: string) => void
   spawnImpl?: typeof spawn
+}
+
+/**
+ * How much readahead each playback-buffer preset asks for, and the memory
+ * ceiling that has to accompany it.
+ *
+ * The seconds are a request, not a guarantee: mpv stops reading at whichever
+ * limit it hits first, so a byte ceiling too low for the bitrate silently makes
+ * the seconds meaningless. These pairs are sized so the byte limit is not the
+ * binding constraint at ordinary streaming bitrates (roughly 25Mbps), which is
+ * what makes "pause, let it fill, resume without waiting" actually work.
+ */
+export const BUFFER_PROFILES: Record<number, { readaheadSeconds: number; maxBytes: string }> = {
+  3: { readaheadSeconds: 60, maxBytes: '256MiB' },
+  8: { readaheadSeconds: 180, maxBytes: '512MiB' },
+  15: { readaheadSeconds: 420, maxBytes: '1024MiB' }
+}
+
+export function bufferProfileFor(bufferSeconds: number | undefined): {
+  readaheadSeconds: number
+  maxBytes: string
+} {
+  return BUFFER_PROFILES[Number(bufferSeconds)] ?? BUFFER_PROFILES[3]
 }
 
 function geometryFor(bounds: MpvBounds): string {
@@ -256,7 +281,8 @@ export class MpvPlayer {
     if (!mpvPath) throw new Error('Playback is unavailable (mpv not found).')
     if (this.running) return
 
-    const { bounds, onLog, spawnImpl = spawn } = options
+    const { bounds, bufferSeconds, onLog, spawnImpl = spawn } = options
+    const profile = bufferProfileFor(bufferSeconds)
     this.onLog = onLog ?? (() => {})
     this.pipeName = `r3-media-hub-mpv-${crypto.randomBytes(12).toString('hex')}`
 
@@ -303,11 +329,35 @@ export class MpvPlayer {
       '--no-border',
       '--ontop',
       '--focus-on=never',
-      // StreamCache already owns the real buffer and the single upstream
-      // connection to the debrid link; mpv only needs a modest readahead on top
-      // of the local loopback server, and must not duplicate it onto disk.
+      // BUFFERING. mpv's demuxer keeps reading ahead while playback is paused,
+      // which is what makes "pause for a moment, resume without waiting" work
+      // and what rides out a stall. The default readahead is ONE SECOND, so
+      // this has to be set explicitly or there is effectively no buffer at all.
+      //
+      // This is the second line of defence, not the first: StreamCache still
+      // owns the upstream connection and already fills well ahead of the
+      // playhead on disk (see its own retention window), so a network dip is
+      // absorbed there. What mpv's cache adds is instant resume and immunity to
+      // brief local hiccups, out of already-downloaded bytes.
+      //
+      // --cache-on-disk stays off deliberately: StreamCache is already writing
+      // these bytes to disk, and duplicating them would double the write volume
+      // for no gain.
       '--cache=yes',
       '--cache-on-disk=no',
+      `--demuxer-readahead-secs=${profile.readaheadSeconds}`,
+      `--cache-secs=${profile.readaheadSeconds}`,
+      `--demuxer-max-bytes=${profile.maxBytes}`,
+      // Keeps recent history in memory so a short seek backwards is instant
+      // rather than a re-read.
+      '--demuxer-max-back-bytes=128MiB',
+      // WINDOW DRAGGING OFF. mpv lets a borderless window be dragged from
+      // anywhere in the picture, and defaults to allowing it. Since this window
+      // is positioned to sit exactly over the app, a stray drag detaches the
+      // video from the controls and there is no way to put it back — reported
+      // live as "the video plays in a separate window I can drag round, and the
+      // controls render behind it".
+      '--window-dragging=no',
       '--msg-level=all=warn'
     ]
     if (bounds) args.push(`--geometry=${geometryFor(bounds)}`)
