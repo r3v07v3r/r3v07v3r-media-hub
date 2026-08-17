@@ -75,10 +75,3 @@ export function normalizeSubtitleResult(entry: unknown): SubtitleResult {
     hearingImpaired: Boolean(a.hearing_impaired)
   }
 }
-
-export function srtToVtt(text: string): string {
-  const body = String(text || '')
-    .replace(/\r\n/g, '\n')
-    .replace(/(\d{2}:\d{2}:\d{2}),(\d{3})/g, '$1.$2')
-  return `WEBVTT\n\n${body.trim()}\n`
-}
