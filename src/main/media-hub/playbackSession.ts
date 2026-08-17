@@ -37,6 +37,7 @@ import type {
 } from '../../shared/media-hub/types'
 import { handle } from './ipcGuard'
 import { getPlaybackBufferSeconds } from '../../shared/media-hub/playbackBuffer'
+import { normalizeVideoScaling } from '../../shared/media-hub/videoScaling'
 import { reportPreparation } from './playbackProgress'
 import { captureThumbnail, findMpv } from './mpv'
 import {
@@ -187,7 +188,8 @@ export async function preparePlayback(
   const { tracks } = await startPlayerSession(activeCacheUrl, {
     audioLanguage: settings.audioLanguage || 'en',
     subtitleLanguage: settings.subtitleLanguage || undefined,
-    bufferSeconds: getPlaybackBufferSeconds(settings.playbackBuffer)
+    bufferSeconds: getPlaybackBufferSeconds(settings.playbackBuffer),
+    videoScaling: normalizeVideoScaling(settings.videoScaling)
   })
   activeMediaTracks = tracks
   // Now that mpv has opened the file, hand its duration to the cache so the

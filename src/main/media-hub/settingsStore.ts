@@ -66,6 +66,8 @@ export interface MediaHubRawSettings {
   audioLanguage?: string
   updateChannel?: string
   playbackBuffer?: string
+  /** GPU scaling quality — see shared/media-hub/videoScaling.ts. */
+  videoScaling?: string
   autoSubtitlesEnabled?: boolean
   uiAnimationsEnabled?: boolean
   performancePanelVisible?: boolean
