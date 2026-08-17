@@ -186,6 +186,7 @@ export interface StartPlayerSessionOptions {
   startSeconds?: number
   audioLanguage?: string
   subtitleLanguage?: string
+  videoScaling?: import('../../shared/media-hub/videoScaling').VideoScalingPreset
   /** The playback-buffer preset in seconds (3 | 8 | 15). Chooses how far ahead
    *  mpv keeps reading — see mpv.ts's BUFFERING note. Only applied when the
    *  process is started, since these are launch options. */
@@ -231,7 +232,8 @@ export async function startPlayerSession(
   await player.loadFile(url, {
     startSeconds: options.startSeconds,
     audioLanguage: options.audioLanguage,
-    subtitleLanguage: options.subtitleLanguage
+    subtitleLanguage: options.subtitleLanguage,
+    videoScaling: options.videoScaling
   })
 
   // mpv only creates its video window on loadfile, and it is always-on-top —

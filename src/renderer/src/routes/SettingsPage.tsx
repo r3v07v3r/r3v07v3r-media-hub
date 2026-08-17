@@ -30,6 +30,15 @@ const PLAYBACK_BUFFER_OPTIONS: { value: string; label: string }[] = [
   { value: 'maximum', label: 'Maximum' }
 ]
 
+// Three plain choices rather than mpv's ~40 scaler names: the difference
+// between neighbouring high-end filters is invisible in motion, the difference
+// between cheap and good is not. See shared/media-hub/videoScaling.ts.
+const VIDEO_SCALING_OPTIONS: { value: string; label: string }[] = [
+  { value: 'auto', label: 'Standard' },
+  { value: 'high', label: 'High' },
+  { value: 'sharp', label: 'Sharp' }
+]
+
 const QUALITY_OPTIONS = [
   { value: '0', label: 'Any' },
   { value: '480', label: '480p' },
@@ -677,6 +686,11 @@ export default function SettingsPage() {
       )
   }
 
+  async function handleSetVideoScaling(preset: string) {
+    const api = window.api?.mediaHub
+    if (api) await saveSetting('settings.video-scaling', () => api.settings.setVideoScaling(preset))
+  }
+
   async function handleSetPlaybackBuffer(preset: string) {
     const api = window.api?.mediaHub
     if (api)
@@ -881,10 +895,18 @@ export default function SettingsPage() {
               <SegmentedRow
                 icon="clock"
                 title="Playback buffer"
-                description="How long to buffer before playback starts. Higher settings help on a slow or unstable connection at the cost of a longer wait to start."
+                description="How far ahead to keep loading while you watch. Higher settings ride out a slow or unstable connection and let you pause, let it fill, and resume without waiting — at the cost of more memory. Playback still starts straight away either way."
                 value={mediaHubSettings?.playbackBuffer ?? 'auto'}
                 options={PLAYBACK_BUFFER_OPTIONS}
                 onChange={handleSetPlaybackBuffer}
+              />
+              <SegmentedRow
+                icon="cpu"
+                title="Video scaling"
+                description="How video is resized to fit your screen, done on the GPU while playing. Sharp is crisper on older, lower-resolution titles; it can ring slightly on very noisy sources, which is why it isn't the default."
+                value={mediaHubSettings?.videoScaling ?? 'auto'}
+                options={VIDEO_SCALING_OPTIONS}
+                onChange={handleSetVideoScaling}
               />
             </section>
 

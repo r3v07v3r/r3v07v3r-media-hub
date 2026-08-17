@@ -15,6 +15,7 @@ export const MEDIA_HUB_CHANNELS = {
   settingsSetSubtitleLanguage: 'mediahub:settings:set-subtitle-language',
   settingsSetAudioLanguage: 'mediahub:settings:set-audio-language',
   settingsSetPlaybackBuffer: 'mediahub:settings:set-playback-buffer',
+  settingsSetVideoScaling: 'mediahub:settings:set-video-scaling',
   settingsSetAutoSubtitles: 'mediahub:settings:set-auto-subtitles',
   settingsSetUiAnimations: 'mediahub:settings:set-ui-animations',
   settingsSetPerformancePanelVisible: 'mediahub:settings:set-performance-panel-visible',

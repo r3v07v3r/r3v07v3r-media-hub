@@ -18,6 +18,7 @@ import { logError } from './logger'
 import { mpvPath, hasActivePlayback, stopPlayback } from './playbackSession'
 import { normalizeTheme, publicSettings, logoutSettings, THEMES } from './preferences'
 import { normalizePlaybackBuffer } from '../../shared/media-hub/playbackBuffer'
+import { normalizeVideoScaling } from '../../shared/media-hub/videoScaling'
 import { isAllowedExternalUrl } from './security'
 import { clearAllSessions, MIN_CACHE_BYTES } from './streamCache'
 import {
@@ -88,6 +89,16 @@ export function registerAppIpc(): void {
       settings.playbackBuffer = normalizePlaybackBuffer(value)
       writeSettings(settings)
       return { playbackBuffer: settings.playbackBuffer }
+    }
+  )
+
+  handle<unknown, { videoScaling: string }>(
+    MEDIA_HUB_CHANNELS.settingsSetVideoScaling,
+    (_event, value) => {
+      const settings = readSettings()
+      settings.videoScaling = normalizeVideoScaling(value)
+      writeSettings(settings)
+      return { videoScaling: settings.videoScaling }
     }
   )
 

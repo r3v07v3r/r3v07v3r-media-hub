@@ -7,6 +7,7 @@
 
 import type { MediaHubPublicSettings, Theme, UpdateChannel } from '../../shared/media-hub/types'
 import { normalizePlaybackBuffer } from '../../shared/media-hub/playbackBuffer'
+import { normalizeVideoScaling } from '../../shared/media-hub/videoScaling'
 
 export const THEMES: Theme[] = [
   { id: 'neon', name: 'Neon Noir', description: 'Signature magenta command center' },
@@ -44,12 +45,10 @@ export function publicSettings(settings: Record<string, unknown> = {}): MediaHub
     partyDisplayName: String(settings.partyDisplayName || ''),
     updateChannel: normalizeUpdateChannel(settings.updateChannel),
     playbackBuffer: normalizePlaybackBuffer(settings.playbackBuffer),
+    videoScaling: normalizeVideoScaling(settings.videoScaling),
     autoSubtitlesEnabled: settings.autoSubtitlesEnabled !== false,
     uiAnimationsEnabled: settings.uiAnimationsEnabled !== false,
     performancePanelVisible: settings.performancePanelVisible !== false,
-    // Opt-in, unlike uiAnimationsEnabled above: this spins up a real
-    // hardware-encoder probe + CPU/GPU cost the first time it's actually
-    // used, so it defaults off rather than on.
     maxStreamResolution: Number(settings.maxStreamResolution) || 0,
     maxStreamSizeGb: Number(settings.maxStreamSizeGb) || 0,
     // Deliberately NOT `Number(x) || 0`: that coerces "never configured"
@@ -89,6 +88,7 @@ export function logoutSettings(
   | 'theme'
   | 'updateChannel'
   | 'playbackBuffer'
+  | 'videoScaling'
   | 'autoSubtitlesEnabled'
   | 'uiAnimationsEnabled'
   | 'performancePanelVisible'
@@ -105,6 +105,7 @@ export function logoutSettings(
     theme: normalizeTheme(settings.theme),
     updateChannel: normalizeUpdateChannel(settings.updateChannel),
     playbackBuffer: normalizePlaybackBuffer(settings.playbackBuffer),
+    videoScaling: normalizeVideoScaling(settings.videoScaling),
     autoSubtitlesEnabled: settings.autoSubtitlesEnabled !== false,
     uiAnimationsEnabled: settings.uiAnimationsEnabled !== false,
     performancePanelVisible: settings.performancePanelVisible !== false,

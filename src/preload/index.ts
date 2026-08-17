@@ -165,6 +165,8 @@ const api = {
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.settingsSetAudioLanguage, language),
       setPlaybackBuffer: (preset: string): Promise<{ playbackBuffer: string }> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.settingsSetPlaybackBuffer, preset),
+      setVideoScaling: (preset: string): Promise<{ videoScaling: string }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.settingsSetVideoScaling, preset),
       setAutoSubtitles: (enabled: boolean): Promise<{ autoSubtitlesEnabled: boolean }> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.settingsSetAutoSubtitles, enabled),
       setUiAnimations: (enabled: boolean): Promise<{ uiAnimationsEnabled: boolean }> =>

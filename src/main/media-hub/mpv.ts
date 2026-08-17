@@ -38,6 +38,7 @@ import os from 'node:os'
 import path from 'node:path'
 
 import type { MediaTrack, MediaTracks } from '../../shared/media-hub/types'
+import { scalerPropertiesFor, type VideoScalingPreset } from '../../shared/media-hub/videoScaling'
 import { isAllowedRemoteMediaUrl } from './playback'
 import { isOwnCacheUrl } from './streamCache'
 
@@ -538,10 +539,15 @@ export class MpvPlayer {
    */
   async loadFile(
     url: string,
-    { startSeconds, audioLanguage, subtitleLanguage }: LoadFileOptions = {}
+    { startSeconds, audioLanguage, subtitleLanguage, videoScaling }: LoadFileOptions = {}
   ): Promise<void> {
     // Defense in depth immediately before the load — see assertPlayableUrl.
     assertPlayableUrl(url)
+    if (videoScaling) {
+      for (const [property, value] of Object.entries(scalerPropertiesFor(videoScaling))) {
+        await this.set(property, value).catch(() => {})
+      }
+    }
     if (audioLanguage) await this.set('alang', audioLanguage)
     if (subtitleLanguage) await this.set('slang', subtitleLanguage)
     // `start` MUST be written as a string, and only when there is somewhere to
@@ -629,6 +635,10 @@ export interface LoadFileOptions {
   startSeconds?: number
   audioLanguage?: string
   subtitleLanguage?: string
+  /** GPU scaling quality. Applied per load rather than at launch so changing
+   *  the setting takes effect on the next title instead of needing a restart —
+   *  mpv's scaler properties are all runtime-settable. */
+  videoScaling?: VideoScalingPreset
 }
 
 /**

@@ -432,8 +432,12 @@ export interface MediaHubPublicSettings {
   /** Last display name used to host or join a Watch Party — remembered so it doesn't need retyping each time. */
   partyDisplayName: string
   updateChannel: UpdateChannel
-  /** How long to buffer ahead before playback starts — see shared/media-hub/playbackBuffer.ts. */
+  /** How far ahead the player keeps reading — see shared/media-hub/playbackBuffer.ts
+   *  and mpv.ts's BUFFERING note. Not a pre-roll delay: playback starts
+   *  immediately and the buffer fills behind it, including while paused. */
   playbackBuffer: string
+  /** GPU scaling quality — see shared/media-hub/videoScaling.ts. */
+  videoScaling: string
   /** On by default: fetches and applies an OpenSubtitles match (in
    *  `subtitleLanguage` below) automatically as soon as a title starts,
    *  same as picking the first OpenSubtitles search result manually would
