@@ -116,6 +116,68 @@ interface StoredMeta extends CacheSessionMeta {
   createdAt: number
 }
 
+/**
+ * Identity of the CONTENT a cache session holds, as opposed to the session.
+ *
+ * The remote link cannot be the key: TorBox mints a fresh, expiring
+ * `requestdl` URL every play, so the same film has a different URL every time.
+ * The catalog id (plus season/episode for an episode) is stable, which is what
+ * makes reuse possible at all. Title is the fallback for a session written
+ * before a catalog id was recorded.
+ */
+export function cacheContentKey(meta: CacheSessionMeta | undefined): string {
+  if (!meta) return ''
+  const id = String(meta.catalogId || meta.title || '')
+    .trim()
+    .toLowerCase()
+  if (!id) return ''
+  return `${id}:${meta.seasonNumber ?? ''}:${meta.episodeNumber ?? ''}`
+}
+
+/**
+ * Finds an existing session on disk holding the same content, so a replay
+ * continues the download instead of starting a second copy.
+ *
+ * The bar for adopting one is deliberately high, because the failure mode of
+ * getting it wrong is silent corruption — playing one film's bytes believing
+ * they are another's. Two independent things must agree: the content key, and
+ * the exact total byte length of the remote file. A different release of the
+ * same title has a different length and is correctly rejected.
+ *
+ * Returns the session's directory name (its token), or '' when nothing matches.
+ */
+export async function findReusableSession(
+  root: string,
+  meta: CacheSessionMeta | undefined,
+  remoteTotalBytes: number | null,
+  excludeToken = ''
+): Promise<string> {
+  const key = cacheContentKey(meta)
+  if (!key || remoteTotalBytes === null) return ''
+  let entries: fs.Dirent[]
+  try {
+    entries = await fsp.readdir(root, { withFileTypes: true })
+  } catch {
+    return ''
+  }
+  for (const entry of entries) {
+    if (!entry.isDirectory() || !SESSION_TOKEN_RE.test(entry.name)) continue
+    if (entry.name === excludeToken) continue
+    try {
+      const stored = JSON.parse(
+        await fsp.readFile(metaFilePath(root, entry.name), 'utf8')
+      ) as StoredMeta
+      if (stored.totalBytes !== remoteTotalBytes) continue
+      if (cacheContentKey(stored) !== key) continue
+      return entry.name
+    } catch {
+      // A session without readable meta cannot be identified, so it is not a
+      // candidate. It stays on disk for pruneIdleSessions to deal with.
+    }
+  }
+  return ''
+}
+
 export function chunkIndexForByte(byte: number, chunkBytes = CHUNK_BYTES): number {
   return Math.floor(byte / chunkBytes)
 }
@@ -484,6 +546,48 @@ export function createStreamCache({
     if (!list) return
     waiters.delete(index)
     for (const w of list) w.resolve(status)
+  }
+
+  /**
+   * Marks every chunk already on disk for the current session as ready.
+   *
+   * Only a file of exactly the expected size counts. A short chunk is a
+   * half-written file from a session that was killed mid-write, and trusting it
+   * would serve a hole in the middle of the film; leaving it unmarked means the
+   * fill simply overwrites it. The final chunk is legitimately short, so its
+   * expected size is computed from totalBytes rather than assumed.
+   */
+  async function adoptExistingChunks(): Promise<void> {
+    if (totalBytes === null) return
+    const lastIndex = chunkIndexForByte(totalBytes - 1)
+    let files: string[]
+    try {
+      files = await fsp.readdir(sessionDir(cacheRoot, token))
+    } catch {
+      return
+    }
+    let adopted = 0
+    for (const file of files) {
+      const match = /^chunk-(\d+)\.bin$/.exec(file)
+      if (!match) continue
+      const index = Number(match[1])
+      if (!Number.isInteger(index) || index < 0 || index > lastIndex) continue
+      const expected = index === lastIndex ? totalBytes - index * CHUNK_BYTES : CHUNK_BYTES
+      try {
+        const stat = await fsp.stat(chunkFilePath(cacheRoot, token, index))
+        if (stat.size !== expected) continue
+      } catch {
+        continue
+      }
+      chunks.set(index, 'ready')
+      adopted += 1
+    }
+    if (adopted > 0) {
+      reportPreparation(
+        'buffer',
+        `Reusing ${formatMegabytes(adopted * CHUNK_BYTES)} already downloaded`
+      )
+    }
   }
 
   function markChunk(index: number, status: ChunkStatus): void {
@@ -884,11 +988,37 @@ export function createStreamCache({
     await listen()
     reportPreparation('connect', 'Connecting to the source')
     totalBytes = await fetchTotalBytes()
+
+    // REUSE AN EXISTING CACHE FOR THIS CONTENT, if there is one.
+    //
+    // Without this, replaying a title downloaded a second full copy while the
+    // first sat on disk beside it. stopPlayback deliberately KEEPS the cache
+    // for "a likely near-term resume", and the Downloads page lists it, but
+    // nothing ever read it back — the retention had no consumer.
+    //
+    // Adoption is gated on two independent things agreeing (see
+    // findReusableSession): the content key, and the exact total byte length of
+    // the remote file. Length is what makes this safe rather than merely
+    // convenient — a different release of the same title is a different length
+    // and is rejected, so the cache cannot be crossed with the wrong bytes.
+    const reusableToken = await findReusableSession(cacheRoot, meta, totalBytes, token)
+    if (reusableToken) {
+      activeCacheTokens.delete(token)
+      token = reusableToken
+      activeCacheTokens.add(token)
+      await adoptExistingChunks()
+    }
+
     fullRetention = totalBytes !== null && maxBytes >= totalBytes
     void writeMeta(meta, cacheRoot, token)
 
     const myGeneration = ++generation
-    void runFill(0, myGeneration)
+    // Start at the first byte NOT already on disk. The fill is sequential from
+    // there, and the existing gap-chase (see runFill's fullRetention branch)
+    // picks up anything further along, so a resumed title downloads only what
+    // it is missing.
+    const firstGap = firstMissingChunkIndex()
+    void runFill(firstGap === null ? 0 : firstGap * CHUNK_BYTES, myGeneration)
     // Wait for at least the first chunk so the very first read from ffmpeg/
     // the <video> element doesn't land on nothing — mirrors the readiness
     // gate createFfmpegTranscoder already uses before its own start()
