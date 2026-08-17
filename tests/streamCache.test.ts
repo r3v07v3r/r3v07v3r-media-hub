@@ -7,7 +7,16 @@
 // Run with: npx tsx tests/streamCache.test.ts   (or npm.cmd test)
 
 import assert from 'node:assert'
-import { chunkIndexForByte, computeRetainedChunkIndices } from '../src/main/media-hub/streamCache'
+import fs from 'node:fs'
+import fsp from 'node:fs/promises'
+import os from 'node:os'
+import path from 'node:path'
+import {
+  cacheContentKey,
+  chunkIndexForByte,
+  computeRetainedChunkIndices,
+  findReusableSession
+} from '../src/main/media-hub/streamCache'
 
 let pass = 0
 function check(name: string, fn: () => void): void {
@@ -237,3 +246,129 @@ check('each centre gets its own window rather than one spanning window between t
 })
 
 console.log(`\n${pass} passed`)
+
+// --- Reusing an existing cache -------------------------------------------
+// Replaying a title used to download a second full copy while the first sat on
+// disk beside it: stopPlayback keeps the cache for a later resume, and nothing
+// ever read it back. Adoption is what closes that, and its failure mode is the
+// dangerous kind — serving one film's bytes believing they are another's — so
+// what is pinned here is mostly what must NOT be adopted.
+
+async function withTempRoot(fn: (root: string) => Promise<void>): Promise<void> {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'r3-cache-test-'))
+  try {
+    await fn(root)
+  } finally {
+    await fsp.rm(root, { recursive: true, force: true })
+  }
+}
+
+const TOKEN_A = 'a'.repeat(64)
+const TOKEN_B = 'b'.repeat(64)
+
+async function writeSession(
+  root: string,
+  token: string,
+  meta: Record<string, unknown>
+): Promise<void> {
+  await fsp.mkdir(path.join(root, token), { recursive: true })
+  await fsp.writeFile(path.join(root, token, 'meta.json'), JSON.stringify(meta))
+}
+
+async function checkAsync(name: string, fn: () => Promise<void>): Promise<void> {
+  try {
+    await fn()
+    pass++
+    console.log(`  ok  ${name}`)
+  } catch (error) {
+    console.log(`FAIL  ${name}
+      ${(error as Error).message}`)
+    process.exitCode = 1
+  }
+}
+
+check('content key ignores the remote URL, which changes every play', () => {
+  // TorBox mints a fresh requestdl link each time, so the key must come from
+  // catalog identity instead.
+  assert.equal(cacheContentKey({ title: 'Dune', catalogId: 'tt1160419' }), 'tt1160419::')
+  assert.equal(
+    cacheContentKey({ title: 'Show', catalogId: 'tt1', seasonNumber: 2, episodeNumber: 5 }),
+    'tt1:2:5'
+  )
+  // Falls back to title for sessions written before catalogId was recorded.
+  assert.equal(cacheContentKey({ title: 'Dune' }), 'dune::')
+  // Nothing identifiable means never reusable.
+  assert.equal(cacheContentKey({ title: '' }), '')
+  assert.equal(cacheContentKey(undefined), '')
+})
+
+check('an episode never matches a different episode of the same show', () => {
+  const s2e5 = cacheContentKey({ title: 'S', catalogId: 'tt1', seasonNumber: 2, episodeNumber: 5 })
+  const s2e6 = cacheContentKey({ title: 'S', catalogId: 'tt1', seasonNumber: 2, episodeNumber: 6 })
+  assert.notEqual(s2e5, s2e6)
+})
+
+async function main(): Promise<void> {
+  await checkAsync('adopts a session with the same content AND the same length', async () => {
+    await withTempRoot(async (root) => {
+      await writeSession(root, TOKEN_A, { title: 'Dune', catalogId: 'tt1', totalBytes: 5000 })
+      const found = await findReusableSession(root, { title: 'Dune', catalogId: 'tt1' }, 5000)
+      assert.equal(found, TOKEN_A)
+    })
+  })
+
+  await checkAsync('refuses a different release of the same title', async () => {
+    await withTempRoot(async (root) => {
+      // Same film, different encode: the length differs, so the cached bytes
+      // are not the bytes now being streamed. This is the check that keeps
+      // reuse from silently corrupting playback.
+      await writeSession(root, TOKEN_A, { title: 'Dune', catalogId: 'tt1', totalBytes: 5000 })
+      const found = await findReusableSession(root, { title: 'Dune', catalogId: 'tt1' }, 9999)
+      assert.equal(found, '')
+    })
+  })
+
+  await checkAsync('refuses a different title that happens to be the same length', async () => {
+    await withTempRoot(async (root) => {
+      await writeSession(root, TOKEN_A, { title: 'Dune', catalogId: 'tt1', totalBytes: 5000 })
+      const found = await findReusableSession(root, { title: 'Arrival', catalogId: 'tt2' }, 5000)
+      assert.equal(found, '')
+    })
+  })
+
+  await checkAsync('refuses when the remote length is unknown', async () => {
+    await withTempRoot(async (root) => {
+      await writeSession(root, TOKEN_A, { title: 'Dune', catalogId: 'tt1', totalBytes: 5000 })
+      assert.equal(await findReusableSession(root, { title: 'Dune', catalogId: 'tt1' }, null), '')
+    })
+  })
+
+  await checkAsync('skips the session currently being started', async () => {
+    await withTempRoot(async (root) => {
+      await writeSession(root, TOKEN_A, { title: 'Dune', catalogId: 'tt1', totalBytes: 5000 })
+      assert.equal(
+        await findReusableSession(root, { title: 'Dune', catalogId: 'tt1' }, 5000, TOKEN_A),
+        ''
+      )
+    })
+  })
+
+  await checkAsync('ignores unreadable meta and non-session directories', async () => {
+    await withTempRoot(async (root) => {
+      await fsp.mkdir(path.join(root, 'not-a-session'), { recursive: true })
+      await fsp.mkdir(path.join(root, TOKEN_B), { recursive: true })
+      await fsp.writeFile(path.join(root, TOKEN_B, 'meta.json'), 'not json')
+      assert.equal(await findReusableSession(root, { title: 'Dune', catalogId: 'tt1' }, 5000), '')
+    })
+  })
+
+  await checkAsync('a missing cache root is not an error', async () => {
+    const missing = path.join(os.tmpdir(), 'r3-cache-does-not-exist-' + String(fs.constants.F_OK))
+    assert.equal(await findReusableSession(missing, { title: 'D', catalogId: 't' }, 1), '')
+  })
+
+  console.log(`
+${pass} passed`)
+}
+
+void main()
