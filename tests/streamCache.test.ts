@@ -49,7 +49,10 @@ check('fullRetention returns exactly the present set, ignoring every other param
     tailBytes: TAIL,
     chunkBytes: CHUNK
   })
-  assert.deepEqual([...retained].sort((a, b) => a - b), present)
+  assert.deepEqual(
+    [...retained].sort((a, b) => a - b),
+    present
+  )
 })
 
 check('head region (chunks 0..3 at 16MB/4MB) is always retained regardless of playhead', () => {
@@ -87,59 +90,69 @@ check('tail region (last 4MB) is always retained regardless of playhead', () => 
   assert.ok(retained.has(totalChunks - 1), 'last chunk should be retained as the tail')
 })
 
-check('window follows the playhead: behind/ahead convert seconds to bytes via bytesPerSecond', () => {
-  const totalBytes = CHUNK * 1000
-  const centerByte = CHUNK * 500
-  const retained = computeRetainedChunkIndices({
-    presentChunkIndices: [],
-    fullRetention: false,
-    totalBytes,
-    centerBytes: [centerByte],
-    behindSeconds: 10,
-    aheadSeconds: 20,
-    bytesPerSecond: CHUNK, // 1 chunk/sec — 10 chunks behind, 20 ahead
-    headBytes: HEAD,
-    tailBytes: TAIL,
-    chunkBytes: CHUNK
-  })
-  assert.ok(retained.has(490), 'exactly 10 chunks behind the playhead should be retained')
-  assert.ok(retained.has(520), 'exactly 20 chunks ahead of the playhead should be retained')
-  assert.ok(!retained.has(478), 'well beyond the behind-window should not be retained')
-  assert.ok(!retained.has(530), 'well beyond the ahead-window should not be retained')
-})
+check(
+  'window follows the playhead: behind/ahead convert seconds to bytes via bytesPerSecond',
+  () => {
+    const totalBytes = CHUNK * 1000
+    const centerByte = CHUNK * 500
+    const retained = computeRetainedChunkIndices({
+      presentChunkIndices: [],
+      fullRetention: false,
+      totalBytes,
+      centerBytes: [centerByte],
+      behindSeconds: 10,
+      aheadSeconds: 20,
+      bytesPerSecond: CHUNK, // 1 chunk/sec — 10 chunks behind, 20 ahead
+      headBytes: HEAD,
+      tailBytes: TAIL,
+      chunkBytes: CHUNK
+    })
+    assert.ok(retained.has(490), 'exactly 10 chunks behind the playhead should be retained')
+    assert.ok(retained.has(520), 'exactly 20 chunks ahead of the playhead should be retained')
+    assert.ok(!retained.has(478), 'well beyond the behind-window should not be retained')
+    assert.ok(!retained.has(530), 'well beyond the ahead-window should not be retained')
+  }
+)
 
-check('shrinking aheadSeconds shrinks the ahead edge but never the behind edge or pinned regions', () => {
-  const totalBytes = CHUNK * 1000
-  const centerByte = CHUNK * 500
-  const wide = computeRetainedChunkIndices({
-    presentChunkIndices: [],
-    fullRetention: false,
-    totalBytes,
-    centerBytes: [centerByte],
-    behindSeconds: 30,
-    aheadSeconds: 300,
-    bytesPerSecond: CHUNK,
-    headBytes: HEAD,
-    tailBytes: TAIL,
-    chunkBytes: CHUNK
-  })
-  const squeezed = computeRetainedChunkIndices({
-    presentChunkIndices: [],
-    fullRetention: false,
-    totalBytes,
-    centerBytes: [centerByte],
-    behindSeconds: 30, // unchanged — squeezeForPressure never touches this
-    aheadSeconds: 5, // squeezed under pressure
-    bytesPerSecond: CHUNK,
-    headBytes: HEAD,
-    tailBytes: TAIL,
-    chunkBytes: CHUNK
-  })
-  assert.ok(wide.has(centerByte / CHUNK + 300), 'wide window reaches 300 chunks ahead')
-  assert.ok(!squeezed.has(centerByte / CHUNK + 300), 'squeezed window no longer reaches that far')
-  assert.ok(squeezed.has(centerByte / CHUNK - 30), 'behind edge is identical after squeezing ahead only')
-  for (let i = 0; i < 4; i++) assert.ok(squeezed.has(i), `head chunk ${i} still retained after squeezing`)
-})
+check(
+  'shrinking aheadSeconds shrinks the ahead edge but never the behind edge or pinned regions',
+  () => {
+    const totalBytes = CHUNK * 1000
+    const centerByte = CHUNK * 500
+    const wide = computeRetainedChunkIndices({
+      presentChunkIndices: [],
+      fullRetention: false,
+      totalBytes,
+      centerBytes: [centerByte],
+      behindSeconds: 30,
+      aheadSeconds: 300,
+      bytesPerSecond: CHUNK,
+      headBytes: HEAD,
+      tailBytes: TAIL,
+      chunkBytes: CHUNK
+    })
+    const squeezed = computeRetainedChunkIndices({
+      presentChunkIndices: [],
+      fullRetention: false,
+      totalBytes,
+      centerBytes: [centerByte],
+      behindSeconds: 30, // unchanged — squeezeForPressure never touches this
+      aheadSeconds: 5, // squeezed under pressure
+      bytesPerSecond: CHUNK,
+      headBytes: HEAD,
+      tailBytes: TAIL,
+      chunkBytes: CHUNK
+    })
+    assert.ok(wide.has(centerByte / CHUNK + 300), 'wide window reaches 300 chunks ahead')
+    assert.ok(!squeezed.has(centerByte / CHUNK + 300), 'squeezed window no longer reaches that far')
+    assert.ok(
+      squeezed.has(centerByte / CHUNK - 30),
+      'behind edge is identical after squeezing ahead only'
+    )
+    for (let i = 0; i < 4; i++)
+      assert.ok(squeezed.has(i), `head chunk ${i} still retained after squeezing`)
+  }
+)
 
 check('no known bitrate falls back to a fixed chunk-count window instead of an empty one', () => {
   const retained = computeRetainedChunkIndices({

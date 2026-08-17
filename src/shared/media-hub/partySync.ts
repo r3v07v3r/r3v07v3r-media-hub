@@ -55,13 +55,17 @@ export const MAX_RATE_DELTA = 0.08
  *  one second saturates at MAX_RATE_DELTA. */
 export const RATE_GAIN = 0.08
 
-/** Past this, nudging the speed would take too long and a hard seek is
- *  the lesser evil. Compatibility mode's threshold is much wider on
- *  purpose: a seek there restarts the ffmpeg transcode from scratch, so
- *  it must be reserved for a genuine desync rather than spent on the
- *  couple of seconds of keyframe-snap difference that is expected when
- *  every member is streaming their own independently-resolved file. */
-export const HARD_SEEK_SECONDS = { direct: 2, compatibility: 6 }
+/** Past this, nudging the speed would take too long and a hard seek is the
+ *  lesser evil.
+ *
+ *  One threshold, not two. This used to be `{ direct: 2, compatibility: 6 }`:
+ *  under the old engine a seek restarted an ffmpeg transcode from scratch, so
+ *  in that mode it had to be reserved for genuine desync rather than spent on
+ *  the couple of seconds of keyframe-snap difference expected when every member
+ *  streams their own independently-resolved file. Seeks are in-place now, and
+ *  the `-noaccurate_seek` snap went with the transcode, so both halves of that
+ *  reasoning are gone. */
+export const HARD_SEEK_SECONDS = 2
 
 export type SyncCorrection =
   { action: 'none' } | { action: 'rate'; rate: number } | { action: 'seek'; position: number }
@@ -107,18 +111,13 @@ export function isSampleUsable(sample: HostPositionSample | null, now: number): 
  * converges smoothly and can be evaluated as often as we like, because
  * `expected` is extrapolated rather than waited for.
  */
-export function syncCorrection(
-  localPosition: number,
-  expected: number,
-  compatibility: boolean
-): SyncCorrection {
+export function syncCorrection(localPosition: number, expected: number): SyncCorrection {
   // Never let corrupt/partial wire data turn into playbackRate=NaN or a
   // seek to an invalid time. The next valid heartbeat will recover without
   // disturbing responsive local playback in the meantime.
   if (!Number.isFinite(localPosition) || !Number.isFinite(expected)) return { action: 'none' }
   const error = localPosition - expected
-  const hardLimit = compatibility ? HARD_SEEK_SECONDS.compatibility : HARD_SEEK_SECONDS.direct
-  if (Math.abs(error) > hardLimit) return { action: 'seek', position: expected }
+  if (Math.abs(error) > HARD_SEEK_SECONDS) return { action: 'seek', position: expected }
   if (Math.abs(error) <= DEAD_ZONE_SECONDS) return { action: 'none' }
   const delta = Math.max(-MAX_RATE_DELTA, Math.min(MAX_RATE_DELTA, -error * RATE_GAIN))
   return { action: 'rate', rate: 1 + delta }

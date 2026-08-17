@@ -36,7 +36,11 @@ function kitsuRecord(id: string, episodeCount: number) {
   }
 }
 
-function anime(id: string, videos: Episode[], episodeCounts?: CatalogItem['episodeCounts']): CatalogItem {
+function anime(
+  id: string,
+  videos: Episode[],
+  episodeCounts?: CatalogItem['episodeCounts']
+): CatalogItem {
   return {
     id,
     title: `Show ${id}`,
@@ -133,7 +137,7 @@ check('sums episode counts across every season, counts seasons by member count',
   assert.deepEqual(result, { totalSeasons: 3, totalEpisodes: 51 })
 })
 
-check('prefers a member\'s own episodeCounts hint over deriving from videos.length', () => {
+check("prefers a member's own episodeCounts hint over deriving from videos.length", () => {
   // Exercises the defensive fallback path directly — a member that
   // already carries a combined hint (shouldn't normally happen for a
   // single season, but the reduce must not silently double-count if it

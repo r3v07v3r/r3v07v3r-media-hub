@@ -20,15 +20,23 @@ assert.equal(isSampleUsable(sample, 1_000 + SAMPLE_MAX_AGE_MS + 1), false)
 assert.equal(isSampleUsable(sample, 999), false)
 assert.equal(isSampleUsable({ ...sample, mediaTime: Number.NaN }, 1_000), false)
 
-assert.deepEqual(syncCorrection(10, 10 + DEAD_ZONE_SECONDS / 2, false), { action: 'none' })
-assert.deepEqual(syncCorrection(10, 10.5, false), { action: 'rate', rate: 1.04 })
-assert.deepEqual(syncCorrection(10.5, 10, false), { action: 'rate', rate: 0.96 })
-assert.deepEqual(syncCorrection(0, 100, false), { action: 'seek', position: 100 })
-assert.deepEqual(syncCorrection(0, HARD_SEEK_SECONDS.compatibility, true), {
+assert.deepEqual(syncCorrection(10, 10 + DEAD_ZONE_SECONDS / 2), { action: 'none' })
+assert.deepEqual(syncCorrection(10, 10.5), { action: 'rate', rate: 1.04 })
+assert.deepEqual(syncCorrection(10.5, 10), { action: 'rate', rate: 0.96 })
+assert.deepEqual(syncCorrection(0, 100), { action: 'seek', position: 100 })
+// Exactly at the hard-seek threshold is still steered, not seeked (the check
+// is strictly greater-than), and the proportional term has saturated by then.
+assert.deepEqual(syncCorrection(0, HARD_SEEK_SECONDS), {
   action: 'rate',
   rate: 1 + MAX_RATE_DELTA
 })
-assert.deepEqual(syncCorrection(Number.NaN, 10, false), { action: 'none' })
-assert.deepEqual(syncCorrection(10, Number.POSITIVE_INFINITY, false), { action: 'none' })
+// A hair past it flips to a seek. One threshold now, not one per playback
+// mode — see HARD_SEEK_SECONDS.
+assert.deepEqual(syncCorrection(0, HARD_SEEK_SECONDS + 0.01), {
+  action: 'seek',
+  position: HARD_SEEK_SECONDS + 0.01
+})
+assert.deepEqual(syncCorrection(Number.NaN, 10), { action: 'none' })
+assert.deepEqual(syncCorrection(10, Number.POSITIVE_INFINITY), { action: 'none' })
 
 console.log('party sync tests passed')

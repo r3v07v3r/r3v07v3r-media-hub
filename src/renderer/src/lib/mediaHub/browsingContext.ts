@@ -103,7 +103,8 @@ export function deriveBrowsingLabel(params: {
   const base = kindLabel[pathname]
 
   if (base) {
-    const kindForSearch = pathname === '/movies' ? 'movie' : pathname === '/series' ? 'series' : 'anime'
+    const kindForSearch =
+      pathname === '/movies' ? 'movie' : pathname === '/series' ? 'series' : 'anime'
     if (categorySearch.kind === kindForSearch && categorySearch.query.trim()) {
       return 'Search Results'
     }

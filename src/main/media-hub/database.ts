@@ -258,7 +258,9 @@ export function createDatabase(filename: string): MediaHubDatabase {
   // is itself 30 days) and past any realistic length of time offline.
   const CACHE_PRUNE_GRACE_MS = 30 * 24 * 60 * 60 * 1000
   try {
-    sql.prepare('DELETE FROM catalog_cache WHERE expires_at < ?').run(Date.now() - CACHE_PRUNE_GRACE_MS)
+    sql
+      .prepare('DELETE FROM catalog_cache WHERE expires_at < ?')
+      .run(Date.now() - CACHE_PRUNE_GRACE_MS)
   } catch {
     // Best-effort, same convention as every other cache operation in this
     // file — a failed prune must not stop the app from opening its database.
@@ -492,7 +494,10 @@ export function createDatabase(filename: string): MediaHubDatabase {
           season,
           episode,
           position: positionSeconds,
-          duration: typeof durationSeconds === 'number' && Number.isFinite(durationSeconds) ? durationSeconds : null,
+          duration:
+            typeof durationSeconds === 'number' && Number.isFinite(durationSeconds)
+              ? durationSeconds
+              : null,
           now: new Date().toISOString()
         })
       } catch {

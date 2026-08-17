@@ -100,12 +100,15 @@ check('just under 90% is still stored (the boundary is real, not approximate)', 
   db.close()
 })
 
-check('with no known duration, "near the end" can never trigger — position alone cannot tell', () => {
-  const db = tempDb()
-  db.savePlaybackPosition('tt1234567', undefined, 100000) // huge, but no duration to compare against
-  assert.ok(db.getPlaybackPosition('tt1234567'))
-  db.close()
-})
+check(
+  'with no known duration, "near the end" can never trigger — position alone cannot tell',
+  () => {
+    const db = tempDb()
+    db.savePlaybackPosition('tt1234567', undefined, 100000) // huge, but no duration to compare against
+    assert.ok(db.getPlaybackPosition('tt1234567'))
+    db.close()
+  }
+)
 
 console.log('\nseries — season/episode keying')
 

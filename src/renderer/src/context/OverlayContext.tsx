@@ -35,15 +35,7 @@
 // AppStateProvider's own handlers (startPlayback, party events, profile
 // switching) push notifications during their work.
 
-import {
-  createContext,
-  useCallback,
-  useContext,
-  useEffect,
-  useMemo,
-  useRef,
-  useState
-} from 'react'
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import type { AppNotification, MediaItem } from '@renderer/types'
 
 /** How long a toast stays on screen before it removes itself. */

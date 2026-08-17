@@ -26,7 +26,11 @@ export interface SimilarPanelProps {
 export function SimilarPanel({ status, items, config, onSelect, onViewAll }: SimilarPanelProps) {
   if (status === 'loading') {
     return (
-      <section className={`${styles.panel} glass-panel`} aria-busy="true" aria-label="Loading similar titles">
+      <section
+        className={`${styles.panel} glass-panel`}
+        aria-busy="true"
+        aria-label="Loading similar titles"
+      >
         <h2 className={styles.heading}>Similar {config.pluralLabel}</h2>
         <ul className={styles.list}>
           {[0, 1, 2].map((i) => (

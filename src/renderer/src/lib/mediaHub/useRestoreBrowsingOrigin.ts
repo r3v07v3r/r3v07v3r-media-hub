@@ -66,6 +66,5 @@ export function useRestoreBrowsingOrigin(ready: boolean): void {
       cancelAnimationFrame(raf1)
       cancelAnimationFrame(raf2)
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- appliedRef/originAtMountRef intentionally not deps (refs, and the latter is a deliberate one-time snapshot); re-running this effect for either would defeat the point
   }, [ready, location.pathname, location.search, clearBrowsingOrigin])
 }

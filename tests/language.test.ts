@@ -11,7 +11,6 @@ import {
   releaseLacksPreferredLanguage,
   releaseLocalisedInto
 } from '../src/shared/media-hub/language'
-import { needsAudioCompatibility, selectTranscodeAudioTrack } from '../src/main/media-hub/vlc'
 
 let pass = 0
 function check(name: string, fn: () => void): void {
@@ -25,12 +24,7 @@ function check(name: string, fn: () => void): void {
   }
 }
 
-function audio(
-  ordinal: number,
-  language: string,
-  codec = 'aac',
-  isDefault = false
-): MediaTrack {
+function audio(ordinal: number, language: string, codec = 'aac', isDefault = false): MediaTrack {
   return {
     ordinal,
     index: ordinal + 1,
@@ -60,122 +54,21 @@ check('unknown passes through', () => assert.equal(normalizeLanguage('xyz'), 'xy
 console.log('\nlanguageMatches')
 check('eng matches en', () => assert.equal(languageMatches('eng', 'en'), true))
 check('fre does not match en', () => assert.equal(languageMatches('fre', 'en'), false))
-check('an unlabelled track never matches', () =>
-  assert.equal(languageMatches('', 'en'), false)
-)
+check('an unlabelled track never matches', () => assert.equal(languageMatches('', 'en'), false))
 check('jpn matches ja', () => assert.equal(languageMatches('jpn', 'ja'), true))
 
-console.log('\nselectTranscodeAudioTrack — the reported bug')
-check('picks English over a French track marked default', () => {
-  const t = tracks(audio(0, 'fre', 'aac', true), audio(1, 'eng'))
-  assert.equal(selectTranscodeAudioTrack(t, 'en')?.ordinal, 1)
-})
-check('picks English even when French is first AND default', () => {
-  const t = tracks(audio(0, 'fra', 'ac3', true), audio(1, 'ger'), audio(2, 'eng'))
-  assert.equal(selectTranscodeAudioTrack(t, 'en')?.ordinal, 2)
-})
-check('honours a non-English preference too', () => {
-  const t = tracks(audio(0, 'eng', 'aac', true), audio(1, 'jpn'))
-  assert.equal(selectTranscodeAudioTrack(t, 'ja')?.ordinal, 1)
-})
-check('falls back to the default when the language is absent', () => {
-  const t = tracks(audio(0, 'fre'), audio(1, 'ger', 'aac', true))
-  assert.equal(selectTranscodeAudioTrack(t, 'en')?.ordinal, 1)
-})
-check('falls back to the first when nothing is marked default', () => {
-  const t = tracks(audio(0, 'fre'), audio(1, 'ger'))
-  assert.equal(selectTranscodeAudioTrack(t, 'en')?.ordinal, 0)
-})
-check('no audio at all is undefined, not a crash', () =>
-  assert.equal(selectTranscodeAudioTrack(tracks(), 'en'), undefined)
-)
+// The selectTranscodeAudioTrack / needsAudioCompatibility sections that used to
+// sit here are gone with vlc.ts. Both existed to serve a <video> element:
+// needsAudioCompatibility decided whether ffmpeg had to be involved at all, and
+// selectTranscodeAudioTrack picked which single track to bake into the stream —
+// including deliberately declining TrueHD/DTS, because downmixing those through
+// ffmpeg produced packets Chromium's decoder rejected mid-playback.
+//
+// mpv resolves the language preference against the container itself (--alang)
+// and plays whatever it finds, so there is nothing left to pick or avoid. What
+// remains below is the language matching those functions were built on, which
+// torbox.ts's release ranking also depends on.
 
-console.log('\nselectTranscodeAudioTrack — risky codecs still avoided')
-check('prefers a safe English track over a TrueHD English one', () => {
-  const t = tracks(audio(0, 'eng', 'truehd', true), audio(1, 'eng', 'ac3'))
-  assert.equal(selectTranscodeAudioTrack(t, 'en')?.ordinal, 1)
-})
-check('does NOT escape to another language to dodge a risky codec', () => {
-  // English is only available as TrueHD. A French AC3 track is safer to
-  // transcode but is the wrong language — language wins.
-  const t = tracks(audio(0, 'eng', 'truehd', true), audio(1, 'fre', 'ac3'))
-  assert.equal(selectTranscodeAudioTrack(t, 'en')?.ordinal, 0)
-})
-
-console.log('\nneedsAudioCompatibility')
-check('true when the wanted track is not the container default', () => {
-  // Both browser-playable codecs, so the ONLY reason is track selection.
-  const t = tracks(audio(0, 'fre', 'aac', true), audio(1, 'eng', 'aac'))
-  assert.equal(needsAudioCompatibility(t, 'en'), true)
-})
-check('false when the wanted track already is the default', () => {
-  const t = tracks(audio(0, 'eng', 'aac', true), audio(1, 'fre', 'aac'))
-  assert.equal(needsAudioCompatibility(t, 'en'), false)
-})
-check('false for a single-track browser-playable file', () =>
-  assert.equal(needsAudioCompatibility(tracks(audio(0, 'eng', 'aac', true)), 'en'), false)
-)
-check('still true for an undecodable codec regardless of language', () =>
-  assert.equal(needsAudioCompatibility(tracks(audio(0, 'eng', 'truehd', true)), 'en'), true)
-)
-
-console.log('\nreleaseLacksPreferredLanguage')
-check('flags a TRUEFRENCH release', () =>
-  assert.equal(releaseLacksPreferredLanguage('Movie.2024.TRUEFRENCH.1080p.WEB.x264', 'en'), true)
-)
-check('flags FRENCH', () =>
-  assert.equal(releaseLacksPreferredLanguage('Movie.2024.FRENCH.1080p', 'en'), true)
-)
-check('flags VOSTFR', () =>
-  assert.equal(releaseLacksPreferredLanguage('Movie.2024.VOSTFR.1080p', 'en'), true)
-)
-check('flags GERMAN', () =>
-  assert.equal(releaseLacksPreferredLanguage('Movie.2024.GERMAN.DL.1080p', 'en'), true)
-)
-check('MULTI cancels it', () =>
-  assert.equal(releaseLacksPreferredLanguage('Movie.2024.MULTI.FRENCH.1080p', 'en'), false)
-)
-check('DUAL cancels it', () =>
-  assert.equal(releaseLacksPreferredLanguage('Movie.2024.DUAL.ITA.ENG.1080p', 'en'), false)
-)
-check('an explicit ENG token cancels it', () =>
-  assert.equal(releaseLacksPreferredLanguage('Movie.2024.FRENCH.ENG.1080p', 'en'), false)
-)
-check('a plain English release is fine', () =>
-  assert.equal(releaseLacksPreferredLanguage('Movie.2024.1080p.BluRay.x264-GROUP', 'en'), false)
-)
-check('does not flag a Japanese-audio anime release', () => {
-  // The whole Anime section depends on this NOT being treated as a dub to
-  // avoid — Japanese audio is the original work, not a localisation.
-  assert.equal(
-    releaseLacksPreferredLanguage('[SubsPlease] Show - 05 (1080p) [ABC123].mkv', 'en'),
-    false
-  )
-})
-check('does not flag JAPANESE in a release name', () =>
-  assert.equal(releaseLacksPreferredLanguage('Film.2024.JAPANESE.1080p', 'en'), false)
-)
-check('reversed: wanting French, a FRENCH release is fine', () =>
-  assert.equal(releaseLacksPreferredLanguage('Movie.2024.FRENCH.1080p', 'fr'), false)
-)
-check('reversed: wanting French, a GERMAN release is not', () =>
-  assert.equal(releaseLacksPreferredLanguage('Movie.2024.GERMAN.1080p', 'fr'), true)
-)
-check('empty text is not flagged', () =>
-  assert.equal(releaseLacksPreferredLanguage('', 'en'), false)
-)
-check('does not match a substring inside a word', () =>
-  // "frenchie" is one token and must not read as the FRENCH marker
-  assert.equal(releaseLacksPreferredLanguage('The.Frenchie.2024.1080p', 'en'), false)
-)
-
-console.log('\nreleaseLocalisedInto / languageName')
-check('names the language a release is dubbed into', () =>
-  assert.equal(releaseLocalisedInto('Movie.2024.TRUEFRENCH.1080p', 'en'), 'fr')
-)
-check('null for a clean release', () =>
-  assert.equal(releaseLocalisedInto('Movie.2024.1080p', 'en'), null)
-)
 check('language names', () => {
   assert.equal(languageName('fre'), 'French')
   assert.equal(languageName('en'), 'English')

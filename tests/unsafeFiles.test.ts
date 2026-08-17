@@ -63,20 +63,18 @@ check('RTL override hiding the real extension', () => {
 check('zero-width space padding', () => blocks('Movie\u200B.exe'))
 check('path is reduced to its basename', () => blocks('Some.Movie.2024/Subs/install.exe'))
 check('windows path separators too', () => blocks('C:\\downloads\\Movie\\setup.exe'))
-check('a DIRECTORY named .exe does not condemn its media', () =>
-  allows('Movie.exe/film.mkv')
-)
+check('a DIRECTORY named .exe does not condemn its media', () => allows('Movie.exe/film.mkv'))
 check('.exe in the middle is not the effective extension', () => allows('Movie.exe.mkv'))
 
 console.log('\neffectiveExtension')
-check('reads the last extension', () =>
-  assert.equal(effectiveExtension('a.b.c.mkv'), 'mkv')
-)
+check('reads the last extension', () => assert.equal(effectiveExtension('a.b.c.mkv'), 'mkv'))
 check('empty when none', () => assert.equal(effectiveExtension('plainfile'), ''))
 check('empty on a trailing dot only', () => assert.equal(effectiveExtension('weird.'), ''))
 
 console.log('\nmime types')
-check('blocks x-msdownload', () => assert.equal(isBlockedMimeType('application/x-msdownload'), true))
+check('blocks x-msdownload', () =>
+  assert.equal(isBlockedMimeType('application/x-msdownload'), true)
+)
 check('blocks with charset suffix', () =>
   assert.equal(isBlockedMimeType('application/x-msdownload; charset=binary'), true)
 )

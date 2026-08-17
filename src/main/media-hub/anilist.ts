@@ -72,9 +72,7 @@ const NO_ANILIST_ID = -1
 export function anilistIdFromKitsuMappings(mappings: {
   data?: { attributes?: { externalSite?: string; externalId?: string } }[]
 }): number | null {
-  const entry = (mappings.data || []).find(
-    (x) => x.attributes?.externalSite === 'anilist/anime'
-  )
+  const entry = (mappings.data || []).find((x) => x.attributes?.externalSite === 'anilist/anime')
   const id = Number(entry?.attributes?.externalId)
   return Number.isInteger(id) && id > 0 ? id : null
 }
@@ -114,14 +112,13 @@ const SEASON_CHAIN_RELATIONS = new Set(['PREQUEL', 'SEQUEL', 'PARENT'])
  *  toward a real season without itself being one. */
 export function seasonChainEdges(node: AnilistMediaNode): AnilistSeasonChainEdge[] {
   return (node.relations?.edges || [])
-    .filter(
-      (e): e is { relationType: string; node: { id: number; format: string } } =>
-        Boolean(
-          e.relationType &&
-            SEASON_CHAIN_RELATIONS.has(e.relationType) &&
-            e.node?.format === 'TV' &&
-            Number.isInteger(e.node?.id)
-        )
+    .filter((e): e is { relationType: string; node: { id: number; format: string } } =>
+      Boolean(
+        e.relationType &&
+        SEASON_CHAIN_RELATIONS.has(e.relationType) &&
+        e.node?.format === 'TV' &&
+        Number.isInteger(e.node?.id)
+      )
     )
     .map((e) => ({ relationType: e.relationType, targetAnilistId: e.node.id }))
 }
@@ -138,7 +135,10 @@ const SEASON_ORDINAL: Record<string, number> = { WINTER: 1, SPRING: 2, SUMMER: 3
  * date, not Kitsu's upload-order id, which is only ever a proxy for it.
  * Pure and testable. Null when either half is missing/unrecognized.
  */
-export function anilistSeasonOrderKey(season: string | null | undefined, seasonYear: number | null | undefined): number | null {
+export function anilistSeasonOrderKey(
+  season: string | null | undefined,
+  seasonYear: number | null | undefined
+): number | null {
   const ordinal = season ? SEASON_ORDINAL[season] : undefined
   if (!ordinal || !Number.isInteger(seasonYear) || !seasonYear) return null
   return seasonYear * 10 + ordinal

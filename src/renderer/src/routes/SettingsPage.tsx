@@ -440,12 +440,6 @@ function MoreOptionsSection() {
       await saveSetting('settings.ui-animations', () => api.settings.setUiAnimations(enabled))
   }
 
-  async function handleToggleVideoTranscode(enabled: boolean) {
-    const api = window.api?.mediaHub
-    if (api)
-      await saveSetting('settings.video-transcode', () => api.settings.setVideoTranscode(enabled))
-  }
-
   async function handleToggleHideWatched(enabled: boolean) {
     const api = window.api?.mediaHub
     if (api)
@@ -496,13 +490,6 @@ function MoreOptionsSection() {
         description="Decorative ambient motion (sidebar highlights, background drift). Playback already pauses these automatically — this turns them off everywhere, all the time."
         checked={mediaHubSettings?.uiAnimationsEnabled ?? true}
         onChange={handleToggleAnimations}
-      />
-      <ToggleRow
-        icon="cpu"
-        title="Convert incompatible video (experimental)"
-        description="For titles whose video format doesn't play reliably here (e.g. HEVC). Only runs if a real hardware encoder is found on this machine — off by default, and silently has no effect otherwise. Off, you'll still get a warning instead of an unexplained crash."
-        checked={mediaHubSettings?.videoTranscodeEnabled ?? false}
-        onChange={handleToggleVideoTranscode}
       />
       <ToggleRow
         icon="eye-off"
@@ -1113,10 +1100,7 @@ export default function SettingsPage() {
             <h2 id="settings-services-title">Media services</h2>
             <p>Connect servers, download clients, and your streaming provider.</p>
           </header>
-          <div
-            ref={servicesPack.gridRef}
-            className={`${styles.groupGrid} ${styles.groupGridWide}`}
-          >
+          <div ref={servicesPack.gridRef} className={`${styles.groupGrid} ${styles.groupGridWide}`}>
             <MediaServicesSection />
             <TorBoxSection />
           </div>

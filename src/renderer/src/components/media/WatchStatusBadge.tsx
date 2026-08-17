@@ -2,7 +2,10 @@ import type { WatchStatus } from '@renderer/lib/mediaHub/watchStatus'
 import { Icon } from '@renderer/components/icons/Icon'
 import styles from './WatchStatusBadge.module.css'
 
-const BADGE: Record<Exclude<WatchStatus['state'], 'unwatched'>, { label: string; className: string }> = {
+const BADGE: Record<
+  Exclude<WatchStatus['state'], 'unwatched'>,
+  { label: string; className: string }
+> = {
   'in-progress': { label: 'In Progress', className: styles.inProgress },
   watched: { label: 'Watched', className: styles.watched },
   completed: { label: 'Completed', className: styles.completed }

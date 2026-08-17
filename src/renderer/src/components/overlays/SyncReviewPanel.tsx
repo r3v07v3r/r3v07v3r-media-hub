@@ -34,8 +34,8 @@ export function SyncReviewPanel() {
           <div className={styles.headerText}>
             <span className={styles.title}>Out of sync with Simkl</span>
             <span className={styles.subtitle}>
-              These titles disagree between this app and Simkl. Pick which side is right, or
-              ignore a title to stop it showing up here.
+              These titles disagree between this app and Simkl. Pick which side is right, or ignore
+              a title to stop it showing up here.
             </span>
           </div>
           <button

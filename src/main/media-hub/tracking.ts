@@ -178,9 +178,7 @@ async function computeMovieDiscrepancies(): Promise<WatchStatusDiscrepancy[]> {
       .map((h) => [h.id, h] as const)
   )
   const remoteMovies = new Map(
-    (await simklWatchedHistory())
-      .filter((h) => h.type === 'movie')
-      .map((h) => [h.id, h] as const)
+    (await simklWatchedHistory()).filter((h) => h.type === 'movie').map((h) => [h.id, h] as const)
   )
   const ids = new Set([...localMovies.keys(), ...remoteMovies.keys()])
   const out: WatchStatusDiscrepancy[] = []
@@ -396,10 +394,13 @@ export function registerTrackingIpc(): void {
     return { disliked: true }
   })
 
-  handle<{ id: string }, { disliked: boolean }>(MEDIA_HUB_CHANNELS.dislikedRemove, (_e, payload) => {
-    getDatabase().undislike(payload.id)
-    return { disliked: false }
-  })
+  handle<{ id: string }, { disliked: boolean }>(
+    MEDIA_HUB_CHANNELS.dislikedRemove,
+    (_e, payload) => {
+      getDatabase().undislike(payload.id)
+      return { disliked: false }
+    }
+  )
 
   handle<undefined, HomePersonalizedResult>(MEDIA_HUB_CHANNELS.homePersonalized, async () => {
     const [movies, series, anime] = await Promise.all(

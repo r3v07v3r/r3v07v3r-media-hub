@@ -23,11 +23,7 @@
 import { app } from 'electron'
 
 import { MEDIA_HUB_CHANNELS } from '../../shared/media-hub/ipc-channels'
-import type {
-  ConnectResult,
-  SubtitleResult,
-  SubtitleSelection
-} from '../../shared/media-hub/types'
+import type { ConnectResult, SubtitleResult, SubtitleSelection } from '../../shared/media-hub/types'
 import { fetchJson, type HttpError } from './httpClient'
 import { handle } from './ipcGuard'
 import { logError } from './logger'

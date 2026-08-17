@@ -18,7 +18,6 @@ export const MEDIA_HUB_CHANNELS = {
   settingsSetAutoSubtitles: 'mediahub:settings:set-auto-subtitles',
   settingsSetUiAnimations: 'mediahub:settings:set-ui-animations',
   settingsSetPerformancePanelVisible: 'mediahub:settings:set-performance-panel-visible',
-  settingsSetVideoTranscode: 'mediahub:settings:set-video-transcode',
   settingsSetStreamLimits: 'mediahub:settings:set-stream-limits',
   settingsSetStreamCacheSize: 'mediahub:settings:set-stream-cache-size',
   settingsChooseStreamCacheDir: 'mediahub:settings:choose-stream-cache-dir',
@@ -62,19 +61,10 @@ export const MEDIA_HUB_CHANNELS = {
   // Streaming / playback
   streamResolve: 'mediahub:stream:resolve',
   playStream: 'mediahub:play:stream',
-  playbackCompatibility: 'mediahub:playback:compatibility',
-  playbackSelectTracks: 'mediahub:playback:select-tracks',
   playbackStop: 'mediahub:playback:stop',
   playbackPrepareProgress: 'mediahub:playback:prepare-progress', // push event
   playbackThumbnail: 'mediahub:playback:thumbnail',
   playbackSkipTimes: 'mediahub:playback:skip-times',
-  playbackExtractSubtitle: 'mediahub:playback:extract-subtitle',
-  // A <video> element's MediaError never reaches main on its own — the
-  // renderer's onError handler forwards it here purely so it lands in
-  // logs/media-hub.log (see PlaybackOverlay), since that's the one piece
-  // of a playback crash otherwise visible only in DevTools, on the one
-  // machine it happened on, for as long as that session stays open.
-  playbackReportClientError: 'mediahub:playback:report-client-error',
   streamCacheClear: 'mediahub:playback:stream-cache-clear',
 
   // Embedded player (mpv) — see main/media-hub/playerBridge.ts.

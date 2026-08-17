@@ -15,15 +15,11 @@ files:
   - '!{.eslintcache,eslint.config.mjs,.prettierignore,.prettierrc.yaml,dev-app-update.yml,CHANGELOG.md,README.md}'
   - '!{.env,.env.*,.npmrc,pnpm-lock.yaml}'
   - '!{tsconfig.json,tsconfig.node.json,tsconfig.web.json}'
-  # Ships only via win.extraResources below (to resourcesPath/ffmpeg) — this
+  # Ships only via win.extraResources below (to resourcesPath/mpv) — this
   # exclusion stops the default files glob from ALSO pulling it into
-  # app.asar.unpacked, which doubled the installer's size for no reason
-  # (verified: 137MB in each of the two locations before this was added).
-  - '!resources/ffmpeg-win/**'
-  # Same exclusion, same reason, for the bundled mpv player (fetched by
-  # scripts/fetch-mpv.ts). mpv.exe is 114MB on its own, so letting the default
-  # glob duplicate it into app.asar.unpacked would be an even worse version of
-  # the ffmpeg problem above.
+  # app.asar.unpacked. That trap is well established here: the same mistake
+  # with the old ffmpeg bundle put 137MB in each of two locations, and mpv.exe
+  # is a single 114MB file, so it would be worse.
   - '!resources/mpv-win/**'
 asarUnpack:
   - resources/**
@@ -32,21 +28,13 @@ win:
     - nsis
   icon: build/icon.ico
   artifactName: R3-Media-Hub-${version}-Setup.${ext}
-  # Bundled so audio-compatibility playback (copy video, transcode only
-  # audio — see vlc.ts) works with zero setup: unlike VLC, which this
-  # project no longer depends on, most users won't already have ffmpeg
-  # installed. Lands at process.resourcesPath/ffmpeg/ffmpeg.exe — see
-  # vlc.ts's findFfmpeg().
-  #
-  # mpv is the playback engine itself (demux + decode + track switching +
+  # mpv is the playback engine (demux + decode + track switching +
   # subtitle rendering, all locally) — see mpv.ts's header for why a
   # <video> element could not do this. It is NOT committed; scripts/fetch-mpv.ts
   # populates resources/mpv-win on postinstall, so a build fails loudly here if
   # that step was skipped rather than silently shipping without a player.
   # Lands at process.resourcesPath/mpv/mpv.exe — see mpv.ts's findMpv().
   extraResources:
-    - from: resources/ffmpeg-win
-      to: ffmpeg
     - from: resources/mpv-win
       to: mpv
 nsis:

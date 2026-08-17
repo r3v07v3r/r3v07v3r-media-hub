@@ -19,10 +19,7 @@ import { sendToRenderer } from './rendererBridge'
  * triggers mid-playback; the renderer simply ignores anything that arrives
  * while no preparation is in flight (see AppStateContext's subscriber).
  */
-export function reportPreparation(
-  step: PlaybackPrepareProgress['step'],
-  message: string
-): void {
+export function reportPreparation(step: PlaybackPrepareProgress['step'], message: string): void {
   sendToRenderer(MEDIA_HUB_CHANNELS.playbackPrepareProgress, { step, message })
 }
 

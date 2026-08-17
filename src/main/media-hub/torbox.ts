@@ -429,7 +429,10 @@ export function registerTorBoxIpc(): void {
 
   handle<PlayStreamPayload, PlaybackResult>(
     MEDIA_HUB_CHANNELS.playStream,
-    async (_e, { stream, mediaId, type, resolveId, catalogId, title, posterUrl, season, episode }) => {
+    async (
+      _e,
+      { stream, mediaId, type, resolveId, catalogId, title, posterUrl, season, episode }
+    ) => {
       const auth = getTorBoxToken()
       const hash = String(stream?.infoHash || '').toLowerCase()
       if (!/^[a-f0-9]{40}$/.test(hash)) {

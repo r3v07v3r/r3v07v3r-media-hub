@@ -69,11 +69,9 @@ export interface MediaHubRawSettings {
   autoSubtitlesEnabled?: boolean
   uiAnimationsEnabled?: boolean
   performancePanelVisible?: boolean
-  videoTranscodeEnabled?: boolean
   maxStreamResolution?: number
   maxStreamSizeGb?: number
   connectionSpeedMbps?: number
-  preferredUpscaleHeight?: number
   /** How much local disk streamCache.ts is allowed to use for the local
    *  rolling playback cache (see playbackSession.ts's
    *  resolveStreamCacheMaxBytes). Distinct from maxStreamSizeGb above,

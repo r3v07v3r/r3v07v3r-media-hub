@@ -258,7 +258,9 @@ async function kitsuSequelEdges(kitsuId: string): Promise<SequelEdge[]> {
       `https://kitsu.io/api/edge/anime/${encodeURIComponent(kitsuId)}/media-relationships?include=destination&page%5Blimit%5D=20`
     )
     const edges: SequelEdge[] = (result.data || [])
-      .filter((r: RawApiPayload) => r.attributes?.role === 'sequel' || r.attributes?.role === 'prequel')
+      .filter(
+        (r: RawApiPayload) => r.attributes?.role === 'sequel' || r.attributes?.role === 'prequel'
+      )
       .map((r: RawApiPayload) => ({
         role: r.attributes.role,
         destId: String(r.relationships?.destination?.data?.id || '')
@@ -511,7 +513,11 @@ export async function buildGroupedAnimeVideos(
     if (!episodes.length) {
       const real = await kitsuRealEpisodes(kitsuIds[i], parentId)
       if (real.length) {
-        episodes = real.map((v) => ({ ...v, id: `${parentId}:${seasonNumber}:${v.episode}`, season: seasonNumber }))
+        episodes = real.map((v) => ({
+          ...v,
+          id: `${parentId}:${seasonNumber}:${v.episode}`,
+          season: seasonNumber
+        }))
       } else {
         try {
           const result = await fetchJson<RawApiPayload>(

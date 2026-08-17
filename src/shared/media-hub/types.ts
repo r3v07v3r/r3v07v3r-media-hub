@@ -160,16 +160,9 @@ export interface MediaTrack {
   title: string
   label: string
   default: boolean
-  /** Video tracks only (ffprobe never reports these for audio/subtitle streams) — used for the upscale suggestion below, not currently shown in the UI otherwise. */
+  /** Video tracks only — mpv reports these as demux-w/demux-h. Not currently shown in the UI. */
   width?: number
   height?: number
-}
-
-/** Computed once per title (see vlc.ts's videoResolutionUpscaleSuggestion) when the source's own resolution is 1080p or below — surfaced regardless of codec/transcode-path, since upscaling is an independent axis from codec compatibility. `recommended` defaults to the user's last-chosen height (see MediaHubRawSettings.preferredUpscaleHeight) when that's still a valid option for this title, otherwise the option closest to this machine's screen resolution. */
-export interface UpscaleSuggestion {
-  sourceHeight: number
-  options: number[]
-  recommended: number
 }
 
 export interface MediaTracks {
@@ -448,8 +441,6 @@ export interface MediaHubPublicSettings {
   uiAnimationsEnabled: boolean
   /** Whether the Home dashboard's live CPU/GPU/RAM/network gauges (PerformanceWidget) are shown. Device/UI preference, not account data — survives logout like uiAnimationsEnabled. */
   performancePanelVisible: boolean
-  /** Opt-in, off by default: re-encode video (not just audio) via a real hardware encoder when a source's video codec isn't one Chromium can reliably decode (see vlc.ts's detectVideoEncoder). Silently has no effect if no working hardware encoder is found on this machine — never falls back to a software encoder. */
-  videoTranscodeEnabled: boolean
   /** Upper bounds used when choosing a release. Zero means unrestricted. */
   maxStreamResolution: number
   maxStreamSizeGb: number
@@ -459,9 +450,7 @@ export interface MediaHubPublicSettings {
   streamCacheDir?: string
   /** Last measured downstream speed. Informational; the test is only run on demand. */
   connectionSpeedMbps?: number
-  /** Last height the player's own quality menu was set to (see UpscaleSuggestion) — remembered so the next applicable title's suggestion defaults to it instead of always recomputing from screen size. Global to this install, not per-profile — same scope as every other setting here (playbackBuffer, videoTranscodeEnabled, etc.), which don't have per-profile scoping either. Undefined until the person has picked one at least once. */
-  preferredUpscaleHeight?: number
-  /** Default state for the Movies/Series/Anime pages' "Hide Watched/Completed/Disliked" filters (see categoryFilters.ts) — a browse page starts from these unless the person has explicitly toggled that filter on this page before (see CategoryPage.tsx), and Home's Mood Browser / My Stuff apply them directly with no per-page override. Device/browsing preference, not account data — survives logout like uiAnimationsEnabled/videoTranscodeEnabled. */
+  /** Default state for the Movies/Series/Anime pages' "Hide Watched/Completed/Disliked" filters (see categoryFilters.ts) — a browse page starts from these unless the person has explicitly toggled that filter on this page before (see CategoryPage.tsx), and Home's Mood Browser / My Stuff apply them directly with no per-page override. Device/browsing preference, not account data — survives logout like uiAnimationsEnabled. */
   hideWatchedDefault: boolean
   hideCompletedDefault: boolean
   hideDislikedDefault: boolean

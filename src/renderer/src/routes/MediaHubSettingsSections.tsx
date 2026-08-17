@@ -895,7 +895,9 @@ export function OpenSubtitlesSection() {
               // while the backend rejected a connect attempt without them
               // every time; fixed by requiring what's actually required
               // instead of promising less than that.
-              disabled={!apiKey.trim() || !username.trim() || !password.trim() || status.kind === 'busy'}
+              disabled={
+                !apiKey.trim() || !username.trim() || !password.trim() || status.kind === 'busy'
+              }
             >
               {status.kind === 'busy' ? 'Connecting…' : 'Connect'}
             </button>

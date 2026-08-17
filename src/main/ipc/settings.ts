@@ -54,7 +54,10 @@ function decryptApiKey(value: string): string {
   }
 }
 
-function mapApiKeys(services: ServiceSettings, transform: (apiKey: string) => string): ServiceSettings {
+function mapApiKeys(
+  services: ServiceSettings,
+  transform: (apiKey: string) => string
+): ServiceSettings {
   return Object.fromEntries(
     Object.entries(services).map(([id, config]) => [
       id,
