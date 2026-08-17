@@ -11,6 +11,7 @@
 // Everything here is structurally cloneable: it travels over Electron IPC.
 
 import type { MediaTracks } from './types'
+import type { VideoFitMode } from './videoFit'
 
 /** The subset of a catalog item the player UI actually reads. Deliberately not
  *  the full MediaItem: that type lives in the renderer, and anything needing
@@ -80,6 +81,11 @@ export interface PlayerStatePatch {
   eofReached?: boolean
   /** Track list changed — e.g. an external subtitle was added. */
   tracks?: MediaTracks
+  /** Current fit mode. Not observed off mpv like the rest of this patch:
+   *  `keepaspect` and `panscan` are two properties describing one user-facing
+   *  choice, and main is the side that knows which choice they add up to — so
+   *  it pushes the mode it just applied rather than the overlay inferring it. */
+  fitMode?: VideoFitMode
   /** A terminal playback failure. mpv reports these through `end-file` with a
    *  reason rather than anything resembling MediaError.code. */
   error?: string
@@ -110,7 +116,24 @@ export type PlayerCommand =
   /** Manual subtitle timing offset in seconds — the thing VLC users fix in two
    *  keypresses and the old <track>-based pipeline had no way to express. */
   | { type: 'set-subtitle-delay'; seconds: number }
-  | { type: 'set-fit-mode'; mode: 'contain' | 'cover' | 'fill' }
+  /** How the picture is fitted into the window — see shared/media-hub/videoFit.ts. */
+  | { type: 'set-fit-mode'; mode: VideoFitMode }
+
+/**
+ * Main -> overlay. An input that arrived at mpv's own window rather than the
+ * controls, forwarded so the overlay can apply it through exactly the handlers
+ * its own clicks and keys use.
+ *
+ * mpv's window receives input whenever the controls are hidden, because the
+ * overlay is click-through then and only mousemove is forwarded to it. Acting
+ * on those directly in main is what this type exists to avoid: main has no
+ * access to the party rules (they live in the overlay's usePartySync), so a
+ * pause applied there would pause one person and leave the rest of the watch
+ * party playing.
+ */
+export interface PlayerInputEvent {
+  action: 'toggle-pause' | 'toggle-fullscreen'
+}
 
 /**
  * Overlay -> main -> main window. Actions whose effect belongs to the main
@@ -134,3 +157,12 @@ export type PlayerUiEvent =
    *  click-through so the video underneath receives the events instead — see
    *  playerWindow.ts's setOverlayInteractive. */
   | { type: 'set-interactive'; interactive: boolean }
+  /** Whether this window is actually listening for forwarded input yet.
+   *
+   *  Sent when the PlayerInputEvent subscription is established and again when
+   *  it goes away. Main cannot infer it: the overlay window exists well before
+   *  its renderer has mounted anything, and webContents.send to a window with
+   *  no listener is silently dropped. Without this, mpv's safety inputs would
+   *  be forwarded into nothing during startup or after a renderer failure —
+   *  precisely the states those bindings exist for. */
+  | { type: 'set-input-ready'; ready: boolean }

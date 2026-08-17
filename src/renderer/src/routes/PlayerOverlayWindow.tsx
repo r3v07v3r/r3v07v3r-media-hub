@@ -24,6 +24,12 @@ import { PlayerWindowProvider, usePlayerWindow } from '@renderer/context/PlayerW
 import { usePartySync } from '@renderer/hooks/usePartySync'
 import { usePlayerTracking } from '@renderer/hooks/usePlayerTracking'
 import type { SubtitleResult } from '@shared/media-hub/types'
+import {
+  DEFAULT_VIDEO_FIT,
+  VIDEO_FIT_MODES,
+  videoFitDescription,
+  videoFitLabel
+} from '@shared/media-hub/videoFit'
 import styles from './PlayerOverlayWindow.module.css'
 
 const CONTROLS_IDLE_MS = 3200
@@ -35,7 +41,7 @@ const SCRUB_PREVIEW_WIDTH = 160
  *  live; there is no re-render of anything. */
 const SUBTITLE_DELAY_STEP = 0.25
 
-type Menu = 'audio' | 'subtitles' | null
+type Menu = 'audio' | 'subtitles' | 'fit' | null
 
 function formatTime(totalSeconds: number): string {
   if (!Number.isFinite(totalSeconds) || totalSeconds < 0) return '0:00'
@@ -67,6 +73,9 @@ function PlayerControls() {
   const buffering = state.bufferingForCache === true
   const volume = state.volume ?? 1
   const media = session?.media ?? null
+  // Main owns this, and pushes it — the overlay never guesses, so the label
+  // stays right across a title change or a remount.
+  const fitMode = state.fitMode ?? DEFAULT_VIDEO_FIT
 
   const party = usePartySync({
     timePos,
@@ -160,11 +169,158 @@ function PlayerControls() {
     closePlayer()
   }, [state.error, ui, closePlayer])
 
-  // Real OS-level BrowserWindow fullscreen, not the DOM Fullscreen API — the
-  // main window owns it and mpv follows automatically as its child.
+  // Real OS-level BrowserWindow fullscreen of the MAIN window, not the DOM
+  // Fullscreen API and not this window — mpv's video window and this overlay
+  // are both sized to the main window's content area, so it is the one that has
+  // to change shape for anything to happen (see appIpc.ts).
+  const [fullScreen, setFullScreen] = useState(false)
   const toggleFullscreen = useCallback(() => {
-    window.api?.mediaHub?.window?.toggleFullscreen().catch(() => {})
+    window.api?.mediaHub?.window
+      ?.toggleFullscreen()
+      .then((result) => setFullScreen(result.fullScreen))
+      .catch(() => {})
   }, [])
+
+  // Read once on mount, then follow. Reading matters because the overlay is
+  // created mid-session and can open into an already-fullscreen window;
+  // following matters because Escape and F11 change the state without asking
+  // this button first.
+  useEffect(() => {
+    const api = window.api?.mediaHub?.window
+    if (!api) return
+    api
+      .isFullscreen()
+      .then((result) => setFullScreen(result.fullScreen))
+      .catch(() => {})
+    return api.onFullscreenChange(({ fullScreen: next }) => setFullScreen(next))
+  }, [])
+
+  // Escape leaves fullscreen first, and only closes the title when there was no
+  // fullscreen to leave — so one press is never both.
+  //
+  // The decision is asked of main rather than read from `fullScreen` above.
+  // That state is accurate within a frame or two, but Escape is the key someone
+  // presses when something has already gone wrong, and answering from a stale
+  // cache could make it *enter* fullscreen instead. Anything that goes wrong on
+  // the way still closes the player, because a dead Escape is the one outcome
+  // that must not happen — see playerBridge's r3-stop for the same rule applied
+  // when mpv's window holds the focus instead of this one.
+  const handleEscape = useCallback(() => {
+    const api = window.api?.mediaHub?.window
+    if (!api) {
+      closePlayer()
+      return
+    }
+    api
+      .exitFullscreen()
+      .then(({ wasFullScreen }) => {
+        if (!wasFullScreen) closePlayer()
+      })
+      .catch(() => closePlayer())
+  }, [closePlayer])
+
+  // Click the picture to play/pause; double-click it for fullscreen.
+  //
+  // The two gestures share a button, so the first click of a double-click is
+  // indistinguishable from a single one until the second either arrives or
+  // doesn't. This toggles immediately and lets the double-click handler put
+  // playback back, rather than holding the toggle until a double-click is ruled
+  // out. Deferring is the more obvious design and it cannot be made correct
+  // here: the deadline it needs is the platform's double-click interval, which
+  // is user-configurable (500ms by default on Windows) and not readable from a
+  // renderer. Any fixed guess shorter than it fires the toggle before the
+  // second click lands — so a plain double-click both pauses the film and goes
+  // fullscreen — and any guess long enough to be safe is a visible lag on every
+  // single click, which is the whole point of clicking the picture.
+  //
+  // Toggling twice leaves playback exactly where it started, costs one brief
+  // pause during a gesture that is about to redraw the whole window anyway, and
+  // stays coherent for a watch party: both toggles broadcast, so everyone ends
+  // up in the same state rather than the host alone.
+  //
+  // All of this covers clicks while the controls are up. When they are hidden
+  // the window is click-through and the click reaches mpv instead, which is
+  // what its MBTN_LEFT binding is for (see mpv.ts's bindSafetyKeys).
+  const pausedBeforeClick = useRef(paused)
+  const handleSurfaceClick = useCallback(
+    (event: React.MouseEvent<HTMLDivElement>) => {
+      // The picture only. Clicks on the controls bar bubble up to here too, and
+      // the play button toggling twice per press is not a subtle bug. Locked
+      // party followers need no check — togglePlay already ignores them.
+      if (event.target !== event.currentTarget) return
+      // The second click of a double-click, which the handler below owns.
+      if (event.detail > 1) return
+      // Recorded before the toggle, so the undo below restores a state that was
+      // read when nothing was in flight.
+      pausedBeforeClick.current = paused
+      party.togglePlay()
+    },
+    [party, paused]
+  )
+
+  // Same picture-only rule — this handler has always been on the surface, so
+  // before that rule an impatient double-press on any control threw the window
+  // into fullscreen.
+  const handleSurfaceDoubleClick = useCallback(
+    (event: React.MouseEvent<HTMLDivElement>) => {
+      if (event.target !== event.currentTarget) return
+      // Undoes the toggle the first click of this pair already made: the
+      // gesture was "fullscreen", not "pause, then fullscreen".
+      //
+      // setPaused, not another togglePlay. A toggle would have to work out what
+      // to tell the rest of a watch party from the last observed `paused`, and
+      // that reading may still be the pre-click one this soon after — in which
+      // case peers are sent the action that already happened and stay paused
+      // while this player resumes. Naming the target state cannot go stale.
+      party.setPaused(pausedBeforeClick.current)
+      toggleFullscreen()
+    },
+    [party, toggleFullscreen]
+  )
+
+  // Input that reached mpv's window instead of this one, because the controls
+  // were hidden and the overlay was click-through (see mpv.ts's bindSafetyKeys
+  // for which inputs, and why they cannot be applied in main). Routed through
+  // the same handlers as a click here, so the two can never drift apart on who
+  // is allowed to pause or on what the party is told.
+  //
+  // The handlers are read from a ref rather than listed as dependencies:
+  // usePartySync returns a fresh object every render, and re-subscribing an IPC
+  // channel that often for a callback that changes nothing would be waste.
+  // Deliberately NOT revealing the controls here, tempting as it is.
+  //
+  // Revealing them makes this window interactive, and that hands mouse
+  // ownership back from mpv within a few milliseconds — long before the second
+  // click of a double-click arrives. That click would then land on this window
+  // instead, where it is the *first* click as far as Chromium's click counting
+  // is concerned, so mpv never reports MBTN_LEFT_DBL and React never sees a
+  // pair: the double-click-to-fullscreen gesture disappears exactly in the
+  // state these bindings exist to serve. Both clicks have to stay with the
+  // window that saw the first one, so the controls stay put and any mouse
+  // movement brings them back as it always has.
+  const forwardedInput = useRef({ party, toggleFullscreen })
+  useEffect(() => {
+    forwardedInput.current = { party, toggleFullscreen }
+  })
+  useEffect(() => {
+    const api = window.api?.mediaHub?.player
+    if (!api?.onInput) return
+    const unsubscribe = api.onInput(({ action }) => {
+      const current = forwardedInput.current
+      if (action === 'toggle-pause') current.party.togglePlay()
+      else if (action === 'toggle-fullscreen') current.toggleFullscreen()
+    })
+    // Main forwards nothing until this says so, and goes back to driving mpv
+    // itself once it is retracted — otherwise input would be handed to a window
+    // that has not mounted this listener yet, or no longer has it, and vanish.
+    // Retracting it also covers a React tree that unmounts on an error, since
+    // effect cleanups still run in that case.
+    ui({ type: 'set-input-ready', ready: true })
+    return () => {
+      ui({ type: 'set-input-ready', ready: false })
+      unsubscribe()
+    }
+  }, [ui])
 
   useEffect(() => {
     function onKey(event: KeyboardEvent): void {
@@ -180,13 +336,13 @@ function PlayerControls() {
       } else if (event.key === 'f') {
         toggleFullscreen()
       } else if (event.key === 'Escape') {
-        closePlayer()
+        handleEscape()
       }
       revealControls()
     }
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
-  }, [party, seekTo, timePos, toggleFullscreen, closePlayer, revealControls])
+  }, [party, seekTo, timePos, toggleFullscreen, handleEscape, revealControls])
 
   // --- Skip intro/credits (anime only) -------------------------------------
   // Needs a real duration: Aniskip matches submissions by proximity to episode
@@ -341,7 +497,12 @@ function PlayerControls() {
   const activeSubtitleOrdinal = state.subtitleOrdinal ?? -1
 
   return (
-    <div className={styles.surface} onMouseMove={revealControls} onDoubleClick={toggleFullscreen}>
+    <div
+      className={styles.surface}
+      onMouseMove={revealControls}
+      onClick={handleSurfaceClick}
+      onDoubleClick={handleSurfaceDoubleClick}
+    >
       {buffering && (
         <div className={styles.buffering} aria-live="polite">
           <span className={styles.spinner} aria-hidden="true" />
@@ -571,6 +732,39 @@ function PlayerControls() {
             )}
           </div>
 
+          {/* Fit/fill. mpv applies both underlying properties to the frame
+              already on screen, so every option here is instant — there is no
+              reload and no reseek behind any of them. */}
+          <div className={styles.menuWrap}>
+            <button
+              type="button"
+              className={styles.button}
+              onClick={() => setMenu(menu === 'fit' ? null : 'fit')}
+              aria-label={`Picture size: ${videoFitLabel(fitMode)}`}
+            >
+              {videoFitLabel(fitMode)}
+            </button>
+            {menu === 'fit' && (
+              <div className={styles.menu}>
+                {VIDEO_FIT_MODES.map((mode) => (
+                  <button
+                    key={mode}
+                    type="button"
+                    className={styles.menuItem}
+                    onClick={() => {
+                      void command({ type: 'set-fit-mode', mode })
+                      setMenu(null)
+                    }}
+                  >
+                    {videoFitLabel(mode)}
+                    {fitMode === mode ? ' ✓' : ''}
+                    <span className={styles.menuItemNote}>{videoFitDescription(mode)}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
           <button
             type="button"
             className={styles.button}
@@ -578,6 +772,16 @@ function PlayerControls() {
             aria-label="Watch party"
           >
             Party
+          </button>
+
+          <button
+            type="button"
+            className={styles.button}
+            onClick={toggleFullscreen}
+            aria-label={fullScreen ? 'Exit fullscreen' : 'Enter fullscreen'}
+            title={fullScreen ? 'Exit fullscreen (F)' : 'Fullscreen (F)'}
+          >
+            {fullScreen ? '⤡' : '⤢'}
           </button>
 
           <button

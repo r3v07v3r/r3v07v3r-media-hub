@@ -16,6 +16,7 @@ import { installDownloadGuard } from './media-hub/downloadGuard'
 import { closeParty } from './media-hub/watchParty'
 import { stopPlayback } from './media-hub/playbackSession'
 import { shutdownPlayer } from './media-hub/playerBridge'
+import { sendToPlayerOverlay } from './media-hub/playerWindow'
 import { MEDIA_HUB_CHANNELS } from '../shared/media-hub/ipc-channels'
 
 // Fixed 1920x1080 design canvas (spec section 1) — the composition is built
@@ -57,12 +58,16 @@ function createWindow(): void {
   // real state even when it changes from something other than that button
   // (OS-level exit via Escape/F11, etc.) — without this, the renderer's
   // own local toggle-tracking state would drift out of sync with reality.
-  mainWindow.on('enter-full-screen', () => {
-    sendToRenderer(MEDIA_HUB_CHANNELS.windowFullscreenChanged, { fullScreen: true })
-  })
-  mainWindow.on('leave-full-screen', () => {
-    sendToRenderer(MEDIA_HUB_CHANNELS.windowFullscreenChanged, { fullScreen: false })
-  })
+  //
+  // Sent to the player overlay as well as the main renderer, because during
+  // playback the overlay is where that button actually lives — and it is a
+  // separate window, so sendToRenderer does not reach it.
+  const announceFullscreen = (fullScreen: boolean): void => {
+    sendToRenderer(MEDIA_HUB_CHANNELS.windowFullscreenChanged, { fullScreen })
+    sendToPlayerOverlay(MEDIA_HUB_CHANNELS.windowFullscreenChanged, { fullScreen })
+  }
+  mainWindow.on('enter-full-screen', () => announceFullscreen(true))
+  mainWindow.on('leave-full-screen', () => announceFullscreen(false))
 
   // media-hub integration: only ever open an external browser window for a
   // host on the media-hub security allowlist (TorBox/Simkl/GitHub/TMDB/MAL/

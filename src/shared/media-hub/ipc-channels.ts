@@ -99,6 +99,10 @@ export const MEDIA_HUB_CHANNELS = {
    *  window's own state (close the player, raise a toast, refresh watch
    *  status, open the party panel). */
   playerUiEvent: 'mediahub:player:ui-event',
+  /** Main -> overlay push. An input that landed on mpv's own window instead of
+   *  the controls, handed over so the overlay applies it with its own party
+   *  rules rather than main acting on mpv behind the party's back. */
+  playerInput: 'mediahub:player:input', // push event
   libraryList: 'mediahub:library:list',
   libraryPlay: 'mediahub:library:play',
   streamCacheList: 'mediahub:stream-cache:list',
@@ -160,6 +164,8 @@ export const MEDIA_HUB_CHANNELS = {
 
   // Window
   windowToggleFullscreen: 'mediahub:window:toggle-fullscreen',
+  windowExitFullscreen: 'mediahub:window:exit-fullscreen',
+  windowIsFullscreen: 'mediahub:window:is-fullscreen',
   windowFullscreenChanged: 'mediahub:window:fullscreen-changed', // push event
 
   // Downloads

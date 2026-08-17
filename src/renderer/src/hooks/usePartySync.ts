@@ -67,6 +67,11 @@ export interface PartySync {
   seekTo: (seconds: number) => void
   /** Party-aware play/pause. */
   togglePlay: () => void
+  /** Party-aware play/pause for a caller that already knows the state it wants.
+   *  Unlike togglePlay it never consults the last observed `paused`, so it
+   *  cannot broadcast an action derived from a reading that has not caught up
+   *  yet — see the note on togglePlay. */
+  setPaused: (paused: boolean) => void
 }
 
 export function usePartySync({
@@ -250,12 +255,33 @@ export function usePartySync({
     [isHost, canControl, run, send, clearSyncSeek, checkSeekReady]
   )
 
+  // Note what this has to do that a solo player would not: mpv is told to
+  // *toggle*, but peers must be told the resulting state, and that is derived
+  // from the last observed `paused`. The two can disagree if the observed value
+  // has not caught up — after a first toggle whose state push is still in
+  // flight, `next` is computed from the pre-toggle reading and peers are sent
+  // the action that has already happened. setPaused below exists for callers
+  // that can say what they want instead of asking for the opposite of a
+  // reading.
   const togglePlay = useCallback(() => {
     if (following && !canControl) return
     const next = live.current.paused ? 'play' : 'pause'
     run({ type: 'toggle-pause' })
     if (statusRef.current?.inParty && (isHost || canControl)) send({ type: next })
   }, [following, canControl, isHost, run, send])
+
+  const setPaused = useCallback(
+    (nextPaused: boolean) => {
+      if (following && !canControl) return
+      const next = nextPaused ? 'pause' : 'play'
+      // An explicit play/pause rather than a toggle, so this cannot race mpv's
+      // own read-modify-write either: two of these in flight land on the same
+      // state, where two toggles would cancel out.
+      run({ type: next })
+      if (statusRef.current?.inParty && (isHost || canControl)) send({ type: next })
+    },
+    [following, canControl, isHost, run, send]
+  )
 
   // Applying incoming actions. Normally only a follower receives these, but with
   // "anyone can control playback" on, any member's action reaches everyone —
@@ -379,6 +405,7 @@ export function usePartySync({
     waitingNames,
     syncing: activeSyncRequestId !== null,
     seekTo,
-    togglePlay
+    togglePlay,
+    setPaused
   }
 }

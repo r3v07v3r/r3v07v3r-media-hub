@@ -14,11 +14,18 @@ import path from 'node:path'
 
 import type {
   PlayerCommand,
+  PlayerInputEvent,
   PlayerSessionSnapshot,
   PlayerStatePatch,
   PlayerUiEvent
 } from '../../shared/media-hub/player'
 import { MEDIA_HUB_CHANNELS } from '../../shared/media-hub/ipc-channels'
+import {
+  DEFAULT_VIDEO_FIT,
+  mpvPropertiesForFit,
+  normalizeVideoFit,
+  type VideoFitMode
+} from '../../shared/media-hub/videoFit'
 import { handle } from './ipcGuard'
 import { logError } from './logger'
 import {
@@ -31,15 +38,33 @@ import {
 } from './mpv'
 import {
   closePlayerOverlay,
+  isOverlayInputReady,
   openPlayerOverlay,
   raisePlayerOverlay,
   sendToPlayerOverlay,
+  setOverlayInputReady,
   setOverlayInteractive
 } from './playerWindow'
 import { getActiveWindow, sendToRenderer } from './rendererBridge'
 
 const player = new MpvPlayer()
 let sessionSnapshot: PlayerSessionSnapshot | null = null
+
+// The fit mode is held here rather than in the overlay because the overlay is
+// rebuilt per playback session and mpv is not: a mode chosen on one title has
+// to still be the mode — and still be the one the button shows — on the next.
+let fitMode: VideoFitMode = DEFAULT_VIDEO_FIT
+
+/** Writes the mode to mpv and tells the overlay what it now is. Both
+ *  properties are always written, never just the one that changed, so mpv
+ *  cannot end up in a state no mode describes. */
+async function applyFitMode(mode: VideoFitMode): Promise<void> {
+  const { keepaspect, panscan } = mpvPropertiesForFit(mode)
+  await player.set('keepaspect', keepaspect)
+  await player.set('panscan', panscan)
+  fitMode = mode
+  queuePatch({ fitMode: mode }, true)
+}
 
 export function getPlayer(): MpvPlayer {
   return player
@@ -95,6 +120,34 @@ async function readTracks(): Promise<ReturnType<typeof tracksFromMpvTrackList>> 
     player.get<number>('duration').catch(() => undefined)
   ])
   return tracksFromMpvTrackList(list, duration)
+}
+
+/**
+ * Hands an input that landed on mpv's window to the overlay, which applies it
+ * through the same handlers its own clicks and keys use. Reports whether the
+ * overlay was in a state to take it.
+ *
+ * The check is on the overlay having *subscribed*, not on its window existing.
+ * The window is created before its renderer has mounted anything, and a send
+ * into a window with no listener is dropped silently — so trusting existence
+ * would turn "the overlay is broken", which is the case these bindings are for,
+ * into "the input disappears".
+ *
+ * A false return therefore means no overlay is listening, which also means no
+ * party sync is running, since that lives in the same React tree. The caller's
+ * fallback of acting on mpv directly is only ever reached when there is nothing
+ * left for it to be inconsistent with.
+ */
+function forwardInput(action: PlayerInputEvent['action']): boolean {
+  if (!isOverlayInputReady()) return false
+  sendToPlayerOverlay(MEDIA_HUB_CHANNELS.playerInput, { action })
+  return true
+}
+
+function toggleMainWindowFullscreen(): void {
+  const win = getActiveWindow()
+  if (!win || win.isDestroyed()) return
+  win.setFullScreen(!win.isFullScreen())
 }
 
 /** Wires every property the UI needs. Called once per mpv process, not per
@@ -154,12 +207,31 @@ async function attachObservers(): Promise<void> {
   player.on('client-message', (msg) => {
     const args = Array.isArray(msg.args) ? (msg.args as unknown[]) : []
     switch (String(args[0] ?? '')) {
-      case 'r3-stop':
+      case 'r3-stop': {
+        // Escape leaves fullscreen before it closes anything, so one press is
+        // never both. The overlay's own Escape follows the same rule via
+        // window:exit-fullscreen — this is the copy for when mpv's window has
+        // the focus instead, and the two must not disagree or Escape would mean
+        // different things depending on which window happened to be focused.
+        const mainWindow = getActiveWindow()
+        if (mainWindow && !mainWindow.isDestroyed() && mainWindow.isFullScreen()) {
+          mainWindow.setFullScreen(false)
+          return
+        }
         // Same path the overlay's close button takes.
         sendToRenderer(MEDIA_HUB_CHANNELS.playerUiEvent, { type: 'stop-playback', watched: false })
         return
+      }
       case 'r3-toggle-pause':
-        void runCommand({ type: 'toggle-pause' }).catch(() => {})
+        // Handed to the overlay rather than applied to mpv here. This process
+        // knows how to pause a file but not who is allowed to: the watch-party
+        // rules and the broadcast that keeps everyone together live in the
+        // overlay's usePartySync, so pausing from here would stop one person's
+        // film and leave the rest of the party playing.
+        if (!forwardInput('toggle-pause')) void runCommand({ type: 'toggle-pause' }).catch(() => {})
+        return
+      case 'r3-toggle-fullscreen':
+        if (!forwardInput('toggle-fullscreen')) toggleMainWindowFullscreen()
         return
       case 'r3-seek-back':
         void player.command('seek', -15, 'relative').catch(() => {})
@@ -264,6 +336,13 @@ export async function startPlayerSession(
     subtitleLanguage: options.subtitleLanguage,
     videoScaling: options.videoScaling
   })
+
+  // Re-asserted per title rather than set once. mpv keeps these properties
+  // across `loadfile`, so this is usually a no-op — but the process can be
+  // respawned mid-run (a crash, or playback stopped and restarted after a
+  // shutdown), and a respawned mpv is back at its defaults while the overlay
+  // would still be showing the mode that was chosen before.
+  await applyFitMode(fitMode).catch(() => {})
 
   // Raising once here is NOT enough, and that is the whole subtlety: the
   // `file-loaded` this just awaited fires before mpv's video window actually
@@ -438,23 +517,12 @@ async function runCommand(command: PlayerCommand): Promise<void> {
       await player.set('sub-delay', clamp(seconds, -60, 60))
       return
     }
-    case 'set-fit-mode': {
-      // The old UI did this with CSS object-fit on the <video> element. There
-      // is no CSS box around a native surface, so it maps onto mpv's own
-      // scaling: 'contain' letterboxes, 'cover' crops to fill (panscan 1),
-      // 'fill' stretches by ignoring the aspect ratio.
-      if (command.mode === 'contain') {
-        await player.set('keepaspect', true)
-        await player.set('panscan', 0)
-      } else if (command.mode === 'cover') {
-        await player.set('keepaspect', true)
-        await player.set('panscan', 1)
-      } else {
-        await player.set('keepaspect', false)
-        await player.set('panscan', 0)
-      }
+    case 'set-fit-mode':
+      // Normalized rather than trusted: this is the IPC boundary, and an
+      // unrecognized mode has an obvious safe reading (the default) instead of
+      // being worth failing the call over.
+      await applyFitMode(normalizeVideoFit(command.mode))
       return
-    }
     default: {
       // Exhaustiveness: a new PlayerCommand variant must be handled here.
       const unhandled: never = command
@@ -471,6 +539,12 @@ function subtitleCacheRoot(): string {
 }
 
 function forwardUiEvent(event: PlayerUiEvent): void {
+  // Both of these describe the overlay window itself, so they stop here rather
+  // than going on to the main window, which has nothing to do with either.
+  if (event.type === 'set-input-ready') {
+    setOverlayInputReady(Boolean(event.ready))
+    return
+  }
   if (event.type === 'set-interactive') {
     setOverlayInteractive(Boolean(event.interactive))
     // Showing the controls is the one moment it is definitely worth making sure
@@ -563,6 +637,10 @@ async function currentState(): Promise<PlayerStatePatch> {
   if (aid !== undefined) patch.audioOrdinal = ordinalForMpvTrackId(aid)
   if (sid !== undefined) patch.subtitleOrdinal = ordinalForMpvTrackId(sid)
   if (typeof cache === 'number') patch.cacheAheadSeconds = cache
+  // Read from this module, not from mpv: applyFitMode is the only writer of
+  // either underlying property, so this value is the authority on which of the
+  // three modes the pair currently represents.
+  patch.fitMode = fitMode
   patch.tracks = await readTracks()
   return patch
 }

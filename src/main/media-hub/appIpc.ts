@@ -17,6 +17,7 @@ import { handle } from './ipcGuard'
 import { logError } from './logger'
 import { mpvPath, hasActivePlayback, stopPlayback } from './playbackSession'
 import { normalizeTheme, publicSettings, logoutSettings, THEMES } from './preferences'
+import { getActiveWindow } from './rendererBridge'
 import { normalizePlaybackBuffer } from '../../shared/media-hub/playbackBuffer'
 import { normalizeVideoScaling } from '../../shared/media-hub/videoScaling'
 import { isAllowedExternalUrl } from './security'
@@ -333,9 +334,43 @@ export function registerAppIpc(): void {
     return { ok: true }
   })
 
-  handle<undefined, { fullScreen: boolean }>(MEDIA_HUB_CHANNELS.windowToggleFullscreen, (event) => {
-    const win = BrowserWindow.fromWebContents(event.sender) as BrowserWindow
+  // Always the MAIN window, never the calling window.
+  //
+  // This used to resolve the window from event.sender, which was right when the
+  // app's own UI was the only caller. The player's controls are a second,
+  // transparent BrowserWindow now (see playerWindow.ts), so from there
+  // event.sender resolved to the overlay — created `fullscreenable: false`, so
+  // Electron dropped the call and the fullscreen button did nothing at all.
+  // Even without that guard it would have been wrong: mpv's window and the
+  // overlay both size themselves to the MAIN window's content bounds, so the
+  // main window is the only one whose fullscreen state means anything.
+  handle<undefined, { fullScreen: boolean }>(MEDIA_HUB_CHANNELS.windowToggleFullscreen, () => {
+    const win = getActiveWindow()
+    if (!win || win.isDestroyed()) throw new Error('No application window is available.')
     win.setFullScreen(!win.isFullScreen())
     return { fullScreen: win.isFullScreen() }
+  })
+
+  // Leaves fullscreen and reports whether there was any to leave.
+  //
+  // Separate from the toggle above because Escape needs to know the difference:
+  // it exits fullscreen if there is one and closes the title otherwise, and
+  // asking a toggle to do that would mean deciding from the renderer's cached
+  // idea of the current state. Escape is the key people press when something
+  // has already gone wrong, so it must not be able to *enter* fullscreen
+  // because that cache was a frame stale.
+  handle<undefined, { wasFullScreen: boolean }>(MEDIA_HUB_CHANNELS.windowExitFullscreen, () => {
+    const win = getActiveWindow()
+    if (!win || win.isDestroyed() || !win.isFullScreen()) return { wasFullScreen: false }
+    win.setFullScreen(false)
+    return { wasFullScreen: true }
+  })
+
+  // The player overlay is created mid-session and can therefore open into an
+  // already-fullscreen window, so it reads the state once on mount rather than
+  // assuming windowed and waiting for a change event that may never come.
+  handle<undefined, { fullScreen: boolean }>(MEDIA_HUB_CHANNELS.windowIsFullscreen, () => {
+    const win = getActiveWindow()
+    return { fullScreen: Boolean(win && !win.isDestroyed() && win.isFullScreen()) }
   })
 }

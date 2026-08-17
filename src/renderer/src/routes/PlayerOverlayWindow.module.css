@@ -135,6 +135,15 @@
   background: rgba(255, 255, 255, 0.12);
 }
 
+/* Second line inside a menu item, for options whose name doesn't carry the
+   whole meaning — "Fill" and "Stretch" are otherwise near-synonyms. */
+.menuItemNote {
+  display: block;
+  margin-top: 2px;
+  font-size: 11px;
+  opacity: 0.6;
+}
+
 .buffering {
   position: absolute;
   top: 50%;

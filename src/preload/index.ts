@@ -65,6 +65,7 @@ import type {
 } from '../shared/media-hub/types'
 import type {
   PlayerCommand,
+  PlayerInputEvent,
   PlayerSessionSnapshot,
   PlayerStatePatch,
   PlayerUiEvent
@@ -384,6 +385,10 @@ const api = {
         subscribe<PlayerStatePatch>(MEDIA_HUB_CHANNELS.playerState, onEvent),
       onSession: (onEvent: (snapshot: PlayerSessionSnapshot) => void): (() => void) =>
         subscribe<PlayerSessionSnapshot>(MEDIA_HUB_CHANNELS.playerSession, onEvent),
+      /** Input that reached mpv's window instead of the controls — the overlay
+       *  applies it through its own handlers so the party rules still hold. */
+      onInput: (onEvent: (event: PlayerInputEvent) => void): (() => void) =>
+        subscribe<PlayerInputEvent>(MEDIA_HUB_CHANNELS.playerInput, onEvent),
       /** Main-window side of the bridge: actions the overlay raised that belong
        *  to this window's state (close the player, toast, refresh watch
        *  status, open the party panel). */
@@ -527,6 +532,10 @@ const api = {
     window: {
       toggleFullscreen: (): Promise<{ fullScreen: boolean }> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.windowToggleFullscreen),
+      exitFullscreen: (): Promise<{ wasFullScreen: boolean }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.windowExitFullscreen),
+      isFullscreen: (): Promise<{ fullScreen: boolean }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.windowIsFullscreen),
       onFullscreenChange: (onEvent: (payload: { fullScreen: boolean }) => void): (() => void) =>
         subscribe<{ fullScreen: boolean }>(MEDIA_HUB_CHANNELS.windowFullscreenChanged, onEvent)
     },
