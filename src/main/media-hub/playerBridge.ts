@@ -186,6 +186,10 @@ export interface StartPlayerSessionOptions {
   startSeconds?: number
   audioLanguage?: string
   subtitleLanguage?: string
+  /** The playback-buffer preset in seconds (3 | 8 | 15). Chooses how far ahead
+   *  mpv keeps reading — see mpv.ts's BUFFERING note. Only applied when the
+   *  process is started, since these are launch options. */
+  bufferSeconds?: number
 }
 
 /**
@@ -212,6 +216,7 @@ export async function startPlayerSession(
     }
     await player.start(mpvPath, {
       bounds: mainWindow.getContentBounds(),
+      bufferSeconds: options.bufferSeconds,
       onLog: (chunk) => {
         const line = chunk.trim()
         if (line) logError('mpv:stderr', line)

@@ -186,7 +186,8 @@ export async function preparePlayback(
   // than plumbed through unused.)
   const { tracks } = await startPlayerSession(activeCacheUrl, {
     audioLanguage: settings.audioLanguage || 'en',
-    subtitleLanguage: settings.subtitleLanguage || undefined
+    subtitleLanguage: settings.subtitleLanguage || undefined,
+    bufferSeconds: getPlaybackBufferSeconds(settings.playbackBuffer)
   })
   activeMediaTracks = tracks
   // Now that mpv has opened the file, hand its duration to the cache so the
