@@ -254,7 +254,7 @@ function decodeSubtitleText(bytes: Buffer): string {
  * Extracts the SRT text from a downloaded SubDL archive.
  *
  * Only `.srt` is accepted. The rest of the pipeline is SRT-shaped —
- * srtToVtt() parses SRT timestamps, and playbackSession writes the text out
+ * The player parses SRT timestamps directly, and playbackSession writes the text out
  * as a .srt for ffmpeg burn-in — so handing it an .ass/.ssa would not fail
  * loudly, it would render as garbage or as nothing. Refusing with a clear
  * message is the honest outcome; the person can pick another release from
@@ -280,8 +280,8 @@ export function readSrtFromZip(archive: Buffer): string {
   }
 
   // Strip a leading UTF-8 BOM: it survives decoding as U+FEFF and would
-  // otherwise land in front of the first cue number, where srtToVtt's
-  // timestamp regex no longer matches the block. Written as an escape
+  // otherwise land in front of the first cue number, where a subtitle parser's
+  // timestamp match no longer lines up with the block. Written as an escape
   // rather than a literal so it stays visible to anyone reading the source.
   return decodeSubtitleText(inflateEntry(archive, entry)).replace(/^\ufeff/, '')
 }

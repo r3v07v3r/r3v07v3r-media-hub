@@ -206,7 +206,9 @@ export interface PlaybackPrepareProgress {
   /** Which piece of the step is running. The renderer only renders
    *  `message`; this is here so a future UI (or a log) can tell the phases
    *  apart without parsing prose. */
-  step: 'link' | 'probe' | 'connect' | 'buffer' | 'encoder' | 'transcode'
+  // 'probe', 'encoder' and 'transcode' went with the ffmpeg pipeline: there
+  // is no separate probe pass, no hardware-encoder detection, and no transcode.
+  step: 'link' | 'connect' | 'buffer'
   /** Ready-to-show text, built in main (which is the only side that knows
    *  the real byte counts, buffer settings and codec decisions). */
   message: string
