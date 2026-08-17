@@ -278,7 +278,11 @@ export class MpvPlayer {
       // The app owns all input. Without these, mpv's own bindings would fight
       // the renderer's keyboard handling for the same keys.
       '--no-input-default-bindings',
-      '--input-vo-keyboard=no',
+      // Deliberately YES, paired with --no-input-default-bindings below: mpv's
+      // own window is the keyboard BACKSTOP. If the controls overlay is buried,
+      // crashed or not yet up, Escape must still get someone out of a
+      // fullscreen always-on-top video — see bindSafetyKeys().
+      '--input-vo-keyboard=yes',
       '--osc=no',
       '--osd-level=0',
       '--hwdec=auto-safe',
@@ -515,6 +519,27 @@ export class MpvPlayer {
   async setBounds(bounds: MpvBounds): Promise<void> {
     if (!this.socket) return
     await this.set('geometry', geometryFor(bounds)).catch(() => {})
+  }
+
+  /**
+   * Binds the few keys that must work even when the controls overlay does not.
+   *
+   * Being unable to pause or close a playing title is a genuinely bad state —
+   * the video is always-on-top and covers the app. The overlay owns the real
+   * keyboard handling, but it is a separate window that can lose focus, be
+   * covered, or fail to load; mpv's own window can always take a key. Each
+   * binding emits a script-message, which arrives back as a `client-message`
+   * event for playerBridge to act on, so both routes end in the same code.
+   */
+  async bindSafetyKeys(): Promise<void> {
+    for (const [key, message] of [
+      ['ESC', 'r3-stop'],
+      ['SPACE', 'r3-toggle-pause'],
+      ['LEFT', 'r3-seek-back'],
+      ['RIGHT', 'r3-seek-forward']
+    ]) {
+      await this.command('keybind', key, `script-message ${message}`).catch(() => {})
+    }
   }
 
   /** Hides/shows mpv's window without unloading the title — used when the app
