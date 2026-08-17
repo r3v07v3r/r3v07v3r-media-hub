@@ -287,9 +287,20 @@ function PlayerControls() {
   // The handlers are read from a ref rather than listed as dependencies:
   // usePartySync returns a fresh object every render, and re-subscribing an IPC
   // channel that often for a callback that changes nothing would be waste.
-  const forwardedInput = useRef({ party, toggleFullscreen, revealControls })
+  // Deliberately NOT revealing the controls here, tempting as it is.
+  //
+  // Revealing them makes this window interactive, and that hands mouse
+  // ownership back from mpv within a few milliseconds — long before the second
+  // click of a double-click arrives. That click would then land on this window
+  // instead, where it is the *first* click as far as Chromium's click counting
+  // is concerned, so mpv never reports MBTN_LEFT_DBL and React never sees a
+  // pair: the double-click-to-fullscreen gesture disappears exactly in the
+  // state these bindings exist to serve. Both clicks have to stay with the
+  // window that saw the first one, so the controls stay put and any mouse
+  // movement brings them back as it always has.
+  const forwardedInput = useRef({ party, toggleFullscreen })
   useEffect(() => {
-    forwardedInput.current = { party, toggleFullscreen, revealControls }
+    forwardedInput.current = { party, toggleFullscreen }
   })
   useEffect(() => {
     const api = window.api?.mediaHub?.player
@@ -298,10 +309,6 @@ function PlayerControls() {
       const current = forwardedInput.current
       if (action === 'toggle-pause') current.party.togglePlay()
       else if (action === 'toggle-fullscreen') current.toggleFullscreen()
-      // Clicking the picture also brings the controls back, the same as moving
-      // the mouse over it — this is the one route where that does not already
-      // happen, since the click never reached this window's own handlers.
-      current.revealControls()
     })
   }, [])
 
