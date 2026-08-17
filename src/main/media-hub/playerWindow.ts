@@ -191,6 +191,28 @@ export function openPlayerOverlay(parent: BrowserWindow): BrowserWindow {
 }
 
 /**
+ * Raises the controls above mpv's video window and gives them keyboard focus.
+ *
+ * Ordering matters and is not obvious: this window is created BEFORE mpv has a
+ * video window (mpv makes one on loadfile, not on launch), and mpv sets
+ * --ontop. Among always-on-top windows on Windows the most recently raised
+ * wins, so the controls start out buried under the video — invisible,
+ * unclickable, and with no route for Escape. Symptom: a playing title with no
+ * way to pause or exit it.
+ *
+ * So this must be called AFTER the file is loaded, not when the window is made.
+ */
+export function raisePlayerOverlay(): void {
+  const win = getPlayerOverlay()
+  if (!win) return
+  win.setAlwaysOnTop(true, 'screen-saver')
+  win.moveTop()
+  // Without focus the keydown handler never runs, which is what leaves Escape
+  // and space dead while a title is playing.
+  win.focus()
+}
+
+/**
  * Click-through control. `interactive: false` forwards mouse events to whatever
  * is underneath (mpv) while still delivering mousemove to this window, which is
  * what lets moving the mouse over the video reveal the controls without the

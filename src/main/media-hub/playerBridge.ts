@@ -32,6 +32,7 @@ import {
 import {
   closePlayerOverlay,
   openPlayerOverlay,
+  raisePlayerOverlay,
   sendToPlayerOverlay,
   setOverlayInteractive
 } from './playerWindow'
@@ -141,6 +142,30 @@ async function attachObservers(): Promise<void> {
       .catch(() => {})
   })
 
+  // The keyboard backstop (see MpvPlayer.bindSafetyKeys). These arrive when
+  // mpv's own window has focus rather than the controls overlay, and route to
+  // exactly the same actions the overlay's buttons do.
+  player.on('client-message', (msg) => {
+    const args = Array.isArray(msg.args) ? (msg.args as unknown[]) : []
+    switch (String(args[0] ?? '')) {
+      case 'r3-stop':
+        // Same path the overlay's close button takes.
+        sendToRenderer(MEDIA_HUB_CHANNELS.playerUiEvent, { type: 'stop-playback', watched: false })
+        return
+      case 'r3-toggle-pause':
+        void runCommand({ type: 'toggle-pause' }).catch(() => {})
+        return
+      case 'r3-seek-back':
+        void player.command('seek', -15, 'relative').catch(() => {})
+        return
+      case 'r3-seek-forward':
+        void player.command('seek', 15, 'relative').catch(() => {})
+        return
+      default:
+        return
+    }
+  })
+
   // mpv's failure model is end-file with a reason, not anything resembling
   // MediaError.code. Only a genuine error is surfaced: a normal stop or an EOF
   // arrives on the same event and must not be reported as a failure.
@@ -193,6 +218,7 @@ export async function startPlayerSession(
       }
     })
     await attachObservers()
+    await player.bindSafetyKeys()
   }
   trackWindow(mainWindow)
 
@@ -202,6 +228,11 @@ export async function startPlayerSession(
     audioLanguage: options.audioLanguage,
     subtitleLanguage: options.subtitleLanguage
   })
+
+  // mpv only creates its video window on loadfile, and it is always-on-top —
+  // so the controls have to be re-raised now that it exists, or they stay
+  // buried under the video with no way to pause or close the title.
+  raisePlayerOverlay()
 
   const tracks = await readTracks()
   queuePatch({ tracks }, true)
