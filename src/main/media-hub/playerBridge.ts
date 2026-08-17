@@ -38,10 +38,11 @@ import {
 } from './mpv'
 import {
   closePlayerOverlay,
-  getPlayerOverlay,
+  isOverlayInputReady,
   openPlayerOverlay,
   raisePlayerOverlay,
   sendToPlayerOverlay,
+  setOverlayInputReady,
   setOverlayInteractive
 } from './playerWindow'
 import { getActiveWindow, sendToRenderer } from './rendererBridge'
@@ -123,16 +124,22 @@ async function readTracks(): Promise<ReturnType<typeof tracksFromMpvTrackList>> 
 
 /**
  * Hands an input that landed on mpv's window to the overlay, which applies it
- * through the same handlers its own clicks and keys use. Reports whether there
- * was an overlay to take it.
+ * through the same handlers its own clicks and keys use. Reports whether the
+ * overlay was in a state to take it.
  *
- * A false return means no player-overlay window exists — which also means no
- * party sync is running, since that lives in it. So the caller's fallback of
- * acting on mpv directly is only ever reached when there is nothing for it to
- * be inconsistent with.
+ * The check is on the overlay having *subscribed*, not on its window existing.
+ * The window is created before its renderer has mounted anything, and a send
+ * into a window with no listener is dropped silently — so trusting existence
+ * would turn "the overlay is broken", which is the case these bindings are for,
+ * into "the input disappears".
+ *
+ * A false return therefore means no overlay is listening, which also means no
+ * party sync is running, since that lives in the same React tree. The caller's
+ * fallback of acting on mpv directly is only ever reached when there is nothing
+ * left for it to be inconsistent with.
  */
 function forwardInput(action: PlayerInputEvent['action']): boolean {
-  if (!getPlayerOverlay()) return false
+  if (!isOverlayInputReady()) return false
   sendToPlayerOverlay(MEDIA_HUB_CHANNELS.playerInput, { action })
   return true
 }
@@ -532,6 +539,12 @@ function subtitleCacheRoot(): string {
 }
 
 function forwardUiEvent(event: PlayerUiEvent): void {
+  // Both of these describe the overlay window itself, so they stop here rather
+  // than going on to the main window, which has nothing to do with either.
+  if (event.type === 'set-input-ready') {
+    setOverlayInputReady(Boolean(event.ready))
+    return
+  }
   if (event.type === 'set-interactive') {
     setOverlayInteractive(Boolean(event.interactive))
     // Showing the controls is the one moment it is definitely worth making sure

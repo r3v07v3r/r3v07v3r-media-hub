@@ -305,12 +305,22 @@ function PlayerControls() {
   useEffect(() => {
     const api = window.api?.mediaHub?.player
     if (!api?.onInput) return
-    return api.onInput(({ action }) => {
+    const unsubscribe = api.onInput(({ action }) => {
       const current = forwardedInput.current
       if (action === 'toggle-pause') current.party.togglePlay()
       else if (action === 'toggle-fullscreen') current.toggleFullscreen()
     })
-  }, [])
+    // Main forwards nothing until this says so, and goes back to driving mpv
+    // itself once it is retracted — otherwise input would be handed to a window
+    // that has not mounted this listener yet, or no longer has it, and vanish.
+    // Retracting it also covers a React tree that unmounts on an error, since
+    // effect cleanups still run in that case.
+    ui({ type: 'set-input-ready', ready: true })
+    return () => {
+      ui({ type: 'set-input-ready', ready: false })
+      unsubscribe()
+    }
+  }, [ui])
 
   useEffect(() => {
     function onKey(event: KeyboardEvent): void {

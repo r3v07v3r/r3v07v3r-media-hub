@@ -157,3 +157,12 @@ export type PlayerUiEvent =
    *  click-through so the video underneath receives the events instead — see
    *  playerWindow.ts's setOverlayInteractive. */
   | { type: 'set-interactive'; interactive: boolean }
+  /** Whether this window is actually listening for forwarded input yet.
+   *
+   *  Sent when the PlayerInputEvent subscription is established and again when
+   *  it goes away. Main cannot infer it: the overlay window exists well before
+   *  its renderer has mounted anything, and webContents.send to a window with
+   *  no listener is silently dropped. Without this, mpv's safety inputs would
+   *  be forwarded into nothing during startup or after a renderer failure —
+   *  precisely the states those bindings exist for. */
+  | { type: 'set-input-ready'; ready: boolean }

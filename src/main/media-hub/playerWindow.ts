@@ -31,6 +31,7 @@ import { isAllowedExternalUrl } from './security'
 let overlayWindow: BrowserWindow | null = null
 let parentWindow: BrowserWindow | null = null
 let detachBoundsListeners: (() => void) | null = null
+let inputReady = false
 
 export function getPlayerOverlay(): BrowserWindow | null {
   return overlayWindow && !overlayWindow.isDestroyed() ? overlayWindow : null
@@ -41,6 +42,31 @@ export function getPlayerOverlay(): BrowserWindow | null {
 export function sendToPlayerOverlay(channel: string, payload?: unknown): void {
   const win = getPlayerOverlay()
   if (win) win.webContents.send(channel, payload)
+}
+
+/**
+ * Whether the overlay is actually listening for forwarded input.
+ *
+ * Deliberately not derived from the window existing. The window is created
+ * before its renderer has loaded, let alone mounted its subscription, and
+ * webContents.send into a window with no listener is dropped without a word —
+ * so treating existence as readiness would silently swallow the very inputs
+ * mpv's bindings exist to keep working when the overlay is in trouble.
+ *
+ * The renderer reports this itself (PlayerUiEvent's set-input-ready). What the
+ * renderer cannot report is its own death, so this is also cleared when the
+ * window goes or its process does.
+ *
+ * One case remains outside this: a renderer that is alive and subscribed but
+ * wedged. The message is queued rather than dropped there, so it arrives late
+ * instead of never, and no readiness flag can tell the difference in advance.
+ */
+export function isOverlayInputReady(): boolean {
+  return inputReady && getPlayerOverlay() !== null
+}
+
+export function setOverlayInputReady(ready: boolean): void {
+  inputReady = ready
 }
 
 /**
@@ -85,6 +111,9 @@ export function openPlayerOverlay(parent: BrowserWindow): BrowserWindow {
   }
 
   parentWindow = parent
+  // Nothing in this window is listening yet, and will not be until its renderer
+  // has mounted and said so.
+  inputReady = false
   const win = new BrowserWindow({
     ...contentBoundsOf(parent),
     parent,
@@ -180,11 +209,20 @@ export function openPlayerOverlay(parent: BrowserWindow): BrowserWindow {
     parent.off('leave-full-screen', onFullscreenSettled)
   }
 
+  // A dead renderer cannot retract its own readiness, so this is the one report
+  // that has to come from outside it. Without it the flag would stay true after
+  // a crash and forwarded input would go on being swallowed by a window that
+  // can no longer act on anything.
+  win.webContents.on('render-process-gone', () => {
+    inputReady = false
+  })
+
   win.on('closed', () => {
     detachBoundsListeners?.()
     detachBoundsListeners = null
     overlayWindow = null
     parentWindow = null
+    inputReady = false
   })
 
   return win
@@ -231,5 +269,6 @@ export function closePlayerOverlay(): void {
   detachBoundsListeners = null
   overlayWindow = null
   parentWindow = null
+  inputReady = false
   if (win) win.destroy()
 }
