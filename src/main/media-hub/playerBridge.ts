@@ -14,6 +14,7 @@ import path from 'node:path'
 
 import type {
   PlayerCommand,
+  PlayerInputEvent,
   PlayerSessionSnapshot,
   PlayerStatePatch,
   PlayerUiEvent
@@ -37,6 +38,7 @@ import {
 } from './mpv'
 import {
   closePlayerOverlay,
+  getPlayerOverlay,
   openPlayerOverlay,
   raisePlayerOverlay,
   sendToPlayerOverlay,
@@ -119,6 +121,28 @@ async function readTracks(): Promise<ReturnType<typeof tracksFromMpvTrackList>> 
   return tracksFromMpvTrackList(list, duration)
 }
 
+/**
+ * Hands an input that landed on mpv's window to the overlay, which applies it
+ * through the same handlers its own clicks and keys use. Reports whether there
+ * was an overlay to take it.
+ *
+ * A false return means no player-overlay window exists — which also means no
+ * party sync is running, since that lives in it. So the caller's fallback of
+ * acting on mpv directly is only ever reached when there is nothing for it to
+ * be inconsistent with.
+ */
+function forwardInput(action: PlayerInputEvent['action']): boolean {
+  if (!getPlayerOverlay()) return false
+  sendToPlayerOverlay(MEDIA_HUB_CHANNELS.playerInput, { action })
+  return true
+}
+
+function toggleMainWindowFullscreen(): void {
+  const win = getActiveWindow()
+  if (!win || win.isDestroyed()) return
+  win.setFullScreen(!win.isFullScreen())
+}
+
 /** Wires every property the UI needs. Called once per mpv process, not per
  *  title — observers survive `loadfile`. */
 async function attachObservers(): Promise<void> {
@@ -192,7 +216,15 @@ async function attachObservers(): Promise<void> {
         return
       }
       case 'r3-toggle-pause':
-        void runCommand({ type: 'toggle-pause' }).catch(() => {})
+        // Handed to the overlay rather than applied to mpv here. This process
+        // knows how to pause a file but not who is allowed to: the watch-party
+        // rules and the broadcast that keeps everyone together live in the
+        // overlay's usePartySync, so pausing from here would stop one person's
+        // film and leave the rest of the party playing.
+        if (!forwardInput('toggle-pause')) void runCommand({ type: 'toggle-pause' }).catch(() => {})
+        return
+      case 'r3-toggle-fullscreen':
+        if (!forwardInput('toggle-fullscreen')) toggleMainWindowFullscreen()
         return
       case 'r3-seek-back':
         void player.command('seek', -15, 'relative').catch(() => {})

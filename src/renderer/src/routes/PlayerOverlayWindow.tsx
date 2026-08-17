@@ -241,6 +241,7 @@ function PlayerControls() {
   // All of this covers clicks while the controls are up. When they are hidden
   // the window is click-through and the click reaches mpv instead, which is
   // what its MBTN_LEFT binding is for (see mpv.ts's bindSafetyKeys).
+  const pausedBeforeClick = useRef(paused)
   const handleSurfaceClick = useCallback(
     (event: React.MouseEvent<HTMLDivElement>) => {
       // The picture only. Clicks on the controls bar bubble up to here too, and
@@ -249,9 +250,12 @@ function PlayerControls() {
       if (event.target !== event.currentTarget) return
       // The second click of a double-click, which the handler below owns.
       if (event.detail > 1) return
+      // Recorded before the toggle, so the undo below restores a state that was
+      // read when nothing was in flight.
+      pausedBeforeClick.current = paused
       party.togglePlay()
     },
-    [party]
+    [party, paused]
   )
 
   // Same picture-only rule — this handler has always been on the surface, so
@@ -262,11 +266,44 @@ function PlayerControls() {
       if (event.target !== event.currentTarget) return
       // Undoes the toggle the first click of this pair already made: the
       // gesture was "fullscreen", not "pause, then fullscreen".
-      party.togglePlay()
+      //
+      // setPaused, not another togglePlay. A toggle would have to work out what
+      // to tell the rest of a watch party from the last observed `paused`, and
+      // that reading may still be the pre-click one this soon after — in which
+      // case peers are sent the action that already happened and stay paused
+      // while this player resumes. Naming the target state cannot go stale.
+      party.setPaused(pausedBeforeClick.current)
       toggleFullscreen()
     },
     [party, toggleFullscreen]
   )
+
+  // Input that reached mpv's window instead of this one, because the controls
+  // were hidden and the overlay was click-through (see mpv.ts's bindSafetyKeys
+  // for which inputs, and why they cannot be applied in main). Routed through
+  // the same handlers as a click here, so the two can never drift apart on who
+  // is allowed to pause or on what the party is told.
+  //
+  // The handlers are read from a ref rather than listed as dependencies:
+  // usePartySync returns a fresh object every render, and re-subscribing an IPC
+  // channel that often for a callback that changes nothing would be waste.
+  const forwardedInput = useRef({ party, toggleFullscreen, revealControls })
+  useEffect(() => {
+    forwardedInput.current = { party, toggleFullscreen, revealControls }
+  })
+  useEffect(() => {
+    const api = window.api?.mediaHub?.player
+    if (!api?.onInput) return
+    return api.onInput(({ action }) => {
+      const current = forwardedInput.current
+      if (action === 'toggle-pause') current.party.togglePlay()
+      else if (action === 'toggle-fullscreen') current.toggleFullscreen()
+      // Clicking the picture also brings the controls back, the same as moving
+      // the mouse over it — this is the one route where that does not already
+      // happen, since the click never reached this window's own handlers.
+      current.revealControls()
+    })
+  }, [])
 
   useEffect(() => {
     function onKey(event: KeyboardEvent): void {

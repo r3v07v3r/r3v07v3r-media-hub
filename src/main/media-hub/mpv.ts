@@ -587,18 +587,26 @@ export class MpvPlayer {
    * binding emits a script-message, which arrives back as a `client-message`
    * event for playerBridge to act on, so both routes end in the same code.
    *
-   * MBTN_LEFT is here for a reason that is not about failure at all. The
-   * overlay is click-through while the controls are hidden (see
+   * The two mouse bindings are here for a reason that is not about failure at
+   * all. The overlay is click-through while the controls are hidden (see
    * playerWindow.ts), and only mousemove is forwarded to it — clicks are not.
    * So clicking the picture without moving the mouse first, which is exactly
    * how someone pauses a film they are already watching, lands on mpv and
-   * nowhere else. Without this binding that click does nothing.
+   * nowhere else. Without these, that click does nothing, and neither does the
+   * double-click that means fullscreen.
+   *
+   * MBTN_LEFT_DBL is bound to fullscreen ALONE, with no attempt to undo the
+   * pause its first click caused — deliberately, because mpv is free to emit
+   * either one MBTN_LEFT or two before the _DBL. Undoing would be right for one
+   * of those and wrong for the other, whereas leaving it costs at most a single
+   * unwanted toggle under either.
    */
   async bindSafetyKeys(): Promise<void> {
     for (const [key, message] of [
       ['ESC', 'r3-stop'],
       ['SPACE', 'r3-toggle-pause'],
       ['MBTN_LEFT', 'r3-toggle-pause'],
+      ['MBTN_LEFT_DBL', 'r3-toggle-fullscreen'],
       ['LEFT', 'r3-seek-back'],
       ['RIGHT', 'r3-seek-forward']
     ]) {

@@ -120,6 +120,22 @@ export type PlayerCommand =
   | { type: 'set-fit-mode'; mode: VideoFitMode }
 
 /**
+ * Main -> overlay. An input that arrived at mpv's own window rather than the
+ * controls, forwarded so the overlay can apply it through exactly the handlers
+ * its own clicks and keys use.
+ *
+ * mpv's window receives input whenever the controls are hidden, because the
+ * overlay is click-through then and only mousemove is forwarded to it. Acting
+ * on those directly in main is what this type exists to avoid: main has no
+ * access to the party rules (they live in the overlay's usePartySync), so a
+ * pause applied there would pause one person and leave the rest of the watch
+ * party playing.
+ */
+export interface PlayerInputEvent {
+  action: 'toggle-pause' | 'toggle-fullscreen'
+}
+
+/**
  * Overlay -> main -> main window. Actions whose effect belongs to the main
  * window's own React state, which the overlay process cannot touch directly.
  *
