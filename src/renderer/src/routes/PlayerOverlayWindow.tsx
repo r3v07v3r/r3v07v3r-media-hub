@@ -24,6 +24,12 @@ import { PlayerWindowProvider, usePlayerWindow } from '@renderer/context/PlayerW
 import { usePartySync } from '@renderer/hooks/usePartySync'
 import { usePlayerTracking } from '@renderer/hooks/usePlayerTracking'
 import type { SubtitleResult } from '@shared/media-hub/types'
+import {
+  DEFAULT_VIDEO_FIT,
+  VIDEO_FIT_MODES,
+  videoFitDescription,
+  videoFitLabel
+} from '@shared/media-hub/videoFit'
 import styles from './PlayerOverlayWindow.module.css'
 
 const CONTROLS_IDLE_MS = 3200
@@ -35,7 +41,7 @@ const SCRUB_PREVIEW_WIDTH = 160
  *  live; there is no re-render of anything. */
 const SUBTITLE_DELAY_STEP = 0.25
 
-type Menu = 'audio' | 'subtitles' | null
+type Menu = 'audio' | 'subtitles' | 'fit' | null
 
 function formatTime(totalSeconds: number): string {
   if (!Number.isFinite(totalSeconds) || totalSeconds < 0) return '0:00'
@@ -67,6 +73,9 @@ function PlayerControls() {
   const buffering = state.bufferingForCache === true
   const volume = state.volume ?? 1
   const media = session?.media ?? null
+  // Main owns this, and pushes it — the overlay never guesses, so the label
+  // stays right across a title change or a remount.
+  const fitMode = state.fitMode ?? DEFAULT_VIDEO_FIT
 
   const party = usePartySync({
     timePos,
@@ -160,10 +169,30 @@ function PlayerControls() {
     closePlayer()
   }, [state.error, ui, closePlayer])
 
-  // Real OS-level BrowserWindow fullscreen, not the DOM Fullscreen API — the
-  // main window owns it and mpv follows automatically as its child.
+  // Real OS-level BrowserWindow fullscreen of the MAIN window, not the DOM
+  // Fullscreen API and not this window — mpv's video window and this overlay
+  // are both sized to the main window's content area, so it is the one that has
+  // to change shape for anything to happen (see appIpc.ts).
+  const [fullScreen, setFullScreen] = useState(false)
   const toggleFullscreen = useCallback(() => {
-    window.api?.mediaHub?.window?.toggleFullscreen().catch(() => {})
+    window.api?.mediaHub?.window
+      ?.toggleFullscreen()
+      .then((result) => setFullScreen(result.fullScreen))
+      .catch(() => {})
+  }, [])
+
+  // Read once on mount, then follow. Reading matters because the overlay is
+  // created mid-session and can open into an already-fullscreen window;
+  // following matters because Escape and F11 change the state without asking
+  // this button first.
+  useEffect(() => {
+    const api = window.api?.mediaHub?.window
+    if (!api) return
+    api
+      .isFullscreen()
+      .then((result) => setFullScreen(result.fullScreen))
+      .catch(() => {})
+    return api.onFullscreenChange(({ fullScreen: next }) => setFullScreen(next))
   }, [])
 
   useEffect(() => {
@@ -571,6 +600,39 @@ function PlayerControls() {
             )}
           </div>
 
+          {/* Fit/fill. mpv applies both underlying properties to the frame
+              already on screen, so every option here is instant — there is no
+              reload and no reseek behind any of them. */}
+          <div className={styles.menuWrap}>
+            <button
+              type="button"
+              className={styles.button}
+              onClick={() => setMenu(menu === 'fit' ? null : 'fit')}
+              aria-label={`Picture size: ${videoFitLabel(fitMode)}`}
+            >
+              {videoFitLabel(fitMode)}
+            </button>
+            {menu === 'fit' && (
+              <div className={styles.menu}>
+                {VIDEO_FIT_MODES.map((mode) => (
+                  <button
+                    key={mode}
+                    type="button"
+                    className={styles.menuItem}
+                    onClick={() => {
+                      void command({ type: 'set-fit-mode', mode })
+                      setMenu(null)
+                    }}
+                  >
+                    {videoFitLabel(mode)}
+                    {fitMode === mode ? ' ✓' : ''}
+                    <span className={styles.menuItemNote}>{videoFitDescription(mode)}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
           <button
             type="button"
             className={styles.button}
@@ -578,6 +640,16 @@ function PlayerControls() {
             aria-label="Watch party"
           >
             Party
+          </button>
+
+          <button
+            type="button"
+            className={styles.button}
+            onClick={toggleFullscreen}
+            aria-label={fullScreen ? 'Exit fullscreen' : 'Enter fullscreen'}
+            title={fullScreen ? 'Exit fullscreen (F)' : 'Fullscreen (F)'}
+          >
+            {fullScreen ? '⤡' : '⤢'}
           </button>
 
           <button

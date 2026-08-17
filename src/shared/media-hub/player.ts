@@ -11,6 +11,7 @@
 // Everything here is structurally cloneable: it travels over Electron IPC.
 
 import type { MediaTracks } from './types'
+import type { VideoFitMode } from './videoFit'
 
 /** The subset of a catalog item the player UI actually reads. Deliberately not
  *  the full MediaItem: that type lives in the renderer, and anything needing
@@ -80,6 +81,11 @@ export interface PlayerStatePatch {
   eofReached?: boolean
   /** Track list changed — e.g. an external subtitle was added. */
   tracks?: MediaTracks
+  /** Current fit mode. Not observed off mpv like the rest of this patch:
+   *  `keepaspect` and `panscan` are two properties describing one user-facing
+   *  choice, and main is the side that knows which choice they add up to — so
+   *  it pushes the mode it just applied rather than the overlay inferring it. */
+  fitMode?: VideoFitMode
   /** A terminal playback failure. mpv reports these through `end-file` with a
    *  reason rather than anything resembling MediaError.code. */
   error?: string
@@ -110,7 +116,8 @@ export type PlayerCommand =
   /** Manual subtitle timing offset in seconds — the thing VLC users fix in two
    *  keypresses and the old <track>-based pipeline had no way to express. */
   | { type: 'set-subtitle-delay'; seconds: number }
-  | { type: 'set-fit-mode'; mode: 'contain' | 'cover' | 'fill' }
+  /** How the picture is fitted into the window — see shared/media-hub/videoFit.ts. */
+  | { type: 'set-fit-mode'; mode: VideoFitMode }
 
 /**
  * Overlay -> main -> main window. Actions whose effect belongs to the main

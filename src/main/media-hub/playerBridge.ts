@@ -19,6 +19,12 @@ import type {
   PlayerUiEvent
 } from '../../shared/media-hub/player'
 import { MEDIA_HUB_CHANNELS } from '../../shared/media-hub/ipc-channels'
+import {
+  DEFAULT_VIDEO_FIT,
+  mpvPropertiesForFit,
+  normalizeVideoFit,
+  type VideoFitMode
+} from '../../shared/media-hub/videoFit'
 import { handle } from './ipcGuard'
 import { logError } from './logger'
 import {
@@ -40,6 +46,22 @@ import { getActiveWindow, sendToRenderer } from './rendererBridge'
 
 const player = new MpvPlayer()
 let sessionSnapshot: PlayerSessionSnapshot | null = null
+
+// The fit mode is held here rather than in the overlay because the overlay is
+// rebuilt per playback session and mpv is not: a mode chosen on one title has
+// to still be the mode — and still be the one the button shows — on the next.
+let fitMode: VideoFitMode = DEFAULT_VIDEO_FIT
+
+/** Writes the mode to mpv and tells the overlay what it now is. Both
+ *  properties are always written, never just the one that changed, so mpv
+ *  cannot end up in a state no mode describes. */
+async function applyFitMode(mode: VideoFitMode): Promise<void> {
+  const { keepaspect, panscan } = mpvPropertiesForFit(mode)
+  await player.set('keepaspect', keepaspect)
+  await player.set('panscan', panscan)
+  fitMode = mode
+  queuePatch({ fitMode: mode }, true)
+}
 
 export function getPlayer(): MpvPlayer {
   return player
@@ -265,6 +287,13 @@ export async function startPlayerSession(
     videoScaling: options.videoScaling
   })
 
+  // Re-asserted per title rather than set once. mpv keeps these properties
+  // across `loadfile`, so this is usually a no-op — but the process can be
+  // respawned mid-run (a crash, or playback stopped and restarted after a
+  // shutdown), and a respawned mpv is back at its defaults while the overlay
+  // would still be showing the mode that was chosen before.
+  await applyFitMode(fitMode).catch(() => {})
+
   // Raising once here is NOT enough, and that is the whole subtlety: the
   // `file-loaded` this just awaited fires before mpv's video window actually
   // exists, so a single raise at this point loses the race and the controls end
@@ -438,23 +467,12 @@ async function runCommand(command: PlayerCommand): Promise<void> {
       await player.set('sub-delay', clamp(seconds, -60, 60))
       return
     }
-    case 'set-fit-mode': {
-      // The old UI did this with CSS object-fit on the <video> element. There
-      // is no CSS box around a native surface, so it maps onto mpv's own
-      // scaling: 'contain' letterboxes, 'cover' crops to fill (panscan 1),
-      // 'fill' stretches by ignoring the aspect ratio.
-      if (command.mode === 'contain') {
-        await player.set('keepaspect', true)
-        await player.set('panscan', 0)
-      } else if (command.mode === 'cover') {
-        await player.set('keepaspect', true)
-        await player.set('panscan', 1)
-      } else {
-        await player.set('keepaspect', false)
-        await player.set('panscan', 0)
-      }
+    case 'set-fit-mode':
+      // Normalized rather than trusted: this is the IPC boundary, and an
+      // unrecognized mode has an obvious safe reading (the default) instead of
+      // being worth failing the call over.
+      await applyFitMode(normalizeVideoFit(command.mode))
       return
-    }
     default: {
       // Exhaustiveness: a new PlayerCommand variant must be handled here.
       const unhandled: never = command
@@ -563,6 +581,10 @@ async function currentState(): Promise<PlayerStatePatch> {
   if (aid !== undefined) patch.audioOrdinal = ordinalForMpvTrackId(aid)
   if (sid !== undefined) patch.subtitleOrdinal = ordinalForMpvTrackId(sid)
   if (typeof cache === 'number') patch.cacheAheadSeconds = cache
+  // Read from this module, not from mpv: applyFitMode is the only writer of
+  // either underlying property, so this value is the authority on which of the
+  // three modes the pair currently represents.
+  patch.fitMode = fitMode
   patch.tracks = await readTracks()
   return patch
 }
