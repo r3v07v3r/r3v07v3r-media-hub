@@ -131,6 +131,12 @@ async function attachObservers(): Promise<void> {
   await player.observe('paused-for-cache', (value) => {
     if (typeof value === 'boolean') queuePatch({ bufferingForCache: value }, true)
   })
+  // The moment mpv's video window genuinely exists. This is what the controls
+  // have to be raised against — `file-loaded` is too early, since the window is
+  // created a little after the file is.
+  await player.observe('vo-configured', (value) => {
+    if (value === true) raiseOverlaySoon()
+  })
   await player.observe('eof-reached', (value) => {
     if (value === true) queuePatch({ eofReached: true }, true)
   })
@@ -176,6 +182,29 @@ async function attachObservers(): Promise<void> {
     logError('media-hub:player', new Error(`mpv end-file: ${detail}`))
     queuePatch({ error: detail }, true)
   })
+}
+
+/**
+ * Raises the controls above the video, several times over a short window.
+ *
+ * Deliberately repeated rather than done once. mpv creates, and can re-create,
+ * its always-on-top video window asynchronously — on load, and again on things
+ * like a resolution change — and whichever always-on-top window was raised last
+ * wins on Windows. A single raise is a race this side loses often enough to
+ * leave someone staring at a video with no controls and no obvious way out.
+ * Re-raising a window that is already on top costs nothing.
+ */
+const RAISE_RETRIES_MS = [0, 150, 400, 900, 1800]
+let raiseTimers: NodeJS.Timeout[] = []
+
+function raiseOverlaySoon(): void {
+  clearRaiseTimers()
+  raiseTimers = RAISE_RETRIES_MS.map((delay) => setTimeout(() => raisePlayerOverlay(), delay))
+}
+
+function clearRaiseTimers(): void {
+  for (const timer of raiseTimers) clearTimeout(timer)
+  raiseTimers = []
 }
 
 // ---------------------------------------------------------------------------
@@ -236,10 +265,13 @@ export async function startPlayerSession(
     videoScaling: options.videoScaling
   })
 
-  // mpv only creates its video window on loadfile, and it is always-on-top —
-  // so the controls have to be re-raised now that it exists, or they stay
-  // buried under the video with no way to pause or close the title.
-  raisePlayerOverlay()
+  // Raising once here is NOT enough, and that is the whole subtlety: the
+  // `file-loaded` this just awaited fires before mpv's video window actually
+  // exists, so a single raise at this point loses the race and the controls end
+  // up buried again — reported live as "I still can't see the bottom nav bar".
+  // The `vo-configured` observer below is the real trigger; these are belt and
+  // braces for the case where it has already fired.
+  raiseOverlaySoon()
 
   const tracks = await readTracks()
   queuePatch({ tracks }, true)
@@ -251,6 +283,7 @@ export async function startPlayerSession(
  *  is also what destroys mpv's embedded video window, which is what makes the
  *  app UI behind it visible again. */
 export async function stopPlayerSession(): Promise<void> {
+  clearRaiseTimers()
   untrackWindow?.()
   pendingPatch = {}
   if (flushTimer) {
@@ -440,6 +473,10 @@ function subtitleCacheRoot(): string {
 function forwardUiEvent(event: PlayerUiEvent): void {
   if (event.type === 'set-interactive') {
     setOverlayInteractive(Boolean(event.interactive))
+    // Showing the controls is the one moment it is definitely worth making sure
+    // they are actually on top — mpv can re-create its video window (a
+    // resolution change, for one) and silently win the z-order again.
+    if (event.interactive) raisePlayerOverlay()
     return
   }
   // Everything else belongs to the main window's own React state, which this
