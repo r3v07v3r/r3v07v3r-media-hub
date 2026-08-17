@@ -286,7 +286,9 @@ export async function metadata(type: MediaKind, id: string): Promise<CatalogItem
     // separate /episodes sub-resource (see kitsuRealEpisodes) — try that
     // before falling back to keeping the placeholders, same as the grouped
     // path already does per-season.
-    const kitsuId = String(resolvedId).replace(/^kitsu:/, '').split(':')[0]
+    const kitsuId = String(resolvedId)
+      .replace(/^kitsu:/, '')
+      .split(':')[0]
     const real = await kitsuRealEpisodes(kitsuId, item.id)
     if (real.length) item.videos = real
   }

@@ -138,7 +138,11 @@ export function EpisodesSection({
 
   if (status === 'loading') {
     return (
-      <section className={`${styles.section} glass-panel`} aria-busy="true" aria-label="Loading episodes">
+      <section
+        className={`${styles.section} glass-panel`}
+        aria-busy="true"
+        aria-label="Loading episodes"
+      >
         <div className={styles.skeletonSeasonRow}>
           {[0, 1, 2].map((i) => (
             <span key={i} className={styles.skeletonPill} />
@@ -260,10 +264,7 @@ export function EpisodesSection({
           const watched = watchedKeys.has(key(ep.season, ep.episode))
           const isNext = nextEpisode?.season === ep.season && nextEpisode?.episode === ep.episode
           return (
-            <li
-              key={ep.id}
-              className={`${styles.row} ${isNext ? styles.rowNext : ''}`}
-            >
+            <li key={ep.id} className={`${styles.row} ${isNext ? styles.rowNext : ''}`}>
               <span className={styles.number}>{ep.episode}</span>
               <ArtworkImage
                 src={ep.thumbnail}
@@ -311,7 +312,9 @@ export function EpisodesSection({
                   className={styles.watchedToggle}
                   onClick={() => onMarkWatched(ep, !watched)}
                   aria-label={
-                    watched ? `Mark episode ${ep.episode} unwatched` : `Mark episode ${ep.episode} watched`
+                    watched
+                      ? `Mark episode ${ep.episode} unwatched`
+                      : `Mark episode ${ep.episode} watched`
                   }
                 >
                   <Icon name={watched ? 'eye-off' : 'eye'} size={13} />

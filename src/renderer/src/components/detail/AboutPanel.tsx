@@ -22,13 +22,20 @@ export function AboutPanel({ media, config }: { media: MediaItem; config: Detail
   const shown = !isLong || expanded ? description : `${description.slice(0, COLLAPSE_LENGTH)}…`
 
   return (
-    <section className={`${styles.panel} glass-panel`} aria-label={`About this ${config.label.toLowerCase()}`}>
+    <section
+      className={`${styles.panel} glass-panel`}
+      aria-label={`About this ${config.label.toLowerCase()}`}
+    >
       <h2 className={styles.heading}>About this {config.label}</h2>
       {description ? (
         <p className={styles.synopsis}>
           {shown}{' '}
           {isLong && (
-            <button type="button" className={styles.expandButton} onClick={() => setExpanded((v) => !v)}>
+            <button
+              type="button"
+              className={styles.expandButton}
+              onClick={() => setExpanded((v) => !v)}
+            >
               {expanded ? 'Show less' : 'Show more'}
             </button>
           )}

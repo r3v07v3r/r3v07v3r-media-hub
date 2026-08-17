@@ -42,9 +42,19 @@ export function registerNetworkIpc(): void {
         const speedMbps = Math.round(((bytes * 8) / seconds / 1_000_000) * 10) / 10
         const screen = Math.max(480, Number(value?.screenHeight) || 1080)
         const speedLimit = speedMbps < 4 ? 480 : speedMbps < 8 ? 720 : speedMbps < 20 ? 1080 : 2160
-        const screenLimit = screen < 600 ? 480 : screen < 900 ? 720 : screen < 1300 ? 1080 : screen < 1800 ? 1440 : 2160
+        const screenLimit =
+          screen < 600
+            ? 480
+            : screen < 900
+              ? 720
+              : screen < 1300
+                ? 1080
+                : screen < 1800
+                  ? 1440
+                  : 2160
         const recommendedResolution = Math.min(speedLimit, screenLimit)
-        const recommendedSizeGb = speedMbps < 4 ? 1 : speedMbps < 8 ? 2 : speedMbps < 20 ? 5 : speedMbps < 40 ? 10 : 20
+        const recommendedSizeGb =
+          speedMbps < 4 ? 1 : speedMbps < 8 ? 2 : speedMbps < 20 ? 5 : speedMbps < 40 ? 10 : 20
         return { speedMbps, testedBytes: bytes, recommendedResolution, recommendedSizeGb }
       } finally {
         clearTimeout(timeout)

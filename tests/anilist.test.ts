@@ -47,7 +47,9 @@ check('extracts the anilist/anime externalId', () => {
 
 check('returns null when there is no anilist entry', () => {
   assert.equal(
-    anilistIdFromKitsuMappings({ data: [{ attributes: { externalSite: 'thetvdb', externalId: '1/1' } }] }),
+    anilistIdFromKitsuMappings({
+      data: [{ attributes: { externalSite: 'thetvdb', externalId: '1/1' } }]
+    }),
     null
   )
 })
@@ -59,11 +61,15 @@ check('returns null on an empty/absent mappings list', () => {
 
 check('rejects a non-numeric or zero externalId rather than crashing', () => {
   assert.equal(
-    anilistIdFromKitsuMappings({ data: [{ attributes: { externalSite: 'anilist/anime', externalId: 'abc' } }] }),
+    anilistIdFromKitsuMappings({
+      data: [{ attributes: { externalSite: 'anilist/anime', externalId: 'abc' } }]
+    }),
     null
   )
   assert.equal(
-    anilistIdFromKitsuMappings({ data: [{ attributes: { externalSite: 'anilist/anime', externalId: '0' } }] }),
+    anilistIdFromKitsuMappings({
+      data: [{ attributes: { externalSite: 'anilist/anime', externalId: '0' } }]
+    }),
     null
   )
 })
@@ -107,17 +113,43 @@ check('excludes a PREQUEL edge that points at a non-TV format (the "No Regrets" 
 
 check('excludes SPIN_OFF even though its target is TV format — wrong relation type', () => {
   const edges = seasonChainEdges(attackOnTitan)
-  assert.ok(!edges.some((e) => e.targetAnilistId === 21281), 'a spin-off is not a season continuation')
+  assert.ok(
+    !edges.some((e) => e.targetAnilistId === 21281),
+    'a spin-off is not a season continuation'
+  )
 })
 
 // One Piece, id 21, fetched live 2026-08-10 — a single continuous TV
 // entry whose entire relations list is specials/movies/recaps, with no
 // PREQUEL/SEQUEL/PARENT edge at all.
 const onePieceRelationTypes = [
-  'SIDE_STORY', 'SIDE_STORY', 'SIDE_STORY', 'SIDE_STORY', 'SIDE_STORY', 'SIDE_STORY', 'SIDE_STORY',
-  'SIDE_STORY', 'SIDE_STORY', 'SIDE_STORY', 'SUMMARY', 'SUMMARY', 'SIDE_STORY', 'SUMMARY',
-  'SIDE_STORY', 'SIDE_STORY', 'SUMMARY', 'SIDE_STORY', 'SIDE_STORY', 'SIDE_STORY', 'SIDE_STORY',
-  'SIDE_STORY', 'SIDE_STORY', 'SUMMARY', 'SUMMARY', 'SIDE_STORY', 'SIDE_STORY'
+  'SIDE_STORY',
+  'SIDE_STORY',
+  'SIDE_STORY',
+  'SIDE_STORY',
+  'SIDE_STORY',
+  'SIDE_STORY',
+  'SIDE_STORY',
+  'SIDE_STORY',
+  'SIDE_STORY',
+  'SIDE_STORY',
+  'SUMMARY',
+  'SUMMARY',
+  'SIDE_STORY',
+  'SUMMARY',
+  'SIDE_STORY',
+  'SIDE_STORY',
+  'SUMMARY',
+  'SIDE_STORY',
+  'SIDE_STORY',
+  'SIDE_STORY',
+  'SIDE_STORY',
+  'SIDE_STORY',
+  'SIDE_STORY',
+  'SUMMARY',
+  'SUMMARY',
+  'SIDE_STORY',
+  'SIDE_STORY'
 ]
 const onePiece: AnilistMediaNode = {
   id: 21,
@@ -142,7 +174,10 @@ check('a missing relations block is empty, not a crash', () => {
 })
 
 check('an edge with no node is skipped, not a crash', () => {
-  assert.deepEqual(seasonChainEdges({ id: 1, relations: { edges: [{ relationType: 'SEQUEL' }] } }), [])
+  assert.deepEqual(
+    seasonChainEdges({ id: 1, relations: { edges: [{ relationType: 'SEQUEL' }] } }),
+    []
+  )
 })
 
 check('PARENT is included alongside PREQUEL/SEQUEL', () => {

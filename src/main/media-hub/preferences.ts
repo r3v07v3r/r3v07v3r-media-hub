@@ -50,7 +50,6 @@ export function publicSettings(settings: Record<string, unknown> = {}): MediaHub
     // Opt-in, unlike uiAnimationsEnabled above: this spins up a real
     // hardware-encoder probe + CPU/GPU cost the first time it's actually
     // used, so it defaults off rather than on.
-    videoTranscodeEnabled: settings.videoTranscodeEnabled === true,
     maxStreamResolution: Number(settings.maxStreamResolution) || 0,
     maxStreamSizeGb: Number(settings.maxStreamSizeGb) || 0,
     // Deliberately NOT `Number(x) || 0`: that coerces "never configured"
@@ -66,7 +65,8 @@ export function publicSettings(settings: Record<string, unknown> = {}): MediaHub
       typeof settings.streamCacheMaxGb === 'number' && Number.isFinite(settings.streamCacheMaxGb)
         ? settings.streamCacheMaxGb
         : undefined,
-    streamCacheDir: typeof settings.streamCacheDir === 'string' ? settings.streamCacheDir : undefined,
+    streamCacheDir:
+      typeof settings.streamCacheDir === 'string' ? settings.streamCacheDir : undefined,
     connectionSpeedMbps:
       Number(settings.connectionSpeedMbps) > 0 ? Number(settings.connectionSpeedMbps) : undefined,
     hideWatchedDefault: settings.hideWatchedDefault === true,
@@ -92,7 +92,6 @@ export function logoutSettings(
   | 'autoSubtitlesEnabled'
   | 'uiAnimationsEnabled'
   | 'performancePanelVisible'
-  | 'videoTranscodeEnabled'
   | 'maxStreamResolution'
   | 'maxStreamSizeGb'
   | 'streamCacheMaxGb'
@@ -109,7 +108,6 @@ export function logoutSettings(
     autoSubtitlesEnabled: settings.autoSubtitlesEnabled !== false,
     uiAnimationsEnabled: settings.uiAnimationsEnabled !== false,
     performancePanelVisible: settings.performancePanelVisible !== false,
-    videoTranscodeEnabled: settings.videoTranscodeEnabled === true,
     maxStreamResolution: Number(settings.maxStreamResolution) || 0,
     maxStreamSizeGb: Number(settings.maxStreamSizeGb) || 0,
     // Deliberately NOT `Number(x) || 0`: that coerces "never configured"
@@ -125,7 +123,8 @@ export function logoutSettings(
       typeof settings.streamCacheMaxGb === 'number' && Number.isFinite(settings.streamCacheMaxGb)
         ? settings.streamCacheMaxGb
         : undefined,
-    streamCacheDir: typeof settings.streamCacheDir === 'string' ? settings.streamCacheDir : undefined,
+    streamCacheDir:
+      typeof settings.streamCacheDir === 'string' ? settings.streamCacheDir : undefined,
     connectionSpeedMbps:
       Number(settings.connectionSpeedMbps) > 0 ? Number(settings.connectionSpeedMbps) : undefined,
     hideWatchedDefault: settings.hideWatchedDefault === true,

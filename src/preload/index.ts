@@ -24,7 +24,6 @@ import type {
   MarkWatchedResult,
   MediaHubSettingsSnapshot,
   MediaKind,
-  MediaTracks,
   NetworkInfoResult,
   PartyEventPayload,
   PartyHostResult,
@@ -40,7 +39,6 @@ import type {
   PlaybackPositionResult,
   PlaybackPrepareProgress,
   PlaybackResult,
-  PlaybackSelection,
   ProfilePublic,
   ProfilesListResult,
   ProfileSetActiveResult,
@@ -175,8 +173,6 @@ const api = {
         enabled: boolean
       ): Promise<{ performancePanelVisible: boolean }> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.settingsSetPerformancePanelVisible, enabled),
-      setVideoTranscode: (enabled: boolean): Promise<{ videoTranscodeEnabled: boolean }> =>
-        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.settingsSetVideoTranscode, enabled),
       setStreamLimits: (limits: {
         maxStreamResolution: number
         maxStreamSizeGb: number
@@ -336,24 +332,10 @@ const api = {
     },
 
     playback: {
-      // Both handlers start (or restart) the ffmpeg transcoder, so their
-      // resolved payload spreads FfmpegTranscoderResult (url/engine/
-      // compatibility: true) alongside the fields named below — see
-      // main/media-hub/playbackSession.ts's PlaybackCompatibilityResult /
-      // PlaybackSelectTracksResult.
-      compatibility: (
-        selection: PlaybackSelection = {}
-      ): Promise<{ tracks: MediaTracks; url: string; engine: string; compatibility: true }> =>
-        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.playbackCompatibility, selection),
-      selectTracks: (
-        selection: PlaybackSelection
-      ): Promise<{
-        tracks: MediaTracks
-        selection: PlaybackSelection
-        url: string
-        engine: string
-        compatibility: true
-      }> => ipcRenderer.invoke(MEDIA_HUB_CHANNELS.playbackSelectTracks, selection),
+      // What used to be here — `compatibility` and `selectTracks` — started or
+      // restarted the ffmpeg transcoder. Track selection and seeking are player
+      // properties now (see the `player` group above), so nothing in this group
+      // touches the stream itself anymore.
       stop: (options?: { watched?: boolean }): Promise<{ ok: true }> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.playbackStop, options),
       thumbnail: (seconds: number): Promise<string | null> =>
@@ -368,14 +350,6 @@ const api = {
           episode,
           episodeLengthSeconds
         }),
-      extractSubtitle: (ordinal: number): Promise<string | null> =>
-        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.playbackExtractSubtitle, ordinal),
-      reportClientError: (error: {
-        code?: number
-        message?: string
-        currentTime?: number
-      }): Promise<{ ok: true }> =>
-        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.playbackReportClientError, error),
       clearStreamCache: (): Promise<{ ok: true; freedBytes: number }> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.streamCacheClear),
       /** Live sub-status while `stream.play` is in flight — see
@@ -471,16 +445,11 @@ const api = {
       // Takes the whole provider-identifying slice of the chosen result
       // rather than a bare id: which field identifies a subtitle depends on
       // the provider it came from (see SubtitleSelection).
-      apply: (
-        subtitle: SubtitleSelection,
-        compatibility: boolean,
-        selection?: PlaybackSelection
-      ): Promise<SubtitlesApplyResult> =>
-        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.subtitlesApply, {
-          ...subtitle,
-          compatibility,
-          selection
-        }),
+      // The `compatibility` flag and playback `selection` this used to take are
+      // gone with the transcode: applying a subtitle writes the .srt and hands
+      // it to the player, which loads it in place. It never touches playback.
+      apply: (subtitle: SubtitleSelection): Promise<SubtitlesApplyResult> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.subtitlesApply, { ...subtitle }),
       clearCache: (): Promise<{ ok: true; freedBytes: number }> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.subtitlesClearCache)
     },

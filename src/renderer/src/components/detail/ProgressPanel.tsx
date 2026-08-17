@@ -68,7 +68,14 @@ export function ProgressPanel({
           <div className={styles.statRow}>
             <div className={styles.stat}>
               <span className={styles.statValue}>
-                {continueEntry ? Math.round((continueEntry.media.progressPercentage ?? 0) * (media.totalEpisodes ?? 0) / 100) : media.watched ? media.totalEpisodes ?? 0 : 0}
+                {continueEntry
+                  ? Math.round(
+                      ((continueEntry.media.progressPercentage ?? 0) * (media.totalEpisodes ?? 0)) /
+                        100
+                    )
+                  : media.watched
+                    ? (media.totalEpisodes ?? 0)
+                    : 0}
               </span>
               <span className={styles.statLabel}>Watched</span>
             </div>
@@ -83,7 +90,12 @@ export function ProgressPanel({
                   style={{
                     strokeDasharray: 2 * Math.PI * 30,
                     strokeDashoffset:
-                      2 * Math.PI * 30 * (1 - (continueEntry?.media.progressPercentage ?? (media.completed ? 100 : 0)) / 100)
+                      2 *
+                      Math.PI *
+                      30 *
+                      (1 -
+                        (continueEntry?.media.progressPercentage ?? (media.completed ? 100 : 0)) /
+                          100)
                   }}
                 />
               </svg>
@@ -95,7 +107,14 @@ export function ProgressPanel({
             <div className={styles.stat}>
               <span className={styles.statValue}>
                 {media.totalEpisodes != null
-                  ? Math.max(0, media.totalEpisodes - Math.round((continueEntry?.media.progressPercentage ?? 0) * media.totalEpisodes / 100))
+                  ? Math.max(
+                      0,
+                      media.totalEpisodes -
+                        Math.round(
+                          ((continueEntry?.media.progressPercentage ?? 0) * media.totalEpisodes) /
+                            100
+                        )
+                    )
                   : '—'}
               </span>
               <span className={styles.statLabel}>Unwatched</span>

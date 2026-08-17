@@ -3,7 +3,17 @@
 import type { MediaItem } from '@renderer/types'
 import styles from './RatingsPanel.module.css'
 
-function Gauge({ value, max, label, color }: { value: number; max: number; label: string; color: string }) {
+function Gauge({
+  value,
+  max,
+  label,
+  color
+}: {
+  value: number
+  max: number
+  label: string
+  color: string
+}) {
   const pct = Math.max(0, Math.min(1, value / max))
   const radius = 30
   const circumference = 2 * Math.PI * radius
@@ -20,7 +30,9 @@ function Gauge({ value, max, label, color }: { value: number; max: number; label
           style={{ stroke: color, strokeDasharray: circumference, strokeDashoffset: offset }}
         />
       </svg>
-      <span className={styles.gaugeValue}>{max === 100 ? Math.round(value) : value.toFixed(1)}</span>
+      <span className={styles.gaugeValue}>
+        {max === 100 ? Math.round(value) : value.toFixed(1)}
+      </span>
       <span className={styles.gaugeLabel}>{label}</span>
     </div>
   )
@@ -41,10 +53,20 @@ function Gauge({ value, max, label, color }: { value: number; max: number; label
 export function RatingsPanel({ media }: { media: MediaItem }) {
   const gauges: { value: number; max: number; label: string; color: string }[] = []
   if (media.communityRating) {
-    gauges.push({ value: media.communityRating, max: 10, label: 'R3 Score', color: 'var(--accent-yellow)' })
+    gauges.push({
+      value: media.communityRating,
+      max: 10,
+      label: 'R3 Score',
+      color: 'var(--accent-yellow)'
+    })
   }
   if (media.matchPercentage !== undefined) {
-    gauges.push({ value: media.matchPercentage, max: 100, label: 'Match', color: 'var(--accent-green)' })
+    gauges.push({
+      value: media.matchPercentage,
+      max: 100,
+      label: 'Match',
+      color: 'var(--accent-green)'
+    })
   }
   if (media.imdbRating) {
     gauges.push({ value: media.imdbRating, max: 10, label: 'IMDb', color: 'var(--accent-cyan)' })

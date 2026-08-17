@@ -158,7 +158,11 @@ export function rankSafeStreams(
   preferredLanguage = 'en',
   limits: StreamLimits = {}
 ): StreamCandidate[] {
-  return rankStreams(streams.filter((s) => !isUnsafeStream(s)), preferredLanguage, limits)
+  return rankStreams(
+    streams.filter((s) => !isUnsafeStream(s)),
+    preferredLanguage,
+    limits
+  )
 }
 
 /**
