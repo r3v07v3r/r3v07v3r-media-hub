@@ -401,6 +401,17 @@ export class MpvPlayer {
       }
     })
     child.once('exit', () => {
+      // The socket goes with the process. Nothing else nulls it — the
+      // post-connect 'error' handler in connect() deliberately swallows, and
+      // there is no 'close' handler — so without this it stays truthy after a
+      // crash, and every `if (!this.socket) return` guard below reads as "still
+      // running" and pushes the command into a dead pipe. That does not fail:
+      // it waits out COMMAND_TIMEOUT_MS first, which is long enough to visibly
+      // stall a caller awaiting it (playerBridge's raiseMainWindowOverPlayer
+      // waits on setOntop before raising the main window). Torn down the same
+      // way quit() does it, so both paths leave the same state.
+      this.socket?.destroy()
+      this.socket = null
       this.child = null
       this.failAllPending(new Error('mpv exited'))
     })
