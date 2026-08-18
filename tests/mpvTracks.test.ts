@@ -14,6 +14,7 @@ import {
   mpvTrackIdForOrdinal,
   ordinalForMpvTrackId,
   tracksFromMpvTrackList,
+  type MpvSpawnOptions,
   type MpvTrackListEntry
 } from '../src/main/media-hub/mpv'
 
@@ -203,6 +204,34 @@ function writesFor(sent: string[], property: string): unknown[] {
     .map((msg) => msg.command[2])
 }
 
+/**
+ * Runs start() far enough to capture the launch arguments, without a real mpv.
+ *
+ * The stub child reports 'exit' the moment start() subscribes, which clears
+ * `this.child` and makes the IPC connect loop give up on its first attempt
+ * instead of retrying a named pipe that will never exist for ten seconds. The
+ * rejection that follows is the point at which the arguments have already been
+ * built, so it is swallowed.
+ */
+async function launchArgs(bounds?: MpvSpawnOptions['bounds']): Promise<string[]> {
+  let captured: string[] = []
+  const spawnImpl = ((_command: string, args: string[]) => {
+    captured = args
+    return {
+      stderr: {
+        on(): void {
+          /* start() subscribes to stderr; this stub never emits any */
+        }
+      },
+      once(event: string, handler: () => void): void {
+        if (event === 'exit') handler()
+      }
+    }
+  }) as unknown as NonNullable<MpvSpawnOptions['spawnImpl']>
+  await new MpvPlayer().start('mpv.exe', { bounds, spawnImpl }).catch(() => {})
+  return captured
+}
+
 /** Starts a load without awaiting it — `file-loaded` never arrives on a fake
  *  socket, so the returned promise is expected to reject on its own timeout
  *  long after the assertions are done. Swallowed so it cannot surface as an
@@ -245,6 +274,33 @@ async function main(): Promise<void> {
     await assert.rejects(
       () => player.loadFile('file:///C:/Windows/win.ini'),
       /valid HTTPS media URL/
+    )
+  })
+
+  await checkAsync(
+    'the window is the rectangle it is given, not the shape of the film',
+    async () => {
+      const args = await launchArgs({ x: 0, y: 0, width: 3440, height: 1440 })
+      // Without this mpv defaults to keeping its WINDOW at the video's aspect
+      // ratio, so it shrinks the size the geometry below just asked for and the
+      // app shows through the strip left over — "fullscreen doesn't go quite
+      // fullscreen, there is a gap on the right", on an ultrawide display.
+      assert.ok(
+        args.includes('--no-keepaspect-window'),
+        `launch args do not disable window aspect locking: ${args.join(' ')}`
+      )
+      assert.ok(
+        args.includes('--geometry=3440x1440+0+0'),
+        `geometry was not the exact requested rectangle: ${args.join(' ')}`
+      )
+    }
+  )
+
+  await checkAsync('geometry is omitted entirely when there are no bounds to honour', async () => {
+    const args = await launchArgs()
+    assert.deepEqual(
+      args.filter((arg) => arg.startsWith('--geometry')),
+      []
     )
   })
 

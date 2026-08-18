@@ -330,6 +330,20 @@ export class MpvPlayer {
       '--no-border',
       '--ontop',
       '--focus-on=never',
+      // The window is EXACTLY the rectangle it is given, never the shape of the
+      // film in it. mpv defaults --keepaspect-window to yes, which lets it
+      // shrink its own window to the video's aspect ratio after the geometry
+      // below has asked for a specific size — so a 2.35:1 film on a 16:9 screen
+      // gets a window narrower or shorter than the app's content area, and
+      // whatever is behind it shows through the leftover strip. Reported as
+      // "fullscreen doesn't go quite fullscreen, there is a gap on the right",
+      // with the app's own sidebar visible in the gap.
+      //
+      // Fitting the picture INSIDE this window is a separate concern and stays
+      // with keepaspect/panscan, which the fit/fill modes drive — see
+      // shared/media-hub/videoFit.ts. Letterbox bars are mpv's to draw within
+      // the rectangle, not a reason for the rectangle to change size.
+      '--no-keepaspect-window',
       // BUFFERING. mpv's demuxer keeps reading ahead while playback is paused,
       // which is what makes "pause for a moment, resume without waiting" work
       // and what rides out a stall. The default readahead is ONE SECOND, so
