@@ -1183,24 +1183,29 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   // MediaItem to build its trackable payload, and that record lives here —
   // shipping it across the boundary and back would be strictly worse.
   // Keeps main's picture of the party panel in step with this window's, by
-  // reporting it rather than letting main infer it. Main has to know, and
-  // cannot see React state: mpv is always-on-top and sized over this window's
-  // content area, so while the panel is up the video must be lowered and the
-  // app raised, and when it goes the video takes the front back. Without this
+  // reporting it rather than letting main infer it. Main has to know and cannot
+  // see React state: mpv's window sits over this window's content area, so
+  // while the panel is up the video has to be handed the back and the app the
+  // front, and when the panel goes the video takes the front back. Without this
   // the Party button appeared to do nothing at all.
   //
-  // Both edges are reported, and the open edge is re-reported whenever the
-  // playing title changes, because starting a session raises the controls over
-  // everything. That re-announcement is what the panel's own queue depends on:
-  // the panel is still on screen after a film ends, and the next title started
-  // from it would otherwise cover the thing that started it.
+  // Both edges are reported now, whatever is playing. That is what lets main
+  // hold mainWindowUiOpen across a stop rather than clearing it there — see its
+  // comment in playerBridge.ts. The old close report only fired during
+  // playback, so the flag had to be cleared on every stop to keep it from
+  // sticking, and clearing it is what let a title played from the still-open
+  // queue cover the panel that started it.
   //
-  // The first run always reports, even with nothing yet to report. Main
-  // outlives a renderer reload, and this window comes back with the panel
-  // closed — that opening "closed" is what stops a panel that was open before
-  // the reload from leaving the video lowered forever. Outside playback both
-  // reports are no-ops on main's side: there is no mpv window to restack and no
-  // overlay to raise.
+  // The open edge is re-reported whenever the playing title changes, so a flag
+  // that has drifted the other way is repaired by the next thing played rather
+  // than staying wrong. The first run always reports, even with nothing yet to
+  // report: main outlives a renderer reload and this window comes back with the
+  // panel closed, and that opening "closed" is what stops a panel that was open
+  // before the reload from keeping the video down forever. Between them there
+  // is no state main can be left holding that this window does not correct.
+  //
+  // Outside playback both reports are no-ops on main's side — restackPlayer
+  // returns without a running player, and there is no overlay to raise.
   const partyPanelReportedOpen = useRef<boolean | null>(null)
   useEffect(() => {
     const reported = partyPanelReportedOpen.current

@@ -1,11 +1,19 @@
 // The transparent control surface layered over mpv's native video window.
 //
-// WHY A SECOND WINDOW. mpv draws into its own borderless, always-on-top window
-// sitting over the app's content area (see mpv.ts's WINDOWING note on why it is
-// not embedded with --wid). Nothing can be painted over that from inside the
-// main window, so the controls live here: a frameless, transparent,
-// always-on-top BrowserWindow whose bounds track the main window's, raised to a
-// higher always-on-top level than mpv so it reliably wins the z-order.
+// WHY A SECOND WINDOW. mpv draws into its own borderless window sitting over
+// the app's content area (see mpv.ts's WINDOWING note on why it is not embedded
+// with --wid). Nothing can be painted over that from inside the main window, so
+// the controls live here: a frameless, transparent BrowserWindow whose bounds
+// track the main window's, and which is re-raised over the video whenever
+// anything could have reordered the two.
+//
+// ORDINARY WINDOWS, NOT TOPMOST. Neither this window nor mpv's is always-on-top
+// while the film is windowed, so other applications can be put over the picture
+// — with the flag on, nothing could ever cover a playing video. The z-order is
+// held together instead by raising both windows when the app is activated
+// (playerBridge's restackPlayer). Fullscreen is the exception and does set the
+// flag on both, since a fullscreen film should have nothing over it, the
+// taskbar included; setPlayerOverlayTopmost is how that arrives here.
 //
 // The obvious worry with that shape is cost: Electron transparent overlays on
 // Windows have a reputation for flicker and for throttling whatever renders
@@ -32,6 +40,14 @@ let overlayWindow: BrowserWindow | null = null
 let parentWindow: BrowserWindow | null = null
 let detachBoundsListeners: (() => void) | null = null
 let inputReady = false
+// Whether the controls are currently meant to be in the always-on-top band.
+// Only fullscreen turns this on — see this file's header.
+let topmost = false
+
+// mpv's window is topmost too while fullscreen, so a plain topmost flag would
+// only put the controls in the same band as the video and leave the winner to
+// whichever was raised last. A higher level wins outright.
+const OVERLAY_TOPMOST_LEVEL = 'screen-saver' as const
 
 export function getPlayerOverlay(): BrowserWindow | null {
   return overlayWindow && !overlayWindow.isDestroyed() ? overlayWindow : null
@@ -98,12 +114,23 @@ function mirrorBounds(): void {
   win.setBounds(bounds)
 }
 
+export interface OpenPlayerOverlayOptions {
+  /** Called when this window is activated. Clicking a control activates the
+   *  main window with it — they are one owner group — which puts the app back
+   *  over mpv's video window, so the caller has to put the video back on top.
+   *  Wired at creation so a title change cannot stack up a second copy. */
+  onFocus?: () => void
+}
+
 /**
  * Creates the overlay for a playback session. Idempotent — calling it while an
  * overlay is already open just re-mirrors the bounds, so a title change inside
  * an open player does not tear the window down and rebuild it.
  */
-export function openPlayerOverlay(parent: BrowserWindow): BrowserWindow {
+export function openPlayerOverlay(
+  parent: BrowserWindow,
+  options: OpenPlayerOverlayOptions = {}
+): BrowserWindow {
   const existing = getPlayerOverlay()
   if (existing) {
     mirrorBounds()
@@ -126,7 +153,6 @@ export function openPlayerOverlay(parent: BrowserWindow): BrowserWindow {
     fullscreenable: false,
     hasShadow: false,
     skipTaskbar: true,
-    alwaysOnTop: true,
     // Nothing should flash before React has painted the (fully transparent)
     // control layer.
     show: false,
@@ -146,10 +172,9 @@ export function openPlayerOverlay(parent: BrowserWindow): BrowserWindow {
     }
   })
   overlayWindow = win
-  // mpv's own window is also always-on-top (see mpv.ts's WINDOWING note), so a
-  // plain topmost flag is not enough to guarantee the controls sit above the
-  // video — both would be in the same band. A higher level wins outright.
-  win.setAlwaysOnTop(true, 'pop-up-menu')
+  // A session can open into an already-fullscreen window, so the band is
+  // applied from the standing policy rather than assumed to be the default.
+  if (topmost) win.setAlwaysOnTop(true, OVERLAY_TOPMOST_LEVEL)
 
   // The same navigation and permission guards the main window applies. Without
   // these, this window would be the weakest link of the two.
@@ -182,6 +207,8 @@ export function openPlayerOverlay(parent: BrowserWindow): BrowserWindow {
   win.once('ready-to-show', () => {
     if (!win.isDestroyed()) win.show()
   })
+
+  if (options.onFocus) win.on('focus', options.onFocus)
 
   const onBoundsChange = (): void => mirrorBounds()
   parent.on('resize', onBoundsChange)
@@ -229,25 +256,48 @@ export function openPlayerOverlay(parent: BrowserWindow): BrowserWindow {
 }
 
 /**
- * Raises the controls above mpv's video window and gives them keyboard focus.
+ * Moves the controls into or out of the always-on-top band, and remembers
+ * which, so a window created later opens into the same policy.
  *
- * Ordering matters and is not obvious: this window is created BEFORE mpv has a
- * video window (mpv makes one on loadfile, not on launch), and mpv sets
- * --ontop. Among always-on-top windows on Windows the most recently raised
- * wins, so the controls start out buried under the video — invisible,
- * unclickable, and with no route for Escape. Symptom: a playing title with no
- * way to pause or exit it.
- *
- * So this must be called AFTER the file is loaded, not when the window is made.
+ * The caller owns the ordering against mpv: whichever of the two windows
+ * changes band last ends up in front of the other, and that has to be the
+ * controls (playerBridge's setPlayerTopmost does this).
  */
-export function raisePlayerOverlay(): void {
+export function setPlayerOverlayTopmost(on: boolean): void {
+  topmost = on
   const win = getPlayerOverlay()
   if (!win) return
-  win.setAlwaysOnTop(true, 'screen-saver')
+  if (on) win.setAlwaysOnTop(true, OVERLAY_TOPMOST_LEVEL)
+  else win.setAlwaysOnTop(false)
+}
+
+/**
+ * Raises the controls above mpv's video window, and by default gives them
+ * keyboard focus.
+ *
+ * Ordering matters and is not obvious: this window is created BEFORE mpv has a
+ * video window (mpv makes one on loadfile, not on launch), and a newly created
+ * window arrives in front, so the controls start out buried under the video —
+ * invisible, unclickable, and with no route for Escape. Symptom: a playing
+ * title with no way to pause or exit it.
+ *
+ * So this must be called AFTER the file is loaded, not when the window is made.
+ *
+ * `focus: false` is for the raises that are only tidying the z-order — the app
+ * being activated, mpv reporting that its own window was — where taking the
+ * keyboard would interrupt whatever the person is actually doing in the window
+ * they just clicked.
+ */
+export function raisePlayerOverlay({ focus = true }: { focus?: boolean } = {}): void {
+  const win = getPlayerOverlay()
+  if (!win) return
+  // Re-asserted, not assumed: within the topmost band the most recently raised
+  // window wins, and mpv can re-create its video window at any time.
+  if (topmost) win.setAlwaysOnTop(true, OVERLAY_TOPMOST_LEVEL)
   win.moveTop()
   // Without focus the keydown handler never runs, which is what leaves Escape
   // and space dead while a title is playing.
-  win.focus()
+  if (focus) win.focus()
 }
 
 /**
@@ -270,5 +320,8 @@ export function closePlayerOverlay(): void {
   overlayWindow = null
   parentWindow = null
   inputReady = false
+  // The next session decides its own band from the state the app is in then,
+  // not from how the last one ended.
+  topmost = false
   if (win) win.destroy()
 }

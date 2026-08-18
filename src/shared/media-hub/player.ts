@@ -3,7 +3,7 @@
 // WHY THIS BOUNDARY EXISTS AT ALL. mpv renders into a native child window,
 // which on Windows always composites above Chromium's web content — HTML
 // cannot be drawn over it within the same window. The controls therefore live
-// in a second, transparent, always-on-top BrowserWindow layered on top. That
+// in a second, transparent BrowserWindow layered on top. That
 // window is its own renderer process with its own React tree, so it has no
 // access to the main window's AppStateContext. Everything the player UI needs
 // crosses these three payload shapes instead.
@@ -149,17 +149,17 @@ export type PlayerUiEvent =
   | { type: 'refresh-watch-status' }
   | { type: 'notify'; tone: 'info' | 'error' | 'success'; message: string }
   /** Overlay -> main -> main window: open the party panel. Also main window ->
-   *  main, reporting that the panel IS open — sent on the closed -> open edge
-   *  and again whenever the playing title changes, since starting a session
-   *  raises the controls over everything and the panel has to say it is still
-   *  there. */
+   *  main, reporting that the panel IS open — on the closed -> open edge, and
+   *  again on every title change so a mainWindowUiOpen that has drifted false
+   *  is repaired by the next thing played rather than staying wrong. */
   | { type: 'set-party-panel-open'; open: boolean }
-  /** Main window -> main: the party panel has gone, so the video can go back on
-   *  top. See playerBridge's handling of set-party-panel-open for why the video
-   *  has to be lowered at all, and mainWindowUiOpen for why main takes this
-   *  window's word for it rather than inferring the close from playback ending.
-   *  Sent on every open -> closed edge, and once on mount so a main process
-   *  that outlived a renderer reload cannot be left holding a stale "open". */
+  /** Main window -> main: the party panel has gone, so the video can have the
+   *  front back. See playerBridge's handling of set-party-panel-open for why it
+   *  was given up at all, and mainWindowUiOpen for why main takes this window's
+   *  word for the close rather than inferring it from playback ending. Sent on
+   *  every open -> closed edge whatever is playing, and once on mount so a main
+   *  process that outlived a renderer reload cannot be left holding a stale
+   *  "open" — which would keep the video under the app indefinitely. */
   | { type: 'party-panel-closed' }
   /** Whether the overlay currently wants mouse input. False makes the window
    *  click-through so the video underneath receives the events instead — see
