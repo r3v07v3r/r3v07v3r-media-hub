@@ -356,6 +356,23 @@ function appHasFocus(): boolean {
 }
 
 /**
+ * Bumped by every decision about which band the player's windows belong in.
+ *
+ * The half of such a decision that has to wait for mpv finishes asynchronously,
+ * and by then the answer can be out of date — entering fullscreen and opening
+ * the party panel a moment later, or stopping playback mid-transition. A
+ * completion that is no longer the current generation has been overtaken and
+ * must apply nothing: without this, the fullscreen transition's tail re-raises
+ * the controls over the panel that deliberately displaced them, and a stopped
+ * session leaves `topmost` set for the NEXT one to open into — a transparent
+ * window over every other application until its own policy lands.
+ *
+ * Cheaper than serializing the transitions, and better behaved: the newest
+ * decision applies immediately rather than queueing behind a stale one.
+ */
+let topmostGeneration = 0
+
+/**
  * Puts both player windows in or out of the always-on-top band.
  *
  * Fullscreen is the only caller that passes true: a fullscreen film should have
@@ -369,10 +386,12 @@ function appHasFocus(): boolean {
  * they are buried under the video the moment fullscreen changes.
  */
 function setPlayerTopmost(on: boolean): void {
+  const generation = ++topmostGeneration
   void player
     .setOntop(on)
     .catch(() => {})
     .finally(() => {
+      if (generation !== topmostGeneration) return
       setPlayerOverlayTopmost(on)
       raiseOverlaySoon()
     })
@@ -395,7 +414,13 @@ function restackPlayer(): void {
   void player
     .raiseWindow()
     .catch(() => {})
-    .finally(() => raisePlayerOverlay({ focus: false }))
+    // Re-checked rather than assumed: the panel can be opened while this is
+    // still waiting on mpv, and the tail of a restack must not walk over a
+    // decision made after it started.
+    .finally(() => {
+      if (mainWindowUiOpen) return
+      raisePlayerOverlay({ focus: false })
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -491,6 +516,12 @@ export async function stopPlayerSession(): Promise<void> {
   clearRaiseTimers()
   untrackWindow?.()
   mainWindowUiOpen = false
+  // Closing is the newest word on which band anything belongs in.
+  // closePlayerOverlay clears the policy, and this stops a transition still in
+  // flight from writing it back — which would hand the NEXT session an overlay
+  // that opens topmost, over every other application, until its own policy
+  // lands after loadFile.
+  topmostGeneration++
   pendingPatch = {}
   if (flushTimer) {
     clearTimeout(flushTimer)
@@ -718,6 +749,12 @@ function forwardUiEvent(event: PlayerUiEvent): void {
   if (event.type === 'set-party-panel-open' && event.open) {
     mainWindowUiOpen = true
     clearRaiseTimers()
+    // This is a band decision like any other, so it takes a generation — both
+    // to overtake a fullscreen transition still waiting on mpv, and so that its
+    // own tail is dropped if the panel is closed again before it lands. Raising
+    // the main window after that would bury the film the person just went back
+    // to.
+    const generation = ++topmostGeneration
     setPlayerOverlayTopmost(false)
     // Ordered, not fired and forgotten. A fullscreen film's window is topmost,
     // which no amount of raising an ordinary window can get past, and leaving
@@ -727,6 +764,7 @@ function forwardUiEvent(event: PlayerUiEvent): void {
       .setOntop(false)
       .catch(() => {})
       .finally(() => {
+        if (generation !== topmostGeneration) return
         const mainWindow = getActiveWindow()
         if (mainWindow && !mainWindow.isDestroyed()) {
           mainWindow.moveTop()
