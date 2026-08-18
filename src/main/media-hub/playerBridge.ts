@@ -423,6 +423,39 @@ function restackPlayer(): void {
     })
 }
 
+/**
+ * The opposite of restackPlayer: hands the front to the main window, so
+ * main-window UI reached from the player can actually be seen and clicked.
+ *
+ * Both player windows leave the always-on-top band first, and the main window
+ * is raised only once mpv confirms it has — a fullscreen film's window is
+ * topmost, which no amount of raising an ordinary window can get past, and
+ * leaving the band puts it at the front of the ordinary one, so raising the
+ * main window before that lands just buries the panel again.
+ *
+ * The caller owns mainWindowUiOpen; this only moves windows.
+ */
+function raiseMainWindowOverPlayer(): void {
+  // A band decision like any other, so it takes a generation — both to overtake
+  // a fullscreen transition still waiting on mpv, and so its own tail is
+  // dropped if something newer (the panel closing again) has since decided
+  // otherwise. Raising the main window after that would bury the film the
+  // person has just gone back to.
+  const generation = ++topmostGeneration
+  setPlayerOverlayTopmost(false)
+  void player
+    .setOntop(false)
+    .catch(() => {})
+    .finally(() => {
+      if (generation !== topmostGeneration) return
+      const mainWindow = getActiveWindow()
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.moveTop()
+        mainWindow.focus()
+      }
+    })
+}
+
 // ---------------------------------------------------------------------------
 // Session lifecycle
 // ---------------------------------------------------------------------------
@@ -473,7 +506,6 @@ export async function startPlayerSession(
   }
   trackWindow(mainWindow)
 
-  mainWindowUiOpen = false
   openPlayerOverlay(mainWindow, { onFocus: () => restackPlayer() })
   await player.loadFile(url, {
     startSeconds: options.startSeconds,
@@ -493,7 +525,16 @@ export async function startPlayerSession(
   // the window because a session can start into an already-fullscreen app —
   // "playback is starting" says nothing about which band these two windows
   // belong in, only the main window's state does.
-  setPlayerTopmost(mainWindow.isFullScreen())
+  //
+  // Except when main-window UI is up, which a title change does NOT close: a
+  // host playing something from the watch-party queue goes through here with
+  // the panel still open and still rendering (PartyPanel's Play button ->
+  // requestPartyPlay, which starts the title and leaves the panel alone). The
+  // new film taking the front there would make the panel vanish mid-party, for
+  // no reason the person could see. It gets the front back the moment the panel
+  // is closed — see party-panel-closed.
+  if (mainWindowUiOpen) raiseMainWindowOverPlayer()
+  else setPlayerTopmost(mainWindow.isFullScreen())
 
   // Raising once here is NOT enough, and that is the whole subtlety: the
   // `file-loaded` this just awaited fires before mpv's video window actually
@@ -594,7 +635,12 @@ function trackWindow(mainWindow: BrowserWindow): void {
   // transition either way has to be told — and the state is read from the
   // window rather than inferred from which event fired, so the two can never
   // disagree.
-  const applyTopmost = (): void => setPlayerTopmost(mainWindow.isFullScreen())
+  //
+  // An open panel outranks fullscreen: going fullscreen while main-window UI is
+  // up must not put the film in a band the panel cannot be seen from. Closing
+  // the panel re-reads the window and lands in the right band then.
+  const applyTopmost = (): void =>
+    setPlayerTopmost(mainWindow.isFullScreen() && !mainWindowUiOpen)
   const restack = (): void => restackPlayer()
 
   mainWindow.on('resize', sync)
@@ -749,28 +795,7 @@ function forwardUiEvent(event: PlayerUiEvent): void {
   if (event.type === 'set-party-panel-open' && event.open) {
     mainWindowUiOpen = true
     clearRaiseTimers()
-    // This is a band decision like any other, so it takes a generation — both
-    // to overtake a fullscreen transition still waiting on mpv, and so that its
-    // own tail is dropped if the panel is closed again before it lands. Raising
-    // the main window after that would bury the film the person just went back
-    // to.
-    const generation = ++topmostGeneration
-    setPlayerOverlayTopmost(false)
-    // Ordered, not fired and forgotten. A fullscreen film's window is topmost,
-    // which no amount of raising an ordinary window can get past, and leaving
-    // the band puts it at the front of the ordinary one — so raising the main
-    // window before that has landed just buries the panel again.
-    void player
-      .setOntop(false)
-      .catch(() => {})
-      .finally(() => {
-        if (generation !== topmostGeneration) return
-        const mainWindow = getActiveWindow()
-        if (mainWindow && !mainWindow.isDestroyed()) {
-          mainWindow.moveTop()
-          mainWindow.focus()
-        }
-      })
+    raiseMainWindowOverPlayer()
   }
   if (event.type === 'party-panel-closed') {
     mainWindowUiOpen = false
