@@ -3,7 +3,7 @@
 // WHY THIS BOUNDARY EXISTS AT ALL. mpv renders into a native child window,
 // which on Windows always composites above Chromium's web content — HTML
 // cannot be drawn over it within the same window. The controls therefore live
-// in a second, transparent, always-on-top BrowserWindow layered on top. That
+// in a second, transparent BrowserWindow layered on top. That
 // window is its own renderer process with its own React tree, so it has no
 // access to the main window's AppStateContext. Everything the player UI needs
 // crosses these three payload shapes instead.

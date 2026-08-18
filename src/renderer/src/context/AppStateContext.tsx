@@ -1183,7 +1183,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   // MediaItem to build its trackable payload, and that record lives here —
   // shipping it across the boundary and back would be strictly worse.
   // Tells main the party panel has closed so the video can go back on top.
-  // Opening it lowered the video deliberately — mpv is always-on-top over this
+  // Opening it lowered the video deliberately — mpv's window sits over this
   // window's content area, so anything drawn here during playback is invisible
   // and unclickable, which is why the Party button appeared to do nothing.
   // Only fires while something is playing; outside playback there is nothing

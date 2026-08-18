@@ -43,7 +43,8 @@ import {
   raisePlayerOverlay,
   sendToPlayerOverlay,
   setOverlayInputReady,
-  setOverlayInteractive
+  setOverlayInteractive,
+  setPlayerOverlayTopmost
 } from './playerWindow'
 import { getActiveWindow, sendToRenderer } from './rendererBridge'
 
@@ -188,8 +189,33 @@ async function attachObservers(): Promise<void> {
   // have to be raised against — `file-loaded` is too early, since the window is
   // created a little after the file is.
   await player.observe('vo-configured', (value) => {
-    if (value === true) raiseOverlaySoon()
+    if (value !== true) return
+    // The whole stack, not just the controls. That window has just been created
+    // without being activated and is no longer topmost, so it cannot be assumed
+    // to have arrived over the app that spawned it — and a film hidden behind
+    // the app's own UI is a worse failure than controls hidden behind the film.
+    //
+    // Only while the app is the one being used, though: this also fires on a
+    // mid-playback re-configure, and a windowed film must not pull itself over
+    // whatever the person has moved on to. The raise train applies the same
+    // rule, but per retry rather than once here — see raiseOverlaySoon.
+    if (appHasFocus()) restackPlayer()
+    raiseOverlaySoon()
   })
+  // mpv's window being activated raises it over the controls, and the controls
+  // are what the person needs the moment they have gone back to the film. The
+  // click case also arrives as a client-message below; this covers the rest of
+  // them, alt-tabbing straight to the video most of all.
+  //
+  // Best effort on purpose: an mpv without this property simply never reports,
+  // and the client-message path still catches every click on the picture.
+  await player
+    .observe('focused', (value) => {
+      if (value === true && !mainWindowUiOpen) raisePlayerOverlay({ focus: false })
+    })
+    // A build that does not know the property must not take the rest of the
+    // observers down with it — every one of those the UI genuinely needs.
+    .catch(() => {})
   await player.observe('eof-reached', (value) => {
     if (value === true) queuePatch({ eofReached: true }, true)
   })
@@ -206,6 +232,12 @@ async function attachObservers(): Promise<void> {
   // exactly the same actions the overlay's buttons do.
   player.on('client-message', (msg) => {
     const args = Array.isArray(msg.args) ? (msg.args as unknown[]) : []
+    // Reaching here at all means mpv's window took the input, which means it
+    // was activated and is now over the controls. Clicking the picture is how
+    // someone comes back to a film they left running behind another window, so
+    // this is exactly when the controls have to be pulled back over it —
+    // keyboard included, since from here on the keys are the player's.
+    if (!mainWindowUiOpen) raisePlayerOverlay()
     switch (String(args[0] ?? '')) {
       case 'r3-stop': {
         // Escape leaves fullscreen before it closes anything, so one press is
@@ -260,23 +292,168 @@ async function attachObservers(): Promise<void> {
  * Raises the controls above the video, several times over a short window.
  *
  * Deliberately repeated rather than done once. mpv creates, and can re-create,
- * its always-on-top video window asynchronously — on load, and again on things
- * like a resolution change — and whichever always-on-top window was raised last
- * wins on Windows. A single raise is a race this side loses often enough to
+ * its video window asynchronously — on load, and again on things like a
+ * resolution change — and a window that has just been created arrives in front
+ * of everything else. A single raise is a race this side loses often enough to
  * leave someone staring at a video with no controls and no obvious way out.
  * Re-raising a window that is already on top costs nothing.
+ *
+ * Each retry decides for itself whether to fire, at the moment it fires rather
+ * than when it was scheduled — 1.8 seconds is long enough for someone to start
+ * a title and switch to another application before the train has finished, and
+ * a train that had made its mind up at t=0 would spend the rest of its run
+ * pulling a window that spans the whole content area back over whatever they
+ * moved on to, keyboard and all. Skipping costs nothing either: the stack is
+ * re-established the moment the app or the video is next activated.
  */
 const RAISE_RETRIES_MS = [0, 150, 400, 900, 1800]
 let raiseTimers: NodeJS.Timeout[] = []
 
 function raiseOverlaySoon(): void {
   clearRaiseTimers()
-  raiseTimers = RAISE_RETRIES_MS.map((delay) => setTimeout(() => raisePlayerOverlay(), delay))
+  raiseTimers = RAISE_RETRIES_MS.map((delay) =>
+    setTimeout(() => {
+      if (!appHasFocus() || mainWindowUiOpen) return
+      raisePlayerOverlay()
+    }, delay)
+  )
 }
 
 function clearRaiseTimers(): void {
   for (const timer of raiseTimers) clearTimeout(timer)
   raiseTimers = []
+}
+
+// ---------------------------------------------------------------------------
+// Window stacking
+// ---------------------------------------------------------------------------
+//
+// Three unrelated top-level windows have to end up in one order — main window,
+// then mpv's video window, then the controls — and only the last two are the
+// player's. Neither of them is always-on-top while the film is windowed, so
+// that order is not held by the OS: it is re-established here, at each of the
+// moments that can disturb it.
+//
+// The alternative, and what this replaced, was --ontop plus a topmost overlay.
+// That never needed re-stacking, and never allowed another application to be
+// put over a playing video either.
+
+/** Whether main-window UI has deliberately been brought to the front over the
+ *  video (the watch-party panel). While it is, nothing here may put the video
+ *  back on top — that is the one state where the app is meant to win. */
+let mainWindowUiOpen = false
+
+function mainWindowIsFullScreen(): boolean {
+  const win = getActiveWindow()
+  return Boolean(win && !win.isDestroyed() && win.isFullScreen())
+}
+
+/** Whether one of the app's own windows currently has focus. False while
+ *  another application has it, and also while mpv's window does — mpv is a
+ *  separate process, so it is not one of ours. */
+function appHasFocus(): boolean {
+  return BrowserWindow.getFocusedWindow() !== null
+}
+
+/**
+ * Bumped by every decision about which band the player's windows belong in.
+ *
+ * The half of such a decision that has to wait for mpv finishes asynchronously,
+ * and by then the answer can be out of date — entering fullscreen and opening
+ * the party panel a moment later, or stopping playback mid-transition. A
+ * completion that is no longer the current generation has been overtaken and
+ * must apply nothing: without this, the fullscreen transition's tail re-raises
+ * the controls over the panel that deliberately displaced them, and a stopped
+ * session leaves `topmost` set for the NEXT one to open into — a transparent
+ * window over every other application until its own policy lands.
+ *
+ * Cheaper than serializing the transitions, and better behaved: the newest
+ * decision applies immediately rather than queueing behind a stale one.
+ */
+let topmostGeneration = 0
+
+/**
+ * Puts both player windows in or out of the always-on-top band.
+ *
+ * Fullscreen is the only caller that passes true: a fullscreen film should have
+ * nothing at all over it, including the taskbar, which an ordinary window does
+ * not reliably clear. Windowed playback stays out of the band so other
+ * applications can be put over the picture.
+ *
+ * The two calls are ordered, not fired together. Both entering and leaving the
+ * band move a window to the front of the one it lands in, so whichever is
+ * applied last ends up over the other — and that has to be the controls, or
+ * they are buried under the video the moment fullscreen changes.
+ */
+function setPlayerTopmost(on: boolean): void {
+  const generation = ++topmostGeneration
+  void player
+    .setOntop(on)
+    .catch(() => {})
+    .finally(() => {
+      if (generation !== topmostGeneration) return
+      setPlayerOverlayTopmost(on)
+      raiseOverlaySoon()
+    })
+}
+
+/**
+ * Puts the video back over the app, and the controls back over the video.
+ *
+ * Called when the app is activated. Activating any of the app's windows raises
+ * it — and, for the controls, the main window that owns them — above mpv's
+ * window, which would leave the film hidden behind the UI it is playing in.
+ *
+ * Deliberately does not take focus. The main window is activated by clicking
+ * its title bar as often as by anything else, and stealing the keyboard
+ * mid-drag is a worse bug than the one this fixes; the controls take focus when
+ * the person actually reaches for them (set-interactive, below).
+ */
+function restackPlayer(): void {
+  if (!player.running || mainWindowUiOpen) return
+  void player
+    .raiseWindow()
+    .catch(() => {})
+    // Re-checked rather than assumed: the panel can be opened while this is
+    // still waiting on mpv, and the tail of a restack must not walk over a
+    // decision made after it started.
+    .finally(() => {
+      if (mainWindowUiOpen) return
+      raisePlayerOverlay({ focus: false })
+    })
+}
+
+/**
+ * The opposite of restackPlayer: hands the front to the main window, so
+ * main-window UI reached from the player can actually be seen and clicked.
+ *
+ * Both player windows leave the always-on-top band first, and the main window
+ * is raised only once mpv confirms it has — a fullscreen film's window is
+ * topmost, which no amount of raising an ordinary window can get past, and
+ * leaving the band puts it at the front of the ordinary one, so raising the
+ * main window before that lands just buries the panel again.
+ *
+ * The caller owns mainWindowUiOpen; this only moves windows.
+ */
+function raiseMainWindowOverPlayer(): void {
+  // A band decision like any other, so it takes a generation — both to overtake
+  // a fullscreen transition still waiting on mpv, and so its own tail is
+  // dropped if something newer (the panel closing again) has since decided
+  // otherwise. Raising the main window after that would bury the film the
+  // person has just gone back to.
+  const generation = ++topmostGeneration
+  setPlayerOverlayTopmost(false)
+  void player
+    .setOntop(false)
+    .catch(() => {})
+    .finally(() => {
+      if (generation !== topmostGeneration) return
+      const mainWindow = getActiveWindow()
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.moveTop()
+        mainWindow.focus()
+      }
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -329,7 +506,7 @@ export async function startPlayerSession(
   }
   trackWindow(mainWindow)
 
-  openPlayerOverlay(mainWindow)
+  openPlayerOverlay(mainWindow, { onFocus: () => restackPlayer() })
   await player.loadFile(url, {
     startSeconds: options.startSeconds,
     audioLanguage: options.audioLanguage,
@@ -343,6 +520,21 @@ export async function startPlayerSession(
   // shutdown), and a respawned mpv is back at its defaults while the overlay
   // would still be showing the mode that was chosen before.
   await applyFitMode(fitMode).catch(() => {})
+
+  // Re-asserted per title for the same reason as the fit mode, and read from
+  // the window because a session can start into an already-fullscreen app —
+  // "playback is starting" says nothing about which band these two windows
+  // belong in, only the main window's state does.
+  //
+  // Except when main-window UI is up, which a title change does NOT close: a
+  // host playing something from the watch-party queue goes through here with
+  // the panel still open and still rendering (PartyPanel's Play button ->
+  // requestPartyPlay, which starts the title and leaves the panel alone). The
+  // new film taking the front there would make the panel vanish mid-party, for
+  // no reason the person could see. It gets the front back the moment the panel
+  // is closed — see party-panel-closed.
+  if (mainWindowUiOpen) raiseMainWindowOverPlayer()
+  else setPlayerTopmost(mainWindow.isFullScreen())
 
   // Raising once here is NOT enough, and that is the whole subtlety: the
   // `file-loaded` this just awaited fires before mpv's video window actually
@@ -364,6 +556,13 @@ export async function startPlayerSession(
 export async function stopPlayerSession(): Promise<void> {
   clearRaiseTimers()
   untrackWindow?.()
+  mainWindowUiOpen = false
+  // Closing is the newest word on which band anything belongs in.
+  // closePlayerOverlay clears the policy, and this stops a transition still in
+  // flight from writing it back — which would hand the NEXT session an overlay
+  // that opens topmost, over every other application, until its own policy
+  // lands after loadFile.
+  topmostGeneration++
   pendingPatch = {}
   if (flushTimer) {
     clearTimeout(flushTimer)
@@ -400,13 +599,16 @@ export async function addSubtitleFileToPlayer(filePath: string): Promise<number>
 }
 
 /**
- * Keeps mpv's window glued to the app's content area.
+ * Keeps mpv's window glued to the app's content area, and in the right place
+ * in the z-order.
  *
- * mpv is not embedded — it owns a borderless always-on-top window (see mpv.ts's
+ * mpv is not embedded — it owns a borderless window of its own (see mpv.ts's
  * WINDOWING note on why embedding does not work), which means nothing moves it
- * for us. Every way the app window can change shape has to be mirrored, and it
- * has to be hidden when the app is not on screen, or an always-on-top video
- * window would sit over whatever the person switched to.
+ * for us. Every way the app window can change shape has to be mirrored; it has
+ * to be hidden when the app is not on screen, since a window nothing owns does
+ * not minimise with the app that spawned it; and because it is not topmost
+ * while windowed, it has to be raised again whenever activating the app has
+ * put the app's own window in front of it.
  */
 let untrackWindow: (() => void) | null = null
 
@@ -425,12 +627,29 @@ function trackWindow(mainWindow: BrowserWindow): void {
   const show = (): void => {
     void player.setWindowVisible(true)
     sync()
+    // A window that was minimised comes back wherever the OS puts it, which is
+    // not necessarily over the app it belongs to.
+    restackPlayer()
   }
+  // Only fullscreen puts the player in the always-on-top band, so every
+  // transition either way has to be told — and the state is read from the
+  // window rather than inferred from which event fired, so the two can never
+  // disagree.
+  //
+  // An open panel outranks fullscreen: going fullscreen while main-window UI is
+  // up must not put the film in a band the panel cannot be seen from. Closing
+  // the panel re-reads the window and lands in the right band then.
+  const applyTopmost = (): void =>
+    setPlayerTopmost(mainWindow.isFullScreen() && !mainWindowUiOpen)
+  const restack = (): void => restackPlayer()
 
   mainWindow.on('resize', sync)
   mainWindow.on('move', sync)
   mainWindow.on('enter-full-screen', syncSettled)
   mainWindow.on('leave-full-screen', syncSettled)
+  mainWindow.on('enter-full-screen', applyTopmost)
+  mainWindow.on('leave-full-screen', applyTopmost)
+  mainWindow.on('focus', restack)
   mainWindow.on('minimize', hide)
   mainWindow.on('restore', show)
   mainWindow.on('hide', hide)
@@ -441,6 +660,9 @@ function trackWindow(mainWindow: BrowserWindow): void {
     mainWindow.off('move', sync)
     mainWindow.off('enter-full-screen', syncSettled)
     mainWindow.off('leave-full-screen', syncSettled)
+    mainWindow.off('enter-full-screen', applyTopmost)
+    mainWindow.off('leave-full-screen', applyTopmost)
+    mainWindow.off('focus', restack)
     mainWindow.off('minimize', hide)
     mainWindow.off('restore', show)
     mainWindow.off('hide', hide)
@@ -550,26 +772,40 @@ function forwardUiEvent(event: PlayerUiEvent): void {
     // Showing the controls is the one moment it is definitely worth making sure
     // they are actually on top — mpv can re-create its video window (a
     // resolution change, for one) and silently win the z-order again.
-    if (event.interactive) raisePlayerOverlay()
+    //
+    // Only while the app is the window being used, though. The controls also
+    // reveal on a mouse move across whatever part of the video another
+    // application is not currently covering, and raising a window that spans
+    // the whole content area over that application — never mind taking the
+    // keyboard off it — would be the topmost behaviour this change exists to
+    // remove. Left alone, the controls simply appear in the part of the picture
+    // that is actually visible, which is the part being pointed at.
+    if (event.interactive && appHasFocus() && !mainWindowUiOpen) raisePlayerOverlay()
     return
   }
   // The party panel renders in the MAIN window, which the video window covers:
-  // mpv is always-on-top and sized over the app's content area, so anything the
-  // main window draws during playback is invisible and unclickable. Opening the
-  // panel therefore has to hand the front to the app, and closing it gives the
-  // front back. This applies to any main-window UI reached from the player, not
-  // just this panel.
+  // mpv's window is sized over the app's content area and sits above it, so
+  // anything the main window draws during playback is invisible and
+  // unclickable. Opening the panel therefore has to hand the front to the app,
+  // and closing it gives the front back. This applies to any main-window UI
+  // reached from the player, not just this panel.
+  //
+  // mainWindowUiOpen holds that decision against everything else in this file
+  // that raises the video: while the panel is up, the app is meant to win.
   if (event.type === 'set-party-panel-open' && event.open) {
-    void player.set('ontop', false).catch(() => {})
-    const mainWindow = getActiveWindow()
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.moveTop()
-      mainWindow.focus()
-    }
+    mainWindowUiOpen = true
+    clearRaiseTimers()
+    raiseMainWindowOverPlayer()
   }
   if (event.type === 'party-panel-closed') {
-    void player.set('ontop', true).catch(() => {})
-    raiseOverlaySoon()
+    mainWindowUiOpen = false
+    // Fullscreen gets the front back by returning to the topmost band. Windowed
+    // playback has no band to return to, so the video has to be raised over the
+    // main window explicitly — nothing else will move it now that the panel
+    // deliberately put that window in front.
+    const fullScreen = mainWindowIsFullScreen()
+    setPlayerTopmost(fullScreen)
+    if (!fullScreen) restackPlayer()
     return
   }
 

@@ -73,7 +73,7 @@ export const MEDIA_HUB_CHANNELS = {
   // These exist because the player UI no longer lives in the main window.
   // mpv renders into a native child window, which on Windows always sits
   // above Chromium's web content, so the controls have to be a second,
-  // transparent, always-on-top BrowserWindow layered over it. That window is a
+  // transparent BrowserWindow layered over it. That window is a
   // separate renderer process with its own React tree and therefore no access
   // to AppStateContext, so everything it needs crosses this boundary instead.
   /** Overlay -> main. One request/response channel for every player operation
