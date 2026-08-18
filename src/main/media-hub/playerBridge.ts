@@ -671,8 +671,26 @@ function trackWindow(mainWindow: BrowserWindow): void {
   // An open panel outranks fullscreen: going fullscreen while main-window UI is
   // up must not put the film in a band the panel cannot be seen from. Closing
   // the panel re-reads the window and lands in the right band then.
-  const applyTopmost = (): void =>
-    setPlayerTopmost(mainWindow.isFullScreen() && !mainWindowUiOpen)
+  //
+  // Returning early rather than passing false is the point, not just tidier
+  // phrasing. Both windows are already out of the band while the panel is up —
+  // raiseMainWindowOverPlayer takes them out before it raises the main window,
+  // and nothing puts them back while the flag is set — so the call would decide
+  // nothing. It would still take a generation, though, and that raise is
+  // typically still waiting on mpv's socket when a fullscreen transition fires.
+  // The new generation drops its tail, and the tail is the half that raises the
+  // main window. Nothing on this path replaces it: setPlayerTopmost's own tail
+  // only sets the overlay band and calls raiseOverlaySoon, which bails while the
+  // panel is up. The panel would just stay behind the video, with no further
+  // event coming to correct it.
+  //
+  // A real decision still overtakes the raise, which is the behaviour this has
+  // to keep: closing the panel clears the flag before re-reading the window, and
+  // stopping the session bumps the generation itself.
+  const applyTopmost = (): void => {
+    if (mainWindowUiOpen) return
+    setPlayerTopmost(mainWindow.isFullScreen())
+  }
   const restack = (): void => restackPlayer()
 
   mainWindow.on('resize', sync)
