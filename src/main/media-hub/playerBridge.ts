@@ -824,10 +824,22 @@ function forwardUiEvent(event: PlayerUiEvent): void {
   //
   // mainWindowUiOpen holds that decision against everything else in this file
   // that raises the video: while the panel is up, the app is meant to win.
-  if (event.type === 'set-party-panel-open' && event.open) {
+  //
+  // Two events arrive here saying "the panel is open", and the difference
+  // between them is the whole reason there are two. set-party-panel-open is the
+  // overlay ASKING for a panel that is not open yet, so it goes on to the main
+  // window to be acted on. party-panel-open is the main window REPORTING one
+  // that already is, and it stops here — sending a report back to the window it
+  // came from turns it into an instruction to re-open, and if the person closed
+  // the panel while it was in flight that instruction arrives after they did
+  // and re-opens it under them.
+  if (event.type === 'party-panel-open' || (event.type === 'set-party-panel-open' && event.open)) {
     mainWindowUiOpen = true
     clearRaiseTimers()
     raiseMainWindowOverPlayer()
+    // The report stops here. The command falls through to the main window,
+    // which still has to actually open the panel the overlay asked for.
+    if (event.type === 'party-panel-open') return
   }
   if (event.type === 'party-panel-closed') {
     mainWindowUiOpen = false

@@ -1212,7 +1212,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     partyPanelReportedOpen.current = partyPanelOpen
     const player = window.api?.mediaHub?.player
     if (!player) return
-    if (partyPanelOpen) player.uiEvent({ type: 'set-party-panel-open', open: true }).catch(() => {})
+    if (partyPanelOpen) player.uiEvent({ type: 'party-panel-open' }).catch(() => {})
     else if (reported !== false) player.uiEvent({ type: 'party-panel-closed' }).catch(() => {})
   }, [partyPanelOpen, playbackMedia])
 
