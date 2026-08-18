@@ -273,6 +273,11 @@ export class MpvPlayer {
   private nextId = 1
   private pipeName = ''
   private onLog: (line: string) => void = () => {}
+  // Mirrors mpv's `ontop`, which this side has to remember rather than read
+  // back: raising the window is done by writing the property and putting it
+  // straight back (see raiseWindow), and that needs to know which band the
+  // window is supposed to end up in.
+  private ontop = false
 
   get running(): boolean {
     return Boolean(this.child && !this.child.killed && this.socket)
@@ -285,6 +290,9 @@ export class MpvPlayer {
     const { bounds, bufferSeconds, onLog, spawnImpl = spawn } = options
     const profile = bufferProfileFor(bufferSeconds)
     this.onLog = onLog ?? (() => {})
+    // A fresh process is back at mpv's defaults, and the args below do not ask
+    // for --ontop, so this is the honest starting state after a respawn.
+    this.ontop = false
     this.pipeName = `r3-media-hub-mpv-${crypto.randomBytes(12).toString('hex')}`
 
     const args = [
@@ -325,10 +333,16 @@ export class MpvPlayer {
       // screen. A screenshot settles it in one look; two property reads do not.
       //
       // --focus-on=never keeps this window from stealing focus from the app,
-      // and the controls overlay is raised above it by window level (see
-      // playerWindow.ts).
+      // and the controls overlay is raised above it (see playerWindow.ts).
+      //
+      // Deliberately NOT --ontop while windowed. A topmost video window cannot
+      // be covered by anything, which meant no other application could be put
+      // over a windowed film — the price of never having to think about
+      // z-order. What replaces the flag is re-raising: raiseWindow() below puts
+      // the video back over the app whenever the app is activated, and
+      // fullscreen turns the flag back on (playerBridge's setPlayerTopmost) so
+      // nothing, the taskbar included, sits over a fullscreen film.
       '--no-border',
-      '--ontop',
       '--focus-on=never',
       // The window is EXACTLY the rectangle it is given, never the shape of the
       // film in it. mpv defaults --keepaspect-window to yes, which lets it
@@ -591,11 +605,48 @@ export class MpvPlayer {
     await this.set('geometry', geometryFor(bounds)).catch(() => {})
   }
 
+  /** Puts mpv's window in (true) or out of (false) the always-on-top band.
+   *  Only fullscreen asks for true — see playerBridge's setPlayerTopmost. */
+  async setOntop(ontop: boolean): Promise<void> {
+    this.ontop = ontop
+    if (!this.socket) return
+    await this.set('ontop', ontop).catch(() => {})
+  }
+
+  /**
+   * Raises mpv's window to the front of the band it belongs to.
+   *
+   * There is no raise command in mpv's protocol and geometry writes do not
+   * reorder anything, so `ontop` is the only lever from here — and it is
+   * enough, because of how Windows implements it: entering the topmost band
+   * puts a window at the front of that band, and leaving it puts the window at
+   * the front of the ordinary one. Writing the property to the wrong value and
+   * immediately back therefore lands the window exactly where it belongs, in
+   * front.
+   *
+   * The second write is NOT awaited behind the first, deliberately: both are
+   * written to the socket in the same tick, so mpv reads and applies them
+   * together and the window is never seen in the wrong band. Awaiting in
+   * between would put a full round trip in the middle of that, which is exactly
+   * long enough for a windowed film to flash over another application.
+   *
+   * This is what puts the video back over the app's own window after clicking
+   * the app has raised that above it — the job --ontop used to do by never
+   * letting it happen in the first place.
+   */
+  async raiseWindow(): Promise<void> {
+    if (!this.socket) return
+    const leave = this.set('ontop', !this.ontop).catch(() => {})
+    const back = this.set('ontop', this.ontop).catch(() => {})
+    await Promise.all([leave, back])
+  }
+
   /**
    * Binds the few inputs that must work even when the controls overlay does not.
    *
    * Being unable to pause or close a playing title is a genuinely bad state —
-   * the video is always-on-top and covers the app. The overlay owns the real
+   * the video sits over the app's content area, and over everything else when
+   * the film is fullscreen. The overlay owns the real
    * input handling, but it is a separate window that can lose focus, be
    * covered, or fail to load; mpv's own window can always take an event. Each
    * binding emits a script-message, which arrives back as a `client-message`
@@ -629,8 +680,9 @@ export class MpvPlayer {
   }
 
   /** Hides/shows mpv's window without unloading the title — used when the app
-   *  is minimised or hidden, since an always-on-top video window would
-   *  otherwise sit over whatever the person switched to. */
+   *  is minimised or hidden. This window is not owned by the app's window, so
+   *  it does not minimise with it: without this it would be left behind on
+   *  screen, over the desktop the person just went back to. */
   async setWindowVisible(visible: boolean): Promise<void> {
     if (!this.socket) return
     await this.set('window-minimized', !visible).catch(() => {})
