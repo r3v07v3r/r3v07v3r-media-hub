@@ -1182,19 +1182,38 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   // mark-watched in particular stays on this side because it needs the full
   // MediaItem to build its trackable payload, and that record lives here —
   // shipping it across the boundary and back would be strictly worse.
-  // Tells main the party panel has closed so the video can go back on top.
-  // Opening it lowered the video deliberately — mpv's window sits over this
-  // window's content area, so anything drawn here during playback is invisible
-  // and unclickable, which is why the Party button appeared to do nothing.
-  // Only fires while something is playing; outside playback there is nothing
-  // covering anything.
-  const partyPanelWasOpen = useRef(false)
+  // Keeps main's picture of the party panel in step with this window's, by
+  // reporting it rather than letting main infer it. Main has to know and cannot
+  // see React state: mpv's window sits over this window's content area, so
+  // while the panel is up the video has to be handed the back and the app the
+  // front, and when the panel goes the video takes the front back. Without this
+  // the Party button appeared to do nothing at all.
+  //
+  // Both edges are reported now, whatever is playing. That is what lets main
+  // hold mainWindowUiOpen across a stop rather than clearing it there — see its
+  // comment in playerBridge.ts. The old close report only fired during
+  // playback, so the flag had to be cleared on every stop to keep it from
+  // sticking, and clearing it is what let a title played from the still-open
+  // queue cover the panel that started it.
+  //
+  // The open edge is re-reported whenever the playing title changes, so a flag
+  // that has drifted the other way is repaired by the next thing played rather
+  // than staying wrong. The first run always reports, even with nothing yet to
+  // report: main outlives a renderer reload and this window comes back with the
+  // panel closed, and that opening "closed" is what stops a panel that was open
+  // before the reload from keeping the video down forever. Between them there
+  // is no state main can be left holding that this window does not correct.
+  //
+  // Outside playback both reports are no-ops on main's side — restackPlayer
+  // returns without a running player, and there is no overlay to raise.
+  const partyPanelReportedOpen = useRef<boolean | null>(null)
   useEffect(() => {
-    const wasOpen = partyPanelWasOpen.current
-    partyPanelWasOpen.current = partyPanelOpen
-    if (wasOpen && !partyPanelOpen && playbackMedia) {
-      window.api?.mediaHub?.player?.uiEvent({ type: 'party-panel-closed' }).catch(() => {})
-    }
+    const reported = partyPanelReportedOpen.current
+    partyPanelReportedOpen.current = partyPanelOpen
+    const player = window.api?.mediaHub?.player
+    if (!player) return
+    if (partyPanelOpen) player.uiEvent({ type: 'party-panel-open' }).catch(() => {})
+    else if (reported !== false) player.uiEvent({ type: 'party-panel-closed' }).catch(() => {})
   }, [partyPanelOpen, playbackMedia])
 
   // Held in refs, not dependencies: refreshWatchStatus's identity changes

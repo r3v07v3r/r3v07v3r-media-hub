@@ -338,9 +338,19 @@ function clearRaiseTimers(): void {
 // That never needed re-stacking, and never allowed another application to be
 // put over a playing video either.
 
-/** Whether main-window UI has deliberately been brought to the front over the
- *  video (the watch-party panel). While it is, nothing here may put the video
- *  back on top — that is the one state where the app is meant to win. */
+/**
+ * Whether main-window UI has deliberately been brought to the front over the
+ * video (the watch-party panel). While it is, nothing here may put the video
+ * back on top — that is the one state where the app is meant to win.
+ *
+ * Mirrors what the main window reports and infers nothing. It used to be
+ * cleared when playback stopped, on the grounds that a stop was main's last
+ * reliable word — the renderer only reported a close while something was
+ * playing. It reports both edges now, whatever is playing, so the stop is no
+ * longer needed and is wrong besides: the panel outlives the film. A host whose
+ * title ends with the panel still up would have had the next thing they played
+ * from the queue land on a cleared flag and cover the panel that started it.
+ */
 let mainWindowUiOpen = false
 
 function mainWindowIsFullScreen(): boolean {
@@ -410,7 +420,21 @@ function setPlayerTopmost(on: boolean): void {
  * the person actually reaches for them (set-interactive, below).
  */
 function restackPlayer(): void {
-  if (!player.running || mainWindowUiOpen) return
+  if (!player.running) return
+  // An open panel inverts the order this restores, so it gets the inverted one
+  // applied rather than nothing at all. Bailing out — which is what this did —
+  // left the front to whichever window happened to arrive last, and mpv's video
+  // window arrives after the raise that was supposed to beat it:
+  // startPlayerSession raises the main window when `file-loaded` resolves, and
+  // that window does not exist until `vo-configured`. Every route into here is
+  // one of the moments that disturbs the stack — the window being created, the
+  // app being activated, a restore from minimised — which makes this the place
+  // the panel gets its front back too, and the reason the panel could otherwise
+  // end up under a film it started with no way back to it.
+  if (mainWindowUiOpen) {
+    raiseMainWindowOverPlayer({ focus: false })
+    return
+  }
   void player
     .raiseWindow()
     .catch(() => {})
@@ -434,8 +458,14 @@ function restackPlayer(): void {
  * main window before that lands just buries the panel again.
  *
  * The caller owns mainWindowUiOpen; this only moves windows.
+ *
+ * `focus: false` for the calls that merely re-establish the order rather than
+ * decide it — restackPlayer's, which is reached from the app being activated
+ * and from mpv re-creating its window. That path is deliberately focus-free
+ * (see its own comment) and must stay so; taking the keyboard there would
+ * steal it mid-drag, or off the controls on a mid-playback re-configure.
  */
-function raiseMainWindowOverPlayer(): void {
+function raiseMainWindowOverPlayer({ focus = true }: { focus?: boolean } = {}): void {
   // A band decision like any other, so it takes a generation — both to overtake
   // a fullscreen transition still waiting on mpv, and so its own tail is
   // dropped if something newer (the panel closing again) has since decided
@@ -451,7 +481,7 @@ function raiseMainWindowOverPlayer(): void {
       const mainWindow = getActiveWindow()
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.moveTop()
-        mainWindow.focus()
+        if (focus) mainWindow.focus()
       }
     })
 }
@@ -556,7 +586,9 @@ export async function startPlayerSession(
 export async function stopPlayerSession(): Promise<void> {
   clearRaiseTimers()
   untrackWindow?.()
-  mainWindowUiOpen = false
+  // mainWindowUiOpen is deliberately NOT cleared here: a stop is not a close.
+  // See its own comment — the main window reports the panel itself now.
+  //
   // Closing is the newest word on which band anything belongs in.
   // closePlayerOverlay clears the policy, and this stops a transition still in
   // flight from writing it back — which would hand the NEXT session an overlay
@@ -792,10 +824,22 @@ function forwardUiEvent(event: PlayerUiEvent): void {
   //
   // mainWindowUiOpen holds that decision against everything else in this file
   // that raises the video: while the panel is up, the app is meant to win.
-  if (event.type === 'set-party-panel-open' && event.open) {
+  //
+  // Two events arrive here saying "the panel is open", and the difference
+  // between them is the whole reason there are two. set-party-panel-open is the
+  // overlay ASKING for a panel that is not open yet, so it goes on to the main
+  // window to be acted on. party-panel-open is the main window REPORTING one
+  // that already is, and it stops here — sending a report back to the window it
+  // came from turns it into an instruction to re-open, and if the person closed
+  // the panel while it was in flight that instruction arrives after they did
+  // and re-opens it under them.
+  if (event.type === 'party-panel-open' || (event.type === 'set-party-panel-open' && event.open)) {
     mainWindowUiOpen = true
     clearRaiseTimers()
     raiseMainWindowOverPlayer()
+    // The report stops here. The command falls through to the main window,
+    // which still has to actually open the panel the overlay asked for.
+    if (event.type === 'party-panel-open') return
   }
   if (event.type === 'party-panel-closed') {
     mainWindowUiOpen = false

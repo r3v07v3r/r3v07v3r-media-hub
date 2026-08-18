@@ -148,10 +148,29 @@ export type PlayerUiEvent =
   | { type: 'mark-watched' }
   | { type: 'refresh-watch-status' }
   | { type: 'notify'; tone: 'info' | 'error' | 'success'; message: string }
+  /** Overlay -> main -> main window: OPEN the party panel. A command, for a
+   *  panel that is not open yet — the only one of these three that main passes
+   *  on to the main window rather than acting on and stopping. */
   | { type: 'set-party-panel-open'; open: boolean }
-  /** Main window -> main: the party panel has been closed, so the video can go
-   *  back on top. See playerBridge's handling of set-party-panel-open for why
-   *  the video has to be lowered at all. */
+  /** Main window -> main: the party panel IS open, so the video has to give up
+   *  the front. A report, not a command, which is why it is a separate event
+   *  from set-party-panel-open rather than the same one sent the other way: a
+   *  report that main echoed back would reach this window as an instruction to
+   *  open, and one still in flight when the person closes the panel would land
+   *  after them and re-open it.
+   *
+   *  Sent on the closed -> open edge, and again on every title change so a
+   *  mainWindowUiOpen that has drifted false is repaired by the next thing
+   *  played rather than staying wrong. */
+  | { type: 'party-panel-open' }
+  /** Main window -> main: the party panel has gone, so the video can have the
+   *  front back. The other half of the report pair above. See playerBridge's
+   *  handling of party-panel-open for why the front was given up at all, and
+   *  mainWindowUiOpen for why main takes this window's word for the close
+   *  rather than inferring it from playback ending. Sent on every open ->
+   *  closed edge whatever is playing, and once on mount so a main process that
+   *  outlived a renderer reload cannot be left holding a stale "open" — which
+   *  would keep the video under the app indefinitely. */
   | { type: 'party-panel-closed' }
   /** Whether the overlay currently wants mouse input. False makes the window
    *  click-through so the video underneath receives the events instead — see
