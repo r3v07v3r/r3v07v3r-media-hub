@@ -420,7 +420,21 @@ function setPlayerTopmost(on: boolean): void {
  * the person actually reaches for them (set-interactive, below).
  */
 function restackPlayer(): void {
-  if (!player.running || mainWindowUiOpen) return
+  if (!player.running) return
+  // An open panel inverts the order this restores, so it gets the inverted one
+  // applied rather than nothing at all. Bailing out — which is what this did —
+  // left the front to whichever window happened to arrive last, and mpv's video
+  // window arrives after the raise that was supposed to beat it:
+  // startPlayerSession raises the main window when `file-loaded` resolves, and
+  // that window does not exist until `vo-configured`. Every route into here is
+  // one of the moments that disturbs the stack — the window being created, the
+  // app being activated, a restore from minimised — which makes this the place
+  // the panel gets its front back too, and the reason the panel could otherwise
+  // end up under a film it started with no way back to it.
+  if (mainWindowUiOpen) {
+    raiseMainWindowOverPlayer({ focus: false })
+    return
+  }
   void player
     .raiseWindow()
     .catch(() => {})
@@ -444,8 +458,14 @@ function restackPlayer(): void {
  * main window before that lands just buries the panel again.
  *
  * The caller owns mainWindowUiOpen; this only moves windows.
+ *
+ * `focus: false` for the calls that merely re-establish the order rather than
+ * decide it — restackPlayer's, which is reached from the app being activated
+ * and from mpv re-creating its window. That path is deliberately focus-free
+ * (see its own comment) and must stay so; taking the keyboard there would
+ * steal it mid-drag, or off the controls on a mid-playback re-configure.
  */
-function raiseMainWindowOverPlayer(): void {
+function raiseMainWindowOverPlayer({ focus = true }: { focus?: boolean } = {}): void {
   // A band decision like any other, so it takes a generation — both to overtake
   // a fullscreen transition still waiting on mpv, and so its own tail is
   // dropped if something newer (the panel closing again) has since decided
@@ -461,7 +481,7 @@ function raiseMainWindowOverPlayer(): void {
       const mainWindow = getActiveWindow()
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.moveTop()
-        mainWindow.focus()
+        if (focus) mainWindow.focus()
       }
     })
 }
