@@ -197,7 +197,8 @@ async function attachObservers(): Promise<void> {
     //
     // Only while the app is the one being used, though: this also fires on a
     // mid-playback re-configure, and a windowed film must not pull itself over
-    // whatever the person has moved on to.
+    // whatever the person has moved on to. The raise train applies the same
+    // rule, but per retry rather than once here — see raiseOverlaySoon.
     if (appHasFocus()) restackPlayer()
     raiseOverlaySoon()
   })
@@ -291,18 +292,31 @@ async function attachObservers(): Promise<void> {
  * Raises the controls above the video, several times over a short window.
  *
  * Deliberately repeated rather than done once. mpv creates, and can re-create,
- * its always-on-top video window asynchronously — on load, and again on things
- * like a resolution change — and whichever always-on-top window was raised last
- * wins on Windows. A single raise is a race this side loses often enough to
+ * its video window asynchronously — on load, and again on things like a
+ * resolution change — and a window that has just been created arrives in front
+ * of everything else. A single raise is a race this side loses often enough to
  * leave someone staring at a video with no controls and no obvious way out.
  * Re-raising a window that is already on top costs nothing.
+ *
+ * Each retry decides for itself whether to fire, at the moment it fires rather
+ * than when it was scheduled — 1.8 seconds is long enough for someone to start
+ * a title and switch to another application before the train has finished, and
+ * a train that had made its mind up at t=0 would spend the rest of its run
+ * pulling a window that spans the whole content area back over whatever they
+ * moved on to, keyboard and all. Skipping costs nothing either: the stack is
+ * re-established the moment the app or the video is next activated.
  */
 const RAISE_RETRIES_MS = [0, 150, 400, 900, 1800]
 let raiseTimers: NodeJS.Timeout[] = []
 
 function raiseOverlaySoon(): void {
   clearRaiseTimers()
-  raiseTimers = RAISE_RETRIES_MS.map((delay) => setTimeout(() => raisePlayerOverlay(), delay))
+  raiseTimers = RAISE_RETRIES_MS.map((delay) =>
+    setTimeout(() => {
+      if (!appHasFocus() || mainWindowUiOpen) return
+      raisePlayerOverlay()
+    }, delay)
+  )
 }
 
 function clearRaiseTimers(): void {
