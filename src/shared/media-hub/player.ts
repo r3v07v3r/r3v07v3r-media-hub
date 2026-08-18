@@ -148,10 +148,18 @@ export type PlayerUiEvent =
   | { type: 'mark-watched' }
   | { type: 'refresh-watch-status' }
   | { type: 'notify'; tone: 'info' | 'error' | 'success'; message: string }
+  /** Overlay -> main -> main window: open the party panel. Also main window ->
+   *  main, reporting that the panel IS open — sent on the closed -> open edge
+   *  and again whenever the playing title changes, since starting a session
+   *  raises the controls over everything and the panel has to say it is still
+   *  there. */
   | { type: 'set-party-panel-open'; open: boolean }
-  /** Main window -> main: the party panel has been closed, so the video can go
-   *  back on top. See playerBridge's handling of set-party-panel-open for why
-   *  the video has to be lowered at all. */
+  /** Main window -> main: the party panel has gone, so the video can go back on
+   *  top. See playerBridge's handling of set-party-panel-open for why the video
+   *  has to be lowered at all, and mainWindowUiOpen for why main takes this
+   *  window's word for it rather than inferring the close from playback ending.
+   *  Sent on every open -> closed edge, and once on mount so a main process
+   *  that outlived a renderer reload cannot be left holding a stale "open". */
   | { type: 'party-panel-closed' }
   /** Whether the overlay currently wants mouse input. False makes the window
    *  click-through so the video underneath receives the events instead — see

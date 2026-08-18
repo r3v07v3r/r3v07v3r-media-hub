@@ -269,14 +269,38 @@ async function attachObservers(): Promise<void> {
 const RAISE_RETRIES_MS = [0, 150, 400, 900, 1800]
 let raiseTimers: NodeJS.Timeout[] = []
 
+/**
+ * Whether the main window is showing UI that has to stay in front of the video
+ * — today that means the watch-party panel. While it is true nothing here may
+ * raise the controls or the video above the app, because the user put the app
+ * in front deliberately and a title starting behind the panel must not take
+ * that back.
+ *
+ * The renderer reports both edges of the panel and this only ever mirrors those
+ * reports. It is deliberately NOT cleared by stopPlayerSession: a stop is not a
+ * close. The panel is still on screen after a film ends, so inferring "closed"
+ * from "playback ended" is wrong in exactly the case that matters — the next
+ * title played from the still-open queue would cover the panel that started it.
+ */
+let mainWindowUiOpen = false
+
 function raiseOverlaySoon(): void {
   clearRaiseTimers()
+  if (mainWindowUiOpen) return
   raiseTimers = RAISE_RETRIES_MS.map((delay) => setTimeout(() => raisePlayerOverlay(), delay))
 }
 
 function clearRaiseTimers(): void {
   for (const timer of raiseTimers) clearTimeout(timer)
   raiseTimers = []
+}
+
+/** Gives the front back to the video, and lets the controls be raised again.
+ *  Reached only from the renderer's report that the panel has gone. */
+function closeMainWindowUi(): void {
+  mainWindowUiOpen = false
+  void player.set('ontop', true).catch(() => {})
+  raiseOverlaySoon()
 }
 
 // ---------------------------------------------------------------------------
@@ -550,7 +574,7 @@ function forwardUiEvent(event: PlayerUiEvent): void {
     // Showing the controls is the one moment it is definitely worth making sure
     // they are actually on top — mpv can re-create its video window (a
     // resolution change, for one) and silently win the z-order again.
-    if (event.interactive) raisePlayerOverlay()
+    if (event.interactive && !mainWindowUiOpen) raisePlayerOverlay()
     return
   }
   // The party panel renders in the MAIN window, which the video window covers:
@@ -559,17 +583,31 @@ function forwardUiEvent(event: PlayerUiEvent): void {
   // panel therefore has to hand the front to the app, and closing it gives the
   // front back. This applies to any main-window UI reached from the player, not
   // just this panel.
-  if (event.type === 'set-party-panel-open' && event.open) {
-    void player.set('ontop', false).catch(() => {})
-    const mainWindow = getActiveWindow()
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.moveTop()
-      mainWindow.focus()
+  if (event.type === 'set-party-panel-open') {
+    if (event.open) {
+      mainWindowUiOpen = true
+      // Cancelling the raises already queued matters as much as refusing the
+      // ones to come. A session that has just started still has retries
+      // pending — see RAISE_RETRIES_MS — so without this the app comes to the
+      // front and is buried a second later by a timer that outlived the
+      // decision. This is also the arrival point for the re-announcement the
+      // main window sends when a title starts while the panel is up.
+      clearRaiseTimers()
+      void player.set('ontop', false).catch(() => {})
+      const mainWindow = getActiveWindow()
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.moveTop()
+        mainWindow.focus()
+      }
+    } else {
+      closeMainWindowUi()
     }
+    // Deliberately falls through to the renderer: the panel itself still has
+    // to open or close, and this event is how the overlay's Party button asks
+    // for that.
   }
   if (event.type === 'party-panel-closed') {
-    void player.set('ontop', true).catch(() => {})
-    raiseOverlaySoon()
+    closeMainWindowUi()
     return
   }
 

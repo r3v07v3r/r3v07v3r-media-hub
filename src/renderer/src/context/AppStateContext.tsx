@@ -1182,19 +1182,33 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   // mark-watched in particular stays on this side because it needs the full
   // MediaItem to build its trackable payload, and that record lives here —
   // shipping it across the boundary and back would be strictly worse.
-  // Tells main the party panel has closed so the video can go back on top.
-  // Opening it lowered the video deliberately — mpv is always-on-top over this
-  // window's content area, so anything drawn here during playback is invisible
-  // and unclickable, which is why the Party button appeared to do nothing.
-  // Only fires while something is playing; outside playback there is nothing
-  // covering anything.
-  const partyPanelWasOpen = useRef(false)
+  // Keeps main's picture of the party panel in step with this window's, by
+  // reporting it rather than letting main infer it. Main has to know, and
+  // cannot see React state: mpv is always-on-top and sized over this window's
+  // content area, so while the panel is up the video must be lowered and the
+  // app raised, and when it goes the video takes the front back. Without this
+  // the Party button appeared to do nothing at all.
+  //
+  // Both edges are reported, and the open edge is re-reported whenever the
+  // playing title changes, because starting a session raises the controls over
+  // everything. That re-announcement is what the panel's own queue depends on:
+  // the panel is still on screen after a film ends, and the next title started
+  // from it would otherwise cover the thing that started it.
+  //
+  // The first run always reports, even with nothing yet to report. Main
+  // outlives a renderer reload, and this window comes back with the panel
+  // closed — that opening "closed" is what stops a panel that was open before
+  // the reload from leaving the video lowered forever. Outside playback both
+  // reports are no-ops on main's side: there is no mpv window to restack and no
+  // overlay to raise.
+  const partyPanelReportedOpen = useRef<boolean | null>(null)
   useEffect(() => {
-    const wasOpen = partyPanelWasOpen.current
-    partyPanelWasOpen.current = partyPanelOpen
-    if (wasOpen && !partyPanelOpen && playbackMedia) {
-      window.api?.mediaHub?.player?.uiEvent({ type: 'party-panel-closed' }).catch(() => {})
-    }
+    const reported = partyPanelReportedOpen.current
+    partyPanelReportedOpen.current = partyPanelOpen
+    const player = window.api?.mediaHub?.player
+    if (!player) return
+    if (partyPanelOpen) player.uiEvent({ type: 'set-party-panel-open', open: true }).catch(() => {})
+    else if (reported !== false) player.uiEvent({ type: 'party-panel-closed' }).catch(() => {})
   }, [partyPanelOpen, playbackMedia])
 
   // Held in refs, not dependencies: refreshWatchStatus's identity changes
