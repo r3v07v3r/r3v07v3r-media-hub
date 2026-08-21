@@ -754,14 +754,20 @@ export function registerTrackingIpc(): void {
   handle<undefined, ReconcileCheckResult>(MEDIA_HUB_CHANNELS.trackingReconcileCheck, async () => {
     if (!simklCredentials().accessToken) return { ran: false, discrepancies: [] }
     const db = getDatabase()
-    // Ahead of the cooldown, and ahead of any diffing: a decision left
-    // over from a previous session (the app was closed before its batch
-    // went out, or the push failed, or this machine was offline) gets
-    // another attempt now, while the queue's own attempt cap keeps a
-    // permanently-failing entry from being retried forever.
-    const justPushed = await flushPendingPushes()
     if (db.getCache(RECONCILE_COOLDOWN_KEY)) return { ran: false, discrepancies: [] }
     db.putCache(RECONCILE_COOLDOWN_KEY, true, RECONCILE_COOLDOWN_MS)
+    // Behind the cooldown, deliberately. A decision left over from a
+    // previous session — the app closed before its batch went out, the
+    // push failed, this machine was offline — is retried here, and this
+    // handler runs on every launch. Retrying ahead of the cooldown made
+    // closing and reopening the app five times inside five minutes
+    // enough to burn a failing entry's whole attempt budget and then
+    // suppress that title for ninety days: a decision someone made
+    // discarded in about a minute of ordinary restarting. It also broke
+    // the floor this cooldown exists to hold (see its own comment).
+    // Paced by the same five minutes, five attempts is five separate
+    // sessions rather than five double-clicks of the app icon.
+    const justPushed = await flushPendingPushes()
     try {
       const discrepancies = await computeMovieDiscrepancies()
       // Anything confirmed moments ago is settled, whatever Simkl's
