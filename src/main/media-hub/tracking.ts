@@ -268,7 +268,27 @@ function simklAccountMark(): string {
  *  reconcile check flushes it. */
 const PENDING_FLUSH_DELAY_MS = 3000
 
+/** Pacing for entries that have already failed at least once, kept apart
+ *  from the reconcile cooldown next to it because the two are throttling
+ *  different things. That one guards an expensive diff (two Simkl
+ *  all-items reads) against being run too often. This one guards an
+ *  entry's five-attempt budget: the check that retries the queue runs on
+ *  every launch, so without pacing, a few restarts in a row could spend
+ *  a decision's whole budget in about a minute and then suppress the
+ *  title for ninety days. A decision nobody has tried yet is never
+ *  subject to this — going out promptly is the entire promise of the
+ *  batch timer. */
+const RECONCILE_RETRY_KEY = 'reconcile:retry-cooldown:v1'
+const RECONCILE_RETRY_COOLDOWN_MS = 5 * 60 * 1000
+
 let flushTimer: NodeJS.Timeout | null = null
+/** Wakes a long-running session up to retry what stayed queued. The
+ *  check that would otherwise retry runs once per launch, so without
+ *  this a failure at 9am — offline at the time, online a minute later —
+ *  would sit untouched until the app was next started, however long it
+ *  stayed open in between. Separate from flushTimer so a new decision's
+ *  three-second batch cannot clobber the wake-up. */
+let retryTimer: NodeJS.Timeout | null = null
 let flushInFlight: Promise<Set<string>> | null = null
 /** Bumped every time the connected Simkl account changes. A flush issues
  *  its requests one after another and simklRequest re-reads credentials
@@ -338,6 +358,10 @@ function clearPendingPushes(): void {
     clearTimeout(flushTimer)
     flushTimer = null
   }
+  if (retryTimer) {
+    clearTimeout(retryTimer)
+    retryTimer = null
+  }
   flushAgain = false
   // Disowns any flush already in the air as well as the queue on disk —
   // see accountGeneration for why the two are not the same thing.
@@ -377,6 +401,14 @@ async function pushPendingToServices(): Promise<Set<string>> {
   // that went wrong, and shouldn't burn this entry's attempt budget.
   if (!simklCredentials().accessToken) return new Set()
 
+  // A decision nobody has tried yet always goes out. One that has
+  // already failed waits for the retry pacing — see RECONCILE_RETRY_KEY
+  // for what each of the two cooldowns is protecting.
+  const db = getDatabase()
+  const retryReady = !db.getCache(RECONCILE_RETRY_KEY)
+  const attemptable = queue.filter((entry) => entry.attempts === 0 || retryReady)
+  if (!attemptable.length) return new Set()
+
   // Pinned for the whole flush: anything below this line is work done on
   // behalf of the account connected right now, and stops the moment that
   // is no longer the account connected.
@@ -408,7 +440,7 @@ async function pushPendingToServices(): Promise<Set<string>> {
   // two sides now agree on their own. Pushing anyway would be a no-op at
   // best and — for a removal Simkl has nothing to remove — an unmatched
   // response that retries until the attempt cap.
-  const sendable = queue.filter((entry) => {
+  const sendable = attemptable.filter((entry) => {
     if (locallyWatched.has(entry.id) !== entry.remoteWatched) return true
     settled.add(entry.id)
     return false
@@ -448,6 +480,10 @@ async function pushPendingToServices(): Promise<Set<string>> {
       for (const entry of group) failed.add(entry.id)
     }
   }
+
+  // Requests went out, so the pacing starts now — including for the
+  // entries this flush is about to mark as having failed.
+  if (sendable.length) db.putCache(RECONCILE_RETRY_KEY, true, RECONCILE_RETRY_COOLDOWN_MS)
 
   // Nothing below this point is true of the account now connected: the
   // queue these results describe has already been dropped, so writing
@@ -541,6 +577,11 @@ async function pushPendingToServices(): Promise<Set<string>> {
   if (report.pushed.length || report.retrying.length || report.abandoned.length) {
     sendToRenderer(MEDIA_HUB_CHANNELS.trackingReconcileSync, report)
   }
+  // Something is still queued and nothing else in this session will ask
+  // again — see retryTimer. Bounded by the attempt cap: an entry that
+  // keeps failing stops being reported as retrying once it is let go of,
+  // and nothing re-arms this.
+  if (report.retrying.length) scheduleRetry()
   return confirmed
 }
 
@@ -562,6 +603,16 @@ function flushPendingPushes(): Promise<Set<string>> {
     })
   flushInFlight = run
   return run
+}
+
+function scheduleRetry(): void {
+  if (retryTimer) clearTimeout(retryTimer)
+  // A second past the pacing window, so the cooldown it is waiting on
+  // has definitely expired by the time this fires.
+  retryTimer = setTimeout(() => {
+    retryTimer = null
+    void flushPendingPushes()
+  }, RECONCILE_RETRY_COOLDOWN_MS + 1000)
 }
 
 function scheduleFlush(): void {
@@ -754,20 +805,17 @@ export function registerTrackingIpc(): void {
   handle<undefined, ReconcileCheckResult>(MEDIA_HUB_CHANNELS.trackingReconcileCheck, async () => {
     if (!simklCredentials().accessToken) return { ran: false, discrepancies: [] }
     const db = getDatabase()
+    // Ahead of the cooldown below, which throttles the diff, not this.
+    // A decision left over from a previous session — the app closed
+    // before its batch went out, the push failed, this machine was
+    // offline — has to get out promptly, and this is the only thing that
+    // runs on a launch where nobody touches the review panel. What
+    // stops a few restarts from spending an entry's whole attempt
+    // budget is the flush's own retry pacing, which applies to entries
+    // that have already failed and never to one nobody has tried.
+    const justPushed = await flushPendingPushes()
     if (db.getCache(RECONCILE_COOLDOWN_KEY)) return { ran: false, discrepancies: [] }
     db.putCache(RECONCILE_COOLDOWN_KEY, true, RECONCILE_COOLDOWN_MS)
-    // Behind the cooldown, deliberately. A decision left over from a
-    // previous session — the app closed before its batch went out, the
-    // push failed, this machine was offline — is retried here, and this
-    // handler runs on every launch. Retrying ahead of the cooldown made
-    // closing and reopening the app five times inside five minutes
-    // enough to burn a failing entry's whole attempt budget and then
-    // suppress that title for ninety days: a decision someone made
-    // discarded in about a minute of ordinary restarting. It also broke
-    // the floor this cooldown exists to hold (see its own comment).
-    // Paced by the same five minutes, five attempts is five separate
-    // sessions rather than five double-clicks of the app icon.
-    const justPushed = await flushPendingPushes()
     try {
       const discrepancies = await computeMovieDiscrepancies()
       // Anything confirmed moments ago is settled, whatever Simkl's
