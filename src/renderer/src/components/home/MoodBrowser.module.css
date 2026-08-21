@@ -264,6 +264,14 @@
   align-items: center;
   justify-content: flex-end;
   text-align: center;
+  /* Explicit, not omitted: global.css resets a button's background and
+     border but not its padding, so dropping the declaration here handed
+     the cell the UA stylesheet's own `1px 6px`. Harmless-looking — the
+     content is centred either way — but it inset .target by 6px on each
+     side, which at the mobile breakpoint (where .target stretches to the
+     cell edge so no dead strip is left for a swipe to fall through) put
+     the dead strip straight back. */
+  padding: 0;
   /* Deliberately no border, background, box-shadow or backdrop-filter.
      See this file's header — the colour lives entirely in .plume. */
   transition: none;
@@ -671,17 +679,30 @@
      Being clipped on that axis costs nothing — the row's bottom edge is
      the dock's bottom edge, so the only thing cut off is the part of each
      pool that was already meant to be off the bottom of the screen.
-     pointer-events comes back on so a drag anywhere along the strip
-     scrolls it, not just a drag that starts on a mood. */
+     Note what is NOT here: pointer-events. Turning it back on for the
+     strip so that a drag anywhere along it would scroll also handed the
+     whole transparent band back its power to intercept taps, undoing for
+     this breakpoint exactly what .target does everywhere else. It isn't
+     needed either — a touch landing on .target scrolls this element
+     regardless, because the scroll chain is walked from the hit node's
+     ancestors and pointer-events has no say in that (measured, not
+     assumed: a swipe from a target moves scrollLeft 0 -> 176). */
   .row {
     overflow: auto hidden;
     width: auto;
-    pointer-events: auto;
   }
   .mood {
     flex: 0 0 132px;
   }
   .target {
+    /* Full cell width here, unlike every other breakpoint. The moods tile
+       edge to edge with no gap, so stretching leaves no dead strip
+       between them for a swipe to start in and fall through — the whole
+       row stays draggable while the transparent band ABOVE the targets,
+       which is where the stacked layout's clipped content shows through,
+       stops intercepting taps. Purely a hit-area change: the icon and
+       label are still centred by .target's own align-items. */
+    align-self: stretch;
     padding: 11px 12px 19px;
   }
   .moodIcon svg {
