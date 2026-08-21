@@ -194,6 +194,14 @@ const PENDING_FLUSH_DELAY_MS = 3000
 
 let flushTimer: NodeJS.Timeout | null = null
 let flushInFlight: Promise<Set<string>> | null = null
+/** Bumped every time the connected Simkl account changes. A flush issues
+ *  its requests one after another and simklRequest re-reads credentials
+ *  on each one, so a flush that started under account A can have its
+ *  second request answered by account B's token if someone signs out
+ *  and in between the two — clearing the queue alone doesn't stop the
+ *  work already in the air. Every flush pins this value at its start and
+ *  checks it before each request and before believing its own results. */
+let accountGeneration = 0
 /** Set when a decision is made while a flush is already in flight. That
  *  flush snapshotted the queue before this decision existed and will
  *  neither push nor report it, and the single-flight guard below means
@@ -209,8 +217,21 @@ function pendingPushes(): PendingWatchStatusPush[] {
   return getDatabase().getCache<PendingWatchStatusPush[]>(RECONCILE_PENDING_KEY) || []
 }
 
-function writePendingPushes(queue: PendingWatchStatusPush[]): void {
-  getDatabase().putCache(RECONCILE_PENDING_KEY, queue, RECONCILE_PENDING_TTL_MS)
+/**
+ * Writes the queue back, and reports whether it actually stuck. putCache
+ * swallows its own failures by design (cache writes are best-effort
+ * everywhere else in this app — a read-only or full database must never
+ * surface to a caller), which is fine for a cache and not fine at all
+ * for this: a decision acknowledged as recorded but never written is the
+ * exact silent loss the queue exists to end. So the write is read back,
+ * and callers that are about to tell someone "your choice is kept" have
+ * something to check.
+ */
+function writePendingPushes(queue: PendingWatchStatusPush[]): boolean {
+  const db = getDatabase()
+  db.putCache(RECONCILE_PENDING_KEY, queue, RECONCILE_PENDING_TTL_MS)
+  const stored = new Set(pendingPushes().map((entry) => entry.id))
+  return stored.size === queue.length && queue.every((entry) => stored.has(entry.id))
 }
 
 /**
@@ -234,6 +255,9 @@ function clearPendingPushes(): void {
     flushTimer = null
   }
   flushAgain = false
+  // Disowns any flush already in the air as well as the queue on disk —
+  // see accountGeneration for why the two are not the same thing.
+  accountGeneration++
   writePendingPushes([])
 }
 
@@ -268,6 +292,12 @@ async function pushPendingToServices(): Promise<Set<string>> {
   // against a service that was never asked. Being signed out isn't a push
   // that went wrong, and shouldn't burn this entry's attempt budget.
   if (!simklCredentials().accessToken) return new Set()
+
+  // Pinned for the whole flush: anything below this line is work done on
+  // behalf of the account connected right now, and stops the moment that
+  // is no longer the account connected.
+  const generation = accountGeneration
+  const disowned = (): boolean => generation !== accountGeneration
 
   const confirmed = new Set<string>()
   const failed = new Set<string>()
@@ -304,6 +334,10 @@ async function pushPendingToServices(): Promise<Set<string>> {
   ] as const) {
     const group = sendable.filter((entry) => locallyWatched.has(entry.id) === watched)
     if (!group.length) continue
+    // Signing out (or into a different account) between this flush's two
+    // requests would otherwise send one account's decisions with the
+    // other's token.
+    if (disowned()) return new Set()
     const items = group.map(pushItemFor)
     try {
       const response = await simklRequest<SimklHistoryResponse>(pathname, {
@@ -319,6 +353,11 @@ async function pushPendingToServices(): Promise<Set<string>> {
       for (const entry of group) failed.add(entry.id)
     }
   }
+
+  // Nothing below this point is true of the account now connected: the
+  // queue these results describe has already been dropped, so writing
+  // the outcome back or reporting "synced" would both be lies.
+  if (disowned()) return new Set()
 
   for (const entry of queue) {
     if (!confirmed.has(entry.id)) continue
@@ -614,7 +653,7 @@ export function registerTrackingIpc(): void {
       // burst of "keep local" clicks go out as ONE batched request per
       // service (see PENDING_FLUSH_DELAY_MS), with the outcome reported
       // over trackingReconcileSync rather than swallowed.
-      writePendingPushes(
+      const recorded = writePendingPushes(
         queuePendingPush(pendingPushes(), {
           id: discrepancy.id,
           type: discrepancy.type,
@@ -624,6 +663,10 @@ export function registerTrackingIpc(): void {
           attempts: 0
         })
       )
+      // Nothing was written — the panel must not act as though the
+      // choice was kept, since the flush would read an empty queue and
+      // the title would come back with nobody having been told why.
+      if (!recorded) return { ok: true, queued: false }
       scheduleFlush()
       return { ok: true, queued: true }
     }

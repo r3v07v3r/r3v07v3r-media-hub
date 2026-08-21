@@ -382,7 +382,10 @@ export interface ReconcileResolveResult {
    *  than applied entirely locally — i.e. a "keep local" pick, whose push
    *  to the tracking services happens on the queue's own schedule (see
    *  main/media-hub/tracking.ts) and reports back over
-   *  `trackingReconcileSync`, not in this reply. */
+   *  `trackingReconcileSync`, not in this reply. False for a "keep local"
+   *  pick means the decision could NOT be recorded and nothing will
+   *  happen on its own — the caller has to say so rather than let the
+   *  choice disappear. */
   queued: boolean
 }
 

@@ -764,13 +764,27 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       setSyncDiscrepancies((prev) => prev.filter((d) => d.id !== discrepancy.id))
       window.api?.mediaHub?.tracking
         .reconcileResolve({ discrepancy, resolution })
-        .then(() => {
+        .then((result) => {
+          // A "keep local" pick that main couldn't record is the one case
+          // where the optimism above is wrong: nothing is queued, nothing
+          // will retry, and staying quiet would put us right back to a
+          // choice silently going nowhere. Put the row back and say so.
+          if (resolution === 'use-local' && !result?.queued) {
+            setSyncDiscrepancies((prev) =>
+              prev.some((d) => d.id === discrepancy.id) ? prev : [...prev, discrepancy]
+            )
+            pushNotification({
+              tone: 'error',
+              message: `Could not keep your choice for "${discrepancy.title}". Nothing was changed — try again.`
+            })
+            return
+          }
           watchedIdsResult.refresh()
           homeFeed.refresh()
         })
         .catch(() => {})
     },
-    [watchedIdsResult, homeFeed]
+    [watchedIdsResult, homeFeed, pushNotification]
   )
 
   // The other half of that: a queued batch going out (or not) is the only
