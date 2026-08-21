@@ -405,9 +405,19 @@ async function pushPendingToServices(): Promise<Set<string>> {
   // already failed waits for the retry pacing — see RECONCILE_RETRY_KEY
   // for what each of the two cooldowns is protecting.
   const db = getDatabase()
-  const retryReady = !db.getCache(RECONCILE_RETRY_KEY)
+  // The cooldown holds its own deadline, so a wake-up can be armed for
+  // exactly what is left of it rather than a fresh full window.
+  const retryDeadline = db.getCache<number>(RECONCILE_RETRY_KEY)
+  const retryReady = retryDeadline === null
   const attemptable = queue.filter((entry) => entry.attempts === 0 || retryReady)
-  if (!attemptable.length) return new Set()
+  if (!attemptable.length) {
+    // Everything queued is waiting on the pacing, and the check that
+    // would otherwise come back to it runs once per launch — so an app
+    // reopened inside the window and left open would never retry at
+    // all. Arm the wake-up for the rest of the window instead.
+    scheduleRetry(retryDeadline ? retryDeadline - Date.now() : RECONCILE_RETRY_COOLDOWN_MS)
+    return new Set()
+  }
 
   // Pinned for the whole flush: anything below this line is work done on
   // behalf of the account connected right now, and stops the moment that
@@ -483,7 +493,13 @@ async function pushPendingToServices(): Promise<Set<string>> {
 
   // Requests went out, so the pacing starts now — including for the
   // entries this flush is about to mark as having failed.
-  if (sendable.length) db.putCache(RECONCILE_RETRY_KEY, true, RECONCILE_RETRY_COOLDOWN_MS)
+  if (sendable.length) {
+    db.putCache(
+      RECONCILE_RETRY_KEY,
+      Date.now() + RECONCILE_RETRY_COOLDOWN_MS,
+      RECONCILE_RETRY_COOLDOWN_MS
+    )
+  }
 
   // Nothing below this point is true of the account now connected: the
   // queue these results describe has already been dropped, so writing
@@ -605,14 +621,17 @@ function flushPendingPushes(): Promise<Set<string>> {
   return run
 }
 
-function scheduleRetry(): void {
+function scheduleRetry(delayMs: number = RECONCILE_RETRY_COOLDOWN_MS): void {
   if (retryTimer) clearTimeout(retryTimer)
   // A second past the pacing window, so the cooldown it is waiting on
   // has definitely expired by the time this fires.
-  retryTimer = setTimeout(() => {
-    retryTimer = null
-    void flushPendingPushes()
-  }, RECONCILE_RETRY_COOLDOWN_MS + 1000)
+  retryTimer = setTimeout(
+    () => {
+      retryTimer = null
+      void flushPendingPushes()
+    },
+    Math.max(0, delayMs) + 1000
+  )
 }
 
 function scheduleFlush(): void {
