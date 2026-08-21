@@ -13,6 +13,7 @@
 // against the source app.
 
 import { app } from 'electron'
+import crypto from 'node:crypto'
 import type {
   CatalogItem,
   ConnectResult,
@@ -180,8 +181,44 @@ function addIgnoredReconcileId(id: string): void {
  *  outlive a failed push or the app being closed — otherwise the exact
  *  titles they already ruled on come back on the next launch, which is
  *  the bug this queue exists to end. */
-const RECONCILE_PENDING_KEY = 'reconcile:pending:v1'
+const RECONCILE_PENDING_KEY = 'reconcile:pending:v2'
 const RECONCILE_PENDING_TTL_MS = 90 * 24 * 60 * 60 * 1000
+
+/** The queue as persisted: entries plus WHOSE they are. */
+interface PendingQueue {
+  account: string
+  entries: PendingWatchStatusPush[]
+}
+
+/**
+ * A stable, non-reversible mark for "the Simkl account currently
+ * connected", derived from its access token — nothing in this app
+ * persists a Simkl user id to use instead, and a truncated salted digest
+ * of a high-entropy token identifies the connection without storing
+ * anything usable as one.
+ *
+ * The point is that every queued decision is stamped with the connection
+ * it was made under and checked against this before it can be sent, so
+ * the safety property survives things going wrong: a clear that failed
+ * to write, a crash between signing out and signing in, a database that
+ * was read-only at the wrong moment. A queue that outlives its account
+ * is inert rather than dangerous.
+ *
+ * Conservative in the one direction that matters: re-authorizing the
+ * SAME account mints a new token and therefore abandons that account's
+ * own queued decisions, which costs a title being asked about once more.
+ * Delivering a decision to the wrong person's history has no equivalent
+ * undo.
+ */
+function simklAccountMark(): string {
+  const { accessToken } = simklCredentials()
+  if (!accessToken) return ''
+  return crypto
+    .createHash('sha256')
+    .update(`reconcile-account:${accessToken}`)
+    .digest('hex')
+    .slice(0, 16)
+}
 
 /** How long a "keep local" click waits for the clicks after it before the
  *  queue is flushed. Working through a review list is a burst of clicks a
@@ -213,8 +250,13 @@ let accountGeneration = 0
  *  already refusing it. */
 let flushAgain = false
 
+/** Queued decisions belonging to the account connected right now. A
+ *  queue stamped with any other connection is ignored outright — see
+ *  simklAccountMark. */
 function pendingPushes(): PendingWatchStatusPush[] {
-  return getDatabase().getCache<PendingWatchStatusPush[]>(RECONCILE_PENDING_KEY) || []
+  const stored = getDatabase().getCache<PendingQueue>(RECONCILE_PENDING_KEY)
+  if (!stored?.entries?.length) return []
+  return stored.account === simklAccountMark() ? stored.entries : []
 }
 
 /**
@@ -228,26 +270,25 @@ function pendingPushes(): PendingWatchStatusPush[] {
  * something to check.
  */
 function writePendingPushes(queue: PendingWatchStatusPush[]): boolean {
-  const db = getDatabase()
-  db.putCache(RECONCILE_PENDING_KEY, queue, RECONCILE_PENDING_TTL_MS)
+  const payload: PendingQueue = { account: simklAccountMark(), entries: queue }
+  getDatabase().putCache(RECONCILE_PENDING_KEY, payload, RECONCILE_PENDING_TTL_MS)
   const stored = new Set(pendingPushes().map((entry) => entry.id))
   return stored.size === queue.length && queue.every((entry) => stored.has(entry.id))
 }
 
 /**
- * Drops every queued decision, and any batch timer waiting to send them.
- * Called whenever the connected Simkl account changes — signing out, or
- * authorizing a different one — because these entries are decisions
- * about ONE account's history and this queue has no way to tell two
- * accounts apart (nothing here persists a Simkl user identity). Left in
- * place, a decision queued by account A would be delivered with account
- * B's token on the next flush, editing the watch history of whoever
- * happened to sign in next.
+ * Drops every queued decision, and any batch timer waiting to send them,
+ * when the connected Simkl account changes — signing out, or authorizing
+ * a different one. These are decisions about ONE account's history, and
+ * the cost of dropping them is that a title someone already ruled on
+ * gets asked about once more; the cost of delivering one to the wrong
+ * account has no equivalent undo.
  *
- * Dropping rather than trying to keep them is the safe direction: the
- * cost is that a title someone already ruled on gets asked about once
- * more, since the next check recomputes the disagreement from scratch.
- * Writing to the wrong person's account has no equivalent undo.
+ * Tidying, not the safety guarantee. The write below is best-effort and
+ * can fail on a read-only or full database, and this can't run at all if
+ * the app never reaches it (a crash, a kill). What actually keeps a
+ * surviving queue from being delivered to the next account is the stamp
+ * every entry carries — see simklAccountMark and pendingPushes.
  */
 function clearPendingPushes(): void {
   if (flushTimer) {
@@ -358,6 +399,25 @@ async function pushPendingToServices(): Promise<Set<string>> {
   // queue these results describe has already been dropped, so writing
   // the outcome back or reporting "synced" would both be lies.
   if (disowned()) return new Set()
+
+  // The local state was read before the requests went out, and a request
+  // takes long enough for someone to mark or unmark that very title in
+  // the meantime (their own mark/unmark pushes too, so the two can also
+  // land in either order). What went out — or what was judged not worth
+  // sending — is then no longer what local says, and dropping the entry
+  // on that basis would leave the two sides opposed with the decision
+  // gone. Those entries stay queued to be reconsidered against the
+  // current value, deliberately WITHOUT counting an attempt, since
+  // nothing failed here; applyPushOutcome leaves anything in neither set
+  // exactly as it is.
+  const nowWatched = new Set(
+    getDatabase()
+      .history()
+      .map((entry) => String(entry.id))
+  )
+  const changedUnderneath = (id: string): boolean => nowWatched.has(id) !== locallyWatched.has(id)
+  for (const id of [...confirmed]) if (changedUnderneath(id)) confirmed.delete(id)
+  for (const id of [...settled]) if (changedUnderneath(id)) settled.delete(id)
 
   for (const entry of queue) {
     if (!confirmed.has(entry.id)) continue
