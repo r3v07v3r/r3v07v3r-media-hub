@@ -799,12 +799,16 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     return api.onReconcileSync((report) => {
       const list = (titles: string[]): string =>
         titles.length === 1 ? `"${titles[0]}"` : `${titles.length} titles`
+      // Not an else-if chain: one batch can carry both, and hearing only
+      // about the titles that were given up on leaves the others looking
+      // like they went through.
       if (report.abandoned.length) {
         pushNotification({
           tone: 'error',
-          message: `Could not sync ${list(report.abandoned)} to your tracking services after several tries.${report.error ? ` ${report.error}` : ''}`
+          message: `Could not sync ${list(report.abandoned)} to your tracking services after several tries — no longer flagging ${report.abandoned.length === 1 ? 'it' : 'them'}.${report.error ? ` ${report.error}` : ''}`
         })
-      } else if (report.retrying.length) {
+      }
+      if (report.retrying.length) {
         pushNotification({
           tone: 'warning',
           message: `${list(report.retrying)} could not be synced yet — this will be retried.${report.error ? ` ${report.error}` : ''}`

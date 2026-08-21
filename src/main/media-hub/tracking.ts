@@ -276,8 +276,12 @@ function pendingPushes(): PendingWatchStatusPush[] {
 function writePendingPushes(queue: PendingWatchStatusPush[]): boolean {
   const payload: PendingQueue = { account: simklAccountMark(), entries: queue }
   getDatabase().putCache(RECONCILE_PENDING_KEY, payload, RECONCILE_PENDING_TTL_MS)
-  const stored = new Set(pendingPushes().map((entry) => entry.id))
-  return stored.size === queue.length && queue.every((entry) => stored.has(entry.id))
+  // The whole payload, not just which ids are present: a flush that only
+  // bumped `attempts` (or corrected `remoteWatched`) leaves the id set
+  // identical, so comparing ids would call a rejected write a success
+  // and let a failing entry sit at the same attempt count forever,
+  // never reaching the cap that is supposed to stop it.
+  return JSON.stringify(pendingPushes()) === JSON.stringify(queue)
 }
 
 /**
@@ -462,7 +466,17 @@ async function pushPendingToServices(): Promise<Set<string>> {
   // Entries that were pushed and stayed queued now know something new
   // about the remote side — see withPushedRemoteState.
   const persisted = writePendingPushes(withPushedRemoteState(remaining, pushedValue))
-  if (!persisted) {
+  // Giving up on a push and then asking about the same title again — in
+  // this very pass, since the diff that follows a check's flush would
+  // find it unchanged and surface it — is the nagging loop this queue
+  // exists to end, now with the added insult of having just said it was
+  // given up on. Five failed attempts is enough to stop asking; the
+  // ignore list's own 90-day expiry is what eventually re-opens the
+  // question. Only once the outcome actually persisted, though:
+  // otherwise these entries are still queued and not abandoned at all.
+  if (persisted) {
+    for (const entry of abandoned) addIgnoredReconcileId(entry.id)
+  } else {
     // The pushes themselves stand (they are what the report says);
     // what could not be written down is which of them are now done.
     // Worst case they are pushed again on a later launch, which both
