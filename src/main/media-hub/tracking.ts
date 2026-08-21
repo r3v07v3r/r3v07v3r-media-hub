@@ -299,6 +299,16 @@ let retryTimer: NodeJS.Timeout | null = null
  *  The persisted copy is what carries it across launches; this is what
  *  makes it true within one. */
 let retryPacingUntil = 0
+/** Ids whose recorded `remoteWatched` is known to be out of date on
+ *  disk: this app pushed them, learned what the remote side now holds,
+ *  and could not write that down (see writePendingPushes on why a write
+ *  can fail silently). The settle shortcut — drop an entry whose two
+ *  sides have come to agree by themselves — reads that stale record and
+ *  would conclude agreement with a remote state this app itself
+ *  changed, dropping the decision and leaving the services opposed. An
+ *  id in here is never settled on a snapshot; it is sent, which both
+ *  services take idempotently. */
+const staleSnapshots = new Set<string>()
 let flushInFlight: Promise<Set<string>> | null = null
 /** Bumped every time the connected Simkl account changes. A flush issues
  *  its requests one after another and simklRequest re-reads credentials
@@ -373,6 +383,7 @@ function clearPendingPushes(): void {
     retryTimer = null
   }
   retryPacingUntil = 0
+  staleSnapshots.clear()
   flushAgain = false
   // Disowns any flush already in the air as well as the queue on disk —
   // see accountGeneration for why the two are not the same thing.
@@ -467,6 +478,10 @@ async function pushPendingToServices(): Promise<Set<string>> {
   // response that retries until the attempt cap.
   const sendable = attemptable.filter((entry) => {
     if (locallyWatched.has(entry.id) !== entry.remoteWatched) return true
+    // Agreement judged against a record this app knows to be behind
+    // what it did to the remote side is not agreement — see
+    // staleSnapshots.
+    if (staleSnapshots.has(entry.id)) return true
     settled.add(entry.id)
     return false
   })
@@ -578,6 +593,10 @@ async function pushPendingToServices(): Promise<Set<string>> {
   // about the remote side — see withPushedRemoteState.
   const kept = withPushedRemoteState([...remaining, ...stillHeld], pushedValue)
   const persisted = writePendingPushes(kept)
+  // What is on disk is either exactly what this flush learned, or it is
+  // behind by whatever this flush pushed.
+  if (persisted) staleSnapshots.clear()
+  else for (const id of pushedValue.keys()) staleSnapshots.add(id)
   if (!persisted) {
     // The pushes themselves stand (they are what the report says);
     // what could not be written down is which of them are now done.
