@@ -1,382 +1,529 @@
+/* ---------------------------------------------------------------------
+   Browse By Mood — the bottom light dock.
+
+   The brief for this pass: the moods must stop reading as a row of
+   buttons floating in an invisible rectangle, and start reading as light
+   flowing out of the bottom edge of the screen. Three things follow from
+   that and are worth stating before the numbers:
+
+   1. Nothing here has a container. No border, no fill, no backdrop
+      blur, no rotating edge light. A mood is an icon, a word, and a
+      bloom of colour — the moment any of them gets an outline the row
+      snaps back to looking like seven buttons.
+   2. The dock is anchored to the VIEWPORT, not to its grid cell. It
+      spans the full window width (under the nav rail on the left, out
+      to the window's right edge) and sits flush on the bottom edge, so
+      the light has an edge to come out of. `position: fixed` is what
+      buys that: HomeDashboard's .dashboard clips with overflow:clip and
+      AppShell's .main computes overflow-x:auto (see their own comments),
+      and a fixed box escapes both — verified in this build, not assumed.
+   3. It never moves. The old .section was `position: sticky; bottom: 0`
+      inside .main's scroller, which is what made the row slide up and
+      down when a short window let .main scroll at all. Fixed can't
+      travel, so it doesn't.
+   --------------------------------------------------------------------- */
+
 .section {
   grid-area: mood;
-  /* Keep the mood controls anchored to the visible bottom edge when the
-     shell's shared main container has a scroll offset. Home normally fits
-     inside one viewport, but compact window heights can still make .main
-     scroll; `sticky` preserves this section's grid footprint while ensuring
-     the controls never travel away with that scroll. Unlike `fixed`, it also
-     remains correctly constrained above the dedicated mobile bottom-nav row. */
-  position: sticky;
-  bottom: 0;
-  z-index: 10;
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  /* Explicit floor, not 0 — .cropX below has non-visible overflow-x,
-     which forces its own automatic minimum size to 0 and would otherwise
-     collapse this auto-sized grid row to nothing at the stacked
-     (<1100px) breakpoint. */
+  position: relative;
+  /* This element is now only a spacer: it reserves row 3's height in
+     .dashboard's grid so the hero and AI Picks rows above can't grow
+     into the space the (fixed) dock occupies. Everything visible lives
+     in .dock below. Kept slightly under the dock's own height — the
+     dock's top edge is pure transparent falloff, so a few px of overlap
+     with the row above blends rather than collides. */
   min-height: 190px;
+  z-index: 10;
+  min-width: 0;
   overflow: visible;
-  /* Bled left past .main's own edge to run underneath the nav rail
-     footprint, closing the lower-left composition gap — this is a
-     deliberate part of the layout, not clipped by .main's overflow (see
-     the overflow-x comment on .main in AppShell.module.css).
-
-     Third refinement pass: was a small fixed 48px (just enough for the
-     connector line's glow to tuck under, deliberately not enough to
-     touch the first pill — see the git history for the original
-     reasoning) — the brief now explicitly asks for the leftmost mood
-     blobs to sit partially *under* the nav footprint as a layered
-     composition choice, and the rail itself grew to 285px this pass, so
-     a proportional half-rail-width bleed both reaches further and stays
-     in sync automatically if the rail's width ever changes again.
-     Half, not the full rail width: the rail's own SVG boundary tapers
-     back toward the left edge well before reaching this row's height
-     (it's centered higher up the column), so the DOM footprint worth
-     bleeding under is really the icon/label column, not the full
-     published width — half reaches under that comfortably without
-     pushing the whole row so far left it collides with the "assistant"
-     (AI orb) column's own content above it.
-
-     Compositing pass: nudged 0.5 -> 0.8. Fixing the clipping bug (see
-     .main in AppShell.module.css) revealed that at 0.5 — and even at an
-     intermediate 0.65 — this row's leftmost pill landed only right at
-     (or just short of) the rail's own tapered silhouette at this
-     height, reading as two separate floating shapes with a gap between
-     them rather than "the nav overlapping the mood row." 0.8 was tuned
-     by screenshot (checked against the rail's actual painted boundary,
-     not just its bounding box — the SVG boundary curves well inside
-     that box at this height) to land the pill's top-left genuinely
-     under the rail's own (translucent) glass fill, so the pill's glow
-     now visibly passes beneath it — while staying well short of the
-     rail's own widest bulge higher up the column, so nothing here
-     collides with the "assistant" column above. This value is kept in
-     lockstep with the matching compensation terms on .main
-     (AppShell.module.css) and .dashboard (HomeDashboard.module.css) —
-     if this ever changes again, update those two the same way, or the
-     clipping bug comes back. */
+  /* Left bleed past .main's own edge, kept from the previous design and
+     still load-bearing for the results drawer's width at the stacked
+     breakpoints (where .dock is NOT fixed and inherits this box). The
+     0.8 factor is one of a lockstep trio — the matching compensation
+     terms live on .main (AppShell.module.css) and .dashboard
+     (HomeDashboard.module.css); if it ever changes, all three change
+     together or .main's computed overflow-x clips the bled content. */
   margin-left: calc(var(--nav-rail-width, 285px) * -0.8);
   width: calc(100% + var(--nav-rail-width, 285px) * 0.8);
 }
 
-.heading {
-  text-align: center;
-  font-family: var(--font-display);
-  font-size: 12px;
-  font-weight: 600;
-  letter-spacing: 1.2px;
-  color: var(--text-muted);
-  text-transform: uppercase;
-  /* 10-foot-interface pass: this is an <h2> with no margin-top reset,
-     so it was carrying the UA stylesheet's default ~0.83em top margin
-     on top of the explicit 6px bottom margin below — unaccounted
-     vertical space in row 3's auto-sized grid track. Same class of fix
-     as the AI Picks heading in RecommendationCarousel.module.css,
-     needed to help the whole composition fit inside 1920x1080 now that
-     row 2 is taller. */
-  margin-top: 0;
-  margin-bottom: 6px;
-  flex: 0 0 auto;
+.dock {
+  position: fixed;
+  left: 0;
+  right: 0;
+  /* 0 at every width except mobile, where the nav becomes a bottom bar
+     and the dock has to sit on top of it rather than over it (the value
+     is measured and published by SidebarNavigation, same as the rail's
+     width). */
+  bottom: var(--nav-bar-height, 0px);
+  height: 198px;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  /* The dock's box covers the full width of the window at the bottom,
+     including the nav rail's column and the empty space under it. It
+     must not eat clicks on anything it merely floats over — only the
+     moods themselves and the results drawer opt back in. */
+  pointer-events: none;
+  /* Confines the plumes' `screen` blending to this layer, so overlapping
+     blooms add into each other (which is what makes seven separate mood
+     lights read as one continuous band) without the whole dock trying to
+     blend with the hero art behind it. */
+  isolation: isolate;
 }
 
-.cropX {
-  position: relative;
-  /* No scroll on this row (unlike Continue Watching/AI Picks, which keep
-     theirs) — .pill already flex-grows/shrinks to fill the row's real
-     width; overflow-x:hidden is only ever reached if a window is narrower
-     than 7 pills' combined min-width can shrink to, in which case the
-     rightmost pills clip rather than becoming reachable via scroll. */
-  overflow-x: hidden;
-  overflow-y: visible;
-}
-
-/* Flowing multicolor light line the pills sit on top of, tying the row
-   together the way a single connected trail does in the reference. Lives
-   INSIDE .row (not .cropX) so its 100% width tracks the row's real
-   content width — including the "min-width: max-content" case where the
-   row is wider than the viewport and scrolls — rather than just the
-   scroll container's visible viewport. */
-.connector {
+/* Grounds the dock against whatever is behind it (hero art, AI Picks
+   cards) so the labels stay readable. A gradient that starts at fully
+   transparent, never a panel — an edge here is exactly the "invisible
+   box" this pass exists to remove. */
+.scrim {
   position: absolute;
   left: 0;
   right: 0;
-  top: 50%;
+  top: -34px;
+  bottom: 0;
+  z-index: -3;
+  pointer-events: none;
+  background: linear-gradient(
+    180deg,
+    transparent 0%,
+    rgba(4, 8, 16, 0.16) 52%,
+    rgba(3, 6, 12, 0.42) 100%
+  );
+}
+
+/* ---------- Flowing currents ---------- */
+
+.currents,
+.currentsGlow {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
   width: 100%;
-  height: 60px;
-  transform: translateY(-50%);
-  z-index: 0;
+  height: 100%;
   pointer-events: none;
   overflow: visible;
+  /* Fades the filaments out toward the top of the dock so they dissolve
+     into the page rather than stopping at the dock's top edge. */
+  -webkit-mask-image: linear-gradient(180deg, transparent 0%, rgba(0, 0, 0, 0.32) 20%, #000 54%);
+  mask-image: linear-gradient(180deg, transparent 0%, rgba(0, 0, 0, 0.32) 20%, #000 54%);
+  /* Very slow vertical drift — the "breathing with the page" part. Two
+     layers at the same duration but different delays means the glow and
+     the hairline never move in perfect lockstep, which reads as depth. */
+  animation: currentDrift var(--motion-idle-slow, 10s) var(--ease-organic) infinite;
 }
-.connectorLine {
-  opacity: 0.55;
+/* Stacking inside .dock, lowest first: .scrim (-3), the filaments' blur
+   pass (-2), the mood blooms (-1), then the crisp filaments at 0 and the
+   icons/labels after them in DOM order. Crisp lines therefore glint
+   ACROSS the blooms rather than being buried under them, which is what
+   makes this read as light with structure in it instead of a gradient. */
+.currents {
+  z-index: 0;
+  animation-delay: -3.4s;
 }
-.connectorPulse {
-  stroke-dasharray: 60 940;
+.currentsGlow {
+  z-index: -2;
+  filter: blur(7px);
+}
+@keyframes currentDrift {
+  0%,
+  100% {
+    transform: translateY(0) scaleY(1);
+  }
+  50% {
+    transform: translateY(-4px) scaleY(1.035);
+  }
+}
+
+.current {
+  transition: opacity var(--transition-standard);
+}
+/* A short bright segment travelling the length of the curve — the same
+   idea as the old straight connector line, but now following the
+   filament's real shape. pathLength=1000 on the element normalises every
+   curve's length so one dash pattern works for all of them regardless of
+   how long the path actually is (the scalloped spine is several times
+   the arc length of the ambient strands). */
+.currentPulse {
+  stroke-dasharray: 62 938;
   stroke-dashoffset: 0;
-  animation: moodConnectorTravel var(--motion-idle-slow, 10s) linear infinite;
-  opacity: 0.9;
+  opacity: 0.85;
+  animation: currentTravel calc(var(--motion-idle-slow, 10s) * 1.8) linear infinite;
+  animation-delay: var(--current-delay, 0s);
 }
-@keyframes moodConnectorTravel {
+@keyframes currentTravel {
   to {
     stroke-dashoffset: -1000;
   }
 }
-.reduced .connectorPulse {
+.reduced .currentPulse {
   animation: none;
-  opacity: 0;
+  /* The solid strand underneath is still drawn, so the highlight simply
+     stops existing rather than freezing as a dash parked somewhere. */
+  display: none;
+}
+.reduced .currents,
+.reduced .currentsGlow {
+  animation: none;
 }
 
-.row {
-  position: relative;
-  z-index: 1;
-  display: flex;
-  align-items: center;
-  /* Was justify-content: center with pills at a fixed width — on wide
-     viewports that left the whole strip centered with ~30px of dead
-     margin on each side instead of reaching the same left/right edges
-     as the hero, AI Picks, and Continue Watching above it. Pills now
-     grow (see .pill's flex-grow) to consume that space themselves, so
-     the row's real content spans edge-to-edge and justify-content only
-     matters as a fallback. */
-  justify-content: center;
-  /* Close together, not overlapping — just enough separation that each
-     capsule's own edge stays legible, tight enough that the glow blooms
-     bleed into a near-continuous strip of light per the reference. */
-  gap: 3px;
-  padding: 14px 10px 8px;
-  width: 100%;
-}
-
-/* Large, saturated glowing mood capsules sitting close together on the
-   connector line (per reference), replacing the earlier compact
-   left-aligned glass chips. Icon centered near the top, label centered
-   below, generous outer bloom that's allowed to extend past the
-   capsule's own edge into the gap toward its neighbors — that bleed is
-   what reads as "connected by light" rather than a row of separate
-   buttons, while the capsules themselves still never overlap. */
-.pill {
-  position: relative;
-  /* Custom organic blob, not a stadium/pill — asymmetric elliptical
-     corner radii (the CSS "blob" technique: four different x/y radius
-     pairs) instead of a uniform 999px pill, so every mood control reads
-     as a one-off irregular shape rather than a row of identical
-     capsules. flex-grow (not 0 0 auto) is what makes the row cover the
-     full width: each pill starts at 224px and stretches to fill
-     whatever's left over, so 7 pills always tile edge-to-edge across
-     the section's real width instead of sitting centered at their
-     intrinsic size. min-width keeps them from ever going narrower than
-     the reference's proportions. */
-  width: auto;
-  min-width: 224px;
-  height: 118px;
-  flex: 1 1 224px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  padding: 14px;
-  border-radius: 62% 38% 51% 49% / 58% 44% 56% 42%;
-  overflow: visible;
-  isolation: isolate;
-  border: 1px solid hsla(var(--hue), 60%, 55%, 0.22);
-  /* Centre stays dark — colour lives almost entirely in the perimeter
-     glow (.pillHalo, below) plus this thin edge-hugging rim, not in the
-     fill itself. Was inverted before (bright fill fading to dark at the
-     edge); this is the reference's actual treatment. */
-  background: radial-gradient(
-    ellipse at 50% 42%,
-    rgba(6, 10, 18, 0.55) 0%,
-    rgba(4, 7, 13, 0.7) 46%,
-    hsla(var(--hue), 70%, 42%, 0.22) 82%,
-    hsla(var(--hue), 75%, 50%, 0.4) 100%
-  );
-  backdrop-filter: blur(6px);
-  color: inherit;
-  text-align: center;
-  box-shadow: 0 0 26px -6px hsla(var(--hue), 90%, 55%, 0.45);
-  transition:
-    transform var(--transition-fast),
-    border-color var(--transition-fast),
-    background var(--transition-fast),
-    box-shadow var(--transition-fast);
-}
-.pill:hover,
-.pill:focus-visible {
-  transform: translateY(-4px);
-  border-color: hsla(var(--hue), 88%, 70%, 0.5);
-  background: radial-gradient(
-    ellipse at 50% 42%,
-    rgba(6, 10, 18, 0.55) 0%,
-    rgba(4, 7, 13, 0.68) 44%,
-    hsla(var(--hue), 75%, 45%, 0.3) 80%,
-    hsla(var(--hue), 80%, 55%, 0.5) 100%
-  );
-  box-shadow: 0 0 36px -4px hsla(var(--hue), 90%, 58%, 0.6);
-}
-
-.pillHalo {
-  position: absolute;
-  /* Pooled toward the bottom rather than centered — the reference's
-     pills read as floating just above a glowing light source beneath
-     them, not lit evenly from the middle.
-
-     Bug fix: this row is the last one in HomeDashboard's fixed 3-row
-     grid, and .dashboard clips with overflow:hidden (it must — see that
-     rule's own comment on why Home can never page-scroll). At the very
-     common 1080px-tall window heights ultra-wide monitors run in
-     fullscreen (2560x1080, 3440x1080, ...), the grid's tuned-for-1920x1080
-     row budget leaves only ~45-55px of real clearance below the pill's
-     own box before hitting that hard clip — this halo's old 82%/157%
-     pooled roughly 71px below the pill, comfortably past that, so the
-     glow's soft blur-out got guillotined by a hard flat edge instead of
-     fading to nothing, reading as "the blur is cut off" / the pills
-     "floating" with no visible light pooled beneath them. (Taller
-     windows, e.g. 1440p, had enough slack that this never showed up —
-     confirmed via getBoundingClientRect + real screenshots at both
-     heights.) 66%/128% keeps the same "pooled low, not centered"
-     character and the same connecting bleed toward neighboring pills,
-     just with less overshoot (~37px below the pill) so it fades out on
-     its own well inside that worst-case clearance instead of getting
-     clipped. */
-  top: 66%;
-  left: 50%;
-  translate: -50% -50%;
-  z-index: -1;
-  /* Deliberately wider than the capsule itself — the bloom is allowed to
-     bleed toward (and now, at this tight a gap, gently into) the next
-     capsule's own glow, which is what makes the row read as one
-     connected strip of light per the reference. Sized as a percentage
-     of the pill (its containing block), not a fixed px, because pills
-     now flex-grow to fill the row's full width — a fixed halo would go
-     stale (too small, not reaching the capsule's own edge) the moment a
-     pill grows past its 224px starting basis. */
-  width: 112%;
-  height: 128%;
-  border-radius: 50%;
-  background: radial-gradient(circle, hsla(var(--hue), 95%, 65%, 0.48), transparent 70%);
-  filter: blur(24px);
-}
-
-.pillIcon {
-  position: relative;
-  z-index: 1;
-  flex: 0 0 auto;
-  width: 40px;
-  height: 40px;
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: hsl(var(--hue), 95%, 85%);
-  /* Thin glassy ring rather than a solid gradient badge — closer to the
-     reference's lighter, more delicate icon treatment. */
-  background: radial-gradient(circle at 35% 30%, hsla(var(--hue), 90%, 60%, 0.16), transparent 70%);
-  box-shadow:
-    inset 0 0 0 1.5px hsla(var(--hue), 90%, 78%, 0.75),
-    0 0 16px 1px hsla(var(--hue), 95%, 62%, 0.5);
-  transition:
-    box-shadow var(--transition-standard),
-    transform var(--transition-standard);
-}
-.pillIcon svg {
-  width: 20px;
-  height: 20px;
-}
-.pill:hover .pillIcon,
-.pill:focus-visible .pillIcon {
-  transform: scale(1.08);
-}
-
-.pillLabel {
-  position: relative;
-  z-index: 1;
-  font-family: var(--font-body);
-  font-size: 12.5px;
-  font-weight: 700;
-  letter-spacing: 0.8px;
-  text-transform: uppercase;
-  color: hsl(var(--hue), 92%, 90%);
-  text-shadow: 0 0 10px hsla(var(--hue), 90%, 55%, 0.45);
-  line-height: 1.2;
-}
-
-.pillActive {
-  border-color: hsla(var(--hue), 90%, 72%, 0.6);
-  background: radial-gradient(
-    ellipse at 50% 42%,
-    rgba(6, 10, 18, 0.5) 0%,
-    rgba(4, 7, 13, 0.62) 42%,
-    hsla(var(--hue), 85%, 50%, 0.4) 82%,
-    hsla(var(--hue), 88%, 58%, 0.62) 100%
-  );
-  box-shadow:
-    0 0 0 1px hsla(var(--hue), 90%, 72%, 0.4),
-    0 16px 34px -14px hsla(var(--hue), 90%, 55%, 0.7);
-}
-.pillActive .pillIcon {
-  box-shadow:
-    0 0 0 1px hsla(var(--hue), 90%, 85%, 0.9),
-    0 0 26px 4px hsla(var(--hue), 95%, 65%, 0.9);
-}
-
-/* Each mood gets a genuinely distinct silhouette (not a shared template
-   with minor jitter) — the corner radii below are deliberately pushed
-   toward each mood's own character rather than staying close to a
-   common baseline blob. .row's first child is the connector <svg>, so
-   nth-child(2) is the first actual pill (Thrilling) through
-   nth-child(8) (Action). */
-/* Refinement pass: every shape's asymmetry pushed further from a
-   uniform pill — wider deltas between opposing corners, and the one
-   shape (Sci-Fi) that was a perfectly symmetric lens now wobbles
-   slightly off-axis too, so none of the seven reads as a stretched
-   capsule with rounded corners. */
-.row > button:nth-child(2) {
-  /* Thrilling — pointed left edge (low radius on the left corners),
-     rounded right, like a blob leaning/darting rightward. */
-  border-radius: 16% 80% 84% 20% / 50% 66% 42% 54%;
-}
-.row > button:nth-child(3) {
-  /* Emotional — heart-like: two rounded lobes up top, a single
-     narrower point at the bottom. */
-  border-radius: 70% 70% 26% 26% / 80% 80% 22% 22%;
-}
-.row > button:nth-child(4) {
-  /* Mind-Bending — wide central bulge via alternating high/low
-     vertical radii, reading as a twisted, off-axis blob. */
-  border-radius: 68% 32% 68% 32% / 32% 70% 28% 72%;
-}
-.row > button:nth-child(5) {
-  /* Feel Good — a soft oval with a gentle organic wobble, the calmest
-     shape in the row but no longer a perfectly even ellipse. */
-  border-radius: 48% 52% 54% 46% / 60% 64% 56% 60%;
-}
-.row > button:nth-child(6) {
-  /* Family — slight upper bulge (top corners rounder/taller than the
-     bottom), reading as gently top-heavy. */
-  border-radius: 64% 62% 38% 40% / 74% 72% 40% 42%;
-}
-.row > button:nth-child(7) {
-  /* Sci-Fi — stretched/elongated profile: very round left-right,
-     flatter top-bottom, so it reads as a lens rather than a circle —
-     now with a slight asymmetric wobble instead of a perfectly even
-     lens, which itself read as the most "pill-like" shape in the row. */
-  border-radius: 88% 86% 90% 84% / 30% 32% 28% 34%;
-}
-.row > button:nth-child(8) {
-  /* Action — mirror of Thrilling: sharper right edge, rounded left. */
-  border-radius: 80% 16% 20% 84% / 54% 50% 52% 44%;
-}
-
-/* ---------- Filtered results drawer ---------- */
-.resultsDrawer {
+/* The window's own bottom edge, lit with the same left-to-right run of
+   mood accents the filaments are stroked with (the gradient itself is
+   built from MOOD_CATEGORIES in the component — see accentSweep). Half of
+   its blur radius falls below the edge and is never seen, which is
+   exactly the point: the source of the light is off the display. */
+.edgeGlow {
   position: absolute;
   left: 0;
   right: 0;
-  bottom: calc(100% + 8px);
+  bottom: -1px;
+  height: 4px;
+  z-index: -1;
+  pointer-events: none;
+  opacity: 0.85;
+  filter: blur(7px);
+  mix-blend-mode: screen;
+  animation: edgeBreathe var(--motion-breathe, 4.5s) var(--ease-organic) infinite;
+  animation-delay: -1.4s;
+}
+@keyframes edgeBreathe {
+  0%,
+  100% {
+    opacity: 0.7;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+.reduced .edgeGlow {
+  animation: none;
+}
+
+/* ---------- Heading ---------- */
+
+.heading {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  /* Same UA-margin reset as the other section headings on this page —
+     an <h2>'s default ~0.83em top margin is unaccounted vertical space
+     in a fixed-height dock. */
+  margin: 0;
+  padding-top: 10px;
+  font-family: var(--font-display);
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 2px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+}
+.heading::before,
+.heading::after {
+  content: '';
+  height: 1px;
+  width: clamp(60px, 9vw, 190px);
+  background: linear-gradient(90deg, transparent, rgba(150, 190, 230, 0.3));
+}
+.heading::after {
+  transform: scaleX(-1);
+}
+
+/* ---------- The moods ---------- */
+
+.row {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  align-items: stretch;
+  /* No gap and no padding: each mood's box tiles edge to edge across the
+     window so the outermost blooms run off the left and right edges
+     instead of stopping short of them. */
+  width: 100%;
+}
+
+.mood {
+  position: relative;
+  pointer-events: auto;
+  /* Equal shares of the full window width, and allowed to shrink below
+     content width rather than forcing the row wider than the viewport. */
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 14px;
+  /* The deep bottom padding is doing real work: it opens a band of empty
+     space between the labels and the window's edge for the spine and the
+     glow pool to occupy. Without it the labels sit on the bottom edge and
+     there's nothing for the light to be coming out of. */
+  padding: 0 8px 57px;
+  text-align: center;
+  /* Deliberately no border, background, box-shadow or backdrop-filter.
+     See this file's header — the colour lives entirely in .plume. */
+  transition: none;
+}
+
+/* The glow pool each mood's light rises from. `height: 150%` with
+   `bottom: -85%` puts its CENTRE below the window's bottom edge, so the
+   brightest part of the light source is off the display entirely and only
+   its upper falloff is on screen. That geometry — not the colour — is
+   what sells "coming out of the bottom of the screen"; centring it inside
+   the dock instead just draws a row of discs.
+
+   Sized in percentages of the mood's own box, so it tracks the window
+   width and every breakpoint's dock height for free. 116% wide leaves a
+   genuine dark trough between neighbouring pools: an earlier pass at
+   152% overlapped them so heavily that all seven hues averaged into one
+   flat grey-pastel strip. They still just touch at the tails, and
+   `screen` blending lets those tails add rather than occlude, so the row
+   reads as one band of light made of seven distinct sources.
+
+   Two gradients, rim first (it paints on top): a faint luminous arc over
+   the top of the pool. At this blur radius it's a soft halo, not an
+   outline — the distinction matters, since an outline here is a button
+   again. */
+.plume {
+  position: absolute;
+  left: 50%;
+  bottom: -85%;
+  translate: -50% 0;
+  z-index: -1;
+  width: 116%;
+  height: 150%;
+  border-radius: 50%;
+  background:
+    radial-gradient(
+      closest-side,
+      transparent 56%,
+      hsla(var(--hue), 98%, 76%, 0.3) 76%,
+      transparent 92%
+    ),
+    radial-gradient(
+      closest-side,
+      hsla(var(--hue), 98%, 66%, 0.92) 0%,
+      hsla(var(--hue), 97%, 58%, 0.46) 40%,
+      hsla(var(--hue), 95%, 52%, 0.12) 64%,
+      transparent 82%
+    );
+  filter: blur(16px);
+  mix-blend-mode: screen;
+  pointer-events: none;
+  /* `scale`/`opacity` rather than `transform`, so :hover below can still
+     use `filter` (and any future transform) without the animation and
+     the hover state fighting over one property. 0%/100% is the resting
+     state on purpose: the global prefers-reduced-motion rule collapses
+     animation-duration to ~0, which settles a loop on its final
+     keyframe. */
+  animation: plumeBreathe var(--motion-breathe, 4.5s) var(--ease-organic) infinite;
+  animation-delay: var(--breathe-delay, 0s);
+  transition: filter var(--transition-standard);
+}
+@keyframes plumeBreathe {
+  0%,
+  100% {
+    opacity: 0.68;
+    scale: 1 1;
+  }
+  50% {
+    opacity: 1;
+    scale: 1.04 1.1;
+  }
+}
+.reduced .plume {
+  animation: none;
+}
+
+/* Seven identically-sized blooms in a straight line is the same "row of
+   identical shapes" problem the old capsules had, just softer. Each one
+   gets its own proportions and its own resting height instead — small
+   enough deltas that nothing looks misaligned (the icons and labels stay
+   on one baseline), large enough that no two lights are twins. */
+.row > .mood:nth-child(1) .plume {
+  width: 124%;
+  height: 142%;
+  bottom: -81%;
+}
+.row > .mood:nth-child(2) .plume {
+  width: 108%;
+  height: 158%;
+  bottom: -89%;
+}
+.row > .mood:nth-child(3) .plume {
+  width: 120%;
+  height: 146%;
+  bottom: -83%;
+}
+.row > .mood:nth-child(4) .plume {
+  width: 110%;
+  height: 164%;
+  bottom: -92%;
+}
+.row > .mood:nth-child(5) .plume {
+  width: 122%;
+  height: 140%;
+  bottom: -80%;
+}
+.row > .mood:nth-child(6) .plume {
+  width: 106%;
+  height: 154%;
+  bottom: -87%;
+}
+.row > .mood:nth-child(7) .plume {
+  width: 126%;
+  height: 150%;
+  bottom: -85%;
+}
+
+/* A soft shaft of light standing up out of the bottom edge under each
+   icon — blurred to a glow rather than left as a hairline, so it reads
+   as the column of light the bloom is rising through, not as a rule. */
+.riser {
+  position: absolute;
+  left: 50%;
+  bottom: 0;
+  translate: -50% 0;
+  z-index: -1;
+  width: 14px;
+  height: 112px;
+  background: linear-gradient(180deg, transparent, hsla(var(--hue), 98%, 80%, 0.42));
+  filter: blur(9px);
+  opacity: 0.6;
+  mix-blend-mode: screen;
+  pointer-events: none;
+  transition:
+    opacity var(--transition-standard),
+    height var(--transition-standard);
+}
+
+.moodIcon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* No ring, no badge, no plate. Just the stroke glyph and its own
+     glow — matching the reference's delicate line icons. */
+  color: hsl(var(--hue), 96%, 86%);
+  filter: drop-shadow(0 0 9px hsla(var(--hue), 96%, 62%, 0.7));
+  transition:
+    transform var(--transition-standard),
+    filter var(--transition-standard);
+}
+.moodIcon svg {
+  display: block;
+  width: 28px;
+  height: 28px;
+}
+
+.moodLabel {
+  position: relative;
+  font-family: var(--font-body);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 2.2px;
+  text-transform: uppercase;
+  color: hsl(var(--hue), 48%, 90%);
+  text-shadow: 0 0 14px hsla(var(--hue), 92%, 58%, 0.5);
+  line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+  /* Room inside the label's own (clipping) box for the selected-state
+     underline below — a negative `bottom` on the pseudo-element would be
+     cut off by the overflow:hidden the ellipsis needs. */
+  padding-bottom: 7px;
+  transition:
+    color var(--transition-standard),
+    transform var(--transition-standard);
+}
+
+.mood:hover .plume {
+  filter: blur(16px) brightness(1.5) saturate(1.15);
+}
+.mood:hover .riser {
+  opacity: 0.85;
+  height: 116px;
+}
+.mood:hover .moodIcon {
+  transform: translateY(-3px) scale(1.07);
+  filter: drop-shadow(0 0 15px hsla(var(--hue), 96%, 66%, 0.95));
+}
+.mood:hover .moodLabel {
+  color: #fff;
+  transform: translateY(-2px);
+}
+
+/* The dock has no boxes, so the global :focus-visible outline (a 2px
+   rectangle) would draw a full-height rectangle over the window's whole
+   bottom-left-to-right — precisely the shape this design removes. The
+   indicator moves onto the glyph instead, where it's compact, obviously
+   attached to the focused mood, and still meets the same contrast. */
+.mood:focus-visible {
+  outline: none;
+}
+.mood:focus-visible .moodIcon {
+  outline: 2px solid var(--accent-cyan);
+  outline-offset: 9px;
+  border-radius: 50%;
+  transform: translateY(-3px) scale(1.07);
+}
+.mood:focus-visible .plume {
+  filter: blur(16px) brightness(1.5) saturate(1.15);
+}
+
+/* Selected. Brightness alone would be the only cue, so the label also
+   gets a lit underline — a state that survives being read at a glance
+   from across a room, and one that doesn't depend on comparing two
+   glows against each other. */
+.moodActive .plume {
+  filter: blur(16px) brightness(1.9) saturate(1.25);
+}
+.moodActive .riser {
+  opacity: 1;
+  height: 140px;
+}
+.moodActive .moodIcon {
+  color: #fff;
+  filter: drop-shadow(0 0 18px hsla(var(--hue), 96%, 68%, 1));
+}
+.moodActive .moodLabel {
+  color: #fff;
+}
+.moodActive .moodLabel::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 1.5px;
+  border-radius: 2px;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    hsl(var(--hue), 96%, 74%) 22%,
+    hsl(var(--hue), 96%, 74%) 78%,
+    transparent
+  );
+  box-shadow: 0 0 10px hsla(var(--hue), 96%, 62%, 0.9);
+}
+
+/* ---------- Filtered results drawer ---------- */
+
+/* Anchored to the dock (not to .section) so it always floats directly
+   above the light band, whether the dock is fixed to the window or —
+   at the stacked breakpoints below — sitting in normal flow. Inset past
+   the nav rail on the left so a full-width dock doesn't put the drawer
+   underneath it. */
+.resultsDrawer {
+  position: absolute;
+  left: calc(var(--nav-rail-width, 285px) + 26px);
+  right: 26px;
+  bottom: calc(100% + 6px);
   z-index: 30;
+  pointer-events: auto;
   max-height: 260px;
   padding: 16px 18px;
   border-radius: var(--radius-large);
@@ -441,58 +588,81 @@
   padding: 8px 0;
 }
 
+/* ---------- Breakpoints ---------- */
+
 @media (max-width: 1439px) {
-  .pill {
-    /* flex-basis (set via the .pill flex shorthand) wins over `width`
-       for main-axis sizing whenever it's anything other than `auto` —
-       since the base rule sets an explicit 224px basis, this breakpoint
-       has to override flex/min-width too, not just width, or the pills
-       would silently stay at the desktop basis. */
-    width: auto;
-    min-width: 192px;
-    flex: 1 1 192px;
-    height: 96px;
-    padding: 12px;
-    gap: 6px;
-    border-radius: 999px;
+  .section {
+    min-height: 168px;
   }
-  .pillIcon {
-    width: 32px;
-    height: 32px;
+  .dock {
+    height: 184px;
   }
-  .pillIcon svg {
-    width: 15px;
-    height: 15px;
+  .mood {
+    gap: 11px;
+    padding-bottom: 25px;
   }
-  /* .pillHalo no longer needs an override here — it's percentage-sized
-     off the pill itself now, so it tracks this breakpoint's pill size
-     automatically. */
-  .pillLabel {
-    font-size: 11.5px;
+  .moodIcon svg {
+    width: 25px;
+    height: 25px;
+  }
+  .moodLabel {
+    font-size: 11px;
+    letter-spacing: 1.8px;
+  }
+  .resultsDrawer {
+    left: calc(var(--nav-rail-width, 285px) + 20px);
+    right: 20px;
+  }
+}
+
+/* Tablet and below: the dashboard becomes a single stacked column whose
+   five sections can't all fit, and .dashboard clips rather than scrolls
+   (a deliberate choice — see its own comment). The dock stays pinned to
+   the window here for exactly that reason: left in normal flow it would
+   land a few hundred px below the fold and be clipped away entirely,
+   which is what the old sticky positioning existed to prevent. */
+@media (max-width: 1099px) {
+  .section {
+    min-height: 0;
+  }
+  .dock {
+    height: 176px;
+  }
+  .resultsDrawer {
+    left: 14px;
+    right: 14px;
   }
 }
 
 @media (max-width: 767px) {
-  /* Mobile keeps the old horizontal-scroll strip instead of stretching
-     to fill — there usually isn't spare width to fill on a phone, and
-     growing pills here would fight the scrollable, fixed-size-capsule
-     behavior .cropX already provides. */
+  .dock {
+    height: 168px;
+  }
+  /* Seven moods can't share a phone's width and stay legible, so the row
+     scrolls here instead of tiling.
+     `overflow: auto hidden`, not `auto visible`: per the overflow spec a
+     'visible' axis computes to 'auto' as soon as the other axis isn't
+     visible, which would leave this quietly scrollable vertically too.
+     Being clipped on that axis costs nothing — the row's bottom edge is
+     the dock's bottom edge, so the only thing cut off is the part of each
+     pool that was already meant to be off the bottom of the screen.
+     pointer-events comes back on so a drag anywhere along the strip
+     scrolls it, not just a drag that starts on a mood. */
   .row {
-    justify-content: flex-start;
-    min-width: max-content;
+    overflow: auto hidden;
     width: auto;
+    pointer-events: auto;
   }
-  .pill {
-    width: 168px;
-    min-width: 168px;
-    flex: 0 0 168px;
-    height: 88px;
-    border-radius: 999px;
+  .mood {
+    flex: 0 0 132px;
+    padding-bottom: 19px;
   }
-  .pillIcon {
-    width: 30px;
-    height: 30px;
+  .moodIcon svg {
+    width: 23px;
+    height: 23px;
   }
-  /* .pillHalo is percentage-sized off the pill (see base rule) and
-     tracks this breakpoint's fixed pill size automatically. */
+  .moodLabel {
+    font-size: 10.5px;
+    letter-spacing: 1.4px;
+  }
 }
