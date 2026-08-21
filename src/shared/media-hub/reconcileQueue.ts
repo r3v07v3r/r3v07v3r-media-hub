@@ -69,3 +69,29 @@ export function applyPushOutcome(
   }
   return { queue: next, abandoned }
 }
+
+/**
+ * Teaches entries that stayed queued what this flush already did to the
+ * remote side. An entry is pushed and then kept — because the local
+ * state moved underneath it mid-request, or because a second service
+ * refused it — and its recorded `remoteWatched` is now out of date by
+ * exactly the push that just succeeded. Left alone, the next flush
+ * weighs the current local value against that stale record, concludes
+ * the two sides agree on their own, and drops the decision without ever
+ * undoing what went out.
+ *
+ * `pushedValue` maps an id to the value a successful request actually
+ * sent; entries with no entry there were never pushed and are returned
+ * untouched.
+ */
+export function withPushedRemoteState(
+  queue: PendingWatchStatusPush[],
+  pushedValue: ReadonlyMap<string, boolean>
+): PendingWatchStatusPush[] {
+  return queue.map((entry) => {
+    const pushed = pushedValue.get(entry.id)
+    return pushed === undefined || pushed === entry.remoteWatched
+      ? entry
+      : { ...entry, remoteWatched: pushed }
+  })
+}

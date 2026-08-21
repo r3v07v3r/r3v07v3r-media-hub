@@ -35,7 +35,11 @@ import type {
   WatchStatusDiscrepancy
 } from '../../shared/media-hub/types'
 import { MEDIA_HUB_CHANNELS } from '../../shared/media-hub/ipc-channels'
-import { applyPushOutcome, queuePendingPush } from '../../shared/media-hub/reconcileQueue'
+import {
+  applyPushOutcome,
+  queuePendingPush,
+  withPushedRemoteState
+} from '../../shared/media-hub/reconcileQueue'
 import { airingStatus, continueWatchingList } from './core'
 import { catalogData, metadata } from './catalog'
 import { getDatabase } from './dbState'
@@ -342,6 +346,8 @@ async function pushPendingToServices(): Promise<Set<string>> {
 
   const confirmed = new Set<string>()
   const failed = new Set<string>()
+  /** id -> the value a successful request actually sent. */
+  const pushedValue = new Map<string, boolean>()
   // Disagreements that resolved themselves locally while the decision sat
   // in the queue — nothing to send, but the entry is still done with.
   const settled = new Set<string>()
@@ -386,7 +392,16 @@ async function pushPendingToServices(): Promise<Set<string>> {
         body: JSON.stringify(batchHistoryPayload(items.map((item) => ({ item }))))
       })
       const unmatched = new Set(unmatchedCatalogIds(response, items))
-      for (const entry of group) (unmatched.has(entry.id) ? failed : confirmed).add(entry.id)
+      for (const entry of group) {
+        if (unmatched.has(entry.id)) {
+          failed.add(entry.id)
+          continue
+        }
+        confirmed.add(entry.id)
+        // What the remote side now holds, because this request just put
+        // it there — the one thing about it we know first-hand.
+        pushedValue.set(entry.id, watched)
+      }
       if (unmatched.size) error = 'Simkl did not find a match.'
     } catch (caught) {
       logError(`reconcile:push:${pathname}`, caught)
@@ -443,13 +458,26 @@ async function pushPendingToServices(): Promise<Set<string>> {
     [...confirmed, ...settled],
     failed
   )
-  writePendingPushes(remaining)
+
+  // Entries that were pushed and stayed queued now know something new
+  // about the remote side — see withPushedRemoteState.
+  const persisted = writePendingPushes(withPushedRemoteState(remaining, pushedValue))
+  if (!persisted) {
+    // The pushes themselves stand (they are what the report says);
+    // what could not be written down is which of them are now done.
+    // Worst case they are pushed again on a later launch, which both
+    // services take idempotently.
+    logError('reconcile:queue-write', new Error('Could not record the outcome of the sync batch.'))
+  }
 
   const titleFor = (id: string): string => queue.find((x) => x.id === id)?.title || id
   const report: ReconcileSyncReport = {
     pushed: [...confirmed].map(titleFor),
     retrying: remaining.filter((entry) => failed.has(entry.id)).map((entry) => entry.title),
-    abandoned: abandoned.map((entry) => entry.title),
+    // Only true if the write above stuck: otherwise these are still on
+    // disk with their old attempt counts and will be retried, so saying
+    // they were given up on would be the opposite of what happens.
+    abandoned: persisted ? abandoned.map((entry) => entry.title) : [],
     ...(error ? { error } : {})
   }
   if (report.pushed.length || report.retrying.length || report.abandoned.length) {

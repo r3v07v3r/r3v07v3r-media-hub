@@ -10,7 +10,11 @@
 
 import assert from 'node:assert'
 import type { PendingWatchStatusPush } from '../src/shared/media-hub/types'
-import { applyPushOutcome, queuePendingPush } from '../src/shared/media-hub/reconcileQueue'
+import {
+  applyPushOutcome,
+  queuePendingPush,
+  withPushedRemoteState
+} from '../src/shared/media-hub/reconcileQueue'
 import { batchHistoryPayload, unmatchedCatalogIds } from '../src/main/media-hub/simkl'
 
 let pass = 0
@@ -94,6 +98,28 @@ check('entries queued during a flush keep their untouched state', () => {
   const arrivedLate = entry({ id: 'tt0770828', title: 'Man of Steel' })
   const { queue } = applyPushOutcome([entry(), arrivedLate], ['tt4877122'], [])
   assert.deepEqual(queue, [arrivedLate])
+})
+
+check('an entry that was pushed but stayed queued learns the new remote state', () => {
+  // The push landed, then the local side moved underneath it before the
+  // response came back, so the entry is kept rather than confirmed. If
+  // it still claimed the remote was unwatched, the next flush would see
+  // local unwatched too, call that agreement, and drop the decision —
+  // leaving the title watched on Simkl with nothing left to undo it.
+  const kept = withPushedRemoteState(
+    [entry({ remoteWatched: false })],
+    new Map([['tt4877122', true]])
+  )
+  assert.equal(kept[0].remoteWatched, true)
+})
+
+check('leaves entries nothing was pushed for exactly as they are', () => {
+  const untouched = [entry({ remoteWatched: false })]
+  assert.deepEqual(withPushedRemoteState(untouched, new Map()), untouched)
+  // Same object identity when the push agreed with what was recorded —
+  // nothing new was learned.
+  const agreed = withPushedRemoteState(untouched, new Map([['tt4877122', false]]))
+  assert.equal(agreed[0], untouched[0])
 })
 
 // --- batched payloads ------------------------------------------------------
