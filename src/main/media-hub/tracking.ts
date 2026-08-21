@@ -201,11 +201,16 @@ function abandonedReconcileIds(): Set<string> {
   return new Set(stored.ids)
 }
 
-function addAbandonedReconcileId(id: string): void {
+/** Reports whether the suppression actually stuck, on the same
+ *  read-it-back terms as writePendingPushes — a title can only be
+ *  treated as given up on once the record saying so exists, or the pass
+ *  that reports it goes straight on to ask about it again. */
+function addAbandonedReconcileId(id: string): boolean {
   const ids = abandonedReconcileIds()
   ids.add(id)
   const record: AbandonedRecord = { account: simklAccountMark(), ids: [...ids] }
   getDatabase().putCache(RECONCILE_ABANDONED_KEY, record, RECONCILE_IGNORED_TTL_MS)
+  return abandonedReconcileIds().has(id)
 }
 
 /** Decisions someone has already made ("keep local") that haven't been
@@ -493,20 +498,26 @@ async function pushPendingToServices(): Promise<Set<string>> {
     failed
   )
 
+  // Suppression BEFORE the queue write, not after. Giving up on a push
+  // and then asking about the same title again — in this very pass,
+  // since the diff that follows a check's flush would find it unchanged
+  // and surface it — is the nagging loop this queue exists to end, with
+  // the added insult of having just said it was given up on. So a title
+  // is only let go of once the record saying so exists; one that can't
+  // be written stays in the queue, where being queued suppresses it
+  // anyway and a later flush can try again. Five failed attempts is
+  // enough to stop asking; the store's 90-day expiry re-opens it.
+  const letGo: PendingWatchStatusPush[] = []
+  const stillHeld: PendingWatchStatusPush[] = []
+  for (const entry of abandoned) {
+    ;(addAbandonedReconcileId(entry.id) ? letGo : stillHeld).push(entry)
+  }
+
   // Entries that were pushed and stayed queued now know something new
   // about the remote side — see withPushedRemoteState.
-  const persisted = writePendingPushes(withPushedRemoteState(remaining, pushedValue))
-  // Giving up on a push and then asking about the same title again — in
-  // this very pass, since the diff that follows a check's flush would
-  // find it unchanged and surface it — is the nagging loop this queue
-  // exists to end, now with the added insult of having just said it was
-  // given up on. Five failed attempts is enough to stop asking; the
-  // ignore list's own 90-day expiry is what eventually re-opens the
-  // question. Only once the outcome actually persisted, though:
-  // otherwise these entries are still queued and not abandoned at all.
-  if (persisted) {
-    for (const entry of abandoned) addAbandonedReconcileId(entry.id)
-  } else {
+  const kept = withPushedRemoteState([...remaining, ...stillHeld], pushedValue)
+  const persisted = writePendingPushes(kept)
+  if (!persisted) {
     // The pushes themselves stand (they are what the report says);
     // what could not be written down is which of them are now done.
     // Worst case they are pushed again on a later launch, which both
@@ -514,14 +525,17 @@ async function pushPendingToServices(): Promise<Set<string>> {
     logError('reconcile:queue-write', new Error('Could not record the outcome of the sync batch.'))
   }
 
+  // Reported from what is actually on disk: if the write above didn't
+  // stick, the OLD queue is still there — nothing was let go of, and
+  // every failure in it will be tried again. Saying otherwise would
+  // describe a batch that didn't happen, and leaving those titles out
+  // of both lists would say nothing about them at all.
+  const onDisk = persisted ? kept : queue
   const titleFor = (id: string): string => queue.find((x) => x.id === id)?.title || id
   const report: ReconcileSyncReport = {
     pushed: [...confirmed].map(titleFor),
-    retrying: remaining.filter((entry) => failed.has(entry.id)).map((entry) => entry.title),
-    // Only true if the write above stuck: otherwise these are still on
-    // disk with their old attempt counts and will be retried, so saying
-    // they were given up on would be the opposite of what happens.
-    abandoned: persisted ? abandoned.map((entry) => entry.title) : [],
+    retrying: onDisk.filter((entry) => failed.has(entry.id)).map((entry) => entry.title),
+    abandoned: persisted ? letGo.map((entry) => entry.title) : [],
     ...(error ? { error } : {})
   }
   if (report.pushed.length || report.retrying.length || report.abandoned.length) {
