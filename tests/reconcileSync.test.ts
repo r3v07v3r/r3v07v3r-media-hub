@@ -31,7 +31,7 @@ function entry(overrides: Partial<PendingWatchStatusPush> = {}): PendingWatchSta
     type: 'movie',
     title: 'Split',
     year: '2016',
-    watched: true,
+    remoteWatched: false,
     attempts: 0,
     ...overrides
   }
@@ -43,18 +43,29 @@ check('queues a decision', () => {
   const queue = queuePendingPush([], entry())
   assert.equal(queue.length, 1)
   assert.equal(queue[0].id, 'tt4877122')
-  assert.equal(queue[0].watched, true)
+  assert.equal(queue[0].remoteWatched, false)
 })
 
 check('re-deciding the same title replaces it and re-arms its attempts', () => {
   // A push that never landed lets the title resurface for a second
   // ruling — that must not leave two entries fighting over one id, nor
   // inherit the attempt budget the earlier ruling had already burned.
-  const stale = entry({ attempts: 3, watched: false })
-  const queue = queuePendingPush([stale], entry({ watched: true }))
+  const stale = entry({ attempts: 3, remoteWatched: true })
+  const queue = queuePendingPush([stale], entry({ remoteWatched: false }))
   assert.equal(queue.length, 1)
   assert.equal(queue[0].attempts, 0)
-  assert.equal(queue[0].watched, true)
+  assert.equal(queue[0].remoteWatched, false)
+})
+
+check('records what the remote said, not what the local side said', () => {
+  // The local value is deliberately NOT snapshotted: it can change
+  // between the click and a delayed or retried push, and the flush is
+  // what re-reads it (see tracking.ts's pushPendingToServices). A queue
+  // entry that carried a stale `watched: true` would push the exact
+  // opposite of local truth once someone unmarked the title.
+  const queued = queuePendingPush([], entry({ remoteWatched: false }))[0]
+  assert.equal('watched' in queued, false)
+  assert.equal(queued.remoteWatched, false)
 })
 
 check('a confirmed push leaves the queue', () => {

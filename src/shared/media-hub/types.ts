@@ -396,9 +396,14 @@ export interface PendingWatchStatusPush {
   type: MediaKind
   title: string
   year: string
-  /** The local truth being pushed out: `true` adds the title to the
-   *  services' watched history, `false` removes it. */
-  watched: boolean
+  /** What the REMOTE side said when the decision was made. The local
+   *  side is deliberately not snapshotted here: "keep local" is a ruling
+   *  about which side wins, not a copy of a value, and the value can
+   *  still change before a delayed or retried push goes out (queue a
+   *  watched movie while offline, unmark it an hour later). The flush
+   *  re-reads local history for the value to send, and uses this only to
+   *  spot a disagreement that has since resolved itself. */
+  remoteWatched: boolean
   /** Failed flush attempts so far — see PENDING_PUSH_MAX_ATTEMPTS. */
   attempts: number
 }

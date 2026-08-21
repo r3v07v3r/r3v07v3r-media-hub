@@ -213,6 +213,30 @@ function writePendingPushes(queue: PendingWatchStatusPush[]): void {
   getDatabase().putCache(RECONCILE_PENDING_KEY, queue, RECONCILE_PENDING_TTL_MS)
 }
 
+/**
+ * Drops every queued decision, and any batch timer waiting to send them.
+ * Called whenever the connected Simkl account changes — signing out, or
+ * authorizing a different one — because these entries are decisions
+ * about ONE account's history and this queue has no way to tell two
+ * accounts apart (nothing here persists a Simkl user identity). Left in
+ * place, a decision queued by account A would be delivered with account
+ * B's token on the next flush, editing the watch history of whoever
+ * happened to sign in next.
+ *
+ * Dropping rather than trying to keep them is the safe direction: the
+ * cost is that a title someone already ruled on gets asked about once
+ * more, since the next check recomputes the disagreement from scratch.
+ * Writing to the wrong person's account has no equivalent undo.
+ */
+function clearPendingPushes(): void {
+  if (flushTimer) {
+    clearTimeout(flushTimer)
+    flushTimer = null
+  }
+  flushAgain = false
+  writePendingPushes([])
+}
+
 function pushItemFor(entry: PendingWatchStatusPush): SimklPushItem {
   return { id: entry.id, type: entry.type, title: entry.title, year: entry.year }
 }
@@ -247,13 +271,38 @@ async function pushPendingToServices(): Promise<Set<string>> {
 
   const confirmed = new Set<string>()
   const failed = new Set<string>()
+  // Disagreements that resolved themselves locally while the decision sat
+  // in the queue — nothing to send, but the entry is still done with.
+  const settled = new Set<string>()
   let error: string | undefined
+
+  // The value to send is read HERE, not at decision time. Someone can
+  // rule "keep local" while offline and then change that very state
+  // before the push ever goes out; sending the stale snapshot would
+  // write the exact opposite of the local truth this pass exists to
+  // defend. Presence in history is what "watched" means for a movie,
+  // which is all this pass ever queues (see the header comment).
+  const locallyWatched = new Set(
+    getDatabase()
+      .history()
+      .map((entry) => String(entry.id))
+  )
+
+  // Local has since come round to what the remote already said, so the
+  // two sides now agree on their own. Pushing anyway would be a no-op at
+  // best and — for a removal Simkl has nothing to remove — an unmatched
+  // response that retries until the attempt cap.
+  const sendable = queue.filter((entry) => {
+    if (locallyWatched.has(entry.id) !== entry.remoteWatched) return true
+    settled.add(entry.id)
+    return false
+  })
 
   for (const [watched, pathname] of [
     [true, '/sync/history'],
     [false, '/sync/history/remove']
   ] as const) {
-    const group = queue.filter((entry) => entry.watched === watched)
+    const group = sendable.filter((entry) => locallyWatched.has(entry.id) === watched)
     if (!group.length) continue
     const items = group.map(pushItemFor)
     try {
@@ -290,7 +339,11 @@ async function pushPendingToServices(): Promise<Set<string>> {
   // Re-read rather than reusing `queue` — anything queued while the
   // requests above were in flight belongs to the next flush, not this
   // one's verdict.
-  const { queue: remaining, abandoned } = applyPushOutcome(pendingPushes(), confirmed, failed)
+  const { queue: remaining, abandoned } = applyPushOutcome(
+    pendingPushes(),
+    [...confirmed, ...settled],
+    failed
+  )
   writePendingPushes(remaining)
 
   const titleFor = (id: string): string => queue.find((x) => x.id === id)?.title || id
@@ -567,7 +620,7 @@ export function registerTrackingIpc(): void {
           type: discrepancy.type,
           title: discrepancy.title,
           year: discrepancy.year,
-          watched: discrepancy.localWatched,
+          remoteWatched: discrepancy.remoteWatched,
           attempts: 0
         })
       )
@@ -691,6 +744,13 @@ export function registerTrackingIpc(): void {
       const s = readSettings()
       s.simklAccessToken = encrypt(result.access_token)
       writeSettings(s)
+      // A fresh authorization can be a different account than the one
+      // whose decisions are sitting in the queue, and nothing here can
+      // tell the two apart — see clearPendingPushes. Re-authorizing the
+      // SAME account pays the same price (its queue is dropped and those
+      // titles come back on the next check), which is the acceptable
+      // half of that trade.
+      clearPendingPushes()
       const user = await simklRequest<Record<string, unknown>>('/users/settings', {
         method: 'POST',
         body: '{}'
@@ -708,6 +768,7 @@ export function registerTrackingIpc(): void {
     const s = readSettings()
     delete s.simklAccessToken
     writeSettings(s)
+    clearPendingPushes()
     return { ok: true }
   })
 
