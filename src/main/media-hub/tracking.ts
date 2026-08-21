@@ -178,6 +178,36 @@ function addIgnoredReconcileId(id: string): void {
   getDatabase().putCache(RECONCILE_IGNORED_KEY, [...ids], RECONCILE_IGNORED_TTL_MS)
 }
 
+/** Titles this app gave up trying to push, after enough failed attempts
+ *  that asking again would just be nagging (see PENDING_PUSH_MAX_ATTEMPTS).
+ *
+ *  Kept apart from the ignore list above, and scoped to an account,
+ *  because the two are different kinds of fact. "Ignore" is a person
+ *  saying stop asking me about this title, which is true of the title
+ *  whichever account happens to be connected. Giving up is something
+ *  that happened between this app and ONE account — another account has
+ *  never been asked, and suppressing the title there would hide a
+ *  disagreement nobody has ruled on. Same 90-day expiry either way. */
+const RECONCILE_ABANDONED_KEY = 'reconcile:abandoned:v1'
+
+interface AbandonedRecord {
+  account: string
+  ids: string[]
+}
+
+function abandonedReconcileIds(): Set<string> {
+  const stored = getDatabase().getCache<AbandonedRecord>(RECONCILE_ABANDONED_KEY)
+  if (!stored?.ids?.length || stored.account !== simklAccountMark()) return new Set()
+  return new Set(stored.ids)
+}
+
+function addAbandonedReconcileId(id: string): void {
+  const ids = abandonedReconcileIds()
+  ids.add(id)
+  const record: AbandonedRecord = { account: simklAccountMark(), ids: [...ids] }
+  getDatabase().putCache(RECONCILE_ABANDONED_KEY, record, RECONCILE_IGNORED_TTL_MS)
+}
+
 /** Decisions someone has already made ("keep local") that haven't been
  *  confirmed on every connected service yet. Persisted for the same
  *  reason as the ignored list above and with the same TTL: it's a record
@@ -475,7 +505,7 @@ async function pushPendingToServices(): Promise<Set<string>> {
   // question. Only once the outcome actually persisted, though:
   // otherwise these entries are still queued and not abandoned at all.
   if (persisted) {
-    for (const entry of abandoned) addIgnoredReconcileId(entry.id)
+    for (const entry of abandoned) addAbandonedReconcileId(entry.id)
   } else {
     // The pushes themselves stand (they are what the report says);
     // what could not be written down is which of them are now done.
@@ -538,6 +568,9 @@ function scheduleFlush(): void {
  *  already in agreement and never surfaced. */
 async function computeMovieDiscrepancies(): Promise<WatchStatusDiscrepancy[]> {
   const ignored = ignoredReconcileIds()
+  // Titles this app has stopped trying to push for the connected
+  // account — see addAbandonedReconcileId.
+  const givenUpOn = abandonedReconcileIds()
   // Titles whose ruling is already made and merely waiting on (or
   // retrying) its push. Surfacing one of these would be asking the same
   // question a second time about something nobody changed their mind on.
@@ -554,7 +587,7 @@ async function computeMovieDiscrepancies(): Promise<WatchStatusDiscrepancy[]> {
   const ids = new Set([...localMovies.keys(), ...remoteMovies.keys()])
   const out: WatchStatusDiscrepancy[] = []
   for (const id of ids) {
-    if (ignored.has(id) || decided.has(id)) continue
+    if (ignored.has(id) || givenUpOn.has(id) || decided.has(id)) continue
     const local = localMovies.has(id)
     const remote = remoteMovies.has(id)
     if (local === remote) continue
@@ -755,6 +788,13 @@ export function registerTrackingIpc(): void {
       // burst of "keep local" clicks go out as ONE batched request per
       // service (see PENDING_FLUSH_DELAY_MS), with the outcome reported
       // over trackingReconcileSync rather than swallowed.
+      // Nothing to deliver this to. Written down anyway it would be
+      // stamped with an empty account, sit through a flush that exits
+      // silently for want of a token, and be dropped the moment anyone
+      // authorized — a choice gone with nobody told, which is the whole
+      // failure this queue was built to stop. Refusing it puts the row
+      // back with a message instead.
+      if (!simklCredentials().accessToken) return { ok: true, queued: false }
       const recorded = writePendingPushes(
         queuePendingPush(pendingPushes(), {
           id: discrepancy.id,
