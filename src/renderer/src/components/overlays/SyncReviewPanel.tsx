@@ -11,7 +11,11 @@ import styles from './SyncReviewPanel.module.css'
  *  applied automatically. Each row is resolved independently: picking
  *  "Keep local"/"Use Simkl" pushes that value to the losing side, and
  *  "Ignore" just drops the item from future checks without changing
- *  either side. */
+ *  either side. "Keep local" is recorded before it is sent, and a burst
+ *  of them goes out as one batched request per service a few seconds
+ *  after the last click — so working down this list is one push, and a
+ *  row that leaves stays gone even if that push has to be retried on a
+ *  later launch (see tracking.ts's pending-push queue). */
 export function SyncReviewPanel() {
   const { syncReviewOpen, setSyncReviewOpen, syncDiscrepancies, resolveSyncDiscrepancy } =
     useAppState()

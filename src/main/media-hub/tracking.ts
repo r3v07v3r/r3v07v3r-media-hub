@@ -21,8 +21,11 @@ import type {
   HomePersonalizedResult,
   MarkWatchedResult,
   PlaybackPositionResult,
+  PendingWatchStatusPush,
   ReconcileCheckResult,
   ReconcileResolution,
+  ReconcileResolveResult,
+  ReconcileSyncReport,
   SimklPinStart,
   SimklPollResult,
   SimklStatus,
@@ -31,6 +34,7 @@ import type {
   WatchStatusDiscrepancy
 } from '../../shared/media-hub/types'
 import { MEDIA_HUB_CHANNELS } from '../../shared/media-hub/ipc-channels'
+import { applyPushOutcome, queuePendingPush } from '../../shared/media-hub/reconcileQueue'
 import { airingStatus, continueWatchingList } from './core'
 import { catalogData, metadata } from './catalog'
 import { getDatabase } from './dbState'
@@ -39,11 +43,15 @@ import { handle } from './ipcGuard'
 import { logError } from './logger'
 import { pushMalProgress } from './malSync'
 import { encrypt, readSettings, simklCredentials, writeSettings } from './settingsStore'
+import { sendToRenderer } from './rendererBridge'
 import {
+  batchHistoryPayload,
   historyPayload,
   scrobblePayload,
   seasonHistoryPayload,
+  unmatchedCatalogIds,
   type PlaybackPosition,
+  type SimklHistoryResponse,
   type SimklPushItem
 } from './simkl'
 import {
@@ -165,12 +173,181 @@ function addIgnoredReconcileId(id: string): void {
   getDatabase().putCache(RECONCILE_IGNORED_KEY, [...ids], RECONCILE_IGNORED_TTL_MS)
 }
 
+/** Decisions someone has already made ("keep local") that haven't been
+ *  confirmed on every connected service yet. Persisted for the same
+ *  reason as the ignored list above and with the same TTL: it's a record
+ *  of what a person decided, not a rate limit, and a decision has to
+ *  outlive a failed push or the app being closed — otherwise the exact
+ *  titles they already ruled on come back on the next launch, which is
+ *  the bug this queue exists to end. */
+const RECONCILE_PENDING_KEY = 'reconcile:pending:v1'
+const RECONCILE_PENDING_TTL_MS = 90 * 24 * 60 * 60 * 1000
+
+/** How long a "keep local" click waits for the clicks after it before the
+ *  queue is flushed. Working through a review list is a burst of clicks a
+ *  second or two apart, so this collapses the whole list into ONE request
+ *  per service instead of one per row, without ever asking the person to
+ *  press a separate "apply" button — the batch closes itself. Nothing is
+ *  lost if the app quits mid-window: the queue is on disk, and the next
+ *  reconcile check flushes it. */
+const PENDING_FLUSH_DELAY_MS = 3000
+
+let flushTimer: NodeJS.Timeout | null = null
+let flushInFlight: Promise<Set<string>> | null = null
+/** Set when a decision is made while a flush is already in flight. That
+ *  flush snapshotted the queue before this decision existed and will
+ *  neither push nor report it, and the single-flight guard below means
+ *  the timer would otherwise just hand back the in-flight promise and
+ *  drop the new decision until some later launch — so it re-arms once
+ *  the current flush is done. Only a new DECISION sets this, never a
+ *  failed push: a failure stays queued for the next reconcile check
+ *  rather than spinning the batch timer against a service that is
+ *  already refusing it. */
+let flushAgain = false
+
+function pendingPushes(): PendingWatchStatusPush[] {
+  return getDatabase().getCache<PendingWatchStatusPush[]>(RECONCILE_PENDING_KEY) || []
+}
+
+function writePendingPushes(queue: PendingWatchStatusPush[]): void {
+  getDatabase().putCache(RECONCILE_PENDING_KEY, queue, RECONCILE_PENDING_TTL_MS)
+}
+
+function pushItemFor(entry: PendingWatchStatusPush): SimklPushItem {
+  return { id: entry.id, type: entry.type, title: entry.title, year: entry.year }
+}
+
+/**
+ * Sends every queued decision out to every connected tracking service, as
+ * one batched request per direction (add vs. remove) rather than one per
+ * title, and folds the results back into the queue.
+ *
+ * "Confirmed" is deliberately stricter than "the request didn't throw":
+ * Simkl answers 200 for a push it never actually matched and reports the
+ * casualties in `not_found` (see unmatchedCatalogIds), so a title listed
+ * there stays queued for a retry instead of being quietly declared synced.
+ * MAL is pushed for every otherwise-confirmed entry too — a no-op today,
+ * since this pass only ever surfaces movies and pushMalProgress ignores
+ * everything that isn't a Kitsu-id'd anime, but a MAL failure counts as a
+ * failure for that entry rather than being swallowed, so "synced" always
+ * means synced everywhere. Re-pushing on a later retry is safe: both
+ * services take these as idempotent set-to-this-state writes.
+ *
+ * Returns the ids confirmed during THIS flush, so a check running right
+ * after one doesn't re-report a title that was pushed seconds ago and
+ * that Simkl's own all-items view may not reflect yet.
+ */
+async function pushPendingToServices(): Promise<Set<string>> {
+  const queue = pendingPushes()
+  if (!queue.length) return new Set()
+  // Not connected — keep everything queued rather than failing attempts
+  // against a service that was never asked. Being signed out isn't a push
+  // that went wrong, and shouldn't burn this entry's attempt budget.
+  if (!simklCredentials().accessToken) return new Set()
+
+  const confirmed = new Set<string>()
+  const failed = new Set<string>()
+  let error: string | undefined
+
+  for (const [watched, pathname] of [
+    [true, '/sync/history'],
+    [false, '/sync/history/remove']
+  ] as const) {
+    const group = queue.filter((entry) => entry.watched === watched)
+    if (!group.length) continue
+    const items = group.map(pushItemFor)
+    try {
+      const response = await simklRequest<SimklHistoryResponse>(pathname, {
+        method: 'POST',
+        body: JSON.stringify(batchHistoryPayload(items.map((item) => ({ item }))))
+      })
+      const unmatched = new Set(unmatchedCatalogIds(response, items))
+      for (const entry of group) (unmatched.has(entry.id) ? failed : confirmed).add(entry.id)
+      if (unmatched.size) error = 'Simkl did not find a match.'
+    } catch (caught) {
+      logError(`reconcile:push:${pathname}`, caught)
+      error = (caught as Error).message
+      for (const entry of group) failed.add(entry.id)
+    }
+  }
+
+  for (const entry of queue) {
+    if (!confirmed.has(entry.id)) continue
+    const result = await pushMalProgress({ id: entry.id, type: entry.type })
+    if (!result.malError) continue
+    error = result.malError
+    confirmed.delete(entry.id)
+    failed.add(entry.id)
+  }
+
+  // The pushes above bypass simklWatchedHistory()'s own request path, so
+  // its 20-minute cache never learns about them; left alone, the next
+  // check compares against the stale pre-push snapshot and re-reports
+  // exactly what was just resolved. On failure, leave it: it's still an
+  // accurate reflection of Simkl.
+  if (confirmed.size) invalidateSimklWatchedCache()
+
+  // Re-read rather than reusing `queue` — anything queued while the
+  // requests above were in flight belongs to the next flush, not this
+  // one's verdict.
+  const { queue: remaining, abandoned } = applyPushOutcome(pendingPushes(), confirmed, failed)
+  writePendingPushes(remaining)
+
+  const titleFor = (id: string): string => queue.find((x) => x.id === id)?.title || id
+  const report: ReconcileSyncReport = {
+    pushed: [...confirmed].map(titleFor),
+    retrying: remaining.filter((entry) => failed.has(entry.id)).map((entry) => entry.title),
+    abandoned: abandoned.map((entry) => entry.title),
+    ...(error ? { error } : {})
+  }
+  if (report.pushed.length || report.retrying.length || report.abandoned.length) {
+    sendToRenderer(MEDIA_HUB_CHANNELS.trackingReconcileSync, report)
+  }
+  return confirmed
+}
+
+/** Single-flight wrapper — the debounce timer and a reconcile check can
+ *  both ask for a flush, and two overlapping ones would push the same
+ *  queue twice and race on writing it back. */
+function flushPendingPushes(): Promise<Set<string>> {
+  if (flushInFlight) return flushInFlight
+  const run = pushPendingToServices()
+    .catch((error) => {
+      logError('reconcile:flush', error)
+      return new Set<string>()
+    })
+    .finally(() => {
+      flushInFlight = null
+      if (!flushAgain) return
+      flushAgain = false
+      scheduleFlush()
+    })
+  flushInFlight = run
+  return run
+}
+
+function scheduleFlush(): void {
+  if (flushInFlight) {
+    flushAgain = true
+    return
+  }
+  if (flushTimer) clearTimeout(flushTimer)
+  flushTimer = setTimeout(() => {
+    flushTimer = null
+    void flushPendingPushes()
+  }, PENDING_FLUSH_DELAY_MS)
+}
+
 /** The actual diff. Local and remote are each reduced to "which movie ids
  *  does this side consider watched," and only ids where the two sides
  *  disagree are returned — an id watched (or not) on both sides is
  *  already in agreement and never surfaced. */
 async function computeMovieDiscrepancies(): Promise<WatchStatusDiscrepancy[]> {
   const ignored = ignoredReconcileIds()
+  // Titles whose ruling is already made and merely waiting on (or
+  // retrying) its push. Surfacing one of these would be asking the same
+  // question a second time about something nobody changed their mind on.
+  const decided = new Set(pendingPushes().map((entry) => entry.id))
   const localMovies = new Map(
     getDatabase()
       .history()
@@ -183,7 +360,7 @@ async function computeMovieDiscrepancies(): Promise<WatchStatusDiscrepancy[]> {
   const ids = new Set([...localMovies.keys(), ...remoteMovies.keys()])
   const out: WatchStatusDiscrepancy[] = []
   for (const id of ids) {
-    if (ignored.has(id)) continue
+    if (ignored.has(id) || decided.has(id)) continue
     const local = localMovies.has(id)
     const remote = remoteMovies.has(id)
     if (local === remote) continue
@@ -336,54 +513,72 @@ export function registerTrackingIpc(): void {
   handle<undefined, ReconcileCheckResult>(MEDIA_HUB_CHANNELS.trackingReconcileCheck, async () => {
     if (!simklCredentials().accessToken) return { ran: false, discrepancies: [] }
     const db = getDatabase()
+    // Ahead of the cooldown, and ahead of any diffing: a decision left
+    // over from a previous session (the app was closed before its batch
+    // went out, or the push failed, or this machine was offline) gets
+    // another attempt now, while the queue's own attempt cap keeps a
+    // permanently-failing entry from being retried forever.
+    const justPushed = await flushPendingPushes()
     if (db.getCache(RECONCILE_COOLDOWN_KEY)) return { ran: false, discrepancies: [] }
     db.putCache(RECONCILE_COOLDOWN_KEY, true, RECONCILE_COOLDOWN_MS)
     try {
-      return { ran: true, discrepancies: await computeMovieDiscrepancies() }
+      const discrepancies = await computeMovieDiscrepancies()
+      // Anything confirmed moments ago is settled, whatever Simkl's
+      // all-items view says — that read can lag its own write, and
+      // re-asking about a title someone just resolved is the exact
+      // nagging this whole path exists to stop.
+      return { ran: true, discrepancies: discrepancies.filter((d) => !justPushed.has(d.id)) }
     } catch (error) {
       logError('tracking:reconcile', error)
       return { ran: true, discrepancies: [] }
     }
   })
 
-  handle<{ discrepancy: WatchStatusDiscrepancy; resolution: ReconcileResolution }, { ok: true }>(
-    MEDIA_HUB_CHANNELS.trackingReconcileResolve,
-    async (_e, { discrepancy, resolution }) => {
-      if (resolution === 'ignore') {
-        addIgnoredReconcileId(discrepancy.id)
-        return { ok: true }
-      }
-      const item: SimklPushItem = {
-        id: discrepancy.id,
-        type: discrepancy.type,
-        title: discrepancy.title,
-        year: discrepancy.year
-      }
-      const db = getDatabase()
-      if (resolution === 'use-local') {
-        // Local's answer is the one to keep — push it to Simkl so the
-        // remote side matches instead of drifting further.
-        const result = discrepancy.localWatched
-          ? await syncSimklHistory('/sync/history', historyPayload(item))
-          : await syncSimklHistory('/sync/history/remove', historyPayload(item))
-        // The push above bypasses simklWatchedHistory()'s own request path,
-        // so its 20-minute cache never learns about it. Left alone, the next
-        // reconcile check keeps comparing against the stale pre-push
-        // snapshot and re-reports the exact discrepancy this just resolved
-        // — every launch, until the cache happens to expire on its own. On
-        // failure, leave the cache as-is: it's still an accurate reflection
-        // of Simkl, and the discrepancy correctly resurfacing is how a
-        // failed resolve is meant to be retried (see AppStateContext's
-        // resolveSyncDiscrepancy comment).
-        if (result.simklSynced) invalidateSimklWatchedCache()
-      } else {
-        // Simkl's answer is the one to keep — update the local record to match.
-        if (discrepancy.remoteWatched) db.markWatched(item)
-        else db.unmarkWatched(item.id)
-      }
-      return { ok: true }
+  handle<
+    { discrepancy: WatchStatusDiscrepancy; resolution: ReconcileResolution },
+    ReconcileResolveResult
+  >(MEDIA_HUB_CHANNELS.trackingReconcileResolve, async (_e, { discrepancy, resolution }) => {
+    if (resolution === 'ignore') {
+      addIgnoredReconcileId(discrepancy.id)
+      return { ok: true, queued: false }
     }
-  )
+    const item: SimklPushItem = {
+      id: discrepancy.id,
+      type: discrepancy.type,
+      title: discrepancy.title,
+      year: discrepancy.year
+    }
+    const db = getDatabase()
+    if (resolution === 'use-local') {
+      // Local's answer is the one to keep — so it has to reach every
+      // connected service, not just leave the row. This used to fire one
+      // Simkl POST here and return { ok: true } no matter what came back,
+      // which is how a title could disappear from the review list and be
+      // asked about again on the very next launch: the push had failed
+      // (or was accepted-but-unmatched) and nothing recorded either the
+      // decision or the failure. Instead, the decision is written down
+      // first and pushed on the queue's own schedule — which also lets a
+      // burst of "keep local" clicks go out as ONE batched request per
+      // service (see PENDING_FLUSH_DELAY_MS), with the outcome reported
+      // over trackingReconcileSync rather than swallowed.
+      writePendingPushes(
+        queuePendingPush(pendingPushes(), {
+          id: discrepancy.id,
+          type: discrepancy.type,
+          title: discrepancy.title,
+          year: discrepancy.year,
+          watched: discrepancy.localWatched,
+          attempts: 0
+        })
+      )
+      scheduleFlush()
+      return { ok: true, queued: true }
+    }
+    // Simkl's answer is the one to keep — update the local record to match.
+    if (discrepancy.remoteWatched) db.markWatched(item)
+    else db.unmarkWatched(item.id)
+    return { ok: true, queued: false }
+  })
 
   handle<undefined, DislikedListResult>(MEDIA_HUB_CHANNELS.dislikedList, async () => {
     return { disliked: getDatabase().disliked() }

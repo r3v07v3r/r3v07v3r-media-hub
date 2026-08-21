@@ -754,8 +754,13 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   const resolveSyncDiscrepancy = useCallback(
     (discrepancy: WatchStatusDiscrepancy, resolution: ReconcileResolution) => {
       // Optimistic — the list is meant to shrink as each item is handled,
-      // and there is no useful "undo" state to roll back to on failure;
-      // worst case, a failed resolve simply resurfaces on the next check.
+      // and there is no useful "undo" state to roll back to. A "keep
+      // local" pick is now recorded in main before this call returns and
+      // pushed out to the tracking services as a batch a few seconds
+      // later (see tracking.ts's pending queue), so the row leaving here
+      // means the decision is kept, not that the push already succeeded —
+      // the push's real outcome arrives on the onReconcileSync effect
+      // below.
       setSyncDiscrepancies((prev) => prev.filter((d) => d.id !== discrepancy.id))
       window.api?.mediaHub?.tracking
         .reconcileResolve({ discrepancy, resolution })
@@ -767,6 +772,38 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     },
     [watchedIdsResult, homeFeed]
   )
+
+  // The other half of that: a queued batch going out (or not) is the only
+  // moment anyone can find out whether their decision actually reached
+  // the services. Silence here is what let the same titles come back on
+  // every launch, so each outcome gets said out loud — including the
+  // "still retrying" case, which is genuinely fine but shouldn't look
+  // like success.
+  useEffect(() => {
+    const api = window.api?.mediaHub?.tracking
+    if (!api?.onReconcileSync) return
+    return api.onReconcileSync((report) => {
+      const list = (titles: string[]): string =>
+        titles.length === 1 ? `"${titles[0]}"` : `${titles.length} titles`
+      if (report.abandoned.length) {
+        pushNotification({
+          tone: 'error',
+          message: `Could not sync ${list(report.abandoned)} to your tracking services after several tries.${report.error ? ` ${report.error}` : ''}`
+        })
+      } else if (report.retrying.length) {
+        pushNotification({
+          tone: 'warning',
+          message: `${list(report.retrying)} could not be synced yet — this will be retried.${report.error ? ` ${report.error}` : ''}`
+        })
+      }
+      if (report.pushed.length) {
+        pushNotification({
+          tone: 'success',
+          message: `Synced ${list(report.pushed)} to your tracking services.`
+        })
+      }
+    })
+  }, [pushNotification])
 
   const cancelProfilePinPrompt = useCallback(() => setProfilePinPrompt(null), [])
 

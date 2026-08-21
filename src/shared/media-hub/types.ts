@@ -376,6 +376,47 @@ export interface ReconcileCheckResult {
 
 export type ReconcileResolution = 'use-local' | 'use-remote' | 'ignore'
 
+export interface ReconcileResolveResult {
+  ok: true
+  /** True when the decision was written to the pending-push queue rather
+   *  than applied entirely locally — i.e. a "keep local" pick, whose push
+   *  to the tracking services happens on the queue's own schedule (see
+   *  main/media-hub/tracking.ts) and reports back over
+   *  `trackingReconcileSync`, not in this reply. */
+  queued: boolean
+}
+
+/** One "keep local" decision waiting to be pushed out to every connected
+ *  tracking service. Persisted rather than held in memory, so a decision
+ *  outlives a failed push, being offline at the time, or the app being
+ *  closed before the batch went out — the whole point being that a title
+ *  someone has already ruled on never comes back to be ruled on again. */
+export interface PendingWatchStatusPush {
+  id: string
+  type: MediaKind
+  title: string
+  year: string
+  /** The local truth being pushed out: `true` adds the title to the
+   *  services' watched history, `false` removes it. */
+  watched: boolean
+  /** Failed flush attempts so far — see PENDING_PUSH_MAX_ATTEMPTS. */
+  attempts: number
+}
+
+/** Outcome of one flush of that queue, pushed to the renderer so a sync
+ *  that silently didn't happen is something the person actually hears
+ *  about instead of only finding out when the same titles reappear. */
+export interface ReconcileSyncReport {
+  /** Titles now confirmed on every connected service. */
+  pushed: string[]
+  /** Titles whose push failed this round and stay queued for a retry. */
+  retrying: string[]
+  /** Titles dropped after too many failed attempts — nothing retries these. */
+  abandoned: string[]
+  /** The most recent failure message, for the notification text. */
+  error?: string
+}
+
 // ---------------------------------------------------------------------
 // Profiles
 // ---------------------------------------------------------------------
