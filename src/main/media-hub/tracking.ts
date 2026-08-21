@@ -289,6 +289,16 @@ let flushTimer: NodeJS.Timeout | null = null
  *  stayed open in between. Separate from flushTimer so a new decision's
  *  three-second batch cannot clobber the wake-up. */
 let retryTimer: NodeJS.Timeout | null = null
+/** The pacing deadline, mirrored in memory. The persisted copy is a
+ *  cache write, and cache writes swallow their failures — so on a
+ *  read-only or full database the deadline silently vanishes, every
+ *  entry reads as retry-ready, and the wake-up arms for seconds instead
+ *  of minutes: a loop firing requests at Simkl every few seconds for as
+ *  long as the app is open, burning a decision's attempt budget on the
+ *  way. Pacing is not something to hold only as well as the disk allows.
+ *  The persisted copy is what carries it across launches; this is what
+ *  makes it true within one. */
+let retryPacingUntil = 0
 let flushInFlight: Promise<Set<string>> | null = null
 /** Bumped every time the connected Simkl account changes. A flush issues
  *  its requests one after another and simklRequest re-reads credentials
@@ -362,6 +372,7 @@ function clearPendingPushes(): void {
     clearTimeout(retryTimer)
     retryTimer = null
   }
+  retryPacingUntil = 0
   flushAgain = false
   // Disowns any flush already in the air as well as the queue on disk —
   // see accountGeneration for why the two are not the same thing.
@@ -409,18 +420,17 @@ async function pushPendingToServices(): Promise<Set<string>> {
   // A decision nobody has tried yet always goes out. One that has
   // already failed waits for the retry pacing — see RECONCILE_RETRY_KEY
   // for what each of the two cooldowns is protecting.
-  const db = getDatabase()
-  // The cooldown holds its own deadline, so a wake-up can be armed for
-  // exactly what is left of it rather than a fresh full window.
-  const retryDeadline = db.getCache<number>(RECONCILE_RETRY_KEY)
-  const retryReady = retryDeadline === null
+  // The pacing holds a deadline, so a wake-up can be armed for exactly
+  // what is left of the window rather than a fresh full one.
+  const retryDeadline = retryPacingDeadline()
+  const retryReady = retryDeadline <= Date.now()
   const attemptable = queue.filter((entry) => entry.attempts === 0 || retryReady)
   if (!attemptable.length) {
     // Everything queued is waiting on the pacing, and the check that
     // would otherwise come back to it runs once per launch — so an app
     // reopened inside the window and left open would never retry at
     // all. Arm the wake-up for the rest of the window instead.
-    scheduleRetry(retryDeadline ? retryDeadline - Date.now() : RECONCILE_RETRY_COOLDOWN_MS)
+    scheduleRetry(retryDeadline - Date.now())
     return new Set()
   }
 
@@ -498,13 +508,7 @@ async function pushPendingToServices(): Promise<Set<string>> {
 
   // Requests went out, so the pacing starts now — including for the
   // entries this flush is about to mark as having failed.
-  if (sendable.length) {
-    db.putCache(
-      RECONCILE_RETRY_KEY,
-      Date.now() + RECONCILE_RETRY_COOLDOWN_MS,
-      RECONCILE_RETRY_COOLDOWN_MS
-    )
-  }
+  if (sendable.length) startRetryPacing()
 
   // Nothing below this point is true of the account now connected: the
   // queue these results describe has already been dropped, so writing
@@ -607,10 +611,7 @@ async function pushPendingToServices(): Promise<Set<string>> {
   // queued and this flush did not send it, a wake-up is armed for the
   // earliest moment it could be. Bounded by the attempt cap — entries
   // that keep failing are let go of, and an empty queue arms nothing.
-  if (onDisk.length) {
-    const deadline = db.getCache<number>(RECONCILE_RETRY_KEY)
-    scheduleRetry(deadline ? deadline - Date.now() : PENDING_FLUSH_DELAY_MS)
-  }
+  if (onDisk.length) scheduleRetry(retryPacingDeadline() - Date.now())
   return confirmed
 }
 
@@ -634,17 +635,31 @@ function flushPendingPushes(): Promise<Set<string>> {
   return run
 }
 
+/** When the next retry is allowed: the later of what was written down
+ *  and what this session remembers. */
+function retryPacingDeadline(): number {
+  return Math.max(retryPacingUntil, getDatabase().getCache<number>(RECONCILE_RETRY_KEY) ?? 0)
+}
+
+function startRetryPacing(): void {
+  const until = Date.now() + RECONCILE_RETRY_COOLDOWN_MS
+  retryPacingUntil = until
+  getDatabase().putCache(RECONCILE_RETRY_KEY, until, RECONCILE_RETRY_COOLDOWN_MS)
+}
+
 function scheduleRetry(delayMs: number = RECONCILE_RETRY_COOLDOWN_MS): void {
   if (retryTimer) clearTimeout(retryTimer)
-  // A second past the pacing window, so the cooldown it is waiting on
-  // has definitely expired by the time this fires.
-  retryTimer = setTimeout(
-    () => {
-      retryTimer = null
-      void flushPendingPushes()
-    },
-    Math.max(0, delayMs) + 1000
-  )
+  // Every caller is asking for "when the pacing allows". A delay that
+  // isn't positive therefore means nothing is pacing this at all, which
+  // is the state that turns a wake-up into a request loop — so it waits
+  // out a full window rather than firing straight back.
+  const delay = delayMs > 0 ? delayMs : RECONCILE_RETRY_COOLDOWN_MS
+  // A second past the window, so the pacing it is waiting on has
+  // definitely elapsed by the time this fires.
+  retryTimer = setTimeout(() => {
+    retryTimer = null
+    void flushPendingPushes()
+  }, delay + 1000)
 }
 
 function scheduleFlush(): void {
