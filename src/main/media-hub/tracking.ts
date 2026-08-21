@@ -399,6 +399,11 @@ async function pushPendingToServices(): Promise<Set<string>> {
   // Not connected — keep everything queued rather than failing attempts
   // against a service that was never asked. Being signed out isn't a push
   // that went wrong, and shouldn't burn this entry's attempt budget.
+  // Nothing is armed here, and nothing needs to be: a queue only reads
+  // back at all when its stamp matches the connected account, and that
+  // stamp is derived from a token, so reaching this line with entries
+  // in hand isn't possible. Connecting an account clears the queue and
+  // a decision made without one is refused outright.
   if (!simklCredentials().accessToken) return new Set()
 
   // A decision nobody has tried yet always goes out. One that has
@@ -593,11 +598,19 @@ async function pushPendingToServices(): Promise<Set<string>> {
   if (report.pushed.length || report.retrying.length || report.abandoned.length) {
     sendToRenderer(MEDIA_HUB_CHANNELS.trackingReconcileSync, report)
   }
-  // Something is still queued and nothing else in this session will ask
-  // again — see retryTimer. Bounded by the attempt cap: an entry that
-  // keeps failing stops being reported as retrying once it is let go of,
-  // and nothing re-arms this.
-  if (report.retrying.length) scheduleRetry()
+  // Anything still queued gets a wake-up, whatever kept it there — a
+  // failed push, a decision the pacing deferred while other entries
+  // went out, or one whose local state moved while its request was in
+  // flight. Deriving this from the report instead only ever re-armed
+  // failures, and left the other two waiting for a relaunch that might
+  // be days away. The rule this is meant to hold: if something is
+  // queued and this flush did not send it, a wake-up is armed for the
+  // earliest moment it could be. Bounded by the attempt cap — entries
+  // that keep failing are let go of, and an empty queue arms nothing.
+  if (onDisk.length) {
+    const deadline = db.getCache<number>(RECONCILE_RETRY_KEY)
+    scheduleRetry(deadline ? deadline - Date.now() : PENDING_FLUSH_DELAY_MS)
+  }
   return confirmed
 }
 
