@@ -246,7 +246,15 @@
 
 .mood {
   position: relative;
-  pointer-events: auto;
+  /* The button's box is a full-height slice of the dock because that is
+     what the glow pool is measured against — NOT because all of it is a
+     control. Hit testing stays off here and comes back on .target below.
+     This matters at ordinary window heights, not just extreme ones: at
+     1440x900 the dock's band covers the lower 158px of every 243px AI
+     Picks card, and a full-cell hit target made all of that unclickable
+     while .dock's own pointer-events:none was busy promising the
+     opposite. */
+  pointer-events: none;
   /* Equal shares of the full window width, and allowed to shrink below
      content width rather than forcing the row wider than the viewport. */
   flex: 1 1 0;
@@ -255,16 +263,33 @@
   flex-direction: column;
   align-items: center;
   justify-content: flex-end;
-  gap: 14px;
-  /* The deep bottom padding is doing real work: it opens a band of empty
-     space between the labels and the window's edge for the spine and the
-     glow pool to occupy. Without it the labels sit on the bottom edge and
-     there's nothing for the light to be coming out of. */
-  padding: 0 8px 57px;
   text-align: center;
   /* Deliberately no border, background, box-shadow or backdrop-filter.
      See this file's header — the colour lives entirely in .plume. */
   transition: none;
+}
+
+/* The actual control: the icon, the word, and a generous margin around
+   them. Sized by its own content rather than by a tuned height, so it
+   tracks each breakpoint's font sizes and gaps without a second set of
+   numbers to keep in sync.
+
+   The deep bottom padding is doing real work beyond the hit area: it
+   opens a band of empty space between the labels and the window's edge
+   for the spine and the glow pool to occupy. Without it the labels sit on
+   the bottom edge and there's nothing for the light to be coming out of.
+   It belongs here rather than on .mood so the target reaches the window's
+   edge — the light below the label is part of the mood, and clicking it
+   should select the mood. */
+.target {
+  pointer-events: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  padding: 16px 20px 57px;
+  max-width: 100%;
+  min-width: 0;
 }
 
 /* The glow pool each mood's light rises from. `height: 150%` with
@@ -597,9 +622,9 @@
   .dock {
     height: 184px;
   }
-  .mood {
+  .target {
     gap: 11px;
-    padding-bottom: 25px;
+    padding: 13px 16px 25px;
   }
   .moodIcon svg {
     width: 25px;
@@ -655,7 +680,9 @@
   }
   .mood {
     flex: 0 0 132px;
-    padding-bottom: 19px;
+  }
+  .target {
+    padding: 11px 12px 19px;
   }
   .moodIcon svg {
     width: 23px;

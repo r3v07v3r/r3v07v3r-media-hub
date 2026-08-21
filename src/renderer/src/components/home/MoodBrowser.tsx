@@ -326,10 +326,15 @@ export function MoodBrowser() {
               >
                 <span className={styles.plume} aria-hidden="true" />
                 <span className={styles.riser} aria-hidden="true" />
-                <span className={styles.moodIcon} aria-hidden="true">
-                  <Icon name={mood.icon} strokeWidth={1.25} />
+                {/* Everything clickable lives in here rather than on the
+                    button's own (deliberately oversized) box — see .target
+                    in the stylesheet. */}
+                <span className={styles.target}>
+                  <span className={styles.moodIcon} aria-hidden="true">
+                    <Icon name={mood.icon} strokeWidth={1.25} />
+                  </span>
+                  <span className={styles.moodLabel}>{mood.label}</span>
                 </span>
-                <span className={styles.moodLabel}>{mood.label}</span>
               </button>
             )
           })}
