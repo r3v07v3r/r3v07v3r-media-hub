@@ -1310,8 +1310,23 @@ export function OllamaSection() {
     const api = window.api?.mediaHub?.ollama
     if (!api || saving) return
     const generation = ++probeGeneration.current
+    // Check is always a question about what is IN the field. Passing an
+    // empty address through as `undefined` made the bridge omit it, which
+    // main reads as "probe whatever is saved" — so clearing the box and
+    // pressing Check reported success and repopulated the old server's
+    // models while showing an empty address. The no-argument form is for the
+    // probe on open, which really is asking about the saved server.
+    const address = baseUrl.trim()
+    if (!address) {
+      applyProbedModels([])
+      setStatus({
+        kind: 'error',
+        message: `Enter the address of your Ollama server, e.g. ${DEFAULT_OLLAMA_BASE_URL}`
+      })
+      return
+    }
     setStatus({ kind: 'busy' })
-    const result = await api.status(baseUrl.trim() || undefined).catch(() => null)
+    const result = await api.status(address).catch(() => null)
     // Superseded by a newer check, or by the address being edited while this
     // one was out. Whatever replaced it owns the status line now.
     if (probeGeneration.current !== generation) return

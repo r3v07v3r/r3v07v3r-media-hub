@@ -347,7 +347,9 @@ function textAfterTitle(line: string, title: string): string | null {
 function reasonAfterTitle(line: string, title: string): string {
   const after = textAfterTitle(line, title)
   if (after === null) return ''
-  const tail = after.match(/^\s*(?:\(\d{4}\))?\s*[—–-]\s+(.*)$/u)
+  // Step over a closing quote and a year if either is there, the same way
+  // yearAfterTitle does — `"It" (2017) — the scary one` has both.
+  const tail = after.match(new RegExp(`^${QUOTES}?\\s*(?:\\(\\d{4}\\))?\\s*[—–-]\\s+(.*)$`, 'u'))
   return tail ? tail[1].trim() : ''
 }
 
@@ -367,7 +369,9 @@ function reasonAfterTitle(line: string, title: string): string {
  * still finds 1984.
  */
 function yearAfterTitle(text: string, title: string): number | undefined {
-  const found = text.match(new RegExp(`${titleOccurrence(title)}\\s*\\((\\d{4})\\)`, 'u'))
+  // A closing quote may sit between the two — the model wrote "It" (2017),
+  // and that year is still this title's.
+  const found = text.match(new RegExp(`${titleOccurrence(title)}${QUOTES}?\\s*\\((\\d{4})\\)`, 'u'))
   return found ? Number(found[1]) : undefined
 }
 
@@ -424,6 +428,27 @@ function namesTitleExplicitly(reply: string, title: string): boolean {
 /** True for a single word so common that a bare mention of it proves nothing. */
 function isAmbiguousTitle(title: string): boolean {
   return AMBIGUOUS_TITLE_WORDS.has(title.trim().toLowerCase())
+}
+
+/**
+ * The line on which `reply` actually names `title`, or null if it never
+ * does.
+ *
+ * This is the single place that decides which mention counts, and everything
+ * downstream — the year against the title, the reason after it — reads from
+ * the line it returns. Explicitness is judged per line rather than across
+ * the whole reply for exactly that reason: evidence has to sit with the
+ * mention it justifies, or a quote on line two ends up admitting a bare
+ * pronoun on line one.
+ */
+function namingLine(reply: string, title: string): string | null {
+  const needsProof = isAmbiguousTitle(title)
+  for (const line of reply.split('\n')) {
+    if (!mentionsTitle(line, title)) continue
+    if (needsProof && !namesTitleExplicitly(line, title)) continue
+    return line
+  }
+  return null
 }
 
 /**
@@ -509,29 +534,28 @@ export function matchRecommendation(
   const wellFormed = matchLinePrefix(firstLine, candidates)
   if (wellFormed) return wellFormed
 
-  const mentioned = longestTitleFirst(candidates).filter(
-    (item) =>
-      item.title.length >= 2 &&
-      mentionsTitle(text, item.title) &&
-      // An ordinary word needs to be marked as a title before a bare mention
-      // of it counts — see AMBIGUOUS_TITLE_WORDS.
-      (!isAmbiguousTitle(item.title) || namesTitleExplicitly(text, item.title))
-  )
+  // Each candidate paired with the line that names it, so the year and the
+  // reason are read from the SAME mention that qualified it rather than from
+  // the first one that merely contains the words. For an ambiguous title
+  // those can be different lines: "It depends on your mood." names nothing,
+  // while `I recommend "It" (2017) — the scary one.` names it twice over.
+  // Checking explicitness across the whole reply but extracting from the
+  // first mention picked the 1927 film and lost the reason.
+  const mentioned = longestTitleFirst(candidates)
+    .filter((item) => item.title.length >= 2)
+    .map((item) => ({ item, line: namingLine(text, item.title) }))
+    .filter((found): found is { item: OllamaTitleRef; line: string } => found.line !== null)
   if (!mentioned.length) return null
 
-  const title = mentioned[0].title
-  // The reason comes from the line that actually NAMES the title, not from
-  // the first line of the reply: this fallback exists to tolerate chattier,
-  // multi-line answers, and in one of those the first line is often a
-  // preamble that says nothing about the pick.
-  const namingLine = text.split('\n').find((line) => mentionsTitle(line, title)) ?? ''
+  const { item: best, line } = mentioned[0]
+  const title = best.title
   // Longest title wins, then the year picks between any remakes sharing it.
   // The year is read from directly against the title rather than from
   // anywhere on the line — a preamble's year is not the pick's year, whether
   // it sits on its own line or in the same sentence.
-  const sameTitle = mentioned.filter((item) => item.title === title)
+  const sameTitle = mentioned.filter((found) => found.item.title === title).map((f) => f.item)
   return {
-    match: narrowByYear(sameTitle, yearAfterTitle(namingLine, title)),
-    reason: reasonAfterTitle(namingLine, title)
+    match: narrowByYear(sameTitle, yearAfterTitle(line, title)),
+    reason: reasonAfterTitle(line, title)
   }
 }

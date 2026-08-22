@@ -500,6 +500,38 @@ check('does not read ordinary words as Roman numerals', () => {
   assert.equal(matchRecommendation('Dune x Arrival would be odd', FIRST_FILMS)?.match.id, 'dune')
 })
 
+check('reads an ambiguous title from the mention that proved it', () => {
+  // "It depends on your mood." names nothing; the quoted, dated mention on
+  // the next line names it twice over. Judging explicitness across the whole
+  // reply but extracting from the first mention picked the 1927 film and
+  // threw the reason away.
+  const its: OllamaTitleRef[] = [
+    { id: 'it1927', title: 'It', year: 1927 },
+    { id: 'it2017', title: 'It', year: 2017 }
+  ]
+  const picked = matchRecommendation(
+    'It depends on your mood.\nI recommend "It" (2017) — the scary one.',
+    its
+  )
+  assert.equal(picked?.match.id, 'it2017')
+  assert.equal(picked?.reason, 'the scary one.')
+})
+
+check('steps over a closing quote to reach the year and the reason', () => {
+  const its: OllamaTitleRef[] = [
+    { id: 'it1927', title: 'It', year: 1927 },
+    { id: 'it2017', title: 'It', year: 2017 }
+  ]
+  const picked = matchRecommendation('Go with "It" (1927) — the silent one.', its)
+  assert.equal(picked?.match.id, 'it1927')
+  assert.equal(picked?.reason, 'the silent one.')
+})
+
+check('an ambiguous title proved nowhere still falls back', () => {
+  const its: OllamaTitleRef[] = [{ id: 'it2017', title: 'It', year: 2017 }]
+  assert.equal(matchRecommendation('It depends on your mood.\nHard to say.', its), null)
+})
+
 check('reports no match when the model picks something not on the list', () => {
   assert.equal(matchRecommendation('Watch Interstellar.', LIBRARY), null)
   assert.equal(matchRecommendation('   ', LIBRARY), null)
