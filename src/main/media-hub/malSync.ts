@@ -7,7 +7,7 @@
 // tracking.ts (mark-watched/unmark-watched/mark-season-watched) can import
 // just `pushMalProgress` without pulling in the whole OAuth/reconciliation
 // surface — see simklClient.ts's header comment for why simklCredentials/
-// simklRequest/simklWatchedHistory are centralized elsewhere instead of
+// simklRequest/simklWatchedSnapshot are centralized elsewhere instead of
 // living here as they did in the original, to avoid an import cycle.
 //
 // The OAuth flow itself (PKCE 'plain' challenge, local-loopback redirect
@@ -37,7 +37,7 @@ import {
 } from './mal'
 import { isAllowedExternalUrl } from './security'
 import { seasonHistoryPayload } from './simkl'
-import { simklRequest, simklWatchedHistory } from './simklClient'
+import { simklRequest, simklWatchedSnapshot } from './simklClient'
 import {
   encrypt,
   malCredentials,
@@ -370,7 +370,18 @@ export function registerMalIpc(): void {
         kitsuId: await resolveKitsuIdForMal(entry.malId)
       }))
     )
-    const history = [...getDatabase().history(), ...(await simklWatchedHistory())]
+    // Simkl's watched history counts as local progress here, so a Simkl
+    // side that couldn't be read isn't a degraded comparison — it's a
+    // wrong one. Every episode this app knows about only through Simkl
+    // silently disappears from the local count, and the preview fills up
+    // with "MAL is ahead, pull these down" rows for episodes that are
+    // already watched on both sides. Better to say the comparison couldn't
+    // be made and let the person retry.
+    const remote = await simklWatchedSnapshot()
+    if (!remote.complete) {
+      throw new Error('Could not read your Simkl watch history — try again in a moment.')
+    }
+    const history = [...getDatabase().history(), ...remote.entries]
     const localProgress = localWatchedEpisodeCounts(history)
     return computeReconciliation(withKitsuIds, localProgress)
   })

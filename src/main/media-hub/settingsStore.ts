@@ -19,6 +19,7 @@
 // in dev — see ENCRYPTION_UNAVAILABLE_PREFIX below.
 
 import { app, safeStorage } from 'electron'
+import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import { MEDIA_HUB_CHANNELS } from '../../shared/media-hub/ipc-channels'
@@ -212,6 +213,48 @@ export function simklCredentials(): SimklCredentials {
     clientId: settings.simklClientId || '',
     accessToken: decrypt(settings.simklAccessToken)
   }
+}
+
+/**
+ * A stable, non-reversible mark for "the Simkl account currently
+ * connected", derived from its access token — nothing in this app
+ * persists a Simkl user id to use instead, and a truncated salted digest
+ * of a high-entropy token identifies the connection without storing
+ * anything usable as one. Empty string when nothing is connected, which
+ * every caller must treat as "matches no stored stamp" rather than as an
+ * account in its own right.
+ *
+ * The point is that anything persisted about one account is stamped with
+ * the connection it was made under and checked against this before it is
+ * used, so the safety property survives things going wrong: a clear that
+ * failed to write, a crash between signing out and signing in, a database
+ * that was read-only at the wrong moment, a request still in flight when
+ * the account changed underneath it. State that outlives its account is
+ * inert rather than dangerous. Two things rely on it — the pending-push
+ * queue in tracking.ts and the watched-history cache in simklClient.ts —
+ * which is why it lives here, alongside the credential it is derived
+ * from, rather than in either of them.
+ *
+ * Conservative in the one direction that matters: re-authorizing the
+ * SAME account mints a new token and therefore abandons that account's
+ * own stamped state, which costs a title being asked about once more.
+ * Delivering a decision to the wrong person's history has no equivalent
+ * undo.
+ *
+ * The salt string below is load-bearing and must not be "tidied" to match
+ * this function's new home: stamps written by earlier versions are on
+ * disk, and changing it would silently orphan every one of them — reading
+ * as somebody else's account and quietly discarding decisions a person
+ * already made.
+ */
+export function simklAccountMark(): string {
+  const { accessToken } = simklCredentials()
+  if (!accessToken) return ''
+  return crypto
+    .createHash('sha256')
+    .update(`reconcile-account:${accessToken}`)
+    .digest('hex')
+    .slice(0, 16)
 }
 
 export interface MalCredentials {

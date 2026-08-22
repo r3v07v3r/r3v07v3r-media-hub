@@ -128,4 +128,40 @@ check('re-opening an already-pruned database is idempotent', () => {
   second.close()
 })
 
+// deleteCache is the other half of the same concern: expiry deliberately
+// leaves a row readable so the offline fallback above still works, which
+// means expiry is NOT a way to make a payload go away. The Simkl
+// watched-history cache needs both — an expiring invalidate after a push
+// whose outcome it already knows, and a real delete when the connected
+// account changes and the cached library belongs to somebody else.
+
+check('deleteCache removes a row that an allowExpired reader could still serve', () => {
+  const dbPath = tempDbPath()
+  const db = createDatabase(dbPath)
+  db.putCache('doomed', { v: 1 }, 60_000)
+  db.deleteCache('doomed')
+  assert.equal(db.getCache('doomed'), null)
+  assert.equal(db.getCache('doomed', { allowExpired: true }), null)
+  db.close()
+})
+
+check('an expired row is still readable, but a deleted one is not', () => {
+  const dbPath = tempDbPath()
+  seedRow(dbPath, 'expired', now - 5 * DAY_MS)
+  seedRow(dbPath, 'deleted', now - 5 * DAY_MS)
+  const db = createDatabase(dbPath)
+  db.deleteCache('deleted')
+  assert.ok(db.getCache('expired', { allowExpired: true }))
+  assert.equal(db.getCache('deleted', { allowExpired: true }), null)
+  db.close()
+})
+
+check('deleting a key that was never cached is a no-op', () => {
+  const dbPath = tempDbPath()
+  const db = createDatabase(dbPath)
+  db.deleteCache('never-existed')
+  assert.equal(db.getCache('never-existed', { allowExpired: true }), null)
+  db.close()
+})
+
 console.log(`\n${pass} passed`)

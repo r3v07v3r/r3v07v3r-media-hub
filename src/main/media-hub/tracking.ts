@@ -13,7 +13,6 @@
 // against the source app.
 
 import { app } from 'electron'
-import crypto from 'node:crypto'
 import type {
   CatalogItem,
   ConnectResult,
@@ -47,7 +46,13 @@ import { fetchJson } from './httpClient'
 import { handle } from './ipcGuard'
 import { logError } from './logger'
 import { pushMalProgress } from './malSync'
-import { encrypt, readSettings, simklCredentials, writeSettings } from './settingsStore'
+import {
+  encrypt,
+  readSettings,
+  simklAccountMark,
+  simklCredentials,
+  writeSettings
+} from './settingsStore'
 import { sendToRenderer } from './rendererBridge'
 import {
   batchHistoryPayload,
@@ -60,10 +65,11 @@ import {
   type SimklPushItem
 } from './simkl'
 import {
+  forgetSimklWatchedCache,
   invalidateSimklWatchedCache,
   simklRequest,
   simklUrl,
-  simklWatchedHistory
+  simklWatchedSnapshot
 } from './simklClient'
 
 /** Result of a single "push this watch-state change to Simkl" attempt, merged into every mark/unmark handler's response. */
@@ -227,36 +233,6 @@ const RECONCILE_PENDING_TTL_MS = 90 * 24 * 60 * 60 * 1000
 interface PendingQueue {
   account: string
   entries: PendingWatchStatusPush[]
-}
-
-/**
- * A stable, non-reversible mark for "the Simkl account currently
- * connected", derived from its access token — nothing in this app
- * persists a Simkl user id to use instead, and a truncated salted digest
- * of a high-entropy token identifies the connection without storing
- * anything usable as one.
- *
- * The point is that every queued decision is stamped with the connection
- * it was made under and checked against this before it can be sent, so
- * the safety property survives things going wrong: a clear that failed
- * to write, a crash between signing out and signing in, a database that
- * was read-only at the wrong moment. A queue that outlives its account
- * is inert rather than dangerous.
- *
- * Conservative in the one direction that matters: re-authorizing the
- * SAME account mints a new token and therefore abandons that account's
- * own queued decisions, which costs a title being asked about once more.
- * Delivering a decision to the wrong person's history has no equivalent
- * undo.
- */
-function simklAccountMark(): string {
-  const { accessToken } = simklCredentials()
-  if (!accessToken) return ''
-  return crypto
-    .createHash('sha256')
-    .update(`reconcile-account:${accessToken}`)
-    .digest('hex')
-    .slice(0, 16)
 }
 
 /** How long a "keep local" click waits for the clicks after it before the
@@ -558,7 +534,7 @@ async function pushPendingToServices(): Promise<Set<string>> {
     failed.add(entry.id)
   }
 
-  // The pushes above bypass simklWatchedHistory()'s own request path, so
+  // The pushes above bypass simklWatchedSnapshot()'s own request path, so
   // its 20-minute cache never learns about them; left alone, the next
   // check compares against the stale pre-push snapshot and re-reports
   // exactly what was just resolved. On failure, leave it: it's still an
@@ -731,8 +707,16 @@ async function computeMovieDiscrepancies(): Promise<WatchStatusDiscrepancy[]> {
       .filter((h) => h.type === 'movie')
       .map((h) => [h.id, h] as const)
   )
+  const snapshot = await simklWatchedSnapshot()
+  // No trustworthy remote side means there is nothing to diff. An
+  // unreadable Simkl comes back as an EMPTY Simkl, and an empty Simkl
+  // makes every movie watched locally look like a disagreement — a review
+  // panel offering to push the person's entire watch history to an account
+  // that already has it. Reporting nothing is the honest answer: the
+  // cooldown lapses and the next pass asks again.
+  if (!snapshot.complete) return []
   const remoteMovies = new Map(
-    (await simklWatchedHistory()).filter((h) => h.type === 'movie').map((h) => [h.id, h] as const)
+    snapshot.entries.filter((h) => h.type === 'movie').map((h) => [h.id, h] as const)
   )
   const ids = new Set([...localMovies.keys(), ...remoteMovies.keys()])
   const out: WatchStatusDiscrepancy[] = []
@@ -781,7 +765,7 @@ export function registerTrackingIpc(): void {
     const db = getDatabase()
     const trackedItems = db.tracked()
     // Local history ONLY — no live/cached Simkl merge here. This used to
-    // fold in simklWatchedHistory() unconditionally, which is cached for
+    // fold in the Simkl watched history unconditionally, which is cached for
     // 20 minutes (see simklClient.ts) and can therefore keep reporting a
     // title as watched for up to 20 minutes after a real, successful
     // local unmark (which DOES push a Simkl removal — see
@@ -1083,12 +1067,15 @@ export function registerTrackingIpc(): void {
       s.simklAccessToken = encrypt(result.access_token)
       writeSettings(s)
       // A fresh authorization can be a different account than the one
-      // whose decisions are sitting in the queue, and nothing here can
-      // tell the two apart — see clearPendingPushes. Re-authorizing the
-      // SAME account pays the same price (its queue is dropped and those
-      // titles come back on the next check), which is the acceptable
-      // half of that trade.
+      // whose decisions are sitting in the queue and whose watched
+      // history is sitting in the cache, and nothing here can tell the
+      // two apart — a bearer token is all this app ever holds. See
+      // clearPendingPushes and forgetSimklWatchedCache. Re-authorizing
+      // the SAME account pays the same price (its queue is dropped and
+      // those titles come back on the next check; the history costs one
+      // refetch), which is the acceptable half of that trade.
       clearPendingPushes()
+      forgetSimklWatchedCache()
       const user = await simklRequest<Record<string, unknown>>('/users/settings', {
         method: 'POST',
         body: '{}'
@@ -1107,6 +1094,9 @@ export function registerTrackingIpc(): void {
     delete s.simklAccessToken
     writeSettings(s)
     clearPendingPushes()
+    // And whoever connects next must not be diffed against the library of
+    // the account that just left — see forgetSimklWatchedCache.
+    forgetSimklWatchedCache()
     return { ok: true }
   })
 

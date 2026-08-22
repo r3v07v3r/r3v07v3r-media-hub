@@ -143,6 +143,11 @@ export interface MediaHubDatabase {
   ): PlaybackPositionResult | null
   putCache<T>(key: string, payload: T, ttlMs: number): void
   getCache<T>(key: string, opts?: { allowExpired?: boolean }): T | null
+  /** Removes a cache row outright. Distinct from letting a row expire,
+   *  which the `allowExpired: true` readers can still serve back as a
+   *  stale fallback — this is for a payload that has become WRONG rather
+   *  than merely old, and must not be served again. */
+  deleteCache(key: string): void
   trackedUpdates(details: CatalogItem[], now?: Date): TrackedUpdate[]
   close(): void
   filename: string
@@ -163,6 +168,7 @@ interface PreparedQueries {
   disliked: StatementSync
   putCache: StatementSync
   getCache: StatementSync
+  deleteCache: StatementSync
   lastEpisode: StatementSync
   savePosition: StatementSync
   clearPosition: StatementSync
@@ -300,6 +306,7 @@ export function createDatabase(filename: string): MediaHubDatabase {
        ON CONFLICT(cache_key) DO UPDATE SET payload_json=excluded.payload_json,expires_at=excluded.expires_at,updated_at=excluded.updated_at`
     ),
     getCache: sql.prepare('SELECT payload_json,expires_at FROM catalog_cache WHERE cache_key=?'),
+    deleteCache: sql.prepare('DELETE FROM catalog_cache WHERE cache_key=?'),
     lastEpisode: sql.prepare(
       'SELECT season,episode FROM watch_history WHERE content_id=? AND season IS NOT NULL ORDER BY season DESC,episode DESC LIMIT 1'
     ),
@@ -541,6 +548,15 @@ export function createDatabase(filename: string): MediaHubDatabase {
           : null
       } catch {
         return null
+      }
+    },
+
+    deleteCache(key: string): void {
+      try {
+        q.deleteCache.run(key)
+      } catch {
+        // Best-effort, same convention as every other cache operation in
+        // this file — a failed delete must not surface to callers.
       }
     },
 
