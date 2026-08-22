@@ -50,9 +50,9 @@ play something. Optional metadata, tracking, and subtitle services add to the ex
 - **Use separate profiles**, including Kids and PIN-protected profiles. Watch history is
   currently shared between profiles.
 - **Ask a local AI model** for suggestions, if you connect one. The assistant field and the
-  Recommend Next buttons run on an [Ollama](https://ollama.com) model on your own machine —
-  nothing is sent to a hosted service, and with no model connected those features say so rather
-  than answering.
+  Recommend Next buttons run on an [Ollama](https://ollama.com) model on your own machine, and
+  nothing is sent to a hosted service. Without one, the assistant says so rather than answering,
+  and the Recommend Next buttons fall back to a pick they openly label as random.
 
 ## Quick start
 

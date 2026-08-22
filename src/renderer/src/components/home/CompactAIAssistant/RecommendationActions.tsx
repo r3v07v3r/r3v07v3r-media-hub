@@ -90,10 +90,31 @@ export function RecommendationActions({ kinds = ['movie', 'series'] }: Recommend
     return AI_PICKS.map((r) => r.media).filter((m) => matchesCategoryKind(m, kind))
   }
 
-  function announce(pick: MediaItem, reason: string) {
+  /** A model chose this one, and said why. */
+  function announceModelPick(pick: MediaItem, reason: string) {
     pushNotification({
       tone: 'success',
       message: reason ? `${pick.title} — ${reason}` : `Recommendation ready: "${pick.title}"`
+    })
+    openDetail(pick)
+  }
+
+  /**
+   * Nothing chose this one — it came off a coin flip, and the toast says so.
+   *
+   * The button still works without a model, because it always did and taking
+   * that away would be a regression for anyone who never sets Ollama up. But
+   * a random pick presented as "Recommendation ready" is the app claiming
+   * something it didn't do, which is the exact habit the rest of this work
+   * removed. Both ways of getting here are named: no model connected, or a
+   * model that answered with something that wasn't on the list.
+   */
+  function announceRandomPick(pick: MediaItem) {
+    pushNotification({
+      tone: 'info',
+      message: aiConnected
+        ? `Picked "${pick.title}" at random — the model didn't choose from the list.`
+        : `Picked "${pick.title}" at random. Connect a local model in Settings → AI for a real recommendation.`
     })
     openDetail(pick)
   }
@@ -116,9 +137,14 @@ export function RecommendationActions({ kinds = ['movie', 'series'] }: Recommend
       // With a model linked, the pick is genuinely the model's: it is shown
       // the same shortlist this button would otherwise choose from at
       // random, and its own one-line reason is what the toast says. Without
-      // one, this stays exactly what it always was — a random pick from the
-      // shortlist — including the short pause, so the button still feels
-      // like it did something rather than firing instantly.
+      // one, this stays what it always was — a random pick — but announced
+      // as one.
+      //
+      // The 1.3s pause that used to sit on this path is gone. It existed to
+      // make the button feel like it was thinking; nothing was, and a fake
+      // deliberation in front of a coin flip is the same theatre as the
+      // hardcoded assistant answer and the mute microphone this work
+      // removed. An instant answer is the honest one.
       if (api && aiConnected) {
         const shortlist = pool.slice(0, MAX_PROMPT_TITLES)
         const result = await api.recommend(
@@ -135,14 +161,11 @@ export function RecommendationActions({ kinds = ['movie', 'series'] }: Recommend
         // something that wasn't on offer — fall through to the random pick
         // rather than showing nothing.
         if (picked) {
-          announce(picked, result.reason)
+          announceModelPick(picked, result.reason)
           return
         }
-      } else {
-        await new Promise((resolve) => setTimeout(resolve, 1300))
-        if (!mountedRef.current) return
       }
-      announce(randomPick(pool), '')
+      announceRandomPick(randomPick(pool))
     } catch (error) {
       // Same reasoning as above: an error toast for a page the person has
       // already left is noise about something they stopped caring about.

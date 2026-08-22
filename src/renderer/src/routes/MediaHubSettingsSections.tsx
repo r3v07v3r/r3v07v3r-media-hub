@@ -1300,10 +1300,11 @@ export function OllamaSection() {
       </div>
       <p className={styles.rowDescription} style={{ marginBottom: 10 }}>
         Point R3 at an Ollama instance running on this machine (or another one on your network) and
-        every AI feature in the app — the &ldquo;Ask R3 anything&rdquo; field and the Recommend Next
-        buttons — runs on that model. Nothing is sent anywhere else, and with nothing connected here
-        those features say so rather than making something up. Install from ollama.com, then{' '}
-        <code>ollama pull llama3.2</code>.
+        the AI features run on that model: the &ldquo;Ask R3 anything&rdquo; field answers from it,
+        and the Recommend Next buttons let it choose. Nothing is sent anywhere else. With nothing
+        connected, the assistant says so rather than making something up, and the Recommend Next
+        buttons keep working by picking at random — labelled as a random pick, never passed off as a
+        recommendation. Install from ollama.com, then <code>ollama pull llama3.2</code>.
       </p>
 
       {connected && (
