@@ -13,7 +13,6 @@
 // against the source app.
 
 import { app } from 'electron'
-import crypto from 'node:crypto'
 import type {
   CatalogItem,
   ConnectResult,
@@ -47,7 +46,13 @@ import { fetchJson } from './httpClient'
 import { handle } from './ipcGuard'
 import { logError } from './logger'
 import { pushMalProgress } from './malSync'
-import { encrypt, readSettings, simklCredentials, writeSettings } from './settingsStore'
+import {
+  encrypt,
+  readSettings,
+  simklAccountMark,
+  simklCredentials,
+  writeSettings
+} from './settingsStore'
 import { sendToRenderer } from './rendererBridge'
 import {
   batchHistoryPayload,
@@ -228,36 +233,6 @@ const RECONCILE_PENDING_TTL_MS = 90 * 24 * 60 * 60 * 1000
 interface PendingQueue {
   account: string
   entries: PendingWatchStatusPush[]
-}
-
-/**
- * A stable, non-reversible mark for "the Simkl account currently
- * connected", derived from its access token — nothing in this app
- * persists a Simkl user id to use instead, and a truncated salted digest
- * of a high-entropy token identifies the connection without storing
- * anything usable as one.
- *
- * The point is that every queued decision is stamped with the connection
- * it was made under and checked against this before it can be sent, so
- * the safety property survives things going wrong: a clear that failed
- * to write, a crash between signing out and signing in, a database that
- * was read-only at the wrong moment. A queue that outlives its account
- * is inert rather than dangerous.
- *
- * Conservative in the one direction that matters: re-authorizing the
- * SAME account mints a new token and therefore abandons that account's
- * own queued decisions, which costs a title being asked about once more.
- * Delivering a decision to the wrong person's history has no equivalent
- * undo.
- */
-function simklAccountMark(): string {
-  const { accessToken } = simklCredentials()
-  if (!accessToken) return ''
-  return crypto
-    .createHash('sha256')
-    .update(`reconcile-account:${accessToken}`)
-    .digest('hex')
-    .slice(0, 16)
 }
 
 /** How long a "keep local" click waits for the clicks after it before the

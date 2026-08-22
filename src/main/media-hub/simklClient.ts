@@ -17,7 +17,7 @@ import { app } from 'electron'
 import type { HistoryEntry } from '../../shared/media-hub/types'
 import { fetchJson } from './httpClient'
 import { logError } from './logger'
-import { simklCredentials } from './settingsStore'
+import { simklAccountMark, simklCredentials } from './settingsStore'
 import { watchedFromAllItems, type SimklMoviesPayload, type SimklShowsPayload } from './simkl'
 import { getDatabase } from './dbState'
 
@@ -63,7 +63,39 @@ export async function simklPublicRequest<T = unknown>(
   })
 }
 
-const WATCHED_HISTORY_CACHE_KEY = 'simkl:watched:v1'
+// v2 stamps the payload with WHOSE history it is (see CachedWatchedHistory).
+// The v1 rows left on disk carry a bare array with no account on it, so they
+// can never satisfy the check below and are simply never read again; the
+// database's own prune reclaims them.
+const WATCHED_HISTORY_CACHE_KEY = 'simkl:watched:v2'
+
+/** The cache payload: the history, and the account it belongs to. */
+interface CachedWatchedHistory {
+  account: string
+  entries: HistoryEntry[]
+}
+
+/**
+ * The cached history, but ONLY if it belongs to `account`. A row stamped
+ * with anyone else is not a weaker answer to fall back on, it's the wrong
+ * person's library — so it reads as no row at all, and the caller reports
+ * "couldn't read" rather than serving it.
+ *
+ * This, not forgetSimklWatchedCache, is what actually makes the account
+ * boundary hold. Clearing on sign-out is tidying: it is best-effort, it
+ * can't run if the app was killed, and it can't do anything about a
+ * request that was already in flight when the account changed. The stamp
+ * covers all of those, because it is checked at the point of USE.
+ */
+function cachedHistoryFor(account: string, allowExpired = false): HistoryEntry[] | null {
+  // No account connected matches no stamp — never the empty-string account
+  // a malformed row might carry.
+  if (!account) return null
+  const row = getDatabase().getCache<CachedWatchedHistory>(WATCHED_HISTORY_CACHE_KEY, {
+    allowExpired
+  })
+  return row?.account === account && Array.isArray(row.entries) ? row.entries : null
+}
 
 /** What Simkl reports as watched, plus whether that picture can be trusted at all. */
 export interface SimklWatchedSnapshot {
@@ -95,10 +127,12 @@ export interface SimklWatchedSnapshot {
  * instead of posing as an account with nothing watched.
  */
 export async function simklWatchedSnapshot(): Promise<SimklWatchedSnapshot> {
-  if (!simklCredentials().accessToken) return { entries: [], complete: true }
-  const key = WATCHED_HISTORY_CACHE_KEY
-  const db = getDatabase()
-  const cached = db.getCache<HistoryEntry[]>(key)
+  // Read once, up front: this is the account the whole call is about, and
+  // everything below is checked against it rather than against whatever
+  // happens to be connected by the time each step runs.
+  const account = simklAccountMark()
+  if (!account) return { entries: [], complete: true }
+  const cached = cachedHistoryFor(account)
   if (cached) return { entries: cached, complete: true }
 
   try {
@@ -108,15 +142,29 @@ export async function simklWatchedSnapshot(): Promise<SimklWatchedSnapshot> {
         '/sync/all-items/shows/all?extended=full&episode_watched_at=yes'
       )
     ])
+    // These requests take seconds, and signing out or authorizing someone
+    // else during them is an ordinary thing to do. Both carry the OLD
+    // account's bearer token, so what came back is the OLD account's
+    // library — writing it now would repopulate the key that sign-out just
+    // cleared, and hand the NEW account twenty minutes of somebody else's
+    // watch history to be diffed and "corrected" against.
+    if (simklAccountMark() !== account) return { entries: [], complete: false }
     const entries = watchedFromAllItems(movies, shows)
-    db.putCache(key, entries, 20 * 60 * 1000)
+    getDatabase().putCache(
+      WATCHED_HISTORY_CACHE_KEY,
+      { account, entries } satisfies CachedWatchedHistory,
+      20 * 60 * 1000
+    )
     return { entries, complete: true }
   } catch (error) {
     logError('simkl:watched-history', error)
-    const stale = db.getCache<HistoryEntry[]>(key, { allowExpired: true })
-    // A stale snapshot is still a genuine picture of this account, just an
-    // old one — that's the whole point of keeping expired rows readable.
-    // Only the no-row case is a real "we don't know."
+    // Re-read the mark for the same reason as above — the account can have
+    // changed while this request was failing, and the stale row would then
+    // belong to the account that left. A stale snapshot of the account
+    // still connected is a genuine picture, just an old one, which is the
+    // whole point of keeping expired rows readable; anything else is a
+    // real "we don't know."
+    const stale = cachedHistoryFor(simklAccountMark(), true)
     return stale ? { entries: stale, complete: true } : { entries: [], complete: false }
   }
 }
@@ -134,8 +182,17 @@ export async function simklWatchedSnapshot(): Promise<SimklWatchedSnapshot> {
  */
 export function invalidateSimklWatchedCache(): void {
   const db = getDatabase()
-  const existing = db.getCache<HistoryEntry[]>(WATCHED_HISTORY_CACHE_KEY, { allowExpired: true })
-  db.putCache(WATCHED_HISTORY_CACHE_KEY, existing ?? [], 0)
+  const existing = db.getCache<CachedWatchedHistory>(WATCHED_HISTORY_CACHE_KEY, {
+    allowExpired: true
+  })
+  // Nothing cached means there is nothing to keep readable. Writing an
+  // empty payload here — which is what `existing ?? []` used to do — would
+  // MANUFACTURE the "Simkl has nothing watched" answer that `complete`
+  // exists to distinguish from "Simkl could not be reached", and a later
+  // failed refetch would fall back onto it and report every locally
+  // watched title as a discrepancy.
+  if (!existing) return
+  db.putCache(WATCHED_HISTORY_CACHE_KEY, existing, 0)
 }
 
 /**
@@ -152,16 +209,14 @@ export function invalidateSimklWatchedCache(): void {
  * "fix" them by pushing or erasing watches on an account that was never
  * out of sync.
  *
- * A delete, not a stamp — worth knowing which of the two this is. The
- * pending-push queue in tracking.ts defends itself the stronger way:
- * every entry carries a simklAccountMark() and is checked against it
- * before being sent, so a queue that outlives its account is inert rather
- * than dangerous. This cache deserves the same, because the delete below
- * is best-effort (see deleteCache) and a database that was read-only at
- * the wrong moment leaves the previous account's library readable. That
- * mark is private to tracking.ts, which imports THIS module and so can't
- * be imported back; giving the cache the same guarantee means lifting it
- * somewhere both can reach. Worth doing, not done here.
+ * Tidying, not the safety guarantee — same division as clearPendingPushes
+ * in tracking.ts, and worth knowing which of the two this is. The delete
+ * below is best-effort (see deleteCache), can't run at all if the app was
+ * killed, and can do nothing about a request already in flight. What
+ * actually keeps one account's history from being served to the next is
+ * the stamp every payload carries, checked at the point of use — see
+ * cachedHistoryFor. This just frees the row rather than leaving it to sit
+ * there unreadable until the prune.
  */
 export function forgetSimklWatchedCache(): void {
   getDatabase().deleteCache(WATCHED_HISTORY_CACHE_KEY)
