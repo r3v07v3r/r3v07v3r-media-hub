@@ -45,6 +45,8 @@ import type {
   ProfileVerifyPinResult,
   ReconcileCheckResult,
   ReconcileResolution,
+  ReconcileResolveResult,
+  ReconcileSyncReport,
   SimklPinStart,
   SimklPollResult,
   SimklStatus,
@@ -288,8 +290,14 @@ const api = {
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.trackingSavePosition, payload),
       reconcileCheck: (): Promise<ReconcileCheckResult> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.trackingReconcileCheck),
-      reconcileResolve: (payload: ReconcileResolvePayload): Promise<{ ok: true }> =>
-        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.trackingReconcileResolve, payload)
+      reconcileResolve: (payload: ReconcileResolvePayload): Promise<ReconcileResolveResult> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.trackingReconcileResolve, payload),
+      /** Fires when a batch of "keep local" decisions has been pushed out
+       *  to the tracking services — or has failed to be. The resolve call
+       *  itself only queues the decision (see tracking.ts), so this is
+       *  where the actual outcome arrives. */
+      onReconcileSync: (onEvent: (report: ReconcileSyncReport) => void): (() => void) =>
+        subscribe<ReconcileSyncReport>(MEDIA_HUB_CHANNELS.trackingReconcileSync, onEvent)
     },
 
     disliked: {

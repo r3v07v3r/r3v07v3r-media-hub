@@ -127,6 +127,91 @@ export function historyPayload(
   return item.type === 'anime' ? { anime: [entry] } : { shows: [entry] }
 }
 
+/** One title in a batched history push — the same (item, playback) pair
+ *  historyPayload takes for a single one. */
+export interface SimklHistoryEntry {
+  item: SimklPushItem
+  playback?: PlaybackPosition
+}
+
+/**
+ * Batched historyPayload: one request body covering many titles at once,
+ * so resolving a whole out-of-sync review list is a single Simkl call
+ * rather than one per row. Grouping is exactly historyPayload's (movies
+ * carry a bare ref, shows/anime nest their season+episode block), just
+ * accumulated per bucket — nothing about a title's own payload changes by
+ * being sent alongside others.
+ */
+export function batchHistoryPayload(entries: SimklHistoryEntry[]): SimklHistoryPayload {
+  const movies: SimklMediaRef[] = []
+  const shows: SimklShowRef[] = []
+  const anime: SimklShowRef[] = []
+  for (const { item, playback } of entries) {
+    const single = historyPayload(item, playback)
+    if (single.movies) movies.push(...single.movies)
+    if (single.shows) shows.push(...single.shows)
+    if (single.anime) anime.push(...single.anime)
+  }
+  const payload: SimklHistoryPayload = {}
+  if (movies.length) payload.movies = movies
+  if (shows.length) payload.shows = shows
+  if (anime.length) payload.anime = anime
+  return payload
+}
+
+/**
+ * What Simkl answers a /sync/history (or /sync/history/remove) POST with.
+ * Only `not_found` is read here, and it is the whole reason this type
+ * exists: Simkl replies 200 whether or not it actually matched anything
+ * that was sent, listing everything it couldn't resolve under not_found.
+ * Treating the 200 alone as success means a push that changed nothing on
+ * the account is indistinguishable from one that worked — which is
+ * exactly how a "keep local" decision could vanish from the review list
+ * and then reappear, unchanged, on the next launch.
+ */
+export interface SimklHistoryResponse {
+  not_found?: {
+    movies?: Array<{ ids?: SimklMediaIds }>
+    shows?: Array<{ ids?: SimklMediaIds }>
+    anime?: Array<{ ids?: SimklMediaIds }>
+    episodes?: Array<{ ids?: SimklMediaIds }>
+  }
+}
+
+/** Flattens an ids object into comparable `service:value` keys (lowercased,
+ *  since Simkl echoes IMDb ids back in whatever case they arrived in). */
+function idKeys(ids: SimklMediaIds | undefined): string[] {
+  return Object.entries(ids || {})
+    .filter(([, value]) => value !== undefined && value !== null && value !== '')
+    .map(([service, value]) => `${service}:${String(value).toLowerCase()}`)
+}
+
+/**
+ * Which of the pushed items Simkl reported it could not match, as this
+ * app's own catalog ids. Matching is done through mediaIds — the same
+ * mapping the request was built with — so an entry Simkl echoes back
+ * under a different id space than the one we sent is still attributed to
+ * the right item. not_found entries that carry no ids at all can't be
+ * attributed to anything and are ignored rather than guessed at; the
+ * items they belong to are treated as pushed, and if they genuinely
+ * weren't, the disagreement simply resurfaces on a later check.
+ */
+export function unmatchedCatalogIds(
+  response: SimklHistoryResponse | null | undefined,
+  items: SimklPushItem[]
+): string[] {
+  const notFound = response?.not_found
+  if (!notFound) return []
+  const unmatched = new Set<string>()
+  for (const group of [notFound.movies, notFound.shows, notFound.anime, notFound.episodes]) {
+    for (const entry of group || []) for (const key of idKeys(entry?.ids)) unmatched.add(key)
+  }
+  if (!unmatched.size) return []
+  return items
+    .filter((item) => idKeys(mediaIds(item)).some((key) => unmatched.has(key)))
+    .map((item) => String(item.id))
+}
+
 /** Same as historyPayload but for marking a whole batch of episode numbers within one season watched at once. */
 export function seasonHistoryPayload(
   item: SimklPushItem,
