@@ -65,19 +65,41 @@ export async function simklPublicRequest<T = unknown>(
 
 const WATCHED_HISTORY_CACHE_KEY = 'simkl:watched:v1'
 
+/** What Simkl reports as watched, plus whether that picture can be trusted at all. */
+export interface SimklWatchedSnapshot {
+  entries: HistoryEntry[]
+  /**
+   * True when `entries` is a real answer about the remote side: freshly
+   * fetched, served from this module's cache, or accurately empty because
+   * no account is connected. False ONLY when an account IS connected and
+   * its history could not be read — the request failed and there was no
+   * cached snapshot to fall back on — which leaves `entries` empty for
+   * lack of knowledge rather than lack of watches.
+   *
+   * Anything that DIFFS local state against Simkl has to check this.
+   * "We couldn't ask" and "Simkl has nothing" produce the same empty
+   * array but mean opposite things, and reading the first as the second
+   * turns every locally watched title into a discrepancy against a remote
+   * account that never actually disagreed.
+   */
+  complete: boolean
+}
+
 /**
  * Flattened, cached view of everything Simkl reports as watched for the
- * connected account (movies + show episodes). Returns `[]` (not an error)
- * when Simkl isn't connected — callers merge this into local watch
- * history unconditionally. Falls back to a stale cache entry on error
- * rather than failing the caller outright.
+ * connected account (movies + show episodes). Never throws for a Simkl
+ * problem — callers merge this into local watch history, and a tracking
+ * service being unreachable shouldn't fail whatever they were doing.
+ * Falls back to a stale cache entry on error rather than losing the last
+ * good answer; when even that is unavailable, says so via `complete`
+ * instead of posing as an account with nothing watched.
  */
-export async function simklWatchedHistory(): Promise<HistoryEntry[]> {
-  if (!simklCredentials().accessToken) return []
+export async function simklWatchedSnapshot(): Promise<SimklWatchedSnapshot> {
+  if (!simklCredentials().accessToken) return { entries: [], complete: true }
   const key = WATCHED_HISTORY_CACHE_KEY
   const db = getDatabase()
   const cached = db.getCache<HistoryEntry[]>(key)
-  if (cached) return cached
+  if (cached) return { entries: cached, complete: true }
 
   try {
     const [movies, shows] = await Promise.all([
@@ -88,15 +110,19 @@ export async function simklWatchedHistory(): Promise<HistoryEntry[]> {
     ])
     const entries = watchedFromAllItems(movies, shows)
     db.putCache(key, entries, 20 * 60 * 1000)
-    return entries
+    return { entries, complete: true }
   } catch (error) {
     logError('simkl:watched-history', error)
-    return db.getCache<HistoryEntry[]>(key, { allowExpired: true }) || []
+    const stale = db.getCache<HistoryEntry[]>(key, { allowExpired: true })
+    // A stale snapshot is still a genuine picture of this account, just an
+    // old one — that's the whole point of keeping expired rows readable.
+    // Only the no-row case is a real "we don't know."
+    return stale ? { entries: stale, complete: true } : { entries: [], complete: false }
   }
 }
 
 /**
- * Forces the next simklWatchedHistory() call to refetch instead of reusing
+ * Forces the next simklWatchedSnapshot() call to refetch instead of reusing
  * its 20-minute cache. Needed after a "keep local" reconcile resolution
  * pushes a change to Simkl directly (bypassing this module's own request
  * path) — without this, the stale cached snapshot still disagrees with the
@@ -110,4 +136,26 @@ export function invalidateSimklWatchedCache(): void {
   const db = getDatabase()
   const existing = db.getCache<HistoryEntry[]>(WATCHED_HISTORY_CACHE_KEY, { allowExpired: true })
   db.putCache(WATCHED_HISTORY_CACHE_KEY, existing ?? [], 0)
+}
+
+/**
+ * Throws the cached watched history away entirely, for when the CONNECTED
+ * ACCOUNT changes — signing out, or authorizing a different one.
+ *
+ * Deliberately not invalidateSimklWatchedCache above. That one keeps the
+ * payload readable on purpose, so a failed refetch can still fall back on
+ * it; correct when the snapshot is merely one push out of date, and
+ * exactly wrong here. What's cached belongs to the account that just went
+ * away, and serving it as a fallback means diffing the NEW account's local
+ * history against the OLD account's remote one — a review panel full of
+ * disagreements that are really just somebody else's library, offering to
+ * "fix" them by pushing or erasing watches on an account that was never
+ * out of sync.
+ *
+ * The cache is keyed globally rather than per-account (this module never
+ * learns a user id — see simklRequest, which only carries a bearer token),
+ * so there is nothing finer-grained to drop; the row has to go.
+ */
+export function forgetSimklWatchedCache(): void {
+  getDatabase().deleteCache(WATCHED_HISTORY_CACHE_KEY)
 }

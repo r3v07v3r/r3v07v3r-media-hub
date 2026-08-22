@@ -47,10 +47,11 @@ import {
   type SimklPushItem
 } from './simkl'
 import {
+  forgetSimklWatchedCache,
   invalidateSimklWatchedCache,
   simklRequest,
   simklUrl,
-  simklWatchedHistory
+  simklWatchedSnapshot
 } from './simklClient'
 
 /** Result of a single "push this watch-state change to Simkl" attempt, merged into every mark/unmark handler's response. */
@@ -177,8 +178,16 @@ async function computeMovieDiscrepancies(): Promise<WatchStatusDiscrepancy[]> {
       .filter((h) => h.type === 'movie')
       .map((h) => [h.id, h] as const)
   )
+  const remote = await simklWatchedSnapshot()
+  // No trustworthy remote side means there is nothing to diff. An
+  // unreadable Simkl comes back as an EMPTY Simkl, and an empty Simkl
+  // makes every movie watched locally look like a disagreement — a review
+  // panel offering to push the person's entire watch history to an account
+  // that already has it. Reporting nothing is the honest answer: the
+  // cooldown lapses and the next pass asks again.
+  if (!remote.complete) return []
   const remoteMovies = new Map(
-    (await simklWatchedHistory()).filter((h) => h.type === 'movie').map((h) => [h.id, h] as const)
+    remote.entries.filter((h) => h.type === 'movie').map((h) => [h.id, h] as const)
   )
   const ids = new Set([...localMovies.keys(), ...remoteMovies.keys()])
   const out: WatchStatusDiscrepancy[] = []
@@ -227,7 +236,7 @@ export function registerTrackingIpc(): void {
     const db = getDatabase()
     const trackedItems = db.tracked()
     // Local history ONLY — no live/cached Simkl merge here. This used to
-    // fold in simklWatchedHistory() unconditionally, which is cached for
+    // fold in the Simkl watched history unconditionally, which is cached for
     // 20 minutes (see simklClient.ts) and can therefore keep reporting a
     // title as watched for up to 20 minutes after a real, successful
     // local unmark (which DOES push a Simkl removal — see
@@ -366,7 +375,7 @@ export function registerTrackingIpc(): void {
         const result = discrepancy.localWatched
           ? await syncSimklHistory('/sync/history', historyPayload(item))
           : await syncSimklHistory('/sync/history/remove', historyPayload(item))
-        // The push above bypasses simklWatchedHistory()'s own request path,
+        // The push above bypasses simklWatchedSnapshot()'s own request path,
         // so its 20-minute cache never learns about it. Left alone, the next
         // reconcile check keeps comparing against the stale pre-push
         // snapshot and re-reports the exact discrepancy this just resolved
@@ -496,6 +505,13 @@ export function registerTrackingIpc(): void {
       const s = readSettings()
       s.simklAccessToken = encrypt(result.access_token)
       writeSettings(s)
+      // This may well be a DIFFERENT account than the one whose watched
+      // history is sitting in the cache, and nothing here can tell the two
+      // apart — a bearer token is all this app ever holds. Re-authorizing
+      // the same account pays the same price (one refetch it would have
+      // done within 20 minutes anyway), which is the cheap half of that
+      // trade. See forgetSimklWatchedCache.
+      forgetSimklWatchedCache()
       const user = await simklRequest<Record<string, unknown>>('/users/settings', {
         method: 'POST',
         body: '{}'
@@ -513,6 +529,9 @@ export function registerTrackingIpc(): void {
     const s = readSettings()
     delete s.simklAccessToken
     writeSettings(s)
+    // Whoever connects next must not be compared against this account's
+    // library — see forgetSimklWatchedCache.
+    forgetSimklWatchedCache()
     return { ok: true }
   })
 
