@@ -202,24 +202,41 @@ function escapeForRegex(value: string): string {
  */
 const TITLE_EDGE = '[\\p{L}\\p{N}:-]'
 
+/** How a part number is written: digits, Roman numerals, or the word. Both cases, since a model may lower-case a subtitle it is writing inline. */
+const PART_NUMBER =
+  '(?:\\d{1,3}|[IVX]{2,}|[Oo]ne|[Tt]wo|[Tt]hree|[Ff]our|[Ff]ive|[Ss]ix|[Ss]even|[Ee]ight|[Nn]ine|[Tt]en)'
+
+/** The words that introduce one, when a title spells its sequel out instead of numbering it. */
+const PART_MARKER = '(?:[Pp]art|[Cc]hapter|[Ee]pisode|[Vv]olume|[Bb]ook|[Ss]eason)'
+
 /**
- * Refuses an occurrence that runs straight on into a sequel number — "Rocky
- * II", "Scream 2" — because that is a different film, and quite possibly one
- * the shortlist never offered.
+ * Refuses an occurrence that runs straight on into a sequel — "Rocky II",
+ * "Scream 2", "Dune Part Two" — because that is a different film, and quite
+ * possibly one the shortlist never offered.
  *
  * TITLE_EDGE cannot express this: the character after "Rocky" is a space,
  * which is a perfectly good title boundary everywhere else. So this rides
  * alongside it as a lookahead rather than joining it.
  *
- * Two deliberate limits. Four-digit numbers are left alone, because "Dune
- * 2021" is a model writing the year without brackets, not naming a 2021st
- * sequel. And a lone I, V or X is left alone, being far more often a pronoun
- * or a Roman numeral that isn't one; only II and longer count.
+ * Three deliberate limits, each one protecting a case that is already right.
+ * Four-digit numbers are left alone, because "Dune 2021" is a model writing
+ * the year without brackets, not naming a 2021st sequel. A lone I, V or X is
+ * left alone, being far more often a pronoun than a part number; only II and
+ * longer count. And the marker word must be followed by an actual number, so
+ * "Dune is part of a series" is untouched — "part" there is a preposition,
+ * not a sequel.
  *
  * This rejects the OCCURRENCE, not the title, so "Rocky II is fine but Rocky
  * is better" still resolves to Rocky on its second mention.
+ *
+ * It does NOT cover a sequel named rather than numbered — "Dune Messiah",
+ * "Alien Resurrection". Nothing in the text marks those as continuations
+ * rather than the title itself, so they are left to the shortlist check:
+ * a named sequel that IS on offer wins on longest-title-first, and one that
+ * is not resolves to its original. Closing that properly means not parsing
+ * prose at all.
  */
-const NOT_A_SEQUEL = '(?!\\s+(?:\\d{1,3}|[IVX]{2,})(?![\\p{L}\\p{N}]))'
+const NOT_A_SEQUEL = `(?!\\s+(?:${PART_MARKER}\\s+)?${PART_NUMBER}(?![\\p{L}\\p{N}]))`
 
 /**
  * Whether `reply` mentions `title` as a phrase in its own right, rather than

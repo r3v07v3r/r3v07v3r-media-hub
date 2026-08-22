@@ -1239,9 +1239,27 @@ export function OllamaSection() {
   // too — a probe in flight was asking about somewhere else.
   const probeGeneration = useRef(0)
 
-  /** Invalidates any probe still in flight, and drops the message describing its result. */
+  /**
+   * Invalidates a probe still in flight along with everything it told us:
+   * the model list, the selection made from it, and the message describing
+   * it.
+   *
+   * The list has to go with it. That dropdown is a claim about the server in
+   * the address field — "these are the models installed there" — and the
+   * moment the address changes, nothing has verified that claim. Leaving it
+   * lets someone submit a model the new server never listed and collect an
+   * avoidable failure, and it is the same species of unearned claim the rest
+   * of this work went round removing. Clearing it empties the selection too,
+   * which disables Connect until Check has actually asked the new address
+   * what it has — which is the right order to do this in.
+   */
   function abandonProbe() {
     probeGeneration.current += 1
+    // Called on every keystroke in the address field, so the already-empty
+    // case keeps its array identity rather than churning a new one per
+    // character.
+    setModels((current) => (current.length ? [] : current))
+    setModel('')
     // Must not be left on 'busy': that disables Check and Connect, and the
     // superseded probe is no longer coming back to clear it. A write in
     // flight owns the status line and is exempt — clearing it there would

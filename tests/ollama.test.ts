@@ -412,6 +412,25 @@ check('treats a four-digit number after a title as a year, not a sequel', () => 
   assert.equal(matchRecommendation('Dune 2021 is my pick.', FIRST_FILMS)?.match.id, 'dune')
 })
 
+check('does not resolve a worded sequel to the original', () => {
+  // "Dune Part Two" with no colon: the boundary check reads it as naming
+  // Dune, and opens the original with the sequel's reason attached.
+  assert.equal(matchRecommendation('Dune Part Two — the sequel', FIRST_FILMS), null)
+  assert.equal(matchRecommendation('Dune part two — the sequel', FIRST_FILMS), null)
+  assert.equal(matchRecommendation('Rocky Chapter 2 — later', FIRST_FILMS), null)
+  // The marker is optional — "Dune Two" is how people say it out loud.
+  assert.equal(matchRecommendation('Dune Two — the sequel', FIRST_FILMS), null)
+})
+
+check('a marker word without a number is ordinary prose', () => {
+  // "part" here is a preposition, not a sequel. Requiring a number after the
+  // marker is what keeps this a match.
+  assert.equal(
+    matchRecommendation('Dune is part of a series I like', FIRST_FILMS)?.match.id,
+    'dune'
+  )
+})
+
 check('reports no match when the model picks something not on the list', () => {
   assert.equal(matchRecommendation('Watch Interstellar.', LIBRARY), null)
   assert.equal(matchRecommendation('   ', LIBRARY), null)
