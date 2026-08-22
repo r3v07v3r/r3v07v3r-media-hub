@@ -12,11 +12,10 @@ import styles from './CompactAIAssistant.module.css'
 // management, and 2D compositing (`lighter` blend mode) already gets the
 // additive-glow look a shader would otherwise be needed for.
 
-type Tone = 'idle' | 'listening' | 'processing' | 'responding' | 'error'
+type Tone = 'idle' | 'processing' | 'responding' | 'error'
 
 const PALETTES: Record<Tone, { a: string; b: string; c: string; speed: number }> = {
   idle: { a: '#3fb2ff', b: '#8b6bff', c: '#1fc9ff', speed: 1 },
-  listening: { a: '#38e5ff', b: '#8b6bff', c: '#3fb2ff', speed: 2.2 },
   processing: { a: '#a943ff', b: '#ef569c', c: '#8b6bff', speed: 3.4 },
   responding: { a: '#ffffff', b: '#3fb2ff', c: '#8b6bff', speed: 1.5 },
   error: { a: '#ff7a60', b: '#ff5a5a', c: '#ff9a3d', speed: 2.6 }

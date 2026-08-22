@@ -1700,7 +1700,6 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
 
   const uiActivity = useMemo<UIActivityState>(() => {
     if (playbackMedia) return 'playing'
-    if (assistantState === 'listening') return 'listening'
     if (assistantState === 'processing') return 'processing'
     if (assistantState === 'responding') return 'responding'
     if (assistantState === 'error') return 'error'

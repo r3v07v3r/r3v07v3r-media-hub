@@ -8,7 +8,6 @@ const STATUS_LABEL: Record<string, string> = {
   idle: 'R3 AI ready when you are',
   hover: 'R3 AI ready when you are',
   focused: 'R3 AI ready when you are',
-  listening: 'Hearing you…',
   processing: 'Thinking…',
   responding: "Here's an idea",
   playing: 'Playing',
@@ -22,7 +21,7 @@ const STATUS_LABEL: Record<string, string> = {
  *  fit phone width without pushing the hero below the fold. */
 export function CompactStatusBar() {
   const { assistantState } = useAppState()
-  const active = assistantState === 'listening' || assistantState === 'processing'
+  const active = assistantState === 'processing'
 
   return (
     <section
