@@ -226,9 +226,23 @@ function escapeForRegex(value: string): string {
  */
 const TITLE_EDGE = '[\\p{L}\\p{N}:-]'
 
-/** How a part number is written: digits, Roman numerals, or the word. Both cases, since a model may lower-case a subtitle it is writing inline. */
+/**
+ * How a part number is written: digits, Roman numerals, or the word.
+ *
+ * Both cases throughout — a model that lower-cases a subtitle it writes
+ * inline lower-cases all of it, and having the words take either case while
+ * the numerals demanded capitals meant "Rocky IV" was caught and "Rocky iv"
+ * sailed through to open the original.
+ *
+ * The case flexibility is spelled into the classes rather than set with the
+ * `i` flag, because these are embedded in a pattern whose title match must
+ * stay case-sensitive (see mentionsTitle).
+ *
+ * Two or more numeral letters, never one: a lone i, v or x is a pronoun, a
+ * crossover "x", or a sentence, far more often than a part number.
+ */
 const PART_NUMBER =
-  '(?:\\d{1,3}|[IVX]{2,}|[Oo]ne|[Tt]wo|[Tt]hree|[Ff]our|[Ff]ive|[Ss]ix|[Ss]even|[Ee]ight|[Nn]ine|[Tt]en)'
+  '(?:\\d{1,3}|[IiVvXx]{2,}|[Oo]ne|[Tt]wo|[Tt]hree|[Ff]our|[Ff]ive|[Ss]ix|[Ss]even|[Ee]ight|[Nn]ine|[Tt]en)'
 
 /** The words that introduce one, when a title spells its sequel out instead of numbering it. */
 const PART_MARKER = '(?:[Pp]art|[Cc]hapter|[Ee]pisode|[Vv]olume|[Bb]ook|[Ss]eason)'

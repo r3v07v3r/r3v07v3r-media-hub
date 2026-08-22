@@ -483,6 +483,23 @@ check('reads a reason that follows the year', () => {
   assert.equal(picked?.reason, 'the strange one')
 })
 
+check('catches a Roman sequel number in either case', () => {
+  // The worded numbers already took either case; the numerals demanded
+  // capitals, so "Rocky IV" was caught and "Rocky iv" opened the original.
+  assert.equal(matchRecommendation('Rocky IV — the fourth one is best', FIRST_FILMS), null)
+  assert.equal(matchRecommendation('Rocky iv — the fourth one is best', FIRST_FILMS), null)
+  assert.equal(matchRecommendation('Rocky part iv — the fourth', FIRST_FILMS), null)
+})
+
+check('does not read ordinary words as Roman numerals', () => {
+  // Everything here starts with letters the numeral class contains. Two or
+  // more numeral letters are required and the whole token must be numerals,
+  // which is what keeps these matching.
+  assert.equal(matchRecommendation('Rocky is better than most', FIRST_FILMS)?.match.id, 'rocky')
+  assert.equal(matchRecommendation('Rocky vs Creed, obviously', FIRST_FILMS)?.match.id, 'rocky')
+  assert.equal(matchRecommendation('Dune x Arrival would be odd', FIRST_FILMS)?.match.id, 'dune')
+})
+
 check('reports no match when the model picks something not on the list', () => {
   assert.equal(matchRecommendation('Watch Interstellar.', LIBRARY), null)
   assert.equal(matchRecommendation('   ', LIBRARY), null)
