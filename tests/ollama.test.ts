@@ -234,6 +234,50 @@ check('matches a title whose punctuation is regex-significant', () => {
   )
 })
 
+// A remake and its original, sharing a title and separated only by year —
+// the shortlist shows both, so the reply has to be able to tell them apart.
+const REMAKES: OllamaTitleRef[] = [
+  { id: 'dune-1984', title: 'Dune', year: 1984 },
+  { id: 'dune-2021', title: 'Dune', year: 2021 },
+  { id: 'arrival', title: 'Arrival', year: 2016 }
+]
+
+check('tells two same-titled works apart by the year the model gave', () => {
+  assert.equal(matchRecommendation('Dune (1984) — the strange one', REMAKES)?.match.id, 'dune-1984')
+  assert.equal(matchRecommendation('Dune (2021) — the pretty one', REMAKES)?.match.id, 'dune-2021')
+})
+
+check('uses the year in the loose prose scan too', () => {
+  assert.equal(
+    matchRecommendation('Honestly? I would go with Dune (1984) tonight.', REMAKES)?.match.id,
+    'dune-1984'
+  )
+})
+
+check('ignores a year that matches nothing rather than giving up', () => {
+  // The model misremembered the year, but it still named a title on the
+  // list — falling back to the random pick would be worse than opening the
+  // first work by that name.
+  const picked = matchRecommendation('Arrival (1999) — still good', REMAKES)
+  assert.equal(picked?.match.id, 'arrival')
+})
+
+check('the year is read off the line naming the title, not the whole reply', () => {
+  // A year in a later sentence must not redirect the pick.
+  const picked = matchRecommendation(
+    'Dune (2021) — worth it\nThe 1984 version is quite different.',
+    REMAKES
+  )
+  assert.equal(picked?.match.id, 'dune-2021')
+})
+
+check('the year is optional, and a bare title still resolves', () => {
+  // Nothing distinguishes them, so the first is as good an answer as any —
+  // the ambiguity is the model's, and the title it named is still opened.
+  assert.ok(matchRecommendation('Dune — sandy', REMAKES)?.match.title === 'Dune')
+  assert.equal(matchRecommendation('Arrival — quiet', REMAKES)?.match.id, 'arrival')
+})
+
 check('reports no match when the model picks something not on the list', () => {
   assert.equal(matchRecommendation('Watch Interstellar.', LIBRARY), null)
   assert.equal(matchRecommendation('   ', LIBRARY), null)

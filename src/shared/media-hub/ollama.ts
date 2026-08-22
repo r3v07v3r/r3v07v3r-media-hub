@@ -173,7 +173,7 @@ export function buildRecommendationMessages(
       role: 'system',
       content: [
         `You pick one ${kindLabel} for someone to watch next, from a fixed list.`,
-        'Reply with exactly one line: the title exactly as written in the list, then " — ", then one short sentence on why.',
+        'Reply with exactly one line: the title exactly as written in the list — including the year in brackets, if the list shows one — then " — ", then one short sentence on why.',
         'Never pick anything that is not on the list. Never add anything else to your reply.'
       ].join('\n')
     },
@@ -213,15 +213,58 @@ function mentionsTitle(reply: string, title: string): boolean {
   return new RegExp(pattern, 'u').test(reply)
 }
 
+/** A year in brackets, as titleLines writes them into the listing the model is shown. */
+function statedYear(text: string): number | undefined {
+  const found = text.match(/\((\d{4})\)/)
+  return found ? Number(found[1]) : undefined
+}
+
+/** Drops a trailing "(1984)" so the rest can be compared against a bare candidate title. */
+function withoutYear(value: string): string {
+  return value.replace(/\s*\(\d{4}\)\s*$/, '').trim()
+}
+
+/**
+ * Narrows several candidates sharing one title down to the one the model
+ * meant, using the year it echoed back.
+ *
+ * Remakes and reboots make this real: a shortlist can hold Dune (1984) and
+ * Dune (2021), and picking whichever came first in the array would open a
+ * different film from the one the model named. The year in the reply is the
+ * only thing that separates them, which is why the prompt now asks for it
+ * and the listing has always shown it.
+ *
+ * A year that matches nothing falls back to the first same-titled candidate
+ * rather than giving up — a model that misremembers the year of the only
+ * Dune on the list still picked that Dune.
+ */
+function narrowByYear(matches: OllamaTitleRef[], year: number | undefined): OllamaTitleRef {
+  if (matches.length === 1 || !year) return matches[0]
+  return matches.find((item) => item.year === year) ?? matches[0]
+}
+
+/** Candidates whose title is exactly `title`, narrowed by `year`; null if none match. */
+function resolveTitle(
+  candidates: OllamaTitleRef[],
+  title: string,
+  year: number | undefined
+): OllamaTitleRef | null {
+  const needle = title.trim().toLowerCase()
+  if (!needle) return null
+  const matches = candidates.filter((item) => item.title.toLowerCase() === needle)
+  return matches.length ? narrowByYear(matches, year) : null
+}
+
 /**
  * Resolves a recommendation reply back to a real candidate, or null.
  *
- * Tried in order: the whole reply as a title, the part before the dash, and
- * finally any candidate whose title is mentioned in the reply (longest title
- * first, so "Dune: Part Two" wins over "Dune" when both are on the list and
- * both appear). Null means the model answered with something that isn't on
- * the list — the caller falls back rather than opening a title nobody asked
- * for.
+ * Tried in order: the part before the dash as a title, the whole line as a
+ * title, and finally any candidate whose title is mentioned in the reply
+ * (longest title first, so "Dune: Part Two" wins over "Dune" when both are
+ * on the list and both appear). Every step then disambiguates same-titled
+ * candidates by the year the model gave. Null means the model answered with
+ * something that isn't on the list — the caller falls back rather than
+ * opening a title nobody asked for.
  */
 export function matchRecommendation(
   reply: string,
@@ -235,16 +278,21 @@ export function matchRecommendation(
   // one they echo back, whatever the prompt asked for.
   const [titlePart, ...reasonParts] = firstLine.split(/\s+[—–-]\s+/)
   const reason = reasonParts.join(' - ').trim()
+  // Read off the line that named the title, not the whole reply, so a year
+  // mentioned in passing in a later sentence can't redirect the pick.
+  const year = statedYear(firstLine)
 
-  const byExact = (needle: string) =>
-    candidates.find((item) => item.title.toLowerCase() === needle.trim().toLowerCase())
-
-  const exact = byExact(titlePart ?? '') ?? byExact(firstLine)
+  const exact =
+    resolveTitle(candidates, withoutYear(titlePart ?? ''), year) ??
+    resolveTitle(candidates, withoutYear(firstLine), year)
   if (exact) return { match: exact, reason }
 
-  const contained = [...candidates]
+  const mentioned = [...candidates]
     .sort((a, b) => b.title.length - a.title.length)
-    .find((item) => item.title.length >= 2 && mentionsTitle(text, item.title))
+    .filter((item) => item.title.length >= 2 && mentionsTitle(text, item.title))
+  if (!mentioned.length) return null
 
-  return contained ? { match: contained, reason } : null
+  // Longest title wins, then the year picks between any remakes sharing it.
+  const sameTitle = mentioned.filter((item) => item.title === mentioned[0].title)
+  return { match: narrowByYear(sameTitle, year ?? statedYear(text)), reason }
 }
