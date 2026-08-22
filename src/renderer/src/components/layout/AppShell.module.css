@@ -57,6 +57,17 @@
   flex-direction: column;
   justify-content: safe center;
   overflow-y: auto;
+  /* The rail is sized to its own buttons, not to this column (see .rail
+     in SidebarNavigation.module.css), so most of this full-height column
+     is empty, transparent — and, until this rule, still hit-testable.
+     That mattered once MoodBrowser's dock became a full-width band along
+     the bottom of the window: this column sits above it (z-index 15 vs
+     .main's 5), so its empty lower half was silently swallowing clicks
+     on the first mood. Hit-testing is disabled for the column itself and
+     restored on .rail, which is the only thing in here that draws
+     anything. Wheel events over the rail still bubble to this element,
+     so the overflow-y:auto fallback above keeps working. */
+  pointer-events: none;
 }
 
 .main {
