@@ -167,8 +167,16 @@ export function SidebarNavigation() {
   const measure = useCallback(() => {
     const nav = navRef.current
     if (!nav) return
-    const width = isMobile ? 0 : Math.round(nav.getBoundingClientRect().width)
+    const rect = nav.getBoundingClientRect()
+    const width = isMobile ? 0 : Math.round(rect.width)
     document.documentElement.style.setProperty('--nav-rail-width', `${width}px`)
+    // The mirror of the above for the mobile layout, where this nav is a
+    // bottom bar rather than a left column. MoodBrowser's dock is pinned
+    // to the bottom of the window and has to sit ON TOP of that bar,
+    // never over it — measured for the same reason the width is, so a CSS
+    // change to the bar's height can't silently desync the dock.
+    const barHeight = isMobile ? Math.round(rect.height) : 0
+    document.documentElement.style.setProperty('--nav-bar-height', `${barHeight}px`)
   }, [isMobile])
 
   useLayoutEffect(() => {
