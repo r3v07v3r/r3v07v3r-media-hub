@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useAppState } from '@renderer/context/AppStateContext'
 import { Icon } from '@renderer/components/icons/Icon'
-import { DEFAULT_OLLAMA_BASE_URL } from '@shared/media-hub/ollama'
+import { DEFAULT_OLLAMA_BASE_URL, pickInstalledModel } from '@shared/media-hub/ollama'
 import type {
   MalReconcilePreview,
   SimklPinStart,
@@ -1281,7 +1281,10 @@ export function OllamaSection() {
       .then((result) => {
         if (probeGeneration.current !== generation) return
         setModels(result.models)
-        setModel((current) => current || result.model || result.models[0] || '')
+        // The saved model is only a preference, never a guarantee — it can
+        // have been removed with `ollama rm` since it was configured. See
+        // pickInstalledModel.
+        setModel((current) => pickInstalledModel(result.models, current, result.model))
       })
       .catch(() => {})
     return () => {
@@ -1315,7 +1318,10 @@ export function OllamaSection() {
       })
       return
     }
-    setModel((current) => (current && result.models.includes(current) ? current : result.models[0]))
+    // No saved model passed: Check may well be probing a different address
+    // from the one the settings file describes, so what is saved says
+    // nothing about what is installed there.
+    setModel((current) => pickInstalledModel(result.models, current, ''))
     setStatus({
       kind: 'ok',
       message: `Found ${result.models.length} model${result.models.length === 1 ? '' : 's'}.`

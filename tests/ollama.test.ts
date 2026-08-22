@@ -16,6 +16,7 @@ import {
   normalizeOllamaModel,
   parseOllamaModels,
   parseOllamaReply,
+  pickInstalledModel,
   type OllamaTitleRef
 } from '../src/shared/media-hub/ollama'
 
@@ -109,6 +110,31 @@ check('tolerates any shape a server might return', () => {
   assert.deepEqual(parseOllamaModels({ models: [{ name: 'bad name' }, { name: 'ok:1' }] }), [
     'ok:1'
   ])
+})
+
+// --- pickInstalledModel ----------------------------------------------------
+
+check('keeps a selection that is still installed', () => {
+  assert.equal(pickInstalledModel(['a:1', 'b:2'], 'b:2', 'a:1'), 'b:2')
+})
+
+check('falls back to the saved model when nothing is chosen yet', () => {
+  assert.equal(pickInstalledModel(['a:1', 'b:2'], '', 'b:2'), 'b:2')
+})
+
+check('drops a model that is no longer installed', () => {
+  // The case that matters: configured last week, since removed with
+  // `ollama rm`. Restoring it would leave the select holding a value that
+  // matches no option, and Save would fail on a name the server has never
+  // heard of.
+  assert.equal(pickInstalledModel(['a:1', 'b:2'], '', 'gone:9'), 'a:1')
+  assert.equal(pickInstalledModel(['a:1', 'b:2'], 'gone:9', 'also-gone:9'), 'a:1')
+})
+
+check('holds nothing when the server has nothing to offer', () => {
+  // An unreachable server reports no models; Connect stays disabled rather
+  // than pointing at a model nobody has confirmed exists.
+  assert.equal(pickInstalledModel([], 'a:1', 'b:2'), '')
 })
 
 // --- parseOllamaReply ------------------------------------------------------

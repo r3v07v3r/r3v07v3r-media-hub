@@ -81,6 +81,30 @@ export function normalizeOllamaModel(value: unknown): string {
   return /^[A-Za-z0-9][A-Za-z0-9._:/-]*$/.test(raw) ? raw : ''
 }
 
+/**
+ * Which model the Settings dropdown should hold, given what is actually
+ * installed on the server that was just probed.
+ *
+ * The rule is only ever "something on that list, or nothing": a select whose
+ * value matches none of its options renders as one model while its state
+ * holds another, and Save then fails on a name the server has never heard
+ * of. That happens for real — a model configured last week and since removed
+ * with `ollama rm` is still what the settings file says.
+ *
+ * Preference order is keep-what-is-chosen, then what was saved, then the
+ * first installed one, so a valid existing selection survives a re-probe and
+ * an install that has moved on quietly corrects itself.
+ *
+ * Lives here rather than in the pane because the two places that probe a
+ * server — the background one on open, and the Check button — had already
+ * drifted apart on exactly this point once.
+ */
+export function pickInstalledModel(installed: string[], current: string, saved: string): string {
+  if (current && installed.includes(current)) return current
+  if (saved && installed.includes(saved)) return saved
+  return installed[0] ?? ''
+}
+
 /** Model tags from a `GET /api/tags` body, de-duplicated and sorted. Tolerates any shape — this is a response from a server the person pointed us at, not something to trust. */
 export function parseOllamaModels(payload: unknown): string[] {
   const models = (payload as { models?: unknown })?.models
