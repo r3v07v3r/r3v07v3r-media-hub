@@ -577,6 +577,24 @@ check('longest-first still settles titles overlapping at one mention', () => {
   assert.equal(picked?.match.id, 'batman-movie')
 })
 
+check('keeps a prefix title that is also named on its own', () => {
+  // "Batman" appears twice: once swallowed by the longer title, once as the
+  // pick carrying the reason. Judging ownership per title rather than per
+  // occurrence dropped it and opened the film being rejected.
+  const both: OllamaTitleRef[] = [
+    { id: 'batman', title: 'Batman', year: 1989 },
+    { id: 'batman-movie', title: 'Batman - The Movie', year: 1966 }
+  ]
+  const picked = matchRecommendation(
+    'I considered Batman - The Movie, but pick Batman — classic.',
+    both
+  )
+  assert.equal(picked?.match.id, 'batman')
+  // And the reason must come from the standalone mention, not from the
+  // swallowed one — reading there yields "The Movie, but pick Batman ...".
+  assert.equal(picked?.reason, 'classic.')
+})
+
 check('reports no match when the model picks something not on the list', () => {
   assert.equal(matchRecommendation('Watch Interstellar.', LIBRARY), null)
   assert.equal(matchRecommendation('   ', LIBRARY), null)

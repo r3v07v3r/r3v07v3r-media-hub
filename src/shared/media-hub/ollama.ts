@@ -322,9 +322,16 @@ function titleOccurrence(title: string): string {
   return `(?<!${TITLE_EDGE})${escapeForRegex(title)}(?!${TITLE_EDGE})${NOT_A_SEQUEL}`
 }
 
-/** Where the qualifying occurrence of `title` starts in `line`, or -1. */
-function titleIndexIn(line: string, title: string): number {
-  return line.match(new RegExp(titleOccurrence(title), 'u'))?.index ?? -1
+/** Start and end offsets of one occurrence of a title within a line. */
+type TitleSpan = [number, number]
+
+/** Every qualifying occurrence of `title` in `line`, not just the first. */
+function titleSpansIn(line: string, title: string): TitleSpan[] {
+  const spans: TitleSpan[] = []
+  for (const found of line.matchAll(new RegExp(titleOccurrence(title), 'gu'))) {
+    if (found.index !== undefined) spans.push([found.index, found.index + found[0].length])
+  }
+  return spans
 }
 
 /**
@@ -343,20 +350,36 @@ function titleIndexIn(line: string, title: string): number {
  * everything in this file that inferred rather than parsed has come back as
  * a defect.
  */
-function reasonAfterTitle(line: string, title: string): string {
-  // Every qualifying occurrence is tried, not just the first: "Between Dune
-  // and Arrival, go with Arrival — quieter." names Arrival twice and only
-  // the second one carries the reason. Same shape as yearAfterTitle, which
-  // walks past mentions that have no year against them.
+function reasonAtSpans(line: string, spans: TitleSpan[]): string {
+  // Every given occurrence is tried, not just the first: "Between Dune and
+  // Arrival, go with Arrival — quieter." names Arrival twice and only the
+  // second one carries the reason.
+  //
+  // Taking spans rather than a title is what keeps a swallowed occurrence
+  // out of this. In "I considered Batman - The Movie, but pick Batman —
+  // classic." the first "Batman" is part of the longer title, and reading
+  // from it returns "The Movie, but pick Batman — classic." as the reason.
   //
   // The tail steps over a closing quote and a year if either is there, since
   // `"It" (2017) — the scary one` has both between the title and its reason.
   const tail = new RegExp(`^${QUOTES}?\\s*(?:\\(\\d{4}\\))?\\s*[—–-]\\s+(.*)$`, 'u')
-  for (const found of line.matchAll(new RegExp(titleOccurrence(title), 'gu'))) {
-    const after = line.slice(found.index + found[0].length).match(tail)
+  for (const [, end] of spans) {
+    const after = line.slice(end).match(tail)
     if (after) return after[1].trim()
   }
   return ''
+}
+
+/** The year bracketed against one of `spans`, or undefined. */
+function yearAtSpans(line: string, spans: TitleSpan[]): number | undefined {
+  // A closing quote may sit between the two — the model wrote "It" (2017),
+  // and that year is still this title's.
+  const bracket = new RegExp(`^${QUOTES}?\\s*\\((\\d{4})\\)`, 'u')
+  for (const [, end] of spans) {
+    const found = line.slice(end).match(bracket)
+    if (found) return Number(found[1])
+  }
+  return undefined
 }
 
 /**
@@ -374,11 +397,9 @@ function reasonAfterTitle(line: string, title: string): string {
  * ending the search, so "Dune is great. Actually, Dune (1984) is my pick."
  * still finds 1984.
  */
+/** Whether the reply writes a year against this title anywhere. Only used to judge whether an everyday word was written AS a title, which is a question about the whole reply. */
 function yearAfterTitle(text: string, title: string): number | undefined {
-  // A closing quote may sit between the two — the model wrote "It" (2017),
-  // and that year is still this title's.
-  const found = text.match(new RegExp(`${titleOccurrence(title)}${QUOTES}?\\s*\\((\\d{4})\\)`, 'u'))
-  return found ? Number(found[1]) : undefined
+  return yearAtSpans(text, titleSpansIn(text, title))
 }
 
 /**
@@ -567,36 +588,41 @@ export function matchRecommendation(
   // named in different places, and using it there opened whichever name
   // happened to be longer: "I considered Interstellar, but I'd pick Arrival"
   // opened Interstellar, the one the model had just rejected.
-  const named = [...byTitle.entries()].map(([title, group]) => ({
-    title,
-    ...group,
-    at: titleIndexIn(group.line, title)
-  }))
-  const distinct = named.filter(
-    (entry, index) =>
-      !named.some(
-        (longer, other) =>
-          other < index &&
-          longer.line === entry.line &&
-          entry.at >= longer.at &&
-          entry.at < longer.at + longer.title.length
-      )
-  )
+  //
+  // Ownership is per OCCURRENCE, not per title. A prefix title can be
+  // swallowed in one place and named in its own right in another: "I
+  // considered Batman - The Movie, but pick Batman — classic." names both,
+  // and dropping Batman because its first mention sat inside the longer
+  // title opened the very film that sentence was rejecting.
+  const named: Array<{ title: string; items: OllamaTitleRef[]; line: string; spans: TitleSpan[] }> =
+    []
+  for (const [title, group] of byTitle) {
+    const owned = titleSpansIn(group.line, title).filter(
+      ([start]) =>
+        !named.some(
+          (longer) =>
+            longer.line === group.line &&
+            longer.spans.some(([from, to]) => start >= from && start < to)
+        )
+    )
+    if (owned.length) named.push({ title, ...group, spans: owned })
+  }
+  if (!named.length) return null
 
   // More than one title genuinely named. Which one was chosen is a question
   // about the sentence, and this is a regex — so the only thing it may go on
   // is the format the prompt asked for: the pick is the one the model
   // attached its reason to. Anything less clear falls back to a random pick,
   // which at least says out loud that nothing chose it.
-  const withReason = distinct.filter((entry) => reasonAfterTitle(entry.line, entry.title) !== '')
-  const pick = distinct.length === 1 ? distinct[0] : withReason.length === 1 ? withReason[0] : null
+  const withReason = named.filter((entry) => reasonAtSpans(entry.line, entry.spans) !== '')
+  const pick = named.length === 1 ? named[0] : withReason.length === 1 ? withReason[0] : null
   if (!pick) return null
 
   // The year picks between any remakes sharing the chosen title, read from
   // directly against it rather than from anywhere on the line — a preamble's
   // year is not the pick's year.
   return {
-    match: narrowByYear(pick.items, yearAfterTitle(pick.line, pick.title)),
-    reason: reasonAfterTitle(pick.line, pick.title)
+    match: narrowByYear(pick.items, yearAtSpans(pick.line, pick.spans)),
+    reason: reasonAtSpans(pick.line, pick.spans)
   }
 }
