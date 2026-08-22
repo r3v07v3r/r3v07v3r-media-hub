@@ -1253,13 +1253,29 @@ export function OllamaSection() {
    * which disables Connect until Check has actually asked the new address
    * what it has — which is the right order to do this in.
    */
+  /**
+   * The one way the model list and the selection ever change, so they cannot
+   * come apart.
+   *
+   * They already have, twice. The selection kept a model the server no
+   * longer had; then the early returns in check() — unreachable, or reached
+   * with nothing installed — emptied the list and left the selection behind,
+   * so Connect stayed enabled on a model the latest probe had explicitly not
+   * verified. Both were the same invariant written down in more than one
+   * place: what is selected must be something the last probe actually saw.
+   * pickInstalledModel returns '' for an empty list, so "we learned nothing"
+   * lands here as "select nothing" without a special case.
+   */
+  function applyProbedModels(installed: string[], saved = '') {
+    // Keeps the array identity when nothing was there and nothing is now —
+    // this runs on every keystroke in the address field via abandonProbe.
+    setModels((current) => (current.length === 0 && installed.length === 0 ? current : installed))
+    setModel((current) => pickInstalledModel(installed, current, saved))
+  }
+
   function abandonProbe() {
     probeGeneration.current += 1
-    // Called on every keystroke in the address field, so the already-empty
-    // case keeps its array identity rather than churning a new one per
-    // character.
-    setModels((current) => (current.length ? [] : current))
-    setModel('')
+    applyProbedModels([])
     // Must not be left on 'busy': that disables Check and Connect, and the
     // superseded probe is no longer coming back to clear it. A write in
     // flight owns the status line and is exempt — clearing it there would
@@ -1280,11 +1296,9 @@ export function OllamaSection() {
       .status()
       .then((result) => {
         if (probeGeneration.current !== generation) return
-        setModels(result.models)
         // The saved model is only a preference, never a guarantee — it can
-        // have been removed with `ollama rm` since it was configured. See
-        // pickInstalledModel.
-        setModel((current) => pickInstalledModel(result.models, current, result.model))
+        // have been removed with `ollama rm` since it was configured.
+        applyProbedModels(result.models, result.model)
       })
       .catch(() => {})
     return () => {
@@ -1302,10 +1316,15 @@ export function OllamaSection() {
     // one was out. Whatever replaced it owns the status line now.
     if (probeGeneration.current !== generation) return
     if (!result) {
+      applyProbedModels([])
       setStatus({ kind: 'error', message: 'Could not check that address.' })
       return
     }
-    setModels(result.models)
+    // Before the early returns below, not after: an unreachable server and a
+    // server with nothing installed both report no models, and the selection
+    // has to go with them. No saved model is passed, because Check may be
+    // probing a different address from the one the settings file describes.
+    applyProbedModels(result.models)
     if (!result.reachable) {
       setStatus({ kind: 'error', message: result.error ?? 'No Ollama server answered there.' })
       return
@@ -1318,10 +1337,6 @@ export function OllamaSection() {
       })
       return
     }
-    // No saved model passed: Check may well be probing a different address
-    // from the one the settings file describes, so what is saved says
-    // nothing about what is installed there.
-    setModel((current) => pickInstalledModel(result.models, current, ''))
     setStatus({
       kind: 'ok',
       message: `Found ${result.models.length} model${result.models.length === 1 ? '' : 's'}.`
