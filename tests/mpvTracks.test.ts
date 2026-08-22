@@ -197,6 +197,14 @@ function fakePlayer(replyError = 'success'): { player: MpvPlayer; sent: string[]
   return { player, sent }
 }
 
+/** Which properties were written, in the order they went on the wire. */
+function propertiesWritten(sent: string[]): string[] {
+  return sent
+    .map((line) => JSON.parse(line) as { command: unknown[] })
+    .filter((msg) => msg.command[0] === 'set_property')
+    .map((msg) => String(msg.command[1]))
+}
+
 function writesFor(sent: string[], property: string): unknown[] {
   return sent
     .map((line) => JSON.parse(line) as { command: unknown[] })
@@ -350,6 +358,29 @@ async function main(): Promise<void> {
     assert.ok(
       args.includes('--fs-screen=current'),
       `launch args do not pin the fullscreen screen: ${args.join(' ')}`
+    )
+  })
+
+  await checkAsync('a retained player is put back in the window before it is given one', async () => {
+    const { player, sent } = fakePlayer()
+    // What the last session left behind. The mpv PROCESS outlives a session and
+    // keeps its properties, and nothing tracks the app window between sessions
+    // — so leaving fullscreen while stopped goes unheard.
+    await player.setFullscreen(true)
+    sent.length = 0
+
+    // What starting a windowed title on that process has to do, in this order.
+    await player.setFullscreen(false)
+    await player.setBounds({ x: 0, y: 0, width: 1600, height: 900 })
+
+    assert.deepEqual(
+      propertiesWritten(sent),
+      ['fullscreen', 'geometry'],
+      // The other order loses the rectangle: geometry writes are dropped while
+      // mpv still believes it is fullscreen, so the next title's window would
+      // be created from the last session's bounds — screen-sized, over a
+      // windowed app, for as long as the load takes.
+      `stale fullscreen was not cleared before the rectangle: ${sent.join(' ')}`
     )
   })
 

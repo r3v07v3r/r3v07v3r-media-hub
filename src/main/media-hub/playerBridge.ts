@@ -589,6 +589,29 @@ export async function startPlayerSession(
   trackWindow(mainWindow)
 
   openPlayerOverlay(mainWindow, { onFocus: () => restackPlayer() })
+
+  // Where mpv's window goes, and whether it is fullscreen, settled BEFORE the
+  // file loads — because `loadfile` is what CREATES that window, and a window
+  // created in the wrong state is on screen in the wrong state for as long as
+  // the load takes, which on a cold stream is seconds rather than frames.
+  //
+  // Needed at all because the mpv PROCESS outlives a session and keeps its
+  // properties, while the window tracking that would correct them is detached
+  // between sessions. Stopping a fullscreen title and leaving fullscreen before
+  // starting the next one is the case that bites: nothing has told mpv, so the
+  // next title opens screen-sized over a windowed app for the whole load.
+  //
+  // Ordered against the rectangle rather than fired alongside it, because
+  // geometry writes are dropped while mpv is fullscreen (see setBounds):
+  // leaving has to come before the rectangle and entering after it, or the
+  // window is placed from the last session's bounds. Both are no-ops when the
+  // state already agrees, which is what a mid-session title change gets — so
+  // swapping films inside a fullscreen party does not flash out and back.
+  const fullScreen = mainWindow.isFullScreen()
+  if (!fullScreen) await player.setFullscreen(false)
+  await player.setBounds(playerBoundsFor(mainWindow))
+  if (fullScreen) await player.setFullscreen(true)
+
   await player.loadFile(url, {
     startSeconds: options.startSeconds,
     audioLanguage: options.audioLanguage,
@@ -602,14 +625,6 @@ export async function startPlayerSession(
   // shutdown), and a respawned mpv is back at its defaults while the overlay
   // would still be showing the mode that was chosen before.
   await applyFitMode(fitMode).catch(() => {})
-
-  // Re-asserted per title, and for a sharper reason than the fit mode: the mpv
-  // PROCESS outlives a session, so an mpv left in fullscreen by the last title
-  // would open the next one screen-sized over a windowed app. Reading the
-  // window rather than assuming also covers the other direction, a session
-  // started while the app is already fullscreen — no transition event is coming
-  // to correct that one, because the transition already happened.
-  setPlayerFullscreen(mainWindow.isFullScreen())
 
   // Re-asserted per title for the same reason as the fit mode, and read from
   // the window because a session can start into an already-fullscreen app —
@@ -663,6 +678,13 @@ export async function stopPlayerSession(): Promise<void> {
   sessionSnapshot = null
   closePlayerOverlay()
   await player.stopFile()
+  // The film is gone, so nothing is fullscreen. Cleared here as well as applied
+  // at the next session's start, because between the two there is no window
+  // tracking at all: leaving fullscreen while stopped goes unheard, and the flag
+  // would still be set when the next title's window is created. Written after
+  // stopFile rather than before it so mpv drops the state on a window that has
+  // already gone, instead of animating out of fullscreen on the way out.
+  await player.setFullscreen(false)
 }
 
 /** Full teardown, for app quit. */
