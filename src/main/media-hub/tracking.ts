@@ -593,10 +593,19 @@ async function pushPendingToServices(): Promise<Set<string>> {
   // about the remote side — see withPushedRemoteState.
   const kept = withPushedRemoteState([...remaining, ...stillHeld], pushedValue)
   const persisted = writePendingPushes(kept)
-  // What is on disk is either exactly what this flush learned, or it is
-  // behind by whatever this flush pushed.
-  if (persisted) staleSnapshots.clear()
-  else for (const id of pushedValue.keys()) staleSnapshots.add(id)
+  // A successful write only vouches for what THIS flush corrected. An
+  // entry carrying staleness from an earlier one was written straight
+  // back out with that same stale value — the write succeeding says
+  // nothing about it, and clearing its marker would hand it back to the
+  // settle shortcut it was being kept away from. Entries that left the
+  // queue can never be settled against anything, so their markers go.
+  if (persisted) {
+    for (const id of pushedValue.keys()) staleSnapshots.delete(id)
+    const queuedIds = new Set(kept.map((entry) => entry.id))
+    for (const id of [...staleSnapshots]) if (!queuedIds.has(id)) staleSnapshots.delete(id)
+  } else {
+    for (const id of pushedValue.keys()) staleSnapshots.add(id)
+  }
   if (!persisted) {
     // The pushes themselves stand (they are what the report says);
     // what could not be written down is which of them are now done.
