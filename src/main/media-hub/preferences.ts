@@ -8,6 +8,7 @@
 import type { MediaHubPublicSettings, Theme, UpdateChannel } from '../../shared/media-hub/types'
 import { normalizePlaybackBuffer } from '../../shared/media-hub/playbackBuffer'
 import { normalizeVideoScaling } from '../../shared/media-hub/videoScaling'
+import { normalizeOllamaBaseUrl, normalizeOllamaModel } from '../../shared/media-hub/ollama'
 
 export const THEMES: Theme[] = [
   { id: 'neon', name: 'Neon Noir', description: 'Signature magenta command center' },
@@ -70,7 +71,12 @@ export function publicSettings(settings: Record<string, unknown> = {}): MediaHub
       Number(settings.connectionSpeedMbps) > 0 ? Number(settings.connectionSpeedMbps) : undefined,
     hideWatchedDefault: settings.hideWatchedDefault === true,
     hideCompletedDefault: settings.hideCompletedDefault === true,
-    hideDislikedDefault: settings.hideDislikedDefault === true
+    hideDislikedDefault: settings.hideDislikedDefault === true,
+    // Re-normalized on the way out, not just on the way in: what's on disk
+    // was written by some earlier version of this app, and the renderer
+    // renders this straight into the Settings pane.
+    ollamaBaseUrl: normalizeOllamaBaseUrl(settings.ollamaBaseUrl),
+    ollamaModel: normalizeOllamaModel(settings.ollamaModel)
   }
 }
 
@@ -79,7 +85,8 @@ export function publicSettings(settings: Record<string, unknown> = {}): MediaHub
  * playback buffering survive; every account/service-identifying field is
  * intentionally dropped. Playback buffering (and the UI-animations/video-
  * transcode toggles alongside it) is a device/connection preference, not
- * account data, so it belongs here too.
+ * account data, so it belongs here too, as does the local Ollama address
+ * and model.
  */
 export function logoutSettings(
   settings: Record<string, unknown> = {}
@@ -100,6 +107,8 @@ export function logoutSettings(
   | 'hideWatchedDefault'
   | 'hideCompletedDefault'
   | 'hideDislikedDefault'
+  | 'ollamaBaseUrl'
+  | 'ollamaModel'
 > {
   return {
     theme: normalizeTheme(settings.theme),
@@ -130,6 +139,11 @@ export function logoutSettings(
       Number(settings.connectionSpeedMbps) > 0 ? Number(settings.connectionSpeedMbps) : undefined,
     hideWatchedDefault: settings.hideWatchedDefault === true,
     hideCompletedDefault: settings.hideCompletedDefault === true,
-    hideDislikedDefault: settings.hideDislikedDefault === true
+    hideDislikedDefault: settings.hideDislikedDefault === true,
+    // Survives logout with the other device preferences: which machine on
+    // your own network runs your own models has nothing to do with which
+    // TorBox/Simkl account was signed in.
+    ollamaBaseUrl: normalizeOllamaBaseUrl(settings.ollamaBaseUrl),
+    ollamaModel: normalizeOllamaModel(settings.ollamaModel)
   }
 }

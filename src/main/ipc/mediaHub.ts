@@ -19,6 +19,7 @@ import { registerCatalogIpc } from '../media-hub/catalog'
 import { registerDownloadGuardIpc } from '../media-hub/downloadGuard'
 import { registerMalIpc } from '../media-hub/malSync'
 import { registerNetworkIpc } from '../media-hub/network'
+import { registerOllamaIpc } from '../media-hub/ollamaService'
 import { registerOmdbIpc } from '../media-hub/omdb'
 import { registerPlaybackIpc, subtitleCacheDir } from '../media-hub/playbackSession'
 import { registerPlayerIpc } from '../media-hub/playerBridge'
@@ -51,5 +52,6 @@ export function registerMediaHubIpc(): void {
   registerNetworkIpc()
   registerAniskipIpc()
   registerOmdbIpc()
+  registerOllamaIpc()
   registerDownloadGuardIpc()
 }

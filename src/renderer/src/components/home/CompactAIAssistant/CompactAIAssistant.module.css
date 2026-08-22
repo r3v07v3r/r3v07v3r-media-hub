@@ -163,9 +163,6 @@
     transform: rotate(360deg);
   }
 }
-.orbWrap.listening .orbImage {
-  animation-duration: 14s;
-}
 .orbWrap.processing .orbImage {
   animation-duration: 8s;
 }
@@ -240,9 +237,6 @@
   letter-spacing: 0.3px;
 }
 
-.orbWrap.listening .orbHalo {
-  animation-duration: 1.6s;
-}
 .orbWrap.processing .orbRingSpin {
   animation-duration: 3.2s;
 }

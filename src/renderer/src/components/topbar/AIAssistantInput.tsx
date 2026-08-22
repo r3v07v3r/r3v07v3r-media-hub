@@ -10,8 +10,8 @@ import styles from './AIAssistantInput.module.css'
 // Route -> category kind, so this one global search field knows when it's
 // sitting on a Movies/Series/Anime page and should hit the real
 // catalog:search backend (see AppStateContext's categorySearch) instead of
-// the scripted assistant response every other route still uses. Kept as a
-// plain lookup rather than parsing categoryConfig.ts here, since this
+// the assistant (runAssistantQuery) every other route still uses. Kept as
+// a plain lookup rather than parsing categoryConfig.ts here, since this
 // component only needs the kind + a short label, not the full per-page
 // config (filters, genre lists, ...).
 const CATEGORY_ROUTE_KIND: Record<string, { kind: CategoryKind; label: string }> = {
@@ -81,31 +81,38 @@ export function AIAssistantInput() {
     setAssistantState,
     runAssistantQuery,
     closeAssistant,
+    categorySearch,
     runCategorySearch,
     clearCategorySearch
   } = useAppState()
   const [value, setValue] = useState('')
   const inputRef = useRef<HTMLInputElement>(null)
-  const listenTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const pathname = useLocation().pathname
   const category = CATEGORY_ROUTE_KIND[pathname]
 
-  useEffect(() => {
-    return () => {
-      if (listenTimer.current) clearTimeout(listenTimer.current)
-    }
-  }, [])
+  // The search still standing for THIS page, if any — '' on every other
+  // route (including a detail page, where the field is the assistant again
+  // and a leftover query would read as nonsense in it).
+  const activeQuery = category && categorySearch.kind === category.kind ? categorySearch.query : ''
 
-  // Leaving a category page (or the query going back to empty) drops
-  // whatever search was in flight/showing on that page — otherwise a
-  // search typed on /movies would still be "active" in context after
-  // navigating to /series, which would incorrectly gate that page's own
-  // search-results view too (see CategoryPage's categorySearch check).
+  // Refills the field from that standing search whenever the route
+  // changes. This is what makes "search, open a title, come back" land on
+  // the results with the query still in the field, instead of on an empty
+  // field over the full unfiltered grid: categorySearch is app-level state
+  // that already survives the detail-page visit (CategoryPage renders
+  // straight off it), and this is the half that keeps the input agreeing
+  // with it. Navigating no longer clears the search at all — it now ends
+  // only when the person ends it (the clear button here, the results
+  // heading's own Clear, Escape, or emptying the field), which is also why
+  // the query stays visible the whole time it is in effect rather than
+  // silently filtering a page with a blank-looking search box.
+  //
+  // This does NOT fight typing: `activeQuery` only changes when a search is
+  // actually submitted or cleared, never on a keystroke.
   useEffect(() => {
-    if (!category) clearCategorySearch()
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    setValue('')
-  }, [pathname, category, clearCategorySearch])
+    setValue(activeQuery)
+  }, [pathname, activeQuery])
 
   function submitQuery(query: string) {
     if (category) {
@@ -118,25 +125,16 @@ export function AIAssistantInput() {
   const capsuleClass = [
     styles.capsule,
     assistantState === 'focused' ? styles.capsuleFocused : '',
-    assistantState === 'listening' ? styles.capsuleListening : '',
     assistantState === 'processing' ? styles.capsuleProcessing : '',
     assistantState === 'error' ? styles.capsuleError : ''
   ]
     .filter(Boolean)
     .join(' ')
 
-  function handleMicClick() {
-    if (assistantState === 'listening') {
-      setAssistantState('idle')
-      return
-    }
-    setAssistantState('listening')
-    listenTimer.current = setTimeout(() => {
-      const heard = category ? category.label : 'something thrilling for tonight'
-      setValue(heard)
-      setAssistantState(category ? 'idle' : 'listening')
-      submitQuery(heard)
-    }, 1600)
+  function clearSearch() {
+    setValue('')
+    clearCategorySearch()
+    inputRef.current?.focus()
   }
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
@@ -151,7 +149,6 @@ export function AIAssistantInput() {
   }
 
   const statusLabel: Partial<Record<string, string>> = {
-    listening: 'Listening…',
     processing: 'Thinking…',
     responding: ''
   }
@@ -160,15 +157,15 @@ export function AIAssistantInput() {
     <div className={styles.wrap}>
       <WaveSpacer state={assistantState} />
       <div className={capsuleClass}>
-        <button
-          type="button"
-          className={`${styles.micButton} ${assistantState === 'listening' ? styles.micButtonActive : ''}`}
-          aria-pressed={assistantState === 'listening'}
-          aria-label={assistantState === 'listening' ? 'Stop listening' : 'Ask with your voice'}
-          onClick={handleMicClick}
-        >
-          <Icon name="mic" className={styles.micIcon} />
-        </button>
+        {/* Decorative, not a control. This slot used to hold a microphone
+            button that faked a voice capture on a timer — no audio was
+            ever recorded, and nothing in this app can ask for the
+            microphone anyway (the main process denies every permission
+            request outright, see main/index.ts). Removed rather than left
+            standing as an affordance for a capability that isn't there. */}
+        <span className={styles.leadIcon} aria-hidden="true">
+          <Icon name={category ? 'search' : 'sparkle'} className={styles.leadIconGlyph} />
+        </span>
         <input
           ref={inputRef}
           type="text"
@@ -192,6 +189,20 @@ export function AIAssistantInput() {
           onKeyDown={handleKeyDown}
           aria-label={category ? `Search ${category.label}` : 'Ask R3 anything'}
         />
+        {/* Only while a search is actually standing. The search outlives
+            navigating away and back now, so it needs a way out from the
+            field itself, not only from the results heading further down
+            the page. */}
+        {activeQuery && (
+          <button
+            type="button"
+            className={styles.clearButton}
+            onClick={clearSearch}
+            aria-label={category ? `Clear ${category.label} search` : 'Clear search'}
+          >
+            <Icon name="x" size={12} />
+          </button>
+        )}
         {assistantState === 'processing' && (
           <span className={styles.processingRing} aria-hidden="true" />
         )}
@@ -199,10 +210,9 @@ export function AIAssistantInput() {
           <span className={styles.statusText}>{statusLabel[assistantState]}</span>
         )}
         <span className="visually-hidden" role="status" aria-live="polite">
-          {assistantState === 'listening' && 'Voice assistant is listening'}
-          {assistantState === 'processing' && 'Voice assistant is processing your request'}
-          {assistantState === 'responding' && 'Voice assistant has a response'}
-          {assistantState === 'error' && 'Voice assistant encountered an error'}
+          {assistantState === 'processing' && 'R3 AI is working on your request'}
+          {assistantState === 'responding' && 'R3 AI has a response'}
+          {assistantState === 'error' && 'R3 AI could not answer that'}
         </span>
       </div>
       <WaveSpacer mirrored state={assistantState} />

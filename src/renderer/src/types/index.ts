@@ -107,8 +107,10 @@ export interface UserProfile {
   isKid?: boolean
 }
 
-export type AssistantState =
-  'idle' | 'hover' | 'focused' | 'listening' | 'processing' | 'responding' | 'error'
+// No 'listening' member: the app has no voice input and cannot ask for a
+// microphone (main/index.ts denies every permission request), so a state
+// nothing could ever enter is not modelled here.
+export type AssistantState = 'idle' | 'hover' | 'focused' | 'processing' | 'responding' | 'error'
 
 // Global "what is the system doing right now" signal for the motion
 // system (see AppStateContext's `uiActivity`) — every ambient/reactive
@@ -116,7 +118,7 @@ export type AssistantState =
 // of activity from assistantState/playback/etc, so the whole interface
 // agrees on when to look "busy" vs "idle".
 export type UIActivityState =
-  'idle' | 'hovering' | 'listening' | 'processing' | 'responding' | 'playing' | 'loading' | 'error'
+  'idle' | 'hovering' | 'processing' | 'responding' | 'playing' | 'loading' | 'error'
 
 export interface WeatherSnapshot {
   tempC: number

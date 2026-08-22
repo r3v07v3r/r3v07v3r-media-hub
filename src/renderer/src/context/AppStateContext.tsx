@@ -37,7 +37,8 @@ import type {
 } from '@shared/media-hub/types'
 import {
   mediaItemToTrackablePayload,
-  catalogItemToMediaItem
+  catalogItemToMediaItem,
+  indexHistoryById
 } from '@renderer/lib/mediaHub/adapters'
 import {
   PlaybackPreparationCancelledError,
@@ -52,6 +53,8 @@ import {
   useMediaHubWatchedIds
 } from '@renderer/lib/mediaHub/hooks'
 import type { CategoryKind } from '@renderer/lib/mediaHub/categoryFilters'
+import { MAX_PROMPT_TITLES } from '@shared/media-hub/ollama'
+import { mediaItemToTitleRef } from '@renderer/lib/mediaHub/adapters'
 import { buildMediaId } from '@renderer/lib/mediaHub/streamId'
 import {
   captureBrowsingOrigin,
@@ -421,18 +424,72 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   const [activeMood, setActiveMood] = useState<string | null>(null)
   const [combinedMoods, setCombinedMoods] = useState<string[]>([])
   const [isOffline, setIsOffline] = useState(false)
-  const [categorySearch, setCategorySearch] = useState<AppStateValue['categorySearch']>({
+  // The RAW backend rows behind categorySearch, not the MediaItems the rest
+  // of the app reads. Those carry watched/completed/disliked/inMyList flags
+  // baked in at the moment they were mapped, and a search now outlives the
+  // detail page opened from it — so a result marked watched on that page and
+  // returned to would otherwise still show its old badge, and still slip
+  // past Hide Watched, until the search was retyped. Keeping the rows and
+  // re-deriving below is the same shape useMediaHubBrowseCatalog already
+  // uses for the browse grid, and for the same reason.
+  const [categorySearchRaw, setCategorySearchRaw] = useState<{
+    kind: CategoryKind | null
+    query: string
+    items: CatalogItem[]
+    loading: boolean
+    error: boolean
+  }>({
     kind: null,
     query: '',
-    results: [],
+    items: [],
     loading: false,
     error: false
   })
-  // The assistant's simulated think-time. A ref rather than state so a
-  // second query replaces the first instead of racing it, and so an
-  // unmount can cancel a pending one — the previous version was an
-  // append-only array nothing ever read or cleared.
-  const assistantTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  // Grouped once per history change rather than re-scanned per item — see
+  // CatalogItemAdapterContext.historyById.
+  const searchHistoryById = useMemo(
+    () => indexHistoryById(watchedIdsResult.history),
+    [watchedIdsResult.history]
+  )
+
+  // Re-derived whenever the watch/dislike/My List state behind it moves, so
+  // a standing search's badges and the Hide Watched/Completed/Disliked
+  // filters always reflect what is true now rather than what was true when
+  // the person pressed Enter. Every dependency is a useState value or a memo
+  // of one, so this recomputes when the data actually changes and not on
+  // every render — which matters, because MediaGrid resets its lazy reveal
+  // batch whenever its `items` array identity changes.
+  const categorySearch = useMemo<AppStateValue['categorySearch']>(
+    () => ({
+      kind: categorySearchRaw.kind,
+      query: categorySearchRaw.query,
+      results: categorySearchRaw.items.map((item) =>
+        catalogItemToMediaItem(item, {
+          trackedIds: myList,
+          watchedIds: watchedIdsResult.watchedIds,
+          historyById: searchHistoryById,
+          dislikedIds
+        })
+      ),
+      loading: categorySearchRaw.loading,
+      error: categorySearchRaw.error
+    }),
+    [categorySearchRaw, myList, watchedIdsResult.watchedIds, searchHistoryById, dislikedIds]
+  )
+  // Which assistant question is the current one. A local model can take a
+  // while to answer, so an answer that lands after the person has asked
+  // something else — or closed the panel — must be dropped rather than
+  // shown. Same guard, same reason, as searchGeneration just below; it
+  // replaces the ref that used to hold a fake think-time timer.
+  const assistantGeneration = useRef(0)
+  // The id main is currently generating an answer under, so it can be told
+  // to stop (see abandonAssistantRequest). null whenever nothing is in
+  // flight. Derived from assistantGeneration, which only ever counts up
+  // within one mount of this provider — that is the whole lifetime of the
+  // app, and the only thing a repeat could do is abandon a request whose
+  // answer was already going to be discarded.
+  const assistantRequestId = useRef<string | null>(null)
   // Guards against an in-flight search resolving after a newer one
   // started (or after clearCategorySearch) — only the most recent call's
   // result is ever applied.
@@ -958,24 +1015,27 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     [refreshPartyStatus]
   )
 
+  // Stops main generating an answer nobody is waiting for any more. The
+  // generation counter alone only discards the answer when it eventually
+  // arrives; the model keeps running for up to two minutes on the person's
+  // own hardware, and a replacement question ends up queued behind work
+  // that was explicitly dismissed. See ollamaService.ts's inFlightAsks.
+  const abandonAssistantRequest = useCallback(() => {
+    const pending = assistantRequestId.current
+    if (!pending) return
+    assistantRequestId.current = null
+    window.api?.mediaHub?.ollama?.cancel(pending).catch(() => {})
+  }, [])
+
   const closeAssistant = useCallback(() => {
-    // Cancel the pending think-time too, or a closed assistant reopens
-    // itself a second later with the answer to a question nobody is
-    // waiting for any more.
-    if (assistantTimer.current) {
-      clearTimeout(assistantTimer.current)
-      assistantTimer.current = null
-    }
+    // Abandons any answer still being generated, or a closed panel reopens
+    // itself with the answer to a question nobody is waiting for any more.
+    assistantGeneration.current += 1
+    abandonAssistantRequest()
     setAssistantState('idle')
     setAssistantResponse(null)
     setAssistantQuery('')
-  }, [])
-
-  useEffect(() => {
-    return () => {
-      if (assistantTimer.current) clearTimeout(assistantTimer.current)
-    }
-  }, [])
+  }, [abandonAssistantRequest])
 
   // Centralized here (every "open a title" call site — card, hero,
   // continue-watching row, context menu — already just calls
@@ -1631,76 +1691,116 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     )
   }, [])
 
-  const runAssistantQuery = useCallback((query: string) => {
-    setAssistantQuery(query)
-    setAssistantState('processing')
-    setAssistantResponse(null)
-    if (assistantTimer.current) clearTimeout(assistantTimer.current)
-    assistantTimer.current = setTimeout(() => {
-      setAssistantState('responding')
-      setAssistantResponse(
-        query.trim()
-          ? `Based on your history and current mood, I'd suggest something in Sci-Fi tonight — "Dune: Part Two" is a strong match for what you've been watching.`
-          : `I didn't catch a question there — try asking about a genre, mood, or title.`
-      )
-    }, 1100)
-  }, [])
+  // Asks the local model the person connected in Settings (see
+  // main/media-hub/ollamaService.ts). This used to resolve a hardcoded
+  // sentence about Dune on a 1.1s timer no matter what was typed; there is
+  // no canned answer left, and no model means it says so rather than
+  // pretending. A slice of the browse catalog rides along as context so the
+  // model can ground an answer in what this app can actually play.
+  const runAssistantQuery = useCallback(
+    (query: string) => {
+      const question = query.trim()
+      const generation = ++assistantGeneration.current
+      // Whatever was still generating is now answering a question that has
+      // been replaced — stop it before starting another one, so a small
+      // machine isn't running two models at once.
+      abandonAssistantRequest()
+      setAssistantQuery(query)
+      setAssistantResponse(null)
+
+      if (!question) {
+        setAssistantState('responding')
+        setAssistantResponse("I didn't catch a question there — try a genre, a mood, or a title.")
+        return
+      }
+
+      // `mediaHubSettings === null` is "the first settings fetch hasn't
+      // resolved yet", not "nothing is connected" — asking anyway is right
+      // there, because the main process answers that question
+      // authoritatively and its refusal says the same thing this branch
+      // would have. Only a settled snapshot that says no model is connected
+      // short-circuits.
+      const api = window.api?.mediaHub?.ollama
+      if (!api || mediaHubSettings?.ollamaConnected === false) {
+        setAssistantState('error')
+        setAssistantResponse(
+          'No local model is connected yet. Settings → AI links R3 to an Ollama model running on your own machine.'
+        )
+        return
+      }
+
+      const requestId = `ask-${generation}`
+      assistantRequestId.current = requestId
+      setAssistantState('processing')
+      api
+        .ask(
+          question,
+          browseCatalog.items.slice(0, MAX_PROMPT_TITLES).map(mediaItemToTitleRef),
+          requestId
+        )
+        .then((result) => {
+          if (assistantRequestId.current === requestId) assistantRequestId.current = null
+          // `cancelled` is main confirming it stopped; the generation check
+          // covers the same case for anything already superseded here.
+          if (result.cancelled || assistantGeneration.current !== generation) return
+          setAssistantState('responding')
+          setAssistantResponse(result.reply)
+        })
+        .catch((error: unknown) => {
+          if (assistantRequestId.current === requestId) assistantRequestId.current = null
+          if (assistantGeneration.current !== generation) return
+          setAssistantState('error')
+          setAssistantResponse(
+            error instanceof Error
+              ? error.message
+              : 'That question did not get through to the model.'
+          )
+        })
+    },
+    [browseCatalog.items, mediaHubSettings?.ollamaConnected, abandonAssistantRequest]
+  )
 
   // The backend itself requires >=2 characters (main/media-hub/catalog.ts's
   // catalogSearch handler returns [] below that) — mirrored here so the UI
   // can show "keep typing" rather than firing a request that's guaranteed
   // to come back empty.
-  const runCategorySearch = useCallback(
-    (kind: CategoryKind, query: string) => {
-      const q = query.trim()
-      const generation = ++searchGeneration.current
-      if (q.length < 2) {
-        setCategorySearch({ kind, query, results: [], loading: false, error: false })
-        return
-      }
-      setCategorySearch({ kind, query, results: [], loading: true, error: false })
-      const api = window.api?.mediaHub
-      if (!api) {
-        // No bridge (browser preview) — honest empty state, never a fake
-        // result list standing in for a real search.
-        setCategorySearch({ kind, query, results: [], loading: false, error: true })
-        return
-      }
-      api.catalog
-        .search(kind, q)
-        .then((items) => {
-          if (searchGeneration.current !== generation) return
-          setCategorySearch({
-            kind,
-            query,
-            results: items.map((item) =>
-              catalogItemToMediaItem(item, {
-                trackedIds: myList,
-                watchedIds: watchedIdsResult.watchedIds,
-                history: watchedIdsResult.history,
-                dislikedIds
-              })
-            ),
-            loading: false,
-            error: false
-          })
-        })
-        .catch(() => {
-          if (searchGeneration.current !== generation) return
-          setCategorySearch({ kind, query, results: [], loading: false, error: true })
-        })
-    },
-    [myList, watchedIdsResult.watchedIds, watchedIdsResult.history, dislikedIds]
-  )
+  // Stores what the backend returned and nothing else — the mapping to
+  // MediaItem happens in the memo above, so it stays current as watch state
+  // moves underneath a search that is still on screen.
+  const runCategorySearch = useCallback((kind: CategoryKind, query: string) => {
+    const q = query.trim()
+    const generation = ++searchGeneration.current
+    if (q.length < 2) {
+      setCategorySearchRaw({ kind, query, items: [], loading: false, error: false })
+      return
+    }
+    setCategorySearchRaw({ kind, query, items: [], loading: true, error: false })
+    const api = window.api?.mediaHub
+    if (!api) {
+      // No bridge (browser preview) — honest empty state, never a fake
+      // result list standing in for a real search.
+      setCategorySearchRaw({ kind, query, items: [], loading: false, error: true })
+      return
+    }
+    api.catalog
+      .search(kind, q)
+      .then((items) => {
+        if (searchGeneration.current !== generation) return
+        setCategorySearchRaw({ kind, query, items, loading: false, error: false })
+      })
+      .catch(() => {
+        if (searchGeneration.current !== generation) return
+        setCategorySearchRaw({ kind, query, items: [], loading: false, error: true })
+      })
+  }, [])
 
   const clearCategorySearch = useCallback(() => {
     searchGeneration.current += 1
-    setCategorySearch({ kind: null, query: '', results: [], loading: false, error: false })
+    setCategorySearchRaw({ kind: null, query: '', items: [], loading: false, error: false })
   }, [])
 
   const uiActivity = useMemo<UIActivityState>(() => {
     if (playbackMedia) return 'playing'
-    if (assistantState === 'listening') return 'listening'
     if (assistantState === 'processing') return 'processing'
     if (assistantState === 'responding') return 'responding'
     if (assistantState === 'error') return 'error'

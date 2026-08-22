@@ -132,6 +132,14 @@ export const MEDIA_HUB_CHANNELS = {
   subtitlesApply: 'mediahub:subtitles:apply',
   subtitlesClearCache: 'mediahub:subtitles:clear-cache',
 
+  // Local AI (Ollama) — see main/media-hub/ollamaService.ts
+  ollamaStatus: 'mediahub:ollama:status',
+  ollamaConnect: 'mediahub:ollama:connect',
+  ollamaDisconnect: 'mediahub:ollama:disconnect',
+  ollamaAsk: 'mediahub:ollama:ask',
+  ollamaCancel: 'mediahub:ollama:cancel',
+  ollamaRecommend: 'mediahub:ollama:recommend',
+
   // Network
   networkInfo: 'mediahub:network:info',
   networkSpeedTest: 'mediahub:network:speed-test',

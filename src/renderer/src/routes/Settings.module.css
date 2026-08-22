@@ -594,6 +594,16 @@
   border-color: var(--border-active);
 }
 
+/* Native <select> inside a dark glass panel: Chromium hands the dropdown
+   list itself to the OS, which paints it with the system's own colors — on
+   Windows that lands as near-white-on-white unless the options are given an
+   explicit dark background of their own. The closed control reuses
+   .fieldInput above; this is only about the open list. */
+.fieldSelect option {
+  background: #0b1220;
+  color: var(--text-primary);
+}
+
 .serviceActions {
   display: flex;
   align-items: center;

@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useAppState } from '@renderer/context/AppStateContext'
 import { Icon } from '@renderer/components/icons/Icon'
+import { DEFAULT_OLLAMA_BASE_URL, pickInstalledModel } from '@shared/media-hub/ollama'
 import type {
   MalReconcilePreview,
   SimklPinStart,
@@ -1181,6 +1182,305 @@ export function WatchPartySection() {
           </div>
         </>
       )}
+    </section>
+  )
+}
+
+/**
+ * The local AI model everything in this app labelled "AI" runs on.
+ *
+ * Ollama rather than a hosted API on purpose: the app has no account, no
+ * key of its own to spend, and nothing here should be sending someone's
+ * viewing habits to a service they didn't choose. The model is one they
+ * installed on their own machine, and if they haven't installed one, the
+ * AI features say so instead of quietly doing something else.
+ *
+ * Two steps, deliberately: check the address first (which lists what is
+ * actually installed there), then pick from that list. Typing a model name
+ * blind is how you end up with a setting that saves fine and fails later at
+ * the point of use.
+ */
+export function OllamaSection() {
+  const { mediaHubSettings, refreshMediaHubSettings } = useAppState()
+  const savedBaseUrl = mediaHubSettings?.ollamaBaseUrl ?? ''
+  const savedModel = mediaHubSettings?.ollamaModel ?? ''
+  const connected = mediaHubSettings?.ollamaConnected ?? false
+
+  const [baseUrlEdited, setBaseUrlEdited] = useState<string | null>(null)
+  const baseUrl = baseUrlEdited ?? savedBaseUrl
+  const [model, setModel] = useState('')
+  const [models, setModels] = useState<string[]>([])
+  const [status, setStatus] = useState<Status>({ kind: 'idle' })
+  // Whether a write — Connect or Disconnect — is in flight, tracked apart
+  // from the probe lifecycle below.
+  //
+  // The two are genuinely different things and conflating them was a bug:
+  // editing the address while a slow Connect was still checking the host
+  // called abandonProbe(), which cleared the shared status back to idle and
+  // re-enabled the Connect button, so a second Connect could start and race
+  // the first to persist a different server. A probe can be abandoned
+  // because nobody wants its answer any more; a write cannot, because it is
+  // going to happen whether or not the form has moved on.
+  const [saving, setSaving] = useState(false)
+  // Both fields are frozen while a write is in flight, which is what makes
+  // that safe: there is no edit to lose, and connect()'s own
+  // setBaseUrlEdited(null) on success cannot discard one made meanwhile.
+  const busy = saving || status.kind === 'busy'
+
+  // Every probe of a server claims a number, and only the newest one's
+  // result is allowed to land.
+  //
+  // A probe can take the full six seconds against a host that never answers,
+  // which is long enough for someone to give up, type a different address
+  // and press Check. Without this, the slow first result arrives last and
+  // overwrites the second server's model list: the field shows one server,
+  // the dropdown lists another's models, and Connect then fails on a model
+  // the address in the box has never heard of. Editing the address bumps it
+  // too — a probe in flight was asking about somewhere else.
+  const probeGeneration = useRef(0)
+
+  /**
+   * Invalidates a probe still in flight along with everything it told us:
+   * the model list, the selection made from it, and the message describing
+   * it.
+   *
+   * The list has to go with it. That dropdown is a claim about the server in
+   * the address field — "these are the models installed there" — and the
+   * moment the address changes, nothing has verified that claim. Leaving it
+   * lets someone submit a model the new server never listed and collect an
+   * avoidable failure, and it is the same species of unearned claim the rest
+   * of this work went round removing. Clearing it empties the selection too,
+   * which disables Connect until Check has actually asked the new address
+   * what it has — which is the right order to do this in.
+   */
+  /**
+   * The one way the model list and the selection ever change, so they cannot
+   * come apart.
+   *
+   * They already have, twice. The selection kept a model the server no
+   * longer had; then the early returns in check() — unreachable, or reached
+   * with nothing installed — emptied the list and left the selection behind,
+   * so Connect stayed enabled on a model the latest probe had explicitly not
+   * verified. Both were the same invariant written down in more than one
+   * place: what is selected must be something the last probe actually saw.
+   * pickInstalledModel returns '' for an empty list, so "we learned nothing"
+   * lands here as "select nothing" without a special case.
+   */
+  function applyProbedModels(installed: string[], saved = '') {
+    // Keeps the array identity when nothing was there and nothing is now —
+    // this runs on every keystroke in the address field via abandonProbe.
+    setModels((current) => (current.length === 0 && installed.length === 0 ? current : installed))
+    setModel((current) => pickInstalledModel(installed, current, saved))
+  }
+
+  function abandonProbe() {
+    probeGeneration.current += 1
+    applyProbedModels([])
+    // Must not be left on 'busy': that disables Check and Connect, and the
+    // superseded probe is no longer coming back to clear it. A write in
+    // flight owns the status line and is exempt — clearing it there would
+    // re-enable Connect underneath a Connect that is still running.
+    if (!saving) setStatus({ kind: 'idle' })
+  }
+
+  // Populates the model list on open when there is already an address to
+  // check, so a connected instance shows its models without anyone having
+  // to press Check first. Keyed on the SAVED address only — re-probing on
+  // every keystroke while someone types a new one would fire a request per
+  // character.
+  useEffect(() => {
+    const api = window.api?.mediaHub?.ollama
+    if (!api || !savedBaseUrl) return
+    const generation = ++probeGeneration.current
+    api
+      .status()
+      .then((result) => {
+        if (probeGeneration.current !== generation) return
+        // The saved model is only a preference, never a guarantee — it can
+        // have been removed with `ollama rm` since it was configured.
+        applyProbedModels(result.models, result.model)
+      })
+      .catch(() => {})
+    return () => {
+      probeGeneration.current += 1
+    }
+  }, [savedBaseUrl])
+
+  async function check() {
+    const api = window.api?.mediaHub?.ollama
+    if (!api || saving) return
+    const generation = ++probeGeneration.current
+    // Check is always a question about what is IN the field. Passing an
+    // empty address through as `undefined` made the bridge omit it, which
+    // main reads as "probe whatever is saved" — so clearing the box and
+    // pressing Check reported success and repopulated the old server's
+    // models while showing an empty address. The no-argument form is for the
+    // probe on open, which really is asking about the saved server.
+    const address = baseUrl.trim()
+    if (!address) {
+      applyProbedModels([])
+      setStatus({
+        kind: 'error',
+        message: `Enter the address of your Ollama server, e.g. ${DEFAULT_OLLAMA_BASE_URL}`
+      })
+      return
+    }
+    setStatus({ kind: 'busy' })
+    const result = await api.status(address).catch(() => null)
+    // Superseded by a newer check, or by the address being edited while this
+    // one was out. Whatever replaced it owns the status line now.
+    if (probeGeneration.current !== generation) return
+    if (!result) {
+      applyProbedModels([])
+      setStatus({ kind: 'error', message: 'Could not check that address.' })
+      return
+    }
+    // Before the early returns below, not after: an unreachable server and a
+    // server with nothing installed both report no models, and the selection
+    // has to go with them. No saved model is passed, because Check may be
+    // probing a different address from the one the settings file describes.
+    applyProbedModels(result.models)
+    if (!result.reachable) {
+      setStatus({ kind: 'error', message: result.error ?? 'No Ollama server answered there.' })
+      return
+    }
+    if (!result.models.length) {
+      setStatus({
+        kind: 'error',
+        message:
+          'Reached Ollama, but it has no models installed. Pull one first, e.g. "ollama pull llama3.2".'
+      })
+      return
+    }
+    setStatus({
+      kind: 'ok',
+      message: `Found ${result.models.length} model${result.models.length === 1 ? '' : 's'}.`
+    })
+  }
+
+  async function connect() {
+    const api = window.api?.mediaHub?.ollama
+    if (!api || !baseUrl.trim() || !model || saving) return
+    // Connect's own outcome is the message that matters — a probe still in
+    // flight must not overwrite "Connected." with "Found 3 models."
+    probeGeneration.current += 1
+    setSaving(true)
+    setStatus({ kind: 'busy' })
+    try {
+      await api.connect(baseUrl.trim(), model)
+      setBaseUrlEdited(null)
+      setStatus({ kind: 'ok', message: 'Connected.' })
+      refreshMediaHubSettings()
+    } catch (error) {
+      setStatus({
+        kind: 'error',
+        message: error instanceof Error ? error.message : 'Could not connect.'
+      })
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function disconnect() {
+    const api = window.api?.mediaHub?.ollama
+    if (!api || saving) return
+    probeGeneration.current += 1
+    setSaving(true)
+    setStatus({ kind: 'busy' })
+    try {
+      await api.disconnect().catch(() => {})
+      setBaseUrlEdited(null)
+      setStatus({ kind: 'idle' })
+      refreshMediaHubSettings()
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <section className={`${styles.section} glass-panel`} aria-labelledby="settings-ollama">
+      <div className={styles.serviceHead}>
+        <h2 id="settings-ollama" className={styles.sectionTitle} style={{ marginBottom: 0 }}>
+          Local AI model
+        </h2>
+        <ConnectionBadge connected={connected} />
+      </div>
+      <p className={styles.rowDescription} style={{ marginBottom: 10 }}>
+        Point R3 at an Ollama instance running on this machine (or another one on your network) and
+        the AI features run on that model: the &ldquo;Ask R3 anything&rdquo; field answers from it,
+        and the Recommend Next buttons let it choose. Nothing is sent anywhere else. With nothing
+        connected, the assistant says so rather than making something up, and the Recommend Next
+        buttons keep working by picking at random — labelled as a random pick, never passed off as a
+        recommendation. Install from ollama.com, then <code>ollama pull llama3.2</code>.
+      </p>
+
+      {connected && (
+        <p className={styles.rowDescription} style={{ marginBottom: 10 }}>
+          Currently asking <strong>{savedModel}</strong> at <strong>{savedBaseUrl}</strong>.
+        </p>
+      )}
+
+      <div className={styles.serviceFields}>
+        <label className={styles.field}>
+          <span className={styles.fieldLabel}>Server address</span>
+          <input
+            className={styles.fieldInput}
+            type="text"
+            placeholder={DEFAULT_OLLAMA_BASE_URL}
+            value={baseUrl}
+            onChange={(e) => {
+              // Anything still being probed was asking about the previous
+              // address — see abandonProbe.
+              abandonProbe()
+              setBaseUrlEdited(e.target.value)
+            }}
+            // Frozen while Connect/Disconnect is writing: that request is
+            // about the address as it stands, and an edit landing underneath
+            // it would either be discarded on success or persist a server
+            // nobody asked for.
+            disabled={saving}
+          />
+        </label>
+        <label className={styles.field}>
+          <span className={styles.fieldLabel}>Model</span>
+          <select
+            className={`${styles.fieldInput} ${styles.fieldSelect}`}
+            value={model}
+            onChange={(e) => setModel(e.target.value)}
+            disabled={!models.length || saving}
+          >
+            {models.length ? (
+              models.map((name) => (
+                <option key={name} value={name}>
+                  {name}
+                </option>
+              ))
+            ) : (
+              <option value="">Check the address first</option>
+            )}
+          </select>
+        </label>
+      </div>
+
+      <div className={styles.serviceActions} style={{ marginTop: 10 }}>
+        <button type="button" className={styles.testButton} onClick={check} disabled={busy}>
+          <Icon name="refresh" size={12} /> Check
+        </button>
+        <button
+          type="button"
+          className={styles.testButton}
+          onClick={connect}
+          disabled={!baseUrl.trim() || !model || busy}
+        >
+          {connected ? 'Save' : 'Connect'}
+        </button>
+        {connected && (
+          <button type="button" className={styles.testButton} onClick={disconnect} disabled={busy}>
+            Disconnect
+          </button>
+        )}
+        <StatusLine status={status} />
+      </div>
     </section>
   )
 }

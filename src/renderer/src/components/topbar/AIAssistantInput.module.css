@@ -36,10 +36,9 @@
   transform: scaleX(-1);
 }
 
-/* Travelling pulse riding the wave path — idle: slow + dim, listening:
-   fast + bright cyan, processing: medium + violet-shifted. This is the
-   "glow moves through the interface" behavior the static waveGlow/
-   waveLine alone don't provide. */
+/* Travelling pulse riding the wave path — idle: slow + dim, processing:
+   medium + violet-shifted. This is the "glow moves through the interface"
+   behavior the static waveGlow/waveLine alone don't provide. */
 .wavePulse {
   opacity: 0.85;
   stroke-dasharray: 0.06 1;
@@ -50,11 +49,6 @@
   to {
     stroke-dashoffset: -1;
   }
-}
-.waveState-listening .wavePulse {
-  stroke: #8ff2ff;
-  animation-duration: 1.6s;
-  filter: drop-shadow(0 0 6px rgba(143, 242, 255, 1));
 }
 .waveState-processing .wavePulse {
   stroke: #b98bff;
@@ -73,8 +67,6 @@
   opacity: 0.4;
 }
 
-.waveState-listening .waveGlow,
-.waveState-listening .waveLine,
 .waveState-processing .waveGlow,
 .waveState-processing .waveLine {
   opacity: 1;
@@ -102,9 +94,9 @@
      read as a soft glow, not a drawn outline. */
   border: 1px solid rgba(120, 165, 220, 0.1);
   /* Reference: even at rest this field carries a visible ambient cyan/
-     violet glow around the mic/input area, not just on focus. Refinement
-     pass: glow concentrated a little more toward the mic/left side (via
-     the extra asymmetric layer below) plus a slow breathing animation —
+     violet glow around the whole input area, not just on focus. Refinement
+     pass: glow concentrated a little more toward the lit left-hand icon
+     (via the extra asymmetric layer below) plus a slow breathing animation —
      it should read as a live AI control surface that happens to hold
      text, not a static search field with a glow applied to it. */
   box-shadow:
@@ -144,12 +136,6 @@
     0 0 0 4px rgba(56, 193, 255, 0.14),
     0 0 26px rgba(141, 77, 255, 0.28);
 }
-.capsuleListening {
-  border-color: rgba(56, 229, 255, 0.65);
-  box-shadow:
-    0 0 0 4px rgba(56, 229, 255, 0.18),
-    0 0 30px rgba(56, 229, 255, 0.4);
-}
 .capsuleProcessing {
   border-color: rgba(141, 77, 255, 0.65);
   box-shadow:
@@ -167,44 +153,34 @@
    off for every state that needs its own explicit glow. */
 .capsuleFocused,
 .capsule:focus-within,
-.capsuleListening,
 .capsuleProcessing,
 .capsuleError {
   animation: none;
 }
 
-.micButton {
+/* The capsule's lit left-hand anchor. This was a microphone button; it is
+   a plain decorative glyph now (search on a category page, sparkle for the
+   assistant) — see AIAssistantInput.tsx. The lighting is kept exactly as it
+   was: it is what stops the capsule reading as "a search field with a glow
+   applied to it" rather than a lit AI control surface, and the glyph in the
+   slot never had anything to do with that. */
+.leadIcon {
   position: relative;
   flex: 0 0 auto;
   width: 30px;
   height: 30px;
-  min-width: 44px;
-  min-height: 30px;
   display: flex;
   align-items: center;
   justify-content: center;
   border-radius: 50%;
   color: var(--text-secondary);
-  /* Second pass: soft always-on glow echoing the capsule's own ambient
-     light (see the .micButton::before comment below) — part of "the
-     microphone should feel integrated into the energy field." */
   box-shadow: 0 0 14px -4px rgba(56, 229, 255, 0.25);
-  transition:
-    color var(--transition-fast),
-    background var(--transition-fast);
+  transition: color var(--transition-fast);
 }
-/* Refinement pass: a faint permanent glow ring behind the mic, not just
-   on hover/active — the mic is this control's real focal point, and a
-   small always-on presence there reinforces "AI control surface" over
-   "button in a search field." Deliberately subtle: .micButtonActive's
-   own box-shadow pulse (below) is still the primary active-state cue.
-   Second pass: "the microphone should feel integrated into the energy
-   field" — widened past the button's own bounds (inset -6px instead of
-   2px) and given a matching soft box-shadow, so the mic's glow visually
-   bleeds into and merges with the capsule's own ambient cyan/violet
-   light instead of reading as a separately-lit control sitting inside
-   it. */
-.micButton::before {
+/* Glow ring widened past the glyph's own bounds so its light bleeds into
+   and merges with the capsule's ambient cyan/violet field instead of
+   reading as a separately-lit control sitting inside it. */
+.leadIcon::before {
   content: '';
   position: absolute;
   inset: -6px;
@@ -212,26 +188,32 @@
   background: radial-gradient(circle, rgba(56, 229, 255, 0.14), transparent 72%);
   pointer-events: none;
 }
-.micButton:hover {
+.capsule:focus-within .leadIcon,
+.capsuleProcessing .leadIcon {
   color: var(--accent-cyan);
-  background: rgba(56, 229, 255, 0.1);
 }
-.micButtonActive {
-  color: var(--accent-cyan);
-  animation: micPulse 1.1s ease-in-out infinite;
-}
-@keyframes micPulse {
-  0%,
-  100% {
-    box-shadow: 0 0 0 0 rgba(56, 229, 255, 0.4);
-  }
-  50% {
-    box-shadow: 0 0 0 8px rgba(56, 229, 255, 0);
-  }
-}
-.micIcon {
+.leadIconGlyph {
   width: 16px;
   height: 16px;
+}
+
+.clearButton {
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  color: var(--text-muted);
+  background: rgba(255, 255, 255, 0.06);
+  transition:
+    color var(--transition-fast),
+    background var(--transition-fast);
+}
+.clearButton:hover {
+  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.14);
 }
 
 .input {

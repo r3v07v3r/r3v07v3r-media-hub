@@ -16,6 +16,7 @@ import type { MediaHubPublicSettings, MediaHubSettingsSnapshot } from '../../sha
 import { handle } from './ipcGuard'
 import { logError } from './logger'
 import { mpvPath, hasActivePlayback, stopPlayback } from './playbackSession'
+import { ollamaConnected } from './ollamaService'
 import { normalizeTheme, publicSettings, logoutSettings, THEMES } from './preferences'
 import { getActiveWindow } from './rendererBridge'
 import { normalizePlaybackBuffer } from '../../shared/media-hub/playbackBuffer'
@@ -45,7 +46,8 @@ export function registerAppIpc(): void {
     osConnected: osConnected(),
     subdlConnected: subdlConnected(),
     partySyncConnected: Boolean(partySyncCredentials().url && partySyncCredentials().inviteKey),
-    playerAvailable: Boolean(mpvPath)
+    playerAvailable: Boolean(mpvPath),
+    ollamaConnected: ollamaConnected()
   }))
 
   handle<unknown, { theme: string }>(MEDIA_HUB_CHANNELS.settingsSetTheme, (_event, value) => {

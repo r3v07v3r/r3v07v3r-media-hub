@@ -11,6 +11,7 @@ import {
   SimklSection,
   MalSection,
   SubDLSection,
+  OllamaSection,
   OpenSubtitlesSection,
   WatchPartySection,
   R3PartySyncSection
@@ -631,6 +632,7 @@ export default function SettingsPage() {
   const servicesPack = useColumnPackGrid<HTMLElement>()
   const accountsPack = useColumnPackGrid<HTMLElement>()
   const communityPack = useColumnPackGrid<HTMLElement>()
+  const aiPack = useColumnPackGrid<HTMLElement>()
   const {
     isOffline,
     setIsOffline,
@@ -853,6 +855,7 @@ export default function SettingsPage() {
             ['settings-playback', 'Playback'],
             ['settings-services', 'Services'],
             ['settings-accounts', 'Accounts'],
+            ['settings-ai', 'AI'],
             ['settings-community', 'Community']
           ].map(([id, label]) => (
             <button
@@ -1146,6 +1149,26 @@ export default function SettingsPage() {
             <MalSection />
             <SubDLSection />
             <OpenSubtitlesSection />
+          </div>
+        </section>
+
+        {/* Its own group rather than a tile inside General: this is the one
+            place that decides whether the app's AI features do anything at
+            all, and it should be as findable as the account connections
+            above it. */}
+        <section
+          id="settings-ai"
+          ref={aiPack.groupRef}
+          className={styles.settingsGroup}
+          aria-labelledby="settings-ai-title"
+        >
+          <header className={styles.groupHeader}>
+            <span className={styles.groupEyebrow}>Assistant</span>
+            <h2 id="settings-ai-title">AI</h2>
+            <p>Run the assistant and recommendations on a model of your own.</p>
+          </header>
+          <div ref={aiPack.gridRef} className={styles.groupGrid}>
+            <OllamaSection />
           </div>
         </section>
 

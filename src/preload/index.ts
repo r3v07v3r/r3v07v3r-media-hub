@@ -25,6 +25,9 @@ import type {
   MediaHubSettingsSnapshot,
   MediaKind,
   NetworkInfoResult,
+  OllamaAskResult,
+  OllamaRecommendResult,
+  OllamaStatus,
   PartyEventPayload,
   PartyHostResult,
   PartyMode,
@@ -65,6 +68,7 @@ import type {
   UpdateChannel,
   UpdateStatusPayload
 } from '../shared/media-hub/types'
+import type { OllamaTitleRef } from '../shared/media-hub/ollama'
 import type {
   PlayerCommand,
   PlayerInputEvent,
@@ -239,6 +243,37 @@ const api = {
       connect: (apiKey: string): Promise<ConnectResult> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.omdbConnect, apiKey),
       disconnect: (): Promise<{ ok: true }> => ipcRenderer.invoke(MEDIA_HUB_CHANNELS.omdbDisconnect)
+    },
+
+    // Local AI. Every one of these fails loudly when no model has been
+    // linked in Settings — there is deliberately no default instance to
+    // silently fall back to (see main/media-hub/ollamaService.ts).
+    ollama: {
+      /** Probes an instance and lists its installed models. Pass `baseUrl` to check an address that hasn't been saved yet; omit it to check the saved one. Never rejects for an unreachable server — read `reachable`/`error`. */
+      status: (baseUrl?: string): Promise<OllamaStatus> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.ollamaStatus, baseUrl ? { baseUrl } : undefined),
+      /** Saves the address + model, after verifying the server is up and has that model. Rejects with the reason if not. */
+      connect: (baseUrl: string, model: string): Promise<OllamaStatus> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.ollamaConnect, { baseUrl, model }),
+      disconnect: (): Promise<{ ok: true }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.ollamaDisconnect),
+      /** One assistant question. `library` is context for grounding the answer, not a menu the model must pick from. `requestId` is what `cancel` below abandons it by. */
+      ask: (
+        question: string,
+        library: OllamaTitleRef[],
+        requestId: string
+      ): Promise<OllamaAskResult> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.ollamaAsk, { question, library, requestId }),
+      /** Abandons an `ask` that is still generating. Local models run on the person's own hardware, so a dismissed question must actually stop, not just have its answer discarded on arrival. */
+      cancel: (requestId: string): Promise<{ ok: true }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.ollamaCancel, { requestId }),
+      /** Asks the model to pick one of `candidates`. An empty `id` back means it answered with something not on the list — fall back rather than treating it as a failure. */
+      recommend: (
+        kindLabel: string,
+        candidates: OllamaTitleRef[],
+        requestId: string
+      ): Promise<OllamaRecommendResult> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.ollamaRecommend, { kindLabel, candidates, requestId })
     },
 
     clipboard: {

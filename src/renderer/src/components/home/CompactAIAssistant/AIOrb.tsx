@@ -3,20 +3,18 @@ import { AIOrbCanvas } from './AIOrbCanvas'
 import styles from './CompactAIAssistant.module.css'
 
 const STATUS_LABEL: Record<string, string> = {
-  idle: 'Listening…',
-  hover: 'Listening…',
-  focused: 'Listening…',
-  listening: 'Hearing you…',
+  idle: 'Ready',
+  hover: 'Ready',
+  focused: 'Ready',
   processing: 'Thinking…',
   responding: "Here's an idea",
-  error: "Didn't catch that"
+  error: 'Something went wrong'
 }
 
 export function AIOrb() {
   const { assistantState } = useAppState()
   const cls = [
     styles.orbWrap,
-    assistantState === 'listening' ? styles.listening : '',
     assistantState === 'processing' ? styles.processing : '',
     assistantState === 'responding' ? styles.responding : '',
     assistantState === 'error' ? styles.error : ''
@@ -52,7 +50,6 @@ export function AIOrb() {
           alone can't produce this genuinely animated plasma texture. */}
       <AIOrbCanvas
         tone={
-          assistantState === 'listening' ||
           assistantState === 'processing' ||
           assistantState === 'responding' ||
           assistantState === 'error'
