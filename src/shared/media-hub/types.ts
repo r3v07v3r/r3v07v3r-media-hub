@@ -568,6 +568,11 @@ export interface OllamaRecommendResult {
   id: string
   /** The model's own one-line justification, or '' if it didn't give one. */
   reason: string
+  /** True when the request was abandoned before it finished — the panel that
+   *  asked for it was unmounted. The caller must not act on the result: a
+   *  recommendation ends by navigating, and navigating on behalf of a page
+   *  the person has already left is worse than not answering. */
+  cancelled?: boolean
 }
 
 export interface ConnectResult {

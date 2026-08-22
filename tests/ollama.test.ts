@@ -278,6 +278,35 @@ check('the year is optional, and a bare title still resolves', () => {
   assert.equal(matchRecommendation('Arrival — quiet', REMAKES)?.match.id, 'arrival')
 })
 
+// A title containing a spaced dash, alongside the shorter title it starts
+// with — both on the same shortlist, which is what makes it dangerous.
+const DASHED: OllamaTitleRef[] = [
+  { id: 'batman', title: 'Batman' },
+  { id: 'batman-movie', title: 'Batman - The Movie' },
+  { id: 'spider', title: 'Spider' }
+]
+
+check('does not mistake part of a title for the reason separator', () => {
+  // Splitting on the first spaced dash yields "Batman", which is a real and
+  // different film on this same list — the button would open it, with the
+  // rest of the intended title as its reason.
+  const picked = matchRecommendation('Batman - The Movie — because it is daft', DASHED)
+  assert.equal(picked?.match.id, 'batman-movie')
+  assert.equal(picked?.reason, 'because it is daft')
+})
+
+check('still resolves the shorter title when that is what was named', () => {
+  const picked = matchRecommendation('Batman — the dark one', DASHED)
+  assert.equal(picked?.match.id, 'batman')
+  assert.equal(picked?.reason, 'the dark one')
+})
+
+check('a dash inside a word is not a separator', () => {
+  // "Spider-Man" is not on the list. Reading the hyphen as a separator would
+  // resolve it to Spider with a reason of "Man".
+  assert.equal(matchRecommendation('Spider-Man', DASHED), null)
+})
+
 check('reports no match when the model picks something not on the list', () => {
   assert.equal(matchRecommendation('Watch Interstellar.', LIBRARY), null)
   assert.equal(matchRecommendation('   ', LIBRARY), null)

@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useAppState } from '@renderer/context/AppStateContext'
 import { AI_PICKS } from '@renderer/data/mockData'
 import { matchesCategoryKind, CategoryKind } from '@renderer/lib/mediaHub/categoryFilters'
@@ -34,6 +34,13 @@ function randomPick(pool: MediaItem[]): MediaItem {
   return pool[Math.floor(Math.random() * pool.length)]
 }
 
+/** Never reused within a session, so a cancel can never land on a later
+ *  request that happens to have been numbered the same. Module scope rather
+ *  than a ref because this panel is mounted by Home AND by each category
+ *  page, and a per-instance counter would restart at 1 on every navigation.
+ *  See ollamaService.ts's inFlight map. */
+let requestSequence = 0
+
 export interface RecommendationActionsProps {
   /** Which quick-action buttons to show — Home shows both movie+series
    *  (unchanged default); a category page passes its own single kind so
@@ -47,6 +54,25 @@ export function RecommendationActions({ kinds = ['movie', 'series'] }: Recommend
     useAppState()
   const [loading, setLoading] = useState<CategoryKind | null>(null)
   const aiConnected = mediaHubSettings?.ollamaConnected ?? false
+
+  // A recommendation ends by NAVIGATING (openDetail), which makes a stale
+  // one actively hostile rather than merely wasted: leave Home while a model
+  // is still thinking and, up to two minutes later, the app would yank the
+  // person off whatever page they had since opened and onto a title they
+  // asked about on a page they have left. So this panel tracks whether it is
+  // still mounted, and tells main to stop generating when it isn't.
+  const mountedRef = useRef(true)
+  const pendingRequestId = useRef<string | null>(null)
+
+  useEffect(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+      const pending = pendingRequestId.current
+      pendingRequestId.current = null
+      if (pending) window.api?.mediaHub?.ollama?.cancel(pending).catch(() => {})
+    }
+  }, [])
 
   // Prefer the real recommendation backend (home:personalized's
   // genre-scored recommendations — see adapters.ts's
@@ -82,6 +108,8 @@ export function RecommendationActions({ kinds = ['movie', 'series'] }: Recommend
       return
     }
 
+    const requestId = `recommend-${++requestSequence}`
+    pendingRequestId.current = requestId
     setLoading(kind)
     try {
       const api = window.api?.mediaHub?.ollama
@@ -93,7 +121,15 @@ export function RecommendationActions({ kinds = ['movie', 'series'] }: Recommend
       // like it did something rather than firing instantly.
       if (api && aiConnected) {
         const shortlist = pool.slice(0, MAX_PROMPT_TITLES)
-        const result = await api.recommend(NOUN_BY_KIND[kind], shortlist.map(mediaItemToTitleRef))
+        const result = await api.recommend(
+          NOUN_BY_KIND[kind],
+          shortlist.map(mediaItemToTitleRef),
+          requestId
+        )
+        // Cancelled, or this panel is gone — either way nobody is waiting on
+        // this any more, and announcing it would navigate them somewhere
+        // they never asked to go.
+        if (!mountedRef.current || result.cancelled) return
         const picked = shortlist.find((item) => item.id === result.id)
         // An id the shortlist doesn't contain means the model answered with
         // something that wasn't on offer — fall through to the random pick
@@ -104,15 +140,20 @@ export function RecommendationActions({ kinds = ['movie', 'series'] }: Recommend
         }
       } else {
         await new Promise((resolve) => setTimeout(resolve, 1300))
+        if (!mountedRef.current) return
       }
       announce(randomPick(pool), '')
     } catch (error) {
+      // Same reasoning as above: an error toast for a page the person has
+      // already left is noise about something they stopped caring about.
+      if (!mountedRef.current) return
       pushNotification({
         tone: 'error',
         message: error instanceof Error ? error.message : 'The model could not be reached.'
       })
     } finally {
-      setLoading(null)
+      if (pendingRequestId.current === requestId) pendingRequestId.current = null
+      if (mountedRef.current) setLoading(null)
     }
   }
 

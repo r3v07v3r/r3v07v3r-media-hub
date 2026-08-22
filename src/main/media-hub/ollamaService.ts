@@ -218,8 +218,8 @@ function sanitizeTitles(value: unknown): OllamaTitleRef[] {
 }
 
 /**
- * Assistant generations still running, by the request id the renderer minted
- * for each one, so `ollamaCancel` can abort one by name.
+ * Generations still running, by the request id the renderer minted for each
+ * one, so `ollamaCancel` can abort one by name.
  *
  * This exists because dropping a superseded answer in the renderer is not
  * enough: the generation keeps running here for up to two minutes, on
@@ -228,11 +228,13 @@ function sanitizeTitles(value: unknown): OllamaTitleRef[] {
  * queued behind work nobody wants any more — is the single most noticeable
  * way this integration could waste someone's machine.
  *
- * Only the assistant is cancellable. A recommendation has no dismiss
- * affordance (its button is disabled until it returns), so there is nothing
- * that could ask to abandon one.
+ * Both surfaces use it. The assistant cancels when its panel closes or a
+ * newer question replaces the old one; a recommendation cancels when the
+ * panel that asked for it unmounts — which matters more than it sounds,
+ * since that request ends by NAVIGATING. A stale one does not merely waste
+ * cycles, it moves someone off the page they are on.
  */
-const inFlightAsks = new Map<string, AbortController>()
+const inFlight = new Map<string, AbortController>()
 
 export function registerOllamaIpc(): void {
   // Probes whichever address is being asked about — the one passed in (the
@@ -321,7 +323,7 @@ export function registerOllamaIpc(): void {
       const controller = new AbortController()
       // Registered before the first await, so a cancel that arrives while
       // the model is still warming up finds something to abort.
-      if (requestId) inFlightAsks.set(requestId, controller)
+      if (requestId) inFlight.set(requestId, controller)
 
       try {
         const reply = await chat(
@@ -338,7 +340,7 @@ export function registerOllamaIpc(): void {
         if (isCancellation(error)) return { reply: '', cancelled: true }
         throw error
       } finally {
-        if (requestId) inFlightAsks.delete(requestId)
+        if (requestId) inFlight.delete(requestId)
       }
     }
   )
@@ -347,7 +349,7 @@ export function registerOllamaIpc(): void {
     MEDIA_HUB_CHANNELS.ollamaCancel,
     (_event, payload) => {
       const requestId = String(payload?.requestId ?? '')
-      inFlightAsks.get(requestId)?.abort()
+      inFlight.get(requestId)?.abort()
       return { ok: true }
     }
   )
@@ -356,7 +358,7 @@ export function registerOllamaIpc(): void {
   // that isn't on the list it was given: that is a bad answer, not a broken
   // connection, and the caller has a perfectly good non-AI pick to fall back
   // on. Anything that IS a broken connection still throws.
-  handle<{ kindLabel?: string; candidates?: unknown }, OllamaRecommendResult>(
+  handle<{ kindLabel?: string; candidates?: unknown; requestId?: string }, OllamaRecommendResult>(
     MEDIA_HUB_CHANNELS.ollamaRecommend,
     async (_event, payload) => {
       const config = requireConfig()
@@ -366,12 +368,26 @@ export function registerOllamaIpc(): void {
         .trim()
         .slice(0, 20)
 
-      const reply = await chat(
-        config,
-        buildRecommendationMessages(kindLabel || 'title', candidates)
-      )
-      const picked = matchRecommendation(reply, candidates)
-      return picked ? { id: picked.match.id, reason: picked.reason } : { id: '', reason: '' }
+      const requestId = String(payload?.requestId ?? '').slice(0, 64)
+      const controller = new AbortController()
+      if (requestId) inFlight.set(requestId, controller)
+
+      try {
+        const reply = await chat(
+          config,
+          buildRecommendationMessages(kindLabel || 'title', candidates),
+          controller.signal
+        )
+        const picked = matchRecommendation(reply, candidates)
+        return picked ? { id: picked.match.id, reason: picked.reason } : { id: '', reason: '' }
+      } catch (error) {
+        // Not a failure: the panel that asked went away. Reported rather
+        // than thrown so ipcGuard doesn't log it as an error.
+        if (isCancellation(error)) return { id: '', reason: '', cancelled: true }
+        throw error
+      } finally {
+        if (requestId) inFlight.delete(requestId)
+      }
     }
   )
 }

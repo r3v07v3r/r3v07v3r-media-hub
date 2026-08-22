@@ -193,9 +193,13 @@ function escapeForRegex(value: string): string {
  * Whether `reply` mentions `title` as a phrase in its own right, rather than
  * as a run of characters inside a longer word.
  *
- * Two guards, because real titles include Up, It and Us:
+ * Three guards, because real titles include Up, It, Us and Spider:
  *
  *  - Word boundaries, so "an uplifting choice" does not count as picking Up.
+ *  - A hyphen counts as part of the word, so "Spider-Man" is one name rather
+ *    than the candidate Spider followed by something else. Hyphenated
+ *    compounds are how English writes a single word, and a bare boundary
+ *    check reads straight through them.
  *  - Case sensitivity, so "it depends" does not count as picking It. This is
  *    the one place matching is case-sensitive, and deliberately so: the
  *    exact-title paths in matchRecommendation are confident about what they
@@ -209,7 +213,8 @@ function escapeForRegex(value: string): string {
  * film nobody asked for.
  */
 function mentionsTitle(reply: string, title: string): boolean {
-  const pattern = `(?<![\\p{L}\\p{N}])${escapeForRegex(title)}(?![\\p{L}\\p{N}])`
+  const edge = '[\\p{L}\\p{N}-]'
+  const pattern = `(?<!${edge})${escapeForRegex(title)}(?!${edge})`
   return new RegExp(pattern, 'u').test(reply)
 }
 
@@ -217,11 +222,6 @@ function mentionsTitle(reply: string, title: string): boolean {
 function statedYear(text: string): number | undefined {
   const found = text.match(/\((\d{4})\)/)
   return found ? Number(found[1]) : undefined
-}
-
-/** Drops a trailing "(1984)" so the rest can be compared against a bare candidate title. */
-function withoutYear(value: string): string {
-  return value.replace(/\s*\(\d{4}\)\s*$/, '').trim()
 }
 
 /**
@@ -243,28 +243,57 @@ function narrowByYear(matches: OllamaTitleRef[], year: number | undefined): Olla
   return matches.find((item) => item.year === year) ?? matches[0]
 }
 
-/** Candidates whose title is exactly `title`, narrowed by `year`; null if none match. */
-function resolveTitle(
-  candidates: OllamaTitleRef[],
-  title: string,
-  year: number | undefined
-): OllamaTitleRef | null {
-  const needle = title.trim().toLowerCase()
-  if (!needle) return null
-  const matches = candidates.filter((item) => item.title.toLowerCase() === needle)
-  return matches.length ? narrowByYear(matches, year) : null
+/** Candidates ordered so a title that merely prefixes another is always tried second. */
+function longestTitleFirst(candidates: OllamaTitleRef[]): OllamaTitleRef[] {
+  return [...candidates].sort((a, b) => b.title.length - a.title.length)
+}
+
+/**
+ * Reads a `Title (year) — reason` line by finding which candidate title it
+ * opens with, rather than by splitting on the first dash and hoping that was
+ * the separator.
+ *
+ * The order matters and is the whole point. Titles contain spaced dashes —
+ * "Batman - The Movie" — so splitting first and matching second hands back
+ * "Batman", which is a different film that may well be on the same
+ * shortlist; the button then opens the wrong one with the rest of its own
+ * title as the reason. Trying the longest candidate title first means the
+ * fuller title claims the line before its own prefix ever gets to.
+ *
+ * Both spaces around the separator are required for the same reason: without
+ * them, "Spider-Man" would read as the candidate "Spider" plus a reason of
+ * "Man".
+ */
+function matchLinePrefix(
+  line: string,
+  candidates: OllamaTitleRef[]
+): { match: OllamaTitleRef; reason: string } | null {
+  const trimmed = line.trim()
+  for (const item of longestTitleFirst(candidates)) {
+    // An em dash, en dash or hyphen — models are not consistent about which
+    // one they echo back, whatever the prompt asked for.
+    const pattern = `^${escapeForRegex(item.title)}(?:\\s*\\((\\d{4})\\))?(?:\\s+[—–-]\\s+(.*))?$`
+    const found = trimmed.match(new RegExp(pattern, 'iu'))
+    if (!found) continue
+    const sameTitle = candidates.filter(
+      (other) => other.title.toLowerCase() === item.title.toLowerCase()
+    )
+    const year = found[1] ? Number(found[1]) : undefined
+    return { match: narrowByYear(sameTitle, year), reason: (found[2] ?? '').trim() }
+  }
+  return null
 }
 
 /**
  * Resolves a recommendation reply back to a real candidate, or null.
  *
- * Tried in order: the part before the dash as a title, the whole line as a
- * title, and finally any candidate whose title is mentioned in the reply
- * (longest title first, so "Dune: Part Two" wins over "Dune" when both are
- * on the list and both appear). Every step then disambiguates same-titled
- * candidates by the year the model gave. Null means the model answered with
- * something that isn't on the list — the caller falls back rather than
- * opening a title nobody asked for.
+ * Tried in order: the first line read as `Title (year) — reason`, then any
+ * candidate whose title is mentioned anywhere in the reply (longest title
+ * first, so "Dune: Part Two" wins over "Dune" when both are on the list and
+ * both appear). Both steps disambiguate same-titled candidates by the year
+ * the model gave. Null means the model answered with something that isn't on
+ * the list — the caller falls back rather than opening a title nobody asked
+ * for.
  */
 export function matchRecommendation(
   reply: string,
@@ -274,25 +303,24 @@ export function matchRecommendation(
   if (!text) return null
 
   const firstLine = text.split('\n').find((line) => line.trim()) ?? ''
-  // An em dash, en dash or hyphen — models are not consistent about which
-  // one they echo back, whatever the prompt asked for.
-  const [titlePart, ...reasonParts] = firstLine.split(/\s+[—–-]\s+/)
-  const reason = reasonParts.join(' - ').trim()
-  // Read off the line that named the title, not the whole reply, so a year
-  // mentioned in passing in a later sentence can't redirect the pick.
-  const year = statedYear(firstLine)
 
-  const exact =
-    resolveTitle(candidates, withoutYear(titlePart ?? ''), year) ??
-    resolveTitle(candidates, withoutYear(firstLine), year)
-  if (exact) return { match: exact, reason }
+  const wellFormed = matchLinePrefix(firstLine, candidates)
+  if (wellFormed) return wellFormed
 
-  const mentioned = [...candidates]
-    .sort((a, b) => b.title.length - a.title.length)
-    .filter((item) => item.title.length >= 2 && mentionsTitle(text, item.title))
+  const mentioned = longestTitleFirst(candidates).filter(
+    (item) => item.title.length >= 2 && mentionsTitle(text, item.title)
+  )
   if (!mentioned.length) return null
 
+  // Read off the line that named the title, not the whole reply, so a year
+  // mentioned in passing in a later sentence can't redirect the pick.
+  const year = statedYear(firstLine) ?? statedYear(text)
   // Longest title wins, then the year picks between any remakes sharing it.
   const sameTitle = mentioned.filter((item) => item.title === mentioned[0].title)
-  return { match: narrowByYear(sameTitle, year ?? statedYear(text)), reason }
+  const reason = firstLine
+    .split(/\s+[—–-]\s+/)
+    .slice(1)
+    .join(' - ')
+    .trim()
+  return { match: narrowByYear(sameTitle, year), reason }
 }

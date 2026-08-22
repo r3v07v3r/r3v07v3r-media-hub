@@ -270,9 +270,10 @@ const api = {
       /** Asks the model to pick one of `candidates`. An empty `id` back means it answered with something not on the list — fall back rather than treating it as a failure. */
       recommend: (
         kindLabel: string,
-        candidates: OllamaTitleRef[]
+        candidates: OllamaTitleRef[],
+        requestId: string
       ): Promise<OllamaRecommendResult> =>
-        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.ollamaRecommend, { kindLabel, candidates })
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.ollamaRecommend, { kindLabel, candidates, requestId })
     },
 
     clipboard: {
