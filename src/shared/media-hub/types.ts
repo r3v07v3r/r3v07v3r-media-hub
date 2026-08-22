@@ -573,6 +573,12 @@ export interface OllamaRecommendResult {
    *  recommendation ends by navigating, and navigating on behalf of a page
    *  the person has already left is worse than not answering. */
   cancelled?: boolean
+  /** True when no model is connected, so no model was asked. Reported rather
+   *  than thrown because this button has a non-AI fallback and needs to know
+   *  to use it — and because the renderer can't decide this for itself while
+   *  its settings snapshot is still loading. Distinct from an empty `id`,
+   *  which means a model DID answer, just not with anything on the list. */
+  unavailable?: boolean
 }
 
 export interface ConnectResult {

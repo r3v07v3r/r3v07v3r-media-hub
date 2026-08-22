@@ -361,7 +361,17 @@ export function registerOllamaIpc(): void {
   handle<{ kindLabel?: string; candidates?: unknown; requestId?: string }, OllamaRecommendResult>(
     MEDIA_HUB_CHANNELS.ollamaRecommend,
     async (_event, payload) => {
-      const config = requireConfig()
+      // Reported, not thrown, unlike the assistant's requireConfig(). The
+      // assistant has nothing else to offer, so "no model connected" IS its
+      // answer; this button has a working non-AI fallback, and the renderer
+      // needs to be told to use it rather than shown a failure. It matters
+      // because the renderer cannot answer this itself: its settings
+      // snapshot is null until the first fetch lands, so an early click has
+      // to ask rather than assume.
+      const config = ollamaConfig()
+      if (!config.baseUrl || !config.model) {
+        return { id: '', reason: '', unavailable: true }
+      }
       const candidates = sanitizeTitles(payload?.candidates)
       if (!candidates.length) throw new Error('There is nothing to recommend from yet.')
       const kindLabel = String(payload?.kindLabel ?? 'title')

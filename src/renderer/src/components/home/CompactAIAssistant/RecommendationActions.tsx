@@ -53,7 +53,15 @@ export function RecommendationActions({ kinds = ['movie', 'series'] }: Recommend
   const { openDetail, pushNotification, catalog, recommendations, homeFeedLive, mediaHubSettings } =
     useAppState()
   const [loading, setLoading] = useState<CategoryKind | null>(null)
-  const aiConnected = mediaHubSettings?.ollamaConnected ?? false
+  // "Not known to be disconnected", not "connected". mediaHubSettings is
+  // null until the first settings fetch lands, and defaulting that to
+  // disconnected meant someone with a model configured who pressed this
+  // button early got an instant random pick — told to go and connect the
+  // model they had already connected. Main is the authority on this, and it
+  // answers `unavailable` when there really is no model, so an early click
+  // asks rather than assumes. Only a settled snapshot saying `false` skips
+  // the round trip.
+  const aiPossible = mediaHubSettings?.ollamaConnected !== false
 
   // A recommendation ends by NAVIGATING (openDetail), which makes a stale
   // one actively hostile rather than merely wasted: leave Home while a model
@@ -106,13 +114,17 @@ export function RecommendationActions({ kinds = ['movie', 'series'] }: Recommend
    * that away would be a regression for anyone who never sets Ollama up. But
    * a random pick presented as "Recommendation ready" is the app claiming
    * something it didn't do, which is the exact habit the rest of this work
-   * removed. Both ways of getting here are named: no model connected, or a
-   * model that answered with something that wasn't on the list.
+   * removed.
+   *
+   * `modelDeclined` distinguishes the two ways of getting here, and comes
+   * from what main actually reported rather than from a settings snapshot
+   * that may not have loaded yet — telling someone to connect a model they
+   * already have is its own small lie.
    */
-  function announceRandomPick(pick: MediaItem) {
+  function announceRandomPick(pick: MediaItem, modelDeclined: boolean) {
     pushNotification({
       tone: 'info',
-      message: aiConnected
+      message: modelDeclined
         ? `Picked "${pick.title}" at random — the model didn't choose from the list.`
         : `Picked "${pick.title}" at random. Connect a local model in Settings → AI for a real recommendation.`
     })
@@ -145,7 +157,8 @@ export function RecommendationActions({ kinds = ['movie', 'series'] }: Recommend
       // deliberation in front of a coin flip is the same theatre as the
       // hardcoded assistant answer and the mute microphone this work
       // removed. An instant answer is the honest one.
-      if (api && aiConnected) {
+      let modelDeclined = false
+      if (api && aiPossible) {
         const shortlist = pool.slice(0, MAX_PROMPT_TITLES)
         const result = await api.recommend(
           NOUN_BY_KIND[kind],
@@ -164,8 +177,11 @@ export function RecommendationActions({ kinds = ['movie', 'series'] }: Recommend
           announceModelPick(picked, result.reason)
           return
         }
+        // `unavailable` is main saying there was no model to ask, which is
+        // the one case that should still point at Settings.
+        modelDeclined = !result.unavailable
       }
-      announceRandomPick(randomPick(pool))
+      announceRandomPick(randomPick(pool), modelDeclined)
     } catch (error) {
       // Same reasoning as above: an error toast for a page the person has
       // already left is noise about something they stopped caring about.
