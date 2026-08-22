@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useAppState } from '@renderer/context/AppStateContext'
 import { Icon } from '@renderer/components/icons/Icon'
 import { DEFAULT_OLLAMA_BASE_URL } from '@shared/media-hub/ollama'
@@ -1212,6 +1212,26 @@ export function OllamaSection() {
   const [models, setModels] = useState<string[]>([])
   const [status, setStatus] = useState<Status>({ kind: 'idle' })
 
+  // Every probe of a server claims a number, and only the newest one's
+  // result is allowed to land.
+  //
+  // A probe can take the full six seconds against a host that never answers,
+  // which is long enough for someone to give up, type a different address
+  // and press Check. Without this, the slow first result arrives last and
+  // overwrites the second server's model list: the field shows one server,
+  // the dropdown lists another's models, and Connect then fails on a model
+  // the address in the box has never heard of. Editing the address bumps it
+  // too — a probe in flight was asking about somewhere else.
+  const probeGeneration = useRef(0)
+
+  /** Invalidates any probe still in flight, and drops the message describing its result. */
+  function abandonProbe() {
+    probeGeneration.current += 1
+    // Must not be left on 'busy': that disables Check and Connect, and the
+    // superseded probe is no longer coming back to clear it.
+    setStatus({ kind: 'idle' })
+  }
+
   // Populates the model list on open when there is already an address to
   // check, so a connected instance shows its models without anyone having
   // to press Check first. Keyed on the SAVED address only — re-probing on
@@ -1220,25 +1240,29 @@ export function OllamaSection() {
   useEffect(() => {
     const api = window.api?.mediaHub?.ollama
     if (!api || !savedBaseUrl) return
-    let cancelled = false
+    const generation = ++probeGeneration.current
     api
       .status()
       .then((result) => {
-        if (cancelled) return
+        if (probeGeneration.current !== generation) return
         setModels(result.models)
         setModel((current) => current || result.model || result.models[0] || '')
       })
       .catch(() => {})
     return () => {
-      cancelled = true
+      probeGeneration.current += 1
     }
   }, [savedBaseUrl])
 
   async function check() {
     const api = window.api?.mediaHub?.ollama
     if (!api) return
+    const generation = ++probeGeneration.current
     setStatus({ kind: 'busy' })
     const result = await api.status(baseUrl.trim() || undefined).catch(() => null)
+    // Superseded by a newer check, or by the address being edited while this
+    // one was out. Whatever replaced it owns the status line now.
+    if (probeGeneration.current !== generation) return
     if (!result) {
       setStatus({ kind: 'error', message: 'Could not check that address.' })
       return
@@ -1266,6 +1290,9 @@ export function OllamaSection() {
   async function connect() {
     const api = window.api?.mediaHub?.ollama
     if (!api || !baseUrl.trim() || !model) return
+    // Connect's own outcome is the message that matters — a probe still in
+    // flight must not overwrite "Connected." with "Found 3 models."
+    probeGeneration.current += 1
     setStatus({ kind: 'busy' })
     try {
       await api.connect(baseUrl.trim(), model)
@@ -1283,6 +1310,7 @@ export function OllamaSection() {
   async function disconnect() {
     const api = window.api?.mediaHub?.ollama
     if (!api) return
+    probeGeneration.current += 1
     setStatus({ kind: 'busy' })
     await api.disconnect().catch(() => {})
     setBaseUrlEdited(null)
@@ -1321,7 +1349,12 @@ export function OllamaSection() {
             type="text"
             placeholder={DEFAULT_OLLAMA_BASE_URL}
             value={baseUrl}
-            onChange={(e) => setBaseUrlEdited(e.target.value)}
+            onChange={(e) => {
+              // Anything still being probed was asking about the previous
+              // address — see abandonProbe.
+              abandonProbe()
+              setBaseUrlEdited(e.target.value)
+            }}
           />
         </label>
         <label className={styles.field}>
