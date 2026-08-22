@@ -290,8 +290,51 @@ const NOT_A_SEQUEL = `(?!\\s+(?:${PART_MARKER}\\s+)?${PART_NUMBER}(?![\\p{L}\\p{
  * film nobody asked for.
  */
 function mentionsTitle(reply: string, title: string): boolean {
-  const pattern = `(?<!${TITLE_EDGE})${escapeForRegex(title)}(?!${TITLE_EDGE})${NOT_A_SEQUEL}`
-  return new RegExp(pattern, 'u').test(reply)
+  return new RegExp(titleOccurrence(title), 'u').test(reply)
+}
+
+/**
+ * Regex source matching one occurrence of `title` that actually counts as
+ * naming it: right boundaries, not swallowed by a sequel.
+ *
+ * Every question asked about where a title appears goes through this, so
+ * they cannot disagree about which occurrence they mean. They have drifted
+ * apart twice already — once over whether a year had to sit against the
+ * title, once over whether the reason came from the same mention that
+ * matched — and both times the symptom was one function answering about a
+ * different occurrence from the one that qualified.
+ */
+function titleOccurrence(title: string): string {
+  return `(?<!${TITLE_EDGE})${escapeForRegex(title)}(?!${TITLE_EDGE})${NOT_A_SEQUEL}`
+}
+
+/** Everything following the qualifying occurrence of `title`, or null if it does not appear. */
+function textAfterTitle(line: string, title: string): string | null {
+  const found = line.match(new RegExp(titleOccurrence(title), 'u'))
+  return found?.index === undefined ? null : line.slice(found.index + found[0].length)
+}
+
+/**
+ * The model's stated reason, read from after the title it named rather than
+ * from wherever the line happens to hold a dash.
+ *
+ * Splitting the whole line breaks on any title that contains a spaced dash:
+ * "I recommend Batman - The Movie — because it is fun" split at the FIRST
+ * dash, so the reason came back as "The Movie - because it is fun" and the
+ * toast read "Batman - The Movie — The Movie - because it is fun".
+ * Advancing past the match first means a title cannot contribute to its own
+ * reason.
+ *
+ * Only the separator the prompt asked for counts. Picking a reason out after
+ * a comma or a "because" would mean inferring where it starts, and
+ * everything in this file that inferred rather than parsed has come back as
+ * a defect.
+ */
+function reasonAfterTitle(line: string, title: string): string {
+  const after = textAfterTitle(line, title)
+  if (after === null) return ''
+  const tail = after.match(/^\s*(?:\(\d{4}\))?\s*[—–-]\s+(.*)$/u)
+  return tail ? tail[1].trim() : ''
 }
 
 /**
@@ -310,8 +353,7 @@ function mentionsTitle(reply: string, title: string): boolean {
  * still finds 1984.
  */
 function yearAfterTitle(text: string, title: string): number | undefined {
-  const pattern = `(?<!${TITLE_EDGE})${escapeForRegex(title)}(?!${TITLE_EDGE})\\s*\\((\\d{4})\\)`
-  const found = text.match(new RegExp(pattern, 'u'))
+  const found = text.match(new RegExp(`${titleOccurrence(title)}\\s*\\((\\d{4})\\)`, 'u'))
   return found ? Number(found[1]) : undefined
 }
 
@@ -474,10 +516,8 @@ export function matchRecommendation(
   // anywhere on the line — a preamble's year is not the pick's year, whether
   // it sits on its own line or in the same sentence.
   const sameTitle = mentioned.filter((item) => item.title === title)
-  const reason = namingLine
-    .split(/\s+[—–-]\s+/)
-    .slice(1)
-    .join(' - ')
-    .trim()
-  return { match: narrowByYear(sameTitle, yearAfterTitle(namingLine, title)), reason }
+  return {
+    match: narrowByYear(sameTitle, yearAfterTitle(namingLine, title)),
+    reason: reasonAfterTitle(namingLine, title)
+  }
 }

@@ -457,6 +457,32 @@ check('a marker word without a number is ordinary prose', () => {
   )
 })
 
+check('does not let a title contribute to its own reason', () => {
+  // Splitting the line on its first spaced dash puts half the title into the
+  // reason, and the toast reads "Batman - The Movie — The Movie - because
+  // it is fun".
+  const picked = matchRecommendation('I recommend Batman - The Movie — because it is fun', DASHED)
+  assert.equal(picked?.match.id, 'batman-movie')
+  assert.equal(picked?.reason, 'because it is fun')
+})
+
+check('takes the reason from the occurrence that actually matched', () => {
+  // The first mention is a sequel and does not qualify; the reason belongs
+  // to the second, not to whatever followed the first.
+  const picked = matchRecommendation(
+    'Rocky II is fine but Rocky — the original is better',
+    FIRST_FILMS
+  )
+  assert.equal(picked?.match.id, 'rocky')
+  assert.equal(picked?.reason, 'the original is better')
+})
+
+check('reads a reason that follows the year', () => {
+  const picked = matchRecommendation('Honestly, Dune (1984) — the strange one', REMAKES)
+  assert.equal(picked?.match.id, 'dune-1984')
+  assert.equal(picked?.reason, 'the strange one')
+})
+
 check('reports no match when the model picks something not on the list', () => {
   assert.equal(matchRecommendation('Watch Interstellar.', LIBRARY), null)
   assert.equal(matchRecommendation('   ', LIBRARY), null)
