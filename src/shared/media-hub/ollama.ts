@@ -312,15 +312,22 @@ export function matchRecommendation(
   )
   if (!mentioned.length) return null
 
-  // Read off the line that named the title, not the whole reply, so a year
-  // mentioned in passing in a later sentence can't redirect the pick.
-  const year = statedYear(firstLine) ?? statedYear(text)
+  // The year and the reason both come from the line that actually NAMES the
+  // title, not from the first line of the reply. This fallback exists to
+  // tolerate chattier, multi-line answers, and in one of those the first
+  // line is often a preamble — "Considering releases from (2021):" ahead of
+  // "Dune (1984) is my pick." — whose year belongs to nothing. Reading the
+  // preamble's year there would open the 2021 film the model just declined
+  // to pick. A title-bearing line with no year of its own yields no year at
+  // all rather than borrowing one from elsewhere in the reply.
+  const title = mentioned[0].title
+  const namingLine = text.split('\n').find((line) => mentionsTitle(line, title)) ?? ''
   // Longest title wins, then the year picks between any remakes sharing it.
-  const sameTitle = mentioned.filter((item) => item.title === mentioned[0].title)
-  const reason = firstLine
+  const sameTitle = mentioned.filter((item) => item.title === title)
+  const reason = namingLine
     .split(/\s+[—–-]\s+/)
     .slice(1)
     .join(' - ')
     .trim()
-  return { match: narrowByYear(sameTitle, year), reason }
+  return { match: narrowByYear(sameTitle, statedYear(namingLine)), reason }
 }

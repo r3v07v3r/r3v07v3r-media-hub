@@ -307,6 +307,17 @@ check('a dash inside a word is not a separator', () => {
   assert.equal(matchRecommendation('Spider-Man', DASHED), null)
 })
 
+check('reads the year off the title-bearing line, not a preamble', () => {
+  // The chattier answers this fallback exists for often open with a line
+  // that carries a year belonging to nothing. Reading it would open the
+  // 2021 film the model just declined to pick.
+  const picked = matchRecommendation(
+    'Considering releases from (2021):\nDune (1984) is my pick.',
+    REMAKES
+  )
+  assert.equal(picked?.match.id, 'dune-1984')
+})
+
 check('reports no match when the model picks something not on the list', () => {
   assert.equal(matchRecommendation('Watch Interstellar.', LIBRARY), null)
   assert.equal(matchRecommendation('   ', LIBRARY), null)

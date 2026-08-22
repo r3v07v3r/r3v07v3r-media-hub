@@ -37,7 +37,8 @@ import type {
 } from '@shared/media-hub/types'
 import {
   mediaItemToTrackablePayload,
-  catalogItemToMediaItem
+  catalogItemToMediaItem,
+  indexHistoryById
 } from '@renderer/lib/mediaHub/adapters'
 import {
   PlaybackPreparationCancelledError,
@@ -423,13 +424,59 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   const [activeMood, setActiveMood] = useState<string | null>(null)
   const [combinedMoods, setCombinedMoods] = useState<string[]>([])
   const [isOffline, setIsOffline] = useState(false)
-  const [categorySearch, setCategorySearch] = useState<AppStateValue['categorySearch']>({
+  // The RAW backend rows behind categorySearch, not the MediaItems the rest
+  // of the app reads. Those carry watched/completed/disliked/inMyList flags
+  // baked in at the moment they were mapped, and a search now outlives the
+  // detail page opened from it — so a result marked watched on that page and
+  // returned to would otherwise still show its old badge, and still slip
+  // past Hide Watched, until the search was retyped. Keeping the rows and
+  // re-deriving below is the same shape useMediaHubBrowseCatalog already
+  // uses for the browse grid, and for the same reason.
+  const [categorySearchRaw, setCategorySearchRaw] = useState<{
+    kind: CategoryKind | null
+    query: string
+    items: CatalogItem[]
+    loading: boolean
+    error: boolean
+  }>({
     kind: null,
     query: '',
-    results: [],
+    items: [],
     loading: false,
     error: false
   })
+
+  // Grouped once per history change rather than re-scanned per item — see
+  // CatalogItemAdapterContext.historyById.
+  const searchHistoryById = useMemo(
+    () => indexHistoryById(watchedIdsResult.history),
+    [watchedIdsResult.history]
+  )
+
+  // Re-derived whenever the watch/dislike/My List state behind it moves, so
+  // a standing search's badges and the Hide Watched/Completed/Disliked
+  // filters always reflect what is true now rather than what was true when
+  // the person pressed Enter. Every dependency is a useState value or a memo
+  // of one, so this recomputes when the data actually changes and not on
+  // every render — which matters, because MediaGrid resets its lazy reveal
+  // batch whenever its `items` array identity changes.
+  const categorySearch = useMemo<AppStateValue['categorySearch']>(
+    () => ({
+      kind: categorySearchRaw.kind,
+      query: categorySearchRaw.query,
+      results: categorySearchRaw.items.map((item) =>
+        catalogItemToMediaItem(item, {
+          trackedIds: myList,
+          watchedIds: watchedIdsResult.watchedIds,
+          historyById: searchHistoryById,
+          dislikedIds
+        })
+      ),
+      loading: categorySearchRaw.loading,
+      error: categorySearchRaw.error
+    }),
+    [categorySearchRaw, myList, watchedIdsResult.watchedIds, searchHistoryById, dislikedIds]
+  )
   // Which assistant question is the current one. A local model can take a
   // while to answer, so an answer that lands after the person has asked
   // something else — or closed the panel — must be dropped rather than
@@ -1717,52 +1764,39 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   // catalogSearch handler returns [] below that) — mirrored here so the UI
   // can show "keep typing" rather than firing a request that's guaranteed
   // to come back empty.
-  const runCategorySearch = useCallback(
-    (kind: CategoryKind, query: string) => {
-      const q = query.trim()
-      const generation = ++searchGeneration.current
-      if (q.length < 2) {
-        setCategorySearch({ kind, query, results: [], loading: false, error: false })
-        return
-      }
-      setCategorySearch({ kind, query, results: [], loading: true, error: false })
-      const api = window.api?.mediaHub
-      if (!api) {
-        // No bridge (browser preview) — honest empty state, never a fake
-        // result list standing in for a real search.
-        setCategorySearch({ kind, query, results: [], loading: false, error: true })
-        return
-      }
-      api.catalog
-        .search(kind, q)
-        .then((items) => {
-          if (searchGeneration.current !== generation) return
-          setCategorySearch({
-            kind,
-            query,
-            results: items.map((item) =>
-              catalogItemToMediaItem(item, {
-                trackedIds: myList,
-                watchedIds: watchedIdsResult.watchedIds,
-                history: watchedIdsResult.history,
-                dislikedIds
-              })
-            ),
-            loading: false,
-            error: false
-          })
-        })
-        .catch(() => {
-          if (searchGeneration.current !== generation) return
-          setCategorySearch({ kind, query, results: [], loading: false, error: true })
-        })
-    },
-    [myList, watchedIdsResult.watchedIds, watchedIdsResult.history, dislikedIds]
-  )
+  // Stores what the backend returned and nothing else — the mapping to
+  // MediaItem happens in the memo above, so it stays current as watch state
+  // moves underneath a search that is still on screen.
+  const runCategorySearch = useCallback((kind: CategoryKind, query: string) => {
+    const q = query.trim()
+    const generation = ++searchGeneration.current
+    if (q.length < 2) {
+      setCategorySearchRaw({ kind, query, items: [], loading: false, error: false })
+      return
+    }
+    setCategorySearchRaw({ kind, query, items: [], loading: true, error: false })
+    const api = window.api?.mediaHub
+    if (!api) {
+      // No bridge (browser preview) — honest empty state, never a fake
+      // result list standing in for a real search.
+      setCategorySearchRaw({ kind, query, items: [], loading: false, error: true })
+      return
+    }
+    api.catalog
+      .search(kind, q)
+      .then((items) => {
+        if (searchGeneration.current !== generation) return
+        setCategorySearchRaw({ kind, query, items, loading: false, error: false })
+      })
+      .catch(() => {
+        if (searchGeneration.current !== generation) return
+        setCategorySearchRaw({ kind, query, items: [], loading: false, error: true })
+      })
+  }, [])
 
   const clearCategorySearch = useCallback(() => {
     searchGeneration.current += 1
-    setCategorySearch({ kind: null, query: '', results: [], loading: false, error: false })
+    setCategorySearchRaw({ kind: null, query: '', items: [], loading: false, error: false })
   }, [])
 
   const uiActivity = useMemo<UIActivityState>(() => {
