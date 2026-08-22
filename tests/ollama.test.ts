@@ -318,6 +318,21 @@ check('reads the year off the title-bearing line, not a preamble', () => {
   assert.equal(picked?.match.id, 'dune-1984')
 })
 
+check('reads the year sitting against the title, not one earlier in the line', () => {
+  // Both years are on the SAME line here, so picking the title-bearing line
+  // is not enough — only the bracket directly against the title is its own.
+  const picked = matchRecommendation(
+    'Considering releases from (2021), Dune (1984) is my pick.',
+    REMAKES
+  )
+  assert.equal(picked?.match.id, 'dune-1984')
+})
+
+check('skips a mention with no year to find the one that has it', () => {
+  const picked = matchRecommendation('Dune is great. Actually, Dune (1984) is my pick.', REMAKES)
+  assert.equal(picked?.match.id, 'dune-1984')
+})
+
 check('reports no match when the model picks something not on the list', () => {
   assert.equal(matchRecommendation('Watch Interstellar.', LIBRARY), null)
   assert.equal(matchRecommendation('   ', LIBRARY), null)

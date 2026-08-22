@@ -212,15 +212,32 @@ function escapeForRegex(value: string): string {
  * falls back to the random pick. That is a far better failure than opening a
  * film nobody asked for.
  */
+/** Letters, digits and hyphens — what must NOT sit against a title for it to count as named. See mentionsTitle. */
+const TITLE_EDGE = '[\\p{L}\\p{N}-]'
+
 function mentionsTitle(reply: string, title: string): boolean {
-  const edge = '[\\p{L}\\p{N}-]'
-  const pattern = `(?<!${edge})${escapeForRegex(title)}(?!${edge})`
+  const pattern = `(?<!${TITLE_EDGE})${escapeForRegex(title)}(?!${TITLE_EDGE})`
   return new RegExp(pattern, 'u').test(reply)
 }
 
-/** A year in brackets, as titleLines writes them into the listing the model is shown. */
-function statedYear(text: string): number | undefined {
-  const found = text.match(/\((\d{4})\)/)
+/**
+ * The year written immediately after this title where it appears — the form
+ * titleLines puts into the listing the model is shown, "Dune (1984)".
+ *
+ * Adjacency is the whole point, and is why this is not just "the first year
+ * in the text". A single line can carry a year that belongs to something
+ * else entirely — "Considering releases from (2021), Dune (1984) is my
+ * pick." — and taking the first one there opens the 2021 film the model
+ * just declined to pick. Only a year bracketed directly against the title
+ * is that title's year.
+ *
+ * Occurrences of the title that carry no year are skipped rather than
+ * ending the search, so "Dune is great. Actually, Dune (1984) is my pick."
+ * still finds 1984.
+ */
+function yearAfterTitle(text: string, title: string): number | undefined {
+  const pattern = `(?<!${TITLE_EDGE})${escapeForRegex(title)}(?!${TITLE_EDGE})\\s*\\((\\d{4})\\)`
+  const found = text.match(new RegExp(pattern, 'u'))
   return found ? Number(found[1]) : undefined
 }
 
@@ -312,22 +329,21 @@ export function matchRecommendation(
   )
   if (!mentioned.length) return null
 
-  // The year and the reason both come from the line that actually NAMES the
-  // title, not from the first line of the reply. This fallback exists to
-  // tolerate chattier, multi-line answers, and in one of those the first
-  // line is often a preamble — "Considering releases from (2021):" ahead of
-  // "Dune (1984) is my pick." — whose year belongs to nothing. Reading the
-  // preamble's year there would open the 2021 film the model just declined
-  // to pick. A title-bearing line with no year of its own yields no year at
-  // all rather than borrowing one from elsewhere in the reply.
   const title = mentioned[0].title
+  // The reason comes from the line that actually NAMES the title, not from
+  // the first line of the reply: this fallback exists to tolerate chattier,
+  // multi-line answers, and in one of those the first line is often a
+  // preamble that says nothing about the pick.
   const namingLine = text.split('\n').find((line) => mentionsTitle(line, title)) ?? ''
   // Longest title wins, then the year picks between any remakes sharing it.
+  // The year is read from directly against the title rather than from
+  // anywhere on the line — a preamble's year is not the pick's year, whether
+  // it sits on its own line or in the same sentence.
   const sameTitle = mentioned.filter((item) => item.title === title)
   const reason = namingLine
     .split(/\s+[—–-]\s+/)
     .slice(1)
     .join(' - ')
     .trim()
-  return { match: narrowByYear(sameTitle, statedYear(namingLine)), reason }
+  return { match: narrowByYear(sameTitle, yearAfterTitle(namingLine, title)), reason }
 }
