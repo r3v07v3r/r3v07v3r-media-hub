@@ -10,6 +10,7 @@
 // only work against a model you installed yourself should not be quietly
 // reaching anywhere else.
 
+import type { WebContents } from 'electron'
 import { MEDIA_HUB_CHANNELS } from '../../shared/media-hub/ipc-channels'
 import type {
   OllamaAskResult,
@@ -236,6 +237,54 @@ function sanitizeTitles(value: unknown): OllamaTitleRef[] {
  */
 const inFlight = new Map<string, AbortController>()
 
+/**
+ * Keys are scoped to the renderer that asked, because the ids themselves are
+ * only unique within one.
+ *
+ * Both counters live in renderer memory and restart at 1 when a renderer is
+ * created. On macOS that is not hypothetical: window-all-closed deliberately
+ * does not quit (see main/index.ts), so closing the window destroys the
+ * renderer while this process and this map live on, and `activate` builds a
+ * fresh one whose very first question is `ask-1` again. Unscoped, that new
+ * request would overwrite an orphaned `ask-1` — making the orphan
+ * uncancellable while it kept a local GPU busy — and the orphan's own
+ * cleanup would then delete the newcomer's entry, leaving IT uncancellable
+ * too. One dead window would break cancellation for the next one.
+ */
+function requestKey(senderId: number, requestId: string): string {
+  return `${senderId}:${requestId}`
+}
+
+/**
+ * Registers a cancellable request, returning the signal to pass to the model
+ * call and the cleanup to run when it settles.
+ *
+ * The cleanup only removes the entry if it is still the one this call put
+ * there, so a late finisher can never evict a live request that reused its
+ * key. Closing the renderer aborts whatever it still owns: nothing in a
+ * destroyed window is going to want that answer, and a generation nobody is
+ * waiting for keeps a local GPU busy for up to two minutes.
+ */
+function trackRequest(
+  sender: WebContents,
+  requestId: string
+): { signal: AbortSignal; release: () => void } {
+  const controller = new AbortController()
+  const onDestroyed = (): void => controller.abort()
+  sender.once('destroyed', onDestroyed)
+
+  const key = requestId ? requestKey(sender.id, requestId) : ''
+  if (key) inFlight.set(key, controller)
+
+  return {
+    signal: controller.signal,
+    release: () => {
+      if (key && inFlight.get(key) === controller) inFlight.delete(key)
+      if (!sender.isDestroyed()) sender.off('destroyed', onDestroyed)
+    }
+  }
+}
+
 export function registerOllamaIpc(): void {
   // Probes whichever address is being asked about — the one passed in (the
   // Settings pane checking an address the person is still typing, before
@@ -312,24 +361,25 @@ export function registerOllamaIpc(): void {
 
   handle<{ question?: string; library?: unknown; requestId?: string }, OllamaAskResult>(
     MEDIA_HUB_CHANNELS.ollamaAsk,
-    async (_event, payload) => {
+    async (event, payload) => {
       const config = requireConfig()
       const question = String(payload?.question ?? '')
         .trim()
         .slice(0, 2000)
       if (!question) throw new Error('Ask a question first.')
 
-      const requestId = String(payload?.requestId ?? '').slice(0, 64)
-      const controller = new AbortController()
       // Registered before the first await, so a cancel that arrives while
       // the model is still warming up finds something to abort.
-      if (requestId) inFlight.set(requestId, controller)
+      const { signal, release } = trackRequest(
+        event.sender,
+        String(payload?.requestId ?? '').slice(0, 64)
+      )
 
       try {
         const reply = await chat(
           config,
           buildAssistantMessages(question, sanitizeTitles(payload?.library)),
-          controller.signal
+          signal
         )
         if (!reply)
           throw new Error(`${config.model} came back with an empty answer. Try asking again.`)
@@ -340,16 +390,17 @@ export function registerOllamaIpc(): void {
         if (isCancellation(error)) return { reply: '', cancelled: true }
         throw error
       } finally {
-        if (requestId) inFlight.delete(requestId)
+        release()
       }
     }
   )
 
   handle<{ requestId?: string }, { ok: true }>(
     MEDIA_HUB_CHANNELS.ollamaCancel,
-    (_event, payload) => {
+    (event, payload) => {
+      // Scoped to the sender, so one renderer can never cancel another's work.
       const requestId = String(payload?.requestId ?? '')
-      inFlight.get(requestId)?.abort()
+      inFlight.get(requestKey(event.sender.id, requestId))?.abort()
       return { ok: true }
     }
   )
@@ -360,7 +411,7 @@ export function registerOllamaIpc(): void {
   // on. Anything that IS a broken connection still throws.
   handle<{ kindLabel?: string; candidates?: unknown; requestId?: string }, OllamaRecommendResult>(
     MEDIA_HUB_CHANNELS.ollamaRecommend,
-    async (_event, payload) => {
+    async (event, payload) => {
       // Reported, not thrown, unlike the assistant's requireConfig(). The
       // assistant has nothing else to offer, so "no model connected" IS its
       // answer; this button has a working non-AI fallback, and the renderer
@@ -378,15 +429,16 @@ export function registerOllamaIpc(): void {
         .trim()
         .slice(0, 20)
 
-      const requestId = String(payload?.requestId ?? '').slice(0, 64)
-      const controller = new AbortController()
-      if (requestId) inFlight.set(requestId, controller)
+      const { signal, release } = trackRequest(
+        event.sender,
+        String(payload?.requestId ?? '').slice(0, 64)
+      )
 
       try {
         const reply = await chat(
           config,
           buildRecommendationMessages(kindLabel || 'title', candidates),
-          controller.signal
+          signal
         )
         const picked = matchRecommendation(reply, candidates)
         return picked ? { id: picked.match.id, reason: picked.reason } : { id: '', reason: '' }
@@ -396,7 +448,7 @@ export function registerOllamaIpc(): void {
         if (isCancellation(error)) return { id: '', reason: '', cancelled: true }
         throw error
       } finally {
-        if (requestId) inFlight.delete(requestId)
+        release()
       }
     }
   )

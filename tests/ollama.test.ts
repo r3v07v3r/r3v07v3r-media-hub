@@ -532,6 +532,51 @@ check('an ambiguous title proved nowhere still falls back', () => {
   assert.equal(matchRecommendation('It depends on your mood.\nHard to say.', its), null)
 })
 
+// Two distinct offered titles, for the case where a chatty reply names more
+// than one of them.
+const TWO_OFFERED: OllamaTitleRef[] = [
+  { id: 'interstellar', title: 'Interstellar', year: 2014 },
+  { id: 'arrival', title: 'Arrival', year: 2016 },
+  { id: 'dune', title: 'Dune', year: 2021 }
+]
+
+check('does not open the title the model rejected', () => {
+  // Sorting the whole candidate set by length made the longest NAME win
+  // regardless of which one was chosen, so this opened Interstellar.
+  const picked = matchRecommendation(
+    "I considered Interstellar, but I'd pick Arrival — quieter.",
+    TWO_OFFERED
+  )
+  assert.equal(picked?.match.id, 'arrival')
+  assert.equal(picked?.reason, 'quieter.')
+})
+
+check('takes the reason from the mention that carries it', () => {
+  // Arrival is named twice and only the second carries the reason.
+  const picked = matchRecommendation(
+    'Between Dune and Arrival, go with Arrival — quieter.',
+    TWO_OFFERED
+  )
+  assert.equal(picked?.match.id, 'arrival')
+  assert.equal(picked?.reason, 'quieter.')
+})
+
+check('falls back when two titles are named and nothing marks the pick', () => {
+  // Which one was chosen is a question about the sentence. Guessing would
+  // open a film the model may have been rejecting.
+  assert.equal(
+    matchRecommendation('I considered Interstellar but would pick Arrival.', TWO_OFFERED),
+    null
+  )
+})
+
+check('longest-first still settles titles overlapping at one mention', () => {
+  // Batman and "Batman - The Movie" start at the same place, so this is one
+  // mention with a longer and a shorter reading — not two named titles.
+  const picked = matchRecommendation('I recommend Batman - The Movie — because it is fun', DASHED)
+  assert.equal(picked?.match.id, 'batman-movie')
+})
+
 check('reports no match when the model picks something not on the list', () => {
   assert.equal(matchRecommendation('Watch Interstellar.', LIBRARY), null)
   assert.equal(matchRecommendation('   ', LIBRARY), null)

@@ -322,10 +322,9 @@ function titleOccurrence(title: string): string {
   return `(?<!${TITLE_EDGE})${escapeForRegex(title)}(?!${TITLE_EDGE})${NOT_A_SEQUEL}`
 }
 
-/** Everything following the qualifying occurrence of `title`, or null if it does not appear. */
-function textAfterTitle(line: string, title: string): string | null {
-  const found = line.match(new RegExp(titleOccurrence(title), 'u'))
-  return found?.index === undefined ? null : line.slice(found.index + found[0].length)
+/** Where the qualifying occurrence of `title` starts in `line`, or -1. */
+function titleIndexIn(line: string, title: string): number {
+  return line.match(new RegExp(titleOccurrence(title), 'u'))?.index ?? -1
 }
 
 /**
@@ -345,12 +344,19 @@ function textAfterTitle(line: string, title: string): string | null {
  * a defect.
  */
 function reasonAfterTitle(line: string, title: string): string {
-  const after = textAfterTitle(line, title)
-  if (after === null) return ''
-  // Step over a closing quote and a year if either is there, the same way
-  // yearAfterTitle does — `"It" (2017) — the scary one` has both.
-  const tail = after.match(new RegExp(`^${QUOTES}?\\s*(?:\\(\\d{4}\\))?\\s*[—–-]\\s+(.*)$`, 'u'))
-  return tail ? tail[1].trim() : ''
+  // Every qualifying occurrence is tried, not just the first: "Between Dune
+  // and Arrival, go with Arrival — quieter." names Arrival twice and only
+  // the second one carries the reason. Same shape as yearAfterTitle, which
+  // walks past mentions that have no year against them.
+  //
+  // The tail steps over a closing quote and a year if either is there, since
+  // `"It" (2017) — the scary one` has both between the title and its reason.
+  const tail = new RegExp(`^${QUOTES}?\\s*(?:\\(\\d{4}\\))?\\s*[—–-]\\s+(.*)$`, 'u')
+  for (const found of line.matchAll(new RegExp(titleOccurrence(title), 'gu'))) {
+    const after = line.slice(found.index + found[0].length).match(tail)
+    if (after) return after[1].trim()
+  }
+  return ''
 }
 
 /**
@@ -547,15 +553,50 @@ export function matchRecommendation(
     .filter((found): found is { item: OllamaTitleRef; line: string } => found.line !== null)
   if (!mentioned.length) return null
 
-  const { item: best, line } = mentioned[0]
-  const title = best.title
-  // Longest title wins, then the year picks between any remakes sharing it.
-  // The year is read from directly against the title rather than from
-  // anywhere on the line — a preamble's year is not the pick's year, whether
-  // it sits on its own line or in the same sentence.
-  const sameTitle = mentioned.filter((found) => found.item.title === title).map((f) => f.item)
+  // Candidates sharing a title are one mention with several works behind it —
+  // remakes, separated by year further down, never by which is longer.
+  const byTitle = new Map<string, { items: OllamaTitleRef[]; line: string }>()
+  for (const { item, line } of mentioned) {
+    const group = byTitle.get(item.title)
+    if (group) group.items.push(item)
+    else byTitle.set(item.title, { items: [item], line })
+  }
+
+  // Longest-first settles titles that overlap AT ONE MENTION — "Batman - The
+  // Movie" owns the "Batman" inside it. It settles nothing between titles
+  // named in different places, and using it there opened whichever name
+  // happened to be longer: "I considered Interstellar, but I'd pick Arrival"
+  // opened Interstellar, the one the model had just rejected.
+  const named = [...byTitle.entries()].map(([title, group]) => ({
+    title,
+    ...group,
+    at: titleIndexIn(group.line, title)
+  }))
+  const distinct = named.filter(
+    (entry, index) =>
+      !named.some(
+        (longer, other) =>
+          other < index &&
+          longer.line === entry.line &&
+          entry.at >= longer.at &&
+          entry.at < longer.at + longer.title.length
+      )
+  )
+
+  // More than one title genuinely named. Which one was chosen is a question
+  // about the sentence, and this is a regex — so the only thing it may go on
+  // is the format the prompt asked for: the pick is the one the model
+  // attached its reason to. Anything less clear falls back to a random pick,
+  // which at least says out loud that nothing chose it.
+  const withReason = distinct.filter((entry) => reasonAfterTitle(entry.line, entry.title) !== '')
+  const pick = distinct.length === 1 ? distinct[0] : withReason.length === 1 ? withReason[0] : null
+  if (!pick) return null
+
+  // The year picks between any remakes sharing the chosen title, read from
+  // directly against it rather than from anywhere on the line — a preamble's
+  // year is not the pick's year.
   return {
-    match: narrowByYear(sameTitle, yearAfterTitle(line, title)),
-    reason: reasonAfterTitle(line, title)
+    match: narrowByYear(pick.items, yearAfterTitle(pick.line, pick.title)),
+    reason: reasonAfterTitle(pick.line, pick.title)
   }
 }
