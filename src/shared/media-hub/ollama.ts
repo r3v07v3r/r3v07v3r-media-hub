@@ -189,8 +189,18 @@ function escapeForRegex(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
-/** Letters, digits and hyphens — what must NOT sit against a title for it to count as named. See mentionsTitle. */
-const TITLE_EDGE = '[\\p{L}\\p{N}-]'
+/**
+ * What must NOT sit against a title for it to count as named: letters,
+ * digits, hyphens and colons.
+ *
+ * The first three keep a title from matching inside a longer word. The colon
+ * is there for a different reason — it is how a title continues into its own
+ * subtitle. Without it, a shortlist holding Dune but not Dune: Part Two
+ * matched "Dune: Part Two — the sequel" as Dune, opened it, and captioned it
+ * with the sequel's reason; a title the app was never offered has to fall
+ * back, not resolve to its own prefix.
+ */
+const TITLE_EDGE = '[\\p{L}\\p{N}:-]'
 
 /**
  * Whether `reply` mentions `title` as a phrase in its own right, rather than

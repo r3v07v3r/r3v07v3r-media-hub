@@ -356,6 +356,33 @@ check('a distinctive title still needs no quotes', () => {
   assert.equal(matchRecommendation('Sure! How about Arrival?', LIBRARY)?.match.id, 'a')
 })
 
+// The first film only — the sequel is deliberately NOT on offer.
+const WITHOUT_SEQUEL: OllamaTitleRef[] = [{ id: 'dune', title: 'Dune', year: 2021 }]
+
+check('does not resolve an unavailable sequel to its own prefix', () => {
+  // A colon is how a title continues into its subtitle, so a title ending
+  // there has not been named — matching it would open the wrong film AND
+  // caption it with the sequel's reason.
+  assert.equal(matchRecommendation('Dune: Part Two — the sequel', WITHOUT_SEQUEL), null)
+  assert.equal(
+    matchRecommendation('I would go with Dune: Part Two this time.', WITHOUT_SEQUEL),
+    null
+  )
+})
+
+check('still resolves a subtitled title that IS on offer', () => {
+  const picked = matchRecommendation('Dune: Part Two — the sequel', LIBRARY)
+  assert.equal(picked?.match.id, 'c')
+  assert.equal(picked?.reason, 'the sequel')
+  // And the base title is unaffected by the stricter edge.
+  assert.equal(matchRecommendation('Dune — the first one', LIBRARY)?.match.id, 'b')
+})
+
+check('a colon does not block a year from being read', () => {
+  // The year belongs to whichever title it sits against, subtitled or not.
+  assert.equal(matchRecommendation('Dune: Part Two (2024) is my pick.', LIBRARY)?.match.id, 'c')
+})
+
 check('reports no match when the model picks something not on the list', () => {
   assert.equal(matchRecommendation('Watch Interstellar.', LIBRARY), null)
   assert.equal(matchRecommendation('   ', LIBRARY), null)
