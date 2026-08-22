@@ -189,6 +189,9 @@ function escapeForRegex(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
+/** Letters, digits and hyphens — what must NOT sit against a title for it to count as named. See mentionsTitle. */
+const TITLE_EDGE = '[\\p{L}\\p{N}-]'
+
 /**
  * Whether `reply` mentions `title` as a phrase in its own right, rather than
  * as a run of characters inside a longer word.
@@ -208,13 +211,14 @@ function escapeForRegex(value: string): string {
  *    list it was given, capitals and all; the same word in lower case is
  *    almost always just the sentence around it.
  *
+ * Case alone is not enough for a word like "It", which grammar capitalises
+ * at the start of any sentence — see AMBIGUOUS_TITLE_WORDS below, which is
+ * the guard for that.
+ *
  * The cost is a reply that lower-cases a title it genuinely meant, which
  * falls back to the random pick. That is a far better failure than opening a
  * film nobody asked for.
  */
-/** Letters, digits and hyphens — what must NOT sit against a title for it to count as named. See mentionsTitle. */
-const TITLE_EDGE = '[\\p{L}\\p{N}-]'
-
 function mentionsTitle(reply: string, title: string): boolean {
   const pattern = `(?<!${TITLE_EDGE})${escapeForRegex(title)}(?!${TITLE_EDGE})`
   return new RegExp(pattern, 'u').test(reply)
@@ -239,6 +243,61 @@ function yearAfterTitle(text: string, title: string): number | undefined {
   const pattern = `(?<!${TITLE_EDGE})${escapeForRegex(title)}(?!${TITLE_EDGE})\\s*\\((\\d{4})\\)`
   const found = text.match(new RegExp(pattern, 'u'))
   return found ? Number(found[1]) : undefined
+}
+
+/**
+ * Words that turn up constantly in an ordinary English sentence and are also
+ * real film titles: It, Us, Up, Her, Them, Go, Down, Out.
+ *
+ * Case tells a title from prose for most of them — but not at the start of a
+ * sentence, where grammar capitalises the pronoun too. "It depends on your
+ * mood" is an off-list answer that looks exactly like naming It (2017). No
+ * amount of boundary or case checking separates those, because there is
+ * nothing in the characters to separate: only the grammar differs, and this
+ * is a regex, not a parser.
+ *
+ * So for these words alone, the loose prose scan demands that the reply mark
+ * the title AS a title — quoted, or carrying its year. Everything else keeps
+ * the plain boundary-and-case check, because a bare mention of a distinctive
+ * title is already strong evidence.
+ *
+ * Closed-class words plus the handful of verbs and adjectives that appear in
+ * almost any short recommendation. Over-inclusion is close to free: the cost
+ * is that a genuine "Best" or "New" needs quotes or a year to be picked up,
+ * and without them it falls back to a random pick. Under-inclusion opens a
+ * film nobody asked for.
+ */
+const AMBIGUOUS_TITLE_WORDS = new Set(
+  `a an the this that these those some any all no none each every both
+   i me my mine you your he him his she her hers it its we us our they them their
+   who what which whose
+   in on at to of for from with by as up down out off over under into onto
+   about after before between through around against along across
+   and or but if so than then because while when where why how
+   is are was were am be been being do does did have has had can will would should
+   go goes get got see saw make made take took come came know think want say
+   not very just only more most now here there yes well still also too
+   one two three first last next new old good best`
+    .split(/\s+/)
+    .filter(Boolean)
+)
+
+/** Quote characters a model might wrap a title in, opening and closing. */
+const QUOTES = '["\'“”‘’«»]'
+
+/**
+ * Whether the reply marks `title` as a title rather than merely containing
+ * those words — quoted, or followed by its year. Only asked of the words in
+ * AMBIGUOUS_TITLE_WORDS above.
+ */
+function namesTitleExplicitly(reply: string, title: string): boolean {
+  const quoted = new RegExp(`${QUOTES}\\s*${escapeForRegex(title)}\\s*${QUOTES}`, 'u')
+  return quoted.test(reply) || yearAfterTitle(reply, title) !== undefined
+}
+
+/** True for a single word so common that a bare mention of it proves nothing. */
+function isAmbiguousTitle(title: string): boolean {
+  return AMBIGUOUS_TITLE_WORDS.has(title.trim().toLowerCase())
 }
 
 /**
@@ -325,7 +384,12 @@ export function matchRecommendation(
   if (wellFormed) return wellFormed
 
   const mentioned = longestTitleFirst(candidates).filter(
-    (item) => item.title.length >= 2 && mentionsTitle(text, item.title)
+    (item) =>
+      item.title.length >= 2 &&
+      mentionsTitle(text, item.title) &&
+      // An ordinary word needs to be marked as a title before a bare mention
+      // of it counts — see AMBIGUOUS_TITLE_WORDS.
+      (!isAmbiguousTitle(item.title) || namesTitleExplicitly(text, item.title))
   )
   if (!mentioned.length) return null
 

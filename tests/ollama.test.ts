@@ -333,6 +333,29 @@ check('skips a mention with no year to find the one that has it', () => {
   assert.equal(picked?.match.id, 'dune-1984')
 })
 
+check('is not fooled by a sentence that opens with an ordinary word title', () => {
+  // Grammar capitalises "It" at the start of a sentence, so case cannot tell
+  // the pronoun from the film. A bare mention of an everyday word proves
+  // nothing, and this must fall back rather than open It.
+  assert.equal(matchRecommendation('It depends on your mood', SHORT_TITLES), null)
+  assert.equal(matchRecommendation('Up to you, really', SHORT_TITLES), null)
+  assert.equal(matchRecommendation('Us both, ideally', SHORT_TITLES), null)
+})
+
+check('accepts an ordinary word title when the reply marks it as one', () => {
+  // Quoted, or carrying its year — either is the model naming a title rather
+  // than writing a sentence.
+  assert.equal(matchRecommendation('Honestly, "It" is the one.', SHORT_TITLES)?.match.id, 'it')
+  const dated: OllamaTitleRef[] = [{ id: 'it2017', title: 'It', year: 2017 }]
+  assert.equal(matchRecommendation('I would say It (2017) tonight.', dated)?.match.id, 'it2017')
+})
+
+check('a distinctive title still needs no quotes', () => {
+  // The stricter rule applies only to everyday words; anything else keeps
+  // the plain boundary-and-case check.
+  assert.equal(matchRecommendation('Sure! How about Arrival?', LIBRARY)?.match.id, 'a')
+})
+
 check('reports no match when the model picks something not on the list', () => {
   assert.equal(matchRecommendation('Watch Interstellar.', LIBRARY), null)
   assert.equal(matchRecommendation('   ', LIBRARY), null)
