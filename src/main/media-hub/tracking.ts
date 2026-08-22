@@ -639,7 +639,17 @@ async function pushPendingToServices(): Promise<Set<string>> {
   // queued and this flush did not send it, a wake-up is armed for the
   // earliest moment it could be. Bounded by the attempt cap — entries
   // that keep failing are let go of, and an empty queue arms nothing.
-  if (onDisk.length) scheduleRetry(retryPacingDeadline() - Date.now())
+  if (onDisk.length) {
+    // Which wake-up depends on what is actually eligible, because the
+    // eligibility rule above and this one have to agree or they park
+    // work that could go out now. An entry still at zero attempts has
+    // never failed — nothing about it is being paced — so it belongs on
+    // the batch timer that every fresh decision uses; parking it behind
+    // the failure cooldown would sit on a corrected decision for five
+    // minutes. The cooldown is for entries that actually failed.
+    if (onDisk.some((entry) => entry.attempts === 0)) scheduleFlush()
+    else scheduleRetry(retryPacingDeadline() - Date.now())
+  }
   return confirmed
 }
 
