@@ -278,6 +278,10 @@ export class MpvPlayer {
   // straight back (see raiseWindow), and that needs to know which band the
   // window is supposed to end up in.
   private ontop = false
+  // Mirrors mpv's `fullscreen`, for the same reason as `ontop` and one more:
+  // geometry writes are dropped while it is set (see setBounds), and that
+  // decision is taken on every window move, which is no place for a round trip.
+  private fullscreen = false
 
   get running(): boolean {
     return Boolean(this.child && !this.child.killed && this.socket)
@@ -293,6 +297,7 @@ export class MpvPlayer {
     // A fresh process is back at mpv's defaults, and the args below do not ask
     // for --ontop, so this is the honest starting state after a respawn.
     this.ontop = false
+    this.fullscreen = false
     this.pipeName = `r3-media-hub-mpv-${crypto.randomBytes(12).toString('hex')}`
 
     const args = [
@@ -344,6 +349,12 @@ export class MpvPlayer {
       // nothing, the taskbar included, sits over a fullscreen film.
       '--no-border',
       '--focus-on=never',
+      // WHICH screen a fullscreen film covers: the one mpv's window is already
+      // on, which is the one the app is on, because the window is positioned to
+      // the app's content area. This is mpv's default and is written out anyway
+      // because it is load-bearing on a multi-monitor desk and fails silently
+      // when it is wrong — the film simply opens on the other screen.
+      '--fs-screen=current',
       // The window is EXACTLY the rectangle it is given, never the shape of the
       // film in it. mpv defaults --keepaspect-window to yes, which lets it
       // shrink its own window to the video's aspect ratio after the geometry
@@ -610,10 +621,49 @@ export class MpvPlayer {
 
   /** Moves/resizes mpv's window to follow the app. Runtime `geometry` writes
    *  are honoured by mpv (verified: osd-width/height follow the new value), so
-   *  the player can track the app window without any native call on this side. */
+   *  the player can track the app window without any native call on this side.
+   *
+   *  Dropped while the window is in mpv's own fullscreen. The screen-covering
+   *  rectangle belongs to mpv there (see setFullscreen), and a geometry write
+   *  arriving mid-transition is at best ignored and at worst becomes the
+   *  rectangle mpv restores to on the way out. The app re-syncs after leaving. */
   async setBounds(bounds: MpvBounds): Promise<void> {
-    if (!this.socket) return
+    if (!this.socket || this.fullscreen) return
     await this.set('geometry', geometryFor(bounds)).catch(() => {})
+  }
+
+  /**
+   * Puts mpv's window into or out of ITS OWN fullscreen mode.
+   *
+   * Sizing the window to the screen is NOT the same thing, and believing it was
+   * is what left fullscreen short down one side twice. A `geometry` write is a
+   * REQUEST, which mpv reshapes before applying, and every step of that
+   * reshaping is measured against the monitor's WORK AREA rather than the
+   * monitor (mpv's w32_common.c and win_state.c):
+   *
+   *   - the target rectangle comes from get_working_area(), which returns the
+   *     taskbar-excluded rcWork for any window not already in mpv's fullscreen;
+   *   - the position is then added to that work area's ORIGIN rather than the
+   *     desktop's, so +0+0 means the top-left of the work area and a
+   *     side-docked taskbar shifts the whole window sideways;
+   *   - anything that still does not fit is shrunk to fit with the aspect ratio
+   *     of the REQUEST preserved, so height lost to a taskbar costs width too;
+   *   - and which monitor's work area is meant is resolved from wherever mpv's
+   *     window already happens to be.
+   *
+   * None of that is on the fullscreen path: mpv takes the monitor rect whole
+   * (rcMonitor, via get_screen_area) and skips the fitting altogether. So the
+   * screen-covering rectangle is mpv's to compute, and this app's only job is
+   * to say when — which is what this is.
+   *
+   * The mirror is set BEFORE the write lands, deliberately: a fullscreen
+   * transition provokes a burst of geometry writes from the app's own window
+   * tracking, and they have to already be suppressed when they arrive.
+   */
+  async setFullscreen(fullscreen: boolean): Promise<void> {
+    this.fullscreen = fullscreen
+    if (!this.socket) return
+    await this.set('fullscreen', fullscreen).catch(() => {})
   }
 
   /** Puts mpv's window in (true) or out of (false) the always-on-top band.

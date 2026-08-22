@@ -9,7 +9,7 @@
 // reproduces a bug the old code hit and documented: tearing the backend session
 // down from a component unmount broke the *next* title in a watch party.
 
-import { BrowserWindow } from 'electron'
+import { BrowserWindow, screen } from 'electron'
 import path from 'node:path'
 
 import type {
@@ -353,6 +353,31 @@ function clearRaiseTimers(): void {
  */
 let mainWindowUiOpen = false
 
+/**
+ * The rectangle to hand mpv, in the units mpv actually reads.
+ *
+ * Electron speaks DIPs — density-independent pixels, which are physical pixels
+ * divided by the display's scale factor — and every bounds API on this side,
+ * getContentBounds included, returns them. mpv's `geometry` is raw physical
+ * pixels: it measures against GetMonitorInfo and hands the result straight to
+ * SetWindowPos, and an explicit WxH is taken literally with no DPI factor
+ * applied to it (the scale factor in mpv's win_state.c only ever touches the
+ * size mpv derives from the video itself, which an explicit geometry replaces).
+ *
+ * So on any display not at 100% the two disagree, and the window comes out
+ * short by exactly the scale factor — a quarter of the width missing at 125%,
+ * a third at 150% — with the app showing through the strip left over. At 100%
+ * they happen to agree, which is what makes this the kind of bug that ships.
+ *
+ * dipToScreenRect converts against the display nearest the window, so a desk
+ * with different scaling on each monitor gets the right factor rather than the
+ * primary's.
+ */
+function playerBoundsFor(mainWindow: BrowserWindow): Electron.Rectangle {
+  const bounds = mainWindow.getContentBounds()
+  return process.platform === 'win32' ? screen.dipToScreenRect(mainWindow, bounds) : bounds
+}
+
 function mainWindowIsFullScreen(): boolean {
   const win = getActiveWindow()
   return Boolean(win && !win.isDestroyed() && win.isFullScreen())
@@ -404,6 +429,33 @@ function setPlayerTopmost(on: boolean): void {
       if (generation !== topmostGeneration) return
       setPlayerOverlayTopmost(on)
       raiseOverlaySoon()
+    })
+}
+
+/**
+ * Hands mpv's own fullscreen mode the job of covering the screen.
+ *
+ * Separate from setPlayerTopmost, which decides a BAND, and separate from the
+ * geometry tracking, which decides a RECTANGLE. This decides neither: it tells
+ * mpv that the film is fullscreen and lets mpv work the rectangle out, which is
+ * the only way to get the whole monitor rather than a fitted approximation of
+ * it (see MpvPlayer.setFullscreen for what mpv does to a rectangle it is
+ * merely asked for).
+ *
+ * Driven by the main window's fullscreen state and nothing else — in
+ * particular NOT by an open panel. A panel displaces the player within the
+ * z-order; it does not stop the film being fullscreen, and dropping mpv out of
+ * fullscreen to show one would resize the video underneath it for no reason
+ * the person could see.
+ */
+function setPlayerFullscreen(on: boolean): void {
+  void player
+    .setFullscreen(on)
+    .catch(() => {})
+    .finally(() => {
+      // Entering and leaving move mpv's window, and a moved window arrives in
+      // front of the controls that are supposed to be over it.
+      if (!mainWindowUiOpen) raiseOverlaySoon()
     })
 }
 
@@ -524,7 +576,7 @@ export async function startPlayerSession(
       )
     }
     await player.start(mpvPath, {
-      bounds: mainWindow.getContentBounds(),
+      bounds: playerBoundsFor(mainWindow),
       bufferSeconds: options.bufferSeconds,
       onLog: (chunk) => {
         const line = chunk.trim()
@@ -550,6 +602,14 @@ export async function startPlayerSession(
   // shutdown), and a respawned mpv is back at its defaults while the overlay
   // would still be showing the mode that was chosen before.
   await applyFitMode(fitMode).catch(() => {})
+
+  // Re-asserted per title, and for a sharper reason than the fit mode: the mpv
+  // PROCESS outlives a session, so an mpv left in fullscreen by the last title
+  // would open the next one screen-sized over a windowed app. Reading the
+  // window rather than assuming also covers the other direction, a session
+  // started while the app is already fullscreen — no transition event is coming
+  // to correct that one, because the transition already happened.
+  setPlayerFullscreen(mainWindow.isFullScreen())
 
   // Re-asserted per title for the same reason as the fit mode, and read from
   // the window because a session can start into an already-fullscreen app —
@@ -648,7 +708,7 @@ function trackWindow(mainWindow: BrowserWindow): void {
   if (untrackWindow) return
   const sync = (): void => {
     if (mainWindow.isDestroyed()) return
-    void player.setBounds(mainWindow.getContentBounds())
+    void player.setBounds(playerBoundsFor(mainWindow))
   }
   // Fullscreen transitions report their final bounds a frame or two late on
   // Windows, so re-sync once they have settled rather than trying to predict.
@@ -691,10 +751,25 @@ function trackWindow(mainWindow: BrowserWindow): void {
     if (mainWindowUiOpen) return
     setPlayerTopmost(mainWindow.isFullScreen())
   }
+  // Unconditional, unlike applyTopmost: mpv's own fullscreen is a property of
+  // the film, not of the z-order, so an open panel does not get a say.
+  const applyFullscreen = (): void => {
+    if (mainWindow.isDestroyed()) return
+    setPlayerFullscreen(mainWindow.isFullScreen())
+  }
   const restack = (): void => restackPlayer()
 
   mainWindow.on('resize', sync)
   mainWindow.on('move', sync)
+  // Registered BEFORE the geometry re-syncs, and that order is load-bearing in
+  // both directions. Entering, it means the geometry writes the transition
+  // provokes are already being suppressed by the time they arrive, instead of
+  // one of them landing as mpv's restore rectangle. Leaving, it means mpv is
+  // out of fullscreen before the re-sync tries to place its window, so the
+  // write is not dropped and the video does not stay screen-sized over a
+  // windowed app.
+  mainWindow.on('enter-full-screen', applyFullscreen)
+  mainWindow.on('leave-full-screen', applyFullscreen)
   mainWindow.on('enter-full-screen', syncSettled)
   mainWindow.on('leave-full-screen', syncSettled)
   mainWindow.on('enter-full-screen', applyTopmost)
@@ -708,6 +783,8 @@ function trackWindow(mainWindow: BrowserWindow): void {
   untrackWindow = () => {
     mainWindow.off('resize', sync)
     mainWindow.off('move', sync)
+    mainWindow.off('enter-full-screen', applyFullscreen)
+    mainWindow.off('leave-full-screen', applyFullscreen)
     mainWindow.off('enter-full-screen', syncSettled)
     mainWindow.off('leave-full-screen', syncSettled)
     mainWindow.off('enter-full-screen', applyTopmost)
