@@ -436,6 +436,13 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   // shown. Same guard, same reason, as searchGeneration just below; it
   // replaces the ref that used to hold a fake think-time timer.
   const assistantGeneration = useRef(0)
+  // The id main is currently generating an answer under, so it can be told
+  // to stop (see abandonAssistantRequest). null whenever nothing is in
+  // flight. Derived from assistantGeneration, which only ever counts up
+  // within one mount of this provider — that is the whole lifetime of the
+  // app, and the only thing a repeat could do is abandon a request whose
+  // answer was already going to be discarded.
+  const assistantRequestId = useRef<string | null>(null)
   // Guards against an in-flight search resolving after a newer one
   // started (or after clearCategorySearch) — only the most recent call's
   // result is ever applied.
@@ -961,14 +968,27 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     [refreshPartyStatus]
   )
 
+  // Stops main generating an answer nobody is waiting for any more. The
+  // generation counter alone only discards the answer when it eventually
+  // arrives; the model keeps running for up to two minutes on the person's
+  // own hardware, and a replacement question ends up queued behind work
+  // that was explicitly dismissed. See ollamaService.ts's inFlightAsks.
+  const abandonAssistantRequest = useCallback(() => {
+    const pending = assistantRequestId.current
+    if (!pending) return
+    assistantRequestId.current = null
+    window.api?.mediaHub?.ollama?.cancel(pending).catch(() => {})
+  }, [])
+
   const closeAssistant = useCallback(() => {
     // Abandons any answer still being generated, or a closed panel reopens
     // itself with the answer to a question nobody is waiting for any more.
     assistantGeneration.current += 1
+    abandonAssistantRequest()
     setAssistantState('idle')
     setAssistantResponse(null)
     setAssistantQuery('')
-  }, [])
+  }, [abandonAssistantRequest])
 
   // Centralized here (every "open a title" call site — card, hero,
   // continue-watching row, context menu — already just calls
@@ -1634,6 +1654,10 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     (query: string) => {
       const question = query.trim()
       const generation = ++assistantGeneration.current
+      // Whatever was still generating is now answering a question that has
+      // been replaced — stop it before starting another one, so a small
+      // machine isn't running two models at once.
+      abandonAssistantRequest()
       setAssistantQuery(query)
       setAssistantResponse(null)
 
@@ -1658,15 +1682,25 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         return
       }
 
+      const requestId = `ask-${generation}`
+      assistantRequestId.current = requestId
       setAssistantState('processing')
       api
-        .ask(question, browseCatalog.items.slice(0, MAX_PROMPT_TITLES).map(mediaItemToTitleRef))
+        .ask(
+          question,
+          browseCatalog.items.slice(0, MAX_PROMPT_TITLES).map(mediaItemToTitleRef),
+          requestId
+        )
         .then((result) => {
-          if (assistantGeneration.current !== generation) return
+          if (assistantRequestId.current === requestId) assistantRequestId.current = null
+          // `cancelled` is main confirming it stopped; the generation check
+          // covers the same case for anything already superseded here.
+          if (result.cancelled || assistantGeneration.current !== generation) return
           setAssistantState('responding')
           setAssistantResponse(result.reply)
         })
         .catch((error: unknown) => {
+          if (assistantRequestId.current === requestId) assistantRequestId.current = null
           if (assistantGeneration.current !== generation) return
           setAssistantState('error')
           setAssistantResponse(
@@ -1676,7 +1710,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
           )
         })
     },
-    [browseCatalog.items, mediaHubSettings?.ollamaConnected]
+    [browseCatalog.items, mediaHubSettings?.ollamaConnected, abandonAssistantRequest]
   )
 
   // The backend itself requires >=2 characters (main/media-hub/catalog.ts's

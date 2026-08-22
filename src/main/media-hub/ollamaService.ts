@@ -59,6 +59,18 @@ export function ollamaConnected(): boolean {
   return Boolean(config.baseUrl && config.model)
 }
 
+/** Thrown when a request was deliberately abandoned by the renderer (see `ollamaCancel`) rather than failing. Never shown to anyone. */
+class OllamaCancelledError extends Error {
+  constructor() {
+    super('Request cancelled.')
+    this.name = 'OllamaCancelledError'
+  }
+}
+
+function isCancellation(error: unknown): boolean {
+  return error instanceof OllamaCancelledError
+}
+
 /**
  * POSTs/GETs one Ollama endpoint and returns the parsed JSON body.
  *
@@ -67,34 +79,75 @@ export function ollamaConnected(): boolean {
  * "that's the wrong port", "the firewall is eating it"), and the address is
  * the piece of information that makes the difference between a fixable
  * message and a shrug.
+ *
+ * The timeout covers reading the response body, not just getting a reply to
+ * the request. fetch() resolves as soon as the headers land, so a server (or
+ * a reverse proxy in front of one) that answers and then stalls partway
+ * through its JSON would otherwise hold the read open indefinitely with the
+ * timer already cleared — six seconds and two minutes would both mean
+ * nothing, and Settings or an AI panel would sit in its busy state forever.
  */
 async function ollamaFetch<T>(
   baseUrl: string,
   path: string,
   init: RequestInit,
-  timeoutMs: number
+  timeoutMs: number,
+  externalSignal?: AbortSignal
 ): Promise<T> {
   const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), timeoutMs)
-  let response: Response
-  try {
-    response = await fetch(`${baseUrl}${path}`, { ...init, signal: controller.signal })
-  } catch (error) {
-    if ((error as Error)?.name === 'AbortError') {
-      throw new Error(`${baseUrl} did not answer in time.`)
-    }
-    throw new Error(`Couldn't reach an Ollama server at ${baseUrl}. Is it running?`)
-  } finally {
-    clearTimeout(timer)
+  let timedOut = false
+  let cancelled = false
+  const timer = setTimeout(() => {
+    timedOut = true
+    controller.abort()
+  }, timeoutMs)
+  const onExternalAbort = (): void => {
+    cancelled = true
+    controller.abort()
+  }
+  if (externalSignal?.aborted) onExternalAbort()
+  else externalSignal?.addEventListener('abort', onExternalAbort, { once: true })
+
+  // Distinguishes the three ways this can end early, since they are three
+  // different things to say (or not say) to the person: they gave up on the
+  // answer, the server went quiet, or it was never there.
+  const describe = (error: unknown, stalled: string): Error => {
+    if (cancelled) return new OllamaCancelledError()
+    if (timedOut || (error as Error)?.name === 'AbortError') return new Error(stalled)
+    return new Error(`Couldn't reach an Ollama server at ${baseUrl}. Is it running?`)
   }
 
-  const body = (await response.json().catch(() => ({}))) as T & { error?: unknown }
-  if (!response.ok) {
-    const detail =
-      typeof body?.error === 'string' && body.error ? body.error : `HTTP ${response.status}`
-    throw new Error(`Ollama refused that request: ${detail}`)
+  try {
+    let response: Response
+    try {
+      response = await fetch(`${baseUrl}${path}`, { ...init, signal: controller.signal })
+    } catch (error) {
+      throw describe(error, `${baseUrl} did not answer in time.`)
+    }
+
+    let body: T & { error?: unknown }
+    try {
+      body = (await response.json()) as T & { error?: unknown }
+    } catch (error) {
+      if (cancelled || timedOut || (error as Error)?.name === 'AbortError') {
+        throw describe(error, `${baseUrl} stopped responding partway through its answer.`)
+      }
+      // A body that simply isn't JSON is tolerated as an empty object, same
+      // as before — that is a badly-behaved endpoint, not a stalled one, and
+      // the status check below still has the last word.
+      body = {} as T & { error?: unknown }
+    }
+
+    if (!response.ok) {
+      const detail =
+        typeof body?.error === 'string' && body.error ? body.error : `HTTP ${response.status}`
+      throw new Error(`Ollama refused that request: ${detail}`)
+    }
+    return body
+  } finally {
+    clearTimeout(timer)
+    externalSignal?.removeEventListener('abort', onExternalAbort)
   }
-  return body
 }
 
 /** Installed model tags at `baseUrl`. Throws with a readable reason if the server isn't reachable. */
@@ -112,7 +165,11 @@ async function listModels(baseUrl: string): Promise<string[]> {
  * not a typewriter. Streaming would mean a push channel per request and a
  * partial-answer state in the renderer for no gain at these lengths.
  */
-async function chat(config: OllamaConfig, messages: OllamaMessage[]): Promise<string> {
+async function chat(
+  config: OllamaConfig,
+  messages: OllamaMessage[],
+  signal?: AbortSignal
+): Promise<string> {
   const body = await ollamaFetch<unknown>(
     config.baseUrl,
     '/api/chat',
@@ -121,7 +178,8 @@ async function chat(config: OllamaConfig, messages: OllamaMessage[]): Promise<st
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ model: config.model, messages, stream: false })
     },
-    GENERATE_TIMEOUT_MS
+    GENERATE_TIMEOUT_MS,
+    signal
   )
   return parseOllamaReply(body)
 }
@@ -158,6 +216,23 @@ function sanitizeTitles(value: unknown): OllamaTitleRef[] {
   }
   return titles
 }
+
+/**
+ * Assistant generations still running, by the request id the renderer minted
+ * for each one, so `ollamaCancel` can abort one by name.
+ *
+ * This exists because dropping a superseded answer in the renderer is not
+ * enough: the generation keeps running here for up to two minutes, on
+ * hardware the person is sitting in front of. A dismissed question that
+ * carries on pinning a local GPU — and leaves the replacement question
+ * queued behind work nobody wants any more — is the single most noticeable
+ * way this integration could waste someone's machine.
+ *
+ * Only the assistant is cancellable. A recommendation has no dismiss
+ * affordance (its button is disabled until it returns), so there is nothing
+ * that could ask to abandon one.
+ */
+const inFlightAsks = new Map<string, AbortController>()
 
 export function registerOllamaIpc(): void {
   // Probes whichever address is being asked about — the one passed in (the
@@ -233,7 +308,7 @@ export function registerOllamaIpc(): void {
     return { ok: true }
   })
 
-  handle<{ question?: string; library?: unknown }, OllamaAskResult>(
+  handle<{ question?: string; library?: unknown; requestId?: string }, OllamaAskResult>(
     MEDIA_HUB_CHANNELS.ollamaAsk,
     async (_event, payload) => {
       const config = requireConfig()
@@ -241,13 +316,39 @@ export function registerOllamaIpc(): void {
         .trim()
         .slice(0, 2000)
       if (!question) throw new Error('Ask a question first.')
-      const reply = await chat(
-        config,
-        buildAssistantMessages(question, sanitizeTitles(payload?.library))
-      )
-      if (!reply)
-        throw new Error(`${config.model} came back with an empty answer. Try asking again.`)
-      return { reply }
+
+      const requestId = String(payload?.requestId ?? '').slice(0, 64)
+      const controller = new AbortController()
+      // Registered before the first await, so a cancel that arrives while
+      // the model is still warming up finds something to abort.
+      if (requestId) inFlightAsks.set(requestId, controller)
+
+      try {
+        const reply = await chat(
+          config,
+          buildAssistantMessages(question, sanitizeTitles(payload?.library)),
+          controller.signal
+        )
+        if (!reply)
+          throw new Error(`${config.model} came back with an empty answer. Try asking again.`)
+        return { reply }
+      } catch (error) {
+        // A cancellation is not a failure and must not be logged as one by
+        // ipcGuard — the person closed the panel or asked something else.
+        if (isCancellation(error)) return { reply: '', cancelled: true }
+        throw error
+      } finally {
+        if (requestId) inFlightAsks.delete(requestId)
+      }
+    }
+  )
+
+  handle<{ requestId?: string }, { ok: true }>(
+    MEDIA_HUB_CHANNELS.ollamaCancel,
+    (_event, payload) => {
+      const requestId = String(payload?.requestId ?? '')
+      inFlightAsks.get(requestId)?.abort()
+      return { ok: true }
     }
   )
 

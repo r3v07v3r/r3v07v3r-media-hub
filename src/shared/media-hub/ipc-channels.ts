@@ -137,6 +137,7 @@ export const MEDIA_HUB_CHANNELS = {
   ollamaConnect: 'mediahub:ollama:connect',
   ollamaDisconnect: 'mediahub:ollama:disconnect',
   ollamaAsk: 'mediahub:ollama:ask',
+  ollamaCancel: 'mediahub:ollama:cancel',
   ollamaRecommend: 'mediahub:ollama:recommend',
 
   // Network

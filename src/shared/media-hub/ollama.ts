@@ -184,15 +184,44 @@ export function buildRecommendationMessages(
   ]
 }
 
+/** Escapes a title so it can be matched as a literal inside a regex. */
+function escapeForRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+/**
+ * Whether `reply` mentions `title` as a phrase in its own right, rather than
+ * as a run of characters inside a longer word.
+ *
+ * Two guards, because real titles include Up, It and Us:
+ *
+ *  - Word boundaries, so "an uplifting choice" does not count as picking Up.
+ *  - Case sensitivity, so "it depends" does not count as picking It. This is
+ *    the one place matching is case-sensitive, and deliberately so: the
+ *    exact-title paths in matchRecommendation are confident about what they
+ *    are looking at and stay forgiving, while this last-resort scan over
+ *    free prose is guessing. A model naming a title is copying it from the
+ *    list it was given, capitals and all; the same word in lower case is
+ *    almost always just the sentence around it.
+ *
+ * The cost is a reply that lower-cases a title it genuinely meant, which
+ * falls back to the random pick. That is a far better failure than opening a
+ * film nobody asked for.
+ */
+function mentionsTitle(reply: string, title: string): boolean {
+  const pattern = `(?<![\\p{L}\\p{N}])${escapeForRegex(title)}(?![\\p{L}\\p{N}])`
+  return new RegExp(pattern, 'u').test(reply)
+}
+
 /**
  * Resolves a recommendation reply back to a real candidate, or null.
  *
  * Tried in order: the whole reply as a title, the part before the dash, and
- * finally any candidate whose title appears anywhere in the reply (longest
- * title first, so "Dune: Part Two" wins over "Dune" when both are on the
- * list and both appear). Null means the model answered with something that
- * isn't on the list — the caller falls back rather than opening a title
- * nobody asked for.
+ * finally any candidate whose title is mentioned in the reply (longest title
+ * first, so "Dune: Part Two" wins over "Dune" when both are on the list and
+ * both appear). Null means the model answered with something that isn't on
+ * the list — the caller falls back rather than opening a title nobody asked
+ * for.
  */
 export function matchRecommendation(
   reply: string,
@@ -213,10 +242,9 @@ export function matchRecommendation(
   const exact = byExact(titlePart ?? '') ?? byExact(firstLine)
   if (exact) return { match: exact, reason }
 
-  const haystack = text.toLowerCase()
   const contained = [...candidates]
     .sort((a, b) => b.title.length - a.title.length)
-    .find((item) => item.title.length >= 2 && haystack.includes(item.title.toLowerCase()))
+    .find((item) => item.title.length >= 2 && mentionsTitle(text, item.title))
 
   return contained ? { match: contained, reason } : null
 }

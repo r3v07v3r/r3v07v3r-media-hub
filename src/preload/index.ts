@@ -257,9 +257,16 @@ const api = {
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.ollamaConnect, { baseUrl, model }),
       disconnect: (): Promise<{ ok: true }> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.ollamaDisconnect),
-      /** One assistant question. `library` is context for grounding the answer, not a menu the model must pick from. */
-      ask: (question: string, library: OllamaTitleRef[]): Promise<OllamaAskResult> =>
-        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.ollamaAsk, { question, library }),
+      /** One assistant question. `library` is context for grounding the answer, not a menu the model must pick from. `requestId` is what `cancel` below abandons it by. */
+      ask: (
+        question: string,
+        library: OllamaTitleRef[],
+        requestId: string
+      ): Promise<OllamaAskResult> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.ollamaAsk, { question, library, requestId }),
+      /** Abandons an `ask` that is still generating. Local models run on the person's own hardware, so a dismissed question must actually stop, not just have its answer discarded on arrival. */
+      cancel: (requestId: string): Promise<{ ok: true }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.ollamaCancel, { requestId }),
       /** Asks the model to pick one of `candidates`. An empty `id` back means it answered with something not on the list — fall back rather than treating it as a failure. */
       recommend: (
         kindLabel: string,

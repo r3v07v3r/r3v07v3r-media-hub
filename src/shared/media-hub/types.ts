@@ -556,6 +556,11 @@ export interface OllamaStatus {
 
 export interface OllamaAskResult {
   reply: string
+  /** True when the request was abandoned before it finished (the panel was
+   *  closed, or a newer question replaced it — see the ollamaCancel
+   *  channel). `reply` is empty and the caller should ignore the whole
+   *  result rather than treating it as a failed answer. */
+  cancelled?: boolean
 }
 
 export interface OllamaRecommendResult {

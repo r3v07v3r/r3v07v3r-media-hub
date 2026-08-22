@@ -192,6 +192,48 @@ check('finds the title inside a chattier answer than the prompt asked for', () =
   assert.equal(matchRecommendation('Sure! How about Arrival?', LIBRARY)?.match.id, 'a')
 })
 
+// Up, It and Us are all real films, and all three are ordinary English
+// words — the case the loose containment scan has to survive.
+const SHORT_TITLES: OllamaTitleRef[] = [
+  { id: 'up', title: 'Up' },
+  { id: 'it', title: 'It' },
+  { id: 'us', title: 'Us' }
+]
+
+check('does not mistake a short title for letters inside a longer word', () => {
+  // A plain substring check reads "an uplifting choice" as picking Up and
+  // opens the wrong title instead of falling back.
+  assert.equal(matchRecommendation('Interstellar — an uplifting choice', SHORT_TITLES), null)
+  assert.equal(matchRecommendation('Try something upbeat', SHORT_TITLES), null)
+})
+
+check('does not mistake a short title for the same word in ordinary prose', () => {
+  // Word boundaries alone do not save this one: "it" in "it depends" IS a
+  // whole word. Only the capitalization tells the film from the pronoun.
+  assert.equal(matchRecommendation('Whatever suits you, it depends', SHORT_TITLES), null)
+  assert.equal(matchRecommendation('None of us would enjoy that', SHORT_TITLES), null)
+})
+
+check('still matches a short title when it is genuinely the answer', () => {
+  assert.equal(matchRecommendation('Up — it still gets me', SHORT_TITLES)?.match.id, 'up')
+  assert.equal(matchRecommendation('I would say "Us" tonight.', SHORT_TITLES)?.match.id, 'us')
+  assert.equal(matchRecommendation('It', SHORT_TITLES)?.match.id, 'it')
+})
+
+check('the exact-title paths stay case-insensitive', () => {
+  // Only the loose prose scan is case-sensitive. A well-formed reply that
+  // happens to lower-case the title still resolves.
+  assert.equal(matchRecommendation('dune — sandy', LIBRARY)?.match.id, 'b')
+})
+
+check('matches a title whose punctuation is regex-significant', () => {
+  const punctuated: OllamaTitleRef[] = [{ id: 'q', title: 'Who Framed Roger Rabbit?' }]
+  assert.equal(
+    matchRecommendation('Who Framed Roger Rabbit? — still holds up', punctuated)?.match.id,
+    'q'
+  )
+})
+
 check('reports no match when the model picks something not on the list', () => {
   assert.equal(matchRecommendation('Watch Interstellar.', LIBRARY), null)
   assert.equal(matchRecommendation('   ', LIBRARY), null)
