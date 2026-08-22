@@ -383,6 +383,35 @@ check('a colon does not block a year from being read', () => {
   assert.equal(matchRecommendation('Dune: Part Two (2024) is my pick.', LIBRARY)?.match.id, 'c')
 })
 
+// First films only — every sequel below is deliberately NOT on offer.
+const FIRST_FILMS: OllamaTitleRef[] = [
+  { id: 'rocky', title: 'Rocky', year: 1976 },
+  { id: 'scream', title: 'Scream', year: 1996 },
+  { id: 'dune', title: 'Dune', year: 2021 }
+]
+
+check('does not resolve a spaced sequel number to the original', () => {
+  // Whitespace is a perfectly good title boundary, so the boundary check
+  // alone reads "Rocky II" as naming Rocky and opens the wrong film.
+  assert.equal(matchRecommendation('Rocky II — the sequel is best', FIRST_FILMS), null)
+  assert.equal(matchRecommendation('Scream 2 — sharper than the first', FIRST_FILMS), null)
+})
+
+check('rejects the sequel occurrence, not the title itself', () => {
+  // The bare mention later in the sentence is still a genuine naming.
+  assert.equal(
+    matchRecommendation('Rocky II is fine but Rocky is better', FIRST_FILMS)?.match.id,
+    'rocky'
+  )
+  assert.equal(matchRecommendation('Rocky — the original', FIRST_FILMS)?.match.id, 'rocky')
+})
+
+check('treats a four-digit number after a title as a year, not a sequel', () => {
+  // "Dune 2021" is the model writing the year without brackets. Reading it
+  // as a part number would drop a perfectly good answer.
+  assert.equal(matchRecommendation('Dune 2021 is my pick.', FIRST_FILMS)?.match.id, 'dune')
+})
+
 check('reports no match when the model picks something not on the list', () => {
   assert.equal(matchRecommendation('Watch Interstellar.', LIBRARY), null)
   assert.equal(matchRecommendation('   ', LIBRARY), null)

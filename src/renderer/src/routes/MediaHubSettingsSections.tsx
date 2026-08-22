@@ -1211,6 +1211,21 @@ export function OllamaSection() {
   const [model, setModel] = useState('')
   const [models, setModels] = useState<string[]>([])
   const [status, setStatus] = useState<Status>({ kind: 'idle' })
+  // Whether a write — Connect or Disconnect — is in flight, tracked apart
+  // from the probe lifecycle below.
+  //
+  // The two are genuinely different things and conflating them was a bug:
+  // editing the address while a slow Connect was still checking the host
+  // called abandonProbe(), which cleared the shared status back to idle and
+  // re-enabled the Connect button, so a second Connect could start and race
+  // the first to persist a different server. A probe can be abandoned
+  // because nobody wants its answer any more; a write cannot, because it is
+  // going to happen whether or not the form has moved on.
+  const [saving, setSaving] = useState(false)
+  // Both fields are frozen while a write is in flight, which is what makes
+  // that safe: there is no edit to lose, and connect()'s own
+  // setBaseUrlEdited(null) on success cannot discard one made meanwhile.
+  const busy = saving || status.kind === 'busy'
 
   // Every probe of a server claims a number, and only the newest one's
   // result is allowed to land.
@@ -1228,8 +1243,10 @@ export function OllamaSection() {
   function abandonProbe() {
     probeGeneration.current += 1
     // Must not be left on 'busy': that disables Check and Connect, and the
-    // superseded probe is no longer coming back to clear it.
-    setStatus({ kind: 'idle' })
+    // superseded probe is no longer coming back to clear it. A write in
+    // flight owns the status line and is exempt — clearing it there would
+    // re-enable Connect underneath a Connect that is still running.
+    if (!saving) setStatus({ kind: 'idle' })
   }
 
   // Populates the model list on open when there is already an address to
@@ -1256,7 +1273,7 @@ export function OllamaSection() {
 
   async function check() {
     const api = window.api?.mediaHub?.ollama
-    if (!api) return
+    if (!api || saving) return
     const generation = ++probeGeneration.current
     setStatus({ kind: 'busy' })
     const result = await api.status(baseUrl.trim() || undefined).catch(() => null)
@@ -1289,10 +1306,11 @@ export function OllamaSection() {
 
   async function connect() {
     const api = window.api?.mediaHub?.ollama
-    if (!api || !baseUrl.trim() || !model) return
+    if (!api || !baseUrl.trim() || !model || saving) return
     // Connect's own outcome is the message that matters — a probe still in
     // flight must not overwrite "Connected." with "Found 3 models."
     probeGeneration.current += 1
+    setSaving(true)
     setStatus({ kind: 'busy' })
     try {
       await api.connect(baseUrl.trim(), model)
@@ -1304,18 +1322,25 @@ export function OllamaSection() {
         kind: 'error',
         message: error instanceof Error ? error.message : 'Could not connect.'
       })
+    } finally {
+      setSaving(false)
     }
   }
 
   async function disconnect() {
     const api = window.api?.mediaHub?.ollama
-    if (!api) return
+    if (!api || saving) return
     probeGeneration.current += 1
+    setSaving(true)
     setStatus({ kind: 'busy' })
-    await api.disconnect().catch(() => {})
-    setBaseUrlEdited(null)
-    setStatus({ kind: 'idle' })
-    refreshMediaHubSettings()
+    try {
+      await api.disconnect().catch(() => {})
+      setBaseUrlEdited(null)
+      setStatus({ kind: 'idle' })
+      refreshMediaHubSettings()
+    } finally {
+      setSaving(false)
+    }
   }
 
   return (
@@ -1355,6 +1380,11 @@ export function OllamaSection() {
               abandonProbe()
               setBaseUrlEdited(e.target.value)
             }}
+            // Frozen while Connect/Disconnect is writing: that request is
+            // about the address as it stands, and an edit landing underneath
+            // it would either be discarded on success or persist a server
+            // nobody asked for.
+            disabled={saving}
           />
         </label>
         <label className={styles.field}>
@@ -1363,7 +1393,7 @@ export function OllamaSection() {
             className={`${styles.fieldInput} ${styles.fieldSelect}`}
             value={model}
             onChange={(e) => setModel(e.target.value)}
-            disabled={!models.length}
+            disabled={!models.length || saving}
           >
             {models.length ? (
               models.map((name) => (
@@ -1379,24 +1409,19 @@ export function OllamaSection() {
       </div>
 
       <div className={styles.serviceActions} style={{ marginTop: 10 }}>
-        <button
-          type="button"
-          className={styles.testButton}
-          onClick={check}
-          disabled={status.kind === 'busy'}
-        >
+        <button type="button" className={styles.testButton} onClick={check} disabled={busy}>
           <Icon name="refresh" size={12} /> Check
         </button>
         <button
           type="button"
           className={styles.testButton}
           onClick={connect}
-          disabled={!baseUrl.trim() || !model || status.kind === 'busy'}
+          disabled={!baseUrl.trim() || !model || busy}
         >
           {connected ? 'Save' : 'Connect'}
         </button>
         {connected && (
-          <button type="button" className={styles.testButton} onClick={disconnect}>
+          <button type="button" className={styles.testButton} onClick={disconnect} disabled={busy}>
             Disconnect
           </button>
         )}

@@ -203,6 +203,25 @@ function escapeForRegex(value: string): string {
 const TITLE_EDGE = '[\\p{L}\\p{N}:-]'
 
 /**
+ * Refuses an occurrence that runs straight on into a sequel number — "Rocky
+ * II", "Scream 2" — because that is a different film, and quite possibly one
+ * the shortlist never offered.
+ *
+ * TITLE_EDGE cannot express this: the character after "Rocky" is a space,
+ * which is a perfectly good title boundary everywhere else. So this rides
+ * alongside it as a lookahead rather than joining it.
+ *
+ * Two deliberate limits. Four-digit numbers are left alone, because "Dune
+ * 2021" is a model writing the year without brackets, not naming a 2021st
+ * sequel. And a lone I, V or X is left alone, being far more often a pronoun
+ * or a Roman numeral that isn't one; only II and longer count.
+ *
+ * This rejects the OCCURRENCE, not the title, so "Rocky II is fine but Rocky
+ * is better" still resolves to Rocky on its second mention.
+ */
+const NOT_A_SEQUEL = '(?!\\s+(?:\\d{1,3}|[IVX]{2,})(?![\\p{L}\\p{N}]))'
+
+/**
  * Whether `reply` mentions `title` as a phrase in its own right, rather than
  * as a run of characters inside a longer word.
  *
@@ -230,7 +249,7 @@ const TITLE_EDGE = '[\\p{L}\\p{N}:-]'
  * film nobody asked for.
  */
 function mentionsTitle(reply: string, title: string): boolean {
-  const pattern = `(?<!${TITLE_EDGE})${escapeForRegex(title)}(?!${TITLE_EDGE})`
+  const pattern = `(?<!${TITLE_EDGE})${escapeForRegex(title)}(?!${TITLE_EDGE})${NOT_A_SEQUEL}`
   return new RegExp(pattern, 'u').test(reply)
 }
 
