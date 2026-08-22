@@ -94,6 +94,13 @@ export interface MediaHubRawSettings {
    *  settingsChooseStreamCacheDir. Changing this does NOT move any
    *  already-cached data from the old location. */
   streamCacheDir?: string
+  /** Address of the local Ollama instance the AI features call, already
+   *  normalized (see shared/media-hub/ollama.ts). Deliberately NOT
+   *  encrypted: it is a LAN address, not a credential, and an Ollama
+   *  instance has no token to store in the first place. */
+  ollamaBaseUrl?: string
+  /** Which installed model to use, e.g. 'qwen2.5:7b'. */
+  ollamaModel?: string
   hideWatchedDefault?: boolean
   hideCompletedDefault?: boolean
   hideDislikedDefault?: boolean

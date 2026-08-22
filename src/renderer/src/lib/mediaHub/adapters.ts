@@ -17,6 +17,7 @@ import type {
   TrackedItemEnriched
 } from '@shared/media-hub/types'
 import { episodeWatchState } from '@shared/media-hub/catalog-logic'
+import type { OllamaTitleRef } from '@shared/media-hub/ollama'
 import type { MediaItem, MediaType, Recommendation } from '@renderer/types'
 import { initialsFromTitle, tintFromSeed } from './tint'
 
@@ -39,6 +40,22 @@ function toMediaKind(type: MediaType): MediaKind {
   if (type === 'episode') return 'series'
   if (type === 'live') return 'movie'
   return type
+}
+
+/**
+ * The four fields a local model is given about a title — enough to
+ * recognise it and say something useful about it, and nothing else. What
+ * goes to the model is deliberately explicit here rather than being a
+ * MediaItem with most of it ignored: this is the boundary where the app's
+ * data leaves for a language model, even one running on the same machine.
+ */
+export function mediaItemToTitleRef(media: MediaItem): OllamaTitleRef {
+  return {
+    id: media.id,
+    title: media.title,
+    year: media.releaseYear,
+    genres: media.genres
+  }
 }
 
 /**

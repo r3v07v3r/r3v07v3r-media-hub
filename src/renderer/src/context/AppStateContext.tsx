@@ -52,6 +52,8 @@ import {
   useMediaHubWatchedIds
 } from '@renderer/lib/mediaHub/hooks'
 import type { CategoryKind } from '@renderer/lib/mediaHub/categoryFilters'
+import { MAX_PROMPT_TITLES } from '@shared/media-hub/ollama'
+import { mediaItemToTitleRef } from '@renderer/lib/mediaHub/adapters'
 import { buildMediaId } from '@renderer/lib/mediaHub/streamId'
 import {
   captureBrowsingOrigin,
@@ -428,11 +430,12 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     loading: false,
     error: false
   })
-  // The assistant's simulated think-time. A ref rather than state so a
-  // second query replaces the first instead of racing it, and so an
-  // unmount can cancel a pending one — the previous version was an
-  // append-only array nothing ever read or cleared.
-  const assistantTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // Which assistant question is the current one. A local model can take a
+  // while to answer, so an answer that lands after the person has asked
+  // something else — or closed the panel — must be dropped rather than
+  // shown. Same guard, same reason, as searchGeneration just below; it
+  // replaces the ref that used to hold a fake think-time timer.
+  const assistantGeneration = useRef(0)
   // Guards against an in-flight search resolving after a newer one
   // started (or after clearCategorySearch) — only the most recent call's
   // result is ever applied.
@@ -959,22 +962,12 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   )
 
   const closeAssistant = useCallback(() => {
-    // Cancel the pending think-time too, or a closed assistant reopens
-    // itself a second later with the answer to a question nobody is
-    // waiting for any more.
-    if (assistantTimer.current) {
-      clearTimeout(assistantTimer.current)
-      assistantTimer.current = null
-    }
+    // Abandons any answer still being generated, or a closed panel reopens
+    // itself with the answer to a question nobody is waiting for any more.
+    assistantGeneration.current += 1
     setAssistantState('idle')
     setAssistantResponse(null)
     setAssistantQuery('')
-  }, [])
-
-  useEffect(() => {
-    return () => {
-      if (assistantTimer.current) clearTimeout(assistantTimer.current)
-    }
   }, [])
 
   // Centralized here (every "open a title" call site — card, hero,
@@ -1631,20 +1624,60 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     )
   }, [])
 
-  const runAssistantQuery = useCallback((query: string) => {
-    setAssistantQuery(query)
-    setAssistantState('processing')
-    setAssistantResponse(null)
-    if (assistantTimer.current) clearTimeout(assistantTimer.current)
-    assistantTimer.current = setTimeout(() => {
-      setAssistantState('responding')
-      setAssistantResponse(
-        query.trim()
-          ? `Based on your history and current mood, I'd suggest something in Sci-Fi tonight — "Dune: Part Two" is a strong match for what you've been watching.`
-          : `I didn't catch a question there — try asking about a genre, mood, or title.`
-      )
-    }, 1100)
-  }, [])
+  // Asks the local model the person connected in Settings (see
+  // main/media-hub/ollamaService.ts). This used to resolve a hardcoded
+  // sentence about Dune on a 1.1s timer no matter what was typed; there is
+  // no canned answer left, and no model means it says so rather than
+  // pretending. A slice of the browse catalog rides along as context so the
+  // model can ground an answer in what this app can actually play.
+  const runAssistantQuery = useCallback(
+    (query: string) => {
+      const question = query.trim()
+      const generation = ++assistantGeneration.current
+      setAssistantQuery(query)
+      setAssistantResponse(null)
+
+      if (!question) {
+        setAssistantState('responding')
+        setAssistantResponse("I didn't catch a question there — try a genre, a mood, or a title.")
+        return
+      }
+
+      // `mediaHubSettings === null` is "the first settings fetch hasn't
+      // resolved yet", not "nothing is connected" — asking anyway is right
+      // there, because the main process answers that question
+      // authoritatively and its refusal says the same thing this branch
+      // would have. Only a settled snapshot that says no model is connected
+      // short-circuits.
+      const api = window.api?.mediaHub?.ollama
+      if (!api || mediaHubSettings?.ollamaConnected === false) {
+        setAssistantState('error')
+        setAssistantResponse(
+          'No local model is connected yet. Settings → AI links R3 to an Ollama model running on your own machine.'
+        )
+        return
+      }
+
+      setAssistantState('processing')
+      api
+        .ask(question, browseCatalog.items.slice(0, MAX_PROMPT_TITLES).map(mediaItemToTitleRef))
+        .then((result) => {
+          if (assistantGeneration.current !== generation) return
+          setAssistantState('responding')
+          setAssistantResponse(result.reply)
+        })
+        .catch((error: unknown) => {
+          if (assistantGeneration.current !== generation) return
+          setAssistantState('error')
+          setAssistantResponse(
+            error instanceof Error
+              ? error.message
+              : 'That question did not get through to the model.'
+          )
+        })
+    },
+    [browseCatalog.items, mediaHubSettings?.ollamaConnected]
+  )
 
   // The backend itself requires >=2 characters (main/media-hub/catalog.ts's
   // catalogSearch handler returns [] below that) — mirrored here so the UI

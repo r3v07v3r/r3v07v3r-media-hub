@@ -49,6 +49,10 @@ play something. Optional metadata, tracking, and subtitle services add to the ex
   a shared queue and synchronized playback controls.
 - **Use separate profiles**, including Kids and PIN-protected profiles. Watch history is
   currently shared between profiles.
+- **Ask a local AI model** for suggestions, if you connect one. The assistant field and the
+  Recommend Next buttons run on an [Ollama](https://ollama.com) model on your own machine —
+  nothing is sent to a hosted service, and with no model connected those features say so rather
+  than answering.
 
 ## Quick start
 
@@ -132,6 +136,7 @@ above. Metadata, tracking, subtitle, and relay services remain optional:
 | **Sonarr / Radarr** | Connect series and movie management to the local download workflow.                  |
 | **qBittorrent**     | Supply and manage downloads for the local playback workflow.                         |
 | **R3 Party Sync**   | Relay Watch Party traffic when a direct connection is not suitable.                  |
+| **Ollama**          | Run the AI assistant and recommendations on a language model you host yourself.      |
 
 Add or remove these integrations from **Settings**. API credentials are entered in the desktop
 app rather than in the source tree.
@@ -223,6 +228,21 @@ Both providers are searched together and the results are shown in one list, tagg
 service each came from. SubDL is listed first because its downloads are unmetered, so the
 automatic fetch prefers it; OpenSubtitles allows only 5 downloads per day on a free account. If
 the menu says "No results", check that at least one of the two is still connected.
+
+</details>
+
+<details>
+<summary><strong>The AI assistant says no model is connected</strong></summary>
+
+The AI features have no hosted service behind them — they only ever talk to an
+[Ollama](https://ollama.com) instance you run yourself. Install Ollama, pull a model
+(`ollama pull llama3.2`), then open **Settings → AI**, enter the server address
+(`http://127.0.0.1:11434` if it is on this machine), press **Check** to list what is installed,
+choose a model and press **Connect**.
+
+If **Check** cannot reach it, confirm Ollama is running (`ollama list`) and that the port matches.
+For an instance on another machine, that machine must have `OLLAMA_HOST` set to an address other
+than localhost for it to accept connections from the network at all.
 
 </details>
 

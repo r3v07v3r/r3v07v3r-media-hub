@@ -7,12 +7,22 @@ import styles from './Overlays.module.css'
 export function AIResponsePanel() {
   const { assistantState, assistantResponse, closeAssistant } = useAppState()
 
-  if (assistantState !== 'processing' && assistantState !== 'responding') return null
+  // 'error' shows too: a local model that isn't connected, isn't running,
+  // or timed out puts its reason in assistantResponse, and that reason is
+  // the whole point — silently rendering nothing would look like the field
+  // ignored the question.
+  if (
+    assistantState !== 'processing' &&
+    assistantState !== 'responding' &&
+    assistantState !== 'error'
+  ) {
+    return null
+  }
 
   return (
     <div className={`${styles.aiPanel} glass-panel`} role="status" aria-live="polite">
       <span className={styles.aiPanelIcon}>
-        <Icon name="sparkle" />
+        <Icon name={assistantState === 'error' ? 'info' : 'sparkle'} />
       </span>
       <div className={styles.aiPanelText}>
         {assistantState === 'processing' ? (

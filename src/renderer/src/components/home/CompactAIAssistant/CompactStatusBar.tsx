@@ -12,7 +12,7 @@ const STATUS_LABEL: Record<string, string> = {
   responding: "Here's an idea",
   playing: 'Playing',
   loading: 'Loading…',
-  error: "Didn't catch that"
+  error: 'R3 AI could not answer that'
 }
 
 /** The mobile-only "compact assistant status" required by spec section 8
@@ -20,8 +20,13 @@ const STATUS_LABEL: Record<string, string> = {
  *  standing in for the full orb + recommend-buttons panel, which doesn't
  *  fit phone width without pushing the hero below the fold. */
 export function CompactStatusBar() {
-  const { assistantState } = useAppState()
+  const { assistantState, mediaHubSettings } = useAppState()
   const active = assistantState === 'processing'
+  // Same honesty as the full panel's AssistantStatus: at rest, say whether
+  // there is a model to ask at all.
+  const idleLabel = mediaHubSettings?.ollamaConnected
+    ? STATUS_LABEL.idle
+    : 'R3 AI — no local model connected'
 
   return (
     <section
@@ -30,7 +35,9 @@ export function CompactStatusBar() {
     >
       <Icon name="waveform" />
       <span className={styles.compactStatusText}>
-        {STATUS_LABEL[assistantState] ?? STATUS_LABEL.idle}
+        {assistantState === 'idle' || assistantState === 'hover' || assistantState === 'focused'
+          ? idleLabel
+          : (STATUS_LABEL[assistantState] ?? idleLabel)}
       </span>
       <span className={styles.compactStatusDot} aria-hidden="true" />
     </section>

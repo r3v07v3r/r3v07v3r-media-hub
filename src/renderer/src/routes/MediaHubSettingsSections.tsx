@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useAppState } from '@renderer/context/AppStateContext'
 import { Icon } from '@renderer/components/icons/Icon'
+import { DEFAULT_OLLAMA_BASE_URL } from '@shared/media-hub/ollama'
 import type {
   MalReconcilePreview,
   SimklPinStart,
@@ -1181,6 +1182,192 @@ export function WatchPartySection() {
           </div>
         </>
       )}
+    </section>
+  )
+}
+
+/**
+ * The local AI model everything in this app labelled "AI" runs on.
+ *
+ * Ollama rather than a hosted API on purpose: the app has no account, no
+ * key of its own to spend, and nothing here should be sending someone's
+ * viewing habits to a service they didn't choose. The model is one they
+ * installed on their own machine, and if they haven't installed one, the
+ * AI features say so instead of quietly doing something else.
+ *
+ * Two steps, deliberately: check the address first (which lists what is
+ * actually installed there), then pick from that list. Typing a model name
+ * blind is how you end up with a setting that saves fine and fails later at
+ * the point of use.
+ */
+export function OllamaSection() {
+  const { mediaHubSettings, refreshMediaHubSettings } = useAppState()
+  const savedBaseUrl = mediaHubSettings?.ollamaBaseUrl ?? ''
+  const savedModel = mediaHubSettings?.ollamaModel ?? ''
+  const connected = mediaHubSettings?.ollamaConnected ?? false
+
+  const [baseUrlEdited, setBaseUrlEdited] = useState<string | null>(null)
+  const baseUrl = baseUrlEdited ?? savedBaseUrl
+  const [model, setModel] = useState('')
+  const [models, setModels] = useState<string[]>([])
+  const [status, setStatus] = useState<Status>({ kind: 'idle' })
+
+  // Populates the model list on open when there is already an address to
+  // check, so a connected instance shows its models without anyone having
+  // to press Check first. Keyed on the SAVED address only — re-probing on
+  // every keystroke while someone types a new one would fire a request per
+  // character.
+  useEffect(() => {
+    const api = window.api?.mediaHub?.ollama
+    if (!api || !savedBaseUrl) return
+    let cancelled = false
+    api
+      .status()
+      .then((result) => {
+        if (cancelled) return
+        setModels(result.models)
+        setModel((current) => current || result.model || result.models[0] || '')
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [savedBaseUrl])
+
+  async function check() {
+    const api = window.api?.mediaHub?.ollama
+    if (!api) return
+    setStatus({ kind: 'busy' })
+    const result = await api.status(baseUrl.trim() || undefined).catch(() => null)
+    if (!result) {
+      setStatus({ kind: 'error', message: 'Could not check that address.' })
+      return
+    }
+    setModels(result.models)
+    if (!result.reachable) {
+      setStatus({ kind: 'error', message: result.error ?? 'No Ollama server answered there.' })
+      return
+    }
+    if (!result.models.length) {
+      setStatus({
+        kind: 'error',
+        message:
+          'Reached Ollama, but it has no models installed. Pull one first, e.g. "ollama pull llama3.2".'
+      })
+      return
+    }
+    setModel((current) => (current && result.models.includes(current) ? current : result.models[0]))
+    setStatus({
+      kind: 'ok',
+      message: `Found ${result.models.length} model${result.models.length === 1 ? '' : 's'}.`
+    })
+  }
+
+  async function connect() {
+    const api = window.api?.mediaHub?.ollama
+    if (!api || !baseUrl.trim() || !model) return
+    setStatus({ kind: 'busy' })
+    try {
+      await api.connect(baseUrl.trim(), model)
+      setBaseUrlEdited(null)
+      setStatus({ kind: 'ok', message: 'Connected.' })
+      refreshMediaHubSettings()
+    } catch (error) {
+      setStatus({
+        kind: 'error',
+        message: error instanceof Error ? error.message : 'Could not connect.'
+      })
+    }
+  }
+
+  async function disconnect() {
+    const api = window.api?.mediaHub?.ollama
+    if (!api) return
+    setStatus({ kind: 'busy' })
+    await api.disconnect().catch(() => {})
+    setBaseUrlEdited(null)
+    setStatus({ kind: 'idle' })
+    refreshMediaHubSettings()
+  }
+
+  return (
+    <section className={`${styles.section} glass-panel`} aria-labelledby="settings-ollama">
+      <div className={styles.serviceHead}>
+        <h2 id="settings-ollama" className={styles.sectionTitle} style={{ marginBottom: 0 }}>
+          Local AI model
+        </h2>
+        <ConnectionBadge connected={connected} />
+      </div>
+      <p className={styles.rowDescription} style={{ marginBottom: 10 }}>
+        Point R3 at an Ollama instance running on this machine (or another one on your network) and
+        every AI feature in the app — the &ldquo;Ask R3 anything&rdquo; field and the Recommend Next
+        buttons — runs on that model. Nothing is sent anywhere else, and with nothing connected here
+        those features say so rather than making something up. Install from ollama.com, then{' '}
+        <code>ollama pull llama3.2</code>.
+      </p>
+
+      {connected && (
+        <p className={styles.rowDescription} style={{ marginBottom: 10 }}>
+          Currently asking <strong>{savedModel}</strong> at <strong>{savedBaseUrl}</strong>.
+        </p>
+      )}
+
+      <div className={styles.serviceFields}>
+        <label className={styles.field}>
+          <span className={styles.fieldLabel}>Server address</span>
+          <input
+            className={styles.fieldInput}
+            type="text"
+            placeholder={DEFAULT_OLLAMA_BASE_URL}
+            value={baseUrl}
+            onChange={(e) => setBaseUrlEdited(e.target.value)}
+          />
+        </label>
+        <label className={styles.field}>
+          <span className={styles.fieldLabel}>Model</span>
+          <select
+            className={`${styles.fieldInput} ${styles.fieldSelect}`}
+            value={model}
+            onChange={(e) => setModel(e.target.value)}
+            disabled={!models.length}
+          >
+            {models.length ? (
+              models.map((name) => (
+                <option key={name} value={name}>
+                  {name}
+                </option>
+              ))
+            ) : (
+              <option value="">Check the address first</option>
+            )}
+          </select>
+        </label>
+      </div>
+
+      <div className={styles.serviceActions} style={{ marginTop: 10 }}>
+        <button
+          type="button"
+          className={styles.testButton}
+          onClick={check}
+          disabled={status.kind === 'busy'}
+        >
+          <Icon name="refresh" size={12} /> Check
+        </button>
+        <button
+          type="button"
+          className={styles.testButton}
+          onClick={connect}
+          disabled={!baseUrl.trim() || !model || status.kind === 'busy'}
+        >
+          {connected ? 'Save' : 'Connect'}
+        </button>
+        {connected && (
+          <button type="button" className={styles.testButton} onClick={disconnect}>
+            Disconnect
+          </button>
+        )}
+        <StatusLine status={status} />
+      </div>
     </section>
   )
 }

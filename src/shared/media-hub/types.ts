@@ -509,6 +509,15 @@ export interface MediaHubPublicSettings {
   hideWatchedDefault: boolean
   hideCompletedDefault: boolean
   hideDislikedDefault: boolean
+  /** Address of the local Ollama instance the AI features talk to, e.g.
+   *  "http://127.0.0.1:11434" — '' when none has been set up. Not a
+   *  credential: it is a machine on the person's own network, stored in
+   *  plain text like partySyncUrl. See shared/media-hub/ollama.ts. */
+  ollamaBaseUrl: string
+  /** Which installed model to use, e.g. "llama3.2:3b". '' when unset. Both
+   *  this and ollamaBaseUrl must be set before anything in the app will
+   *  call a model at all. */
+  ollamaModel: string
 }
 
 export interface MediaHubSettingsSnapshot extends MediaHubPublicSettings {
@@ -524,6 +533,36 @@ export interface MediaHubSettingsSnapshot extends MediaHubPublicSettings {
    *  `ffmpegAvailable` while playback depended on an ffmpeg transcode; ffmpeg
    *  is no longer involved in playing anything. */
   playerAvailable: boolean
+  /** Both an address and a model are saved. The renderer gates every AI
+   *  feature on this: with no model linked, the assistant says so instead
+   *  of inventing an answer, and "Recommend Next ..." falls back to its own
+   *  catalog pick rather than pretending a model chose it. */
+  ollamaConnected: boolean
+}
+
+/** What a probe of an Ollama instance found — see main/media-hub/ollamaService.ts. */
+export interface OllamaStatus {
+  /** A model has been picked AND its server address is saved. Says nothing about whether that server is up right now — that's `reachable`. */
+  connected: boolean
+  baseUrl: string
+  model: string
+  /** Whether the probe just reached an Ollama instance at `baseUrl`. */
+  reachable: boolean
+  /** Model tags installed there. Empty when it could not be reached. */
+  models: string[]
+  /** Why the probe failed, in words worth showing someone. */
+  error?: string
+}
+
+export interface OllamaAskResult {
+  reply: string
+}
+
+export interface OllamaRecommendResult {
+  /** Catalog id of the title the model picked, or '' when it answered with something that wasn't on the list it was given. */
+  id: string
+  /** The model's own one-line justification, or '' if it didn't give one. */
+  reason: string
 }
 
 export interface ConnectResult {
