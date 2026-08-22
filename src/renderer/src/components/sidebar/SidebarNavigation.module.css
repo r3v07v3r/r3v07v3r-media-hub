@@ -73,6 +73,9 @@
 
   transition: width var(--transition-standard);
   overflow: visible;
+  /* Re-enables hit-testing that .sidebar (AppShell.module.css) turns off
+     for its column as a whole — see that rule for why. */
+  pointer-events: auto;
 }
 
 /* The glass surface, as its OWN layer rather than a background on .rail.

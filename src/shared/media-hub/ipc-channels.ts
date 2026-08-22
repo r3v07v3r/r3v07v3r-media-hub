@@ -55,6 +55,7 @@ export const MEDIA_HUB_CHANNELS = {
   trackingSavePosition: 'mediahub:tracking:save-position',
   trackingReconcileCheck: 'mediahub:tracking:reconcile-check',
   trackingReconcileResolve: 'mediahub:tracking:reconcile-resolve',
+  trackingReconcileSync: 'mediahub:tracking:reconcile-sync', // push event — a queued "keep local" batch went out (or didn't)
   dislikedList: 'mediahub:disliked:list',
   dislikedAdd: 'mediahub:disliked:add',
   dislikedRemove: 'mediahub:disliked:remove',

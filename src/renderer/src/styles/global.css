@@ -69,6 +69,13 @@
      before hydration and should match its most common actual state.
      Third refinement pass: rail widened 220px -> 285px. */
   --nav-rail-width: 285px;
+
+  /* Companion to the above for the mobile layout, where the nav is a
+     bottom bar instead of a left column — SidebarNavigation measures and
+     publishes the real value on mount. 0 is the correct default: it's
+     what every non-mobile width resolves to, and it's what MoodBrowser's
+     bottom-pinned dock offsets itself by. */
+  --nav-bar-height: 0px;
 }
 
 /* Registered custom property so animating --edge-angle interpolates as a

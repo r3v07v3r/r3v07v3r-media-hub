@@ -152,9 +152,16 @@ export function invalidateSimklWatchedCache(): void {
  * "fix" them by pushing or erasing watches on an account that was never
  * out of sync.
  *
- * The cache is keyed globally rather than per-account (this module never
- * learns a user id — see simklRequest, which only carries a bearer token),
- * so there is nothing finer-grained to drop; the row has to go.
+ * A delete, not a stamp — worth knowing which of the two this is. The
+ * pending-push queue in tracking.ts defends itself the stronger way:
+ * every entry carries a simklAccountMark() and is checked against it
+ * before being sent, so a queue that outlives its account is inert rather
+ * than dangerous. This cache deserves the same, because the delete below
+ * is best-effort (see deleteCache) and a database that was read-only at
+ * the wrong moment leaves the previous account's library readable. That
+ * mark is private to tracking.ts, which imports THIS module and so can't
+ * be imported back; giving the cache the same guarantee means lifting it
+ * somewhere both can reach. Worth doing, not done here.
  */
 export function forgetSimklWatchedCache(): void {
   getDatabase().deleteCache(WATCHED_HISTORY_CACHE_KEY)

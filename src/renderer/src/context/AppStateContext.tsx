@@ -754,19 +754,74 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   const resolveSyncDiscrepancy = useCallback(
     (discrepancy: WatchStatusDiscrepancy, resolution: ReconcileResolution) => {
       // Optimistic — the list is meant to shrink as each item is handled,
-      // and there is no useful "undo" state to roll back to on failure;
-      // worst case, a failed resolve simply resurfaces on the next check.
+      // and there is no useful "undo" state to roll back to. A "keep
+      // local" pick is now recorded in main before this call returns and
+      // pushed out to the tracking services as a batch a few seconds
+      // later (see tracking.ts's pending queue), so the row leaving here
+      // means the decision is kept, not that the push already succeeded —
+      // the push's real outcome arrives on the onReconcileSync effect
+      // below.
       setSyncDiscrepancies((prev) => prev.filter((d) => d.id !== discrepancy.id))
       window.api?.mediaHub?.tracking
         .reconcileResolve({ discrepancy, resolution })
-        .then(() => {
+        .then((result) => {
+          // A "keep local" pick that main couldn't record is the one case
+          // where the optimism above is wrong: nothing is queued, nothing
+          // will retry, and staying quiet would put us right back to a
+          // choice silently going nowhere. Put the row back and say so.
+          if (resolution === 'use-local' && !result?.queued) {
+            setSyncDiscrepancies((prev) =>
+              prev.some((d) => d.id === discrepancy.id) ? prev : [...prev, discrepancy]
+            )
+            pushNotification({
+              tone: 'error',
+              message: `Could not keep your choice for "${discrepancy.title}". Nothing was changed — try again.`
+            })
+            return
+          }
           watchedIdsResult.refresh()
           homeFeed.refresh()
         })
         .catch(() => {})
     },
-    [watchedIdsResult, homeFeed]
+    [watchedIdsResult, homeFeed, pushNotification]
   )
+
+  // The other half of that: a queued batch going out (or not) is the only
+  // moment anyone can find out whether their decision actually reached
+  // the services. Silence here is what let the same titles come back on
+  // every launch, so each outcome gets said out loud — including the
+  // "still retrying" case, which is genuinely fine but shouldn't look
+  // like success.
+  useEffect(() => {
+    const api = window.api?.mediaHub?.tracking
+    if (!api?.onReconcileSync) return
+    return api.onReconcileSync((report) => {
+      const list = (titles: string[]): string =>
+        titles.length === 1 ? `"${titles[0]}"` : `${titles.length} titles`
+      // Not an else-if chain: one batch can carry both, and hearing only
+      // about the titles that were given up on leaves the others looking
+      // like they went through.
+      if (report.abandoned.length) {
+        pushNotification({
+          tone: 'error',
+          message: `Could not sync ${list(report.abandoned)} to your tracking services after several tries — no longer flagging ${report.abandoned.length === 1 ? 'it' : 'them'}.${report.error ? ` ${report.error}` : ''}`
+        })
+      }
+      if (report.retrying.length) {
+        pushNotification({
+          tone: 'warning',
+          message: `${list(report.retrying)} could not be synced yet — this will be retried.${report.error ? ` ${report.error}` : ''}`
+        })
+      }
+      if (report.pushed.length) {
+        pushNotification({
+          tone: 'success',
+          message: `Synced ${list(report.pushed)} to your tracking services.`
+        })
+      }
+    })
+  }, [pushNotification])
 
   const cancelProfilePinPrompt = useCallback(() => setProfilePinPrompt(null), [])
 
