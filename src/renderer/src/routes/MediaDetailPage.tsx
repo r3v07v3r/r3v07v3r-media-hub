@@ -15,7 +15,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useAppState } from '@renderer/context/AppStateContext'
-import { catalogItemToMediaItem } from '@renderer/lib/mediaHub/adapters'
+import { airedEpisodes, catalogItemToMediaItem } from '@renderer/lib/mediaHub/adapters'
 import { DETAIL_CONFIGS } from '@renderer/lib/mediaHub/detailAdapters'
 import { useRestoreBrowsingOrigin } from '@renderer/lib/mediaHub/useRestoreBrowsingOrigin'
 import type {
@@ -290,13 +290,23 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
    *  panel and the tiles can never disagree. Null when there's no episode
    *  list at all (a movie, or the degraded no-bridge path where `media`
    *  came from the cached catalog), leaving the panel on its old
-   *  continueEntry-based fallback for those. */
+   *  continueEntry-based fallback for those.
+   *
+   *  airedEpisodes, not a plain !unplayable filter: it's the same
+   *  denominator adapters.ts's isSeriesCompleted uses for the "Completed"
+   *  badge on a catalog card, so a currently-airing show someone is fully
+   *  caught up on reads 100% here AND completed there. Counting the
+   *  future-dated episodes Cinemeta/TMDB ship in `videos` would have left
+   *  it short of 100% with episodes that don't exist yet sitting in the
+   *  Unwatched total. The grid itself still shows them — what's coming is
+   *  worth seeing, it just isn't progress.  */
   const episodeStats = useMemo(() => {
-    const playable = episodes.filter((e) => !e.unplayable)
-    if (playable.length === 0) return null
+    const countable = airedEpisodes(episodes)
+    if (countable.length === 0) return null
     return {
-      watchedCount: playable.filter((e) => watchedKeys.has(episodeKey(e.season, e.episode))).length,
-      total: playable.length
+      watchedCount: countable.filter((e) => watchedKeys.has(episodeKey(e.season, e.episode)))
+        .length,
+      total: countable.length
     }
   }, [episodes, watchedKeys])
 

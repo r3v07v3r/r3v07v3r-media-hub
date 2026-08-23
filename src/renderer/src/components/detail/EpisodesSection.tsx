@@ -107,10 +107,24 @@ function episodeCode(ep: Episode): string {
 
 /** Air date as a compact "12 Mar 2003". Returns null for the empty or
  *  unparseable `released` values Kitsu's placeholder episodes carry, so
- *  the caller renders nothing rather than "Invalid Date". */
+ *  the caller renders nothing rather than "Invalid Date".
+ *
+ *  A bare YYYY-MM-DD is built from local calendar components rather than
+ *  handed to `new Date(string)`, which per spec reads a date-ONLY string
+ *  as UTC midnight (a date-TIME string without an offset is read as
+ *  local — the inconsistency is the trap). Both real sources for this
+ *  field are date-only — Kitsu's `airdate` and TMDB's `air_date`, see
+ *  core.ts's normalizeKitsuEpisode and animeSeasons.ts — so west of
+ *  Greenwich every tile rendered the day BEFORE the episode aired.
+ *  Anything with a time in it still goes through the normal parse. */
+const DATE_ONLY = /^(\d{4})-(\d{2})-(\d{2})$/
+
 function airDateLabel(released: string | undefined): string | null {
   if (!released) return null
-  const date = new Date(released)
+  const parts = DATE_ONLY.exec(released.trim())
+  const date = parts
+    ? new Date(Number(parts[1]), Number(parts[2]) - 1, Number(parts[3]))
+    : new Date(released)
   if (Number.isNaN(date.getTime())) return null
   return date.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })
 }

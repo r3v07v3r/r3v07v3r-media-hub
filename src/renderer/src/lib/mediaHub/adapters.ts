@@ -172,23 +172,41 @@ export function indexHistoryById(history: HistoryEntry[]): Map<string, HistoryEn
   return index
 }
 
+/**
+ * The episodes that count toward a title's progress — the denominator for
+ * "how far through this am I".
+ *
+ * Two exclusions, for two different reasons:
+ *
+ * v.unplayable (see disambiguateVideos in core.ts) is a synthetic Specials
+ * entry with no real episode behind it — its watched controls are hidden,
+ * so it can never appear in `history`. Counting it would mean watchedCount
+ * could never reach total, permanently blocking a series from reading as
+ * complete even after every real episode is watched.
+ *
+ * Unaired/future episodes (Cinemeta and TMDB both include these in
+ * `videos`) are excluded so a currently-airing show someone is fully
+ * caught up on isn't permanently short of 100%.
+ *
+ * Shared by isSeriesCompleted below and MediaDetailPage's own Tracked &
+ * Progress counts, so the "Completed" badge on a catalog card and the
+ * percentage in the detail sidebar can't disagree about the denominator.
+ */
+export function airedEpisodes<T extends { unplayable?: boolean; released?: string }>(
+  videos: readonly T[] | undefined,
+  now: number = Date.now()
+): T[] {
+  return (videos || []).filter(
+    (v) => !v.unplayable && (!v.released || new Date(v.released).getTime() <= now)
+  )
+}
+
 /** A series/anime counts as complete once every already-aired episode has
  *  been watched — a still-airing show the person is fully caught up on
  *  counts too (nothing new to watch right now), but a show they're
- *  partway through does not. Unaired/future episodes (Cinemeta includes
- *  these in `videos`) are excluded from the total so a currently-airing
- *  show isn't permanently unwatchable-to-complete. */
+ *  partway through does not. */
 function isSeriesCompleted(item: CatalogItem, history: HistoryEntry[]): boolean {
-  const now = Date.now()
-  // v.unplayable (see disambiguateVideos in core.ts) is a synthetic
-  // Specials entry with no real episode behind it — its watched controls
-  // are hidden, so it can never appear in `history`. Counting it toward
-  // `aired` would mean state.watchedCount could never reach state.total,
-  // permanently blocking a series from showing as complete even after
-  // every real episode is watched.
-  const aired = (item.videos || []).filter(
-    (v) => !v.unplayable && (!v.released || new Date(v.released).getTime() <= now)
-  )
+  const aired = airedEpisodes(item.videos)
   if (!aired.length) return false
   const state = episodeWatchState(aired, history, item.id)
   return state.total > 0 && state.watchedCount >= state.total
