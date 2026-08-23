@@ -104,6 +104,17 @@ export const MEDIA_HUB_CHANNELS = {
    *  the controls, handed over so the overlay applies it with its own party
    *  rules rather than main acting on mpv behind the party's back. */
   playerInput: 'mediahub:player:input', // push event
+  /** Main -> overlay push. The controls window has just been put on screen.
+   *
+   *  Reported rather than observed because the overlay genuinely cannot see it:
+   *  measured on Electron 39, a window created with `show: false` reports
+   *  `document.visibilityState === 'visible'` the entire time it is hidden and
+   *  fires no `visibilitychange` when it is finally shown. (The documented cure,
+   *  `paintWhenInitiallyHidden: false`, is not available here — it suppresses
+   *  `ready-to-show`, which is what the reveal itself waits on.) Without this the
+   *  controls' idle countdown ran during the load and a cold stream slower than
+   *  it started the film with the bar already faded out. */
+  playerControlsShown: 'mediahub:player:controls-shown', // push event
   libraryList: 'mediahub:library:list',
   libraryPlay: 'mediahub:library:play',
   streamCacheList: 'mediahub:stream-cache:list',

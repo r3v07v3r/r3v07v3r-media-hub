@@ -41,6 +41,7 @@ import {
   isOverlayInputReady,
   openPlayerOverlay,
   raisePlayerOverlay,
+  revealPlayerOverlay,
   sendToPlayerOverlay,
   setOverlayInputReady,
   setOverlayInteractive,
@@ -618,6 +619,16 @@ export async function startPlayerSession(
     subtitleLanguage: options.subtitleLanguage,
     videoScaling: options.videoScaling
   })
+
+  // Only now do the controls go on screen. The overlay was created before the
+  // load, because its renderer needs that time to boot, but a control bar over
+  // the media detail page with no film behind it is not a loading state anyone
+  // asked for — see revealPlayerOverlay.
+  //
+  // Unconditional, unlike the raises below: those skip when the app is not the
+  // window being used, and a film that started while the person was in another
+  // application must still have controls waiting when they come back to it.
+  revealPlayerOverlay()
 
   // Re-asserted per title rather than set once. mpv keeps these properties
   // across `loadfile`, so this is usually a no-op — but the process can be

@@ -105,14 +105,32 @@ function PlayerControls() {
     idleTimer.current = setTimeout(() => setControlsVisible(false), CONTROLS_IDLE_MS)
   }, [])
 
-  // Arms the initial idle countdown only — `controlsVisible` already starts
-  // true, so calling revealControls() here would set state it is already in.
+  // Arms the idle countdown when this window is actually put on screen, not
+  // when this tree mounts.
+  //
+  // The two are far apart: the window is created before `loadfile` so its
+  // renderer has the load to boot in, and main does not show it until there is
+  // a film to sit over (playerWindow.ts's revealPlayerOverlay). A countdown
+  // armed at mount therefore ran during the wait, so on any cold stream slower
+  // than CONTROLS_IDLE_MS the controls had already faded by the moment they
+  // first became visible — the film starts and there is no bar.
+  //
+  // Main has to report it, tempting as `document.visibilityState` is. Measured
+  // on Electron 39 with this window's exact webPreferences: it reads 'visible'
+  // for the whole time the window is hidden and fires no visibilitychange when
+  // the window is finally shown, so a renderer-side check would arm at mount
+  // and never re-arm — the very bug it was meant to fix. See the
+  // playerControlsShown channel for why the documented cure is not available.
+  // A report that never arrives costs a bar that stays up until the mouse next
+  // moves, which revealControls then arms in the ordinary way — degraded, not
+  // stuck, which is the right way round for a control surface.
   useEffect(() => {
-    idleTimer.current = setTimeout(() => setControlsVisible(false), CONTROLS_IDLE_MS)
+    const unsubscribe = window.api?.mediaHub?.player?.onControlsShown?.(revealControls)
     return () => {
+      unsubscribe?.()
       if (idleTimer.current) clearTimeout(idleTimer.current)
     }
-  }, [])
+  }, [revealControls])
 
   // The window only takes mouse input while there is something to click.
   useEffect(() => {

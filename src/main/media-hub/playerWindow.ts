@@ -15,6 +15,20 @@
 // flag on both, since a fullscreen film should have nothing over it, the
 // taskbar included; setPlayerOverlayTopmost is how that arrives here.
 //
+// OWNERSHIP. This window is NOT created with `parent`, and that is load-bearing
+// rather than an oversight. Win32 keeps an owner and its owned windows together
+// as one block in the z-order: nothing belonging to another process can be
+// placed between them. mpv's video window has to go exactly there — above the
+// main window, below these controls — so ownership makes the required order
+// unreachable. Measured on Windows 11 against the real mpv build: with this
+// window owned, raising it carried the main window up with it and left the film
+// underneath both (audio playing, app UI on screen, no picture); unowned, the
+// same raise lands controls > video > app every time. What ownership was doing
+// for us — going away when the app is minimised, dying with the main window —
+// is done explicitly at the bottom of openPlayerOverlay instead.
+//
+// RAISING IS A BAND TOGGLE, NOT moveTop(). See raisePlayerOverlay.
+//
 // The obvious worry with that shape is cost: Electron transparent overlays on
 // Windows have a reputation for flicker and for throttling whatever renders
 // beneath them. Measured before committing to this design, against 4K60 at
@@ -33,6 +47,7 @@ import { is } from '@electron-toolkit/utils'
 import path from 'node:path'
 
 import { APP_SCHEME } from '../appProtocol'
+import { MEDIA_HUB_CHANNELS } from '../../shared/media-hub/ipc-channels'
 import { PLAYER_OVERLAY_ROUTE } from '../../shared/media-hub/playerRoute'
 import { isAllowedExternalUrl } from './security'
 
@@ -40,13 +55,22 @@ let overlayWindow: BrowserWindow | null = null
 let parentWindow: BrowserWindow | null = null
 let detachBoundsListeners: (() => void) | null = null
 let inputReady = false
+// The two halves of the first show. The renderer is ready well before the film
+// is — see revealPlayerOverlay for why they are not the same moment.
+let readyToShow = false
+let revealRequested = false
 // Whether the controls are currently meant to be in the always-on-top band.
 // Only fullscreen turns this on — see this file's header.
 let topmost = false
 
-// mpv's window is topmost too while fullscreen, so a plain topmost flag would
-// only put the controls in the same band as the video and leave the winner to
-// whichever was raised last. A higher level wins outright.
+// The level asked for when this window enters the always-on-top band.
+//
+// It does NOT outrank mpv, whatever the name suggests: Win32 has one topmost
+// band, and measured against the real player, raising mpv while both windows
+// were in it put mpv in front regardless of this level. Within the band the
+// most recently raised window wins, full stop — which is why every raise
+// re-asserts rather than assuming (see raisePlayerOverlay), and why the caller
+// owns the ordering of the two (see playerBridge's setPlayerTopmost).
 const OVERLAY_TOPMOST_LEVEL = 'screen-saver' as const
 
 export function getPlayerOverlay(): BrowserWindow | null {
@@ -141,9 +165,13 @@ export function openPlayerOverlay(
   // Nothing in this window is listening yet, and will not be until its renderer
   // has mounted and said so.
   inputReady = false
+  readyToShow = false
+  revealRequested = false
   const win = new BrowserWindow({
     ...contentBoundsOf(parent),
-    parent,
+    // Deliberately NOT `parent` — see this file's OWNERSHIP note. An owned
+    // window cannot have mpv's window placed between it and its owner, which
+    // is the one arrangement this whole file exists to produce.
     transparent: true,
     frame: false,
     resizable: false,
@@ -205,7 +233,11 @@ export function openPlayerOverlay(
   }
 
   win.once('ready-to-show', () => {
-    if (!win.isDestroyed()) win.show()
+    readyToShow = true
+    // Not shown here. The renderer is usually ready long before there is a film
+    // to be shown over — see revealPlayerOverlay. This only picks up a reveal
+    // that was asked for before the window could honour it.
+    showOverlayWindow()
   })
 
   if (options.onFocus) win.on('focus', options.onFocus)
@@ -227,13 +259,43 @@ export function openPlayerOverlay(
   parent.on('enter-full-screen', onFullscreenSettled)
   parent.on('leave-full-screen', onFullscreenSettled)
 
+  // Both of these came free with ownership and have to be done by hand now (see
+  // this file's OWNERSHIP note). Neither is optional: a transparent window left
+  // up after the app is minimised is an invisible sheet over whatever the
+  // person went back to, and one that outlives its main window is a window with
+  // no owner, no taskbar entry and no way to close it.
+  const hideWithApp = (): void => {
+    if (!win.isDestroyed() && win.isVisible()) win.hide()
+  }
+  // Also performs a reveal the load finished while the app was minimised — see
+  // showOverlayWindow, which declines to show into an app nobody is looking at.
+  const showWithApp = (): void => {
+    if (win.isDestroyed()) return
+    showOverlayWindow()
+    mirrorBounds()
+  }
+  const closeWithApp = (): void => closePlayerOverlay()
+  parent.on('minimize', hideWithApp)
+  parent.on('restore', showWithApp)
+  parent.on('hide', hideWithApp)
+  parent.on('show', showWithApp)
+  parent.on('closed', closeWithApp)
+
   detachBoundsListeners = () => {
+    // The parent is already gone on the close path, and `off` on a destroyed
+    // BrowserWindow throws.
+    if (parent.isDestroyed()) return
     parent.off('resize', onBoundsChange)
     parent.off('move', onBoundsChange)
     parent.off('enter-full-screen', onBoundsChange)
     parent.off('leave-full-screen', onBoundsChange)
     parent.off('enter-full-screen', onFullscreenSettled)
     parent.off('leave-full-screen', onFullscreenSettled)
+    parent.off('minimize', hideWithApp)
+    parent.off('restore', showWithApp)
+    parent.off('hide', hideWithApp)
+    parent.off('show', showWithApp)
+    parent.off('closed', closeWithApp)
   }
 
   // A dead renderer cannot retract its own readiness, so this is the one report
@@ -250,9 +312,62 @@ export function openPlayerOverlay(
     overlayWindow = null
     parentWindow = null
     inputReady = false
+    readyToShow = false
+    revealRequested = false
   })
 
   return win
+}
+
+/**
+ * Puts the controls on screen for the first time this session.
+ *
+ * Separate from the window being ready, and that gap is the point. The overlay
+ * is created before `loadfile` — it has to be, because its renderer needs the
+ * load to boot in — and on a cold stream that load is seconds, not frames.
+ * Showing on `ready-to-show` therefore parked a scrub bar and a play button
+ * over the media detail page for the whole wait, with no film behind them:
+ * reported as "the bar shows with the movie description page behind it".
+ *
+ * One caller, and deliberately so: startPlayerSession, once `loadfile` has
+ * resolved. Nothing else knows there is a film to be shown over — a raise does
+ * not, since the renderer provokes one the moment it mounts. Idempotent, and it
+ * survives a window that is not ready yet (`ready-to-show` picks the request
+ * up).
+ *
+ * NOT the toggle this file's header rules out: that rule is about revealing and
+ * concealing the CONTROLS, which still fade with CSS inside a window that stays
+ * up for the rest of the session.
+ */
+export function revealPlayerOverlay(): void {
+  revealRequested = true
+  showOverlayWindow()
+}
+
+/**
+ * The single place this window is put on screen, so the two things that must
+ * accompany every show cannot be forgotten at one of the call sites.
+ *
+ * NOT WHILE THE APP IS AWAY. The reveal is driven by the title finishing its
+ * load, which says nothing about whether anyone is looking: minimise the app
+ * during a cold stream and the load goes on finishing without it. Showing then
+ * would put a transparent, mouse-capturing sheet over whatever the person
+ * switched to, with no further minimise event coming to take it away again.
+ * The pending request survives instead, and `showWithApp` performs it on
+ * restore.
+ *
+ * showInactive, not show: the raise that follows decides the z-order, and
+ * taking the foreground here would activate this window before the film it is
+ * supposed to be sitting over has been put in front of the app.
+ */
+function showOverlayWindow(): void {
+  const win = getPlayerOverlay()
+  if (!win || !readyToShow || !revealRequested || win.isVisible()) return
+  if (!parentWindow || parentWindow.isDestroyed()) return
+  if (parentWindow.isMinimized() || !parentWindow.isVisible()) return
+  win.showInactive()
+  // The renderer cannot see this for itself — see playerControlsShown.
+  sendToPlayerOverlay(MEDIA_HUB_CHANNELS.playerControlsShown)
 }
 
 /**
@@ -291,10 +406,39 @@ export function setPlayerOverlayTopmost(on: boolean): void {
 export function raisePlayerOverlay({ focus = true }: { focus?: boolean } = {}): void {
   const win = getPlayerOverlay()
   if (!win) return
-  // Re-asserted, not assumed: within the topmost band the most recently raised
-  // window wins, and mpv can re-create its video window at any time.
-  if (topmost) win.setAlwaysOnTop(true, OVERLAY_TOPMOST_LEVEL)
-  win.moveTop()
+  // Deliberately does NOT reveal. A raise can be provoked while the title is
+  // still loading — the renderer reports set-interactive the moment it mounts,
+  // and playerBridge raises on that — and revealing there would put the bar
+  // back over the detail page for the rest of the load. Raising a window that
+  // is not on screen yet is harmless; the reveal has one caller, and it is the
+  // one that knows the film has loaded.
+  //
+  // THE RAISE IS A BAND TOGGLE. Enter the always-on-top band and leave it
+  // again; leaving lands the window at the FRONT of the ordinary band, so the
+  // pair is a raise rather than a no-op.
+  //
+  // This is not a roundabout moveTop() — it is the only thing that works.
+  // moveTop() is SetWindowPos(HWND_TOP), which Windows declines to honour
+  // against a window owned by ANOTHER PROCESS unless the caller is the
+  // foreground application, and mpv's video window is exactly such a window.
+  // Measured with mpv raised and the real bundled build: moveTop() left the
+  // controls underneath it every single time, and so did focus(); entering and
+  // leaving the band put them in front every single time.
+  //
+  // It is also exactly what mpv does to raise ITSELF (MpvPlayer.raiseWindow).
+  // That was the whole asymmetry behind "the film is playing and the control
+  // bar has gone": both windows were competing for the front, mpv with a lever
+  // that always works and this side with one that mostly does not, so mpv won
+  // every contest.
+  //
+  // Both calls run in the same tick with no repaint between them, so the window
+  // is never seen in the wrong band.
+  win.setAlwaysOnTop(true, OVERLAY_TOPMOST_LEVEL)
+  // Within the band the most recently raised window wins — 'screen-saver' is
+  // not a level that outranks mpv's topmost on Win32, measured, whatever the
+  // name suggests. So a fullscreen film stays in the band and only re-asserts,
+  // while windowed playback drops back out of it.
+  if (!topmost) win.setAlwaysOnTop(false)
   // Without focus the keydown handler never runs, which is what leaves Escape
   // and space dead while a title is playing.
   if (focus) win.focus()
@@ -320,6 +464,8 @@ export function closePlayerOverlay(): void {
   overlayWindow = null
   parentWindow = null
   inputReady = false
+  readyToShow = false
+  revealRequested = false
   // The next session decides its own band from the state the app is in then,
   // not from how the last one ended.
   topmost = false
