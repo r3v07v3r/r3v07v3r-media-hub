@@ -74,9 +74,13 @@ export function publicSettings(settings: Record<string, unknown> = {}): MediaHub
     hideDislikedDefault: settings.hideDislikedDefault === true,
     // Re-normalized on the way out, not just on the way in: what's on disk
     // was written by some earlier version of this app, and the renderer
-    // renders this straight into the Settings pane.
+    // renders this straight into the Settings pane. These two are what was
+    // SAVED; settings:get overwrites them with what is actually in use,
+    // which also counts an instance found at the default address (see
+    // appIpc.ts).
     ollamaBaseUrl: normalizeOllamaBaseUrl(settings.ollamaBaseUrl),
-    ollamaModel: normalizeOllamaModel(settings.ollamaModel)
+    ollamaModel: normalizeOllamaModel(settings.ollamaModel),
+    ollamaAutoDetect: settings.ollamaAutoDetect !== false
   }
 }
 
@@ -109,6 +113,7 @@ export function logoutSettings(
   | 'hideDislikedDefault'
   | 'ollamaBaseUrl'
   | 'ollamaModel'
+  | 'ollamaAutoDetect'
 > {
   return {
     theme: normalizeTheme(settings.theme),
@@ -142,8 +147,11 @@ export function logoutSettings(
     hideDislikedDefault: settings.hideDislikedDefault === true,
     // Survives logout with the other device preferences: which machine on
     // your own network runs your own models has nothing to do with which
-    // TorBox/Simkl account was signed in.
+    // TorBox/Simkl account was signed in. Having turned local AI off is the
+    // same kind of fact, and dropping it here would have logging out
+    // silently switch it back on.
     ollamaBaseUrl: normalizeOllamaBaseUrl(settings.ollamaBaseUrl),
-    ollamaModel: normalizeOllamaModel(settings.ollamaModel)
+    ollamaModel: normalizeOllamaModel(settings.ollamaModel),
+    ollamaAutoDetect: settings.ollamaAutoDetect !== false
   }
 }

@@ -9,15 +9,20 @@ import assert from 'node:assert'
 import {
   DEFAULT_OLLAMA_BASE_URL,
   MAX_PROMPT_TITLES,
+  MAX_SIMILAR_TITLES,
   buildAssistantMessages,
   buildRecommendationMessages,
+  effectiveOllamaBaseUrl,
   matchRecommendation,
   normalizeOllamaBaseUrl,
   normalizeOllamaModel,
+  parseAssistantAnswer,
   parseOllamaModels,
   parseOllamaReply,
   pickInstalledModel,
-  type OllamaTitleRef
+  resolveOllamaConfig,
+  type OllamaTitleRef,
+  type SavedOllamaConfig
 } from '../src/shared/media-hub/ollama'
 
 let pass = 0
@@ -169,8 +174,26 @@ const LIBRARY: OllamaTitleRef[] = [
   { id: 'c', title: 'Dune: Part Two', year: 2024, genres: ['Sci-Fi'] }
 ]
 
+const WATCHED: OllamaTitleRef[] = [{ id: 'w', title: 'Blade Runner 2049', year: 2017 }]
+
+function assistantPrompt(
+  question: string,
+  context: Partial<Parameters<typeof buildAssistantMessages>[1]> = {}
+): string {
+  return buildAssistantMessages(question, {
+    matches: [],
+    library: [],
+    watched: [],
+    ...context
+  })[0].content
+}
+
 check('the assistant prompt carries the question and the library listing', () => {
-  const messages = buildAssistantMessages('something for a rainy night?', LIBRARY)
+  const messages = buildAssistantMessages('something for a rainy night?', {
+    matches: [],
+    library: LIBRARY,
+    watched: []
+  })
   assert.equal(messages.length, 2)
   assert.equal(messages[0].role, 'system')
   assert.ok(messages[0].content.includes('Arrival (2016)'))
@@ -178,8 +201,36 @@ check('the assistant prompt carries the question and the library listing', () =>
 })
 
 check('the assistant prompt still works with no library to offer', () => {
-  const messages = buildAssistantMessages('what should I watch?', [])
-  assert.ok(messages[0].content.includes('general knowledge'))
+  assert.ok(assistantPrompt('what should I watch?').includes('general knowledge'))
+})
+
+check("the prompt hands over what the app's own search already found", () => {
+  const prompt = assistantPrompt('is dune any good?', { matches: [LIBRARY[1]] })
+  assert.ok(prompt.includes('already searched'))
+  assert.ok(prompt.includes('Dune (2021)'))
+  // The results are on screen before the model is asked, so re-listing
+  // them is the one thing it must not do.
+  assert.ok(prompt.includes('Do not list the results back'))
+})
+
+check('the prompt says outright when the search found nothing', () => {
+  const prompt = assistantPrompt('is dune any good?')
+  assert.ok(prompt.includes('found nothing matching'))
+})
+
+check('a taste claim has to be grounded in something actually watched', () => {
+  const prompt = assistantPrompt('would I like Arrival?', { watched: WATCHED })
+  assert.ok(prompt.includes('Blade Runner 2049 (2017)'))
+  assert.ok(prompt.includes('name that title'))
+})
+
+check('with no watch history the model is told to claim nothing about taste', () => {
+  const prompt = assistantPrompt('would I like Arrival?')
+  assert.ok(prompt.includes('make no claim about their taste'))
+})
+
+check('the prompt asks for the similar-titles line the caller parses', () => {
+  assert.ok(assistantPrompt('anything good?').includes('SIMILAR:'))
 })
 
 check('a prompt never lists more titles than the cap', () => {
@@ -192,6 +243,148 @@ check('a prompt never lists more titles than the cap', () => {
     listing.split('\n').filter((line) => line.startsWith('- ')).length,
     MAX_PROMPT_TITLES
   )
+})
+
+// --- effectiveOllamaBaseUrl / resolveOllamaConfig --------------------------
+
+/** Nothing configured and never turned off — a fresh install. */
+function fresh(over: Partial<SavedOllamaConfig> = {}): SavedOllamaConfig {
+  return { baseUrl: '', model: '', autoDetect: true, ...over }
+}
+
+const LOCAL = DEFAULT_OLLAMA_BASE_URL
+const LAN = 'http://192.168.1.5:11434'
+
+check('an unconfigured install is pointed at the default address', () => {
+  assert.equal(effectiveOllamaBaseUrl(fresh()), LOCAL)
+})
+
+check('a saved address is used instead of the default', () => {
+  assert.equal(effectiveOllamaBaseUrl(fresh({ baseUrl: LAN })), LAN)
+})
+
+check('after a disconnect there is no address to look at', () => {
+  assert.equal(effectiveOllamaBaseUrl(fresh({ autoDetect: false })), '')
+})
+
+check('what was saved wins over anything detected', () => {
+  const saved = fresh({ baseUrl: LAN, model: 'llama3.2' })
+  assert.deepEqual(resolveOllamaConfig(saved, { baseUrl: LOCAL, model: 'qwen2.5' }), {
+    baseUrl: LAN,
+    model: 'llama3.2'
+  })
+})
+
+check('a detected pair is used when nothing was configured', () => {
+  assert.deepEqual(resolveOllamaConfig(fresh(), { baseUrl: LOCAL, model: 'qwen2.5' }), {
+    baseUrl: LOCAL,
+    model: 'qwen2.5'
+  })
+})
+
+check('nothing detected and nothing saved is nothing to ask', () => {
+  assert.deepEqual(resolveOllamaConfig(fresh(), null), { baseUrl: '', model: '' })
+})
+
+check('a saved model is kept, and only the address filled in', () => {
+  const saved = fresh({ model: 'llama3.2' })
+  assert.deepEqual(resolveOllamaConfig(saved, { baseUrl: LOCAL, model: 'qwen2.5' }), {
+    baseUrl: LOCAL,
+    model: 'llama3.2'
+  })
+})
+
+check('a saved LAN address is never handed this machine\'s model list', () => {
+  // The detected pair was seen on loopback; pairing its model with a server
+  // on the network would ask a machine for a model it may not have.
+  const saved = fresh({ baseUrl: LAN })
+  assert.deepEqual(resolveOllamaConfig(saved, { baseUrl: LOCAL, model: 'qwen2.5' }), {
+    baseUrl: LAN,
+    model: ''
+  })
+})
+
+check('a probe landing after Disconnect cannot put the server back', () => {
+  // The exact race: detectOllama was awaiting listModels when Disconnect
+  // was pressed, so its answer is recorded afterwards. Auto-detection is
+  // off, so nothing is effective, and the stale answer must not be usable.
+  const disconnected = fresh({ autoDetect: false })
+  assert.deepEqual(resolveOllamaConfig(disconnected, { baseUrl: LOCAL, model: 'qwen2.5' }), {
+    baseUrl: '',
+    model: ''
+  })
+})
+
+check('a probe landing after Connect elsewhere cannot redirect the model', () => {
+  // Same race, other ending: a loopback probe was in flight when the person
+  // connected a LAN server, so the detected address is no longer the one in
+  // effect.
+  const moved = fresh({ baseUrl: LAN, model: '' })
+  assert.deepEqual(resolveOllamaConfig(moved, { baseUrl: LOCAL, model: 'qwen2.5' }), {
+    baseUrl: LAN,
+    model: ''
+  })
+})
+
+check('a detection that found no model is not a connection', () => {
+  assert.deepEqual(resolveOllamaConfig(fresh(), { baseUrl: LOCAL, model: '' }), {
+    baseUrl: '',
+    model: ''
+  })
+})
+
+// --- parseAssistantAnswer --------------------------------------------------
+
+check('splits the similar-titles line off the end of an answer', () => {
+  const answer = parseAssistantAnswer(
+    'Dune is worth it — big, slow and gorgeous.\nSIMILAR: Arrival, Blade Runner 2049'
+  )
+  assert.equal(answer.text, 'Dune is worth it — big, slow and gorgeous.')
+  assert.deepEqual(answer.similar, ['Arrival', 'Blade Runner 2049'])
+})
+
+check('an answer with no similar line is all prose', () => {
+  const answer = parseAssistantAnswer('Nothing here matches that, sorry.')
+  assert.equal(answer.text, 'Nothing here matches that, sorry.')
+  assert.deepEqual(answer.similar, [])
+})
+
+check('only the marker counts — similar titles are never read out of prose', () => {
+  const answer = parseAssistantAnswer('Films similar to Dune: Arrival, and Blade Runner too.')
+  assert.deepEqual(answer.similar, [])
+  assert.ok(answer.text.includes('Arrival'))
+})
+
+check('strips the decoration models add to a titles line', () => {
+  const answer = parseAssistantAnswer('Yes.\nSimilar: "Arrival" (2016), - Blade Runner 2049')
+  assert.deepEqual(answer.similar, ['Arrival', 'Blade Runner 2049'])
+})
+
+check('strips a year written inside the quotes as well as outside them', () => {
+  const answer = parseAssistantAnswer('Yes.\nSIMILAR: "Arrival (2016)", Solaris')
+  assert.deepEqual(answer.similar, ['Arrival', 'Solaris'])
+})
+
+check('a model that writes one title per line still gets read', () => {
+  const answer = parseAssistantAnswer('Yes.\nSIMILAR: Arrival\nSIMILAR: Solaris')
+  assert.equal(answer.text, 'Yes.')
+  assert.deepEqual(answer.similar, ['Arrival', 'Solaris'])
+})
+
+check('never returns more titles than the panel asks for', () => {
+  const answer = parseAssistantAnswer('Yes.\nSIMILAR: A, B, C, D, E, F')
+  assert.equal(answer.similar.length, MAX_SIMILAR_TITLES)
+})
+
+check('drops a title the model repeated', () => {
+  const answer = parseAssistantAnswer('Yes.\nSIMILAR: Arrival, arrival, Solaris')
+  assert.deepEqual(answer.similar, ['Arrival', 'Solaris'])
+})
+
+check('a similar line written first does not cost the answer', () => {
+  const answer = parseAssistantAnswer('SIMILAR: Arrival\nDune is worth it.')
+  assert.equal(answer.text, 'Dune is worth it.')
+  assert.deepEqual(answer.similar, ['Arrival'])
 })
 
 // --- matchRecommendation ---------------------------------------------------

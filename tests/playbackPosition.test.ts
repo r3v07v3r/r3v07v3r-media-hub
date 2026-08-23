@@ -168,4 +168,48 @@ check('numeric ids (as some catalog sources use) work the same as string ids', (
   db.close()
 })
 
+console.log('\nlistPlaybackPositions - the detail page episode grid')
+
+check('returns every episode bookmark for one title, and nothing from another', () => {
+  const db = tempDb()
+  db.savePlaybackPosition('kitsu:1', { season: 1, episode: 1 }, 300, 1400)
+  db.savePlaybackPosition('kitsu:1', { season: 1, episode: 2 }, 900, 1400)
+  db.savePlaybackPosition('kitsu:1', { season: 2, episode: 5 }, 120, 1400)
+  db.savePlaybackPosition('kitsu:2', { season: 1, episode: 1 }, 700, 1400)
+  const rows = db.listPlaybackPositions('kitsu:1')
+  assert.equal(rows.length, 3)
+  assert.deepEqual(
+    rows.map((r) => `${r.season}:${r.episode}=${r.positionSeconds}`).sort(),
+    ['1:1=300', '1:2=900', '2:5=120']
+  )
+  assert.ok(rows.every((r) => r.durationSeconds === 1400))
+  db.close()
+})
+
+check('a title with no bookmarks at all comes back empty, not null', () => {
+  const db = tempDb()
+  assert.deepEqual(db.listPlaybackPositions('kitsu:404'), [])
+  db.close()
+})
+
+check('movie bookmarks report null season/episode, exactly as stored', () => {
+  const db = tempDb()
+  db.savePlaybackPosition('tt1234567', undefined, 1450, 7200)
+  assert.deepEqual(db.listPlaybackPositions('tt1234567'), [
+    { season: null, episode: null, positionSeconds: 1450, durationSeconds: 7200 }
+  ])
+  db.close()
+})
+
+check('a bookmark cleared by watching past 90% stops being listed', () => {
+  const db = tempDb()
+  db.savePlaybackPosition('kitsu:1', { season: 1, episode: 1 }, 300, 1400)
+  assert.equal(db.listPlaybackPositions('kitsu:1').length, 1)
+  // Same "finished" threshold savePlaybackPosition applies on write - the
+  // grid must not keep drawing a resume sliver on an episode that ran out.
+  db.savePlaybackPosition('kitsu:1', { season: 1, episode: 1 }, 1300, 1400)
+  assert.deepEqual(db.listPlaybackPositions('kitsu:1'), [])
+  db.close()
+})
+
 console.log(`\n${pass} passed`)

@@ -15,6 +15,7 @@ import type {
   ConnectResult,
   ConnectionTestResult,
   DislikedListResult,
+  EpisodePlaybackPosition,
   HomePersonalizedResult,
   LibraryItem,
   MalReconcileApplyResult,
@@ -245,25 +246,39 @@ const api = {
       disconnect: (): Promise<{ ok: true }> => ipcRenderer.invoke(MEDIA_HUB_CHANNELS.omdbDisconnect)
     },
 
-    // Local AI. Every one of these fails loudly when no model has been
-    // linked in Settings — there is deliberately no default instance to
-    // silently fall back to (see main/media-hub/ollamaService.ts).
+    // Local AI. Every one of these fails loudly when there is no model to
+    // ask — an Ollama at its own default address is found and used without
+    // being configured, but nothing else is, and there is deliberately no
+    // hosted model to silently fall back to (see
+    // main/media-hub/ollamaService.ts).
     ollama: {
-      /** Probes an instance and lists its installed models. Pass `baseUrl` to check an address that hasn't been saved yet; omit it to check the saved one. Never rejects for an unreachable server — read `reachable`/`error`. */
+      /** Probes an instance and lists its installed models. Pass `baseUrl` to check an address that hasn't been saved yet; omit it to check the one in use, which on an unconfigured install is Ollama's default address. Never rejects for an unreachable server — read `reachable`/`error`. */
       status: (baseUrl?: string): Promise<OllamaStatus> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.ollamaStatus, baseUrl ? { baseUrl } : undefined),
       /** Saves the address + model, after verifying the server is up and has that model. Rejects with the reason if not. */
       connect: (baseUrl: string, model: string): Promise<OllamaStatus> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.ollamaConnect, { baseUrl, model }),
+      /** Forgets the model AND stops the app looking for one at the default address, since otherwise it would simply find the same one again. */
       disconnect: (): Promise<{ ok: true }> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.ollamaDisconnect),
-      /** One assistant question. `library` is context for grounding the answer, not a menu the model must pick from. `requestId` is what `cancel` below abandons it by. */
+      /** Fires when a model was found (or lost) without anyone asking — re-read the settings snapshot, the `ollamaConnected` in hand is stale. */
+      onChanged: (onEvent: () => void): (() => void) =>
+        subscribe<undefined>(MEDIA_HUB_CHANNELS.ollamaChanged, () => onEvent()),
+      /** One assistant question, with the app's own search results for it
+       *  (`matches`, already on screen), what this person has watched
+       *  (`watched`), and a sample of the catalog (`library`). All three are
+       *  context for grounding the answer, never a menu the model must pick
+       *  from. `requestId` is what `cancel` below abandons it by. */
       ask: (
         question: string,
-        library: OllamaTitleRef[],
+        context: {
+          matches: OllamaTitleRef[]
+          library: OllamaTitleRef[]
+          watched: OllamaTitleRef[]
+        },
         requestId: string
       ): Promise<OllamaAskResult> =>
-        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.ollamaAsk, { question, library, requestId }),
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.ollamaAsk, { question, ...context, requestId }),
       /** Abandons an `ask` that is still generating. Local models run on the person's own hardware, so a dismissed question must actually stop, not just have its answer discarded on arrival. */
       cancel: (requestId: string): Promise<{ ok: true }> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.ollamaCancel, { requestId }),
@@ -323,6 +338,11 @@ const api = {
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.trackingGetPosition, payload),
       savePosition: (payload: SavePositionPayload): Promise<{ ok: true }> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.trackingSavePosition, payload),
+      /** Every resume bookmark stored for one title, in one call — what
+       *  the detail page's episode grid draws its per-tile "N min left"
+       *  slivers from. */
+      listPositions: (payload: { id: string }): Promise<EpisodePlaybackPosition[]> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.trackingListPositions, payload),
       reconcileCheck: (): Promise<ReconcileCheckResult> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.trackingReconcileCheck),
       reconcileResolve: (payload: ReconcileResolvePayload): Promise<ReconcileResolveResult> =>

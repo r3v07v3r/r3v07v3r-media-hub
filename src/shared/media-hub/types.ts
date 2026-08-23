@@ -342,6 +342,18 @@ export interface PlaybackPositionResult {
   durationSeconds: number | null
 }
 
+/** Every resume bookmark stored for one title, in one read — the
+ *  per-episode equivalent of PlaybackPositionResult above. The detail
+ *  page's episode grid needs the bookmark for EVERY episode it renders
+ *  at once (to draw each tile's "N min left" sliver); asking
+ *  tracking:get-position once per episode would be a season's worth of
+ *  round-trips for what is a single indexed query on content_id. Movies
+ *  come back with season/episode both null, exactly as they're stored. */
+export interface EpisodePlaybackPosition extends PlaybackPositionResult {
+  season: number | null
+  episode: number | null
+}
+
 // ---------------------------------------------------------------------
 // Watch-status reconciliation — movies only for now (see
 // main/media-hub/tracking.ts's computeMovieDiscrepancies for why). The
@@ -510,14 +522,26 @@ export interface MediaHubPublicSettings {
   hideCompletedDefault: boolean
   hideDislikedDefault: boolean
   /** Address of the local Ollama instance the AI features talk to, e.g.
-   *  "http://127.0.0.1:11434" — '' when none has been set up. Not a
-   *  credential: it is a machine on the person's own network, stored in
-   *  plain text like partySyncUrl. See shared/media-hub/ollama.ts. */
+   *  "http://127.0.0.1:11434" — '' when there is none. Not a credential: it
+   *  is a machine on the person's own network, stored in plain text like
+   *  partySyncUrl. See shared/media-hub/ollama.ts.
+   *
+   *  In the settings:get snapshot this is the address in USE, which is not
+   *  always the one on disk: with nothing configured, an Ollama answering
+   *  at the default address is picked up on its own (main/media-hub/
+   *  ollamaService.ts's detectOllama), and the Settings pane has to show
+   *  what is actually being asked rather than two empty fields. */
   ollamaBaseUrl: string
-  /** Which installed model to use, e.g. "llama3.2:3b". '' when unset. Both
-   *  this and ollamaBaseUrl must be set before anything in the app will
-   *  call a model at all. */
+  /** Which installed model is being used, e.g. "llama3.2:3b". '' when there
+   *  is none. Both this and ollamaBaseUrl must be set before anything in
+   *  the app will call a model at all. Detected alongside the address, on
+   *  the same terms. */
   ollamaModel: string
+  /** Whether the app may still look for an Ollama at the default address on
+   *  its own. False only after a deliberate Disconnect — pressing Connect
+   *  turns it back on. The Settings pane says so, since an app that finds a
+   *  local model by itself and then stops doing it owes an explanation. */
+  ollamaAutoDetect: boolean
 }
 
 export interface MediaHubSettingsSnapshot extends MediaHubPublicSettings {
@@ -556,6 +580,11 @@ export interface OllamaStatus {
 
 export interface OllamaAskResult {
   reply: string
+  /** Titles the model suggested as worth trying next, in the order it gave
+   *  them. Names only, and not necessarily titles this app has — the
+   *  renderer looks each one up in the catalog and shows only the ones it
+   *  can actually open (see resolveSimilarTitles). */
+  similar?: string[]
   /** True when the request was abandoned before it finished (the panel was
    *  closed, or a newer question replaced it — see the ollamaCancel
    *  channel). `reply` is empty and the caller should ignore the whole

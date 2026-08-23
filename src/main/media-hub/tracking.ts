@@ -17,6 +17,7 @@ import type {
   CatalogItem,
   ConnectResult,
   DislikedListResult,
+  EpisodePlaybackPosition,
   HistoryEntry,
   HomePersonalizedResult,
   MarkWatchedResult,
@@ -119,6 +120,10 @@ interface ScrobbleStartPayload {
 interface GetPositionPayload {
   id: string
   playback?: PlaybackPosition
+}
+
+interface ListPositionsPayload {
+  id: string
 }
 
 interface SavePositionPayload {
@@ -865,6 +870,14 @@ export function registerTrackingIpc(): void {
       getDatabase().savePlaybackPosition(id, playback, positionSeconds, durationSeconds)
       return { ok: true }
     }
+  )
+
+  // Every bookmark for one title in a single call — see
+  // EpisodePlaybackPosition's own doc comment for why the episode grid
+  // can't reasonably use trackingGetPosition once per row.
+  handle<ListPositionsPayload, EpisodePlaybackPosition[]>(
+    MEDIA_HUB_CHANNELS.trackingListPositions,
+    (_e, { id }) => getDatabase().listPlaybackPositions(id)
   )
 
   // Renderer-triggered (a few seconds after startup, and rate-limited by

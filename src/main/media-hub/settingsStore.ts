@@ -101,6 +101,14 @@ export interface MediaHubRawSettings {
   ollamaBaseUrl?: string
   /** Which installed model to use, e.g. 'qwen2.5:7b'. */
   ollamaModel?: string
+  /** Set to false — and only ever to false — when the person pressed
+   *  Disconnect in Settings. Absent means "never turned off", which is
+   *  what a fresh install looks like, so the default address gets tried on
+   *  its own (see ollamaService.ts's detectOllama). The flag exists because
+   *  the two states are otherwise identical on disk: with auto-detection
+   *  running, simply forgetting the saved address would reconnect to the
+   *  same local server seconds later, and Disconnect would do nothing. */
+  ollamaAutoDetect?: boolean
   hideWatchedDefault?: boolean
   hideCompletedDefault?: boolean
   hideDislikedDefault?: boolean
