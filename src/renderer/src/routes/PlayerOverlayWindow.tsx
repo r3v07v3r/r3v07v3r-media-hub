@@ -105,11 +105,30 @@ function PlayerControls() {
     idleTimer.current = setTimeout(() => setControlsVisible(false), CONTROLS_IDLE_MS)
   }, [])
 
-  // Arms the initial idle countdown only — `controlsVisible` already starts
-  // true, so calling revealControls() here would set state it is already in.
+  // Arms the initial idle countdown — but only once this window is actually on
+  // screen, and again if it was not the first time.
+  //
+  // This tree mounts while the window is still hidden: it is created before
+  // `loadfile` so it has the load to boot in, and main does not reveal it until
+  // there is a film to sit over (playerWindow.ts's revealPlayerOverlay). A
+  // countdown armed at mount therefore ran during the wait, so on any cold
+  // stream slower than CONTROLS_IDLE_MS the controls had already faded by the
+  // moment they first became visible — the film starts and there is no bar.
+  //
+  // `visibilitychange` is the signal because Electron drives document
+  // visibility off the window being shown or hidden, so this needs no new IPC
+  // and stays right for the minimise/restore case too.
   useEffect(() => {
-    idleTimer.current = setTimeout(() => setControlsVisible(false), CONTROLS_IDLE_MS)
+    const arm = (): void => {
+      if (document.visibilityState !== 'visible') return
+      setControlsVisible(true)
+      if (idleTimer.current) clearTimeout(idleTimer.current)
+      idleTimer.current = setTimeout(() => setControlsVisible(false), CONTROLS_IDLE_MS)
+    }
+    arm()
+    document.addEventListener('visibilitychange', arm)
     return () => {
+      document.removeEventListener('visibilitychange', arm)
       if (idleTimer.current) clearTimeout(idleTimer.current)
     }
   }, [])
