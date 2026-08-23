@@ -1,5 +1,11 @@
 import assert from 'node:assert'
-import { isRelayMessageWithinLimit, MAX_RELAY_MESSAGE_BYTES } from '../party-sync-worker/src/room'
+import {
+  isRelayMessageWithinLimit,
+  MAX_RELAY_MESSAGES_PER_WINDOW,
+  MAX_RELAY_MESSAGE_BYTES,
+  nextRelayMessageRate,
+  RELAY_RATE_WINDOW_MS
+} from '../party-sync-worker/src/room.ts'
 
 let pass = 0
 
@@ -27,5 +33,28 @@ check('counts UTF-8 bytes instead of JavaScript code units', () =>
     false
   )
 )
+check('enforces a per-connection message rate', () => {
+  const startedAt = 1_000
+  const atLimit = nextRelayMessageRate(startedAt, MAX_RELAY_MESSAGES_PER_WINDOW - 1, startedAt + 1)
+  assert.equal(atLimit.allowed, true)
+  const overLimit = nextRelayMessageRate(
+    atLimit.windowStartedAt,
+    atLimit.windowMessageCount,
+    startedAt + 2
+  )
+  assert.equal(overLimit.allowed, false)
+})
+check('resets a message rate after its window closes', () => {
+  const rate = nextRelayMessageRate(
+    1_000,
+    MAX_RELAY_MESSAGES_PER_WINDOW,
+    1_000 + RELAY_RATE_WINDOW_MS
+  )
+  assert.deepEqual(rate, {
+    allowed: true,
+    windowStartedAt: 1_000 + RELAY_RATE_WINDOW_MS,
+    windowMessageCount: 1
+  })
+})
 
 console.log(`\n${pass} passed`)

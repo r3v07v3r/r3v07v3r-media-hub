@@ -2,7 +2,7 @@ import assert from 'node:assert'
 import {
   MAX_PROXY_RESPONSE_BYTES,
   readLimitedResponseText
-} from '../src/shared/media-hub/responseLimit'
+} from '../src/shared/media-hub/responseLimit.ts'
 
 let pass = 0
 

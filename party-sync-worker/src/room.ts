@@ -57,6 +57,10 @@ interface SocketAttachment {
   last?: string
   /** When that message arrived, by this object's clock. */
   lastAt?: number
+  /** Start of the current per-connection relay-message window. */
+  rateWindowStartedAt?: number
+  /** Number of messages accepted in that window. */
+  rateWindowMessageCount?: number
 }
 
 // A room with no connections at all is reclaimed after this long. Only
@@ -78,9 +82,28 @@ export const MAX_RELAY_MESSAGE_BYTES = 60 * 1024
 // A Watch Party is intentionally a small room. This bounds retained state and
 // the O(connections) fan-out work a member can trigger with one message.
 export const MAX_ROOM_CONNECTIONS = 32
+export const RELAY_RATE_WINDOW_MS = 10_000
+export const MAX_RELAY_MESSAGES_PER_WINDOW = 40
 
 export function isRelayMessageWithinLimit(message: string): boolean {
   return new TextEncoder().encode(message).byteLength <= MAX_RELAY_MESSAGE_BYTES
+}
+
+export function nextRelayMessageRate(
+  windowStartedAt: number | undefined,
+  windowMessageCount: number | undefined,
+  now: number
+): { allowed: boolean; windowStartedAt: number; windowMessageCount: number } {
+  const startsNewWindow =
+    windowStartedAt === undefined ||
+    now < windowStartedAt ||
+    now - windowStartedAt >= RELAY_RATE_WINDOW_MS
+  const nextCount = startsNewWindow ? 1 : (windowMessageCount ?? 0) + 1
+  return {
+    allowed: nextCount <= MAX_RELAY_MESSAGES_PER_WINDOW,
+    windowStartedAt: startsNewWindow ? now : windowStartedAt,
+    windowMessageCount: nextCount
+  }
 }
 
 export class PartyRoom {
@@ -186,13 +209,25 @@ export class PartyRoom {
     }
     const attachment = this.attachmentOf(ws)
     if (!attachment) return
+    const now = Date.now()
+    const rate = nextRelayMessageRate(
+      attachment.rateWindowStartedAt,
+      attachment.rateWindowMessageCount,
+      now
+    )
+    if (!rate.allowed) {
+      ws.close(1008, 'Message rate exceeds the party limit.')
+      return
+    }
 
     // Retain this connection's latest message for future joiners. Still
     // never decrypted — we store exactly the bytes we forward.
     ws.serializeAttachment({
       ...attachment,
       last: body,
-      lastAt: Date.now()
+      lastAt: now,
+      rateWindowStartedAt: rate.windowStartedAt,
+      rateWindowMessageCount: rate.windowMessageCount
     } satisfies SocketAttachment)
 
     const envelope = JSON.stringify({

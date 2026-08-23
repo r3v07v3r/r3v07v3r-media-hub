@@ -46,3 +46,7 @@ jobs:
         run: npm ci --prefix party-sync-worker
       - name: Typecheck relay
         run: npm run typecheck --prefix party-sync-worker
+      # Wrangler's current development dependency tree has an upstream-only
+      # high advisory. Keep it visible and fail if a critical issue appears.
+      - name: Audit relay dependencies
+        run: npm audit --prefix party-sync-worker --audit-level=critical
