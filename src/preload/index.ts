@@ -432,6 +432,10 @@ const api = {
        *  applies it through its own handlers so the party rules still hold. */
       onInput: (onEvent: (event: PlayerInputEvent) => void): (() => void) =>
         subscribe<PlayerInputEvent>(MEDIA_HUB_CHANNELS.playerInput, onEvent),
+      /** This window has just been put on screen. The overlay cannot detect
+       *  that for itself — see the channel's own comment. */
+      onControlsShown: (onEvent: () => void): (() => void) =>
+        subscribe<void>(MEDIA_HUB_CHANNELS.playerControlsShown, onEvent),
       /** Main-window side of the bridge: actions the overlay raised that belong
        *  to this window's state (close the player, toast, refresh watch
        *  status, open the party panel). */

@@ -47,6 +47,7 @@ import { is } from '@electron-toolkit/utils'
 import path from 'node:path'
 
 import { APP_SCHEME } from '../appProtocol'
+import { MEDIA_HUB_CHANNELS } from '../../shared/media-hub/ipc-channels'
 import { PLAYER_OVERLAY_ROUTE } from '../../shared/media-hub/playerRoute'
 import { isAllowedExternalUrl } from './security'
 
@@ -234,8 +235,9 @@ export function openPlayerOverlay(
   win.once('ready-to-show', () => {
     readyToShow = true
     // Not shown here. The renderer is usually ready long before there is a film
-    // to be shown over — see revealPlayerOverlay.
-    if (revealRequested) revealPlayerOverlay()
+    // to be shown over — see revealPlayerOverlay. This only picks up a reveal
+    // that was asked for before the window could honour it.
+    showOverlayWindow()
   })
 
   if (options.onFocus) win.on('focus', options.onFocus)
@@ -265,9 +267,11 @@ export function openPlayerOverlay(
   const hideWithApp = (): void => {
     if (!win.isDestroyed() && win.isVisible()) win.hide()
   }
+  // Also performs a reveal the load finished while the app was minimised — see
+  // showOverlayWindow, which declines to show into an app nobody is looking at.
   const showWithApp = (): void => {
-    if (win.isDestroyed() || !revealRequested || win.isVisible()) return
-    win.showInactive()
+    if (win.isDestroyed()) return
+    showOverlayWindow()
     mirrorBounds()
   }
   const closeWithApp = (): void => closePlayerOverlay()
@@ -337,12 +341,33 @@ export function openPlayerOverlay(
  */
 export function revealPlayerOverlay(): void {
   revealRequested = true
+  showOverlayWindow()
+}
+
+/**
+ * The single place this window is put on screen, so the two things that must
+ * accompany every show cannot be forgotten at one of the call sites.
+ *
+ * NOT WHILE THE APP IS AWAY. The reveal is driven by the title finishing its
+ * load, which says nothing about whether anyone is looking: minimise the app
+ * during a cold stream and the load goes on finishing without it. Showing then
+ * would put a transparent, mouse-capturing sheet over whatever the person
+ * switched to, with no further minimise event coming to take it away again.
+ * The pending request survives instead, and `showWithApp` performs it on
+ * restore.
+ *
+ * showInactive, not show: the raise that follows decides the z-order, and
+ * taking the foreground here would activate this window before the film it is
+ * supposed to be sitting over has been put in front of the app.
+ */
+function showOverlayWindow(): void {
   const win = getPlayerOverlay()
-  if (!win || !readyToShow || win.isVisible()) return
-  // showInactive, not show: the raise that follows decides the z-order, and
-  // taking the foreground here would activate this window before the film it is
-  // supposed to be sitting over has been put in front of the app.
+  if (!win || !readyToShow || !revealRequested || win.isVisible()) return
+  if (!parentWindow || parentWindow.isDestroyed()) return
+  if (parentWindow.isMinimized() || !parentWindow.isVisible()) return
   win.showInactive()
+  // The renderer cannot see this for itself — see playerControlsShown.
+  sendToPlayerOverlay(MEDIA_HUB_CHANNELS.playerControlsShown)
 }
 
 /**

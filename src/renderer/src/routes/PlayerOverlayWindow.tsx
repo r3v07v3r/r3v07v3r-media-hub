@@ -105,33 +105,32 @@ function PlayerControls() {
     idleTimer.current = setTimeout(() => setControlsVisible(false), CONTROLS_IDLE_MS)
   }, [])
 
-  // Arms the initial idle countdown — but only once this window is actually on
-  // screen, and again if it was not the first time.
+  // Arms the idle countdown when this window is actually put on screen, not
+  // when this tree mounts.
   //
-  // This tree mounts while the window is still hidden: it is created before
-  // `loadfile` so it has the load to boot in, and main does not reveal it until
-  // there is a film to sit over (playerWindow.ts's revealPlayerOverlay). A
-  // countdown armed at mount therefore ran during the wait, so on any cold
-  // stream slower than CONTROLS_IDLE_MS the controls had already faded by the
-  // moment they first became visible — the film starts and there is no bar.
+  // The two are far apart: the window is created before `loadfile` so its
+  // renderer has the load to boot in, and main does not show it until there is
+  // a film to sit over (playerWindow.ts's revealPlayerOverlay). A countdown
+  // armed at mount therefore ran during the wait, so on any cold stream slower
+  // than CONTROLS_IDLE_MS the controls had already faded by the moment they
+  // first became visible — the film starts and there is no bar.
   //
-  // `visibilitychange` is the signal because Electron drives document
-  // visibility off the window being shown or hidden, so this needs no new IPC
-  // and stays right for the minimise/restore case too.
+  // Main has to report it, tempting as `document.visibilityState` is. Measured
+  // on Electron 39 with this window's exact webPreferences: it reads 'visible'
+  // for the whole time the window is hidden and fires no visibilitychange when
+  // the window is finally shown, so a renderer-side check would arm at mount
+  // and never re-arm — the very bug it was meant to fix. See the
+  // playerControlsShown channel for why the documented cure is not available.
+  // A report that never arrives costs a bar that stays up until the mouse next
+  // moves, which revealControls then arms in the ordinary way — degraded, not
+  // stuck, which is the right way round for a control surface.
   useEffect(() => {
-    const arm = (): void => {
-      if (document.visibilityState !== 'visible') return
-      setControlsVisible(true)
-      if (idleTimer.current) clearTimeout(idleTimer.current)
-      idleTimer.current = setTimeout(() => setControlsVisible(false), CONTROLS_IDLE_MS)
-    }
-    arm()
-    document.addEventListener('visibilitychange', arm)
+    const unsubscribe = window.api?.mediaHub?.player?.onControlsShown?.(revealControls)
     return () => {
-      document.removeEventListener('visibilitychange', arm)
+      unsubscribe?.()
       if (idleTimer.current) clearTimeout(idleTimer.current)
     }
-  }, [])
+  }, [revealControls])
 
   // The window only takes mouse input while there is something to click.
   useEffect(() => {
