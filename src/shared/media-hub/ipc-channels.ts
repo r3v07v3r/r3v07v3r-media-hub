@@ -151,6 +151,10 @@ export const MEDIA_HUB_CHANNELS = {
   ollamaAsk: 'mediahub:ollama:ask',
   ollamaCancel: 'mediahub:ollama:cancel',
   ollamaRecommend: 'mediahub:ollama:recommend',
+  /** Pushed when the answer to "is a local model connected?" changed on its
+   *  own — i.e. auto-detection found (or lost) an Ollama at the default
+   *  address after the renderer had already read its settings snapshot. */
+  ollamaChanged: 'mediahub:ollama:changed',
 
   // Network
   networkInfo: 'mediahub:network:info',

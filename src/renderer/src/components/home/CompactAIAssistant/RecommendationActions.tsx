@@ -50,18 +50,8 @@ export interface RecommendationActionsProps {
 }
 
 export function RecommendationActions({ kinds = ['movie', 'series'] }: RecommendationActionsProps) {
-  const { openDetail, pushNotification, catalog, recommendations, homeFeedLive, mediaHubSettings } =
-    useAppState()
+  const { openDetail, pushNotification, catalog, recommendations, homeFeedLive } = useAppState()
   const [loading, setLoading] = useState<CategoryKind | null>(null)
-  // "Not known to be disconnected", not "connected". mediaHubSettings is
-  // null until the first settings fetch lands, and defaulting that to
-  // disconnected meant someone with a model configured who pressed this
-  // button early got an instant random pick — told to go and connect the
-  // model they had already connected. Main is the authority on this, and it
-  // answers `unavailable` when there really is no model, so an early click
-  // asks rather than assumes. Only a settled snapshot saying `false` skips
-  // the round trip.
-  const aiPossible = mediaHubSettings?.ollamaConnected !== false
 
   // A recommendation ends by NAVIGATING (openDetail), which makes a stale
   // one actively hostile rather than merely wasted: leave Home while a model
@@ -157,8 +147,16 @@ export function RecommendationActions({ kinds = ['movie', 'series'] }: Recommend
       // deliberation in front of a coin flip is the same theatre as the
       // hardcoded assistant answer and the mute microphone this work
       // removed. An instant answer is the honest one.
+      // Main is asked whenever the bridge exists — the settings snapshot is
+      // deliberately not consulted. It was, and it defaulted to "no model"
+      // in two situations where that was wrong: before the first settings
+      // fetch landed, and after main had recorded `false` for an Ollama
+      // that has since been started. Main looks again on this very call
+      // (ollamaService's resolveConfig) and answers `unavailable` when
+      // there genuinely is nothing, so the round trip is what turns a
+      // guess into an answer.
       let modelDeclined = false
-      if (api && aiPossible) {
+      if (api) {
         const shortlist = pool.slice(0, MAX_PROMPT_TITLES)
         const result = await api.recommend(
           NOUN_BY_KIND[kind],

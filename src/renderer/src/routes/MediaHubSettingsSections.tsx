@@ -1199,15 +1199,29 @@ export function WatchPartySection() {
  * actually installed there), then pick from that list. Typing a model name
  * blind is how you end up with a setting that saves fine and fails later at
  * the point of use.
+ *
+ * Most people should never need either step. An Ollama answering at its own
+ * default address is found and used without being configured, so this pane
+ * usually opens already connected and exists for the cases that aren't
+ * automatic: a server on another machine, a second model, or turning the
+ * whole thing off.
  */
 export function OllamaSection() {
   const { mediaHubSettings, refreshMediaHubSettings } = useAppState()
+  // The address and model IN USE, which need never have been saved — main
+  // fills these in from whatever it found at the default address.
   const savedBaseUrl = mediaHubSettings?.ollamaBaseUrl ?? ''
   const savedModel = mediaHubSettings?.ollamaModel ?? ''
   const connected = mediaHubSettings?.ollamaConnected ?? false
+  const autoDetect = mediaHubSettings?.ollamaAutoDetect ?? true
 
   const [baseUrlEdited, setBaseUrlEdited] = useState<string | null>(null)
-  const baseUrl = baseUrlEdited ?? savedBaseUrl
+  // With nothing in use, the field starts on the default rather than empty.
+  // It is the address on virtually every install, it is the one Check and
+  // Connect would be aimed at anyway, and asking someone to type a constant
+  // back in — after Disconnect, or where nothing was found — is the busywork
+  // this whole feature is here to remove.
+  const baseUrl = baseUrlEdited ?? (savedBaseUrl || DEFAULT_OLLAMA_BASE_URL)
   const [model, setModel] = useState('')
   const [models, setModels] = useState<string[]>([])
   const [status, setStatus] = useState<Status>({ kind: 'idle' })
@@ -1283,14 +1297,16 @@ export function OllamaSection() {
     if (!saving) setStatus({ kind: 'idle' })
   }
 
-  // Populates the model list on open when there is already an address to
-  // check, so a connected instance shows its models without anyone having
-  // to press Check first. Keyed on the SAVED address only — re-probing on
-  // every keystroke while someone types a new one would fire a request per
-  // character.
+  // Populates the model list on open, so an instance already being used
+  // shows its models without anyone having to press Check first. Runs with
+  // nothing saved too: the no-argument form asks main which address it
+  // would use, and on an unconfigured machine that is the default one — so
+  // opening this pane with Ollama running is itself enough to connect.
+  // Keyed on the address IN USE only; re-probing on every keystroke while
+  // someone types a new one would fire a request per character.
   useEffect(() => {
     const api = window.api?.mediaHub?.ollama
-    if (!api || !savedBaseUrl) return
+    if (!api || (!savedBaseUrl && !autoDetect)) return
     const generation = ++probeGeneration.current
     api
       .status()
@@ -1304,7 +1320,7 @@ export function OllamaSection() {
     return () => {
       probeGeneration.current += 1
     }
-  }, [savedBaseUrl])
+  }, [savedBaseUrl, autoDetect])
 
   async function check() {
     const api = window.api?.mediaHub?.ollama
@@ -1411,12 +1427,24 @@ export function OllamaSection() {
         and the Recommend Next buttons let it choose. Nothing is sent anywhere else. With nothing
         connected, the assistant says so rather than making something up, and the Recommend Next
         buttons keep working by picking at random — labelled as a random pick, never passed off as a
-        recommendation. Install from ollama.com, then <code>ollama pull llama3.2</code>.
+        recommendation. An Ollama running on this machine at{' '}
+        <code>{DEFAULT_OLLAMA_BASE_URL}</code> is picked up on its own, so there is usually nothing
+        to do here; Disconnect stops that until you connect again. Install from ollama.com, then{' '}
+        <code>ollama pull llama3.2</code>.
       </p>
 
       {connected && (
         <p className={styles.rowDescription} style={{ marginBottom: 10 }}>
           Currently asking <strong>{savedModel}</strong> at <strong>{savedBaseUrl}</strong>.
+        </p>
+      )}
+
+      {/* An app that connects itself and then stops owes an explanation —
+          otherwise Disconnect looks like it failed to stick the next time
+          the app opens with Ollama still running. */}
+      {!connected && !autoDetect && (
+        <p className={styles.rowDescription} style={{ marginBottom: 10 }}>
+          Turned off here. R3 will not look for a local model again until you press Connect.
         </p>
       )}
 

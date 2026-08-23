@@ -19,7 +19,7 @@ import { registerCatalogIpc } from '../media-hub/catalog'
 import { registerDownloadGuardIpc } from '../media-hub/downloadGuard'
 import { registerMalIpc } from '../media-hub/malSync'
 import { registerNetworkIpc } from '../media-hub/network'
-import { registerOllamaIpc } from '../media-hub/ollamaService'
+import { detectOllama, registerOllamaIpc } from '../media-hub/ollamaService'
 import { registerOmdbIpc } from '../media-hub/omdb'
 import { registerPlaybackIpc, subtitleCacheDir } from '../media-hub/playbackSession'
 import { registerPlayerIpc } from '../media-hub/playerBridge'
@@ -53,5 +53,10 @@ export function registerMediaHubIpc(): void {
   registerAniskipIpc()
   registerOmdbIpc()
   registerOllamaIpc()
+  // Looks for an Ollama at its default address straight away, so the AI
+  // features are live on a machine already running one without anyone
+  // opening Settings to type an address the app could have guessed. Not
+  // awaited: it is one request to loopback and nothing else waits on it.
+  void detectOllama()
   registerDownloadGuardIpc()
 }

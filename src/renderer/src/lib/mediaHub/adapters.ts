@@ -59,6 +59,25 @@ export function mediaItemToTitleRef(media: MediaItem): OllamaTitleRef {
 }
 
 /**
+ * The same four fields, straight off a raw backend row.
+ *
+ * The assistant searches the catalog and hands what it found to the model
+ * in the same turn (see AppStateContext runAssistantQuery), which is before
+ * those rows have been through catalogItemToMediaItem — that conversion
+ * happens in a memo, one render later. Going through MediaItem here would
+ * mean either waiting a render or building throwaway MediaItems for their
+ * title alone.
+ */
+export function catalogItemToTitleRef(item: CatalogItem): OllamaTitleRef {
+  return {
+    id: item.id,
+    title: item.title,
+    year: parseYear(item.year),
+    genres: item.genres
+  }
+}
+
+/**
  * Minimal outbound payload for tracking:toggle / the `item` half of
  * tracking:mark-watched — only the fields the main process's
  * `TrackableItem`/`SimklPushItem` types actually read (id/type/title/

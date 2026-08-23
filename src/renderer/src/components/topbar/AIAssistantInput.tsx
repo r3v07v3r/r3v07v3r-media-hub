@@ -170,7 +170,11 @@ export function AIAssistantInput() {
           ref={inputRef}
           type="text"
           className={styles.input}
-          placeholder={category ? `Search ${category.label}…` : 'Ask R3 anything…'}
+          // Off a category page this field searches the whole catalog
+          // AND asks the model about what it finds (see
+          // AppStateContext's runAssistantQuery), so the placeholder no
+          // longer offers only the second half of that.
+          placeholder={category ? `Search ${category.label}…` : 'Search or ask R3…'}
           value={value}
           onChange={(e) => {
             const next = e.target.value
@@ -187,7 +191,7 @@ export function AIAssistantInput() {
             if (assistantState === 'focused') setAssistantState('idle')
           }}
           onKeyDown={handleKeyDown}
-          aria-label={category ? `Search ${category.label}` : 'Ask R3 anything'}
+          aria-label={category ? `Search ${category.label}` : 'Search or ask R3'}
         />
         {/* Only while a search is actually standing. The search outlives
             navigating away and back now, so it needs a way out from the

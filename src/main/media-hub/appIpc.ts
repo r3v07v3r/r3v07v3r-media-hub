@@ -16,7 +16,7 @@ import type { MediaHubPublicSettings, MediaHubSettingsSnapshot } from '../../sha
 import { handle } from './ipcGuard'
 import { logError } from './logger'
 import { mpvPath, hasActivePlayback, stopPlayback } from './playbackSession'
-import { ollamaConnected } from './ollamaService'
+import { ollamaConfig, ollamaConnected } from './ollamaService'
 import { normalizeTheme, publicSettings, logoutSettings, THEMES } from './preferences'
 import { getActiveWindow } from './rendererBridge'
 import { normalizePlaybackBuffer } from '../../shared/media-hub/playbackBuffer'
@@ -36,19 +36,28 @@ import {
 
 /** Registers the miscellaneous settings/account/system IPC handlers. */
 export function registerAppIpc(): void {
-  handle<undefined, MediaHubSettingsSnapshot>(MEDIA_HUB_CHANNELS.settingsGet, () => ({
-    ...publicSettings(readSettings()),
-    appVersion: app.getVersion(),
-    themes: THEMES,
-    torboxConnected: Boolean(getTorBoxToken()),
-    tmdbConnected: Boolean(tmdbCredentials().apiKey),
-    omdbConnected: Boolean(omdbCredentials().apiKey),
-    osConnected: osConnected(),
-    subdlConnected: subdlConnected(),
-    partySyncConnected: Boolean(partySyncCredentials().url && partySyncCredentials().inviteKey),
-    playerAvailable: Boolean(mpvPath),
-    ollamaConnected: ollamaConnected()
-  }))
+  handle<undefined, MediaHubSettingsSnapshot>(MEDIA_HUB_CHANNELS.settingsGet, () => {
+    // Not what publicSettings read off disk: an Ollama running at the
+    // default address is used without ever being saved (see ollamaService's
+    // detectOllama), and the Settings pane renders these two fields, so it
+    // has to be told which server is actually being asked.
+    const ollama = ollamaConfig()
+    return {
+      ...publicSettings(readSettings()),
+      ollamaBaseUrl: ollama.baseUrl,
+      ollamaModel: ollama.model,
+      appVersion: app.getVersion(),
+      themes: THEMES,
+      torboxConnected: Boolean(getTorBoxToken()),
+      tmdbConnected: Boolean(tmdbCredentials().apiKey),
+      omdbConnected: Boolean(omdbCredentials().apiKey),
+      osConnected: osConnected(),
+      subdlConnected: subdlConnected(),
+      partySyncConnected: Boolean(partySyncCredentials().url && partySyncCredentials().inviteKey),
+      playerAvailable: Boolean(mpvPath),
+      ollamaConnected: ollamaConnected()
+    }
+  })
 
   handle<unknown, { theme: string }>(MEDIA_HUB_CHANNELS.settingsSetTheme, (_event, value) => {
     const settings = readSettings()
