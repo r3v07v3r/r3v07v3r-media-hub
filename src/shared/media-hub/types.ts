@@ -342,6 +342,18 @@ export interface PlaybackPositionResult {
   durationSeconds: number | null
 }
 
+/** Every resume bookmark stored for one title, in one read — the
+ *  per-episode equivalent of PlaybackPositionResult above. The detail
+ *  page's episode grid needs the bookmark for EVERY episode it renders
+ *  at once (to draw each tile's "N min left" sliver); asking
+ *  tracking:get-position once per episode would be a season's worth of
+ *  round-trips for what is a single indexed query on content_id. Movies
+ *  come back with season/episode both null, exactly as they're stored. */
+export interface EpisodePlaybackPosition extends PlaybackPositionResult {
+  season: number | null
+  episode: number | null
+}
+
 // ---------------------------------------------------------------------
 // Watch-status reconciliation — movies only for now (see
 // main/media-hub/tracking.ts's computeMovieDiscrepancies for why). The

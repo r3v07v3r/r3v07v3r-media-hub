@@ -38,8 +38,9 @@
    though it existed in the DOM at the right z-index. Position is a JS-
    measured anchor off the trigger button (see EpisodesSection.tsx),
    since a plain CSS-relative position would need an ancestor this menu
-   can no longer use. */
-.seasonMenu {
+   can no longer use. Shared by the season menu and every tile's overflow
+   menu — only one is ever open. */
+.menu {
   position: fixed;
   z-index: 10;
   min-width: 190px;
@@ -49,7 +50,12 @@
   flex-direction: column;
   gap: 2px;
 }
-.seasonMenuItem {
+/* Anchored by its RIGHT edge — see MenuAnchor's doc comment for why a
+   tile's overflow menu hangs left while a season pill's hangs right. */
+.menuRight {
+  transform: translateX(-100%);
+}
+.menuItem {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -61,7 +67,7 @@
   text-align: left;
   white-space: nowrap;
 }
-.seasonMenuItem:hover {
+.menuItem:hover {
   background: rgba(255, 255, 255, 0.06);
 }
 .seasonPill {
@@ -87,124 +93,261 @@
   border-color: transparent;
 }
 
-.list {
+/* Tile grid, per the reference episode browser: a 16:9 still per episode
+   with the show name, an episode code + distinct title beneath, and the
+   watched/next/resume state drawn on the still itself rather than in a
+   separate status column. auto-fill so the same grid reflows from the
+   detail page's wide main column down to the single-column layout below
+   1100px without a breakpoint per size. */
+.grid {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(212px, 1fr));
+  gap: 20px 16px;
+}
+
+.tile {
+  min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 9px;
 }
 
-.row {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  padding: 10px 10px;
-  border-radius: var(--radius-small);
-  transition: background var(--transition-fast);
-}
-.row:hover {
-  background: rgba(255, 255, 255, 0.04);
-}
-.rowNext {
-  background: linear-gradient(90deg, rgba(56, 193, 255, 0.14), rgba(141, 77, 255, 0.1));
-  border: 1px solid rgba(94, 193, 255, 0.4);
-}
-
-.number {
-  flex: 0 0 auto;
-  width: 22px;
-  text-align: center;
-  font-family: var(--font-display);
-  font-size: 15px;
-  color: var(--text-muted);
-}
-.thumb {
-  flex: 0 0 auto;
-  width: 110px;
+/* The whole still is the play button. `position: relative` makes it the
+   containing block for the badges/progress sliver layered on top of it. */
+.thumbFrame {
+  position: relative;
+  display: block;
+  width: 100%;
+  /* Explicit — the UA's own button padding would otherwise inset the
+     still inside its frame, since `.thumb` fills the content box. */
+  padding: 0;
   aspect-ratio: 16 / 9;
   border-radius: var(--radius-small);
   overflow: hidden;
+  border: 1px solid transparent;
+  background: rgba(10, 15, 25, 0.5);
+  transition:
+    border-color var(--transition-fast),
+    transform var(--transition-fast),
+    box-shadow var(--transition-fast);
 }
-.info {
-  flex: 1;
+.thumbFrame:disabled {
+  cursor: default;
+}
+.thumbFrame:hover {
+  border-color: var(--border-active);
+  transform: translateY(-2px);
+  box-shadow: 0 12px 26px -14px rgba(0, 0, 0, 0.85);
+}
+.thumbFrame:focus-visible {
+  border-color: var(--border-active);
+  outline: none;
+}
+.thumb {
+  width: 100%;
+  height: 100%;
+}
+/* Watched stills are dimmed the way the reference greys out an episode
+   that's already been seen — the badge alone reads too quietly across a
+   grid of a hundred tiles. */
+.tileWatched .thumb {
+  opacity: 0.45;
+  transition: opacity var(--transition-fast);
+}
+.tileWatched .thumbFrame:hover .thumb {
+  opacity: 0.7;
+}
+.tileNext .thumbFrame {
+  border-color: rgba(94, 193, 255, 0.55);
+  box-shadow: 0 0 0 1px rgba(94, 193, 255, 0.25);
+}
+
+/* Always visible (not hover-only), matching the reference: on a dense
+   grid the affordance is what tells you the tiles are playable at all.
+   It brightens and grows on hover rather than appearing from nothing. */
+.playOverlay {
+  position: absolute;
+  z-index: 2;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  color: #fff;
+  background: rgba(6, 12, 22, 0.5);
+  backdrop-filter: blur(4px);
+  box-shadow: 0 4px 14px -6px rgba(0, 0, 0, 0.8);
+  opacity: 0.82;
+  transition:
+    opacity var(--transition-fast),
+    transform var(--transition-fast),
+    background var(--transition-fast);
+}
+.thumbFrame:hover .playOverlay {
+  opacity: 1;
+  transform: translate(-50%, -50%) scale(1.08);
+  background: rgba(24, 169, 255, 0.72);
+}
+.playSpinner {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.28);
+  border-top-color: #fff;
+  animation: episodeTileSpin 0.8s linear infinite;
+}
+@keyframes episodeTileSpin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* One badge slot, bottom-right of the still — watched / next / "Nm left"
+   / runtime are mutually exclusive states of the same episode, so they
+   share the corner rather than stacking. */
+.badge {
+  position: absolute;
+  z-index: 2;
+  right: 7px;
+  bottom: 7px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border-radius: var(--radius-small);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.2px;
+  backdrop-filter: blur(6px);
+  box-shadow: 0 2px 8px -3px rgba(0, 0, 0, 0.6);
+}
+.badge svg {
+  width: 10px;
+  height: 10px;
+}
+.badgeWatched {
+  color: #f4f6fb;
+  background: rgba(10, 17, 29, 0.82);
+  border: 1px solid rgba(160, 190, 230, 0.25);
+}
+.badgeNext {
+  color: #04121c;
+  background: var(--accent-cyan);
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+}
+.badgeResume {
+  color: #fff;
+  background: rgba(255, 122, 40, 0.9);
+}
+.badgeRuntime {
+  color: #d6dced;
+  background: rgba(6, 12, 22, 0.72);
+  border: 1px solid rgba(160, 190, 230, 0.2);
+}
+
+/* Sits flush with the bottom edge, under the badge — same "progress
+   sliver on the artwork" idiom WatchStatusBadge already uses on catalog
+   cards, in the orange the resume badge above is keyed to. */
+.resumeTrack {
+  position: absolute;
+  z-index: 3;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 4px;
+  background: rgba(0, 0, 0, 0.45);
+}
+.resumeFill {
+  display: block;
+  height: 100%;
+  background: var(--accent-orange);
+}
+
+.meta {
   min-width: 0;
   display: flex;
   flex-direction: column;
   gap: 3px;
 }
-.title {
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--text-primary);
+.showName {
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.7px;
+  text-transform: uppercase;
+  color: var(--text-muted);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.description {
+.title {
   margin: 0;
-  font-size: 12px;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  font-family: var(--font-display);
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.25;
+  color: var(--text-primary);
+}
+.code {
+  flex: 0 0 auto;
   color: var(--text-secondary);
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 1;
+}
+.code::after {
+  content: ' –';
+}
+.titleText {
+  min-width: 0;
   overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tileWatched .title {
+  color: var(--text-secondary);
 }
 
-.status {
-  flex: 0 0 auto;
-  min-width: 76px;
-}
-.watchedBadge {
+.metaFooter {
   display: flex;
   align-items: center;
-  gap: 4px;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 24px;
+}
+.subLabel {
+  min-width: 0;
   font-size: 11.5px;
-  font-weight: 600;
-  color: var(--accent-green);
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
-.watchedBadge svg {
-  width: 11px;
-  height: 11px;
-}
-.nextBadge {
-  font-size: 11.5px;
-  font-weight: 700;
-  letter-spacing: 0.5px;
-  text-transform: uppercase;
-  color: var(--accent-cyan);
-}
-
-.playRowButton,
-.watchedToggle {
+.tileMenuTrigger {
   flex: 0 0 auto;
-  width: 32px;
-  height: 32px;
-  border-radius: 50%;
   display: flex;
   align-items: center;
   justify-content: center;
-  color: var(--text-secondary);
-  background: rgba(255, 255, 255, 0.04);
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  color: var(--text-muted);
   transition:
     color var(--transition-fast),
     background var(--transition-fast);
 }
-.playRowButton:hover,
-.watchedToggle:hover {
+.tileMenuTrigger:hover,
+.tileMenuTrigger[aria-expanded='true'] {
   color: var(--text-primary);
-  background: rgba(255, 255, 255, 0.09);
-}
-.playRowSpinner {
-  width: 13px;
-  height: 13px;
-  border-radius: 50%;
-  border: 2px solid rgba(255, 255, 255, 0.25);
-  border-top-color: var(--text-primary);
-  animation: episodeRowPlaySpin 0.8s linear infinite;
-}
-@keyframes episodeRowPlaySpin {
-  to {
-    transform: rotate(360deg);
-  }
+  background: rgba(255, 255, 255, 0.08);
 }
 
 .empty {
@@ -225,8 +368,8 @@
   border-radius: var(--radius-pill);
   background: rgba(255, 255, 255, 0.06);
 }
-.skeletonRow {
-  height: 70px;
+.skeletonTile {
+  aspect-ratio: 16 / 11;
   border-radius: var(--radius-small);
   background: linear-gradient(
     100deg,
@@ -243,5 +386,11 @@
   }
   100% {
     background-position: -200% 0;
+  }
+}
+
+@media (max-width: 1439px) {
+  .grid {
+    grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
   }
 }

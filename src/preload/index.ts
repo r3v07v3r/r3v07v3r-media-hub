@@ -15,6 +15,7 @@ import type {
   ConnectResult,
   ConnectionTestResult,
   DislikedListResult,
+  EpisodePlaybackPosition,
   HomePersonalizedResult,
   LibraryItem,
   MalReconcileApplyResult,
@@ -323,6 +324,11 @@ const api = {
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.trackingGetPosition, payload),
       savePosition: (payload: SavePositionPayload): Promise<{ ok: true }> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.trackingSavePosition, payload),
+      /** Every resume bookmark stored for one title, in one call — what
+       *  the detail page's episode grid draws its per-tile "N min left"
+       *  slivers from. */
+      listPositions: (payload: { id: string }): Promise<EpisodePlaybackPosition[]> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.trackingListPositions, payload),
       reconcileCheck: (): Promise<ReconcileCheckResult> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.trackingReconcileCheck),
       reconcileResolve: (payload: ReconcileResolvePayload): Promise<ReconcileResolveResult> =>
