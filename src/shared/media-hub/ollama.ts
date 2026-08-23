@@ -11,7 +11,17 @@
 // through a model the person actually installed themselves now, on their
 // own machine, or they say plainly that no model is connected.
 
-/** Ollama's own default bind address. Offered as the placeholder in Settings; nothing assumes it. */
+/**
+ * Ollama's own default bind address, and the one address this app is
+ * allowed to try without being told to.
+ *
+ * Ollama binds here on every platform unless someone has gone out of their
+ * way to move it, so "is a local model available?" is answerable without
+ * asking anyone to retype a constant into Settings. It stays a loopback
+ * address on purpose: this is the person's own machine, so looking is not
+ * reaching anywhere they didn't already put a server. Anything else — a box
+ * on the LAN, a reverse proxy — is still theirs to enter by hand.
+ */
 export const DEFAULT_OLLAMA_BASE_URL = 'http://127.0.0.1:11434'
 
 /** Upper bound on how many titles get listed in a prompt. Local models run

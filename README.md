@@ -49,10 +49,11 @@ play something. Optional metadata, tracking, and subtitle services add to the ex
   a shared queue and synchronized playback controls.
 - **Use separate profiles**, including Kids and PIN-protected profiles. Watch history is
   currently shared between profiles.
-- **Ask a local AI model** for suggestions, if you connect one. The assistant field and the
-  Recommend Next buttons run on an [Ollama](https://ollama.com) model on your own machine, and
-  nothing is sent to a hosted service. Without one, the assistant says so rather than answering,
-  and the Recommend Next buttons fall back to a pick they openly label as random.
+- **Ask a local AI model** for suggestions. The assistant field and the Recommend Next buttons
+  run on an [Ollama](https://ollama.com) model on your own machine, and nothing is sent to a
+  hosted service. An Ollama running here at its usual `http://127.0.0.1:11434` is found and used
+  on its own — there is nothing to set up. Without one, the assistant says so rather than
+  answering, and the Recommend Next buttons fall back to a pick they openly label as random.
 
 ## Quick start
 
@@ -136,7 +137,7 @@ above. Metadata, tracking, subtitle, and relay services remain optional:
 | **Sonarr / Radarr** | Connect series and movie management to the local download workflow.                  |
 | **qBittorrent**     | Supply and manage downloads for the local playback workflow.                         |
 | **R3 Party Sync**   | Relay Watch Party traffic when a direct connection is not suitable.                  |
-| **Ollama**          | Run the AI assistant and recommendations on a language model you host yourself.      |
+| **Ollama**          | Run the AI assistant and recommendations on a language model you host yourself. Detected automatically when it is on this machine. |
 
 Add or remove these integrations from **Settings**. API credentials are entered in the desktop
 app rather than in the source tree.
@@ -235,10 +236,15 @@ the menu says "No results", check that at least one of the two is still connecte
 <summary><strong>The AI assistant says no model is connected</strong></summary>
 
 The AI features have no hosted service behind them — they only ever talk to an
-[Ollama](https://ollama.com) instance you run yourself. Install Ollama, pull a model
-(`ollama pull llama3.2`), then open **Settings → AI**, enter the server address
-(`http://127.0.0.1:11434` if it is on this machine), press **Check** to list what is installed,
-choose a model and press **Connect**.
+[Ollama](https://ollama.com) instance you run yourself. Install Ollama and pull a model
+(`ollama pull llama3.2`); if it is running on this machine at the usual
+`http://127.0.0.1:11434`, R3 finds it and connects on its own, with nothing to enter. Starting
+Ollama after R3 is fine — the next question you ask picks it up.
+
+Open **Settings → AI** for the cases that are not automatic: a server on another machine, a
+different port, or choosing a specific model. Enter the address, press **Check** to list what is
+installed there, pick a model and press **Connect**. **Disconnect** turns the AI features off
+altogether, including the automatic look, until you press **Connect** again.
 
 If **Check** cannot reach it, confirm Ollama is running (`ollama list`) and that the port matches.
 For an instance on another machine, that machine must have `OLLAMA_HOST` set to an address other

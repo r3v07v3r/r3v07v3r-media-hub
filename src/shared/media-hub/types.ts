@@ -510,14 +510,26 @@ export interface MediaHubPublicSettings {
   hideCompletedDefault: boolean
   hideDislikedDefault: boolean
   /** Address of the local Ollama instance the AI features talk to, e.g.
-   *  "http://127.0.0.1:11434" — '' when none has been set up. Not a
-   *  credential: it is a machine on the person's own network, stored in
-   *  plain text like partySyncUrl. See shared/media-hub/ollama.ts. */
+   *  "http://127.0.0.1:11434" — '' when there is none. Not a credential: it
+   *  is a machine on the person's own network, stored in plain text like
+   *  partySyncUrl. See shared/media-hub/ollama.ts.
+   *
+   *  In the settings:get snapshot this is the address in USE, which is not
+   *  always the one on disk: with nothing configured, an Ollama answering
+   *  at the default address is picked up on its own (main/media-hub/
+   *  ollamaService.ts's detectOllama), and the Settings pane has to show
+   *  what is actually being asked rather than two empty fields. */
   ollamaBaseUrl: string
-  /** Which installed model to use, e.g. "llama3.2:3b". '' when unset. Both
-   *  this and ollamaBaseUrl must be set before anything in the app will
-   *  call a model at all. */
+  /** Which installed model is being used, e.g. "llama3.2:3b". '' when there
+   *  is none. Both this and ollamaBaseUrl must be set before anything in
+   *  the app will call a model at all. Detected alongside the address, on
+   *  the same terms. */
   ollamaModel: string
+  /** Whether the app may still look for an Ollama at the default address on
+   *  its own. False only after a deliberate Disconnect — pressing Connect
+   *  turns it back on. The Settings pane says so, since an app that finds a
+   *  local model by itself and then stops doing it owes an explanation. */
+  ollamaAutoDetect: boolean
 }
 
 export interface MediaHubSettingsSnapshot extends MediaHubPublicSettings {

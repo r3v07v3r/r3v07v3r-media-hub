@@ -530,6 +530,15 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     return window.api?.mediaHub?.torbox.onUnauthorized(() => refreshMediaHubSettings())
   }, [refreshMediaHubSettings])
 
+  // Main looks for an Ollama at its default address on its own, and that
+  // look can land after this snapshot was read — so the answer to "is a
+  // model connected?" changes underneath us, and every AI surface gates on
+  // it. Without this the assistant would keep saying nothing is connected
+  // with a model sitting ready behind it.
+  useEffect(() => {
+    return window.api?.mediaHub?.ollama?.onChanged(() => refreshMediaHubSettings())
+  }, [refreshMediaHubSettings])
+
   const refreshProfiles = useCallback(() => {
     const api = window.api?.mediaHub?.profiles
     if (!api) return
