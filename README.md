@@ -236,7 +236,7 @@ the menu says "No results", check that at least one of the two is still connecte
 
 The AI features have no hosted service behind them — they only ever talk to an
 [Ollama](https://ollama.com) instance you run yourself. Install Ollama, pull a model
-(`ollama pull llama3.2`), then open **Settings → AI**, enter the server address
+(`ollama pull llama3.2:3b`), then open **Settings → AI**, enter the server address
 (`http://127.0.0.1:11434` if it is on this machine), press **Check** to list what is installed,
 choose a model and press **Connect**.
 

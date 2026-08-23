@@ -780,15 +780,27 @@ function trackWindow(mainWindow: BrowserWindow): void {
   // A real decision still overtakes the raise, which is the behaviour this has
   // to keep: closing the panel clears the flag before re-reading the window, and
   // stopping the session bumps the generation itself.
-  const applyTopmost = (): void => {
+  const applyTopmost = (fullScreen = mainWindow.isFullScreen()): void => {
     if (mainWindowUiOpen) return
-    setPlayerTopmost(mainWindow.isFullScreen())
+    setPlayerTopmost(fullScreen)
   }
   // Unconditional, unlike applyTopmost: mpv's own fullscreen is a property of
   // the film, not of the z-order, so an open panel does not get a say.
-  const applyFullscreen = (): void => {
+  const applyFullscreen = (fullScreen: boolean): void => {
     if (mainWindow.isDestroyed()) return
-    setPlayerFullscreen(mainWindow.isFullScreen())
+    setPlayerFullscreen(fullScreen)
+  }
+  // These events are the authoritative transition result.  Reading
+  // isFullScreen() back in the middle of Windows' animation can return the
+  // previous value, which sends mpv the opposite command and produces the two
+  // half-fullscreen states (correct video/wrong controls, then vice versa).
+  const enterFullscreen = (): void => {
+    applyFullscreen(true)
+    applyTopmost(true)
+  }
+  const leaveFullscreen = (): void => {
+    applyFullscreen(false)
+    applyTopmost(false)
   }
   const restack = (): void => restackPlayer()
 
@@ -801,12 +813,10 @@ function trackWindow(mainWindow: BrowserWindow): void {
   // out of fullscreen before the re-sync tries to place its window, so the
   // write is not dropped and the video does not stay screen-sized over a
   // windowed app.
-  mainWindow.on('enter-full-screen', applyFullscreen)
-  mainWindow.on('leave-full-screen', applyFullscreen)
+  mainWindow.on('enter-full-screen', enterFullscreen)
+  mainWindow.on('leave-full-screen', leaveFullscreen)
   mainWindow.on('enter-full-screen', syncSettled)
   mainWindow.on('leave-full-screen', syncSettled)
-  mainWindow.on('enter-full-screen', applyTopmost)
-  mainWindow.on('leave-full-screen', applyTopmost)
   mainWindow.on('focus', restack)
   mainWindow.on('minimize', hide)
   mainWindow.on('restore', show)
@@ -816,12 +826,10 @@ function trackWindow(mainWindow: BrowserWindow): void {
   untrackWindow = () => {
     mainWindow.off('resize', sync)
     mainWindow.off('move', sync)
-    mainWindow.off('enter-full-screen', applyFullscreen)
-    mainWindow.off('leave-full-screen', applyFullscreen)
+    mainWindow.off('enter-full-screen', enterFullscreen)
+    mainWindow.off('leave-full-screen', leaveFullscreen)
     mainWindow.off('enter-full-screen', syncSettled)
     mainWindow.off('leave-full-screen', syncSettled)
-    mainWindow.off('enter-full-screen', applyTopmost)
-    mainWindow.off('leave-full-screen', applyTopmost)
     mainWindow.off('focus', restack)
     mainWindow.off('minimize', hide)
     mainWindow.off('restore', show)

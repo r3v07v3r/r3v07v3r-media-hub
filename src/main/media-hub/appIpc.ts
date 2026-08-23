@@ -34,6 +34,29 @@ import {
   writeSettings
 } from './settingsStore'
 
+// BrowserWindow#setFullScreen starts an asynchronous native transition.  Keep
+// the requested state alongside Electron's eventually-consistent query so a
+// second click (or Escape) during that transition reverses it rather than
+// treating the still-old `isFullScreen()` value as the source of truth.
+const requestedFullscreen = new WeakMap<BrowserWindow, boolean>()
+const trackedFullscreenWindows = new WeakSet<BrowserWindow>()
+
+function fullscreenTarget(win: BrowserWindow): boolean {
+  if (!trackedFullscreenWindows.has(win)) {
+    trackedFullscreenWindows.add(win)
+    requestedFullscreen.set(win, win.isFullScreen())
+    win.on('enter-full-screen', () => requestedFullscreen.set(win, true))
+    win.on('leave-full-screen', () => requestedFullscreen.set(win, false))
+  }
+  return requestedFullscreen.get(win) ?? win.isFullScreen()
+}
+
+function setFullscreenTarget(win: BrowserWindow, fullScreen: boolean): void {
+  fullscreenTarget(win)
+  requestedFullscreen.set(win, fullScreen)
+  win.setFullScreen(fullScreen)
+}
+
 /** Registers the miscellaneous settings/account/system IPC handlers. */
 export function registerAppIpc(): void {
   handle<undefined, MediaHubSettingsSnapshot>(MEDIA_HUB_CHANNELS.settingsGet, () => ({
@@ -349,8 +372,14 @@ export function registerAppIpc(): void {
   handle<undefined, { fullScreen: boolean }>(MEDIA_HUB_CHANNELS.windowToggleFullscreen, () => {
     const win = getActiveWindow()
     if (!win || win.isDestroyed()) throw new Error('No application window is available.')
-    win.setFullScreen(!win.isFullScreen())
-    return { fullScreen: win.isFullScreen() }
+    // setFullScreen starts an OS transition.  On Windows, isFullScreen() can
+    // still report the old value until its enter/leave event arrives, so
+    // returning a fresh read here made the controls immediately display the
+    // opposite state after every click.  The requested state is unambiguous;
+    // the window event remains the final source of truth for every renderer.
+    const fullScreen = !fullscreenTarget(win)
+    setFullscreenTarget(win, fullScreen)
+    return { fullScreen }
   })
 
   // Leaves fullscreen and reports whether there was any to leave.
@@ -363,8 +392,8 @@ export function registerAppIpc(): void {
   // because that cache was a frame stale.
   handle<undefined, { wasFullScreen: boolean }>(MEDIA_HUB_CHANNELS.windowExitFullscreen, () => {
     const win = getActiveWindow()
-    if (!win || win.isDestroyed() || !win.isFullScreen()) return { wasFullScreen: false }
-    win.setFullScreen(false)
+    if (!win || win.isDestroyed() || !fullscreenTarget(win)) return { wasFullScreen: false }
+    setFullscreenTarget(win, false)
     return { wasFullScreen: true }
   })
 
@@ -373,6 +402,6 @@ export function registerAppIpc(): void {
   // assuming windowed and waiting for a change event that may never come.
   handle<undefined, { fullScreen: boolean }>(MEDIA_HUB_CHANNELS.windowIsFullscreen, () => {
     const win = getActiveWindow()
-    return { fullScreen: Boolean(win && !win.isDestroyed() && win.isFullScreen()) }
+    return { fullScreen: Boolean(win && !win.isDestroyed() && fullscreenTarget(win)) }
   })
 }

@@ -42,7 +42,7 @@
 //      (setIgnoreMouseEvents with forward: true), so mouse events reach mpv
 //      while this side still receives the mousemove that reveals them.
 
-import { BrowserWindow, shell } from 'electron'
+import { BrowserWindow, screen, shell } from 'electron'
 import { is } from '@electron-toolkit/utils'
 import path from 'node:path'
 
@@ -120,10 +120,27 @@ function contentBoundsOf(win: BrowserWindow): Electron.Rectangle {
   return win.getContentBounds()
 }
 
+/**
+ * The main window's content rectangle is the right overlay rectangle while it
+ * is windowed.  It is not a dependable source during a Windows fullscreen
+ * transition, though: for a few frames Chromium can still report the old
+ * content rect even after the window has entered fullscreen.  That left the
+ * controls in the old, centred window while mpv had correctly filled the
+ * monitor.
+ *
+ * In fullscreen the monitor is the contract, not a transient content rect.
+ * Electron's display bounds are in the same DIP coordinate system that
+ * BrowserWindow#setBounds accepts, including on mixed-DPI desks.
+ */
+function overlayBoundsFor(win: BrowserWindow): Electron.Rectangle {
+  if (!win.isFullScreen()) return contentBoundsOf(win)
+  return screen.getDisplayMatching(win.getBounds()).bounds
+}
+
 function mirrorBounds(): void {
   const win = getPlayerOverlay()
   if (!win || !parentWindow || parentWindow.isDestroyed()) return
-  const bounds = contentBoundsOf(parentWindow)
+  const bounds = overlayBoundsFor(parentWindow)
   const current = win.getBounds()
   // Cheap equality check first: these listeners fire continuously during a
   // drag or resize, and setBounds on a transparent window is not free.
@@ -168,7 +185,7 @@ export function openPlayerOverlay(
   readyToShow = false
   revealRequested = false
   const win = new BrowserWindow({
-    ...contentBoundsOf(parent),
+    ...overlayBoundsFor(parent),
     // Deliberately NOT `parent` — see this file's OWNERSHIP note. An owned
     // window cannot have mpv's window placed between it and its owner, which
     // is the one arrangement this whole file exists to produce.

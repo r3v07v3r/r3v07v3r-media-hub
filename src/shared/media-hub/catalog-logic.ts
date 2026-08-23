@@ -240,24 +240,32 @@ function titleWords(value: string): string[] {
  * silently hides a legitimate suggestion, so a bare shared first word is
  * never enough on its own.
  *
- * One title's words must be a prefix of the other's, AND either the
- * shared stem is at least two words ("John Wick" / "John Wick Chapter 4")
- * or the very next word is a sequel marker or a number ("Dune" / "Dune
- * Part Two"). That's what keeps "Up" from swallowing "Up in the Air"
- * while still catching the cases that actually annoy people.
+ * A full title prefix is enough when the shared stem is at least two words
+ * ("John Wick" / "John Wick Chapter 4") or the next word is a sequel
+ * marker/number ("Dune" / "Dune Part Two"). Distinct titles can also share
+ * a distinctive franchise stem, such as "Spider-Man: Homecoming" and
+ * "Spider-Man: Far From Home"; accept that only for a hyphenated two-word
+ * stem or a shared three-word stem. That keeps "Up" from swallowing "Up in
+ * the Air" without giving ordinary one-word overlaps franchise status.
  */
 export function isLikelyFranchiseSibling(a: string, b: string): boolean {
   const left = titleWords(a)
   const right = titleWords(b)
   if (!left.length || !right.length) return false
-  const [short, long] = left.length <= right.length ? [left, right] : [right, left]
-  if (short.length === long.length) return false
-  for (let i = 0; i < short.length; i++) {
-    if (short[i] !== long[i]) return false
+  let shared = 0
+  while (shared < left.length && shared < right.length && left[shared] === right[shared]) {
+    shared++
   }
-  if (short.length >= 2) return true
-  const next = long[short.length]
-  return SEQUEL_MARKERS.has(next) || /^\d+$/.test(next)
+  if (!shared) return false
+
+  const [short, long] = left.length <= right.length ? [left, right] : [right, left]
+  if (short.length !== long.length && shared === short.length) {
+    if (short.length >= 2) return true
+    const next = long[short.length]
+    return SEQUEL_MARKERS.has(next) || /^\d+$/.test(next)
+  }
+
+  return shared >= 3 || (shared >= 2 && /[-‐‑‒–—]/.test(a) && /[-‐‑‒–—]/.test(b))
 }
 
 function genreOverlap(a: string[], b: string[]): number {
@@ -313,6 +321,76 @@ export function rankSimilarTitles(
     .sort((a, b) => b.score - a.score || String(a.item.title).localeCompare(String(b.item.title)))
     .slice(0, Math.max(0, limit))
     .map((x) => x.item)
+}
+
+// Home recommendations are ranked locally and deterministically. A small
+// Ollama model can explain a shortlisted choice, but it should not decide
+// watch-history or release ordering.
+export interface PersonalizedRecommendationOptions {
+  history: HistoryEntry[]
+  preferredGenres?: string[]
+  now?: Date
+}
+
+function releaseYear(item: Pick<CatalogItem, 'year'> | HistoryEntry): number | null {
+  const year = Number.parseInt(String(item.year || ''), 10)
+  return Number.isFinite(year) ? year : null
+}
+
+/**
+ * Orders home suggestions using the catalog signals available locally:
+ * chronological franchise continuations, genre affinity, recent releases
+ * and rating. Franchise matching is conservative and title-based until the
+ * broad catalog exposes canonical collection and continuity identifiers.
+ */
+export function rankPersonalizedRecommendations(
+  pool: CatalogItem[],
+  { history, preferredGenres = [], now = new Date() }: PersonalizedRecommendationOptions
+): CatalogItem[] {
+  const preferred = new Set(preferredGenres.map((genre) => String(genre).toLowerCase()))
+  const currentYear = now.getUTCFullYear()
+  const watched = history.filter((entry) => Boolean(entry?.title))
+  const nextFranchiseIds = new Set<string>()
+
+  // Give the strong continuation boost only to the first later instalment.
+  for (const watchedEntry of watched) {
+    const watchedYear = releaseYear(watchedEntry)
+    if (!watchedYear || !watchedEntry.title) continue
+    const next = pool
+      .filter(
+        (item) =>
+          item.type === watchedEntry.type &&
+          !isItemWatched(item, history) &&
+          isLikelyFranchiseSibling(watchedEntry.title || '', item.title) &&
+          (releaseYear(item) || 0) > watchedYear
+      )
+      .sort(
+        (a, b) =>
+          (releaseYear(a) || Number.MAX_SAFE_INTEGER) -
+            (releaseYear(b) || Number.MAX_SAFE_INTEGER) || a.title.localeCompare(b.title)
+      )[0]
+    if (next) nextFranchiseIds.add(String(next.id))
+  }
+
+  return pool
+    .filter((item) => !isItemWatched(item, history))
+    .map((item) => {
+      const year = releaseYear(item)
+      const genreMatches = (item.genres || []).filter((genre) =>
+        preferred.has(String(genre).toLowerCase())
+      ).length
+      const recentReleaseBoost = year === currentYear ? 18 : year === currentYear - 1 ? 8 : 0
+      const continuationBoost = nextFranchiseIds.has(String(item.id)) ? 100 : 0
+      const rating = Math.min(Math.max(Number.parseFloat(item.rating) || 0, 0), 10)
+      return { item, score: continuationBoost + recentReleaseBoost + genreMatches * 12 + rating }
+    })
+    .sort(
+      (a, b) =>
+        b.score - a.score ||
+        (releaseYear(b.item) || 0) - (releaseYear(a.item) || 0) ||
+        a.item.title.localeCompare(b.item.title)
+    )
+    .map(({ item }) => item)
 }
 
 export function subtitlesInadequate(

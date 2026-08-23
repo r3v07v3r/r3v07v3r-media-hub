@@ -39,6 +39,7 @@ import {
   queuePendingPush,
   withPushedRemoteState
 } from '../../shared/media-hub/reconcileQueue'
+import { rankPersonalizedRecommendations } from '../../shared/media-hub/catalog-logic'
 import { airingStatus, continueWatchingList } from './core'
 import { catalogData, metadata } from './catalog'
 import { getDatabase } from './dbState'
@@ -990,15 +991,16 @@ export function registerTrackingIpc(): void {
     const trackedIds = new Set(tracked.map((x) => String(x.id)))
     const dislikedIds = new Set(db.disliked().map((x) => String(x.id)))
     const genres = db.preferredGenres(4)
-    const recommendations = all
-      .filter(
-        (x) =>
-          !watchedIds.has(String(x.id)) &&
-          !trackedIds.has(String(x.id)) &&
-          !dislikedIds.has(String(x.id)) &&
-          (genres.length === 0 || x.genres.some((g) => genres.includes(g)))
-      )
-      .slice(0, 18)
+    const recommendationCandidates = all.filter(
+      (x) =>
+        !watchedIds.has(String(x.id)) &&
+        !trackedIds.has(String(x.id)) &&
+        !dislikedIds.has(String(x.id))
+    )
+    const recommendations = rankPersonalizedRecommendations(recommendationCandidates, {
+      history,
+      preferredGenres: genres
+    }).slice(0, 18)
 
     const details = (
       await Promise.all(
@@ -1012,7 +1014,9 @@ export function registerTrackingIpc(): void {
       tracked,
       updates: db.trackedUpdates(details),
       continueWatching: continueWatchingList(details, history).slice(0, 18),
-      recommendations: recommendations.length ? recommendations : all.slice(0, 18),
+      recommendations: recommendations.length
+        ? recommendations
+        : rankPersonalizedRecommendations(all, { history, preferredGenres: genres }).slice(0, 18),
       preferredGenres: genres
     }
   })
