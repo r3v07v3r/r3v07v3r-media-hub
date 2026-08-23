@@ -173,7 +173,18 @@ function PlayerControls() {
     ui({ type: 'mark-watched' })
   }, [state.eofReached, tracking, ui])
 
+  // Saves BEFORE raising the stop, not only via usePlayerTracking's teardown
+  // effect — same explicit call the pause and end-of-file paths above already
+  // make, and here it also fixes an ordering problem. `stop-playback` reaches
+  // the main window through main (two hops), where it clears playbackMedia;
+  // the detail page re-reads its resume bookmarks off that transition to draw
+  // each episode tile's "N min left" sliver. Starting the one-hop save first
+  // means it has landed by the time that re-read is even issued, so closing
+  // partway through an episode leaves a tile that reflects it. Teardown's own
+  // save stays as the backstop for the paths that never come through here
+  // (the window being destroyed outright).
   const closePlayer = useCallback(() => {
+    tracking.savePositionNow()
     ui({ type: 'stop-playback', watched: tracking.markedWatched() })
   }, [tracking, ui])
 

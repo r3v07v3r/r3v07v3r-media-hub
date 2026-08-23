@@ -113,6 +113,11 @@ export interface PlaybackPositionResult {
   durationSeconds: number | null
 }
 
+export interface EpisodePlaybackPosition extends PlaybackPositionResult {
+  season: number | null
+  episode: number | null
+}
+
 export interface MediaHubDatabase {
   track(item: Partial<CatalogItem> & { id: unknown }, now?: Date): TrackedItem
   untrack(id: string | number): boolean
@@ -141,6 +146,10 @@ export interface MediaHubDatabase {
     contentId: string | number,
     playback?: { season?: number; episode?: number }
   ): PlaybackPositionResult | null
+  /** Every stored bookmark for one title at once — see
+   *  EpisodePlaybackPosition (shared/media-hub/types.ts) for why the
+   *  episode grid needs the whole set rather than one lookup per row. */
+  listPlaybackPositions(contentId: string | number): EpisodePlaybackPosition[]
   putCache<T>(key: string, payload: T, ttlMs: number): void
   getCache<T>(key: string, opts?: { allowExpired?: boolean }): T | null
   /** Removes a cache row outright. Distinct from letting a row expire,
@@ -173,6 +182,7 @@ interface PreparedQueries {
   savePosition: StatementSync
   clearPosition: StatementSync
   getPosition: StatementSync
+  listPositions: StatementSync
 }
 
 export function createDatabase(filename: string): MediaHubDatabase {
@@ -318,6 +328,9 @@ export function createDatabase(filename: string): MediaHubDatabase {
     clearPosition: sql.prepare('DELETE FROM playback_positions WHERE position_key=?'),
     getPosition: sql.prepare(
       'SELECT position_seconds,duration_seconds FROM playback_positions WHERE position_key=?'
+    ),
+    listPositions: sql.prepare(
+      'SELECT season,episode,position_seconds,duration_seconds FROM playback_positions WHERE content_id=?'
     )
   }
 
@@ -526,6 +539,22 @@ export function createDatabase(filename: string): MediaHubDatabase {
         }
       } catch {
         return null
+      }
+    },
+
+    // Same best-effort contract as the two above: an unreadable
+    // positions table costs the grid its resume slivers, never the grid
+    // itself, so a failure here is an empty list rather than a throw.
+    listPlaybackPositions(contentId) {
+      try {
+        return (q.listPositions.all(String(contentId)) as Row[]).map((row) => ({
+          season: (row.season as number | null) ?? null,
+          episode: (row.episode as number | null) ?? null,
+          positionSeconds: row.position_seconds as number,
+          durationSeconds: (row.duration_seconds as number | null) ?? null
+        }))
+      } catch {
+        return []
       }
     },
 

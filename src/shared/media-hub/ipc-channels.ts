@@ -53,6 +53,7 @@ export const MEDIA_HUB_CHANNELS = {
   trackingMarkSeasonWatched: 'mediahub:tracking:mark-season-watched',
   trackingGetPosition: 'mediahub:tracking:get-position',
   trackingSavePosition: 'mediahub:tracking:save-position',
+  trackingListPositions: 'mediahub:tracking:list-positions',
   trackingReconcileCheck: 'mediahub:tracking:reconcile-check',
   trackingReconcileResolve: 'mediahub:tracking:reconcile-resolve',
   trackingReconcileSync: 'mediahub:tracking:reconcile-sync', // push event — a queued "keep local" batch went out (or didn't)

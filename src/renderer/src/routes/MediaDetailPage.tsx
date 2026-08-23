@@ -15,16 +15,23 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useAppState } from '@renderer/context/AppStateContext'
-import { catalogItemToMediaItem } from '@renderer/lib/mediaHub/adapters'
+import { airedEpisodes, catalogItemToMediaItem } from '@renderer/lib/mediaHub/adapters'
 import { DETAIL_CONFIGS } from '@renderer/lib/mediaHub/detailAdapters'
 import { useRestoreBrowsingOrigin } from '@renderer/lib/mediaHub/useRestoreBrowsingOrigin'
-import type { CatalogItem, Episode, HistoryEntry, MediaKind } from '@shared/media-hub/types'
+import type {
+  CatalogItem,
+  Episode,
+  EpisodePlaybackPosition,
+  HistoryEntry,
+  MediaKind
+} from '@shared/media-hub/types'
 import type { MediaItem } from '@renderer/types'
 import { ContextBackButton } from '@renderer/components/detail/ContextBackButton'
 import { DetailHero } from '@renderer/components/detail/DetailHero'
 import { NextToPlayPanel } from '@renderer/components/detail/NextToPlayPanel'
 import { AboutPanel } from '@renderer/components/detail/AboutPanel'
 import { EpisodesSection } from '@renderer/components/detail/EpisodesSection'
+import type { EpisodeResume } from '@renderer/components/detail/EpisodesSection'
 import { RatingsPanel } from '@renderer/components/detail/RatingsPanel'
 import { ProgressPanel } from '@renderer/components/detail/ProgressPanel'
 import { GenresPanel } from '@renderer/components/detail/GenresPanel'
@@ -47,6 +54,7 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
     toggleMyList,
     continueWatching,
     startPartyPlayback,
+    playbackMedia,
     catalog,
     pushNotification,
     openDetail,
@@ -66,6 +74,13 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
   // render as not-yet-watched until it resolves, via EpisodesSection's
   // own `status`, which tracks the primary catalog:meta fetch instead).
   const [, setHistoryStatus] = useState<FetchStatus>('loading')
+
+  // Resume bookmarks for every episode of this title, in one call (see
+  // EpisodePlaybackPosition's doc comment) — what the episode grid draws
+  // its per-tile "N min left" slivers from. Purely decorative: no loading
+  // state and no error surface, since a tile without a sliver is exactly
+  // what an episode nobody has started looks like anyway.
+  const [positions, setPositions] = useState<EpisodePlaybackPosition[]>([])
 
   const [showTrailer, setShowTrailer] = useState(false)
   // null means "no explicit choice yet" — falls back to the season
@@ -172,6 +187,40 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
     // see AppStateContext's watchStatusVersion doc comment.
   }, [id, watchStatusVersion])
 
+  // Two triggers, because a bookmark and a watch are saved by different
+  // things. watchStatusVersion covers the watch (PlayerOverlay's 80%
+  // auto-mark bumps it), same as the history fetch above.
+  //
+  // `isPlaying` covers the bookmark. Stopping an episode BELOW that 80%
+  // threshold saves a position without ever touching watch status — and
+  // the player is its own window, so this page stays mounted throughout
+  // and would otherwise keep showing no sliver on the episode just
+  // stopped until something else happened to re-render it. playbackMedia
+  // going back to null is the one signal that means "playback is over"
+  // (see AppStateContext's stopPlayback), and PlayerOverlayWindow's
+  // closePlayer now saves before raising the stop that clears it, so the
+  // bookmark is already written by the time this re-reads. Narrowed to a
+  // boolean so the fetch fires on the two edges rather than on every
+  // playbackMedia identity change.
+  const isPlaying = playbackMedia != null
+  useEffect(() => {
+    if (!id) return
+    let cancelled = false
+    const api = window.api?.mediaHub
+    if (!api) return
+    api.tracking
+      .listPositions({ id })
+      .then((result) => {
+        if (!cancelled) setPositions(result)
+      })
+      .catch(() => {
+        if (!cancelled) setPositions([])
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [id, watchStatusVersion, isPlaying])
+
   const media = useMemo<MediaItem | null>(() => {
     if (catalogItem) return catalogItemToMediaItem(catalogItem, { trackedIds: myList })
     // Graceful degradation (no bridge, or the fetch failed): whatever's
@@ -205,6 +254,61 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
     }
     return set
   }, [history])
+
+  // Real per-episode resume state, keyed the same way watchedKeys is.
+  // A bookmark with no duration recorded (savePlaybackPosition stores
+  // duration as nullable) still gets a tile badge-less entry rather than
+  // being dropped: "started, unknown how far" is worth showing, it just
+  // can't say how much is left, and its percent falls back to the show's
+  // own per-episode runtime when there is one.
+  const resumeByKey = useMemo(() => {
+    const map = new Map<string, EpisodeResume>()
+    for (const p of positions) {
+      if (p.season == null || p.episode == null) continue
+      const duration =
+        p.durationSeconds && p.durationSeconds > 0
+          ? p.durationSeconds
+          : media?.runtimeMinutes
+            ? media.runtimeMinutes * 60
+            : null
+      if (!duration || p.positionSeconds <= 0) continue
+      const percent = Math.min(100, Math.max(0, Math.round((p.positionSeconds / duration) * 100)))
+      const remaining = Math.max(0, duration - p.positionSeconds)
+      map.set(episodeKey(p.season, p.episode), {
+        percent,
+        // Rounded up, so the last 30 seconds read "1m left" rather than
+        // "0m left" — which would look like a finished episode.
+        remainingMinutes: Math.max(1, Math.ceil(remaining / 60))
+      })
+    }
+    return map
+  }, [positions, media?.runtimeMinutes])
+
+  /** Watched-vs-total across this title's real episode list — the numbers
+   *  the Tracked & Progress panel shows. Derived from the same
+   *  (episodes, watchedKeys) pair the grid itself renders from, so the
+   *  panel and the tiles can never disagree. Null when there's no episode
+   *  list at all (a movie, or the degraded no-bridge path where `media`
+   *  came from the cached catalog), leaving the panel on its old
+   *  continueEntry-based fallback for those.
+   *
+   *  airedEpisodes, not a plain !unplayable filter: it's the same
+   *  denominator adapters.ts's isSeriesCompleted uses for the "Completed"
+   *  badge on a catalog card, so a currently-airing show someone is fully
+   *  caught up on reads 100% here AND completed there. Counting the
+   *  future-dated episodes Cinemeta/TMDB ship in `videos` would have left
+   *  it short of 100% with episodes that don't exist yet sitting in the
+   *  Unwatched total. The grid itself still shows them — what's coming is
+   *  worth seeing, it just isn't progress.  */
+  const episodeStats = useMemo(() => {
+    const countable = airedEpisodes(episodes)
+    if (countable.length === 0) return null
+    return {
+      watchedCount: countable.filter((e) => watchedKeys.has(episodeKey(e.season, e.episode)))
+        .length,
+      total: countable.length
+    }
+  }, [episodes, watchedKeys])
 
   const continueEntry = useMemo(
     () => (id ? continueWatching.find((c) => c.media.id === id) : undefined),
@@ -442,11 +546,14 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
             />
             <EpisodesSection
               mediaId={media.id}
+              showTitle={media.title}
               episodes={episodes}
               seasons={seasons}
               selectedSeason={selectedSeason}
               onSelectSeason={setSelectedSeasonOverride}
               watchedKeys={watchedKeys}
+              resumeByKey={resumeByKey}
+              runtimeMinutes={media.runtimeMinutes}
               nextEpisode={nextEpisode}
               onPlay={(ep) => handlePlay(ep.season, ep.episode)}
               onMarkWatched={handleMarkEpisodeWatched}
@@ -467,6 +574,7 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
         <ProgressPanel
           config={config}
           media={media}
+          episodeStats={episodeStats}
           continueEntry={continueEntry}
           inMyList={inMyList}
           onToggleMyList={() => toggleMyList(media)}
