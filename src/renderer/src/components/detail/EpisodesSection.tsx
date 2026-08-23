@@ -298,7 +298,10 @@ export function EpisodesSection({
 
   return (
     <section className={`${styles.section} glass-panel`} aria-label="Episodes">
-      {seasons.length > 1 && (
+      {/* Keep the season actions available for one-season shows too. The
+          selected pill is still useful there: its menu contains the
+          bulk watched/unwatched controls for the entire season. */}
+      {seasons.length > 0 && (
         <div className={`${styles.seasonRow} thin-scroll`} role="tablist" aria-label="Season">
           {seasons.map((s) => {
             const isActive = s === selectedSeason
