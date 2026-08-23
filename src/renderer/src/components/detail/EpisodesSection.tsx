@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import type { Episode } from '@shared/media-hub/types'
 import { useAppState } from '@renderer/context/AppStateContext'
@@ -70,7 +70,14 @@ interface MenuAnchor {
   top: number
   left: number
   align: 'left' | 'right'
+  /** Set once the layout effect below has moved the menu above its
+   *  trigger because it didn't fit underneath. Also the guard that stops
+   *  that effect re-measuring its own result forever. */
+  flippedUp?: boolean
 }
+
+/** Breathing room kept between a flipped/clamped menu and the window edge. */
+const MENU_VIEWPORT_MARGIN = 8
 
 function key(season: number, episode: number): string {
   return `${season}:${episode}`
@@ -189,6 +196,28 @@ export function EpisodesSection({
     menuTriggerRef.current = trigger
     setOpenMenu(menu)
   }
+
+  // Flip above the trigger when the menu would run off the bottom of the
+  // window. The last grid row is the case that needs it: the page has only
+  // 40px of padding under it, so a menu opened from a tile down there
+  // extends past the viewport with no further scroll available to reach
+  // it. Measured rather than assumed from an item count, so it stays
+  // right if either menu ever grows a third item — and done in a layout
+  // effect so the correction lands before paint rather than as a visible
+  // jump.
+  useLayoutEffect(() => {
+    const menu = menuRef.current
+    const trigger = menuTriggerRef.current
+    if (!menu || !trigger || !menuAnchor || menuAnchor.flippedUp) return
+    const height = menu.offsetHeight
+    if (menuAnchor.top + height <= window.innerHeight - MENU_VIEWPORT_MARGIN) return
+    const rect = trigger.getBoundingClientRect()
+    setMenuAnchor({
+      ...menuAnchor,
+      top: Math.max(MENU_VIEWPORT_MARGIN, rect.top - 6 - height),
+      flippedUp: true
+    })
+  }, [menuAnchor])
 
   useEffect(() => {
     if (!openMenu) return

@@ -54,6 +54,7 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
     toggleMyList,
     continueWatching,
     startPartyPlayback,
+    playbackMedia,
     catalog,
     pushNotification,
     openDetail,
@@ -186,10 +187,22 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
     // see AppStateContext's watchStatusVersion doc comment.
   }, [id, watchStatusVersion])
 
-  // Same watchStatusVersion trigger as the history fetch above, for the
-  // same reason plus one more: PlayerOverlay saves a position as playback
-  // goes and bumps watchStatusVersion when it auto-marks an episode
-  // watched, so coming back to this page after watching re-reads both.
+  // Two triggers, because a bookmark and a watch are saved by different
+  // things. watchStatusVersion covers the watch (PlayerOverlay's 80%
+  // auto-mark bumps it), same as the history fetch above.
+  //
+  // `isPlaying` covers the bookmark. Stopping an episode BELOW that 80%
+  // threshold saves a position without ever touching watch status — and
+  // the player is its own window, so this page stays mounted throughout
+  // and would otherwise keep showing no sliver on the episode just
+  // stopped until something else happened to re-render it. playbackMedia
+  // going back to null is the one signal that means "playback is over"
+  // (see AppStateContext's stopPlayback), and PlayerOverlayWindow's
+  // closePlayer now saves before raising the stop that clears it, so the
+  // bookmark is already written by the time this re-reads. Narrowed to a
+  // boolean so the fetch fires on the two edges rather than on every
+  // playbackMedia identity change.
+  const isPlaying = playbackMedia != null
   useEffect(() => {
     if (!id) return
     let cancelled = false
@@ -206,7 +219,7 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
     return () => {
       cancelled = true
     }
-  }, [id, watchStatusVersion])
+  }, [id, watchStatusVersion, isPlaying])
 
   const media = useMemo<MediaItem | null>(() => {
     if (catalogItem) return catalogItemToMediaItem(catalogItem, { trackedIds: myList })
