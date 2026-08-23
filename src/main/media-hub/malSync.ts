@@ -33,6 +33,7 @@ import {
   buildAuthorizeUrl,
   computeReconciliation,
   localWatchedEpisodeCounts,
+  malStatusForProgress,
   normalizeMalEntry
 } from './mal'
 import { isAllowedExternalUrl } from './security'
@@ -172,6 +173,7 @@ async function resolveMalIdForKitsu(kitsuId: string): Promise<number> {
 export async function pushMalProgress(item: {
   id: string
   type: MediaKind
+  totalEpisodes?: number
 }): Promise<{ malSynced: boolean; malError?: string }> {
   if (item.type !== 'anime' || !String(item.id).startsWith('kitsu:')) return { malSynced: false }
   if (!malCredentials().accessToken) return { malSynced: false }
@@ -182,11 +184,15 @@ export async function pushMalProgress(item: {
 
     const counts = localWatchedEpisodeCounts(getDatabase().history())
     const watchedEpisodes = counts[item.id] || 0
+    const status = malStatusForProgress(watchedEpisodes, item.totalEpisodes)
 
     await malRequest(`/anime/${malId}/my_list_status`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({ num_watched_episodes: String(watchedEpisodes) })
+      body: new URLSearchParams({
+        num_watched_episodes: String(watchedEpisodes),
+        ...(status ? { status } : {})
+      })
     })
     return { malSynced: true }
   } catch (error) {

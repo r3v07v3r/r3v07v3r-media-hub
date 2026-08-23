@@ -383,7 +383,8 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
       type: kind,
       title: media.title,
       poster: media.posterUrl ?? '',
-      year: media.releaseYear ? String(media.releaseYear) : ''
+      year: media.releaseYear ? String(media.releaseYear) : '',
+      ...(media.totalEpisodes != null ? { totalEpisodes: media.totalEpisodes } : {})
     }
     const call = watched ? api.tracking.markWatched : api.tracking.unmarkWatched
     try {
@@ -416,7 +417,8 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
       type: kind,
       title: media.title,
       poster: media.posterUrl ?? '',
-      year: media.releaseYear ? String(media.releaseYear) : ''
+      year: media.releaseYear ? String(media.releaseYear) : '',
+      ...(media.totalEpisodes != null ? { totalEpisodes: media.totalEpisodes } : {})
     }
     const call = watched ? api.tracking.markWatched : api.tracking.unmarkWatched
     try {

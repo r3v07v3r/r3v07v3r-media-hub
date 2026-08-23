@@ -81,6 +81,20 @@ export function localWatchedEpisodeCounts(history: HistoryEntry[]): Record<strin
 }
 
 /**
+ * MAL treats an episode count and list status as separate fields. Keep them
+ * aligned whenever this app knows the title's total: reaching that total
+ * moves it out of the Watching list, while unmarking an episode moves it
+ * back. With no reliable total, leave status alone rather than guessing.
+ */
+export function malStatusForProgress(
+  watchedEpisodes: number,
+  totalEpisodes: number | undefined
+): 'completed' | 'watching' | undefined {
+  if (!Number.isFinite(totalEpisodes) || !totalEpisodes || totalEpisodes < 0) return undefined
+  return watchedEpisodes >= totalEpisodes ? 'completed' : 'watching'
+}
+
+/**
  * Diffs MAL's remote watch progress against local watch progress per title.
  * Entries MAL couldn't be matched to a local Kitsu id (`kitsuId` missing)
  * are reported as `unmatched` rather than silently dropped. When MAL is

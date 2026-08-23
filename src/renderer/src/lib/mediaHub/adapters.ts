@@ -31,11 +31,10 @@ function toMediaType(kind: MediaKind): MediaType {
 }
 
 // The reverse of toMediaType, for building an outbound tracking payload
-// from a MediaItem the user is acting on (My List toggle, mark watched).
-// 'episode'/'live' have no catalog-kind equivalent (nothing in this
-// dashboard currently tracks/plays either through the media-hub backend) —
-// mapped to the closest harmless default rather than throwing, since a
-// stray call here shouldn't crash the My List button.
+// from a MediaItem the user is acting on when the original media kind is
+// unavailable. `mediaKind` is preferred below: anime renders as
+// `mediaType: 'series'`, but must remain `type: 'anime'` for anime-specific
+// tracking such as MyAnimeList sync.
 function toMediaKind(type: MediaType): MediaKind {
   if (type === 'episode') return 'series'
   if (type === 'live') return 'movie'
@@ -81,7 +80,9 @@ export function catalogItemToTitleRef(item: CatalogItem): OllamaTitleRef {
  * Minimal outbound payload for tracking:toggle / the `item` half of
  * tracking:mark-watched — only the fields the main process's
  * `TrackableItem`/`SimklPushItem` types actually read (id/type/title/
- * poster/year), not a full CatalogItem round-trip.
+ * poster/year), plus the known episode total used solely to set the correct
+ * MyAnimeList completion status. This is still not a full CatalogItem
+ * round-trip.
  */
 export function mediaItemToTrackablePayload(media: MediaItem): {
   id: string
@@ -89,13 +90,15 @@ export function mediaItemToTrackablePayload(media: MediaItem): {
   title: string
   poster: string
   year: string
+  totalEpisodes?: number
 } {
   return {
     id: media.id,
-    type: toMediaKind(media.mediaType),
+    type: media.mediaKind ?? toMediaKind(media.mediaType),
     title: media.title,
     poster: media.posterUrl ?? '',
-    year: media.releaseYear ? String(media.releaseYear) : ''
+    year: media.releaseYear ? String(media.releaseYear) : '',
+    ...(media.totalEpisodes != null ? { totalEpisodes: media.totalEpisodes } : {})
   }
 }
 
