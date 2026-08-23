@@ -50,9 +50,16 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
   const config = DETAIL_CONFIGS[kind]
   const {
     browsingOrigin,
+    activeProfileId,
+    profiles,
     myList,
     toggleMyList,
     continueWatching,
+    partyStatus,
+    mediaHubSettings,
+    hostParty,
+    suggestToParty,
+    setPartyPanelOpen,
     startPartyPlayback,
     playbackMedia,
     catalog,
@@ -371,6 +378,44 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
     )
   }
 
+  async function handleWatchTogether(): Promise<void> {
+    if (!media) return
+    const target = config.isEpisodic
+      ? {
+          ...media,
+          seasonNumber: nextEpisode?.season ?? 1,
+          episodeNumber: nextEpisode?.episode ?? 1
+        }
+      : media
+    const item = {
+      id: target.id,
+      type: target.mediaKind ?? config.kind,
+      title: target.title,
+      poster: target.posterUrl ?? '',
+      year: target.releaseYear ? String(target.releaseYear) : ''
+    }
+
+    if (partyStatus?.inParty) {
+      if (partyStatus.role === 'host') {
+        setPartyPanelOpen(false)
+        await startPartyPlayback(target)
+      } else {
+        await suggestToParty(item)
+        pushNotification({ tone: 'success', message: `Suggested ${target.title} to the room.` })
+      }
+      return
+    }
+
+    const activeProfile = profiles.find((profile) => profile.id === activeProfileId)
+    const name = mediaHubSettings?.partyDisplayName?.trim() || activeProfile?.name || 'Host'
+    await hostParty(name)
+    // hostParty opens the hub so the invite is immediately available. Close it
+    // as playback begins; the player has its own room rail and the hub remains
+    // one click away in navigation.
+    setPartyPanelOpen(false)
+    await startPartyPlayback(target)
+  }
+
   function handleGenreSelect(genre: string): void {
     navigate(`/${config.path}?genre=${encodeURIComponent(genre)}`)
   }
@@ -535,6 +580,7 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
         onPlay={() =>
           handlePlay(continueEntry?.media.seasonNumber, continueEntry?.media.episodeNumber)
         }
+        onWatchTogether={handleWatchTogether}
       />
 
       <div className={styles.main}>

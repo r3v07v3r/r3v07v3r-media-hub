@@ -26,6 +26,15 @@ import {
   normalizeVideoFit,
   type VideoFitMode
 } from '../../shared/media-hub/videoFit'
+import {
+  DEFAULT_VIDEO_PICTURE,
+  VIDEO_PICTURE_CONTROLS,
+  VIDEO_PICTURE_MAX,
+  VIDEO_PICTURE_MIN,
+  isVideoPictureControl,
+  type VideoPictureControl,
+  type VideoPictureSettings
+} from '../../shared/media-hub/videoPicture'
 import { handle } from './ipcGuard'
 import { logError } from './logger'
 import {
@@ -57,6 +66,12 @@ let sessionSnapshot: PlayerSessionSnapshot | null = null
 // to still be the mode — and still be the one the button shows — on the next.
 let fitMode: VideoFitMode = DEFAULT_VIDEO_FIT
 
+// Like fit mode, picture adjustments live alongside the long-lived MPV
+// process rather than in the overlay React tree. That makes the values survive
+// an overlay remount or a new title, and lets a restarted MPV be brought back
+// to the controls the overlay is showing.
+let pictureSettings: VideoPictureSettings = { ...DEFAULT_VIDEO_PICTURE }
+
 /** Writes the mode to mpv and tells the overlay what it now is. Both
  *  properties are always written, never just the one that changed, so mpv
  *  cannot end up in a state no mode describes. */
@@ -66,6 +81,35 @@ async function applyFitMode(mode: VideoFitMode): Promise<void> {
   await player.set('panscan', panscan)
   fitMode = mode
   queuePatch({ fitMode: mode }, true)
+}
+
+function picturePatch(settings: VideoPictureSettings): Pick<PlayerStatePatch, VideoPictureControl> {
+  return { ...settings }
+}
+
+async function applyPictureControl(control: VideoPictureControl, value: number): Promise<void> {
+  const next = Math.round(clamp(value, VIDEO_PICTURE_MIN, VIDEO_PICTURE_MAX))
+  await player.set(control, next)
+  pictureSettings = { ...pictureSettings, [control]: next }
+  queuePatch(picturePatch(pictureSettings), true)
+}
+
+/** Writes all four values together. A fresh MPV process starts at defaults, so
+ * the remembered controls are reapplied after every title load. */
+async function applyPictureSettings(): Promise<void> {
+  for (const { control } of VIDEO_PICTURE_CONTROLS) {
+    await player.set(control, pictureSettings[control])
+  }
+  queuePatch(picturePatch(pictureSettings), true)
+}
+
+async function resetPictureSettings(): Promise<void> {
+  const reset = { ...DEFAULT_VIDEO_PICTURE }
+  for (const { control } of VIDEO_PICTURE_CONTROLS) {
+    await player.set(control, reset[control])
+  }
+  pictureSettings = reset
+  queuePatch(picturePatch(pictureSettings), true)
 }
 
 export function getPlayer(): MpvPlayer {
@@ -635,6 +679,7 @@ export async function startPlayerSession(
   // shutdown), and a respawned mpv is back at its defaults while the overlay
   // would still be showing the mode that was chosen before.
   await applyFitMode(fitMode).catch(() => {})
+  await applyPictureSettings().catch(() => {})
 
   // Re-asserted per title for the same reason as the fit mode, and read from
   // the window because a session can start into an already-fullscreen app —
@@ -912,6 +957,16 @@ async function runCommand(command: PlayerCommand): Promise<void> {
       // being worth failing the call over.
       await applyFitMode(normalizeVideoFit(command.mode))
       return
+    case 'set-picture-control': {
+      if (!isVideoPictureControl(command.control)) throw new Error('Invalid picture control.')
+      const value = Number(command.value)
+      if (!Number.isFinite(value)) throw new Error('Invalid picture value.')
+      await applyPictureControl(command.control, value)
+      return
+    }
+    case 'reset-picture-controls':
+      await resetPictureSettings()
+      return
     default: {
       // Exhaustiveness: a new PlayerCommand variant must be handled here.
       const unhandled: never = command
@@ -1052,6 +1107,7 @@ async function currentState(): Promise<PlayerStatePatch> {
   if (aid !== undefined) patch.audioOrdinal = ordinalForMpvTrackId(aid)
   if (sid !== undefined) patch.subtitleOrdinal = ordinalForMpvTrackId(sid)
   if (typeof cache === 'number') patch.cacheAheadSeconds = cache
+  Object.assign(patch, picturePatch(pictureSettings))
   // Read from this module, not from mpv: applyFitMode is the only writer of
   // either underlying property, so this value is the authority on which of the
   // three modes the pair currently represents.

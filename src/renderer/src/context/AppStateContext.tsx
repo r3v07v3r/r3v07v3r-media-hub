@@ -1038,6 +1038,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       setPartyHostCode(result.code)
       setPartyWanAvailable(result.wanAvailable ?? false)
       setPartyHostPort(result.port ?? null)
+      setPartyChat([])
       setPartyPanelOpen(true)
       refreshPartyStatus()
       return result
@@ -1053,6 +1054,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       setPartyHostCode(null)
       setPartyWanAvailable(null)
       setPartyHostPort(null)
+      setPartyChat([])
       setPartyPanelOpen(true)
       refreshPartyStatus()
     },
@@ -1066,6 +1068,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     setPartyHostCode(null)
     setPartyWanAvailable(null)
     setPartyHostPort(null)
+    setPartyChat([])
     setPartyPanelOpen(false)
     setPartyStatus(null)
     setPartyQueue([])
@@ -1488,7 +1491,14 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       const episode = opts?.episode ?? media.episodeNumber
       const target = opts ? { ...media, seasonNumber: season, episodeNumber: episode } : media
       const partyApi = window.api?.mediaHub?.party
-      const isHosting = !!partyApi && !!partyStatus?.inParty && partyStatus.role === 'host'
+      // Hosting from a title card can happen in the same click that creates a
+      // room. Read main's live snapshot here instead of waiting for React's
+      // asynchronous status refresh, otherwise that first title would start
+      // locally without announcing itself to the room.
+      const livePartyStatus = partyApi
+        ? await partyApi.status().catch(() => partyStatus)
+        : partyStatus
+      const isHosting = !!partyApi && !!livePartyStatus?.inParty && livePartyStatus.role === 'host'
       const partyKind = media.mediaKind ?? (media.mediaType === 'series' ? 'series' : 'movie')
       // Announce BEFORE resolving, not after. startPlayback below is a
       // stream search plus a buffer wait — seconds, sometimes many — and

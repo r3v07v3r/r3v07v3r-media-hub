@@ -135,6 +135,58 @@
   background: rgba(255, 255, 255, 0.12);
 }
 
+.pictureMenu {
+  min-width: 250px;
+  padding: 8px 12px 10px;
+  gap: 10px;
+}
+
+.pictureControl {
+  display: grid;
+  gap: 5px;
+  color: rgba(255, 255, 255, 0.88);
+  font-size: 12px;
+}
+
+.pictureControl span {
+  display: flex;
+  justify-content: space-between;
+}
+
+.pictureControl output {
+  color: var(--accent, #4da3ff);
+  font-variant-numeric: tabular-nums;
+}
+
+.pictureControl input {
+  width: 100%;
+  margin: 0;
+  accent-color: var(--accent, #4da3ff);
+  cursor: pointer;
+}
+
+.resetPictureButton {
+  align-self: flex-end;
+  appearance: none;
+  border: 0;
+  border-radius: 6px;
+  padding: 5px 8px;
+  color: #fff;
+  background: rgba(255, 255, 255, 0.1);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.resetPictureButton:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.18);
+}
+
+.resetPictureButton:disabled {
+  cursor: default;
+  opacity: 0.42;
+}
+
 /* Second line inside a menu item, for options whose name doesn't carry the
    whole meaning — "Fill" and "Stretch" are otherwise near-synonyms. */
 .menuItemNote {

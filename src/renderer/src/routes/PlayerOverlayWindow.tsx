@@ -23,6 +23,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { PlayerWindowProvider, usePlayerWindow } from '@renderer/context/PlayerWindowContext'
 import { usePartySync } from '@renderer/hooks/usePartySync'
 import { usePlayerTracking } from '@renderer/hooks/usePlayerTracking'
+import { PlayerSessionRail } from '@renderer/components/party/PlayerSessionRail'
 import type { SubtitleResult } from '@shared/media-hub/types'
 import {
   DEFAULT_VIDEO_FIT,
@@ -30,6 +31,12 @@ import {
   videoFitDescription,
   videoFitLabel
 } from '@shared/media-hub/videoFit'
+import {
+  DEFAULT_VIDEO_PICTURE,
+  VIDEO_PICTURE_CONTROLS,
+  VIDEO_PICTURE_MAX,
+  VIDEO_PICTURE_MIN
+} from '@shared/media-hub/videoPicture'
 import styles from './PlayerOverlayWindow.module.css'
 
 const CONTROLS_IDLE_MS = 3200
@@ -41,7 +48,7 @@ const SCRUB_PREVIEW_WIDTH = 160
  *  live; there is no re-render of anything. */
 const SUBTITLE_DELAY_STEP = 0.25
 
-type Menu = 'audio' | 'subtitles' | 'fit' | null
+type Menu = 'audio' | 'subtitles' | 'fit' | 'picture' | null
 
 function formatTime(totalSeconds: number): string {
   if (!Number.isFinite(totalSeconds) || totalSeconds < 0) return '0:00'
@@ -56,6 +63,7 @@ function PlayerControls() {
   const { session, state, command, ui, setInteractive } = usePlayerWindow()
   const [controlsVisible, setControlsVisible] = useState(true)
   const [menu, setMenu] = useState<Menu>(null)
+  const [roomRailOpen, setRoomRailOpen] = useState(false)
   const [subtitleResults, setSubtitleResults] = useState<SubtitleResult[] | null>(null)
   const [subtitleSearchError, setSubtitleSearchError] = useState<string | null>(null)
   const [pendingSubtitleId, setPendingSubtitleId] = useState<string | null>(null)
@@ -76,6 +84,13 @@ function PlayerControls() {
   // Main owns this, and pushes it — the overlay never guesses, so the label
   // stays right across a title change or a remount.
   const fitMode = state.fitMode ?? DEFAULT_VIDEO_FIT
+  const pictureSettings = {
+    brightness: state.brightness ?? DEFAULT_VIDEO_PICTURE.brightness,
+    contrast: state.contrast ?? DEFAULT_VIDEO_PICTURE.contrast,
+    saturation: state.saturation ?? DEFAULT_VIDEO_PICTURE.saturation,
+    gamma: state.gamma ?? DEFAULT_VIDEO_PICTURE.gamma
+  }
+  const pictureAdjusted = Object.values(pictureSettings).some((value) => value !== 0)
 
   const party = usePartySync({
     timePos,
@@ -97,7 +112,7 @@ function PlayerControls() {
 
   // A menu or an in-flight sync has to pin the controls open — otherwise the
   // idle timer closes the surface out from under someone mid-selection.
-  const pinned = menu !== null || party.syncing
+  const pinned = menu !== null || party.syncing || roomRailOpen
 
   const revealControls = useCallback(() => {
     setControlsVisible(true)
@@ -532,6 +547,7 @@ function PlayerControls() {
       onClick={handleSurfaceClick}
       onDoubleClick={handleSurfaceDoubleClick}
     >
+      <PlayerSessionRail open={roomRailOpen} onClose={() => setRoomRailOpen(false)} />
       {buffering && (
         <div className={styles.buffering} aria-live="polite">
           <span className={styles.spinner} aria-hidden="true" />
@@ -794,13 +810,61 @@ function PlayerControls() {
             )}
           </div>
 
+          <div className={styles.menuWrap}>
+            <button
+              type="button"
+              className={styles.button}
+              onClick={() => setMenu(menu === 'picture' ? null : 'picture')}
+              aria-expanded={menu === 'picture'}
+            >
+              Picture{pictureAdjusted ? ' •' : ''}
+            </button>
+            {menu === 'picture' && (
+              <div className={`${styles.menu} ${styles.pictureMenu}`}>
+                <div className={styles.menuHeading}>Picture</div>
+                {VIDEO_PICTURE_CONTROLS.map(({ control, label }) => (
+                  <label key={control} className={styles.pictureControl}>
+                    <span>
+                      {label}
+                      <output>{pictureSettings[control]}</output>
+                    </span>
+                    <input
+                      type="range"
+                      min={VIDEO_PICTURE_MIN}
+                      max={VIDEO_PICTURE_MAX}
+                      step={1}
+                      value={pictureSettings[control]}
+                      onChange={(event) =>
+                        void command({
+                          type: 'set-picture-control',
+                          control,
+                          value: Number(event.target.value)
+                        })
+                      }
+                      aria-label={label}
+                    />
+                  </label>
+                ))}
+                <button
+                  type="button"
+                  className={styles.resetPictureButton}
+                  onClick={() => void command({ type: 'reset-picture-controls' })}
+                  disabled={!pictureAdjusted}
+                >
+                  Reset picture
+                </button>
+              </div>
+            )}
+          </div>
+
           <button
             type="button"
             className={styles.button}
-            onClick={() => ui({ type: 'set-party-panel-open', open: true })}
-            aria-label="Watch party"
+            onClick={() => setRoomRailOpen((open) => !open)}
+            aria-pressed={roomRailOpen}
+            aria-label="Open room rail"
           >
-            Party
+            Room
           </button>
 
           <button

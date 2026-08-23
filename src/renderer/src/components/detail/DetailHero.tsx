@@ -34,6 +34,7 @@ export interface DetailHeroProps {
   inMyList: boolean
   onToggleMyList: () => void
   onPlay: () => void
+  onWatchTogether: () => Promise<void>
 }
 
 export function DetailHero({
@@ -46,13 +47,14 @@ export function DetailHero({
   onToggleTrailer,
   inMyList,
   onToggleMyList,
-  onPlay
+  onPlay,
+  onWatchTogether
 }: DetailHeroProps) {
-  const { resolvingMedia, pushNotification } = useAppState()
+  const { resolvingMedia, pushNotification, partyStatus } = useAppState()
   const artwork = resolveArtwork(media)
   const hasProgress = !!continueEntry && !continueEntry.media.completed
   const isResolving = resolvingMedia?.id === media.id
-  const [suggesting, setSuggesting] = useState(false)
+  const [startingRoomWatch, setStartingRoomWatch] = useState(false)
 
   const trailerFrameRef = useRef<HTMLIFrameElement>(null)
   const trailerActive = showTrailer && !!trailer
@@ -87,26 +89,17 @@ export function DetailHero({
     nextEpisode
   ])
 
-  async function handleSuggestToParty(): Promise<void> {
-    const api = window.api?.mediaHub
-    if (!api) return
-    setSuggesting(true)
+  async function handleWatchTogether(): Promise<void> {
+    setStartingRoomWatch(true)
     try {
-      await api.party.suggest({
-        id: media.id,
-        type: media.mediaKind ?? config.kind,
-        title: media.title,
-        poster: media.posterUrl ?? '',
-        year: media.releaseYear ? String(media.releaseYear) : ''
-      })
-      pushNotification({ tone: 'success', message: `Suggested ${media.title} to the party.` })
+      await onWatchTogether()
     } catch (error) {
       pushNotification({
         tone: 'error',
-        message: error instanceof Error ? error.message : 'Could not suggest this title.'
+        message: error instanceof Error ? error.message : 'Could not start a room watch.'
       })
     } finally {
-      setSuggesting(false)
+      setStartingRoomWatch(false)
     }
   }
 
@@ -255,11 +248,17 @@ export function DetailHero({
           <button
             type="button"
             className={styles.secondaryButton}
-            onClick={handleSuggestToParty}
-            disabled={suggesting}
+            onClick={() => void handleWatchTogether()}
+            disabled={startingRoomWatch}
           >
             <Icon name="people" size={15} />
-            {suggesting ? 'Suggesting…' : 'Suggest to Party'}
+            {startingRoomWatch
+              ? 'Opening room…'
+              : partyStatus?.inParty
+                ? partyStatus.role === 'host'
+                  ? 'Play in room'
+                  : 'Suggest to room'
+                : 'Watch together'}
           </button>
         </div>
       </div>

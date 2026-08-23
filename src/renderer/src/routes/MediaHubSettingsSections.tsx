@@ -912,11 +912,11 @@ export function OpenSubtitlesSection() {
 
 /**
  * R3-Party-Sync — an optional external relay (self-hosted, see
- * party-sync-worker/ in the repo) that Watch Party can host through
+ * party-sync-worker/ in the repo) that Rooms can host through
  * instead of a direct LAN/WAN connection, for when a host's router won't
  * cooperate with UPnP/NAT-PMP. Configuring this here just unlocks the
  * "Relay" option in WatchPartySection below — it doesn't itself start or
- * join a party.
+ * join a room.
  */
 export function R3PartySyncSection() {
   const { mediaHubSettings, refreshMediaHubSettings } = useAppState()
@@ -960,13 +960,13 @@ export function R3PartySyncSection() {
     <section className={`${styles.section} glass-panel`} aria-labelledby="settings-party-sync">
       <div className={styles.serviceHead}>
         <h2 id="settings-party-sync" className={styles.sectionTitle} style={{ marginBottom: 0 }}>
-          R3-Party-Sync
+          Room relay
         </h2>
         <ConnectionBadge connected={connected} />
       </div>
       <p className={styles.rowDescription} style={{ marginBottom: 10 }}>
-        A relay worker you deploy yourself (see party-sync-worker/ in the repo) so Watch Party can
-        connect over the internet even when a router won&apos;t forward a port automatically.
+        A relay worker you deploy yourself (see party-sync-worker/ in the repo) so Rooms can connect
+        over the internet even when a router won&apos;t forward a port automatically.
       </p>
       {connected ? (
         <>
@@ -1020,14 +1020,14 @@ export function R3PartySyncSection() {
 }
 
 /**
- * Watch Party — setup/connection controls only (host/join/leave, current
+ * Rooms — setup/connection controls only (host/join/leave, current
  * members). The live in-session queue/voting UI is a separate concern
  * from Settings and isn't part of this section; this just covers getting
- * into (or out of) a party, the same "configuration surface" scope as
+ * into (or out of) a room, the same "configuration surface" scope as
  * every other section on this page.
  *
  * Reads/writes the same AppStateContext party slice the topbar's
- * PartyButton/PartyPanel use — one source of truth, so hosting/joining
+ * PartyButton/SessionHub use — one source of truth, so hosting/joining
  * from here is immediately reflected in the topbar and vice versa.
  */
 export function WatchPartySection() {
@@ -1093,12 +1093,13 @@ export function WatchPartySection() {
     <section className={`${styles.section} glass-panel`} aria-labelledby="settings-party">
       <div className={styles.serviceHead}>
         <h2 id="settings-party" className={styles.sectionTitle} style={{ marginBottom: 0 }}>
-          Watch Party
+          Rooms
         </h2>
         <ConnectionBadge connected={inParty} />
       </div>
       <p className={styles.rowDescription} style={{ marginBottom: 10 }}>
-        Watch something together, in sync, with a shareable code.
+        Your name and fallback connection controls. Use Rooms in the top navigation for the live
+        conversation, people, and shared queue.
       </p>
       {inParty ? (
         <>
@@ -1110,11 +1111,11 @@ export function WatchPartySection() {
                 — code <strong>{partyHostCode}</strong>
               </>
             )}
-            {partyStatus?.members?.length ? ` · ${partyStatus.members.length} in the party` : ''}
+            {partyStatus?.members?.length ? ` · ${partyStatus.members.length} in the room` : ''}
           </p>
           <div className={styles.serviceActions}>
             <button type="button" className={styles.testButton} onClick={leave}>
-              Leave party
+              Leave room
             </button>
             <StatusLine status={actionStatus} />
           </div>
@@ -1132,7 +1133,7 @@ export function WatchPartySection() {
               />
             </label>
             <label className={styles.field}>
-              <span className={styles.fieldLabel}>Party code (to join one)</span>
+              <span className={styles.fieldLabel}>Room code (to join one)</span>
               <input
                 className={styles.fieldInput}
                 type="text"
@@ -1143,7 +1144,7 @@ export function WatchPartySection() {
             </label>
           </div>
           {!joinCode.trim() && relayReady && (
-            <div className={styles.segmentGroup} role="radiogroup" aria-label="Party mode">
+            <div className={styles.segmentGroup} role="radiogroup" aria-label="Room connection">
               <button
                 type="button"
                 role="radio"
@@ -1175,8 +1176,8 @@ export function WatchPartySection() {
               {actionStatus.kind === 'busy'
                 ? 'Working…'
                 : joinCode.trim()
-                  ? 'Join party'
-                  : 'Host a party'}
+                  ? 'Join room'
+                  : 'Host a room'}
             </button>
             <StatusLine status={actionStatus} />
           </div>
@@ -1427,10 +1428,9 @@ export function OllamaSection() {
         and the Recommend Next buttons let it choose. Nothing is sent anywhere else. With nothing
         connected, the assistant says so rather than making something up, and the Recommend Next
         buttons keep working by picking at random — labelled as a random pick, never passed off as a
-        recommendation. An Ollama running on this machine at{' '}
-        <code>{DEFAULT_OLLAMA_BASE_URL}</code> is picked up on its own, so there is usually nothing
-        to do here; Disconnect stops that until you connect again. Install from ollama.com, then{' '}
-        <code>ollama pull llama3.2</code>.
+        recommendation. An Ollama running on this machine at <code>{DEFAULT_OLLAMA_BASE_URL}</code>{' '}
+        is picked up on its own, so there is usually nothing to do here; Disconnect stops that until
+        you connect again. Install from ollama.com, then <code>ollama pull llama3.2</code>.
       </p>
 
       {connected && (

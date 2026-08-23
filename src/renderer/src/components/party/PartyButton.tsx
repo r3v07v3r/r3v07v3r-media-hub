@@ -15,12 +15,11 @@ export function PartyButton() {
         type="button"
         className={`${styles.button} ${inParty ? styles.active : ''}`}
         aria-pressed={partyPanelOpen}
-        aria-label={
-          inParty ? `Watch Party — ${memberCount} watching` : 'Start or join a Watch Party'
-        }
+        aria-label={inParty ? `Open room — ${memberCount} people` : 'Open Rooms'}
         onClick={() => setPartyPanelOpen((v) => !v)}
       >
         <Icon name="people" size={17} className={styles.icon} />
+        <span className={styles.label}>{inParty ? 'Room' : 'Rooms'}</span>
         {inParty && memberCount > 0 && <span className={styles.badge}>{memberCount}</span>}
       </button>
       <div className={styles.separator} aria-hidden="true" />

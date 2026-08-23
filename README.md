@@ -45,8 +45,8 @@ play something. Optional metadata, tracking, and subtitle services add to the ex
 - **Build a personal library** in **My Stuff**, including watchlisted, liked, disliked, watched,
   and in-progress titles.
 - **Manage downloads** and optionally connect Jellyfin, Sonarr, Radarr, and qBittorrent.
-- **Watch together** over a direct LAN/WAN connection or an optional R3 Party Sync relay, with
-  a shared queue and synchronized playback controls.
+- **Watch together in Rooms** over a direct LAN/WAN connection or an optional R3 Party Sync
+  relay, with a shared queue, synchronized playback, and short-lived encrypted room chat.
 - **Use separate profiles**, including Kids and PIN-protected profiles. Watch history is
   currently shared between profiles.
 - **Search and ask in one field.** Typing in the top bar searches the movie, series and anime
@@ -119,7 +119,7 @@ stream.
 | **Anime**     | Anime discovery, season groupings, episode progress, and anime-specific tracking.                                |
 | **My Stuff**  | Watchlist, liked/disliked titles, watched items, and viewing history.                                            |
 | **Downloads** | Active and completed TorBox downloads with relevant actions.                                                     |
-| **Settings**  | Playback, language, network, profiles, connected services, Watch Party, and updates.                             |
+| **Settings**  | Playback, language, network, profiles, connected services, Rooms, and updates.                                   |
 
 On desktop, press <kbd>Ctrl</kbd>+<kbd>B</kbd> (or <kbd>⌘</kbd>+<kbd>B</kbd> on macOS) to collapse
 or expand the sidebar. On narrow windows, primary navigation moves to the bottom; use **More**
@@ -148,12 +148,12 @@ above. Metadata, tracking, subtitle, and relay services remain optional:
 Add or remove these integrations from **Settings**. API credentials are entered in the desktop
 app rather than in the source tree.
 
-### Start a Watch Party
+### Start or join a Room
 
-1. Open **Settings → Watch Party** and set your display name.
-2. Choose direct hosting for a LAN/WAN party, or configure **R3 Party Sync** for relay mode.
+1. Open **Rooms** in the top navigation and set the name friends should see.
+2. Choose direct hosting for a LAN/WAN room, or configure **Room relay** in Settings for relay mode.
 3. Host a room and send its generated invite to the other viewers through a trusted channel.
-4. Guests join with the invite. Participants can suggest titles and vote in the shared queue.
+4. Guests join with the invite. Participants can chat, suggest titles, and vote in the shared queue.
 5. Start a queued title; play, pause, and seek events are synchronized for the room.
 
 Direct hosting advertises your local network address and can attempt router port mapping. If

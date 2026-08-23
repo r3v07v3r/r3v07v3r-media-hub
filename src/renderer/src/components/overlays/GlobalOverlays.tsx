@@ -4,7 +4,7 @@ import { NotificationLayer } from './NotificationLayer'
 import { OfflineBanner } from './OfflineBanner'
 import { SyncReviewPanel } from './SyncReviewPanel'
 import { ProfilePinPrompt } from '@renderer/components/profiles/ProfilePinPrompt'
-import { PartyPanel } from '@renderer/components/party/PartyPanel'
+import { SessionHub } from '@renderer/components/party/SessionHub'
 import { PartyLoadingOverlay } from '@renderer/components/party/PartyLoadingOverlay'
 import { PlaybackPreparationOverlay } from './PlaybackPreparationOverlay'
 
@@ -31,7 +31,7 @@ export function GlobalOverlays() {
           which also means the per-title `key` remount that used to reset the
           player's local state is now that window's own concern, and the mpv
           handle is no longer tied to any React lifecycle at all. */}
-      <PartyPanel />
+      <SessionHub />
       <PartyLoadingOverlay />
       <NotificationLayer />
       <SyncReviewPanel />

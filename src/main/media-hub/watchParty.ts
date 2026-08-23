@@ -28,6 +28,7 @@ import { WebSocket, WebSocketServer } from 'ws'
 import { MEDIA_HUB_CHANNELS } from '../../shared/media-hub/ipc-channels'
 import type {
   ConnectResult,
+  PartyEventPayload,
   PartyHostResult,
   PartyChatMessage,
   PartyMemberSummary,
@@ -182,7 +183,7 @@ function partyBroadcast(payload: string): void {
  * renderers. Room state has to reach both: without this, the player could
  * synchronise playback but had no way to show the people or conversation it
  * was synchronising with. */
-function sendPartyEvent(payload: import('../../shared/media-hub/types').PartyEventPayload): void {
+function sendPartyEvent(payload: PartyEventPayload): void {
   sendToRenderer(MEDIA_HUB_CHANNELS.partyEvent, payload)
   sendToPlayerOverlay(MEDIA_HUB_CHANNELS.partyEvent, payload)
 }

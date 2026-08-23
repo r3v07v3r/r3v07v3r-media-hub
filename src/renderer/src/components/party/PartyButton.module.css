@@ -1,7 +1,8 @@
 .button {
   position: relative;
-  width: 36px;
+  min-width: 36px;
   height: 36px;
+  padding: 0 10px;
   border-radius: 50%;
   display: flex;
   align-items: center;
@@ -13,14 +14,25 @@
     background var(--transition-fast),
     border-color var(--transition-fast);
 }
+.label {
+  display: none;
+  margin-left: 5px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.2px;
+}
 .button:hover {
   color: var(--text-primary);
   background: rgba(255, 255, 255, 0.06);
 }
 .button.active {
+  border-radius: 18px;
   color: var(--accent-cyan);
   border-color: rgba(56, 229, 255, 0.35);
   background: rgba(56, 229, 255, 0.08);
+}
+.button.active .label {
+  display: inline;
 }
 .button[aria-pressed='true'] {
   box-shadow: 0 0 0 3px rgba(56, 229, 255, 0.25);
@@ -44,6 +56,17 @@
   font-weight: 700;
   line-height: 16px;
   text-align: center;
+}
+
+@media (min-width: 1180px) {
+  .button:hover .label,
+  .button[aria-pressed='true'] .label {
+    display: inline;
+  }
+  .button:hover,
+  .button[aria-pressed='true'] {
+    border-radius: 18px;
+  }
 }
 
 .separator {

@@ -12,6 +12,7 @@
 
 import type { MediaTracks } from './types'
 import type { VideoFitMode } from './videoFit'
+import type { VideoPictureControl } from './videoPicture'
 
 /** The subset of a catalog item the player UI actually reads. Deliberately not
  *  the full MediaItem: that type lives in the renderer, and anything needing
@@ -86,6 +87,12 @@ export interface PlayerStatePatch {
    *  choice, and main is the side that knows which choice they add up to — so
    *  it pushes the mode it just applied rather than the overlay inferring it. */
   fitMode?: VideoFitMode
+  /** MPV's live picture offsets. Each is an integer in the -100–100 range;
+   * zero is the original picture. */
+  brightness?: number
+  contrast?: number
+  saturation?: number
+  gamma?: number
   /** A terminal playback failure. mpv reports these through `end-file` with a
    *  reason rather than anything resembling MediaError.code. */
   error?: string
@@ -118,6 +125,10 @@ export type PlayerCommand =
   | { type: 'set-subtitle-delay'; seconds: number }
   /** How the picture is fitted into the window — see shared/media-hub/videoFit.ts. */
   | { type: 'set-fit-mode'; mode: VideoFitMode }
+  /** One of the small set of live MPV picture controls. */
+  | { type: 'set-picture-control'; control: VideoPictureControl; value: number }
+  /** Returns every picture control to the original, unadjusted picture. */
+  | { type: 'reset-picture-controls' }
 
 /**
  * Main -> overlay. An input that arrived at mpv's own window rather than the
