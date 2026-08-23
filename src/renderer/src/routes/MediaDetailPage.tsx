@@ -540,12 +540,15 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
       <div className={styles.main}>
         {config.isEpisodic ? (
           <>
-            <NextToPlayPanel
-              media={media}
-              nextEpisode={nextEpisode}
-              allWatched={episodes.length > 0 && !nextEpisode}
-              onPlay={(ep) => ep && handlePlay(ep.season, ep.episode)}
-            />
+            <div className={styles.overviewRow}>
+              <AboutPanel media={media} config={config} />
+              <NextToPlayPanel
+                media={media}
+                nextEpisode={nextEpisode}
+                allWatched={episodes.length > 0 && !nextEpisode}
+                onPlay={(ep) => ep && handlePlay(ep.season, ep.episode)}
+              />
+            </div>
             <EpisodesSection
               mediaId={media.id}
               showTitle={media.title}
@@ -568,7 +571,7 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
             — its movie-specific "Ready to Watch"/"Resume Watching" variant
             was just a second Play button duplicating the hero's own, per
             the user's own request. */}
-        <AboutPanel media={media} config={config} />
+        {!config.isEpisodic && <AboutPanel media={media} config={config} />}
       </div>
 
       <div className={styles.sidebar}>

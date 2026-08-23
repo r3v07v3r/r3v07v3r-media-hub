@@ -362,3 +362,18 @@
     display: none;
   }
 }
+
+/* On very wide desktops a 520px detail banner can be more than five times
+   as wide as its 16:9 backdrop. Constrain the photographic canvas to a
+   cinematic right-hand frame at that breakpoint, preserving the source's
+   composition instead of enlarging a narrow crop across the full banner. */
+@media (min-width: 2560px) {
+  .artImageWrap {
+    position: absolute;
+    inset: 0 0 0 auto;
+    width: min(54%, 1320px);
+    height: 100%;
+    -webkit-mask-image: linear-gradient(to right, transparent 0%, black 14%);
+    mask-image: linear-gradient(to right, transparent 0%, black 14%);
+  }
+}

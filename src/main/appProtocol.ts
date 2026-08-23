@@ -32,6 +32,10 @@ export function registerAppSchemeAsPrivileged(): void {
 export function registerAppSchemeHandler(): void {
   protocol.handle(APP_SCHEME, (request) => {
     const url = new URL(request.url)
+    // The production renderer always uses app://index.html/. Refusing other
+    // authorities keeps a crafted app:// URL from becoming a second origin
+    // that can access the same packaged assets and preload script.
+    if (url.hostname !== 'index.html') return new Response('Forbidden', { status: 403 })
     // app://index.html/media/x.jpg style URLs put the path in `pathname`
     // once the host is stripped; treat the whole thing after the scheme as
     // a root-relative path into RENDERER_ROOT.

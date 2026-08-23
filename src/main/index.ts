@@ -30,6 +30,18 @@ const DESIGN_HEIGHT = 1080
 // custom scheme instead of file://.
 registerAppSchemeAsPrivileged()
 
+function isOwnRendererUrl(value: string): boolean {
+  try {
+    const url = new URL(value)
+    if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
+      return url.origin === new URL(process.env['ELECTRON_RENDERER_URL']).origin
+    }
+    return url.protocol === `${APP_SCHEME}:` && url.hostname === 'index.html'
+  } catch {
+    return false
+  }
+}
+
 function createWindow(): void {
   // Create the browser window.
   const mainWindow = new BrowserWindow({
@@ -87,21 +99,7 @@ function createWindow(): void {
   // blocked any URL not local, adapted here for this project's custom
   // app:// scheme instead of file://.
   mainWindow.webContents.on('will-navigate', (event, url) => {
-    const isOwnOrigin =
-      is.dev && process.env['ELECTRON_RENDERER_URL']
-        ? url.startsWith(process.env['ELECTRON_RENDERER_URL'])
-        : // Chromium normalizes this custom standard scheme's empty-authority
-          // loadURL(`${APP_SCHEME}:///index.html`) into a real host at
-          // runtime — the actual URL is `app://index.html/...` (two
-          // slashes), not `app:///...` (three, empty host). Confirmed live
-          // via a remote-debugging probe (Runtime.evaluate('location.href')
-          // against a packaged build — see ipcGuard.ts's
-          // trustedRendererOrigin() for the same fix and fuller context).
-          // The three-slash prefix here never matched, so this guard was
-          // silently blocking every same-origin navigation it was meant to
-          // allow, not just rejecting external ones.
-          url.startsWith(`${APP_SCHEME}://`)
-    if (!isOwnOrigin) event.preventDefault()
+    if (!isOwnRendererUrl(url)) event.preventDefault()
   })
 
   // Deny every permission request (camera/mic/notifications/etc.) by

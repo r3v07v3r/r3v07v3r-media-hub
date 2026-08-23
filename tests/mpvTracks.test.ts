@@ -11,6 +11,7 @@
 import assert from 'node:assert'
 import {
   MpvPlayer,
+  mpvSearchCandidates,
   mpvTrackIdForOrdinal,
   ordinalForMpvTrackId,
   tracksFromMpvTrackList,
@@ -251,6 +252,30 @@ function startLoad(player: MpvPlayer, options: Parameters<MpvPlayer['loadFile']>
 const settle = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 20))
 
 async function main(): Promise<void> {
+  await checkAsync('mpv discovery does not synchronously scan PATH directories', async () => {
+    // A stale UNC/removable-drive PATH entry makes `existsSync` block the
+    // Electron main process on Windows. The player discovery path is hit at
+    // startup and before first playback, so it must only inspect fixed local
+    // candidates (or an explicitly supplied MPV_PATH).
+    const originalPath = process.env.PATH
+    const originalMpvPath = process.env.MPV_PATH
+    process.env.PATH = '\\\\offline-server\\tools;C:\\another-missing-location'
+    delete process.env.MPV_PATH
+    try {
+      const candidates = mpvSearchCandidates()
+      assert.equal(
+        candidates.some((candidate) => candidate?.includes('offline-server')),
+        false,
+        `mpv discovery unexpectedly scanned PATH: ${candidates.join(', ')}`
+      )
+    } finally {
+      if (originalPath === undefined) delete process.env.PATH
+      else process.env.PATH = originalPath
+      if (originalMpvPath === undefined) delete process.env.MPV_PATH
+      else process.env.MPV_PATH = originalMpvPath
+    }
+  })
+
   await checkAsync('loadFile writes a non-zero start as a STRING, never a number', async () => {
     const { player, sent } = fakePlayer()
     startLoad(player, { startSeconds: 90 })

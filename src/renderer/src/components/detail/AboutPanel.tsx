@@ -74,12 +74,6 @@ export function AboutPanel({ media, config }: { media: MediaItem; config: Detail
             <dd>{media.totalEpisodes}</dd>
           </div>
         )}
-        {media.genres.length > 0 && (
-          <div className={styles.fact}>
-            <dt>Genres</dt>
-            <dd>{media.genres.join(', ')}</dd>
-          </div>
-        )}
       </dl>
     </section>
   )

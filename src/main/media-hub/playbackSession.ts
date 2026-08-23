@@ -39,7 +39,7 @@ import { handle } from './ipcGuard'
 import { getPlaybackBufferSeconds } from '../../shared/media-hub/playbackBuffer'
 import { normalizeVideoScaling } from '../../shared/media-hub/videoScaling'
 import { reportPreparation } from './playbackProgress'
-import { captureThumbnail, findMpv } from './mpv'
+import { captureThumbnail, mpvPath } from './mpv'
 import {
   addSubtitleFileToPlayer,
   pushSessionSnapshot,
@@ -57,7 +57,7 @@ import {
 } from './streamCache'
 import { downloadSubtitleText } from './subtitlesService'
 
-export const mpvPath = findMpv()
+export { mpvPath } from './mpv'
 
 /** True while a title is actively playing (has a live stream-cache
  *  session) — see appIpc.ts's stream-cache-location handlers, which

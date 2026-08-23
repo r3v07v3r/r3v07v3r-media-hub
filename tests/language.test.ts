@@ -3,14 +3,7 @@
 // Run with: npx tsx tests/language.test.ts   (or npm.cmd test)
 
 import assert from 'node:assert'
-import type { MediaTrack, MediaTracks } from '../src/shared/media-hub/types'
-import {
-  languageMatches,
-  languageName,
-  normalizeLanguage,
-  releaseLacksPreferredLanguage,
-  releaseLocalisedInto
-} from '../src/shared/media-hub/language'
+import { languageMatches, languageName, normalizeLanguage } from '../src/shared/media-hub/language'
 
 let pass = 0
 function check(name: string, fn: () => void): void {
@@ -23,24 +16,6 @@ function check(name: string, fn: () => void): void {
     process.exitCode = 1
   }
 }
-
-function audio(ordinal: number, language: string, codec = 'aac', isDefault = false): MediaTrack {
-  return {
-    ordinal,
-    index: ordinal + 1,
-    codec,
-    language,
-    title: '',
-    label: `${language} ${codec}`,
-    default: isDefault
-  }
-}
-const tracks = (...list: MediaTrack[]): MediaTracks => ({
-  video: [],
-  audio: list,
-  subtitle: [],
-  probed: true
-})
 
 console.log('normalizeLanguage')
 check('639-2/B to 639-1', () => assert.equal(normalizeLanguage('fre'), 'fr'))

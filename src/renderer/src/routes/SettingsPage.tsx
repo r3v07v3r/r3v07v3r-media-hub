@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { useAppState } from '@renderer/context/AppStateContext'
 import { Icon } from '@renderer/components/icons/Icon'
 import { useAsyncAction } from '@renderer/hooks/useAsyncAction'
@@ -586,6 +586,12 @@ function MoreOptionsSection() {
 function useColumnPackGrid<TGroup extends HTMLElement = HTMLElement>() {
   const gridRef = useRef<HTMLDivElement>(null)
   const groupRef = useRef<TGroup>(null)
+  const gridBinding = useCallback((node: HTMLDivElement | null) => {
+    gridRef.current = node
+  }, [])
+  const groupBinding = useCallback((node: TGroup | null) => {
+    groupRef.current = node
+  }, [])
 
   useLayoutEffect(() => {
     const grid = gridRef.current
@@ -622,17 +628,17 @@ function useColumnPackGrid<TGroup extends HTMLElement = HTMLElement>() {
     }
   }, [])
 
-  return { gridRef, groupRef }
+  return [gridBinding, groupBinding] as const
 }
 
 export default function SettingsPage() {
   const tileAreaRef = useRef<HTMLDivElement>(null)
-  const generalPack = useColumnPackGrid<HTMLElement>()
-  const playbackPack = useColumnPackGrid<HTMLElement>()
-  const servicesPack = useColumnPackGrid<HTMLElement>()
-  const accountsPack = useColumnPackGrid<HTMLElement>()
-  const communityPack = useColumnPackGrid<HTMLElement>()
-  const aiPack = useColumnPackGrid<HTMLElement>()
+  const [generalGridBinding, generalGroupBinding] = useColumnPackGrid<HTMLElement>()
+  const [playbackGridBinding, playbackGroupBinding] = useColumnPackGrid<HTMLElement>()
+  const [servicesGridBinding, servicesGroupBinding] = useColumnPackGrid<HTMLElement>()
+  const [accountsGridBinding, accountsGroupBinding] = useColumnPackGrid<HTMLElement>()
+  const [communityGridBinding, communityGroupBinding] = useColumnPackGrid<HTMLElement>()
+  const [aiGridBinding, aiGroupBinding] = useColumnPackGrid<HTMLElement>()
   const {
     isOffline,
     setIsOffline,
@@ -872,7 +878,7 @@ export default function SettingsPage() {
       <div className={styles.tileArea} ref={tileAreaRef}>
         <section
           id="settings-general"
-          ref={generalPack.groupRef}
+          ref={generalGroupBinding}
           className={styles.settingsGroup}
           aria-labelledby="settings-general-title"
         >
@@ -881,7 +887,7 @@ export default function SettingsPage() {
             <h2 id="settings-general-title">General</h2>
             <p>App updates, display preferences, and everyday behavior.</p>
           </header>
-          <div ref={generalPack.gridRef} className={styles.groupGrid}>
+          <div ref={generalGridBinding} className={styles.groupGrid}>
             <AboutUpdateSection />
 
             <section className={`${styles.section} glass-panel`} aria-labelledby="settings-perf">
@@ -919,7 +925,7 @@ export default function SettingsPage() {
 
         <section
           id="settings-playback"
-          ref={playbackPack.groupRef}
+          ref={playbackGroupBinding}
           className={styles.settingsGroup}
           aria-labelledby="settings-playback-title"
         >
@@ -928,7 +934,7 @@ export default function SettingsPage() {
             <h2 id="settings-playback-title">Playback</h2>
             <p>Choose language, quality, and connection preferences.</p>
           </header>
-          <div ref={playbackPack.gridRef} className={styles.groupGrid}>
+          <div ref={playbackGridBinding} className={styles.groupGrid}>
             <section
               className={`${styles.section} glass-panel`}
               aria-labelledby="settings-subtitles"
@@ -1116,7 +1122,7 @@ export default function SettingsPage() {
 
         <section
           id="settings-services"
-          ref={servicesPack.groupRef}
+          ref={servicesGroupBinding}
           className={styles.settingsGroup}
           aria-labelledby="settings-services-title"
         >
@@ -1125,7 +1131,7 @@ export default function SettingsPage() {
             <h2 id="settings-services-title">Media services</h2>
             <p>Connect servers, download clients, and your streaming provider.</p>
           </header>
-          <div ref={servicesPack.gridRef} className={`${styles.groupGrid} ${styles.groupGridWide}`}>
+          <div ref={servicesGridBinding} className={`${styles.groupGrid} ${styles.groupGridWide}`}>
             <MediaServicesSection />
             <TorBoxSection />
           </div>
@@ -1133,7 +1139,7 @@ export default function SettingsPage() {
 
         <section
           id="settings-accounts"
-          ref={accountsPack.groupRef}
+          ref={accountsGroupBinding}
           className={styles.settingsGroup}
           aria-labelledby="settings-accounts-title"
         >
@@ -1142,7 +1148,7 @@ export default function SettingsPage() {
             <h2 id="settings-accounts-title">Accounts &amp; metadata</h2>
             <p>Link discovery, tracking, artwork, and subtitle providers.</p>
           </header>
-          <div ref={accountsPack.gridRef} className={styles.groupGrid}>
+          <div ref={accountsGridBinding} className={styles.groupGrid}>
             <TmdbSection />
             <OmdbSection />
             <SimklSection />
@@ -1158,7 +1164,7 @@ export default function SettingsPage() {
             above it. */}
         <section
           id="settings-ai"
-          ref={aiPack.groupRef}
+          ref={aiGroupBinding}
           className={styles.settingsGroup}
           aria-labelledby="settings-ai-title"
         >
@@ -1167,14 +1173,14 @@ export default function SettingsPage() {
             <h2 id="settings-ai-title">AI</h2>
             <p>Run the assistant and recommendations on a model of your own.</p>
           </header>
-          <div ref={aiPack.gridRef} className={styles.groupGrid}>
+          <div ref={aiGridBinding} className={styles.groupGrid}>
             <OllamaSection />
           </div>
         </section>
 
         <section
           id="settings-community"
-          ref={communityPack.groupRef}
+          ref={communityGroupBinding}
           className={styles.settingsGroup}
           aria-labelledby="settings-community-title"
         >
@@ -1183,7 +1189,7 @@ export default function SettingsPage() {
             <h2 id="settings-community-title">Community &amp; profiles</h2>
             <p>Set up shared viewing and choose who is watching.</p>
           </header>
-          <div ref={communityPack.gridRef} className={styles.groupGrid}>
+          <div ref={communityGridBinding} className={styles.groupGrid}>
             <WatchPartySection />
             <R3PartySyncSection />
 

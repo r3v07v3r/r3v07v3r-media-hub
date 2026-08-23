@@ -71,6 +71,18 @@ const ROOM_IDLE_TTL_MS = 30 * 24 * 60 * 60 * 1000
  *  watching, and a client would have to discard it anyway. */
 const RETENTION_MAX_AGE_MS = 10 * 60 * 1000
 
+// The Electron clients cap their raw WebSocket payloads at 64 KiB. The relay
+// adds its own JSON envelope around every payload, so leave headroom for that
+// wrapper and enforce the same boundary before retaining or broadcasting it.
+export const MAX_RELAY_MESSAGE_BYTES = 60 * 1024
+// A Watch Party is intentionally a small room. This bounds retained state and
+// the O(connections) fan-out work a member can trigger with one message.
+export const MAX_ROOM_CONNECTIONS = 32
+
+export function isRelayMessageWithinLimit(message: string): boolean {
+  return new TextEncoder().encode(message).byteLength <= MAX_RELAY_MESSAGE_BYTES
+}
+
 export class PartyRoom {
   private readonly state: DurableObjectState
   private roomToken: string | null = null
@@ -112,6 +124,9 @@ export class PartyRoom {
       // Unknown room (never /host'd, or already reclaimed) — refuse rather
       // than silently accepting a connection nobody else will ever join.
       if (this.roomToken === null) return new Response('Unknown party.', { status: 404 })
+      if (this.state.getWebSockets().length >= MAX_ROOM_CONNECTIONS) {
+        return new Response('Party is full.', { status: 429 })
+      }
 
       const token = url.searchParams.get('token')
       const isHost = token !== null && token === this.roomToken
@@ -165,12 +180,20 @@ export class PartyRoom {
   async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
     const body = typeof message === 'string' ? message : ''
     if (!body) return
+    if (!isRelayMessageWithinLimit(body)) {
+      ws.close(1009, 'Message exceeds the party size limit.')
+      return
+    }
     const attachment = this.attachmentOf(ws)
     if (!attachment) return
 
     // Retain this connection's latest message for future joiners. Still
     // never decrypted — we store exactly the bytes we forward.
-    ws.serializeAttachment({ ...attachment, last: body, lastAt: Date.now() } satisfies SocketAttachment)
+    ws.serializeAttachment({
+      ...attachment,
+      last: body,
+      lastAt: Date.now()
+    } satisfies SocketAttachment)
 
     const envelope = JSON.stringify({
       type: 'relay',

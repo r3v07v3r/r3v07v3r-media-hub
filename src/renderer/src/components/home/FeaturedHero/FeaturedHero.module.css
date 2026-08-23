@@ -442,3 +442,34 @@
     display: none;
   }
 }
+
+/* A fixed-height hero becomes dramatically wider than a cinematic 16:9
+   backdrop on large desktop displays. Keeping `cover` across that whole
+   width magnifies the source until only a thin, unhelpful horizontal slice
+   remains. At this scale, treat the artwork as a right-hand cinema frame
+   instead: its width is capped to keep a useful amount of the original
+   composition in view, while the left half remains the intentional dark
+   stage for title and controls. The local mask eases the frame into that
+   negative space instead of introducing a hard image edge. */
+@media (min-width: 2560px) {
+  .artImageWrap {
+    position: absolute;
+    inset: 0 0 0 auto;
+    width: min(54%, 1320px);
+    height: 100%;
+    -webkit-mask-image: linear-gradient(to right, transparent 0%, black 14%);
+    mask-image: linear-gradient(to right, transparent 0%, black 14%);
+  }
+  .artImage {
+    animation-name: heroKenBurnsUltrawide;
+  }
+}
+
+@keyframes heroKenBurnsUltrawide {
+  from {
+    transform: scale(1);
+  }
+  to {
+    transform: scale(1.012);
+  }
+}

@@ -42,30 +42,41 @@ import { scalerPropertiesFor, type VideoScalingPreset } from '../../shared/media
 import { isAllowedRemoteMediaUrl } from './playback'
 import { isOwnCacheUrl } from './streamCache'
 
-/** Mirrors vlc.ts's findFfmpeg(): the bundled copy first, then a system search
- *  so `electron-vite dev` works on a machine that has mpv installed without
- *  having run the postinstall fetch. Packaged builds always hit the first
- *  candidate — see electron-builder.yml's win.extraResources. */
-export function findMpv(): string {
+/**
+ * Finds only known-local mpv installations.
+ *
+ * This deliberately does NOT walk every directory in PATH. `findMpv()` is
+ * called while the Electron main process is starting and again before the
+ * first player process is created. On Windows, `existsSync()` against one
+ * stale UNC, VPN, or removable-drive PATH entry can block the main thread for
+ * tens of seconds, which makes the whole application appear "Not Responding".
+ *
+ * The packaged player and the repo-local development player cover normal use.
+ * A developer with a custom installation can opt in explicitly with
+ * `MPV_PATH`, avoiding an unbounded synchronous system search on every launch.
+ */
+export function mpvSearchCandidates(): Array<string | undefined> {
   const executable = process.platform === 'win32' ? 'mpv.exe' : 'mpv'
   const bundled = path.join(process.resourcesPath || '', 'mpv', executable)
-  const candidates = [
+  return [
     process.env.MPV_PATH,
     bundled,
     // The repo-local copy scripts/fetch-mpv.ts writes, for dev runs where
     // process.resourcesPath doesn't point at the packaged resources folder.
     path.join(process.cwd(), 'resources', 'mpv-win', executable),
-    'C:/Program Files/mpv/mpv.exe',
-    ...String(process.env.PATH || '')
-      .split(path.delimiter)
-      .map((dir) => path.join(dir, executable))
+    // Keep the conventional Windows install as a convenience, but avoid a
+    // PATH scan. Unlike PATH entries this is always a fixed local location.
+    'C:/Program Files/mpv/mpv.exe'
   ]
-  for (const candidate of candidates) {
+}
+
+export function findMpv(): string {
+  for (const candidate of mpvSearchCandidates()) {
     if (!candidate) continue
     try {
       if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) return candidate
     } catch {
-      // An unreadable PATH entry is not a reason to abandon the search.
+      // A configured path can be unavailable; try the next known-local path.
     }
   }
   return ''

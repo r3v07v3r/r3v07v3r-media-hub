@@ -30,7 +30,7 @@ import { handle } from './ipcGuard'
 import { logError } from './logger'
 import {
   MpvPlayer,
-  findMpv,
+  mpvPath,
   mpvTrackIdForOrdinal,
   ordinalForMpvTrackId,
   tracksFromMpvTrackList,
@@ -569,7 +569,6 @@ export async function startPlayerSession(
   }
 
   if (!player.running) {
-    const mpvPath = findMpv()
     if (!mpvPath) {
       throw new Error(
         'The bundled player is missing. Reinstall the app, or run the postinstall step ' +

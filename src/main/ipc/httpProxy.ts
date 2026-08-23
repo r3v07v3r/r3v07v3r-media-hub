@@ -1,5 +1,6 @@
 import { ipcMain } from 'electron'
 import { IPC_CHANNELS, ProxyRequest, ProxyResponse } from '../../shared/ipc-types'
+import { readLimitedResponseText } from '../../shared/media-hub/responseLimit'
 import { assertTrustedSender } from './trustedSender'
 
 // This proxy deliberately accepts any http(s) host, not just a saved
@@ -109,9 +110,16 @@ export function registerHttpProxyIpc(): void {
           signal: controller.signal
         })
         const contentType = res.headers.get('content-type') ?? ''
+        const responseText = await readLimitedResponseText(res)
         const data = contentType.includes('application/json')
-          ? await res.json().catch(() => undefined)
-          : await res.text()
+          ? (() => {
+              try {
+                return JSON.parse(responseText)
+              } catch {
+                return undefined
+              }
+            })()
+          : responseText
 
         // getSetCookie() (Node 18.17+/undici) returns each Set-Cookie header
         // separately — headers.get('set-cookie') would incorrectly merge

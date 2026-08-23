@@ -33,6 +33,18 @@
   gap: 22px;
 }
 
+.overviewRow {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1.65fr) minmax(420px, 1fr);
+  gap: 16px;
+  align-items: stretch;
+}
+
+.overviewRow > * {
+  min-width: 0;
+}
+
 .sidebar {
   grid-area: sidebar;
   min-width: 0;
@@ -114,5 +126,9 @@
       'main'
       'sidebar';
     overflow-y: auto;
+  }
+
+  .overviewRow {
+    grid-template-columns: 1fr;
   }
 }
