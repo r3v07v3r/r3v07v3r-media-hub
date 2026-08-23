@@ -28,7 +28,7 @@ import type {
 import {
   buildAssistantMessages,
   buildRecommendationMessages,
-  DEFAULT_OLLAMA_BASE_URL,
+  effectiveOllamaBaseUrl,
   matchRecommendation,
   parseAssistantAnswer,
   normalizeOllamaBaseUrl,
@@ -36,8 +36,11 @@ import {
   parseOllamaModels,
   parseOllamaReply,
   pickInstalledModel,
+  resolveOllamaConfig,
+  type OllamaEndpoint,
   type OllamaMessage,
-  type OllamaTitleRef
+  type OllamaTitleRef,
+  type SavedOllamaConfig
 } from '../../shared/media-hub/ollama'
 import { handle } from './ipcGuard'
 import { sendToRenderer } from './rendererBridge'
@@ -52,36 +55,21 @@ const PROBE_TIMEOUT_MS = 6000
  *  on. The UI shows a working state throughout. */
 const GENERATE_TIMEOUT_MS = 120000
 
-export interface OllamaConfig {
-  baseUrl: string
-  model: string
-}
+export type OllamaConfig = OllamaEndpoint
 
-/** The address + model as actually written in the settings file, both re-normalized on read. Either may be ''. */
-function savedConfig(): OllamaConfig {
+/** The address + model + off-switch as actually written in the settings file, all re-normalized on read. Either string may be ''. */
+function savedConfig(): SavedOllamaConfig {
   const settings = readSettings()
   return {
     baseUrl: normalizeOllamaBaseUrl(settings.ollamaBaseUrl),
-    model: normalizeOllamaModel(settings.ollamaModel)
+    model: normalizeOllamaModel(settings.ollamaModel),
+    autoDetect: settings.ollamaAutoDetect !== false
   }
 }
 
-/** Whether the app may look at the default address on its own — false only after a deliberate Disconnect (see settingsStore's ollamaAutoDetect). */
-function autoDetectAllowed(): boolean {
-  return readSettings().ollamaAutoDetect !== false
-}
-
-/**
- * The address to talk to, before any question of which model: whatever was
- * saved, or the default if nothing was and looking is still allowed.
- *
- * Every path that needs an address goes through this, the Settings pane's
- * own probe included, so the pane cannot end up reporting on a different
- * server from the one the AI features would use.
- */
+/** The address to talk to, before any question of which model — see effectiveOllamaBaseUrl, which is where that rule lives. */
 function effectiveBaseUrl(saved = savedConfig()): string {
-  if (saved.baseUrl) return saved.baseUrl
-  return autoDetectAllowed() ? DEFAULT_OLLAMA_BASE_URL : ''
+  return effectiveOllamaBaseUrl(saved)
 }
 
 /**
@@ -127,6 +115,11 @@ const DETECT_COOLDOWN_MS = 15000
  * connected with a model sitting ready behind it.
  */
 function rememberDetection(baseUrl: string, models: string[]): void {
+  // Recorded without asking whether it is still wanted — ollamaConfig
+  // decides that on the way out, so a probe that landed after a Disconnect
+  // can write here and still change nothing. The broadcast below is
+  // computed from ollamaConfig at both ends, so it stays silent in exactly
+  // that case too.
   const wasConnected = ollamaConnected()
   // A saved model is preferred whenever the server still has it, so a
   // half-configured install — address forgotten, model remembered — lands
@@ -186,11 +179,7 @@ export function detectOllama(force = false): Promise<void> {
  * happens to be running on.
  */
 export function ollamaConfig(): OllamaConfig {
-  const saved = savedConfig()
-  if (saved.baseUrl && saved.model) return saved
-  if (!detected) return saved
-  if (saved.baseUrl && saved.baseUrl !== detected.baseUrl) return saved
-  return { baseUrl: detected.baseUrl, model: saved.model || detected.model }
+  return resolveOllamaConfig(savedConfig(), detected)
 }
 
 /** Whether the AI features have somewhere to go. Read by settings:get so the renderer can gate on it. */

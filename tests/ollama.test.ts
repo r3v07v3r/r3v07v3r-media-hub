@@ -12,6 +12,7 @@ import {
   MAX_SIMILAR_TITLES,
   buildAssistantMessages,
   buildRecommendationMessages,
+  effectiveOllamaBaseUrl,
   matchRecommendation,
   normalizeOllamaBaseUrl,
   normalizeOllamaModel,
@@ -19,7 +20,9 @@ import {
   parseOllamaModels,
   parseOllamaReply,
   pickInstalledModel,
-  type OllamaTitleRef
+  resolveOllamaConfig,
+  type OllamaTitleRef,
+  type SavedOllamaConfig
 } from '../src/shared/media-hub/ollama'
 
 let pass = 0
@@ -240,6 +243,94 @@ check('a prompt never lists more titles than the cap', () => {
     listing.split('\n').filter((line) => line.startsWith('- ')).length,
     MAX_PROMPT_TITLES
   )
+})
+
+// --- effectiveOllamaBaseUrl / resolveOllamaConfig --------------------------
+
+/** Nothing configured and never turned off — a fresh install. */
+function fresh(over: Partial<SavedOllamaConfig> = {}): SavedOllamaConfig {
+  return { baseUrl: '', model: '', autoDetect: true, ...over }
+}
+
+const LOCAL = DEFAULT_OLLAMA_BASE_URL
+const LAN = 'http://192.168.1.5:11434'
+
+check('an unconfigured install is pointed at the default address', () => {
+  assert.equal(effectiveOllamaBaseUrl(fresh()), LOCAL)
+})
+
+check('a saved address is used instead of the default', () => {
+  assert.equal(effectiveOllamaBaseUrl(fresh({ baseUrl: LAN })), LAN)
+})
+
+check('after a disconnect there is no address to look at', () => {
+  assert.equal(effectiveOllamaBaseUrl(fresh({ autoDetect: false })), '')
+})
+
+check('what was saved wins over anything detected', () => {
+  const saved = fresh({ baseUrl: LAN, model: 'llama3.2' })
+  assert.deepEqual(resolveOllamaConfig(saved, { baseUrl: LOCAL, model: 'qwen2.5' }), {
+    baseUrl: LAN,
+    model: 'llama3.2'
+  })
+})
+
+check('a detected pair is used when nothing was configured', () => {
+  assert.deepEqual(resolveOllamaConfig(fresh(), { baseUrl: LOCAL, model: 'qwen2.5' }), {
+    baseUrl: LOCAL,
+    model: 'qwen2.5'
+  })
+})
+
+check('nothing detected and nothing saved is nothing to ask', () => {
+  assert.deepEqual(resolveOllamaConfig(fresh(), null), { baseUrl: '', model: '' })
+})
+
+check('a saved model is kept, and only the address filled in', () => {
+  const saved = fresh({ model: 'llama3.2' })
+  assert.deepEqual(resolveOllamaConfig(saved, { baseUrl: LOCAL, model: 'qwen2.5' }), {
+    baseUrl: LOCAL,
+    model: 'llama3.2'
+  })
+})
+
+check('a saved LAN address is never handed this machine\'s model list', () => {
+  // The detected pair was seen on loopback; pairing its model with a server
+  // on the network would ask a machine for a model it may not have.
+  const saved = fresh({ baseUrl: LAN })
+  assert.deepEqual(resolveOllamaConfig(saved, { baseUrl: LOCAL, model: 'qwen2.5' }), {
+    baseUrl: LAN,
+    model: ''
+  })
+})
+
+check('a probe landing after Disconnect cannot put the server back', () => {
+  // The exact race: detectOllama was awaiting listModels when Disconnect
+  // was pressed, so its answer is recorded afterwards. Auto-detection is
+  // off, so nothing is effective, and the stale answer must not be usable.
+  const disconnected = fresh({ autoDetect: false })
+  assert.deepEqual(resolveOllamaConfig(disconnected, { baseUrl: LOCAL, model: 'qwen2.5' }), {
+    baseUrl: '',
+    model: ''
+  })
+})
+
+check('a probe landing after Connect elsewhere cannot redirect the model', () => {
+  // Same race, other ending: a loopback probe was in flight when the person
+  // connected a LAN server, so the detected address is no longer the one in
+  // effect.
+  const moved = fresh({ baseUrl: LAN, model: '' })
+  assert.deepEqual(resolveOllamaConfig(moved, { baseUrl: LOCAL, model: 'qwen2.5' }), {
+    baseUrl: LAN,
+    model: ''
+  })
+})
+
+check('a detection that found no model is not a connection', () => {
+  assert.deepEqual(resolveOllamaConfig(fresh(), { baseUrl: LOCAL, model: '' }), {
+    baseUrl: '',
+    model: ''
+  })
 })
 
 // --- parseAssistantAnswer --------------------------------------------------

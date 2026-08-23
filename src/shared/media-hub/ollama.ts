@@ -24,6 +24,66 @@
  */
 export const DEFAULT_OLLAMA_BASE_URL = 'http://127.0.0.1:11434'
 
+/** An address and a model: everything needed to ask something. Either field may be '' where nothing is known. */
+export interface OllamaEndpoint {
+  baseUrl: string
+  model: string
+}
+
+/** What the settings file says, which is not always what is in use. */
+export interface SavedOllamaConfig extends OllamaEndpoint {
+  /** Whether the app may look at the default address on its own. False only
+   *  after a deliberate Disconnect — see settingsStore's ollamaAutoDetect. */
+  autoDetect: boolean
+}
+
+/**
+ * The address to talk to, before any question of which model: whatever was
+ * saved, or the default if nothing was and looking is still allowed.
+ *
+ * Every path that needs an address goes through this, the Settings pane's
+ * own probe included, so the pane cannot end up reporting on a different
+ * server from the one the AI features would use.
+ */
+export function effectiveOllamaBaseUrl(saved: SavedOllamaConfig): string {
+  if (saved.baseUrl) return saved.baseUrl
+  return saved.autoDetect ? DEFAULT_OLLAMA_BASE_URL : ''
+}
+
+/**
+ * The address + model the AI features will actually use: whatever was
+ * chosen in Settings, filled in from what was detected wherever it was not.
+ *
+ * `detected` is whatever the last probe of the effective address found, and
+ * lives only in memory (see ollamaService.ts). It fills gaps and never more
+ * than that: a saved model is never replaced, and a detected model is only
+ * ever paired with the address it was seen on — so a saved LAN address is
+ * never handed the model list of the machine this app happens to run on.
+ *
+ * The `detected` address is checked against the one effective NOW rather
+ * than trusted from when the probe started. A probe holds for up to its
+ * whole timeout, which is long enough for someone to press Disconnect
+ * meanwhile; its answer then lands afterwards and gets recorded, and
+ * without this check it would put back a server they had just said to stop
+ * using. Deciding it here, at the single point of use, means a stale answer
+ * can be stored and still cannot be acted on — the alternative was the same
+ * rule repeated at each site that records a probe, one of which compares
+ * against an address captured before its own await.
+ *
+ * Lives in this half rather than beside the sockets because it is pure, and
+ * because every subtlety above is a rule worth pinning down in a test.
+ */
+export function resolveOllamaConfig(
+  saved: SavedOllamaConfig,
+  detected: OllamaEndpoint | null
+): OllamaEndpoint {
+  const settled = { baseUrl: saved.baseUrl, model: saved.model }
+  if (saved.baseUrl && saved.model) return settled
+  if (!detected || !detected.model) return settled
+  if (detected.baseUrl !== effectiveOllamaBaseUrl(saved)) return settled
+  return { baseUrl: detected.baseUrl, model: saved.model || detected.model }
+}
+
 /** Upper bound on how many titles get listed in a prompt. Local models run
  *  on the person's own hardware, and prompt length is the main thing that
  *  decides how long they take to answer — a few dozen titles is enough
