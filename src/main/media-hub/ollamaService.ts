@@ -568,20 +568,32 @@ export function registerOllamaIpc(): void {
   >(
     MEDIA_HUB_CHANNELS.ollamaAsk,
     async (event, payload) => {
-      const config = await requireConfig()
-      const question = String(payload?.question ?? '')
-        .trim()
-        .slice(0, 2000)
-      if (!question) throw new Error('Ask a question first.')
-
-      // Registered before the first await, so a cancel that arrives while
-      // the model is still warming up finds something to abort.
+      // Registered before ANY await, requireConfig included. That call can
+      // spend the full probe timeout looking for a server on an
+      // unconfigured install, and a cancel arriving in that window used to
+      // find nothing in `inFlight` to abort — so closing the panel did
+      // nothing, and the generation that detection then started ran on for
+      // up to two minutes with its answer already discarded. There is no
+      // point in this handler at which the request should be
+      // uncancellable.
       const { signal, release } = trackRequest(
         event.sender,
         String(payload?.requestId ?? '').slice(0, 64)
       )
 
       try {
+        const config = await requireConfig()
+        const question = String(payload?.question ?? '')
+          .trim()
+          .slice(0, 2000)
+        if (!question) throw new Error('Ask a question first.')
+
+        // Abandoned while the config was being worked out. Checked rather
+        // than left to chat() — which would abort the fetch immediately
+        // anyway — so a question nobody is waiting for does not first get a
+        // prompt built out of three sanitized title lists.
+        if (signal.aborted) return { reply: '', cancelled: true }
+
         const raw = await chat(
           config,
           buildAssistantMessages(question, {
@@ -628,29 +640,35 @@ export function registerOllamaIpc(): void {
   handle<{ kindLabel?: string; candidates?: unknown; requestId?: string }, OllamaRecommendResult>(
     MEDIA_HUB_CHANNELS.ollamaRecommend,
     async (event, payload) => {
-      // Reported, not thrown, unlike the assistant's requireConfig(). The
-      // assistant has nothing else to offer, so "no model connected" IS its
-      // answer; this button has a working non-AI fallback, and the renderer
-      // needs to be told to use it rather than shown a failure. It matters
-      // because the renderer cannot answer this itself: its settings
-      // snapshot is null until the first fetch lands, so an early click has
-      // to ask rather than assume.
-      const config = await resolveConfig()
-      if (!config.baseUrl || !config.model) {
-        return { id: '', reason: '', unavailable: true }
-      }
-      const candidates = sanitizeTitles(payload?.candidates)
-      if (!candidates.length) throw new Error('There is nothing to recommend from yet.')
-      const kindLabel = String(payload?.kindLabel ?? 'title')
-        .trim()
-        .slice(0, 20)
-
+      // Registered first, for the same reason as ollamaAsk above:
+      // resolveConfig can await a probe, and a request that cannot be
+      // cancelled during that window is one that keeps generating after
+      // the panel asking for it has gone.
       const { signal, release } = trackRequest(
         event.sender,
         String(payload?.requestId ?? '').slice(0, 64)
       )
 
       try {
+        // Reported, not thrown, unlike the assistant's requireConfig(). The
+        // assistant has nothing else to offer, so "no model connected" IS
+        // its answer; this button has a working non-AI fallback, and the
+        // renderer needs to be told to use it rather than shown a failure.
+        // It matters because the renderer cannot answer this itself: its
+        // settings snapshot can say "no model" while one has since been
+        // started, so a click has to ask rather than assume.
+        const config = await resolveConfig()
+        if (!config.baseUrl || !config.model) {
+          return { id: '', reason: '', unavailable: true }
+        }
+        const candidates = sanitizeTitles(payload?.candidates)
+        if (!candidates.length) throw new Error('There is nothing to recommend from yet.')
+        const kindLabel = String(payload?.kindLabel ?? 'title')
+          .trim()
+          .slice(0, 20)
+
+        if (signal.aborted) return { id: '', reason: '', cancelled: true }
+
         const reply = await chat(
           config,
           buildRecommendationMessages(kindLabel || 'title', candidates),

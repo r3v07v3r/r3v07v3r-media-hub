@@ -1822,21 +1822,32 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         setAssistantFindings({ results: found, similar: [], similarSource: null, searching: false })
 
         // --- 2. What the model makes of it ------------------------------
-        // `mediaHubSettings === null` is "the first settings fetch hasn't
-        // resolved yet", not "nothing is connected" — asking anyway is
-        // right there, because main answers that question authoritatively
-        // and its refusal says the same thing this branch would have. Only
-        // a settled snapshot saying no model is connected short-circuits.
+        // Asked unconditionally whenever the bridge exists, and NOT gated
+        // on the settings snapshot's `ollamaConnected`.
+        //
+        // That snapshot is a cached answer to a question whose answer
+        // changes on its own. Main looks for an Ollama at the default
+        // address on the next question asked (ollamaService's
+        // resolveConfig), which is exactly what makes "open R3, then start
+        // Ollama" work — and short-circuiting here on a `false` recorded
+        // before Ollama was running meant that retry could never happen.
+        // The app would sit insisting no model was connected, with one
+        // running, until Settings was opened or the app restarted.
+        //
+        // The round trip costs nothing when there really is no model: main
+        // rate-limits its own probing and refuses immediately, and its
+        // refusal is the authoritative version of the message this branch
+        // used to guess at.
         const api = window.api?.mediaHub?.ollama
-        if (!api || mediaHubSettings?.ollamaConnected === false) {
-          // Not an error when the search found something: the question WAS
-          // answered, just without the extra. Only an empty-handed search
-          // leaves nothing but the explanation.
+        if (!api) {
+          // No bridge at all, so there is nothing to ask and nothing that
+          // could answer later. The one case the renderer can settle by
+          // itself.
           setAssistantState(found.length ? 'responding' : 'error')
           setAssistantResponse(
             found.length
-              ? 'Start Ollama, or connect a model in Settings → AI, and R3 will add what it makes of these.'
-              : 'No local model is connected, and nothing in the catalog matched that. Start Ollama, or connect a model in Settings → AI.'
+              ? 'Connect a local model in Settings → AI and R3 will add what it makes of these.'
+              : 'No local model is connected, and nothing in the catalog matched that.'
           )
           return
         }
@@ -1904,12 +1915,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         }
       })()
     },
-    [
-      browseCatalog.items,
-      watchedIdsResult.history,
-      mediaHubSettings?.ollamaConnected,
-      abandonAssistantRequest
-    ]
+    [browseCatalog.items, watchedIdsResult.history, abandonAssistantRequest]
   )
 
   // The backend itself requires >=2 characters (main/media-hub/catalog.ts's
