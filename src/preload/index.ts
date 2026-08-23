@@ -263,13 +263,21 @@ const api = {
       /** Fires when a model was found (or lost) without anyone asking — re-read the settings snapshot, the `ollamaConnected` in hand is stale. */
       onChanged: (onEvent: () => void): (() => void) =>
         subscribe<undefined>(MEDIA_HUB_CHANNELS.ollamaChanged, () => onEvent()),
-      /** One assistant question. `library` is context for grounding the answer, not a menu the model must pick from. `requestId` is what `cancel` below abandons it by. */
+      /** One assistant question, with the app's own search results for it
+       *  (`matches`, already on screen), what this person has watched
+       *  (`watched`), and a sample of the catalog (`library`). All three are
+       *  context for grounding the answer, never a menu the model must pick
+       *  from. `requestId` is what `cancel` below abandons it by. */
       ask: (
         question: string,
-        library: OllamaTitleRef[],
+        context: {
+          matches: OllamaTitleRef[]
+          library: OllamaTitleRef[]
+          watched: OllamaTitleRef[]
+        },
         requestId: string
       ): Promise<OllamaAskResult> =>
-        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.ollamaAsk, { question, library, requestId }),
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.ollamaAsk, { question, ...context, requestId }),
       /** Abandons an `ask` that is still generating. Local models run on the person's own hardware, so a dismissed question must actually stop, not just have its answer discarded on arrival. */
       cancel: (requestId: string): Promise<{ ok: true }> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.ollamaCancel, { requestId }),

@@ -568,6 +568,11 @@ export interface OllamaStatus {
 
 export interface OllamaAskResult {
   reply: string
+  /** Titles the model suggested as worth trying next, in the order it gave
+   *  them. Names only, and not necessarily titles this app has — the
+   *  renderer looks each one up in the catalog and shows only the ones it
+   *  can actually open (see resolveSimilarTitles). */
+  similar?: string[]
   /** True when the request was abandoned before it finished (the panel was
    *  closed, or a newer question replaced it — see the ollamaCancel
    *  channel). `reply` is empty and the caller should ignore the whole

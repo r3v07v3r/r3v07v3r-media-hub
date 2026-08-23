@@ -49,11 +49,17 @@ play something. Optional metadata, tracking, and subtitle services add to the ex
   a shared queue and synchronized playback controls.
 - **Use separate profiles**, including Kids and PIN-protected profiles. Watch history is
   currently shared between profiles.
-- **Ask a local AI model** for suggestions. The assistant field and the Recommend Next buttons
-  run on an [Ollama](https://ollama.com) model on your own machine, and nothing is sent to a
-  hosted service. An Ollama running here at its usual `http://127.0.0.1:11434` is found and used
-  on its own — there is nothing to set up. Without one, the assistant says so rather than
-  answering, and the Recommend Next buttons fall back to a pick they openly label as random.
+- **Search and ask in one field.** Typing in the top bar searches the movie, series and anime
+  catalogs and shows what it finds — real titles you can open, with or without an AI model. With
+  one connected, its answer appears underneath: what the top result is, whether it fits what
+  you have actually watched, and other titles worth trying, each one looked up so it opens like
+  anything else.
+- **Run the AI locally.** The assistant and the Recommend Next buttons run on an
+  [Ollama](https://ollama.com) model on your own machine, and nothing is sent to a hosted
+  service. An Ollama running here at its usual `http://127.0.0.1:11434` is found and used on its
+  own — there is nothing to set up. Without one, the search still answers, the assistant says
+  plainly that no model is connected, and the Recommend Next buttons fall back to a pick they
+  openly label as random.
 
 ## Quick start
 

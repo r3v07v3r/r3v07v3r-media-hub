@@ -30,6 +30,7 @@ import {
   buildRecommendationMessages,
   DEFAULT_OLLAMA_BASE_URL,
   matchRecommendation,
+  parseAssistantAnswer,
   normalizeOllamaBaseUrl,
   normalizeOllamaModel,
   parseOllamaModels,
@@ -550,7 +551,21 @@ export function registerOllamaIpc(): void {
     return { ok: true }
   })
 
-  handle<{ question?: string; library?: unknown; requestId?: string }, OllamaAskResult>(
+  // The question, plus the three lists that make the answer about THIS app
+  // rather than about films in general: what the app's own search already
+  // found for it, what this person has watched, and what else is on offer.
+  // The search runs in the renderer and finishes before this is called —
+  // main is not the one that knows what is on screen.
+  handle<
+    {
+      question?: string
+      library?: unknown
+      matches?: unknown
+      watched?: unknown
+      requestId?: string
+    },
+    OllamaAskResult
+  >(
     MEDIA_HUB_CHANNELS.ollamaAsk,
     async (event, payload) => {
       const config = await requireConfig()
@@ -567,14 +582,24 @@ export function registerOllamaIpc(): void {
       )
 
       try {
-        const reply = await chat(
+        const raw = await chat(
           config,
-          buildAssistantMessages(question, sanitizeTitles(payload?.library)),
+          buildAssistantMessages(question, {
+            matches: sanitizeTitles(payload?.matches),
+            library: sanitizeTitles(payload?.library),
+            watched: sanitizeTitles(payload?.watched)
+          }),
           signal
         )
-        if (!reply)
+        const answer = parseAssistantAnswer(raw)
+        // Judged on the prose alone. A model that returns nothing but a
+        // SIMILAR line has not answered the question, and the renderer has
+        // the search results to show either way — but silently rendering an
+        // empty answer under them would read as the model having nothing to
+        // say rather than having failed.
+        if (!answer.text)
           throw new Error(`${config.model} came back with an empty answer. Try asking again.`)
-        return { reply }
+        return { reply: answer.text, similar: answer.similar }
       } catch (error) {
         // A cancellation is not a failure and must not be logged as one by
         // ipcGuard — the person closed the panel or asked something else.

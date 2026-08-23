@@ -161,33 +161,146 @@ function titleLines(titles: OllamaTitleRef[]): string {
     .join('\n')
 }
 
+/** How many "you might also like" titles the assistant is asked for. Three
+ *  fits the panel, and each one costs a catalog lookup to turn into
+ *  something openable — see the renderer's resolveSimilarTitles. */
+export const MAX_SIMILAR_TITLES = 3
+
+/** The marker the assistant is told to put its similar-titles line behind. Parsed, never inferred — see parseAssistantAnswer. */
+const SIMILAR_MARKER = /^\s*similar\s*:/i
+
 /**
- * The top-bar assistant's prompt. The library listing is context, not a
- * menu: people ask this field general questions ("what's a good rainy
- * Sunday film?") as often as they ask it about their own catalog, and a
- * model told to answer only from the list gives worse answers to the first
- * kind. It is told to prefer what's there when it fits, and the length cap
- * is explicit because the answer is rendered in a small floating panel.
+ * Everything the assistant is told about the app before it answers.
+ *
+ * The app searches its own catalog BEFORE the model is asked, and hands the
+ * result over here. That order is the point: a question about a title is
+ * answered first by the app that has the title — posters, episodes, a play
+ * button — and the model's job is what it is actually good for, which is
+ * saying something worth reading about what was found and pointing at what
+ * else to try. Asked the other way round, this field was just a chat box
+ * that happened to live in a media app.
+ */
+export interface AssistantContext {
+  /** What the app's own search turned up for this question, already on
+   *  screen above the answer by the time the model is asked. */
+  matches: OllamaTitleRef[]
+  /** A sample of what the app can offer right now, for a question that
+   *  named no title at all ("something for a rainy night"). */
+  library: OllamaTitleRef[]
+  /** Recently watched titles, newest first — what "would I like this?" is
+   *  answered against. */
+  watched: OllamaTitleRef[]
+}
+
+/**
+ * The top-bar assistant's prompt.
+ *
+ * Three lists, three different jobs, and the prompt has to keep them apart
+ * or the answer blurs into a list of everything it was shown:
+ *
+ *  - `matches` is what the app already found and is already showing. The
+ *    model must not re-list it; it is there to be talked ABOUT.
+ *  - `watched` is the only ground for a claim about this person's taste.
+ *    Saying "you'll like this" with nothing behind it is the kind of
+ *    invention the rest of this app went round removing, so the prompt asks
+ *    for the past title that justifies it, by name, or for no claim at all.
+ *  - `library` is context for a question that named nothing, exactly as
+ *    before: preferred when something fits, never a menu it must pick from.
+ *
+ * The similar-titles line is asked for in a fixed shape because the caller
+ * turns each name back into a real catalog item. Anything the app cannot
+ * find is simply dropped, so a hallucinated title costs a missing chip
+ * rather than a dead link.
  */
 export function buildAssistantMessages(
   question: string,
-  library: OllamaTitleRef[]
+  context: AssistantContext
 ): OllamaMessage[] {
-  const listing = titleLines(library)
+  const found = titleLines(context.matches)
+  const watched = titleLines(context.watched)
+  const listing = titleLines(context.library)
   return [
     {
       role: 'system',
       content: [
         'You are R3, the assistant inside a movie, series and anime app.',
         'Answer in at most three sentences, in plain prose — no lists, no markdown, no preamble.',
-        'When you name a title, name it exactly once and say in a few words why it fits.',
+        found
+          ? `The app has already searched its catalog for this and is showing these results above your answer:\n${found}\nWrite about the first of these — what it is, and whether it is worth their time. Do not list the results back; they can already see them.`
+          : 'The app searched its catalog and found nothing matching, so answer the question itself.',
+        watched
+          ? `Recently watched by this person, newest first:\n${watched}\nIf something here genuinely supports whether they would enjoy it, say so and name that title. If nothing does, say nothing about their taste — never guess at it.`
+          : 'You know nothing about what this person has watched, so make no claim about their taste.',
         listing
-          ? `Some of what is available in this app right now:\n${listing}\nPrefer these when one genuinely fits the question. If none do, recommend something else and say so.`
-          : 'You have no listing of this catalog, so answer from general knowledge.'
+          ? `Also available in this app right now:\n${listing}\nPrefer these when one genuinely fits. If none do, recommend something else and say so.`
+          : 'You have no listing of this catalog, so answer from general knowledge.',
+        `Finish with one last line, exactly: SIMILAR: followed by up to ${MAX_SIMILAR_TITLES} other titles they might enjoy, separated by commas. Titles only — no years, no reasons, nothing else on that line.`
       ].join('\n')
     },
     { role: 'user', content: question }
   ]
+}
+
+/** An assistant answer split into the part meant for reading and the part meant for looking up. */
+export interface AssistantAnswer {
+  /** The prose, with the machine-readable line taken back out. */
+  text: string
+  /** Titles the model suggested, in the order it gave them. Names only — the caller decides whether the app actually has any of them. */
+  similar: string[]
+}
+
+/**
+ * Splits `SIMILAR: a, b, c` off the end of an answer.
+ *
+ * Parsed, not inferred, in the same spirit as matchRecommendation below:
+ * only a line that opens with the marker the prompt asked for counts, so a
+ * model that writes "similar films include..." mid-paragraph is left as
+ * prose rather than having names guessed out of a sentence. A model that
+ * ignores the instruction entirely costs an empty row, which is what an
+ * empty row is for.
+ *
+ * The line is removed from the text on the way past. It is an instruction
+ * the model was following, not something anyone should have to read.
+ */
+export function parseAssistantAnswer(raw: string): AssistantAnswer {
+  const lines = String(raw ?? '').split('\n')
+  const kept: string[] = []
+  const similar: string[] = []
+  for (const line of lines) {
+    if (!SIMILAR_MARKER.test(line)) {
+      kept.push(line)
+      continue
+    }
+    // Every marker line contributes, not just the first: a model that
+    // writes one title per SIMILAR line is following the instruction
+    // clumsily, not refusing it. And the scan never stops early — the
+    // prompt asks for this line last, but a model that leads with it must
+    // not cost the prose that follows.
+    for (const name of line.replace(SIMILAR_MARKER, '').split(/[,;]/)) {
+      if (similar.length >= MAX_SIMILAR_TITLES) break
+      // Models bullet, quote and date these however they like, whatever
+      // the prompt asked for. Stripping the decoration is not inferring a
+      // name — the name is the rest of the entry either way.
+      let title = name.trim().replace(/^[-*\u2022\s]+/, '')
+      // Peeled in a loop rather than a fixed order, because there isn't
+      // one: `"Arrival" (2016)` puts the year outside the quotes and
+      // `"Arrival (2016)"` puts it inside, and either order applied once
+      // leaves the other's punctuation stuck to the title.
+      for (let peel = 0; peel < 3; peel++) {
+        const before = title
+        title = title
+          .replace(/^["'\u201c\u2018]\s*/, '')
+          .replace(/\s*["'\u201d\u2019]$/, '')
+          .replace(/\s*\(\d{4}\)$/, '')
+          .trim()
+        if (title === before) break
+      }
+      if (!title || title.length > 120) continue
+      if (similar.some((existing) => existing.toLowerCase() === title.toLowerCase())) continue
+      similar.push(title)
+    }
+  }
+  return { text: kept.join('\n').trim(), similar }
 }
 
 /**

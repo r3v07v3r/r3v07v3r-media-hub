@@ -24,6 +24,7 @@ import { CONTINUE_WATCHING, USER_PROFILES } from '@renderer/data/mockData'
 import type {
   CatalogItem,
   MediaHubSettingsSnapshot,
+  OllamaAskResult,
   MediaKind,
   MediaTracks,
   PartyHostResult,
@@ -38,6 +39,7 @@ import type {
 import {
   mediaItemToTrackablePayload,
   catalogItemToMediaItem,
+  catalogItemToTitleRef,
   indexHistoryById
 } from '@renderer/lib/mediaHub/adapters'
 import {
@@ -55,6 +57,12 @@ import {
 import type { CategoryKind } from '@renderer/lib/mediaHub/categoryFilters'
 import { MAX_PROMPT_TITLES } from '@shared/media-hub/ollama'
 import { mediaItemToTitleRef } from '@renderer/lib/mediaHub/adapters'
+import {
+  recentlyWatchedRefs,
+  relatedToItem,
+  resolveSimilarTitles,
+  searchAppCatalog
+} from '@renderer/lib/mediaHub/assistantSearch'
 import { buildMediaId } from '@renderer/lib/mediaHub/streamId'
 import {
   captureBrowsingOrigin,
@@ -221,6 +229,25 @@ interface AppStateValue {
   assistantQuery: string
   setAssistantQuery: (q: string) => void
   assistantResponse: string | null
+  /** What the app's OWN catalog search found for the current question —
+   *  real, openable titles, filled in before the model has said anything
+   *  and shown whether or not one is connected. This is the answer to
+   *  "which film is that": the model's prose is commentary on top of it. */
+  assistantResults: MediaItem[]
+  /** Titles the model suggested next, each one looked up in the catalog so
+   *  it can actually be opened. Falls back to the first result's own
+   *  related titles when the model named nothing this app has. */
+  assistantSimilar: MediaItem[]
+  /** Which of those two things assistantSimilar actually is. The row says
+   *  so out loud, in the same spirit as the Recommend Next buttons
+   *  labelling a random pick as random — "the model suggested these" and
+   *  "these are related to the first result" are different claims, and
+   *  only one of them is about you. */
+  assistantSimilarSource: 'model' | 'catalog' | null
+  /** The catalog search is still out. Distinct from assistantState
+   *  'processing', which covers the model — the results row and the prose
+   *  arrive separately and each shows its own waiting state. */
+  assistantSearching: boolean
   runAssistantQuery: (query: string) => void
   closeAssistant: () => void
 
@@ -407,6 +434,17 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   const [assistantState, setAssistantState] = useState<AssistantState>('idle')
   const [assistantQuery, setAssistantQuery] = useState('')
   const [assistantResponse, setAssistantResponse] = useState<string | null>(null)
+  // The RAW rows behind the assistant's two title rows, for the same reason
+  // categorySearchRaw below keeps rows rather than MediaItems: the watched/
+  // My List/disliked badges are baked in at conversion time, and an answer
+  // panel that outlives a mark-watched made from the title it opened would
+  // otherwise keep showing the old badge.
+  const [assistantFindings, setAssistantFindings] = useState<{
+    results: CatalogItem[]
+    similar: CatalogItem[]
+    similarSource: 'model' | 'catalog' | null
+    searching: boolean
+  }>({ results: [], similar: [], similarSource: null, searching: false })
   const [browsingOrigin, setBrowsingOrigin] = useState<BrowsingOrigin | null>(null)
   const [resolvingMedia, setResolvingMedia] = useState<{
     id: string
@@ -477,6 +515,32 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     }),
     [categorySearchRaw, myList, watchedIdsResult.watchedIds, searchHistoryById, dislikedIds]
   )
+  // Same derivation, and the same reasoning, as categorySearch just above.
+  const assistantResults = useMemo(
+    () =>
+      assistantFindings.results.map((item) =>
+        catalogItemToMediaItem(item, {
+          trackedIds: myList,
+          watchedIds: watchedIdsResult.watchedIds,
+          historyById: searchHistoryById,
+          dislikedIds
+        })
+      ),
+    [assistantFindings.results, myList, watchedIdsResult.watchedIds, searchHistoryById, dislikedIds]
+  )
+  const assistantSimilar = useMemo(
+    () =>
+      assistantFindings.similar.map((item) =>
+        catalogItemToMediaItem(item, {
+          trackedIds: myList,
+          watchedIds: watchedIdsResult.watchedIds,
+          historyById: searchHistoryById,
+          dislikedIds
+        })
+      ),
+    [assistantFindings.similar, myList, watchedIdsResult.watchedIds, searchHistoryById, dislikedIds]
+  )
+
   // Which assistant question is the current one. A local model can take a
   // while to answer, so an answer that lands after the person has asked
   // something else — or closed the panel — must be dropped rather than
@@ -1044,6 +1108,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     setAssistantState('idle')
     setAssistantResponse(null)
     setAssistantQuery('')
+    setAssistantFindings({ results: [], similar: [], similarSource: null, searching: false })
   }, [abandonAssistantRequest])
 
   // Centralized here (every "open a title" call site — card, hero,
@@ -1706,6 +1771,24 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   // no canned answer left, and no model means it says so rather than
   // pretending. A slice of the browse catalog rides along as context so the
   // model can ground an answer in what this app can actually play.
+  /**
+   * The assistant field, end to end: search this app, then ask the model
+   * about what was found.
+   *
+   * That order is the feature. Typing a title here used to produce three
+   * sentences of prose and nothing else — the same answer a general chat
+   * box would give, in an app that has the title, its poster, its episodes
+   * and a play button. Now the catalog is searched first and its results
+   * are what appears; the model's answer arrives underneath as commentary
+   * on them, grounded in what this person has actually watched, and ends
+   * by naming other titles which are themselves looked up so they can be
+   * opened.
+   *
+   * The two halves are deliberately independent. The search needs no model
+   * and lands in well under a second, so a question still gets a real
+   * answer with Ollama absent, off, or thinking — the AI is what makes the
+   * answer better, not what makes it exist.
+   */
   const runAssistantQuery = useCallback(
     (query: string) => {
       const question = query.trim()
@@ -1716,6 +1799,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       abandonAssistantRequest()
       setAssistantQuery(query)
       setAssistantResponse(null)
+      setAssistantFindings({ results: [], similar: [], similarSource: null, searching: false })
 
       if (!question) {
         setAssistantState('responding')
@@ -1723,50 +1807,109 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         return
       }
 
-      // `mediaHubSettings === null` is "the first settings fetch hasn't
-      // resolved yet", not "nothing is connected" — asking anyway is right
-      // there, because the main process answers that question
-      // authoritatively and its refusal says the same thing this branch
-      // would have. Only a settled snapshot that says no model is connected
-      // short-circuits.
-      const api = window.api?.mediaHub?.ollama
-      if (!api || mediaHubSettings?.ollamaConnected === false) {
-        setAssistantState('error')
-        setAssistantResponse(
-          'No local model is connected yet. Settings → AI links R3 to an Ollama model running on your own machine.'
-        )
-        return
-      }
+      // Only the newest question's results may land. Every await below
+      // re-checks this, because a slow catalog and a slow model can each
+      // outlive the question that started them.
+      const current = () => assistantGeneration.current === generation
 
-      const requestId = `ask-${generation}`
-      assistantRequestId.current = requestId
       setAssistantState('processing')
-      api
-        .ask(
-          question,
-          browseCatalog.items.slice(0, MAX_PROMPT_TITLES).map(mediaItemToTitleRef),
-          requestId
-        )
-        .then((result) => {
+      setAssistantFindings({ results: [], similar: [], similarSource: null, searching: true })
+
+      void (async () => {
+        // --- 1. The app's own answer, with no model involved ------------
+        const found = await searchAppCatalog(question).catch((): CatalogItem[] => [])
+        if (!current()) return
+        setAssistantFindings({ results: found, similar: [], similarSource: null, searching: false })
+
+        // --- 2. What the model makes of it ------------------------------
+        // `mediaHubSettings === null` is "the first settings fetch hasn't
+        // resolved yet", not "nothing is connected" — asking anyway is
+        // right there, because main answers that question authoritatively
+        // and its refusal says the same thing this branch would have. Only
+        // a settled snapshot saying no model is connected short-circuits.
+        const api = window.api?.mediaHub?.ollama
+        if (!api || mediaHubSettings?.ollamaConnected === false) {
+          // Not an error when the search found something: the question WAS
+          // answered, just without the extra. Only an empty-handed search
+          // leaves nothing but the explanation.
+          setAssistantState(found.length ? 'responding' : 'error')
+          setAssistantResponse(
+            found.length
+              ? 'Start Ollama, or connect a model in Settings → AI, and R3 will add what it makes of these.'
+              : 'No local model is connected, and nothing in the catalog matched that. Start Ollama, or connect a model in Settings → AI.'
+          )
+          return
+        }
+
+        const requestId = `ask-${generation}`
+        assistantRequestId.current = requestId
+        let result: OllamaAskResult
+        try {
+          result = await api.ask(
+            question,
+            {
+              matches: found.slice(0, 3).map(catalogItemToTitleRef),
+              library: browseCatalog.items.slice(0, MAX_PROMPT_TITLES).map(mediaItemToTitleRef),
+              watched: recentlyWatchedRefs(watchedIdsResult.history)
+            },
+            requestId
+          )
           if (assistantRequestId.current === requestId) assistantRequestId.current = null
           // `cancelled` is main confirming it stopped; the generation check
           // covers the same case for anything already superseded here.
-          if (result.cancelled || assistantGeneration.current !== generation) return
+          if (result.cancelled || !current()) return
           setAssistantState('responding')
           setAssistantResponse(result.reply)
-        })
-        .catch((error: unknown) => {
+        } catch (error: unknown) {
           if (assistantRequestId.current === requestId) assistantRequestId.current = null
-          if (assistantGeneration.current !== generation) return
-          setAssistantState('error')
+          if (!current()) return
+          // The search results stay on screen and stay useful, so a model
+          // that could not be reached downgrades the answer rather than
+          // replacing it with a failure.
+          setAssistantState(found.length ? 'responding' : 'error')
           setAssistantResponse(
             error instanceof Error
               ? error.message
               : 'That question did not get through to the model.'
           )
-        })
+          return
+        }
+
+        // --- 3. Turn its suggestions into titles that open --------------
+        // After the prose is on screen, never before: this is several more
+        // catalog lookups, and holding the answer back until they finish
+        // would add seconds to something already written.
+        //
+        // Outside the try above, and swallowing its own failures, because
+        // this stage cannot be allowed to take the answer down with it —
+        // catching it alongside the model call meant a catalog hiccup here
+        // replaced three good sentences already on screen with an error.
+        try {
+          const suggested = await resolveSimilarTitles(
+            result.similar ?? [],
+            found.map((item) => String(item.id))
+          )
+          if (!current()) return
+          // A model that named nothing this app has still leaves a useful
+          // row: the catalog's own "more like this" for the top result.
+          const similar = suggested.length ? suggested : await relatedToItem(found[0])
+          if (!current() || !similar.length) return
+          setAssistantFindings((state) => ({
+            ...state,
+            similar,
+            similarSource: suggested.length ? 'model' : 'catalog'
+          }))
+        } catch {
+          // No suggestions row. The answer above it stands.
+        }
+      })()
     },
-    [browseCatalog.items, mediaHubSettings?.ollamaConnected, abandonAssistantRequest]
+    [
+      browseCatalog.items,
+      watchedIdsResult.history,
+      mediaHubSettings?.ollamaConnected,
+      abandonAssistantRequest
+    ]
   )
 
   // The backend itself requires >=2 characters (main/media-hub/catalog.ts's
@@ -1862,6 +2005,10 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       assistantQuery,
       setAssistantQuery,
       assistantResponse,
+      assistantResults,
+      assistantSimilar,
+      assistantSimilarSource: assistantFindings.similarSource,
+      assistantSearching: assistantFindings.searching,
       runAssistantQuery,
       closeAssistant,
       categorySearch,
@@ -1945,6 +2092,10 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       assistantState,
       assistantQuery,
       assistantResponse,
+      assistantResults,
+      assistantSimilar,
+      assistantFindings.similarSource,
+      assistantFindings.searching,
       runAssistantQuery,
       closeAssistant,
       categorySearch,
