@@ -770,6 +770,18 @@ export interface PartyQueueEntry {
   votes: Record<string, 1 | -1>
 }
 
+/** A short-lived message in the current watch room. Messages deliberately live
+ *  with the room rather than the user profile: closing a room clears the
+ *  conversation, and the relay carries the same encrypted envelope as the
+ *  playback protocol. */
+export interface PartyChatMessage {
+  id: string
+  senderId: string
+  senderName: string
+  text: string
+  sentAt: number
+}
+
 export type PartyMode = 'direct' | 'relay'
 
 export interface PartyHostResult {
@@ -794,6 +806,7 @@ export interface PartyStatusResult {
 export type PartyEventPayload =
   | { type: 'party-state'; members: PartyMemberSummary[]; allowMemberControl?: boolean }
   | { type: 'queue-sync'; queue: PartyQueueEntry[] }
+  | { type: 'chat'; chat: PartyChatMessage }
   | { type: 'message'; from: string; message: unknown }
   | { type: 'host-disconnected' }
   | { type: 'play-request'; item: { id: string; type: string; title: string; poster?: string } }

@@ -29,6 +29,7 @@ import { MEDIA_HUB_CHANNELS } from '../../shared/media-hub/ipc-channels'
 import type {
   ConnectResult,
   PartyHostResult,
+  PartyChatMessage,
   PartyMemberSummary,
   PartyMode,
   PartyQueueEntry,
@@ -49,6 +50,7 @@ import {
 } from './party'
 import { encrypt, partySyncCredentials, readSettings, writeSettings } from './settingsStore'
 import { sendToRenderer } from './rendererBridge'
+import { sendToPlayerOverlay } from './playerWindow'
 import { attemptPortMapping } from './upnp'
 import { getLocalLanIp } from './network'
 
@@ -70,6 +72,12 @@ const MAX_PARTY_MEMBERS = 32
 // (mirrors the original's untyped `msg`/`envelope` objects) — every handler
 // below narrows on `type` before touching any other field.
 type PartyMessage = { type?: string; [key: string]: unknown }
+
+interface PartyChatArgs {
+  id?: string
+  text?: string
+  sentAt?: number
+}
 
 interface PartyHostMember {
   id: string
@@ -170,6 +178,15 @@ function partyBroadcast(payload: string): void {
   if (current.ws && current.ws.readyState === WebSocket.OPEN) current.ws.send(payload)
 }
 
+/** The application window and the native player controls are separate
+ * renderers. Room state has to reach both: without this, the player could
+ * synchronise playback but had no way to show the people or conversation it
+ * was synchronising with. */
+function sendPartyEvent(payload: import('../../shared/media-hub/types').PartyEventPayload): void {
+  sendToRenderer(MEDIA_HUB_CHANNELS.partyEvent, payload)
+  sendToPlayerOverlay(MEDIA_HUB_CHANNELS.partyEvent, payload)
+}
+
 function broadcastPartyState(): void {
   const current = party
   if (!current || current.role !== 'host') return
@@ -180,7 +197,7 @@ function broadcastPartyState(): void {
     allowMemberControl: current.allowMemberControl
   })
   partyBroadcast(payload)
-  sendToRenderer(MEDIA_HUB_CHANNELS.partyEvent, {
+  sendPartyEvent({
     type: 'party-state',
     members,
     allowMemberControl: current.allowMemberControl
@@ -192,11 +209,43 @@ function broadcastQueue(): void {
   if (!current || current.role !== 'host') return
   const payload = encryptMessage(current.secret, { type: 'queue-sync', queue: current.queue })
   partyBroadcast(payload)
-  sendToRenderer(MEDIA_HUB_CHANNELS.partyEvent, { type: 'queue-sync', queue: current.queue })
+  sendPartyEvent({ type: 'queue-sync', queue: current.queue })
 }
 
 function handlePartyMessage(fromId: string, msg: PartyMessage): void {
   const current = party
+  if (msg?.type === 'chat') {
+    const incoming = msg.chat as Partial<PartyChatMessage> | undefined
+    const text = typeof incoming?.text === 'string' ? incoming.text.trim().slice(0, 1000) : ''
+    if (!incoming || !text || typeof incoming.id !== 'string') return
+    const chat: PartyChatMessage = {
+      id: incoming.id.slice(0, 80),
+      senderId: fromId,
+      senderName:
+        typeof incoming.senderName === 'string' && incoming.senderName.trim()
+          ? incoming.senderName.trim().slice(0, 40)
+          : current?.members && current.role === 'host'
+            ? current.members.get(fromId)?.name || 'Someone'
+            : 'Someone',
+      text,
+      sentAt:
+        typeof incoming.sentAt === 'number' && Number.isFinite(incoming.sentAt)
+          ? incoming.sentAt
+          : Date.now()
+    }
+    // Direct parties need the host to forward a member's message. Relay
+    // rooms already fan it out, so forwarding there would duplicate it.
+    if (current?.role === 'host' && current.mode === 'direct') {
+      const payload = encryptMessage(current.secret, { type: 'chat', chat })
+      for (const [id, member] of current.members) {
+        if (id !== fromId && member.ws && member.ws.readyState === WebSocket.OPEN) {
+          member.ws.send(payload)
+        }
+      }
+    }
+    sendPartyEvent({ type: 'chat', chat })
+    return
+  }
   // Presence. Host-side only bookkeeping: record whether this member has a
   // player open, then push the updated roster so every client's seek quorum
   // (see checkPartySeekReady in PlaybackOverlay.tsx) agrees on who can
@@ -211,7 +260,7 @@ function handlePartyMessage(fromId: string, msg: PartyMessage): void {
     return
   }
   if (current?.role === 'host' && msg?.type === 'play-request') {
-    sendToRenderer(MEDIA_HUB_CHANNELS.partyEvent, {
+    sendPartyEvent({
       type: 'play-request',
       item: msg.item as { id: string; type: string; title: string; poster?: string }
     })
@@ -246,7 +295,7 @@ function handlePartyMessage(fromId: string, msg: PartyMessage): void {
       if (id !== fromId && m.ws && m.ws.readyState === WebSocket.OPEN) m.ws.send(payload)
     }
   }
-  sendToRenderer(MEDIA_HUB_CHANNELS.partyEvent, { type: 'message', from: fromId, message: msg })
+  sendPartyEvent({ type: 'message', from: fromId, message: msg })
 }
 
 /** Tears down the active party (host: closes the ws server/all member sockets and stops any UPnP mapping; client/relay-host: sends a best-effort `leave` then closes its socket) and clears `party`. Called both from `party:leave` and from `app.on('before-quit', ...)` in src/main/index.ts. */
@@ -468,7 +517,7 @@ export function registerWatchPartyIpc(): void {
       ws.on('close', () => {
         if (party?.role === 'host' && party.mode === 'relay') {
           party = null
-          sendToRenderer(MEDIA_HUB_CHANNELS.partyEvent, { type: 'host-disconnected' })
+          sendPartyEvent({ type: 'host-disconnected' })
         }
       })
       return {
@@ -606,7 +655,7 @@ export function registerWatchPartyIpc(): void {
             party.members = members
             party.allowMemberControl = allowMemberControl
           }
-          sendToRenderer(MEDIA_HUB_CHANNELS.partyEvent, {
+          sendPartyEvent({
             type: 'party-state',
             members,
             allowMemberControl
@@ -616,7 +665,7 @@ export function registerWatchPartyIpc(): void {
         if (msg.type === 'queue-sync') {
           if (party?.role === 'client') {
             party.queue = applyQueueEvent(party.queue, msg as unknown as PartyQueueEvent)
-            sendToRenderer(MEDIA_HUB_CHANNELS.partyEvent, {
+            sendPartyEvent({
               type: 'queue-sync',
               queue: party.queue
             })
@@ -625,7 +674,7 @@ export function registerWatchPartyIpc(): void {
         }
         if (envelope.isHost && msg.type === 'leave') {
           party = null
-          sendToRenderer(MEDIA_HUB_CHANNELS.partyEvent, { type: 'host-disconnected' })
+          sendPartyEvent({ type: 'host-disconnected' })
           return
         }
         if (!envelope.isHost && msg.type === 'nowPlaying') return
@@ -640,7 +689,7 @@ export function registerWatchPartyIpc(): void {
       ws.on('close', () => {
         if (party?.role === 'client') {
           party = null
-          sendToRenderer(MEDIA_HUB_CHANNELS.partyEvent, { type: 'host-disconnected' })
+          sendPartyEvent({ type: 'host-disconnected' })
         }
       })
       return { ok: true }
@@ -692,7 +741,7 @@ export function registerWatchPartyIpc(): void {
           party.members = members
           party.allowMemberControl = allowMemberControl
         }
-        sendToRenderer(MEDIA_HUB_CHANNELS.partyEvent, {
+        sendPartyEvent({
           type: 'party-state',
           members,
           allowMemberControl
@@ -702,7 +751,7 @@ export function registerWatchPartyIpc(): void {
       if (msg.type === 'queue-sync') {
         if (party?.role === 'client') {
           party.queue = applyQueueEvent(party.queue, msg as unknown as PartyQueueEvent)
-          sendToRenderer(MEDIA_HUB_CHANNELS.partyEvent, { type: 'queue-sync', queue: party.queue })
+          sendPartyEvent({ type: 'queue-sync', queue: party.queue })
         }
         return
       }
@@ -711,7 +760,7 @@ export function registerWatchPartyIpc(): void {
     connectedWs.on('close', () => {
       if (party?.role === 'client') {
         party = null
-        sendToRenderer(MEDIA_HUB_CHANNELS.partyEvent, { type: 'host-disconnected' })
+        sendPartyEvent({ type: 'host-disconnected' })
       }
     })
     return { ok: true }
@@ -760,7 +809,7 @@ export function registerWatchPartyIpc(): void {
         item: { id: item.id, type: item.type, title: item.title, poster: item.poster || '' }
       }
       if (current.role === 'host') {
-        sendToRenderer(MEDIA_HUB_CHANNELS.partyEvent, { type: 'play-request', item: event.item })
+        sendPartyEvent({ type: 'play-request', item: event.item })
       } else {
         partyBroadcast(encryptMessage(current.secret, event))
       }
@@ -793,6 +842,35 @@ export function registerWatchPartyIpc(): void {
     }
     return { ok: true }
   })
+
+  handle<PartyChatArgs, { ok: true; chat: PartyChatMessage }>(
+    MEDIA_HUB_CHANNELS.partyChat,
+    (_e, payload) => {
+      const current = party
+      if (!current) throw new Error('Join a room before sending a message.')
+      const text = String(payload?.text || '')
+        .trim()
+        .slice(0, 1000)
+      if (!text) throw new Error('Write a message before sending it.')
+      const senderId = current.role === 'host' ? current.hostId : current.selfId
+      if (!senderId) throw new Error('Your room connection is still starting.')
+      const chat: PartyChatMessage = {
+        id: String(payload?.id || createMemberId()).slice(0, 80),
+        senderId,
+        senderName: String(current.selfName || 'Someone').slice(0, 40),
+        text,
+        sentAt:
+          typeof payload?.sentAt === 'number' && Number.isFinite(payload.sentAt)
+            ? payload.sentAt
+            : Date.now()
+      }
+      partyBroadcast(encryptMessage(current.secret, { type: 'chat', chat }))
+      // A direct host never receives its own broadcast, and relay echo timing
+      // should not decide when a sent message appears in the UI.
+      sendPartyEvent({ type: 'chat', chat })
+      return { ok: true, chat }
+    }
+  )
 
   handle<string, { ok: true }>(MEDIA_HUB_CHANNELS.partyRemove, (_e, queueId) => {
     const current = party

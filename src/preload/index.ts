@@ -38,6 +38,7 @@ import type {
   PartyNowPlayingPayload,
   PartyPreparingPayload,
   PartyPlaybackAction,
+  PartyChatMessage,
   PartyQueueEntry,
   PartyStatusResult,
   PlaybackPositionResult,
@@ -569,6 +570,12 @@ const api = {
         poster?: string
       }): Promise<{ ok: true }> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.partyRequestPlay, { item }),
+      chat: (payload: {
+        id: string
+        text: string
+        sentAt: number
+      }): Promise<{ ok: true; chat: PartyChatMessage }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.partyChat, payload),
       syncConnect: (url: string, inviteKey: string): Promise<ConnectResult> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.partySyncConnect, { url, inviteKey }),
       syncDisconnect: (): Promise<{ ok: true }> =>

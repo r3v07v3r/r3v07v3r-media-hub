@@ -174,6 +174,7 @@ export const MEDIA_HUB_CHANNELS = {
   partyPlaybackAction: 'mediahub:party:playback-action',
   partySetMemberControl: 'mediahub:party:set-member-control',
   partyRequestPlay: 'mediahub:party:request-play',
+  partyChat: 'mediahub:party:chat',
   friendsStatus: 'mediahub:friends:status',
   friendsCreate: 'mediahub:friends:create',
   friendsJoin: 'mediahub:friends:join',

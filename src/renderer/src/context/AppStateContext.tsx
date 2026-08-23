@@ -28,6 +28,7 @@ import type {
   MediaKind,
   MediaTracks,
   PartyHostResult,
+  PartyChatMessage,
   PartyMode,
   PartyQueueEntry,
   PartyStatusResult,
@@ -120,6 +121,8 @@ interface AppStateValue {
   // main/media-hub/watchParty.ts for the real backend this is wired to).
   partyStatus: PartyStatusResult | null
   partyQueue: PartyQueueEntry[]
+  /** Ephemeral, encrypted room conversation. Cleared when the room ends. */
+  partyChat: PartyChatMessage[]
   /** Only known right after hosting (party:host's own response — party:status never returns it) — cleared on leave. */
   partyHostCode: string | null
   /** Whether hosting's own best-effort UPnP router port-mapping succeeded
@@ -149,6 +152,7 @@ interface AppStateValue {
   }) => Promise<void>
   voteQueue: (queueId: string, direction: 1 | -1) => Promise<void>
   removeFromQueue: (queueId: string) => Promise<void>
+  sendPartyChat: (text: string) => Promise<void>
 
   // My List — a Set of media ids. Kept centrally so the hero, the
   // carousel, continue-watching, and the detail modal all agree on
@@ -400,6 +404,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   const [profilePinPrompt, setProfilePinPrompt] = useState<ProfilePublic | null>(null)
   const [partyStatus, setPartyStatus] = useState<PartyStatusResult | null>(null)
   const [partyQueue, setPartyQueue] = useState<PartyQueueEntry[]>([])
+  const [partyChat, setPartyChat] = useState<PartyChatMessage[]>([])
   const [partyHostCode, setPartyHostCode] = useState<string | null>(null)
   const [partyWanAvailable, setPartyWanAvailable] = useState<boolean | null>(null)
   const [partyHostPort, setPartyHostPort] = useState<number | null>(null)
@@ -679,6 +684,14 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         refreshPartyStatus()
       } else if (event.type === 'queue-sync') {
         setPartyQueue(event.queue)
+      } else if (event.type === 'chat') {
+        setPartyChat((previous) => {
+          // Relay rooms can echo a local host's message back after the local
+          // confirmation. The message id makes that harmless instead of
+          // rendering a duplicate line in the room conversation.
+          if (previous.some((message) => message.id === event.chat.id)) return previous
+          return [...previous, event.chat].slice(-200)
+        })
       } else if (event.type === 'host-disconnected') {
         setPartyHostCode(null)
         setPartyWanAvailable(null)
@@ -1056,6 +1069,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     setPartyPanelOpen(false)
     setPartyStatus(null)
     setPartyQueue([])
+    setPartyChat([])
   }, [])
 
   const suggestToParty = useCallback(
@@ -1067,6 +1081,14 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     },
     [refreshPartyStatus]
   )
+
+  const sendPartyChat = useCallback(async (text: string) => {
+    const api = window.api?.mediaHub?.party
+    if (!api) throw new Error("Rooms aren't available outside the desktop app.")
+    const trimmed = text.trim()
+    if (!trimmed) return
+    await api.chat({ id: crypto.randomUUID(), text: trimmed, sentAt: Date.now() })
+  }, [])
 
   const voteQueue = useCallback(
     async (queueId: string, direction: 1 | -1) => {
@@ -1977,6 +1999,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       deleteProfile,
       partyStatus,
       partyQueue,
+      partyChat,
       partyHostCode,
       partyWanAvailable,
       partyHostPort,
@@ -1989,6 +2012,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       suggestToParty,
       voteQueue,
       removeFromQueue,
+      sendPartyChat,
       myList,
       toggleMyList,
       dislikedIds,
@@ -2067,6 +2091,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       deleteProfile,
       partyStatus,
       partyQueue,
+      partyChat,
       partyHostCode,
       partyWanAvailable,
       partyHostPort,
@@ -2078,6 +2103,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       suggestToParty,
       voteQueue,
       removeFromQueue,
+      sendPartyChat,
       myList,
       toggleMyList,
       dislikedIds,
