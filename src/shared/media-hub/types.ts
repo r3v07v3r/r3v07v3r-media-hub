@@ -947,3 +947,39 @@ export type FriendMessage =
   | { type: 'friend-join-offer'; fromFriendId: string; toFriendId: string; partyCode: string }
   // Politely declining — they stopped watching, or hosting failed.
   | { type: 'friend-join-declined'; fromFriendId: string; toFriendId: string; reason: string }
+
+/**
+ * One piece of work the central scheduler is currently running — see
+ * src/main/media-hub/taskScheduler.ts.
+ */
+export interface ActivityTask {
+  label: string
+  /** Which upstream's budget it is spending (kitsu, simkl, cinemeta, ...). */
+  lane: string
+  priority: 'interactive' | 'visible' | 'background' | 'maintenance'
+  startedAt: number
+}
+
+/** One registered recurring job and when it is next due — see
+ *  src/main/media-hub/backgroundJobs.ts. */
+export interface ActivityJob {
+  name: string
+  label: string
+  dueAt: number
+  running: boolean
+}
+
+/**
+ * Everything the work manager is doing, for the Downloads page's activity
+ * panel. This is the answer to "why does the app feel busy right now",
+ * which before this existed could only be got at by reading the source.
+ */
+export interface ActivitySnapshot {
+  /** How loaded the app currently considers itself. `critical` means
+   *  playback is running and background work is suspended. */
+  pressure: 'idle' | 'busy' | 'critical'
+  running: ActivityTask[]
+  queued: number
+  queuedByPriority: Record<'interactive' | 'visible' | 'background' | 'maintenance', number>
+  jobs: ActivityJob[]
+}

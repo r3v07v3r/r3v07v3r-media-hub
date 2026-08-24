@@ -25,6 +25,10 @@
 // at the job's own tier, so "due" never means "immediately, ahead of the
 // person using the app".
 
+import type { ActivitySnapshot } from '../../shared/media-hub/types'
+import { MEDIA_HUB_CHANNELS } from '../../shared/media-hub/ipc-channels'
+import { handle } from './ipcGuard'
+import { sendToRenderer } from './rendererBridge'
 import { catalogData } from './catalog'
 import { logError } from './logger'
 import { pruneIdleSessions } from './streamCache'
@@ -33,6 +37,8 @@ import { checkForUpdates } from './autoUpdate'
 import {
   coalesce,
   currentPressure,
+  onSchedulerChange,
+  schedulerSnapshot,
   type SchedulerPressure,
   type TaskPriority
 } from './taskScheduler'
@@ -198,22 +204,55 @@ export function startBackgroundJobs(): void {
 export function stopBackgroundJobs(): void {
   if (heartbeat) clearInterval(heartbeat)
   heartbeat = null
+  if (pushTimer) clearTimeout(pushTimer)
+  pushTimer = null
+  onSchedulerChange(null)
   jobs.length = 0
 }
 
-/** What is registered and when each entry is next due — for the activity
- *  view, so "why has nothing synced" has an answer that does not require
- *  reading this file. */
-export function backgroundJobStatus(): {
-  name: string
-  label: string
-  dueAt: number
-  running: boolean
-}[] {
-  return jobs.map((state) => ({
-    name: state.job.name,
-    label: state.job.label,
-    dueAt: state.dueAt,
-    running: state.running
-  }))
+/** Everything the work manager is doing, in one payload — what is running
+ *  now, what is queued behind it, and when each recurring job is next due.
+ *  So "why does the app feel busy" and "why has nothing synced" both have
+ *  an answer that does not require reading this file. */
+export function activitySnapshot(): ActivitySnapshot {
+  return {
+    ...schedulerSnapshot(),
+    jobs: jobs.map((state) => ({
+      name: state.job.name,
+      label: state.job.label,
+      dueAt: state.dueAt,
+      running: state.running
+    }))
+  }
+}
+
+// The scheduler can change state many times a second while a crawl is
+// dispatching. Pushing every one of those at the renderer would make an
+// activity panel a source of the very jank it exists to explain, so
+// changes are throttled to something a person can actually read.
+const ACTIVITY_PUSH_INTERVAL_MS = 500
+let lastPushAt = 0
+let pushTimer: ReturnType<typeof setTimeout> | null = null
+
+function pushActivity(): void {
+  lastPushAt = Date.now()
+  sendToRenderer(MEDIA_HUB_CHANNELS.activityChanged, activitySnapshot())
+}
+
+function onActivityChanged(): void {
+  if (pushTimer) return
+  const wait = Math.max(0, ACTIVITY_PUSH_INTERVAL_MS - (Date.now() - lastPushAt))
+  // Trailing edge as well as leading: the change that matters most to
+  // anyone watching is the last one — the queue going empty — and a
+  // purely leading-edge throttle drops exactly that.
+  pushTimer = setTimeout(() => {
+    pushTimer = null
+    pushActivity()
+  }, wait)
+}
+
+/** Registers the activity IPC and starts pushing changes at the renderer. */
+export function registerActivityIpc(): void {
+  handle<undefined, ActivitySnapshot>(MEDIA_HUB_CHANNELS.activityGet, () => activitySnapshot())
+  onSchedulerChange(onActivityChanged)
 }

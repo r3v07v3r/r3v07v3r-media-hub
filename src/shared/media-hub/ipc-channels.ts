@@ -121,6 +121,12 @@ export const MEDIA_HUB_CHANNELS = {
   streamCacheList: 'mediahub:stream-cache:list',
   streamCacheDelete: 'mediahub:stream-cache:delete',
 
+  // What the central work manager is doing right now — see
+  // taskScheduler.ts and backgroundJobs.ts. Pushed rather than polled, so
+  // a panel nobody has open costs nothing.
+  activityGet: 'mediahub:activity:get',
+  activityChanged: 'mediahub:activity:changed', // push event
+
   // Simkl
   simklStatus: 'mediahub:simkl:status',
   simklStart: 'mediahub:simkl:start',
