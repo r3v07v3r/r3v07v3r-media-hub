@@ -31,6 +31,17 @@ import type { VideoPictureControl } from './videoPicture'
  */
 export const MAX_PLAYER_VOLUME = 2
 
+/**
+ * How far one press of the volume keys moves it, in the same units — 5%.
+ *
+ * Shared for the same reason as the ceiling: the keys are handled TWICE,
+ * once by the overlay when it has focus and once by main when mpv's own
+ * window took the keystroke instead (playerBridge's client-message handler).
+ * Two different steps would make the same key move the volume by different
+ * amounts depending on which window happened to be focused.
+ */
+export const PLAYER_VOLUME_STEP = 0.05
+
 /** The subset of a catalog item the player UI actually reads. Deliberately not
  *  the full MediaItem: that type lives in the renderer, and anything needing
  *  the whole record (mark-watched's trackable payload, for one) is handled by

@@ -136,6 +136,9 @@ interface SavePositionPayload {
   playback?: PlaybackPosition
   positionSeconds: number
   durationSeconds?: number
+  /** The 0-2 multiplier the player was at, stored so resuming this
+   *  bookmark can resume its loudness too. */
+  volume?: number
 }
 
 /** Minimal shape this port reads from Simkl's `/oauth/pin/:userCode` poll response. */
@@ -995,8 +998,8 @@ export function registerTrackingIpc(): void {
 
   handle<SavePositionPayload, { ok: true }>(
     MEDIA_HUB_CHANNELS.trackingSavePosition,
-    (_e, { id, playback, positionSeconds, durationSeconds }) => {
-      getDatabase().savePlaybackPosition(id, playback, positionSeconds, durationSeconds)
+    (_e, { id, playback, positionSeconds, durationSeconds, volume }) => {
+      getDatabase().savePlaybackPosition(id, playback, positionSeconds, durationSeconds, volume)
       return { ok: true }
     }
   )

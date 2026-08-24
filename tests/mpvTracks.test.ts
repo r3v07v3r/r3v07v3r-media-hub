@@ -398,6 +398,27 @@ async function main(): Promise<void> {
     )
   })
 
+  await checkAsync('the volume keys reach the video window too', async () => {
+    const { player, sent } = fakePlayer()
+    await player.bindSafetyKeys()
+    const bindings = sent
+      .map((line) => JSON.parse(line) as { command: unknown[] })
+      .filter((msg) => msg.command[0] === 'keybind')
+      .map((msg) => `${String(msg.command[1])} ${String(msg.command[2])}`)
+    // Without these, the volume keys would work only while the controls
+    // overlay holds focus — and clicking the picture hands focus to mpv, so
+    // the keys would stop working for the very reason someone reached for
+    // them. Seeking already has this pair; volume needs the same.
+    assert.ok(
+      bindings.includes('UP script-message r3-volume-up'),
+      `UP is not bound: ${bindings.join(', ')}`
+    )
+    assert.ok(
+      bindings.includes('DOWN script-message r3-volume-down'),
+      `DOWN is not bound: ${bindings.join(', ')}`
+    )
+  })
+
   await checkAsync('a retained player is put back in the window before it is given one', async () => {
     const { player, sent } = fakePlayer()
     // What the last session left behind. The mpv PROCESS outlives a session and

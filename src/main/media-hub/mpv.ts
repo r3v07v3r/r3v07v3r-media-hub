@@ -753,7 +753,9 @@ export class MpvPlayer {
       ['MBTN_LEFT', 'r3-toggle-pause'],
       ['MBTN_LEFT_DBL', 'r3-toggle-fullscreen'],
       ['LEFT', 'r3-seek-back'],
-      ['RIGHT', 'r3-seek-forward']
+      ['RIGHT', 'r3-seek-forward'],
+      ['UP', 'r3-volume-up'],
+      ['DOWN', 'r3-volume-down']
     ]) {
       await this.command('keybind', key, `script-message ${message}`).catch(() => {})
     }

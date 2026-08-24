@@ -111,6 +111,12 @@ function fail(error: Error): never {
 export interface PlaybackPositionResult {
   positionSeconds: number
   durationSeconds: number | null
+  /** Playback volume in use when the bookmark was written, as the same
+   *  0-2 multiplier the player speaks (1 = the source's own level).
+   *  Optional because only the single-bookmark read carries it: the
+   *  episode grid's list read has no use for a volume and does not ask
+   *  for one, and absent is the honest way to say that. */
+  volume?: number | null
 }
 
 export interface EpisodePlaybackPosition extends PlaybackPositionResult {
@@ -140,7 +146,8 @@ export interface MediaHubDatabase {
     contentId: string | number,
     playback: { season?: number; episode?: number } | undefined,
     positionSeconds: number,
-    durationSeconds?: number
+    durationSeconds?: number,
+    volume?: number
   ): void
   getPlaybackPosition(
     contentId: string | number,
@@ -231,6 +238,7 @@ export function createDatabase(filename: string): MediaHubDatabase {
     episode INTEGER,
     position_seconds REAL NOT NULL,
     duration_seconds REAL,
+    volume REAL,
     updated_at TEXT NOT NULL
   );
   CREATE INDEX IF NOT EXISTS idx_history_content ON watch_history(content_id, watched_at DESC);`)
@@ -249,6 +257,20 @@ export function createDatabase(filename: string): MediaHubDatabase {
   }
   if (!columns.has('baseline_episode')) {
     sql.exec('ALTER TABLE tracked ADD COLUMN baseline_episode INTEGER NOT NULL DEFAULT 0')
+  }
+
+  // Same guard, for the bookmark's volume. Nullable with no default on
+  // purpose: every bookmark written before this column existed reads back
+  // as "no volume was recorded", which the player treats as the ordinary
+  // 100% start rather than as a stored choice.
+  const positionColumns = new Set(
+    sql
+      .prepare('PRAGMA table_info(playback_positions)')
+      .all()
+      .map((x) => (x as Row).name as string)
+  )
+  if (!positionColumns.has('volume')) {
+    sql.exec('ALTER TABLE playback_positions ADD COLUMN volume REAL')
   }
 
   // Reclaims rows nothing has read in a long time. `catalog_cache` had no
@@ -321,13 +343,13 @@ export function createDatabase(filename: string): MediaHubDatabase {
       'SELECT season,episode FROM watch_history WHERE content_id=? AND season IS NOT NULL ORDER BY season DESC,episode DESC LIMIT 1'
     ),
     savePosition: sql.prepare(
-      `INSERT INTO playback_positions(position_key,content_id,season,episode,position_seconds,duration_seconds,updated_at)
-       VALUES(@key,@id,@season,@episode,@position,@duration,@now)
-       ON CONFLICT(position_key) DO UPDATE SET position_seconds=excluded.position_seconds,duration_seconds=excluded.duration_seconds,updated_at=excluded.updated_at`
+      `INSERT INTO playback_positions(position_key,content_id,season,episode,position_seconds,duration_seconds,volume,updated_at)
+       VALUES(@key,@id,@season,@episode,@position,@duration,@volume,@now)
+       ON CONFLICT(position_key) DO UPDATE SET position_seconds=excluded.position_seconds,duration_seconds=excluded.duration_seconds,volume=COALESCE(excluded.volume,playback_positions.volume),updated_at=excluded.updated_at`
     ),
     clearPosition: sql.prepare('DELETE FROM playback_positions WHERE position_key=?'),
     getPosition: sql.prepare(
-      'SELECT position_seconds,duration_seconds FROM playback_positions WHERE position_key=?'
+      'SELECT position_seconds,duration_seconds,volume FROM playback_positions WHERE position_key=?'
     ),
     listPositions: sql.prepare(
       'SELECT season,episode,position_seconds,duration_seconds FROM playback_positions WHERE content_id=?'
@@ -488,7 +510,7 @@ export function createDatabase(filename: string): MediaHubDatabase {
     // saving (and later re-seeking to) the first few seconds would be a
     // worse experience than just starting fresh, since a tiny seek still
     // pays a real restart cost in compatibility mode.
-    savePlaybackPosition(contentId, playback, positionSeconds, durationSeconds) {
+    savePlaybackPosition(contentId, playback, positionSeconds, durationSeconds, volume) {
       try {
         const id = String(contentId)
         const season = Number.isFinite(playback?.season) ? (playback!.season as number) : null
@@ -518,6 +540,16 @@ export function createDatabase(filename: string): MediaHubDatabase {
             typeof durationSeconds === 'number' && Number.isFinite(durationSeconds)
               ? durationSeconds
               : null,
+          // Null here does NOT overwrite a stored volume — see the upsert's
+          // COALESCE. A caller that has no volume to offer is saying nothing
+          // about it, and must not wipe what the player recorded.
+          //
+          // Silence is not stored either, deliberately: restoring a muted
+          // bookmark would hand someone a film that plays with no sound and
+          // no visible reason, which reads as broken. Muting is for now, a
+          // boost is for this title.
+          volume:
+            typeof volume === 'number' && Number.isFinite(volume) && volume > 0 ? volume : null,
           now: new Date().toISOString()
         })
       } catch {
@@ -535,7 +567,8 @@ export function createDatabase(filename: string): MediaHubDatabase {
         if (!row) return null
         return {
           positionSeconds: row.position_seconds as number,
-          durationSeconds: (row.duration_seconds as number | null) ?? null
+          durationSeconds: (row.duration_seconds as number | null) ?? null,
+          volume: (row.volume as number | null) ?? null
         }
       } catch {
         return null

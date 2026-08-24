@@ -14,6 +14,7 @@ import path from 'node:path'
 
 import {
   MAX_PLAYER_VOLUME,
+  PLAYER_VOLUME_STEP,
   type PlayerCommand,
   type PlayerInputEvent,
   type PlayerSessionSnapshot,
@@ -316,6 +317,18 @@ async function attachObservers(): Promise<void> {
         return
       case 'r3-seek-forward':
         void player.command('seek', 15, 'relative').catch(() => {})
+        return
+      // Applied here rather than handed to the overlay, unlike pause: volume
+      // is nobody else's business in a watch party, so there is no rule about
+      // who is allowed to change it and nothing to broadcast. `add` is mpv's
+      // own relative write, which saves a read and — the part that matters —
+      // clamps against --volume-max itself, so a held key stops at the
+      // ceiling instead of piling up writes mpv rejects.
+      case 'r3-volume-up':
+        void player.command('add', 'volume', PLAYER_VOLUME_STEP * 100).catch(() => {})
+        return
+      case 'r3-volume-down':
+        void player.command('add', 'volume', -PLAYER_VOLUME_STEP * 100).catch(() => {})
         return
       default:
         return
@@ -681,6 +694,18 @@ export async function startPlayerSession(
   // would still be showing the mode that was chosen before.
   await applyFitMode(fitMode).catch(() => {})
   await applyPictureSettings().catch(() => {})
+
+  // EVERY title starts at its own level, because mpv keeps `volume` across
+  // `loadfile` and a boost belongs to the film it was needed for — carrying
+  // 180% from a quiet film into the next one is a shock, not a preference.
+  //
+  // Restoring the boost is the overlay's job, out of the resume bookmark, and
+  // the ordering that makes the two agree is not an accident: this runs inside
+  // startPlayerSession, while the overlay cannot even know WHICH title it is
+  // looking at until pushSessionSnapshot, which its caller only reaches after
+  // this function resolves. The reset therefore always lands first, and the
+  // restore — if there is one — always lands on top of it.
+  await player.set('volume', 100).catch(() => {})
 
   // Re-asserted per title for the same reason as the fit mode, and read from
   // the window because a session can start into an already-fullscreen app —

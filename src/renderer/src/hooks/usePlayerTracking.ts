@@ -29,6 +29,12 @@ interface Options {
   timePos: number
   duration: number
   playing: boolean
+  /** Current volume as the player's 0-2 multiplier. Saved WITH the resume
+   *  bookmark rather than as a setting of its own, which is what makes it a
+   *  property of the interrupted watch: a title that was left partway
+   *  through comes back at the loudness it was left at, while one started
+   *  fresh starts at the ordinary 100% main resets it to. */
+  volume: number
   /** Raised so the main window can mark this watched — it holds the full
    *  MediaItem the tracking payload needs. */
   onMarkWatched: () => void
@@ -38,6 +44,11 @@ export interface PlayerTracking {
   /** Resume position fetched for this title, or null once applied/absent. */
   resumeSeconds: number | null
   consumeResume: () => void
+  /** Volume stored with that bookmark, or null when there is none to
+   *  restore — which is the common case and means "leave it at the 100%
+   *  the title started at". */
+  resumeVolume: number | null
+  consumeResumeVolume: () => void
   /** Whether this title has already crossed the watched threshold — passed to
    *  stop-playback so the backend knows it can delete the local stream cache
    *  rather than keeping it for a likely resume. */
@@ -50,6 +61,7 @@ export function usePlayerTracking({
   timePos,
   duration,
   playing,
+  volume,
   onMarkWatched
 }: Options): PlayerTracking {
   // Mirrored into refs so the unmount/interval closures read the LATEST values
@@ -57,13 +69,15 @@ export function usePlayerTracking({
   // effect rather than during render — a ref written mid-render is exactly the
   // tearing hazard React's own lint rule is about.
   const positionRef = useRef({ time: 0, duration: 0 })
+  const volumeRef = useRef(volume)
   const mediaRef = useRef(media)
   const onMarkWatchedRef = useRef(onMarkWatched)
   useEffect(() => {
     positionRef.current = { time: timePos, duration }
+    volumeRef.current = volume
     mediaRef.current = media
     onMarkWatchedRef.current = onMarkWatched
-  }, [timePos, duration, media, onMarkWatched])
+  }, [timePos, duration, volume, media, onMarkWatched])
   const markedWatchedRef = useRef(false)
   // Carries the episode key alongside the value rather than being reset when
   // the episode changes. Resetting would mean a setState in an effect purely to
@@ -72,6 +86,10 @@ export function usePlayerTracking({
   // applied. Only ever SET from the async fetch callback, which is where state
   // is supposed to be set from.
   const [resume, setResume] = useState<{ key: string; seconds: number } | null>(null)
+  // Separate from `resume` above rather than a field on it, because the two
+  // are applied at different moments: the seek waits for a duration to clamp
+  // against, the volume needs nothing and goes on immediately.
+  const [resumeVolume, setResumeVolume] = useState<{ key: string; volume: number } | null>(null)
 
   // Identity of the specific episode being tracked. The player window is not
   // remounted per episode (the same session can move from one to the next), so
@@ -89,7 +107,8 @@ export function usePlayerTracking({
         id: current.id,
         playback: { season: current.seasonNumber, episode: current.episodeNumber },
         positionSeconds: time,
-        durationSeconds: total || undefined
+        durationSeconds: total || undefined,
+        volume: volumeRef.current
       })
       .catch(() => {})
   }, [])
@@ -110,6 +129,13 @@ export function usePlayerTracking({
         if (cancelled) return
         const seconds = Number(result?.positionSeconds)
         if (Number.isFinite(seconds) && seconds > 0) setResume({ key, seconds })
+        // Only a stored value is ever applied. Nothing stored means nothing to
+        // do — main already put this title at 100% before the overlay was even
+        // told which title it is (playerBridge's startPlayerSession).
+        const storedVolume = Number(result?.volume)
+        if (Number.isFinite(storedVolume) && storedVolume > 0) {
+          setResumeVolume({ key, volume: storedVolume })
+        }
       })
       .catch(() => {})
     return () => {
@@ -145,6 +171,8 @@ export function usePlayerTracking({
     // Only surfaced while it still belongs to the episode being played.
     resumeSeconds: resume && resume.key === trackingKey ? resume.seconds : null,
     consumeResume: () => setResume(null),
+    resumeVolume: resumeVolume && resumeVolume.key === trackingKey ? resumeVolume.volume : null,
+    consumeResumeVolume: () => setResumeVolume(null),
     markedWatched: () => markedWatchedRef.current,
     savePositionNow
   }
