@@ -60,7 +60,14 @@ export function RecommendationCarousel() {
       el.removeEventListener('scroll', update)
       window.removeEventListener('resize', update)
     }
-  }, [loading])
+    // `picks`, not just `loading`. This used to lean on loading flipping
+    // false as the only way the row's contents could change, which stopped
+    // being true once a remembered row could be replaced by a live one
+    // without ever passing through a loading state (see the derivation
+    // above). A short remembered row swapped for a longer live one then
+    // left the forward arrow hidden over a scroller that had plenty left
+    // to show, until some unrelated resize or scroll re-measured it.
+  }, [loading, picks])
 
   // The arrows used to scroll a flat 380px regardless of how many cards
   // that actually covers — on a row this wide that's a fraction of one
