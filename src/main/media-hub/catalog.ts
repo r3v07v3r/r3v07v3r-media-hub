@@ -156,6 +156,24 @@ async function kitsuCatalog(): Promise<CatalogItem[]> {
   return dedupeCatalog(pages)
 }
 
+// One live fetch per kind, shared by everyone who asks for it while it is
+// still running.
+//
+// Startup asks for each catalog twice, from two different places and at
+// the same moment: the renderer's catalog:list (once per kind) and
+// home:personalized, which calls catalogData for all three itself. With
+// a warm cache both are cheap, but on a cold or expired one they used to
+// launch two independent crawls of the same source — for anime that is
+// two full 1000-entry Kitsu walks (kitsuCatalog), doubling both the wait
+// and the load put on an API this app is a guest of, to produce two
+// copies of the same answer.
+//
+// Any in-flight fetch here is by definition already going to the network,
+// so a `force` caller can share one too: forcing means "don't serve me
+// the cache", not "don't serve me a result that is being fetched right
+// now".
+const inFlightCatalogs = new Map<MediaKind, Promise<CatalogItem[]>>()
+
 /**
  * The cached top-level catalog for one kind (movie/series/anime). Tries the
  * broad source first (Kitsu for anime, Simkl trending otherwise); on
@@ -172,6 +190,24 @@ export async function catalogData(kind: MediaKind, force = false): Promise<Catal
     if (cached) return cached
   }
 
+  const existing = inFlightCatalogs.get(kind)
+  if (existing) return existing
+
+  const fetch = fetchCatalogData(kind, key, db).finally(() => {
+    inFlightCatalogs.delete(kind)
+  })
+  // Every caller awaits this promise, so a rejection is always observed;
+  // the entry is removed above before any of them are settled.
+  inFlightCatalogs.set(kind, fetch)
+  return fetch
+}
+
+/** catalogData's actual fetch/fallback chain, split out so the in-flight sharing above reads as one decision. */
+async function fetchCatalogData(
+  kind: MediaKind,
+  key: string,
+  db: ReturnType<typeof getDatabase>
+): Promise<CatalogItem[]> {
   let items: CatalogItem[] | null | undefined
   try {
     items = kind === 'anime' ? await kitsuCatalog() : await simklCatalog(kind)

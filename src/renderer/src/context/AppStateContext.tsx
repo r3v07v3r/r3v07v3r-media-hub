@@ -20,7 +20,7 @@ import {
   Recommendation,
   UIActivityState
 } from '@renderer/types'
-import { CONTINUE_WATCHING, USER_PROFILES } from '@renderer/data/mockData'
+import { USER_PROFILES } from '@renderer/data/mockData'
 import type {
   CatalogItem,
   MediaHubSettingsSnapshot,
@@ -50,6 +50,7 @@ import {
   type PlaybackPreparationStage
 } from '@renderer/lib/mediaHub/playbackPreparation'
 import {
+  startupContinueWatchingFallback,
   useMediaHubBrowseCatalog,
   useMediaHubDislikedIds,
   useMediaHubHomeFeed,
@@ -173,11 +174,12 @@ interface AppStateValue {
 
   // Continue Watching — seeded from the media-hub backend's
   // home:personalized (episode-level watch tracking, not a mock array —
-  // see hooks.ts's useMediaHubHomeFeed) when available, else the mock
-  // CONTINUE_WATCHING placeholder so the panel is never empty before a
-  // backend connection exists. "mark watched/unwatched" and "remove from
-  // row" write through to the real tracking:mark-watched/tracking:toggle
-  // handlers (best-effort — local state updates immediately either way).
+  // see hooks.ts's useMediaHubHomeFeed) when available, else the row this
+  // app last really showed (startupSnapshot.ts), so a relaunch resumes on
+  // what you were actually watching instead of a demo placeholder.
+  // "mark watched/unwatched" and "remove from row" write through to the
+  // real tracking:mark-watched/tracking:toggle handlers (best-effort —
+  // local state updates immediately either way).
   continueWatching: ContinueWatchingItem[]
   /** `media` is required for anything not currently sitting in the
    *  Continue Watching row (a fully-watched title, or one never started)
@@ -217,6 +219,12 @@ interface AppStateValue {
   recommendations: Recommendation[]
   featured: MediaItem[]
   homeFeedLive: boolean
+  /** The home:personalized fetch is still out. Distinct from
+   *  `homeFeedLive`, which stays false for a remembered-but-not-yet-
+   *  refetched feed — a consumer with nothing to show needs to know
+   *  whether to render a loading placeholder or an honest empty state,
+   *  and those are two different questions. */
+  homeFeedLoading: boolean
 
   // Snapshot of the media-hub backend's settings (torboxConnected,
   // simklClientId, theme, ...) — read by the playback gate below and by
@@ -415,8 +423,13 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   )
   const [myList, setMyList] = useState<Set<string>>(new Set())
   const [dislikedIds, setDislikedIds] = useState<Set<string>>(new Set())
-  const [continueWatching, setContinueWatching] =
-    useState<ContinueWatchingItem[]>(CONTINUE_WATCHING)
+  // Seeded from the same remembered feed useMediaHubHomeFeed falls back
+  // to, so the row this component owns and the row that hook reports
+  // agree from the first frame rather than the panel showing demo titles
+  // until home:personalized answers. See hooks.ts.
+  const [continueWatching, setContinueWatching] = useState<ContinueWatchingItem[]>(
+    startupContinueWatchingFallback
+  )
   const homeFeed = useMediaHubHomeFeed()
   const watchedIdsResult = useMediaHubWatchedIds()
   const dislikedIdsResult = useMediaHubDislikedIds()
@@ -567,8 +580,9 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   // Seed myList/continueWatching from the real backend once
   // home:personalized actually resolves — before that (bridge missing,
   // still loading, or the fetch failed) both keep whatever they already
-  // had, which is the empty Set / mock CONTINUE_WATCHING they were
-  // initialized with, per "keep dashboard visible" (see hooks.ts).
+  // had, which is the empty Set / the remembered Continue Watching row
+  // they were initialized with, per "keep dashboard visible" (see
+  // hooks.ts).
   useEffect(() => {
     if (!homeFeed.live) return
     // Deliberate effect-based sync, not derivable inline: myList/
@@ -2038,6 +2052,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       recommendations: homeFeed.recommendations,
       featured: homeFeed.featured,
       homeFeedLive: homeFeed.live,
+      homeFeedLoading: homeFeed.loading,
       mediaHubSettings,
       refreshMediaHubSettings,
       assistantState,
@@ -2129,6 +2144,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       homeFeed.recommendations,
       homeFeed.featured,
       homeFeed.live,
+      homeFeed.loading,
       mediaHubSettings,
       refreshMediaHubSettings,
       assistantState,

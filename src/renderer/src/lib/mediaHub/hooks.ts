@@ -6,19 +6,35 @@
 // fails, so "keep the dashboard visible" (see AppStateContext) holds even
 // offline/before TorBox is connected. `live` mirrors this codebase's
 // ClientResult convention: true only once real backend data has actually
-// loaded; false (with a mock/empty fallback) otherwise — the UI is never
-// meant to silently present mock data as if it were live.
+// loaded; false (with a remembered/empty fallback) otherwise — the UI is
+// never meant to silently present stale or mock data as if it were live.
+//
+// What `live: false` falls back TO changed: it used to be mockData.ts's
+// demo pools, which is why every cold start opened on Blade Runner 2049
+// and Interstellar regardless of what the person actually watches. It is
+// now the previous session's real data (startupSnapshot.ts), and the mock
+// pools survive only for the non-Electron preview build — the browser
+// harness used for visual QA/screenshots, which has no bridge to get real
+// data from and no snapshot to have written one. In the app itself,
+// "nothing remembered yet" renders a skeleton rather than someone else's
+// taste in films.
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { CatalogItem, HistoryEntry, MediaKind } from '@shared/media-hub/types'
-import type { MediaItem, Recommendation } from '@renderer/types'
-import { CATALOG } from '@renderer/data/mockData'
+import type { ContinueWatchingItem, MediaItem, Recommendation } from '@renderer/types'
+import { AI_PICKS, CATALOG, CONTINUE_WATCHING, FEATURED_ITEMS } from '@renderer/data/mockData'
 import {
   catalogItemToMediaItem,
   indexHistoryById,
   catalogItemToRecommendation,
   continueWatchingEntryToItem
 } from './adapters'
+import {
+  rememberCatalog,
+  rememberHomeFeed,
+  rememberedCatalog,
+  rememberedHomeFeed
+} from './startupSnapshot'
 
 const CATALOG_KINDS: MediaKind[] = ['movie', 'series', 'anime']
 
@@ -29,6 +45,75 @@ const CATALOG_KINDS: MediaKind[] = ['movie', 'series', 'anime']
 // call site.
 const NO_HISTORY: HistoryEntry[] = []
 const NO_IDS: Set<string> = new Set()
+const NO_ITEMS: MediaItem[] = []
+
+const EMPTY_HOME_FEED = {
+  continueWatching: [] as ContinueWatchingItem[],
+  recommendations: [] as Recommendation[],
+  featured: [] as MediaItem[],
+  preferredGenres: [] as string[],
+  trackedIds: new Set<string>()
+}
+
+/** True in the real (Electron) app, false in the plain-browser preview build used for visual QA. */
+function hasBridge(): boolean {
+  return Boolean(window.api?.mediaHub)
+}
+
+// Resolved once per session, not per render: what the snapshot held at
+// startup is a fixed fact for this run (later writes are for the NEXT
+// launch), and a fresh array identity here would churn every memo
+// downstream of `catalog` — see the mapped/useMemo comment below for how
+// expensive that particular churn turned out to be.
+let browseFallback: MediaItem[] | null = null
+function startupCatalogFallback(): MediaItem[] {
+  if (!browseFallback) {
+    const remembered = rememberedCatalog()
+    browseFallback = remembered.length ? remembered : hasBridge() ? NO_ITEMS : CATALOG
+  }
+  return browseFallback
+}
+
+// The single place the "remembered, else mock, else nothing" decision is
+// made. Keeping it here rather than in each consumer is deliberate: the
+// bug this fixes existed because three components each made that call
+// independently and all three defaulted to the demo pools.
+let homeFeedFallback: typeof EMPTY_HOME_FEED | null = null
+function startupHomeFeedFallback(): typeof EMPTY_HOME_FEED {
+  if (!homeFeedFallback) {
+    const remembered = rememberedHomeFeed()
+    const bridge = hasBridge()
+    homeFeedFallback = {
+      ...EMPTY_HOME_FEED,
+      featured: remembered.featured.length
+        ? remembered.featured
+        : bridge
+          ? EMPTY_HOME_FEED.featured
+          : FEATURED_ITEMS,
+      recommendations: remembered.recommendations.length
+        ? remembered.recommendations
+        : bridge
+          ? EMPTY_HOME_FEED.recommendations
+          : AI_PICKS,
+      continueWatching: remembered.continueWatching.length
+        ? remembered.continueWatching
+        : bridge
+          ? EMPTY_HOME_FEED.continueWatching
+          : CONTINUE_WATCHING,
+      preferredGenres: remembered.preferredGenres
+      // `trackedIds` deliberately stays empty. Unlike the lists above it
+      // isn't display data — AppStateContext reseeds My List from it, and
+      // only ever when `live` is true, so a remembered set would be a
+      // claim about server state that nothing has re-checked this run.
+    }
+  }
+  return homeFeedFallback
+}
+
+/** The remembered Continue Watching row, for AppStateContext's own copy of that state. */
+export function startupContinueWatchingFallback(): ContinueWatchingItem[] {
+  return startupHomeFeedFallback().continueWatching
+}
 
 function dedupeById(items: CatalogItem[]): CatalogItem[] {
   const seen = new Set<string>()
@@ -61,11 +146,11 @@ export interface BrowseCatalogResult {
  * The flat "browse everything" pool backing mood filtering, My Stuff, and
  * the Movies/Series/Anime category pages — mirrors mockData.ts's CATALOG
  * (movies + series + anime merged), but fetched from the real catalog:list
- * handler across all three kinds. Falls back to the mock CATALOG while
- * loading fails/is unavailable, so mood browsing and My List never go
- * blank — `live` tells a consumer which source it's actually looking at,
- * so a page can say so honestly instead of presenting the fallback as
- * real data.
+ * handler across all three kinds. Falls back to the previous session's
+ * remembered catalog (startupSnapshot.ts) while the fetch is out or has
+ * failed, so mood browsing and My List never go blank — `live` tells a
+ * consumer which source it's actually looking at, so a page can say so
+ * honestly instead of presenting the fallback as fresh data.
  */
 export function useMediaHubBrowseCatalog(
   trackedIds: Set<string>,
@@ -73,7 +158,9 @@ export function useMediaHubBrowseCatalog(
   history: HistoryEntry[] = NO_HISTORY,
   dislikedIds: Set<string> = NO_IDS
 ): BrowseCatalogResult {
-  const [items, setItems] = useState<CatalogItem[] | null>(null)
+  // Kept per kind rather than as one merged array, because the three
+  // fetches are no longer awaited together (see the effect below).
+  const [groups, setGroups] = useState<Partial<Record<MediaKind, CatalogItem[]>>>({})
   // Lazily derived from bridge presence (a constant for this component's
   // lifetime, not something that changes across renders) rather than
   // started `true` and flipped `false` in the effect below — keeps the
@@ -93,26 +180,45 @@ export function useMediaHubBrowseCatalog(
     // redundant re-assertion of the lazy initial value.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setLoading(true)
-    Promise.all(CATALOG_KINDS.map((kind) => api.catalog.list(kind, generation > 0).catch(() => [])))
-      .then((groups) => {
-        if (cancelled) return
-        setItems(dedupeById(groups.flat()))
-      })
-      .catch(() => {
-        if (!cancelled) setItems(null)
-      })
-      .finally(() => {
-        if (!cancelled) {
+    // Deliberately NOT a Promise.all over the three kinds any more. The
+    // anime crawl (catalog.ts's kitsuCatalog walks Kitsu 1000 entries
+    // deep, throttled) routinely takes an order of magnitude longer than
+    // the two Simkl feeds, and awaiting them together meant movies and
+    // series — already parsed, already in hand — sat invisible behind it
+    // while the Movies page showed a placeholder grid. Each kind is
+    // published the moment it lands; `loading`/`settled` still describe
+    // the whole set, so nothing downstream has to learn about kinds.
+    let remaining = CATALOG_KINDS.length
+    for (const kind of CATALOG_KINDS) {
+      api.catalog
+        .list(kind, generation > 0)
+        .then((rows) => {
+          // An empty/failed kind leaves whatever that kind last had in
+          // place — on a refresh that is the previous live data, which
+          // beats blanking a populated grid to report a transient failure.
+          if (cancelled || !rows?.length) return
+          setGroups((prev) => ({ ...prev, [kind]: rows }))
+        })
+        .catch(() => {})
+        .finally(() => {
+          if (cancelled) return
+          remaining -= 1
+          if (remaining > 0) return
           setLoading(false)
           setSettled(true)
-        }
-      })
+        })
+    }
     return () => {
       cancelled = true
     }
   }, [generation])
 
   const refresh = useCallback(() => setGeneration((g) => g + 1), [])
+
+  const items = useMemo(() => {
+    const merged = CATALOG_KINDS.flatMap((kind) => groups[kind] ?? [])
+    return merged.length ? dedupeById(merged) : null
+  }, [groups])
 
   // Grouped once per history change rather than re-derived per item.
   // catalogItemToMediaItem's completion check would otherwise filter the
@@ -134,11 +240,11 @@ export function useMediaHubBrowseCatalog(
   // browser clamped the now-impossible scroll position. It read as the
   // page flashing and jumping upward.
   //
-  // Every dependency here is genuinely stable: `items` is useState, and
-  // the caller's arguments are useState values or module constants (see
-  // EMPTY_HOME_FEED and NO_HISTORY/NO_IDS above, which is why the
-  // defaults are hoisted). So this recomputes when the data actually
-  // changes and not otherwise.
+  // Every dependency here is genuinely stable: `items` is a memo over
+  // useState, and the caller's arguments are useState values or module
+  // constants (see EMPTY_HOME_FEED and NO_HISTORY/NO_IDS above, which is
+  // why the defaults are hoisted). So this recomputes when the data
+  // actually changes and not otherwise.
   const mapped = useMemo(
     () =>
       items?.length
@@ -149,11 +255,21 @@ export function useMediaHubBrowseCatalog(
     [items, trackedIds, watchedIds, historyById, dislikedIds]
   )
 
+  // What the next cold start opens on. Written from `mapped` rather than
+  // the raw rows so the stored shape is the one the UI renders directly,
+  // and re-written whenever a badge moves (marking something watched
+  // changes `mapped`) so the remembered grid doesn't come back with last
+  // week's badges on it. The write itself is deferred and coalesced —
+  // see startupSnapshot.ts's WRITE_DELAY_MS.
+  useEffect(() => {
+    if (mapped?.length) rememberCatalog(mapped)
+  }, [mapped])
+
   return useMemo(
     () =>
       mapped
         ? { items: mapped, loading, live: true, settled, refresh }
-        : { items: CATALOG, loading, live: false, settled, refresh },
+        : { items: startupCatalogFallback(), loading, live: false, settled, refresh },
     [mapped, loading, settled, refresh]
   )
 }
@@ -249,7 +365,11 @@ export function useMediaHubDislikedIds(): DislikedIdsResult {
 }
 
 export interface HomeFeedResult {
-  continueWatching: ReturnType<typeof continueWatchingEntryToItem>[]
+  // The declared interface type, not `ReturnType<typeof
+  // continueWatchingEntryToItem>` — this list now has a second source (a
+  // snapshot revived from JSON, see startupSnapshot.ts), so it can no
+  // longer be defined as "whatever that one adapter happens to return".
+  continueWatching: ContinueWatchingItem[]
   recommendations: Recommendation[]
   featured: MediaItem[]
   preferredGenres: string[]
@@ -260,23 +380,16 @@ export interface HomeFeedResult {
   refresh: () => void
 }
 
-const EMPTY_HOME_FEED = {
-  continueWatching: [] as ReturnType<typeof continueWatchingEntryToItem>[],
-  recommendations: [] as Recommendation[],
-  featured: [] as MediaItem[],
-  preferredGenres: [] as string[],
-  trackedIds: new Set<string>()
-}
-
 /**
  * home:personalized in one hook — Continue Watching, recommendations, and
  * a "featured" pool (this dashboard's hero-rotation concept, which the
  * backend has no equivalent of; the top few recommendations stand in for
- * it here). No mock fallback data for continueWatching/recommendations
- * (an empty state is honest — mockData.ts's CONTINUE_WATCHING/AI_PICKS
- * are just placeholder demo content, not something to blend with real
- * data); `live: false` signals callers to show their own mock fallback
- * where one exists (e.g. FeaturedHero keeps FEATURED_ITEMS).
+ * it here). Until the fetch lands, this reports the previous session's
+ * remembered feed (startupSnapshot.ts) — real titles this person really
+ * did see, not mockData.ts's demo pools, which are now reachable only
+ * from the bridgeless preview build. `live: false` still means "nothing
+ * has been re-checked this run", so a caller that needs to distinguish
+ * remembered from fresh still can.
  */
 export function useMediaHubHomeFeed(): HomeFeedResult {
   const [state, setState] = useState<typeof EMPTY_HOME_FEED | null>(null)
@@ -300,7 +413,7 @@ export function useMediaHubHomeFeed(): HomeFeedResult {
       .then((result) => {
         if (cancelled) return
         const trackedIds = new Set(result.tracked.map((t) => t.id))
-        setState({
+        const next = {
           continueWatching: result.continueWatching.map(continueWatchingEntryToItem),
           recommendations: result.recommendations.map((item) =>
             catalogItemToRecommendation(item, result.preferredGenres, { trackedIds })
@@ -310,6 +423,17 @@ export function useMediaHubHomeFeed(): HomeFeedResult {
             .map((item) => catalogItemToMediaItem(item, { trackedIds })),
           preferredGenres: result.preferredGenres,
           trackedIds
+        }
+        setState(next)
+        // This is the part of the snapshot that matters most: the hero,
+        // the AI Picks row and Continue Watching are the whole of what
+        // Home is above the fold, and they are what the next launch has
+        // to paint before home:personalized can answer again.
+        rememberHomeFeed({
+          featured: next.featured,
+          recommendations: next.recommendations,
+          continueWatching: next.continueWatching,
+          preferredGenres: next.preferredGenres
         })
       })
       .catch(() => {
@@ -326,7 +450,7 @@ export function useMediaHubHomeFeed(): HomeFeedResult {
   const refresh = useCallback(() => setGeneration((g) => g + 1), [])
   return useMemo(
     () => ({
-      ...(state ?? EMPTY_HOME_FEED),
+      ...(state ?? startupHomeFeedFallback()),
       loading,
       live: state !== null,
       refresh

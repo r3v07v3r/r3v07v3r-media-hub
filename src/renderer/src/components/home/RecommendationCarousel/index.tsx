@@ -1,38 +1,41 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import { AI_PICKS } from '@renderer/data/mockData'
 import { useAppState } from '@renderer/context/AppStateContext'
 import { Icon } from '@renderer/components/icons/Icon'
 import { MediaCard } from './MediaCard'
 import styles from './RecommendationCarousel.module.css'
 
 export function RecommendationCarousel() {
-  const { recommendations, homeFeedLive } = useAppState()
-  // Real recommendations replace the staggered-skeleton demo entirely once
-  // home:personalized has actually resolved; before that (bridge missing,
-  // still loading, or the fetch failed) the skeleton -> mock AI_PICKS reveal
-  // below still runs, so the row is never empty on a cold start.
-  const picks = homeFeedLive ? recommendations : AI_PICKS
-  // `loading` is derived, not stored directly: the skeleton timer is one
-  // input (skeletonDone), whether real data has already arrived is the
-  // other (homeFeedLive) — deriving avoids needing a synchronous setState
-  // just to short-circuit the fake delay once real data beats it.
+  const { recommendations, homeFeedLoading } = useAppState()
+  // home:personalized's recommendations once it resolves; before that,
+  // the picks this app last really showed (see lib/mediaHub/
+  // startupSnapshot.ts). The mock AI_PICKS pool this used to fall back to
+  // now only reaches the bridgeless preview build, and only through that
+  // same fallback — see hooks.ts.
+  const picks = recommendations
   const [skeletonDone, setSkeletonDone] = useState(false)
-  const loading = !homeFeedLive && !skeletonDone
+  // `loading` is derived, not stored: the fake reveal timer below is one
+  // input, whether anything is actually in hand is the other.
+  //
+  // It is deliberately gated on having NOTHING to show. Running a 900ms
+  // skeleton over remembered picks would be the same "wait, then swap the
+  // screen out from under you" that this whole change exists to remove —
+  // real content that is already here should just be here.
+  const loading = picks.length === 0 && (homeFeedLoading || !skeletonDone)
   const [canScrollBack, setCanScrollBack] = useState(false)
   // Whether there's still unrevealed content to the right. On a wide
   // enough window (spec: "scale to show more items... 20+ to cover
-  // ultra-wide screens") every card in AI_PICKS can fit without
-  // scrolling at all, so the "show more" arrow needs to disappear
-  // instead of floating over a row that has nothing left to reveal.
+  // ultra-wide screens") every pick can fit without scrolling at all, so
+  // the "show more" arrow needs to disappear instead of floating over a
+  // row that has nothing left to reveal.
   const [canScrollForward, setCanScrollForward] = useState(false)
   const scrollerRef = useRef<HTMLUListElement>(null)
 
   // Staggered skeleton -> reveal on first mount, standing in for a real
   // "generating recommendations" round trip (spec section 15 / 18) — moot
-  // if home:personalized actually resolves before that fake delay is up
-  // (see the `loading` derivation above).
+  // whenever there is anything to show, remembered or live (see the
+  // `loading` derivation above).
   useEffect(() => {
     const t = setTimeout(() => setSkeletonDone(true), 900)
     return () => clearTimeout(t)
@@ -103,8 +106,8 @@ export function RecommendationCarousel() {
         AI Picks For You
       </h2>
       {!loading && picks.length === 0 ? (
-        // Real recommendations, unlike the mock AI_PICKS pool they replace,
-        // can legitimately come back empty (e.g. no watch history yet to
+        // Real recommendations, unlike the mock pool they replaced, can
+        // legitimately come back empty (e.g. no watch history yet to
         // derive a preferred genre from) — honest empty state rather than
         // an empty-looking scroller with no explanation.
         <p className={styles.emptyState}>

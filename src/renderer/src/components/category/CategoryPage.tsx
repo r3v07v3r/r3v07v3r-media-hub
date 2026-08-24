@@ -144,7 +144,7 @@ export function CategoryPage({ config }: { config: CategoryConfig }) {
           would break that self-placement. */}
       <CompactAIAssistant kinds={[config.kind]} />
 
-      <FeaturedHero items={heroItems} />
+      <FeaturedHero items={heroItems} loading={catalogLoading} />
       <ContinueWatchingPanel kindFilter={config.kind} className={styles.continuePanel} />
       <RecommendationCarousel />
 
@@ -159,7 +159,15 @@ export function CategoryPage({ config }: { config: CategoryConfig }) {
         {catalogSettled && !catalogLive && (
           <div className={styles.offlineBanner} role="status">
             <Icon name="wifi-off" size={15} />
-            Showing preview titles — couldn&apos;t reach the media hub backend.
+            {/* Two genuinely different situations, and the banner used to
+                describe both as "showing preview titles" — which stopped
+                being true the moment the fallback became the previous
+                session's real catalog (see lib/mediaHub/startupSnapshot.ts)
+                rather than mockData's demo pool, and was never true at all
+                when the fallback was empty. */}
+            {kindItems.length > 0
+              ? "Couldn't reach the media hub backend — showing the titles it last had."
+              : "Couldn't reach the media hub backend."}
             <button type="button" onClick={refreshCatalog} className={styles.offlineRetry}>
               <Icon name="refresh" size={13} />
               Retry
@@ -189,9 +197,16 @@ export function CategoryPage({ config }: { config: CategoryConfig }) {
             />
           </>
         ) : (
+          // Only a placeholder while there is genuinely nothing to place.
+          // catalog:list now publishes each kind as it lands rather than
+          // awaiting all three together (see hooks.ts), and the anime
+          // crawl takes far longer than the two Simkl feeds — so
+          // `catalogLoading` stays true well after this page's own kind
+          // has arrived, and keying the skeleton off it alone would hide a
+          // grid that is ready to read.
           <MediaGrid
             items={filteredSorted}
-            loading={catalogLoading}
+            loading={catalogLoading && kindItems.length === 0}
             emptyTitle={`No ${config.pluralLabel} to show`}
             emptyMessage="Try widening a filter or clearing them all."
             initialVisibleCount={restoreVisibleCount}
