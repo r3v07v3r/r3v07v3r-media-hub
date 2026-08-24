@@ -54,12 +54,24 @@ export interface HomeFeedSnapshot {
 }
 
 interface StoredSnapshot extends HomeFeedSnapshot {
+  /** When this file was last written, for anything. Diagnostics, and the fallback stamp for a snapshot written before the two below existed. */
   savedAt: number
+  // Aged separately, because they are refreshed separately: the catalog
+  // comes from catalog:list and the home feed from home:personalized, and
+  // one can keep succeeding for weeks while the other keeps failing. A
+  // single shared timestamp meant any successful write renewed BOTH, so
+  // a Continue Watching row could outlive MAX_AGE_MS indefinitely on the
+  // strength of catalog writes that never touched it — an app offering to
+  // resume something you finished months ago.
+  catalogSavedAt: number
+  homeSavedAt: number
   catalog: MediaItem[]
 }
 
 const EMPTY: StoredSnapshot = {
   savedAt: 0,
+  catalogSavedAt: 0,
+  homeSavedAt: 0,
   catalog: [],
   featured: [],
   recommendations: [],
@@ -121,6 +133,19 @@ function reviveWrapped<T extends { media: MediaItem }>(value: unknown): T[] {
 let current: StoredSnapshot | null = null
 let writeTimer: ReturnType<typeof setTimeout> | null = null
 
+function timestamp(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0
+}
+
+/**
+ * A stamp from the future (the clock moved backwards since the write) is
+ * stale by an unknowable amount, not fresh — hence the absolute
+ * difference rather than a one-sided comparison.
+ */
+function isFresh(savedAt: number): boolean {
+  return savedAt > 0 && Math.abs(Date.now() - savedAt) <= MAX_AGE_MS
+}
+
 function read(): StoredSnapshot {
   if (current) return current
   current = EMPTY
@@ -128,21 +153,30 @@ function read(): StoredSnapshot {
     const raw = window.localStorage.getItem(STORAGE_KEY)
     if (!raw) return current
     const parsed = JSON.parse(raw) as Partial<StoredSnapshot>
-    const savedAt = typeof parsed?.savedAt === 'number' ? parsed.savedAt : 0
-    // A savedAt from the future (the clock moved backwards since the
-    // write) is stale by an unknowable amount, not fresh — hence the
-    // absolute difference rather than a one-sided comparison.
-    if (!savedAt || Math.abs(Date.now() - savedAt) > MAX_AGE_MS) {
+    const savedAt = timestamp(parsed?.savedAt)
+    // Snapshots written before the per-section stamps existed carry only
+    // `savedAt`; it dates both sections for them, which is exactly as
+    // accurate as what that version could record.
+    const catalogSavedAt = timestamp(parsed?.catalogSavedAt) || savedAt
+    const homeSavedAt = timestamp(parsed?.homeSavedAt) || savedAt
+    const catalogFresh = isFresh(catalogSavedAt)
+    const homeFresh = isFresh(homeSavedAt)
+    if (!catalogFresh && !homeFresh) {
       clearStartupSnapshot()
       return EMPTY
     }
     current = {
       savedAt,
-      catalog: reviveMediaItems(parsed.catalog),
-      featured: reviveMediaItems(parsed.featured),
-      recommendations: reviveWrapped<Recommendation>(parsed.recommendations),
-      continueWatching: reviveWrapped<ContinueWatchingItem>(parsed.continueWatching),
-      preferredGenres: Array.isArray(parsed.preferredGenres) ? parsed.preferredGenres : []
+      catalogSavedAt: catalogFresh ? catalogSavedAt : 0,
+      homeSavedAt: homeFresh ? homeSavedAt : 0,
+      catalog: catalogFresh ? reviveMediaItems(parsed.catalog) : [],
+      featured: homeFresh ? reviveMediaItems(parsed.featured) : [],
+      recommendations: homeFresh ? reviveWrapped<Recommendation>(parsed.recommendations) : [],
+      continueWatching: homeFresh
+        ? reviveWrapped<ContinueWatchingItem>(parsed.continueWatching)
+        : [],
+      preferredGenres:
+        homeFresh && Array.isArray(parsed.preferredGenres) ? parsed.preferredGenres : []
     }
   } catch {
     current = EMPTY
@@ -235,13 +269,15 @@ export function rememberCatalog(items: MediaItem[]): void {
   if (!items.length) return
   const snapshot = read()
   const next = items.length > MAX_CATALOG_ITEMS ? items.slice(0, MAX_CATALOG_ITEMS) : items
-  if (snapshot.catalog === next) return
-  current = { ...snapshot, catalog: next }
+  // Stamped here rather than at flush time: this is the moment the data
+  // was actually known to be current, and flushes are coalesced across
+  // both sections.
+  current = { ...snapshot, catalog: next, catalogSavedAt: Date.now() }
   schedule()
 }
 
 export function rememberHomeFeed(feed: HomeFeedSnapshot): void {
-  current = { ...read(), ...feed }
+  current = { ...read(), ...feed, homeSavedAt: Date.now() }
   schedule()
 }
 

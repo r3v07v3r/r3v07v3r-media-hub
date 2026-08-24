@@ -84,6 +84,7 @@ async function loadModule(storage: FakeStorage) {
 }
 
 const STORAGE_KEY = 'r3.mediaHub.startupSnapshot.v1'
+const DAY_MS = 24 * 60 * 60 * 1000
 
 function mediaItem(overrides: Partial<MediaItem> = {}): MediaItem {
   return {
@@ -316,6 +317,115 @@ async function main(): Promise<void> {
     assert.equal(catalog[0].title, 'Recent')
   })
 
+  await check('ages the catalog and the home feed independently', () => {
+    // The catalog comes from catalog:list and the home feed from
+    // home:personalized. One can keep succeeding for weeks while the other
+    // keeps failing, and a single shared timestamp let the successful one
+    // renew the dead one indefinitely.
+    const storage = fakeStorage()
+    const now = Date.now()
+    storage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({
+        savedAt: now,
+        catalogSavedAt: now,
+        homeSavedAt: now - 31 * DAY_MS,
+        catalog: [{ id: 'm1', title: 'Fresh', artTint: ['#000', '#111'], initials: 'FR' }],
+        featured: [{ id: 'f1', title: 'Ancient', artTint: ['#000', '#111'], initials: 'AN' }],
+        recommendations: [],
+        continueWatching: [
+          {
+            media: { id: 'c1', title: 'Watched Months Ago', artTint: ['#000', '#111'] },
+            lastPlayedAt: 'x',
+            playbackPositionSeconds: 1,
+            durationSeconds: 2
+          }
+        ],
+        preferredGenres: ['Drama']
+      })
+    )
+    return loadModule(storage).then((mod) => {
+      assert.equal(mod.rememberedCatalog().length, 1, 'the fresh catalog survives')
+      const feed = mod.rememberedHomeFeed()
+      assert.deepEqual(feed.featured, [], 'the stale home feed does not')
+      assert.deepEqual(feed.continueWatching, [], 'nor its Continue Watching row')
+      assert.deepEqual(feed.preferredGenres, [])
+    })
+  })
+
+  await check('drops a stale catalog while keeping a fresh home feed', () => {
+    const storage = fakeStorage()
+    const now = Date.now()
+    storage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({
+        savedAt: now,
+        catalogSavedAt: now - 31 * DAY_MS,
+        homeSavedAt: now,
+        catalog: [{ id: 'm1', title: 'Ancient', artTint: ['#000', '#111'], initials: 'AN' }],
+        featured: [{ id: 'f1', title: 'Fresh', artTint: ['#000', '#111'], initials: 'FR' }],
+        recommendations: [],
+        continueWatching: [],
+        preferredGenres: []
+      })
+    )
+    return loadModule(storage).then((mod) => {
+      assert.deepEqual(mod.rememberedCatalog(), [])
+      assert.equal(mod.rememberedHomeFeed().featured[0].title, 'Fresh')
+    })
+  })
+
+  await check('a catalog write does not renew the home feed it never touched', async () => {
+    const storage = fakeStorage()
+    const now = Date.now()
+    storage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({
+        savedAt: now - 29 * DAY_MS,
+        catalogSavedAt: now - 29 * DAY_MS,
+        homeSavedAt: now - 29 * DAY_MS,
+        catalog: [],
+        featured: [
+          { id: 'f1', title: 'Nearly Expired', artTint: ['#000', '#111'], initials: 'NE' }
+        ],
+        recommendations: [],
+        continueWatching: [],
+        preferredGenres: []
+      })
+    )
+    // A session where catalog:list succeeds and home:personalized does not.
+    const first = await loadModule(storage)
+    first.rememberCatalog([mediaItem({ id: 'm1' })])
+    first.flushStartupSnapshot()
+
+    const written = stored(storage)
+    assert.ok(
+      written.homeSavedAt <= now - 29 * DAY_MS,
+      'the untouched home feed keeps its original age'
+    )
+    assert.ok(written.catalogSavedAt >= now, 'the catalog that was written is now current')
+  })
+
+  await check('falls back to savedAt for a snapshot written before per-section stamps', () => {
+    // Exactly what an earlier build of this file left behind.
+    const storage = fakeStorage()
+    storage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({
+        savedAt: Date.now() - 3 * DAY_MS,
+        catalog: [{ id: 'm1', title: 'Legacy', artTint: ['#000', '#111'], initials: 'LE' }],
+        featured: [{ id: 'f1', title: 'Legacy Hero', artTint: ['#000', '#111'], initials: 'LH' }],
+        recommendations: [],
+        continueWatching: [],
+        preferredGenres: []
+      })
+    )
+    return loadModule(storage).then((mod) => {
+      assert.equal(mod.rememberedCatalog()[0].title, 'Legacy')
+      assert.equal(mod.rememberedHomeFeed().featured[0].title, 'Legacy Hero')
+    })
+  })
+
   console.log('\nstartupSnapshot — running out of storage')
 
   await check('sheds catalog descriptions rather than losing the whole snapshot', async () => {
@@ -347,8 +457,13 @@ async function main(): Promise<void> {
   })
 
   await check('sheds the catalog entirely before giving up on the home feed', async () => {
+    // Mirrors the real stored shape field-for-field, because the ceiling
+    // is derived from its length — a fixture that drifts from the module's
+    // own shape silently stops testing what it claims to.
     const homeFeedOnly = JSON.stringify({
       savedAt: Date.now(),
+      catalogSavedAt: Date.now(),
+      homeSavedAt: Date.now(),
       catalog: [],
       featured: [mediaItem({ id: 'f1' })],
       recommendations: [],
