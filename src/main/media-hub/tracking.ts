@@ -264,7 +264,14 @@ function ignoredReconcileIds(): Set<string> {
 function addIgnoredReconcileId(id: string): void {
   const ids = ignoredReconcileIds()
   ids.add(id)
-  getDatabase().putCache(RECONCILE_IGNORED_KEY, [...ids], RECONCILE_IGNORED_TTL_MS)
+  // Durable: someone pressed Ignore. These three reconcile rows live in
+  // catalog_cache but are not cache — nothing refetches a decision, and
+  // losing one brings the title straight back to the review panel that
+  // has already told the person it was handled. See database.ts's
+  // `durable` helper for why the store defaults the other way.
+  getDatabase().putCache(RECONCILE_IGNORED_KEY, [...ids], RECONCILE_IGNORED_TTL_MS, {
+    durable: true
+  })
 }
 
 /** Titles this app gave up trying to push, after enough failed attempts
@@ -298,7 +305,11 @@ function addAbandonedReconcileId(id: string): boolean {
   const ids = abandonedReconcileIds()
   ids.add(id)
   const record: AbandonedRecord = { account: simklAccountMark(), ids: [...ids] }
-  getDatabase().putCache(RECONCILE_ABANDONED_KEY, record, RECONCILE_IGNORED_TTL_MS)
+  // Durable for the same reason as addIgnoredReconcileId: the person has
+  // already been told this title is no longer being flagged.
+  getDatabase().putCache(RECONCILE_ABANDONED_KEY, record, RECONCILE_IGNORED_TTL_MS, {
+    durable: true
+  })
   return abandonedReconcileIds().has(id)
 }
 
@@ -409,7 +420,14 @@ function pendingPushes(): PendingWatchStatusPush[] {
  */
 function writePendingPushes(queue: PendingWatchStatusPush[]): boolean {
   const payload: PendingQueue = { account: simklAccountMark(), entries: queue }
-  getDatabase().putCache(RECONCILE_PENDING_KEY, payload, RECONCILE_PENDING_TTL_MS)
+  // Durable, and this is the row that most needs it: it IS the record of
+  // an acknowledged "keep local" — the panel drops the discrepancy on the
+  // strength of this write succeeding, and nothing else remembers the
+  // choice. Losing it to a power cut is the exact failure the queue was
+  // built to stop, just with a different cause.
+  getDatabase().putCache(RECONCILE_PENDING_KEY, payload, RECONCILE_PENDING_TTL_MS, {
+    durable: true
+  })
   // The whole payload, not just which ids are present: a flush that only
   // bumped `attempts` (or corrected `remoteWatched`) leaves the id set
   // identical, so comparing ids would call a rejected write a success

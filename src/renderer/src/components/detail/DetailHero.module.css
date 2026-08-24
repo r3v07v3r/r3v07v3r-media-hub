@@ -1,14 +1,38 @@
+/* Height is viewport-relative, not a fixed pixel count, because a fixed
+   one only reads correctly at the window height it was chosen for. The
+   hero's own content stack — label, title, tagline, clamped 3-line
+   description, meta row, buttons, padding — comes to roughly 380px and
+   does not grow with the window, so every pixel of height past that is
+   backdrop art with nothing on it, sitting directly between the buttons
+   and the About panel underneath.
+ *
+ * That is what the fixed 640px below was doing on a 1080p display at
+ * Windows' 125% scaling: an 857px-tall viewport, 640px of it hero, ~340px
+ * of that empty — so About started three-quarters of the way down the
+ * screen and read as detached from the title it belongs to. The clamp
+ * keeps the intended cinematic proportions on a tall display (it still
+ * resolves to the old 520/640 above ~1130/~1190px of viewport height)
+ * while never letting the banner take the whole screen on a short one.
+ * min-height rather than height, and that part is not cosmetic: this
+ * element is overflow:hidden, so a fixed height that a long title plus a
+ * tagline outgrows silently CLIPS the buttons instead of showing them.
+ * The old 520/640 had enough slack to hide that; a viewport-derived
+ * height on a short window would not. As a minimum it still gives the
+ * banner its cinematic proportions whenever the content is shorter,
+ * which is the normal case, and simply grows on the rare title that
+ * needs the room. */
 .hero {
   grid-area: hero;
   position: relative;
   min-width: 0;
-  height: 520px;
+  min-height: clamp(380px, 46vh, 520px);
   border-radius: var(--radius-large);
   overflow: hidden;
   display: flex;
   align-items: flex-start;
   padding: 40px 32px 32px;
   isolation: isolate;
+  transition: min-height var(--transition-standard, 0.25s ease);
 }
 
 /* Movies have nothing below the hero competing for room (no Next-to-Play/
@@ -20,8 +44,18 @@
    same ~40px inset a series page needs room for its season/episode chrome
    underneath. */
 .heroMovie {
-  height: 640px;
+  min-height: clamp(420px, 54vh, 640px);
   padding-top: 22px;
+}
+
+/* "Very visible" is about the trailer, not about the banner at rest — so
+   the extra height is spent when the trailer is actually open rather than
+   held permanently against the About panel. Applied for the whole time
+   the trailer is up (not only while playing, unlike .contentFaded): the
+   frame should not resize under someone who has just paused it. */
+.heroTrailerOpen,
+.heroMovie.heroTrailerOpen {
+  min-height: clamp(460px, 66vh, 720px);
 }
 
 .artLayer {
@@ -348,8 +382,10 @@
   .hero {
     padding: 26px 24px;
   }
+  /* Only the ceiling moves here — the clamp above already handles short
+     windows, and this breakpoint is about width, not height. */
   .heroMovie {
-    height: 560px;
+    min-height: clamp(420px, 54vh, 560px);
     padding-top: 18px;
   }
   .content {

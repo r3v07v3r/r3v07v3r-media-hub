@@ -33,7 +33,7 @@ export function ContextBackButton({ origin, fallbackLabel, onBack }: ContextBack
     <button
       ref={ref}
       type="button"
-      className={`${styles.button} animated-edge glass-panel`}
+      className={`${styles.button} animated-edge edge-idle glass-panel`}
       onClick={onBack}
     >
       <Icon name="chevron-left" size={15} />
