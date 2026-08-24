@@ -49,6 +49,7 @@ import {
   runPlaybackPreparationStage,
   type PlaybackPreparationStage
 } from '@renderer/lib/mediaHub/playbackPreparation'
+import { rememberTrackedId } from '@renderer/lib/mediaHub/startupSnapshot'
 import {
   startupContinueWatchingFallback,
   startupTrackedIdsFallback,
@@ -761,7 +762,15 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       // completed, synchronous db write) supersedes it.
       window.api?.mediaHub?.tracking
         .toggle(mediaItemToTrackablePayload(media))
-        .then(() => homeFeed.refresh())
+        .then((result) => {
+          // Persisted from the toggle's own answer rather than waiting for
+          // the refresh below to carry it. That refresh throws whenever
+          // every catalog source is down — precisely when someone is most
+          // likely to restart mid-outage and find this title offering the
+          // opposite action, which reverses the write that just succeeded.
+          if (typeof result?.tracked === 'boolean') rememberTrackedId(media.id, result.tracked)
+          homeFeed.refresh()
+        })
         .catch(() => {
           // Best-effort — the optimistic local toggle above already reflects
           // the user's intent; a failed write just means it won't survive a

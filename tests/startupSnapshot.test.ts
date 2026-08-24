@@ -622,6 +622,86 @@ async function main(): Promise<void> {
     })
   })
 
+  await check('persists a confirmed My List add without a home refresh', async () => {
+    // tracking:toggle is a local write and succeeds during an outage;
+    // home:personalized throws when every catalog source is down. The
+    // change has to reach disk without it.
+    const storage = fakeStorage()
+    const first = await loadModule(storage)
+    first.rememberHomeFeed({
+      featured: [],
+      recommendations: [],
+      continueWatching: [],
+      preferredGenres: [],
+      trackedIds: ['already']
+    })
+    first.rememberTrackedId('added', true)
+    first.flushStartupSnapshot()
+
+    assert.deepEqual((await loadModule(storage)).rememberedHomeFeed().trackedIds, [
+      'already',
+      'added'
+    ])
+  })
+
+  await check('persists a confirmed My List removal', async () => {
+    const storage = fakeStorage()
+    const first = await loadModule(storage)
+    first.rememberHomeFeed({
+      featured: [],
+      recommendations: [],
+      continueWatching: [],
+      preferredGenres: [],
+      trackedIds: ['keep', 'drop']
+    })
+    first.rememberTrackedId('drop', false)
+    first.flushStartupSnapshot()
+
+    assert.deepEqual((await loadModule(storage)).rememberedHomeFeed().trackedIds, ['keep'])
+  })
+
+  await check('a confirmed toggle does not re-date the rest of the home feed', async () => {
+    // One id was re-verified. The hero pool and Continue Watching beside
+    // it were not, and must keep ageing.
+    const storage = fakeStorage()
+    const old = Date.now() - 29 * DAY_MS
+    storage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({
+        savedAt: old,
+        catalogSavedAt: {},
+        homeSavedAt: old,
+        catalog: [],
+        featured: [mediaItem({ id: 'f1' })],
+        recommendations: [],
+        continueWatching: [],
+        preferredGenres: [],
+        trackedIds: []
+      })
+    )
+    const mod = await loadModule(storage)
+    mod.rememberTrackedId('added', true)
+    mod.flushStartupSnapshot()
+    assert.equal(stored(storage).homeSavedAt, old)
+  })
+
+  await check('ignores a toggle that changes nothing, and a blank id', async () => {
+    const storage = fakeStorage()
+    const mod = await loadModule(storage)
+    mod.rememberHomeFeed({
+      featured: [],
+      recommendations: [],
+      continueWatching: [],
+      preferredGenres: [],
+      trackedIds: ['one']
+    })
+    mod.rememberTrackedId('one', true)
+    mod.rememberTrackedId('missing', false)
+    mod.rememberTrackedId('', true)
+    mod.flushStartupSnapshot()
+    assert.deepEqual(stored(storage).trackedIds, ['one'])
+  })
+
   console.log('\nstartupSnapshot — running out of storage')
 
   await check('sheds catalog descriptions rather than losing the whole snapshot', async () => {

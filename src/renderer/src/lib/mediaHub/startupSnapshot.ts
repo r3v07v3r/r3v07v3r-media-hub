@@ -397,6 +397,34 @@ export function mergeRememberedCatalog(
   return merged
 }
 
+/**
+ * Records one confirmed My List change immediately, without waiting for a
+ * home:personalized refresh to carry it.
+ *
+ * That wait was a real gap: tracking:toggle is a local database write and
+ * succeeds during an outage, but home:personalized THROWS when every
+ * catalog source is down (tracking.ts's homePersonalized), so the change
+ * never reached this file. Restart mid-outage and the title came back
+ * showing the opposite action — and pressing it reversed a mutation the
+ * backend had already committed.
+ *
+ * `homeSavedAt` is deliberately left alone. A confirmed toggle re-verifies
+ * this one id, not the hero pool or the Continue Watching row alongside
+ * it, and re-dating those on the strength of it is the renewal mistake
+ * this file has already made twice.
+ */
+export function rememberTrackedId(id: string, tracked: boolean): void {
+  if (!id) return
+  const snapshot = read()
+  const has = snapshot.trackedIds.includes(id)
+  if (tracked === has) return
+  current = {
+    ...snapshot,
+    trackedIds: tracked ? [...snapshot.trackedIds, id] : snapshot.trackedIds.filter((x) => x !== id)
+  }
+  schedule()
+}
+
 export function clearStartupSnapshot(): void {
   current = EMPTY
   if (writeTimer) {
