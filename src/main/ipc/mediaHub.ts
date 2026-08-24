@@ -13,6 +13,7 @@
 // just follows the domain grouping used elsewhere in this port.
 
 import { registerAniskipIpc } from '../media-hub/aniskip'
+import { registerActivityIpc } from '../media-hub/backgroundJobs'
 import { registerAppIpc } from '../media-hub/appIpc'
 import { registerAutoUpdateIpc } from '../media-hub/autoUpdate'
 import { registerCatalogIpc } from '../media-hub/catalog'
@@ -32,6 +33,7 @@ import { registerFriendsIpc, restoreFriendsGroup } from '../media-hub/friends'
 
 export function registerMediaHubIpc(): void {
   registerAppIpc()
+  registerActivityIpc()
   registerAutoUpdateIpc()
   registerTorBoxIpc()
   registerCatalogIpc()

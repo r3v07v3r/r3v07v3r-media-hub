@@ -197,9 +197,16 @@ export function createDatabase(filename: string): MediaHubDatabase {
   // every millisecond of it main-thread time the renderer cannot get an
   // IPC reply during. That matters because the write-heavy paths here are
   // not occasional: the anime franchise-grouping pass alone caches one
-  // row per crawled title (~735 titles, plus a second relationship pass),
-  // so at FULL it spends multiple seconds of pure blocking fsync in
-  // bursts while the person is trying to use the app.
+  // row per crawled title — ANIME_CATALOG_DEPTH titles, 2000 of them, plus
+  // a second relationship pass over every one without a TVDB mapping — so
+  // at FULL that single job is minutes of wall clock carrying seconds of
+  // pure blocking fsync, in bursts, while the person is using the app.
+  //
+  // Running it at `maintenance` (see catalog.ts's startAnimeGrouping and
+  // taskScheduler.ts) fixes when those writes are issued, not what each
+  // one costs once issued: the tier defers the fetches, and then every
+  // response that lands still stops the main thread for an fsync. The
+  // scheduler and this pragma solve different halves of the same stall.
   //
   // NORMAL is the standard pairing for WAL and is specifically safe here:
   // in WAL mode it still cannot corrupt the database, it only gives up

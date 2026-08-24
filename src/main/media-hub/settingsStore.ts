@@ -18,7 +18,6 @@
 // tagged reversible encoding instead of throwing, so the app keeps working
 // in dev — see ENCRYPTION_UNAVAILABLE_PREFIX below.
 
-import { app, safeStorage } from 'electron'
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -117,8 +116,28 @@ export interface MediaHubRawSettings {
   [key: string]: unknown
 }
 
+/**
+ * Electron resolved on use rather than at import.
+ *
+ * A top-level `import { app } from 'electron'` throws at IMPORT time when
+ * the Electron binary is absent, which takes down everything that merely
+ * mentions this module — however far away, and however little it wanted
+ * anything from Electron. CI installs with `npm ci --ignore-scripts`,
+ * which by design never downloads that binary, so pure-logic tests were
+ * dying on the import chain rather than on anything they assert.
+ *
+ * Every use below is inside a function that only runs in the real app,
+ * where the binary is always present, so nothing changes for the packaged
+ * build. See logger.ts, which carries the same pattern for the same
+ * reason.
+ */
+function electron(): typeof import('electron') {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  return require('electron')
+}
+
 function settingsPath(): string {
-  return path.join(app.getPath('userData'), 'media-hub-settings.json')
+  return path.join(electron().app.getPath('userData'), 'media-hub-settings.json')
 }
 
 // The pre-rewrite app (<= 0.12.x) stored the same keys — same names, same
@@ -127,7 +146,7 @@ function settingsPath(): string {
 // the old app). settings.json is left in place so rolling back to an old
 // build loses nothing.
 function legacySettingsPath(): string {
-  return path.join(app.getPath('userData'), 'settings.json')
+  return path.join(electron().app.getPath('userData'), 'settings.json')
 }
 
 export function readSettings(): MediaHubRawSettings {
@@ -169,7 +188,7 @@ let warnedNoEncryption = false
 
 /** Encrypts a credential-shaped string for storage. Falls back to a tagged, reversible base64 encoding (NOT real encryption) when the OS has no secure-storage backend available, so dev/headless environments don't hard-crash — see module doc comment. */
 export function encrypt(value: string): string {
-  if (!safeStorage.isEncryptionAvailable()) {
+  if (!electron().safeStorage.isEncryptionAvailable()) {
     if (!warnedNoEncryption) {
       warnedNoEncryption = true
       logError(
@@ -181,7 +200,7 @@ export function encrypt(value: string): string {
     }
     return ENCRYPTION_UNAVAILABLE_PREFIX + Buffer.from(value, 'utf8').toString('base64')
   }
-  return safeStorage.encryptString(value).toString('base64')
+  return electron().safeStorage.encryptString(value).toString('base64')
 }
 
 export function decrypt(value: string | undefined): string {
@@ -196,7 +215,7 @@ export function decrypt(value: string | undefined): string {
     }
   }
   try {
-    return safeStorage.decryptString(Buffer.from(value, 'base64'))
+    return electron().safeStorage.decryptString(Buffer.from(value, 'base64'))
   } catch {
     return ''
   }

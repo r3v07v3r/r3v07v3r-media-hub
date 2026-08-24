@@ -58,6 +58,7 @@ import type {
   WatchStatusDiscrepancy,
   SkipTimes,
   CacheSessionMeta,
+  ActivitySnapshot,
   StreamCacheEntry,
   StreamCandidate,
   StreamResolveResult,
@@ -389,6 +390,13 @@ const api = {
           season: meta?.seasonNumber,
           episode: meta?.episodeNumber
         })
+    },
+
+    /** What the central work manager is doing — see taskScheduler.ts. */
+    activity: {
+      get: (): Promise<ActivitySnapshot> => ipcRenderer.invoke(MEDIA_HUB_CHANNELS.activityGet),
+      onChanged: (onEvent: (snapshot: ActivitySnapshot) => void): (() => void) =>
+        subscribe<ActivitySnapshot>(MEDIA_HUB_CHANNELS.activityChanged, onEvent)
     },
 
     streamCache: {
