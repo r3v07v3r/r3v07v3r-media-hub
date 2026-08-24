@@ -297,16 +297,23 @@ async function kitsuCatalog(priority: TaskPriority): Promise<CatalogItem[]> {
   // Kitsu has no franchise concept — each season/cour is its own top-level
   // entry. The exhaustive franchise pass is deliberately left to run after
   // this result is returned (see startAnimeGrouping) rather than awaited
-  // here: this function is called directly by the renderer's catalog:list
-  // request, not by a detached six-hour maintenance job.
+  // here: this function is on the response path of the renderer's
+  // catalog:list request as well as the six-hourly refresh job's, and
+  // that pass takes minutes.
   return dedupeCatalog(pages)
 }
 
 /**
- * The cached top-level catalog for one kind (movie/series/anime). Tries the
- * broad source first (Kitsu for anime, Simkl trending otherwise); on
- * failure or an empty result, non-anime kinds fall back to Cinemeta's top
- * list; if that also comes up empty, falls back to a stale cache entry
+ * The cached top-level catalog for one kind (movie/series/anime).
+ *
+ * Anime comes from Kitsu. Movies and series are read from Simkl's
+ * trending feeds AND Cinemeta's top catalog together and merged — see
+ * mergeCatalogSources, and SIMKL_TRENDING_SPANS for why one source is not
+ * enough. A source that fails costs its own contribution and nothing
+ * else, which preserves what the old try-Simkl-then-fall-back-to-Cinemeta
+ * chain gave: either one alone still fills the catalog.
+ *
+ * If nothing is left after all that, falls back to a stale cache entry
  * (even if expired) before finally rethrowing the original error.
  */
 export async function catalogData(
