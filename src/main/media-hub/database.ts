@@ -540,14 +540,19 @@ export function createDatabase(filename: string): MediaHubDatabase {
             typeof durationSeconds === 'number' && Number.isFinite(durationSeconds)
               ? durationSeconds
               : null,
-          // Null here does NOT overwrite a stored volume — see the upsert's
-          // COALESCE. A caller that has no volume to offer is saying nothing
-          // about it, and must not wipe what the player recorded.
+          // TWO different silences, deliberately mapped to the same NULL —
+          // which the upsert's COALESCE reads as "leave any stored volume
+          // standing":
           //
-          // Silence is not stored either, deliberately: restoring a muted
-          // bookmark would hand someone a film that plays with no sound and
-          // no visible reason, which reads as broken. Muting is for now, a
-          // boost is for this title.
+          //   omitted — the caller has no volume to offer and is saying
+          //     nothing about it, so it must not wipe what the player wrote.
+          //   zero — the player IS saying something: muted, right now. Mute
+          //     is what people do for a minute, so the level worth resuming
+          //     is the last audible one. Not silence, which would come back
+          //     as a film playing with no sound and no visible reason; and
+          //     not a reset to 100%, which would throw away the boost the
+          //     title was actually being watched at — the one thing this
+          //     column exists to remember.
           volume:
             typeof volume === 'number' && Number.isFinite(volume) && volume > 0 ? volume : null,
           now: new Date().toISOString()

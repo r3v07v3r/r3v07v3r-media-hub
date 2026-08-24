@@ -670,6 +670,25 @@ export async function startPlayerSession(
   await player.setBounds(playerBoundsFor(mainWindow))
   if (fullScreen) await player.setFullscreen(true)
 
+  // EVERY title starts at its own level, because mpv keeps `volume` across
+  // `loadfile` and a boost belongs to the film it was needed for — carrying
+  // 180% from a quiet film into the next one is a shock, not a preference.
+  //
+  // BEFORE the load for the same reason the window state above is: `loadfile`
+  // starts playing, and loadFile() does not return until mpv reports
+  // `file-loaded`, by which time sound is already coming out. Reset it
+  // afterwards and the opening seconds of the new title are the previous
+  // title's amplification — the exact shock this exists to prevent, just
+  // shorter.
+  //
+  // Restoring the boost is the overlay's job, out of the resume bookmark, and
+  // the ordering that makes the two agree is not an accident: this runs inside
+  // startPlayerSession, while the overlay cannot even know WHICH title it is
+  // looking at until pushSessionSnapshot, which its caller only reaches after
+  // this function resolves. The reset therefore always lands first, and the
+  // restore — if there is one — always lands on top of it.
+  await player.set('volume', 100).catch(() => {})
+
   await player.loadFile(url, {
     startSeconds: options.startSeconds,
     audioLanguage: options.audioLanguage,
@@ -694,18 +713,6 @@ export async function startPlayerSession(
   // would still be showing the mode that was chosen before.
   await applyFitMode(fitMode).catch(() => {})
   await applyPictureSettings().catch(() => {})
-
-  // EVERY title starts at its own level, because mpv keeps `volume` across
-  // `loadfile` and a boost belongs to the film it was needed for — carrying
-  // 180% from a quiet film into the next one is a shock, not a preference.
-  //
-  // Restoring the boost is the overlay's job, out of the resume bookmark, and
-  // the ordering that makes the two agree is not an accident: this runs inside
-  // startPlayerSession, while the overlay cannot even know WHICH title it is
-  // looking at until pushSessionSnapshot, which its caller only reaches after
-  // this function resolves. The reset therefore always lands first, and the
-  // restore — if there is one — always lands on top of it.
-  await player.set('volume', 100).catch(() => {})
 
   // Re-asserted per title for the same reason as the fit mode, and read from
   // the window because a session can start into an already-fullscreen app —

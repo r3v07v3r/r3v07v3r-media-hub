@@ -151,6 +151,18 @@ check('a new volume replaces the stored one', () => {
   db.close()
 })
 
+check('muting keeps the level the title was being watched at', () => {
+  const db = tempDb()
+  db.savePlaybackPosition('tt1234567', undefined, 1450, 7200, 1.6)
+  // Mute is a thing people do for a minute, not a level to resume at. The
+  // bookmark keeps the last AUDIBLE volume: coming back silent would read as
+  // a broken player, and coming back at 100% would throw away the boost this
+  // title was being watched at, which is the one thing the column is for.
+  db.savePlaybackPosition('tt1234567', undefined, 1600, 7200, 0)
+  assert.equal(db.getPlaybackPosition('tt1234567')?.volume, 1.6)
+  db.close()
+})
+
 check('a bookmark cleared by the thresholds takes its volume with it', () => {
   const db = tempDb()
   db.savePlaybackPosition('tt1234567', undefined, 1450, 7200, 1.8)
