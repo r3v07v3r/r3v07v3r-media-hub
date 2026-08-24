@@ -188,6 +188,27 @@ interface PreparedQueries {
 export function createDatabase(filename: string): MediaHubDatabase {
   const sql = new DatabaseSync(filename)
   sql.exec('PRAGMA journal_mode = WAL')
+  // The single biggest source of "the whole app freezes for a moment":
+  // every statement here runs SYNCHRONOUSLY on the Electron main process,
+  // and SQLite's default `synchronous = FULL` makes each implicit
+  // transaction fsync the WAL before returning. Measured against a real
+  // 19MB user database on this project's own hardware: 2.02 ms per
+  // catalog_cache write at FULL vs 0.045 ms at NORMAL — a 45x difference,
+  // every millisecond of it main-thread time the renderer cannot get an
+  // IPC reply during. That matters because the write-heavy paths here are
+  // not occasional: the anime franchise-grouping pass alone caches one
+  // row per crawled title (~735 titles, plus a second relationship pass),
+  // so at FULL it spends multiple seconds of pure blocking fsync in
+  // bursts while the person is trying to use the app.
+  //
+  // NORMAL is the standard pairing for WAL and is specifically safe here:
+  // in WAL mode it still cannot corrupt the database, it only gives up
+  // durability of the most recent commits if the machine loses power
+  // mid-write. Everything in this file is either a local cache (which
+  // re-fetches) or library state that is re-pushed from the pending queue
+  // (see tracking.ts), so losing the last few commits to a power cut
+  // costs a refetch, not data integrity.
+  sql.exec('PRAGMA synchronous = NORMAL')
   sql.exec('PRAGMA foreign_keys = ON')
 
   sql.exec(`CREATE TABLE IF NOT EXISTS tracked(

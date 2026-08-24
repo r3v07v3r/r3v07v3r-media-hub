@@ -226,7 +226,24 @@ ul {
    final frame instead of being surgically special-cased per class). */
 
 /* Rotating conic-gradient edge light — a border that is mostly dark with
-   a moving highlight sweeping the perimeter, not a fully-lit outline. */
+   a moving highlight sweeping the perimeter, not a fully-lit outline.
+
+   The rotation is NOT on by default, and that is a performance decision,
+   not an aesthetic one. `edgeRotate` animates --edge-angle, a registered
+   @property feeding a conic-gradient, so every frame has to repaint the
+   whole ::before box and re-run its xor mask composite — none of which
+   the compositor can do on its own. That is affordable for the one-off
+   surfaces it was designed for and ruinous on a grid, because MediaCard
+   carries this class: counted live on a browse page, 57 cards meant 57
+   conic gradients repainting every frame forever, and the count climbs
+   with every batch MediaGrid reveals on scroll. That is the single
+   largest always-on cost in the renderer.
+
+   So: idle rotation is opt-in via .edge-idle, for surfaces that exist
+   once on screen (the performance widget, the detail page's back
+   button). Everywhere else the highlight is a static edge at rest and
+   only starts travelling on hover/focus — which is the moment it is
+   actually being looked at, and never more than one card at a time. */
 .animated-edge {
   position: relative;
   isolation: isolate;
@@ -253,16 +270,21 @@ ul {
   -webkit-mask-composite: xor;
   mask-composite: exclude;
   pointer-events: none;
-  animation: edgeRotate var(--motion-idle-slow) linear infinite;
-  animation-delay: var(--edge-delay, 0s);
   opacity: 0.7;
   transition: opacity var(--transition-standard);
+}
+/* Opt-in idle rotation — only for surfaces that appear once on screen. */
+.animated-edge.edge-idle::before {
+  animation: edgeRotate var(--motion-idle-slow) linear infinite;
+  animation-delay: var(--edge-delay, 0s);
 }
 .animated-edge:hover::before,
 .animated-edge:focus-within::before,
 .animated-edge.edge-active::before {
   opacity: 1;
-  animation-duration: calc(var(--motion-idle-slow) * 0.45);
+  /* Explicit shorthand rather than animation-duration alone: the base
+     rule no longer declares an animation for this to override. */
+  animation: edgeRotate calc(var(--motion-idle-slow) * 0.45) linear infinite;
 }
 @keyframes edgeRotate {
   to {
