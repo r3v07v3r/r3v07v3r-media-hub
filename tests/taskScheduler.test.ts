@@ -12,6 +12,8 @@ import {
   currentPressure,
   laneForUrl,
   coalesce,
+  coalesceScope,
+  isForegroundPriority,
   mapWithLimit,
   resetSchedulerForTests,
   schedule,
@@ -318,6 +320,23 @@ async function main(): Promise<void> {
     assert.equal(all.length, 3)
     assert.ok(all.every((pages) => pages.length === 4))
     setPressure('playback', 'idle')
+  })
+
+  await check('foreground and background callers do not share a coalescing key', () => {
+    // A detail page opening must never join a background reconcile pass's
+    // fetch for the same title: it would inherit the tier that fetch was
+    // scheduled at, and then stand down for the very requests the detail
+    // page had just queued itself.
+    assert.equal(isForegroundPriority('interactive'), true)
+    assert.equal(isForegroundPriority('visible'), true)
+    assert.equal(isForegroundPriority('background'), false)
+    assert.equal(isForegroundPriority('maintenance'), false)
+
+    // The pair that matters — catalog:list and home:personalized, both
+    // visible — still share, which is the duplicate-crawl fix.
+    assert.equal(coalesceScope('visible'), coalesceScope('interactive'))
+    assert.notEqual(coalesceScope('visible'), coalesceScope('maintenance'))
+    assert.equal(coalesceScope('background'), coalesceScope('maintenance'))
   })
 
   await check('the snapshot reports what is running and what is waiting', async () => {

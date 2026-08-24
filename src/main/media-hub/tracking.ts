@@ -173,6 +173,22 @@ interface SimklPinPollResponse {
  *  so a broken connection doesn't get hammered either. */
 const RECONCILE_COOLDOWN_MS = 5 * 60 * 1000
 const RECONCILE_COOLDOWN_KEY = 'reconcile:cooldown:v1'
+/**
+ * The most recent diff, kept for as long as the cooldown that produced it.
+ *
+ * The cooldown exists to stop the same expensive Simkl comparison running
+ * over and over, and it works by refusing to run — which was fine when
+ * the only thing that ever asked was the renderer, on mount. Now the
+ * recurring watch-sync job asks too (see runBackgroundWatchSync), and
+ * without somewhere to put its answer it would consume the cooldown and
+ * throw the result away, leaving a review panel opened in the next five
+ * minutes with nothing to show and no way to find out why.
+ *
+ * So whoever runs the diff writes it down, and a caller inside the
+ * cooldown reads it rather than being told nothing happened. The work is
+ * still done once per cooldown window; it is just no longer wasted.
+ */
+const RECONCILE_RESULT_KEY = 'reconcile:result:v1'
 /** Ids someone has explicitly said to stop asking about — kept far longer
  *  than the cooldown above (this is a decision, not a rate limit), but
  *  not forever: 90 days gives a genuinely stale dismissal a chance to
@@ -659,7 +675,8 @@ export async function runBackgroundWatchSync(): Promise<void> {
   if (db.getCache(RECONCILE_COOLDOWN_KEY)) return
   db.putCache(RECONCILE_COOLDOWN_KEY, true, RECONCILE_COOLDOWN_MS)
   try {
-    await computeMovieDiscrepancies()
+    const discrepancies = await computeMovieDiscrepancies()
+    db.putCache(RECONCILE_RESULT_KEY, discrepancies, RECONCILE_COOLDOWN_MS)
   } catch (error) {
     logError('job:watch-sync', error)
   }
@@ -933,10 +950,19 @@ export function registerTrackingIpc(): void {
     // budget is the flush's own retry pacing, which applies to entries
     // that have already failed and never to one nobody has tried.
     const justPushed = await flushPendingPushes()
-    if (db.getCache(RECONCILE_COOLDOWN_KEY)) return { ran: false, discrepancies: [] }
+    if (db.getCache(RECONCILE_COOLDOWN_KEY)) {
+      // Inside the cooldown, but that no longer means "nothing to say" —
+      // the background watch-sync job may have run the diff moments ago.
+      // Reported as ran: false, which is the truth (this call did not run
+      // one) and is all the renderer has ever keyed off; what it acts on
+      // is whether there are discrepancies.
+      const cached = db.getCache<WatchStatusDiscrepancy[]>(RECONCILE_RESULT_KEY) || []
+      return { ran: false, discrepancies: cached.filter((d) => !justPushed.has(d.id)) }
+    }
     db.putCache(RECONCILE_COOLDOWN_KEY, true, RECONCILE_COOLDOWN_MS)
     try {
       const discrepancies = await computeMovieDiscrepancies()
+      db.putCache(RECONCILE_RESULT_KEY, discrepancies, RECONCILE_COOLDOWN_MS)
       // Anything confirmed moments ago is settled, whatever Simkl's
       // all-items view says — that read can lag its own write, and
       // re-asking about a title someone just resolved is the exact

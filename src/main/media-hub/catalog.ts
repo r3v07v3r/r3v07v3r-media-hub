@@ -40,7 +40,7 @@ import {
   type RawApiPayload
 } from './core'
 import { isLikelyFranchiseSibling, rankSimilarTitles } from '../../shared/media-hub/catalog-logic'
-import { coalesce, type TaskPriority } from './taskScheduler'
+import { coalesce, coalesceScope, type TaskPriority } from './taskScheduler'
 import { buildGroupedAnimeVideos, groupAnimeCatalog, kitsuRealEpisodes } from './animeSeasons'
 import { omdbRottenTomatoesRating } from './omdb'
 
@@ -284,8 +284,13 @@ export async function catalogData(
   //
   // `force` is part of the key so an explicit refresh is never satisfied
   // by joining an ordinary in-flight fetch that is about to return the
-  // cached-source result the person just asked to bypass.
-  return coalesce(`catalog:fetch:${kind}:${force ? 'forced' : 'normal'}`, async () => {
+  // cached-source result the person just asked to bypass. The fg/bg scope
+  // keeps a person's refresh from joining the six-hourly maintenance
+  // crawl and inheriting its tier — see coalesceScope. The two callers
+  // that actually matter here, catalog:list and home:personalized, are
+  // both foreground and both unforced, so they still share one crawl.
+  const scope = coalesceScope(priority)
+  return coalesce(`catalog:fetch:${kind}:${force ? 'forced' : 'normal'}:${scope}`, async () => {
     let items: CatalogItem[] | null | undefined
     let primaryError: unknown = new Error('The broad catalog returned no titles.')
 
@@ -388,8 +393,15 @@ export function metadata(
   // Coalesced per title. tracking:list and home:personalized each resolve
   // metadata for every tracked series, and the renderer calls both at
   // once on every launch — without this, every tracked title is fetched
-  // exactly twice, in parallel, for two identical answers.
-  return coalesce(`meta:${type}:${id}`, () => resolveMetadata(type, id, priority))
+  // exactly twice, in parallel, for two identical answers. Both are
+  // foreground, so they share.
+  //
+  // Scoped, so opening a detail page can never join the reconcile pass's
+  // background fetch for the same title and end up waiting behind its own
+  // page's requests — see coalesceScope.
+  return coalesce(`meta:${type}:${id}:${coalesceScope(priority)}`, () =>
+    resolveMetadata(type, id, priority)
+  )
 }
 
 async function resolveMetadata(

@@ -475,6 +475,33 @@ export function schedule<T>(run: () => Promise<T> | T, options: ScheduleOptions 
 const compositeByKey = new Map<string, Promise<unknown>>()
 
 /**
+ * Whether a tier is one somebody is waiting on. Composite work must not
+ * share a coalescing key across this line.
+ *
+ * Coalescing is the right default — one crawl for however many callers —
+ * but joining an in-flight composite means inheriting the tier its leaf
+ * requests were already scheduled at, and those are queued up front and
+ * cannot be re-tiered afterwards. So a detail page that joined a
+ * background reconcile's metadata fetch would sit behind the very
+ * requests its own page had just queued, because the work it is waiting
+ * on stands down for them.
+ *
+ * Splitting the key on this boundary costs a duplicated fetch in the
+ * narrow window where a foreground and a background caller want the same
+ * thing at the same moment, and buys back the guarantee that waiting on
+ * something can never be slower than not having coalesced at all.
+ */
+export function isForegroundPriority(priority: TaskPriority): boolean {
+  return PRIORITY_RANK[priority] <= PRIORITY_RANK.visible
+}
+
+/** The suffix that keeps foreground and background callers of the same
+ *  composite in separate lanes of coalescing. See isForegroundPriority. */
+export function coalesceScope(priority: TaskPriority): string {
+  return isForegroundPriority(priority) ? 'fg' : 'bg'
+}
+
+/**
  * Single-flight for composite work. A second call with the same key, while
  * the first is still running, joins it and shares its result.
  *
