@@ -81,6 +81,25 @@ const CINEMETA_PAGE_SIZE = 100
 const CATALOG_TTL_MS = 6 * 60 * 60 * 1000
 
 /**
+ * Marks that the anime catalog currently in cache has been through the
+ * franchise-grouping pass.
+ *
+ * Needed because the pass takes minutes and the raw catalog is cached
+ * before it starts. Quit in between — closing the app during a crawl is
+ * hardly exotic — and the next launch finds a perfectly valid six-hour
+ * cache entry, returns it without ever reaching the grouping call, and
+ * shows one tile per season for every multi-season franchise until that
+ * entry expires. The hourly refresh honours the same cache, so it does
+ * not rescue it either.
+ *
+ * A marker rather than inspecting the catalog for groupedIds: "no item
+ * has any siblings" is indistinguishable from "never grouped" by
+ * inspection, and guessing wrong there means re-running the largest
+ * background job in the app on every cache hit, forever.
+ */
+const ANIME_GROUPED_KEY = 'catalog:v2:anime:grouped'
+
+/**
  * How deep into Kitsu's popularity ranking the anime crawl walks, in
  * titles. Pages are 20 each, so this is 100 requests.
  *
@@ -154,6 +173,7 @@ function runAnimeGrouping(items: CatalogItem[], generation: number): void {
       // silently roll it back.
       if (!grouped.length || generation !== animeCatalogGeneration) return
       getDatabase().putCache('catalog:v2:anime', grouped, CATALOG_TTL_MS)
+      getDatabase().putCache(ANIME_GROUPED_KEY, true, CATALOG_TTL_MS)
       // The whole point of the pass that just finished is the groupedIds
       // it worked out, so the index has to drop the pre-grouping answer
       // it may have already handed out.
@@ -371,7 +391,15 @@ export async function catalogData(
   const db = getDatabase()
   if (!force) {
     const cached = db.getCache<CatalogItem[]>(key)
-    if (cached) return cached
+    if (cached) {
+      // A cached anime catalog that never finished being grouped — the
+      // app was closed mid-pass — gets picked up here rather than waiting
+      // out its six hours ungrouped. See ANIME_GROUPED_KEY.
+      if (kind === 'anime' && db.getCache<boolean>(ANIME_GROUPED_KEY) !== true) {
+        startAnimeGrouping(cached)
+      }
+      return cached
+    }
   }
 
   // Coalesced across callers, which matters more here than anywhere else
@@ -432,6 +460,10 @@ export async function catalogData(
 
     db.putCache(key, items, CATALOG_TTL_MS)
     if (kind === 'anime') {
+      // This catalog is raw until the pass below says otherwise. Written
+      // rather than left absent so a marker from the PREVIOUS catalog
+      // cannot vouch for this one.
+      db.putCache(ANIME_GROUPED_KEY, false, CATALOG_TTL_MS)
       invalidateAnimeGroupIndex()
       startAnimeGrouping(items)
     }

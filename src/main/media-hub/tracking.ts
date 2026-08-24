@@ -45,7 +45,7 @@ import { airingStatus, continueWatchingList } from './core'
 import { catalogData, metadata } from './catalog'
 import { getDatabase } from './dbState'
 import { fetchJson } from './httpClient'
-import { mapWithLimit } from './taskScheduler'
+import { mapWithLimit, type TaskPriority } from './taskScheduler'
 import { handle } from './ipcGuard'
 import { logError } from './logger'
 import { pushMalProgress } from './malSync'
@@ -82,10 +82,14 @@ interface SimklSyncResult {
 }
 
 /** Runs a Simkl sync/history POST, translating "not connected" vs. a caught error vs. success into the same three-way shape every mark/unmark handler returns. */
-async function syncSimklHistory(pathname: string, body: unknown): Promise<SimklSyncResult> {
+async function syncSimklHistory(
+  pathname: string,
+  body: unknown,
+  priority: TaskPriority = 'interactive'
+): Promise<SimklSyncResult> {
   if (!simklCredentials().accessToken) return { simklSynced: false }
   try {
-    await simklRequest(pathname, { method: 'POST', body: JSON.stringify(body) })
+    await simklRequest(pathname, { method: 'POST', body: JSON.stringify(body) }, priority)
     return { simklSynced: true }
   } catch (error) {
     logError(`simkl:${pathname}`, error)
@@ -210,10 +214,25 @@ interface CachedReconcileResult {
   discrepancies: WatchStatusDiscrepancy[]
 }
 
-function writeReconcileResult(discrepancies: WatchStatusDiscrepancy[]): void {
+/**
+ * Writes a diff under the account it was COMPUTED for, not whichever one
+ * happens to be connected by the time it finishes.
+ *
+ * Those are not the same moment: the diff reads Simkl's whole library and
+ * then enriches every disagreement with metadata, which takes long enough
+ * that signing out and authorizing someone else during it is an ordinary
+ * thing to do. Deriving the stamp at write time would put account A's
+ * rows under account B's mark, and the check on the way back out would
+ * then happily serve them — resolving one pushes A's decision into B's
+ * history. That is the exact failure the stamp exists to prevent, so the
+ * account has to be captured before the work starts and discarded if it
+ * changed, the same way simklWatchedSnapshot already does.
+ */
+function writeReconcileResult(account: string, discrepancies: WatchStatusDiscrepancy[]): void {
+  if (!account || simklAccountMark() !== account) return
   getDatabase().putCache<CachedReconcileResult>(
     RECONCILE_RESULT_KEY,
-    { account: simklAccountMark(), discrepancies },
+    { account, discrepancies },
     RECONCILE_COOLDOWN_MS
   )
 }
@@ -452,7 +471,7 @@ function pushItemFor(entry: PendingWatchStatusPush): SimklPushItem {
  * after one doesn't re-report a title that was pushed seconds ago and
  * that Simkl's own all-items view may not reflect yet.
  */
-async function pushPendingToServices(): Promise<Set<string>> {
+async function pushPendingToServices(priority: TaskPriority): Promise<Set<string>> {
   const queue = pendingPushes()
   if (!queue.length) return new Set()
   // Not connected — keep everything queued rather than failing attempts
@@ -535,10 +554,14 @@ async function pushPendingToServices(): Promise<Set<string>> {
     if (disowned()) return new Set()
     const items = group.map(pushItemFor)
     try {
-      const response = await simklRequest<SimklHistoryResponse>(pathname, {
-        method: 'POST',
-        body: JSON.stringify(batchHistoryPayload(items.map((item) => ({ item }))))
-      })
+      const response = await simklRequest<SimklHistoryResponse>(
+        pathname,
+        {
+          method: 'POST',
+          body: JSON.stringify(batchHistoryPayload(items.map((item) => ({ item }))))
+        },
+        priority
+      )
       const unmatched = new Set(unmatchedCatalogIds(response, items))
       for (const entry of group) {
         if (unmatched.has(entry.id)) {
@@ -708,12 +731,16 @@ async function pushPendingToServices(): Promise<Set<string>> {
  */
 export async function runBackgroundWatchSync(): Promise<void> {
   if (!simklCredentials().accessToken) return
-  await flushPendingPushes()
+  // Background: this is a recurring job nobody asked for, so its pushes
+  // must not jump ahead of the screen someone is looking at, and must
+  // stand down along with the rest of the job once playback starts.
+  await flushPendingPushes('background')
   const db = getDatabase()
   if (db.getCache(RECONCILE_COOLDOWN_KEY)) return
   db.putCache(RECONCILE_COOLDOWN_KEY, true, RECONCILE_COOLDOWN_MS)
+  const account = simklAccountMark()
   try {
-    writeReconcileResult(await computeMovieDiscrepancies())
+    writeReconcileResult(account, await computeMovieDiscrepancies('background'))
   } catch (error) {
     logError('job:watch-sync', error)
   }
@@ -722,9 +749,13 @@ export async function runBackgroundWatchSync(): Promise<void> {
 /** Single-flight wrapper — the debounce timer and a reconcile check can
  *  both ask for a flush, and two overlapping ones would push the same
  *  queue twice and race on writing it back. */
-function flushPendingPushes(): Promise<Set<string>> {
+function flushPendingPushes(priority: TaskPriority = 'interactive'): Promise<Set<string>> {
+  // A flush already running keeps the priority it started with. The
+  // alternative — re-tiering in flight — is not something the scheduler
+  // can do for requests it has already queued, and the two callers here
+  // differ by seconds at most.
   if (flushInFlight) return flushInFlight
-  const run = pushPendingToServices()
+  const run = pushPendingToServices(priority)
     .catch((error) => {
       logError('reconcile:flush', error)
       return new Set<string>()
@@ -782,7 +813,9 @@ function scheduleFlush(): void {
  *  does this side consider watched," and only ids where the two sides
  *  disagree are returned — an id watched (or not) on both sides is
  *  already in agreement and never surfaced. */
-async function computeMovieDiscrepancies(): Promise<WatchStatusDiscrepancy[]> {
+async function computeMovieDiscrepancies(
+  priority: TaskPriority = 'background'
+): Promise<WatchStatusDiscrepancy[]> {
   const ignored = ignoredReconcileIds()
   // Titles this app has stopped trying to push for the connected
   // account — see addAbandonedReconcileId.
@@ -797,7 +830,7 @@ async function computeMovieDiscrepancies(): Promise<WatchStatusDiscrepancy[]> {
       .filter((h) => h.type === 'movie')
       .map((h) => [h.id, h] as const)
   )
-  const snapshot = await simklWatchedSnapshot('background')
+  const snapshot = await simklWatchedSnapshot(priority)
   // No trustworthy remote side means there is nothing to diff. An
   // unreadable Simkl comes back as an EMPTY Simkl, and an empty Simkl
   // makes every movie watched locally look like a disagreement — a review
@@ -840,7 +873,7 @@ async function computeMovieDiscrepancies(): Promise<WatchStatusDiscrepancy[]> {
   return (
     await mapWithLimit(out, async (discrepancy) => {
       try {
-        const detail = await metadata('movie', discrepancy.id, 'background')
+        const detail = await metadata('movie', discrepancy.id, priority)
         return {
           ...discrepancy,
           title: detail.title || discrepancy.title,
@@ -1003,9 +1036,10 @@ export function registerTrackingIpc(): void {
       return { ran: false, discrepancies: cached.filter((d) => !justPushed.has(d.id)) }
     }
     db.putCache(RECONCILE_COOLDOWN_KEY, true, RECONCILE_COOLDOWN_MS)
+    const account = simklAccountMark()
     try {
       const discrepancies = await computeMovieDiscrepancies()
-      writeReconcileResult(discrepancies)
+      writeReconcileResult(account, discrepancies)
       // Anything confirmed moments ago is settled, whatever Simkl's
       // all-items view says — that read can lag its own write, and
       // re-asking about a title someone just resolved is the exact
