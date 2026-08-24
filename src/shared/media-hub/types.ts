@@ -99,6 +99,20 @@ export interface CatalogItem {
   episodeCounts?: { totalSeasons: number; totalEpisodes: number }
 }
 
+/** The direct sequel/prequel entries Kitsu lists for an anime release. */
+export type AnimeStoryRelation = 'sequel' | 'prequel'
+
+export interface AnimeStoryLink {
+  relation: AnimeStoryRelation
+  item: CatalogItem
+}
+
+export interface AnimeStoryResult {
+  links: AnimeStoryLink[]
+  /** False only if the remote lookup failed without a cached answer. */
+  checked: boolean
+}
+
 // TorBox `mylist` items matched against the cached catalogs by parsed
 // release-name (see enrichTorBoxItem in core.ts).
 export interface LibraryItem {

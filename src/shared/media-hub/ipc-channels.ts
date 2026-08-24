@@ -45,6 +45,7 @@ export const MEDIA_HUB_CHANNELS = {
   catalogMeta: 'mediahub:catalog:meta',
   catalogSearch: 'mediahub:catalog:search',
   catalogRelated: 'mediahub:catalog:related',
+  catalogStory: 'mediahub:catalog:story',
   homePersonalized: 'mediahub:home:personalized',
   trackingList: 'mediahub:tracking:list',
   trackingToggle: 'mediahub:tracking:toggle',

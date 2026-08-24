@@ -16,6 +16,7 @@ import { registerAniskipIpc } from '../media-hub/aniskip'
 import { registerActivityIpc } from '../media-hub/backgroundJobs'
 import { registerAppIpc } from '../media-hub/appIpc'
 import { registerAutoUpdateIpc } from '../media-hub/autoUpdate'
+import { registerAnimeStoryIpc } from '../media-hub/animeStory'
 import { registerCatalogIpc } from '../media-hub/catalog'
 import { registerDownloadGuardIpc } from '../media-hub/downloadGuard'
 import { registerMalIpc } from '../media-hub/malSync'
@@ -37,6 +38,7 @@ export function registerMediaHubIpc(): void {
   registerAutoUpdateIpc()
   registerTorBoxIpc()
   registerCatalogIpc()
+  registerAnimeStoryIpc()
   registerTrackingIpc()
   registerMalIpc()
   registerSubtitlesIpc()

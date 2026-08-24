@@ -293,9 +293,11 @@ export function MoodBrowser() {
             straight back. */}
         <span className={styles.scrim} aria-hidden="true" />
 
+        {activeMoods.length > 0 && <span className={styles.spotlightFocus} aria-hidden="true" />}
+
         {activeMoods.length > 0 && (
           <section
-            className={`${styles.spotlight} glass-panel`}
+            className={styles.spotlight}
             aria-label={`${moodLabels.join(' + ')} mood spotlight`}
             style={{
               ['--spotlight-accent' as string]: spotlightMood?.accent ?? 'var(--accent-cyan)'
@@ -353,7 +355,7 @@ export function MoodBrowser() {
                         alt=""
                         fallbackTitle={media.title}
                         artTint={media.artTint}
-                        sizes="180px"
+                        sizes="280px"
                         className={styles.spotlightArt}
                       />
                       <span className={styles.spotlightScrim} aria-hidden="true" />

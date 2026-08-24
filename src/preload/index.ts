@@ -9,6 +9,7 @@ import {
 } from '../shared/ipc-types'
 import { MEDIA_HUB_CHANNELS } from '../shared/media-hub/ipc-channels'
 import type {
+  AnimeStoryResult,
   BlockedDownload,
   BootstrapResult,
   CatalogItem,
@@ -321,7 +322,9 @@ const api = {
       search: (kind: MediaKind, query: string): Promise<CatalogItem[]> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.catalogSearch, { kind, query }),
       related: (type: MediaKind, id: string): Promise<CatalogItem[]> =>
-        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.catalogRelated, { type, id })
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.catalogRelated, { type, id }),
+      story: (type: MediaKind, id: string): Promise<AnimeStoryResult> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.catalogStory, { type, id })
     },
 
     home: {
