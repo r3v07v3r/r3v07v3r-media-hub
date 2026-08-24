@@ -150,7 +150,12 @@ export interface MediaHubDatabase {
    *  EpisodePlaybackPosition (shared/media-hub/types.ts) for why the
    *  episode grid needs the whole set rather than one lookup per row. */
   listPlaybackPositions(contentId: string | number): EpisodePlaybackPosition[]
-  putCache<T>(key: string, payload: T, ttlMs: number): void
+  /** `durable: true` for the few rows in here that are a record of
+   *  something a person decided rather than something refetched — see the
+   *  `durable` helper in createDatabase. catalog_cache is a general
+   *  key-value store, not only a cache, so "it is in catalog_cache" does
+   *  NOT imply "losing it costs a refetch". */
+  putCache<T>(key: string, payload: T, ttlMs: number, opts?: { durable?: boolean }): void
   getCache<T>(key: string, opts?: { allowExpired?: boolean }): T | null
   /** Removes a cache row outright. Distinct from letting a row expire,
    *  which the `allowExpired: true` readers can still serve back as a
@@ -626,10 +631,19 @@ export function createDatabase(filename: string): MediaHubDatabase {
       }
     },
 
-    putCache<T>(key: string, payload: T, ttlMs: number): void {
+    putCache<T>(
+      key: string,
+      payload: T,
+      ttlMs: number,
+      { durable: needsDurability = false }: { durable?: boolean } = {}
+    ): void {
       try {
         const now = Date.now()
-        q.putCache.run(key, JSON.stringify(payload), now + ttlMs, now)
+        const write = (): void => {
+          q.putCache.run(key, JSON.stringify(payload), now + ttlMs, now)
+        }
+        if (needsDurability) durable(write)
+        else write()
       } catch {
         // Cache writes are best-effort; a failure here must not surface to callers.
       }
