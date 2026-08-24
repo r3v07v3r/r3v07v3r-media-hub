@@ -52,8 +52,12 @@ export default function MoodExplorePage() {
   const kindStates = Object.values(catalogKindStates)
   const catalogEmpty = catalog.length === 0
   const stillArriving = catalogEmpty && kindStates.some((state) => state === 'loading')
-  const unavailable =
-    catalogEmpty && !stillArriving && kindStates.every((state) => state === 'failed')
+  // Not gated on the catalog being empty — see MoodBrowser, which makes
+  // the same distinction. Whether every source failed is a fact about the
+  // fetches; a snapshot means there is usually something still on screen,
+  // which is precisely when staying quiet passes remembered rows off as
+  // current.
+  const unavailable = !stillArriving && kindStates.every((state) => state === 'failed')
 
   useRestoreBrowsingOrigin(true)
 
@@ -82,10 +86,23 @@ export default function MoodExplorePage() {
       </header>
 
       <section className={styles.results} aria-label={moodLabels.join(' + ') || 'Mood results'}>
+        {/* Results are showing but nothing could refresh them — qualify
+            them rather than replace them. With none showing, the grid's
+            own error state below carries the failure and the Retry. */}
+        {unavailable && !catalogEmpty && (
+          <p className={styles.staleNotice} role="status">
+            <Icon name="wifi-off" size={13} />
+            Couldn&apos;t reach the media hub backend — these may be out of date.
+            <button type="button" onClick={refreshCatalog} className={styles.staleRetry}>
+              <Icon name="refresh" size={13} />
+              Retry
+            </button>
+          </p>
+        )}
         <MediaGrid
           items={results}
           loading={stillArriving}
-          error={unavailable}
+          error={unavailable && catalogEmpty}
           errorTitle="Couldn't reach the media hub backend"
           onRetry={refreshCatalog}
           emptyTitle={

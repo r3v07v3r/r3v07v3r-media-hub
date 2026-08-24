@@ -177,8 +177,13 @@ export function MoodBrowser() {
   const kindStates = Object.values(catalogKindStates)
   const catalogEmpty = catalog.length === 0
   const catalogStillArriving = catalogEmpty && kindStates.some((state) => state === 'loading')
+  // Deliberately NOT gated on the catalog being empty. Whether every
+  // source failed is a fact about the fetches, not about what happens to
+  // be left on screen — and a snapshot means there usually IS something
+  // left on screen, which is exactly when saying nothing presents last
+  // week's matches as this minute's.
   const catalogUnavailable =
-    catalogEmpty && !catalogStillArriving && kindStates.every((state) => state === 'failed')
+    !catalogStillArriving && kindStates.every((state) => state === 'failed')
 
   const spotlightMood = MOOD_CATEGORIES.find((mood) => mood.id === activeMoods[0])
 
@@ -342,7 +347,7 @@ export function MoodBrowser() {
                       landed yet is the wrong instruction. */}
                   {catalogStillArriving
                     ? 'Matching titles to this mood…'
-                    : catalogUnavailable
+                    : catalogUnavailable && catalogEmpty
                       ? "Couldn't reach the media hub backend."
                       : rankedResults.length === 0
                         ? 'No titles match your current settings.'
@@ -353,6 +358,21 @@ export function MoodBrowser() {
                 {rankedResults.length} title{rankedResults.length === 1 ? '' : 's'}
               </span>
             </div>
+
+            {/* Results ARE showing, and every source that would have
+                refreshed them failed. The count above is true and the
+                picks are real; what is not established is that they are
+                current. */}
+            {catalogUnavailable && !catalogEmpty && (
+              <p className={styles.spotlightStale} role="status">
+                <Icon name="wifi-off" size={13} />
+                Couldn&apos;t reach the media hub backend — these may be out of date.
+                <button type="button" onClick={refreshCatalog} className={styles.spotlightRetry}>
+                  <Icon name="refresh" size={13} />
+                  Retry
+                </button>
+              </p>
+            )}
 
             {spotlightPicks.length === 0 ? (
               <p className={styles.spotlightEmpty}>
