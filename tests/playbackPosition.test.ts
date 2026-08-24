@@ -12,6 +12,7 @@ import assert from 'node:assert'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
 import { createDatabase } from '../src/main/media-hub/database'
 
 let pass = 0
@@ -26,9 +27,13 @@ function check(name: string, fn: () => void): void {
   }
 }
 
-function tempDb() {
+function tempDbPath(): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'r3-position-test-'))
-  return createDatabase(path.join(dir, 'test.sqlite'))
+  return path.join(dir, 'test.sqlite')
+}
+
+function tempDb() {
+  return createDatabase(tempDbPath())
 }
 
 console.log('savePlaybackPosition / getPlaybackPosition — movies')
@@ -37,7 +42,9 @@ check('round-trips a saved position', () => {
   const db = tempDb()
   db.savePlaybackPosition('tt1234567', undefined, 1450, 7200)
   const result = db.getPlaybackPosition('tt1234567')
-  assert.deepEqual(result, { positionSeconds: 1450, durationSeconds: 7200 })
+  // volume comes back null, not absent: a bookmark written without one says
+  // "nothing was recorded", which is what leaves the title at 100%.
+  assert.deepEqual(result, { positionSeconds: 1450, durationSeconds: 7200, volume: null })
   db.close()
 })
 
@@ -53,7 +60,8 @@ check('saving again for the same movie overwrites, not duplicates', () => {
   db.savePlaybackPosition('tt1234567', undefined, 1500, 7200)
   assert.deepEqual(db.getPlaybackPosition('tt1234567'), {
     positionSeconds: 1500,
-    durationSeconds: 7200
+    durationSeconds: 7200,
+    volume: null
   })
   db.close()
 })
@@ -63,7 +71,8 @@ check('duration is optional — position alone still saves', () => {
   db.savePlaybackPosition('tt1234567', undefined, 300)
   assert.deepEqual(db.getPlaybackPosition('tt1234567'), {
     positionSeconds: 300,
-    durationSeconds: null
+    durationSeconds: null,
+    volume: null
   })
   db.close()
 })
@@ -110,6 +119,105 @@ check(
   }
 )
 
+console.log('\nvolume travels with the bookmark')
+
+check('the volume in use is stored with the position and read back', () => {
+  const db = tempDb()
+  db.savePlaybackPosition('tt1234567', undefined, 1450, 7200, 1.6)
+  assert.equal(db.getPlaybackPosition('tt1234567')?.volume, 1.6)
+  db.close()
+})
+
+check('a later save with no volume leaves the stored one alone', () => {
+  const db = tempDb()
+  db.savePlaybackPosition('tt1234567', undefined, 1450, 7200, 1.6)
+  // The periodic saves come from the player and always carry a volume, but any
+  // other caller reaching this bookmark is saying nothing about loudness — and
+  // must not silently erase a boost by omitting it.
+  db.savePlaybackPosition('tt1234567', undefined, 1600, 7200)
+  assert.deepEqual(db.getPlaybackPosition('tt1234567'), {
+    positionSeconds: 1600,
+    durationSeconds: 7200,
+    volume: 1.6
+  })
+  db.close()
+})
+
+check('a new volume replaces the stored one', () => {
+  const db = tempDb()
+  db.savePlaybackPosition('tt1234567', undefined, 1450, 7200, 1.6)
+  db.savePlaybackPosition('tt1234567', undefined, 1600, 7200, 1)
+  assert.equal(db.getPlaybackPosition('tt1234567')?.volume, 1)
+  db.close()
+})
+
+check('muting keeps the level the title was being watched at', () => {
+  const db = tempDb()
+  db.savePlaybackPosition('tt1234567', undefined, 1450, 7200, 1.6)
+  // Mute is a thing people do for a minute, not a level to resume at. The
+  // bookmark keeps the last AUDIBLE volume: coming back silent would read as
+  // a broken player, and coming back at 100% would throw away the boost this
+  // title was being watched at, which is the one thing the column is for.
+  db.savePlaybackPosition('tt1234567', undefined, 1600, 7200, 0)
+  assert.equal(db.getPlaybackPosition('tt1234567')?.volume, 1.6)
+  db.close()
+})
+
+check('a bookmark cleared by the thresholds takes its volume with it', () => {
+  const db = tempDb()
+  db.savePlaybackPosition('tt1234567', undefined, 1450, 7200, 1.8)
+  // Past 90% is "finished", and a finished title starts over next time — at
+  // the ordinary volume, not at the boost the last few minutes needed.
+  db.savePlaybackPosition('tt1234567', undefined, 6900, 7200, 1.8)
+  assert.equal(db.getPlaybackPosition('tt1234567'), null)
+  db.close()
+})
+
+check('each episode keeps its own volume', () => {
+  const db = tempDb()
+  db.savePlaybackPosition('tt7654321', { season: 1, episode: 1 }, 600, 2400, 1.5)
+  db.savePlaybackPosition('tt7654321', { season: 1, episode: 2 }, 600, 2400, 1)
+  assert.equal(db.getPlaybackPosition('tt7654321', { season: 1, episode: 1 })?.volume, 1.5)
+  assert.equal(db.getPlaybackPosition('tt7654321', { season: 1, episode: 2 })?.volume, 1)
+  db.close()
+})
+
+console.log('\nupgrading a database that predates stored volumes')
+
+check('an existing bookmark table gains the column without losing its rows', () => {
+  const dbPath = tempDbPath()
+  // The playback_positions table exactly as it was shipped before volume was
+  // part of a bookmark. Every installed copy of the app has one of these, so
+  // the ALTER guard is the difference between an upgrade and an app that
+  // cannot read its own resume points.
+  const raw = new DatabaseSync(dbPath)
+  raw.exec(`CREATE TABLE playback_positions(
+    position_key TEXT PRIMARY KEY,
+    content_id TEXT NOT NULL,
+    season INTEGER,
+    episode INTEGER,
+    position_seconds REAL NOT NULL,
+    duration_seconds REAL,
+    updated_at TEXT NOT NULL
+  )`)
+  raw
+    .prepare(
+      'INSERT INTO playback_positions(position_key,content_id,season,episode,position_seconds,duration_seconds,updated_at) VALUES(?,?,?,?,?,?,?)'
+    )
+    .run('tt1234567:movie:movie', 'tt1234567', null, null, 1450, 7200, new Date().toISOString())
+  raw.close()
+
+  const db = createDatabase(dbPath)
+  assert.deepEqual(
+    db.getPlaybackPosition('tt1234567'),
+    { positionSeconds: 1450, durationSeconds: 7200, volume: null },
+    'the bookmark that was already there must survive the upgrade'
+  )
+  db.savePlaybackPosition('tt1234567', undefined, 1500, 7200, 1.4)
+  assert.equal(db.getPlaybackPosition('tt1234567')?.volume, 1.4)
+  db.close()
+})
+
 console.log('\nseries — season/episode keying')
 
 check('different episodes of the same show keep independent bookmarks', () => {
@@ -118,11 +226,13 @@ check('different episodes of the same show keep independent bookmarks', () => {
   db.savePlaybackPosition('tt7654321', { season: 1, episode: 2 }, 1200, 2400)
   assert.deepEqual(db.getPlaybackPosition('tt7654321', { season: 1, episode: 1 }), {
     positionSeconds: 600,
-    durationSeconds: 2400
+    durationSeconds: 2400,
+    volume: null
   })
   assert.deepEqual(db.getPlaybackPosition('tt7654321', { season: 1, episode: 2 }), {
     positionSeconds: 1200,
-    durationSeconds: 2400
+    durationSeconds: 2400,
+    volume: null
   })
   db.close()
 })

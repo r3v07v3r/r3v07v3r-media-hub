@@ -114,6 +114,9 @@ interface SavePositionPayload {
   playback?: PlaybackPosition
   positionSeconds: number
   durationSeconds?: number
+  /** The 0-2 multiplier the player was at — stored with the bookmark so a
+   *  resumed title comes back at the loudness it was left at. */
+  volume?: number
 }
 
 interface ReconcileResolvePayload {

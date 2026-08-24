@@ -18,6 +18,7 @@ import {
   type MpvSpawnOptions,
   type MpvTrackListEntry
 } from '../src/main/media-hub/mpv'
+import { MAX_PLAYER_VOLUME } from '../src/shared/media-hub/player'
 
 let pass = 0
 function check(name: string, fn: () => void): void {
@@ -383,6 +384,38 @@ async function main(): Promise<void> {
     assert.ok(
       args.includes('--fs-screen=current'),
       `launch args do not pin the fullscreen screen: ${args.join(' ')}`
+    )
+  })
+
+  await checkAsync('the volume ceiling the UI offers is one mpv will accept', async () => {
+    const args = await launchArgs()
+    // mpv rejects any `volume` above --volume-max and defaults that to 130%,
+    // so a slider that runs to MAX_PLAYER_VOLUME without this arg goes dead
+    // partway up: the two numbers have to be the same one.
+    assert.ok(
+      args.includes(`--volume-max=${MAX_PLAYER_VOLUME * 100}`),
+      `launch args do not raise mpv's amplification ceiling: ${args.join(' ')}`
+    )
+  })
+
+  await checkAsync('the volume keys reach the video window too', async () => {
+    const { player, sent } = fakePlayer()
+    await player.bindSafetyKeys()
+    const bindings = sent
+      .map((line) => JSON.parse(line) as { command: unknown[] })
+      .filter((msg) => msg.command[0] === 'keybind')
+      .map((msg) => `${String(msg.command[1])} ${String(msg.command[2])}`)
+    // Without these, the volume keys would work only while the controls
+    // overlay holds focus — and clicking the picture hands focus to mpv, so
+    // the keys would stop working for the very reason someone reached for
+    // them. Seeking already has this pair; volume needs the same.
+    assert.ok(
+      bindings.includes('UP script-message r3-volume-up'),
+      `UP is not bound: ${bindings.join(', ')}`
+    )
+    assert.ok(
+      bindings.includes('DOWN script-message r3-volume-down'),
+      `DOWN is not bound: ${bindings.join(', ')}`
     )
   })
 
