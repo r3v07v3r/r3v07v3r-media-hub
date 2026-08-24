@@ -112,6 +112,26 @@ export function RecommendationCarousel() {
         <Icon name="sparkle" />
         AI Picks For You
       </h2>
+      {/* A populated row can be a failure too, and used to say nothing
+          about it: a cold start whose home:personalized threw still has
+          the remembered picks to show, so the empty-state branch below is
+          skipped and this row presented last session's picks as current
+          with no way to ask again. Same situation the category pages
+          already banner over their carried rows — see CategoryPage's
+          .offlineBanner. The copy covers both routes here (nothing
+          fetched this run, or a mid-session refresh that failed) because
+          both make the same claim: what you are looking at may have
+          moved on. */}
+      {homeFeedError && picks.length > 0 && (
+        <p className={styles.staleNotice} role="status">
+          <Icon name="wifi-off" size={13} />
+          Couldn&apos;t reach the media hub backend — these picks may be out of date.
+          <button type="button" onClick={refreshHomeFeed} className={styles.emptyRetry}>
+            <Icon name="refresh" size={13} />
+            Retry
+          </button>
+        </p>
+      )}
       {!loading && picks.length === 0 ? (
         // An empty row has two causes and they are not interchangeable.
         //
