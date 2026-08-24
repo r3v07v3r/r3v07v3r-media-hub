@@ -37,6 +37,7 @@ import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 
+import { MAX_PLAYER_VOLUME } from '../../shared/media-hub/player'
 import type { MediaTrack, MediaTracks } from '../../shared/media-hub/types'
 import { scalerPropertiesFor, type VideoScalingPreset } from '../../shared/media-hub/videoScaling'
 import { isAllowedRemoteMediaUrl } from './playback'
@@ -335,6 +336,13 @@ export class MpvPlayer {
       // fullscreen always-on-top video — see bindSafetyKeys().
       '--input-vo-keyboard=yes',
       '--osc=no',
+      // AMPLIFICATION HEADROOM. mpv refuses any `volume` above --volume-max,
+      // and its own default ceiling is 130% — so without this the slider stops
+      // having any effect partway up its own range instead of at the top of it.
+      // The number comes from the same constant the slider and the set-volume
+      // clamp use: a disagreement here reads as a control that silently does
+      // nothing, with nothing in the log to say why.
+      `--volume-max=${MAX_PLAYER_VOLUME * 100}`,
       '--osd-level=0',
       '--hwdec=auto-safe',
       // WINDOWING. mpv gets its OWN borderless, always-on-top window, sized and

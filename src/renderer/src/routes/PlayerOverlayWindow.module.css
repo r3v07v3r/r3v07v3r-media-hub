@@ -225,10 +225,31 @@
   }
 }
 
+.volumeWrap {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .volume {
   width: 96px;
   accent-color: var(--accent, #4da3ff);
   cursor: pointer;
+}
+
+/* The stretch above 100% is amplification, not just "louder", and it can
+   clip — so the control changes colour there rather than leaving the
+   readout as the only sign of which side of the line the slider is on. */
+.volumeBoosted {
+  accent-color: var(--accent-orange, #ff9a3c);
+}
+
+.volumeReadout {
+  min-width: 4ch;
+  text-align: right;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.72;
 }
 
 .scrubberLocked {

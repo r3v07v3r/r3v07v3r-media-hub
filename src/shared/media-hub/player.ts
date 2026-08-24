@@ -14,6 +14,23 @@ import type { MediaTracks } from './types'
 import type { VideoFitMode } from './videoFit'
 import type { VideoPictureControl } from './videoPicture'
 
+/**
+ * Loudest the player can be asked to go, as a multiplier of the source's own
+ * level: 1 is the untouched signal, 2 is twice it.
+ *
+ * Above 1 mpv amplifies in software, which is the only thing that rescues a
+ * film mixed quiet — dialogue buried under the score, a stereo downmix of a
+ * 5.1 track with everything but the centre channel loud. Past roughly 2 the
+ * amplification stops helping and starts clipping the peaks it cannot fit, so
+ * the ceiling is set there rather than at mpv's own 1000% maximum.
+ *
+ * Three places must agree on this number: mpv's --volume-max (mpv.ts), which
+ * makes mpv REJECT any higher value outright; the clamp on the set-volume
+ * command (playerBridge.ts); and the slider's range (PlayerOverlayWindow.tsx).
+ * They all import it from here for that reason.
+ */
+export const MAX_PLAYER_VOLUME = 2
+
 /** The subset of a catalog item the player UI actually reads. Deliberately not
  *  the full MediaItem: that type lives in the renderer, and anything needing
  *  the whole record (mark-watched's trackable payload, for one) is handled by

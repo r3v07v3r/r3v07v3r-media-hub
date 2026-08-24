@@ -12,12 +12,13 @@
 import { BrowserWindow, screen } from 'electron'
 import path from 'node:path'
 
-import type {
-  PlayerCommand,
-  PlayerInputEvent,
-  PlayerSessionSnapshot,
-  PlayerStatePatch,
-  PlayerUiEvent
+import {
+  MAX_PLAYER_VOLUME,
+  type PlayerCommand,
+  type PlayerInputEvent,
+  type PlayerSessionSnapshot,
+  type PlayerStatePatch,
+  type PlayerUiEvent
 } from '../../shared/media-hub/player'
 import { MEDIA_HUB_CHANNELS } from '../../shared/media-hub/ipc-channels'
 import {
@@ -922,8 +923,11 @@ async function runCommand(command: PlayerCommand): Promise<void> {
     case 'set-volume': {
       const volume = Number(command.volume)
       if (!Number.isFinite(volume)) throw new Error('Invalid volume.')
-      // The UI speaks 0-1 (what video.volume used to be); mpv speaks 0-100.
-      await player.set('volume', clamp(volume, 0, 1) * 100)
+      // The UI speaks a multiplier of the source level (1 = untouched); mpv
+      // speaks percent. Anything above 1 is software amplification, which mpv
+      // only permits as far as the --volume-max it was launched with — hence
+      // the shared ceiling on both sides.
+      await player.set('volume', clamp(volume, 0, MAX_PLAYER_VOLUME) * 100)
       return
     }
     case 'set-speed': {

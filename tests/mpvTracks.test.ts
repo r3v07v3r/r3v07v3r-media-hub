@@ -18,6 +18,7 @@ import {
   type MpvSpawnOptions,
   type MpvTrackListEntry
 } from '../src/main/media-hub/mpv'
+import { MAX_PLAYER_VOLUME } from '../src/shared/media-hub/player'
 
 let pass = 0
 function check(name: string, fn: () => void): void {
@@ -383,6 +384,17 @@ async function main(): Promise<void> {
     assert.ok(
       args.includes('--fs-screen=current'),
       `launch args do not pin the fullscreen screen: ${args.join(' ')}`
+    )
+  })
+
+  await checkAsync('the volume ceiling the UI offers is one mpv will accept', async () => {
+    const args = await launchArgs()
+    // mpv rejects any `volume` above --volume-max and defaults that to 130%,
+    // so a slider that runs to MAX_PLAYER_VOLUME without this arg goes dead
+    // partway up: the two numbers have to be the same one.
+    assert.ok(
+      args.includes(`--volume-max=${MAX_PLAYER_VOLUME * 100}`),
+      `launch args do not raise mpv's amplification ceiling: ${args.join(' ')}`
     )
   })
 

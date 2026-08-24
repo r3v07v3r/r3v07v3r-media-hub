@@ -24,6 +24,7 @@ import { PlayerWindowProvider, usePlayerWindow } from '@renderer/context/PlayerW
 import { usePartySync } from '@renderer/hooks/usePartySync'
 import { usePlayerTracking } from '@renderer/hooks/usePlayerTracking'
 import { PlayerSessionRail } from '@renderer/components/party/PlayerSessionRail'
+import { MAX_PLAYER_VOLUME } from '@shared/media-hub/player'
 import type { SubtitleResult } from '@shared/media-hub/types'
 import {
   DEFAULT_VIDEO_FIT,
@@ -80,6 +81,11 @@ function PlayerControls() {
   const subtitleTracks = session?.tracks?.subtitle ?? []
   const buffering = state.bufferingForCache === true
   const volume = state.volume ?? 1
+  // Shown as a percentage rather than the 0-2 the command speaks: the number
+  // only means anything against the 100% that is the film's own level, which
+  // is the line the slider can now be pushed past.
+  const volumePercent = Math.round(volume * 100)
+  const volumeBoosted = volume > 1
   const media = session?.media ?? null
   // Main owns this, and pushes it — the overlay never guesses, so the label
   // stays right across a title change or a remount.
@@ -638,18 +644,33 @@ function PlayerControls() {
 
           <div className={styles.spacer} />
 
-          <input
-            type="range"
-            min={0}
-            max={1}
-            step={0.05}
-            value={volume}
-            className={styles.volume}
-            onChange={(event) =>
-              void command({ type: 'set-volume', volume: Number(event.target.value) })
-            }
-            aria-label="Volume"
-          />
+          {/* Runs past 100% deliberately. Everything above it is mpv amplifying
+              in software, which is the only fix on this side for a film mixed
+              far quieter than the rest of the system — the ceiling is
+              MAX_PLAYER_VOLUME, and mpv is launched knowing the same number. */}
+          <div className={styles.volumeWrap}>
+            <input
+              type="range"
+              min={0}
+              max={MAX_PLAYER_VOLUME}
+              step={0.05}
+              value={volume}
+              className={`${styles.volume} ${volumeBoosted ? styles.volumeBoosted : ''}`}
+              onChange={(event) =>
+                void command({ type: 'set-volume', volume: Number(event.target.value) })
+              }
+              aria-label="Volume"
+              aria-valuetext={`${volumePercent}%`}
+              title={
+                volumeBoosted
+                  ? `Volume ${volumePercent}% — amplified above the source level`
+                  : `Volume ${volumePercent}%`
+              }
+            />
+            {/* Fixed width, always present: a readout that appeared only once
+                boosted would shove every control to its right along mid-drag. */}
+            <span className={styles.volumeReadout}>{volumePercent}%</span>
+          </div>
 
           {/* Shown whenever the title has any audio at all, not only when it
               has a choice. Hiding it for single-track files makes "this film has
