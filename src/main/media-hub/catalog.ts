@@ -31,6 +31,7 @@ import {
   dedupeCatalog,
   disambiguateVideos,
   filterAnimeRelationships,
+  mergeCatalogSources,
   normalizeKitsuAnime,
   normalizeMeta,
   normalizeSimklCatalog,
@@ -48,11 +49,50 @@ const catalogUrls: Record<'movie' | 'series', string> = {
   series: 'https://v3-cinemeta.strem.io/catalog/series/top.json'
 }
 
+/**
+ * Simkl's trending feeds, newest window first. Confirmed live: these three
+ * spans are all that exist (`year` and `all` are 404s), each returns
+ * exactly 500 entries, and the pages overlap heavily — week and month
+ * together dedupe to 559 unique movies, which is the whole movie library
+ * this app used to have and is why it felt small. Adding `today` takes
+ * that to 669; there is no fourth feed to add.
+ */
+const SIMKL_TRENDING_SPANS = ['today', 'week', 'month'] as const
+
+/**
+ * How many 100-entry pages of Cinemeta's top catalog to walk per kind,
+ * beyond the first.
+ *
+ * This is the source that actually makes the library big: Simkl's own
+ * feeds are capped at the ~600 unique titles above no matter how they are
+ * combined. Cinemeta is Stremio's catalog addon and is already this app's
+ * metadata source for every movie and series, so nothing new is being
+ * depended on — only more of what is already there, via the addon
+ * protocol's `skip=` pagination.
+ *
+ * Every page is fetched independently and a failed page contributes
+ * nothing rather than failing the catalog (see cinemetaPages). That
+ * matters beyond ordinary robustness: it means the worst case for this
+ * whole expansion is the library staying exactly the size it is today.
+ */
+const CINEMETA_EXTRA_PAGES = 12
+const CINEMETA_PAGE_SIZE = 100
+
 const CATALOG_TTL_MS = 6 * 60 * 60 * 1000
 
-/** How deep into Kitsu's popularity ranking the anime crawl walks, in
- *  titles. Pages are 20 each, so this is also the request count. */
-const ANIME_CATALOG_DEPTH = 1000
+/**
+ * How deep into Kitsu's popularity ranking the anime crawl walks, in
+ * titles. Pages are 20 each, so this is 100 requests.
+ *
+ * This was 1000, set when the crawl paced itself with a sleep between
+ * every batch of five and ran on the response path of catalog:list — at
+ * which point going deeper meant a longer wait for the person who opened
+ * the app. Neither is true now: the pages are paced by the kitsu lane
+ * alongside every other Kitsu caller, and the six-hourly refresh job
+ * (backgroundJobs.ts) fetches them at `maintenance` before the cache
+ * expires, so depth costs background time rather than anyone's page load.
+ */
+const ANIME_CATALOG_DEPTH = 2000
 
 /**
  * Grouping the full Kitsu crawl costs roughly one enrichment request per
@@ -109,7 +149,7 @@ async function simklCatalog(
 ): Promise<CatalogItem[]> {
   const section = kind === 'series' ? 'tv' : 'movies'
   const feeds = await Promise.all(
-    ['week', 'month'].map((span) =>
+    SIMKL_TRENDING_SPANS.map((span) =>
       fetchJson<RawApiPayload[]>(
         `https://data.simkl.in/discover/trending/${section}/${span}_500.json`,
         {},
@@ -123,6 +163,45 @@ async function simklCatalog(
         .map((x) => normalizeSimklCatalog(x, kind))
         .filter((x) => x.id && !x.id.startsWith('simkl:'))
     )
+  )
+}
+
+/**
+ * Cinemeta's top catalog for one kind, walked `CINEMETA_EXTRA_PAGES` pages
+ * deep via the Stremio addon protocol's `skip=` pagination.
+ *
+ * Page 0 is deliberately the exact URL this file has always used as its
+ * Simkl-failed fallback (catalogUrls), not a `skip=0` variant of it — so
+ * the one request whose shape is already proven in production stays
+ * byte-identical, and only the additional pages use the paginated form.
+ *
+ * Every page resolves independently to `[]` on failure. A page shape this
+ * app has never asked for before must not be able to take down a catalog
+ * that Simkl has already successfully filled.
+ */
+async function cinemetaPages(
+  kind: Exclude<MediaKind, 'anime'>,
+  priority: TaskPriority
+): Promise<CatalogItem[][]> {
+  const urls = [catalogUrls[kind]]
+  for (let page = 1; page <= CINEMETA_EXTRA_PAGES; page++) {
+    urls.push(
+      `https://v3-cinemeta.strem.io/catalog/${kind}/top/skip=${page * CINEMETA_PAGE_SIZE}.json`
+    )
+  }
+  return Promise.all(
+    urls.map(async (url, index) => {
+      try {
+        const result = await fetchJson<{ metas?: RawApiPayload[] }>(
+          url,
+          {},
+          { priority, label: `${kind} catalog (page ${index + 1})` }
+        )
+        return (result.metas || []).map((x) => normalizeMeta(x, kind))
+      } catch {
+        return []
+      }
+    })
   )
 }
 
@@ -208,27 +287,43 @@ export async function catalogData(
   // cached-source result the person just asked to bypass.
   return coalesce(`catalog:fetch:${kind}:${force ? 'forced' : 'normal'}`, async () => {
     let items: CatalogItem[] | null | undefined
-    try {
-      items = kind === 'anime' ? await kitsuCatalog(priority) : await simklCatalog(kind, priority)
-      if (!items.length) throw new Error('The broad catalog returned no titles.')
-    } catch (primaryError) {
-      if (kind !== 'anime') {
-        try {
-          const result = await fetchJson<{ metas?: RawApiPayload[] }>(
-            catalogUrls[kind],
-            {},
-            { priority, label: `${kind} catalog (fallback)` }
-          )
-          items = (result.metas || []).map((x) => normalizeMeta(x, kind))
-        } catch {
-          items = null
-        }
+    let primaryError: unknown = new Error('The broad catalog returned no titles.')
+
+    if (kind === 'anime') {
+      try {
+        items = await kitsuCatalog(priority)
+      } catch (error) {
+        primaryError = error
+        items = null
       }
-      if (!items?.length) {
-        const stale = db.getCache<CatalogItem[]>(key, { allowExpired: true })
-        if (stale?.length) return stale
-        throw primaryError
-      }
+    } else {
+      // Both sources, merged — not "Simkl, and Cinemeta only if Simkl
+      // failed", which is what this used to be. Simkl's trending feeds
+      // cap out at around 600 unique titles however they are combined
+      // (see SIMKL_TRENDING_SPANS), so treating Cinemeta as a
+      // failure-only fallback was leaving the app's own metadata source
+      // unread for browsing purposes and the library that size.
+      //
+      // Simkl first, because dedupeCatalog keeps the first occurrence of
+      // an id and trending order is the more useful ranking for what
+      // appears at the top of a grid. Cinemeta's depth follows it.
+      //
+      // Settled rather than awaited together, so one source being down
+      // costs its own contribution and nothing else — which also
+      // preserves the old fallback guarantee exactly: a total Simkl
+      // failure still yields a Cinemeta-filled catalog.
+      const settled = await Promise.allSettled([
+        simklCatalog(kind, priority).then((list) => [list]),
+        cinemetaPages(kind, priority)
+      ])
+      if (settled[0].status === 'rejected') primaryError = settled[0].reason
+      items = mergeCatalogSources(settled)
+    }
+
+    if (!items?.length) {
+      const stale = db.getCache<CatalogItem[]>(key, { allowExpired: true })
+      if (stale?.length) return stale
+      throw primaryError
     }
 
     db.putCache(key, items, CATALOG_TTL_MS)
