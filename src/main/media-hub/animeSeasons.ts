@@ -62,7 +62,7 @@
 
 import type { CatalogItem, Episode } from '../../shared/media-hub/types'
 import { fetchJson } from './httpClient'
-import type { TaskPriority } from './taskScheduler'
+import { mapWithLimit, type TaskPriority } from './taskScheduler'
 import { logError } from './logger'
 import { getDatabase } from './dbState'
 import { normalizeKitsuAnime, normalizeKitsuEpisode, type RawApiPayload } from './core'
@@ -325,8 +325,16 @@ export async function groupAnimeCatalog(
   // serialised the whole pass on the slowest item in each batch of
   // twenty, for pacing the kitsu lane now applies across every caller at
   // once. See kitsuCatalog in catalog.ts for the same change and why.
-  const mappings = await Promise.all(
-    items.map((item) => kitsuTvdbMapping(item.id.replace(/^kitsu:/, ''), priority))
+  //
+  // Bounded rather than a bare Promise.all over every item, though, and
+  // for a reason that has nothing to do with the network: each call runs
+  // a synchronous SQLite cache read before it ever reaches a request, so
+  // starting two thousand of them in one synchronous pass means two
+  // thousand disk reads and two thousand scheduler enqueues back to back
+  // on the main thread. The lane governs when the requests go out; this
+  // governs how many of these composites exist at once.
+  const mappings = await mapWithLimit(items, (item) =>
+    kitsuTvdbMapping(item.id.replace(/^kitsu:/, ''), priority)
   )
   items.forEach((item, idx) => mappingByItemId.set(item.id, mappings[idx]))
 
@@ -368,13 +376,14 @@ export async function groupAnimeCatalog(
   // ones still isolated when checked, is what actually closes that chain
   // regardless of processing order. Redundant unions here are harmless.
   const needsEdgeCheck = items.filter((item) => !mappingByItemId.get(item.id))
-  const edgesByItem = await Promise.all(
-    needsEdgeCheck.map((item) => kitsuSequelEdges(item.id.replace(/^kitsu:/, ''), priority))
+  // Bounded for the same reason as the mapping pass above.
+  const edgesByItem = await mapWithLimit(needsEdgeCheck, (item) =>
+    kitsuSequelEdges(item.id.replace(/^kitsu:/, ''), priority)
   )
   needsEdgeCheck.forEach((item, idx) => {
     const srcIndex = idToIndex.get(item.id)
     if (srcIndex === undefined) return
-    for (const edge of edgesByItem[idx]) {
+    for (const edge of edgesByItem[idx] || []) {
       const destIndex = idToIndex.get(`kitsu:${edge.destId}`)
       if (destIndex !== undefined) union(srcIndex, destIndex)
     }

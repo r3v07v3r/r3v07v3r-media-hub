@@ -132,12 +132,15 @@ export function startBackgroundJobs(): void {
   registerRecurringJob({
     name: 'catalog-refresh',
     label: 'Refreshing the catalogs',
-    // Matches the catalog cache's own 6h TTL, so the refresh lands as the
-    // entry goes stale rather than the next person to open a page paying
-    // for a full crawl while they wait. This is what makes a bigger
-    // library free at the point of use: it is fetched on this job's
-    // schedule, in the background, at the tier that yields to everything.
-    everyMs: 6 * 60 * 60 * 1000,
+    // Hourly, against a cache with a 6h TTL — so this is a cheap check
+    // that mostly finds nothing (three SQLite reads) and picks the crawl
+    // up within an hour of the entry actually going stale, in the
+    // background, rather than leaving it for whoever next opens a page.
+    //
+    // The pairing matters: an interval EQUAL to the TTL would check once
+    // per lifetime of an entry and, landing just before an expiry, would
+    // miss it by a minute and leave the next person to pay for the crawl.
+    everyMs: 60 * 60 * 1000,
     // Long enough after launch that the on-demand fetches the renderer
     // makes on its own have already been served, and their results cached
     // — so this job usually finds nothing to do at all on a cold start.
@@ -150,7 +153,14 @@ export function startBackgroundJobs(): void {
         // three crawls at once is three crawls competing for the same
         // budget for no gain — the whole point of this job existing is
         // that nobody is waiting for it.
-        await catalogData(kind, true, 'maintenance').catch((error) =>
+        //
+        // NOT forced. Forcing would bypass the 6h cache the renderer
+        // filled moments earlier and re-crawl all three catalogs — two
+        // thousand anime titles among them — on every session that lasts
+        // long enough to see this job fire, plus another franchise
+        // grouping pass on top. Honouring the cache is what makes this a
+        // refresh rather than a periodic re-download.
+        await catalogData(kind, false, 'maintenance').catch((error) =>
           logError(`job:catalog-refresh:${kind}`, error)
         )
       }

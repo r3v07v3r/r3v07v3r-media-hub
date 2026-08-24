@@ -193,6 +193,7 @@ const laneLastDispatch = new Map<string, number>()
 const pressureSources = new Map<string, SchedulerPressure>()
 
 let pumpTimer: ReturnType<typeof setTimeout> | null = null
+let pumpQueued = false
 let pumping = false
 let changeListener: (() => void) | null = null
 
@@ -232,7 +233,7 @@ export function setPressure(source: string, level: SchedulerPressure): void {
   else pressureSources.set(source, level)
   if (currentPressure() !== previous) {
     notifyChange()
-    schedulePump(0)
+    requestPump()
   }
 }
 
@@ -260,6 +261,31 @@ function notifyChange(): void {
  *  importance jumps a queue it joined later. */
 function compareTasks(a: QueuedTask, b: QueuedTask): number {
   return PRIORITY_RANK[a.priority] - PRIORITY_RANK[b.priority] || a.enqueuedAt - b.enqueuedAt
+}
+
+/**
+ * Asks for a dispatch pass as soon as the current synchronous run of code
+ * finishes — coalescing however many callers ask for one in between.
+ *
+ * schedule() used to pump synchronously on every single enqueue, which
+ * made dispatch quadratic against a burst: each pass sorts the whole
+ * queue, so a crawl that enqueues its pages in one `Promise.all` paid a
+ * sort per page over a queue growing to the page count. Measured at 2,000
+ * pages — the anime catalog's depth — that is ~2 million comparisons on
+ * the thread that answers the window, which is precisely the kind of
+ * stall this module exists to remove rather than relocate.
+ *
+ * A microtask rather than a timer: the whole burst is enqueued inside one
+ * synchronous run, so the first dispatch still happens before the event
+ * loop turns, and nothing waits a tick longer than it used to.
+ */
+function requestPump(): void {
+  if (pumpQueued) return
+  pumpQueued = true
+  queueMicrotask(() => {
+    pumpQueued = false
+    pump()
+  })
 }
 
 function schedulePump(delayMs: number): void {
@@ -296,6 +322,11 @@ function dispatchLoop(): void {
   const globalBudget = GLOBAL_BUDGET[pressure]
   const tierBudget = TIER_BUDGET[pressure]
   const now = Date.now()
+
+  // Ahead of the sort, which is the expensive part of this function: with
+  // every slot already taken there is nothing to choose between, so
+  // ordering the queue would be work thrown away.
+  if (!queue.length || running.size >= globalBudget) return
 
   queue.sort(compareTasks)
 
@@ -365,11 +396,10 @@ function dispatchLoop(): void {
 function finish(id: number): void {
   running.delete(id)
   notifyChange()
-  // Synchronously rather than via schedulePump, so a chain of small tasks
-  // doesn't pay a timer hop each — but through pump()'s re-entry guard, so
-  // a task that settles during dispatchLoop can't recurse into it.
-  if (pumping) schedulePump(0)
-  else pump()
+  // A microtask rather than a timer hop, so a chain of small tasks stays
+  // prompt — and it goes through requestPump's coalescing so a batch of
+  // completions settling together causes one dispatch pass, not one each.
+  requestPump()
 }
 
 /**
@@ -394,7 +424,7 @@ export function schedule<T>(run: () => Promise<T> | T, options: ScheduleOptions 
         // the queue instead of finishing on its original, lazier schedule.
         if (PRIORITY_RANK[priority] < PRIORITY_RANK[pending.priority]) {
           pending.priority = priority
-          schedulePump(0)
+          requestPump()
         }
       }
       return existing as Promise<T>
@@ -448,7 +478,7 @@ export function schedule<T>(run: () => Promise<T> | T, options: ScheduleOptions 
   }
 
   queue.push(task)
-  pump()
+  requestPump()
   return promise
 }
 
@@ -606,6 +636,10 @@ export function schedulerSnapshot(): SchedulerSnapshot {
  * asked it to close.
  */
 export function shutdownScheduler(): void {
+  // A dispatch pass already queued as a microtask would otherwise still
+  // run after this, against whatever it found; it finds an empty queue
+  // either way, but saying so is clearer than relying on that.
+  pumpQueued = true
   queue.length = 0
   queuedByKey.clear()
   compositeByKey.clear()
@@ -618,6 +652,7 @@ export function shutdownScheduler(): void {
  *  tasks are left to settle on their own; nothing here can cancel work
  *  that has already started. */
 export function resetSchedulerForTests(): void {
+  pumpQueued = false
   queue.length = 0
   queuedByKey.clear()
   inFlightByKey.clear()

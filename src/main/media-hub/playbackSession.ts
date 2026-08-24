@@ -144,6 +144,23 @@ export async function preparePlayback(
   url: string,
   cacheMeta?: CacheSessionMeta
 ): Promise<PlaybackResult> {
+  try {
+    return await openPlayback(url, cacheMeta)
+  } catch (error) {
+    // Nothing is playing, so the backpressure raised below has to come
+    // back off here. Every SUCCESSFUL end-of-playback path goes through
+    // stopPlayback, which releases it — but a preparation that throws
+    // reaches none of them: the renderer's rejected stream.play only
+    // shows an error, and never calls playback.stop. Without this, one
+    // unresolvable link would leave maintenance work suspended and
+    // background work throttled for the rest of the session, with
+    // nothing playing to explain why.
+    setPressure('playback', 'idle')
+    throw error
+  }
+}
+
+async function openPlayback(url: string, cacheMeta?: CacheSessionMeta): Promise<PlaybackResult> {
   activeMediaUrl = url
   // StreamCache is the sole owner of the upstream connection to `url`. It is
   // started before the player opens anything, and mpv then reads only from its

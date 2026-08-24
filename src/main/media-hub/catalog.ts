@@ -95,6 +95,18 @@ const CATALOG_TTL_MS = 6 * 60 * 60 * 1000
 const ANIME_CATALOG_DEPTH = 2000
 
 /**
+ * Which raw anime catalog is current. Bumped every time one is written, so
+ * a grouping pass can tell whether the catalog it started from is still
+ * the one on disk by the time it finishes — see startAnimeGrouping.
+ */
+let animeCatalogGeneration = 0
+/** The in-flight grouping pass, and the catalog it is grouping. */
+let animeGrouping: { generation: number; promise: Promise<unknown> } | null = null
+/** A catalog that arrived while a pass was already running, waiting for
+ *  its own turn. Only the newest is worth keeping. */
+let animeGroupingPending: CatalogItem[] | null = null
+
+/**
  * Grouping the full Kitsu crawl costs roughly one enrichment request per
  * title, plus a second relationship pass for every title without a TVDB
  * mapping. That is valuable catalog hygiene and it is also the single
@@ -107,18 +119,40 @@ const ANIME_CATALOG_DEPTH = 2000
  * it, so it simply is not dispatched until they are done. A fixed 15s
  * delay could only ever guess at when that moment was.
  *
- * coalesce() rather than the pair of module-level flags this used to
- * carry: same guarantee (one pass at a time, however many callers ask for
- * one), expressed the way every other composite in this file expresses it.
+ * Deliberately NOT coalesce(): a pass takes minutes, and a refresh that
+ * lands inside one wants its OWN items grouped, not a share of the result
+ * of grouping the previous catalog. Joining would have been worse than a
+ * wasted request — the joining caller would then write that older,
+ * already-superseded result straight over the newer catalog it had just
+ * cached. So a second caller waits its turn instead, and the write is
+ * guarded by the generation it started from either way.
  */
 function startAnimeGrouping(items: CatalogItem[]): void {
   if (items.length < 2) return
-  void coalesce('catalog:anime:grouping', () => groupAnimeCatalog(items, 'maintenance'))
+  const generation = ++animeCatalogGeneration
+  if (animeGrouping) {
+    // A pass is already running against an older catalog. Starting a
+    // second full enrichment pass alongside it would double the largest
+    // piece of background work in the app; queue this one instead. Only
+    // the newest waiting catalog is worth keeping.
+    animeGroupingPending = items
+    return
+  }
+  runAnimeGrouping(items, generation)
+}
+
+function runAnimeGrouping(items: CatalogItem[], generation: number): void {
+  const promise = groupAnimeCatalog(items, 'maintenance')
     .then((grouped) => {
       // The ungrouped catalog is already cached and usable. Replacing it
       // only after the whole enrichment pass succeeds avoids ever leaving
       // a partial catalog in the cache.
-      if (!grouped.length) return
+      //
+      // And only if it is still the same catalog: a refresh may have
+      // landed during the minutes this took, in which case what is on
+      // disk is NEWER than what was just grouped, and writing this would
+      // silently roll it back.
+      if (!grouped.length || generation !== animeCatalogGeneration) return
       getDatabase().putCache('catalog:v2:anime', grouped, CATALOG_TTL_MS)
       // The whole point of the pass that just finished is the groupedIds
       // it worked out, so the index has to drop the pre-grouping answer
@@ -126,6 +160,17 @@ function startAnimeGrouping(items: CatalogItem[]): void {
       invalidateAnimeGroupIndex()
     })
     .catch((error) => logError('catalog:anime-grouping', error))
+    .finally(() => {
+      animeGrouping = null
+      const next = animeGroupingPending
+      animeGroupingPending = null
+      // Whatever arrived while this was running still needs grouping —
+      // without this it would stay ungrouped until the next refresh
+      // hours later, with every multi-season franchise showing one tile
+      // per season in the meantime.
+      if (next) runAnimeGrouping(next, animeCatalogGeneration)
+    })
+  animeGrouping = { generation, promise }
 }
 
 /**

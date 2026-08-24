@@ -339,6 +339,56 @@ async function main(): Promise<void> {
     assert.equal(coalesceScope('background'), coalesceScope('maintenance'))
   })
 
+  await check('a burst of work costs one dispatch pass, not one per task', async () => {
+    // schedule() used to run a dispatch pass synchronously on every
+    // enqueue, and each pass sorts the whole queue — so a crawl enqueuing
+    // its pages in one Promise.all paid a sort per page over a queue
+    // growing to the page count. At the anime catalog's 2,000-page depth
+    // that measures at ~2 million comparisons on the thread that answers
+    // the window: the exact kind of stall this module exists to remove
+    // rather than relocate.
+    //
+    // Counted by watching Array.prototype.sort rather than by timing,
+    // which would make this a flaky benchmark instead of a statement
+    // about behaviour.
+    const realSort = Array.prototype.sort
+    let sorts = 0
+    Array.prototype.sort = function <T>(this: T[], ...args: [((a: T, b: T) => number)?]): T[] {
+      sorts++
+      return realSort.apply(this, args) as T[]
+    }
+
+    const burst = 300
+    const gates = Array.from({ length: burst }, () => gate())
+    let all: Promise<string>[]
+    try {
+      all = gates.map((g, i) =>
+        schedule(g.task, {
+          lane: 'default',
+          // Mixed tiers so ordering is real work, not a no-op over an
+          // already-sorted queue.
+          priority: i % 2 ? 'visible' : 'background',
+          label: `page ${i}`
+        })
+      )
+      await settle()
+    } finally {
+      Array.prototype.sort = realSort
+    }
+
+    assert.ok(
+      sorts <= 4,
+      `a burst of ${burst} tasks triggered ${sorts} dispatch passes; it should coalesce into one`
+    )
+    // Still dispatched correctly, not merely cheaply.
+    const snapshot = schedulerSnapshot()
+    assert.equal(snapshot.running.length, 4, 'the lane budget was not respected under a burst')
+    assert.equal(snapshot.queued, burst - 4)
+
+    gates.forEach((g) => g.release())
+    await Promise.all(all)
+  })
+
   await check('the snapshot reports what is running and what is waiting', async () => {
     const gates = Array.from({ length: 7 }, () => gate())
     const all = gates.map((g, i) =>
