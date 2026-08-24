@@ -47,6 +47,41 @@ const catalogUrls: Record<'movie' | 'series', string> = {
   series: 'https://v3-cinemeta.strem.io/catalog/series/top.json'
 }
 
+const CATALOG_TTL_MS = 6 * 60 * 60 * 1000
+// Grouping the full Kitsu crawl requires roughly one enrichment request per
+// title (and a second relationship pass for titles without a TVDB mapping).
+// That is valuable catalog hygiene, but it must never sit on the response
+// path of catalog:list: the renderer waits on that IPC call before it can
+// replace its lightweight fallback catalog. Starting it a little after the
+// list has been returned keeps the app interactive while the cache is being
+// enriched for the next launch/refresh.
+const ANIME_GROUPING_DELAY_MS = 15_000
+
+let animeGroupingTimer: ReturnType<typeof setTimeout> | null = null
+let animeGroupingPromise: Promise<void> | null = null
+
+function scheduleAnimeGrouping(items: CatalogItem[]): void {
+  if (items.length < 2 || animeGroupingTimer || animeGroupingPromise) return
+
+  animeGroupingTimer = setTimeout(() => {
+    animeGroupingTimer = null
+    animeGroupingPromise = groupAnimeCatalog(items)
+      .then((grouped) => {
+        // The ungrouped catalog is already cached and usable. Replacing it
+        // only after the whole enrichment pass succeeds avoids ever leaving
+        // a partial catalog in the cache.
+        if (grouped.length) getDatabase().putCache('catalog:v2:anime', grouped, CATALOG_TTL_MS)
+      })
+      .catch((error) => logError('catalog:anime-grouping', error))
+      .finally(() => {
+        animeGroupingPromise = null
+      })
+  }, ANIME_GROUPING_DELAY_MS)
+  // A deferred convenience task must not keep the process alive after the
+  // user has closed the app.
+  animeGroupingTimer.unref?.()
+}
+
 /** Cached (7d) Kitsu genre/category titles for one anime id. */
 async function kitsuCategories(id: string): Promise<string[]> {
   const key = `kitsu:categories:${id}`
@@ -114,13 +149,11 @@ async function kitsuCatalog(): Promise<CatalogItem[]> {
     if (offset < 900) await new Promise((resolve) => setTimeout(resolve, 350))
   }
   // Kitsu has no franchise concept — each season/cour is its own top-level
-  // entry (see animeSeasons.ts's header) — so multi-season anime would
-  // otherwise show up as one catalog tile per season instead of per show.
-  // groupAnimeCatalog checks every item directly (no title-match shortcut,
-  // see its own header for why that isn't reliable enough) — a full,
-  // uncached crawl now takes a few minutes rather than tens of seconds as
-  // a result, but only on the 6h cache refresh below, never on a page load.
-  return groupAnimeCatalog(dedupeCatalog(pages))
+  // entry. The exhaustive franchise pass is deliberately scheduled after
+  // this result is returned (see scheduleAnimeGrouping) rather than awaited
+  // here: this function is called directly by the renderer's catalog:list
+  // request, not by a detached six-hour maintenance job.
+  return dedupeCatalog(pages)
 }
 
 /**
@@ -159,7 +192,8 @@ export async function catalogData(kind: MediaKind, force = false): Promise<Catal
     }
   }
 
-  db.putCache(key, items, 6 * 60 * 60 * 1000)
+  db.putCache(key, items, CATALOG_TTL_MS)
+  if (kind === 'anime') scheduleAnimeGrouping(items)
   return items
 }
 
