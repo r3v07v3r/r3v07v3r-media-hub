@@ -130,7 +130,7 @@ async function main(): Promise<void> {
   await check('remembers a catalog and reads it back on the next launch', async () => {
     const storage = fakeStorage()
     const first = await loadModule(storage)
-    first.rememberCatalog([mediaItem({ id: 'm1', title: 'First' })])
+    first.rememberCatalog([mediaItem({ id: 'm1', title: 'First' })], ['movie'])
     first.flushStartupSnapshot()
 
     const next = await loadModule(storage)
@@ -395,7 +395,7 @@ async function main(): Promise<void> {
     )
     // A session where catalog:list succeeds and home:personalized does not.
     const first = await loadModule(storage)
-    first.rememberCatalog([mediaItem({ id: 'm1' })])
+    first.rememberCatalog([mediaItem({ id: 'm1' })], ['movie'])
     first.flushStartupSnapshot()
 
     const written = stored(storage)
@@ -403,7 +403,7 @@ async function main(): Promise<void> {
       written.homeSavedAt <= now - 29 * DAY_MS,
       'the untouched home feed keeps its original age'
     )
-    assert.ok(written.catalogSavedAt >= now, 'the catalog that was written is now current')
+    assert.ok(written.catalogSavedAt.movie >= now, 'the catalog kind that was written is current')
   })
 
   await check('falls back to savedAt for a snapshot written before per-section stamps', () => {
@@ -426,6 +426,91 @@ async function main(): Promise<void> {
     })
   })
 
+  await check('a live kind does not renew the age of a kind that failed', async () => {
+    // The Anime source is down while Movies keeps loading. Each partial
+    // success used to re-date the carried Anime rows, so a source that had
+    // been dead for months still looked a day old.
+    const storage = fakeStorage()
+    const old = Date.now() - 29 * DAY_MS
+    storage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({
+        savedAt: old,
+        catalogSavedAt: { movie: old, anime: old },
+        homeSavedAt: old,
+        catalog: [
+          mediaItem({ id: 'm1', mediaKind: 'movie' }),
+          mediaItem({ id: 'a1', mediaKind: 'anime' })
+        ],
+        featured: [],
+        recommendations: [],
+        continueWatching: [],
+        preferredGenres: []
+      })
+    )
+    const mod = await loadModule(storage)
+    // Movies answered; anime did not, so its rows are merely carried.
+    mod.rememberCatalog(
+      [mediaItem({ id: 'm2', mediaKind: 'movie' }), mediaItem({ id: 'a1', mediaKind: 'anime' })],
+      ['movie']
+    )
+    mod.flushStartupSnapshot()
+
+    const written = stored(storage)
+    assert.ok(written.catalogSavedAt.movie >= Date.now() - 5000, 'movies were re-fetched')
+    assert.equal(written.catalogSavedAt.anime, old, 'anime keeps the age it already had')
+  })
+
+  await check('expires one kind while keeping the kinds still answering', () => {
+    const storage = fakeStorage()
+    const now = Date.now()
+    storage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({
+        savedAt: now,
+        catalogSavedAt: { movie: now, anime: now - 31 * DAY_MS },
+        homeSavedAt: now,
+        catalog: [
+          mediaItem({ id: 'm1', title: 'Fresh Movie', mediaKind: 'movie' }),
+          mediaItem({ id: 'a1', title: 'Dead Anime', mediaKind: 'anime' })
+        ],
+        featured: [],
+        recommendations: [],
+        continueWatching: [],
+        preferredGenres: []
+      })
+    )
+    return loadModule(storage).then((mod) => {
+      const catalog = mod.rememberedCatalog()
+      assert.deepEqual(
+        catalog.map((m: MediaItem) => m.title),
+        ['Fresh Movie'],
+        'the expired kind drops out, the live one stays'
+      )
+    })
+  })
+
+  await check('reads a single-number catalog stamp from the intermediate shape', () => {
+    // One version of this file stamped the whole catalog with one number.
+    const storage = fakeStorage()
+    storage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({
+        savedAt: Date.now() - 2 * DAY_MS,
+        catalogSavedAt: Date.now() - 2 * DAY_MS,
+        homeSavedAt: Date.now() - 2 * DAY_MS,
+        catalog: [mediaItem({ id: 'm1', title: 'Interim', mediaKind: 'movie' })],
+        featured: [],
+        recommendations: [],
+        continueWatching: [],
+        preferredGenres: []
+      })
+    )
+    return loadModule(storage).then((mod) => {
+      assert.equal(mod.rememberedCatalog()[0].title, 'Interim')
+    })
+  })
+
   console.log('\nstartupSnapshot — running out of storage')
 
   await check('sheds catalog descriptions rather than losing the whole snapshot', async () => {
@@ -441,7 +526,7 @@ async function main(): Promise<void> {
     // A ceiling the full payload cannot fit under but the trimmed one can.
     const storage = fakeStorage(withDescriptions.length - 1000)
     const mod = await loadModule(storage)
-    mod.rememberCatalog([mediaItem({ id: 'm1', description: longDescription })])
+    mod.rememberCatalog([mediaItem({ id: 'm1', description: longDescription })], ['movie'])
     mod.rememberHomeFeed({
       featured: [mediaItem({ id: 'f1' })],
       recommendations: [],
@@ -472,7 +557,10 @@ async function main(): Promise<void> {
     })
     const storage = fakeStorage(homeFeedOnly.length + 40)
     const mod = await loadModule(storage)
-    mod.rememberCatalog(Array.from({ length: 40 }, (_, i) => mediaItem({ id: `m${i}` })))
+    mod.rememberCatalog(
+      Array.from({ length: 40 }, (_, i) => mediaItem({ id: `m${i}` })),
+      ['movie']
+    )
     mod.rememberHomeFeed({
       featured: [mediaItem({ id: 'f1' })],
       recommendations: [],
@@ -492,7 +580,7 @@ async function main(): Promise<void> {
     const previous = storage.getItem(STORAGE_KEY)
     storage.limit = 1
     const mod = await loadModule(storage)
-    mod.rememberCatalog([mediaItem({ id: 'm1' })])
+    mod.rememberCatalog([mediaItem({ id: 'm1' })], ['movie'])
     mod.flushStartupSnapshot()
     assert.equal(storage.getItem(STORAGE_KEY), previous)
   })

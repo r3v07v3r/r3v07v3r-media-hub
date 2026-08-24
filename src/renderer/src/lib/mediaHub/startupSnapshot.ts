@@ -53,30 +53,51 @@ export interface HomeFeedSnapshot {
   preferredGenres: string[]
 }
 
+/**
+ * Catalog freshness, per kind. Keyed by `MediaItem.mediaKind`, with
+ * UNKINDED for rows that carry none.
+ *
+ * Not one timestamp for the whole catalog, because the catalog is not
+ * fetched as a whole: each kind answers on its own, and a kind that fails
+ * has its previous rows carried forward (see mergeRememberedCatalog). A
+ * single stamp meant every partial success re-dated those carried rows,
+ * so a source that had been down for months still looked a day old and
+ * MAX_AGE_MS never reached it.
+ */
+type CatalogStamps = Record<string, number>
+
+/** Stamp key for rows with no `mediaKind` — mockData's, which are never persisted, and anything a future shape forgets to tag. */
+const UNKINDED = '_'
+
 interface StoredSnapshot extends HomeFeedSnapshot {
-  /** When this file was last written, for anything. Diagnostics, and the fallback stamp for a snapshot written before the two below existed. */
+  /** When this file was last written, for anything. Diagnostics, and the fallback stamp for a snapshot written before the fields below existed. */
   savedAt: number
-  // Aged separately, because they are refreshed separately: the catalog
-  // comes from catalog:list and the home feed from home:personalized, and
-  // one can keep succeeding for weeks while the other keeps failing. A
-  // single shared timestamp meant any successful write renewed BOTH, so
-  // a Continue Watching row could outlive MAX_AGE_MS indefinitely on the
-  // strength of catalog writes that never touched it — an app offering to
-  // resume something you finished months ago.
-  catalogSavedAt: number
+  catalogSavedAt: CatalogStamps
+  // Aged separately from the catalog, because they are refreshed
+  // separately: the catalog comes from catalog:list and the home feed
+  // from home:personalized, and one can keep succeeding for weeks while
+  // the other keeps failing. A single shared timestamp meant any
+  // successful write renewed BOTH, so a Continue Watching row could
+  // outlive MAX_AGE_MS indefinitely on the strength of catalog writes
+  // that never touched it — an app offering to resume something you
+  // finished months ago.
   homeSavedAt: number
   catalog: MediaItem[]
 }
 
 const EMPTY: StoredSnapshot = {
   savedAt: 0,
-  catalogSavedAt: 0,
+  catalogSavedAt: {},
   homeSavedAt: 0,
   catalog: [],
   featured: [],
   recommendations: [],
   continueWatching: [],
   preferredGenres: []
+}
+
+function stampKey(item: MediaItem): string {
+  return item.mediaKind ?? UNKINDED
 }
 
 /**
@@ -154,22 +175,43 @@ function read(): StoredSnapshot {
     if (!raw) return current
     const parsed = JSON.parse(raw) as Partial<StoredSnapshot>
     const savedAt = timestamp(parsed?.savedAt)
-    // Snapshots written before the per-section stamps existed carry only
-    // `savedAt`; it dates both sections for them, which is exactly as
-    // accurate as what that version could record.
-    const catalogSavedAt = timestamp(parsed?.catalogSavedAt) || savedAt
+    // Snapshots written before these stamps existed carry only `savedAt`,
+    // and the version between the two carried a single catalog number —
+    // either way one value dates everything, which is exactly as accurate
+    // as what that version could record.
+    const rawCatalogStamps: unknown = parsed?.catalogSavedAt
+    const fallbackStamp = timestamp(rawCatalogStamps) || savedAt
+    const stamps: CatalogStamps = {}
+    if (rawCatalogStamps && typeof rawCatalogStamps === 'object') {
+      for (const [kind, value] of Object.entries(rawCatalogStamps as Record<string, unknown>)) {
+        const at = timestamp(value)
+        if (at) stamps[kind] = at
+      }
+    }
     const homeSavedAt = timestamp(parsed?.homeSavedAt) || savedAt
-    const catalogFresh = isFresh(catalogSavedAt)
     const homeFresh = isFresh(homeSavedAt)
-    if (!catalogFresh && !homeFresh) {
+
+    // Filtered row by row against its own kind's age, so a kind whose
+    // source has been down long enough to expire drops out while the
+    // kinds still answering stay.
+    const keptStamps: CatalogStamps = {}
+    const catalog = reviveMediaItems(parsed.catalog).filter((item) => {
+      const key = stampKey(item)
+      const at = stamps[key] ?? fallbackStamp
+      if (!isFresh(at)) return false
+      keptStamps[key] = at
+      return true
+    })
+
+    if (!catalog.length && !homeFresh) {
       clearStartupSnapshot()
       return EMPTY
     }
     current = {
       savedAt,
-      catalogSavedAt: catalogFresh ? catalogSavedAt : 0,
+      catalogSavedAt: keptStamps,
       homeSavedAt: homeFresh ? homeSavedAt : 0,
-      catalog: catalogFresh ? reviveMediaItems(parsed.catalog) : [],
+      catalog,
       featured: homeFresh ? reviveMediaItems(parsed.featured) : [],
       recommendations: homeFresh ? reviveWrapped<Recommendation>(parsed.recommendations) : [],
       continueWatching: homeFresh
@@ -265,14 +307,31 @@ export function rememberedHomeFeed(): HomeFeedSnapshot {
   }
 }
 
-export function rememberCatalog(items: MediaItem[]): void {
+/**
+ * `liveKinds` is the kinds that actually returned rows this run — NOT
+ * every kind present in `items`, which also holds the rows carried
+ * forward for kinds that failed (see mergeRememberedCatalog). Only what
+ * was really re-fetched gets re-dated, so a source that stays down keeps
+ * ageing and eventually expires however often its neighbours succeed.
+ */
+export function rememberCatalog(items: MediaItem[], liveKinds: Iterable<string>): void {
   if (!items.length) return
   const snapshot = read()
   const next = items.length > MAX_CATALOG_ITEMS ? items.slice(0, MAX_CATALOG_ITEMS) : items
   // Stamped here rather than at flush time: this is the moment the data
   // was actually known to be current, and flushes are coalesced across
-  // both sections.
-  current = { ...snapshot, catalog: next, catalogSavedAt: Date.now() }
+  // every section.
+  const now = Date.now()
+  const stamps: CatalogStamps = { ...snapshot.catalogSavedAt }
+  for (const kind of liveKinds) stamps[kind] = now
+  for (const item of next) {
+    // A kind in the list that has never been stamped — carried out of a
+    // snapshot written before per-kind stamps existed — inherits that
+    // snapshot's age rather than today's.
+    const key = stampKey(item)
+    if (!stamps[key]) stamps[key] = snapshot.savedAt || now
+  }
+  current = { ...snapshot, catalog: next, catalogSavedAt: stamps }
   schedule()
 }
 

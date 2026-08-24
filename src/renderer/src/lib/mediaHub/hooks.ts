@@ -325,8 +325,12 @@ export function useMediaHubBrowseCatalog(
   // mockData's demo pool, and persisting THAT as this app's memory would
   // be the original bug wearing a new hat.
   useEffect(() => {
-    if (mapped?.length) rememberCatalog(catalog)
-  }, [mapped, catalog])
+    // `resolvedKinds`, not every kind in `catalog`: the merged list also
+    // holds rows carried forward for kinds that failed, and re-dating
+    // those on the strength of a neighbour's success is how a dead
+    // source stays "fresh" forever. See rememberCatalog.
+    if (mapped?.length) rememberCatalog(catalog, resolvedKinds)
+  }, [mapped, catalog, resolvedKinds])
 
   return useMemo(
     () => ({ items: catalog, loading, kindStates, refresh }),
