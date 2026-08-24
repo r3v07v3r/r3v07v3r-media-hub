@@ -19,6 +19,7 @@ import { shutdownPlayer } from './media-hub/playerBridge'
 import { shutdownScheduler } from './media-hub/taskScheduler'
 import { startBackgroundJobs, stopBackgroundJobs } from './media-hub/backgroundJobs'
 import { sendToPlayerOverlay } from './media-hub/playerWindow'
+import { toggleMainWindowFullscreen } from './media-hub/windowFullscreen'
 import { MEDIA_HUB_CHANNELS } from '../shared/media-hub/ipc-channels'
 
 // Fixed 1920x1080 design canvas (spec section 1) — the composition is built
@@ -144,6 +145,31 @@ function createWindow(): void {
   setupAutoUpdater(mainWindow)
 }
 
+// F11 enters and leaves fullscreen from anywhere in the app — the main window
+// and the player-controls overlay alike, since both are BrowserWindows and this
+// is registered on every one of them.
+//
+// Handled here rather than in a renderer for two reasons. It has to reach the
+// overlay, which is a second window with its own React tree; and it has to
+// suppress Electron's default View ▸ Toggle Full Screen accelerator, which is
+// also F11 and would otherwise toggle a second time and land back where it
+// started. `event.preventDefault()` in before-input-event is what stops that
+// menu accelerator (and the page keydown) from firing at all.
+//
+// Always the MAIN window's fullscreen, whichever window took the key — see
+// windowFullscreen.ts. mpv's video window is not a BrowserWindow and never sees
+// this, so it carries its own F11 binding instead (mpv.ts's bindSafetyKeys),
+// which routes to the same toggle.
+function watchFullscreenShortcut(window: BrowserWindow): void {
+  window.webContents.on('before-input-event', (event, input) => {
+    if (input.type !== 'keyDown' || input.key !== 'F11') return
+    // Bare F11 only. A modified press is somebody else's shortcut.
+    if (input.control || input.meta || input.alt || input.shift) return
+    event.preventDefault()
+    toggleMainWindowFullscreen()
+  })
+}
+
 // This method will be called when Electron has finished
 // initialization and is ready to create browser windows.
 // Some APIs can only be used after this event occurs.
@@ -162,6 +188,7 @@ app.whenReady().then(() => {
   // see https://github.com/alex8088/electron-toolkit/tree/master/packages/utils
   app.on('browser-window-created', (_, window) => {
     optimizer.watchWindowShortcuts(window)
+    watchFullscreenShortcut(window)
   })
 
   registerTelemetryIpc()

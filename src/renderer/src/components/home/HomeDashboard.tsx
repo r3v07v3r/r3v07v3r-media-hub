@@ -7,8 +7,8 @@ import { MoodBrowser } from './MoodBrowser'
 import { useRestoreBrowsingOrigin } from '@renderer/lib/mediaHub/useRestoreBrowsingOrigin'
 import styles from './HomeDashboard.module.css'
 
-// Reference composition target (public/reference/dashboard-reference.png)
-// puts the telemetry cluster back in its own small column to the right
+// The reference composition this screen was built against puts the
+// telemetry cluster back in its own small column to the right
 // of the AI Picks row — not the top bar (see topbar/TopUtilityBar.tsx,
 // which no longer renders a system-monitor widget).
 export function HomeDashboard() {

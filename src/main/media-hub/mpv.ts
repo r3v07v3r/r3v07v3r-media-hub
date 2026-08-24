@@ -752,6 +752,15 @@ export class MpvPlayer {
       ['SPACE', 'r3-toggle-pause'],
       ['MBTN_LEFT', 'r3-toggle-pause'],
       ['MBTN_LEFT_DBL', 'r3-toggle-fullscreen'],
+      // F11 is the app's fullscreen key everywhere else (src/main/index.ts
+      // registers it on every BrowserWindow). This window is mpv's, not
+      // Electron's, so that handler never sees it — bound to the same
+      // script-message the double-click uses so the key means one thing no
+      // matter which window happens to hold the focus. mpv's own `fullscreen`
+      // property is deliberately NOT what it toggles: mpv follows the main
+      // window (playerBridge's setPlayerFullscreen), and going fullscreen
+      // underneath a windowed app would leave the controls stranded.
+      ['F11', 'r3-toggle-fullscreen'],
       ['LEFT', 'r3-seek-back'],
       ['RIGHT', 'r3-seek-forward'],
       ['UP', 'r3-volume-up'],

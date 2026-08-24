@@ -59,6 +59,11 @@ import {
   setPlayerOverlayTopmost
 } from './playerWindow'
 import { getActiveWindow, sendToRenderer } from './rendererBridge'
+import {
+  mainWindowFullscreenTarget,
+  setMainWindowFullscreen,
+  toggleMainWindowFullscreen
+} from './windowFullscreen'
 
 const player = new MpvPlayer()
 let sessionSnapshot: PlayerSessionSnapshot | null = null
@@ -192,12 +197,6 @@ function forwardInput(action: PlayerInputEvent['action']): boolean {
   return true
 }
 
-function toggleMainWindowFullscreen(): void {
-  const win = getActiveWindow()
-  if (!win || win.isDestroyed()) return
-  win.setFullScreen(!win.isFullScreen())
-}
-
 /** Wires every property the UI needs. Called once per mpv process, not per
  *  title — observers survive `loadfile`. */
 async function attachObservers(): Promise<void> {
@@ -292,9 +291,16 @@ async function attachObservers(): Promise<void> {
         // window:exit-fullscreen — this is the copy for when mpv's window has
         // the focus instead, and the two must not disagree or Escape would mean
         // different things depending on which window happened to be focused.
-        const mainWindow = getActiveWindow()
-        if (mainWindow && !mainWindow.isDestroyed() && mainWindow.isFullScreen()) {
-          mainWindow.setFullScreen(false)
+        //
+        // Asked of the tracked target rather than isFullScreen(), which is what
+        // window:exit-fullscreen asks and is the only reading that survives an
+        // in-flight transition. F11 and a double-click both go fullscreen from
+        // this very window, and on Windows isFullScreen() still answers false
+        // for the length of the native animation — so Escape pressed in that
+        // window read "not fullscreen" and killed the film instead of leaving
+        // fullscreen, which is the one outcome this branch exists to prevent.
+        if (mainWindowFullscreenTarget()) {
+          setMainWindowFullscreen(false)
           return
         }
         // Same path the overlay's close button takes.
@@ -310,6 +316,9 @@ async function attachObservers(): Promise<void> {
         if (!forwardInput('toggle-pause')) void runCommand({ type: 'toggle-pause' }).catch(() => {})
         return
       case 'r3-toggle-fullscreen':
+        // Same shared toggle the overlay's button and F11 reach through IPC, so
+        // a press that arrives here mid-transition reverses the one in flight
+        // instead of reading a state Windows has not caught up to yet.
         if (!forwardInput('toggle-fullscreen')) toggleMainWindowFullscreen()
         return
       case 'r3-seek-back':

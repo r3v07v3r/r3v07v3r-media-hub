@@ -10,7 +10,6 @@ import { MediaDetailPage } from '@renderer/routes/MediaDetailPage'
 import MyStuffPage from '@renderer/routes/MyStuffPage'
 import DownloadsPage from '@renderer/routes/DownloadsPage'
 import SettingsPage from '@renderer/routes/SettingsPage'
-import { ReferenceOverlay } from '@renderer/components/debug/ReferenceOverlay'
 import PlayerOverlayWindow from '@renderer/routes/PlayerOverlayWindow'
 import { PLAYER_OVERLAY_ROUTE } from '@shared/media-hub/playerRoute'
 
@@ -70,10 +69,6 @@ export default function App() {
               <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>
           </AppShell>
-          {/* Dev/QA-only pixel-alignment tool (spec: F8 toggle, F9/F10/F11
-            opacity presets) — renders null unless toggled on, so it's safe
-            to always mount. */}
-          <ReferenceOverlay />
         </AppStateProvider>
       </OverlayProvider>
     </HashRouter>
