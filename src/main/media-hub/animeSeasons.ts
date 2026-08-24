@@ -62,6 +62,7 @@
 
 import type { CatalogItem, Episode } from '../../shared/media-hub/types'
 import { fetchJson } from './httpClient'
+import type { TaskPriority } from './taskScheduler'
 import { logError } from './logger'
 import { getDatabase } from './dbState'
 import { normalizeKitsuAnime, normalizeKitsuEpisode, type RawApiPayload } from './core'
@@ -82,7 +83,10 @@ const NO_TVDB_MAPPING: TvdbMapping = { seriesId: '', season: -1 }
  *  published) Kitsu-to-TheTVDB mapping for one anime id. Returns null (not
  *  an error) when Kitsu has no thetvdb mapping for it — common for very
  *  new or obscure titles not yet catalogued there. */
-export async function kitsuTvdbMapping(kitsuId: string): Promise<TvdbMapping | null> {
+export async function kitsuTvdbMapping(
+  kitsuId: string,
+  priority: TaskPriority = 'maintenance'
+): Promise<TvdbMapping | null> {
   const key = `kitsu:tvdb:${kitsuId}`
   const db = getDatabase()
   const cached = db.getCache<TvdbMapping>(key)
@@ -90,7 +94,9 @@ export async function kitsuTvdbMapping(kitsuId: string): Promise<TvdbMapping | n
 
   try {
     const result = await fetchJson<RawApiPayload>(
-      `https://kitsu.io/api/edge/anime/${encodeURIComponent(kitsuId)}/mappings`
+      `https://kitsu.io/api/edge/anime/${encodeURIComponent(kitsuId)}/mappings`,
+      {},
+      { priority, label: 'anime franchise mapping' }
     )
     const entry = (result.data || []).find(
       (x: RawApiPayload) => x.attributes?.externalSite === 'thetvdb'
@@ -119,7 +125,11 @@ export async function kitsuTvdbMapping(kitsuId: string): Promise<TvdbMapping | n
  *  /find endpoint. Returns null when TMDB has no matching tv entry, or no
  *  API key is configured — callers fall back to Kitsu's own per-id data
  *  either way, this is never a hard requirement. */
-async function tmdbTvIdFromTvdb(tvdbSeriesId: string, apiKey: string): Promise<number | null> {
+async function tmdbTvIdFromTvdb(
+  tvdbSeriesId: string,
+  apiKey: string,
+  priority: TaskPriority
+): Promise<number | null> {
   const key = `tvdb:tmdb-tv:${tvdbSeriesId}`
   const db = getDatabase()
   const cached = db.getCache<number>(key)
@@ -127,7 +137,9 @@ async function tmdbTvIdFromTvdb(tvdbSeriesId: string, apiKey: string): Promise<n
 
   try {
     const result = await fetchJson<RawApiPayload>(
-      `https://api.themoviedb.org/3/find/${encodeURIComponent(tvdbSeriesId)}?api_key=${encodeURIComponent(apiKey)}&external_source=tvdb_id`
+      `https://api.themoviedb.org/3/find/${encodeURIComponent(tvdbSeriesId)}?api_key=${encodeURIComponent(apiKey)}&external_source=tvdb_id`,
+      {},
+      { priority, label: 'TMDB series lookup' }
     )
     const id = Number(result.tv_results?.[0]?.id)
     const value = Number.isInteger(id) && id > 0 ? id : -1
@@ -161,7 +173,8 @@ async function tmdbSeasonEpisodes(
   tmdbTvId: number,
   seasonNumber: number,
   apiKey: string,
-  parentId: string
+  parentId: string,
+  priority: TaskPriority
 ): Promise<Episode[]> {
   const key = `tmdb:season:${tmdbTvId}:${seasonNumber}`
   const db = getDatabase()
@@ -170,7 +183,9 @@ async function tmdbSeasonEpisodes(
 
   try {
     const result = await fetchJson<RawApiPayload>(
-      `https://api.themoviedb.org/3/tv/${tmdbTvId}/season/${seasonNumber}?api_key=${encodeURIComponent(apiKey)}`
+      `https://api.themoviedb.org/3/tv/${tmdbTvId}/season/${seasonNumber}?api_key=${encodeURIComponent(apiKey)}`,
+      {},
+      { priority, label: 'TMDB season' }
     )
     const episodes = (result.episodes || []).map((e: RawApiPayload) =>
       normalizeTmdbEpisode(e, parentId, seasonNumber)
@@ -193,10 +208,13 @@ async function tmdbSeasonEpisodes(
 async function kitsuEpisodePage(
   kitsuId: string,
   offset: number,
-  parentId: string
+  parentId: string,
+  priority: TaskPriority
 ): Promise<{ episodes: Episode[]; total: number }> {
   const result = await fetchJson<RawApiPayload>(
-    `https://kitsu.io/api/edge/anime/${encodeURIComponent(kitsuId)}/episodes?page%5Blimit%5D=20&page%5Boffset%5D=${offset}&sort=number`
+    `https://kitsu.io/api/edge/anime/${encodeURIComponent(kitsuId)}/episodes?page%5Blimit%5D=20&page%5Boffset%5D=${offset}&sort=number`,
+    {},
+    { priority, label: 'anime episodes' }
   )
   const episodes = (result.data || []).map((record: RawApiPayload) =>
     normalizeKitsuEpisode(record, parentId)
@@ -206,27 +224,32 @@ async function kitsuEpisodePage(
 }
 
 /**
- * Walks a Kitsu anime's full real episode list — 20 per page, up to 5 pages
- * fetched concurrently per batch with the same 350ms politeness pacing
- * kitsuCatalog/groupAnimeCatalog already use elsewhere in this codebase.
+ * Walks a Kitsu anime's full real episode list, 20 per page. The first
+ * page is what tells us how many there are; the rest are asked for
+ * together and paced by the scheduler's kitsu lane rather than by the
+ * hand-rolled batch-of-five-then-sleep loop this used to run (see
+ * kitsuCatalog in catalog.ts for why that pattern is gone everywhere).
+ *
  * Returns `[]` (not an error) on any failure, including a title with no
  * /episodes coverage on Kitsu at all — every caller treats an empty result
  * as "fall back to the synthesized placeholder episodes," never as a hard
  * failure.
  */
-export async function kitsuRealEpisodes(kitsuId: string, parentId: string): Promise<Episode[]> {
+export async function kitsuRealEpisodes(
+  kitsuId: string,
+  parentId: string,
+  priority: TaskPriority = 'interactive'
+): Promise<Episode[]> {
   try {
-    const first = await kitsuEpisodePage(kitsuId, 0, parentId)
-    const episodes = [...first.episodes]
+    const first = await kitsuEpisodePage(kitsuId, 0, parentId, priority)
     const offsets: number[] = []
     for (let o = 20; o < first.total; o += 20) offsets.push(o)
-    for (let i = 0; i < offsets.length; i += 5) {
-      const batch = offsets.slice(i, i + 5)
-      const pages = await Promise.all(batch.map((o) => kitsuEpisodePage(kitsuId, o, parentId)))
-      episodes.push(...pages.flatMap((p) => p.episodes))
-      if (i + 5 < offsets.length) await new Promise((resolve) => setTimeout(resolve, 350))
-    }
-    return episodes.sort((a, b) => a.season - b.season || a.episode - b.episode)
+    const rest = await Promise.all(
+      offsets.map((offset) => kitsuEpisodePage(kitsuId, offset, parentId, priority))
+    )
+    return [...first.episodes, ...rest.flatMap((page) => page.episodes)].sort(
+      (a, b) => a.season - b.season || a.episode - b.episode
+    )
   } catch (error) {
     logError('anime:episodes', error)
     return []
@@ -243,7 +266,7 @@ interface SequelEdge {
  *  season 3 AND season 3 independently lists a "sequel" edge to season 4),
  *  so checking only a single item's own outgoing edges against the rest of
  *  the catalog is enough; no need to also check incoming edges. */
-async function kitsuSequelEdges(kitsuId: string): Promise<SequelEdge[]> {
+async function kitsuSequelEdges(kitsuId: string, priority: TaskPriority): Promise<SequelEdge[]> {
   const key = `kitsu:edges:${kitsuId}`
   const db = getDatabase()
   const cached = db.getCache<SequelEdge[]>(key)
@@ -255,7 +278,9 @@ async function kitsuSequelEdges(kitsuId: string): Promise<SequelEdge[]> {
       // reference itself, not just the sideloaded attributes) entirely
       // without it, despite JSON:API convention normally keeping linkage
       // data independent of `include`.
-      `https://kitsu.io/api/edge/anime/${encodeURIComponent(kitsuId)}/media-relationships?include=destination&page%5Blimit%5D=20`
+      `https://kitsu.io/api/edge/anime/${encodeURIComponent(kitsuId)}/media-relationships?include=destination&page%5Blimit%5D=20`,
+      {},
+      { priority, label: 'anime relationships' }
     )
     const edges: SequelEdge[] = (result.data || [])
       .filter(
@@ -284,22 +309,26 @@ async function kitsuSequelEdges(kitsuId: string): Promise<SequelEdge[]> {
  * buildGroupedAnimeVideos to fetch on demand when that title's detail page
  * is actually opened.
  */
-export async function groupAnimeCatalog(items: CatalogItem[]): Promise<CatalogItem[]> {
+export async function groupAnimeCatalog(
+  items: CatalogItem[],
+  priority: TaskPriority = 'maintenance'
+): Promise<CatalogItem[]> {
   const idToIndex = new Map(items.map((item, i) => [item.id, i] as const))
   const mappingByItemId = new Map<string, TvdbMapping | null>()
 
-  // Paced in batches of 20, same politeness convention the crawl itself
-  // already uses — every item pays for this fetch now, not just candidates
-  // from a title match, so a full crawl genuinely takes minutes rather than
-  // seconds; only the 6h-cached refresh pays that cost, not page loads.
-  for (let i = 0; i < items.length; i += 20) {
-    const batch = items.slice(i, i + 20)
-    const mappings = await Promise.all(
-      batch.map((item) => kitsuTvdbMapping(item.id.replace(/^kitsu:/, '')))
-    )
-    batch.forEach((item, idx) => mappingByItemId.set(item.id, mappings[idx]))
-    if (i + 20 < items.length) await new Promise((resolve) => setTimeout(resolve, 350))
-  }
+  // Every item pays for this fetch, not just candidates from a title
+  // match, so a full uncached crawl genuinely takes minutes. That is
+  // fine — at `maintenance` it only ever runs in the gaps, and the
+  // ungrouped catalog is already cached and usable the whole time.
+  //
+  // The batch-of-20-then-sleep-350ms loop this used to be is gone: it
+  // serialised the whole pass on the slowest item in each batch of
+  // twenty, for pacing the kitsu lane now applies across every caller at
+  // once. See kitsuCatalog in catalog.ts for the same change and why.
+  const mappings = await Promise.all(
+    items.map((item) => kitsuTvdbMapping(item.id.replace(/^kitsu:/, ''), priority))
+  )
+  items.forEach((item, idx) => mappingByItemId.set(item.id, mappings[idx]))
 
   const parent = items.map((_, i) => i)
   function find(i: number): number {
@@ -339,21 +368,17 @@ export async function groupAnimeCatalog(items: CatalogItem[]): Promise<CatalogIt
   // ones still isolated when checked, is what actually closes that chain
   // regardless of processing order. Redundant unions here are harmless.
   const needsEdgeCheck = items.filter((item) => !mappingByItemId.get(item.id))
-  for (let i = 0; i < needsEdgeCheck.length; i += 20) {
-    const batch = needsEdgeCheck.slice(i, i + 20)
-    const edgesBatch = await Promise.all(
-      batch.map((item) => kitsuSequelEdges(item.id.replace(/^kitsu:/, '')))
-    )
-    batch.forEach((item, idx) => {
-      const srcIndex = idToIndex.get(item.id)
-      if (srcIndex === undefined) return
-      for (const edge of edgesBatch[idx]) {
-        const destIndex = idToIndex.get(`kitsu:${edge.destId}`)
-        if (destIndex !== undefined) union(srcIndex, destIndex)
-      }
-    })
-    if (i + 20 < needsEdgeCheck.length) await new Promise((resolve) => setTimeout(resolve, 350))
-  }
+  const edgesByItem = await Promise.all(
+    needsEdgeCheck.map((item) => kitsuSequelEdges(item.id.replace(/^kitsu:/, ''), priority))
+  )
+  needsEdgeCheck.forEach((item, idx) => {
+    const srcIndex = idToIndex.get(item.id)
+    if (srcIndex === undefined) return
+    for (const edge of edgesByItem[idx]) {
+      const destIndex = idToIndex.get(`kitsu:${edge.destId}`)
+      if (destIndex !== undefined) union(srcIndex, destIndex)
+    }
+  })
 
   // A second attempt at the exact same question, from a different
   // provider — see anilist.ts's own header for why this exists and how
@@ -385,7 +410,7 @@ export async function groupAnimeCatalog(items: CatalogItem[]): Promise<CatalogIt
     .map((item) => anilistIdByItemId.get(item.id))
     .filter((id): id is number => Boolean(id))
   if (anilistLookupIds.length) {
-    const info = await anilistTitleInfo(anilistLookupIds)
+    const info = await anilistTitleInfo(anilistLookupIds, priority)
     for (const item of needsEdgeCheck) {
       const anilistId = anilistIdByItemId.get(item.id)
       if (!anilistId) continue
@@ -492,7 +517,8 @@ export function combineGroupEpisodeCounts(members: CatalogItem[]): {
  */
 export async function buildGroupedAnimeVideos(
   canonical: CatalogItem,
-  apiKey: string
+  apiKey: string,
+  priority: TaskPriority = 'interactive'
 ): Promise<Episode[]> {
   const orderedIds = [canonical.id, ...(canonical.groupedIds || [])]
   const kitsuIds = orderedIds.map((id) => id.replace(/^kitsu:/, ''))
@@ -500,18 +526,18 @@ export async function buildGroupedAnimeVideos(
 
   let tmdbTvId: number | null = null
   if (apiKey) {
-    const rootMapping = await kitsuTvdbMapping(kitsuIds[0])
-    if (rootMapping) tmdbTvId = await tmdbTvIdFromTvdb(rootMapping.seriesId, apiKey)
+    const rootMapping = await kitsuTvdbMapping(kitsuIds[0], priority)
+    if (rootMapping) tmdbTvId = await tmdbTvIdFromTvdb(rootMapping.seriesId, apiKey, priority)
   }
 
   const videos: Episode[] = []
   for (let i = 0; i < kitsuIds.length; i++) {
     const seasonNumber = i + 1
     let episodes: Episode[] = tmdbTvId
-      ? await tmdbSeasonEpisodes(tmdbTvId, seasonNumber, apiKey, parentId)
+      ? await tmdbSeasonEpisodes(tmdbTvId, seasonNumber, apiKey, parentId, priority)
       : []
     if (!episodes.length) {
-      const real = await kitsuRealEpisodes(kitsuIds[i], parentId)
+      const real = await kitsuRealEpisodes(kitsuIds[i], parentId, priority)
       if (real.length) {
         episodes = real.map((v) => ({
           ...v,
@@ -521,7 +547,9 @@ export async function buildGroupedAnimeVideos(
       } else {
         try {
           const result = await fetchJson<RawApiPayload>(
-            `https://kitsu.io/api/edge/anime/${encodeURIComponent(kitsuIds[i])}`
+            `https://kitsu.io/api/edge/anime/${encodeURIComponent(kitsuIds[i])}`,
+            {},
+            { priority, label: 'anime season fallback' }
           )
           const fallbackItem = normalizeKitsuAnime(result.data || {})
           episodes = fallbackItem.videos.map((v) => ({
@@ -541,7 +569,7 @@ export async function buildGroupedAnimeVideos(
   // no corresponding Kitsu id of its own, so there's nothing to fall back
   // to; it's simply included when TMDB has it, skipped otherwise.
   if (tmdbTvId) {
-    const specials = await tmdbSeasonEpisodes(tmdbTvId, 0, apiKey, parentId)
+    const specials = await tmdbSeasonEpisodes(tmdbTvId, 0, apiKey, parentId, priority)
     videos.unshift(...specials)
   }
 

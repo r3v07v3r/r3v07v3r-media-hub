@@ -30,6 +30,7 @@
 // once, confirmed live the same day — and paced well under the ceiling.
 
 import { fetchJson } from './httpClient'
+import type { TaskPriority } from './taskScheduler'
 import { logError } from './logger'
 import { getDatabase } from './dbState'
 
@@ -42,11 +43,12 @@ const ANILIST_ENDPOINT = 'https://graphql.anilist.co'
  *  batch size every other paced loop in this file already uses. */
 const ANILIST_BATCH_SIZE = 20
 
-/** ~24 requests/minute sustained — under the confirmed 30/min ceiling
- *  with real headroom for the rest of this app's own traffic and for
- *  AniList's limit being per-IP-shared across whatever else is running
- *  on this machine. */
-const ANILIST_BATCH_PACING_MS = 2_500
+// The ~24 requests/minute this file used to pace itself at, by sleeping
+// between batches, is now the `anilist` lane's minimum gap in
+// taskScheduler.ts. It has to live there rather than here because this
+// loop was never the only thing on this machine talking to AniList — a
+// per-IP rate limit can only be respected by something that sees every
+// caller, and a sleep in one loop cannot.
 
 /** A franchise's relation graph is close to static — new entries appear,
  *  existing ones essentially never change their relationType. 30 days
@@ -149,7 +151,10 @@ export interface AnilistTitleInfo {
   chainEdges: AnilistSeasonChainEdge[]
 }
 
-async function fetchAnilistBatch(ids: number[]): Promise<Record<string, AnilistMediaNode | null>> {
+async function fetchAnilistBatch(
+  ids: number[],
+  priority: TaskPriority
+): Promise<Record<string, AnilistMediaNode | null>> {
   const query = `query {
     ${ids
       .map(
@@ -166,7 +171,8 @@ async function fetchAnilistBatch(ids: number[]): Promise<Record<string, AnilistM
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
       body: JSON.stringify({ query })
-    }
+    },
+    { priority, label: 'AniList relations' }
   )
   return result.data || {}
 }
@@ -180,7 +186,10 @@ async function fetchAnilistBatch(ids: number[]): Promise<Record<string, AnilistM
  * already use for the same reason (a transient failure here should
  * degrade grouping quality, never take playback-adjacent code down).
  */
-export async function anilistTitleInfo(ids: number[]): Promise<Map<number, AnilistTitleInfo>> {
+export async function anilistTitleInfo(
+  ids: number[],
+  priority: TaskPriority = 'maintenance'
+): Promise<Map<number, AnilistTitleInfo>> {
   const db = getDatabase()
   const results = new Map<number, AnilistTitleInfo>()
   const uncached: number[] = []
@@ -194,7 +203,7 @@ export async function anilistTitleInfo(ids: number[]): Promise<Map<number, Anili
   for (let i = 0; i < uncached.length; i += ANILIST_BATCH_SIZE) {
     const batch = uncached.slice(i, i + ANILIST_BATCH_SIZE)
     try {
-      const nodes = await fetchAnilistBatch(batch)
+      const nodes = await fetchAnilistBatch(batch, priority)
       batch.forEach((id, idx) => {
         const node = nodes[`a${idx}`]
         const info: AnilistTitleInfo = node
@@ -210,9 +219,6 @@ export async function anilistTitleInfo(ids: number[]): Promise<Map<number, Anili
       logError('anime:anilist-relations', error)
       // Nothing cached for this batch's ids — they simply contribute no
       // AniList signal this crawl, same as if they'd never been queried.
-    }
-    if (i + ANILIST_BATCH_SIZE < uncached.length) {
-      await new Promise((resolve) => setTimeout(resolve, ANILIST_BATCH_PACING_MS))
     }
   }
 

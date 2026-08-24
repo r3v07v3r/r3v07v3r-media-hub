@@ -88,7 +88,11 @@ const LANES: Record<string, LaneConfig> = {
   kitsu: { concurrency: 5, minGapMs: 120 },
   simkl: { concurrency: 3, minGapMs: 150 },
   cinemeta: { concurrency: 4, minGapMs: 80 },
-  anilist: { concurrency: 2, minGapMs: 700 },
+  // ~24 requests/minute sustained, under AniList's confirmed 30/min
+  // ceiling with headroom for their limit being per-IP and shared with
+  // whatever else is running on the machine. Serial, because two
+  // concurrent requests inside one gap is a burst of two.
+  anilist: { concurrency: 1, minGapMs: 2_500 },
   tmdb: { concurrency: 4, minGapMs: 60 },
   mal: { concurrency: 2, minGapMs: 300 },
   omdb: { concurrency: 2, minGapMs: 200 },
@@ -448,34 +452,96 @@ export function schedule<T>(run: () => Promise<T> | T, options: ScheduleOptions 
   return promise
 }
 
+// ---------------------------------------------------------------------------
+// Composite work
+//
+// schedule() above is for LEAF work — one request, one bulk local job.
+// Something that occupies a worker slot and, while it holds it, does not
+// wait on anything else that also needs one.
+//
+// A composite (catalogData crawling fifty pages, metadata() fetching a
+// record plus its categories plus its episode list) must NOT go through
+// schedule(): it would hold a slot for its whole lifetime while the leaf
+// requests it is waiting on queue for the same budget. Three of those at
+// once against a tier ceiling of two is a deadlock that only breaks when
+// the pressure level happens to change.
+//
+// So composites get the two things they actually need — not being run
+// twice over, and not all starting at once — from the two helpers below,
+// neither of which takes a worker slot. The rule is: schedule the leaves,
+// coalesce the composites.
+// ---------------------------------------------------------------------------
+
+const compositeByKey = new Map<string, Promise<unknown>>()
+
 /**
- * Runs `items` through `worker` with the scheduler's limits applied to
- * each one — the bounded replacement for the `Promise.all(items.map(...))`
- * fan-outs that opened one socket per tracked title, all at once, twice
- * over (tracking:list and home:personalized both did it).
+ * Single-flight for composite work. A second call with the same key, while
+ * the first is still running, joins it and shares its result.
+ *
+ * This is what stops catalog:list and home:personalized — which both ask
+ * for all three catalogs, and which the renderer fires within a few
+ * milliseconds of each other on every cold start — from running two full
+ * Kitsu crawls side by side and each writing the result over the other's.
+ *
+ * Deliberately does not occupy a worker slot: the leaf requests inside
+ * `run` are the things that are scheduled, and a composite waiting on its
+ * own children for a slot it is holding is a deadlock.
+ */
+export function coalesce<T>(key: string, run: () => Promise<T>): Promise<T> {
+  const existing = compositeByKey.get(key)
+  if (existing) return existing as Promise<T>
+
+  const promise = (async () => run())()
+  compositeByKey.set(key, promise)
+  // Released on settle either way — a failed crawl must not pin its own
+  // rejection under this key and hand it back to every later caller.
+  void promise
+    .catch(() => {})
+    .finally(() => {
+      if (compositeByKey.get(key) === promise) compositeByKey.delete(key)
+    })
+  return promise
+}
+
+/** How many composite operations may be in flight at once by default. The
+ *  point is not socket count (the leaf scheduler owns that) but everything
+ *  that happens around the requests: a composite's synchronous prologue —
+ *  a SQLite read and a JSON.parse of a cached record, in metadata()'s case
+ *  — runs on the main thread, and two hundred of those back to back is its
+ *  own visible stall regardless of how politely the fetches behind them
+ *  are paced. */
+const DEFAULT_COMPOSITE_LIMIT = 6
+
+/**
+ * Runs `items` through `worker`, at most `limit` at a time — the bounded
+ * replacement for the `Promise.all(items.map(...))` fan-outs that started
+ * one metadata resolve per tracked title all at once, twice over
+ * (tracking:list and home:personalized each did it).
  *
  * Order is preserved. A worker that rejects yields `null` for that item
  * rather than failing the batch, because every call site of this shape
  * already treated a per-item failure that way.
  */
-export function scheduleAll<TIn, TOut>(
+export async function mapWithLimit<TIn, TOut>(
   items: readonly TIn[],
-  worker: (item: TIn, index: number) => Promise<TOut> | TOut,
-  options: Omit<ScheduleOptions, 'key' | 'label'> & {
-    keyFor?: (item: TIn, index: number) => string
-    label?: string
-  } = {}
+  worker: (item: TIn, index: number) => Promise<TOut>,
+  limit = DEFAULT_COMPOSITE_LIMIT
 ): Promise<(TOut | null)[]> {
-  const { keyFor, label, ...rest } = options
-  return Promise.all(
-    items.map((item, index) =>
-      schedule(() => worker(item, index), {
-        ...rest,
-        key: keyFor?.(item, index),
-        label: label ? `${label} (${index + 1}/${items.length})` : undefined
-      }).catch(() => null)
-    )
-  )
+  const results: (TOut | null)[] = new Array(items.length).fill(null)
+  let next = 0
+  const workers = Array.from({ length: Math.max(1, Math.min(limit, items.length)) }, async () => {
+    for (;;) {
+      const index = next++
+      if (index >= items.length) return
+      try {
+        results[index] = await worker(items[index], index)
+      } catch {
+        // Left as null — see the doc comment.
+      }
+    }
+  })
+  await Promise.all(workers)
+  return results
 }
 
 export interface SchedulerSnapshot {
@@ -515,6 +581,7 @@ export function schedulerSnapshot(): SchedulerSnapshot {
 export function shutdownScheduler(): void {
   queue.length = 0
   queuedByKey.clear()
+  compositeByKey.clear()
   if (pumpTimer) clearTimeout(pumpTimer)
   pumpTimer = null
   changeListener = null
@@ -527,6 +594,7 @@ export function resetSchedulerForTests(): void {
   queue.length = 0
   queuedByKey.clear()
   inFlightByKey.clear()
+  compositeByKey.clear()
   laneLastDispatch.clear()
   pressureSources.clear()
   if (pumpTimer) clearTimeout(pumpTimer)

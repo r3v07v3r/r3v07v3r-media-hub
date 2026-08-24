@@ -47,7 +47,12 @@ export async function omdbRottenTomatoesRating(imdbId: string): Promise<string |
 
   try {
     const result = await fetchJson<{ Ratings?: OmdbRatingEntry[] }>(
-      `https://www.omdbapi.com/?i=${encodeURIComponent(imdbId)}&apikey=${encodeURIComponent(apiKey)}`
+      `https://www.omdbapi.com/?i=${encodeURIComponent(imdbId)}&apikey=${encodeURIComponent(apiKey)}`,
+      {},
+      // A Rotten Tomatoes score is garnish on a detail page that has
+      // already rendered without it. It should never be ahead of anything
+      // in the queue.
+      { priority: 'background', label: 'Rotten Tomatoes score' }
     )
     const entry = (result.Ratings || []).find((r) => r.Source === 'Rotten Tomatoes')
     const value = entry?.Value?.match(/\d+/)?.[0] || ''

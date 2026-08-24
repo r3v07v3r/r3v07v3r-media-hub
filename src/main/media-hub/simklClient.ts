@@ -16,6 +16,7 @@
 import { app } from 'electron'
 import type { HistoryEntry } from '../../shared/media-hub/types'
 import { fetchJson } from './httpClient'
+import type { TaskPriority } from './taskScheduler'
 import { logError } from './logger'
 import { simklAccountMark, simklCredentials } from './settingsStore'
 import { watchedFromAllItems, type SimklMoviesPayload, type SimklShowsPayload } from './simkl'
@@ -32,35 +33,45 @@ export function simklUrl(pathname: string, clientId: string): string {
 /** Authenticated Simkl request (requires both a client ID and a connected account's access token). */
 export async function simklRequest<T = unknown>(
   pathname: string,
-  options: RequestInit = {}
+  options: RequestInit = {},
+  priority: TaskPriority = 'interactive'
 ): Promise<T> {
   const { clientId, accessToken } = simklCredentials()
   if (!clientId || !accessToken) throw new Error('Simkl is not connected.')
-  return fetchJson<T>(simklUrl(pathname, clientId), {
-    ...options,
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${accessToken}`,
-      'User-Agent': `r3v07v3r-media-hub/${app.getVersion()}`,
-      ...options.headers
-    }
-  })
+  return fetchJson<T>(
+    simklUrl(pathname, clientId),
+    {
+      ...options,
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${accessToken}`,
+        'User-Agent': `r3v07v3r-media-hub/${app.getVersion()}`,
+        ...options.headers
+      }
+    },
+    { priority, label: 'Simkl' }
+  )
 }
 
 /** Client-ID-only Simkl request (search/lookup endpoints that don't require a connected account). */
 export async function simklPublicRequest<T = unknown>(
   pathname: string,
+  priority: TaskPriority = 'interactive',
   options: RequestInit = {}
 ): Promise<T> {
   const { clientId } = simklCredentials()
   if (!clientId) throw new Error('Add a Simkl Client ID in Settings to search movies & series.')
-  return fetchJson<T>(simklUrl(pathname, clientId), {
-    ...options,
-    headers: {
-      'User-Agent': `r3v07v3r-media-hub/${app.getVersion()}`,
-      ...options.headers
-    }
-  })
+  return fetchJson<T>(
+    simklUrl(pathname, clientId),
+    {
+      ...options,
+      headers: {
+        'User-Agent': `r3v07v3r-media-hub/${app.getVersion()}`,
+        ...options.headers
+      }
+    },
+    { priority, label: 'Simkl' }
+  )
 }
 
 // v2 stamps the payload with WHOSE history it is (see CachedWatchedHistory).

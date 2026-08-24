@@ -45,6 +45,7 @@ import { airingStatus, continueWatchingList } from './core'
 import { catalogData, metadata } from './catalog'
 import { getDatabase } from './dbState'
 import { fetchJson } from './httpClient'
+import { mapWithLimit } from './taskScheduler'
 import { handle } from './ipcGuard'
 import { logError } from './logger'
 import { pushMalProgress } from './malSync'
@@ -750,7 +751,7 @@ async function computeMovieDiscrepancies(): Promise<WatchStatusDiscrepancy[]> {
   return Promise.all(
     out.map(async (discrepancy) => {
       try {
-        const detail = await metadata('movie', discrepancy.id)
+        const detail = await metadata('movie', discrepancy.id, 'background')
         return {
           ...discrepancy,
           title: detail.title || discrepancy.title,
@@ -786,11 +787,17 @@ export function registerTrackingIpc(): void {
     // surfaces disagreements for review instead of one side silently
     // winning on every ordinary read.
     const history = db.history()
+    // Bounded, and at `visible` rather than `interactive`. This used to be
+    // a bare Promise.all over every tracked series, which meant a large
+    // library opened one request per title the moment the app started —
+    // and home:personalized below did exactly the same thing at the same
+    // moment, for the same titles. metadata() is coalesced per title now,
+    // so the two calls share one fetch each; mapWithLimit is what stops
+    // either of them starting hundreds of resolves at once regardless.
     const details = (
-      await Promise.all(
-        trackedItems
-          .filter((x) => x.type !== 'movie')
-          .map((x) => metadata(x.type, x.id).catch(() => null))
+      await mapWithLimit(
+        trackedItems.filter((x) => x.type !== 'movie'),
+        (x) => metadata(x.type, x.id, 'visible')
       )
     ).filter((x): x is CatalogItem => Boolean(x))
     const newEpisodesById = new Map(
@@ -988,7 +995,9 @@ export function registerTrackingIpc(): void {
 
   handle<undefined, HomePersonalizedResult>(MEDIA_HUB_CHANNELS.homePersonalized, async () => {
     const [movies, series, anime] = await Promise.all(
-      (['movie', 'series', 'anime'] as const).map((kind) => catalogData(kind).catch(() => []))
+      (['movie', 'series', 'anime'] as const).map((kind) =>
+        catalogData(kind, false, 'visible').catch(() => [])
+      )
     )
     const all: CatalogItem[] = [...movies, ...series, ...anime]
     if (!all.length) throw new Error('All catalog sources are currently unavailable.')
@@ -1015,11 +1024,12 @@ export function registerTrackingIpc(): void {
       preferredGenres: genres
     }).slice(0, 18)
 
+    // See tracking:list above — same fan-out, same bound, and the two
+    // share their per-title fetches through metadata()'s coalescing.
     const details = (
-      await Promise.all(
-        tracked
-          .filter((x) => x.type !== 'movie')
-          .map((x) => metadata(x.type, x.id).catch(() => null))
+      await mapWithLimit(
+        tracked.filter((x) => x.type !== 'movie'),
+        (x) => metadata(x.type, x.id, 'visible')
       )
     ).filter((x): x is CatalogItem => Boolean(x))
 

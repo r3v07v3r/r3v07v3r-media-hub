@@ -39,6 +39,7 @@ import {
   type RawApiPayload
 } from './core'
 import { isLikelyFranchiseSibling, rankSimilarTitles } from '../../shared/media-hub/catalog-logic'
+import { coalesce, type TaskPriority } from './taskScheduler'
 import { buildGroupedAnimeVideos, groupAnimeCatalog, kitsuRealEpisodes } from './animeSeasons'
 import { omdbRottenTomatoesRating } from './omdb'
 
@@ -48,49 +49,51 @@ const catalogUrls: Record<'movie' | 'series', string> = {
 }
 
 const CATALOG_TTL_MS = 6 * 60 * 60 * 1000
-// Grouping the full Kitsu crawl requires roughly one enrichment request per
-// title (and a second relationship pass for titles without a TVDB mapping).
-// That is valuable catalog hygiene, but it must never sit on the response
-// path of catalog:list: the renderer waits on that IPC call before it can
-// replace its lightweight fallback catalog. Starting it a little after the
-// list has been returned keeps the app interactive while the cache is being
-// enriched for the next launch/refresh.
-const ANIME_GROUPING_DELAY_MS = 15_000
 
-let animeGroupingTimer: ReturnType<typeof setTimeout> | null = null
-let animeGroupingPromise: Promise<void> | null = null
+/** How deep into Kitsu's popularity ranking the anime crawl walks, in
+ *  titles. Pages are 20 each, so this is also the request count. */
+const ANIME_CATALOG_DEPTH = 1000
 
-function scheduleAnimeGrouping(items: CatalogItem[]): void {
-  if (items.length < 2 || animeGroupingTimer || animeGroupingPromise) return
-
-  animeGroupingTimer = setTimeout(() => {
-    animeGroupingTimer = null
-    animeGroupingPromise = groupAnimeCatalog(items)
-      .then((grouped) => {
-        // The ungrouped catalog is already cached and usable. Replacing it
-        // only after the whole enrichment pass succeeds avoids ever leaving
-        // a partial catalog in the cache.
-        if (grouped.length) getDatabase().putCache('catalog:v2:anime', grouped, CATALOG_TTL_MS)
-      })
-      .catch((error) => logError('catalog:anime-grouping', error))
-      .finally(() => {
-        animeGroupingPromise = null
-      })
-  }, ANIME_GROUPING_DELAY_MS)
-  // A deferred convenience task must not keep the process alive after the
-  // user has closed the app.
-  animeGroupingTimer.unref?.()
+/**
+ * Grouping the full Kitsu crawl costs roughly one enrichment request per
+ * title, plus a second relationship pass for every title without a TVDB
+ * mapping. That is valuable catalog hygiene and it is also the single
+ * largest piece of background work this app does, so it runs at
+ * `maintenance` — the tier that stands down for anything anyone is
+ * waiting on, and that is suspended outright during playback.
+ *
+ * It no longer needs a timer of its own to stay off the critical path.
+ * The tier is what keeps it off now: catalog:list's own requests outrank
+ * it, so it simply is not dispatched until they are done. A fixed 15s
+ * delay could only ever guess at when that moment was.
+ *
+ * coalesce() rather than the pair of module-level flags this used to
+ * carry: same guarantee (one pass at a time, however many callers ask for
+ * one), expressed the way every other composite in this file expresses it.
+ */
+function startAnimeGrouping(items: CatalogItem[]): void {
+  if (items.length < 2) return
+  void coalesce('catalog:anime:grouping', () => groupAnimeCatalog(items, 'maintenance'))
+    .then((grouped) => {
+      // The ungrouped catalog is already cached and usable. Replacing it
+      // only after the whole enrichment pass succeeds avoids ever leaving
+      // a partial catalog in the cache.
+      if (grouped.length) getDatabase().putCache('catalog:v2:anime', grouped, CATALOG_TTL_MS)
+    })
+    .catch((error) => logError('catalog:anime-grouping', error))
 }
 
 /** Cached (7d) Kitsu genre/category titles for one anime id. */
-async function kitsuCategories(id: string): Promise<string[]> {
+async function kitsuCategories(id: string, priority: TaskPriority): Promise<string[]> {
   const key = `kitsu:categories:${id}`
   const db = getDatabase()
   const cached = db.getCache<string[]>(key)
   if (cached) return cached
 
   const result = await fetchJson<RawApiPayload>(
-    `https://kitsu.io/api/edge/anime/${encodeURIComponent(id)}/categories?page%5Blimit%5D=20`
+    `https://kitsu.io/api/edge/anime/${encodeURIComponent(id)}/categories?page%5Blimit%5D=20`,
+    {},
+    { priority, label: 'anime genres' }
   )
   const genres: string[] = (result.data || [])
     .map((x: RawApiPayload) => x.attributes?.title)
@@ -100,12 +103,17 @@ async function kitsuCategories(id: string): Promise<string[]> {
 }
 
 /** Merges Simkl's week/month trending feeds for one section into a deduped catalog, dropping unmatched (no-imdb) entries. */
-async function simklCatalog(kind: Exclude<MediaKind, 'anime'>): Promise<CatalogItem[]> {
+async function simklCatalog(
+  kind: Exclude<MediaKind, 'anime'>,
+  priority: TaskPriority
+): Promise<CatalogItem[]> {
   const section = kind === 'series' ? 'tv' : 'movies'
   const feeds = await Promise.all(
     ['week', 'month'].map((span) =>
       fetchJson<RawApiPayload[]>(
-        `https://data.simkl.in/discover/trending/${section}/${span}_500.json`
+        `https://data.simkl.in/discover/trending/${section}/${span}_500.json`,
+        {},
+        { priority, label: `${kind} trending (${span})` }
       )
     )
   )
@@ -119,9 +127,11 @@ async function simklCatalog(kind: Exclude<MediaKind, 'anime'>): Promise<CatalogI
 }
 
 /** One page (20 items) of Kitsu's most-popular-anime listing, with genre titles resolved from the included `categories` sideload. */
-async function kitsuPage(offset: number): Promise<CatalogItem[]> {
+async function kitsuPage(offset: number, priority: TaskPriority): Promise<CatalogItem[]> {
   const result = await fetchJson<RawApiPayload>(
-    `https://kitsu.io/api/edge/anime?sort=-userCount&page%5Blimit%5D=20&page%5Boffset%5D=${offset}&include=categories`
+    `https://kitsu.io/api/edge/anime?sort=-userCount&page%5Blimit%5D=20&page%5Boffset%5D=${offset}&include=categories`,
+    {},
+    { priority, label: `anime catalog +${offset}` }
   )
   const categories = new Map<string, string | undefined>(
     (result.included || [])
@@ -141,16 +151,26 @@ async function kitsuPage(offset: number): Promise<CatalogItem[]> {
     .map((record) => normalizeKitsuAnime(record, true))
 }
 
-/** Walks Kitsu's popularity ranking 1000 entries deep (5 pages of 20 fetched concurrently per 100-offset batch, 350ms between batches to stay polite to the API). */
-async function kitsuCatalog(): Promise<CatalogItem[]> {
-  const pages: CatalogItem[][] = []
-  for (let offset = 0; offset < 1000; offset += 100) {
-    pages.push(...(await Promise.all([0, 20, 40, 60, 80].map((step) => kitsuPage(offset + step)))))
-    if (offset < 900) await new Promise((resolve) => setTimeout(resolve, 350))
-  }
+/**
+ * Walks Kitsu's popularity ranking, 20 entries per page.
+ *
+ * Every page is asked for at once and the scheduler's kitsu lane decides
+ * how fast they actually go out — which is why the hand-rolled "five at a
+ * time, then sleep 350ms" batching this used to do is gone. That loop
+ * paced this one crawl against nothing but itself: it had no idea whether
+ * anything else in the app was talking to Kitsu at the same moment (the
+ * franchise-grouping pass and every open anime detail page are), and it
+ * made the crawl's own progress hostage to the slowest page in each batch
+ * of five. The lane's gap is the same politeness, applied across every
+ * Kitsu caller at once instead of to this one in isolation.
+ */
+async function kitsuCatalog(priority: TaskPriority): Promise<CatalogItem[]> {
+  const offsets: number[] = []
+  for (let offset = 0; offset < ANIME_CATALOG_DEPTH; offset += 20) offsets.push(offset)
+  const pages = await Promise.all(offsets.map((offset) => kitsuPage(offset, priority)))
   // Kitsu has no franchise concept — each season/cour is its own top-level
-  // entry. The exhaustive franchise pass is deliberately scheduled after
-  // this result is returned (see scheduleAnimeGrouping) rather than awaited
+  // entry. The exhaustive franchise pass is deliberately left to run after
+  // this result is returned (see startAnimeGrouping) rather than awaited
   // here: this function is called directly by the renderer's catalog:list
   // request, not by a detached six-hour maintenance job.
   return dedupeCatalog(pages)
@@ -163,7 +183,11 @@ async function kitsuCatalog(): Promise<CatalogItem[]> {
  * list; if that also comes up empty, falls back to a stale cache entry
  * (even if expired) before finally rethrowing the original error.
  */
-export async function catalogData(kind: MediaKind, force = false): Promise<CatalogItem[]> {
+export async function catalogData(
+  kind: MediaKind,
+  force = false,
+  priority: TaskPriority = 'visible'
+): Promise<CatalogItem[]> {
   if (!['movie', 'series', 'anime'].includes(kind)) throw new Error('Unknown catalog.')
   const key = `catalog:v2:${kind}`
   const db = getDatabase()
@@ -172,29 +196,45 @@ export async function catalogData(kind: MediaKind, force = false): Promise<Catal
     if (cached) return cached
   }
 
-  let items: CatalogItem[] | null | undefined
-  try {
-    items = kind === 'anime' ? await kitsuCatalog() : await simklCatalog(kind)
-    if (!items.length) throw new Error('The broad catalog returned no titles.')
-  } catch (primaryError) {
-    if (kind !== 'anime') {
-      try {
-        const result = await fetchJson<{ metas?: RawApiPayload[] }>(catalogUrls[kind])
-        items = (result.metas || []).map((x) => normalizeMeta(x, kind))
-      } catch {
-        items = null
+  // Coalesced across callers, which matters more here than anywhere else
+  // in the app: on a cold start the renderer fires catalog:list for all
+  // three kinds AND home:personalized (which asks for all three itself)
+  // within a few milliseconds of each other. Before this, that was two
+  // full Kitsu crawls running side by side, each writing its result over
+  // the other's, for one catalog nobody asked for twice.
+  //
+  // `force` is part of the key so an explicit refresh is never satisfied
+  // by joining an ordinary in-flight fetch that is about to return the
+  // cached-source result the person just asked to bypass.
+  return coalesce(`catalog:fetch:${kind}:${force ? 'forced' : 'normal'}`, async () => {
+    let items: CatalogItem[] | null | undefined
+    try {
+      items = kind === 'anime' ? await kitsuCatalog(priority) : await simklCatalog(kind, priority)
+      if (!items.length) throw new Error('The broad catalog returned no titles.')
+    } catch (primaryError) {
+      if (kind !== 'anime') {
+        try {
+          const result = await fetchJson<{ metas?: RawApiPayload[] }>(
+            catalogUrls[kind],
+            {},
+            { priority, label: `${kind} catalog (fallback)` }
+          )
+          items = (result.metas || []).map((x) => normalizeMeta(x, kind))
+        } catch {
+          items = null
+        }
+      }
+      if (!items?.length) {
+        const stale = db.getCache<CatalogItem[]>(key, { allowExpired: true })
+        if (stale?.length) return stale
+        throw primaryError
       }
     }
-    if (!items?.length) {
-      const stale = db.getCache<CatalogItem[]>(key, { allowExpired: true })
-      if (stale?.length) return stale
-      throw primaryError
-    }
-  }
 
-  db.putCache(key, items, CATALOG_TTL_MS)
-  if (kind === 'anime') scheduleAnimeGrouping(items)
-  return items
+    db.putCache(key, items, CATALOG_TTL_MS)
+    if (kind === 'anime') startAnimeGrouping(items)
+    return items
+  })
 }
 
 // `season || 1` would silently turn a real season 0 (Simkl's own specials
@@ -222,10 +262,15 @@ function simklEpisode(record: RawApiPayload, parentId: string): Episode {
 }
 
 /** Resolves a `simkl:<id>` catalog id to its IMDb id (the id form every other lookup/streaming path expects). Throws if Simkl has no IMDb mapping for it. */
-async function resolveSimklId(type: MediaKind, simklId: string): Promise<string> {
+async function resolveSimklId(
+  type: MediaKind,
+  simklId: string,
+  priority: TaskPriority
+): Promise<string> {
   const endpointType = type === 'series' ? 'tv' : 'movies'
   const result = await simklPublicRequest<RawApiPayload>(
-    `/${endpointType}/${encodeURIComponent(simklId)}?extended=full`
+    `/${endpointType}/${encodeURIComponent(simklId)}?extended=full`,
+    priority
   )
   const imdb = result?.ids?.imdb
   if (!imdb) throw new Error('This title could not be matched to a playable source.')
@@ -240,9 +285,25 @@ async function resolveSimklId(type: MediaKind, simklId: string): Promise<string>
  * for series that have a known `simklId`, a live re-fetch of Simkl's
  * episode list so continue-watching/episode data isn't just an empty array.
  */
-export async function metadata(type: MediaKind, id: string): Promise<CatalogItem> {
+export function metadata(
+  type: MediaKind,
+  id: string,
+  priority: TaskPriority = 'interactive'
+): Promise<CatalogItem> {
+  // Coalesced per title. tracking:list and home:personalized each resolve
+  // metadata for every tracked series, and the renderer calls both at
+  // once on every launch — without this, every tracked title is fetched
+  // exactly twice, in parallel, for two identical answers.
+  return coalesce(`meta:${type}:${id}`, () => resolveMetadata(type, id, priority))
+}
+
+async function resolveMetadata(
+  type: MediaKind,
+  id: string,
+  priority: TaskPriority
+): Promise<CatalogItem> {
   const resolvedId = String(id).startsWith('simkl:')
-    ? await resolveSimklId(type, String(id).slice(6))
+    ? await resolveSimklId(type, String(id).slice(6), priority)
     : id
   const cacheKey = `meta:v3:${type}:${resolvedId}`
   const db = getDatabase()
@@ -267,8 +328,12 @@ export async function metadata(type: MediaKind, id: string): Promise<CatalogItem
         .replace(/^kitsu:/, '')
         .split(':')[0]
       const [result, genres] = await Promise.all([
-        fetchJson<RawApiPayload>(`https://kitsu.io/api/edge/anime/${encodeURIComponent(kitsuId)}`),
-        kitsuCategories(kitsuId)
+        fetchJson<RawApiPayload>(
+          `https://kitsu.io/api/edge/anime/${encodeURIComponent(kitsuId)}`,
+          {},
+          { priority, label: 'anime details' }
+        ),
+        kitsuCategories(kitsuId, priority)
       ])
       item = normalizeKitsuAnime({
         ...result.data,
@@ -276,7 +341,9 @@ export async function metadata(type: MediaKind, id: string): Promise<CatalogItem
       })
     } else {
       const result = await fetchJson<{ meta?: RawApiPayload }>(
-        `https://v3-cinemeta.strem.io/meta/${type}/${encodeURIComponent(resolvedId)}.json`
+        `https://v3-cinemeta.strem.io/meta/${type}/${encodeURIComponent(resolvedId)}.json`,
+        {},
+        { priority, label: `${type} details` }
       )
       item = normalizeMeta(result.meta || {}, type)
     }
@@ -288,7 +355,9 @@ export async function metadata(type: MediaKind, id: string): Promise<CatalogItem
     item = { ...source, videos: [] }
     if (type === 'series' && source.simklId) {
       const episodes = await fetchJson<RawApiPayload[]>(
-        `https://api.simkl.com/tv/episodes/${encodeURIComponent(String(source.simklId))}`
+        `https://api.simkl.com/tv/episodes/${encodeURIComponent(String(source.simklId))}`,
+        {},
+        { priority, label: 'episode list' }
       )
       item.videos = (episodes || []).map((x) => simklEpisode(x, resolvedId))
     }
@@ -308,7 +377,7 @@ export async function metadata(type: MediaKind, id: string): Promise<CatalogItem
   }
   if (type === 'anime' && item.groupedIds?.length) {
     try {
-      item.videos = await buildGroupedAnimeVideos(item, tmdbCredentials().apiKey)
+      item.videos = await buildGroupedAnimeVideos(item, tmdbCredentials().apiKey, priority)
     } catch (error) {
       logError('anime:grouped-videos', error)
     }
@@ -323,7 +392,7 @@ export async function metadata(type: MediaKind, id: string): Promise<CatalogItem
     const kitsuId = String(resolvedId)
       .replace(/^kitsu:/, '')
       .split(':')[0]
-    const real = await kitsuRealEpisodes(kitsuId, item.id)
+    const real = await kitsuRealEpisodes(kitsuId, item.id, priority)
     if (real.length) item.videos = real
   }
 
@@ -356,16 +425,25 @@ export async function metadata(type: MediaKind, id: string): Promise<CatalogItem
  *  candidate-bucket pre-filtering cost concern. */
 async function kitsuSearch(query: string): Promise<CatalogItem[]> {
   const result = await fetchJson<RawApiPayload>(
-    `https://kitsu.io/api/edge/anime?filter%5Btext%5D=${encodeURIComponent(query)}&page%5Blimit%5D=20`
+    `https://kitsu.io/api/edge/anime?filter%5Btext%5D=${encodeURIComponent(query)}&page%5Blimit%5D=20`,
+    {},
+    { priority: 'interactive', label: 'anime search' }
   )
-  return groupAnimeCatalog((result.data || []).map((record) => normalizeKitsuAnime(record, true)))
+  // 'interactive' throughout, unlike the crawl's own grouping pass: this
+  // one is 20 items with somebody watching a search box, not 1000 items
+  // nobody asked for.
+  return groupAnimeCatalog(
+    (result.data || []).map((record) => normalizeKitsuAnime(record, true)),
+    'interactive'
+  )
 }
 
 /** Free-text movie/series search against Simkl. */
 async function simklSearch(kind: MediaKind, query: string): Promise<CatalogItem[]> {
   const endpointType = kind === 'series' ? 'tv' : 'movie'
   const result = await simklPublicRequest<RawApiPayload[] | RawApiPayload>(
-    `/search/${endpointType}?q=${encodeURIComponent(query)}&extended=full`
+    `/search/${endpointType}?q=${encodeURIComponent(query)}&extended=full`,
+    'interactive'
   )
   return (Array.isArray(result) ? result : []).map((x) => normalizeSimklSearchResult(x, kind))
 }
@@ -382,7 +460,9 @@ async function relatedAnime(id: string): Promise<CatalogItem[]> {
       .replace(/^kitsu:/, '')
       .split(':')[0]
     const result = await fetchJson<RawApiPayload>(
-      `https://kitsu.io/api/edge/anime/${encodeURIComponent(kitsuId)}/media-relationships?include=destination&page%5Blimit%5D=20`
+      `https://kitsu.io/api/edge/anime/${encodeURIComponent(kitsuId)}/media-relationships?include=destination&page%5Blimit%5D=20`,
+      {},
+      { priority: 'interactive', label: 'related anime' }
     )
     const entries = filterAnimeRelationships(result)
     db.putCache(key, entries, 24 * 60 * 60 * 1000)

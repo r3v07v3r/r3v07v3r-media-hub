@@ -11,9 +11,10 @@ import assert from 'node:assert'
 import {
   currentPressure,
   laneForUrl,
+  coalesce,
+  mapWithLimit,
   resetSchedulerForTests,
   schedule,
-  scheduleAll,
   schedulerSnapshot,
   setPressure
 } from '../src/main/media-hub/taskScheduler'
@@ -236,35 +237,87 @@ async function main(): Promise<void> {
     assert.equal(currentPressure(), 'idle')
   })
 
-  await check('scheduleAll preserves order and yields null for a failed item', async () => {
-    const result = await scheduleAll(
-      ['a', 'b', 'c', 'd'],
-      async (item) => {
-        if (item === 'c') throw new Error('no metadata for c')
-        return item.toUpperCase()
-      },
-      { lane: 'cinemeta', priority: 'visible' }
-    )
+  await check('mapWithLimit preserves order and yields null for a failed item', async () => {
+    const result = await mapWithLimit(['a', 'b', 'c', 'd'], async (item) => {
+      if (item === 'c') throw new Error('no metadata for c')
+      return item.toUpperCase()
+    })
     assert.deepEqual(result, ['A', 'B', null, 'D'])
   })
 
-  await check('scheduleAll stays inside the lane budget for a large fan-out', async () => {
+  await check('mapWithLimit never runs more than its limit at once', async () => {
     let live = 0
     let peak = 0
     const items = Array.from({ length: 40 }, (_, i) => i)
-    await scheduleAll(
+    await mapWithLimit(
       items,
       async () => {
         live++
         peak = Math.max(peak, live)
-        await new Promise((resolve) => setTimeout(resolve, 1))
+        await sleep(1)
         live--
         return true
       },
-      { lane: 'cinemeta', priority: 'background' }
+      5
     )
-    // cinemeta is configured at 4; the background tier ceiling is 4 at idle.
-    assert.ok(peak <= 4, `fan-out peaked at ${peak} concurrent requests, budget is 4`)
+    assert.ok(peak <= 5, `fan-out peaked at ${peak} concurrent operations, limit is 5`)
+  })
+
+  await check('coalesce runs composite work once and shares the result', async () => {
+    let runs = 0
+    const crawl = async (): Promise<string> => {
+      runs++
+      await sleep(5)
+      return 'catalog'
+    }
+    const [a, b, c] = await Promise.all([
+      coalesce('catalog:anime', crawl),
+      coalesce('catalog:anime', crawl),
+      coalesce('catalog:anime', crawl)
+    ])
+    assert.equal(runs, 1, 'the crawl ran more than once for concurrent callers')
+    assert.deepEqual([a, b, c], ['catalog', 'catalog', 'catalog'])
+    // Released on settle, so a later refresh is a real refresh.
+    await coalesce('catalog:anime', crawl)
+    assert.equal(runs, 2)
+  })
+
+  await check('a failed coalesce is not pinned for later callers', async () => {
+    await assert.rejects(
+      coalesce('catalog:series', async () => {
+        throw new Error('kitsu is down')
+      }),
+      /kitsu is down/
+    )
+    assert.equal(await coalesce('catalog:series', async () => 'recovered'), 'recovered')
+  })
+
+  await check('a composite waiting on scheduled leaves cannot deadlock', async () => {
+    // The reason composites use coalesce() and not schedule(): if the
+    // outer operation held a worker slot while the leaf requests it is
+    // waiting on queued for the same budget, enough concurrent composites
+    // would take every slot and none of their children could ever start.
+    // Pressure is pinned at critical, where the visible tier is only 2 —
+    // three composites at once is more than the tier can hold.
+    setPressure('playback', 'critical')
+    const composite = (kind: string): Promise<string[]> =>
+      coalesce(`catalog:${kind}`, async () => {
+        const pages = await Promise.all(
+          [0, 1, 2, 3].map((page) =>
+            schedule(async () => `${kind}:${page}`, {
+              lane: 'kitsu',
+              priority: 'visible',
+              label: `${kind} page ${page}`
+            })
+          )
+        )
+        return pages
+      })
+
+    const all = await Promise.all([composite('movie'), composite('series'), composite('anime')])
+    assert.equal(all.length, 3)
+    assert.ok(all.every((pages) => pages.length === 4))
+    setPressure('playback', 'idle')
   })
 
   await check('the snapshot reports what is running and what is waiting', async () => {

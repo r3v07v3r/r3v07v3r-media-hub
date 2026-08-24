@@ -554,63 +554,60 @@ export function registerOllamaIpc(): void {
       requestId?: string
     },
     OllamaAskResult
-  >(
-    MEDIA_HUB_CHANNELS.ollamaAsk,
-    async (event, payload) => {
-      // Registered before ANY await, requireConfig included. That call can
-      // spend the full probe timeout looking for a server on an
-      // unconfigured install, and a cancel arriving in that window used to
-      // find nothing in `inFlight` to abort — so closing the panel did
-      // nothing, and the generation that detection then started ran on for
-      // up to two minutes with its answer already discarded. There is no
-      // point in this handler at which the request should be
-      // uncancellable.
-      const { signal, release } = trackRequest(
-        event.sender,
-        String(payload?.requestId ?? '').slice(0, 64)
+  >(MEDIA_HUB_CHANNELS.ollamaAsk, async (event, payload) => {
+    // Registered before ANY await, requireConfig included. That call can
+    // spend the full probe timeout looking for a server on an
+    // unconfigured install, and a cancel arriving in that window used to
+    // find nothing in `inFlight` to abort — so closing the panel did
+    // nothing, and the generation that detection then started ran on for
+    // up to two minutes with its answer already discarded. There is no
+    // point in this handler at which the request should be
+    // uncancellable.
+    const { signal, release } = trackRequest(
+      event.sender,
+      String(payload?.requestId ?? '').slice(0, 64)
+    )
+
+    try {
+      const config = await requireConfig()
+      const question = String(payload?.question ?? '')
+        .trim()
+        .slice(0, 2000)
+      if (!question) throw new Error('Ask a question first.')
+
+      // Abandoned while the config was being worked out. Checked rather
+      // than left to chat() — which would abort the fetch immediately
+      // anyway — so a question nobody is waiting for does not first get a
+      // prompt built out of three sanitized title lists.
+      if (signal.aborted) return { reply: '', cancelled: true }
+
+      const raw = await chat(
+        config,
+        buildAssistantMessages(question, {
+          matches: sanitizeTitles(payload?.matches),
+          library: sanitizeTitles(payload?.library),
+          watched: sanitizeTitles(payload?.watched)
+        }),
+        signal
       )
-
-      try {
-        const config = await requireConfig()
-        const question = String(payload?.question ?? '')
-          .trim()
-          .slice(0, 2000)
-        if (!question) throw new Error('Ask a question first.')
-
-        // Abandoned while the config was being worked out. Checked rather
-        // than left to chat() — which would abort the fetch immediately
-        // anyway — so a question nobody is waiting for does not first get a
-        // prompt built out of three sanitized title lists.
-        if (signal.aborted) return { reply: '', cancelled: true }
-
-        const raw = await chat(
-          config,
-          buildAssistantMessages(question, {
-            matches: sanitizeTitles(payload?.matches),
-            library: sanitizeTitles(payload?.library),
-            watched: sanitizeTitles(payload?.watched)
-          }),
-          signal
-        )
-        const answer = parseAssistantAnswer(raw)
-        // Judged on the prose alone. A model that returns nothing but a
-        // SIMILAR line has not answered the question, and the renderer has
-        // the search results to show either way — but silently rendering an
-        // empty answer under them would read as the model having nothing to
-        // say rather than having failed.
-        if (!answer.text)
-          throw new Error(`${config.model} came back with an empty answer. Try asking again.`)
-        return { reply: answer.text, similar: answer.similar }
-      } catch (error) {
-        // A cancellation is not a failure and must not be logged as one by
-        // ipcGuard — the person closed the panel or asked something else.
-        if (isCancellation(error)) return { reply: '', cancelled: true }
-        throw error
-      } finally {
-        release()
-      }
+      const answer = parseAssistantAnswer(raw)
+      // Judged on the prose alone. A model that returns nothing but a
+      // SIMILAR line has not answered the question, and the renderer has
+      // the search results to show either way — but silently rendering an
+      // empty answer under them would read as the model having nothing to
+      // say rather than having failed.
+      if (!answer.text)
+        throw new Error(`${config.model} came back with an empty answer. Try asking again.`)
+      return { reply: answer.text, similar: answer.similar }
+    } catch (error) {
+      // A cancellation is not a failure and must not be logged as one by
+      // ipcGuard — the person closed the panel or asked something else.
+      if (isCancellation(error)) return { reply: '', cancelled: true }
+      throw error
+    } finally {
+      release()
     }
-  )
+  })
 
   handle<{ requestId?: string }, { ok: true }>(
     MEDIA_HUB_CHANNELS.ollamaCancel,

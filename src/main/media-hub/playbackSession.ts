@@ -47,6 +47,7 @@ import {
   stopPlayerSession
 } from './playerBridge'
 import { readSettings } from './settingsStore'
+import { setPressure } from './taskScheduler'
 import {
   clearAllSessions,
   createStreamCache,
@@ -151,6 +152,14 @@ export async function preparePlayback(
   // ran before the cache opened, deliberately sequential so the two never
   // overlapped on that one connection. mpv reports the track list itself, so
   // the remote link is now touched by exactly one thing.
+  // Everything the app does in the background — the catalog crawls, the
+  // franchise-grouping pass, the watch-history reconcile — stands down for
+  // the duration. It competes for the same main thread mpv's IPC and the
+  // stream cache's fills run on, and for the same bandwidth the person is
+  // trying to watch a film over. Raised before the upstream connection
+  // opens rather than after the player appears, so the queue is already
+  // quiet by the time the first bytes are being pulled.
+  setPressure('playback', 'critical')
   reportPreparation('connect', 'Connecting to the source')
   const cacheResult = await streamCache.start(
     url,
@@ -244,6 +253,12 @@ export async function preparePlayback(
  *  the idle sweep; otherwise the cache is left on disk for a likely
  *  near-term resume. */
 export async function stopPlayback(deleteCache = false): Promise<void> {
+  // Released here rather than in a `finally` around playback, because this
+  // is the one function every end-of-playback path goes through — the
+  // renderer closing the player, a new title replacing this one, and the
+  // app quitting. A missed release would leave background work suspended
+  // for the rest of the session with nothing playing to explain it.
+  setPressure('playback', 'idle')
   activeMediaUrl = ''
   activeCacheUrl = ''
   activeMediaTracks = { video: [], audio: [], subtitle: [], probed: false }
