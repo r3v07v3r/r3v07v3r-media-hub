@@ -1003,3 +1003,19 @@ export interface ActivitySnapshot {
   queuedByPriority: Record<'interactive' | 'visible' | 'background' | 'maintenance', number>
   jobs: ActivityJob[]
 }
+
+/**
+ * A catalog:list response, and whether anything actually fetched it.
+ *
+ * `stale` is true when every live source failed and the rows came from an
+ * EXPIRED cache entry instead (see main/media-hub/catalog.ts's fallback
+ * chain). The rows are real and worth showing — that fallback exists so
+ * a dead upstream doesn't empty the app — but nothing re-fetched them,
+ * and a caller that cannot tell will present them as current: no offline
+ * warning, and, for anything that dates what it stores, a renewal of rows
+ * that could be arbitrarily old.
+ */
+export interface CatalogListing {
+  items: CatalogItem[]
+  stale: boolean
+}

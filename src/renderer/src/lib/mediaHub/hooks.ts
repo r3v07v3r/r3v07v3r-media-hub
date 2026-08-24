@@ -243,14 +243,23 @@ export function useMediaHubBrowseCatalog(
       api.catalog
         .list(kind, generation > 0)
         .then(
-          (rows) => {
+          (result) => {
             if (cancelled) return
-            setOutcomes((prev) => ({ ...prev, [kind]: 'live' }))
+            const rows = result?.items
+            // Main answers with rows from an EXPIRED cache when every live
+            // source failed — real titles, but nothing fetched them (see
+            // CatalogListing). Treated as the failure it is: the offline
+            // banner belongs on a kind whose sources are all down, and
+            // dating these rows to now would renew rows of unknown age
+            // every launch, indefinitely. They are still published, since
+            // they are the best this kind has.
+            setOutcomes((prev) => ({ ...prev, [kind]: result?.stale ? 'failed' : 'live' }))
             // An empty kind leaves whatever that kind last had in place —
             // on a refresh that is the previous live data, which beats
             // blanking a populated grid over a momentary nothing.
             if (!rows?.length) return
             setGroups((prev) => ({ ...prev, [kind]: rows }))
+            if (result?.stale) return
             // Which run these rows came from AND when, so freshness is
             // dated to the fetch that actually delivered them — see
             // `freshStamps`.

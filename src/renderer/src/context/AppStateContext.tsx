@@ -773,6 +773,17 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
           // likely to restart mid-outage and find this title offering the
           // opposite action, which reverses the write that just succeeded.
           if (typeof result?.tracked === 'boolean') rememberTrackedId(media.id, result.tracked)
+          // Untracking is also what drops a title out of Continue Watching
+          // (see removeContinueWatching, which has no other channel to
+          // call). So unfollowing something in progress has to clear it
+          // from that row too — the same write, reached from a different
+          // control. Left behind, it came back on the next launch and its
+          // Remove button toggled tracking the other way, re-adding what
+          // was just untracked.
+          if (result?.tracked === false) {
+            setContinueWatching((prev) => prev.filter((c) => c.media.id !== media.id))
+            forgetContinueWatching(media.id)
+          }
           homeFeed.refresh()
         })
         .catch(() => {
