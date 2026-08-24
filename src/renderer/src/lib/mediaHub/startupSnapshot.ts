@@ -351,6 +351,52 @@ export function rememberHomeFeed(feed: HomeFeedSnapshot): void {
   schedule()
 }
 
+/** The tracking state a remembered row has to be re-checked against. A structural subset of adapters.ts's CatalogItemAdapterContext, declared here so this module stays free of path-aliased imports. */
+export interface TrackingState {
+  trackedIds?: Set<string>
+  watchedIds?: Set<string>
+  dislikedIds?: Set<string>
+}
+
+/**
+ * Re-applies the CURRENT watched / My List / disliked state to a
+ * remembered row.
+ *
+ * Rows come out of this file with the flags they had when they were
+ * persisted, and nothing else re-derives them: the live mapping in
+ * hooks.ts only covers rows the backend returned this run. So marking a
+ * carried title watched left its badge, its context-menu action and the
+ * Hide Watched filter all reading last session's answer.
+ *
+ * `completed` is the one field this cannot fully restore. MediaItem does
+ * not carry `videos`, which is exactly the episode list
+ * catalogItemToMediaItem's isSeriesCompleted walks — dropping it is most
+ * of why a snapshot fits in localStorage at all. For a movie, completion
+ * IS watched, so that case is exact. For a series or anime the previous
+ * answer is kept rather than invented, with the one correction that needs
+ * no episode data: something not watched at all cannot be complete.
+ *
+ * Returns the SAME object when nothing changed. This runs over the whole
+ * remembered catalog on every badge change, and a fresh object per row
+ * would churn every memo downstream of it.
+ */
+export function applyTrackingState(item: MediaItem, state: TrackingState = {}): MediaItem {
+  const watched = state.watchedIds?.has(item.id) ?? false
+  const inMyList = state.trackedIds?.has(item.id) ?? false
+  const disliked = state.dislikedIds?.has(item.id) ?? false
+  const isMovie = item.mediaKind ? item.mediaKind === 'movie' : item.mediaType === 'movie'
+  const completed = isMovie ? watched : watched && item.completed
+  if (
+    item.watched === watched &&
+    item.inMyList === inMyList &&
+    item.disliked === disliked &&
+    item.completed === completed
+  ) {
+    return item
+  }
+  return { ...item, watched, inMyList, disliked, completed }
+}
+
 /** The catalog kinds a MediaItem can carry — `mediaKind`, minus undefined. */
 export type ResolvedKind = NonNullable<MediaItem['mediaKind']>
 

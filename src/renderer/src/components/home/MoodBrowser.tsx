@@ -177,13 +177,21 @@ export function MoodBrowser() {
   const kindStates = Object.values(catalogKindStates)
   const catalogEmpty = catalog.length === 0
   const catalogStillArriving = catalogEmpty && kindStates.some((state) => state === 'loading')
-  // Deliberately NOT gated on the catalog being empty. Whether every
-  // source failed is a fact about the fetches, not about what happens to
-  // be left on screen — and a snapshot means there usually IS something
-  // left on screen, which is exactly when saying nothing presents last
-  // week's matches as this minute's.
+  // Nothing at all could be loaded — the empty-state case below.
   const catalogUnavailable =
     !catalogStillArriving && kindStates.every((state) => state === 'failed')
+  // Some source behind what IS on screen failed. Not "every source
+  // failed": the kinds are fetched independently, so one dead source is
+  // the ordinary failure, and if its rows are among the results shown
+  // then those results are exactly the ones that could not be refreshed.
+  // Asked of the results themselves rather than of the catalog, so a
+  // failure in a kind this mood does not surface stays quiet.
+  const resultsMayBeStale = useMemo(() => {
+    if (catalogStillArriving) return false
+    return rankedResults.some(
+      (item) => item.mediaKind && catalogKindStates[item.mediaKind] === 'failed'
+    )
+  }, [catalogStillArriving, rankedResults, catalogKindStates])
 
   const spotlightMood = MOOD_CATEGORIES.find((mood) => mood.id === activeMoods[0])
 
@@ -363,7 +371,7 @@ export function MoodBrowser() {
                 refreshed them failed. The count above is true and the
                 picks are real; what is not established is that they are
                 current. */}
-            {catalogUnavailable && !catalogEmpty && (
+            {resultsMayBeStale && (
               <p className={styles.spotlightStale} role="status">
                 <Icon name="wifi-off" size={13} />
                 Couldn&apos;t reach the media hub backend — these may be out of date.

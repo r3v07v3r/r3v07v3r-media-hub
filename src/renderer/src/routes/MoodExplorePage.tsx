@@ -52,12 +52,17 @@ export default function MoodExplorePage() {
   const kindStates = Object.values(catalogKindStates)
   const catalogEmpty = catalog.length === 0
   const stillArriving = catalogEmpty && kindStates.some((state) => state === 'loading')
-  // Not gated on the catalog being empty — see MoodBrowser, which makes
-  // the same distinction. Whether every source failed is a fact about the
-  // fetches; a snapshot means there is usually something still on screen,
-  // which is precisely when staying quiet passes remembered rows off as
-  // current.
+  // Nothing at all could be loaded — the grid's own error state.
   const unavailable = !stillArriving && kindStates.every((state) => state === 'failed')
+  // A source behind the results actually shown failed. Asked of the
+  // results rather than of the catalog, and not requiring every source to
+  // fail — see MoodBrowser, which makes the same distinction.
+  const resultsMayBeStale = useMemo(
+    () =>
+      !stillArriving &&
+      results.some((item) => item.mediaKind && catalogKindStates[item.mediaKind] === 'failed'),
+    [stillArriving, results, catalogKindStates]
+  )
 
   useRestoreBrowsingOrigin(true)
 
@@ -89,7 +94,7 @@ export default function MoodExplorePage() {
         {/* Results are showing but nothing could refresh them — qualify
             them rather than replace them. With none showing, the grid's
             own error state below carries the failure and the Retry. */}
-        {unavailable && !catalogEmpty && (
+        {resultsMayBeStale && (
           <p className={styles.staleNotice} role="status">
             <Icon name="wifi-off" size={13} />
             Couldn&apos;t reach the media hub backend — these may be out of date.

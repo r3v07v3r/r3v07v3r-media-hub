@@ -779,6 +779,79 @@ async function main(): Promise<void> {
     assert.equal(storage.getItem(STORAGE_KEY), previous)
   })
 
+  console.log('\nstartupSnapshot — re-checking a remembered row against now')
+
+  const { applyTrackingState } = await loadModule(fakeStorage())
+  const row = (overrides: Partial<MediaItem> = {}) =>
+    mediaItem({ mediaKind: 'movie', disliked: false, inMyList: false, ...overrides })
+
+  await check('applies the current watched / My List / disliked state', () => {
+    const next = applyTrackingState(row({ id: 'm1' }), {
+      watchedIds: new Set(['m1']),
+      trackedIds: new Set(['m1']),
+      dislikedIds: new Set(['m1'])
+    })
+    assert.equal(next.watched, true)
+    assert.equal(next.inMyList, true)
+    assert.equal(next.disliked, true)
+  })
+
+  await check('clears flags that stopped being true', () => {
+    const stale = row({ id: 'm1', watched: true, completed: true, inMyList: true, disliked: true })
+    const next = applyTrackingState(stale, {})
+    assert.equal(next.watched, false)
+    assert.equal(next.inMyList, false)
+    assert.equal(next.disliked, false)
+    assert.equal(next.completed, false)
+  })
+
+  await check('a movie is complete exactly when it is watched', () => {
+    // The cited case: marking a remembered movie watched while its kind is
+    // unavailable has to move the badge.
+    const next = applyTrackingState(row({ id: 'm1' }), { watchedIds: new Set(['m1']) })
+    assert.equal(next.completed, true)
+  })
+
+  await check('keeps a series completion it has no episode data to recompute', () => {
+    const series = row({
+      id: 's1',
+      mediaKind: 'series',
+      mediaType: 'series',
+      watched: true,
+      completed: true
+    })
+    assert.equal(applyTrackingState(series, { watchedIds: new Set(['s1']) }).completed, true)
+  })
+
+  await check('nothing unwatched stays complete, series included', () => {
+    const series = row({
+      id: 's1',
+      mediaKind: 'series',
+      mediaType: 'series',
+      watched: true,
+      completed: true
+    })
+    assert.equal(applyTrackingState(series, {}).completed, false)
+  })
+
+  await check('returns the very same object when nothing changed', () => {
+    // Identity matters: this runs over the whole remembered catalog on
+    // every badge change, and a fresh object per row would churn every
+    // memo downstream of it.
+    const unchanged = row({ id: 'm1' })
+    assert.equal(applyTrackingState(unchanged, {}), unchanged)
+    const tracked = row({ id: 'm1', watched: true, completed: true, inMyList: true })
+    assert.equal(
+      applyTrackingState(tracked, { watchedIds: new Set(['m1']), trackedIds: new Set(['m1']) }),
+      tracked
+    )
+  })
+
+  await check('falls back to mediaType when a row carries no mediaKind', () => {
+    const legacy = row({ id: 'm1', mediaKind: undefined, mediaType: 'movie' })
+    assert.equal(applyTrackingState(legacy, { watchedIds: new Set(['m1']) }).completed, true)
+  })
+
   console.log('\nstartupSnapshot — merging a partially-loaded catalog')
 
   // catalog:list publishes each kind as it lands. These pin the window in

@@ -30,6 +30,7 @@ import {
   continueWatchingEntryToItem
 } from './adapters'
 import {
+  applyTrackingState,
   mergeRememberedCatalog,
   rememberCatalog,
   rememberHomeFeed,
@@ -350,11 +351,33 @@ export function useMediaHubBrowseCatalog(
   // Live rows for the kinds that have answered, plus the remembered rows
   // for the kinds that have not — see mergeRememberedCatalog, which is
   // where the reasoning (and the bug it prevents) lives.
-  const catalog = useMemo(() => {
+  // The remembered rows, brought up to date with this session's tracking
+  // state. They were adapted when they were persisted, and nothing else
+  // re-derives them — the live mapping above only covers rows the backend
+  // returned this run — so without this a carried title kept last
+  // session's watched/My List/disliked flags no matter what happened to it
+  // since. See applyTrackingState, including what it deliberately cannot
+  // restore.
+  //
+  // Skipped without a bridge, where the fallback is mockData's demo pool:
+  // those rows' flags are authored demo state, not a stale reading of
+  // anything, and the empty tracking sets would simply erase them.
+  const rememberedItems = useMemo(() => {
     const remembered = startupCatalogFallback()
-    if (!mapped) return remembered
-    return mergeRememberedCatalog(mapped, remembered, heldKinds)
-  }, [mapped, heldKinds])
+    if (!remembered.length || !hasBridge()) return remembered
+    let changed = false
+    const updated = remembered.map((item) => {
+      const next = applyTrackingState(item, { trackedIds, watchedIds, dislikedIds })
+      if (next !== item) changed = true
+      return next
+    })
+    return changed ? updated : remembered
+  }, [trackedIds, watchedIds, dislikedIds])
+
+  const catalog = useMemo(() => {
+    if (!mapped) return rememberedItems
+    return mergeRememberedCatalog(mapped, rememberedItems, heldKinds)
+  }, [mapped, rememberedItems, heldKinds])
 
   // What the next cold start opens on. Written from the merged list rather
   // than the raw rows so the stored shape is the one the UI renders
