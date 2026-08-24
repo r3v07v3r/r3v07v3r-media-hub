@@ -57,6 +57,7 @@ import {
   setPlayerOverlayTopmost
 } from './playerWindow'
 import { getActiveWindow, sendToRenderer } from './rendererBridge'
+import { toggleMainWindowFullscreen } from './windowFullscreen'
 
 const player = new MpvPlayer()
 let sessionSnapshot: PlayerSessionSnapshot | null = null
@@ -190,12 +191,6 @@ function forwardInput(action: PlayerInputEvent['action']): boolean {
   return true
 }
 
-function toggleMainWindowFullscreen(): void {
-  const win = getActiveWindow()
-  if (!win || win.isDestroyed()) return
-  win.setFullScreen(!win.isFullScreen())
-}
-
 /** Wires every property the UI needs. Called once per mpv process, not per
  *  title — observers survive `loadfile`. */
 async function attachObservers(): Promise<void> {
@@ -308,6 +303,9 @@ async function attachObservers(): Promise<void> {
         if (!forwardInput('toggle-pause')) void runCommand({ type: 'toggle-pause' }).catch(() => {})
         return
       case 'r3-toggle-fullscreen':
+        // Same shared toggle the overlay's button and F11 reach through IPC, so
+        // a press that arrives here mid-transition reverses the one in flight
+        // instead of reading a state Windows has not caught up to yet.
         if (!forwardInput('toggle-fullscreen')) toggleMainWindowFullscreen()
         return
       case 'r3-seek-back':
