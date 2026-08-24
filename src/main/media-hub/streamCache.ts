@@ -44,7 +44,6 @@ import fs from 'node:fs'
 import fsp from 'node:fs/promises'
 import http, { type IncomingMessage, type ServerResponse } from 'node:http'
 import path from 'node:path'
-import { app } from 'electron'
 
 import { assertPublicMediaUrl, defaultResolveHost, fetchMediaWithRetry } from './playback'
 import { logError } from './logger'
@@ -85,10 +84,23 @@ const RECONNECT_GRACE_MS = 500
  * OTHER contents are never something this module reads, writes, or
  * deletes — only its own subfolder.
  */
+/**
+ * Electron resolved on use rather than at import — see logger.ts for the
+ * full reasoning. Short version: a top-level electron import throws when
+ * the binary is absent, taking down every module that transitively
+ * mentions this one, and CI installs without that binary on purpose.
+ */
+function electron(): typeof import('electron') {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  return require('electron')
+}
+
 function cacheRootDir(): string {
   const configured = readSettings().streamCacheDir
   const base =
-    typeof configured === 'string' && configured.trim() ? configured : app.getPath('userData')
+    typeof configured === 'string' && configured.trim()
+      ? configured
+      : electron().app.getPath('userData')
   return path.join(base, 'stream-cache')
 }
 

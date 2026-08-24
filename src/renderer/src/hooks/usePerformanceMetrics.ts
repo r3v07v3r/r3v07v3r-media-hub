@@ -9,7 +9,7 @@ function smoothStep(current: number, target: number, amount = 0.35) {
 
 /** Real system telemetry via the main-process IPC bridge (systeminformation
  *  — see src/main/ipc/telemetry.ts), smoothed on a fast local tick so the
- *  gauges don't visibly jump every time a new ~1.5s snapshot arrives. Falls
+ *  gauges don't visibly jump every time a new snapshot arrives. Falls
  *  back to a static idle-looking snapshot if window.api isn't present
  *  (e.g. this component rendered outside Electron, such as a plain browser
  *  tab during Playwright/dev-server visual verification) rather than
@@ -32,7 +32,11 @@ export function usePerformanceMetrics() {
   const [live, setLive] = useState(false)
 
   useEffect(() => {
-    if (!window.api?.system) return
+    // Home stays mounted beneath the opaque player overlay. Stop the
+    // subscription as well as the visual tween while it is hidden/minimized
+    // so the WMI-backed worker can be terminated instead of continuing to
+    // compete with the renderer for CPU nobody can see being spent.
+    if (!window.api?.system || motionSuspended) return
     const unsubscribe = window.api.system.subscribe((s) => {
       setLive(true)
       targets.current = {
@@ -44,7 +48,7 @@ export function usePerformanceMetrics() {
       }
     })
     return unsubscribe
-  }, [])
+  }, [motionSuspended])
 
   useEffect(() => {
     if (skipSmoothing) {
@@ -58,13 +62,23 @@ export function usePerformanceMetrics() {
       return
     }
     const id = setInterval(() => {
-      setSnapshot((prev) => ({
-        cpu: smoothStep(prev.cpu, targets.current.cpu),
-        gpu: smoothStep(prev.gpu, targets.current.gpu),
-        ram: smoothStep(prev.ram, targets.current.ram),
-        netDownMbps: smoothStep(prev.netDownMbps, targets.current.netDown),
-        netUpMbps: smoothStep(prev.netUpMbps, targets.current.netUp)
-      }))
+      setSnapshot((prev) => {
+        const next = {
+          cpu: smoothStep(prev.cpu, targets.current.cpu),
+          gpu: smoothStep(prev.gpu, targets.current.gpu),
+          ram: smoothStep(prev.ram, targets.current.ram),
+          netDownMbps: smoothStep(prev.netDownMbps, targets.current.netDown),
+          netUpMbps: smoothStep(prev.netUpMbps, targets.current.netUp)
+        }
+        // Once all gauges have reached their targets, return the existing
+        // object so React skips a needless Home/PerformanceWidget render
+        // every 220ms until the next telemetry update arrives.
+        return Object.entries(next).every(
+          ([key, value]) => Math.abs(value - prev[key as keyof PerformanceSnapshot]) < 0.05
+        )
+          ? prev
+          : next
+      })
     }, 220)
     return () => clearInterval(id)
   }, [skipSmoothing])

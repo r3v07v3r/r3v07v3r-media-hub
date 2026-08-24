@@ -47,13 +47,13 @@ import {
   stopPlayerSession
 } from './playerBridge'
 import { readSettings } from './settingsStore'
+import { setPressure } from './taskScheduler'
 import {
   clearAllSessions,
   createStreamCache,
   deleteCacheSession,
   listCacheSessions,
-  MIN_CACHE_BYTES,
-  pruneIdleSessions
+  MIN_CACHE_BYTES
 } from './streamCache'
 import { downloadSubtitleText } from './subtitlesService'
 
@@ -79,10 +79,15 @@ export function hasActivePlayback(): boolean {
 const streamCache = createStreamCache()
 // Disk-hygiene backstop for a title that was closed before being marked
 // watched (its cache is deliberately left in place for a likely near-term
-// resume — see stopPlayback's own comment) — runs once at startup and then
-// hourly so a cache dir from days ago doesn't sit around forever.
-void pruneIdleSessions()
-setInterval(() => void pruneIdleSessions(), 60 * 60 * 1000)
+// resume — see stopPlayback's own comment), so a cache dir from days ago
+// doesn't sit around forever.
+//
+// The hourly cadence is unchanged but the timer is gone: this is now one
+// of backgroundJobs.ts's registered jobs, which is also what stops it
+// running while something is playing. The startup run is gone with it —
+// it fired at import time, before a window even existed, competing with
+// the app getting on screen for a sweep of directories that had already
+// been there for days and could wait ten more minutes.
 
 let activeMediaUrl = ''
 // StreamCache's local server URL for the current title — what mpv actually
@@ -139,6 +144,23 @@ export async function preparePlayback(
   url: string,
   cacheMeta?: CacheSessionMeta
 ): Promise<PlaybackResult> {
+  try {
+    return await openPlayback(url, cacheMeta)
+  } catch (error) {
+    // Nothing is playing, so the backpressure raised below has to come
+    // back off here. Every SUCCESSFUL end-of-playback path goes through
+    // stopPlayback, which releases it — but a preparation that throws
+    // reaches none of them: the renderer's rejected stream.play only
+    // shows an error, and never calls playback.stop. Without this, one
+    // unresolvable link would leave maintenance work suspended and
+    // background work throttled for the rest of the session, with
+    // nothing playing to explain why.
+    setPressure('playback', 'idle')
+    throw error
+  }
+}
+
+async function openPlayback(url: string, cacheMeta?: CacheSessionMeta): Promise<PlaybackResult> {
   activeMediaUrl = url
   // StreamCache is the sole owner of the upstream connection to `url`. It is
   // started before the player opens anything, and mpv then reads only from its
@@ -151,6 +173,14 @@ export async function preparePlayback(
   // ran before the cache opened, deliberately sequential so the two never
   // overlapped on that one connection. mpv reports the track list itself, so
   // the remote link is now touched by exactly one thing.
+  // Everything the app does in the background — the catalog crawls, the
+  // franchise-grouping pass, the watch-history reconcile — stands down for
+  // the duration. It competes for the same main thread mpv's IPC and the
+  // stream cache's fills run on, and for the same bandwidth the person is
+  // trying to watch a film over. Raised before the upstream connection
+  // opens rather than after the player appears, so the queue is already
+  // quiet by the time the first bytes are being pulled.
+  setPressure('playback', 'critical')
   reportPreparation('connect', 'Connecting to the source')
   const cacheResult = await streamCache.start(
     url,
@@ -244,6 +274,12 @@ export async function preparePlayback(
  *  the idle sweep; otherwise the cache is left on disk for a likely
  *  near-term resume. */
 export async function stopPlayback(deleteCache = false): Promise<void> {
+  // Released here rather than in a `finally` around playback, because this
+  // is the one function every end-of-playback path goes through — the
+  // renderer closing the player, a new title replacing this one, and the
+  // app quitting. A missed release would leave background work suspended
+  // for the rest of the session with nothing playing to explain it.
+  setPressure('playback', 'idle')
   activeMediaUrl = ''
   activeCacheUrl = ''
   activeMediaTracks = { video: [], audio: [], subtitle: [], probed: false }

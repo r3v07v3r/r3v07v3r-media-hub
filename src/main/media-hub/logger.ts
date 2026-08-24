@@ -3,11 +3,32 @@
 // errors — intentionally not wired into any broader logging framework the
 // rest of this project might add later, to keep this port self-contained.
 
-import { app } from 'electron'
 import fs from 'node:fs'
 import path from 'node:path'
 
+/**
+ * Where the log lives. Electron is resolved lazily, on the first line
+ * actually written, rather than imported at the top of this file.
+ *
+ * The reason is that a top-level `import { app } from 'electron'` throws
+ * at IMPORT time when the Electron binary is absent, and that takes down
+ * everything that merely mentions this module — however far away, and
+ * however little it wanted a log file. CI installs with `npm ci
+ * --ignore-scripts`, which by design never downloads that binary, so the
+ * pure-logic tests were failing on the import chain
+ * animeCatalogStorage.test -> animeSeasons -> logger -> electron before
+ * running a single assertion.
+ *
+ * Lazily, the same absence is just a throw inside logError's existing
+ * catch, which degrades to "no log file written" — exactly the contract
+ * this module already promises ("Never throws — logging must not be able
+ * to break the feature it's observing"). Nothing changes for the packaged
+ * app, where the binary is always there and this resolves on the first
+ * error logged.
+ */
 function logPath(): string {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { app } = require('electron') as typeof import('electron')
   return path.join(app.getPath('userData'), 'logs', 'media-hub.log')
 }
 
