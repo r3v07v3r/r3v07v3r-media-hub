@@ -57,7 +57,11 @@ import {
   setPlayerOverlayTopmost
 } from './playerWindow'
 import { getActiveWindow, sendToRenderer } from './rendererBridge'
-import { toggleMainWindowFullscreen } from './windowFullscreen'
+import {
+  mainWindowFullscreenTarget,
+  setMainWindowFullscreen,
+  toggleMainWindowFullscreen
+} from './windowFullscreen'
 
 const player = new MpvPlayer()
 let sessionSnapshot: PlayerSessionSnapshot | null = null
@@ -285,9 +289,16 @@ async function attachObservers(): Promise<void> {
         // window:exit-fullscreen — this is the copy for when mpv's window has
         // the focus instead, and the two must not disagree or Escape would mean
         // different things depending on which window happened to be focused.
-        const mainWindow = getActiveWindow()
-        if (mainWindow && !mainWindow.isDestroyed() && mainWindow.isFullScreen()) {
-          mainWindow.setFullScreen(false)
+        //
+        // Asked of the tracked target rather than isFullScreen(), which is what
+        // window:exit-fullscreen asks and is the only reading that survives an
+        // in-flight transition. F11 and a double-click both go fullscreen from
+        // this very window, and on Windows isFullScreen() still answers false
+        // for the length of the native animation — so Escape pressed in that
+        // window read "not fullscreen" and killed the film instead of leaving
+        // fullscreen, which is the one outcome this branch exists to prevent.
+        if (mainWindowFullscreenTarget()) {
+          setMainWindowFullscreen(false)
           return
         }
         // Same path the overlay's close button takes.
