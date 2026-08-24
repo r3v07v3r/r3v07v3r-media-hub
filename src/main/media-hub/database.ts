@@ -208,15 +208,47 @@ export function createDatabase(filename: string): MediaHubDatabase {
   // response that lands still stops the main thread for an fsync. The
   // scheduler and this pragma solve different halves of the same stall.
   //
-  // NORMAL is the standard pairing for WAL and is specifically safe here:
-  // in WAL mode it still cannot corrupt the database, it only gives up
-  // durability of the most recent commits if the machine loses power
-  // mid-write. Everything in this file is either a local cache (which
-  // re-fetches) or library state that is re-pushed from the pending queue
-  // (see tracking.ts), so losing the last few commits to a power cut
-  // costs a refetch, not data integrity.
+  // NORMAL is the standard pairing for WAL: it still cannot corrupt the
+  // database, it only gives up durability of the most recent commits if
+  // the machine loses power before the WAL is synced.
+  //
+  // That trade is right for the caches and wrong for some of the rest, so
+  // it is not applied uniformly — see `durable` below. NORMAL is the
+  // default because the volume lives in catalog_cache, every row of which
+  // is refetchable; the handful of writes that are somebody's actual
+  // library, and would simply be gone, opt back into FULL individually.
   sql.exec('PRAGMA synchronous = NORMAL')
   sql.exec('PRAGMA foreign_keys = ON')
+
+  /**
+   * Runs one write with FULL durability, then restores the connection
+   * default.
+   *
+   * For state that exists only here. A tracked title, a dislike and a
+   * resume bookmark are all written straight to disk with no push and no
+   * replay queue behind them (trackingToggle and trackingSavePosition in
+   * tracking.ts are local-only by design), so a commit lost to a power
+   * cut is a My List entry or a resume point the person simply does not
+   * get back — unlike a lost cache row, which the next fetch rebuilds.
+   * markWatched is included because the local row is the source of truth
+   * even where a Simkl push also happens; the reconcile pending queue
+   * covers review-panel decisions, not ordinary writes.
+   *
+   * Affordable precisely because these are rare — one per deliberate
+   * action, at the ~2ms an fsync costs — where the cache writes this
+   * pragma change exists for arrive in bursts of thousands. `finally`
+   * rather than a trailing exec: every caller below reports failures by
+   * throwing, and leaving the connection pinned at FULL after one of
+   * those would silently undo the change for the rest of the session.
+   */
+  function durable<T>(write: () => T): T {
+    sql.exec('PRAGMA synchronous = FULL')
+    try {
+      return write()
+    } finally {
+      sql.exec('PRAGMA synchronous = NORMAL')
+    }
+  }
 
   sql.exec(`CREATE TABLE IF NOT EXISTS tracked(
     content_id TEXT PRIMARY KEY,
@@ -367,16 +399,18 @@ export function createDatabase(filename: string): MediaHubDatabase {
       try {
         const value = normalizeTitle(item)
         const baseline = latestReleased(item.videos as EpisodeLike[] | undefined, now)
-        q.track.run({
-          id: value.id,
-          type: value.type,
-          title: value.title,
-          poster: value.poster,
-          json: JSON.stringify(value),
-          now: now.toISOString(),
-          baselineSeason: baseline.season,
-          baselineEpisode: baseline.episode
-        })
+        durable(() =>
+          q.track.run({
+            id: value.id,
+            type: value.type,
+            title: value.title,
+            poster: value.poster,
+            json: JSON.stringify(value),
+            now: now.toISOString(),
+            baselineSeason: baseline.season,
+            baselineEpisode: baseline.episode
+          })
+        )
         return value
       } catch (error) {
         return fail(error as Error)
@@ -385,7 +419,7 @@ export function createDatabase(filename: string): MediaHubDatabase {
 
     untrack(id) {
       try {
-        return q.untrack.run(String(id)).changes > 0
+        return durable(() => q.untrack.run(String(id)).changes > 0)
       } catch (error) {
         return fail(error as Error)
       }
@@ -415,16 +449,18 @@ export function createDatabase(filename: string): MediaHubDatabase {
         const season = Number.isFinite(playback.season) ? (playback.season as number) : null
         const episode = Number.isFinite(playback.episode) ? (playback.episode as number) : null
         const key = `${value.id}:${season ?? 'movie'}:${episode ?? 'movie'}`
-        q.watched.run({
-          key,
-          id: value.id,
-          type: value.type,
-          title: value.title,
-          season,
-          episode,
-          now: new Date().toISOString(),
-          json: JSON.stringify(value)
-        })
+        durable(() =>
+          q.watched.run({
+            key,
+            id: value.id,
+            type: value.type,
+            title: value.title,
+            season,
+            episode,
+            now: new Date().toISOString(),
+            json: JSON.stringify(value)
+          })
+        )
         return value
       } catch (error) {
         return fail(error as Error)
@@ -434,7 +470,7 @@ export function createDatabase(filename: string): MediaHubDatabase {
     unmarkWatched(id, season, episode) {
       try {
         const key = `${String(id)}:${Number.isFinite(season) ? season : 'movie'}:${Number.isFinite(episode) ? episode : 'movie'}`
-        return q.unwatch.run(key).changes > 0
+        return durable(() => q.unwatch.run(key).changes > 0)
       } catch (error) {
         return fail(error as Error)
       }
@@ -459,14 +495,16 @@ export function createDatabase(filename: string): MediaHubDatabase {
     dislike(item, now = new Date()) {
       try {
         const value = normalizeTitle(item)
-        q.dislike.run({
-          id: value.id,
-          type: value.type,
-          title: value.title,
-          poster: value.poster,
-          json: JSON.stringify(value),
-          now: now.toISOString()
-        })
+        durable(() =>
+          q.dislike.run({
+            id: value.id,
+            type: value.type,
+            title: value.title,
+            poster: value.poster,
+            json: JSON.stringify(value),
+            now: now.toISOString()
+          })
+        )
         return value
       } catch (error) {
         return fail(error as Error)
@@ -475,7 +513,7 @@ export function createDatabase(filename: string): MediaHubDatabase {
 
     undislike(id) {
       try {
-        return q.undislike.run(String(id)).changes > 0
+        return durable(() => q.undislike.run(String(id)).changes > 0)
       } catch (error) {
         return fail(error as Error)
       }
@@ -533,21 +571,23 @@ export function createDatabase(filename: string): MediaHubDatabase {
           (durationSeconds as number) > 0 &&
           positionSeconds / (durationSeconds as number) >= 0.9
         if (nearStart || nearEnd) {
-          q.clearPosition.run(key)
+          durable(() => q.clearPosition.run(key))
           return
         }
-        q.savePosition.run({
-          key,
-          id,
-          season,
-          episode,
-          position: positionSeconds,
-          duration:
-            typeof durationSeconds === 'number' && Number.isFinite(durationSeconds)
-              ? durationSeconds
-              : null,
-          now: new Date().toISOString()
-        })
+        durable(() =>
+          q.savePosition.run({
+            key,
+            id,
+            season,
+            episode,
+            position: positionSeconds,
+            duration:
+              typeof durationSeconds === 'number' && Number.isFinite(durationSeconds)
+                ? durationSeconds
+                : null,
+            now: new Date().toISOString()
+          })
+        )
       } catch {
         // Best-effort — a failed resume-position write must never surface
         // to the player; worst case, the next play just starts from 0.
