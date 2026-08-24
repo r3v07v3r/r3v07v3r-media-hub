@@ -137,7 +137,9 @@ export interface SimklWatchedSnapshot {
  * good answer; when even that is unavailable, says so via `complete`
  * instead of posing as an account with nothing watched.
  */
-export async function simklWatchedSnapshot(): Promise<SimklWatchedSnapshot> {
+export async function simklWatchedSnapshot(
+  priority: TaskPriority = 'interactive'
+): Promise<SimklWatchedSnapshot> {
   // Read once, up front: this is the account the whole call is about, and
   // everything below is checked against it rather than against whatever
   // happens to be connected by the time each step runs.
@@ -147,10 +149,21 @@ export async function simklWatchedSnapshot(): Promise<SimklWatchedSnapshot> {
   if (cached) return { entries: cached, complete: true }
 
   try {
+    // Two whole-library reads that take seconds each. The default above
+    // is `interactive` because the MyAnimeList reconcile preview calls
+    // this with somebody watching a spinner — but the recurring
+    // watch-history pass calls it too, and that one has to go behind
+    // anything the person is actually doing.
     const [movies, shows] = await Promise.all([
-      simklRequest<SimklMoviesPayload>('/sync/all-items/movies/completed?extended=full'),
+      simklRequest<SimklMoviesPayload>(
+        '/sync/all-items/movies/completed?extended=full',
+        {},
+        priority
+      ),
       simklRequest<SimklShowsPayload>(
-        '/sync/all-items/shows/all?extended=full&episode_watched_at=yes'
+        '/sync/all-items/shows/all?extended=full&episode_watched_at=yes',
+        {},
+        priority
       )
     ])
     // These requests take seconds, and signing out or authorizing someone

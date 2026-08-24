@@ -760,7 +760,7 @@ async function computeMovieDiscrepancies(): Promise<WatchStatusDiscrepancy[]> {
       .filter((h) => h.type === 'movie')
       .map((h) => [h.id, h] as const)
   )
-  const snapshot = await simklWatchedSnapshot()
+  const snapshot = await simklWatchedSnapshot('background')
   // No trustworthy remote side means there is nothing to diff. An
   // unreadable Simkl comes back as an EMPTY Simkl, and an empty Simkl
   // makes every movie watched locally look like a disagreement — a review
@@ -794,8 +794,14 @@ async function computeMovieDiscrepancies(): Promise<WatchStatusDiscrepancy[]> {
   // Resolve the same cached metadata used by the detail page before handing
   // the review list to the renderer. Keep the history values as fallbacks so
   // a single unavailable metadata request never hides a discrepancy.
-  return Promise.all(
-    out.map(async (discrepancy) => {
+  // Bounded: a first sync against a large Simkl account can produce
+  // hundreds of disagreements, and a bare Promise.all over them would
+  // start that many metadata resolves at once for a review panel nobody
+  // has opened yet. mapWithLimit never returns null for an item here —
+  // the per-item catch below always yields the unenriched row — so the
+  // fallback is only satisfying the type.
+  return (
+    await mapWithLimit(out, async (discrepancy) => {
       try {
         const detail = await metadata('movie', discrepancy.id, 'background')
         return {
@@ -809,7 +815,7 @@ async function computeMovieDiscrepancies(): Promise<WatchStatusDiscrepancy[]> {
         return discrepancy
       }
     })
-  )
+  ).map((row, index) => row ?? out[index])
 }
 
 /** Registers every `tracking:*`, `home:personalized`, and `simkl:*` IPC handler. Call once during main-process startup. */
