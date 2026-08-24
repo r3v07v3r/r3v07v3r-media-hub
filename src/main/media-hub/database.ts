@@ -111,6 +111,12 @@ function fail(error: Error): never {
 export interface PlaybackPositionResult {
   positionSeconds: number
   durationSeconds: number | null
+  /** Playback volume in use when the bookmark was written, as the same
+   *  0-2 multiplier the player speaks (1 = the source's own level).
+   *  Optional because only the single-bookmark read carries it: the
+   *  episode grid's list read has no use for a volume and does not ask
+   *  for one, and absent is the honest way to say that. */
+  volume?: number | null
 }
 
 export interface EpisodePlaybackPosition extends PlaybackPositionResult {
@@ -140,7 +146,8 @@ export interface MediaHubDatabase {
     contentId: string | number,
     playback: { season?: number; episode?: number } | undefined,
     positionSeconds: number,
-    durationSeconds?: number
+    durationSeconds?: number,
+    volume?: number
   ): void
   getPlaybackPosition(
     contentId: string | number,
@@ -150,7 +157,12 @@ export interface MediaHubDatabase {
    *  EpisodePlaybackPosition (shared/media-hub/types.ts) for why the
    *  episode grid needs the whole set rather than one lookup per row. */
   listPlaybackPositions(contentId: string | number): EpisodePlaybackPosition[]
-  putCache<T>(key: string, payload: T, ttlMs: number): void
+  /** `durable: true` for the few rows in here that are a record of
+   *  something a person decided rather than something refetched — see the
+   *  `durable` helper in createDatabase. catalog_cache is a general
+   *  key-value store, not only a cache, so "it is in catalog_cache" does
+   *  NOT imply "losing it costs a refetch". */
+  putCache<T>(key: string, payload: T, ttlMs: number, opts?: { durable?: boolean }): void
   getCache<T>(key: string, opts?: { allowExpired?: boolean }): T | null
   /** Removes a cache row outright. Distinct from letting a row expire,
    *  which the `allowExpired: true` readers can still serve back as a
@@ -188,7 +200,67 @@ interface PreparedQueries {
 export function createDatabase(filename: string): MediaHubDatabase {
   const sql = new DatabaseSync(filename)
   sql.exec('PRAGMA journal_mode = WAL')
+  // The single biggest source of "the whole app freezes for a moment":
+  // every statement here runs SYNCHRONOUSLY on the Electron main process,
+  // and SQLite's default `synchronous = FULL` makes each implicit
+  // transaction fsync the WAL before returning. Measured against a real
+  // 19MB user database on this project's own hardware: 2.02 ms per
+  // catalog_cache write at FULL vs 0.045 ms at NORMAL — a 45x difference,
+  // every millisecond of it main-thread time the renderer cannot get an
+  // IPC reply during. That matters because the write-heavy paths here are
+  // not occasional: the anime franchise-grouping pass alone caches one
+  // row per crawled title — ANIME_CATALOG_DEPTH titles, 2000 of them, plus
+  // a second relationship pass over every one without a TVDB mapping — so
+  // at FULL that single job is minutes of wall clock carrying seconds of
+  // pure blocking fsync, in bursts, while the person is using the app.
+  //
+  // Running it at `maintenance` (see catalog.ts's startAnimeGrouping and
+  // taskScheduler.ts) fixes when those writes are issued, not what each
+  // one costs once issued: the tier defers the fetches, and then every
+  // response that lands still stops the main thread for an fsync. The
+  // scheduler and this pragma solve different halves of the same stall.
+  //
+  // NORMAL is the standard pairing for WAL: it still cannot corrupt the
+  // database, it only gives up durability of the most recent commits if
+  // the machine loses power before the WAL is synced.
+  //
+  // That trade is right for the caches and wrong for some of the rest, so
+  // it is not applied uniformly — see `durable` below. NORMAL is the
+  // default because the volume lives in catalog_cache, every row of which
+  // is refetchable; the handful of writes that are somebody's actual
+  // library, and would simply be gone, opt back into FULL individually.
+  sql.exec('PRAGMA synchronous = NORMAL')
   sql.exec('PRAGMA foreign_keys = ON')
+
+  /**
+   * Runs one write with FULL durability, then restores the connection
+   * default.
+   *
+   * For state that exists only here. A tracked title, a dislike and a
+   * resume bookmark are all written straight to disk with no push and no
+   * replay queue behind them (trackingToggle and trackingSavePosition in
+   * tracking.ts are local-only by design), so a commit lost to a power
+   * cut is a My List entry or a resume point the person simply does not
+   * get back — unlike a lost cache row, which the next fetch rebuilds.
+   * markWatched is included because the local row is the source of truth
+   * even where a Simkl push also happens; the reconcile pending queue
+   * covers review-panel decisions, not ordinary writes.
+   *
+   * Affordable precisely because these are rare — one per deliberate
+   * action, at the ~2ms an fsync costs — where the cache writes this
+   * pragma change exists for arrive in bursts of thousands. `finally`
+   * rather than a trailing exec: every caller below reports failures by
+   * throwing, and leaving the connection pinned at FULL after one of
+   * those would silently undo the change for the rest of the session.
+   */
+  function durable<T>(write: () => T): T {
+    sql.exec('PRAGMA synchronous = FULL')
+    try {
+      return write()
+    } finally {
+      sql.exec('PRAGMA synchronous = NORMAL')
+    }
+  }
 
   sql.exec(`CREATE TABLE IF NOT EXISTS tracked(
     content_id TEXT PRIMARY KEY,
@@ -231,6 +303,7 @@ export function createDatabase(filename: string): MediaHubDatabase {
     episode INTEGER,
     position_seconds REAL NOT NULL,
     duration_seconds REAL,
+    volume REAL,
     updated_at TEXT NOT NULL
   );
   CREATE INDEX IF NOT EXISTS idx_history_content ON watch_history(content_id, watched_at DESC);`)
@@ -249,6 +322,20 @@ export function createDatabase(filename: string): MediaHubDatabase {
   }
   if (!columns.has('baseline_episode')) {
     sql.exec('ALTER TABLE tracked ADD COLUMN baseline_episode INTEGER NOT NULL DEFAULT 0')
+  }
+
+  // Same guard, for the bookmark's volume. Nullable with no default on
+  // purpose: every bookmark written before this column existed reads back
+  // as "no volume was recorded", which the player treats as the ordinary
+  // 100% start rather than as a stored choice.
+  const positionColumns = new Set(
+    sql
+      .prepare('PRAGMA table_info(playback_positions)')
+      .all()
+      .map((x) => (x as Row).name as string)
+  )
+  if (!positionColumns.has('volume')) {
+    sql.exec('ALTER TABLE playback_positions ADD COLUMN volume REAL')
   }
 
   // Reclaims rows nothing has read in a long time. `catalog_cache` had no
@@ -321,13 +408,13 @@ export function createDatabase(filename: string): MediaHubDatabase {
       'SELECT season,episode FROM watch_history WHERE content_id=? AND season IS NOT NULL ORDER BY season DESC,episode DESC LIMIT 1'
     ),
     savePosition: sql.prepare(
-      `INSERT INTO playback_positions(position_key,content_id,season,episode,position_seconds,duration_seconds,updated_at)
-       VALUES(@key,@id,@season,@episode,@position,@duration,@now)
-       ON CONFLICT(position_key) DO UPDATE SET position_seconds=excluded.position_seconds,duration_seconds=excluded.duration_seconds,updated_at=excluded.updated_at`
+      `INSERT INTO playback_positions(position_key,content_id,season,episode,position_seconds,duration_seconds,volume,updated_at)
+       VALUES(@key,@id,@season,@episode,@position,@duration,@volume,@now)
+       ON CONFLICT(position_key) DO UPDATE SET position_seconds=excluded.position_seconds,duration_seconds=excluded.duration_seconds,volume=COALESCE(excluded.volume,playback_positions.volume),updated_at=excluded.updated_at`
     ),
     clearPosition: sql.prepare('DELETE FROM playback_positions WHERE position_key=?'),
     getPosition: sql.prepare(
-      'SELECT position_seconds,duration_seconds FROM playback_positions WHERE position_key=?'
+      'SELECT position_seconds,duration_seconds,volume FROM playback_positions WHERE position_key=?'
     ),
     listPositions: sql.prepare(
       'SELECT season,episode,position_seconds,duration_seconds FROM playback_positions WHERE content_id=?'
@@ -339,16 +426,18 @@ export function createDatabase(filename: string): MediaHubDatabase {
       try {
         const value = normalizeTitle(item)
         const baseline = latestReleased(item.videos as EpisodeLike[] | undefined, now)
-        q.track.run({
-          id: value.id,
-          type: value.type,
-          title: value.title,
-          poster: value.poster,
-          json: JSON.stringify(value),
-          now: now.toISOString(),
-          baselineSeason: baseline.season,
-          baselineEpisode: baseline.episode
-        })
+        durable(() =>
+          q.track.run({
+            id: value.id,
+            type: value.type,
+            title: value.title,
+            poster: value.poster,
+            json: JSON.stringify(value),
+            now: now.toISOString(),
+            baselineSeason: baseline.season,
+            baselineEpisode: baseline.episode
+          })
+        )
         return value
       } catch (error) {
         return fail(error as Error)
@@ -357,7 +446,7 @@ export function createDatabase(filename: string): MediaHubDatabase {
 
     untrack(id) {
       try {
-        return q.untrack.run(String(id)).changes > 0
+        return durable(() => q.untrack.run(String(id)).changes > 0)
       } catch (error) {
         return fail(error as Error)
       }
@@ -387,16 +476,18 @@ export function createDatabase(filename: string): MediaHubDatabase {
         const season = Number.isFinite(playback.season) ? (playback.season as number) : null
         const episode = Number.isFinite(playback.episode) ? (playback.episode as number) : null
         const key = `${value.id}:${season ?? 'movie'}:${episode ?? 'movie'}`
-        q.watched.run({
-          key,
-          id: value.id,
-          type: value.type,
-          title: value.title,
-          season,
-          episode,
-          now: new Date().toISOString(),
-          json: JSON.stringify(value)
-        })
+        durable(() =>
+          q.watched.run({
+            key,
+            id: value.id,
+            type: value.type,
+            title: value.title,
+            season,
+            episode,
+            now: new Date().toISOString(),
+            json: JSON.stringify(value)
+          })
+        )
         return value
       } catch (error) {
         return fail(error as Error)
@@ -406,7 +497,7 @@ export function createDatabase(filename: string): MediaHubDatabase {
     unmarkWatched(id, season, episode) {
       try {
         const key = `${String(id)}:${Number.isFinite(season) ? season : 'movie'}:${Number.isFinite(episode) ? episode : 'movie'}`
-        return q.unwatch.run(key).changes > 0
+        return durable(() => q.unwatch.run(key).changes > 0)
       } catch (error) {
         return fail(error as Error)
       }
@@ -431,14 +522,16 @@ export function createDatabase(filename: string): MediaHubDatabase {
     dislike(item, now = new Date()) {
       try {
         const value = normalizeTitle(item)
-        q.dislike.run({
-          id: value.id,
-          type: value.type,
-          title: value.title,
-          poster: value.poster,
-          json: JSON.stringify(value),
-          now: now.toISOString()
-        })
+        durable(() =>
+          q.dislike.run({
+            id: value.id,
+            type: value.type,
+            title: value.title,
+            poster: value.poster,
+            json: JSON.stringify(value),
+            now: now.toISOString()
+          })
+        )
         return value
       } catch (error) {
         return fail(error as Error)
@@ -447,7 +540,7 @@ export function createDatabase(filename: string): MediaHubDatabase {
 
     undislike(id) {
       try {
-        return q.undislike.run(String(id)).changes > 0
+        return durable(() => q.undislike.run(String(id)).changes > 0)
       } catch (error) {
         return fail(error as Error)
       }
@@ -488,7 +581,7 @@ export function createDatabase(filename: string): MediaHubDatabase {
     // saving (and later re-seeking to) the first few seconds would be a
     // worse experience than just starting fresh, since a tiny seek still
     // pays a real restart cost in compatibility mode.
-    savePlaybackPosition(contentId, playback, positionSeconds, durationSeconds) {
+    savePlaybackPosition(contentId, playback, positionSeconds, durationSeconds, volume) {
       try {
         const id = String(contentId)
         const season = Number.isFinite(playback?.season) ? (playback!.season as number) : null
@@ -505,21 +598,38 @@ export function createDatabase(filename: string): MediaHubDatabase {
           (durationSeconds as number) > 0 &&
           positionSeconds / (durationSeconds as number) >= 0.9
         if (nearStart || nearEnd) {
-          q.clearPosition.run(key)
+          durable(() => q.clearPosition.run(key))
           return
         }
-        q.savePosition.run({
-          key,
-          id,
-          season,
-          episode,
-          position: positionSeconds,
-          duration:
-            typeof durationSeconds === 'number' && Number.isFinite(durationSeconds)
-              ? durationSeconds
-              : null,
-          now: new Date().toISOString()
-        })
+        durable(() =>
+          q.savePosition.run({
+            key,
+            id,
+            season,
+            episode,
+            position: positionSeconds,
+            duration:
+              typeof durationSeconds === 'number' && Number.isFinite(durationSeconds)
+                ? durationSeconds
+                : null,
+            // TWO different silences, deliberately mapped to the same NULL —
+            // which the upsert's COALESCE reads as "leave any stored volume
+            // standing":
+            //
+            //   omitted — the caller has no volume to offer and is saying
+            //     nothing about it, so it must not wipe what the player wrote.
+            //   zero — the player IS saying something: muted, right now. Mute
+            //     is what people do for a minute, so the level worth resuming
+            //     is the last audible one. Not silence, which would come back
+            //     as a film playing with no sound and no visible reason; and
+            //     not a reset to 100%, which would throw away the boost the
+            //     title was actually being watched at — the one thing this
+            //     column exists to remember.
+            volume:
+              typeof volume === 'number' && Number.isFinite(volume) && volume > 0 ? volume : null,
+            now: new Date().toISOString()
+          })
+        )
       } catch {
         // Best-effort — a failed resume-position write must never surface
         // to the player; worst case, the next play just starts from 0.
@@ -535,7 +645,8 @@ export function createDatabase(filename: string): MediaHubDatabase {
         if (!row) return null
         return {
           positionSeconds: row.position_seconds as number,
-          durationSeconds: (row.duration_seconds as number | null) ?? null
+          durationSeconds: (row.duration_seconds as number | null) ?? null,
+          volume: (row.volume as number | null) ?? null
         }
       } catch {
         return null
@@ -558,10 +669,19 @@ export function createDatabase(filename: string): MediaHubDatabase {
       }
     },
 
-    putCache<T>(key: string, payload: T, ttlMs: number): void {
+    putCache<T>(
+      key: string,
+      payload: T,
+      ttlMs: number,
+      { durable: needsDurability = false }: { durable?: boolean } = {}
+    ): void {
       try {
         const now = Date.now()
-        q.putCache.run(key, JSON.stringify(payload), now + ttlMs, now)
+        const write = (): void => {
+          q.putCache.run(key, JSON.stringify(payload), now + ttlMs, now)
+        }
+        if (needsDurability) durable(write)
+        else write()
       } catch {
         // Cache writes are best-effort; a failure here must not surface to callers.
       }

@@ -99,6 +99,20 @@ export interface CatalogItem {
   episodeCounts?: { totalSeasons: number; totalEpisodes: number }
 }
 
+/** The direct sequel/prequel entries Kitsu lists for an anime release. */
+export type AnimeStoryRelation = 'sequel' | 'prequel'
+
+export interface AnimeStoryLink {
+  relation: AnimeStoryRelation
+  item: CatalogItem
+}
+
+export interface AnimeStoryResult {
+  links: AnimeStoryLink[]
+  /** False only if the remote lookup failed without a cached answer. */
+  checked: boolean
+}
+
 // TorBox `mylist` items matched against the cached catalogs by parsed
 // release-name (see enrichTorBoxItem in core.ts).
 export interface LibraryItem {
@@ -340,6 +354,12 @@ export interface MarkWatchedResult {
 export interface PlaybackPositionResult {
   positionSeconds: number
   durationSeconds: number | null
+  /** Playback volume in use when the bookmark was written, as the same
+   *  0-2 multiplier the player speaks (1 = the source's own level).
+   *  Optional because only the single-bookmark read carries it: the
+   *  episode grid's list read has no use for a volume and does not ask
+   *  for one, and absent is the honest way to say that. */
+  volume?: number | null
 }
 
 /** Every resume bookmark stored for one title, in one read — the
@@ -947,3 +967,39 @@ export type FriendMessage =
   | { type: 'friend-join-offer'; fromFriendId: string; toFriendId: string; partyCode: string }
   // Politely declining — they stopped watching, or hosting failed.
   | { type: 'friend-join-declined'; fromFriendId: string; toFriendId: string; reason: string }
+
+/**
+ * One piece of work the central scheduler is currently running — see
+ * src/main/media-hub/taskScheduler.ts.
+ */
+export interface ActivityTask {
+  label: string
+  /** Which upstream's budget it is spending (kitsu, simkl, cinemeta, ...). */
+  lane: string
+  priority: 'interactive' | 'visible' | 'background' | 'maintenance'
+  startedAt: number
+}
+
+/** One registered recurring job and when it is next due — see
+ *  src/main/media-hub/backgroundJobs.ts. */
+export interface ActivityJob {
+  name: string
+  label: string
+  dueAt: number
+  running: boolean
+}
+
+/**
+ * Everything the work manager is doing, for the Downloads page's activity
+ * panel. This is the answer to "why does the app feel busy right now",
+ * which before this existed could only be got at by reading the source.
+ */
+export interface ActivitySnapshot {
+  /** How loaded the app currently considers itself. `critical` means
+   *  playback is running and background work is suspended. */
+  pressure: 'idle' | 'busy' | 'critical'
+  running: ActivityTask[]
+  queued: number
+  queuedByPriority: Record<'interactive' | 'visible' | 'background' | 'maintenance', number>
+  jobs: ActivityJob[]
+}

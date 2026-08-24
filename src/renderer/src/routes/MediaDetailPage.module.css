@@ -58,7 +58,10 @@
   position: relative;
   border-radius: var(--radius-large);
   overflow: hidden;
-  height: 520px;
+  /* Same clamp as .hero in DetailHero.module.css — the skeleton stands in
+     for the hero, so a mismatch here is a visible jump in where the rest
+     of the page starts the moment the real content arrives. */
+  height: clamp(380px, 46vh, 520px);
   padding: 40px 32px;
   display: flex;
   flex-direction: column;

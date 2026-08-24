@@ -9,6 +9,7 @@ import {
 } from '../shared/ipc-types'
 import { MEDIA_HUB_CHANNELS } from '../shared/media-hub/ipc-channels'
 import type {
+  AnimeStoryResult,
   BlockedDownload,
   BootstrapResult,
   CatalogItem,
@@ -58,6 +59,7 @@ import type {
   WatchStatusDiscrepancy,
   SkipTimes,
   CacheSessionMeta,
+  ActivitySnapshot,
   StreamCacheEntry,
   StreamCandidate,
   StreamResolveResult,
@@ -113,6 +115,9 @@ interface SavePositionPayload {
   playback?: PlaybackPosition
   positionSeconds: number
   durationSeconds?: number
+  /** The 0-2 multiplier the player was at — stored with the bookmark so a
+   *  resumed title comes back at the loudness it was left at. */
+  volume?: number
 }
 
 interface ReconcileResolvePayload {
@@ -317,7 +322,9 @@ const api = {
       search: (kind: MediaKind, query: string): Promise<CatalogItem[]> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.catalogSearch, { kind, query }),
       related: (type: MediaKind, id: string): Promise<CatalogItem[]> =>
-        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.catalogRelated, { type, id })
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.catalogRelated, { type, id }),
+      story: (type: MediaKind, id: string): Promise<AnimeStoryResult> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.catalogStory, { type, id })
     },
 
     home: {
@@ -389,6 +396,13 @@ const api = {
           season: meta?.seasonNumber,
           episode: meta?.episodeNumber
         })
+    },
+
+    /** What the central work manager is doing — see taskScheduler.ts. */
+    activity: {
+      get: (): Promise<ActivitySnapshot> => ipcRenderer.invoke(MEDIA_HUB_CHANNELS.activityGet),
+      onChanged: (onEvent: (snapshot: ActivitySnapshot) => void): (() => void) =>
+        subscribe<ActivitySnapshot>(MEDIA_HUB_CHANNELS.activityChanged, onEvent)
     },
 
     streamCache: {

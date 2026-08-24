@@ -45,6 +45,7 @@ import { airingStatus, continueWatchingList } from './core'
 import { catalogData, metadata } from './catalog'
 import { getDatabase } from './dbState'
 import { fetchJson } from './httpClient'
+import { mapWithLimit, type TaskPriority } from './taskScheduler'
 import { handle } from './ipcGuard'
 import { logError } from './logger'
 import { pushMalProgress } from './malSync'
@@ -81,10 +82,14 @@ interface SimklSyncResult {
 }
 
 /** Runs a Simkl sync/history POST, translating "not connected" vs. a caught error vs. success into the same three-way shape every mark/unmark handler returns. */
-async function syncSimklHistory(pathname: string, body: unknown): Promise<SimklSyncResult> {
+async function syncSimklHistory(
+  pathname: string,
+  body: unknown,
+  priority: TaskPriority = 'interactive'
+): Promise<SimklSyncResult> {
   if (!simklCredentials().accessToken) return { simklSynced: false }
   try {
-    await simklRequest(pathname, { method: 'POST', body: JSON.stringify(body) })
+    await simklRequest(pathname, { method: 'POST', body: JSON.stringify(body) }, priority)
     return { simklSynced: true }
   } catch (error) {
     logError(`simkl:${pathname}`, error)
@@ -131,6 +136,9 @@ interface SavePositionPayload {
   playback?: PlaybackPosition
   positionSeconds: number
   durationSeconds?: number
+  /** The 0-2 multiplier the player was at, stored so resuming this
+   *  bookmark can resume its loudness too. */
+  volume?: number
 }
 
 /** Minimal shape this port reads from Simkl's `/oauth/pin/:userCode` poll response. */
@@ -172,6 +180,75 @@ interface SimklPinPollResponse {
  *  so a broken connection doesn't get hammered either. */
 const RECONCILE_COOLDOWN_MS = 5 * 60 * 1000
 const RECONCILE_COOLDOWN_KEY = 'reconcile:cooldown:v1'
+/**
+ * The most recent diff, kept for as long as the cooldown that produced it.
+ *
+ * The cooldown exists to stop the same expensive Simkl comparison running
+ * over and over, and it works by refusing to run — which was fine when
+ * the only thing that ever asked was the renderer, on mount. Now the
+ * recurring watch-sync job asks too (see runBackgroundWatchSync), and
+ * without somewhere to put its answer it would consume the cooldown and
+ * throw the result away, leaving a review panel opened in the next five
+ * minutes with nothing to show and no way to find out why.
+ *
+ * So whoever runs the diff writes it down, and a caller inside the
+ * cooldown reads it rather than being told nothing happened. The work is
+ * still done once per cooldown window; it is just no longer wasted.
+ */
+const RECONCILE_RESULT_KEY = 'reconcile:result:v2'
+
+/**
+ * A cached diff, stamped with whose account it was computed against.
+ *
+ * Disconnecting and authorizing someone else inside the five-minute
+ * cooldown would otherwise hand the new account the old account's
+ * disagreements — and resolving one of those pushes a decision about
+ * somebody else's library, or rewrites local history to match it.
+ *
+ * Checked at the point of USE rather than cleared on sign-out, for the
+ * same reasons simklClient.ts's cachedHistoryFor spells out: clearing is
+ * best-effort tidying that cannot run if the app was killed and cannot
+ * catch a pass that was already in flight when the account changed. The
+ * stamp covers all of it. v2 because a v1 row carries no stamp and can
+ * never satisfy this check; the database's own prune reclaims those.
+ */
+interface CachedReconcileResult {
+  account: string
+  discrepancies: WatchStatusDiscrepancy[]
+}
+
+/**
+ * Writes a diff under the account it was COMPUTED for, not whichever one
+ * happens to be connected by the time it finishes.
+ *
+ * Those are not the same moment: the diff reads Simkl's whole library and
+ * then enriches every disagreement with metadata, which takes long enough
+ * that signing out and authorizing someone else during it is an ordinary
+ * thing to do. Deriving the stamp at write time would put account A's
+ * rows under account B's mark, and the check on the way back out would
+ * then happily serve them — resolving one pushes A's decision into B's
+ * history. That is the exact failure the stamp exists to prevent, so the
+ * account has to be captured before the work starts and discarded if it
+ * changed, the same way simklWatchedSnapshot already does.
+ */
+function writeReconcileResult(account: string, discrepancies: WatchStatusDiscrepancy[]): void {
+  if (!account || simklAccountMark() !== account) return
+  getDatabase().putCache<CachedReconcileResult>(
+    RECONCILE_RESULT_KEY,
+    { account, discrepancies },
+    RECONCILE_COOLDOWN_MS
+  )
+}
+
+/** The cached diff, but only if it belongs to the account connected now. */
+function cachedReconcileResult(): WatchStatusDiscrepancy[] {
+  const account = simklAccountMark()
+  // No account connected matches no stamp — never the empty-string
+  // account a malformed row might carry.
+  if (!account) return []
+  const row = getDatabase().getCache<CachedReconcileResult>(RECONCILE_RESULT_KEY)
+  return row?.account === account && Array.isArray(row.discrepancies) ? row.discrepancies : []
+}
 /** Ids someone has explicitly said to stop asking about — kept far longer
  *  than the cooldown above (this is a decision, not a rate limit), but
  *  not forever: 90 days gives a genuinely stale dismissal a chance to
@@ -187,7 +264,14 @@ function ignoredReconcileIds(): Set<string> {
 function addIgnoredReconcileId(id: string): void {
   const ids = ignoredReconcileIds()
   ids.add(id)
-  getDatabase().putCache(RECONCILE_IGNORED_KEY, [...ids], RECONCILE_IGNORED_TTL_MS)
+  // Durable: someone pressed Ignore. These three reconcile rows live in
+  // catalog_cache but are not cache — nothing refetches a decision, and
+  // losing one brings the title straight back to the review panel that
+  // has already told the person it was handled. See database.ts's
+  // `durable` helper for why the store defaults the other way.
+  getDatabase().putCache(RECONCILE_IGNORED_KEY, [...ids], RECONCILE_IGNORED_TTL_MS, {
+    durable: true
+  })
 }
 
 /** Titles this app gave up trying to push, after enough failed attempts
@@ -221,7 +305,11 @@ function addAbandonedReconcileId(id: string): boolean {
   const ids = abandonedReconcileIds()
   ids.add(id)
   const record: AbandonedRecord = { account: simklAccountMark(), ids: [...ids] }
-  getDatabase().putCache(RECONCILE_ABANDONED_KEY, record, RECONCILE_IGNORED_TTL_MS)
+  // Durable for the same reason as addIgnoredReconcileId: the person has
+  // already been told this title is no longer being flagged.
+  getDatabase().putCache(RECONCILE_ABANDONED_KEY, record, RECONCILE_IGNORED_TTL_MS, {
+    durable: true
+  })
   return abandonedReconcileIds().has(id)
 }
 
@@ -332,7 +420,14 @@ function pendingPushes(): PendingWatchStatusPush[] {
  */
 function writePendingPushes(queue: PendingWatchStatusPush[]): boolean {
   const payload: PendingQueue = { account: simklAccountMark(), entries: queue }
-  getDatabase().putCache(RECONCILE_PENDING_KEY, payload, RECONCILE_PENDING_TTL_MS)
+  // Durable, and this is the row that most needs it: it IS the record of
+  // an acknowledged "keep local" — the panel drops the discrepancy on the
+  // strength of this write succeeding, and nothing else remembers the
+  // choice. Losing it to a power cut is the exact failure the queue was
+  // built to stop, just with a different cause.
+  getDatabase().putCache(RECONCILE_PENDING_KEY, payload, RECONCILE_PENDING_TTL_MS, {
+    durable: true
+  })
   // The whole payload, not just which ids are present: a flush that only
   // bumped `attempts` (or corrected `remoteWatched`) leaves the id set
   // identical, so comparing ids would call a rejected write a success
@@ -397,7 +492,7 @@ function pushItemFor(entry: PendingWatchStatusPush): SimklPushItem {
  * after one doesn't re-report a title that was pushed seconds ago and
  * that Simkl's own all-items view may not reflect yet.
  */
-async function pushPendingToServices(): Promise<Set<string>> {
+async function pushPendingToServices(priority: TaskPriority): Promise<Set<string>> {
   const queue = pendingPushes()
   if (!queue.length) return new Set()
   // Not connected — keep everything queued rather than failing attempts
@@ -480,10 +575,14 @@ async function pushPendingToServices(): Promise<Set<string>> {
     if (disowned()) return new Set()
     const items = group.map(pushItemFor)
     try {
-      const response = await simklRequest<SimklHistoryResponse>(pathname, {
-        method: 'POST',
-        body: JSON.stringify(batchHistoryPayload(items.map((item) => ({ item }))))
-      })
+      const response = await simklRequest<SimklHistoryResponse>(
+        pathname,
+        {
+          method: 'POST',
+          body: JSON.stringify(batchHistoryPayload(items.map((item) => ({ item }))))
+        },
+        priority
+      )
       const unmatched = new Set(unmatchedCatalogIds(response, items))
       for (const entry of group) {
         if (unmatched.has(entry.id)) {
@@ -635,12 +734,49 @@ async function pushPendingToServices(): Promise<Set<string>> {
   return confirmed
 }
 
+/**
+ * The recurring watch-history pass, for backgroundJobs.ts.
+ *
+ * Two things, in the order they have to happen. First anything already
+ * decided and still queued goes out — a decision made in a previous
+ * session that never reached the services is the one piece of this that
+ * is genuinely owed to somebody. Then, if the cooldown allows, the local
+ * history is diffed against Simkl's so new disagreements are ready for
+ * the review panel the next time it is opened.
+ *
+ * Deliberately does NOT push discrepancies at the renderer. The review
+ * panel is opened from the renderer's own reconcileCheck call (see
+ * trackingReconcileCheck), which shares this same cooldown — so the two
+ * cooperate rather than double-asking, and a background pass never
+ * interrupts anyone with a panel they did not ask for.
+ */
+export async function runBackgroundWatchSync(): Promise<void> {
+  if (!simklCredentials().accessToken) return
+  // Background: this is a recurring job nobody asked for, so its pushes
+  // must not jump ahead of the screen someone is looking at, and must
+  // stand down along with the rest of the job once playback starts.
+  await flushPendingPushes('background')
+  const db = getDatabase()
+  if (db.getCache(RECONCILE_COOLDOWN_KEY)) return
+  db.putCache(RECONCILE_COOLDOWN_KEY, true, RECONCILE_COOLDOWN_MS)
+  const account = simklAccountMark()
+  try {
+    writeReconcileResult(account, await computeMovieDiscrepancies('background'))
+  } catch (error) {
+    logError('job:watch-sync', error)
+  }
+}
+
 /** Single-flight wrapper — the debounce timer and a reconcile check can
  *  both ask for a flush, and two overlapping ones would push the same
  *  queue twice and race on writing it back. */
-function flushPendingPushes(): Promise<Set<string>> {
+function flushPendingPushes(priority: TaskPriority = 'interactive'): Promise<Set<string>> {
+  // A flush already running keeps the priority it started with. The
+  // alternative — re-tiering in flight — is not something the scheduler
+  // can do for requests it has already queued, and the two callers here
+  // differ by seconds at most.
   if (flushInFlight) return flushInFlight
-  const run = pushPendingToServices()
+  const run = pushPendingToServices(priority)
     .catch((error) => {
       logError('reconcile:flush', error)
       return new Set<string>()
@@ -698,7 +834,9 @@ function scheduleFlush(): void {
  *  does this side consider watched," and only ids where the two sides
  *  disagree are returned — an id watched (or not) on both sides is
  *  already in agreement and never surfaced. */
-async function computeMovieDiscrepancies(): Promise<WatchStatusDiscrepancy[]> {
+async function computeMovieDiscrepancies(
+  priority: TaskPriority = 'background'
+): Promise<WatchStatusDiscrepancy[]> {
   const ignored = ignoredReconcileIds()
   // Titles this app has stopped trying to push for the connected
   // account — see addAbandonedReconcileId.
@@ -713,7 +851,7 @@ async function computeMovieDiscrepancies(): Promise<WatchStatusDiscrepancy[]> {
       .filter((h) => h.type === 'movie')
       .map((h) => [h.id, h] as const)
   )
-  const snapshot = await simklWatchedSnapshot()
+  const snapshot = await simklWatchedSnapshot(priority)
   // No trustworthy remote side means there is nothing to diff. An
   // unreadable Simkl comes back as an EMPTY Simkl, and an empty Simkl
   // makes every movie watched locally look like a disagreement — a review
@@ -747,10 +885,16 @@ async function computeMovieDiscrepancies(): Promise<WatchStatusDiscrepancy[]> {
   // Resolve the same cached metadata used by the detail page before handing
   // the review list to the renderer. Keep the history values as fallbacks so
   // a single unavailable metadata request never hides a discrepancy.
-  return Promise.all(
-    out.map(async (discrepancy) => {
+  // Bounded: a first sync against a large Simkl account can produce
+  // hundreds of disagreements, and a bare Promise.all over them would
+  // start that many metadata resolves at once for a review panel nobody
+  // has opened yet. mapWithLimit never returns null for an item here —
+  // the per-item catch below always yields the unenriched row — so the
+  // fallback is only satisfying the type.
+  return (
+    await mapWithLimit(out, async (discrepancy) => {
       try {
-        const detail = await metadata('movie', discrepancy.id)
+        const detail = await metadata('movie', discrepancy.id, priority)
         return {
           ...discrepancy,
           title: detail.title || discrepancy.title,
@@ -762,7 +906,7 @@ async function computeMovieDiscrepancies(): Promise<WatchStatusDiscrepancy[]> {
         return discrepancy
       }
     })
-  )
+  ).map((row, index) => row ?? out[index])
 }
 
 /** Registers every `tracking:*`, `home:personalized`, and `simkl:*` IPC handler. Call once during main-process startup. */
@@ -786,11 +930,17 @@ export function registerTrackingIpc(): void {
     // surfaces disagreements for review instead of one side silently
     // winning on every ordinary read.
     const history = db.history()
+    // Bounded, and at `visible` rather than `interactive`. This used to be
+    // a bare Promise.all over every tracked series, which meant a large
+    // library opened one request per title the moment the app started —
+    // and home:personalized below did exactly the same thing at the same
+    // moment, for the same titles. metadata() is coalesced per title now,
+    // so the two calls share one fetch each; mapWithLimit is what stops
+    // either of them starting hundreds of resolves at once regardless.
     const details = (
-      await Promise.all(
-        trackedItems
-          .filter((x) => x.type !== 'movie')
-          .map((x) => metadata(x.type, x.id).catch(() => null))
+      await mapWithLimit(
+        trackedItems.filter((x) => x.type !== 'movie'),
+        (x) => metadata(x.type, x.id, 'visible')
       )
     ).filter((x): x is CatalogItem => Boolean(x))
     const newEpisodesById = new Map(
@@ -866,8 +1016,8 @@ export function registerTrackingIpc(): void {
 
   handle<SavePositionPayload, { ok: true }>(
     MEDIA_HUB_CHANNELS.trackingSavePosition,
-    (_e, { id, playback, positionSeconds, durationSeconds }) => {
-      getDatabase().savePlaybackPosition(id, playback, positionSeconds, durationSeconds)
+    (_e, { id, playback, positionSeconds, durationSeconds, volume }) => {
+      getDatabase().savePlaybackPosition(id, playback, positionSeconds, durationSeconds, volume)
       return { ok: true }
     }
   )
@@ -897,10 +1047,20 @@ export function registerTrackingIpc(): void {
     // budget is the flush's own retry pacing, which applies to entries
     // that have already failed and never to one nobody has tried.
     const justPushed = await flushPendingPushes()
-    if (db.getCache(RECONCILE_COOLDOWN_KEY)) return { ran: false, discrepancies: [] }
+    if (db.getCache(RECONCILE_COOLDOWN_KEY)) {
+      // Inside the cooldown, but that no longer means "nothing to say" —
+      // the background watch-sync job may have run the diff moments ago.
+      // Reported as ran: false, which is the truth (this call did not run
+      // one) and is all the renderer has ever keyed off; what it acts on
+      // is whether there are discrepancies.
+      const cached = cachedReconcileResult()
+      return { ran: false, discrepancies: cached.filter((d) => !justPushed.has(d.id)) }
+    }
     db.putCache(RECONCILE_COOLDOWN_KEY, true, RECONCILE_COOLDOWN_MS)
+    const account = simklAccountMark()
     try {
       const discrepancies = await computeMovieDiscrepancies()
+      writeReconcileResult(account, discrepancies)
       // Anything confirmed moments ago is settled, whatever Simkl's
       // all-items view says — that read can lag its own write, and
       // re-asking about a title someone just resolved is the exact
@@ -988,7 +1148,9 @@ export function registerTrackingIpc(): void {
 
   handle<undefined, HomePersonalizedResult>(MEDIA_HUB_CHANNELS.homePersonalized, async () => {
     const [movies, series, anime] = await Promise.all(
-      (['movie', 'series', 'anime'] as const).map((kind) => catalogData(kind).catch(() => []))
+      (['movie', 'series', 'anime'] as const).map((kind) =>
+        catalogData(kind, false, 'visible').catch(() => [])
+      )
     )
     const all: CatalogItem[] = [...movies, ...series, ...anime]
     if (!all.length) throw new Error('All catalog sources are currently unavailable.')
@@ -1015,11 +1177,12 @@ export function registerTrackingIpc(): void {
       preferredGenres: genres
     }).slice(0, 18)
 
+    // See tracking:list above — same fan-out, same bound, and the two
+    // share their per-title fetches through metadata()'s coalescing.
     const details = (
-      await Promise.all(
-        tracked
-          .filter((x) => x.type !== 'movie')
-          .map((x) => metadata(x.type, x.id).catch(() => null))
+      await mapWithLimit(
+        tracked.filter((x) => x.type !== 'movie'),
+        (x) => metadata(x.type, x.id, 'visible')
       )
     ).filter((x): x is CatalogItem => Boolean(x))
 

@@ -45,6 +45,7 @@ export const MEDIA_HUB_CHANNELS = {
   catalogMeta: 'mediahub:catalog:meta',
   catalogSearch: 'mediahub:catalog:search',
   catalogRelated: 'mediahub:catalog:related',
+  catalogStory: 'mediahub:catalog:story',
   homePersonalized: 'mediahub:home:personalized',
   trackingList: 'mediahub:tracking:list',
   trackingToggle: 'mediahub:tracking:toggle',
@@ -120,6 +121,12 @@ export const MEDIA_HUB_CHANNELS = {
   libraryPlay: 'mediahub:library:play',
   streamCacheList: 'mediahub:stream-cache:list',
   streamCacheDelete: 'mediahub:stream-cache:delete',
+
+  // What the central work manager is doing right now — see
+  // taskScheduler.ts and backgroundJobs.ts. Pushed rather than polled, so
+  // a panel nobody has open costs nothing.
+  activityGet: 'mediahub:activity:get',
+  activityChanged: 'mediahub:activity:changed', // push event
 
   // Simkl
   simklStatus: 'mediahub:simkl:status',

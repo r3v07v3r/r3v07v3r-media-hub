@@ -5,6 +5,7 @@ import type { StreamCacheEntry } from '@shared/media-hub/types'
 import { getTorrents, QbTorrent } from '@renderer/lib/api/qbittorrent'
 import { sonarrClient, radarrClient, ServarrQueueItem } from '@renderer/lib/api/servarr'
 import { isConfigured } from '@renderer/lib/api/types'
+import { BackgroundActivitySection } from '@renderer/components/downloads/BackgroundActivitySection'
 import { ComingSoonSection } from '@renderer/components/placeholder/ComingSoonSection'
 import { Icon } from '@renderer/components/icons/Icon'
 import styles from './Downloads.module.css'
@@ -219,17 +220,22 @@ export default function DownloadsPage() {
 
   if (!anyConfigured && cacheEntries.length === 0) {
     return (
-      <ComingSoonSection
-        icon="downloads"
-        title="Downloads"
-        description="Connect qBittorrent, Sonarr, or Radarr in Settings to see active downloads and queues here."
-      />
+      <div className={styles.wrap}>
+        <BackgroundActivitySection />
+        <ComingSoonSection
+          icon="downloads"
+          title="Downloads"
+          description="Connect qBittorrent, Sonarr, or Radarr in Settings to see active downloads and queues here."
+        />
+      </div>
     )
   }
 
   return (
     <div className={styles.wrap}>
       <h1 className={styles.heading}>Downloads</h1>
+
+      <BackgroundActivitySection />
 
       <section className={`${styles.section} glass-panel`}>
         <h2 className={styles.sectionTitle}>

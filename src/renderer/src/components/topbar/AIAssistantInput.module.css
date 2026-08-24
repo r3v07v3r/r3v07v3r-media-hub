@@ -104,26 +104,44 @@
     0 0 20px -6px rgba(56, 229, 255, 0.3),
     0 0 24px -4px rgba(94, 140, 255, 0.26),
     0 0 44px -18px rgba(141, 77, 255, 0.3);
-  animation: capsuleBreathe 6s ease-in-out infinite;
   transition:
     box-shadow var(--transition-standard),
     border-color var(--transition-standard);
 }
+/* The breathing half of that glow, as a crossfading overlay rather than
+   an animated box-shadow on .capsule itself.
+ *
+ * box-shadow is not a compositable property, so the old
+ * `animation: capsuleBreathe` repainted this element every frame for the
+ * life of the app — and this element sits in the always-visible top bar
+ * AND carries backdrop-filter: blur(14px), so each of those repaints also
+ * forced the blurred backdrop behind it to be recomputed. Same look, but
+ * only `opacity` changes now, which the compositor animates on its own
+ * without ever repainting.
+ *
+ * The keyframes' bright state lives here permanently and is faded in and
+ * out; .capsule keeps the dim state as its resting box-shadow. */
+.capsule::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  box-shadow:
+    0 0 0 1px rgba(56, 193, 255, 0.09),
+    0 0 24px -5px rgba(56, 229, 255, 0.4),
+    0 0 30px -4px rgba(94, 140, 255, 0.34),
+    0 0 50px -16px rgba(141, 77, 255, 0.38);
+  opacity: 0;
+  animation: capsuleBreathe 6s ease-in-out infinite;
+}
 @keyframes capsuleBreathe {
   0%,
   100% {
-    box-shadow:
-      0 0 0 1px rgba(56, 193, 255, 0.06),
-      0 0 20px -6px rgba(56, 229, 255, 0.3),
-      0 0 24px -4px rgba(94, 140, 255, 0.26),
-      0 0 44px -18px rgba(141, 77, 255, 0.3);
+    opacity: 0;
   }
   50% {
-    box-shadow:
-      0 0 0 1px rgba(56, 193, 255, 0.09),
-      0 0 24px -5px rgba(56, 229, 255, 0.4),
-      0 0 30px -4px rgba(94, 140, 255, 0.34),
-      0 0 50px -16px rgba(141, 77, 255, 0.38);
+    opacity: 1;
   }
 }
 .capsule:hover {
@@ -146,16 +164,19 @@
   border-color: rgba(255, 90, 90, 0.6);
   box-shadow: 0 0 0 4px rgba(255, 90, 90, 0.14);
 }
-/* The idle breathing animation (see .capsule/@keyframes capsuleBreathe
-   above) would otherwise keep overriding box-shadow every frame
-   regardless of selector specificity — CSS animations always win over
-   non-!important declarations for the property they animate. Turn it
-   off for every state that needs its own explicit glow. */
-.capsuleFocused,
-.capsule:focus-within,
-.capsuleProcessing,
-.capsuleError {
+/* Every state above sets its own explicit glow, so the idle breathing
+   overlay (see .capsule::after) has to get out of the way — otherwise its
+   ambient cyan/violet halo would still be layered on top of, say, the red
+   error ring. It used to be .capsule itself that was cancelled here,
+   because the animation drove box-shadow directly and CSS animations
+   always win over non-!important declarations for the property they
+   animate; now the overlay is a separate box and hiding it is enough. */
+.capsuleFocused::after,
+.capsule:focus-within::after,
+.capsuleProcessing::after,
+.capsuleError::after {
   animation: none;
+  opacity: 0;
 }
 
 /* The capsule's lit left-hand anchor. This was a microphone button; it is

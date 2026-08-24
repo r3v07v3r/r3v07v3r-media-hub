@@ -105,7 +105,9 @@ export function DetailHero({
 
   return (
     <section
-      className={`${styles.hero} ${!config.isEpisodic ? styles.heroMovie : ''}`}
+      className={`${styles.hero} ${!config.isEpisodic ? styles.heroMovie : ''} ${
+        trailerActive ? styles.heroTrailerOpen : ''
+      }`}
       aria-label={`${media.title} details`}
     >
       <div

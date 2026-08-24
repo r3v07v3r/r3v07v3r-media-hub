@@ -19,6 +19,7 @@ import { airedEpisodes, catalogItemToMediaItem } from '@renderer/lib/mediaHub/ad
 import { DETAIL_CONFIGS } from '@renderer/lib/mediaHub/detailAdapters'
 import { useRestoreBrowsingOrigin } from '@renderer/lib/mediaHub/useRestoreBrowsingOrigin'
 import type {
+  AnimeStoryLink,
   CatalogItem,
   Episode,
   EpisodePlaybackPosition,
@@ -36,6 +37,7 @@ import { RatingsPanel } from '@renderer/components/detail/RatingsPanel'
 import { ProgressPanel } from '@renderer/components/detail/ProgressPanel'
 import { GenresPanel } from '@renderer/components/detail/GenresPanel'
 import { SimilarPanel } from '@renderer/components/detail/SimilarPanel'
+import { AnimeStoryPanel } from '@renderer/components/detail/AnimeStoryPanel'
 import styles from './MediaDetailPage.module.css'
 
 type FetchStatus = 'loading' | 'ready' | 'error'
@@ -74,6 +76,10 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
 
   const [related, setRelated] = useState<MediaItem[]>([])
   const [relatedStatus, setRelatedStatus] = useState<FetchStatus>('loading')
+
+  const [storyLinks, setStoryLinks] = useState<AnimeStoryLink[]>([])
+  const [storyStatus, setStoryStatus] = useState<FetchStatus>('loading')
+  const [storyChecked, setStoryChecked] = useState(false)
 
   const [history, setHistory] = useState<HistoryEntry[]>([])
   // Only the setter is used — nothing in this page shows a separate
@@ -121,6 +127,35 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
       .catch(() => {
         if (cancelled) return
         setMetaStatus('error')
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [kind, id])
+
+  // Finished describes this release. A direct story lookup makes the
+  // next/previous title explicit instead of hiding it from Similar.
+  useEffect(() => {
+    if (!id || kind !== 'anime') return
+    let cancelled = false
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setStoryStatus('loading')
+    setStoryChecked(false)
+    const api = window.api?.mediaHub
+    if (!api) {
+      setStoryStatus('error')
+      return
+    }
+    api.catalog
+      .story(kind, id)
+      .then((result) => {
+        if (cancelled) return
+        setStoryLinks(result.links)
+        setStoryChecked(result.checked)
+        setStoryStatus('ready')
+      })
+      .catch(() => {
+        if (!cancelled) setStoryStatus('error')
       })
     return () => {
       cancelled = true
@@ -236,6 +271,15 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
     // hard failure for a title the person was just looking at a card for.
     return catalog.find((m) => m.id === id) ?? null
   }, [catalogItem, catalog, id, myList])
+
+  const storyItems = useMemo(
+    () =>
+      storyLinks.map((link) => ({
+        ...link,
+        item: catalogItemToMediaItem(link.item, { trackedIds: myList })
+      })),
+    [storyLinks, myList]
+  )
 
   const inMyList = id ? myList.has(id) : false
 
@@ -635,6 +679,16 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
           movieWatched={movieWatched}
           onToggleMovieWatched={handleToggleMovieWatched}
         />
+        {kind === 'anime' && (
+          <AnimeStoryPanel
+            status={storyStatus}
+            checked={storyChecked}
+            links={storyItems}
+            currentStatus={catalogItem?.status ?? media.status}
+            episodeCount={media.totalEpisodes}
+            onSelect={(item) => openDetail(item, media.title)}
+          />
+        )}
         <GenresPanel genres={media.genres} onSelectGenre={handleGenreSelect} />
         <SimilarPanel
           status={relatedStatus}

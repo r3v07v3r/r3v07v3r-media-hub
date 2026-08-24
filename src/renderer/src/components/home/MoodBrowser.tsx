@@ -1,6 +1,7 @@
 'use client'
 
-import { useMemo, useRef } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { MOOD_CATEGORIES } from '@renderer/data/mockData'
 import { useAppState } from '@renderer/context/AppStateContext'
 import { Icon } from '@renderer/components/icons/Icon'
@@ -9,7 +10,11 @@ import { resolveArtwork } from '@renderer/lib/artwork'
 import { ArtworkImage } from '@renderer/components/media/ArtworkImage'
 import { WatchStatusBadge } from '@renderer/components/media/WatchStatusBadge'
 import { getWatchStatus } from '@renderer/lib/mediaHub/watchStatus'
-import { applyWatchStateFilters } from '@renderer/lib/mediaHub/categoryFilters'
+import {
+  rankMoodSpotlight,
+  shuffleMoodSpotlight,
+  SPOTLIGHT_PICK_COUNT
+} from '@renderer/lib/mediaHub/moodSpotlight'
 import styles from './MoodBrowser.module.css'
 
 // The dock's whole visual vocabulary is flowing light lines. Everything
@@ -102,40 +107,126 @@ export function MoodBrowser() {
     toggleCombinedMood,
     openDetail,
     catalog,
+    catalogLoading,
     continueWatching,
-    mediaHubSettings
+    mediaHubSettings,
+    recommendations
   } = useAppState()
+  const navigate = useNavigate()
   const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const reducedMotion = useReducedMotion()
+  const [spotlightSession, setSpotlightSession] = useState<{
+    moodKey: string
+    shownIds: string[]
+    seenIds: string[]
+  }>({ moodKey: '', shownIds: [], seenIds: [] })
 
   const activeMoods = useMemo(
     () => (combinedMoods.length > 0 ? combinedMoods : activeMood ? [activeMood] : []),
     [combinedMoods, activeMood]
   )
 
-  const results = useMemo(() => {
-    if (activeMoods.length === 0) return []
-    const matched = catalog.filter((m) => m.moods?.some((mood) => activeMoods.includes(mood)))
-    // No per-page override here (unlike the Movies/Series/Anime filter bar)
-    // — Mood Browser just reflects the person's global Settings default.
-    return applyWatchStateFilters(matched, {
+  const moodWatchFilters = useMemo(
+    () => ({
       hideWatched: mediaHubSettings?.hideWatchedDefault ?? false,
       hideCompleted: mediaHubSettings?.hideCompletedDefault ?? false,
       hideDisliked: mediaHubSettings?.hideDislikedDefault ?? false
-    })
-  }, [activeMoods, catalog, mediaHubSettings])
+    }),
+    [mediaHubSettings]
+  )
+
+  // No per-page override here (unlike the Movies/Series/Anime filter bar)
+  // — Mood Browser reflects the person's global Settings default. The
+  // Spotlight ranks that eligible pool so its four cards feel chosen rather
+  // than simply being the first four catalog rows.
+  const rankedResults = useMemo(
+    () => rankMoodSpotlight(catalog, recommendations, activeMoods, moodWatchFilters),
+    [activeMoods, catalog, recommendations, moodWatchFilters]
+  )
+  const activeMoodKey = activeMoods.join(',')
+  const initialPickIds = useMemo(
+    () => rankedResults.slice(0, SPOTLIGHT_PICK_COUNT).map((item) => item.id),
+    [rankedResults]
+  )
+  const shownIds =
+    spotlightSession.moodKey === activeMoodKey ? spotlightSession.shownIds : initialPickIds
+  const spotlightPicks = useMemo(() => {
+    const byId = new Map(rankedResults.map((item) => [item.id, item]))
+    const picks = shownIds
+      .map((id) => byId.get(id))
+      .filter((item): item is NonNullable<typeof item> => Boolean(item))
+    const alreadyPicked = new Set(picks.map((item) => item.id))
+
+    for (const item of rankedResults) {
+      if (picks.length >= SPOTLIGHT_PICK_COUNT) break
+      if (!alreadyPicked.has(item.id)) {
+        picks.push(item)
+        alreadyPicked.add(item.id)
+      }
+    }
+    return picks
+  }, [rankedResults, shownIds])
+  const moodLabels = activeMoods
+    .map((id) => MOOD_CATEGORIES.find((mood) => mood.id === id)?.label)
+    .filter((label): label is string => Boolean(label))
+  // "Nothing matched" and "nothing has arrived to match against yet" read
+  // identically from spotlightPicks alone.
+  const catalogStillArriving = catalogLoading && catalog.length === 0
+
+  const spotlightMood = MOOD_CATEGORIES.find((mood) => mood.id === activeMoods[0])
+
+  const clearFilter = useCallback(() => {
+    setActiveMood(null)
+    combinedMoods.forEach((mood) => toggleCombinedMood(mood))
+    setSpotlightSession({ moodKey: '', shownIds: [], seenIds: [] })
+  }, [combinedMoods, setActiveMood, toggleCombinedMood])
+
+  useEffect(() => {
+    if (activeMoods.length === 0) return
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') clearFilter()
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [activeMoods.length, clearFilter])
 
   function selectMood(id: string, combine: boolean) {
     if (combine) {
+      // A long press/right-click on the already selected mood means
+      // "keep this as my blend's starting point," not add then immediately
+      // remove the same id through the two state updaters below.
+      if (combinedMoods.length === 0 && activeMood === id) return
+      // Convert a one-mood selection into a real combination before adding
+      // another mood. The old behavior replaced the visible selection here
+      // because activeMood and combinedMoods are separate state channels.
+      if (combinedMoods.length === 0 && activeMood) {
+        setActiveMood(null)
+        toggleCombinedMood(activeMood)
+      }
       toggleCombinedMood(id)
       return
     }
-    setActiveMood(activeMood === id ? null : id)
+    if (combinedMoods.length === 0 && activeMood === id) {
+      clearFilter()
+      return
+    }
+    combinedMoods.forEach((mood) => toggleCombinedMood(mood))
+    setActiveMood(id)
   }
 
-  function clearFilter() {
-    setActiveMood(null)
-    activeMoods.forEach((m) => toggleCombinedMood(m))
+  function surpriseMe() {
+    const seenIds =
+      spotlightSession.moodKey === activeMoodKey ? spotlightSession.seenIds : initialPickIds
+    const next = shuffleMoodSpotlight(rankedResults, seenIds)
+    setSpotlightSession({
+      moodKey: activeMoodKey,
+      shownIds: next.picks.map((item) => item.id),
+      seenIds: next.seenIds
+    })
+  }
+
+  function exploreAll() {
+    navigate(`/moods?mood=${encodeURIComponent(activeMoodKey)}`)
   }
 
   const spine = useMemo(
@@ -207,52 +298,119 @@ export function MoodBrowser() {
             straight back. */}
         <span className={styles.scrim} aria-hidden="true" />
 
+        {activeMoods.length > 0 && <span className={styles.spotlightFocus} aria-hidden="true" />}
+
         {activeMoods.length > 0 && (
-          <div className={`${styles.resultsDrawer} glass-panel`}>
-            <div className={styles.resultsHeader}>
-              <span>
-                Showing {results.length} title{results.length === 1 ? '' : 's'} for{' '}
-                {activeMoods
-                  .map((id) => MOOD_CATEGORIES.find((m) => m.id === id)?.label)
-                  .filter(Boolean)
-                  .join(' + ')}
+          <section
+            className={styles.spotlight}
+            aria-label={`${moodLabels.join(' + ')} mood spotlight`}
+            style={{
+              ['--spotlight-accent' as string]: spotlightMood?.accent ?? 'var(--accent-cyan)'
+            }}
+          >
+            <div className={styles.spotlightTopline}>
+              <span className={styles.spotlightKicker}>
+                <Icon name={spotlightMood?.icon ?? 'sparkle'} size={14} />
+                Mood spotlight
               </span>
-              <button type="button" className={styles.resultsClear} onClick={clearFilter}>
-                Clear
+              <button
+                type="button"
+                className={styles.spotlightClose}
+                onClick={clearFilter}
+                aria-label="Close mood spotlight"
+              >
+                <Icon name="x" size={14} />
               </button>
             </div>
-            {results.length === 0 ? (
-              <p className={styles.resultsEmpty}>Nothing matches that mood combination yet.</p>
+            <div className={styles.spotlightHeading}>
+              <div>
+                <h2>{moodLabels.join(' + ')} — right now</h2>
+                <p>
+                  {/* Three states, not two. An empty catalog used to mean
+                      only one thing, because the fallback was a mock pool
+                      that was never empty; it can now genuinely be empty
+                      on a first run while catalog:list is still out (see
+                      lib/mediaHub/startupSnapshot.ts). Sending someone to
+                      the Settings page over a fetch that simply has not
+                      landed yet is the wrong instruction. */}
+                  {catalogStillArriving
+                    ? 'Matching titles to this mood…'
+                    : rankedResults.length === 0
+                      ? 'No titles match your current settings.'
+                      : `${Math.min(SPOTLIGHT_PICK_COUNT, spotlightPicks.length)} picks matched to your library`}
+                </p>
+              </div>
+              <span className={styles.spotlightCount}>
+                {rankedResults.length} title{rankedResults.length === 1 ? '' : 's'}
+              </span>
+            </div>
+
+            {spotlightPicks.length === 0 ? (
+              <p className={styles.spotlightEmpty}>
+                {catalogStillArriving
+                  ? 'The catalog is still loading — picks will appear here in a moment.'
+                  : 'Try showing watched or completed titles in Settings, then return to this mood.'}
+              </p>
             ) : (
-              <div className={styles.resultsGrid}>
-                {results.map((m) => {
-                  const artwork = resolveArtwork(m)
-                  const watchStatus = getWatchStatus(m, continueWatching)
+              <div className={styles.spotlightCards}>
+                {spotlightPicks.map((media) => {
+                  const artwork = resolveArtwork(media)
+                  const watchStatus = getWatchStatus(media, continueWatching)
+                  const rating = media.communityRating ?? media.imdbRating
                   return (
                     <button
-                      key={m.id}
+                      key={media.id}
                       type="button"
-                      className={styles.resultCard}
-                      data-media-id={m.id}
-                      onClick={() => openDetail(m)}
+                      className={`${styles.spotlightCard} light-sweep`}
+                      data-media-id={media.id}
+                      onClick={() => openDetail(media)}
+                      aria-label={`Open details for ${media.title}`}
                     >
                       <ArtworkImage
                         src={artwork.backdropUrl ?? artwork.posterUrl}
                         alt=""
-                        fallbackTitle={m.title}
-                        artTint={m.artTint}
-                        sizes="110px"
-                        className={styles.resultArt}
+                        fallbackTitle={media.title}
+                        artTint={media.artTint}
+                        sizes="280px"
+                        className={styles.spotlightArt}
                       />
-                      <div className={styles.resultScrim} aria-hidden="true" />
-                      <span className={styles.resultTitle}>{m.title}</span>
+                      <span className={styles.spotlightScrim} aria-hidden="true" />
+                      <span className={styles.spotlightCardBody}>
+                        <span className={styles.spotlightTitle}>{media.title}</span>
+                        <span className={styles.spotlightMeta}>
+                          {media.releaseYear ?? '—'}
+                          {rating != null && (
+                            <>
+                              <span aria-hidden="true">·</span>
+                              <Icon name="star" size={11} />
+                              {rating.toFixed(1)}
+                            </>
+                          )}
+                        </span>
+                      </span>
                       <WatchStatusBadge status={watchStatus} compact />
                     </button>
                   )
                 })}
               </div>
             )}
-          </div>
+
+            <div className={styles.spotlightActions}>
+              <button
+                type="button"
+                className={styles.surpriseButton}
+                onClick={surpriseMe}
+                disabled={rankedResults.length < 2}
+              >
+                <Icon name="refresh" size={14} />
+                Surprise me
+              </button>
+              <button type="button" className={styles.exploreButton} onClick={exploreAll}>
+                Explore all {moodLabels.join(' + ')}
+                <Icon name="chevron" size={14} />
+              </button>
+            </div>
+          </section>
         )}
 
         {/* Two passes over the same curves: a wide blurred one for the
@@ -322,6 +480,7 @@ export function MoodBrowser() {
                   selectMood(mood.id, true)
                 }}
                 aria-pressed={isActive}
+                aria-expanded={isActive}
                 aria-label={`Browse ${mood.label} — shift-click to combine with another mood`}
               >
                 <span className={styles.plume} aria-hidden="true" />

@@ -113,7 +113,7 @@ export function PerformanceWidget() {
 
   return (
     <div
-      className={`${styles.widget} glass-panel animated-edge ${highLoad ? 'edge-active' : ''}`}
+      className={`${styles.widget} glass-panel animated-edge edge-idle ${highLoad ? 'edge-active' : ''}`}
       role="button"
       tabIndex={0}
       onClick={() => setExpanded((v) => !v)}

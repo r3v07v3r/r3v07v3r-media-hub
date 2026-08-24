@@ -10,6 +10,7 @@
 // import everything it needs from this one module.
 
 import {
+  AnimeStoryLink,
   CatalogItem,
   ContinueWatchingEntry,
   Episode,
@@ -506,6 +507,33 @@ const FRANCHISE_ANIME_ROLES = new Set([
   'summary'
 ])
 
+const STORY_ANIME_ROLES = new Set<AnimeStoryLink['relation']>(['sequel', 'prequel'])
+
+/** Direct before/after entries from Kitsu. Side stories and recaps are not
+ * useful answers to "what should I watch next?"; an absent sequel is never
+ * treated as proof that a future season will not happen. */
+export function animeStoryLinks(payload: RawApiPayload = {}): AnimeStoryLink[] {
+  const included = new Map(
+    (payload.included || [])
+      .filter((x: RawApiPayload) => x.type === 'anime')
+      .map((x: RawApiPayload) => [String(x.id), x])
+  )
+  const seen = new Set<string>()
+  const links: AnimeStoryLink[] = []
+  for (const rel of payload.data || []) {
+    const relation = rel.attributes?.role
+    if (!STORY_ANIME_ROLES.has(relation)) continue
+    const destId = rel.relationships?.destination?.data?.id
+    const dest = destId !== undefined ? included.get(String(destId)) : null
+    if (!dest) continue
+    const key = `${relation}:${destId}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    links.push({ relation, item: normalizeKitsuAnime(dest as RawApiPayload) })
+  }
+  return links
+}
+
 export function filterAnimeRelationships(payload: RawApiPayload = {}): CatalogItem[] {
   const included = new Map(
     (payload.included || [])
@@ -770,6 +798,30 @@ export function selectVideoFile(
     return match || null
   }
   return candidates.sort((a, b) => (b.size || 0) - (a.size || 0))[0] || null
+}
+
+/**
+ * Merges the settled results of several catalog sources into one deduped
+ * list, in the order the sources were given, ignoring any that failed.
+ *
+ * Source order is the ranking: dedupeCatalog keeps the first occurrence of
+ * an id, so a title present in both a trending feed and a top-rated list
+ * keeps its trending position.
+ *
+ * Separated out and given its own tests because the property that matters
+ * here is a negative one: a source that fails must cost its own
+ * contribution and nothing else. This is what preserves the guarantee the
+ * old try-Simkl-then-fall-back-to-Cinemeta chain gave — an unreachable
+ * Simkl still yields a Cinemeta-filled catalog, and vice versa — now that
+ * both are read together rather than one being conditional on the other
+ * failing.
+ */
+export function mergeCatalogSources(
+  results: readonly PromiseSettledResult<CatalogItem[][]>[]
+): CatalogItem[] {
+  return dedupeCatalog(
+    results.flatMap((result) => (result.status === 'fulfilled' ? result.value : []))
+  )
 }
 
 export function dedupeCatalog(groups: CatalogItem[][]): CatalogItem[] {

@@ -18,7 +18,11 @@ import { logError } from './logger'
 import { mpvPath, hasActivePlayback, stopPlayback } from './playbackSession'
 import { ollamaConfig, ollamaConnected } from './ollamaService'
 import { normalizeTheme, publicSettings, logoutSettings, THEMES } from './preferences'
-import { getActiveWindow } from './rendererBridge'
+import {
+  mainWindowFullscreenTarget,
+  setMainWindowFullscreen,
+  toggleMainWindowFullscreen
+} from './windowFullscreen'
 import { normalizePlaybackBuffer } from '../../shared/media-hub/playbackBuffer'
 import { normalizeVideoScaling } from '../../shared/media-hub/videoScaling'
 import { isAllowedExternalUrl } from './security'
@@ -33,29 +37,6 @@ import {
   tmdbCredentials,
   writeSettings
 } from './settingsStore'
-
-// BrowserWindow#setFullScreen starts an asynchronous native transition.  Keep
-// the requested state alongside Electron's eventually-consistent query so a
-// second click (or Escape) during that transition reverses it rather than
-// treating the still-old `isFullScreen()` value as the source of truth.
-const requestedFullscreen = new WeakMap<BrowserWindow, boolean>()
-const trackedFullscreenWindows = new WeakSet<BrowserWindow>()
-
-function fullscreenTarget(win: BrowserWindow): boolean {
-  if (!trackedFullscreenWindows.has(win)) {
-    trackedFullscreenWindows.add(win)
-    requestedFullscreen.set(win, win.isFullScreen())
-    win.on('enter-full-screen', () => requestedFullscreen.set(win, true))
-    win.on('leave-full-screen', () => requestedFullscreen.set(win, false))
-  }
-  return requestedFullscreen.get(win) ?? win.isFullScreen()
-}
-
-function setFullscreenTarget(win: BrowserWindow, fullScreen: boolean): void {
-  fullscreenTarget(win)
-  requestedFullscreen.set(win, fullScreen)
-  win.setFullScreen(fullScreen)
-}
 
 /** Registers the miscellaneous settings/account/system IPC handlers. */
 export function registerAppIpc(): void {
@@ -368,26 +349,18 @@ export function registerAppIpc(): void {
     return { ok: true }
   })
 
-  // Always the MAIN window, never the calling window.
+  // Always the MAIN window, never the calling window — see windowFullscreen.ts,
+  // which owns that rule and the in-flight-transition tracking these three
+  // handlers used to keep for themselves.
   //
   // This used to resolve the window from event.sender, which was right when the
   // app's own UI was the only caller. The player's controls are a second,
   // transparent BrowserWindow now (see playerWindow.ts), so from there
   // event.sender resolved to the overlay — created `fullscreenable: false`, so
   // Electron dropped the call and the fullscreen button did nothing at all.
-  // Even without that guard it would have been wrong: mpv's window and the
-  // overlay both size themselves to the MAIN window's content bounds, so the
-  // main window is the only one whose fullscreen state means anything.
   handle<undefined, { fullScreen: boolean }>(MEDIA_HUB_CHANNELS.windowToggleFullscreen, () => {
-    const win = getActiveWindow()
-    if (!win || win.isDestroyed()) throw new Error('No application window is available.')
-    // setFullScreen starts an OS transition.  On Windows, isFullScreen() can
-    // still report the old value until its enter/leave event arrives, so
-    // returning a fresh read here made the controls immediately display the
-    // opposite state after every click.  The requested state is unambiguous;
-    // the window event remains the final source of truth for every renderer.
-    const fullScreen = !fullscreenTarget(win)
-    setFullscreenTarget(win, fullScreen)
+    const fullScreen = toggleMainWindowFullscreen()
+    if (fullScreen === null) throw new Error('No application window is available.')
     return { fullScreen }
   })
 
@@ -400,9 +373,8 @@ export function registerAppIpc(): void {
   // has already gone wrong, so it must not be able to *enter* fullscreen
   // because that cache was a frame stale.
   handle<undefined, { wasFullScreen: boolean }>(MEDIA_HUB_CHANNELS.windowExitFullscreen, () => {
-    const win = getActiveWindow()
-    if (!win || win.isDestroyed() || !fullscreenTarget(win)) return { wasFullScreen: false }
-    setFullscreenTarget(win, false)
+    if (!mainWindowFullscreenTarget()) return { wasFullScreen: false }
+    setMainWindowFullscreen(false)
     return { wasFullScreen: true }
   })
 
@@ -410,7 +382,6 @@ export function registerAppIpc(): void {
   // already-fullscreen window, so it reads the state once on mount rather than
   // assuming windowed and waiting for a change event that may never come.
   handle<undefined, { fullScreen: boolean }>(MEDIA_HUB_CHANNELS.windowIsFullscreen, () => {
-    const win = getActiveWindow()
-    return { fullScreen: Boolean(win && !win.isDestroyed() && fullscreenTarget(win)) }
+    return { fullScreen: mainWindowFullscreenTarget() }
   })
 }

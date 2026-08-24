@@ -9,7 +9,7 @@
 
 import assert from 'node:assert'
 import type { CatalogItem, Episode } from '../src/shared/media-hub/types'
-import { normalizeKitsuAnime } from '../src/main/media-hub/core'
+import { animeStoryLinks, normalizeKitsuAnime } from '../src/main/media-hub/core'
 import { combineGroupEpisodeCounts } from '../src/main/media-hub/animeSeasons'
 
 let pass = 0
@@ -104,6 +104,31 @@ check('lightweight measurably shrinks the serialized payload', () => {
 check('a zero-episode title produces an empty array either way', () => {
   assert.deepEqual(normalizeKitsuAnime(kitsuRecord('1', 0)).videos, [])
   assert.deepEqual(normalizeKitsuAnime(kitsuRecord('1', 0), true).videos, [])
+})
+
+console.log('\nanimeStoryLinks')
+
+check('keeps only direct sequel/prequel links and preserves availability status', () => {
+  const links = animeStoryLinks({
+    data: [
+      { attributes: { role: 'sequel' }, relationships: { destination: { data: { id: '2' } } } },
+      { attributes: { role: 'prequel' }, relationships: { destination: { data: { id: '3' } } } },
+      { attributes: { role: 'spin_off' }, relationships: { destination: { data: { id: '4' } } } },
+      { attributes: { role: 'sequel' }, relationships: { destination: { data: { id: '2' } } } }
+    ],
+    included: [
+      { id: '2', type: 'anime', attributes: { canonicalTitle: 'Story After', status: 'upcoming' } },
+      { id: '3', type: 'anime', attributes: { canonicalTitle: 'Story Before', status: 'finished' } },
+      { id: '4', type: 'anime', attributes: { canonicalTitle: 'Spin-off', status: 'finished' } }
+    ]
+  })
+  assert.deepEqual(
+    links.map((link) => [link.relation, link.item.title, link.item.status]),
+    [
+      ['sequel', 'Story After', 'upcoming'],
+      ['prequel', 'Story Before', 'finished']
+    ]
+  )
 })
 
 check(
