@@ -51,6 +51,7 @@ import {
 } from '@renderer/lib/mediaHub/playbackPreparation'
 import {
   startupContinueWatchingFallback,
+  startupTrackedIdsFallback,
   useMediaHubBrowseCatalog,
   useMediaHubDislikedIds,
   useMediaHubHomeFeed,
@@ -433,7 +434,11 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   const [partyPreparing, setPartyPreparing] = useState<{ title: string; poster: string } | null>(
     null
   )
-  const [myList, setMyList] = useState<Set<string>>(new Set())
+  // Seeded from the remembered set, not empty — see startupHomeFeedFallback
+  // in hooks.ts. An empty My List alongside remembered titles is not a
+  // neutral starting point: it renders saved titles as unsaved, and the
+  // Add control it produces calls a toggle that removes them.
+  const [myList, setMyList] = useState<Set<string>>(startupTrackedIdsFallback)
   const [dislikedIds, setDislikedIds] = useState<Set<string>>(new Set())
   // Seeded from the same remembered feed useMediaHubHomeFeed falls back
   // to, so the row this component owns and the row that hook reports

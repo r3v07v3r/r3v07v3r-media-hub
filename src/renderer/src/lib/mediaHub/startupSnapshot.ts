@@ -51,6 +51,10 @@ export interface HomeFeedSnapshot {
   recommendations: Recommendation[]
   continueWatching: ContinueWatchingItem[]
   preferredGenres: string[]
+  /** The ids in My List as of the last successful home:personalized. See
+   *  hooks.ts's fallback for why this is remembered rather than started
+   *  empty — an empty set is not the neutral choice it looks like. */
+  trackedIds: string[]
 }
 
 /**
@@ -93,7 +97,8 @@ const EMPTY: StoredSnapshot = {
   featured: [],
   recommendations: [],
   continueWatching: [],
-  preferredGenres: []
+  preferredGenres: [],
+  trackedIds: []
 }
 
 function stampKey(item: MediaItem): string {
@@ -218,7 +223,11 @@ function read(): StoredSnapshot {
         ? reviveWrapped<ContinueWatchingItem>(parsed.continueWatching)
         : [],
       preferredGenres:
-        homeFresh && Array.isArray(parsed.preferredGenres) ? parsed.preferredGenres : []
+        homeFresh && Array.isArray(parsed.preferredGenres) ? parsed.preferredGenres : [],
+      trackedIds:
+        homeFresh && Array.isArray(parsed.trackedIds)
+          ? parsed.trackedIds.filter((id): id is string => typeof id === 'string' && id.length > 0)
+          : []
     }
   } catch {
     current = EMPTY
@@ -303,33 +312,35 @@ export function rememberedHomeFeed(): HomeFeedSnapshot {
     featured: snapshot.featured,
     recommendations: snapshot.recommendations,
     continueWatching: snapshot.continueWatching,
-    preferredGenres: snapshot.preferredGenres
+    preferredGenres: snapshot.preferredGenres,
+    trackedIds: snapshot.trackedIds
   }
 }
 
 /**
- * `liveKinds` is the kinds that actually returned rows this run — NOT
- * every kind present in `items`, which also holds the rows carried
- * forward for kinds that failed (see mergeRememberedCatalog). Only what
- * was really re-fetched gets re-dated, so a source that stays down keeps
- * ageing and eventually expires however often its neighbours succeed.
+ * `deliveredAt` maps a kind to the moment its rows were actually fetched
+ * this run. Only kinds that really answered appear in it — NOT every kind
+ * present in `items`, which also holds the rows carried forward for kinds
+ * that failed (see mergeRememberedCatalog). So a source that stays down
+ * keeps ageing, and eventually expires, however often its neighbours
+ * succeed.
+ *
+ * The caller supplies those timestamps rather than this reaching for the
+ * clock, because this is called far more often than rows are fetched —
+ * every badge change rewrites the snapshot too. Stamping with "now" there
+ * would have ordinary tracking activity renewing rows nothing re-fetched.
  */
-export function rememberCatalog(items: MediaItem[], liveKinds: Iterable<string>): void {
+export function rememberCatalog(items: MediaItem[], deliveredAt: CatalogStamps): void {
   if (!items.length) return
   const snapshot = read()
   const next = items.length > MAX_CATALOG_ITEMS ? items.slice(0, MAX_CATALOG_ITEMS) : items
-  // Stamped here rather than at flush time: this is the moment the data
-  // was actually known to be current, and flushes are coalesced across
-  // every section.
-  const now = Date.now()
-  const stamps: CatalogStamps = { ...snapshot.catalogSavedAt }
-  for (const kind of liveKinds) stamps[kind] = now
+  const stamps: CatalogStamps = { ...snapshot.catalogSavedAt, ...deliveredAt }
   for (const item of next) {
     // A kind in the list that has never been stamped — carried out of a
     // snapshot written before per-kind stamps existed — inherits that
     // snapshot's age rather than today's.
     const key = stampKey(item)
-    if (!stamps[key]) stamps[key] = snapshot.savedAt || now
+    if (!stamps[key]) stamps[key] = snapshot.savedAt || Date.now()
   }
   current = { ...snapshot, catalog: next, catalogSavedAt: stamps }
   schedule()

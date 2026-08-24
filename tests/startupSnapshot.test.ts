@@ -85,6 +85,8 @@ async function loadModule(storage: FakeStorage) {
 
 const STORAGE_KEY = 'r3.mediaHub.startupSnapshot.v1'
 const DAY_MS = 24 * 60 * 60 * 1000
+// A fixed delivery time, the way the hook supplies one — see rememberCatalog.
+const NOW = Date.now()
 
 function mediaItem(overrides: Partial<MediaItem> = {}): MediaItem {
   return {
@@ -130,7 +132,7 @@ async function main(): Promise<void> {
   await check('remembers a catalog and reads it back on the next launch', async () => {
     const storage = fakeStorage()
     const first = await loadModule(storage)
-    first.rememberCatalog([mediaItem({ id: 'm1', title: 'First' })], ['movie'])
+    first.rememberCatalog([mediaItem({ id: 'm1', title: 'First' })], { movie: NOW })
     first.flushStartupSnapshot()
 
     const next = await loadModule(storage)
@@ -160,7 +162,8 @@ async function main(): Promise<void> {
           durationSeconds: 5400
         }
       ],
-      preferredGenres: ['Drama']
+      preferredGenres: ['Drama'],
+      trackedIds: []
     })
     first.flushStartupSnapshot()
 
@@ -395,7 +398,7 @@ async function main(): Promise<void> {
     )
     // A session where catalog:list succeeds and home:personalized does not.
     const first = await loadModule(storage)
-    first.rememberCatalog([mediaItem({ id: 'm1' })], ['movie'])
+    first.rememberCatalog([mediaItem({ id: 'm1' })], { movie: NOW })
     first.flushStartupSnapshot()
 
     const written = stored(storage)
@@ -403,7 +406,11 @@ async function main(): Promise<void> {
       written.homeSavedAt <= now - 29 * DAY_MS,
       'the untouched home feed keeps its original age'
     )
-    assert.ok(written.catalogSavedAt.movie >= now, 'the catalog kind that was written is current')
+    assert.equal(
+      written.catalogSavedAt.movie,
+      NOW,
+      'the written kind carries the delivery time its caller supplied'
+    )
   })
 
   await check('falls back to savedAt for a snapshot written before per-section stamps', () => {
@@ -452,7 +459,7 @@ async function main(): Promise<void> {
     // Movies answered; anime did not, so its rows are merely carried.
     mod.rememberCatalog(
       [mediaItem({ id: 'm2', mediaKind: 'movie' }), mediaItem({ id: 'a1', mediaKind: 'anime' })],
-      ['movie']
+      { movie: NOW }
     )
     mod.flushStartupSnapshot()
 
@@ -511,6 +518,110 @@ async function main(): Promise<void> {
     })
   })
 
+  await check('a rewrite that fetched nothing does not renew any kind', async () => {
+    // The snapshot is rewritten on every badge change too — marking
+    // watched, adding to My List. Those carry no delivery, so nothing may
+    // be re-dated by them.
+    const storage = fakeStorage()
+    const old = Date.now() - 29 * DAY_MS
+    storage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({
+        savedAt: old,
+        catalogSavedAt: { movie: old },
+        homeSavedAt: old,
+        catalog: [mediaItem({ id: 'm1', mediaKind: 'movie' })],
+        featured: [],
+        recommendations: [],
+        continueWatching: [],
+        preferredGenres: [],
+        trackedIds: []
+      })
+    )
+    const mod = await loadModule(storage)
+    // Same rows, a badge moved, no fetch: an empty delivery map.
+    mod.rememberCatalog([mediaItem({ id: 'm1', mediaKind: 'movie', watched: true })], {})
+    mod.flushStartupSnapshot()
+
+    assert.equal(
+      stored(storage).catalogSavedAt.movie,
+      old,
+      'the rows keep the age of the fetch that actually delivered them'
+    )
+  })
+
+  await check('stamps a kind with the delivery time it was given, not write time', async () => {
+    const storage = fakeStorage()
+    const delivered = Date.now() - 60_000
+    const mod = await loadModule(storage)
+    mod.rememberCatalog([mediaItem({ id: 'm1', mediaKind: 'movie' })], { movie: delivered })
+    mod.flushStartupSnapshot()
+    assert.equal(stored(storage).catalogSavedAt.movie, delivered)
+  })
+
+  await check('remembers the My List ids and hands them back as a set', async () => {
+    // An empty My List next to remembered titles is not neutral — it
+    // renders saved titles as unsaved, and the Add control it produces
+    // calls a toggle that removes them.
+    const storage = fakeStorage()
+    const first = await loadModule(storage)
+    first.rememberHomeFeed({
+      featured: [],
+      recommendations: [],
+      continueWatching: [],
+      preferredGenres: [],
+      trackedIds: ['tracked-1', 'tracked-2']
+    })
+    first.flushStartupSnapshot()
+
+    const feed = (await loadModule(storage)).rememberedHomeFeed()
+    assert.deepEqual(feed.trackedIds, ['tracked-1', 'tracked-2'])
+  })
+
+  await check('drops junk from a remembered My List rather than trusting it', () => {
+    const storage = fakeStorage()
+    storage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({
+        savedAt: Date.now(),
+        catalogSavedAt: {},
+        homeSavedAt: Date.now(),
+        catalog: [],
+        featured: [],
+        recommendations: [],
+        continueWatching: [],
+        preferredGenres: [],
+        trackedIds: ['good', '', null, 42, { id: 'nope' }]
+      })
+    )
+    return loadModule(storage).then((mod) => {
+      assert.deepEqual(mod.rememberedHomeFeed().trackedIds, ['good'])
+    })
+  })
+
+  await check('expires the My List ids with the rest of the home feed', () => {
+    const storage = fakeStorage()
+    const now = Date.now()
+    storage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({
+        savedAt: now,
+        catalogSavedAt: { movie: now },
+        homeSavedAt: now - 31 * DAY_MS,
+        catalog: [mediaItem({ id: 'm1', mediaKind: 'movie' })],
+        featured: [],
+        recommendations: [],
+        continueWatching: [],
+        preferredGenres: [],
+        trackedIds: ['stale-1']
+      })
+    )
+    return loadModule(storage).then((mod) => {
+      assert.deepEqual(mod.rememberedHomeFeed().trackedIds, [])
+      assert.equal(mod.rememberedCatalog().length, 1, 'the fresh catalog is unaffected')
+    })
+  })
+
   console.log('\nstartupSnapshot — running out of storage')
 
   await check('sheds catalog descriptions rather than losing the whole snapshot', async () => {
@@ -526,12 +637,13 @@ async function main(): Promise<void> {
     // A ceiling the full payload cannot fit under but the trimmed one can.
     const storage = fakeStorage(withDescriptions.length - 1000)
     const mod = await loadModule(storage)
-    mod.rememberCatalog([mediaItem({ id: 'm1', description: longDescription })], ['movie'])
+    mod.rememberCatalog([mediaItem({ id: 'm1', description: longDescription })], { movie: NOW })
     mod.rememberHomeFeed({
       featured: [mediaItem({ id: 'f1' })],
       recommendations: [],
       continueWatching: [],
-      preferredGenres: []
+      preferredGenres: [],
+      trackedIds: []
     })
     mod.flushStartupSnapshot()
 
@@ -547,25 +659,27 @@ async function main(): Promise<void> {
     // own shape silently stops testing what it claims to.
     const homeFeedOnly = JSON.stringify({
       savedAt: Date.now(),
-      catalogSavedAt: Date.now(),
+      catalogSavedAt: { movie: Date.now() },
       homeSavedAt: Date.now(),
       catalog: [],
       featured: [mediaItem({ id: 'f1' })],
       recommendations: [],
       continueWatching: [],
-      preferredGenres: []
+      preferredGenres: [],
+      trackedIds: []
     })
     const storage = fakeStorage(homeFeedOnly.length + 40)
     const mod = await loadModule(storage)
     mod.rememberCatalog(
       Array.from({ length: 40 }, (_, i) => mediaItem({ id: `m${i}` })),
-      ['movie']
+      { movie: NOW }
     )
     mod.rememberHomeFeed({
       featured: [mediaItem({ id: 'f1' })],
       recommendations: [],
       continueWatching: [],
-      preferredGenres: []
+      preferredGenres: [],
+      trackedIds: []
     })
     mod.flushStartupSnapshot()
 
@@ -580,7 +694,7 @@ async function main(): Promise<void> {
     const previous = storage.getItem(STORAGE_KEY)
     storage.limit = 1
     const mod = await loadModule(storage)
-    mod.rememberCatalog([mediaItem({ id: 'm1' })], ['movie'])
+    mod.rememberCatalog([mediaItem({ id: 'm1' })], { movie: NOW })
     mod.flushStartupSnapshot()
     assert.equal(storage.getItem(STORAGE_KEY), previous)
   })

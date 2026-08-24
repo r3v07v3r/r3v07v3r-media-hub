@@ -102,11 +102,17 @@ function startupHomeFeedFallback(): typeof EMPTY_HOME_FEED {
         : bridge
           ? EMPTY_HOME_FEED.continueWatching
           : CONTINUE_WATCHING,
-      preferredGenres: remembered.preferredGenres
-      // `trackedIds` deliberately stays empty. Unlike the lists above it
-      // isn't display data — AppStateContext reseeds My List from it, and
-      // only ever when `live` is true, so a remembered set would be a
-      // claim about server state that nothing has re-checked this run.
+      preferredGenres: remembered.preferredGenres,
+      // This used to stay empty, on the reasoning that a remembered set is
+      // a claim about server state nothing has re-checked. That was wrong,
+      // and destructively so: an EMPTY set is also a claim — that nothing
+      // is in My List — and it is the one that is definitely false. My
+      // List controls read `myList.has(id)`, so every remembered title
+      // rendered with an Add affordance, and pressing it called the
+      // backend's *toggle*, which removed a title the person had saved.
+      // The last known truth, corrected the moment `live` lands, beats a
+      // confident falsehood that loses data on click.
+      trackedIds: new Set(remembered.trackedIds)
     }
   }
   return homeFeedFallback
@@ -115,6 +121,11 @@ function startupHomeFeedFallback(): typeof EMPTY_HOME_FEED {
 /** The remembered Continue Watching row, for AppStateContext's own copy of that state. */
 export function startupContinueWatchingFallback(): ContinueWatchingItem[] {
   return startupHomeFeedFallback().continueWatching
+}
+
+/** The remembered My List ids, for AppStateContext's own copy of that state. */
+export function startupTrackedIdsFallback(): Set<string> {
+  return startupHomeFeedFallback().trackedIds
 }
 
 function dedupeById<T extends { id: string }>(items: T[]): T[] {
@@ -186,7 +197,9 @@ export function useMediaHubBrowseCatalog(
   // answer that: it deliberately retains a kind's rows across a refresh
   // that failed, so its mere presence says the rows exist, not that
   // anything re-fetched them.
-  const [deliveries, setDeliveries] = useState<Partial<Record<MediaKind, number>>>({})
+  const [deliveries, setDeliveries] = useState<
+    Partial<Record<MediaKind, { generation: number; at: number }>>
+  >({})
   // Lazily derived from bridge presence (a constant for this component's
   // lifetime, not something that changes across renders) rather than
   // started `true` and flipped `false` in the effect below — keeps the
@@ -232,9 +245,10 @@ export function useMediaHubBrowseCatalog(
             // blanking a populated grid over a momentary nothing.
             if (!rows?.length) return
             setGroups((prev) => ({ ...prev, [kind]: rows }))
-            // Which run these rows came from, so freshness can be dated to
-            // the fetch that actually delivered them — see `freshKinds`.
-            setDeliveries((prev) => ({ ...prev, [kind]: generation }))
+            // Which run these rows came from AND when, so freshness is
+            // dated to the fetch that actually delivered them — see
+            // `freshStamps`.
+            setDeliveries((prev) => ({ ...prev, [kind]: { generation, at: Date.now() } }))
           },
           // Two-argument form, not a trailing .catch: a throw from the
           // success path above is a bug in this file, not a failed fetch,
@@ -280,16 +294,23 @@ export function useMediaHubBrowseCatalog(
     [groups]
   )
 
-  // `freshKinds`: kinds whose rows were delivered by THIS run. That is
-  // what freshness has to be dated from. `groups` keeps a kind's rows
-  // across a refresh that failed for it, so deriving freshness from
-  // `heldKinds` let a neighbour's successful refresh re-date rows nothing
-  // had re-fetched — the dead source stays "current" forever, one
-  // partial refresh at a time.
-  const freshKinds = useMemo(
-    () => new Set<ResolvedKind>(CATALOG_KINDS.filter((kind) => deliveries[kind] === generation)),
-    [deliveries, generation]
-  )
+  // `freshStamps`: for the kinds THIS run delivered, the moment each
+  // delivery actually landed. That is what freshness has to be dated
+  // from. `groups` keeps a kind's rows across a refresh that failed for
+  // it, so deriving freshness from `heldKinds` let a neighbour's
+  // successful refresh re-date rows nothing had re-fetched — the dead
+  // source stays "current" forever, one partial refresh at a time.
+  //
+  // Fixed timestamps rather than a set of kinds to stamp with "now" at
+  // write time, for a second reason — see the persist effect below.
+  const freshStamps = useMemo(() => {
+    const stamps: Record<string, number> = {}
+    for (const kind of CATALOG_KINDS) {
+      const delivery = deliveries[kind]
+      if (delivery?.generation === generation) stamps[kind] = delivery.at
+    }
+    return stamps
+  }, [deliveries, generation])
 
   // Grouped once per history change rather than re-derived per item.
   // catalogItemToMediaItem's completion check would otherwise filter the
@@ -346,11 +367,20 @@ export function useMediaHubBrowseCatalog(
   // mockData's demo pool, and persisting THAT as this app's memory would
   // be the original bug wearing a new hat.
   useEffect(() => {
-    // `freshKinds`, not `heldKinds` and not every kind in `catalog` — see
-    // both definitions above. Only rows this run actually fetched may be
-    // dated to this run.
-    if (mapped?.length) rememberCatalog(catalog, freshKinds)
-  }, [mapped, catalog, freshKinds])
+    // `freshStamps`, not `heldKinds` and not every kind in `catalog` —
+    // see both definitions above. Only rows this run actually fetched may
+    // be dated to this run.
+    //
+    // And it carries each delivery's own timestamp rather than letting
+    // rememberCatalog reach for the clock, because this effect runs on
+    // every `mapped` change — which includes every badge move: marking
+    // watched, adding to My List, disliking. Stamping with "now" there
+    // meant ordinary tracking activity re-dated catalog rows nothing had
+    // re-fetched, keeping an old catalog inside MAX_AGE_MS indefinitely
+    // across a long session. With fixed stamps, re-running this is
+    // idempotent.
+    if (mapped?.length) rememberCatalog(catalog, freshStamps)
+  }, [mapped, catalog, freshStamps])
 
   return useMemo(
     () => ({ items: catalog, loading, kindStates, refresh }),
@@ -536,7 +566,8 @@ export function useMediaHubHomeFeed(): HomeFeedResult {
           featured: next.featured,
           recommendations: next.recommendations,
           continueWatching: next.continueWatching,
-          preferredGenres: next.preferredGenres
+          preferredGenres: next.preferredGenres,
+          trackedIds: [...next.trackedIds]
         })
       })
       .catch(() => {
