@@ -543,82 +543,243 @@
   box-shadow: 0 0 10px hsla(var(--hue), 96%, 62%, 0.9);
 }
 
-/* ---------- Filtered results drawer ---------- */
+/* ---------- Mood Spotlight ---------- */
 
-/* Anchored to the dock (not to .section) so it always floats directly
-   above the light band, whether the dock is fixed to the window or —
-   at the stacked breakpoints below — sitting in normal flow. Inset past
-   the nav rail on the left so a full-width dock doesn't put the drawer
-   underneath it. */
-.resultsDrawer {
+/* The tray is a compact transmission, not a second dashboard. Its one
+   signature detail is the narrow vertical relay below it: the selected mood
+   appears to send four titles up from the dock's light current rather than
+   opening a detached generic popover. */
+.spotlight {
   position: absolute;
-  left: calc(var(--nav-rail-width, 285px) + 26px);
-  right: 26px;
-  bottom: calc(100% + 6px);
+  left: calc(var(--nav-rail-width, 285px) + (100vw - var(--nav-rail-width, 285px)) / 2);
+  bottom: calc(100% + 14px);
+  translate: -50% 0;
   z-index: 30;
   pointer-events: auto;
-  max-height: 260px;
-  padding: 16px 18px;
+  width: min(860px, calc(100vw - var(--nav-rail-width, 285px) - 52px));
+  max-height: calc(100vh - var(--nav-bar-height, 0px) - 226px);
+  overflow-y: auto;
+  padding: 16px 18px 14px;
   border-radius: var(--radius-large);
   display: flex;
   flex-direction: column;
-  gap: 10px;
-}
-.resultsHeader {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  font-size: 12.5px;
-  color: var(--text-secondary);
-}
-.resultsClear {
-  color: var(--accent-cyan);
-  font-size: 12px;
-}
-.resultsGrid {
-  display: flex;
   gap: 12px;
-  overflow-x: auto;
-  padding-bottom: 4px;
+  border-color: color-mix(in srgb, var(--spotlight-accent) 42%, rgba(143, 183, 224, 0.2));
+  box-shadow:
+    0 24px 64px rgba(0, 0, 0, 0.52),
+    0 0 34px color-mix(in srgb, var(--spotlight-accent) 20%, transparent),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  animation: spotlightRise var(--transition-standard) var(--ease-reactive) both;
 }
-.resultCard {
-  position: relative;
-  flex: 0 0 auto;
-  width: 110px;
-  height: 66px;
-  border-radius: var(--radius-small);
-  overflow: hidden;
-}
-.resultArt {
+.spotlight::before {
+  content: '';
   position: absolute;
   inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  border-radius: inherit;
+  background:
+    radial-gradient(
+      ellipse 50% 70% at 50% 115%,
+      color-mix(in srgb, var(--spotlight-accent) 24%, transparent),
+      transparent 68%
+    ),
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--spotlight-accent) 7%, transparent),
+      transparent 32%
+    );
 }
-.resultScrim {
+.spotlight::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  bottom: -15px;
+  width: 2px;
+  height: 16px;
+  translate: -50% 0;
+  pointer-events: none;
+  background: linear-gradient(180deg, var(--spotlight-accent), transparent);
+  box-shadow: 0 0 14px 3px var(--spotlight-accent);
+}
+@keyframes spotlightRise {
+  from {
+    opacity: 0;
+    transform: translateY(12px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.spotlightTopline,
+.spotlightHeading,
+.spotlightActions,
+.spotlightMeta {
+  display: flex;
+  align-items: center;
+}
+.spotlightTopline {
+  justify-content: space-between;
+  min-height: 16px;
+}
+.spotlightKicker {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--spotlight-accent);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 1.7px;
+  text-transform: uppercase;
+}
+.spotlightClose {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  min-width: 26px;
+  margin: -5px -5px -5px 0;
+  border-radius: 50%;
+  color: var(--text-secondary);
+}
+.spotlightClose:hover {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.08);
+}
+.spotlightHeading {
+  justify-content: space-between;
+  gap: 14px;
+}
+.spotlightHeading h2 {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 17px;
+  font-weight: 700;
+  letter-spacing: 0.6px;
+  color: var(--text-primary);
+  text-transform: uppercase;
+}
+.spotlightHeading p {
+  margin: 3px 0 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+.spotlightCount {
+  flex: 0 0 auto;
+  color: var(--spotlight-accent);
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.spotlightCards {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+.spotlightCard {
+  position: relative;
+  min-width: 0;
+  aspect-ratio: 16 / 9;
+  overflow: hidden;
+  border-radius: var(--radius-small);
+  border: 1px solid rgba(176, 210, 238, 0.12);
+  background: rgba(8, 13, 22, 0.68);
+  cursor: pointer;
+  transition:
+    transform var(--transition-fast),
+    border-color var(--transition-fast),
+    box-shadow var(--transition-fast);
+}
+.spotlightCard:hover,
+.spotlightCard:focus-visible {
+  transform: translateY(-3px);
+  border-color: var(--spotlight-accent);
+  box-shadow: 0 14px 28px -14px var(--spotlight-accent);
+}
+.spotlightArt {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  filter: saturate(1.16) contrast(1.06);
+}
+.spotlightScrim {
   position: absolute;
   inset: 0;
   z-index: 1;
   pointer-events: none;
-  background: linear-gradient(180deg, transparent 45%, rgba(3, 5, 10, 0.8) 100%);
+  background: linear-gradient(180deg, transparent 32%, rgba(3, 5, 10, 0.78) 100%);
 }
-.resultTitle {
+.spotlightCardBody {
   position: absolute;
-  z-index: 1;
-  left: 8px;
-  right: 8px;
-  bottom: 6px;
-  font-size: 10.5px;
-  font-weight: 600;
-  color: #fff;
-  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.6);
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
+  z-index: 2;
+  left: 9px;
+  right: 9px;
+  bottom: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  text-align: left;
 }
-.resultsEmpty {
+.spotlightTitle {
+  color: #fff;
   font-size: 12px;
-  color: var(--text-muted);
-  padding: 8px 0;
+  font-weight: 700;
+  line-height: 1.15;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-shadow: 0 1px 5px rgba(0, 0, 0, 0.8);
+}
+.spotlightMeta {
+  gap: 4px;
+  color: rgba(235, 242, 255, 0.78);
+  font-size: 10px;
+  line-height: 1;
+}
+.spotlightMeta svg {
+  color: #f4cb45;
+}
+.spotlightEmpty {
+  margin: 0;
+  padding: 18px 2px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.spotlightActions {
+  justify-content: space-between;
+  gap: 12px;
+}
+.surpriseButton,
+.exploreButton {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  font-size: 11.5px;
+  font-weight: 600;
+}
+.surpriseButton {
+  color: var(--text-secondary);
+}
+.surpriseButton:hover:not(:disabled) {
+  color: #fff;
+}
+.surpriseButton:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+.exploreButton {
+  margin-left: auto;
+  color: var(--spotlight-accent);
+}
+.exploreButton:hover {
+  color: #fff;
 }
 
 /* ---------- Breakpoints ---------- */
@@ -642,9 +803,8 @@
     font-size: 11px;
     letter-spacing: 1.8px;
   }
-  .resultsDrawer {
-    left: calc(var(--nav-rail-width, 285px) + 20px);
-    right: 20px;
+  .spotlight {
+    width: min(780px, calc(100vw - var(--nav-rail-width, 285px) - 40px));
   }
 }
 
@@ -661,9 +821,9 @@
   .dock {
     height: 176px;
   }
-  .resultsDrawer {
-    left: 14px;
-    right: 14px;
+  .spotlight {
+    left: 50%;
+    width: min(720px, calc(100vw - 28px));
   }
 }
 
@@ -712,5 +872,19 @@
   .moodLabel {
     font-size: 10.5px;
     letter-spacing: 1.4px;
+  }
+  .spotlight {
+    width: calc(100vw - 24px);
+    max-height: calc(100vh - var(--nav-bar-height, 0px) - 186px);
+    padding: 14px;
+  }
+  .spotlightCards {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .spotlightHeading h2 {
+    font-size: 14px;
+  }
+  .spotlightCount {
+    display: none;
   }
 }

@@ -1,0 +1,125 @@
+.page {
+  min-height: 100%;
+  padding: 28px 34px 42px calc(34px + var(--nav-rail-width, 285px) * 0.8);
+}
+
+.header {
+  position: relative;
+  display: grid;
+  grid-template-columns: auto 46px minmax(0, 1fr);
+  align-items: center;
+  gap: 16px;
+  min-height: 132px;
+  margin-bottom: 28px;
+  padding: 20px 24px;
+  overflow: hidden;
+  border-radius: var(--radius-large);
+  border: 1px solid color-mix(in srgb, var(--mood-accent) 32%, rgba(143, 183, 224, 0.14));
+  background:
+    radial-gradient(
+      ellipse 38% 130% at 20% 100%,
+      color-mix(in srgb, var(--mood-accent) 22%, transparent),
+      transparent 72%
+    ),
+    linear-gradient(120deg, rgba(13, 22, 35, 0.82), rgba(4, 9, 16, 0.72));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+.header::after {
+  content: '';
+  position: absolute;
+  left: 110px;
+  right: 0;
+  bottom: 0;
+  height: 2px;
+  opacity: 0.85;
+  background: linear-gradient(90deg, var(--mood-accent), transparent 64%);
+  box-shadow: 0 0 15px var(--mood-accent);
+}
+
+.backButton {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  align-self: start;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+}
+.backButton:hover {
+  color: #fff;
+}
+.signal {
+  display: grid;
+  place-items: center;
+  width: 46px;
+  height: 46px;
+  border-radius: 50%;
+  color: var(--mood-accent);
+  background: color-mix(in srgb, var(--mood-accent) 11%, transparent);
+  box-shadow: 0 0 26px color-mix(in srgb, var(--mood-accent) 30%, transparent);
+}
+.titleGroup {
+  min-width: 0;
+}
+.kicker {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--mood-accent);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 1.9px;
+  text-transform: uppercase;
+}
+.titleGroup h1 {
+  margin: 0;
+  color: var(--text-primary);
+  font-family: var(--font-display);
+  font-size: clamp(23px, 2.1vw, 34px);
+  font-weight: 700;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+}
+.titleGroup p {
+  margin: 5px 0 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.results {
+  min-width: 0;
+}
+
+@media (max-width: 1439px) {
+  .page {
+    padding: 22px 24px 36px calc(24px + var(--nav-rail-width, 285px) * 0.8);
+  }
+}
+
+@media (max-width: 767px) {
+  .page {
+    padding: 18px 14px 28px;
+  }
+  .header {
+    grid-template-columns: 38px minmax(0, 1fr);
+    gap: 12px;
+    min-height: 116px;
+    padding: 18px;
+  }
+  .backButton {
+    font-size: 0;
+  }
+  .backButton svg {
+    width: 18px;
+    height: 18px;
+  }
+  .signal {
+    width: 38px;
+    height: 38px;
+  }
+  .header::after {
+    left: 58px;
+  }
+  .titleGroup h1 {
+    font-size: 21px;
+  }
+}
