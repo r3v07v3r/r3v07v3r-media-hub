@@ -16,6 +16,7 @@ import { installDownloadGuard } from './media-hub/downloadGuard'
 import { closeParty } from './media-hub/watchParty'
 import { stopPlayback } from './media-hub/playbackSession'
 import { shutdownPlayer } from './media-hub/playerBridge'
+import { shutdownScheduler } from './media-hub/taskScheduler'
 import { sendToPlayerOverlay } from './media-hub/playerWindow'
 import { MEDIA_HUB_CHANNELS } from '../shared/media-hub/ipc-channels'
 
@@ -192,6 +193,11 @@ app.whenReady().then(() => {
 // playbackSession.ts's stopPlayback): there's no future session left to
 // resume into once the app has actually quit.
 app.on('before-quit', () => {
+  // First, so nothing new is dispatched while everything below is being
+  // torn down — a queued catalog crawl reaching for the database this
+  // handler is about to close is exactly the kind of shutdown-order race
+  // the scheduler makes it possible to rule out in one place.
+  shutdownScheduler()
   stopPlayback(true).catch(() => {})
   // mpv is a child process that outlives any single title deliberately (see
   // playerBridge.ts) — quitting the app is the one point it must actually be
