@@ -182,6 +182,11 @@ export function useMediaHubBrowseCatalog(
   // because "returned nothing" and "never returned" are different facts
   // and only one of them is worth offering someone a Retry over.
   const [outcomes, setOutcomes] = useState<Partial<Record<MediaKind, 'live' | 'failed'>>>({})
+  // Which `generation` last delivered rows for each kind. `groups` cannot
+  // answer that: it deliberately retains a kind's rows across a refresh
+  // that failed, so its mere presence says the rows exist, not that
+  // anything re-fetched them.
+  const [deliveries, setDeliveries] = useState<Partial<Record<MediaKind, number>>>({})
   // Lazily derived from bridge presence (a constant for this component's
   // lifetime, not something that changes across renders) rather than
   // started `true` and flipped `false` in the effect below — keeps the
@@ -227,6 +232,9 @@ export function useMediaHubBrowseCatalog(
             // blanking a populated grid over a momentary nothing.
             if (!rows?.length) return
             setGroups((prev) => ({ ...prev, [kind]: rows }))
+            // Which run these rows came from, so freshness can be dated to
+            // the fetch that actually delivered them — see `freshKinds`.
+            setDeliveries((prev) => ({ ...prev, [kind]: generation }))
           },
           // Two-argument form, not a trailing .catch: a throw from the
           // success path above is a bug in this file, not a failed fetch,
@@ -260,13 +268,27 @@ export function useMediaHubBrowseCatalog(
     return merged.length ? dedupeById(merged) : null
   }, [groups])
 
-  // Which kinds have actually reported real rows this run. Publishing each
-  // kind as it lands means the other two are, for a while, simply absent
-  // from `items` — this is what lets the merge below tell "that kind has
-  // nothing" apart from "that kind has not answered yet".
-  const resolvedKinds = useMemo(
+  // Two similar-looking sets that must not be conflated — they answer
+  // different questions and were one set until that turned out to be a
+  // bug.
+  //
+  // `heldKinds`: kinds we have rows for at all, whenever they arrived.
+  // This is what the merge needs — a kind already represented in `items`
+  // must not also have its remembered rows carried in on top.
+  const heldKinds = useMemo(
     () => new Set<ResolvedKind>(CATALOG_KINDS.filter((kind) => groups[kind]?.length)),
     [groups]
+  )
+
+  // `freshKinds`: kinds whose rows were delivered by THIS run. That is
+  // what freshness has to be dated from. `groups` keeps a kind's rows
+  // across a refresh that failed for it, so deriving freshness from
+  // `heldKinds` let a neighbour's successful refresh re-date rows nothing
+  // had re-fetched — the dead source stays "current" forever, one
+  // partial refresh at a time.
+  const freshKinds = useMemo(
+    () => new Set<ResolvedKind>(CATALOG_KINDS.filter((kind) => deliveries[kind] === generation)),
+    [deliveries, generation]
   )
 
   // Grouped once per history change rather than re-derived per item.
@@ -310,8 +332,8 @@ export function useMediaHubBrowseCatalog(
   const catalog = useMemo(() => {
     const remembered = startupCatalogFallback()
     if (!mapped) return remembered
-    return mergeRememberedCatalog(mapped, remembered, resolvedKinds)
-  }, [mapped, resolvedKinds])
+    return mergeRememberedCatalog(mapped, remembered, heldKinds)
+  }, [mapped, heldKinds])
 
   // What the next cold start opens on. Written from the merged list rather
   // than the raw rows so the stored shape is the one the UI renders
@@ -324,12 +346,11 @@ export function useMediaHubBrowseCatalog(
   // mockData's demo pool, and persisting THAT as this app's memory would
   // be the original bug wearing a new hat.
   useEffect(() => {
-    // `resolvedKinds`, not every kind in `catalog`: the merged list also
-    // holds rows carried forward for kinds that failed, and re-dating
-    // those on the strength of a neighbour's success is how a dead
-    // source stays "fresh" forever. See rememberCatalog.
-    if (mapped?.length) rememberCatalog(catalog, resolvedKinds)
-  }, [mapped, catalog, resolvedKinds])
+    // `freshKinds`, not `heldKinds` and not every kind in `catalog` — see
+    // both definitions above. Only rows this run actually fetched may be
+    // dated to this run.
+    if (mapped?.length) rememberCatalog(catalog, freshKinds)
+  }, [mapped, catalog, freshKinds])
 
   return useMemo(
     () => ({ items: catalog, loading, kindStates, refresh }),

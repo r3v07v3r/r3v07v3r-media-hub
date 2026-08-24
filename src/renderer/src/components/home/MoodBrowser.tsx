@@ -107,7 +107,8 @@ export function MoodBrowser() {
     toggleCombinedMood,
     openDetail,
     catalog,
-    catalogLoading,
+    catalogKindStates,
+    refreshCatalog,
     continueWatching,
     mediaHubSettings,
     recommendations
@@ -169,9 +170,15 @@ export function MoodBrowser() {
   const moodLabels = activeMoods
     .map((id) => MOOD_CATEGORIES.find((mood) => mood.id === id)?.label)
     .filter((label): label is string => Boolean(label))
-  // "Nothing matched" and "nothing has arrived to match against yet" read
-  // identically from spotlightPicks alone.
-  const catalogStillArriving = catalogLoading && catalog.length === 0
+  // Three outcomes read identically from spotlightPicks alone: nothing
+  // matched, nothing has arrived to match against yet, and nothing could
+  // be fetched at all. Only the first is the person's filters, and only
+  // the last is worth a Retry.
+  const kindStates = Object.values(catalogKindStates)
+  const catalogEmpty = catalog.length === 0
+  const catalogStillArriving = catalogEmpty && kindStates.some((state) => state === 'loading')
+  const catalogUnavailable =
+    catalogEmpty && !catalogStillArriving && kindStates.every((state) => state === 'failed')
 
   const spotlightMood = MOOD_CATEGORIES.find((mood) => mood.id === activeMoods[0])
 
@@ -335,9 +342,11 @@ export function MoodBrowser() {
                       landed yet is the wrong instruction. */}
                   {catalogStillArriving
                     ? 'Matching titles to this mood…'
-                    : rankedResults.length === 0
-                      ? 'No titles match your current settings.'
-                      : `${Math.min(SPOTLIGHT_PICK_COUNT, spotlightPicks.length)} picks matched to your library`}
+                    : catalogUnavailable
+                      ? "Couldn't reach the media hub backend."
+                      : rankedResults.length === 0
+                        ? 'No titles match your current settings.'
+                        : `${Math.min(SPOTLIGHT_PICK_COUNT, spotlightPicks.length)} picks matched to your library`}
                 </p>
               </div>
               <span className={styles.spotlightCount}>
@@ -347,9 +356,23 @@ export function MoodBrowser() {
 
             {spotlightPicks.length === 0 ? (
               <p className={styles.spotlightEmpty}>
-                {catalogStillArriving
-                  ? 'The catalog is still loading — picks will appear here in a moment.'
-                  : 'Try showing watched or completed titles in Settings, then return to this mood.'}
+                {catalogStillArriving ? (
+                  'The catalog is still loading — picks will appear here in a moment.'
+                ) : catalogUnavailable ? (
+                  <>
+                    Nothing could be loaded to match against.
+                    <button
+                      type="button"
+                      onClick={refreshCatalog}
+                      className={styles.spotlightRetry}
+                    >
+                      <Icon name="refresh" size={13} />
+                      Retry
+                    </button>
+                  </>
+                ) : (
+                  'Try showing watched or completed titles in Settings, then return to this mood.'
+                )}
               </p>
             ) : (
               <div className={styles.spotlightCards}>

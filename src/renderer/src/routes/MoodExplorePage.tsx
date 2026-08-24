@@ -25,7 +25,8 @@ function selectedMoodIds(value: string | null, moods: MoodCategory[]): string[] 
 
 /** The explicit full-catalog destination behind Mood Spotlight's compact tray. */
 export default function MoodExplorePage() {
-  const { catalog, catalogLoading, recommendations, mediaHubSettings } = useAppState()
+  const { catalog, catalogKindStates, refreshCatalog, recommendations, mediaHubSettings } =
+    useAppState()
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
   const moodParam = searchParams.get('mood')
@@ -43,6 +44,16 @@ export default function MoodExplorePage() {
       }),
     [catalog, recommendations, moods, mediaHubSettings]
   )
+
+  // Same three-way distinction the Mood Spotlight tray makes (see
+  // MoodBrowser): an empty grid because nothing matched is the person's
+  // filters, an empty grid because nothing could be fetched is not, and
+  // only the latter deserves a Retry rather than a nudge toward Settings.
+  const kindStates = Object.values(catalogKindStates)
+  const catalogEmpty = catalog.length === 0
+  const stillArriving = catalogEmpty && kindStates.some((state) => state === 'loading')
+  const unavailable =
+    catalogEmpty && !stillArriving && kindStates.every((state) => state === 'failed')
 
   useRestoreBrowsingOrigin(true)
 
@@ -73,7 +84,10 @@ export default function MoodExplorePage() {
       <section className={styles.results} aria-label={moodLabels.join(' + ') || 'Mood results'}>
         <MediaGrid
           items={results}
-          loading={catalogLoading}
+          loading={stillArriving}
+          error={unavailable}
+          errorTitle="Couldn't reach the media hub backend"
+          onRetry={refreshCatalog}
           emptyTitle={
             moodLabels.length > 0
               ? `No ${moodLabels.join(' + ')} titles to show`
