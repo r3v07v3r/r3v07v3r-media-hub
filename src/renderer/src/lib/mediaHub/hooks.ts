@@ -164,11 +164,10 @@ export interface BrowseCatalogResult {
  * failed, so mood browsing and My List never go blank — per kind, not
  * all-or-nothing, since the three kinds no longer land together.
  *
- * `live` means "at least one kind returned real rows this run", so a
- * consumer can tell a wholly-remembered catalog from one that has been
- * re-checked. It does NOT mean every item is fresh: while a slow kind is
- * still out, `items` is a mix of this run's rows and that kind's
- * remembered ones.
+ * `items` is therefore a mix while any kind is still out: this run's rows
+ * for the kinds that have answered, remembered ones for the kinds that
+ * have not. `kindStates` is how a consumer tells which is which, and it
+ * is deliberately the only availability signal here — see its own doc.
  */
 export function useMediaHubBrowseCatalog(
   trackedIds: Set<string>,
@@ -449,7 +448,10 @@ export interface HomeFeedResult {
    *  empty recommendations list essentially only happens when the fetch
    *  failed. Without this, a backend outage rendered as "watch a few
    *  titles and recommendations will show up here", which blames the
-   *  person's viewing history for a network problem. */
+   *  person's viewing history for a network problem.
+   *
+   *  Can be true alongside a populated feed: a refresh that fails leaves
+   *  the data it failed to replace on screen. */
   error: boolean
   /** Re-runs the home:personalized fetch — call after a mutation (mark watched, toggle tracking) that should move an item in/out of Continue Watching. */
   refresh: () => void
@@ -518,7 +520,15 @@ export function useMediaHubHomeFeed(): HomeFeedResult {
       })
       .catch(() => {
         if (cancelled) return
-        setState(null)
+        // `state` is deliberately left alone. refresh() runs after any
+        // mutation that could move something in or out of Continue
+        // Watching, so a failure here is usually a hiccup in the middle of
+        // a session that already has good data on screen — and clearing it
+        // rewound Home to the launch-time snapshot (`state` falls back to
+        // a value memoised during the first render), or emptied the hero
+        // outright on a first-ever run. Losing what is already displayed
+        // is a strictly worse outcome than a stale row, and the `error`
+        // flag reports the failure without it.
         setError(true)
       })
       .finally(() => {
