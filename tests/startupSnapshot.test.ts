@@ -599,7 +599,10 @@ async function main(): Promise<void> {
     })
   })
 
-  await check('expires the My List ids with the rest of the home feed', () => {
+  await check('keeps My List ids when the rest of the home feed expires', () => {
+    // The ids have no clock of their own — deliberately. An expired hero
+    // pool degrades to a skeleton; an expired My List degrades to a
+    // confident "nothing is saved", whose Add control removes things.
     const storage = fakeStorage()
     const now = Date.now()
     storage.setItem(
@@ -608,113 +611,6 @@ async function main(): Promise<void> {
         savedAt: now,
         catalogSavedAt: { movie: now },
         homeSavedAt: now - 31 * DAY_MS,
-        catalog: [mediaItem({ id: 'm1', mediaKind: 'movie' })],
-        featured: [],
-        recommendations: [],
-        continueWatching: [],
-        preferredGenres: [],
-        trackedIds: ['stale-1']
-      })
-    )
-    return loadModule(storage).then((mod) => {
-      assert.deepEqual(mod.rememberedHomeFeed().trackedIds, [])
-      assert.equal(mod.rememberedCatalog().length, 1, 'the fresh catalog is unaffected')
-    })
-  })
-
-  await check('persists a confirmed My List add without a home refresh', async () => {
-    // tracking:toggle is a local write and succeeds during an outage;
-    // home:personalized throws when every catalog source is down. The
-    // change has to reach disk without it.
-    const storage = fakeStorage()
-    const first = await loadModule(storage)
-    first.rememberHomeFeed({
-      featured: [],
-      recommendations: [],
-      continueWatching: [],
-      preferredGenres: [],
-      trackedIds: ['already']
-    })
-    first.rememberTrackedId('added', true)
-    first.flushStartupSnapshot()
-
-    assert.deepEqual((await loadModule(storage)).rememberedHomeFeed().trackedIds, [
-      'already',
-      'added'
-    ])
-  })
-
-  await check('persists a confirmed My List removal', async () => {
-    const storage = fakeStorage()
-    const first = await loadModule(storage)
-    first.rememberHomeFeed({
-      featured: [],
-      recommendations: [],
-      continueWatching: [],
-      preferredGenres: [],
-      trackedIds: ['keep', 'drop']
-    })
-    first.rememberTrackedId('drop', false)
-    first.flushStartupSnapshot()
-
-    assert.deepEqual((await loadModule(storage)).rememberedHomeFeed().trackedIds, ['keep'])
-  })
-
-  await check('a confirmed toggle does not re-date the rest of the home feed', async () => {
-    // One id was re-verified. The hero pool and Continue Watching beside
-    // it were not, and must keep ageing.
-    const storage = fakeStorage()
-    const old = Date.now() - 29 * DAY_MS
-    storage.setItem(
-      STORAGE_KEY,
-      JSON.stringify({
-        savedAt: old,
-        catalogSavedAt: {},
-        homeSavedAt: old,
-        catalog: [],
-        featured: [mediaItem({ id: 'f1' })],
-        recommendations: [],
-        continueWatching: [],
-        preferredGenres: [],
-        trackedIds: []
-      })
-    )
-    const mod = await loadModule(storage)
-    mod.rememberTrackedId('added', true)
-    mod.flushStartupSnapshot()
-    assert.equal(stored(storage).homeSavedAt, old)
-  })
-
-  await check('ignores a toggle that changes nothing, and a blank id', async () => {
-    const storage = fakeStorage()
-    const mod = await loadModule(storage)
-    mod.rememberHomeFeed({
-      featured: [],
-      recommendations: [],
-      continueWatching: [],
-      preferredGenres: [],
-      trackedIds: ['one']
-    })
-    mod.rememberTrackedId('one', true)
-    mod.rememberTrackedId('missing', false)
-    mod.rememberTrackedId('', true)
-    mod.flushStartupSnapshot()
-    assert.deepEqual(stored(storage).trackedIds, ['one'])
-  })
-
-  await check('keeps My List ids when the rest of the home feed has expired', async () => {
-    // The reachable version of this: catalog:list keeps succeeding while
-    // home:personalized keeps failing, and a confirmed toggle updates the
-    // ids without renewing a feed nothing re-fetched.
-    const storage = fakeStorage()
-    const now = Date.now()
-    storage.setItem(
-      STORAGE_KEY,
-      JSON.stringify({
-        savedAt: now,
-        catalogSavedAt: { movie: now },
-        homeSavedAt: now - 31 * DAY_MS,
-        trackedSavedAt: now - 2 * DAY_MS,
         catalog: [mediaItem({ id: 'm1', mediaKind: 'movie' })],
         featured: [mediaItem({ id: 'f1' })],
         recommendations: [],
@@ -723,83 +619,89 @@ async function main(): Promise<void> {
         trackedIds: ['saved-1']
       })
     )
-    const feed = (await loadModule(storage)).rememberedHomeFeed()
-    assert.deepEqual(feed.trackedIds, ['saved-1'], 'the ids outlive the feed around them')
-    assert.deepEqual(feed.featured, [], 'the expired feed still goes')
+    return loadModule(storage).then((mod) => {
+      const feed = mod.rememberedHomeFeed()
+      assert.deepEqual(feed.trackedIds, ['saved-1'], 'the ids outlive the feed around them')
+      assert.deepEqual(feed.featured, [], 'the expired feed still goes')
+    })
   })
 
-  await check('expires My List ids on their own clock', () => {
+  await check('keeps My List ids of any age at all', () => {
+    // Including an id confirmed long after the set was last verified in
+    // full — the case per-id stamps would otherwise have been needed for.
+    const storage = fakeStorage()
+    const ancient = Date.now() - 400 * DAY_MS
+    storage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({
+        savedAt: ancient,
+        catalogSavedAt: {},
+        homeSavedAt: ancient,
+        catalog: [],
+        featured: [mediaItem({ id: 'f1' })],
+        recommendations: [],
+        continueWatching: [],
+        preferredGenres: [],
+        trackedIds: ['saved-1']
+      })
+    )
+    return loadModule(storage).then((mod) => {
+      const feed = mod.rememberedHomeFeed()
+      assert.deepEqual(feed.trackedIds, ['saved-1'])
+      assert.deepEqual(feed.featured, [], 'everything with a clock still expires')
+    })
+  })
+
+  await check('ignores a My List clock left by an older version', () => {
     const storage = fakeStorage()
     const now = Date.now()
     storage.setItem(
       STORAGE_KEY,
       JSON.stringify({
         savedAt: now,
-        catalogSavedAt: { movie: now },
+        catalogSavedAt: {},
         homeSavedAt: now,
-        trackedSavedAt: now - 31 * DAY_MS,
-        catalog: [],
-        featured: [mediaItem({ id: 'f1' })],
-        recommendations: [],
-        continueWatching: [],
-        preferredGenres: [],
-        trackedIds: ['ancient']
-      })
-    )
-    return loadModule(storage).then((mod) => {
-      const feed = mod.rememberedHomeFeed()
-      assert.deepEqual(feed.trackedIds, [])
-      assert.equal(feed.featured.length, 1, 'the fresh feed is unaffected')
-    })
-  })
-
-  await check('dates My List from homeSavedAt when it has no clock of its own', () => {
-    // Written before trackedSavedAt existed.
-    const storage = fakeStorage()
-    storage.setItem(
-      STORAGE_KEY,
-      JSON.stringify({
-        savedAt: Date.now() - 2 * DAY_MS,
-        catalogSavedAt: {},
-        homeSavedAt: Date.now() - 2 * DAY_MS,
+        trackedSavedAt: now - 400 * DAY_MS,
         catalog: [],
         featured: [],
         recommendations: [],
         continueWatching: [],
         preferredGenres: [],
-        trackedIds: ['legacy']
+        trackedIds: ['saved-1']
       })
     )
     return loadModule(storage).then((mod) => {
-      assert.deepEqual(mod.rememberedHomeFeed().trackedIds, ['legacy'])
+      assert.deepEqual(mod.rememberedHomeFeed().trackedIds, ['saved-1'])
     })
   })
 
-  await check('a confirmed toggle does not renew the My List clock either', async () => {
-    // It re-verifies one id, not the set.
-    const storage = fakeStorage()
-    const old = Date.now() - 29 * DAY_MS
-    storage.setItem(
-      STORAGE_KEY,
+  await check('clears the file only when nothing is left worth keeping', async () => {
+    // Ids alone are reason enough to keep it; without them an all-expired
+    // file goes.
+    const withIds = fakeStorage()
+    const ancient = Date.now() - 400 * DAY_MS
+    const payload = (trackedIds: string[]) =>
       JSON.stringify({
-        savedAt: old,
+        savedAt: ancient,
         catalogSavedAt: {},
-        homeSavedAt: old,
-        trackedSavedAt: old,
+        homeSavedAt: ancient,
         catalog: [],
         featured: [],
         recommendations: [],
         continueWatching: [],
         preferredGenres: [],
-        trackedIds: ['one']
+        trackedIds
       })
-    )
-    const mod = await loadModule(storage)
-    mod.rememberTrackedId('two', true)
-    mod.flushStartupSnapshot()
-    const written = stored(storage)
-    assert.deepEqual(written.trackedIds, ['one', 'two'])
-    assert.equal(written.trackedSavedAt, old)
+    withIds.setItem(STORAGE_KEY, payload(['saved-1']))
+    const kept = await loadModule(withIds)
+    assert.deepEqual(kept.rememberedHomeFeed().trackedIds, ['saved-1'])
+    assert.ok(withIds.getItem(STORAGE_KEY), 'the file survives for the ids alone')
+
+    const withoutIds = fakeStorage()
+    withoutIds.setItem(STORAGE_KEY, payload([]))
+    const dropped = await loadModule(withoutIds)
+    assert.deepEqual(dropped.rememberedCatalog(), [])
+    assert.equal(withoutIds.getItem(STORAGE_KEY), null, 'nothing left, so the file goes')
   })
 
   await check('forgets a Continue Watching row the backend confirmed removed', async () => {
@@ -838,7 +740,6 @@ async function main(): Promise<void> {
         savedAt: old,
         catalogSavedAt: {},
         homeSavedAt: old,
-        trackedSavedAt: old,
         catalog: [],
         featured: [mediaItem({ id: 'f1' })],
         recommendations: [],

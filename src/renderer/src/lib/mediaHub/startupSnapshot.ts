@@ -86,25 +86,31 @@ interface StoredSnapshot extends HomeFeedSnapshot {
   // that never touched it — an app offering to resume something you
   // finished months ago.
   homeSavedAt: number
-  // And the My List ids age separately again, for a reason the two above
-  // do not share: an expired hero pool degrades to a skeleton, but an
-  // expired My List degrades to a confident "nothing is saved" — which
-  // renders saved titles with an Add control that removes them. It is
-  // also the one part of the feed a confirmed toggle can update on its
-  // own (rememberTrackedId), during exactly the outage that stops
-  // home:personalized from renewing homeSavedAt.
-  //
-  // Renewed only by a full re-verification (rememberHomeFeed). A single
-  // confirmed toggle corrects one id; it does not vouch for the rest.
-  trackedSavedAt: number
   catalog: MediaItem[]
 }
+
+// The My List ids have no clock at all, and that is deliberate.
+//
+// Everything else here expires because stale content misrepresents
+// itself: a months-old hero pool claims to be this week's. An expired My
+// List does something worse — it degrades to a confident "nothing is
+// saved", which renders saved titles with an Add control that REMOVES
+// them on click. Cosmetic staleness against data loss is not a trade
+// worth making, and it is the same asymmetry that made seeding this set
+// from the snapshot the fix rather than the bug.
+//
+// The alternative was per-id confirmation stamps, so an id confirmed on
+// day 29 could outlive a set last verified on day 1. That is a third
+// clock and a second shape to migrate, in service of an outage that has
+// to last a month; not expiring the ids covers the same case and removes
+// a clock instead of adding one. They are replaced wholesale the moment
+// home:personalized answers, which on any working install is seconds
+// into a launch.
 
 const EMPTY: StoredSnapshot = {
   savedAt: 0,
   catalogSavedAt: {},
   homeSavedAt: 0,
-  trackedSavedAt: 0,
   catalog: [],
   featured: [],
   recommendations: [],
@@ -207,8 +213,12 @@ function read(): StoredSnapshot {
     }
     const homeSavedAt = timestamp(parsed?.homeSavedAt) || savedAt
     const homeFresh = isFresh(homeSavedAt)
-    const trackedSavedAt = timestamp(parsed?.trackedSavedAt) || homeSavedAt
-    const trackedFresh = isFresh(trackedSavedAt)
+    // Kept whatever their age — see the note on trackedSavedAt's removal
+    // above. A snapshot written when they still had a clock simply ignores
+    // it.
+    const trackedIds = Array.isArray(parsed.trackedIds)
+      ? parsed.trackedIds.filter((id): id is string => typeof id === 'string' && id.length > 0)
+      : []
 
     // Filtered row by row against its own kind's age, so a kind whose
     // source has been down long enough to expire drops out while the
@@ -222,7 +232,7 @@ function read(): StoredSnapshot {
       return true
     })
 
-    if (!catalog.length && !homeFresh && !trackedFresh) {
+    if (!catalog.length && !homeFresh && !trackedIds.length) {
       clearStartupSnapshot()
       return EMPTY
     }
@@ -230,7 +240,6 @@ function read(): StoredSnapshot {
       savedAt,
       catalogSavedAt: keptStamps,
       homeSavedAt: homeFresh ? homeSavedAt : 0,
-      trackedSavedAt: trackedFresh ? trackedSavedAt : 0,
       catalog,
       featured: homeFresh ? reviveMediaItems(parsed.featured) : [],
       recommendations: homeFresh ? reviveWrapped<Recommendation>(parsed.recommendations) : [],
@@ -239,10 +248,7 @@ function read(): StoredSnapshot {
         : [],
       preferredGenres:
         homeFresh && Array.isArray(parsed.preferredGenres) ? parsed.preferredGenres : [],
-      trackedIds:
-        trackedFresh && Array.isArray(parsed.trackedIds)
-          ? parsed.trackedIds.filter((id): id is string => typeof id === 'string' && id.length > 0)
-          : []
+      trackedIds
     }
   } catch {
     current = EMPTY
@@ -362,9 +368,7 @@ export function rememberCatalog(items: MediaItem[], deliveredAt: CatalogStamps):
 }
 
 export function rememberHomeFeed(feed: HomeFeedSnapshot): void {
-  const now = Date.now()
-  // The whole feed came from one answer, so both clocks are re-verified.
-  current = { ...read(), ...feed, homeSavedAt: now, trackedSavedAt: now }
+  current = { ...read(), ...feed, homeSavedAt: Date.now() }
   schedule()
 }
 
@@ -489,10 +493,10 @@ export function mergeRememberedCatalog(
  * showing the opposite action — and pressing it reversed a mutation the
  * backend had already committed.
  *
- * Neither clock is touched. A confirmed toggle re-verifies this one id —
- * not the hero pool beside it, and not the rest of the My List set — and
- * re-dating either on the strength of it is the renewal mistake this file
- * has already made twice.
+ * `homeSavedAt` is not touched. A confirmed toggle re-verifies this one
+ * id, not the hero pool beside it, and re-dating that on the strength of
+ * it is the renewal mistake this file has already made twice. The ids
+ * themselves have no clock to renew — see the note above the interface.
  */
 export function rememberTrackedId(id: string, tracked: boolean): void {
   if (!id) return

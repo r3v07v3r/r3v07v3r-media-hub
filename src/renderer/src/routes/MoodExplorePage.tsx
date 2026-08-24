@@ -52,8 +52,12 @@ export default function MoodExplorePage() {
   const kindStates = Object.values(catalogKindStates)
   const catalogEmpty = catalog.length === 0
   const stillArriving = catalogEmpty && kindStates.some((state) => state === 'loading')
-  // Nothing at all could be loaded — the grid's own error state.
-  const unavailable = !stillArriving && kindStates.every((state) => state === 'failed')
+  // Any settled failure. With no results at all this is the right
+  // question, not "did every source fail": a dead source might hold
+  // exactly the titles this mood wants, so "nothing matched" would be a
+  // claim about sources that were never read. See MoodBrowser.
+  const anyKindFailed = !stillArriving && kindStates.some((state) => state === 'failed')
+  const everyKindFailed = !stillArriving && kindStates.every((state) => state === 'failed')
   // A source behind the results actually shown failed. Asked of the
   // results rather than of the catalog, and not requiring every source to
   // fail — see MoodBrowser, which makes the same distinction.
@@ -107,8 +111,12 @@ export default function MoodExplorePage() {
         <MediaGrid
           items={results}
           loading={stillArriving}
-          error={unavailable && catalogEmpty}
-          errorTitle="Couldn't reach the media hub backend"
+          error={results.length === 0 && anyKindFailed}
+          errorTitle={
+            everyKindFailed
+              ? "Couldn't reach the media hub backend"
+              : "Some of the catalog couldn't be loaded"
+          }
           onRetry={refreshCatalog}
           emptyTitle={
             moodLabels.length > 0

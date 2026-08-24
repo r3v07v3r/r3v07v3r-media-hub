@@ -177,9 +177,13 @@ export function MoodBrowser() {
   const kindStates = Object.values(catalogKindStates)
   const catalogEmpty = catalog.length === 0
   const catalogStillArriving = catalogEmpty && kindStates.some((state) => state === 'loading')
-  // Nothing at all could be loaded — the empty-state case below.
-  const catalogUnavailable =
-    !catalogStillArriving && kindStates.every((state) => state === 'failed')
+  // Any settled failure at all. With results on screen this is too broad
+  // (see resultsMayBeStale), but with NONE it is exactly the question:
+  // "no titles match your settings" is only true if every source that
+  // could have matched was actually read, and a dead source might hold
+  // precisely the titles this mood wants.
+  const anyKindFailed = !catalogStillArriving && kindStates.some((state) => state === 'failed')
+  const everyKindFailed = !catalogStillArriving && kindStates.every((state) => state === 'failed')
   // Some source behind what IS on screen failed. Not "every source
   // failed": the kinds are fetched independently, so one dead source is
   // the ordinary failure, and if its rows are among the results shown
@@ -355,11 +359,13 @@ export function MoodBrowser() {
                       landed yet is the wrong instruction. */}
                   {catalogStillArriving
                     ? 'Matching titles to this mood…'
-                    : catalogUnavailable && catalogEmpty
+                    : rankedResults.length === 0 && everyKindFailed
                       ? "Couldn't reach the media hub backend."
-                      : rankedResults.length === 0
-                        ? 'No titles match your current settings.'
-                        : `${Math.min(SPOTLIGHT_PICK_COUNT, spotlightPicks.length)} picks matched to your library`}
+                      : rankedResults.length === 0 && anyKindFailed
+                        ? "Some sources couldn't be reached."
+                        : rankedResults.length === 0
+                          ? 'No titles match your current settings.'
+                          : `${Math.min(SPOTLIGHT_PICK_COUNT, spotlightPicks.length)} picks matched to your library`}
                 </p>
               </div>
               <span className={styles.spotlightCount}>
@@ -386,9 +392,14 @@ export function MoodBrowser() {
               <p className={styles.spotlightEmpty}>
                 {catalogStillArriving ? (
                   'The catalog is still loading — picks will appear here in a moment.'
-                ) : catalogUnavailable ? (
+                ) : anyKindFailed ? (
                   <>
-                    Nothing could be loaded to match against.
+                    {/* Not every source was read, so "nothing matches" is
+                        not something this can honestly say — and Settings
+                        is not where the missing titles went. */}
+                    {everyKindFailed
+                      ? 'Nothing could be loaded to match against.'
+                      : 'Some of the catalog could not be loaded, so there may be matches missing.'}
                     <button
                       type="button"
                       onClick={refreshCatalog}
