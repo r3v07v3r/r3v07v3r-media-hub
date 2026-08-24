@@ -670,6 +670,33 @@ export async function startPlayerSession(
   await player.setBounds(playerBoundsFor(mainWindow))
   if (fullScreen) await player.setFullscreen(true)
 
+  // HAND THE RETAINED PLAYER OVER before touching it. Everything below runs
+  // inside a gap the overlay cannot see: it identifies whichever title it was
+  // last told about, and it is not told about the next one until
+  // pushSessionSnapshot, which this function's caller only reaches once the
+  // load below has finished. An overlay still naming the OUTGOING title
+  // attributes everything it observes to the outgoing bookmark — so its
+  // 20-second save timer, firing anywhere in that gap, would write the reset
+  // volume below into the last film's bookmark and quietly drop the boost
+  // stored there. The same gap misfiles positions once `loadfile` swaps the
+  // clock underneath it.
+  //
+  // Clearing the media closes that gap instead of narrowing it: the overlay's
+  // per-title teardown save fires on the change, recording the outgoing title
+  // with the position and volume it really had — both still untouched at this
+  // point — and tracking then stays quiet until a snapshot names its next
+  // subject. Ordering is what makes that airtight rather than lucky: session
+  // snapshots are sent immediately while property observations are batched
+  // behind STATE_FLUSH_MS, so the overlay cannot see the reset below while it
+  // still believes the old title is the one playing.
+  //
+  // Tracks and settings are deliberately left standing: the outgoing film is
+  // still on screen and still playing until `loadfile` replaces it, so its
+  // track menus are still the truthful ones. A first title has no outgoing
+  // snapshot at all, which makes this a no-op outside a real title change.
+  const outgoing = getSessionSnapshot()
+  if (outgoing?.media) pushSessionSnapshot({ ...outgoing, media: null })
+
   // EVERY title starts at its own level, because mpv keeps `volume` across
   // `loadfile` and a boost belongs to the film it was needed for — carrying
   // 180% from a quiet film into the next one is a shock, not a preference.
