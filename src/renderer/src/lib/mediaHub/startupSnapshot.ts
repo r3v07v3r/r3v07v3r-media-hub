@@ -368,7 +368,16 @@ export function rememberHomeFeed(feed: HomeFeedSnapshot): void {
   schedule()
 }
 
-/** The tracking state a remembered row has to be re-checked against. A structural subset of adapters.ts's CatalogItemAdapterContext, declared here so this module stays free of path-aliased imports. */
+/**
+ * The tracking state a remembered row is re-checked against. A structural
+ * subset of adapters.ts's CatalogItemAdapterContext, declared here so this
+ * module stays free of path-aliased imports.
+ *
+ * An ABSENT set means "this has not been established yet", not "this is
+ * empty" — see applyTrackingState. The two are very different claims, and
+ * every one of these sets starts out empty while its backend read is
+ * still in flight.
+ */
 export interface TrackingState {
   trackedIds?: Set<string>
   watchedIds?: Set<string>
@@ -393,14 +402,23 @@ export interface TrackingState {
  * answer is kept rather than invented, with the one correction that needs
  * no episode data: something not watched at all cannot be complete.
  *
+ * A set that is absent leaves its flag alone. tracking:list and
+ * disliked:list both start as empty sets and answer later — and
+ * tracking:list waits on metadata lookups for tracked series, so "later"
+ * is not instant — so treating the initial emptiness as authoritative
+ * wiped every remembered badge on startup, left it wiped for the whole
+ * session if the read failed, and could persist the wiped state into the
+ * next snapshot. Empty-but-established is still authoritative; pass an
+ * empty Set to say so.
+ *
  * Returns the SAME object when nothing changed. This runs over the whole
  * remembered catalog on every badge change, and a fresh object per row
  * would churn every memo downstream of it.
  */
 export function applyTrackingState(item: MediaItem, state: TrackingState = {}): MediaItem {
-  const watched = state.watchedIds?.has(item.id) ?? false
-  const inMyList = state.trackedIds?.has(item.id) ?? false
-  const disliked = state.dislikedIds?.has(item.id) ?? false
+  const watched = state.watchedIds ? state.watchedIds.has(item.id) : item.watched
+  const inMyList = state.trackedIds ? state.trackedIds.has(item.id) : item.inMyList
+  const disliked = state.dislikedIds ? state.dislikedIds.has(item.id) : item.disliked
   const isMovie = item.mediaKind ? item.mediaKind === 'movie' : item.mediaType === 'movie'
   const completed = isMovie ? watched : watched && item.completed
   if (

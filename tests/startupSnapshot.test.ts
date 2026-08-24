@@ -952,13 +952,38 @@ async function main(): Promise<void> {
     assert.equal(next.disliked, true)
   })
 
+  const ESTABLISHED_EMPTY = {
+    watchedIds: new Set<string>(),
+    trackedIds: new Set<string>(),
+    dislikedIds: new Set<string>()
+  }
+
   await check('clears flags that stopped being true', () => {
     const stale = row({ id: 'm1', watched: true, completed: true, inMyList: true, disliked: true })
-    const next = applyTrackingState(stale, {})
+    const next = applyTrackingState(stale, ESTABLISHED_EMPTY)
     assert.equal(next.watched, false)
     assert.equal(next.inMyList, false)
     assert.equal(next.disliked, false)
     assert.equal(next.completed, false)
+  })
+
+  await check('keeps a flag whose source has not been read yet', () => {
+    // The distinction this hangs on: an ABSENT set is unknown, an empty
+    // one is an answer. tracking:list and disliked:list both start out as
+    // empty sets and answer later, so treating that emptiness as an answer
+    // wiped every remembered badge on startup.
+    const saved = row({ id: 'm1', watched: true, completed: true, inMyList: true, disliked: true })
+    const next = applyTrackingState(saved, {})
+    assert.equal(next, saved, 'nothing established, nothing to change')
+  })
+
+  await check('applies only the sources that have been read', () => {
+    const saved = row({ id: 'm1', watched: true, completed: true, disliked: true })
+    // Disliked has answered and no longer lists it; watched has not answered.
+    const next = applyTrackingState(saved, { dislikedIds: new Set() })
+    assert.equal(next.disliked, false, 'the established set applies')
+    assert.equal(next.watched, true, 'the unread one does not')
+    assert.equal(next.completed, true)
   })
 
   await check('a movie is complete exactly when it is watched', () => {
@@ -987,7 +1012,7 @@ async function main(): Promise<void> {
       watched: true,
       completed: true
     })
-    assert.equal(applyTrackingState(series, {}).completed, false)
+    assert.equal(applyTrackingState(series, ESTABLISHED_EMPTY).completed, false)
   })
 
   await check('returns the very same object when nothing changed', () => {
@@ -995,7 +1020,7 @@ async function main(): Promise<void> {
     // every badge change, and a fresh object per row would churn every
     // memo downstream of it.
     const unchanged = row({ id: 'm1' })
-    assert.equal(applyTrackingState(unchanged, {}), unchanged)
+    assert.equal(applyTrackingState(unchanged, ESTABLISHED_EMPTY), unchanged)
     const tracked = row({ id: 'm1', watched: true, completed: true, inMyList: true })
     assert.equal(
       applyTrackingState(tracked, { watchedIds: new Set(['m1']), trackedIds: new Set(['m1']) }),

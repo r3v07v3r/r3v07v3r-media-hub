@@ -185,7 +185,12 @@ export function useMediaHubBrowseCatalog(
   trackedIds: Set<string>,
   watchedIds: Set<string>,
   history: HistoryEntry[] = NO_HISTORY,
-  dislikedIds: Set<string> = NO_IDS
+  dislikedIds: Set<string> = NO_IDS,
+  /** Whether the two sets above have actually been read yet — see
+   *  WatchedIdsResult.loaded. Only consulted for the REMEMBERED rows,
+   *  where an unread set has a previous answer to preserve; a live row has
+   *  no such history and is mapped from the sets as they stand. */
+  loaded: { watched?: boolean; disliked?: boolean } = {}
 ): BrowseCatalogResult {
   // Kept per kind rather than as one merged array, because the three
   // fetches are no longer awaited together (see the effect below).
@@ -365,14 +370,27 @@ export function useMediaHubBrowseCatalog(
   const rememberedItems = useMemo(() => {
     const remembered = startupCatalogFallback()
     if (!remembered.length || !hasBridge()) return remembered
+    // A set is handed over only once it has been read. Passing it before
+    // then would assert that nothing is watched and nothing is disliked,
+    // which is not what an empty set fresh out of useState means — and
+    // that assertion wiped every remembered badge on startup, kept it
+    // wiped for the session if the read failed, and got persisted into the
+    // next snapshot on the way past. `trackedIds` needs no such guard: it
+    // is seeded from this same snapshot (see startupTrackedIdsFallback),
+    // so it is established from the first render.
+    const state = {
+      trackedIds,
+      watchedIds: loaded.watched ? watchedIds : undefined,
+      dislikedIds: loaded.disliked ? dislikedIds : undefined
+    }
     let changed = false
     const updated = remembered.map((item) => {
-      const next = applyTrackingState(item, { trackedIds, watchedIds, dislikedIds })
+      const next = applyTrackingState(item, state)
       if (next !== item) changed = true
       return next
     })
     return changed ? updated : remembered
-  }, [trackedIds, watchedIds, dislikedIds])
+  }, [trackedIds, watchedIds, dislikedIds, loaded.watched, loaded.disliked])
 
   const catalog = useMemo(() => {
     if (!mapped) return rememberedItems
@@ -424,6 +442,11 @@ export interface WatchedIdsResult {
    *  not just "started") has to be computed, since a flat id set can't
    *  tell that apart. See adapters.ts's isSeriesCompleted. */
   history: HistoryEntry[]
+  /** tracking:list has answered successfully at least once. Until then
+   *  `watchedIds` is empty because nothing has been read, not because
+   *  nothing is watched — a distinction remembered rows depend on (see
+   *  startupSnapshot.ts's applyTrackingState). */
+  loaded: boolean
   refresh: () => void
 }
 
@@ -438,6 +461,7 @@ export interface WatchedIdsResult {
 export function useMediaHubWatchedIds(): WatchedIdsResult {
   const [watchedIds, setWatchedIds] = useState<Set<string>>(new Set())
   const [history, setHistory] = useState<HistoryEntry[]>([])
+  const [loaded, setLoaded] = useState(false)
   const [generation, setGeneration] = useState(0)
 
   useEffect(() => {
@@ -450,7 +474,12 @@ export function useMediaHubWatchedIds(): WatchedIdsResult {
         if (cancelled) return
         setWatchedIds(new Set(result.history.map((h) => h.id)))
         setHistory(result.history)
+        setLoaded(true)
       })
+      // A failed read leaves `loaded` false on purpose: this set is then
+      // still unknown, and callers must not read its emptiness as an
+      // answer. Deliberately not reset at the top of a retry either — a
+      // set that was established once does not become unknown again.
       .catch(() => {})
     return () => {
       cancelled = true
@@ -463,11 +492,16 @@ export function useMediaHubWatchedIds(): WatchedIdsResult {
   // (`refreshWatchStatus`), which in turn sits in the context value's
   // dependency array — a fresh object here defeated both.
   const refresh = useCallback(() => setGeneration((g) => g + 1), [])
-  return useMemo(() => ({ watchedIds, history, refresh }), [watchedIds, history, refresh])
+  return useMemo(
+    () => ({ watchedIds, history, loaded, refresh }),
+    [watchedIds, history, loaded, refresh]
+  )
 }
 
 export interface DislikedIdsResult {
   dislikedIds: Set<string>
+  /** disliked:list has answered successfully at least once — see WatchedIdsResult.loaded. */
+  loaded: boolean
   refresh: () => void
 }
 
@@ -479,6 +513,7 @@ export interface DislikedIdsResult {
  */
 export function useMediaHubDislikedIds(): DislikedIdsResult {
   const [dislikedIds, setDislikedIds] = useState<Set<string>>(new Set())
+  const [loaded, setLoaded] = useState(false)
   const [generation, setGeneration] = useState(0)
 
   useEffect(() => {
@@ -490,6 +525,7 @@ export function useMediaHubDislikedIds(): DislikedIdsResult {
       .then((result) => {
         if (cancelled) return
         setDislikedIds(new Set(result.disliked.map((d) => d.id)))
+        setLoaded(true)
       })
       .catch(() => {})
     return () => {
@@ -498,7 +534,7 @@ export function useMediaHubDislikedIds(): DislikedIdsResult {
   }, [generation])
 
   const refresh = useCallback(() => setGeneration((g) => g + 1), [])
-  return useMemo(() => ({ dislikedIds, refresh }), [dislikedIds, refresh])
+  return useMemo(() => ({ dislikedIds, loaded, refresh }), [dislikedIds, loaded, refresh])
 }
 
 export interface HomeFeedResult {
