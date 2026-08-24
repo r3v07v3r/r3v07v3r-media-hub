@@ -118,9 +118,56 @@ function startAnimeGrouping(items: CatalogItem[]): void {
       // The ungrouped catalog is already cached and usable. Replacing it
       // only after the whole enrichment pass succeeds avoids ever leaving
       // a partial catalog in the cache.
-      if (grouped.length) getDatabase().putCache('catalog:v2:anime', grouped, CATALOG_TTL_MS)
+      if (!grouped.length) return
+      getDatabase().putCache('catalog:v2:anime', grouped, CATALOG_TTL_MS)
+      // The whole point of the pass that just finished is the groupedIds
+      // it worked out, so the index has to drop the pre-grouping answer
+      // it may have already handed out.
+      invalidateAnimeGroupIndex()
     })
     .catch((error) => logError('catalog:anime-grouping', error))
+}
+
+/**
+ * Which franchise siblings each crawled anime has, by catalog id.
+ *
+ * This exists to keep a multi-megabyte JSON.parse off the metadata path.
+ * getCache is a synchronous SQLite read followed by a parse of the WHOLE
+ * catalog blob, and the groupedIds lookup below runs for every anime whose
+ * metadata is being resolved — which, on a launch with a cold metadata
+ * cache, is once per tracked anime. Parsing two thousand catalog entries
+ * per tracked title, on the thread that answers the window, is precisely
+ * the kind of stall this whole change set exists to remove.
+ *
+ * Only the ids are kept, not the entries: this is the one field the hot
+ * path needs, and holding the full parsed catalog in memory to serve it
+ * would trade a repeated parse for a permanent tens-of-megabytes
+ * footprint. The rarely-taken fallback path further down still reads the
+ * whole catalog, because it genuinely needs whole entries and only runs
+ * when a live metadata fetch has already failed.
+ *
+ * Invalidated by hand rather than given a TTL, because there are exactly
+ * two writers (catalogData and the grouping pass) and both are in this
+ * file — a stale index here would mean a grouped anime silently losing
+ * its later seasons, which is not something to leave to a timer.
+ */
+let animeGroupIndex: Map<string, string[]> | null = null
+
+function invalidateAnimeGroupIndex(): void {
+  animeGroupIndex = null
+}
+
+function groupedIdsFor(catalogId: string): string[] | undefined {
+  if (!animeGroupIndex) {
+    const items =
+      getDatabase().getCache<CatalogItem[]>('catalog:v2:anime', { allowExpired: true }) || []
+    animeGroupIndex = new Map(
+      items
+        .filter((item) => item.groupedIds?.length)
+        .map((item) => [String(item.id), item.groupedIds as string[]])
+    )
+  }
+  return animeGroupIndex.get(String(catalogId))
 }
 
 /** Cached (7d) Kitsu genre/category titles for one anime id. */
@@ -332,7 +379,10 @@ export async function catalogData(
     }
 
     db.putCache(key, items, CATALOG_TTL_MS)
-    if (kind === 'anime') startAnimeGrouping(items)
+    if (kind === 'anime') {
+      invalidateAnimeGroupIndex()
+      startAnimeGrouping(items)
+    }
     return items
   })
 }
@@ -477,10 +527,8 @@ async function resolveMetadata(
   // list, then used to build the real multi-season episode list in place
   // of whatever single-season data the fetch above produced on its own.
   if (type === 'anime' && !item.groupedIds) {
-    const catalogEntry = (
-      db.getCache<CatalogItem[]>('catalog:v2:anime', { allowExpired: true }) || []
-    ).find((x) => String(x.id) === String(resolvedId))
-    if (catalogEntry?.groupedIds?.length) item.groupedIds = catalogEntry.groupedIds
+    const groupedIds = groupedIdsFor(resolvedId)
+    if (groupedIds?.length) item.groupedIds = groupedIds
   }
   if (type === 'anime' && item.groupedIds?.length) {
     try {
