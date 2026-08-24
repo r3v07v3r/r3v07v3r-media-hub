@@ -702,6 +702,164 @@ async function main(): Promise<void> {
     assert.deepEqual(stored(storage).trackedIds, ['one'])
   })
 
+  await check('keeps My List ids when the rest of the home feed has expired', async () => {
+    // The reachable version of this: catalog:list keeps succeeding while
+    // home:personalized keeps failing, and a confirmed toggle updates the
+    // ids without renewing a feed nothing re-fetched.
+    const storage = fakeStorage()
+    const now = Date.now()
+    storage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({
+        savedAt: now,
+        catalogSavedAt: { movie: now },
+        homeSavedAt: now - 31 * DAY_MS,
+        trackedSavedAt: now - 2 * DAY_MS,
+        catalog: [mediaItem({ id: 'm1', mediaKind: 'movie' })],
+        featured: [mediaItem({ id: 'f1' })],
+        recommendations: [],
+        continueWatching: [],
+        preferredGenres: [],
+        trackedIds: ['saved-1']
+      })
+    )
+    const feed = (await loadModule(storage)).rememberedHomeFeed()
+    assert.deepEqual(feed.trackedIds, ['saved-1'], 'the ids outlive the feed around them')
+    assert.deepEqual(feed.featured, [], 'the expired feed still goes')
+  })
+
+  await check('expires My List ids on their own clock', () => {
+    const storage = fakeStorage()
+    const now = Date.now()
+    storage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({
+        savedAt: now,
+        catalogSavedAt: { movie: now },
+        homeSavedAt: now,
+        trackedSavedAt: now - 31 * DAY_MS,
+        catalog: [],
+        featured: [mediaItem({ id: 'f1' })],
+        recommendations: [],
+        continueWatching: [],
+        preferredGenres: [],
+        trackedIds: ['ancient']
+      })
+    )
+    return loadModule(storage).then((mod) => {
+      const feed = mod.rememberedHomeFeed()
+      assert.deepEqual(feed.trackedIds, [])
+      assert.equal(feed.featured.length, 1, 'the fresh feed is unaffected')
+    })
+  })
+
+  await check('dates My List from homeSavedAt when it has no clock of its own', () => {
+    // Written before trackedSavedAt existed.
+    const storage = fakeStorage()
+    storage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({
+        savedAt: Date.now() - 2 * DAY_MS,
+        catalogSavedAt: {},
+        homeSavedAt: Date.now() - 2 * DAY_MS,
+        catalog: [],
+        featured: [],
+        recommendations: [],
+        continueWatching: [],
+        preferredGenres: [],
+        trackedIds: ['legacy']
+      })
+    )
+    return loadModule(storage).then((mod) => {
+      assert.deepEqual(mod.rememberedHomeFeed().trackedIds, ['legacy'])
+    })
+  })
+
+  await check('a confirmed toggle does not renew the My List clock either', async () => {
+    // It re-verifies one id, not the set.
+    const storage = fakeStorage()
+    const old = Date.now() - 29 * DAY_MS
+    storage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({
+        savedAt: old,
+        catalogSavedAt: {},
+        homeSavedAt: old,
+        trackedSavedAt: old,
+        catalog: [],
+        featured: [],
+        recommendations: [],
+        continueWatching: [],
+        preferredGenres: [],
+        trackedIds: ['one']
+      })
+    )
+    const mod = await loadModule(storage)
+    mod.rememberTrackedId('two', true)
+    mod.flushStartupSnapshot()
+    const written = stored(storage)
+    assert.deepEqual(written.trackedIds, ['one', 'two'])
+    assert.equal(written.trackedSavedAt, old)
+  })
+
+  await check('forgets a Continue Watching row the backend confirmed removed', async () => {
+    const storage = fakeStorage()
+    const first = await loadModule(storage)
+    const entry = (id: string) => ({
+      media: mediaItem({ id, title: id }),
+      lastPlayedAt: 'x',
+      playbackPositionSeconds: 1,
+      durationSeconds: 2
+    })
+    first.rememberHomeFeed({
+      featured: [],
+      recommendations: [],
+      continueWatching: [entry('keep'), entry('drop')],
+      preferredGenres: [],
+      trackedIds: []
+    })
+    first.forgetContinueWatching('drop')
+    first.forgetContinueWatching('never-there')
+    first.flushStartupSnapshot()
+
+    const feed = (await loadModule(storage)).rememberedHomeFeed()
+    assert.deepEqual(
+      feed.continueWatching.map((c: { media: MediaItem }) => c.media.id),
+      ['keep']
+    )
+  })
+
+  await check('forgetting a row does not re-date the feed around it', async () => {
+    const storage = fakeStorage()
+    const old = Date.now() - 29 * DAY_MS
+    storage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({
+        savedAt: old,
+        catalogSavedAt: {},
+        homeSavedAt: old,
+        trackedSavedAt: old,
+        catalog: [],
+        featured: [mediaItem({ id: 'f1' })],
+        recommendations: [],
+        continueWatching: [
+          {
+            media: mediaItem({ id: 'drop' }),
+            lastPlayedAt: 'x',
+            playbackPositionSeconds: 1,
+            durationSeconds: 2
+          }
+        ],
+        preferredGenres: [],
+        trackedIds: []
+      })
+    )
+    const mod = await loadModule(storage)
+    mod.forgetContinueWatching('drop')
+    mod.flushStartupSnapshot()
+    assert.equal(stored(storage).homeSavedAt, old)
+  })
+
   console.log('\nstartupSnapshot — running out of storage')
 
   await check('sheds catalog descriptions rather than losing the whole snapshot', async () => {
@@ -734,33 +892,31 @@ async function main(): Promise<void> {
   })
 
   await check('sheds the catalog entirely before giving up on the home feed', async () => {
-    // Mirrors the real stored shape field-for-field, because the ceiling
-    // is derived from its length — a fixture that drifts from the module's
-    // own shape silently stops testing what it claims to.
-    const homeFeedOnly = JSON.stringify({
-      savedAt: Date.now(),
-      catalogSavedAt: { movie: Date.now() },
-      homeSavedAt: Date.now(),
-      catalog: [],
+    const homeFeed = {
       featured: [mediaItem({ id: 'f1' })],
       recommendations: [],
       continueWatching: [],
       preferredGenres: [],
       trackedIds: []
-    })
-    const storage = fakeStorage(homeFeedOnly.length + 40)
+    }
+    // The ceiling is measured from what the module ITSELF writes for this
+    // feed, not from a hand-built copy of the stored shape. The copy was
+    // the bug: it derives a byte limit from its own length, so every field
+    // added to the snapshot silently moved the threshold this names.
+    const measuring = fakeStorage()
+    const measure = await loadModule(measuring)
+    measure.rememberHomeFeed(homeFeed)
+    measure.flushStartupSnapshot()
+    const homeFeedOnlyBytes = (measuring.getItem(STORAGE_KEY) ?? '').length
+    assert.ok(homeFeedOnlyBytes > 0, 'the measuring write should have succeeded')
+
+    const storage = fakeStorage(homeFeedOnlyBytes + 40)
     const mod = await loadModule(storage)
     mod.rememberCatalog(
       Array.from({ length: 40 }, (_, i) => mediaItem({ id: `m${i}` })),
       { movie: NOW }
     )
-    mod.rememberHomeFeed({
-      featured: [mediaItem({ id: 'f1' })],
-      recommendations: [],
-      continueWatching: [],
-      preferredGenres: [],
-      trackedIds: []
-    })
+    mod.rememberHomeFeed(homeFeed)
     mod.flushStartupSnapshot()
 
     const written = stored(storage)

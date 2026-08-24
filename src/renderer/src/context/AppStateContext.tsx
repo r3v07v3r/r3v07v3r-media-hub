@@ -49,7 +49,7 @@ import {
   runPlaybackPreparationStage,
   type PlaybackPreparationStage
 } from '@renderer/lib/mediaHub/playbackPreparation'
-import { rememberTrackedId } from '@renderer/lib/mediaHub/startupSnapshot'
+import { forgetContinueWatching, rememberTrackedId } from '@renderer/lib/mediaHub/startupSnapshot'
 import {
   startupContinueWatchingFallback,
   startupTrackedIdsFallback,
@@ -880,7 +880,16 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       // is what actually drops it from home:personalized's list.
       api.tracking
         .toggle(mediaItemToTrackablePayload(entry.media))
-        .then(() => homeFeed.refresh())
+        .then((result) => {
+          // Written straight to the snapshot rather than waiting for the
+          // refresh below, which throws during exactly the outage where
+          // this local write still succeeds. Without it the row came back
+          // on restart, and a second Remove toggled tracking the other way
+          // and re-added it.
+          forgetContinueWatching(id)
+          if (typeof result?.tracked === 'boolean') rememberTrackedId(id, result.tracked)
+          homeFeed.refresh()
+        })
         .catch(() => {})
     },
     [continueWatching, homeFeed]

@@ -86,6 +86,17 @@ interface StoredSnapshot extends HomeFeedSnapshot {
   // that never touched it — an app offering to resume something you
   // finished months ago.
   homeSavedAt: number
+  // And the My List ids age separately again, for a reason the two above
+  // do not share: an expired hero pool degrades to a skeleton, but an
+  // expired My List degrades to a confident "nothing is saved" — which
+  // renders saved titles with an Add control that removes them. It is
+  // also the one part of the feed a confirmed toggle can update on its
+  // own (rememberTrackedId), during exactly the outage that stops
+  // home:personalized from renewing homeSavedAt.
+  //
+  // Renewed only by a full re-verification (rememberHomeFeed). A single
+  // confirmed toggle corrects one id; it does not vouch for the rest.
+  trackedSavedAt: number
   catalog: MediaItem[]
 }
 
@@ -93,6 +104,7 @@ const EMPTY: StoredSnapshot = {
   savedAt: 0,
   catalogSavedAt: {},
   homeSavedAt: 0,
+  trackedSavedAt: 0,
   catalog: [],
   featured: [],
   recommendations: [],
@@ -195,6 +207,8 @@ function read(): StoredSnapshot {
     }
     const homeSavedAt = timestamp(parsed?.homeSavedAt) || savedAt
     const homeFresh = isFresh(homeSavedAt)
+    const trackedSavedAt = timestamp(parsed?.trackedSavedAt) || homeSavedAt
+    const trackedFresh = isFresh(trackedSavedAt)
 
     // Filtered row by row against its own kind's age, so a kind whose
     // source has been down long enough to expire drops out while the
@@ -208,7 +222,7 @@ function read(): StoredSnapshot {
       return true
     })
 
-    if (!catalog.length && !homeFresh) {
+    if (!catalog.length && !homeFresh && !trackedFresh) {
       clearStartupSnapshot()
       return EMPTY
     }
@@ -216,6 +230,7 @@ function read(): StoredSnapshot {
       savedAt,
       catalogSavedAt: keptStamps,
       homeSavedAt: homeFresh ? homeSavedAt : 0,
+      trackedSavedAt: trackedFresh ? trackedSavedAt : 0,
       catalog,
       featured: homeFresh ? reviveMediaItems(parsed.featured) : [],
       recommendations: homeFresh ? reviveWrapped<Recommendation>(parsed.recommendations) : [],
@@ -225,7 +240,7 @@ function read(): StoredSnapshot {
       preferredGenres:
         homeFresh && Array.isArray(parsed.preferredGenres) ? parsed.preferredGenres : [],
       trackedIds:
-        homeFresh && Array.isArray(parsed.trackedIds)
+        trackedFresh && Array.isArray(parsed.trackedIds)
           ? parsed.trackedIds.filter((id): id is string => typeof id === 'string' && id.length > 0)
           : []
     }
@@ -347,7 +362,9 @@ export function rememberCatalog(items: MediaItem[], deliveredAt: CatalogStamps):
 }
 
 export function rememberHomeFeed(feed: HomeFeedSnapshot): void {
-  current = { ...read(), ...feed, homeSavedAt: Date.now() }
+  const now = Date.now()
+  // The whole feed came from one answer, so both clocks are re-verified.
+  current = { ...read(), ...feed, homeSavedAt: now, trackedSavedAt: now }
   schedule()
 }
 
@@ -454,10 +471,10 @@ export function mergeRememberedCatalog(
  * showing the opposite action — and pressing it reversed a mutation the
  * backend had already committed.
  *
- * `homeSavedAt` is deliberately left alone. A confirmed toggle re-verifies
- * this one id, not the hero pool or the Continue Watching row alongside
- * it, and re-dating those on the strength of it is the renewal mistake
- * this file has already made twice.
+ * Neither clock is touched. A confirmed toggle re-verifies this one id —
+ * not the hero pool beside it, and not the rest of the My List set — and
+ * re-dating either on the strength of it is the renewal mistake this file
+ * has already made twice.
  */
 export function rememberTrackedId(id: string, tracked: boolean): void {
   if (!id) return
@@ -468,6 +485,29 @@ export function rememberTrackedId(id: string, tracked: boolean): void {
     ...snapshot,
     trackedIds: tracked ? [...snapshot.trackedIds, id] : snapshot.trackedIds.filter((x) => x !== id)
   }
+  schedule()
+}
+
+/**
+ * Drops one title from the remembered Continue Watching row, for a
+ * removal the backend has already confirmed.
+ *
+ * There is no dedicated "remove from Continue Watching" channel —
+ * untracking is what drops it (see AppStateContext) — and that write is
+ * local and succeeds during an outage, while the home:personalized
+ * refresh that would otherwise carry it to disk throws. So a removal made
+ * mid-outage came back on restart, and pressing Remove a second time
+ * toggled tracking the other way and re-added it.
+ *
+ * `homeSavedAt` is left alone for the same reason rememberTrackedId
+ * leaves the clocks alone: one row was re-verified, not the feed.
+ */
+export function forgetContinueWatching(id: string): void {
+  if (!id) return
+  const snapshot = read()
+  const next = snapshot.continueWatching.filter((entry) => entry.media.id !== id)
+  if (next.length === snapshot.continueWatching.length) return
+  current = { ...snapshot, continueWatching: next }
   schedule()
 }
 
