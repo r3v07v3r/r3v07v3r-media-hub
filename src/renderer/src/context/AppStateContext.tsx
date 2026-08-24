@@ -455,7 +455,11 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     myList,
     watchedIdsResult.watchedIds,
     watchedIdsResult.history,
-    dislikedIds
+    dislikedIds,
+    // Whether those two sets are answers yet or just their initial
+    // emptiness — see WatchedIdsResult.loaded. Only the remembered rows
+    // care, and only so an unread set can't wipe a badge they already had.
+    { watched: watchedIdsResult.loaded, disliked: dislikedIdsResult.loaded }
   )
 
   // Reseeds local optimistic state whenever a fresh disliked:list fetch
