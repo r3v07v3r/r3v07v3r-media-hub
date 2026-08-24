@@ -9,6 +9,7 @@
 import type { ConnectResult } from '../../shared/media-hub/types'
 import { MEDIA_HUB_CHANNELS } from '../../shared/media-hub/ipc-channels'
 import { fetchJson } from './httpClient'
+import type { TaskPriority } from './taskScheduler'
 import { logError } from './logger'
 import { getDatabase } from './dbState'
 import { handle } from './ipcGuard'
@@ -36,7 +37,10 @@ interface OmdbRatingEntry {
  * animeSeasons.ts's NO_TVDB_MAPPING). A real score is never an empty
  * string, so this is an unambiguous sentinel.
  */
-export async function omdbRottenTomatoesRating(imdbId: string): Promise<string | undefined> {
+export async function omdbRottenTomatoesRating(
+  imdbId: string,
+  priority: TaskPriority = 'interactive'
+): Promise<string | undefined> {
   const { apiKey } = omdbCredentials()
   if (!apiKey || !/^tt\d+$/.test(imdbId)) return undefined
 
@@ -49,10 +53,14 @@ export async function omdbRottenTomatoesRating(imdbId: string): Promise<string |
     const result = await fetchJson<{ Ratings?: OmdbRatingEntry[] }>(
       `https://www.omdbapi.com/?i=${encodeURIComponent(imdbId)}&apikey=${encodeURIComponent(apiKey)}`,
       {},
-      // A Rotten Tomatoes score is garnish on a detail page that has
-      // already rendered without it. It should never be ahead of anything
-      // in the queue.
-      { priority: 'background', label: 'Rotten Tomatoes score' }
+      // Inherits the caller's tier rather than being pinned to
+      // `background`, because resolveMetadata AWAITS this before it
+      // returns catalog:meta — which is the detail page's primary fetch.
+      // Pinned low, opening a title during a catalog crawl would leave
+      // the whole page loading behind the stand-down rule, waiting on an
+      // optional rating, for up to the starvation cutoff. Garnish must
+      // not be able to hold up the thing it garnishes.
+      { priority, label: 'Rotten Tomatoes score' }
     )
     const entry = (result.Ratings || []).find((r) => r.Source === 'Rotten Tomatoes')
     const value = entry?.Value?.match(/\d+/)?.[0] || ''

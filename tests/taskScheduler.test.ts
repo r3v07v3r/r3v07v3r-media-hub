@@ -17,6 +17,7 @@ import {
   mapWithLimit,
   resetSchedulerForTests,
   schedule,
+  shutdownScheduler,
   schedulerSnapshot,
   setPressure
 } from '../src/main/media-hub/taskScheduler'
@@ -387,6 +388,34 @@ async function main(): Promise<void> {
 
     gates.forEach((g) => g.release())
     await Promise.all(all)
+  })
+
+  await check('work submitted after shutdown is refused, not dispatched', async () => {
+    // Clearing the queue on shutdown is not enough on its own: a
+    // sequential composite sits BETWEEN requests rather than in the
+    // queue, and calls schedule() again when its current await settles.
+    // before-quit closes SQLite immediately after shutdownScheduler(), so
+    // a follow-on request that still got dispatched would read or write a
+    // closed database.
+    let ranAfterShutdown = false
+    shutdownScheduler()
+    await assert.rejects(
+      schedule(
+        () => {
+          ranAfterShutdown = true
+          return 'touched the database'
+        },
+        { lane: 'default', priority: 'interactive' }
+      ),
+      /shutting down/
+    )
+    await settle()
+    assert.equal(ranAfterShutdown, false, 'a task was dispatched after shutdown')
+
+    // And the guard lifts for the next run rather than being a one-way
+    // door the test seam cannot reopen.
+    resetSchedulerForTests()
+    assert.equal(await schedule(() => 'ok', { lane: 'default' }), 'ok')
   })
 
   await check('the snapshot reports what is running and what is waiting', async () => {

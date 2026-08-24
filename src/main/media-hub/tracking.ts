@@ -188,7 +188,45 @@ const RECONCILE_COOLDOWN_KEY = 'reconcile:cooldown:v1'
  * cooldown reads it rather than being told nothing happened. The work is
  * still done once per cooldown window; it is just no longer wasted.
  */
-const RECONCILE_RESULT_KEY = 'reconcile:result:v1'
+const RECONCILE_RESULT_KEY = 'reconcile:result:v2'
+
+/**
+ * A cached diff, stamped with whose account it was computed against.
+ *
+ * Disconnecting and authorizing someone else inside the five-minute
+ * cooldown would otherwise hand the new account the old account's
+ * disagreements — and resolving one of those pushes a decision about
+ * somebody else's library, or rewrites local history to match it.
+ *
+ * Checked at the point of USE rather than cleared on sign-out, for the
+ * same reasons simklClient.ts's cachedHistoryFor spells out: clearing is
+ * best-effort tidying that cannot run if the app was killed and cannot
+ * catch a pass that was already in flight when the account changed. The
+ * stamp covers all of it. v2 because a v1 row carries no stamp and can
+ * never satisfy this check; the database's own prune reclaims those.
+ */
+interface CachedReconcileResult {
+  account: string
+  discrepancies: WatchStatusDiscrepancy[]
+}
+
+function writeReconcileResult(discrepancies: WatchStatusDiscrepancy[]): void {
+  getDatabase().putCache<CachedReconcileResult>(
+    RECONCILE_RESULT_KEY,
+    { account: simklAccountMark(), discrepancies },
+    RECONCILE_COOLDOWN_MS
+  )
+}
+
+/** The cached diff, but only if it belongs to the account connected now. */
+function cachedReconcileResult(): WatchStatusDiscrepancy[] {
+  const account = simklAccountMark()
+  // No account connected matches no stamp — never the empty-string
+  // account a malformed row might carry.
+  if (!account) return []
+  const row = getDatabase().getCache<CachedReconcileResult>(RECONCILE_RESULT_KEY)
+  return row?.account === account && Array.isArray(row.discrepancies) ? row.discrepancies : []
+}
 /** Ids someone has explicitly said to stop asking about — kept far longer
  *  than the cooldown above (this is a decision, not a rate limit), but
  *  not forever: 90 days gives a genuinely stale dismissal a chance to
@@ -675,8 +713,7 @@ export async function runBackgroundWatchSync(): Promise<void> {
   if (db.getCache(RECONCILE_COOLDOWN_KEY)) return
   db.putCache(RECONCILE_COOLDOWN_KEY, true, RECONCILE_COOLDOWN_MS)
   try {
-    const discrepancies = await computeMovieDiscrepancies()
-    db.putCache(RECONCILE_RESULT_KEY, discrepancies, RECONCILE_COOLDOWN_MS)
+    writeReconcileResult(await computeMovieDiscrepancies())
   } catch (error) {
     logError('job:watch-sync', error)
   }
@@ -962,13 +999,13 @@ export function registerTrackingIpc(): void {
       // Reported as ran: false, which is the truth (this call did not run
       // one) and is all the renderer has ever keyed off; what it acts on
       // is whether there are discrepancies.
-      const cached = db.getCache<WatchStatusDiscrepancy[]>(RECONCILE_RESULT_KEY) || []
+      const cached = cachedReconcileResult()
       return { ran: false, discrepancies: cached.filter((d) => !justPushed.has(d.id)) }
     }
     db.putCache(RECONCILE_COOLDOWN_KEY, true, RECONCILE_COOLDOWN_MS)
     try {
       const discrepancies = await computeMovieDiscrepancies()
-      db.putCache(RECONCILE_RESULT_KEY, discrepancies, RECONCILE_COOLDOWN_MS)
+      writeReconcileResult(discrepancies)
       // Anything confirmed moments ago is settled, whatever Simkl's
       // all-items view says — that read can lag its own write, and
       // re-asking about a title someone just resolved is the exact

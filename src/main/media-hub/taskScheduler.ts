@@ -194,6 +194,7 @@ const pressureSources = new Map<string, SchedulerPressure>()
 
 let pumpTimer: ReturnType<typeof setTimeout> | null = null
 let pumpQueued = false
+let stopped = false
 let pumping = false
 let changeListener: (() => void) | null = null
 
@@ -410,6 +411,20 @@ function finish(id: number): void {
  * *when* something runs, never what its failure means.
  */
 export function schedule<T>(run: () => Promise<T> | T, options: ScheduleOptions = {}): Promise<T> {
+  // Clearing the queue on shutdown is not enough on its own. A sequential
+  // composite — the AniList enrichment pass, say — sits between requests
+  // rather than in the queue, and calls schedule() again when its current
+  // await settles. before-quit closes SQLite immediately after
+  // shutdownScheduler(), so those follow-on requests would otherwise be
+  // dispatched into a closed database. Refusing them is what actually
+  // makes the shutdown ordering hold.
+  //
+  // A rejection rather than a promise that never settles: the callers
+  // that reach the network here all treat a failure as a failure already,
+  // and a pending promise nobody will ever resolve is a leak that also
+  // hides the reason.
+  if (stopped) return Promise.reject(new Error('The app is shutting down.'))
+
   const key = options.key ?? null
   const priority = options.priority ?? 'background'
 
@@ -636,6 +651,7 @@ export function schedulerSnapshot(): SchedulerSnapshot {
  * asked it to close.
  */
 export function shutdownScheduler(): void {
+  stopped = true
   // A dispatch pass already queued as a microtask would otherwise still
   // run after this, against whatever it found; it finds an empty queue
   // either way, but saying so is clearer than relying on that.
@@ -652,6 +668,7 @@ export function shutdownScheduler(): void {
  *  tasks are left to settle on their own; nothing here can cancel work
  *  that has already started. */
 export function resetSchedulerForTests(): void {
+  stopped = false
   pumpQueued = false
   queue.length = 0
   queuedByKey.clear()

@@ -612,7 +612,7 @@ async function resolveMetadata(
   // round trip. omdbRottenTomatoesRating already no-ops (returns undefined)
   // when OMDb isn't connected, so this is always safe to call unconditionally.
   if (type !== 'anime') {
-    item.rottenTomatoesRating = await omdbRottenTomatoesRating(String(resolvedId))
+    item.rottenTomatoesRating = await omdbRottenTomatoesRating(String(resolvedId), priority)
   }
 
   // Applied once here rather than per-source (Cinemeta/Simkl-fallback/
