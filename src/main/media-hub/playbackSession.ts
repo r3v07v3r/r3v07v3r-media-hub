@@ -53,8 +53,7 @@ import {
   createStreamCache,
   deleteCacheSession,
   listCacheSessions,
-  MIN_CACHE_BYTES,
-  pruneIdleSessions
+  MIN_CACHE_BYTES
 } from './streamCache'
 import { downloadSubtitleText } from './subtitlesService'
 
@@ -80,10 +79,15 @@ export function hasActivePlayback(): boolean {
 const streamCache = createStreamCache()
 // Disk-hygiene backstop for a title that was closed before being marked
 // watched (its cache is deliberately left in place for a likely near-term
-// resume — see stopPlayback's own comment) — runs once at startup and then
-// hourly so a cache dir from days ago doesn't sit around forever.
-void pruneIdleSessions()
-setInterval(() => void pruneIdleSessions(), 60 * 60 * 1000)
+// resume — see stopPlayback's own comment), so a cache dir from days ago
+// doesn't sit around forever.
+//
+// The hourly cadence is unchanged but the timer is gone: this is now one
+// of backgroundJobs.ts's registered jobs, which is also what stops it
+// running while something is playing. The startup run is gone with it —
+// it fired at import time, before a window even existed, competing with
+// the app getting on screen for a sweep of directories that had already
+// been there for days and could wait ten more minutes.
 
 let activeMediaUrl = ''
 // StreamCache's local server URL for the current title — what mpv actually

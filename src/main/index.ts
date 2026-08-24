@@ -17,6 +17,7 @@ import { closeParty } from './media-hub/watchParty'
 import { stopPlayback } from './media-hub/playbackSession'
 import { shutdownPlayer } from './media-hub/playerBridge'
 import { shutdownScheduler } from './media-hub/taskScheduler'
+import { startBackgroundJobs, stopBackgroundJobs } from './media-hub/backgroundJobs'
 import { sendToPlayerOverlay } from './media-hub/playerWindow'
 import { MEDIA_HUB_CHANNELS } from '../shared/media-hub/ipc-channels'
 
@@ -178,6 +179,12 @@ app.whenReady().then(() => {
 
   createWindow()
 
+  // After the window exists, so the app's own startup is never competing
+  // with a job the registry decided was due. Every job's first run is
+  // minutes out regardless (see backgroundJobs.ts), but the ordering says
+  // what is meant to be true.
+  startBackgroundJobs()
+
   app.on('activate', function () {
     // On macOS it's common to re-create a window in the app when the
     // dock icon is clicked and there are no other windows open.
@@ -198,6 +205,7 @@ app.on('before-quit', () => {
   // handler is about to close is exactly the kind of shutdown-order race
   // the scheduler makes it possible to rule out in one place.
   shutdownScheduler()
+  stopBackgroundJobs()
   stopPlayback(true).catch(() => {})
   // mpv is a child process that outlives any single title deliberately (see
   // playerBridge.ts) — quitting the app is the one point it must actually be

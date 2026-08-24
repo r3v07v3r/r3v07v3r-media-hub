@@ -636,6 +636,35 @@ async function pushPendingToServices(): Promise<Set<string>> {
   return confirmed
 }
 
+/**
+ * The recurring watch-history pass, for backgroundJobs.ts.
+ *
+ * Two things, in the order they have to happen. First anything already
+ * decided and still queued goes out — a decision made in a previous
+ * session that never reached the services is the one piece of this that
+ * is genuinely owed to somebody. Then, if the cooldown allows, the local
+ * history is diffed against Simkl's so new disagreements are ready for
+ * the review panel the next time it is opened.
+ *
+ * Deliberately does NOT push discrepancies at the renderer. The review
+ * panel is opened from the renderer's own reconcileCheck call (see
+ * trackingReconcileCheck), which shares this same cooldown — so the two
+ * cooperate rather than double-asking, and a background pass never
+ * interrupts anyone with a panel they did not ask for.
+ */
+export async function runBackgroundWatchSync(): Promise<void> {
+  if (!simklCredentials().accessToken) return
+  await flushPendingPushes()
+  const db = getDatabase()
+  if (db.getCache(RECONCILE_COOLDOWN_KEY)) return
+  db.putCache(RECONCILE_COOLDOWN_KEY, true, RECONCILE_COOLDOWN_MS)
+  try {
+    await computeMovieDiscrepancies()
+  } catch (error) {
+    logError('job:watch-sync', error)
+  }
+}
+
 /** Single-flight wrapper — the debounce timer and a reconcile check can
  *  both ask for a flush, and two overlapping ones would push the same
  *  queue twice and race on writing it back. */
