@@ -30,10 +30,12 @@ import {
   continueWatchingEntryToItem
 } from './adapters'
 import {
+  mergeRememberedCatalog,
   rememberCatalog,
   rememberHomeFeed,
   rememberedCatalog,
-  rememberedHomeFeed
+  rememberedHomeFeed,
+  type ResolvedKind
 } from './startupSnapshot'
 
 const CATALOG_KINDS: MediaKind[] = ['movie', 'series', 'anime']
@@ -115,9 +117,9 @@ export function startupContinueWatchingFallback(): ContinueWatchingItem[] {
   return startupHomeFeedFallback().continueWatching
 }
 
-function dedupeById(items: CatalogItem[]): CatalogItem[] {
+function dedupeById<T extends { id: string }>(items: T[]): T[] {
   const seen = new Set<string>()
-  const out: CatalogItem[] = []
+  const out: T[] = []
   for (const item of items) {
     if (!item.id || seen.has(item.id)) continue
     seen.add(item.id)
@@ -148,9 +150,14 @@ export interface BrowseCatalogResult {
  * (movies + series + anime merged), but fetched from the real catalog:list
  * handler across all three kinds. Falls back to the previous session's
  * remembered catalog (startupSnapshot.ts) while the fetch is out or has
- * failed, so mood browsing and My List never go blank — `live` tells a
- * consumer which source it's actually looking at, so a page can say so
- * honestly instead of presenting the fallback as fresh data.
+ * failed, so mood browsing and My List never go blank — per kind, not
+ * all-or-nothing, since the three kinds no longer land together.
+ *
+ * `live` means "at least one kind returned real rows this run", so a
+ * consumer can tell a wholly-remembered catalog from one that has been
+ * re-checked. It does NOT mean every item is fresh: while a slow kind is
+ * still out, `items` is a mix of this run's rows and that kind's
+ * remembered ones.
  */
 export function useMediaHubBrowseCatalog(
   trackedIds: Set<string>,
@@ -220,6 +227,15 @@ export function useMediaHubBrowseCatalog(
     return merged.length ? dedupeById(merged) : null
   }, [groups])
 
+  // Which kinds have actually reported real rows this run. Publishing each
+  // kind as it lands means the other two are, for a while, simply absent
+  // from `items` — this is what lets the merge below tell "that kind has
+  // nothing" apart from "that kind has not answered yet".
+  const resolvedKinds = useMemo(
+    () => new Set<ResolvedKind>(CATALOG_KINDS.filter((kind) => groups[kind]?.length)),
+    [groups]
+  )
+
   // Grouped once per history change rather than re-derived per item.
   // catalogItemToMediaItem's completion check would otherwise filter the
   // whole history for every entry — see CatalogItemAdapterContext.historyById.
@@ -255,22 +271,32 @@ export function useMediaHubBrowseCatalog(
     [items, trackedIds, watchedIds, historyById, dislikedIds]
   )
 
-  // What the next cold start opens on. Written from `mapped` rather than
-  // the raw rows so the stored shape is the one the UI renders directly,
-  // and re-written whenever a badge moves (marking something watched
-  // changes `mapped`) so the remembered grid doesn't come back with last
-  // week's badges on it. The write itself is deferred and coalesced —
+  // Live rows for the kinds that have answered, plus the remembered rows
+  // for the kinds that have not — see mergeRememberedCatalog, which is
+  // where the reasoning (and the bug it prevents) lives.
+  const catalog = useMemo(() => {
+    const remembered = startupCatalogFallback()
+    if (!mapped) return remembered
+    return mergeRememberedCatalog(mapped, remembered, resolvedKinds)
+  }, [mapped, resolvedKinds])
+
+  // What the next cold start opens on. Written from the merged list rather
+  // than the raw rows so the stored shape is the one the UI renders
+  // directly, and re-written whenever a badge moves (marking something
+  // watched changes `mapped`) so the remembered grid doesn't come back
+  // with last week's badges on it. The write is deferred and coalesced —
   // see startupSnapshot.ts's WRITE_DELAY_MS.
+  //
+  // Guarded on `mapped`, not on `catalog`: with no bridge, `catalog` is
+  // mockData's demo pool, and persisting THAT as this app's memory would
+  // be the original bug wearing a new hat.
   useEffect(() => {
-    if (mapped?.length) rememberCatalog(mapped)
-  }, [mapped])
+    if (mapped?.length) rememberCatalog(catalog)
+  }, [mapped, catalog])
 
   return useMemo(
-    () =>
-      mapped
-        ? { items: mapped, loading, live: true, settled, refresh }
-        : { items: startupCatalogFallback(), loading, live: false, settled, refresh },
-    [mapped, loading, settled, refresh]
+    () => ({ items: catalog, loading, live: mapped !== null, settled, refresh }),
+    [catalog, mapped, loading, settled, refresh]
   )
 }
 

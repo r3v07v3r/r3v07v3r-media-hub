@@ -67,7 +67,10 @@ function fakeStorage(limit = Infinity): FakeStorage {
 // The module memoises what it read on first access (a session-long fact
 // by design — see startupCatalogFallback in hooks.ts), so each scenario
 // needs its own module instance rather than a reset hook that only exists
-// for tests.
+// for tests. The distinct query suffix is what buys that; assertIsolated
+// below checks the runner actually honours it, because a loader that
+// collapsed these would leave every scenario asserting against the
+// PREVIOUS one's memoised snapshot.
 let moduleCounter = 0
 async function loadModule(storage: FakeStorage) {
   ;(globalThis as { window?: unknown }).window = {
@@ -103,7 +106,24 @@ function stored(storage: FakeStorage) {
   return JSON.parse(raw)
 }
 
+/**
+ * Fails loudly, once, if the module cache is not per-suffix. Without this
+ * the suite's diagnosis for that would be eight unrelated-looking
+ * assertion failures instead of one sentence naming the cause.
+ */
+async function assertIsolated(): Promise<void> {
+  const a = await loadModule(fakeStorage())
+  const b = await loadModule(fakeStorage())
+  assert.notEqual(
+    a,
+    b,
+    'the test runner is reusing one module instance across query suffixes — every scenario below would read the previous one’s memoised snapshot'
+  )
+}
+
 async function main(): Promise<void> {
+  await assertIsolated()
+
   console.log('startupSnapshot — round trip')
 
   await check('remembers a catalog and reads it back on the next launch', async () => {
@@ -360,6 +380,76 @@ async function main(): Promise<void> {
     mod.rememberCatalog([mediaItem({ id: 'm1' })])
     mod.flushStartupSnapshot()
     assert.equal(storage.getItem(STORAGE_KEY), previous)
+  })
+
+  console.log('\nstartupSnapshot — merging a partially-loaded catalog')
+
+  // catalog:list publishes each kind as it lands. These pin the window in
+  // between, where some kinds are live and others have not answered yet.
+  const { mergeRememberedCatalog } = await loadModule(fakeStorage())
+  const live = (id: string, kind: string) =>
+    mediaItem({ id, title: `live ${id}`, mediaKind: kind as MediaItem['mediaKind'] })
+  const kept = (id: string, kind: string) =>
+    mediaItem({ id, title: `remembered ${id}`, mediaKind: kind as MediaItem['mediaKind'] })
+  const remembered = [kept('m1', 'movie'), kept('s1', 'series'), kept('a1', 'anime')]
+  const ids = (list: MediaItem[]) => list.map((m) => m.id)
+
+  await check('carries kinds that have not answered yet', () => {
+    // The real regression this guards: the Simkl feeds land in about a
+    // second and the Kitsu crawl takes far longer, so publishing kinds as
+    // they land used to blank the Anime page in between.
+    const merged = mergeRememberedCatalog([live('m2', 'movie')], remembered, new Set(['movie']))
+    assert.deepEqual(ids(merged), ['m2', 's1', 'a1'])
+    assert.ok(!ids(merged).includes('m1'), 'an answered kind replaces its own rows outright')
+  })
+
+  await check('keeps carrying a kind whose fetch failed outright', () => {
+    // Anime never resolves, so it never enters resolvedKinds. The
+    // remembered anime has to survive — including into the next snapshot,
+    // since the merged list is also what gets persisted.
+    const merged = mergeRememberedCatalog(
+      [live('m2', 'movie'), live('s2', 'series')],
+      remembered,
+      new Set(['movie', 'series'])
+    )
+    assert.deepEqual(ids(merged), ['m2', 's2', 'a1'])
+  })
+
+  await check('carries nothing once every kind has answered', () => {
+    const liveAll = [live('m2', 'movie'), live('s2', 'series'), live('a2', 'anime')]
+    const merged = mergeRememberedCatalog(
+      liveAll,
+      remembered,
+      new Set(['movie', 'series', 'anime'])
+    )
+    assert.equal(merged, liveAll, 'the live array itself, not a copy, when nothing is carried')
+  })
+
+  await check('prefers the live copy of a title the snapshot also holds', () => {
+    // Same id reached from an unresolved kind: the fresh row wins, so a
+    // stale watched/My List badge cannot outlive the fetch that fixed it.
+    const merged = mergeRememberedCatalog(
+      [live('a1', 'movie')],
+      [kept('a1', 'anime')],
+      new Set(['movie'])
+    )
+    assert.equal(merged.length, 1)
+    assert.equal(merged[0].title, 'live a1')
+  })
+
+  await check('carries items that belong to no kind at all', () => {
+    // mockData's rows have no mediaKind (the bridgeless preview build).
+    const merged = mergeRememberedCatalog(
+      [live('m2', 'movie')],
+      [mediaItem({ id: 'mock1', title: 'Mock', mediaKind: undefined })],
+      new Set(['movie'])
+    )
+    assert.deepEqual(ids(merged), ['m2', 'mock1'])
+  })
+
+  await check('handles either side being empty', () => {
+    assert.deepEqual(ids(mergeRememberedCatalog([live('m2', 'movie')], [], new Set())), ['m2'])
+    assert.deepEqual(ids(mergeRememberedCatalog([], remembered, new Set())), ['m1', 's1', 'a1'])
   })
 
   console.log(`\n${pass} passed${failed ? `, ${failed} failed` : ''}`)

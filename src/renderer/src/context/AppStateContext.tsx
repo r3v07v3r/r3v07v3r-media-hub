@@ -199,15 +199,17 @@ interface AppStateValue {
   ) => void
 
   // The flat "browse everything" pool (movies + series + anime, real
-  // catalog:list data when available, mockData's CATALOG fallback
-  // otherwise — see hooks.ts's useMediaHubBrowseCatalog) — shared here so
+  // catalog:list data when available, the previous session's remembered
+  // catalog otherwise — see hooks.ts's useMediaHubBrowseCatalog) — shared here so
   // MoodBrowser/My Stuff/the AI-recommend actions all fetch it once
   // instead of each mounting their own copy of the hook.
   catalog: MediaItem[]
   catalogLoading: boolean
-  /** True once catalog:list has actually resolved live data — false means
-   *  `catalog` is the mock CATALOG fallback (bridge missing, still
-   *  loading, or every kind's fetch failed). See hooks.ts. */
+  /** True once at least one catalog kind has returned real rows this run
+   *  — false means `catalog` is entirely remembered from the previous
+   *  session (bridge missing, still loading, or every kind's fetch
+   *  failed). Not a promise that every item is fresh: a kind that is
+   *  still loading contributes its remembered rows. See hooks.ts. */
   catalogLive: boolean
   catalogSettled: boolean
   refreshCatalog: () => void

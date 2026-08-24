@@ -245,6 +245,52 @@ export function rememberHomeFeed(feed: HomeFeedSnapshot): void {
   schedule()
 }
 
+/** The catalog kinds a MediaItem can carry — `mediaKind`, minus undefined. */
+export type ResolvedKind = NonNullable<MediaItem['mediaKind']>
+
+/**
+ * Live rows for the catalog kinds that have answered this run, plus the
+ * remembered rows for the kinds that have not.
+ *
+ * catalog:list publishes each kind the moment it lands rather than
+ * awaiting all three (see hooks.ts) — the Simkl feeds come back in about
+ * a second, the Kitsu crawl takes far longer. Without this merge that
+ * improvement actively removes content: as soon as movies landed, the
+ * catalog became movies-only and the remembered anime the Anime page was
+ * already showing vanished into a skeleton until the crawl finished, which
+ * is the "it all disappears a second in" this whole file exists to stop.
+ * If that crawl then failed, the remembered anime stayed gone — and,
+ * because the merged list is also what gets persisted, was dropped from
+ * the next launch's snapshot too.
+ *
+ * A kind that has answered always wins outright for its own rows, so a
+ * title genuinely dropped from the live catalog does not linger. Items
+ * with no `mediaKind` (mockData's, in the bridgeless preview build)
+ * belong to no kind and are always carried; that build resolves no kinds
+ * anyway.
+ */
+export function mergeRememberedCatalog(
+  live: MediaItem[],
+  remembered: MediaItem[],
+  resolvedKinds: ReadonlySet<ResolvedKind>
+): MediaItem[] {
+  if (!remembered.length) return live
+  const carried = remembered.filter((item) => !item.mediaKind || !resolvedKinds.has(item.mediaKind))
+  if (!carried.length) return live
+  if (!live.length) return carried
+
+  const seen = new Set(live.map((item) => item.id))
+  const merged = live.slice()
+  for (const item of carried) {
+    // An id already present live is the same title, freshly fetched —
+    // keep that one, never the remembered copy with its older badges.
+    if (seen.has(item.id)) continue
+    seen.add(item.id)
+    merged.push(item)
+  }
+  return merged
+}
+
 export function clearStartupSnapshot(): void {
   current = EMPTY
   if (writeTimer) {
