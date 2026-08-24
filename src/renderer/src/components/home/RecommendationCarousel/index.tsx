@@ -7,7 +7,7 @@ import { MediaCard } from './MediaCard'
 import styles from './RecommendationCarousel.module.css'
 
 export function RecommendationCarousel() {
-  const { recommendations, homeFeedLoading } = useAppState()
+  const { recommendations, homeFeedLoading, homeFeedError, refreshHomeFeed } = useAppState()
   // home:personalized's recommendations once it resolves; before that,
   // the picks this app last really showed (see lib/mediaHub/
   // startupSnapshot.ts). The mock AI_PICKS pool this used to fall back to
@@ -106,12 +106,29 @@ export function RecommendationCarousel() {
         AI Picks For You
       </h2>
       {!loading && picks.length === 0 ? (
-        // Real recommendations, unlike the mock pool they replaced, can
-        // legitimately come back empty (e.g. no watch history yet to
-        // derive a preferred genre from) — honest empty state rather than
-        // an empty-looking scroller with no explanation.
+        // An empty row has two causes and they are not interchangeable.
+        //
+        // main ranks recommendations over the WHOLE catalog when it has
+        // no watch history to personalise from, and throws outright when
+        // every catalog source is down (tracking.ts's homePersonalized) —
+        // so in practice an empty row means the fetch failed. Saying
+        // "watch a few titles" to someone whose backend is unreachable
+        // blames them for a network problem and hides the retry that
+        // would actually fix it. The "not enough history" copy is kept
+        // for the case it honestly describes.
         <p className={styles.emptyState}>
-          Watch a few titles and recommendations will show up here.
+          {homeFeedError ? (
+            <>
+              <Icon name="wifi-off" size={15} />
+              Couldn&apos;t reach the media hub backend.
+              <button type="button" onClick={refreshHomeFeed} className={styles.emptyRetry}>
+                <Icon name="refresh" size={13} />
+                Retry
+              </button>
+            </>
+          ) : (
+            'Watch a few titles and recommendations will show up here.'
+          )}
         </p>
       ) : (
         <div className={styles.scrollerWrap}>

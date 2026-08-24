@@ -43,9 +43,7 @@ import styles from './CategoryPage.module.css'
 export function CategoryPage({ config }: { config: CategoryConfig }) {
   const {
     catalog,
-    catalogLoading,
-    catalogLive,
-    catalogSettled,
+    catalogKindStates,
     refreshCatalog,
     categorySearch,
     clearCategorySearch,
@@ -107,6 +105,13 @@ export function CategoryPage({ config }: { config: CategoryConfig }) {
     [categorySearch.results, filters]
   )
 
+  // This page's OWN kind, not the catalog as a whole. The three kinds are
+  // fetched independently (see hooks.ts), so a global "the catalog loaded"
+  // flag let a successful Movies fetch vouch for a failed Anime one — the
+  // Anime page then sat there showing remembered titles, or an empty grid
+  // on a first launch, with nothing to say so and no way to retry.
+  const kindState = catalogKindStates[config.kind]
+
   const heroItems = useMemo(() => kindItems.slice(0, 6), [kindItems])
 
   // Enough of the grid needs to already be rendered for the restore step
@@ -144,7 +149,7 @@ export function CategoryPage({ config }: { config: CategoryConfig }) {
           would break that self-placement. */}
       <CompactAIAssistant kinds={[config.kind]} />
 
-      <FeaturedHero items={heroItems} loading={catalogLoading} />
+      <FeaturedHero items={heroItems} loading={kindState === 'loading'} />
       <ContinueWatchingPanel kindFilter={config.kind} className={styles.continuePanel} />
       <RecommendationCarousel />
 
@@ -156,18 +161,14 @@ export function CategoryPage({ config }: { config: CategoryConfig }) {
           onChange={setFilters}
           resultCount={filteredSorted.length}
         />
-        {catalogSettled && !catalogLive && (
+        {/* Only when there are titles on screen that need explaining. With
+            none, the grid below carries the failure and its own Retry
+            instead — one account of what went wrong, not two. */}
+        {kindState === 'failed' && kindItems.length > 0 && (
           <div className={styles.offlineBanner} role="status">
             <Icon name="wifi-off" size={15} />
-            {/* Two genuinely different situations, and the banner used to
-                describe both as "showing preview titles" — which stopped
-                being true the moment the fallback became the previous
-                session's real catalog (see lib/mediaHub/startupSnapshot.ts)
-                rather than mockData's demo pool, and was never true at all
-                when the fallback was empty. */}
-            {kindItems.length > 0
-              ? "Couldn't reach the media hub backend — showing the titles it last had."
-              : "Couldn't reach the media hub backend."}
+            Couldn&apos;t reach the media hub backend — showing the {config.pluralLabel} it last
+            had.
             <button type="button" onClick={refreshCatalog} className={styles.offlineRetry}>
               <Icon name="refresh" size={13} />
               Retry
@@ -197,16 +198,18 @@ export function CategoryPage({ config }: { config: CategoryConfig }) {
             />
           </>
         ) : (
-          // Only a placeholder while there is genuinely nothing to place.
-          // catalog:list now publishes each kind as it lands rather than
-          // awaiting all three together (see hooks.ts), and the anime
-          // crawl takes far longer than the two Simkl feeds — so
-          // `catalogLoading` stays true well after this page's own kind
-          // has arrived, and keying the skeleton off it alone would hide a
-          // grid that is ready to read.
+          // Placeholder and error state both keyed on THIS kind, and both
+          // only while there is nothing to show. catalog:list publishes
+          // each kind as it lands (see hooks.ts), so a grid that is ready
+          // to read must not be hidden behind another kind's slower crawl
+          // — nor must an empty one blame the person's filters for a fetch
+          // that never came back.
           <MediaGrid
             items={filteredSorted}
-            loading={catalogLoading && kindItems.length === 0}
+            loading={kindState === 'loading' && kindItems.length === 0}
+            error={kindState === 'failed' && kindItems.length === 0}
+            errorTitle="Couldn't reach the media hub backend"
+            onRetry={refreshCatalog}
             emptyTitle={`No ${config.pluralLabel} to show`}
             emptyMessage="Try widening a filter or clearing them all."
             initialVisibleCount={restoreVisibleCount}

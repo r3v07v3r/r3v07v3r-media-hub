@@ -54,7 +54,8 @@ import {
   useMediaHubBrowseCatalog,
   useMediaHubDislikedIds,
   useMediaHubHomeFeed,
-  useMediaHubWatchedIds
+  useMediaHubWatchedIds,
+  type CatalogKindState
 } from '@renderer/lib/mediaHub/hooks'
 import type { CategoryKind } from '@renderer/lib/mediaHub/categoryFilters'
 import { MAX_PROMPT_TITLES } from '@shared/media-hub/ollama'
@@ -210,8 +211,11 @@ interface AppStateValue {
    *  session (bridge missing, still loading, or every kind's fetch
    *  failed). Not a promise that every item is fresh: a kind that is
    *  still loading contributes its remembered rows. See hooks.ts. */
-  catalogLive: boolean
-  catalogSettled: boolean
+  /** Per-kind catalog availability — see hooks.ts's CatalogKindState.
+   *  There is deliberately no global "the catalog is live" flag: the
+   *  three kinds are fetched independently, so one would hide a failed
+   *  kind behind a successful one. Ask about the kind you are showing. */
+  catalogKindStates: Record<MediaKind, CatalogKindState>
   refreshCatalog: () => void
 
   // home:personalized's recommendations/featured pool (see
@@ -227,6 +231,12 @@ interface AppStateValue {
    *  whether to render a loading placeholder or an honest empty state,
    *  and those are two different questions. */
   homeFeedLoading: boolean
+  /** The last home:personalized attempt threw — see hooks.ts's
+   *  HomeFeedResult.error for why an empty feed alone can't be read as
+   *  "nothing to recommend yet". */
+  homeFeedError: boolean
+  /** Retries home:personalized. */
+  refreshHomeFeed: () => void
 
   // Snapshot of the media-hub backend's settings (torboxConnected,
   // simklClientId, theme, ...) — read by the playback gate below and by
@@ -2048,13 +2058,14 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       removeContinueWatching,
       catalog: browseCatalog.items,
       catalogLoading: browseCatalog.loading,
-      catalogLive: browseCatalog.live,
-      catalogSettled: browseCatalog.settled,
+      catalogKindStates: browseCatalog.kindStates,
       refreshCatalog: browseCatalog.refresh,
       recommendations: homeFeed.recommendations,
       featured: homeFeed.featured,
       homeFeedLive: homeFeed.live,
       homeFeedLoading: homeFeed.loading,
+      homeFeedError: homeFeed.error,
+      refreshHomeFeed: homeFeed.refresh,
       mediaHubSettings,
       refreshMediaHubSettings,
       assistantState,
@@ -2140,13 +2151,14 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       removeContinueWatching,
       browseCatalog.items,
       browseCatalog.loading,
-      browseCatalog.live,
-      browseCatalog.settled,
+      browseCatalog.kindStates,
       browseCatalog.refresh,
       homeFeed.recommendations,
       homeFeed.featured,
       homeFeed.live,
       homeFeed.loading,
+      homeFeed.error,
+      homeFeed.refresh,
       mediaHubSettings,
       refreshMediaHubSettings,
       assistantState,

@@ -56,9 +56,23 @@
   flex: 1;
   display: flex;
   align-items: center;
+  gap: 7px;
   margin: 0;
   font-size: 13px;
   color: var(--text-secondary);
+}
+
+/* Matches CategoryPage.module.css's .offlineRetry — the same "this failed,
+   try again" affordance, so it should not read as a different control. */
+.emptyRetry {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: inherit;
+  font-weight: 600;
+}
+.emptyRetry:hover {
+  text-decoration: underline;
 }
 
 .scrollerWrap {

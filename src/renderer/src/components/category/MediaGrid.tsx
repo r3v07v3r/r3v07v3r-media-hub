@@ -66,6 +66,11 @@ export interface MediaGridProps {
   onRetry?: () => void
   emptyTitle?: string
   emptyMessage?: string
+  /** Overrides the error-state copy. Defaults to the category-search
+   *  wording this state was originally built for; the browse grid uses it
+   *  for a failed catalog:list, which is a different backend and must not
+   *  claim to be the search one. */
+  errorTitle?: string
   /** Seeds the initial reveal batch above BATCH — used when restoring a
    *  browsing position (see useRestoreBrowsingOrigin) whose focused card
    *  was further down the list than one batch would normally render, so
@@ -84,6 +89,7 @@ export function MediaGrid({
   onRetry,
   emptyTitle = 'No titles match these filters',
   emptyMessage = 'Try widening a filter or clearing them all.',
+  errorTitle = "Couldn't reach the search backend",
   initialVisibleCount
 }: MediaGridProps) {
   const [visibleCount, setVisibleCount] = useState(initialVisibleCount ?? BATCH)
@@ -170,7 +176,7 @@ export function MediaGrid({
     return (
       <div className={styles.state} role="alert">
         <Icon name="wifi-off" size={26} />
-        <p className={styles.stateTitle}>Couldn&apos;t reach the search backend</p>
+        <p className={styles.stateTitle}>{errorTitle}</p>
         <p className={styles.stateMessage}>Check your connection and try again.</p>
         {onRetry && (
           <button type="button" className={styles.retryButton} onClick={onRetry}>

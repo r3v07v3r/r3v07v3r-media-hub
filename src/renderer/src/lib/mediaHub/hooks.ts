@@ -128,15 +128,26 @@ function dedupeById<T extends { id: string }>(items: T[]): T[] {
   return out
 }
 
+/**
+ * Per kind, because the three catalog:list calls succeed and fail
+ * independently — 'loading' until that kind answers, then 'live' or
+ * 'failed'. A single global flag could not express "movies are fine,
+ * anime is down", which is the state a person on the Anime page needs
+ * told about.
+ */
+export type CatalogKindState = 'loading' | 'live' | 'failed'
+
 export interface BrowseCatalogResult {
   items: MediaItem[]
   loading: boolean
-  live: boolean
-  /** True once the initial fetch has settled (succeeded or failed) at
-   *  least once — lets a consumer tell "still loading for the first time"
-   *  apart from "loading again because refresh() was just called", since
-   *  both report `loading: true` the same way. */
-  settled: boolean
+  /** See CatalogKindState. Always has an entry for every kind.
+   *
+   *  This replaced a pair of global `live`/`settled` booleans. They could
+   *  not say "movies are fine, anime is down" — and because the three
+   *  kinds are fetched independently, that is the common failure, not an
+   *  exotic one. A successful Movies fetch was flipping `live` true and
+   *  silently vouching for a failed Anime one. */
+  kindStates: Record<MediaKind, CatalogKindState>
   /** Re-runs catalog:list across all three kinds — the retry action for
    *  category pages' "couldn't reach the backend" error state (spec:
    *  "retry-capable error states"), and generally for anything that wants
@@ -168,13 +179,16 @@ export function useMediaHubBrowseCatalog(
   // Kept per kind rather than as one merged array, because the three
   // fetches are no longer awaited together (see the effect below).
   const [groups, setGroups] = useState<Partial<Record<MediaKind, CatalogItem[]>>>({})
+  // Answered-or-not, per kind, tracked separately from the rows above
+  // because "returned nothing" and "never returned" are different facts
+  // and only one of them is worth offering someone a Retry over.
+  const [outcomes, setOutcomes] = useState<Partial<Record<MediaKind, 'live' | 'failed'>>>({})
   // Lazily derived from bridge presence (a constant for this component's
   // lifetime, not something that changes across renders) rather than
   // started `true` and flipped `false` in the effect below — keeps the
   // "no bridge" case out of the effect entirely instead of a synchronous
   // setState purely to undo the initial value.
   const [loading, setLoading] = useState(() => Boolean(window.api?.mediaHub))
-  const [settled, setSettled] = useState(() => !window.api?.mediaHub)
   const [generation, setGeneration] = useState(0)
 
   useEffect(() => {
@@ -187,6 +201,12 @@ export function useMediaHubBrowseCatalog(
     // redundant re-assertion of the lazy initial value.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setLoading(true)
+    // A retry genuinely is 'loading' again for every kind, so the banner
+    // and error states clear while it runs rather than sitting there
+    // asserting a failure that is currently being re-tested. The rows in
+    // `groups` are deliberately NOT cleared alongside them.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setOutcomes({})
     // Deliberately NOT a Promise.all over the three kinds any more. The
     // anime crawl (catalog.ts's kitsuCatalog walks Kitsu 1000 entries
     // deep, throttled) routinely takes an order of magnitude longer than
@@ -199,20 +219,28 @@ export function useMediaHubBrowseCatalog(
     for (const kind of CATALOG_KINDS) {
       api.catalog
         .list(kind, generation > 0)
-        .then((rows) => {
-          // An empty/failed kind leaves whatever that kind last had in
-          // place — on a refresh that is the previous live data, which
-          // beats blanking a populated grid to report a transient failure.
-          if (cancelled || !rows?.length) return
-          setGroups((prev) => ({ ...prev, [kind]: rows }))
-        })
-        .catch(() => {})
+        .then(
+          (rows) => {
+            if (cancelled) return
+            setOutcomes((prev) => ({ ...prev, [kind]: 'live' }))
+            // An empty kind leaves whatever that kind last had in place —
+            // on a refresh that is the previous live data, which beats
+            // blanking a populated grid over a momentary nothing.
+            if (!rows?.length) return
+            setGroups((prev) => ({ ...prev, [kind]: rows }))
+          },
+          // Two-argument form, not a trailing .catch: a throw from the
+          // success path above is a bug in this file, not a failed fetch,
+          // and must not be recorded as one.
+          () => {
+            if (!cancelled) setOutcomes((prev) => ({ ...prev, [kind]: 'failed' }))
+          }
+        )
         .finally(() => {
           if (cancelled) return
           remaining -= 1
           if (remaining > 0) return
           setLoading(false)
-          setSettled(true)
         })
     }
     return () => {
@@ -221,6 +249,12 @@ export function useMediaHubBrowseCatalog(
   }, [generation])
 
   const refresh = useCallback(() => setGeneration((g) => g + 1), [])
+
+  const kindStates = useMemo(() => {
+    const states = {} as Record<MediaKind, CatalogKindState>
+    for (const kind of CATALOG_KINDS) states[kind] = outcomes[kind] ?? 'loading'
+    return states
+  }, [outcomes])
 
   const items = useMemo(() => {
     const merged = CATALOG_KINDS.flatMap((kind) => groups[kind] ?? [])
@@ -295,8 +329,8 @@ export function useMediaHubBrowseCatalog(
   }, [mapped, catalog])
 
   return useMemo(
-    () => ({ items: catalog, loading, live: mapped !== null, settled, refresh }),
-    [catalog, mapped, loading, settled, refresh]
+    () => ({ items: catalog, loading, kindStates, refresh }),
+    [catalog, kindStates, loading, refresh]
   )
 }
 
@@ -402,6 +436,17 @@ export interface HomeFeedResult {
   trackedIds: Set<string>
   loading: boolean
   live: boolean
+  /** The last home:personalized attempt threw.
+   *
+   *  Worth its own flag because the alternative reading is defamatory:
+   *  main returns recommendations ranked over the WHOLE catalog when it
+   *  has nothing personal to go on, and throws outright when every
+   *  catalog source is down (tracking.ts's homePersonalized) — so an
+   *  empty recommendations list essentially only happens when the fetch
+   *  failed. Without this, a backend outage rendered as "watch a few
+   *  titles and recommendations will show up here", which blames the
+   *  person's viewing history for a network problem. */
+  error: boolean
   /** Re-runs the home:personalized fetch — call after a mutation (mark watched, toggle tracking) that should move an item in/out of Continue Watching. */
   refresh: () => void
 }
@@ -422,6 +467,7 @@ export function useMediaHubHomeFeed(): HomeFeedResult {
   // See useMediaHubBrowseCatalog above for why this is a lazy initializer
   // rather than an effect-driven flip.
   const [loading, setLoading] = useState(() => Boolean(window.api?.mediaHub))
+  const [error, setError] = useState(false)
   const [generation, setGeneration] = useState(0)
 
   useEffect(() => {
@@ -434,6 +480,10 @@ export function useMediaHubHomeFeed(): HomeFeedResult {
     // redundant re-assertion of the initial value.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setLoading(true)
+    // A retry in progress is not a failure — see the same reasoning in
+    // useMediaHubBrowseCatalog's setOutcomes({}).
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setError(false)
     api.home
       .personalized()
       .then((result) => {
@@ -463,7 +513,9 @@ export function useMediaHubHomeFeed(): HomeFeedResult {
         })
       })
       .catch(() => {
-        if (!cancelled) setState(null)
+        if (cancelled) return
+        setState(null)
+        setError(true)
       })
       .finally(() => {
         if (!cancelled) setLoading(false)
@@ -479,8 +531,9 @@ export function useMediaHubHomeFeed(): HomeFeedResult {
       ...(state ?? startupHomeFeedFallback()),
       loading,
       live: state !== null,
+      error,
       refresh
     }),
-    [state, loading, refresh]
+    [state, loading, error, refresh]
   )
 }
