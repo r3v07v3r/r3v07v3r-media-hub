@@ -116,10 +116,18 @@ function tick(): void {
     // on top of that. The `running` flag is what stops a run overlapping
     // itself when the work outlasts its own interval.
     state.dueAt = now + state.job.everyMs
+    // Announced here, and again when it settles, rather than left to the
+    // scheduler's own change events. A job that finds a warm cache does
+    // no scheduled work at all — which, now that the catalog refresh
+    // honours the cache, is the common case — so nothing else would ever
+    // tell the activity panel this happened, and it would sit showing a
+    // job as due "now" forever while it was quietly running on time.
+    onActivityChanged()
     void coalesce(`job:${state.job.name}`, () => state.job.run())
       .catch((error) => logError(`job:${state.job.name}`, error))
       .finally(() => {
         state.running = false
+        onActivityChanged()
       })
   }
 }

@@ -528,7 +528,24 @@ async function resolveMetadata(
   // version bump (which would force-refetch every cached title instead
   // of just re-running a cheap, pure, synchronous transform on data
   // that's already there).
-  if (cached) return { ...cached, videos: disambiguateVideos(cached.videos) }
+  // One exception to serving the cache: an anime whose franchise
+  // siblings were worked out AFTER this entry was written.
+  //
+  // The grouping pass takes minutes, and anything opened while it runs is
+  // cached as the single season it looked like at the time. Invalidating
+  // the group index when the pass finishes fixes the NEXT lookup of that
+  // index, but does nothing for a 24h metadata entry that already
+  // answered without it — so the title would keep showing one season, and
+  // keep hiding the rest of its franchise, until that entry expired on
+  // its own a day later.
+  //
+  // Checked rather than cleared: enumerating which meta:v3 rows to drop
+  // would mean scanning the cache table, and this costs one Map lookup on
+  // a path that is already reading from the database. Only titles that
+  // actually gained siblings re-resolve, and only once.
+  const groupingIsNewer =
+    type === 'anime' && !cached?.groupedIds?.length && Boolean(groupedIdsFor(resolvedId)?.length)
+  if (cached && !groupingIsNewer) return { ...cached, videos: disambiguateVideos(cached.videos) }
 
   let item: CatalogItem
   try {
