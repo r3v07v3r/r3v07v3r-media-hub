@@ -340,6 +340,12 @@ export interface MarkWatchedResult {
 export interface PlaybackPositionResult {
   positionSeconds: number
   durationSeconds: number | null
+  /** Playback volume in use when the bookmark was written, as the same
+   *  0-2 multiplier the player speaks (1 = the source's own level).
+   *  Optional because only the single-bookmark read carries it: the
+   *  episode grid's list read has no use for a volume and does not ask
+   *  for one, and absent is the honest way to say that. */
+  volume?: number | null
 }
 
 /** Every resume bookmark stored for one title, in one read — the

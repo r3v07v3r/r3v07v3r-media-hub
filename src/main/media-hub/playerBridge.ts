@@ -12,12 +12,14 @@
 import { BrowserWindow, screen } from 'electron'
 import path from 'node:path'
 
-import type {
-  PlayerCommand,
-  PlayerInputEvent,
-  PlayerSessionSnapshot,
-  PlayerStatePatch,
-  PlayerUiEvent
+import {
+  MAX_PLAYER_VOLUME,
+  PLAYER_VOLUME_STEP,
+  type PlayerCommand,
+  type PlayerInputEvent,
+  type PlayerSessionSnapshot,
+  type PlayerStatePatch,
+  type PlayerUiEvent
 } from '../../shared/media-hub/player'
 import { MEDIA_HUB_CHANNELS } from '../../shared/media-hub/ipc-channels'
 import {
@@ -315,6 +317,18 @@ async function attachObservers(): Promise<void> {
         return
       case 'r3-seek-forward':
         void player.command('seek', 15, 'relative').catch(() => {})
+        return
+      // Applied here rather than handed to the overlay, unlike pause: volume
+      // is nobody else's business in a watch party, so there is no rule about
+      // who is allowed to change it and nothing to broadcast. `add` is mpv's
+      // own relative write, which saves a read and — the part that matters —
+      // clamps against --volume-max itself, so a held key stops at the
+      // ceiling instead of piling up writes mpv rejects.
+      case 'r3-volume-up':
+        void player.command('add', 'volume', PLAYER_VOLUME_STEP * 100).catch(() => {})
+        return
+      case 'r3-volume-down':
+        void player.command('add', 'volume', -PLAYER_VOLUME_STEP * 100).catch(() => {})
         return
       default:
         return
@@ -656,6 +670,52 @@ export async function startPlayerSession(
   await player.setBounds(playerBoundsFor(mainWindow))
   if (fullScreen) await player.setFullscreen(true)
 
+  // HAND THE RETAINED PLAYER OVER before touching it. Everything below runs
+  // inside a gap the overlay cannot see: it identifies whichever title it was
+  // last told about, and it is not told about the next one until
+  // pushSessionSnapshot, which this function's caller only reaches once the
+  // load below has finished. An overlay still naming the OUTGOING title
+  // attributes everything it observes to the outgoing bookmark — so its
+  // 20-second save timer, firing anywhere in that gap, would write the reset
+  // volume below into the last film's bookmark and quietly drop the boost
+  // stored there. The same gap misfiles positions once `loadfile` swaps the
+  // clock underneath it.
+  //
+  // Clearing the media closes that gap instead of narrowing it: the overlay's
+  // per-title teardown save fires on the change, recording the outgoing title
+  // with the position and volume it really had — both still untouched at this
+  // point — and tracking then stays quiet until a snapshot names its next
+  // subject. Ordering is what makes that airtight rather than lucky: session
+  // snapshots are sent immediately while property observations are batched
+  // behind STATE_FLUSH_MS, so the overlay cannot see the reset below while it
+  // still believes the old title is the one playing.
+  //
+  // Tracks and settings are deliberately left standing: the outgoing film is
+  // still on screen and still playing until `loadfile` replaces it, so its
+  // track menus are still the truthful ones. A first title has no outgoing
+  // snapshot at all, which makes this a no-op outside a real title change.
+  const outgoing = getSessionSnapshot()
+  if (outgoing?.media) pushSessionSnapshot({ ...outgoing, media: null })
+
+  // EVERY title starts at its own level, because mpv keeps `volume` across
+  // `loadfile` and a boost belongs to the film it was needed for — carrying
+  // 180% from a quiet film into the next one is a shock, not a preference.
+  //
+  // BEFORE the load for the same reason the window state above is: `loadfile`
+  // starts playing, and loadFile() does not return until mpv reports
+  // `file-loaded`, by which time sound is already coming out. Reset it
+  // afterwards and the opening seconds of the new title are the previous
+  // title's amplification — the exact shock this exists to prevent, just
+  // shorter.
+  //
+  // Restoring the boost is the overlay's job, out of the resume bookmark, and
+  // the ordering that makes the two agree is not an accident: this runs inside
+  // startPlayerSession, while the overlay cannot even know WHICH title it is
+  // looking at until pushSessionSnapshot, which its caller only reaches after
+  // this function resolves. The reset therefore always lands first, and the
+  // restore — if there is one — always lands on top of it.
+  await player.set('volume', 100).catch(() => {})
+
   await player.loadFile(url, {
     startSeconds: options.startSeconds,
     audioLanguage: options.audioLanguage,
@@ -922,8 +982,11 @@ async function runCommand(command: PlayerCommand): Promise<void> {
     case 'set-volume': {
       const volume = Number(command.volume)
       if (!Number.isFinite(volume)) throw new Error('Invalid volume.')
-      // The UI speaks 0-1 (what video.volume used to be); mpv speaks 0-100.
-      await player.set('volume', clamp(volume, 0, 1) * 100)
+      // The UI speaks a multiplier of the source level (1 = untouched); mpv
+      // speaks percent. Anything above 1 is software amplification, which mpv
+      // only permits as far as the --volume-max it was launched with — hence
+      // the shared ceiling on both sides.
+      await player.set('volume', clamp(volume, 0, MAX_PLAYER_VOLUME) * 100)
       return
     }
     case 'set-speed': {

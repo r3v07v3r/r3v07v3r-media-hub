@@ -24,6 +24,7 @@ import { PlayerWindowProvider, usePlayerWindow } from '@renderer/context/PlayerW
 import { usePartySync } from '@renderer/hooks/usePartySync'
 import { usePlayerTracking } from '@renderer/hooks/usePlayerTracking'
 import { PlayerSessionRail } from '@renderer/components/party/PlayerSessionRail'
+import { MAX_PLAYER_VOLUME, PLAYER_VOLUME_STEP } from '@shared/media-hub/player'
 import type { SubtitleResult } from '@shared/media-hub/types'
 import {
   DEFAULT_VIDEO_FIT,
@@ -80,6 +81,11 @@ function PlayerControls() {
   const subtitleTracks = session?.tracks?.subtitle ?? []
   const buffering = state.bufferingForCache === true
   const volume = state.volume ?? 1
+  // Shown as a percentage rather than the 0-2 the command speaks: the number
+  // only means anything against the 100% that is the film's own level, which
+  // is the line the slider can now be pushed past.
+  const volumePercent = Math.round(volume * 100)
+  const volumeBoosted = volume > 1
   const media = session?.media ?? null
   // Main owns this, and pushes it — the overlay never guesses, so the label
   // stays right across a title change or a remount.
@@ -107,6 +113,7 @@ function PlayerControls() {
     timePos,
     duration,
     playing: !paused,
+    volume,
     onMarkWatched: useCallback(() => ui({ type: 'mark-watched' }), [ui])
   })
 
@@ -161,6 +168,42 @@ function PlayerControls() {
     },
     [locked, party, duration]
   )
+
+  // Volume nudges work off an optimistic ref rather than reading `volume`
+  // straight from state: mpv's property observations reach this window on a
+  // 120ms flush timer (playerBridge's STATE_FLUSH_MS), so a held key would
+  // read the same stale value several presses running and crawl. Writing the
+  // ref as each command goes out makes presses compound; the mirror effect
+  // puts mpv's own answer back whenever one lands, so nothing drifts.
+  const volumeRef = useRef(volume)
+  useEffect(() => {
+    volumeRef.current = volume
+  }, [volume])
+
+  // Not gated on `locked` like seeking and pausing are: volume is this
+  // machine's business, not the party's, so there is no host to defer to.
+  const nudgeVolume = useCallback(
+    (delta: number) => {
+      const next = Math.min(MAX_PLAYER_VOLUME, Math.max(0, volumeRef.current + delta))
+      // Rounded because 0.05 steps do not land on clean multiples in binary
+      // floating point, and this number is shown as a percentage.
+      const rounded = Math.round(next * 100) / 100
+      volumeRef.current = rounded
+      void command({ type: 'set-volume', volume: rounded })
+    },
+    [command]
+  )
+
+  // The other half of the volume decision main begins by resetting every
+  // title to 100%: one being RESUMED comes back at the volume it was left
+  // at, since a title left partway through is exactly the one whose boost
+  // was set for a reason. No bookmark, or one with no volume recorded, and
+  // there is nothing to apply — the reset already stands.
+  useEffect(() => {
+    if (tracking.resumeVolume === null) return
+    void command({ type: 'set-volume', volume: tracking.resumeVolume })
+    tracking.consumeResumeVolume()
+  }, [tracking, command])
 
   // Apply the saved resume position once the title is playing. Seeks are
   // in-place now, so this no longer waits for a buffering gate the way the
@@ -377,6 +420,12 @@ function PlayerControls() {
       } else if (event.key === 'ArrowLeft') {
         event.preventDefault()
         seekTo(timePos - 15)
+      } else if (event.key === 'ArrowUp') {
+        event.preventDefault()
+        nudgeVolume(PLAYER_VOLUME_STEP)
+      } else if (event.key === 'ArrowDown') {
+        event.preventDefault()
+        nudgeVolume(-PLAYER_VOLUME_STEP)
       } else if (event.key === 'f') {
         toggleFullscreen()
       } else if (event.key === 'Escape') {
@@ -386,7 +435,7 @@ function PlayerControls() {
     }
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
-  }, [party, seekTo, timePos, toggleFullscreen, handleEscape, revealControls])
+  }, [party, seekTo, timePos, nudgeVolume, toggleFullscreen, handleEscape, revealControls])
 
   // --- Skip intro/credits (anime only) -------------------------------------
   // Needs a real duration: Aniskip matches submissions by proximity to episode
@@ -638,18 +687,33 @@ function PlayerControls() {
 
           <div className={styles.spacer} />
 
-          <input
-            type="range"
-            min={0}
-            max={1}
-            step={0.05}
-            value={volume}
-            className={styles.volume}
-            onChange={(event) =>
-              void command({ type: 'set-volume', volume: Number(event.target.value) })
-            }
-            aria-label="Volume"
-          />
+          {/* Runs past 100% deliberately. Everything above it is mpv amplifying
+              in software, which is the only fix on this side for a film mixed
+              far quieter than the rest of the system — the ceiling is
+              MAX_PLAYER_VOLUME, and mpv is launched knowing the same number. */}
+          <div className={styles.volumeWrap}>
+            <input
+              type="range"
+              min={0}
+              max={MAX_PLAYER_VOLUME}
+              step={0.05}
+              value={volume}
+              className={`${styles.volume} ${volumeBoosted ? styles.volumeBoosted : ''}`}
+              onChange={(event) =>
+                void command({ type: 'set-volume', volume: Number(event.target.value) })
+              }
+              aria-label="Volume"
+              aria-valuetext={`${volumePercent}%`}
+              title={
+                volumeBoosted
+                  ? `Volume ${volumePercent}% — amplified above the source level`
+                  : `Volume ${volumePercent}%`
+              }
+            />
+            {/* Fixed width, always present: a readout that appeared only once
+                boosted would shove every control to its right along mid-drag. */}
+            <span className={styles.volumeReadout}>{volumePercent}%</span>
+          </div>
 
           {/* Shown whenever the title has any audio at all, not only when it
               has a choice. Hiding it for single-track files makes "this film has
