@@ -6,7 +6,7 @@
 // both main-process code (relative import) and renderer code
 // (`@shared/media-hub/catalog-logic`) with no Electron/Node dependency.
 
-import { AiringState, CatalogItem, HistoryEntry } from './types'
+import { AiringState, CatalogItem, HistoryEntry, MediaKind } from './types'
 
 export interface FilterCatalogOptions {
   includeGenres?: string[]
@@ -366,6 +366,219 @@ export function rankSimilarTitles(
     .map((x) => x.item)
 }
 
+/** One ranked title, with the score that put it there — see rankPersonalizedRecommendationsScored. */
+export interface ScoredRecommendation {
+  item: CatalogItem
+  score: number
+}
+
+/** Share of viewing by kind, 0..1, summing to 1. */
+export type CadenceShares = Record<MediaKind, number>
+
+/** What one person watches at one time of the week. */
+export interface CadenceProfile {
+  shares: CadenceShares
+  /** Dated rows the slot was measured from — the confidence behind `shares`. */
+  samples: number
+}
+
+const NO_SHARES: CadenceShares = { movie: 0, series: 0, anime: 0 }
+const KINDS: MediaKind[] = ['movie', 'series', 'anime']
+
+/**
+ * How much of the week a slot covers. Four parts of the day, split
+ * weekday/weekend, is eight buckets — coarse enough that a real history
+ * fills them, fine enough to separate the patterns people actually have.
+ * Local time throughout, deliberately: "what I watch on a Friday night" is
+ * a fact about the person's evening, not about UTC.
+ */
+function timeSlot(when: Date): string {
+  const hour = when.getHours()
+  const part = hour < 6 ? 'late' : hour < 12 ? 'morning' : hour < 18 ? 'afternoon' : 'evening'
+  const day = when.getDay()
+  return `${day === 0 || day === 6 ? 'weekend' : 'weekday'}:${part}`
+}
+
+/**
+ * Below this many dated rows in the current slot there is no pattern, only
+ * a handful of evenings — which would reshape the row on the strength of
+ * two or three viewings. Silence is the right answer for a new install,
+ * and for anyone whose habits do not fall into slots at all.
+ */
+const MIN_SLOT_SAMPLES = 25
+
+/**
+ * How far the row may move towards the slot's own mix.
+ *
+ * Not all the way, on purpose. This project's own user data has weekday
+ * mornings at 94% series; handing all eighteen slots to series would bury
+ * genuinely better suggestions on the strength of what is, in the end, a
+ * correlation with the clock. Half way keeps the row recognisably the
+ * ranked one while making it look like the time of day it is.
+ */
+const CADENCE_STRENGTH = 0.5
+
+/**
+ * What this person tends to watch AT THIS TIME OF WEEK.
+ *
+ * Null when the current slot holds too little dated history to say
+ * anything — see MIN_SLOT_SAMPLES.
+ *
+ * Undated rows are skipped rather than guessed at: Simkl's "all items"
+ * sync omits last_watched_at for some movies (see HistoryEntry.watchedAt),
+ * and dropping one costs a single sample where inventing a time for it
+ * would quietly bias every slot.
+ */
+export function watchCadenceProfile(
+  history: HistoryEntry[],
+  now = new Date()
+): CadenceProfile | null {
+  const slot = timeSlot(now)
+  const counts: Record<string, number> = {}
+  let samples = 0
+
+  for (const entry of history) {
+    if (!entry?.watchedAt || !entry.type) continue
+    const watchedAt = new Date(entry.watchedAt)
+    if (Number.isNaN(watchedAt.getTime())) continue
+    if (timeSlot(watchedAt) !== slot) continue
+    counts[entry.type] = (counts[entry.type] || 0) + 1
+    samples += 1
+  }
+
+  if (samples < MIN_SLOT_SAMPLES) return null
+
+  const shares: CadenceShares = { ...NO_SHARES }
+  for (const kind of KINDS) shares[kind] = (counts[kind] || 0) / samples
+  return { shares, samples }
+}
+
+/**
+ * How many row slots each kind gets: half what the ranking alone would
+ * have shown, half what this person watches at this hour.
+ *
+ * Largest-remainder, capped by what is actually there — a kind with three
+ * candidates cannot be handed eight slots, and whatever it cannot take
+ * goes back to the kinds that can.
+ */
+function slotQuotas(
+  queues: Map<MediaKind, ScoredRecommendation[]>,
+  ranked: ScoredRecommendation[],
+  shares: CadenceShares,
+  count: number
+): Map<MediaKind, number> {
+  const available = Math.min(count, ranked.length)
+  if (!available) return new Map(KINDS.map((kind) => [kind, 0]))
+
+  // The other half of the blend: what the untouched ranking would have put
+  // in the row.
+  const baseCounts = new Map<MediaKind, number>(KINDS.map((kind) => [kind, 0]))
+  for (const entry of ranked.slice(0, available)) {
+    const kind = entry.item.type
+    baseCounts.set(kind, (baseCounts.get(kind) || 0) + 1)
+  }
+
+  const targets = new Map<MediaKind, number>()
+  for (const kind of KINDS) {
+    const baseShare = (baseCounts.get(kind) || 0) / available
+    targets.set(
+      kind,
+      ((1 - CADENCE_STRENGTH) * baseShare + CADENCE_STRENGTH * shares[kind]) * available
+    )
+  }
+
+  const quotas = new Map<MediaKind, number>()
+  let allocated = 0
+  for (const kind of KINDS) {
+    const capped = Math.min(Math.floor(targets.get(kind) || 0), queues.get(kind)?.length || 0)
+    quotas.set(kind, capped)
+    allocated += capped
+  }
+
+  // Whatever floor() and the availability caps left over, handed to the
+  // kinds furthest below their target that still have candidates.
+  while (allocated < available) {
+    let best: MediaKind | null = null
+    let bestGap = -Infinity
+    for (const kind of KINDS) {
+      if ((queues.get(kind)?.length || 0) <= (quotas.get(kind) || 0)) continue
+      const gap = (targets.get(kind) || 0) - (quotas.get(kind) || 0)
+      if (gap > bestGap) {
+        bestGap = gap
+        best = kind
+      }
+    }
+    if (!best) break
+    quotas.set(best, (quotas.get(best) || 0) + 1)
+    allocated += 1
+  }
+  return quotas
+}
+
+/**
+ * Builds the row: which titles it holds, and in what order, for the time
+ * of day it is now.
+ *
+ * Two separate things happen here. The QUOTA decides how many of each kind
+ * the row gets, and that is what lets a kind the ranking scores low
+ * surface at all — something an added-on score bonus cannot do. Measured
+ * on this project's own user data: series sit at ranks 25-39 of the stored
+ * forty and never once entered the row, on weekday mornings that are 94%
+ * series. No bonus small enough to be safe could lift them; a quota just
+ * gives them the slots.
+ *
+ * Then the INTERLEAVE decides the order, spreading each kind through the
+ * row in proportion to its quota rather than serving one kind and then the
+ * next. A row of eighteen is scrolled, and the first few are what most
+ * people ever see.
+ *
+ * Within a kind, base rank is preserved exactly. This never reorders two
+ * titles of the same kind — it only decides how many of each appear, and
+ * how they are spread.
+ */
+export function applyCadence(
+  ranked: ScoredRecommendation[],
+  profile: CadenceProfile | null,
+  count: number
+): CatalogItem[] {
+  if (!profile) return ranked.slice(0, count).map((entry) => entry.item)
+
+  const queues = new Map<MediaKind, ScoredRecommendation[]>(KINDS.map((kind) => [kind, []]))
+  for (const entry of ranked) queues.get(entry.item.type)?.push(entry)
+
+  const quotas = slotQuotas(queues, ranked, profile.shares, count)
+  const taken = new Map<MediaKind, number>(KINDS.map((kind) => [kind, 0]))
+  const total = [...quotas.values()].reduce((sum, n) => sum + n, 0)
+
+  const row: CatalogItem[] = []
+  while (row.length < total) {
+    // The kind with the most of its share still owed, which spreads each
+    // one evenly instead of in blocks. Ties go to the better-ranked head,
+    // so the row still opens with the strongest suggestion available.
+    let best: MediaKind | null = null
+    let bestGap = -Infinity
+    let bestScore = -Infinity
+    for (const kind of KINDS) {
+      const owed = (quotas.get(kind) || 0) - (taken.get(kind) || 0)
+      if (owed <= 0) continue
+      const head = queues.get(kind)?.[taken.get(kind) || 0]
+      if (!head) continue
+      if (owed > bestGap || (owed === bestGap && head.score > bestScore)) {
+        bestGap = owed
+        bestScore = head.score
+        best = kind
+      }
+    }
+    if (!best) break
+    const index = taken.get(best) || 0
+    const entry = queues.get(best)?.[index]
+    if (!entry) break
+    row.push(entry.item)
+    taken.set(best, index + 1)
+  }
+  return row
+}
+
 // Home recommendations are ranked locally and deterministically. A small
 // Ollama model can explain a shortlisted choice, but it should not decide
 // watch-history or release ordering.
@@ -373,7 +586,28 @@ export interface PersonalizedRecommendationOptions {
   history: HistoryEntry[]
   preferredGenres?: string[]
   now?: Date
+  /**
+   * Titles carrying a resume bookmark nobody has come back to — started,
+   * and left. The caller decides how long "left" is, because only it can
+   * see the bookmark timestamps; see main/media-hub/recommendations.ts.
+   *
+   * Demoted rather than excluded. Somebody may well intend to come back,
+   * and a suggestion row is the wrong place to make that decision for
+   * them — but a title already tried and dropped should not be sitting
+   * above one they have never seen.
+   */
+  abandonedIds?: ReadonlySet<string>
 }
+
+/**
+ * What a title already started and left costs itself in the ranking.
+ *
+ * Sized against the other signals rather than picked: two genre matches
+ * (see the scoring below) and well under the continuation boost, so it
+ * pushes a dropped title down the row without burying it, and never
+ * outranks "this is the next instalment of something you finished".
+ */
+const ABANDONED_PENALTY = 25
 
 function releaseYear(item: Pick<CatalogItem, 'year'> | HistoryEntry): number | null {
   const year = Number.parseInt(String(item.year || ''), 10)
@@ -431,8 +665,30 @@ function isEarlierInstalment(candidate: RankableItem, best: RankableItem): boole
  */
 export function rankPersonalizedRecommendations(
   pool: CatalogItem[],
-  { history, preferredGenres = [], now = new Date() }: PersonalizedRecommendationOptions
+  options: PersonalizedRecommendationOptions
 ): CatalogItem[] {
+  return rankPersonalizedRecommendationsScored(pool, options).map(({ item }) => item)
+}
+
+/**
+ * rankPersonalizedRecommendations, keeping each title's score.
+ *
+ * The score exists so a caller can re-order a stored ranking later without
+ * re-ranking it. main/media-hub/recommendations.ts stores these and adds
+ * the watch-cadence boost at READ time, because that boost depends on what
+ * time it is now — not on what time it was when the list was built. A list
+ * ranked at 3am and read at 8pm would otherwise be recommending whatever
+ * this person watches at 3am.
+ */
+export function rankPersonalizedRecommendationsScored(
+  pool: CatalogItem[],
+  {
+    history,
+    preferredGenres = [],
+    now = new Date(),
+    abandonedIds
+  }: PersonalizedRecommendationOptions
+): ScoredRecommendation[] {
   const preferred = new Set(preferredGenres.map((genre) => String(genre).toLowerCase()))
   const currentYear = now.getUTCFullYear()
   const watchedIds = watchedIdSet(history)
@@ -493,7 +749,12 @@ export function rankPersonalizedRecommendations(
       return {
         item,
         year,
-        score: continuationBoost + recentReleaseBoost + genreMatches * 12 + rating
+        score:
+          continuationBoost +
+          recentReleaseBoost +
+          genreMatches * 12 +
+          rating -
+          (abandonedIds?.has(String(item.id)) ? ABANDONED_PENALTY : 0)
       }
     })
     .sort(
@@ -502,7 +763,7 @@ export function rankPersonalizedRecommendations(
         (b.year || 0) - (a.year || 0) ||
         a.item.title.localeCompare(b.item.title)
     )
-    .map(({ item }) => item)
+    .map(({ item, score }) => ({ item, score }))
 }
 
 export function subtitlesInadequate(

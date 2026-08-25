@@ -30,7 +30,12 @@
 
 import type { CatalogItem, HistoryEntry } from '../../shared/media-hub/types'
 import { MEDIA_HUB_CHANNELS } from '../../shared/media-hub/ipc-channels'
-import { rankPersonalizedRecommendations } from '../../shared/media-hub/catalog-logic'
+import {
+  applyCadence,
+  rankPersonalizedRecommendationsScored,
+  watchCadenceProfile,
+  type ScoredRecommendation
+} from '../../shared/media-hub/catalog-logic'
 import { getDatabase } from './dbState'
 import { logError } from './logger'
 import { sendToRenderer } from './rendererBridge'
@@ -46,7 +51,7 @@ import type { TaskPriority } from './taskScheduler'
  * serving the previous version's ordering back for hours, out of a cache
  * nobody thought to clear.
  */
-export const STORE_KEY = 'recommendations:v1'
+export const STORE_KEY = 'recommendations:v2'
 
 /**
  * How many ranked titles are kept.
@@ -78,8 +83,16 @@ const STORE_TTL_MS = 30 * 24 * 60 * 60 * 1000
 const REBUILD_AFTER_MS = 6 * 60 * 60 * 1000
 
 interface StoredRecommendations {
-  /** Ranked best-first, already excluding what was watched/tracked/disliked AT BUILD TIME. */
-  items: CatalogItem[]
+  /**
+   * Ranked best-first, already excluding what was watched/tracked/disliked
+   * AT BUILD TIME, and each carrying the score that put it there.
+   *
+   * The scores are what let the read re-order this list for the time of
+   * day without re-ranking it — see readStoredRecommendations. A list
+   * built at 3am and read at 8pm must not still be arranged around what
+   * this person watches at 3am.
+   */
+  entries: ScoredRecommendation[]
   builtAt: number
   /** The genre affinity this ranking was produced from, so what is served and what explains it agree. */
   preferredGenres: string[]
@@ -151,7 +164,33 @@ export function requestRecommendationsRebuild(): void {
 }
 
 /**
- * The stored ranking, re-filtered against what is true now.
+ * How long a resume bookmark has to sit untouched before the title counts
+ * as started-and-left.
+ *
+ * A bookmark only exists between twenty seconds in and ninety per cent
+ * through — savePlaybackPosition clears it either side of that — so every
+ * row here is genuinely mid-title. Ten days is past "I'll finish it next
+ * weekend" without being so long the signal never fires: on this project's
+ * own user data, eight of thirteen bookmarks were over a week old and all
+ * but one of those sat below 10% watched.
+ */
+const ABANDONED_AFTER_MS = 10 * 24 * 60 * 60 * 1000
+
+/** Titles started and left — see ABANDONED_AFTER_MS. */
+export function abandonedIds(now = Date.now()): Set<string> {
+  try {
+    return new Set(
+      getDatabase().abandonedContentIds(new Date(now - ABANDONED_AFTER_MS).toISOString())
+    )
+  } catch (error) {
+    logError('recommendations:abandoned', error)
+    return new Set()
+  }
+}
+
+/**
+ * The stored ranking, re-filtered against what is true now and re-ordered
+ * for what time it is now.
  *
  * Returns null — meaning "rank live instead" — when there is no stored
  * list, or when too little of it survives the live exclusions to fill the
@@ -159,7 +198,9 @@ export function requestRecommendationsRebuild(): void {
  * stored copy has stopped being good enough.
  */
 export function readStoredRecommendations(
-  exclusions: LiveExclusions
+  exclusions: LiveExclusions,
+  history: HistoryEntry[],
+  now = new Date()
 ): { items: CatalogItem[]; preferredGenres: string[] } | null {
   let stored: StoredRecommendations | null = null
   try {
@@ -170,20 +211,26 @@ export function readStoredRecommendations(
     logError('recommendations:read', error)
     return null
   }
-  if (!stored || !Array.isArray(stored.items) || !stored.items.length) {
+  if (!stored || !Array.isArray(stored.entries) || !stored.entries.length) {
     requestRecommendationsRebuild()
     return null
   }
 
-  const items = stored.items.filter((item) => keep(item, exclusions))
-  if (items.length < SERVED_COUNT) {
+  const surviving = stored.entries.filter((entry) => entry?.item && keep(entry.item, exclusions))
+  if (surviving.length < SERVED_COUNT) {
     requestRecommendationsRebuild()
     return null
   }
   if (Date.now() - (stored.builtAt || 0) > REBUILD_AFTER_MS) requestRecommendationsRebuild()
 
+  // The one part of the ranking that cannot be precomputed: it depends on
+  // what time it is at the moment somebody looks, not on when the list was
+  // built. Cheap enough to redo per read precisely because there are only
+  // STORED_COUNT of them by this point.
+  const items = applyCadence(surviving, watchCadenceProfile(history, now), SERVED_COUNT)
+
   return {
-    items: items.slice(0, SERVED_COUNT),
+    items,
     preferredGenres: Array.isArray(stored.preferredGenres) ? stored.preferredGenres : []
   }
 }
@@ -203,13 +250,13 @@ export function readStoredRecommendations(
  * Home feed to arrive at the data it already had.
  */
 export function storeRecommendations(
-  ranked: CatalogItem[],
+  ranked: ScoredRecommendation[],
   preferredGenres: string[],
   { announce = true }: { announce?: boolean } = {}
 ): void {
   if (!ranked.length) return
   const payload: StoredRecommendations = {
-    items: ranked.slice(0, STORED_COUNT),
+    entries: ranked.slice(0, STORED_COUNT),
     builtAt: Date.now(),
     preferredGenres
   }
@@ -225,7 +272,7 @@ export function storeRecommendations(
   // re-render of every consumer of the Home feed.
   sendToRenderer(MEDIA_HUB_CHANNELS.recommendationsChanged, {
     builtAt: payload.builtAt,
-    count: payload.items.length
+    count: payload.entries.length
   })
 }
 
@@ -266,9 +313,9 @@ export async function rebuildRecommendations(
   const exclusions = liveExclusions(history)
   const preferredGenres = db.preferredGenres(4)
 
-  const ranked = rankPersonalizedRecommendations(
+  const ranked = rankPersonalizedRecommendationsScored(
     pool.filter((item) => keep(item, exclusions)),
-    { history, preferredGenres }
+    { history, preferredGenres, abandonedIds: abandonedIds() }
   )
   if (!ranked.length) return 0
 
