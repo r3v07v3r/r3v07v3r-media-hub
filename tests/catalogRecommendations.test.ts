@@ -92,4 +92,54 @@ check('uses genre preference as a stronger signal than rating alone', () => {
   assert.equal(ranked[0]?.id, 'sci-fi')
 })
 
+// The whole reason this ranking was rewritten. At real-library scale the
+// previous nested-loop version took 87.7 SECONDS on the Electron main
+// process — measured against 3,104 history rows and 2,776 catalog titles
+// — which is what "the window says Not Responding while the catalogue
+// loads" actually was. home:personalized calls this once per launch.
+//
+// The bound is deliberately loose (a slow CI box is not a regression);
+// what it catches is a return to work that grows with history x catalog x
+// history, which cannot come close to fitting inside it. The rewritten
+// version does this in roughly ten milliseconds.
+check('ranks a real-sized library without blocking the main process', () => {
+  const catalog: CatalogItem[] = []
+  for (let i = 0; i < 2800; i++) {
+    catalog.push(
+      title(`bulk-${i}`, `Bulk Feature ${i}`, String(1990 + (i % 30)), '7.5', ['Documentary'])
+    )
+  }
+  catalog.push(farFromHome, noWayHome)
+
+  const bulkHistory: HistoryEntry[] = []
+  for (let i = 0; i < 3100; i++) {
+    // Mostly episodes of one watched series, as a real history is — the
+    // same question asked three thousand times.
+    const source = i % 20 === 0 ? title(`seen-${i}`, `Bulk Feature ${i}`, '2001') : homecoming
+    bulkHistory.push({
+      id: source.id,
+      type: 'movie',
+      title: source.title,
+      year: source.year,
+      watchedAt: '2026-01-01',
+      season: null,
+      episode: i,
+      genres: ['Action']
+    } as HistoryEntry)
+  }
+
+  const started = Date.now()
+  const ranked = rankPersonalizedRecommendations(catalog, {
+    history: bulkHistory,
+    preferredGenres: ['Action'],
+    now: new Date('2026-08-23T00:00:00Z')
+  })
+  const elapsed = Date.now() - started
+
+  assert.ok(elapsed < 3000, `ranking 2,800 titles against 3,100 history rows took ${elapsed}ms`)
+  // Still the right answer, not just a fast one: Homecoming is watched, so
+  // its next instalment leads despite carrying no rating advantage.
+  assert.equal(ranked[0]?.id, 'far-from-home')
+})
+
 console.log(`\n${pass} passed`)
