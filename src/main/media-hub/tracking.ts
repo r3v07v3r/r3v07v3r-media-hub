@@ -40,8 +40,13 @@ import {
   queuePendingPush,
   withPushedRemoteState
 } from '../../shared/media-hub/reconcileQueue'
-import { rankPersonalizedRecommendations } from '../../shared/media-hub/catalog-logic'
 import {
+  applyCadence,
+  rankPersonalizedRecommendationsScored,
+  watchCadenceProfile
+} from '../../shared/media-hub/catalog-logic'
+import {
+  abandonedIds,
   liveExclusions,
   readStoredRecommendations,
   requestRecommendationsRebuild,
@@ -1174,7 +1179,7 @@ export function registerTrackingIpc(): void {
     // the branch below has to wait for three catalogs, and a cold anime
     // catalog is a twenty-second Kitsu crawl that Home spent all of
     // waiting for eighteen rows it could have read from disk.
-    const stored = readStoredRecommendations(exclusions)
+    const stored = readStoredRecommendations(exclusions, history)
     let recommendations: CatalogItem[]
     let preferredGenres: string[]
 
@@ -1195,28 +1200,34 @@ export function registerTrackingIpc(): void {
       if (!all.length) throw new Error('All catalog sources are currently unavailable.')
 
       preferredGenres = db.preferredGenres(4)
+      const dropped = abandonedIds()
       const candidates = all.filter(
         (item) =>
           !exclusions.watchedIds.has(String(item.id)) &&
           !exclusions.trackedIds.has(String(item.id)) &&
           !exclusions.dislikedIds.has(String(item.id))
       )
-      // Ranked in full, then sliced twice: the row shows SERVED_COUNT, the
-      // store keeps more as the buffer the live exclusions eat into.
-      const ranked = rankPersonalizedRecommendations(candidates, {
+      const ranked = rankPersonalizedRecommendationsScored(candidates, {
         history,
-        preferredGenres
+        preferredGenres,
+        abandonedIds: dropped
       })
       // An empty candidate set means everything in the catalog is already
       // watched, saved or hidden — rank the unfiltered catalog rather than
       // showing nothing, exactly as this handler always has.
       const full = ranked.length
         ? ranked
-        : rankPersonalizedRecommendations(all, { history, preferredGenres })
+        : rankPersonalizedRecommendationsScored(all, {
+            history,
+            preferredGenres,
+            abandonedIds: dropped
+          })
       // announce: false — this handler returns the same list to the same
       // renderer on the next line. See storeRecommendations.
       storeRecommendations(full, preferredGenres, { announce: false })
-      recommendations = full.slice(0, SERVED_COUNT)
+      // Through the same cadence pass the stored path uses, so the row is
+      // ordered the same way whichever branch produced it.
+      recommendations = applyCadence(full, watchCadenceProfile(history), SERVED_COUNT)
     }
 
     // See tracking:list above — same fan-out, same bound, and the two

@@ -157,6 +157,11 @@ export interface MediaHubDatabase {
    *  EpisodePlaybackPosition (shared/media-hub/types.ts) for why the
    *  episode grid needs the whole set rather than one lookup per row. */
   listPlaybackPositions(contentId: string | number): EpisodePlaybackPosition[]
+  /** Content ids whose resume bookmark has not moved since `before` (an ISO
+   *  timestamp). A bookmark only exists between 20 seconds in and 90% through
+   *  — savePlaybackPosition clears it either side of that — so a row this old
+   *  is something started and left, not something in progress. */
+  abandonedContentIds(before: string): string[]
   /** `durable: true` for the few rows in here that are a record of
    *  something a person decided rather than something refetched — see the
    *  `durable` helper in createDatabase. catalog_cache is a general
@@ -194,6 +199,7 @@ interface PreparedQueries {
   savePosition: StatementSync
   clearPosition: StatementSync
   getPosition: StatementSync
+  abandoned: StatementSync
   listPositions: StatementSync
 }
 
@@ -415,6 +421,9 @@ export function createDatabase(filename: string): MediaHubDatabase {
     clearPosition: sql.prepare('DELETE FROM playback_positions WHERE position_key=?'),
     getPosition: sql.prepare(
       'SELECT position_seconds,duration_seconds,volume FROM playback_positions WHERE position_key=?'
+    ),
+    abandoned: sql.prepare(
+      'SELECT DISTINCT content_id FROM playback_positions WHERE updated_at < ?'
     ),
     listPositions: sql.prepare(
       'SELECT season,episode,position_seconds,duration_seconds FROM playback_positions WHERE content_id=?'
@@ -665,6 +674,16 @@ export function createDatabase(filename: string): MediaHubDatabase {
           durationSeconds: (row.duration_seconds as number | null) ?? null
         }))
       } catch {
+        return []
+      }
+    },
+
+    abandonedContentIds(before) {
+      try {
+        return (q.abandoned.all(String(before)) as Row[]).map((row) => String(row.content_id))
+      } catch {
+        // Best-effort, like every other read here: losing this signal
+        // costs a slightly worse ranking, never a broken one.
         return []
       }
     },

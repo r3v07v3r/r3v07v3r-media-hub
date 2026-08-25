@@ -32,7 +32,8 @@ import {
   requestRecommendationsRebuild,
   storeRecommendations
 } from '../src/main/media-hub/recommendations'
-import type { CatalogItem } from '../src/shared/media-hub/types'
+import type { CatalogItem, HistoryEntry } from '../src/shared/media-hub/types'
+import type { ScoredRecommendation } from '../src/shared/media-hub/catalog-logic'
 
 let pass = 0
 function check(name: string, fn: () => void): void {
@@ -68,6 +69,16 @@ function items(count: number): CatalogItem[] {
   return Array.from({ length: count }, (_, i) => item(`id-${i}`))
 }
 
+/** Ranked entries, best first — descending scores so the stored order is unambiguous. */
+function ranked(count: number): ScoredRecommendation[] {
+  return items(count).map((entry, i) => ({ item: entry, score: 1000 - i }))
+}
+
+// No history means no cadence signal, so these cases exercise the stored
+// order itself rather than the time-of-day pass over it — which has its
+// own tests in catalogRecommendations.test.ts.
+const NO_HISTORY: HistoryEntry[] = []
+
 /** A fresh database per case, so one test's tracked/disliked rows cannot leak into the next. */
 function freshDatabase(): MediaHubDatabase {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'r3-recommendations-test-'))
@@ -87,13 +98,12 @@ function countingListener(): { count: () => number; stop: () => void } {
 
 check('serves the stored ranking, in order, without reaching for a catalog', () => {
   freshDatabase()
-  storeRecommendations(items(STORED_COUNT), ['Action'])
+  storeRecommendations(ranked(STORED_COUNT), ['Action'])
 
-  const served = readStoredRecommendations({
-    watchedIds: new Set(),
-    trackedIds: new Set(),
-    dislikedIds: new Set()
-  })
+  const served = readStoredRecommendations(
+    { watchedIds: new Set(), trackedIds: new Set(), dislikedIds: new Set() },
+    NO_HISTORY
+  )
 
   assert.ok(served, 'expected the stored list to be served')
   assert.equal(served.items.length, SERVED_COUNT)
@@ -104,7 +114,7 @@ check('serves the stored ranking, in order, without reaching for a catalog', () 
 
 check('drops what has been watched, saved or hidden since the list was built', () => {
   const db = freshDatabase()
-  storeRecommendations(items(STORED_COUNT), ['Action'])
+  storeRecommendations(ranked(STORED_COUNT), ['Action'])
 
   // Exactly the three things that can happen to a suggestion between two
   // rebuilds, each through the real handler path the app uses.
@@ -112,7 +122,7 @@ check('drops what has been watched, saved or hidden since the list was built', (
   db.track(item('id-1'))
   db.dislike(item('id-2'))
 
-  const served = readStoredRecommendations(liveExclusions(db.history()))
+  const served = readStoredRecommendations(liveExclusions(db.history()), db.history())
 
   assert.ok(served, 'three exclusions out of forty must still fill the row')
   const ids = served.items.map((x) => x.id)
@@ -127,13 +137,16 @@ check('reports a miss when too little of the stored list survives', () => {
   freshDatabase()
   // Only just enough to fill the row before exclusions, so a handful of
   // them takes it under.
-  storeRecommendations(items(SERVED_COUNT + 2), [])
+  storeRecommendations(ranked(SERVED_COUNT + 2), [])
 
-  const served = readStoredRecommendations({
-    watchedIds: new Set(['id-0', 'id-1', 'id-2']),
-    trackedIds: new Set(),
-    dislikedIds: new Set()
-  })
+  const served = readStoredRecommendations(
+    {
+      watchedIds: new Set(['id-0', 'id-1', 'id-2']),
+      trackedIds: new Set(),
+      dislikedIds: new Set()
+    },
+    NO_HISTORY
+  )
 
   assert.equal(served, null, 'a short row must fall back to ranking live, not be served short')
 })
@@ -142,11 +155,10 @@ check('a miss asks for a rebuild', () => {
   freshDatabase()
   const listener = countingListener()
   try {
-    const served = readStoredRecommendations({
-      watchedIds: new Set(),
-      trackedIds: new Set(),
-      dislikedIds: new Set()
-    })
+    const served = readStoredRecommendations(
+      { watchedIds: new Set(), trackedIds: new Set(), dislikedIds: new Set() },
+      NO_HISTORY
+    )
     assert.equal(served, null, 'nothing has been stored yet')
     assert.equal(listener.count(), 1, 'the empty read should ask for a rebuild')
   } finally {
@@ -156,15 +168,16 @@ check('a miss asks for a rebuild', () => {
 
 check('an aged list is still served, and asks to be replaced on the way past', () => {
   const db = freshDatabase()
-  storeRecommendations(items(STORED_COUNT), [])
+  storeRecommendations(ranked(STORED_COUNT), [])
 
   // Older than the rebuild window. Rewritten rather than faked with a
   // clock, so the payload travels the same putCache/getCache path the app
   // uses — including the JSON round trip that `builtAt` has to survive.
-  const stored = db.getCache<{ items: CatalogItem[]; builtAt: number; preferredGenres: string[] }>(
-    STORE_KEY,
-    { allowExpired: true }
-  )
+  const stored = db.getCache<{
+    entries: ScoredRecommendation[]
+    builtAt: number
+    preferredGenres: string[]
+  }>(STORE_KEY, { allowExpired: true })
   assert.ok(stored, 'the list should have been written')
   db.putCache(
     STORE_KEY,
@@ -174,11 +187,10 @@ check('an aged list is still served, and asks to be replaced on the way past', (
 
   const listener = countingListener()
   try {
-    const served = readStoredRecommendations({
-      watchedIds: new Set(),
-      trackedIds: new Set(),
-      dislikedIds: new Set()
-    })
+    const served = readStoredRecommendations(
+      { watchedIds: new Set(), trackedIds: new Set(), dislikedIds: new Set() },
+      NO_HISTORY
+    )
     assert.ok(served, 'age is a reason to rebuild, never a reason to show nothing')
     assert.equal(served.items.length, SERVED_COUNT)
     assert.equal(listener.count(), 1, 'the stale read should ask for a rebuild')
@@ -189,25 +201,25 @@ check('an aged list is still served, and asks to be replaced on the way past', (
 
 check('keeps more than it serves, so exclusions have somewhere to eat into', () => {
   const db = freshDatabase()
-  storeRecommendations(items(500), [])
+  storeRecommendations(ranked(500), [])
 
-  const stored = db.getCache<{ items: CatalogItem[] }>(STORE_KEY, { allowExpired: true })
+  const stored = db.getCache<{ entries: ScoredRecommendation[] }>(STORE_KEY, { allowExpired: true })
   assert.ok(stored)
-  assert.equal(stored.items.length, STORED_COUNT)
+  assert.equal(stored.entries.length, STORED_COUNT)
   assert.ok(STORED_COUNT > SERVED_COUNT, 'the buffer is the whole point of storing extra')
 })
 
 check('storing nothing leaves the previous list alone', () => {
   const db = freshDatabase()
-  storeRecommendations(items(STORED_COUNT), ['Action'])
+  storeRecommendations(ranked(STORED_COUNT), ['Action'])
   // A rebuild that found no catalog must not replace a working list with
   // an empty one — a momentarily unreachable source is not a reason to
   // empty somebody's Home row.
   storeRecommendations([], [])
 
-  const stored = db.getCache<{ items: CatalogItem[] }>(STORE_KEY, { allowExpired: true })
+  const stored = db.getCache<{ entries: ScoredRecommendation[] }>(STORE_KEY, { allowExpired: true })
   assert.ok(stored)
-  assert.equal(stored.items.length, STORED_COUNT)
+  assert.equal(stored.entries.length, STORED_COUNT)
 })
 
 check('a silent store still writes — it only skips the announcement', () => {
@@ -215,11 +227,11 @@ check('a silent store still writes — it only skips the announcement', () => {
   // The cold path in home:personalized stores this way: it is about to
   // return the same list to the same renderer, so the push would only ask
   // for a refetch of what is already in flight.
-  storeRecommendations(items(STORED_COUNT), ['Action'], { announce: false })
+  storeRecommendations(ranked(STORED_COUNT), ['Action'], { announce: false })
 
-  const stored = db.getCache<{ items: CatalogItem[] }>(STORE_KEY, { allowExpired: true })
+  const stored = db.getCache<{ entries: ScoredRecommendation[] }>(STORE_KEY, { allowExpired: true })
   assert.ok(stored, 'announce: false must not mean "do not store"')
-  assert.equal(stored.items.length, STORED_COUNT)
+  assert.equal(stored.entries.length, STORED_COUNT)
 })
 
 check('a rebuild request with nothing listening is a no-op, not a throw', () => {
