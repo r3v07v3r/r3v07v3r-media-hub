@@ -49,6 +49,7 @@ import { isLikelyFranchiseSibling, rankSimilarTitles } from '../../shared/media-
 import { coalesce, coalesceScope, type TaskPriority } from './taskScheduler'
 import { buildGroupedAnimeVideos, groupAnimeCatalog, kitsuRealEpisodes } from './animeSeasons'
 import { omdbRottenTomatoesRating } from './omdb'
+import { titleCredits } from './credits'
 
 const catalogUrls: Record<'movie' | 'series', string> = {
   movie: 'https://v3-cinemeta.strem.io/catalog/movie/top.json',
@@ -567,6 +568,41 @@ export function metadata(
   )
 }
 
+/**
+ * Attaches cast, creators and story-type labels to a resolved item.
+ *
+ * Applied on the way OUT of resolveMetadata, to the cache-hit path as well
+ * as the fresh-fetch one, and deliberately not written into the metadata
+ * cache. Two reasons, and they are the same two that make
+ * disambiguateVideos re-run on cached entries above:
+ *
+ *  - a 24h metadata entry written before credits existed would otherwise
+ *    serve a title with no cast until it expired, which is most titles for
+ *    the first day after this ships;
+ *  - credits have their own rows and their own ninety-day clock (see
+ *    credits.ts). Copying them into a second cache with a different TTL
+ *    means two answers to the same question that can disagree.
+ *
+ * Never throws and never blocks the page: titleCredits already reports
+ * every failure it has — no TMDB key, an id no source recognises, a failed
+ * request — as "no credits for this one".
+ */
+async function withCredits(
+  item: CatalogItem,
+  type: MediaKind,
+  id: string,
+  priority: TaskPriority
+): Promise<CatalogItem> {
+  const credits = await titleCredits(type, id, priority)
+  if (!credits) return item
+  return {
+    ...item,
+    ...(credits.cast.length ? { cast: credits.cast } : {}),
+    ...(credits.creators.length ? { creators: credits.creators } : {}),
+    ...(credits.keywords.length ? { keywords: credits.keywords } : {})
+  }
+}
+
 async function resolveMetadata(
   type: MediaKind,
   id: string,
@@ -606,7 +642,14 @@ async function resolveMetadata(
   // actually gained siblings re-resolve, and only once.
   const groupingIsNewer =
     type === 'anime' && !cached?.groupedIds?.length && Boolean(groupedIdsFor(resolvedId)?.length)
-  if (cached && !groupingIsNewer) return { ...cached, videos: disambiguateVideos(cached.videos) }
+  if (cached && !groupingIsNewer) {
+    return withCredits(
+      { ...cached, videos: disambiguateVideos(cached.videos) },
+      type,
+      resolvedId,
+      priority
+    )
+  }
 
   let item: CatalogItem
   try {
@@ -699,7 +742,7 @@ async function resolveMetadata(
   item.videos = disambiguateVideos(item.videos)
 
   db.putCache(cacheKey, item, 24 * 60 * 60 * 1000)
-  return item
+  return withCredits(item, type, resolvedId, priority)
 }
 
 /** Free-text anime search against Kitsu. Grouped the same way the browse

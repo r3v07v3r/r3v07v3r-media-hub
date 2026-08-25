@@ -27,6 +27,17 @@ export interface MediaItem {
   runtimeMinutes?: number
   genres: string[]
   moods?: string[]
+  /** Top-billed performers, best-known first. Only ever present on a title
+   *  whose full metadata has been resolved (the detail page) and whose
+   *  credits a source could supply — see main/media-hub/credits.ts. Anime
+   *  carries none: it credits voice actors per character, not per title. */
+  cast?: string[]
+  /** Directors for a film, creators for a show, studios for anime. Same availability as `cast`. */
+  creators?: string[]
+  /** Story-type labels — TMDB keywords, or AniList tags for anime. Distinct
+   *  from `moods`, which are derived from genres by keyword map; these come
+   *  from the source and describe what KIND of story a title is. */
+  storyTags?: string[]
   communityRating?: number
   imdbRating?: number
   /** Rotten Tomatoes critic score, 0-100 — see adapters.ts's

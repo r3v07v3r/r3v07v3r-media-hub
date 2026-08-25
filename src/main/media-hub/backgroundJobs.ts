@@ -30,6 +30,8 @@ import { MEDIA_HUB_CHANNELS } from '../../shared/media-hub/ipc-channels'
 import { handle } from './ipcGuard'
 import { sendToRenderer } from './rendererBridge'
 import { catalogData } from './catalog'
+import { enrichCredits } from './credits'
+import { getDatabase } from './dbState'
 import { logError } from './logger'
 import { pruneIdleSessions } from './streamCache'
 import { runBackgroundWatchSync } from './tracking'
@@ -49,6 +51,9 @@ import {
  *  time-critical to the second, and a tick that costs nothing is a tick
  *  that can afford to be the only one. */
 const HEARTBEAT_MS = 30_000
+
+/** How many titles one credits-enrichment run may look up. See the job itself. */
+const CREDITS_PER_PASS = 60
 
 const PRESSURE_RANK: Record<SchedulerPressure, number> = { idle: 0, busy: 1, critical: 2 }
 
@@ -274,6 +279,46 @@ export function startBackgroundJobs(): void {
     maxPressure: 'busy',
     run: async () => {
       await rebuildRecommendations('maintenance')
+    }
+  })
+
+  registerRecurringJob({
+    name: 'credits-enrichment',
+    label: 'Learning what you like',
+    // Often, because each run is deliberately small. A full pass over this
+    // app's catalog and watch history is roughly four thousand titles, and
+    // doing it in one burst would be a long run of requests against two
+    // APIs for a ranking improvement nobody is waiting on. Sixty titles
+    // every half hour gets there over a few sessions and is invisible
+    // while it does — which is the point.
+    everyMs: 30 * 60 * 1000,
+    firstRunAfterMs: 8 * 60 * 1000,
+    priority: 'maintenance',
+    // The only job in this registry held to `idle`. Everything else here
+    // is either quick or genuinely due; this one is pure background
+    // improvement with no deadline of any kind, so it has no business
+    // running while the app is under any load at all.
+    maxPressure: 'idle',
+    run: async () => {
+      const history = getDatabase().history()
+      const catalogs = await Promise.all(
+        (['movie', 'series', 'anime'] as const).map((kind) =>
+          catalogData(kind, false, 'maintenance').catch(() => [])
+        )
+      )
+      // Watch history first. Those titles are what the taste profile is
+      // built FROM, so covering them is what makes the whole signal work
+      // at all — a fully enriched catalog with an unenriched history has
+      // nothing to compare against and changes no ranking.
+      const filled = await enrichCredits(
+        [
+          ...history.map((entry) => ({ id: String(entry.id), type: entry.type })),
+          ...catalogs.flat()
+        ],
+        CREDITS_PER_PASS,
+        'maintenance'
+      )
+      if (filled) sendToRenderer(MEDIA_HUB_CHANNELS.activityChanged, activitySnapshot())
     }
   })
 

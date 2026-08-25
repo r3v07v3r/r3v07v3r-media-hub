@@ -1207,6 +1207,13 @@ export function registerTrackingIpc(): void {
           !exclusions.trackedIds.has(String(item.id)) &&
           !exclusions.dislikedIds.has(String(item.id))
       )
+      // No credits or taste profile on this branch, deliberately.
+      // Assembling them means a cache read per candidate — a couple of
+      // thousand of them — and this is the launch path the stored list
+      // exists to keep clear. It only runs on a fresh install or a bumped
+      // store key, where there are no credits to read anyway, and the
+      // background rebuild replaces this list with a fully-ranked one
+      // within minutes. See recommendations.ts.
       const ranked = rankPersonalizedRecommendationsScored(candidates, {
         history,
         preferredGenres,

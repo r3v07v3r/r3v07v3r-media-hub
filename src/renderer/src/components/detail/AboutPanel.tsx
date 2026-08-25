@@ -8,12 +8,22 @@ import styles from './AboutPanel.module.css'
 const COLLAPSE_LENGTH = 320
 
 /**
- * The backend's CatalogItem model (see shared/media-hub/types.ts) only
- * ever carries synopsis/genres/year/runtime/status — no cast, director,
- * writers, studio, language, subtitle-track list, or country fields exist
- * anywhere in it. Rather than inventing plausible-looking values for
- * fields the spec asked for, this panel only ever renders what the
- * backend actually provides — see this component's own field list below.
+ * Renders only what the backend actually provides, never a plausible-
+ * looking stand-in for a field the spec asked for and the data cannot
+ * support.
+ *
+ * That constraint used to rule out cast and director entirely: the
+ * CatalogItem model carried synopsis/genres/year/runtime/status and
+ * nothing else. It now carries cast, creators and story-type labels for
+ * titles a source could supply them for (see main/media-hub/credits.ts),
+ * so those are rendered — and still only when actually present. Language,
+ * subtitle-track list and country remain absent from the model, so they
+ * remain absent here.
+ *
+ * Every one of these is optional at the item level, not just at the field
+ * level: a grid card never carries them (they are resolved per title, on
+ * the detail page), anime has no cast, and a title TMDB has never heard of
+ * has none of them.
  */
 export function AboutPanel({ media, config }: { media: MediaItem; config: DetailAdapterConfig }) {
   const [expanded, setExpanded] = useState(false)
@@ -74,7 +84,31 @@ export function AboutPanel({ media, config }: { media: MediaItem; config: Detail
             <dd>{media.totalEpisodes}</dd>
           </div>
         )}
+        {media.creators?.length ? (
+          <div className={styles.fact}>
+            <dt>{config.isEpisodic ? 'Created by' : 'Director'}</dt>
+            <dd>{media.creators.join(', ')}</dd>
+          </div>
+        ) : null}
       </dl>
+      {media.cast?.length ? (
+        <div className={styles.people}>
+          <h3 className={styles.subheading}>Cast</h3>
+          <p className={styles.names}>{media.cast.join(', ')}</p>
+        </div>
+      ) : null}
+      {media.storyTags?.length ? (
+        <div className={styles.people}>
+          <h3 className={styles.subheading}>Story</h3>
+          <ul className={styles.tags}>
+            {media.storyTags.map((tag) => (
+              <li key={tag} className={styles.tag}>
+                {tag}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
     </section>
   )
 }

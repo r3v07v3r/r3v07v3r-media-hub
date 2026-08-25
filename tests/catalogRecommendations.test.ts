@@ -1,11 +1,17 @@
 import assert from 'node:assert'
 import {
   applyCadence,
+  buildTasteProfile,
   rankPersonalizedRecommendations,
   watchCadenceProfile
 } from '../src/shared/media-hub/catalog-logic'
 import type { ScoredRecommendation } from '../src/shared/media-hub/catalog-logic'
-import type { CatalogItem, HistoryEntry, MediaKind } from '../src/shared/media-hub/types'
+import type {
+  CatalogItem,
+  HistoryEntry,
+  MediaKind,
+  TitleCredits
+} from '../src/shared/media-hub/types'
 
 let pass = 0
 function check(name: string, fn: () => void): void {
@@ -337,6 +343,168 @@ check('cannot hand a kind more slots than it has candidates', () => {
   const row = applyCadence(ranked, watchCadenceProfile(seriesOnly, TUESDAY_EVENING), 6)
   assert.equal(row.length, 6, 'the row is still full')
   assert.equal(row.filter((x) => x.type === 'series').length, 1, 'one series existed, one is shown')
+})
+
+// ---------------------------------------------------------------------------
+// Taste profile and affinity (buildTasteProfile / the credits signal)
+// ---------------------------------------------------------------------------
+
+function credits(
+  cast: string[] = [],
+  creators: string[] = [],
+  keywords: string[] = []
+): TitleCredits {
+  return { cast, creators, keywords }
+}
+
+check('learns only what appears more than once', () => {
+  // One viewing puts ten actors and fifteen keywords in the tally and is
+  // evidence of nothing. A second appearance is what separates a
+  // preference from a coincidence.
+  const taste = buildTasteProfile([
+    credits(['Repeat Actor', 'One Off'], ['Repeat Director'], ['heist', 'one-off-tag']),
+    credits(['Repeat Actor'], ['Repeat Director'], ['heist'])
+  ])
+  assert.ok(taste.cast.has('repeat actor'))
+  assert.ok(!taste.cast.has('one off'), 'a single appearance is not a taste')
+  assert.ok(taste.creators.has('repeat director'))
+  assert.ok(taste.keywords.has('heist'))
+  assert.ok(!taste.keywords.has('one-off-tag'))
+})
+
+check('matches names regardless of case', () => {
+  const taste = buildTasteProfile([credits(['Denis Villeneuve']), credits(['denis VILLENEUVE'])])
+  assert.ok(taste.cast.has('denis villeneuve'))
+})
+
+check('an empty history produces an empty profile, not a throw', () => {
+  const taste = buildTasteProfile([])
+  assert.equal(taste.cast.size, 0)
+  assert.equal(taste.creators.size, 0)
+  assert.equal(taste.keywords.size, 0)
+})
+
+check('lifts a title that shares a cast, a creator or a story type', () => {
+  const liked = title('liked', 'Alpha Feature', '2024', '7.0')
+  const plain = title('plain', 'Beta Feature', '2024', '7.0')
+  const taste = buildTasteProfile([
+    credits(['Favourite Actor'], ['Favourite Director'], ['time loop']),
+    credits(['Favourite Actor'], ['Favourite Director'], ['time loop'])
+  ])
+  const ranked = rankPersonalizedRecommendations([plain, liked], {
+    history: [],
+    now: new Date('2026-08-23T00:00:00Z'),
+    taste,
+    credits: new Map([
+      ['liked', credits(['Favourite Actor'], ['Favourite Director'], ['time loop'])]
+    ])
+  })
+  assert.equal(ranked[0]?.id, 'liked')
+})
+
+check('does nothing at all without both a profile and credits', () => {
+  const liked = title('liked', 'Alpha Feature', '2024', '7.0')
+  const plain = title('plain', 'Beta Feature', '2024', '9.9')
+  const taste = buildTasteProfile([credits(['Favourite Actor']), credits(['Favourite Actor'])])
+  // Credits supplied, no profile: this is the fresh install, and the
+  // rating has to decide it exactly as it did before any of this existed.
+  const noProfile = rankPersonalizedRecommendations([liked, plain], {
+    history: [],
+    now: new Date('2026-08-23T00:00:00Z'),
+    credits: new Map([['liked', credits(['Favourite Actor'])]])
+  })
+  assert.equal(noProfile[0]?.id, 'plain')
+
+  // Profile supplied, no credits for this pool: same again.
+  const noCredits = rankPersonalizedRecommendations([liked, plain], {
+    history: [],
+    now: new Date('2026-08-23T00:00:00Z'),
+    taste
+  })
+  assert.equal(noCredits[0]?.id, 'plain')
+})
+
+check('caps each category so keywords cannot drown out a director', () => {
+  // Fifteen shared keywords against one shared creator. Uncapped, keyword
+  // agreement would swamp everything else a title has going for it.
+  const manyKeywords = Array.from({ length: 15 }, (_, i) => `tag-${i}`)
+  const taste = buildTasteProfile([
+    credits([], ['Favourite Director'], manyKeywords),
+    credits([], ['Favourite Director'], manyKeywords)
+  ])
+  const tagged = title('tagged', 'Alpha Feature', '2024', '7.0')
+  const directed = title('directed', 'Beta Feature', '2024', '7.0')
+  const ranked = rankPersonalizedRecommendations([tagged, directed], {
+    history: [],
+    now: new Date('2026-08-23T00:00:00Z'),
+    taste,
+    credits: new Map([
+      ['tagged', credits([], [], manyKeywords)],
+      ['directed', credits([], ['Favourite Director'], manyKeywords)]
+    ])
+  })
+  // Both max out their keyword allowance, so the shared creator is what
+  // separates them — which is the whole point of capping per category.
+  assert.equal(ranked[0]?.id, 'directed')
+})
+
+check('the affinity never outranks a franchise continuation', () => {
+  const taste = buildTasteProfile([
+    credits(['Favourite Actor'], ['Favourite Director'], ['heist', 'time loop']),
+    credits(['Favourite Actor'], ['Favourite Director'], ['heist', 'time loop'])
+  ])
+  const ranked = rankPersonalizedRecommendations([popular, farFromHome], {
+    history,
+    now: new Date('2026-08-23T00:00:00Z'),
+    taste,
+    credits: new Map([
+      ['popular', credits(['Favourite Actor'], ['Favourite Director'], ['heist', 'time loop'])]
+    ])
+  })
+  assert.equal(ranked[0]?.id, 'far-from-home')
+})
+
+check('drops production metadata that says nothing about a story', () => {
+  const taste = buildTasteProfile([
+    credits([], [], ['aftercreditsstinger', 'time loop']),
+    credits([], [], ['aftercreditsstinger', 'time loop'])
+  ])
+  assert.ok(taste.keywords.has('time loop'))
+  assert.ok(!taste.keywords.has('aftercreditsstinger'), 'how it was made is not a taste')
+})
+
+check('drops a label that describes the whole library rather than a preference', () => {
+  // "shounen" on most of what somebody watches would match nearly every
+  // candidate and flatten the signal to a constant. The ceiling is a share
+  // of their own titles, so it tunes itself: the same label stays
+  // meaningful for somebody who watches it rarely.
+  const watched: TitleCredits[] = []
+  for (let i = 0; i < 40; i++) watched.push(credits([], [], ['shounen']))
+  for (let i = 0; i < 4; i++) watched.push(credits([], [], ['shounen', 'time loop']))
+  const taste = buildTasteProfile(watched)
+  assert.ok(!taste.keywords.has('shounen'), 'on 100% of titles, it is not a discriminator')
+  assert.ok(taste.keywords.has('time loop'))
+})
+
+check('does not apply the ceiling to a handful of titles', () => {
+  // Three titles is not a corpus; a share of it measures nothing.
+  const taste = buildTasteProfile([
+    credits([], [], ['heist']),
+    credits([], [], ['heist']),
+    credits([], [], ['heist'])
+  ])
+  assert.ok(taste.keywords.has('heist'))
+})
+
+check('keeps a favourite performer however often they appear', () => {
+  // The ceiling is keyword-only on purpose: an actor in most of what
+  // somebody watches is the strongest preference there is, where a LABEL
+  // on most of what they watch is just what their library looks like.
+  const watched: TitleCredits[] = []
+  for (let i = 0; i < 30; i++) watched.push(credits(['Favourite Actor'], ['Favourite Director']))
+  const taste = buildTasteProfile(watched)
+  assert.ok(taste.cast.has('favourite actor'))
+  assert.ok(taste.creators.has('favourite director'))
 })
 
 console.log(`\n${pass} passed`)
