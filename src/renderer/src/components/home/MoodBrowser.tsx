@@ -107,6 +107,8 @@ export function MoodBrowser() {
     toggleCombinedMood,
     openDetail,
     catalog,
+    catalogKindStates,
+    refreshCatalog,
     continueWatching,
     mediaHubSettings,
     recommendations
@@ -168,6 +170,33 @@ export function MoodBrowser() {
   const moodLabels = activeMoods
     .map((id) => MOOD_CATEGORIES.find((mood) => mood.id === id)?.label)
     .filter((label): label is string => Boolean(label))
+  // Three outcomes read identically from spotlightPicks alone: nothing
+  // matched, nothing has arrived to match against yet, and nothing could
+  // be fetched at all. Only the first is the person's filters, and only
+  // the last is worth a Retry.
+  const kindStates = Object.values(catalogKindStates)
+  const catalogEmpty = catalog.length === 0
+  const catalogStillArriving = catalogEmpty && kindStates.some((state) => state === 'loading')
+  // Any settled failure at all. With results on screen this is too broad
+  // (see resultsMayBeStale), but with NONE it is exactly the question:
+  // "no titles match your settings" is only true if every source that
+  // could have matched was actually read, and a dead source might hold
+  // precisely the titles this mood wants.
+  const anyKindFailed = !catalogStillArriving && kindStates.some((state) => state === 'failed')
+  const everyKindFailed = !catalogStillArriving && kindStates.every((state) => state === 'failed')
+  // Some source behind what IS on screen failed. Not "every source
+  // failed": the kinds are fetched independently, so one dead source is
+  // the ordinary failure, and if its rows are among the results shown
+  // then those results are exactly the ones that could not be refreshed.
+  // Asked of the results themselves rather than of the catalog, so a
+  // failure in a kind this mood does not surface stays quiet.
+  const resultsMayBeStale = useMemo(() => {
+    if (catalogStillArriving) return false
+    return rankedResults.some(
+      (item) => item.mediaKind && catalogKindStates[item.mediaKind] === 'failed'
+    )
+  }, [catalogStillArriving, rankedResults, catalogKindStates])
+
   const spotlightMood = MOOD_CATEGORIES.find((mood) => mood.id === activeMoods[0])
 
   const clearFilter = useCallback(() => {
@@ -321,9 +350,22 @@ export function MoodBrowser() {
               <div>
                 <h2>{moodLabels.join(' + ')} — right now</h2>
                 <p>
-                  {rankedResults.length === 0
-                    ? 'No titles match your current settings.'
-                    : `${Math.min(SPOTLIGHT_PICK_COUNT, spotlightPicks.length)} picks matched to your library`}
+                  {/* Three states, not two. An empty catalog used to mean
+                      only one thing, because the fallback was a mock pool
+                      that was never empty; it can now genuinely be empty
+                      on a first run while catalog:list is still out (see
+                      lib/mediaHub/startupSnapshot.ts). Sending someone to
+                      the Settings page over a fetch that simply has not
+                      landed yet is the wrong instruction. */}
+                  {catalogStillArriving
+                    ? 'Matching titles to this mood…'
+                    : rankedResults.length === 0 && everyKindFailed
+                      ? "Couldn't reach the media hub backend."
+                      : rankedResults.length === 0 && anyKindFailed
+                        ? "Some sources couldn't be reached."
+                        : rankedResults.length === 0
+                          ? 'No titles match your current settings.'
+                          : `${Math.min(SPOTLIGHT_PICK_COUNT, spotlightPicks.length)} picks matched to your library`}
                 </p>
               </div>
               <span className={styles.spotlightCount}>
@@ -331,9 +373,45 @@ export function MoodBrowser() {
               </span>
             </div>
 
+            {/* Results ARE showing, and every source that would have
+                refreshed them failed. The count above is true and the
+                picks are real; what is not established is that they are
+                current. */}
+            {resultsMayBeStale && (
+              <p className={styles.spotlightStale} role="status">
+                <Icon name="wifi-off" size={13} />
+                Couldn&apos;t reach the media hub backend — these may be out of date.
+                <button type="button" onClick={refreshCatalog} className={styles.spotlightRetry}>
+                  <Icon name="refresh" size={13} />
+                  Retry
+                </button>
+              </p>
+            )}
+
             {spotlightPicks.length === 0 ? (
               <p className={styles.spotlightEmpty}>
-                Try showing watched or completed titles in Settings, then return to this mood.
+                {catalogStillArriving ? (
+                  'The catalog is still loading — picks will appear here in a moment.'
+                ) : anyKindFailed ? (
+                  <>
+                    {/* Not every source was read, so "nothing matches" is
+                        not something this can honestly say — and Settings
+                        is not where the missing titles went. */}
+                    {everyKindFailed
+                      ? 'Nothing could be loaded to match against.'
+                      : 'Some of the catalog could not be loaded, so there may be matches missing.'}
+                    <button
+                      type="button"
+                      onClick={refreshCatalog}
+                      className={styles.spotlightRetry}
+                    >
+                      <Icon name="refresh" size={13} />
+                      Retry
+                    </button>
+                  </>
+                ) : (
+                  'Try showing watched or completed titles in Settings, then return to this mood.'
+                )}
               </p>
             ) : (
               <div className={styles.spotlightCards}>

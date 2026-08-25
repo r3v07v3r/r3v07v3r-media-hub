@@ -18,7 +18,13 @@
 // instead, and why the franchise lookup is still here doing the opposite
 // job.
 
-import type { CatalogItem, ConnectResult, Episode, MediaKind } from '../../shared/media-hub/types'
+import type {
+  CatalogItem,
+  CatalogListing,
+  ConnectResult,
+  Episode,
+  MediaKind
+} from '../../shared/media-hub/types'
 import { MEDIA_HUB_CHANNELS } from '../../shared/media-hub/ipc-channels'
 import { fetchJson } from './httpClient'
 import { logError } from './logger'
@@ -386,6 +392,24 @@ export async function catalogData(
   force = false,
   priority: TaskPriority = 'visible'
 ): Promise<CatalogItem[]> {
+  return (await catalogListing(kind, force, priority)).items
+}
+
+/**
+ * catalogData, plus whether anything actually fetched the rows.
+ *
+ * Same work, same coalescing — the only difference is that the
+ * expired-cache fallback is reported rather than passed off as a fetch.
+ * A caller that cannot tell the two apart shows stale rows with no
+ * warning and, if it dates what it stores, renews them indefinitely; see
+ * CatalogListing. catalogData stays the plain-items form for the callers
+ * that only want a catalog to rank over.
+ */
+export async function catalogListing(
+  kind: MediaKind,
+  force = false,
+  priority: TaskPriority = 'visible'
+): Promise<CatalogListing> {
   if (!['movie', 'series', 'anime'].includes(kind)) throw new Error('Unknown catalog.')
   const key = `catalog:v2:${kind}`
   const db = getDatabase()
@@ -398,7 +422,9 @@ export async function catalogData(
       if (kind === 'anime' && db.getCache<boolean>(ANIME_GROUPED_KEY) !== true) {
         startAnimeGrouping(cached)
       }
-      return cached
+      // A cache entry inside its TTL is current by definition — this is
+      // the ordinary hit, not the expired fallback below.
+      return { items: cached, stale: false }
     }
   }
 
@@ -454,7 +480,10 @@ export async function catalogData(
 
     if (!items?.length) {
       const stale = db.getCache<CatalogItem[]>(key, { allowExpired: true })
-      if (stale?.length) return stale
+      // Reported as stale, not returned as a fetch. These rows have no
+      // established age beyond "whatever they were before", so a caller
+      // that stamps what it stores must not stamp them with now.
+      if (stale?.length) return { items: stale, stale: true }
       throw primaryError
     }
 
@@ -467,7 +496,7 @@ export async function catalogData(
       invalidateAnimeGroupIndex()
       startAnimeGrouping(items)
     }
-    return items
+    return { items, stale: false }
   })
 }
 
@@ -1012,12 +1041,15 @@ interface CatalogRelatedPayload {
 
 /** Registers catalog:list/meta/search/related and tmdb:connect/disconnect. */
 export function registerCatalogIpc(): void {
-  handle<CatalogListPayload, CatalogItem[]>(MEDIA_HUB_CHANNELS.catalogList, async (_e, payload) => {
-    const kind = payload?.kind
-    const force = payload?.force === true
-    if (!isValidCatalogKind(kind)) throw new Error('Unsupported catalog.')
-    return catalogData(kind, force)
-  })
+  handle<CatalogListPayload, CatalogListing>(
+    MEDIA_HUB_CHANNELS.catalogList,
+    async (_e, payload) => {
+      const kind = payload?.kind
+      const force = payload?.force === true
+      if (!isValidCatalogKind(kind)) throw new Error('Unsupported catalog.')
+      return catalogListing(kind, force)
+    }
+  )
 
   handle<CatalogMetaPayload, CatalogItem>(
     MEDIA_HUB_CHANNELS.catalogMeta,

@@ -1,38 +1,41 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import { AI_PICKS } from '@renderer/data/mockData'
 import { useAppState } from '@renderer/context/AppStateContext'
 import { Icon } from '@renderer/components/icons/Icon'
 import { MediaCard } from './MediaCard'
 import styles from './RecommendationCarousel.module.css'
 
 export function RecommendationCarousel() {
-  const { recommendations, homeFeedLive } = useAppState()
-  // Real recommendations replace the staggered-skeleton demo entirely once
-  // home:personalized has actually resolved; before that (bridge missing,
-  // still loading, or the fetch failed) the skeleton -> mock AI_PICKS reveal
-  // below still runs, so the row is never empty on a cold start.
-  const picks = homeFeedLive ? recommendations : AI_PICKS
-  // `loading` is derived, not stored directly: the skeleton timer is one
-  // input (skeletonDone), whether real data has already arrived is the
-  // other (homeFeedLive) — deriving avoids needing a synchronous setState
-  // just to short-circuit the fake delay once real data beats it.
+  const { recommendations, homeFeedLoading, homeFeedError, refreshHomeFeed } = useAppState()
+  // home:personalized's recommendations once it resolves; before that,
+  // the picks this app last really showed (see lib/mediaHub/
+  // startupSnapshot.ts). The mock AI_PICKS pool this used to fall back to
+  // now only reaches the bridgeless preview build, and only through that
+  // same fallback — see hooks.ts.
+  const picks = recommendations
   const [skeletonDone, setSkeletonDone] = useState(false)
-  const loading = !homeFeedLive && !skeletonDone
+  // `loading` is derived, not stored: the fake reveal timer below is one
+  // input, whether anything is actually in hand is the other.
+  //
+  // It is deliberately gated on having NOTHING to show. Running a 900ms
+  // skeleton over remembered picks would be the same "wait, then swap the
+  // screen out from under you" that this whole change exists to remove —
+  // real content that is already here should just be here.
+  const loading = picks.length === 0 && (homeFeedLoading || !skeletonDone)
   const [canScrollBack, setCanScrollBack] = useState(false)
   // Whether there's still unrevealed content to the right. On a wide
   // enough window (spec: "scale to show more items... 20+ to cover
-  // ultra-wide screens") every card in AI_PICKS can fit without
-  // scrolling at all, so the "show more" arrow needs to disappear
-  // instead of floating over a row that has nothing left to reveal.
+  // ultra-wide screens") every pick can fit without scrolling at all, so
+  // the "show more" arrow needs to disappear instead of floating over a
+  // row that has nothing left to reveal.
   const [canScrollForward, setCanScrollForward] = useState(false)
   const scrollerRef = useRef<HTMLUListElement>(null)
 
   // Staggered skeleton -> reveal on first mount, standing in for a real
   // "generating recommendations" round trip (spec section 15 / 18) — moot
-  // if home:personalized actually resolves before that fake delay is up
-  // (see the `loading` derivation above).
+  // whenever there is anything to show, remembered or live (see the
+  // `loading` derivation above).
   useEffect(() => {
     const t = setTimeout(() => setSkeletonDone(true), 900)
     return () => clearTimeout(t)
@@ -57,7 +60,14 @@ export function RecommendationCarousel() {
       el.removeEventListener('scroll', update)
       window.removeEventListener('resize', update)
     }
-  }, [loading])
+    // `picks`, not just `loading`. This used to lean on loading flipping
+    // false as the only way the row's contents could change, which stopped
+    // being true once a remembered row could be replaced by a live one
+    // without ever passing through a loading state (see the derivation
+    // above). A short remembered row swapped for a longer live one then
+    // left the forward arrow hidden over a scroller that had plenty left
+    // to show, until some unrelated resize or scroll re-measured it.
+  }, [loading, picks])
 
   // The arrows used to scroll a flat 380px regardless of how many cards
   // that actually covers — on a row this wide that's a fraction of one
@@ -102,13 +112,50 @@ export function RecommendationCarousel() {
         <Icon name="sparkle" />
         AI Picks For You
       </h2>
+      {/* A populated row can be a failure too, and used to say nothing
+          about it: a cold start whose home:personalized threw still has
+          the remembered picks to show, so the empty-state branch below is
+          skipped and this row presented last session's picks as current
+          with no way to ask again. Same situation the category pages
+          already banner over their carried rows — see CategoryPage's
+          .offlineBanner. The copy covers both routes here (nothing
+          fetched this run, or a mid-session refresh that failed) because
+          both make the same claim: what you are looking at may have
+          moved on. */}
+      {homeFeedError && picks.length > 0 && (
+        <p className={styles.staleNotice} role="status">
+          <Icon name="wifi-off" size={13} />
+          Couldn&apos;t reach the media hub backend — these picks may be out of date.
+          <button type="button" onClick={refreshHomeFeed} className={styles.emptyRetry}>
+            <Icon name="refresh" size={13} />
+            Retry
+          </button>
+        </p>
+      )}
       {!loading && picks.length === 0 ? (
-        // Real recommendations, unlike the mock AI_PICKS pool they replace,
-        // can legitimately come back empty (e.g. no watch history yet to
-        // derive a preferred genre from) — honest empty state rather than
-        // an empty-looking scroller with no explanation.
+        // An empty row has two causes and they are not interchangeable.
+        //
+        // main ranks recommendations over the WHOLE catalog when it has
+        // no watch history to personalise from, and throws outright when
+        // every catalog source is down (tracking.ts's homePersonalized) —
+        // so in practice an empty row means the fetch failed. Saying
+        // "watch a few titles" to someone whose backend is unreachable
+        // blames them for a network problem and hides the retry that
+        // would actually fix it. The "not enough history" copy is kept
+        // for the case it honestly describes.
         <p className={styles.emptyState}>
-          Watch a few titles and recommendations will show up here.
+          {homeFeedError ? (
+            <>
+              <Icon name="wifi-off" size={15} />
+              Couldn&apos;t reach the media hub backend.
+              <button type="button" onClick={refreshHomeFeed} className={styles.emptyRetry}>
+                <Icon name="refresh" size={13} />
+                Retry
+              </button>
+            </>
+          ) : (
+            'Watch a few titles and recommendations will show up here.'
+          )}
         </p>
       ) : (
         <div className={styles.scrollerWrap}>

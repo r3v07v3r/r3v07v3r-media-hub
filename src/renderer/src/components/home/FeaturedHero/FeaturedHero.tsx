@@ -1,13 +1,13 @@
 'use client'
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { FEATURED_ITEMS } from '@renderer/data/mockData'
 import { MediaItem } from '@renderer/types'
 import { resolveArtwork } from '@renderer/lib/artwork'
 import { ArtworkImage } from '@renderer/components/media/ArtworkImage'
 import { useReducedMotion } from '@renderer/hooks/useReducedMotion'
 import { useAppState } from '@renderer/context/AppStateContext'
 import { FeaturedMetadata } from './FeaturedMetadata'
+import { FeaturedHeroSkeleton } from './FeaturedHeroSkeleton'
 import { HeroActions } from './HeroActions'
 import { HeroSlideSelector } from './HeroSlideSelector'
 import styles from './FeaturedHero.module.css'
@@ -46,27 +46,33 @@ export interface FeaturedHeroProps {
   /** Overrides the default Home-page item source entirely — used by the
    *  Movies/Series/Anime category pages to rotate through that kind's own
    *  top-of-catalog pool instead of home:personalized's cross-kind
-   *  "featured" list. When omitted, behavior is unchanged from before this
-   *  prop existed (Home's own live-recommendations-or-mock-rotation). */
+   *  "featured" list. When omitted, this reads Home's own pool from app
+   *  state. */
   items?: MediaItem[]
+  /** Whether the caller's `items` source is still being fetched, so an
+   *  empty pool can render a placeholder instead of nothing. Only
+   *  consulted alongside `items`; Home reads the home-feed's own loading
+   *  flag from app state instead. */
+  loading?: boolean
 }
 
-export function FeaturedHero({ items: itemsProp }: FeaturedHeroProps = {}) {
-  const { featured, homeFeedLive } = useAppState()
+export function FeaturedHero({ items: itemsProp, loading: loadingProp }: FeaturedHeroProps = {}) {
+  const { featured, homeFeedLoading } = useAppState()
   // home:personalized's top recommendations stand in for this dashboard's
-  // hero-rotation concept (see hooks.ts's useMediaHubHomeFeed) once real —
-  // falls back to the mock rotation before that (bridge missing, still
-  // loading, or a fetch that came back with nothing to feature). Category
-  // pages bypass all of this by passing `items` directly.
-  const items = itemsProp ?? (homeFeedLive && featured.length ? featured : FEATURED_ITEMS)
+  // hero-rotation concept (see hooks.ts's useMediaHubHomeFeed). Before
+  // that resolves, `featured` is the hero pool this app last really
+  // showed (startupSnapshot.ts) — it used to be mockData's FEATURED_ITEMS,
+  // which is why every launch opened on Blade Runner 2049 no matter whose
+  // machine it was. Category pages bypass all of this by passing `items`.
+  const items = itemsProp ?? featured
+  const loading = itemsProp ? Boolean(loadingProp) : homeFeedLoading
 
-  // Guard for category pages, which can legitimately pass an empty array
-  // while their catalog fetch is still in flight (or genuinely returned
-  // nothing) — Home's own two sources are never empty, so this branch is
-  // unreachable from there. The caller (CategoryPage) is responsible for
-  // showing its own loading/empty hero placeholder in this case; this
-  // component just declines to render rather than dividing by zero below.
-  if (items.length === 0) return null
+  // Nothing to rotate through: a genuine first run with nothing
+  // remembered yet, or a category page whose catalog fetch is still out.
+  // A placeholder while the fetch is live, nothing once it has settled on
+  // empty — claiming a hero is coming when none is would be its own small
+  // lie, and the fixed-height row would just sit there blank forever.
+  if (items.length === 0) return loading ? <FeaturedHeroSkeleton /> : null
 
   return <FeaturedHeroInner items={items} />
 }

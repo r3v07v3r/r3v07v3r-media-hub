@@ -13,6 +13,7 @@ import type {
   BlockedDownload,
   BootstrapResult,
   CatalogItem,
+  CatalogListing,
   ConnectResult,
   ConnectionTestResult,
   DislikedListResult,
@@ -315,7 +316,7 @@ const api = {
     },
 
     catalog: {
-      list: (kind: MediaKind, force: boolean = false): Promise<CatalogItem[]> =>
+      list: (kind: MediaKind, force: boolean = false): Promise<CatalogListing> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.catalogList, { kind, force }),
       meta: (type: MediaKind, id: string): Promise<CatalogItem> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.catalogMeta, { type, id }),

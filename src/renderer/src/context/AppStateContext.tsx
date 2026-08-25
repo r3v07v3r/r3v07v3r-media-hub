@@ -20,7 +20,7 @@ import {
   Recommendation,
   UIActivityState
 } from '@renderer/types'
-import { CONTINUE_WATCHING, USER_PROFILES } from '@renderer/data/mockData'
+import { USER_PROFILES } from '@renderer/data/mockData'
 import type {
   CatalogItem,
   MediaHubSettingsSnapshot,
@@ -49,11 +49,15 @@ import {
   runPlaybackPreparationStage,
   type PlaybackPreparationStage
 } from '@renderer/lib/mediaHub/playbackPreparation'
+import { forgetContinueWatching, rememberTrackedId } from '@renderer/lib/mediaHub/startupSnapshot'
 import {
+  startupContinueWatchingFallback,
+  startupTrackedIdsFallback,
   useMediaHubBrowseCatalog,
   useMediaHubDislikedIds,
   useMediaHubHomeFeed,
-  useMediaHubWatchedIds
+  useMediaHubWatchedIds,
+  type CatalogKindState
 } from '@renderer/lib/mediaHub/hooks'
 import type { CategoryKind } from '@renderer/lib/mediaHub/categoryFilters'
 import { MAX_PROMPT_TITLES } from '@shared/media-hub/ollama'
@@ -173,11 +177,12 @@ interface AppStateValue {
 
   // Continue Watching — seeded from the media-hub backend's
   // home:personalized (episode-level watch tracking, not a mock array —
-  // see hooks.ts's useMediaHubHomeFeed) when available, else the mock
-  // CONTINUE_WATCHING placeholder so the panel is never empty before a
-  // backend connection exists. "mark watched/unwatched" and "remove from
-  // row" write through to the real tracking:mark-watched/tracking:toggle
-  // handlers (best-effort — local state updates immediately either way).
+  // see hooks.ts's useMediaHubHomeFeed) when available, else the row this
+  // app last really showed (startupSnapshot.ts), so a relaunch resumes on
+  // what you were actually watching instead of a demo placeholder.
+  // "mark watched/unwatched" and "remove from row" write through to the
+  // real tracking:mark-watched/tracking:toggle handlers (best-effort —
+  // local state updates immediately either way).
   continueWatching: ContinueWatchingItem[]
   /** `media` is required for anything not currently sitting in the
    *  Continue Watching row (a fully-watched title, or one never started)
@@ -197,17 +202,22 @@ interface AppStateValue {
   ) => void
 
   // The flat "browse everything" pool (movies + series + anime, real
-  // catalog:list data when available, mockData's CATALOG fallback
-  // otherwise — see hooks.ts's useMediaHubBrowseCatalog) — shared here so
+  // catalog:list data when available, the previous session's remembered
+  // catalog otherwise — see hooks.ts's useMediaHubBrowseCatalog) — shared here so
   // MoodBrowser/My Stuff/the AI-recommend actions all fetch it once
   // instead of each mounting their own copy of the hook.
   catalog: MediaItem[]
   catalogLoading: boolean
-  /** True once catalog:list has actually resolved live data — false means
-   *  `catalog` is the mock CATALOG fallback (bridge missing, still
-   *  loading, or every kind's fetch failed). See hooks.ts. */
-  catalogLive: boolean
-  catalogSettled: boolean
+  /** True once at least one catalog kind has returned real rows this run
+   *  — false means `catalog` is entirely remembered from the previous
+   *  session (bridge missing, still loading, or every kind's fetch
+   *  failed). Not a promise that every item is fresh: a kind that is
+   *  still loading contributes its remembered rows. See hooks.ts. */
+  /** Per-kind catalog availability — see hooks.ts's CatalogKindState.
+   *  There is deliberately no global "the catalog is live" flag: the
+   *  three kinds are fetched independently, so one would hide a failed
+   *  kind behind a successful one. Ask about the kind you are showing. */
+  catalogKindStates: Record<MediaKind, CatalogKindState>
   refreshCatalog: () => void
 
   // home:personalized's recommendations/featured pool (see
@@ -217,6 +227,18 @@ interface AppStateValue {
   recommendations: Recommendation[]
   featured: MediaItem[]
   homeFeedLive: boolean
+  /** The home:personalized fetch is still out. Distinct from
+   *  `homeFeedLive`, which stays false for a remembered-but-not-yet-
+   *  refetched feed — a consumer with nothing to show needs to know
+   *  whether to render a loading placeholder or an honest empty state,
+   *  and those are two different questions. */
+  homeFeedLoading: boolean
+  /** The last home:personalized attempt threw — see hooks.ts's
+   *  HomeFeedResult.error for why an empty feed alone can't be read as
+   *  "nothing to recommend yet". */
+  homeFeedError: boolean
+  /** Retries home:personalized. */
+  refreshHomeFeed: () => void
 
   // Snapshot of the media-hub backend's settings (torboxConnected,
   // simklClientId, theme, ...) — read by the playback gate below and by
@@ -413,10 +435,19 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   const [partyPreparing, setPartyPreparing] = useState<{ title: string; poster: string } | null>(
     null
   )
-  const [myList, setMyList] = useState<Set<string>>(new Set())
+  // Seeded from the remembered set, not empty — see startupHomeFeedFallback
+  // in hooks.ts. An empty My List alongside remembered titles is not a
+  // neutral starting point: it renders saved titles as unsaved, and the
+  // Add control it produces calls a toggle that removes them.
+  const [myList, setMyList] = useState<Set<string>>(startupTrackedIdsFallback)
   const [dislikedIds, setDislikedIds] = useState<Set<string>>(new Set())
-  const [continueWatching, setContinueWatching] =
-    useState<ContinueWatchingItem[]>(CONTINUE_WATCHING)
+  // Seeded from the same remembered feed useMediaHubHomeFeed falls back
+  // to, so the row this component owns and the row that hook reports
+  // agree from the first frame rather than the panel showing demo titles
+  // until home:personalized answers. See hooks.ts.
+  const [continueWatching, setContinueWatching] = useState<ContinueWatchingItem[]>(
+    startupContinueWatchingFallback
+  )
   const homeFeed = useMediaHubHomeFeed()
   const watchedIdsResult = useMediaHubWatchedIds()
   const dislikedIdsResult = useMediaHubDislikedIds()
@@ -424,7 +455,11 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     myList,
     watchedIdsResult.watchedIds,
     watchedIdsResult.history,
-    dislikedIds
+    dislikedIds,
+    // Whether those two sets are answers yet or just their initial
+    // emptiness — see WatchedIdsResult.loaded. Only the remembered rows
+    // care, and only so an unread set can't wipe a badge they already had.
+    { watched: watchedIdsResult.loaded, disliked: dislikedIdsResult.loaded }
   )
 
   // Reseeds local optimistic state whenever a fresh disliked:list fetch
@@ -567,8 +602,9 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   // Seed myList/continueWatching from the real backend once
   // home:personalized actually resolves — before that (bridge missing,
   // still loading, or the fetch failed) both keep whatever they already
-  // had, which is the empty Set / mock CONTINUE_WATCHING they were
-  // initialized with, per "keep dashboard visible" (see hooks.ts).
+  // had, which is the empty Set / the remembered Continue Watching row
+  // they were initialized with, per "keep dashboard visible" (see
+  // hooks.ts).
   useEffect(() => {
     if (!homeFeed.live) return
     // Deliberate effect-based sync, not derivable inline: myList/
@@ -730,7 +766,26 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       // completed, synchronous db write) supersedes it.
       window.api?.mediaHub?.tracking
         .toggle(mediaItemToTrackablePayload(media))
-        .then(() => homeFeed.refresh())
+        .then((result) => {
+          // Persisted from the toggle's own answer rather than waiting for
+          // the refresh below to carry it. That refresh throws whenever
+          // every catalog source is down — precisely when someone is most
+          // likely to restart mid-outage and find this title offering the
+          // opposite action, which reverses the write that just succeeded.
+          if (typeof result?.tracked === 'boolean') rememberTrackedId(media.id, result.tracked)
+          // Untracking is also what drops a title out of Continue Watching
+          // (see removeContinueWatching, which has no other channel to
+          // call). So unfollowing something in progress has to clear it
+          // from that row too — the same write, reached from a different
+          // control. Left behind, it came back on the next launch and its
+          // Remove button toggled tracking the other way, re-adding what
+          // was just untracked.
+          if (result?.tracked === false) {
+            setContinueWatching((prev) => prev.filter((c) => c.media.id !== media.id))
+            forgetContinueWatching(media.id)
+          }
+          homeFeed.refresh()
+        })
         .catch(() => {
           // Best-effort — the optimistic local toggle above already reflects
           // the user's intent; a failed write just means it won't survive a
@@ -840,7 +895,16 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       // is what actually drops it from home:personalized's list.
       api.tracking
         .toggle(mediaItemToTrackablePayload(entry.media))
-        .then(() => homeFeed.refresh())
+        .then((result) => {
+          // Written straight to the snapshot rather than waiting for the
+          // refresh below, which throws during exactly the outage where
+          // this local write still succeeds. Without it the row came back
+          // on restart, and a second Remove toggled tracking the other way
+          // and re-added it.
+          forgetContinueWatching(id)
+          if (typeof result?.tracked === 'boolean') rememberTrackedId(id, result.tracked)
+          homeFeed.refresh()
+        })
         .catch(() => {})
     },
     [continueWatching, homeFeed]
@@ -2032,12 +2096,14 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       removeContinueWatching,
       catalog: browseCatalog.items,
       catalogLoading: browseCatalog.loading,
-      catalogLive: browseCatalog.live,
-      catalogSettled: browseCatalog.settled,
+      catalogKindStates: browseCatalog.kindStates,
       refreshCatalog: browseCatalog.refresh,
       recommendations: homeFeed.recommendations,
       featured: homeFeed.featured,
       homeFeedLive: homeFeed.live,
+      homeFeedLoading: homeFeed.loading,
+      homeFeedError: homeFeed.error,
+      refreshHomeFeed: homeFeed.refresh,
       mediaHubSettings,
       refreshMediaHubSettings,
       assistantState,
@@ -2123,12 +2189,14 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       removeContinueWatching,
       browseCatalog.items,
       browseCatalog.loading,
-      browseCatalog.live,
-      browseCatalog.settled,
+      browseCatalog.kindStates,
       browseCatalog.refresh,
       homeFeed.recommendations,
       homeFeed.featured,
       homeFeed.live,
+      homeFeed.loading,
+      homeFeed.error,
+      homeFeed.refresh,
       mediaHubSettings,
       refreshMediaHubSettings,
       assistantState,

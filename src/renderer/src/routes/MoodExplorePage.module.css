@@ -123,3 +123,25 @@
     font-size: 21px;
   }
 }
+
+/* Qualifies results that are showing but could not be refreshed. Same
+   affordance as CategoryPage's .offlineBanner and the picks row's
+   .staleNotice — one visual language for "this failed, try again". */
+.staleNotice {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 0 0 14px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.staleRetry {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: inherit;
+  font-weight: 600;
+}
+.staleRetry:hover {
+  text-decoration: underline;
+}
