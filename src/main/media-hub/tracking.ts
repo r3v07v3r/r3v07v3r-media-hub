@@ -41,6 +41,13 @@ import {
   withPushedRemoteState
 } from '../../shared/media-hub/reconcileQueue'
 import { rankPersonalizedRecommendations } from '../../shared/media-hub/catalog-logic'
+import {
+  liveExclusions,
+  readStoredRecommendations,
+  requestRecommendationsRebuild,
+  storeRecommendations,
+  SERVED_COUNT
+} from './recommendations'
 import { airingStatus, continueWatchingList } from './core'
 import { catalogData, metadata } from './catalog'
 import { getDatabase } from './dbState'
@@ -960,6 +967,7 @@ export function registerTrackingIpc(): void {
     const tracked = db.isTracked(item.id)
     if (tracked) db.untrack(item.id)
     else db.track(item)
+    requestRecommendationsRebuild()
     return { tracked: !tracked }
   })
 
@@ -967,6 +975,7 @@ export function registerTrackingIpc(): void {
     MEDIA_HUB_CHANNELS.trackingMarkWatched,
     async (_e, { item, playback }) => {
       getDatabase().markWatched(item, playback || {})
+      requestRecommendationsRebuild()
       const simklResult = await syncSimklHistory(
         '/sync/history',
         historyPayload(item, playback || {})
@@ -980,6 +989,7 @@ export function registerTrackingIpc(): void {
     async (_e, { item, playback }) => {
       const p = playback || {}
       getDatabase().unmarkWatched(item.id, p.season, p.episode)
+      requestRecommendationsRebuild()
       const simklResult = await syncSimklHistory('/sync/history/remove', historyPayload(item, p))
       return { ok: true, ...simklResult, ...(await pushMalProgress(item)) }
     }
@@ -991,6 +1001,7 @@ export function registerTrackingIpc(): void {
       const list = Array.isArray(episodes) ? episodes : []
       const db = getDatabase()
       for (const playback of list) db.markWatched(item, playback)
+      requestRecommendationsRebuild()
       const simklResult = await syncSimklHistory(
         '/sync/history',
         seasonHistoryPayload(
@@ -1135,6 +1146,7 @@ export function registerTrackingIpc(): void {
 
   handle<TrackableItem, { disliked: boolean }>(MEDIA_HUB_CHANNELS.dislikedAdd, (_e, item) => {
     getDatabase().dislike(item)
+    requestRecommendationsRebuild()
     return { disliked: true }
   })
 
@@ -1142,19 +1154,12 @@ export function registerTrackingIpc(): void {
     MEDIA_HUB_CHANNELS.dislikedRemove,
     (_e, payload) => {
       getDatabase().undislike(payload.id)
+      requestRecommendationsRebuild()
       return { disliked: false }
     }
   )
 
   handle<undefined, HomePersonalizedResult>(MEDIA_HUB_CHANNELS.homePersonalized, async () => {
-    const [movies, series, anime] = await Promise.all(
-      (['movie', 'series', 'anime'] as const).map((kind) =>
-        catalogData(kind, false, 'visible').catch(() => [])
-      )
-    )
-    const all: CatalogItem[] = [...movies, ...series, ...anime]
-    if (!all.length) throw new Error('All catalog sources are currently unavailable.')
-
     const db = getDatabase()
     // Local only — see trackingList's own comment above for why: a live/
     // cached Simkl merge here means Continue Watching and the
@@ -1162,20 +1167,57 @@ export function registerTrackingIpc(): void {
     // title as watched for up to 20 minutes.
     const history: HistoryEntry[] = db.history()
     const tracked = db.tracked()
-    const watchedIds = new Set(history.map((x) => String(x.id)))
-    const trackedIds = new Set(tracked.map((x) => String(x.id)))
-    const dislikedIds = new Set(db.disliked().map((x) => String(x.id)))
-    const genres = db.preferredGenres(4)
-    const recommendationCandidates = all.filter(
-      (x) =>
-        !watchedIds.has(String(x.id)) &&
-        !trackedIds.has(String(x.id)) &&
-        !dislikedIds.has(String(x.id))
-    )
-    const recommendations = rankPersonalizedRecommendations(recommendationCandidates, {
-      history,
-      preferredGenres: genres
-    }).slice(0, 18)
+    const exclusions = liveExclusions(history)
+
+    // The suggestion row, from the list the background job already ranked
+    // — see recommendations.ts. This is the whole point of that module:
+    // the branch below has to wait for three catalogs, and a cold anime
+    // catalog is a twenty-second Kitsu crawl that Home spent all of
+    // waiting for eighteen rows it could have read from disk.
+    const stored = readStoredRecommendations(exclusions)
+    let recommendations: CatalogItem[]
+    let preferredGenres: string[]
+
+    if (stored) {
+      recommendations = stored.items
+      preferredGenres = stored.preferredGenres
+    } else {
+      // Nothing stored yet (a fresh install, a bumped STORE_KEY), or too
+      // little of it survived the live exclusions to fill the row. Rank
+      // live this once, and seed the store from that same work so the
+      // next launch takes the branch above.
+      const [movies, series, anime] = await Promise.all(
+        (['movie', 'series', 'anime'] as const).map((kind) =>
+          catalogData(kind, false, 'visible').catch(() => [])
+        )
+      )
+      const all: CatalogItem[] = [...movies, ...series, ...anime]
+      if (!all.length) throw new Error('All catalog sources are currently unavailable.')
+
+      preferredGenres = db.preferredGenres(4)
+      const candidates = all.filter(
+        (item) =>
+          !exclusions.watchedIds.has(String(item.id)) &&
+          !exclusions.trackedIds.has(String(item.id)) &&
+          !exclusions.dislikedIds.has(String(item.id))
+      )
+      // Ranked in full, then sliced twice: the row shows SERVED_COUNT, the
+      // store keeps more as the buffer the live exclusions eat into.
+      const ranked = rankPersonalizedRecommendations(candidates, {
+        history,
+        preferredGenres
+      })
+      // An empty candidate set means everything in the catalog is already
+      // watched, saved or hidden — rank the unfiltered catalog rather than
+      // showing nothing, exactly as this handler always has.
+      const full = ranked.length
+        ? ranked
+        : rankPersonalizedRecommendations(all, { history, preferredGenres })
+      // announce: false — this handler returns the same list to the same
+      // renderer on the next line. See storeRecommendations.
+      storeRecommendations(full, preferredGenres, { announce: false })
+      recommendations = full.slice(0, SERVED_COUNT)
+    }
 
     // See tracking:list above — same fan-out, same bound, and the two
     // share their per-title fetches through metadata()'s coalescing.
@@ -1190,10 +1232,8 @@ export function registerTrackingIpc(): void {
       tracked,
       updates: db.trackedUpdates(details),
       continueWatching: continueWatchingList(details, history).slice(0, 18),
-      recommendations: recommendations.length
-        ? recommendations
-        : rankPersonalizedRecommendations(all, { history, preferredGenres: genres }).slice(0, 18),
-      preferredGenres: genres
+      recommendations,
+      preferredGenres
     }
   })
 

@@ -339,6 +339,19 @@ export interface HomePersonalizedResult {
   preferredGenres: string[]
 }
 
+/**
+ * Payload of the recommendationsChanged push event. Deliberately just a
+ * notification, not the list: every consumer of the Home feed already has
+ * a refetch path (home:personalized), and shipping the rows through the
+ * event as well would give two sources of truth for the same row.
+ */
+export interface RecommendationsChanged {
+  /** When the stored list was rebuilt. */
+  builtAt: number
+  /** How many ranked titles were stored — the buffer, not the number shown. */
+  count: number
+}
+
 export interface MarkWatchedResult {
   ok: true
   simklSynced: boolean

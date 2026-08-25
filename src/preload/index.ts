@@ -61,6 +61,7 @@ import type {
   SkipTimes,
   CacheSessionMeta,
   ActivitySnapshot,
+  RecommendationsChanged,
   StreamCacheEntry,
   StreamCandidate,
   StreamResolveResult,
@@ -330,7 +331,15 @@ const api = {
 
     home: {
       personalized: (): Promise<HomePersonalizedResult> =>
-        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.homePersonalized)
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.homePersonalized),
+      /** Fires when the background job has rebuilt the stored suggestion
+       *  list. Carries no rows on purpose — the subscriber refetches
+       *  through personalized() above, so there is one path to that data
+       *  rather than two that can disagree. */
+      onRecommendationsChanged: (
+        onEvent: (payload: RecommendationsChanged) => void
+      ): (() => void) =>
+        subscribe<RecommendationsChanged>(MEDIA_HUB_CHANNELS.recommendationsChanged, onEvent)
     },
 
     tracking: {

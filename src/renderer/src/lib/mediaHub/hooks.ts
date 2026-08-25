@@ -660,6 +660,20 @@ export function useMediaHubHomeFeed(): HomeFeedResult {
   }, [generation])
 
   const refresh = useCallback(() => setGeneration((g) => g + 1), [])
+
+  // A rebuild that finishes mid-session pushes rather than being polled
+  // for — see main/media-hub/recommendations.ts. Without this, marking
+  // something watched would leave the row showing it until the next
+  // launch, because the rebuild it triggers lands well after the refetch
+  // the mutation itself already did.
+  //
+  // `refresh` is stable (useCallback with no deps), so this subscribes
+  // once for the life of the provider rather than tearing the listener
+  // down and re-establishing it on every rebuild it receives.
+  useEffect(() => {
+    return window.api?.mediaHub?.home?.onRecommendationsChanged?.(() => refresh())
+  }, [refresh])
+
   return useMemo(
     () => ({
       ...(state ?? startupHomeFeedFallback()),
