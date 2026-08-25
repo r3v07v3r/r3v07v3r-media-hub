@@ -6,7 +6,7 @@
 // both main-process code (relative import) and renderer code
 // (`@shared/media-hub/catalog-logic`) with no Electron/Node dependency.
 
-import { AiringState, CatalogItem, HistoryEntry, MediaKind } from './types'
+import { AiringState, CatalogItem, HistoryEntry, MediaKind, TitleCredits } from './types'
 
 export interface FilterCatalogOptions {
   includeGenres?: string[]
@@ -579,6 +579,169 @@ export function applyCadence(
   return row
 }
 
+/**
+ * The names and story-type labels that keep coming up in what somebody
+ * actually watches. Lowercased throughout, so matching is case-insensitive
+ * without every comparison having to remember that.
+ */
+export interface TasteProfile {
+  cast: ReadonlySet<string>
+  creators: ReadonlySet<string>
+  keywords: ReadonlySet<string>
+}
+
+/** Empty on a new install, and on anyone whose titles have not been enriched yet — see main/media-hub/credits.ts. */
+export const NO_TASTE: TasteProfile = {
+  cast: new Set<string>(),
+  creators: new Set<string>(),
+  keywords: new Set<string>()
+}
+
+/**
+ * How many of each are kept, and how often something has to appear before
+ * it counts as a taste at all.
+ *
+ * The minimum is the important one. Watching a film once puts ten actors
+ * and fifteen keywords into the tally, none of which is evidence of
+ * anything — a person who has seen one Tarantino film does not thereby
+ * like Tarantino. Requiring a second appearance is the difference between
+ * a preference and a coincidence.
+ */
+const MIN_APPEARANCES = 2
+const MAX_CAST_TASTE = 40
+const MAX_CREATOR_TASTE = 15
+const MAX_KEYWORD_TASTE = 30
+
+/**
+ * Keywords that describe how a title was MADE or MARKETED rather than what
+ * it is about. TMDB's vocabulary mixes the two freely, and these carry no
+ * information about whether somebody will enjoy something — every large
+ * franchise film has a credits stinger.
+ *
+ * Deliberately short. The frequency ceiling below catches most noise on
+ * its own and does it per person; this list is only for terms that are
+ * useless even when rare.
+ */
+const PRODUCTION_KEYWORDS = new Set([
+  'aftercreditsstinger',
+  'duringcreditsstinger',
+  'sequel',
+  'prequel',
+  'remake',
+  'reboot',
+  'live action remake',
+  'woman director',
+  'imax',
+  'shot on imax'
+])
+
+/**
+ * A keyword on more than this share of somebody's watched titles is not a
+ * preference, it is a description of their library.
+ *
+ * This is what stops "sequel" or "shounen" — true of most of what this
+ * person watches — from matching nearly every candidate and flattening the
+ * signal into a constant. It tunes itself per person, which a fixed list
+ * cannot: "superhero" is a real discriminator for one library and
+ * meaningless in another.
+ */
+const KEYWORD_CEILING_SHARE = 0.25
+
+/** Below this many enriched titles the ceiling above is measuring noise, so it is not applied at all. */
+const MIN_TITLES_FOR_CEILING = 20
+
+function topNames(counts: Map<string, number>, limit: number): Set<string> {
+  return new Set(
+    [...counts]
+      .filter(([, count]) => count >= MIN_APPEARANCES)
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+      .slice(0, limit)
+      .map(([name]) => name)
+  )
+}
+
+/**
+ * Builds a taste profile from the credits of everything somebody has
+ * watched.
+ *
+ * Takes the credits rather than the titles, so this stays pure and the
+ * question of where credits come from — and which titles have them yet —
+ * belongs entirely to the caller.
+ */
+export function buildTasteProfile(watched: Iterable<TitleCredits>): TasteProfile {
+  const cast = new Map<string, number>()
+  const creators = new Map<string, number>()
+  const keywords = new Map<string, number>()
+  let titles = 0
+  const bump = (counts: Map<string, number>, values: string[] | undefined): void => {
+    for (const value of values || []) {
+      const name = String(value).trim().toLowerCase()
+      if (name) counts.set(name, (counts.get(name) || 0) + 1)
+    }
+  }
+
+  for (const credits of watched) {
+    if (!credits) continue
+    titles += 1
+    bump(cast, credits.cast)
+    bump(creators, credits.creators)
+    bump(keywords, credits.keywords)
+  }
+
+  // Both filters are keyword-only. A performer or a director in most of
+  // what somebody watches is the strongest preference there is; a LABEL in
+  // most of what they watch is just what their library looks like.
+  const ceiling = titles >= MIN_TITLES_FOR_CEILING ? titles * KEYWORD_CEILING_SHARE : Infinity
+  const meaningful = new Map<string, number>()
+  for (const [name, count] of keywords) {
+    if (PRODUCTION_KEYWORDS.has(name) || count > ceiling) continue
+    meaningful.set(name, count)
+  }
+
+  return {
+    cast: topNames(cast, MAX_CAST_TASTE),
+    creators: topNames(creators, MAX_CREATOR_TASTE),
+    keywords: topNames(meaningful, MAX_KEYWORD_TASTE)
+  }
+}
+
+/**
+ * What a shared name or label is worth, and how many of each can count.
+ *
+ * Capped per category rather than summed freely, because the categories
+ * are not the same size: a title carries up to fifteen keywords and only
+ * one or two creators, so uncapped keyword agreement would drown out a
+ * director somebody follows. With these caps the whole affinity signal
+ * tops out at 68 — a little above four genre matches, and comfortably
+ * below the continuation boost, which should still win.
+ */
+const CAST_MATCH = 8
+const CREATOR_MATCH = 10
+const KEYWORD_MATCH = 6
+const MAX_CAST_MATCHES = 3
+const MAX_CREATOR_MATCHES = 2
+const MAX_KEYWORD_MATCHES = 4
+
+function overlap(values: string[] | undefined, liked: ReadonlySet<string>, cap: number): number {
+  if (!values?.length || !liked.size) return 0
+  let hits = 0
+  for (const value of values) {
+    if (liked.has(String(value).trim().toLowerCase())) hits += 1
+    if (hits >= cap) break
+  }
+  return hits
+}
+
+/** What one title's cast, creators and story-type labels are worth against a taste profile. */
+function affinityScore(credits: TitleCredits | undefined, taste: TasteProfile): number {
+  if (!credits) return 0
+  return (
+    overlap(credits.cast, taste.cast, MAX_CAST_MATCHES) * CAST_MATCH +
+    overlap(credits.creators, taste.creators, MAX_CREATOR_MATCHES) * CREATOR_MATCH +
+    overlap(credits.keywords, taste.keywords, MAX_KEYWORD_MATCHES) * KEYWORD_MATCH
+  )
+}
+
 // Home recommendations are ranked locally and deterministically. A small
 // Ollama model can explain a shortlisted choice, but it should not decide
 // watch-history or release ordering.
@@ -597,6 +760,19 @@ export interface PersonalizedRecommendationOptions {
    * above one they have never seen.
    */
   abandonedIds?: ReadonlySet<string>
+  /**
+   * Cast, creators and story-type labels for the pool, by title id, and
+   * the names this person keeps coming back to. Both or neither: a
+   * profile with nothing to match against, or credits with no profile to
+   * match them to, contributes nothing.
+   *
+   * Optional throughout, and empty for a long while on a new install —
+   * the background enrichment pass fills them in over several sessions
+   * (see main/media-hub/credits.ts). Ranking without them is exactly what
+   * it was before they existed.
+   */
+  credits?: ReadonlyMap<string, TitleCredits>
+  taste?: TasteProfile
 }
 
 /**
@@ -686,7 +862,9 @@ export function rankPersonalizedRecommendationsScored(
     history,
     preferredGenres = [],
     now = new Date(),
-    abandonedIds
+    abandonedIds,
+    credits,
+    taste
   }: PersonalizedRecommendationOptions
 ): ScoredRecommendation[] {
   const preferred = new Set(preferredGenres.map((genre) => String(genre).toLowerCase()))
@@ -746,6 +924,9 @@ export function rankPersonalizedRecommendationsScored(
       const recentReleaseBoost = year === currentYear ? 18 : year === currentYear - 1 ? 8 : 0
       const continuationBoost = nextFranchiseIds.has(String(item.id)) ? 100 : 0
       const rating = Math.min(Math.max(Number.parseFloat(item.rating) || 0, 0), 10)
+      // Nothing at all until the background enrichment pass has been round
+      // — see PersonalizedRecommendationOptions.credits.
+      const affinity = credits && taste ? affinityScore(credits.get(String(item.id)), taste) : 0
       return {
         item,
         year,
@@ -753,7 +934,8 @@ export function rankPersonalizedRecommendationsScored(
           continuationBoost +
           recentReleaseBoost +
           genreMatches * 12 +
-          rating -
+          rating +
+          affinity -
           (abandonedIds?.has(String(item.id)) ? ABANDONED_PENALTY : 0)
       }
     })

@@ -49,6 +49,7 @@ import { isLikelyFranchiseSibling, rankSimilarTitles } from '../../shared/media-
 import { coalesce, coalesceScope, type TaskPriority } from './taskScheduler'
 import { buildGroupedAnimeVideos, groupAnimeCatalog, kitsuRealEpisodes } from './animeSeasons'
 import { omdbRottenTomatoesRating } from './omdb'
+import { titleCredits } from './credits'
 
 const catalogUrls: Record<'movie' | 'series', string> = {
   movie: 'https://v3-cinemeta.strem.io/catalog/movie/top.json',
@@ -691,6 +692,20 @@ async function resolveMetadata(
   // when OMDb isn't connected, so this is always safe to call unconditionally.
   if (type !== 'anime') {
     item.rottenTomatoesRating = await omdbRottenTomatoesRating(String(resolvedId), priority)
+  }
+
+  // Cast, creators and story-type labels — see credits.ts. Unconditional
+  // for the same reason the OMDb call above is: it already answers
+  // "nothing" for every case it cannot serve (no TMDB key, an id no source
+  // recognises, anime with no AniList mapping), so there is no condition
+  // worth duplicating here. Cheap on the second visit and every visit
+  // after: credits are cached for ninety days, being facts that do not
+  // change.
+  const credits = await titleCredits(type, String(resolvedId), priority)
+  if (credits) {
+    if (credits.cast.length) item.cast = credits.cast
+    if (credits.creators.length) item.creators = credits.creators
+    if (credits.keywords.length) item.keywords = credits.keywords
   }
 
   // Applied once here rather than per-source (Cinemeta/Simkl-fallback/

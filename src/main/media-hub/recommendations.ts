@@ -32,10 +32,12 @@ import type { CatalogItem, HistoryEntry } from '../../shared/media-hub/types'
 import { MEDIA_HUB_CHANNELS } from '../../shared/media-hub/ipc-channels'
 import {
   applyCadence,
+  buildTasteProfile,
   rankPersonalizedRecommendationsScored,
   watchCadenceProfile,
   type ScoredRecommendation
 } from '../../shared/media-hub/catalog-logic'
+import { creditsFor } from './credits'
 import { getDatabase } from './dbState'
 import { logError } from './logger'
 import { sendToRenderer } from './rendererBridge'
@@ -313,10 +315,23 @@ export async function rebuildRecommendations(
   const exclusions = liveExclusions(history)
   const preferredGenres = db.preferredGenres(4)
 
-  const ranked = rankPersonalizedRecommendationsScored(
-    pool.filter((item) => keep(item, exclusions)),
-    { history, preferredGenres, abandonedIds: abandonedIds() }
-  )
+  // What this person keeps coming back to, learned from the credits of
+  // what they have actually watched — see credits.ts. Both sides are read
+  // from cache only: whatever the background enrichment pass has covered
+  // so far is what this run gets, and an install where it has covered
+  // nothing yet ranks exactly as it did before credits existed.
+  const taste = buildTasteProfile(creditsFor(history.map((entry) => String(entry.id))).values())
+  const candidates = pool.filter((item) => keep(item, exclusions))
+  const credits = creditsFor(candidates.map((item) => String(item.id)))
+
+  const ranked = rankPersonalizedRecommendationsScored(candidates, {
+    history,
+    preferredGenres,
+    abandonedIds: abandonedIds(),
+    credits,
+    taste
+  })
+
   if (!ranked.length) return 0
 
   storeRecommendations(ranked, preferredGenres)

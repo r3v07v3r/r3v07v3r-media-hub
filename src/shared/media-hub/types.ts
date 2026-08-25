@@ -64,6 +64,17 @@ export interface CatalogItem {
   rottenTomatoesRating?: string
   runtime: string
   genres: string[]
+  /** Top-billed performers, best-known first. Populated by metadata() where
+   *  a source has them (TMDB, for movie/series) — absent on catalog-list
+   *  entries, and on anime, which credits voice actors per character rather
+   *  than per title. See main/media-hub/credits.ts. */
+  cast?: string[]
+  /** Directors for a film, creators for a show, studios for anime. Same availability as `cast`. */
+  creators?: string[]
+  /** Story-type labels — TMDB keywords, or AniList tags for anime. The
+   *  closest thing this catalog has to what KIND of story a title is,
+   *  where `genres` only says which of five or six buckets it falls in. */
+  keywords?: string[]
   videos: Episode[]
   trailers: Trailer[]
   /** Anime only — sibling Kitsu ids confirmed (via a shared TheTVDB series
@@ -276,6 +287,22 @@ export interface PlaybackResult {
 // Tracked-show entry as persisted (normalizeTitle shape) — matches
 // CatalogItem's identity fields but is stored/returned independently since
 // a tracked item may be stale relative to the live catalog.
+/**
+ * What this app knows about a title beyond its genres — see
+ * main/media-hub/credits.ts for where each field comes from.
+ *
+ * Declared here rather than in that module because the ranking consumes
+ * it, and the ranking is shared code that must not import from main.
+ */
+export interface TitleCredits {
+  /** Top-billed performers, best-known first. Empty for anime, which credits voice actors per character rather than per title. */
+  cast: string[]
+  /** Directors for a film, creators for a show, studios for anime. */
+  creators: string[]
+  /** Story-type labels: TMDB keywords, or AniList tags. */
+  keywords: string[]
+}
+
 export interface TrackedItem {
   id: string
   simklId: number | null
