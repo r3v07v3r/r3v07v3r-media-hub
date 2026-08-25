@@ -297,6 +297,12 @@ export function catalogItemToMediaItem(
     runtimeMinutes: parseRuntimeMinutes(item.runtime),
     genres: item.genres,
     moods: genresToMoods(item.genres),
+    // Present only on a resolved detail-page item — the catalog list
+    // carries none of these (see credits.ts on why they are not on the
+    // catalog blob), so these are undefined for every grid card.
+    cast: item.cast?.length ? item.cast : undefined,
+    creators: item.creators?.length ? item.creators : undefined,
+    storyTags: item.keywords?.length ? item.keywords : undefined,
     communityRating: parseRating(item.rating),
     imdbRating: parseRating(item.rating),
     rottenTomatoesRating: parseRating(item.rottenTomatoesRating || ''),

@@ -590,13 +590,6 @@ export interface TasteProfile {
   keywords: ReadonlySet<string>
 }
 
-/** Empty on a new install, and on anyone whose titles have not been enriched yet — see main/media-hub/credits.ts. */
-export const NO_TASTE: TasteProfile = {
-  cast: new Set<string>(),
-  creators: new Set<string>(),
-  keywords: new Set<string>()
-}
-
 /**
  * How many of each are kept, and how often something has to appear before
  * it counts as a taste at all.
