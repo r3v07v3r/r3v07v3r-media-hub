@@ -47,6 +47,11 @@ export const MEDIA_HUB_CHANNELS = {
   catalogRelated: 'mediahub:catalog:related',
   catalogStory: 'mediahub:catalog:story',
   homePersonalized: 'mediahub:home:personalized',
+  /** Pushed when the stored suggestion list has been rebuilt — see
+   *  main/media-hub/recommendations.ts. The Home feed refetches on it
+   *  rather than polling, so a rebuild that finishes mid-session reaches
+   *  the row without waiting for the next launch. */
+  recommendationsChanged: 'mediahub:recommendations:changed', // push event
   trackingList: 'mediahub:tracking:list',
   trackingToggle: 'mediahub:tracking:toggle',
   trackingMarkWatched: 'mediahub:tracking:mark-watched',

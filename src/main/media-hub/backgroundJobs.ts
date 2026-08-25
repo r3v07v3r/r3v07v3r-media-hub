@@ -33,6 +33,7 @@ import { catalogData } from './catalog'
 import { logError } from './logger'
 import { pruneIdleSessions } from './streamCache'
 import { runBackgroundWatchSync } from './tracking'
+import { onRebuildRequested, rebuildRecommendations } from './recommendations'
 import { checkForUpdates } from './autoUpdate'
 import {
   coalesce,
@@ -99,6 +100,48 @@ export function registerRecurringJob(job: RecurringJob): void {
     dueAt: Date.now() + job.firstRunAfterMs + stagger(jobs.length),
     running: false
   })
+}
+
+/**
+ * Brings one job's next run forward, for work that has a reason to happen
+ * rather than a time to happen.
+ *
+ * Everything in this registry is on a clock, which is right for the jobs
+ * that genuinely are periodic — a catalog goes stale on its own schedule,
+ * an update might land at any time. It is wrong for work whose whole
+ * trigger is that something changed: the suggestion list has no reason to
+ * be rebuilt on a timer and every reason to be rebuilt when somebody
+ * finishes an episode.
+ *
+ * Deliberately "at the next heartbeat", not "now". Three things fall out
+ * of that, all of them wanted:
+ *
+ *  - it debounces for free. Marking a whole season watched is one rebuild,
+ *    not one per episode, because they all land inside one 30s window;
+ *  - the caller is a click somebody is waiting on, and this returns
+ *    instantly instead of putting a re-rank in front of them;
+ *  - the run still passes the pressure gate in tick(), so a request made
+ *    while something is playing waits for the playback to end rather than
+ *    competing with it.
+ *
+ * A job already due is left as it is. A job already RUNNING is not skipped
+ * either, and that matters more than it looks: tick() stamps the next due
+ * time when a run STARTS, so a change made while a rebuild is in flight
+ * would otherwise be invisible to that run and wait out the full interval
+ * before the next one. Marking it due again instead means the run in
+ * progress finishes, and the following heartbeat starts a fresh one that
+ * can see the change. The `running` flag in tick() is still what stops two
+ * from overlapping.
+ */
+export function requestJobRun(name: string): void {
+  const state = jobs.find((entry) => entry.job.name === name)
+  if (!state) return
+  const now = Date.now()
+  if (state.dueAt <= now) return
+  state.dueAt = now
+  // So the activity panel shows it as due immediately, rather than still
+  // counting down to a time that no longer applies.
+  onActivityChanged()
 }
 
 function tick(): void {
@@ -214,6 +257,33 @@ export function startBackgroundJobs(): void {
     run: pruneIdleSessions
   })
 
+  registerRecurringJob({
+    name: 'recommendations',
+    label: 'Updating your suggestions',
+    // The ranking itself is milliseconds; what this cadence really paces
+    // is how often the stored list is allowed to drift from a catalog
+    // that only moves every six hours anyway (see catalog-refresh above).
+    // Between these runs, the event-driven requests below are what keep
+    // it current — this interval is the floor, not the mechanism.
+    everyMs: 6 * 60 * 60 * 1000,
+    // After catalog-refresh's own first run, so the first rebuild of a
+    // session ranks over rows that job has already had a chance to renew
+    // rather than re-ranking and then immediately being out of date.
+    firstRunAfterMs: 6 * 60 * 1000,
+    priority: 'maintenance',
+    maxPressure: 'busy',
+    run: async () => {
+      await rebuildRecommendations('maintenance')
+    }
+  })
+
+  // What turns "I just finished an episode" into a rebuild. Deliberately
+  // routed through the registry rather than run at the call site: this way
+  // a rebuild obeys the same pressure gate and the same never-twice-at-
+  // once rule as every other recurring job, instead of being the one piece
+  // of background work that can start while something is playing.
+  onRebuildRequested(() => requestJobRun('recommendations'))
+
   heartbeat = setInterval(tick, HEARTBEAT_MS)
 }
 
@@ -225,6 +295,9 @@ export function stopBackgroundJobs(): void {
   if (pushTimer) clearTimeout(pushTimer)
   pushTimer = null
   onSchedulerChange(null)
+  // Or a request arriving during shutdown re-arms a job list that is
+  // about to be emptied, against a database before-quit is closing.
+  onRebuildRequested(null)
   jobs.length = 0
 }
 
