@@ -152,6 +152,26 @@ export interface WatchProvidersResult {
   link: string
 }
 
+/**
+ * One episode, on one day.
+ *
+ * Flat rather than grouped by date: the grouping is a presentation decision
+ * (a week grid, a list, a "this week / next week" split) and baking one shape
+ * into the payload would make every other shape a regrouping.
+ */
+export interface CalendarEntry {
+  contentId: string
+  type: MediaKind
+  title: string
+  poster: string
+  season: number
+  episode: number
+  episodeTitle: string
+  /** YYYY-MM-DD, in UTC — the granularity air dates are actually published
+   *  at, so carrying a time would be inventing precision. */
+  airsOn: string
+}
+
 export interface PersonCreditsResult {
   person: string
   cast: CatalogItem[]

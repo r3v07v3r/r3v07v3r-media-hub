@@ -58,6 +58,8 @@ export const MEDIA_HUB_CHANNELS = {
   /** Where a title can be streamed, rented or bought, in the person's own
    *  region — see main/media-hub/watchProviders.ts. */
   catalogProviders: 'mediahub:catalog:providers',
+  /** Episodes of tracked shows around now — see main/media-hub/calendar.ts. */
+  calendarGet: 'mediahub:calendar:get',
   homePersonalized: 'mediahub:home:personalized',
   /** Pushed when the stored suggestion list has been rebuilt — see
    *  main/media-hub/recommendations.ts. The Home feed refetches on it

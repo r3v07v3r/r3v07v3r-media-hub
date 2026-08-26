@@ -23,16 +23,23 @@ import { WatchStatusBadge } from '@renderer/components/media/WatchStatusBadge'
 import { getWatchStatus } from '@renderer/lib/mediaHub/watchStatus'
 import { applyWatchStateFilters } from '@renderer/lib/mediaHub/categoryFilters'
 import type { MediaItem } from '@renderer/types'
-import type { CustomListItem, PlayRecord, ViewingStats } from '@shared/media-hub/types'
+import type {
+  CalendarEntry,
+  CustomListItem,
+  PlayRecord,
+  ViewingStats
+} from '@shared/media-hub/types'
 import styles from './MyStuff.module.css'
 
-type TabId = 'list' | 'progress' | 'watched' | 'rated' | 'history' | 'stats' | 'dropped'
+type TabId =
+  'list' | 'progress' | 'watched' | 'rated' | 'calendar' | 'history' | 'stats' | 'dropped'
 
 const TABS: { id: TabId; label: string }[] = [
   { id: 'list', label: 'Lists' },
   { id: 'progress', label: 'In progress' },
   { id: 'watched', label: 'Watched' },
   { id: 'rated', label: 'Rated' },
+  { id: 'calendar', label: 'Calendar' },
   { id: 'history', label: 'History' },
   { id: 'stats', label: 'Stats' },
   { id: 'dropped', label: 'Not for me' }
@@ -484,6 +491,124 @@ function ListsView({
   )
 }
 
+/**
+ * When each day is, in words.
+ *
+ * Today and tomorrow get named because a date is the wrong unit for them —
+ * somebody scanning a schedule for what is on tonight should not have to
+ * compare two numbers to find out.
+ */
+function airDayLabel(day: string, today: string): string {
+  const date = new Date(`${day}T00:00:00Z`)
+  if (Number.isNaN(date.getTime())) return day
+  const diff = Math.round((date.getTime() - new Date(`${today}T00:00:00Z`).getTime()) / 86_400_000)
+  if (diff === 0) return 'Today'
+  if (diff === 1) return 'Tomorrow'
+  if (diff === -1) return 'Yesterday'
+  return date.toLocaleDateString(undefined, {
+    weekday: 'short',
+    day: 'numeric',
+    month: 'short',
+    timeZone: 'UTC'
+  })
+}
+
+/**
+ * What is airing, grouped by day.
+ *
+ * The payload arrives flat and is grouped here, because the grouping is a
+ * presentation decision — a week grid and a list want the same data arranged
+ * differently, and baking one shape into the IPC would make the other a
+ * regrouping.
+ */
+function CalendarView() {
+  const { openDetail } = useAppState()
+  // Seeded from whether there is a bridge at all: outside the desktop app
+  // there is nothing to wait for, and an effect that says so synchronously
+  // cascades a render.
+  const [entries, setEntries] = useState<CalendarEntry[] | null>(window.api?.mediaHub ? null : [])
+
+  useEffect(() => {
+    const api = window.api?.mediaHub
+    if (!api) return
+    let cancelled = false
+    api.catalog
+      .calendar()
+      .then((result) => {
+        if (!cancelled) setEntries(result.entries)
+      })
+      .catch(() => {
+        if (!cancelled) setEntries([])
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  const today = new Date().toISOString().slice(0, 10)
+  const days = useMemo(() => {
+    const grouped = new Map<string, CalendarEntry[]>()
+    for (const entry of entries ?? []) {
+      const bucket = grouped.get(entry.airsOn)
+      if (bucket) bucket.push(entry)
+      else grouped.set(entry.airsOn, [entry])
+    }
+    return [...grouped]
+  }, [entries])
+
+  if (entries === null) return <p className={styles.empty}>Checking the schedules…</p>
+  if (days.length === 0) {
+    return (
+      <p className={styles.empty}>
+        Nothing scheduled. Only shows in My List appear here, and their episode lists fill in over
+        several sessions in the background — so a show you added a moment ago may not be covered
+        yet.
+      </p>
+    )
+  }
+
+  return (
+    <div className={styles.calendar}>
+      {days.map(([day, forDay]) => (
+        <section key={day} className={styles.calendarDay}>
+          <h2 className={`${styles.calendarDate} ${day === today ? styles.calendarDateToday : ''}`}>
+            {airDayLabel(day, today)}
+          </h2>
+          <ul className={styles.history}>
+            {forDay.map((entry) => (
+              <li
+                key={`${entry.contentId}:${entry.season}:${entry.episode}`}
+                className={styles.historyRow}
+              >
+                <div className={styles.historyArt}>
+                  {entry.poster ? <img src={entry.poster} alt="" /> : null}
+                </div>
+                <button
+                  type="button"
+                  className={styles.calendarEntry}
+                  onClick={() =>
+                    openDetail({ id: entry.contentId, mediaKind: entry.type } as MediaItem)
+                  }
+                >
+                  <span className={styles.historyTitle}>
+                    {entry.title}
+                    <span className={styles.historyEpisode}>
+                      {`S${String(entry.season).padStart(2, '0')}E${String(entry.episode).padStart(2, '0')}`}
+                    </span>
+                  </span>
+                  {entry.episodeTitle ? (
+                    <span className={styles.historyWhen}>{entry.episodeTitle}</span>
+                  ) : null}
+                </button>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ))}
+    </div>
+  )
+}
+
 export default function MyStuffPage() {
   const {
     myList,
@@ -557,7 +682,7 @@ export default function MyStuffPage() {
     ratedItems.length === 0 &&
     droppedItems.length === 0
 
-  if (everythingEmpty && tab !== 'history' && tab !== 'stats') {
+  if (everythingEmpty && tab !== 'history' && tab !== 'stats' && tab !== 'calendar') {
     return (
       <ComingSoonSection
         icon="mystuff"
@@ -611,6 +736,8 @@ export default function MyStuffPage() {
           )}
         </>
       )}
+
+      {tab === 'calendar' && <CalendarView />}
 
       {tab === 'history' && <HistoryList />}
 
