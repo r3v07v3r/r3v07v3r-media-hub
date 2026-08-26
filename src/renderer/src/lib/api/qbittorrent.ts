@@ -63,6 +63,20 @@ export async function testConnection(config: ServiceConfig): Promise<ConnectionT
   return { ok: true, message: `Connected — qBittorrent ${res.data ?? ''}`.trim() }
 }
 
+/**
+ * True when a torrent is in one of qBittorrent's several stopped states.
+ *
+ * There is no single "paused" flag: the WebUI reports pausedDL, pausedUP,
+ * stoppedDL and stoppedUP depending on version and on whether the torrent had
+ * finished, and 4.x renamed the pair midway. Matching on the shape of the
+ * name rather than on an exhaustive list is what keeps this working across
+ * both, and across whatever the next rename is.
+ */
+export function isPaused(torrent: QbTorrent): boolean {
+  const state = String(torrent.state ?? '').toLowerCase()
+  return state.startsWith('paused') || state.startsWith('stopped')
+}
+
 export async function getTorrents(config: ServiceConfig): Promise<ClientResult<QbTorrent[]>> {
   if (!isConfigured(config))
     return { ok: false, live: false, error: "qBittorrent isn't configured" }
@@ -76,4 +90,67 @@ export async function getTorrents(config: ServiceConfig): Promise<ClientResult<Q
   })
   if (!res.ok) return { ok: false, live: false, error: res.error ?? `Status ${res.status}` }
   return { ok: true, live: true, data: res.data ?? [] }
+}
+
+/**
+ * One authenticated POST against a torrent-management endpoint.
+ *
+ * Every call logs in first rather than holding a session. That is a real
+ * round trip per action, and it is the right trade here: the SID cookie
+ * expires on its own schedule, the Downloads page acts on a torrent rarely
+ * (this is not a polling path), and a cached cookie that has quietly gone
+ * stale turns every button into a silent no-op. `getTorrents` above already
+ * works this way for the same reason.
+ */
+async function manage(
+  config: ServiceConfig,
+  action: 'pause' | 'resume' | 'delete',
+  hash: string,
+  extra: Record<string, string> = {}
+): Promise<ClientResult<true>> {
+  if (!isConfigured(config)) {
+    return { ok: false, live: false, error: "qBittorrent isn't configured" }
+  }
+  const loginResult = await login(config)
+  if (!loginResult.ok) return { ok: false, live: false, error: loginResult.error }
+  const base = normalizeBaseUrl(config.baseUrl)
+  const res = await proxyFetch<string>({
+    // pause/resume rather than 5.x's newer stop/start: those are the names
+    // that exist in both, since 5.x kept the old pair as aliases while 4.x
+    // never had the new one.
+    url: `${base}/api/v2/torrents/${action}`,
+    method: 'POST',
+    headers: loginResult.cookie ? { Cookie: loginResult.cookie } : undefined,
+    // Form-encoded, which is what this API takes — see the proxy's own
+    // formBody note. `hashes` is plural in the API and takes a pipe-separated
+    // list; one at a time is all this UI ever needs.
+    formBody: { hashes: hash, ...extra }
+  })
+  if (!res.ok) return { ok: false, live: false, error: res.error ?? `Status ${res.status}` }
+  return { ok: true, live: true, data: true }
+}
+
+export function pauseTorrent(config: ServiceConfig, hash: string): Promise<ClientResult<true>> {
+  return manage(config, 'pause', hash)
+}
+
+export function resumeTorrent(config: ServiceConfig, hash: string): Promise<ClientResult<true>> {
+  return manage(config, 'resume', hash)
+}
+
+/**
+ * Removes a torrent, optionally with the files it downloaded.
+ *
+ * `deleteFiles` is spelled out as a string because the body is form-encoded
+ * and this API's own WebUI sends "true"/"false" — passing a JS boolean would
+ * rely on the encoder's stringification rather than on the documented shape,
+ * on a parameter where being wrong means deleting somebody's media when they
+ * asked not to.
+ */
+export function deleteTorrent(
+  config: ServiceConfig,
+  hash: string,
+  deleteFiles: boolean
+): Promise<ClientResult<true>> {
+  return manage(config, 'delete', hash, { deleteFiles: deleteFiles ? 'true' : 'false' })
 }

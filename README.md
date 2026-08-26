@@ -55,7 +55,9 @@ play something. Optional metadata, tracking, and subtitle services add to the ex
   have set aside. Make as many named lists as you like alongside My List, and add titles to them
   from their own page.
   Any single viewing can be removed from the history without un-watching the episode.
-- **Manage downloads** and optionally connect Jellyfin, Sonarr, Radarr, and qBittorrent.
+- **Manage downloads** and optionally connect Jellyfin, Sonarr, Radarr, and qBittorrent. Torrents
+  can be paused, resumed and removed from the Downloads page, with keeping or deleting the files
+  asked separately.
 - **Ask Sonarr or Radarr for a title** straight from its page, picking the quality profile and
   folder, with a search starting as soon as it is added. Movies and series only — anime is
   catalogued by Kitsu id, which neither service can look up.

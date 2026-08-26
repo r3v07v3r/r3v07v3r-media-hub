@@ -1,8 +1,16 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { DEFAULT_SERVICE_SETTINGS, ServiceSettings } from '@shared/ipc-types'
+import { DEFAULT_SERVICE_SETTINGS, ServiceConfig, ServiceSettings } from '@shared/ipc-types'
 import type { StreamCacheEntry } from '@shared/media-hub/types'
-import { getTorrents, QbTorrent } from '@renderer/lib/api/qbittorrent'
+import {
+  deleteTorrent,
+  getTorrents,
+  isPaused,
+  pauseTorrent,
+  QbTorrent,
+  resumeTorrent
+} from '@renderer/lib/api/qbittorrent'
+import { useAppState } from '@renderer/context/AppStateContext'
 import { sonarrClient, radarrClient, ServarrQueueItem } from '@renderer/lib/api/servarr'
 import { isConfigured } from '@renderer/lib/api/types'
 import { BackgroundActivitySection } from '@renderer/components/downloads/BackgroundActivitySection'
@@ -98,7 +106,40 @@ function CacheStreamRow({
   )
 }
 
-function TorrentRow({ t }: { t: QbTorrent }) {
+function TorrentRow({
+  t,
+  config,
+  onChanged
+}: {
+  t: QbTorrent
+  config: ServiceConfig
+  onChanged: () => void
+}) {
+  const { pushNotification } = useAppState()
+  const [busy, setBusy] = useState(false)
+  const paused = isPaused(t)
+
+  async function run(
+    action: () => Promise<{ ok: boolean; error?: string }>,
+    failure: string
+  ): Promise<void> {
+    setBusy(true)
+    try {
+      const result = await action()
+      if (!result.ok) {
+        pushNotification({ tone: 'error', message: result.error ?? failure })
+        return
+      }
+      // Re-read rather than patching the row locally: qBittorrent decides what
+      // state a torrent lands in (a finished one resumes into seeding, not
+      // downloading), and guessing at that here is how a row ends up claiming
+      // something the server disagrees with.
+      onChanged()
+    } finally {
+      setBusy(false)
+    }
+  }
+
   return (
     <div className={styles.item}>
       <div className={styles.itemHead}>
@@ -111,9 +152,47 @@ function TorrentRow({ t }: { t: QbTorrent }) {
           style={{ width: `${Math.round(t.progress * 100)}%` }}
         />
       </div>
-      <span className={styles.itemMeta}>
-        {t.state} · {formatBytes(t.size)} · ↓ {formatBytes(t.dlspeed)}/s
-      </span>
+      <div className={styles.itemFooter}>
+        <span className={styles.itemMeta}>
+          {t.state} · {formatBytes(t.size)} · ↓ {formatBytes(t.dlspeed)}/s
+        </span>
+        <div className={styles.itemActions}>
+          <button
+            type="button"
+            className={styles.rowButton}
+            disabled={busy}
+            onClick={() =>
+              void run(
+                () => (paused ? resumeTorrent(config, t.hash) : pauseTorrent(config, t.hash)),
+                paused ? 'Could not resume that torrent.' : 'Could not pause that torrent.'
+              )
+            }
+          >
+            {paused ? 'Resume' : 'Pause'}
+          </button>
+          <button
+            type="button"
+            className={styles.rowButton}
+            disabled={busy}
+            onClick={() => {
+              // Two questions rather than one, because they have very
+              // different consequences: removing the torrent is undoable by
+              // adding it again, and deleting the files is not. Defaulting the
+              // second to "keep" is the only safe default.
+              if (!window.confirm(`Remove "${t.name}" from qBittorrent?`)) return
+              const alsoFiles = window.confirm(
+                'Also delete the downloaded files? Cancel keeps them on disk.'
+              )
+              void run(
+                () => deleteTorrent(config, t.hash, alsoFiles),
+                'Could not remove that torrent.'
+              )
+            }}
+          >
+            Remove
+          </button>
+        </div>
+      </div>
     </div>
   )
 }
@@ -182,6 +261,22 @@ export default function DownloadsPage() {
     load()
     return () => {
       cancelled = true
+    }
+  }, [])
+
+  // Re-reads just the torrent list, after an action changed it. Scoped to
+  // qBittorrent on purpose: pausing a torrent has nothing to say about the
+  // Servarr queues or the stream cache, and re-querying three services
+  // because one of them changed is exactly the kind of cost that makes a page
+  // feel heavy.
+  const refreshTorrents = useCallback(async () => {
+    const api = window.api?.settings
+    if (!api) return
+    const next = await api.get()
+    const qb = await getTorrents(next.qbittorrent)
+    if (qb.ok) {
+      setTorrents(qb.data ?? [])
+      setTorrentsLive(qb.live)
     }
   }, [])
 
@@ -260,7 +355,14 @@ export default function DownloadsPage() {
           {torrents.length === 0 ? (
             <p className={styles.empty}>No active torrents.</p>
           ) : (
-            torrents.map((t) => <TorrentRow key={t.hash} t={t} />)
+            torrents.map((t) => (
+              <TorrentRow
+                key={t.hash}
+                t={t}
+                config={settings.qbittorrent}
+                onChanged={refreshTorrents}
+              />
+            ))
           )}
         </section>
       )}
