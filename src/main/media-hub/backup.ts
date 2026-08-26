@@ -145,9 +145,34 @@ export function readBackup(filePath: string): BackupFile {
   if (Number(backup.schemaVersion) > SCHEMA_VERSION) {
     throw new Error('That backup was taken by a newer version of the app. Update, then restore it.')
   }
-  if (!backup.tables || typeof backup.tables !== 'object') {
+  if (!backup.tables || typeof backup.tables !== 'object' || Array.isArray(backup.tables)) {
     throw new Error('That backup is missing its contents.')
   }
+
+  // EVERY table has to be present, and every one an array.
+  //
+  // Not pedantry — this is what stands between a damaged file and an erased
+  // library. restoreBackup deletes all of these before it writes any of them,
+  // and a missing table reads as "restore zero rows", so a file carrying the
+  // right marker and `tables: {}` would empty the library and commit it as a
+  // success. An empty ARRAY is different and legitimate: somebody who has
+  // rated nothing has an empty `ratings`.
+  const missing = BACKUP_TABLES.filter((table) => !Array.isArray(backup.tables?.[table]))
+  if (missing.length > 0) {
+    throw new Error(
+      `That backup is incomplete and was not restored (missing: ${missing.join(', ')}).`
+    )
+  }
+
+  // Checked here rather than where it is read, because it is read AFTER the
+  // restore has committed — see appIpc's backup:import. A file that got that
+  // far and then threw would have replaced the library and skipped putting the
+  // profiles back, leaving every restored row owned by a profile that does not
+  // exist.
+  if (!Array.isArray(backup.profiles)) {
+    throw new Error('That backup is missing its profiles and was not restored.')
+  }
+
   return backup as BackupFile
 }
 

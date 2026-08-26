@@ -4,6 +4,7 @@ import type { ContinueWatchingItem, MediaItem } from '@renderer/types'
 import type { DetailAdapterConfig } from '@renderer/lib/mediaHub/detailAdapters'
 import { useEffect, useState } from 'react'
 import { Icon } from '@renderer/components/icons/Icon'
+import { useAppState } from '@renderer/context/AppStateContext'
 import { useMediaHubLists } from '@renderer/lib/mediaHub/hooks'
 import styles from './ProgressPanel.module.css'
 
@@ -202,7 +203,8 @@ export function ProgressPanel({
  * every title page would be noise.
  */
 function AddToListButton({ media }: { media: MediaItem }) {
-  const { lists, add, removeItem } = useMediaHubLists()
+  const { activeProfileId } = useAppState()
+  const { lists, add, removeItem } = useMediaHubLists(activeProfileId)
   const [open, setOpen] = useState(false)
   const [memberOf, setMemberOf] = useState<Set<string>>(new Set())
 

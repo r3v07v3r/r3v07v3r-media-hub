@@ -185,6 +185,10 @@ export function registerAppIpc(): void {
     const settings = readSettings()
     const existing = settings.profiles ?? []
     const byId = new Map(existing.map((profile) => [profile.id, profile]))
+    // Guaranteed an array by readBackup, which refuses a file without one
+    // BEFORE the restore runs — this read happens after the transaction has
+    // committed, so a throw here would mean a replaced library with no
+    // profiles to own it.
     for (const incoming of backup.profiles as { id?: unknown }[]) {
       const id = String(incoming?.id ?? '')
       if (!id || byId.has(id)) continue

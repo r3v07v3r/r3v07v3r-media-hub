@@ -30,6 +30,7 @@ import {
   PLAYER_VOLUME_STEP
 } from '@shared/media-hub/player'
 import type { NextEpisodeRef } from '@shared/media-hub/nextEpisode'
+import type { PlayerSessionMedia } from '@shared/media-hub/player'
 import type { SubtitleResult } from '@shared/media-hub/types'
 import {
   DEFAULT_SUBTITLE_STYLE,
@@ -356,13 +357,16 @@ function PlayerControls() {
     tracking.savePositionNow()
     // The one transition the scrobble effect above cannot observe: the window
     // is going away, so there is no later render to notice it in.
-    ui({
-      type: 'scrobble',
-      action: 'stop',
-      progress: duration > 0 ? Math.round((timePos / duration) * 100) : 0
-    })
+    if (media) {
+      ui({
+        type: 'scrobble',
+        action: 'stop',
+        progress: duration > 0 ? Math.round((timePos / duration) * 100) : 0,
+        media
+      })
+    }
     ui({ type: 'stop-playback', watched: tracking.markedWatched() })
-  }, [tracking, ui, duration, timePos])
+  }, [tracking, ui, duration, timePos, media])
 
   /** Applies a partial change over the style in force, as one command. */
   const applySubtitleStyle = useCallback(
@@ -382,7 +386,11 @@ function PlayerControls() {
   // A party FOLLOWER still scrobbles: they really are watching it, whoever
   // pressed play. What they must not do is act on the transition themselves,
   // and this does not — it only reports.
-  const scrobbleState = useRef<{ key: string; playing: boolean } | null>(null)
+  const scrobbleState = useRef<{
+    key: string
+    playing: boolean
+    media: PlayerSessionMedia
+  } | null>(null)
   useEffect(() => {
     if (!media) return
     const key = `${media.id}:${media.seasonNumber ?? ''}:${media.episodeNumber ?? ''}`
@@ -396,10 +404,14 @@ function PlayerControls() {
     const progress = duration > 0 ? Math.round((timePos / duration) * 100) : 0
 
     // A title change stops the OUTGOING one before starting the new one, or
-    // Simkl is left holding a scrobble for something that is no longer playing.
-    if (previous && previous.key !== key) ui({ type: 'scrobble', action: 'stop', progress })
-    scrobbleState.current = { key, playing }
-    ui({ type: 'scrobble', action: playing ? 'start' : 'pause', progress })
+    // Simkl is left holding a scrobble for something that is no longer
+    // playing. The stop carries the PREVIOUS media, not the current one —
+    // that is the whole reason the identity travels with the event.
+    if (previous && previous.key !== key) {
+      ui({ type: 'scrobble', action: 'stop', progress, media: previous.media })
+    }
+    scrobbleState.current = { key, playing, media }
+    ui({ type: 'scrobble', action: playing ? 'start' : 'pause', progress, media })
     // timePos and duration are deliberately NOT dependencies: they change
     // every tick, and depending on them would turn this into the heartbeat it
     // exists not to be. They are read at the moment a transition happens,

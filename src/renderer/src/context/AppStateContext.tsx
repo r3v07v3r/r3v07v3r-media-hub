@@ -458,10 +458,14 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   const [continueWatching, setContinueWatching] = useState<ContinueWatchingItem[]>(
     startupContinueWatchingFallback
   )
-  const homeFeed = useMediaHubHomeFeed()
-  const watchedIdsResult = useMediaHubWatchedIds()
-  const dislikedIdsResult = useMediaHubDislikedIds()
-  const ratingsResult = useMediaHubRatings()
+  // Each of these is scoped to the active profile in main, and re-reads when
+  // it changes — see the note above useMediaHubWatchedIds. Without the
+  // argument a profile switch left the previous profile's data on screen while
+  // every write went to the newly scoped database.
+  const homeFeed = useMediaHubHomeFeed(activeProfileId)
+  const watchedIdsResult = useMediaHubWatchedIds(activeProfileId)
+  const dislikedIdsResult = useMediaHubDislikedIds(activeProfileId)
+  const ratingsResult = useMediaHubRatings(activeProfileId)
   const browseCatalog = useMediaHubBrowseCatalog(
     myList,
     watchedIdsResult.watchedIds,
@@ -1570,16 +1574,26 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
           return
         }
         case 'scrobble': {
-          const media = playbackMediaForEventsRef.current
-          if (!media) return
+          // The event's OWN subject, never playbackMedia. During a title
+          // change this window's media has usually already been replaced by
+          // the time the overlay's stop arrives, so reading it here sent the
+          // outgoing title's stop for the incoming episode — ending a scrobble
+          // that had just begun and leaving the previous one running.
+          const subject = event.media
+          if (!subject?.id) return
           // Fire and forget. A scrobble is a courtesy to a third-party
           // service; nothing in this app waits on it, and a failure is logged
           // in main rather than shown over the video.
           window.api?.mediaHub?.simkl
             .scrobble(
               event.action,
-              mediaItemToTrackablePayload(media),
-              { season: media.seasonNumber, episode: media.episodeNumber },
+              {
+                id: subject.id,
+                type: subject.kind,
+                title: subject.title,
+                year: ''
+              },
+              { season: subject.seasonNumber, episode: subject.episodeNumber },
               event.progress
             )
             .catch(() => {})

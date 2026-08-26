@@ -136,7 +136,8 @@ function TitleGrid({
  * is a different action, and it lives on the title's own page.
  */
 function HistoryList() {
-  const { plays, loaded, remove } = useMediaHubPlays()
+  const { activeProfileId } = useAppState()
+  const { plays, loaded, remove } = useMediaHubPlays(activeProfileId)
   if (!loaded) return <p className={styles.empty}>Reading your history…</p>
   if (plays.length === 0) {
     return (
@@ -318,14 +319,13 @@ function ListsView({
   watchlist: MediaItem[]
   onRemoveFromWatchlist: (media: MediaItem) => void
 }) {
-  const { lists, loaded, create, rename, remove, removeItem } = useMediaHubLists()
+  const { openDetail, activeProfileId } = useAppState()
+  const { lists, loaded, create, rename, remove, removeItem } = useMediaHubLists(activeProfileId)
   // null selects My List; a list id selects that one.
   const [selected, setSelected] = useState<string | null>(null)
   const [items, setItems] = useState<CustomListItem[]>([])
   const [naming, setNaming] = useState(false)
   const [draftName, setDraftName] = useState('')
-  const { openDetail } = useAppState()
-
   // A selected list that has just been deleted falls back to My List rather
   // than leaving the chips with nothing highlighted.
   const selectedList = lists.find((list) => list.id === selected) ?? null

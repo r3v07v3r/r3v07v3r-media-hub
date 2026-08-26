@@ -122,7 +122,42 @@ db.exportBackup(backupFile, {
   fs.writeFileSync(future, JSON.stringify({ ...parsed, schemaVersion: 999 }), 'utf8')
   assert.throws(() => guarded.importBackup(future), /newer version/i)
 
+  // A file with the right marker and version but no CONTENTS. This is the one
+  // that mattered: restore deletes every table before writing any of them and
+  // reads a missing table as "zero rows", so without validation a structurally
+  // damaged backup emptied the library and committed it as a success.
+  const hollow = path.join(dir, 'hollow.json')
+  fs.writeFileSync(
+    hollow,
+    JSON.stringify({
+      format: 'r3-media-hub-backup',
+      version: 1,
+      schemaVersion: 1,
+      profiles: [],
+      tables: {}
+    }),
+    'utf8'
+  )
+  assert.throws(() => guarded.importBackup(hollow), /incomplete/i)
+
+  // One missing table is the same failure, and is named.
+  const partial = path.join(dir, 'partial.json')
+  const whole = JSON.parse(fs.readFileSync(backupFile, 'utf8'))
+  delete whole.tables.ratings
+  fs.writeFileSync(partial, JSON.stringify(whole), 'utf8')
+  assert.throws(() => guarded.importBackup(partial), /ratings/i)
+
+  // Missing profiles is refused BEFORE the restore, not after: that field is
+  // read once the transaction has already committed, so a late throw would
+  // leave a replaced library owned by nobody.
+  const noProfiles = path.join(dir, 'no-profiles.json')
+  const stripped = JSON.parse(fs.readFileSync(backupFile, 'utf8'))
+  delete stripped.profiles
+  fs.writeFileSync(noProfiles, JSON.stringify(stripped), 'utf8')
+  assert.throws(() => guarded.importBackup(noProfiles), /profiles/i)
+
   assert.equal(guarded.isTracked('tt-keep'), true, 'no refused file changed anything')
+  assert.equal(guarded.tracked().length, 1, 'and nothing was deleted on the way to refusing')
   guarded.close()
 }
 

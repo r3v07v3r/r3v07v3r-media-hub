@@ -291,9 +291,19 @@ export type PlayerUiEvent =
    *  call per tick would be a request every few seconds for the whole length
    *  of a film.
    *
-   *  Like mark-watched, this carries no item: building the payload needs the
-   *  full MediaItem and that record lives in the main window. */
-  | { type: 'scrobble'; action: 'start' | 'pause' | 'stop'; progress: number }
+   *  Unlike mark-watched, this DOES carry its subject. A scrobble payload
+   *  needs an id, a kind, a title and a coordinate — all of which the overlay
+   *  already has — where mark-watched needs the full MediaItem, which it does
+   *  not. Carrying it is what makes a title change correct: the outgoing stop
+   *  and the incoming start describe different titles, and a receiver reading
+   *  "whatever is playing now" would race the main window's own state and send
+   *  the stop for the episode that just started. */
+  | {
+      type: 'scrobble'
+      action: 'start' | 'pause' | 'stop'
+      progress: number
+      media: PlayerSessionMedia
+    }
   | { type: 'notify'; tone: 'info' | 'error' | 'success'; message: string }
   /** Overlay -> main -> main window: OPEN the party panel. A command, for a
    *  panel that is not open yet — the only one of these three that main passes

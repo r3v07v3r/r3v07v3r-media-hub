@@ -17,11 +17,28 @@ import { BrowserWindow, Notification } from 'electron'
 import { upcomingEpisodes } from './calendar'
 import { getDatabase } from './dbState'
 import { logError } from './logger'
+import { activeProfileId } from './profiles'
 import { readSettings } from './settingsStore'
 
-/** Where the watermark lives. `durable`, because a lost one means notifying
- *  about the same episode twice — the failure people actually notice. */
-const SEEN_KEY = 'notifications:seen:v1'
+/**
+ * Where one profile's watermark lives.
+ *
+ * KEYED BY PROFILE, because the episodes it describes are. `upcomingEpisodes`
+ * reads the active profile's tracked list, so a single shared key meant that
+ * switching profiles found none of the new profile's episodes in the set and
+ * announced every recent one — then overwrote the other profile's watermark on
+ * the way out, so switching back announced everything again.
+ *
+ * catalog_cache is not itself profile-scoped (it holds facts about titles, not
+ * about people), which is why the scoping has to be in the key rather than in
+ * the table.
+ *
+ * `durable`, because a lost watermark means notifying about the same episode
+ * twice — the failure people actually notice.
+ */
+function seenKey(profileId: string): string {
+  return `notifications:seen:v1:${profileId}`
+}
 /** Ten years. This is a watermark, not a cache: it must never expire out from
  *  under the check and cause a re-announcement of everything. */
 const SEEN_TTL_MS = 10 * 365 * 24 * 60 * 60 * 1000
@@ -71,13 +88,18 @@ function show(title: string, body: string): void {
  * already there and stays quiet — the alternative is that turning on
  * notifications immediately fires one for every episode of every tracked show
  * from the past week, which is the single worst first impression this feature
- * could make.
+ * could make. Because the watermark is per profile, that same courtesy applies
+ * the first time each profile is checked rather than only the first time the
+ * setting is turned on.
  */
 export async function checkForNewEpisodes(now = new Date()): Promise<number> {
   if (!notificationsEnabled()) return 0
 
   const db = getDatabase()
-  const stored = db.getCache<string[]>(SEEN_KEY, { allowExpired: true })
+  // Read once and reused for the write below: a profile switch between the two
+  // would otherwise file this profile's episodes under the next one's key.
+  const key = seenKey(activeProfileId())
+  const stored = db.getCache<string[]>(key, { allowExpired: true })
   const seen = new Set(Array.isArray(stored) ? stored : [])
   const firstRun = stored === null
 
@@ -93,7 +115,7 @@ export async function checkForNewEpisodes(now = new Date()): Promise<number> {
 
   // Recorded whether or not anything is announced, including on the first run.
   const nextSeen = aired.map((entry) => `${entry.contentId}:${entry.season}:${entry.episode}`)
-  db.putCache(SEEN_KEY, nextSeen, SEEN_TTL_MS, { durable: true })
+  db.putCache(key, nextSeen, SEEN_TTL_MS, { durable: true })
 
   if (firstRun || fresh.length === 0) return 0
 

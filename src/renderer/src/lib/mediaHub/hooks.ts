@@ -473,7 +473,18 @@ export interface WatchedIdsResult {
  * (Movies/Series/Anime grids and My Stuff all need it), not part of the
  * Home-specific personalized feed.
  */
-export function useMediaHubWatchedIds(): WatchedIdsResult {
+/**
+ * Why every profile-scoped hook below takes an `activeProfileId`.
+ *
+ * The database is scoped to one profile at a time (see its setActiveProfile),
+ * and switching re-scopes it in main. The renderer's copies of that data are
+ * fetched once on mount and have no way to know that happened — so without
+ * this argument a profile switch left the previous profile's watchlist,
+ * history, ratings and Continue Watching on screen while every subsequent
+ * write went to the newly scoped database. The id is not used in the request;
+ * it is there to be a dependency.
+ */
+export function useMediaHubWatchedIds(activeProfileId: string): WatchedIdsResult {
   const [watchedIds, setWatchedIds] = useState<Set<string>>(new Set())
   const [history, setHistory] = useState<HistoryEntry[]>([])
   const [loaded, setLoaded] = useState(false)
@@ -499,7 +510,7 @@ export function useMediaHubWatchedIds(): WatchedIdsResult {
     return () => {
       cancelled = true
     }
-  }, [generation])
+  }, [generation, activeProfileId])
 
   // Stable `refresh` and a memoised result object, for the same reason
   // useMediaHubBrowseCatalog above memoises its own: AppStateContext holds
@@ -526,7 +537,7 @@ export interface DislikedIdsResult {
  * sourced MediaItem needs for its `disliked` field (see
  * CatalogItemAdapterContext.dislikedIds).
  */
-export function useMediaHubDislikedIds(): DislikedIdsResult {
+export function useMediaHubDislikedIds(activeProfileId: string): DislikedIdsResult {
   const [dislikedIds, setDislikedIds] = useState<Set<string>>(new Set())
   const [loaded, setLoaded] = useState(false)
   const [generation, setGeneration] = useState(0)
@@ -546,7 +557,7 @@ export function useMediaHubDislikedIds(): DislikedIdsResult {
     return () => {
       cancelled = true
     }
-  }, [generation])
+  }, [generation, activeProfileId])
 
   const refresh = useCallback(() => setGeneration((g) => g + 1), [])
   return useMemo(() => ({ dislikedIds, loaded, refresh }), [dislikedIds, loaded, refresh])
@@ -574,7 +585,7 @@ export interface ListsResult {
  * keeping a second tally in the renderer is how a picker ends up saying "3
  * titles" over a list of four.
  */
-export function useMediaHubLists(): ListsResult {
+export function useMediaHubLists(activeProfileId: string): ListsResult {
   const [lists, setLists] = useState<CustomList[]>([])
   const [loaded, setLoaded] = useState(() => !window.api?.mediaHub)
 
@@ -595,7 +606,7 @@ export function useMediaHubLists(): ListsResult {
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [activeProfileId])
 
   const create = useCallback(async (name: string) => {
     const api = window.api?.mediaHub
@@ -670,7 +681,7 @@ export interface PlaysResult {
  * only one tab of one page reads it, it can run to hundreds of rows, and
  * nothing else in the app needs to re-render when a play is removed.
  */
-export function useMediaHubPlays(): PlaysResult {
+export function useMediaHubPlays(activeProfileId: string): PlaysResult {
   const [plays, setPlays] = useState<PlayRecord[]>([])
   // Seeded from whether there is an IPC bridge at all: outside the desktop
   // app (a plain browser tab during dev-server work) there is nothing to wait
@@ -695,7 +706,7 @@ export function useMediaHubPlays(): PlaysResult {
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [activeProfileId])
 
   const remove = useCallback(async (playId: number) => {
     const api = window.api?.mediaHub
@@ -727,7 +738,7 @@ export interface RatingsResult {
   rate: (id: string, score: number) => Promise<void>
 }
 
-export function useMediaHubRatings(): RatingsResult {
+export function useMediaHubRatings(activeProfileId: string): RatingsResult {
   const [ratings, setRatings] = useState<Map<string, number>>(new Map())
 
   useEffect(() => {
@@ -744,7 +755,7 @@ export function useMediaHubRatings(): RatingsResult {
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [activeProfileId])
 
   const rate = useCallback(async (id: string, score: number) => {
     const api = window.api?.mediaHub
@@ -813,7 +824,7 @@ export interface HomeFeedResult {
  * has been re-checked this run", so a caller that needs to distinguish
  * remembered from fresh still can.
  */
-export function useMediaHubHomeFeed(): HomeFeedResult {
+export function useMediaHubHomeFeed(activeProfileId: string): HomeFeedResult {
   const [state, setState] = useState<typeof EMPTY_HOME_FEED | null>(null)
   // See useMediaHubBrowseCatalog above for why this is a lazy initializer
   // rather than an effect-driven flip.
@@ -883,7 +894,7 @@ export function useMediaHubHomeFeed(): HomeFeedResult {
     return () => {
       cancelled = true
     }
-  }, [generation])
+  }, [generation, activeProfileId])
 
   const refresh = useCallback(() => setGeneration((g) => g + 1), [])
 
