@@ -45,10 +45,12 @@ import { reportPreparation } from './playbackProgress'
 import { captureThumbnail, mpvPath } from './mpv'
 import {
   addSubtitleFileToPlayer,
+  applyStoredSubtitleStyle,
   getSessionSnapshot,
   pushSessionSnapshot,
   startPlayerSession,
-  stopPlayerSession
+  stopPlayerSession,
+  storedSubtitleStyle
 } from './playerBridge'
 import { readSettings } from './settingsStore'
 import { setPressure } from './taskScheduler'
@@ -281,6 +283,12 @@ async function openPlayback(url: string, cacheMeta?: CacheSessionMeta): Promise<
   // say which title this is, so without this the control bar has a real
   // scrubber above a blank name. `cacheMeta` already carries exactly these
   // fields because the Downloads page lists cached sessions by them.
+  // Re-applied per title, not once at startup: mpv resets these along with
+  // everything else on `loadfile`, so a look somebody set would quietly revert
+  // on the next episode.
+  const subtitleStyle = storedSubtitleStyle()
+  await applyStoredSubtitleStyle()
+
   const sessionMedia = cacheMeta
     ? {
         id: cacheMeta.catalogId ?? '',
@@ -306,7 +314,8 @@ async function openPlayback(url: string, cacheMeta?: CacheSessionMeta): Promise<
       autoSubtitlesEnabled: settings.autoSubtitlesEnabled !== false,
       subtitleLanguage: settings.subtitleLanguage || 'en',
       audioLanguage: settings.audioLanguage || 'en',
-      autoplayNextEnabled: settings.autoplayNextEnabled !== false
+      autoplayNextEnabled: settings.autoplayNextEnabled !== false,
+      subtitleStyle
     }
   })
   // Fire-and-forget, AFTER the snapshot above has gone out. Finding the next

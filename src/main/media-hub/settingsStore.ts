@@ -70,6 +70,10 @@ export interface MediaHubRawSettings {
   videoScaling?: string
   autoSubtitlesEnabled?: boolean
   autoplayNextEnabled?: boolean
+  /** Subtitle size/position/colour/background — see
+   *  shared/media-hub/subtitleStyle.ts. Stored whole because the four are one
+   *  visual decision. */
+  subtitleStyle?: unknown
   uiAnimationsEnabled?: boolean
   performancePanelVisible?: boolean
   maxStreamResolution?: number

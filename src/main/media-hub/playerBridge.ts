@@ -37,8 +37,15 @@ import {
   type VideoPictureControl,
   type VideoPictureSettings
 } from '../../shared/media-hub/videoPicture'
+import {
+  DEFAULT_SUBTITLE_STYLE,
+  normalizeSubtitleStyle,
+  subtitleStyleProperties,
+  type SubtitleStyle
+} from '../../shared/media-hub/subtitleStyle'
 import { handle } from './ipcGuard'
 import { logError } from './logger'
+import { readSettings, writeSettings } from './settingsStore'
 import {
   MpvPlayer,
   mpvPath,
@@ -67,6 +74,32 @@ import {
 
 const player = new MpvPlayer()
 let sessionSnapshot: PlayerSessionSnapshot | null = null
+
+/**
+ * Pushes one subtitle look at mpv.
+ *
+ * Best-effort per property rather than all-or-nothing: an mpv build that does
+ * not know one of these must not cost the other three. Nothing here can fail
+ * in a way worth reporting — the worst case is a subtitle that looks the way
+ * it did before.
+ */
+async function applySubtitleStyle(style: SubtitleStyle): Promise<void> {
+  for (const [property, value] of Object.entries(subtitleStyleProperties(style))) {
+    await player.set(property, value).catch(() => {})
+  }
+}
+
+/** The stored look, or the untouched default. Read on every session start,
+ *  because mpv resets these along with everything else on `loadfile`. */
+export function storedSubtitleStyle(): SubtitleStyle {
+  const stored = readSettings().subtitleStyle
+  return stored ? normalizeSubtitleStyle(stored) : DEFAULT_SUBTITLE_STYLE
+}
+
+/** Puts the stored look back on a freshly loaded file. */
+export async function applyStoredSubtitleStyle(): Promise<void> {
+  await applySubtitleStyle(storedSubtitleStyle())
+}
 
 // The fit mode is held here rather than in the overlay because the overlay is
 // rebuilt per playback session and mpv is not: a mode chosen on one title has
@@ -283,6 +316,32 @@ async function attachObservers(): Promise<void> {
       .then((tracks) => queuePatch({ tracks }, true))
       .catch(() => {})
   })
+
+  // Chapters. Observed rather than read once at load because the list arrives
+  // slightly after the file opens — mpv reports an empty one first — and a
+  // one-shot read would decide a chaptered file has none.
+  await player
+    .observe('chapter-list', (value) => {
+      const list = Array.isArray(value) ? (value as { title?: unknown; time?: unknown }[]) : []
+      const chapters = list
+        .map((chapter) => ({
+          title: String(chapter?.title ?? ''),
+          time: Number(chapter?.time)
+        }))
+        .filter((chapter) => Number.isFinite(chapter.time))
+      queuePatch({ chapters }, true)
+    })
+    .catch(() => {})
+  await player
+    .observe('chapter', (value) => {
+      queuePatch({ chapter: typeof value === 'number' ? value : -1 }, true)
+    })
+    .catch(() => {})
+  await player
+    .observe('audio-delay', (value) => {
+      if (typeof value === 'number') queuePatch({ audioDelay: value })
+    })
+    .catch(() => {})
 
   // The keyboard backstop (see MpvPlayer.bindSafetyKeys). These arrive when
   // mpv's own window has focus rather than the controls overlay, and route to
@@ -1036,6 +1095,37 @@ async function runCommand(command: PlayerCommand): Promise<void> {
       const seconds = Number(command.seconds)
       if (!Number.isFinite(seconds)) throw new Error('Invalid subtitle delay.')
       await player.set('sub-delay', clamp(seconds, -60, 60))
+      return
+    }
+    case 'set-audio-delay': {
+      const seconds = Number(command.seconds)
+      if (!Number.isFinite(seconds)) throw new Error('Invalid audio delay.')
+      await player.set('audio-delay', clamp(seconds, -60, 60))
+      return
+    }
+    case 'set-chapter': {
+      const index = Number(command.index)
+      if (!Number.isInteger(index) || index < 0) throw new Error('Invalid chapter.')
+      // mpv clamps an out-of-range chapter to the last one rather than
+      // erroring, which is the behaviour worth having: a chapter list that
+      // changed under a click seeks to the end instead of failing.
+      await player.set('chapter', index)
+      return
+    }
+    case 'set-subtitle-style': {
+      // Normalized rather than trusted — this is the IPC boundary, and every
+      // field has an obvious safe reading. Stored as well as applied so the
+      // next title opens looking the same; a look somebody set once and had to
+      // set again every episode would not be worth having.
+      const style = normalizeSubtitleStyle(command.style)
+      await applySubtitleStyle(style)
+      const settings = readSettings()
+      settings.subtitleStyle = style
+      writeSettings(settings)
+      const current = getSessionSnapshot()
+      if (current) {
+        pushSessionSnapshot({ ...current, settings: { ...current.settings, subtitleStyle: style } })
+      }
       return
     }
     case 'set-fit-mode':

@@ -40,6 +40,9 @@ play something. Optional metadata, tracking, and subtitle services add to the ex
   seasons, episodes, ratings, and recommendations.
 - **Play from local files, a media server, or TorBox** with automatic source selection,
   audio-language preferences, playback buffering, subtitle selection, and resume progress.
+- **Control playback properly** — speed from 0.5× to 2×, chapter navigation, audio and subtitle
+  sync offsets, subtitle size, height, colour and backdrop, and a sleep timer that can stop at the
+  end of the episode.
 - **Keep watching a series** — when an episode ends, the next one is offered on a post-play card
   and starts after a short countdown. Turn it off under **Settings → Playback → Episodes**.
 - **Track what you watch** locally and, if desired, sync compatible activity with Simkl and

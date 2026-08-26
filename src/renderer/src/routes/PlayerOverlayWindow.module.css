@@ -415,3 +415,186 @@
   border-radius: 4px;
   background: rgba(255, 255, 255, 0.08);
 }
+
+/* ---- Playback menu: speed, audio sync, sleep timer ---------------------- */
+
+.playbackMenu {
+  min-width: 264px;
+  padding: 8px 12px 10px;
+  gap: 8px;
+}
+
+/* Wraps rather than scrolls: seven speeds fit on two rows at this width, and
+   a horizontally scrolling strip inside a popover is a control people miss
+   half of. */
+.speedRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.speedButton {
+  flex: 1 0 auto;
+  appearance: none;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 6px;
+  padding: 5px 9px;
+  color: rgba(255, 255, 255, 0.88);
+  background: transparent;
+  font: inherit;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+
+.speedButton:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.speedButtonOn {
+  background: rgba(255, 255, 255, 0.92);
+  border-color: rgba(255, 255, 255, 0.92);
+  color: #06121f;
+}
+
+.nudgeRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.nudgeButton {
+  appearance: none;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 6px;
+  width: 28px;
+  padding: 4px 0;
+  color: #fff;
+  background: transparent;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.nudgeButton:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.nudgeValue {
+  flex: 1;
+  text-align: center;
+  color: rgba(255, 255, 255, 0.88);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.nudgeReset {
+  appearance: none;
+  border: 0;
+  border-radius: 6px;
+  padding: 4px 8px;
+  color: #fff;
+  background: rgba(255, 255, 255, 0.1);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.nudgeReset:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.18);
+}
+
+.nudgeReset:disabled {
+  cursor: default;
+  opacity: 0.42;
+}
+
+/* ---- Chapters ---------------------------------------------------------- */
+
+/* A long film can carry forty marks, so the list scrolls rather than growing
+   past the top of the window. */
+.chapterMenu {
+  min-width: 240px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+/* ---- Subtitle appearance ----------------------------------------------- */
+
+.styleControl {
+  display: grid;
+  gap: 5px;
+  color: rgba(255, 255, 255, 0.88);
+  font-size: 12px;
+}
+
+.styleControl span {
+  display: flex;
+  justify-content: space-between;
+}
+
+.styleControl output {
+  color: var(--accent, #4da3ff);
+  font-variant-numeric: tabular-nums;
+}
+
+.styleControl input {
+  width: 100%;
+  margin: 0;
+  accent-color: var(--accent, #4da3ff);
+  cursor: pointer;
+}
+
+.colorRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.colorSwatch {
+  appearance: none;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  cursor: pointer;
+}
+
+/* The ring sits outside the swatch so the colour itself is never obscured by
+   the thing marking it as chosen. */
+.colorSwatchOn {
+  border-color: #fff;
+  box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.55);
+}
+
+.colorSwatch:focus-visible,
+.speedButton:focus-visible,
+.nudgeButton:focus-visible,
+.nudgeReset:focus-visible,
+.styleToggle:focus-visible {
+  outline: 2px solid #38e5ff;
+  outline-offset: 2px;
+}
+
+.styleToggle {
+  appearance: none;
+  border: 0;
+  border-radius: 6px;
+  padding: 5px 9px;
+  color: #fff;
+  background: rgba(255, 255, 255, 0.1);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.styleToggle:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.18);
+}
+
+.styleToggle:disabled {
+  cursor: default;
+  opacity: 0.42;
+}

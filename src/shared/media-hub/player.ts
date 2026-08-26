@@ -12,6 +12,7 @@
 
 import type { MediaTracks } from './types'
 import type { NextEpisodeRef } from './nextEpisode'
+import type { SubtitleStyle } from './subtitleStyle'
 import type { VideoFitMode } from './videoFit'
 import type { VideoPictureControl } from './videoPicture'
 
@@ -58,6 +59,13 @@ export const PLAYER_VOLUME_STEP = 0.05
  *  the full MediaItem: that type lives in the renderer, and anything needing
  *  the whole record (mark-watched's trackable payload, for one) is handled by
  *  the main window, which already holds it — see PlayerUiEvent. */
+/** One chapter mark, as mpv reports them. */
+export interface PlayerChapter {
+  title: string
+  /** Seconds from the start of the file. */
+  time: number
+}
+
 export interface PlayerSessionMedia {
   id: string
   title: string
@@ -100,6 +108,9 @@ export interface PlayerSessionSnapshot {
     audioLanguage: string
     /** Whether reaching the end of an episode offers the next one. */
     autoplayNextEnabled: boolean
+    /** The stored look, already applied to mpv — present so the menu opens
+     *  showing what is in force rather than the defaults. */
+    subtitleStyle: SubtitleStyle
   }
 }
 
@@ -137,6 +148,15 @@ export interface PlayerStatePatch {
   eofReached?: boolean
   /** Track list changed — e.g. an external subtitle was added. */
   tracks?: MediaTracks
+  /** The file's chapter marks, in order. Empty for the many releases that
+   *  carry none, which is why the chapters button is absent rather than
+   *  disabled when this is empty. */
+  chapters?: PlayerChapter[]
+  /** Index into `chapters` of the one currently playing, or -1. */
+  chapter?: number
+  /** mpv's audio delay in seconds — observed rather than assumed, so the
+   *  control shows what is actually applied after a title change resets it. */
+  audioDelay?: number
   /** Current fit mode. Not observed off mpv like the rest of this patch:
    *  `keepaspect` and `panscan` are two properties describing one user-facing
    *  choice, and main is the side that knows which choice they add up to — so
@@ -178,6 +198,16 @@ export type PlayerCommand =
   /** Manual subtitle timing offset in seconds — the thing VLC users fix in two
    *  keypresses and the old <track>-based pipeline had no way to express. */
   | { type: 'set-subtitle-delay'; seconds: number }
+  /** The same correction for audio, which a badly muxed release needs just as
+   *  often and in the opposite direction. */
+  | { type: 'set-audio-delay'; seconds: number }
+  /** Jump to a chapter by its index in the observed `chapters` list. */
+  | { type: 'set-chapter'; index: number }
+  /** Size, position, colour and background box — see
+   *  shared/media-hub/subtitleStyle.ts. Applied as one command because the
+   *  four are one visual decision and applying them separately makes the
+   *  subtitle flicker through intermediate states. */
+  | { type: 'set-subtitle-style'; style: SubtitleStyle }
   /** How the picture is fitted into the window — see shared/media-hub/videoFit.ts. */
   | { type: 'set-fit-mode'; mode: VideoFitMode }
   /** One of the small set of live MPV picture controls. */
