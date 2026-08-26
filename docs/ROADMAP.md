@@ -13,27 +13,65 @@ streaming apps people compare everything to.
 
 ## Progress
 
-Twelve feature commits on `claude/competitive-feature-analysis-4de25a`, each
-passing the three gates. Phase 0 is complete; Phases 1 and 2 are substantially
-done; Phase 4 has its two cheapest wins.
+Sixteen features shipped on `claude/competitive-feature-analysis-4de25a`. All 36
+registered tests pass, both TypeScript projects typecheck, and ESLint reports
+zero errors.
 
-| Shipped                      | Phase | What landed                                                                                                                                                                                                                   |
-| ---------------------------- | ----- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Autoplay next episode        | 1     | Post-play card, ten-second countdown, off under Settings → Playback → Episodes. Also fixed `eof-reached` being reported in one direction only, which marked the second title played in a session as watched at position zero. |
-| Migration runner + schema v2 | 0     | `PRAGMA user_version` migrations in transactions; `profile_id` on every library table; append-only `plays`; `ratings`, `lists`, `list_items`.                                                                                 |
-| Backup and restore           | 0     | Whole library to one JSON file and back. No credentials, no PIN, no cache.                                                                                                                                                    |
-| Ratings                      | 2     | 1-10 per profile, weighting both preferred genres and the taste profile.                                                                                                                                                      |
-| Sonarr/Radarr requests       | 4     | Lookup by IMDb id through the server, add with a chosen quality profile and root folder, search on add.                                                                                                                       |
-| Player menu harvest          | 1     | Speed, chapters, audio sync, subtitle size/height/colour/backdrop, sleep timer.                                                                                                                                               |
-| My Stuff tabs + history      | 2     | Six tabs — list, in progress, watched, rated, history, not for me. A single viewing can be removed without un-watching the episode.                                                                                           |
-| Stats                        | 2     | Viewings, titles, estimated hours, a twelve-month chart, top genres, and a seen-again list counted per episode.                                                                                                               |
-| Night mode                   | 1     | Loudness normalization, so quiet dialogue survives a loud score.                                                                                                                                                              |
-| Custom lists                 | 2     | Named lists beside My List, with an add-to-list menu on each title page.                                                                                                                                                      |
-| qBittorrent control          | 4     | Pause, resume and remove, with keeping or deleting the files asked separately.                                                                                                                                                |
-| Person pages                 | 3     | Cast and crew names open what else of theirs the catalog holds.                                                                                                                                                               |
+**Phase 0 is complete. Phases 1, 2 and 3 are substantially done. Phase 4 has
+everything except the two structural items.**
 
-Seek preview thumbnails, listed under Phase 1 below, turned out to already
-exist — the scrub bar has had them since the mpv port.
+| Shipped                      | Phase | What landed                                                                                                                                                                    |
+| ---------------------------- | ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Migration runner + schema v2 | 0     | `PRAGMA user_version` migrations in transactions; `profile_id` on every library table; append-only `plays`; `ratings`, `lists`, `list_items`.                                  |
+| Backup and restore           | 0     | The whole library to one JSON file and back. No credentials, no PIN, no cache.                                                                                                 |
+| Autoplay next episode        | 1     | Post-play card with a countdown. Also fixed `eof-reached` being reported in one direction only, which marked the second title played in a session as watched at position zero. |
+| Player menu harvest          | 1     | Speed, chapters, audio sync, subtitle size/height/colour/backdrop, sleep timer.                                                                                                |
+| Night mode                   | 1     | Loudness normalization, so quiet dialogue survives a loud score.                                                                                                               |
+| Ratings                      | 2     | 1-10 per profile, weighting both preferred genres and the taste profile.                                                                                                       |
+| My Stuff tabs + history      | 2     | Eight tabs. A single viewing can be removed without un-watching the episode.                                                                                                   |
+| Stats                        | 2     | Viewings, titles, estimated hours, twelve-month chart, top genres, seen-again counted per episode.                                                                             |
+| Custom lists                 | 2     | Named lists beside My List, with an add-to-list menu on every title page.                                                                                                      |
+| Scrobble depth               | 2     | start / pause / stop to Simkl, on transitions. The path existed and had never once run.                                                                                        |
+| Person pages                 | 3     | Cast and crew names open what else of theirs the catalog holds.                                                                                                                |
+| Search by credits            | 3     | Typing a director's name finds their films, not films with their name in the title.                                                                                            |
+| Where to watch               | 3     | Streaming, rent and buy for your region, from JustWatch via TMDB.                                                                                                              |
+| Calendar                     | 3     | A week back and six weeks forward, from air dates already on disk.                                                                                                             |
+| Sonarr/Radarr requests       | 4     | Lookup by IMDb id through the server, add with a chosen profile and folder, search on add.                                                                                     |
+| qBittorrent control          | 4     | Pause, resume and remove, with keeping or deleting the files asked separately.                                                                                                 |
+| Notifications                | 4     | New episodes of tracked shows, off by default, deferred while watching.                                                                                                        |
+
+### Corrected along the way
+
+Four defects, three of them pre-existing and one introduced and caught by its
+own test.
+
+- **`eof-reached` was reported in one direction only.** State patches merge, so
+  it could never go back — the second title played in any session was marked
+  watched the instant it started.
+- **Rewatches destroyed the record of the first viewing**, and watch history had
+  no profile column at all.
+- **Scrobbling never ran.** A handler and a preload binding existed; nothing
+  called either.
+- **`Number(null)` is `0`, not `NaN`** — every film ended with an autoplay card
+  offering season 1 episode 1.
+
+### Turned out not to be needed
+
+- **Seek preview thumbnails**, listed under Phase 1, already existed — the
+  scrub bar has had them since the mpv port.
+- **Subtitle hash matching** is not the small item this plan called it.
+  OpenSubtitles' `moviehash` needs the first and last 64KB of the complete
+  file; playback streams through a rolling cache that frequently holds neither.
+  It is an L, and it belongs with the bets below rather than in Phase 1.
+
+### Not verified at runtime
+
+Every pure rule is covered by real tests against real SQLite — migrations,
+profile scoping, plays, ratings, stats, lists, credit search, next-episode
+ordering, subtitle style, Servarr payloads. What has never executed is the
+wiring: mpv chapters and night mode, the autoplay handoff, a live Sonarr add, a
+live qBittorrent pause, a real notification. None of it is drivable without the
+app, a media source and those services.
 
 ## Ground rules
 
