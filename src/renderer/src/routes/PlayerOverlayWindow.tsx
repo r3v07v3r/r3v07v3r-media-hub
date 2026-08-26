@@ -143,6 +143,7 @@ function PlayerControls() {
   const audioDelay = state.audioDelay ?? 0
   const subtitleStyle = session?.settings.subtitleStyle ?? DEFAULT_SUBTITLE_STYLE
   const subtitleStyled = !isSubtitleStyleDefault(subtitleStyle)
+  const nightMode = session?.settings.nightModeEnabled === true
 
   const party = usePartySync({
     timePos,
@@ -1119,6 +1120,7 @@ function PlayerControls() {
             >
               {speed === 1 ? 'Playback' : `${speed}×`}
               {sleep !== null ? ' · ⏱' : ''}
+              {nightMode ? ' · ☾' : ''}
             </button>
             {menu === 'playback' && (
               <div className={`${styles.menu} ${styles.playbackMenu}`}>
@@ -1188,6 +1190,19 @@ function PlayerControls() {
                     Reset
                   </button>
                 </div>
+
+                <div className={styles.menuHeading}>Sound</div>
+                <button
+                  type="button"
+                  className={styles.menuItem}
+                  aria-pressed={nightMode}
+                  onClick={() => void command({ type: 'set-night-mode', enabled: !nightMode })}
+                >
+                  Night mode{nightMode ? ' ✓' : ''}
+                  <span className={styles.menuItemNote}>
+                    Evens out quiet dialogue against a loud score.
+                  </span>
+                </button>
 
                 <div className={styles.menuHeading}>Sleep timer</div>
                 {SLEEP_OPTIONS.map((option) => {

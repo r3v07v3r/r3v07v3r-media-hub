@@ -45,6 +45,30 @@ export const AUTOPLAY_NEXT_COUNTDOWN_SECONDS = 10
 export const MAX_PLAYER_VOLUME = 2
 
 /**
+ * The audio filter behind Night mode.
+ *
+ * The problem it solves is the one that makes people reach for the remote
+ * twice a scene: a film mixed for a cinema puts dialogue thirty decibels below
+ * the score, so the choice is inaudible speech or a explosion that wakes the
+ * house. `dynaudnorm` normalises loudness over a moving window, which lifts
+ * the quiet parts without flattening the loud ones into mush the way a hard
+ * compressor does.
+ *
+ * The numbers are deliberately gentle. `f=200` is a 200ms frame and `g=15` a
+ * fifteen-frame window — roughly three seconds of context, long enough that
+ * the gain does not audibly move within a line of dialogue, which is what
+ * "pumping" sounds like. `p=0.6` leaves headroom rather than driving
+ * everything to the ceiling, and `m=8` caps how much any one passage can be
+ * lifted so a genuinely silent moment stays silent instead of becoming a wall
+ * of amplified room tone.
+ *
+ * Wrapped in mpv's `lavfi=[...]` form rather than passed bare: the bare form
+ * relies on mpv auto-detecting a libavfilter name, which works but is not the
+ * documented spelling.
+ */
+export const NIGHT_MODE_AUDIO_FILTER = 'lavfi=[dynaudnorm=f=200:g=15:p=0.6:m=8]'
+
+/**
  * How far one press of the volume keys moves it, in the same units — 5%.
  *
  * Shared for the same reason as the ceiling: the keys are handled TWICE,
@@ -111,6 +135,8 @@ export interface PlayerSessionSnapshot {
     /** The stored look, already applied to mpv — present so the menu opens
      *  showing what is in force rather than the defaults. */
     subtitleStyle: SubtitleStyle
+    /** Whether loudness normalization is on. */
+    nightModeEnabled: boolean
   }
 }
 
@@ -208,6 +234,10 @@ export type PlayerCommand =
    *  four are one visual decision and applying them separately makes the
    *  subtitle flicker through intermediate states. */
   | { type: 'set-subtitle-style'; style: SubtitleStyle }
+  /** Evens out a mix with quiet dialogue and a loud score — see
+   *  NIGHT_MODE_AUDIO_FILTER. Stored, because somebody who needs it once
+   *  needs it for everything they watch on that setup. */
+  | { type: 'set-night-mode'; enabled: boolean }
   /** How the picture is fitted into the window — see shared/media-hub/videoFit.ts. */
   | { type: 'set-fit-mode'; mode: VideoFitMode }
   /** One of the small set of live MPV picture controls. */

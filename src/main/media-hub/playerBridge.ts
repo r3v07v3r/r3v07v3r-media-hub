@@ -14,6 +14,7 @@ import path from 'node:path'
 
 import {
   MAX_PLAYER_VOLUME,
+  NIGHT_MODE_AUDIO_FILTER,
   PLAYER_VOLUME_STEP,
   type PlayerCommand,
   type PlayerInputEvent,
@@ -99,6 +100,25 @@ export function storedSubtitleStyle(): SubtitleStyle {
 /** Puts the stored look back on a freshly loaded file. */
 export async function applyStoredSubtitleStyle(): Promise<void> {
   await applySubtitleStyle(storedSubtitleStyle())
+}
+
+export function nightModeEnabled(): boolean {
+  return readSettings().nightModeEnabled === true
+}
+
+/**
+ * Applies (or clears) the loudness filter.
+ *
+ * An empty chain is how mpv is told to have no filters, not a missing call —
+ * setting `af` to '' is what removes a previously applied one, and skipping
+ * the call would leave the last title's filter in place.
+ *
+ * Re-applied per session for the same reason the subtitle look is: nothing
+ * here should be a setting that quietly stops applying after the first
+ * episode.
+ */
+export async function applyStoredNightMode(): Promise<void> {
+  await player.set('af', nightModeEnabled() ? NIGHT_MODE_AUDIO_FILTER : '').catch(() => {})
 }
 
 // The fit mode is held here rather than in the overlay because the overlay is
@@ -1110,6 +1130,21 @@ async function runCommand(command: PlayerCommand): Promise<void> {
       // erroring, which is the behaviour worth having: a chapter list that
       // changed under a click seeks to the end instead of failing.
       await player.set('chapter', index)
+      return
+    }
+    case 'set-night-mode': {
+      const enabled = command.enabled === true
+      const settings = readSettings()
+      settings.nightModeEnabled = enabled
+      writeSettings(settings)
+      await applyStoredNightMode()
+      const snapshot = getSessionSnapshot()
+      if (snapshot) {
+        pushSessionSnapshot({
+          ...snapshot,
+          settings: { ...snapshot.settings, nightModeEnabled: enabled }
+        })
+      }
       return
     }
     case 'set-subtitle-style': {

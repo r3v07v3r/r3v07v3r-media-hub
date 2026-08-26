@@ -70,6 +70,8 @@ export interface MediaHubRawSettings {
   videoScaling?: string
   autoSubtitlesEnabled?: boolean
   autoplayNextEnabled?: boolean
+  /** Loudness normalization — see NIGHT_MODE_AUDIO_FILTER. */
+  nightModeEnabled?: boolean
   /** Subtitle size/position/colour/background — see
    *  shared/media-hub/subtitleStyle.ts. Stored whole because the four are one
    *  visual decision. */

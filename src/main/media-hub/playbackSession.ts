@@ -45,9 +45,11 @@ import { reportPreparation } from './playbackProgress'
 import { captureThumbnail, mpvPath } from './mpv'
 import {
   addSubtitleFileToPlayer,
+  applyStoredNightMode,
   applyStoredSubtitleStyle,
   getSessionSnapshot,
   pushSessionSnapshot,
+  nightModeEnabled,
   startPlayerSession,
   stopPlayerSession,
   storedSubtitleStyle
@@ -288,6 +290,7 @@ async function openPlayback(url: string, cacheMeta?: CacheSessionMeta): Promise<
   // on the next episode.
   const subtitleStyle = storedSubtitleStyle()
   await applyStoredSubtitleStyle()
+  await applyStoredNightMode()
 
   const sessionMedia = cacheMeta
     ? {
@@ -315,7 +318,8 @@ async function openPlayback(url: string, cacheMeta?: CacheSessionMeta): Promise<
       subtitleLanguage: settings.subtitleLanguage || 'en',
       audioLanguage: settings.audioLanguage || 'en',
       autoplayNextEnabled: settings.autoplayNextEnabled !== false,
-      subtitleStyle
+      subtitleStyle,
+      nightModeEnabled: nightModeEnabled()
     }
   })
   // Fire-and-forget, AFTER the snapshot above has gone out. Finding the next
