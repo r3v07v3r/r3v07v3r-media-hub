@@ -34,6 +34,7 @@ import { AboutPanel } from '@renderer/components/detail/AboutPanel'
 import { EpisodesSection } from '@renderer/components/detail/EpisodesSection'
 import type { EpisodeResume } from '@renderer/components/detail/EpisodesSection'
 import { RatingsPanel } from '@renderer/components/detail/RatingsPanel'
+import { RequestPanel } from '@renderer/components/detail/RequestPanel'
 import { ProgressPanel } from '@renderer/components/detail/ProgressPanel'
 import { GenresPanel } from '@renderer/components/detail/GenresPanel'
 import { SimilarPanel } from '@renderer/components/detail/SimilarPanel'
@@ -665,6 +666,7 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
       </div>
 
       <div className={styles.sidebar}>
+        <RequestPanel media={media} />
         <RatingsPanel media={media} />
         <ProgressPanel
           config={config}

@@ -1,0 +1,103 @@
+.panel {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 20px 22px;
+  border-radius: var(--radius-medium);
+}
+
+.heading {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  color: var(--text-primary);
+}
+
+.note {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+/* Two columns where there is room, stacked where there is not. The folder
+   paths are the long ones, so they get the flexible column. */
+.fields {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr);
+  gap: 12px;
+}
+
+@media (max-width: 560px) {
+  .fields {
+    grid-template-columns: 1fr;
+  }
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+
+.fieldLabel {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.select {
+  width: 100%;
+  min-width: 0;
+  appearance: none;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-small);
+  background: var(--panel-strong);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 13px;
+  padding: 8px 10px;
+  cursor: pointer;
+}
+
+.select:focus-visible {
+  outline: 2px solid var(--accent-cyan);
+  outline-offset: 2px;
+  border-color: var(--border-active);
+}
+
+.request {
+  align-self: flex-start;
+  appearance: none;
+  border: none;
+  border-radius: var(--radius-pill);
+  background: var(--accent-blue);
+  color: #04121f;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 9px 22px;
+  cursor: pointer;
+  transition: filter var(--transition-fast);
+}
+
+.request:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+
+.request:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.request:focus-visible {
+  outline: 2px solid var(--accent-cyan);
+  outline-offset: 2px;
+}

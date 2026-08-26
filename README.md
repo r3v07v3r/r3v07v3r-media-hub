@@ -50,6 +50,9 @@ play something. Optional metadata, tracking, and subtitle services add to the ex
 - **Build a personal library** in **My Stuff**, including watchlisted, liked, disliked, watched,
   and in-progress titles.
 - **Manage downloads** and optionally connect Jellyfin, Sonarr, Radarr, and qBittorrent.
+- **Ask Sonarr or Radarr for a title** straight from its page, picking the quality profile and
+  folder, with a search starting as soon as it is added. Movies and series only — anime is
+  catalogued by Kitsu id, which neither service can look up.
 - **Watch together in Rooms** over a direct LAN/WAN connection or an optional R3 Party Sync
   relay, with a shared queue, synchronized playback, and short-lived encrypted room chat.
 - **Use separate profiles**, including Kids and PIN-protected profiles. Each profile keeps its
