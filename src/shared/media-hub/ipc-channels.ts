@@ -26,6 +26,10 @@ export const MEDIA_HUB_CHANNELS = {
   settingsResetStreamCacheDir: 'mediahub:settings:reset-stream-cache-dir',
   settingsSetPartyDisplayName: 'mediahub:settings:set-party-display-name',
   settingsSetHideDefaults: 'mediahub:settings:set-hide-defaults',
+  /** Write every profile's library out to a JSON file the person picks, and
+   *  read one back. See main/media-hub/backup.ts for what a backup carries. */
+  backupExport: 'mediahub:backup:export',
+  backupImport: 'mediahub:backup:import',
   logout: 'mediahub:account:logout',
   torboxConnect: 'mediahub:torbox:connect',
   torboxDisconnect: 'mediahub:torbox:disconnect',

@@ -257,6 +257,40 @@ function ToggleRow({
   )
 }
 
+/** A row whose control is a button rather than a switch or a segment — used
+ *  where the setting is an action taken now (export a file, restore one)
+ *  rather than a value that persists. */
+function ActionRow({
+  icon,
+  title,
+  description,
+  label,
+  busy,
+  onClick
+}: {
+  icon: string
+  title: string
+  description: string
+  label: string
+  busy?: boolean
+  onClick: () => void
+}) {
+  return (
+    <div className={styles.row}>
+      <div className={styles.rowIcon} aria-hidden="true">
+        <Icon name={icon} size={17} />
+      </div>
+      <div className={styles.rowText}>
+        <span className={styles.rowTitle}>{title}</span>
+        <span className={styles.rowDescription}>{description}</span>
+      </div>
+      <button type="button" className={styles.testButton} disabled={busy} onClick={onClick}>
+        {busy ? 'Working…' : label}
+      </button>
+    </div>
+  )
+}
+
 /** Inline add/edit form shown below the profile grid — one component for
  *  both create and edit, since the fields are identical apart from a
  *  Delete button and pre-filled values in edit mode. */
@@ -646,11 +680,15 @@ export default function SettingsPage() {
     activeProfileId,
     switchProfile,
     mediaHubSettings,
-    refreshMediaHubSettings
+    refreshMediaHubSettings,
+    pushNotification,
+    refreshWatchStatus
   } = useAppState()
   // null = no form open, 'new' = create form, otherwise the id of the
   // profile being edited.
   const [editingProfile, setEditingProfile] = useState<string | 'new' | null>(null)
+  // Which of the two backup actions is in flight, so only that button says so.
+  const [backupBusy, setBackupBusy] = useState<'export' | 'import' | null>(null)
   const [networkInfo, setNetworkInfo] = useState<NetworkInfoResult | null>(null)
   const [speedTest, setSpeedTest] = useState<{
     kind: 'idle' | 'busy' | 'ok' | 'error'
@@ -709,6 +747,54 @@ export default function SettingsPage() {
     const api = window.api?.mediaHub
     if (api)
       await saveSetting('settings.auto-subtitles', () => api.settings.setAutoSubtitles(enabled))
+  }
+
+  async function handleExportBackup() {
+    const api = window.api?.mediaHub
+    if (!api) return
+    setBackupBusy('export')
+    try {
+      const result = await api.settings.exportBackup()
+      // A cancelled picker is not a failure and gets no message — the person
+      // closed the dialog, they know what happened.
+      if (result?.filePath) {
+        pushNotification({ tone: 'success', message: 'Backup saved.' })
+      }
+    } catch (error) {
+      pushNotification({
+        tone: 'error',
+        message: error instanceof Error ? error.message : 'The backup could not be saved.'
+      })
+    } finally {
+      setBackupBusy(null)
+    }
+  }
+
+  async function handleImportBackup() {
+    const api = window.api?.mediaHub
+    if (!api) return
+    setBackupBusy('import')
+    try {
+      const result = await api.settings.importBackup()
+      if (!result) return
+      const taken = result.createdAt ? new Date(result.createdAt).toLocaleDateString() : null
+      pushNotification({
+        tone: 'success',
+        message: taken
+          ? `Restored ${result.restored} items from your ${taken} backup.`
+          : `Restored ${result.restored} items.`
+      })
+      // Everything on screen was read from the library this just replaced.
+      await refreshMediaHubSettings()
+      refreshWatchStatus()
+    } catch (error) {
+      pushNotification({
+        tone: 'error',
+        message: error instanceof Error ? error.message : 'That backup could not be restored.'
+      })
+    } finally {
+      setBackupBusy(null)
+    }
   }
 
   async function handleSetAutoplayNext(enabled: boolean) {
@@ -922,6 +1008,28 @@ export default function SettingsPage() {
                 value={mediaHubSettings?.videoScaling ?? 'auto'}
                 options={VIDEO_SCALING_OPTIONS}
                 onChange={handleSetVideoScaling}
+              />
+            </section>
+
+            <section className={`${styles.section} glass-panel`} aria-labelledby="settings-backup">
+              <h2 id="settings-backup" className={styles.sectionTitle}>
+                Your library
+              </h2>
+              <ActionRow
+                icon="downloads"
+                title="Save a backup"
+                description="Writes every profile's list, history, ratings and resume points to one file. Service credentials are never included — they belong to this machine."
+                label="Save…"
+                busy={backupBusy === 'export'}
+                onClick={handleExportBackup}
+              />
+              <ActionRow
+                icon="refresh"
+                title="Restore a backup"
+                description="Replaces what is here with the contents of a backup file. Nothing changes unless the whole restore succeeds."
+                label="Restore…"
+                busy={backupBusy === 'import'}
+                onClick={handleImportBackup}
               />
             </section>
 

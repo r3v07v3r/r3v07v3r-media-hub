@@ -49,8 +49,10 @@ play something. Optional metadata, tracking, and subtitle services add to the ex
 - **Manage downloads** and optionally connect Jellyfin, Sonarr, Radarr, and qBittorrent.
 - **Watch together in Rooms** over a direct LAN/WAN connection or an optional R3 Party Sync
   relay, with a shared queue, synchronized playback, and short-lived encrypted room chat.
-- **Use separate profiles**, including Kids and PIN-protected profiles. Watch history is
-  currently shared between profiles.
+- **Use separate profiles**, including Kids and PIN-protected profiles. Each profile keeps its
+  own list, watch history, ratings and resume points.
+- **Back up your library** to a single file and restore it on another machine, from
+  **Settings → General → Your library**. Service credentials stay on the machine that holds them.
 - **Search and ask in one field.** Typing in the top bar searches the movie, series and anime
   catalogs and shows what it finds — real titles you can open, with or without an AI model. With
   one connected, its answer appears underneath: what the top result is, whether it fits what

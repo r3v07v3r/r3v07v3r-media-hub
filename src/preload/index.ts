@@ -187,6 +187,10 @@ const api = {
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.settingsSetAutoSubtitles, enabled),
       setAutoplayNext: (enabled: boolean): Promise<{ autoplayNextEnabled: boolean }> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.settingsSetAutoplayNext, enabled),
+      exportBackup: (): Promise<{ filePath: string | null }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.backupExport),
+      importBackup: (): Promise<{ restored: number; createdAt: string } | null> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.backupImport),
       setUiAnimations: (enabled: boolean): Promise<{ uiAnimationsEnabled: boolean }> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.settingsSetUiAnimations, enabled),
       setPerformancePanelVisible: (

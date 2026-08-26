@@ -6,6 +6,7 @@
 // sqlite.d.ts) which already ships the v22 `node:sqlite` surface, so no
 // ambient declarations were needed here.
 import { DatabaseSync, type SQLOutputValue, type StatementSync } from 'node:sqlite'
+import { readBackup, restoreBackup, writeBackup, type RestoreSummary } from './backup'
 import { migrate } from './migrations'
 import type {
   CatalogItem,
@@ -140,6 +141,16 @@ export interface MediaHubDatabase {
   /** How many times each title has been played by the active profile, keyed by
    *  content id. Titles never played are absent rather than zero. */
   playCounts(): Map<string, number>
+  /** Writes every profile's library to one JSON file — see backup.ts for what
+   *  a backup does and does not carry. NOT scoped to the active profile:
+   *  a backup is of the install, not of whoever happens to be watching. */
+  exportBackup(
+    filePath: string,
+    options: { appVersion: string; profiles: Record<string, unknown>[] }
+  ): void
+  /** Replaces every backed-up table with the file's contents, or changes
+   *  nothing. Also not profile-scoped, for the same reason. */
+  importBackup(filePath: string): RestoreSummary
   track(item: Partial<CatalogItem> & { id: unknown }, now?: Date): TrackedItem
   untrack(id: string | number): boolean
   isTracked(id: string | number): boolean
@@ -421,6 +432,31 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
       // which reads as "this person has watched nothing, ever" rather than as
       // the error it is. Keeping the previous scope is the safer failure.
       if (next) currentProfileId = next
+    },
+
+    exportBackup(filePath, options) {
+      try {
+        writeBackup(sql, filePath, options)
+      } catch (error) {
+        return fail(error as Error)
+      }
+    },
+
+    importBackup(filePath) {
+      try {
+        const summary = restoreBackup(sql, readBackup(filePath))
+        // Not a cache invalidation but a correctness one: `preferredGenres`
+        // and everything else derived from history is computed on demand, so
+        // there is nothing stale to clear here — the restored rows are simply
+        // what the next read sees.
+        return summary
+      } catch (error) {
+        // Rethrown as-is rather than through `fail`, which prefixes every
+        // message with "Local database error". These messages are written to
+        // be shown to the person choosing the file — "That is not an R3 Media
+        // Hub backup" needs no prefix explaining which subsystem said so.
+        throw error as Error
+      }
     },
 
     playCounts() {
