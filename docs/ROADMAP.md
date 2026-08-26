@@ -13,7 +13,9 @@ streaming apps people compare everything to.
 
 ## Progress
 
-The first five tickets are done and on `claude/competitive-feature-analysis-4de25a`.
+Eight feature commits on `claude/competitive-feature-analysis-4de25a`, each with
+its own tests and each passing the three gates. Phase 0 is complete; Phases 1
+and 2 are substantially done.
 
 | Shipped                      | Phase | What landed                                                                                                                                                                                                                   |
 | ---------------------------- | ----- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -23,6 +25,8 @@ The first five tickets are done and on `claude/competitive-feature-analysis-4de2
 | Ratings                      | 2     | 1-10 per profile, weighting both preferred genres and the taste profile.                                                                                                                                                      |
 | Sonarr/Radarr requests       | 4     | Lookup by IMDb id through the server, add with a chosen quality profile and root folder, search on add.                                                                                                                       |
 | Player menu harvest          | 1     | Speed, chapters, audio sync, subtitle size/height/colour/backdrop, sleep timer.                                                                                                                                               |
+| My Stuff tabs + history      | 2     | Six tabs — list, in progress, watched, rated, history, not for me. A single viewing can be removed without un-watching the episode.                                                                                           |
+| Stats                        | 2     | Viewings, titles, estimated hours, a twelve-month chart, top genres, and a seen-again list counted per episode.                                                                                                               |
 
 Seek preview thumbnails, listed under Phase 1 below, turned out to already
 exist — the scrub bar has had them since the mpv port.
