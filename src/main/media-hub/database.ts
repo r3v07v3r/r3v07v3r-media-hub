@@ -6,6 +6,7 @@
 // sqlite.d.ts) which already ships the v22 `node:sqlite` surface, so no
 // ambient declarations were needed here.
 import { DatabaseSync, type SQLOutputValue, type StatementSync } from 'node:sqlite'
+import { migrate } from './migrations'
 import type {
   CatalogItem,
   Episode,
@@ -125,6 +126,20 @@ export interface EpisodePlaybackPosition extends PlaybackPositionResult {
 }
 
 export interface MediaHubDatabase {
+  /**
+   * Re-scopes every subsequent read and write to `profileId`.
+   *
+   * Deliberately module state rather than an argument on all ~20 methods
+   * below. There is exactly one active profile for the whole app at any
+   * moment — the same shape the playback session already has — and threading
+   * an id through every call site would be a large diff whose only effect is
+   * to let callers get it wrong. Set once at startup and again on a profile
+   * switch; nothing else may call it.
+   */
+  setActiveProfile(profileId: string): void
+  /** How many times each title has been played by the active profile, keyed by
+   *  content id. Titles never played are absent rather than zero. */
+  playCounts(): Map<string, number>
   track(item: Partial<CatalogItem> & { id: unknown }, now?: Date): TrackedItem
   untrack(id: string | number): boolean
   isTracked(id: string | number): boolean
@@ -181,6 +196,9 @@ export interface MediaHubDatabase {
 
 interface PreparedQueries {
   track: StatementSync
+  recordPlay: StatementSync
+  deletePlays: StatementSync
+  playCounts: StatementSync
   untrack: StatementSync
   isTracked: StatementSync
   tracked: StatementSync
@@ -203,7 +221,16 @@ interface PreparedQueries {
   listPositions: StatementSync
 }
 
-export function createDatabase(filename: string): MediaHubDatabase {
+/**
+ * Opens (and migrates) the media-hub database.
+ *
+ * `defaultProfileId` is the profile this connection starts scoped to, and the
+ * one every pre-existing row is attributed to when the profile-scoping
+ * migration runs — see migrations.ts. Passed in rather than read from settings
+ * here so this module stays free of the settings/profile machinery, and so a
+ * test can open a database without either.
+ */
+export function createDatabase(filename: string, defaultProfileId: string): MediaHubDatabase {
   const sql = new DatabaseSync(filename)
   sql.exec('PRAGMA journal_mode = WAL')
   // The single biggest source of "the whole app freezes for a moment":
@@ -268,81 +295,8 @@ export function createDatabase(filename: string): MediaHubDatabase {
     }
   }
 
-  sql.exec(`CREATE TABLE IF NOT EXISTS tracked(
-    content_id TEXT PRIMARY KEY,
-    type TEXT NOT NULL,
-    title TEXT NOT NULL,
-    poster TEXT,
-    metadata_json TEXT NOT NULL,
-    tracked_at TEXT NOT NULL,
-    baseline_season INTEGER NOT NULL DEFAULT 0,
-    baseline_episode INTEGER NOT NULL DEFAULT 0
-  );
-  CREATE TABLE IF NOT EXISTS watch_history(
-    watch_key TEXT PRIMARY KEY,
-    content_id TEXT NOT NULL,
-    type TEXT NOT NULL,
-    title TEXT NOT NULL,
-    season INTEGER,
-    episode INTEGER,
-    watched_at TEXT NOT NULL,
-    metadata_json TEXT NOT NULL
-  );
-  CREATE TABLE IF NOT EXISTS catalog_cache(
-    cache_key TEXT PRIMARY KEY,
-    payload_json TEXT NOT NULL,
-    expires_at INTEGER NOT NULL,
-    updated_at INTEGER NOT NULL
-  );
-  CREATE TABLE IF NOT EXISTS disliked(
-    content_id TEXT PRIMARY KEY,
-    type TEXT NOT NULL,
-    title TEXT NOT NULL,
-    poster TEXT,
-    metadata_json TEXT NOT NULL,
-    disliked_at TEXT NOT NULL
-  );
-  CREATE TABLE IF NOT EXISTS playback_positions(
-    position_key TEXT PRIMARY KEY,
-    content_id TEXT NOT NULL,
-    season INTEGER,
-    episode INTEGER,
-    position_seconds REAL NOT NULL,
-    duration_seconds REAL,
-    volume REAL,
-    updated_at TEXT NOT NULL
-  );
-  CREATE INDEX IF NOT EXISTS idx_history_content ON watch_history(content_id, watched_at DESC);`)
-
-  // Migration guard: only ALTER an existing database file that predates the
-  // baseline_* columns. Re-running this against a fresh DB (columns already
-  // present via CREATE TABLE above) must be a no-op.
-  const columns = new Set(
-    sql
-      .prepare('PRAGMA table_info(tracked)')
-      .all()
-      .map((x) => (x as Row).name as string)
-  )
-  if (!columns.has('baseline_season')) {
-    sql.exec('ALTER TABLE tracked ADD COLUMN baseline_season INTEGER NOT NULL DEFAULT 0')
-  }
-  if (!columns.has('baseline_episode')) {
-    sql.exec('ALTER TABLE tracked ADD COLUMN baseline_episode INTEGER NOT NULL DEFAULT 0')
-  }
-
-  // Same guard, for the bookmark's volume. Nullable with no default on
-  // purpose: every bookmark written before this column existed reads back
-  // as "no volume was recorded", which the player treats as the ordinary
-  // 100% start rather than as a stored choice.
-  const positionColumns = new Set(
-    sql
-      .prepare('PRAGMA table_info(playback_positions)')
-      .all()
-      .map((x) => (x as Row).name as string)
-  )
-  if (!positionColumns.has('volume')) {
-    sql.exec('ALTER TABLE playback_positions ADD COLUMN volume REAL')
-  }
+  migrate(sql, defaultProfileId)
+  let currentProfileId = defaultProfileId
 
   // Reclaims rows nothing has read in a long time. `catalog_cache` had no
   // eviction at all before this — every distinct key (a stream resolution,
@@ -375,35 +329,63 @@ export function createDatabase(filename: string): MediaHubDatabase {
     // file — a failed prune must not stop the app from opening its database.
   }
 
+  // Every statement scoped to one profile. `profile_id` is bound at call time
+  // from `currentProfileId` rather than baked in, so switching profiles is a
+  // variable assignment and not a re-prepare of the whole set.
   const q: PreparedQueries = {
     track: sql.prepare(
-      `INSERT INTO tracked(content_id,type,title,poster,metadata_json,tracked_at,baseline_season,baseline_episode)
-       VALUES(@id,@type,@title,@poster,@json,@now,@baselineSeason,@baselineEpisode)
-       ON CONFLICT(content_id) DO UPDATE SET type=excluded.type,title=excluded.title,poster=excluded.poster,metadata_json=excluded.metadata_json`
+      `INSERT INTO tracked(profile_id,content_id,type,title,poster,metadata_json,tracked_at,baseline_season,baseline_episode)
+       VALUES(@profile,@id,@type,@title,@poster,@json,@now,@baselineSeason,@baselineEpisode)
+       ON CONFLICT(profile_id,content_id) DO UPDATE SET type=excluded.type,title=excluded.title,poster=excluded.poster,metadata_json=excluded.metadata_json`
     ),
-    untrack: sql.prepare('DELETE FROM tracked WHERE content_id=?'),
-    isTracked: sql.prepare('SELECT 1 FROM tracked WHERE content_id=?'),
-    tracked: sql.prepare('SELECT metadata_json FROM tracked ORDER BY tracked_at DESC'),
+    untrack: sql.prepare('DELETE FROM tracked WHERE profile_id=? AND content_id=?'),
+    isTracked: sql.prepare('SELECT 1 FROM tracked WHERE profile_id=? AND content_id=?'),
+    tracked: sql.prepare(
+      'SELECT metadata_json FROM tracked WHERE profile_id=? ORDER BY tracked_at DESC'
+    ),
     trackedRows: sql.prepare(
-      'SELECT content_id,metadata_json,baseline_season,baseline_episode FROM tracked ORDER BY tracked_at DESC'
+      'SELECT content_id,metadata_json,baseline_season,baseline_episode FROM tracked WHERE profile_id=? ORDER BY tracked_at DESC'
     ),
     watched: sql.prepare(
-      `INSERT INTO watch_history(watch_key,content_id,type,title,season,episode,watched_at,metadata_json)
-       VALUES(@key,@id,@type,@title,@season,@episode,@now,@json)
-       ON CONFLICT(watch_key) DO UPDATE SET watched_at=excluded.watched_at,metadata_json=excluded.metadata_json`
+      `INSERT INTO watch_history(profile_id,watch_key,content_id,type,title,season,episode,watched_at,metadata_json)
+       VALUES(@profile,@key,@id,@type,@title,@season,@episode,@now,@json)
+       ON CONFLICT(profile_id,watch_key) DO UPDATE SET watched_at=excluded.watched_at,metadata_json=excluded.metadata_json`
     ),
-    unwatch: sql.prepare('DELETE FROM watch_history WHERE watch_key=?'),
+    unwatch: sql.prepare('DELETE FROM watch_history WHERE profile_id=? AND watch_key=?'),
     history: sql.prepare(
-      'SELECT metadata_json,season,episode,watched_at FROM watch_history ORDER BY watched_at DESC'
+      'SELECT metadata_json,season,episode,watched_at FROM watch_history WHERE profile_id=? ORDER BY watched_at DESC'
+    ),
+    // The append-only companion to `watched` above: that row answers "has this
+    // been seen", this one records that it happened. A rewatch updates the
+    // first and adds to the second.
+    recordPlay: sql.prepare(
+      `INSERT INTO plays(profile_id,content_id,type,title,season,episode,watched_at,metadata_json)
+       VALUES(@profile,@id,@type,@title,@season,@episode,@now,@json)`
+    ),
+    // Paired with `unwatch`, which is somebody saying they have not seen this
+    // after all. Leaving the plays behind would make the history view contradict
+    // the badge that was just cleared.
+    deletePlays: sql.prepare(
+      `DELETE FROM plays WHERE profile_id=@profile AND content_id=@id
+       AND season IS @season AND episode IS @episode`
+    ),
+    playCounts: sql.prepare(
+      'SELECT content_id,COUNT(*) AS plays FROM plays WHERE profile_id=? GROUP BY content_id'
     ),
     dislike: sql.prepare(
-      `INSERT INTO disliked(content_id,type,title,poster,metadata_json,disliked_at)
-       VALUES(@id,@type,@title,@poster,@json,@now)
-       ON CONFLICT(content_id) DO UPDATE SET type=excluded.type,title=excluded.title,poster=excluded.poster,metadata_json=excluded.metadata_json`
+      `INSERT INTO disliked(profile_id,content_id,type,title,poster,metadata_json,disliked_at)
+       VALUES(@profile,@id,@type,@title,@poster,@json,@now)
+       ON CONFLICT(profile_id,content_id) DO UPDATE SET type=excluded.type,title=excluded.title,poster=excluded.poster,metadata_json=excluded.metadata_json`
     ),
-    undislike: sql.prepare('DELETE FROM disliked WHERE content_id=?'),
-    isDisliked: sql.prepare('SELECT 1 FROM disliked WHERE content_id=?'),
-    disliked: sql.prepare('SELECT metadata_json FROM disliked ORDER BY disliked_at DESC'),
+    undislike: sql.prepare('DELETE FROM disliked WHERE profile_id=? AND content_id=?'),
+    isDisliked: sql.prepare('SELECT 1 FROM disliked WHERE profile_id=? AND content_id=?'),
+    disliked: sql.prepare(
+      'SELECT metadata_json FROM disliked WHERE profile_id=? ORDER BY disliked_at DESC'
+    ),
+    // catalog_cache is deliberately NOT profile-scoped. It holds what the
+    // catalogs say about a title — metadata, artwork, id mappings, stream
+    // resolutions — none of which differ by who is watching, and duplicating a
+    // 3.4MB catalog row per profile would be pure waste.
     putCache: sql.prepare(
       `INSERT INTO catalog_cache(cache_key,payload_json,expires_at,updated_at) VALUES(?,?,?,?)
        ON CONFLICT(cache_key) DO UPDATE SET payload_json=excluded.payload_json,expires_at=excluded.expires_at,updated_at=excluded.updated_at`
@@ -411,32 +393,57 @@ export function createDatabase(filename: string): MediaHubDatabase {
     getCache: sql.prepare('SELECT payload_json,expires_at FROM catalog_cache WHERE cache_key=?'),
     deleteCache: sql.prepare('DELETE FROM catalog_cache WHERE cache_key=?'),
     lastEpisode: sql.prepare(
-      'SELECT season,episode FROM watch_history WHERE content_id=? AND season IS NOT NULL ORDER BY season DESC,episode DESC LIMIT 1'
+      'SELECT season,episode FROM watch_history WHERE profile_id=? AND content_id=? AND season IS NOT NULL ORDER BY season DESC,episode DESC LIMIT 1'
     ),
     savePosition: sql.prepare(
-      `INSERT INTO playback_positions(position_key,content_id,season,episode,position_seconds,duration_seconds,volume,updated_at)
-       VALUES(@key,@id,@season,@episode,@position,@duration,@volume,@now)
-       ON CONFLICT(position_key) DO UPDATE SET position_seconds=excluded.position_seconds,duration_seconds=excluded.duration_seconds,volume=COALESCE(excluded.volume,playback_positions.volume),updated_at=excluded.updated_at`
+      `INSERT INTO playback_positions(profile_id,position_key,content_id,season,episode,position_seconds,duration_seconds,volume,updated_at)
+       VALUES(@profile,@key,@id,@season,@episode,@position,@duration,@volume,@now)
+       ON CONFLICT(profile_id,position_key) DO UPDATE SET position_seconds=excluded.position_seconds,duration_seconds=excluded.duration_seconds,volume=COALESCE(excluded.volume,playback_positions.volume),updated_at=excluded.updated_at`
     ),
-    clearPosition: sql.prepare('DELETE FROM playback_positions WHERE position_key=?'),
+    clearPosition: sql.prepare(
+      'DELETE FROM playback_positions WHERE profile_id=? AND position_key=?'
+    ),
     getPosition: sql.prepare(
-      'SELECT position_seconds,duration_seconds,volume FROM playback_positions WHERE position_key=?'
+      'SELECT position_seconds,duration_seconds,volume FROM playback_positions WHERE profile_id=? AND position_key=?'
     ),
     abandoned: sql.prepare(
-      'SELECT DISTINCT content_id FROM playback_positions WHERE updated_at < ?'
+      'SELECT DISTINCT content_id FROM playback_positions WHERE profile_id=? AND updated_at < ?'
     ),
     listPositions: sql.prepare(
-      'SELECT season,episode,position_seconds,duration_seconds FROM playback_positions WHERE content_id=?'
+      'SELECT season,episode,position_seconds,duration_seconds FROM playback_positions WHERE profile_id=? AND content_id=?'
     )
   }
 
   const db: MediaHubDatabase = {
+    setActiveProfile(profileId) {
+      const next = String(profileId || '').trim()
+      // An empty id would scope every query to a profile that owns nothing,
+      // which reads as "this person has watched nothing, ever" rather than as
+      // the error it is. Keeping the previous scope is the safer failure.
+      if (next) currentProfileId = next
+    },
+
+    playCounts() {
+      try {
+        const counts = new Map<string, number>()
+        for (const row of q.playCounts.all(currentProfileId) as Row[]) {
+          counts.set(String(row.content_id), Number(row.plays) || 0)
+        }
+        return counts
+      } catch {
+        // Best-effort like every other read here: no counts costs a "watched
+        // twice" label, never the list it would have sat on.
+        return new Map()
+      }
+    },
+
     track(item, now = new Date()) {
       try {
         const value = normalizeTitle(item)
         const baseline = latestReleased(item.videos as EpisodeLike[] | undefined, now)
         durable(() =>
           q.track.run({
+            profile: currentProfileId,
             id: value.id,
             type: value.type,
             title: value.title,
@@ -455,7 +462,7 @@ export function createDatabase(filename: string): MediaHubDatabase {
 
     untrack(id) {
       try {
-        return durable(() => q.untrack.run(String(id)).changes > 0)
+        return durable(() => q.untrack.run(currentProfileId, String(id)).changes > 0)
       } catch (error) {
         return fail(error as Error)
       }
@@ -463,7 +470,7 @@ export function createDatabase(filename: string): MediaHubDatabase {
 
     isTracked(id) {
       try {
-        return Boolean(q.isTracked.get(String(id)))
+        return Boolean(q.isTracked.get(currentProfileId, String(id)))
       } catch (error) {
         return fail(error as Error)
       }
@@ -472,7 +479,7 @@ export function createDatabase(filename: string): MediaHubDatabase {
     tracked() {
       try {
         return q.tracked
-          .all()
+          .all(currentProfileId)
           .map((r) => parse<TrackedItem>((r as Row).metadata_json as string, {} as TrackedItem))
       } catch (error) {
         return fail(error as Error)
@@ -485,18 +492,43 @@ export function createDatabase(filename: string): MediaHubDatabase {
         const season = Number.isFinite(playback.season) ? (playback.season as number) : null
         const episode = Number.isFinite(playback.episode) ? (playback.episode as number) : null
         const key = `${value.id}:${season ?? 'movie'}:${episode ?? 'movie'}`
-        durable(() =>
-          q.watched.run({
-            key,
-            id: value.id,
-            type: value.type,
-            title: value.title,
-            season,
-            episode,
-            now: new Date().toISOString(),
-            json: JSON.stringify(value)
-          })
-        )
+        const now = new Date().toISOString()
+        // Two parameter sets rather than one shared object: node:sqlite rejects
+        // a named parameter the statement does not bind, and only `watched`
+        // has a watch_key.
+        const play = {
+          profile: currentProfileId,
+          id: value.id,
+          type: value.type,
+          title: value.title,
+          season,
+          episode,
+          now,
+          json: JSON.stringify(value)
+        }
+        const seen = { ...play, key }
+        // Two writes, one transaction, because they are two halves of one
+        // fact and a crash between them would leave the app disagreeing with
+        // itself about whether this was watched.
+        //
+        // `watched` upserts — it is the "has this been seen" index every grid,
+        // badge and next-episode calculation reads, and there is exactly one
+        // answer per episode. `plays` appends, because a second viewing is a
+        // second event and the record of the first is not the app's to throw
+        // away. Before this the upsert was the only write, so a rewatch moved
+        // the timestamp and the earlier viewing simply stopped having
+        // happened.
+        durable(() => {
+          sql.exec('BEGIN')
+          try {
+            q.watched.run(seen)
+            q.recordPlay.run(play)
+            sql.exec('COMMIT')
+          } catch (error) {
+            sql.exec('ROLLBACK')
+            throw error
+          }
+        })
         return value
       } catch (error) {
         return fail(error as Error)
@@ -505,8 +537,30 @@ export function createDatabase(filename: string): MediaHubDatabase {
 
     unmarkWatched(id, season, episode) {
       try {
-        const key = `${String(id)}:${Number.isFinite(season) ? season : 'movie'}:${Number.isFinite(episode) ? episode : 'movie'}`
-        return durable(() => q.unwatch.run(key).changes > 0)
+        const seasonValue = Number.isFinite(season) ? (season as number) : null
+        const episodeValue = Number.isFinite(episode) ? (episode as number) : null
+        const key = `${String(id)}:${seasonValue ?? 'movie'}:${episodeValue ?? 'movie'}`
+        // The plays go with it. This is somebody stating they have not seen
+        // this after all, and a history that still listed the viewings would
+        // contradict the badge they just cleared. It is the one thing that
+        // removes from `plays` — playback only ever adds.
+        return durable(() => {
+          sql.exec('BEGIN')
+          try {
+            const removed = q.unwatch.run(currentProfileId, key).changes > 0
+            q.deletePlays.run({
+              profile: currentProfileId,
+              id: String(id),
+              season: seasonValue,
+              episode: episodeValue
+            })
+            sql.exec('COMMIT')
+            return removed
+          } catch (error) {
+            sql.exec('ROLLBACK')
+            throw error
+          }
+        })
       } catch (error) {
         return fail(error as Error)
       }
@@ -514,7 +568,7 @@ export function createDatabase(filename: string): MediaHubDatabase {
 
     history() {
       try {
-        return q.history.all().map((r) => {
+        return q.history.all(currentProfileId).map((r) => {
           const row = r as Row
           return {
             ...parse<Partial<TrackedItem>>(row.metadata_json as string, {}),
@@ -533,6 +587,7 @@ export function createDatabase(filename: string): MediaHubDatabase {
         const value = normalizeTitle(item)
         durable(() =>
           q.dislike.run({
+            profile: currentProfileId,
             id: value.id,
             type: value.type,
             title: value.title,
@@ -549,7 +604,7 @@ export function createDatabase(filename: string): MediaHubDatabase {
 
     undislike(id) {
       try {
-        return durable(() => q.undislike.run(String(id)).changes > 0)
+        return durable(() => q.undislike.run(currentProfileId, String(id)).changes > 0)
       } catch (error) {
         return fail(error as Error)
       }
@@ -557,7 +612,7 @@ export function createDatabase(filename: string): MediaHubDatabase {
 
     isDisliked(id) {
       try {
-        return Boolean(q.isDisliked.get(String(id)))
+        return Boolean(q.isDisliked.get(currentProfileId, String(id)))
       } catch (error) {
         return fail(error as Error)
       }
@@ -566,7 +621,7 @@ export function createDatabase(filename: string): MediaHubDatabase {
     disliked() {
       try {
         return q.disliked
-          .all()
+          .all(currentProfileId)
           .map((r) => parse<TrackedItem>((r as Row).metadata_json as string, {} as TrackedItem))
       } catch (error) {
         return fail(error as Error)
@@ -607,11 +662,12 @@ export function createDatabase(filename: string): MediaHubDatabase {
           (durationSeconds as number) > 0 &&
           positionSeconds / (durationSeconds as number) >= 0.9
         if (nearStart || nearEnd) {
-          durable(() => q.clearPosition.run(key))
+          durable(() => q.clearPosition.run(currentProfileId, key))
           return
         }
         durable(() =>
           q.savePosition.run({
+            profile: currentProfileId,
             key,
             id,
             season,
@@ -650,7 +706,7 @@ export function createDatabase(filename: string): MediaHubDatabase {
         const season = Number.isFinite(playback?.season) ? (playback!.season as number) : null
         const episode = Number.isFinite(playback?.episode) ? (playback!.episode as number) : null
         const key = `${String(contentId)}:${season ?? 'movie'}:${episode ?? 'movie'}`
-        const row = q.getPosition.get(key) as Row | undefined
+        const row = q.getPosition.get(currentProfileId, key) as Row | undefined
         if (!row) return null
         return {
           positionSeconds: row.position_seconds as number,
@@ -667,7 +723,7 @@ export function createDatabase(filename: string): MediaHubDatabase {
     // itself, so a failure here is an empty list rather than a throw.
     listPlaybackPositions(contentId) {
       try {
-        return (q.listPositions.all(String(contentId)) as Row[]).map((row) => ({
+        return (q.listPositions.all(currentProfileId, String(contentId)) as Row[]).map((row) => ({
           season: (row.season as number | null) ?? null,
           episode: (row.episode as number | null) ?? null,
           positionSeconds: row.position_seconds as number,
@@ -680,7 +736,9 @@ export function createDatabase(filename: string): MediaHubDatabase {
 
     abandonedContentIds(before) {
       try {
-        return (q.abandoned.all(String(before)) as Row[]).map((row) => String(row.content_id))
+        return (q.abandoned.all(currentProfileId, String(before)) as Row[]).map((row) =>
+          String(row.content_id)
+        )
       } catch {
         // Best-effort, like every other read here: losing this signal
         // costs a slightly worse ranking, never a broken one.
@@ -732,13 +790,14 @@ export function createDatabase(filename: string): MediaHubDatabase {
       try {
         const byId = new Map(details.map((x) => [String(x.id), x]))
         const updates: TrackedUpdate[] = []
-        for (const r of q.trackedRows.all()) {
+        for (const r of q.trackedRows.all(currentProfileId)) {
           const row = r as Row
           const tracked = parse<TrackedItem>(row.metadata_json as string, {} as TrackedItem)
           const detail = byId.get(String(row.content_id))
           if (!detail) continue
 
-          const watchedRow = q.lastEpisode.get(row.content_id as string) as Row | undefined
+          const watchedRow = q.lastEpisode.get(currentProfileId, row.content_id as string) as
+            Row | undefined
           const watched = toEpisodePosition(watchedRow)
           const baseline: EpisodePosition = {
             season: (row.baseline_season as number) || 0,

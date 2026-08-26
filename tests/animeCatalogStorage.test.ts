@@ -118,7 +118,11 @@ check('keeps only direct sequel/prequel links and preserves availability status'
     ],
     included: [
       { id: '2', type: 'anime', attributes: { canonicalTitle: 'Story After', status: 'upcoming' } },
-      { id: '3', type: 'anime', attributes: { canonicalTitle: 'Story Before', status: 'finished' } },
+      {
+        id: '3',
+        type: 'anime',
+        attributes: { canonicalTitle: 'Story Before', status: 'finished' }
+      },
       { id: '4', type: 'anime', attributes: { canonicalTitle: 'Spin-off', status: 'finished' } }
     ]
   })

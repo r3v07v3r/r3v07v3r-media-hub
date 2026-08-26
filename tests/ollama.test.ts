@@ -294,7 +294,7 @@ check('a saved model is kept, and only the address filled in', () => {
   })
 })
 
-check('a saved LAN address is never handed this machine\'s model list', () => {
+check("a saved LAN address is never handed this machine's model list", () => {
   // The detected pair was seen on loopback; pairing its model with a server
   // on the network would ask a machine for a model it may not have.
   const saved = fresh({ baseUrl: LAN })

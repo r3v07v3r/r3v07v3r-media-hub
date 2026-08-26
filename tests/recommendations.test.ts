@@ -82,7 +82,9 @@ const NO_HISTORY: HistoryEntry[] = []
 /** A fresh database per case, so one test's tracked/disliked rows cannot leak into the next. */
 function freshDatabase(): MediaHubDatabase {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'r3-recommendations-test-'))
-  const db = createDatabase(path.join(dir, 'test.sqlite'))
+  // Scoped to a profile from the moment it opens (see createDatabase). Which
+  // profile does not matter here, only that writes and reads share one.
+  const db = createDatabase(path.join(dir, 'test.sqlite'), 'profile-test')
   setDatabase(db)
   return db
 }
