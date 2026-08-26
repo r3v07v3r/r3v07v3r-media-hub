@@ -112,5 +112,48 @@ db.setActiveProfile(ALICE)
 assert.equal(db.lists()[0].name, 'Spooky season', 'and none of that touched it')
 assert.equal(db.listItems(halloween.id).length, 1)
 
+// ---------------------------------------------------------------------
+// Deleting a profile takes everything it owns with it.
+//
+// Without this, a deleted profile left its library permanently unreachable —
+// and writeBackup, which exports whole tables, would faithfully carry rows
+// owned by a profile that no longer exists.
+// ---------------------------------------------------------------------
+{
+  db.setActiveProfile(BOB)
+  const bobsList = db.createList("Bob's picks")
+  db.addToList(bobsList.id, dune)
+  db.track(dune)
+  db.markWatched(dune)
+  db.dislike(arrival)
+  db.savePlaybackPosition('tt1', undefined, 600, 2400)
+  db.rate('tt1', 8)
+
+  assert.equal(db.lists().length, 1)
+  assert.equal(db.tracked().length, 1)
+  assert.equal(db.plays().length, 1)
+  assert.equal(db.ratings().size, 1)
+
+  db.deleteProfileData(BOB)
+
+  assert.deepEqual(db.lists(), [], 'the lists are gone')
+  assert.deepEqual(db.listItems(bobsList.id), [], 'and their items with them, via the cascade')
+  assert.deepEqual(db.tracked(), [])
+  assert.deepEqual(db.history(), [])
+  assert.deepEqual(db.plays(), [])
+  assert.deepEqual(db.disliked(), [])
+  assert.equal(db.ratings().size, 0)
+  assert.equal(db.getPlaybackPosition('tt1'), null)
+
+  // And it touched nobody else. Alice still has the list from earlier.
+  db.setActiveProfile(ALICE)
+  assert.equal(db.lists().length, 1, "Alice's list survived Bob's deletion")
+  assert.equal(db.listItems(halloween.id).length, 1)
+
+  // An empty id is refused rather than being asked of the database.
+  db.deleteProfileData('')
+  assert.equal(db.lists().length, 1, 'an empty profile id deletes nothing')
+}
+
 db.close()
 console.log('custom list tests passed')

@@ -157,6 +157,14 @@ export interface MediaHubDatabase {
   rate(contentId: string | number, score: number): void
   /** Every score the active profile has given, keyed by content id. */
   ratings(): Map<string, number>
+  /**
+   * Erases everything one profile owns, in one transaction.
+   *
+   * Takes the id rather than acting on the active profile: a profile can only
+   * be deleted while somebody else is active, so this is never about the
+   * current scope.
+   */
+  deleteProfileData(profileId: string): void
   /** The active profile's own named lists, with their sizes. */
   lists(): CustomList[]
   /** Creates a list and returns it. Names are not unique — two lists called
@@ -851,6 +859,43 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
         const id = Number(playId)
         if (!Number.isInteger(id)) return false
         return durable(() => q.deletePlay.run(currentProfileId, id).changes > 0)
+      } catch (error) {
+        return fail(error as Error)
+      }
+    },
+
+    deleteProfileData(profileId) {
+      const id = String(profileId || '').trim()
+      // An empty id would match no rows in the WHERE clauses below, but the
+      // question is not worth asking of the database at all — and a caller
+      // passing one has a bug this should not quietly absorb.
+      if (!id) return
+      try {
+        durable(() => {
+          sql.exec('BEGIN')
+          try {
+            // list_items has no profile column of its own (see the lists
+            // queries above); it belongs to a profile through its parent list,
+            // and the foreign key cascades when that list goes. Deleting the
+            // lists is therefore what removes the items, and doing it first
+            // would leave nothing for a direct delete to find.
+            for (const table of [
+              'tracked',
+              'watch_history',
+              'plays',
+              'disliked',
+              'playback_positions',
+              'ratings',
+              'lists'
+            ]) {
+              sql.prepare(`DELETE FROM ${table} WHERE profile_id=?`).run(id)
+            }
+            sql.exec('COMMIT')
+          } catch (error) {
+            sql.exec('ROLLBACK')
+            throw error
+          }
+        })
       } catch (error) {
         return fail(error as Error)
       }

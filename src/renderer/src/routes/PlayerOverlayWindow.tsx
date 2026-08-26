@@ -353,20 +353,25 @@ function PlayerControls() {
   // partway through an episode leaves a tile that reflects it. Teardown's own
   // save stays as the backstop for the paths that never come through here
   // (the window being destroyed outright).
+  // How far through, kept somewhere a callback can read it WITHOUT depending
+  // on it. closePlayer needs the figure at the arbitrary moment somebody
+  // presses the button; closing over `timePos` instead would give it a new
+  // identity roughly eight times a second, and the sleep timer that depends on
+  // it would clear its own timeout before it could ever fire.
+  const progressRef = useRef(0)
+  useEffect(() => {
+    progressRef.current = duration > 0 ? Math.round((timePos / duration) * 100) : 0
+  }, [timePos, duration])
+
   const closePlayer = useCallback(() => {
     tracking.savePositionNow()
     // The one transition the scrobble effect above cannot observe: the window
     // is going away, so there is no later render to notice it in.
     if (media) {
-      ui({
-        type: 'scrobble',
-        action: 'stop',
-        progress: duration > 0 ? Math.round((timePos / duration) * 100) : 0,
-        media
-      })
+      ui({ type: 'scrobble', action: 'stop', progress: progressRef.current, media })
     }
     ui({ type: 'stop-playback', watched: tracking.markedWatched() })
-  }, [tracking, ui, duration, timePos, media])
+  }, [tracking, ui, media])
 
   /** Applies a partial change over the style in force, as one command. */
   const applySubtitleStyle = useCallback(

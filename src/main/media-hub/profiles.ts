@@ -282,6 +282,12 @@ export function registerProfilesIpc(): void {
     }
     const remaining = profiles.filter((p) => p.id !== id)
     if (remaining.length === profiles.length) throw new Error('That profile no longer exists.')
+    // The rows BEFORE the settings entry, so a failure leaves a profile that
+    // still owns its data rather than data owned by a profile that no longer
+    // exists. Everything a profile owns goes with it: leaving it behind means
+    // a library nothing can reach, which the next backup would faithfully
+    // export and a re-created profile would never see.
+    getDatabase().deleteProfileData(id)
     const settings = readSettings()
     settings.profiles = remaining
     writeSettings(settings)
