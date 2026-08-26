@@ -11,6 +11,22 @@ Competitors this was measured against: Stremio, Plex, Jellyfin, Emby, Infuse, Ko
 Letterboxd, AniList, MyAnimeList, Overseerr/Jellyseerr, Sonarr/Radarr, Teleparty, and the consumer
 streaming apps people compare everything to.
 
+## Progress
+
+The first five tickets are done and on `claude/competitive-feature-analysis-4de25a`.
+
+| Shipped                      | Phase | What landed                                                                                                                                                                                                                   |
+| ---------------------------- | ----- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Autoplay next episode        | 1     | Post-play card, ten-second countdown, off under Settings → Playback → Episodes. Also fixed `eof-reached` being reported in one direction only, which marked the second title played in a session as watched at position zero. |
+| Migration runner + schema v2 | 0     | `PRAGMA user_version` migrations in transactions; `profile_id` on every library table; append-only `plays`; `ratings`, `lists`, `list_items`.                                                                                 |
+| Backup and restore           | 0     | Whole library to one JSON file and back. No credentials, no PIN, no cache.                                                                                                                                                    |
+| Ratings                      | 2     | 1-10 per profile, weighting both preferred genres and the taste profile.                                                                                                                                                      |
+| Sonarr/Radarr requests       | 4     | Lookup by IMDb id through the server, add with a chosen quality profile and root folder, search on add.                                                                                                                       |
+| Player menu harvest          | 1     | Speed, chapters, audio sync, subtitle size/height/colour/backdrop, sleep timer.                                                                                                                                               |
+
+Seek preview thumbnails, listed under Phase 1 below, turned out to already
+exist — the scrub bar has had them since the mpv port.
+
 ## Ground rules
 
 Five constraints every item obeys. They exist because the failure mode here is not shipping too
