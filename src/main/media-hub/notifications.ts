@@ -17,7 +17,6 @@ import { BrowserWindow, Notification } from 'electron'
 import { upcomingEpisodes } from './calendar'
 import { getDatabase } from './dbState'
 import { logError } from './logger'
-import { activeProfileId } from './profiles'
 import { readSettings } from './settingsStore'
 
 /**
@@ -98,7 +97,7 @@ export async function checkForNewEpisodes(now = new Date()): Promise<number> {
   const db = getDatabase()
   // Read once and reused for the write below: a profile switch between the two
   // would otherwise file this profile's episodes under the next one's key.
-  const key = seenKey(activeProfileId())
+  const key = seenKey(db.activeProfile())
   const stored = db.getCache<string[]>(key, { allowExpired: true })
   const seen = new Set(Array.isArray(stored) ? stored : [])
   const firstRun = stored === null

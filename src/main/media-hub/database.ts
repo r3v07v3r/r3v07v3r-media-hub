@@ -144,6 +144,11 @@ export interface MediaHubDatabase {
    * switch; nothing else may call it.
    */
   setActiveProfile(profileId: string): void
+  /** Which profile every read and write above is currently scoped to.
+   *  Exposed so a caller needing to key something else by profile — a stored
+   *  ranking, a notification watermark — can ask the connection rather than
+   *  importing the profile machinery, which drags Electron in with it. */
+  activeProfile(): string
   /** How many times each title has been played by the active profile, keyed by
    *  content id. Titles never played are absent rather than zero. */
   playCounts(): Map<string, number>
@@ -914,6 +919,10 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
         // before ratings existed.
         return new Map()
       }
+    },
+
+    activeProfile() {
+      return currentProfileId
     },
 
     playCounts() {

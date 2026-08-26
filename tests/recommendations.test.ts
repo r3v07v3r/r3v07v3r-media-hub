@@ -25,7 +25,7 @@ import { setDatabase } from '../src/main/media-hub/dbState'
 import {
   SERVED_COUNT,
   STORED_COUNT,
-  STORE_KEY,
+  storeKey,
   liveExclusions,
   onRebuildRequested,
   readStoredRecommendations,
@@ -179,10 +179,10 @@ check('an aged list is still served, and asks to be replaced on the way past', (
     entries: ScoredRecommendation[]
     builtAt: number
     preferredGenres: string[]
-  }>(STORE_KEY, { allowExpired: true })
+  }>(storeKey(), { allowExpired: true })
   assert.ok(stored, 'the list should have been written')
   db.putCache(
-    STORE_KEY,
+    storeKey(),
     { ...stored, builtAt: Date.now() - 7 * 24 * 60 * 60 * 1000 },
     30 * 24 * 60 * 60 * 1000
   )
@@ -205,7 +205,9 @@ check('keeps more than it serves, so exclusions have somewhere to eat into', () 
   const db = freshDatabase()
   storeRecommendations(ranked(500), [])
 
-  const stored = db.getCache<{ entries: ScoredRecommendation[] }>(STORE_KEY, { allowExpired: true })
+  const stored = db.getCache<{ entries: ScoredRecommendation[] }>(storeKey(), {
+    allowExpired: true
+  })
   assert.ok(stored)
   assert.equal(stored.entries.length, STORED_COUNT)
   assert.ok(STORED_COUNT > SERVED_COUNT, 'the buffer is the whole point of storing extra')
@@ -219,7 +221,9 @@ check('storing nothing leaves the previous list alone', () => {
   // empty somebody's Home row.
   storeRecommendations([], [])
 
-  const stored = db.getCache<{ entries: ScoredRecommendation[] }>(STORE_KEY, { allowExpired: true })
+  const stored = db.getCache<{ entries: ScoredRecommendation[] }>(storeKey(), {
+    allowExpired: true
+  })
   assert.ok(stored)
   assert.equal(stored.entries.length, STORED_COUNT)
 })
@@ -231,7 +235,9 @@ check('a silent store still writes — it only skips the announcement', () => {
   // for a refetch of what is already in flight.
   storeRecommendations(ranked(STORED_COUNT), ['Action'], { announce: false })
 
-  const stored = db.getCache<{ entries: ScoredRecommendation[] }>(STORE_KEY, { allowExpired: true })
+  const stored = db.getCache<{ entries: ScoredRecommendation[] }>(storeKey(), {
+    allowExpired: true
+  })
   assert.ok(stored, 'announce: false must not mean "do not store"')
   assert.equal(stored.entries.length, STORED_COUNT)
 })

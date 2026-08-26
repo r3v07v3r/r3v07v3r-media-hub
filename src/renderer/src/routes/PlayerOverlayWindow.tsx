@@ -337,9 +337,22 @@ function PlayerControls() {
 
   // Natural end of file. mpv reports it as a property rather than an element
   // event, but the consequence is the same as the old onEnded.
+  //
+  // Skipped when the 80% auto-mark already fired for this title, which on any
+  // ordinary completion it has — reaching the end means crossing 80% on the
+  // way. Both paths raise the same mark-watched, and that used to be harmless
+  // because the watch-history write was an upsert. It is not harmless now:
+  // marking watched also APPENDS a play, so a single viewing was recorded
+  // twice, inflating the history and the stats and making one watch look like
+  // a rewatch.
+  //
+  // The guard is on the flag rather than on the event, so the case it exists
+  // for still works: a title short enough or seeked past such that 80% never
+  // fired is still marked at the end.
   useEffect(() => {
     if (state.eofReached !== true) return
     tracking.savePositionNow()
+    if (tracking.markedWatched()) return
     ui({ type: 'mark-watched' })
   }, [state.eofReached, tracking, ui])
 
@@ -395,6 +408,10 @@ function PlayerControls() {
     key: string
     playing: boolean
     media: PlayerSessionMedia
+    /** How far through THAT title was, last time this ran. Kept because the
+     *  live clock has already been replaced by the time an outgoing stop is
+     *  sent — see the stop below. */
+    progress: number
   } | null>(null)
   useEffect(() => {
     if (!media) return
@@ -410,12 +427,21 @@ function PlayerControls() {
 
     // A title change stops the OUTGOING one before starting the new one, or
     // Simkl is left holding a scrobble for something that is no longer
-    // playing. The stop carries the PREVIOUS media, not the current one —
-    // that is the whole reason the identity travels with the event.
+    // playing. The stop carries the PREVIOUS media AND the previous progress:
+    // by the time this runs, startPlayerSession has already cleared the old
+    // session and loaded the new file, so the live clock reads the incoming
+    // episode's near-zero position. Sending that would report the finished
+    // title as abandoned — which is precisely the distinction the progress
+    // figure exists to make.
     if (previous && previous.key !== key) {
-      ui({ type: 'scrobble', action: 'stop', progress, media: previous.media })
+      ui({
+        type: 'scrobble',
+        action: 'stop',
+        progress: previous.progress,
+        media: previous.media
+      })
     }
-    scrobbleState.current = { key, playing, media }
+    scrobbleState.current = { key, playing, media, progress }
     ui({ type: 'scrobble', action: playing ? 'start' : 'pause', progress, media })
     // timePos and duration are deliberately NOT dependencies: they change
     // every tick, and depending on them would turn this into the heartbeat it

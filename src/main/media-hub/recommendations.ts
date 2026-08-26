@@ -54,7 +54,21 @@ import type { TaskPriority } from './taskScheduler'
  * serving the previous version's ordering back for hours, out of a cache
  * nobody thought to clear.
  */
-export const STORE_KEY = 'recommendations:v2'
+const STORE_KEY_PREFIX = 'recommendations:v2'
+
+/**
+ * Where one profile's ranked list lives.
+ *
+ * KEYED BY PROFILE, because the ranking is built from that profile's history,
+ * ratings and taste. catalog_cache is not itself profile-scoped — it holds
+ * facts about titles, not about people — so a single fixed key meant that
+ * switching profiles served the previous one's taste-ranked titles and
+ * preferred genres until the shared row happened to be rebuilt, potentially
+ * hours later.
+ */
+export function storeKey(profileId: string = getDatabase().activeProfile()): string {
+  return `${STORE_KEY_PREFIX}:${profileId}`
+}
 
 /**
  * How many ranked titles are kept.
@@ -209,7 +223,7 @@ export function readStoredRecommendations(
   try {
     // allowExpired: see STORE_TTL_MS. An old ordering is a far better
     // answer than a blank row, and this read schedules its replacement.
-    stored = getDatabase().getCache<StoredRecommendations>(STORE_KEY, { allowExpired: true })
+    stored = getDatabase().getCache<StoredRecommendations>(storeKey(), { allowExpired: true })
   } catch (error) {
     logError('recommendations:read', error)
     return null
@@ -264,7 +278,7 @@ export function storeRecommendations(
     preferredGenres
   }
   try {
-    getDatabase().putCache(STORE_KEY, payload, STORE_TTL_MS)
+    getDatabase().putCache(storeKey(), payload, STORE_TTL_MS)
   } catch (error) {
     logError('recommendations:store', error)
     return

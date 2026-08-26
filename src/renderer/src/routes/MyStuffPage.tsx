@@ -194,6 +194,11 @@ function monthLabel(month: string, index: number, all: { month: string }[]): str
  * never opens this tab.
  */
 function StatsView() {
+  // Profile-keyed like the hooks in lib/mediaHub/hooks.ts, and for the same
+  // reason: this reads IPC directly, main re-scopes the database on a switch,
+  // and a tab left mounted across one would otherwise keep showing the
+  // previous profile's totals.
+  const { activeProfileId } = useAppState()
   const [stats, setStats] = useState<ViewingStats | null>(null)
   const [loaded, setLoaded] = useState(() => !window.api?.mediaHub)
 
@@ -214,7 +219,7 @@ function StatsView() {
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [activeProfileId])
 
   if (!loaded) return <p className={styles.empty}>Working it out…</p>
   if (!stats || stats.totalPlays === 0) {
@@ -522,7 +527,9 @@ function airDayLabel(day: string, today: string): string {
  * regrouping.
  */
 function CalendarView() {
-  const { openDetail } = useAppState()
+  // Profile-keyed for the same reason as StatsView above — the calendar is
+  // built from the ACTIVE profile's tracked shows.
+  const { openDetail, activeProfileId } = useAppState()
   // Seeded from whether there is a bridge at all: outside the desktop app
   // there is nothing to wait for, and an effect that says so synchronously
   // cascades a render.
@@ -543,7 +550,7 @@ function CalendarView() {
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [activeProfileId])
 
   const today = new Date().toISOString().slice(0, 10)
   const days = useMemo(() => {
