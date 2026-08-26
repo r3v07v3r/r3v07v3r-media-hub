@@ -23,13 +23,11 @@ function gaugeColor(value: number) {
 function Gauge({
   label,
   value,
-  icon,
-  pulseDelay
+  icon
 }: {
   label: string
   value: number
   icon: string
-  pulseDelay: string
 }) {
   const offset = CIRC - (Math.min(100, Math.max(0, value)) / 100) * CIRC
   const color = gaugeColor(value)
@@ -48,14 +46,6 @@ function Gauge({
             style={{ stroke: color }}
           />
         </svg>
-        {/* Small energy pulse travelling around each gauge occasionally
-            (motion spec section 14) — the shared pulse-ring primitive,
-            staggered per gauge so they don't all pulse in sync. */}
-        <span
-          className="pulse-ring"
-          style={{ ['--pulse-delay' as string]: pulseDelay }}
-          aria-hidden="true"
-        />
         <span className={styles.gaugeLabel}>{Math.round(value)}%</span>
       </span>
       <span className={styles.gaugeName}>
@@ -72,9 +62,9 @@ function Gauge({
 function GaugeStack({ metrics }: { metrics: ReturnType<typeof usePerformanceMetrics> }) {
   return (
     <>
-      <Gauge label="CPU" value={metrics.cpu} icon="cpu" pulseDelay="0s" />
-      <Gauge label="GPU" value={metrics.gpu} icon="gpu" pulseDelay="0.8s" />
-      <Gauge label="RAM" value={metrics.ram} icon="ram" pulseDelay="1.6s" />
+      <Gauge label="CPU" value={metrics.cpu} icon="cpu" />
+      <Gauge label="GPU" value={metrics.gpu} icon="gpu" />
+      <Gauge label="RAM" value={metrics.ram} icon="ram" />
       <div className={styles.divider} />
       <div className={styles.net}>
         <span className={styles.netRow}>
