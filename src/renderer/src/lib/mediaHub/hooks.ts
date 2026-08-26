@@ -20,7 +20,7 @@
 // taste in films.
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import type { CatalogItem, HistoryEntry, MediaKind } from '@shared/media-hub/types'
+import type { CatalogItem, HistoryEntry, MediaKind, PlayRecord } from '@shared/media-hub/types'
 import type { ContinueWatchingItem, MediaItem, Recommendation } from '@renderer/types'
 import { AI_PICKS, CATALOG, CONTINUE_WATCHING, FEATURED_ITEMS } from '@renderer/data/mockData'
 import {
@@ -544,6 +544,68 @@ export function useMediaHubDislikedIds(): DislikedIdsResult {
 
   const refresh = useCallback(() => setGeneration((g) => g + 1), [])
   return useMemo(() => ({ dislikedIds, loaded, refresh }), [dislikedIds, loaded, refresh])
+}
+
+export interface PlaysResult {
+  plays: PlayRecord[]
+  loaded: boolean
+  /** Removes one viewing and adopts the list the backend reports back. */
+  remove: (playId: number) => Promise<void>
+}
+
+/**
+ * The viewing record, newest first.
+ *
+ * Fetched on mount rather than held in AppStateContext with everything else:
+ * only one tab of one page reads it, it can run to hundreds of rows, and
+ * nothing else in the app needs to re-render when a play is removed.
+ */
+export function useMediaHubPlays(): PlaysResult {
+  const [plays, setPlays] = useState<PlayRecord[]>([])
+  // Seeded from whether there is an IPC bridge at all: outside the desktop
+  // app (a plain browser tab during dev-server work) there is nothing to wait
+  // for, and saying so at mount is both truthful and cheaper than an effect
+  // that sets it synchronously — which cascades a render.
+  const [loaded, setLoaded] = useState(() => !window.api?.mediaHub)
+
+  useEffect(() => {
+    let cancelled = false
+    const api = window.api?.mediaHub
+    if (!api) return
+    api.plays
+      .list()
+      .then((result) => {
+        if (cancelled) return
+        setPlays(result.plays)
+        setLoaded(true)
+      })
+      .catch(() => {
+        if (!cancelled) setLoaded(true)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  const remove = useCallback(async (playId: number) => {
+    const api = window.api?.mediaHub
+    if (!api) return
+    // Optimistic: the row disappears under the click, and the authoritative
+    // list replaces it a moment later. A local SQLite delete is fast enough
+    // that the two are usually indistinguishable, but not so fast that waiting
+    // for it is free.
+    setPlays((previous) => previous.filter((play) => play.playId !== playId))
+    try {
+      const result = await api.plays.remove(playId)
+      setPlays(result.plays)
+    } catch {
+      // The optimistic removal stands. A failed delete here is almost always a
+      // closing database, and putting the row back would be the more
+      // confusing outcome.
+    }
+  }, [])
+
+  return useMemo(() => ({ plays, loaded, remove }), [plays, loaded, remove])
 }
 
 export interface RatingsResult {

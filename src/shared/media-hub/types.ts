@@ -341,6 +341,25 @@ export interface HistoryEntry extends Partial<TrackedItem> {
   watchedAt: string | null
 }
 
+/**
+ * One viewing, from the append-only `plays` table.
+ *
+ * Distinct from HistoryEntry above, which is one row per title-and-episode
+ * (the "have I seen this" index). A title watched three times has one
+ * HistoryEntry and three PlayRecords, which is the difference the history
+ * view exists to show.
+ */
+export interface PlayRecord {
+  playId: number
+  contentId: string
+  type: MediaKind
+  title: string
+  season: number | null
+  episode: number | null
+  watchedAt: string
+  poster: string
+}
+
 export interface ContinueWatchingEntry extends CatalogItem {
   continueSeason: number
   continueEpisode: number

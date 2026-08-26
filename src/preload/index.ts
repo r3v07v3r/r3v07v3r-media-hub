@@ -44,6 +44,7 @@ import type {
   PartyQueueEntry,
   PartyStatusResult,
   PlaybackPositionResult,
+  PlayRecord,
   PlaybackPrepareProgress,
   PlaybackResult,
   ProfilePublic,
@@ -377,6 +378,13 @@ const api = {
        *  where the actual outcome arrives. */
       onReconcileSync: (onEvent: (report: ReconcileSyncReport) => void): (() => void) =>
         subscribe<ReconcileSyncReport>(MEDIA_HUB_CHANNELS.trackingReconcileSync, onEvent)
+    },
+
+    plays: {
+      list: (): Promise<{ plays: PlayRecord[] }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.playsList),
+      remove: (playId: number): Promise<{ plays: PlayRecord[] }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.playDelete, { playId })
     },
 
     ratings: {

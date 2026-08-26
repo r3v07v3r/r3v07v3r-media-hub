@@ -50,8 +50,9 @@ play something. Optional metadata, tracking, and subtitle services add to the ex
 - **Rate what you have seen** out of 10 on a title's page. Scores are private to the profile that
   gave them, and they steer what gets suggested — a genre watched often but enjoyed little stops
   leading the recommendations.
-- **Build a personal library** in **My Stuff**, including watchlisted, liked, disliked, watched,
-  and in-progress titles.
+- **Build a personal library** in **My Stuff**, with tabs for your list, what is in progress, what
+  you have finished, what you have rated, your full viewing history, and what you have set aside.
+  Any single viewing can be removed from the history without un-watching the episode.
 - **Manage downloads** and optionally connect Jellyfin, Sonarr, Radarr, and qBittorrent.
 - **Ask Sonarr or Radarr for a title** straight from its page, picking the quality profile and
   folder, with a search starting as soon as it is added. Movies and series only — anime is

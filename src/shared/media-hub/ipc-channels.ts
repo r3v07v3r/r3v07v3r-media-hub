@@ -72,6 +72,10 @@ export const MEDIA_HUB_CHANNELS = {
    *  and shared/media-hub/rating.ts on why "no opinion" is an absence rather
    *  than a zero. */
   ratingSet: 'mediahub:rating:set',
+  /** The append-only viewing record — one entry per play, so a rewatch is
+   *  listed twice. See main/media-hub/database.ts's `plays`. */
+  playsList: 'mediahub:plays:list',
+  playDelete: 'mediahub:plays:delete',
   ratingsList: 'mediahub:ratings:list',
   dislikedList: 'mediahub:disliked:list',
   dislikedAdd: 'mediahub:disliked:add',

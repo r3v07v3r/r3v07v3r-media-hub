@@ -1,47 +1,250 @@
-import { useMemo } from 'react'
+// My Stuff, as the README has always described it.
+//
+// This page rendered one grid — the watchlist — while the README promised
+// "watchlisted, liked, disliked, watched, and in-progress". The other four
+// were never missing data; they were missing a place to be shown. Everything
+// here reads state the app already holds, except History, which reads the
+// append-only `plays` table that now exists.
+//
+// Tabs rather than five nav entries, per the roadmap's first ground rule: the
+// navigation stays at seven, and everything about "what I have watched and
+// what I mean to" belongs behind one destination.
+
+import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useAppState } from '@renderer/context/AppStateContext'
 import { Icon } from '@renderer/components/icons/Icon'
 import { ComingSoonSection } from '@renderer/components/placeholder/ComingSoonSection'
 import { useRestoreBrowsingOrigin } from '@renderer/lib/mediaHub/useRestoreBrowsingOrigin'
+import { useMediaHubPlays } from '@renderer/lib/mediaHub/hooks'
 import { resolveArtwork } from '@renderer/lib/artwork'
 import { ArtworkImage } from '@renderer/components/media/ArtworkImage'
 import { WatchStatusBadge } from '@renderer/components/media/WatchStatusBadge'
 import { getWatchStatus } from '@renderer/lib/mediaHub/watchStatus'
 import { applyWatchStateFilters } from '@renderer/lib/mediaHub/categoryFilters'
+import type { MediaItem } from '@renderer/types'
+import type { PlayRecord } from '@shared/media-hub/types'
 import styles from './MyStuff.module.css'
 
+type TabId = 'list' | 'progress' | 'watched' | 'rated' | 'history' | 'dropped'
+
+const TABS: { id: TabId; label: string }[] = [
+  { id: 'list', label: 'My List' },
+  { id: 'progress', label: 'In progress' },
+  { id: 'watched', label: 'Watched' },
+  { id: 'rated', label: 'Rated' },
+  { id: 'history', label: 'History' },
+  { id: 'dropped', label: 'Not for me' }
+]
+
+/** "S02E04", or nothing at all for a film. */
+function episodeLabel(play: PlayRecord): string {
+  if (play.season == null || play.episode == null) return ''
+  return `S${String(play.season).padStart(2, '0')}E${String(play.episode).padStart(2, '0')}`
+}
+
+/**
+ * When a viewing happened, in the terms people actually think in.
+ *
+ * Today and yesterday get named rather than dated, because "2 March" for
+ * something watched last night reads as a much older memory than it is.
+ */
+function playedWhen(iso: string): string {
+  const when = new Date(iso)
+  if (Number.isNaN(when.getTime())) return ''
+  const today = new Date()
+  const days = Math.floor(
+    (new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime() -
+      new Date(when.getFullYear(), when.getMonth(), when.getDate()).getTime()) /
+      86_400_000
+  )
+  if (days <= 0) return `Today, ${when.toLocaleTimeString([], { timeStyle: 'short' })}`
+  if (days === 1) return `Yesterday, ${when.toLocaleTimeString([], { timeStyle: 'short' })}`
+  if (days < 7) return `${days} days ago`
+  return when.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })
+}
+
+function TitleGrid({
+  items,
+  emptyMessage,
+  action
+}: {
+  items: MediaItem[]
+  emptyMessage: string
+  action?: { label: string; onClick: (media: MediaItem) => void }
+}) {
+  const { openDetail, continueWatching } = useAppState()
+  if (items.length === 0) return <p className={styles.empty}>{emptyMessage}</p>
+  return (
+    <div className={styles.grid}>
+      {items.map((media) => {
+        const artwork = resolveArtwork(media)
+        return (
+          <div key={media.id} className={styles.card}>
+            <button
+              type="button"
+              className={styles.art}
+              data-media-id={media.id}
+              onClick={() => openDetail(media)}
+            >
+              <ArtworkImage
+                src={artwork.posterUrl ?? artwork.backdropUrl}
+                alt=""
+                fallbackTitle={media.title}
+                artTint={media.artTint}
+                sizes="160px"
+                className={styles.artImage}
+              />
+              <WatchStatusBadge status={getWatchStatus(media, continueWatching)} />
+            </button>
+            <div className={styles.info}>
+              <span className={styles.title}>{media.title}</span>
+              {action && (
+                <button
+                  type="button"
+                  className={styles.remove}
+                  onClick={() => action.onClick(media)}
+                  aria-label={`${action.label} ${media.title}`}
+                >
+                  <Icon name="x" size={12} />
+                  {action.label}
+                </button>
+              )}
+            </div>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+/**
+ * Every viewing, newest first, with the one thing a history is for: being
+ * corrected.
+ *
+ * Removing a row deletes that PLAY and nothing else. An episode watched three
+ * times stays watched after one of them is removed, which is the whole reason
+ * the plays table is separate from the watched index — un-watching something
+ * is a different action, and it lives on the title's own page.
+ */
+function HistoryList() {
+  const { plays, loaded, remove } = useMediaHubPlays()
+  if (!loaded) return <p className={styles.empty}>Reading your history…</p>
+  if (plays.length === 0) {
+    return (
+      <p className={styles.empty}>Nothing watched yet. Titles appear here as you finish them.</p>
+    )
+  }
+  return (
+    <ol className={styles.history}>
+      {plays.map((play) => (
+        <li key={play.playId} className={styles.historyRow}>
+          <div className={styles.historyArt}>
+            {play.poster ? <img src={play.poster} alt="" /> : null}
+          </div>
+          <div className={styles.historyBody}>
+            <span className={styles.historyTitle}>
+              {play.title}
+              {episodeLabel(play) ? (
+                <span className={styles.historyEpisode}>{episodeLabel(play)}</span>
+              ) : null}
+            </span>
+            <span className={styles.historyWhen}>{playedWhen(play.watchedAt)}</span>
+          </div>
+          <button
+            type="button"
+            className={styles.remove}
+            onClick={() => void remove(play.playId)}
+            aria-label={`Remove this viewing of ${play.title}`}
+          >
+            <Icon name="x" size={12} />
+            Remove
+          </button>
+        </li>
+      ))}
+    </ol>
+  )
+}
+
 export default function MyStuffPage() {
-  const { myList, toggleMyList, openDetail, catalog, continueWatching, mediaHubSettings } =
-    useAppState()
-  // Global default only, no per-page override here — same as Mood Browser.
-  //
+  const {
+    myList,
+    toggleMyList,
+    catalog,
+    continueWatching,
+    dislikedIds,
+    toggleDisliked,
+    ratings,
+    mediaHubSettings
+  } = useAppState()
+  const [tab, setTab] = useState<TabId>('list')
+  useRestoreBrowsingOrigin(true)
+
+  // Global defaults only, no per-page override — same as the Mood Browser.
   // Memoised because this page subscribes to the whole app context: without
-  // it, a full pass over the catalog (which can be well over a thousand
-  // entries) re-ran on every unrelated state change — a toast appearing, a
-  // context menu opening. CategoryPage and MoodBrowser already memoise
-  // their equivalents; this was the last one that didn't, and it only
-  // started paying off once `catalog` itself became identity-stable.
-  const items = useMemo(
+  // it, a full pass over a catalog well past a thousand entries re-ran on
+  // every unrelated state change, a toast appearing included.
+  const hideFilters = useMemo(
+    () => ({
+      hideWatched: mediaHubSettings?.hideWatchedDefault ?? false,
+      hideCompleted: mediaHubSettings?.hideCompletedDefault ?? false,
+      hideDisliked: mediaHubSettings?.hideDislikedDefault ?? false
+    }),
+    [mediaHubSettings]
+  )
+
+  const listItems = useMemo(
     () =>
       applyWatchStateFilters(
         catalog.filter((m) => myList.has(m.id)),
-        {
-          hideWatched: mediaHubSettings?.hideWatchedDefault ?? false,
-          hideCompleted: mediaHubSettings?.hideCompletedDefault ?? false,
-          hideDisliked: mediaHubSettings?.hideDislikedDefault ?? false
-        }
+        hideFilters
       ),
-    [catalog, myList, mediaHubSettings]
+    [catalog, myList, hideFilters]
   )
-  useRestoreBrowsingOrigin(true)
 
-  if (items.length === 0) {
+  // Straight off the Continue Watching row rather than re-derived from the
+  // catalog: that row is already the authority on what is part-watched, and
+  // it carries titles the browse catalog may not currently hold.
+  const progressItems = useMemo(
+    () => continueWatching.map((entry) => entry.media),
+    [continueWatching]
+  )
+
+  // The watched/completed flags are baked into each MediaItem at conversion
+  // time (see adapters.ts), so this needs no second history fetch.
+  const watchedItems = useMemo(() => catalog.filter((m) => m.completed || m.watched), [catalog])
+
+  // Highest score first, because a list of things you rated is a list you
+  // scan for the best of them.
+  const ratedItems = useMemo(
+    () =>
+      catalog
+        .filter((m) => ratings.has(m.id))
+        .sort((a, b) => (ratings.get(b.id) ?? 0) - (ratings.get(a.id) ?? 0)),
+    [catalog, ratings]
+  )
+
+  const droppedItems = useMemo(
+    () => catalog.filter((m) => dislikedIds.has(m.id)),
+    [catalog, dislikedIds]
+  )
+
+  // The one case where the whole page has nothing to say. Every other empty
+  // tab says so in place, which keeps the tabs themselves from vanishing
+  // under somebody mid-navigation.
+  const everythingEmpty =
+    listItems.length === 0 &&
+    progressItems.length === 0 &&
+    watchedItems.length === 0 &&
+    ratedItems.length === 0 &&
+    droppedItems.length === 0
+
+  if (everythingEmpty && tab !== 'history') {
     return (
       <ComingSoonSection
         icon="mystuff"
         title="My Stuff"
-        description="Titles you save with “My List” will show up here. Nothing saved yet — try adding something from the Home dashboard."
+        description="Titles you save with “My List” show up here, along with what you have watched, rated and set aside. Nothing yet — try adding something from the Home dashboard."
       />
     )
   }
@@ -49,44 +252,64 @@ export default function MyStuffPage() {
   return (
     <div className={styles.wrap}>
       <h1 className={styles.heading}>My Stuff</h1>
-      <div className={styles.grid}>
-        {items.map((m) => {
-          const artwork = resolveArtwork(m)
-          const watchStatus = getWatchStatus(m, continueWatching)
-          return (
-            <div key={m.id} className={styles.card}>
-              <button
-                type="button"
-                className={styles.art}
-                data-media-id={m.id}
-                onClick={() => openDetail(m)}
-              >
-                <ArtworkImage
-                  src={artwork.posterUrl ?? artwork.backdropUrl}
-                  alt=""
-                  fallbackTitle={m.title}
-                  artTint={m.artTint}
-                  sizes="160px"
-                  className={styles.artImage}
-                />
-                <WatchStatusBadge status={watchStatus} />
-              </button>
-              <div className={styles.info}>
-                <span className={styles.title}>{m.title}</span>
-                <button
-                  type="button"
-                  className={styles.remove}
-                  onClick={() => toggleMyList(m)}
-                  aria-label={`Remove ${m.title} from My List`}
-                >
-                  <Icon name="x" size={12} />
-                  Remove
-                </button>
-              </div>
-            </div>
-          )
-        })}
+
+      <div className={styles.tabs} role="tablist" aria-label="My Stuff">
+        {TABS.map((entry) => (
+          <button
+            key={entry.id}
+            type="button"
+            role="tab"
+            aria-selected={tab === entry.id}
+            className={`${styles.tab} ${tab === entry.id ? styles.tabActive : ''}`}
+            onClick={() => setTab(entry.id)}
+          >
+            {entry.label}
+          </button>
+        ))}
       </div>
+
+      {tab === 'list' && (
+        <TitleGrid
+          items={listItems}
+          emptyMessage="Nothing saved yet. Add a title with “My List” and it appears here."
+          action={{ label: 'Remove', onClick: (media) => toggleMyList(media) }}
+        />
+      )}
+
+      {tab === 'progress' && (
+        <TitleGrid
+          items={progressItems}
+          emptyMessage="Nothing started. Anything you leave part-way through waits here."
+        />
+      )}
+
+      {tab === 'watched' && <TitleGrid items={watchedItems} emptyMessage="Nothing finished yet." />}
+
+      {tab === 'rated' && (
+        <>
+          <TitleGrid
+            items={ratedItems}
+            emptyMessage="Nothing rated yet. Give a title a score on its own page and it appears here, best first."
+          />
+          {ratedItems.length > 0 && (
+            <p className={styles.footnote}>
+              Highest first. Your scores steer what gets recommended — a genre watched often but
+              enjoyed little stops leading the row.
+            </p>
+          )}
+        </>
+      )}
+
+      {tab === 'history' && <HistoryList />}
+
+      {tab === 'dropped' && (
+        <TitleGrid
+          items={droppedItems}
+          emptyMessage="Nothing set aside. Titles you mark “Not interested” collect here."
+          action={{ label: 'Restore', onClick: (media) => toggleDisliked(media) }}
+        />
+      )}
+
       <Link to="/" className={styles.backLink}>
         ← Back to Home
       </Link>

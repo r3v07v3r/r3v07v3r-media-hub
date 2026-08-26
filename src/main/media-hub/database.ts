@@ -14,6 +14,7 @@ import type {
   Episode,
   HistoryEntry,
   MediaKind,
+  PlayRecord,
   TrackedItem,
   TrackedUpdate
 } from '../../shared/media-hub/types'
@@ -152,6 +153,18 @@ export interface MediaHubDatabase {
   rate(contentId: string | number, score: number): void
   /** Every score the active profile has given, keyed by content id. */
   ratings(): Map<string, number>
+  /**
+   * The active profile's viewing, newest first — one row per play rather than
+   * one per title, so a rewatch appears twice.
+   *
+   * Capped rather than unbounded: this feeds a scrollable view, and a library
+   * with years of episodes in it has no business parsing all of them to draw
+   * the first screen.
+   */
+  plays(limit?: number): PlayRecord[]
+  /** Removes one play. Returns false when it was already gone — two clicks on
+   *  the same row is not an error. */
+  deletePlay(playId: number): boolean
   /** Writes every profile's library to one JSON file — see backup.ts for what
    *  a backup does and does not carry. NOT scoped to the active profile:
    *  a backup is of the install, not of whoever happens to be watching. */
@@ -218,6 +231,8 @@ export interface MediaHubDatabase {
 
 interface PreparedQueries {
   track: StatementSync
+  plays: StatementSync
+  deletePlay: StatementSync
   rate: StatementSync
   clearRating: StatementSync
   ratings: StatementSync
@@ -397,6 +412,11 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
     playCounts: sql.prepare(
       'SELECT content_id,COUNT(*) AS plays FROM plays WHERE profile_id=? GROUP BY content_id'
     ),
+    plays: sql.prepare(
+      `SELECT play_id,content_id,type,title,season,episode,watched_at,metadata_json
+       FROM plays WHERE profile_id=? ORDER BY watched_at DESC, play_id DESC LIMIT ?`
+    ),
+    deletePlay: sql.prepare('DELETE FROM plays WHERE profile_id=? AND play_id=?'),
     rate: sql.prepare(
       `INSERT INTO ratings(profile_id,content_id,score,rated_at) VALUES(@profile,@id,@score,@now)
        ON CONFLICT(profile_id,content_id) DO UPDATE SET score=excluded.score,rated_at=excluded.rated_at`
@@ -495,6 +515,39 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
             now: new Date().toISOString()
           })
         )
+      } catch (error) {
+        return fail(error as Error)
+      }
+    },
+
+    plays(limit = 500) {
+      try {
+        const rows = q.plays.all(currentProfileId, Math.max(1, Math.floor(limit))) as Row[]
+        return rows.map((row) => {
+          const meta = parse<Partial<TrackedItem>>(row.metadata_json as string, {})
+          return {
+            playId: Number(row.play_id),
+            contentId: String(row.content_id),
+            type: row.type as MediaKind,
+            title: String(row.title ?? meta.title ?? 'Untitled'),
+            season: (row.season as number | null) ?? null,
+            episode: (row.episode as number | null) ?? null,
+            watchedAt: String(row.watched_at),
+            poster: String(meta.poster ?? '')
+          }
+        })
+      } catch {
+        // Best-effort like every other read here: an unreadable table costs
+        // the history view its rows, never the page they would sit on.
+        return []
+      }
+    },
+
+    deletePlay(playId) {
+      try {
+        const id = Number(playId)
+        if (!Number.isInteger(id)) return false
+        return durable(() => q.deletePlay.run(currentProfileId, id).changes > 0)
       } catch (error) {
         return fail(error as Error)
       }

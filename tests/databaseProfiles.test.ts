@@ -91,6 +91,48 @@ assert.equal(db.playCounts().has('tt1'), false)
 assert.equal(db.playCounts().get('tt2'), 1, 'the series was not touched')
 
 // ---------------------------------------------------------------------
+// The history view reads plays, newest first, and can remove one.
+// ---------------------------------------------------------------------
+db.markWatched(severance, { season: 1, episode: 5 })
+db.markWatched(severance, { season: 1, episode: 6 })
+db.markWatched(severance, { season: 1, episode: 5 }) // a rewatch of episode 5
+
+{
+  const plays = db.plays()
+  assert.equal(plays.length, 4, 'episode 2 from earlier, plus 5, 6 and the rewatch of 5')
+  assert.ok(
+    plays.every((play, index) => index === 0 || play.watchedAt <= plays[index - 1].watchedAt),
+    'newest first'
+  )
+  assert.ok(
+    plays.every((play) => Number.isInteger(play.playId)),
+    'every row carries the id the remove button needs'
+  )
+
+  // Removing ONE viewing removes only that viewing. This is the difference
+  // between correcting a history and un-watching something — the latter is a
+  // different action, and it clears every play of that episode.
+  const rewatch = plays.find((play) => play.episode === 5)
+  assert.ok(rewatch)
+  assert.equal(db.deletePlay(rewatch.playId), true)
+  assert.equal(db.plays().length, 3)
+  assert.equal(db.playCounts().get('tt2'), 3, 'one of the two viewings of episode 5 is gone')
+  assert.equal(db.history().length, 3, 'and episode 5 is still marked watched')
+
+  // Removing the same row twice is a no-op, not an error: two clicks on a row
+  // that is already gone is a thing people do.
+  assert.equal(db.deletePlay(rewatch.playId), false)
+
+  // A limit is a cap on rows read, not a filter.
+  assert.equal(db.plays(2).length, 2)
+}
+
+// The record is per profile like everything else.
+db.setActiveProfile(BOB)
+assert.equal(db.plays().length, 0, "Bob sees none of Alice's viewing")
+db.setActiveProfile(ALICE)
+
+// ---------------------------------------------------------------------
 // The scope survives reopening: it is passed in, not remembered in the file.
 // ---------------------------------------------------------------------
 db.close()

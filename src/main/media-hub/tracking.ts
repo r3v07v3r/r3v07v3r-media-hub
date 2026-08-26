@@ -22,6 +22,7 @@ import type {
   HomePersonalizedResult,
   MarkWatchedResult,
   PlaybackPositionResult,
+  PlayRecord,
   PendingWatchStatusPush,
   ReconcileCheckResult,
   ReconcileResolution,
@@ -1148,6 +1149,23 @@ export function registerTrackingIpc(): void {
   handle<undefined, DislikedListResult>(MEDIA_HUB_CHANNELS.dislikedList, async () => {
     return { disliked: getDatabase().disliked() }
   })
+
+  handle<undefined, { plays: PlayRecord[] }>(MEDIA_HUB_CHANNELS.playsList, () => ({
+    plays: getDatabase().plays()
+  }))
+
+  handle<{ playId: number }, { plays: PlayRecord[] }>(
+    MEDIA_HUB_CHANNELS.playDelete,
+    (_e, payload) => {
+      const db = getDatabase()
+      db.deletePlay(Number(payload?.playId))
+      // Deliberately does NOT touch watch_history: removing one viewing of an
+      // episode watched three times must not un-watch it. Clearing the badge
+      // is what tracking:unmark-watched is for, and it removes every play of
+      // that episode along with it.
+      return { plays: db.plays() }
+    }
+  )
 
   handle<undefined, { ratings: Record<string, number> }>(MEDIA_HUB_CHANNELS.ratingsList, () => ({
     ratings: Object.fromEntries(getDatabase().ratings())
