@@ -70,6 +70,10 @@ export interface MediaHubRawSettings {
   videoScaling?: string
   autoSubtitlesEnabled?: boolean
   autoplayNextEnabled?: boolean
+  /** ISO 3166-1 alpha-2, for "where to watch" — availability is exactly the
+   *  thing that differs by country, so there is no global answer. Unset means
+   *  fall back to the machine's own locale. */
+  watchRegion?: string
   /** Loudness normalization — see NIGHT_MODE_AUDIO_FILTER. */
   nightModeEnabled?: boolean
   /** Subtitle size/position/colour/background — see

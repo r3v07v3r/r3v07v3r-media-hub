@@ -14,6 +14,7 @@ import path from 'node:path'
 import { MEDIA_HUB_CHANNELS } from '../../shared/media-hub/ipc-channels'
 import type { MediaHubPublicSettings, MediaHubSettingsSnapshot } from '../../shared/media-hub/types'
 import { readBackup } from './backup'
+import { watchRegion } from './watchProviders'
 import { getDatabase } from './dbState'
 import { handle } from './ipcGuard'
 import { logError } from './logger'
@@ -197,6 +198,23 @@ export function registerAppIpc(): void {
       createdAt: summary.createdAt
     }
   })
+
+  handle<unknown, { watchRegion: string }>(
+    MEDIA_HUB_CHANNELS.settingsSetWatchRegion,
+    (_event, value) => {
+      const settings = readSettings()
+      const next = String(value ?? '')
+        .trim()
+        .toUpperCase()
+      // An empty or malformed value CLEARS the setting rather than storing
+      // nonsense, which puts the region back on the machine's locale — the
+      // same thing a fresh install does, and the honest reading of "I do not
+      // want to pick one".
+      settings.watchRegion = /^[A-Z]{2}$/.test(next) ? next : undefined
+      writeSettings(settings)
+      return { watchRegion: watchRegion() }
+    }
+  )
 
   handle<unknown, { autoplayNextEnabled: boolean }>(
     MEDIA_HUB_CHANNELS.settingsSetAutoplayNext,

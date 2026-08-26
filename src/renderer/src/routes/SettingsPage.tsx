@@ -797,6 +797,11 @@ export default function SettingsPage() {
     }
   }
 
+  async function handleSetWatchRegion(region: string) {
+    const api = window.api?.mediaHub
+    if (api) await saveSetting('settings.watch-region', () => api.settings.setWatchRegion(region))
+  }
+
   async function handleSetAutoplayNext(enabled: boolean) {
     const api = window.api?.mediaHub
     if (api)
@@ -1056,6 +1061,36 @@ export default function SettingsPage() {
               <h2 id="settings-episodes" className={styles.sectionTitle}>
                 Episodes
               </h2>
+              {/* Two letters, typed rather than picked from a list: TMDB
+                  answers for well over a hundred regions, and a dropdown of
+                  all of them is a worse control than a field somebody fills in
+                  once. An empty or malformed value clears the setting, which
+                  puts it back on the machine's own locale. */}
+              <div className={`${styles.row} ${styles.rowSegmented}`}>
+                <div className={styles.rowIcon} aria-hidden="true">
+                  <Icon name="planet" size={17} />
+                </div>
+                <div className={styles.rowText}>
+                  <span className={styles.rowTitle}>Region for “Where to watch”</span>
+                  <span className={styles.rowDescription}>
+                    Two-letter country code. Streaming availability differs by country, so there is
+                    no global answer. Leave it blank to follow this computer&apos;s own region.
+                  </span>
+                </div>
+                <span className={styles.field} style={{ flex: '0 0 88px' }}>
+                  <input
+                    className={styles.fieldInput}
+                    style={{ padding: '5px 10px', fontSize: 12, textAlign: 'center' }}
+                    maxLength={2}
+                    defaultValue={mediaHubSettings?.watchRegion ?? ''}
+                    aria-label="Region for where to watch"
+                    onBlur={(event) => void handleSetWatchRegion(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter') event.currentTarget.blur()
+                    }}
+                  />
+                </span>
+              </div>
               <ToggleRow
                 icon="play"
                 title="Play the next episode"

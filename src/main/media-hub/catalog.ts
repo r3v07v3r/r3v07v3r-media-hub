@@ -24,7 +24,8 @@ import type {
   ConnectResult,
   Episode,
   MediaKind,
-  PersonCreditsResult
+  PersonCreditsResult,
+  WatchProvidersResult
 } from '../../shared/media-hub/types'
 import { MEDIA_HUB_CHANNELS } from '../../shared/media-hub/ipc-channels'
 import { fetchJson } from './httpClient'
@@ -51,6 +52,7 @@ import { coalesce, coalesceScope, type TaskPriority } from './taskScheduler'
 import { buildGroupedAnimeVideos, groupAnimeCatalog, kitsuRealEpisodes } from './animeSeasons'
 import { omdbRottenTomatoesRating } from './omdb'
 import { titleCredits, titlesFeaturing } from './credits'
+import { watchProviders, watchRegion } from './watchProviders'
 
 const catalogUrls: Record<'movie' | 'series', string> = {
   movie: 'https://v3-cinemeta.strem.io/catalog/movie/top.json',
@@ -1139,6 +1141,16 @@ export function registerCatalogIpc(): void {
       const resolve = (ids: string[]): CatalogItem[] =>
         ids.map((id) => byId.get(id)).filter((item): item is CatalogItem => Boolean(item))
       return { person, cast: resolve(cast), creators: resolve(creators) }
+    }
+  )
+
+  handle<{ type: MediaKind; id: string }, WatchProvidersResult>(
+    MEDIA_HUB_CHANNELS.catalogProviders,
+    async (_e, payload) => {
+      const type = payload?.type
+      if (!isValidCatalogKind(type))
+        return { region: watchRegion(), stream: [], rent: [], buy: [], link: '' }
+      return watchProviders(type, String(payload?.id ?? ''))
     }
   )
 

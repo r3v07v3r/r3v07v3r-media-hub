@@ -47,6 +47,7 @@ import type {
   CustomList,
   CustomListItem,
   PersonCreditsResult,
+  WatchProvidersResult,
   PlayRecord,
   ViewingStats,
   PlaybackPrepareProgress,
@@ -192,6 +193,8 @@ const api = {
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.settingsSetAutoSubtitles, enabled),
       setAutoplayNext: (enabled: boolean): Promise<{ autoplayNextEnabled: boolean }> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.settingsSetAutoplayNext, enabled),
+      setWatchRegion: (region: string): Promise<{ watchRegion: string }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.settingsSetWatchRegion, region),
       exportBackup: (): Promise<{ filePath: string | null }> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.backupExport),
       importBackup: (): Promise<{ restored: number; createdAt: string } | null> =>
@@ -339,7 +342,9 @@ const api = {
       story: (type: MediaKind, id: string): Promise<AnimeStoryResult> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.catalogStory, { type, id }),
       person: (person: string): Promise<PersonCreditsResult> =>
-        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.catalogPerson, { person })
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.catalogPerson, { person }),
+      providers: (type: MediaKind, id: string): Promise<WatchProvidersResult> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.catalogProviders, { type, id })
     },
 
     home: {

@@ -18,6 +18,7 @@ export const MEDIA_HUB_CHANNELS = {
   settingsSetVideoScaling: 'mediahub:settings:set-video-scaling',
   settingsSetAutoSubtitles: 'mediahub:settings:set-auto-subtitles',
   settingsSetAutoplayNext: 'mediahub:settings:set-autoplay-next',
+  settingsSetWatchRegion: 'mediahub:settings:set-watch-region',
   settingsSetUiAnimations: 'mediahub:settings:set-ui-animations',
   settingsSetPerformancePanelVisible: 'mediahub:settings:set-performance-panel-visible',
   settingsSetStreamLimits: 'mediahub:settings:set-stream-limits',
@@ -54,6 +55,9 @@ export const MEDIA_HUB_CHANNELS = {
   /** Everything in the catalog this person appears in, from the credits cache
    *  — see main/media-hub/credits.ts's titlesFeaturing on why it is local. */
   catalogPerson: 'mediahub:catalog:person',
+  /** Where a title can be streamed, rented or bought, in the person's own
+   *  region — see main/media-hub/watchProviders.ts. */
+  catalogProviders: 'mediahub:catalog:providers',
   homePersonalized: 'mediahub:home:personalized',
   /** Pushed when the stored suggestion list has been rebuilt — see
    *  main/media-hub/recommendations.ts. The Home feed refetches on it

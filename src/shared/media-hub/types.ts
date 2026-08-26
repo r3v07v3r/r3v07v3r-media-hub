@@ -126,6 +126,32 @@ export interface AnimeStoryLink {
  * followed an actor wants their performances, and a single list ordered by
  * neither serves either.
  */
+/** One streaming, rental or purchase service, as TMDB reports it. */
+export interface WatchProvider {
+  id: number
+  name: string
+  /** Already resolved to a full image URL, or '' when TMDB has no logo. */
+  logo: string
+}
+
+/**
+ * Where a title can be watched, in one region.
+ *
+ * Region is part of the answer rather than assumed by the caller: availability
+ * is exactly the thing that differs by country, and a list with no country
+ * attached to it is not information.
+ */
+export interface WatchProvidersResult {
+  region: string
+  /** Included with a subscription — free and ad-supported tiers folded in,
+   *  since the distinction that matters tonight is "can I just watch it". */
+  stream: WatchProvider[]
+  rent: WatchProvider[]
+  buy: WatchProvider[]
+  /** JustWatch's own page for the title, which TMDB supplies. */
+  link: string
+}
+
 export interface PersonCreditsResult {
   person: string
   cast: CatalogItem[]
@@ -668,6 +694,11 @@ export interface MediaHubPublicSettings {
    *  unaffected either way. A party FOLLOWER never advances on its own
    *  whatever this says — the host owns what plays there. */
   autoplayNextEnabled: boolean
+  /** Which country "where to watch" answers for, ISO 3166-1 alpha-2. Always a
+   *  real value in the snapshot: an unset setting resolves to the machine's
+   *  locale before it gets here, so the Settings pane shows what is in use
+   *  rather than an empty field. */
+  watchRegion: string
   /** Decorative UI animation (idle ambient motion, not playback itself) — layered alongside, not replacing, the automatic motion-suspend-during-playback behavior in global.css. */
   uiAnimationsEnabled: boolean
   /** Whether the Home dashboard's live CPU/GPU/RAM/network gauges (PerformanceWidget) are shown. Device/UI preference, not account data — survives logout like uiAnimationsEnabled. */
