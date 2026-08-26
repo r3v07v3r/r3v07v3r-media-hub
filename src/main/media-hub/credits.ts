@@ -125,6 +125,42 @@ export function creditsFor(ids: Iterable<string>): Map<string, TitleCredits> {
   return found
 }
 
+/**
+ * Every cached title this person appears in, as ids.
+ *
+ * Local and cache-only, deliberately. TMDB would give a complete filmography
+ * including everything this app cannot play, which is the wrong answer here:
+ * the useful question on a title page is "what ELSE of theirs can I watch
+ * now", and that is a question about this catalog. Whatever the background
+ * enrichment pass has covered so far is the answer — an install where it has
+ * covered little shows little, and shows more over the following sessions,
+ * which is the same bargain the taste profile already makes.
+ *
+ * Matched on the normalized name because that is all the credits cache holds:
+ * TMDB person ids are not stored, so two different actors who share a name
+ * would collapse into one. Rare enough to accept, and the alternative is a
+ * schema change plus a re-enrichment of every title already covered.
+ */
+export function titlesFeaturing(
+  ids: Iterable<string>,
+  person: string
+): { cast: string[]; creators: string[] } {
+  const needle = String(person).trim().toLowerCase()
+  const cast: string[] = []
+  const creators: string[] = []
+  if (!needle) return { cast, creators }
+  const matches = (values: string[] | undefined): boolean =>
+    (values ?? []).some((value) => String(value).trim().toLowerCase() === needle)
+
+  for (const [id, credits] of creditsFor(ids)) {
+    // Creator first: somebody who both directed and appeared in a film is
+    // listed under the role people came looking for.
+    if (matches(credits.creators)) creators.push(id)
+    else if (matches(credits.cast)) cast.push(id)
+  }
+  return { cast, creators }
+}
+
 /** Resolves an IMDb id to TMDB's own, which every other TMDB endpoint needs. Cached, since it is a fixed fact and this runs thousands of times. */
 async function tmdbIdFor(
   kind: 'movie' | 'series',

@@ -37,7 +37,8 @@ play something. Optional metadata, tracking, and subtitle services add to the ex
 ### What it can do
 
 - **Browse movies, series, and anime** with search, genre and status filters, title details,
-  seasons, episodes, ratings, and recommendations.
+  seasons, episodes, ratings, and recommendations. Cast and crew names are clickable — they open
+  what else of theirs is in your catalog.
 - **Play from local files, a media server, or TorBox** with automatic source selection,
   audio-language preferences, playback buffering, subtitle selection, and resume progress.
 - **Control playback properly** — speed from 0.5× to 2×, chapter navigation, audio and subtitle

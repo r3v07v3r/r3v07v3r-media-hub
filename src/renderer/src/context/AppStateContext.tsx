@@ -320,6 +320,9 @@ interface AppStateValue {
   /** `originLabelOverride`: only needed when opening a title from within
    *  another detail page — see the implementation's own comment. */
   openDetail: (media: MediaItem, originLabelOverride?: string) => void
+  /** Opens what else this catalog has of one person's — see routes/PersonPage.
+   *  A drill-down from a title page, not a nav destination. */
+  openPerson: (name: string) => void
   clearBrowsingOrigin: () => void
 
   // Resolving a stream (stream:resolve, "searching" for a cached source)
@@ -1228,6 +1231,14 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   // that prefix itself (it doubled up as "Back to Back to X" before this
   // comment was written). Every other call site omits it and gets the
   // auto-derived label, same as before.
+  const openPerson = useCallback(
+    (name: string) => {
+      const trimmed = String(name || '').trim()
+      if (trimmed) navigate(`/people/${encodeURIComponent(trimmed)}`)
+    },
+    [navigate]
+  )
+
   const openDetail = useCallback(
     (media: MediaItem, originLabelOverride?: string) => {
       const route = `${location.pathname}${location.search}`
@@ -2162,6 +2173,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       dismissNotification,
       browsingOrigin,
       openDetail,
+      openPerson,
       clearBrowsingOrigin,
       resolvingMedia,
       cancelPlaybackPreparation,
@@ -2255,6 +2267,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       dismissNotification,
       browsingOrigin,
       openDetail,
+      openPerson,
       clearBrowsingOrigin,
       resolvingMedia,
       cancelPlaybackPreparation,

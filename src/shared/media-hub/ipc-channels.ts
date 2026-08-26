@@ -51,6 +51,9 @@ export const MEDIA_HUB_CHANNELS = {
   catalogSearch: 'mediahub:catalog:search',
   catalogRelated: 'mediahub:catalog:related',
   catalogStory: 'mediahub:catalog:story',
+  /** Everything in the catalog this person appears in, from the credits cache
+   *  — see main/media-hub/credits.ts's titlesFeaturing on why it is local. */
+  catalogPerson: 'mediahub:catalog:person',
   homePersonalized: 'mediahub:home:personalized',
   /** Pushed when the stored suggestion list has been rebuilt — see
    *  main/media-hub/recommendations.ts. The Home feed refetches on it

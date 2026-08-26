@@ -118,6 +118,20 @@ export interface AnimeStoryLink {
   item: CatalogItem
 }
 
+/**
+ * What one person has in this catalog.
+ *
+ * Split by role rather than merged, because the two answer different
+ * questions: somebody who followed a director wants their films, somebody who
+ * followed an actor wants their performances, and a single list ordered by
+ * neither serves either.
+ */
+export interface PersonCreditsResult {
+  person: string
+  cast: CatalogItem[]
+  creators: CatalogItem[]
+}
+
 export interface AnimeStoryResult {
   links: AnimeStoryLink[]
   /** False only if the remote lookup failed without a cached answer. */

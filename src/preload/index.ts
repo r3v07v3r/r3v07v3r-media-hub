@@ -46,6 +46,7 @@ import type {
   PlaybackPositionResult,
   CustomList,
   CustomListItem,
+  PersonCreditsResult,
   PlayRecord,
   ViewingStats,
   PlaybackPrepareProgress,
@@ -336,7 +337,9 @@ const api = {
       related: (type: MediaKind, id: string): Promise<CatalogItem[]> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.catalogRelated, { type, id }),
       story: (type: MediaKind, id: string): Promise<AnimeStoryResult> =>
-        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.catalogStory, { type, id })
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.catalogStory, { type, id }),
+      person: (person: string): Promise<PersonCreditsResult> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.catalogPerson, { person })
     },
 
     home: {

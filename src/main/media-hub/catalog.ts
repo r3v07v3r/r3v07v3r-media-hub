@@ -23,7 +23,8 @@ import type {
   CatalogListing,
   ConnectResult,
   Episode,
-  MediaKind
+  MediaKind,
+  PersonCreditsResult
 } from '../../shared/media-hub/types'
 import { MEDIA_HUB_CHANNELS } from '../../shared/media-hub/ipc-channels'
 import { fetchJson } from './httpClient'
@@ -49,7 +50,7 @@ import { isLikelyFranchiseSibling, rankSimilarTitles } from '../../shared/media-
 import { coalesce, coalesceScope, type TaskPriority } from './taskScheduler'
 import { buildGroupedAnimeVideos, groupAnimeCatalog, kitsuRealEpisodes } from './animeSeasons'
 import { omdbRottenTomatoesRating } from './omdb'
-import { titleCredits } from './credits'
+import { titleCredits, titlesFeaturing } from './credits'
 
 const catalogUrls: Record<'movie' | 'series', string> = {
   movie: 'https://v3-cinemeta.strem.io/catalog/movie/top.json',
@@ -1114,6 +1115,30 @@ export function registerCatalogIpc(): void {
     async (_e, { type, id }) => {
       if (!isValidCatalogKind(type)) return []
       return similarTitles(type, id)
+    }
+  )
+
+  handle<{ person: string }, PersonCreditsResult>(
+    MEDIA_HUB_CHANNELS.catalogPerson,
+    async (_e, payload) => {
+      const person = String(payload?.person ?? '').trim()
+      const empty = { person, cast: [], creators: [] }
+      if (!person) return empty
+
+      // All three catalogs, from cache only (`false` skips the refresh): this
+      // answers a click on a name, and crawling Kitsu for two thousand anime
+      // to do it would be a twenty-second wait for a list of four films.
+      const pools = await Promise.all(
+        (['movie', 'series', 'anime'] as const).map((kind) =>
+          catalogData(kind, false, 'interactive').catch(() => [] as CatalogItem[])
+        )
+      )
+      const pool = pools.flat()
+      const byId = new Map(pool.map((item) => [String(item.id), item]))
+      const { cast, creators } = titlesFeaturing(byId.keys(), person)
+      const resolve = (ids: string[]): CatalogItem[] =>
+        ids.map((id) => byId.get(id)).filter((item): item is CatalogItem => Boolean(item))
+      return { person, cast: resolve(cast), creators: resolve(creators) }
     }
   )
 
