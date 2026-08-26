@@ -474,17 +474,24 @@ export interface WatchedIdsResult {
  * Home-specific personalized feed.
  */
 /**
- * Why every profile-scoped hook below takes an `activeProfileId`.
+ * Why every library-scoped hook below takes a `libraryKey`.
  *
  * The database is scoped to one profile at a time (see its setActiveProfile),
- * and switching re-scopes it in main. The renderer's copies of that data are
- * fetched once on mount and have no way to know that happened — so without
- * this argument a profile switch left the previous profile's watchlist,
- * history, ratings and Continue Watching on screen while every subsequent
- * write went to the newly scoped database. The id is not used in the request;
- * it is there to be a dependency.
+ * and the renderer's copies of its data are fetched once on mount with no way
+ * to know when that changed underneath them. Two things change it:
+ *
+ *   - SWITCHING PROFILE, which re-scopes every query in main. Without this
+ *     argument the previous profile's watchlist, history, ratings and Continue
+ *     Watching stayed on screen while every write went to the new scope.
+ *   - RESTORING A BACKUP, which replaces the rows themselves. The profile id
+ *     is usually UNCHANGED across that — a same-profile restore keeps it
+ *     exactly — so an id alone would not have been enough.
+ *
+ * Hence a composite key rather than an id: it is never used in the request,
+ * only as a dependency, and it is named for the question it answers, which is
+ * "is this still the same library".
  */
-export function useMediaHubWatchedIds(activeProfileId: string): WatchedIdsResult {
+export function useMediaHubWatchedIds(libraryKey: string): WatchedIdsResult {
   const [watchedIds, setWatchedIds] = useState<Set<string>>(new Set())
   const [history, setHistory] = useState<HistoryEntry[]>([])
   const [loaded, setLoaded] = useState(false)
@@ -510,7 +517,7 @@ export function useMediaHubWatchedIds(activeProfileId: string): WatchedIdsResult
     return () => {
       cancelled = true
     }
-  }, [generation, activeProfileId])
+  }, [generation, libraryKey])
 
   // Stable `refresh` and a memoised result object, for the same reason
   // useMediaHubBrowseCatalog above memoises its own: AppStateContext holds
@@ -537,7 +544,7 @@ export interface DislikedIdsResult {
  * sourced MediaItem needs for its `disliked` field (see
  * CatalogItemAdapterContext.dislikedIds).
  */
-export function useMediaHubDislikedIds(activeProfileId: string): DislikedIdsResult {
+export function useMediaHubDislikedIds(libraryKey: string): DislikedIdsResult {
   const [dislikedIds, setDislikedIds] = useState<Set<string>>(new Set())
   const [loaded, setLoaded] = useState(false)
   const [generation, setGeneration] = useState(0)
@@ -557,7 +564,7 @@ export function useMediaHubDislikedIds(activeProfileId: string): DislikedIdsResu
     return () => {
       cancelled = true
     }
-  }, [generation, activeProfileId])
+  }, [generation, libraryKey])
 
   const refresh = useCallback(() => setGeneration((g) => g + 1), [])
   return useMemo(() => ({ dislikedIds, loaded, refresh }), [dislikedIds, loaded, refresh])
@@ -585,7 +592,7 @@ export interface ListsResult {
  * keeping a second tally in the renderer is how a picker ends up saying "3
  * titles" over a list of four.
  */
-export function useMediaHubLists(activeProfileId: string): ListsResult {
+export function useMediaHubLists(libraryKey: string): ListsResult {
   const [lists, setLists] = useState<CustomList[]>([])
   const [loaded, setLoaded] = useState(() => !window.api?.mediaHub)
 
@@ -606,7 +613,7 @@ export function useMediaHubLists(activeProfileId: string): ListsResult {
     return () => {
       cancelled = true
     }
-  }, [activeProfileId])
+  }, [libraryKey])
 
   const create = useCallback(async (name: string) => {
     const api = window.api?.mediaHub
@@ -681,7 +688,7 @@ export interface PlaysResult {
  * only one tab of one page reads it, it can run to hundreds of rows, and
  * nothing else in the app needs to re-render when a play is removed.
  */
-export function useMediaHubPlays(activeProfileId: string): PlaysResult {
+export function useMediaHubPlays(libraryKey: string): PlaysResult {
   const [plays, setPlays] = useState<PlayRecord[]>([])
   // Seeded from whether there is an IPC bridge at all: outside the desktop
   // app (a plain browser tab during dev-server work) there is nothing to wait
@@ -706,7 +713,7 @@ export function useMediaHubPlays(activeProfileId: string): PlaysResult {
     return () => {
       cancelled = true
     }
-  }, [activeProfileId])
+  }, [libraryKey])
 
   const remove = useCallback(async (playId: number) => {
     const api = window.api?.mediaHub
@@ -738,7 +745,7 @@ export interface RatingsResult {
   rate: (id: string, score: number) => Promise<void>
 }
 
-export function useMediaHubRatings(activeProfileId: string): RatingsResult {
+export function useMediaHubRatings(libraryKey: string): RatingsResult {
   const [ratings, setRatings] = useState<Map<string, number>>(new Map())
 
   useEffect(() => {
@@ -755,7 +762,7 @@ export function useMediaHubRatings(activeProfileId: string): RatingsResult {
     return () => {
       cancelled = true
     }
-  }, [activeProfileId])
+  }, [libraryKey])
 
   const rate = useCallback(async (id: string, score: number) => {
     const api = window.api?.mediaHub
@@ -824,7 +831,7 @@ export interface HomeFeedResult {
  * has been re-checked this run", so a caller that needs to distinguish
  * remembered from fresh still can.
  */
-export function useMediaHubHomeFeed(activeProfileId: string): HomeFeedResult {
+export function useMediaHubHomeFeed(libraryKey: string): HomeFeedResult {
   const [state, setState] = useState<typeof EMPTY_HOME_FEED | null>(null)
   // See useMediaHubBrowseCatalog above for why this is a lazy initializer
   // rather than an effect-driven flip.
@@ -894,7 +901,7 @@ export function useMediaHubHomeFeed(activeProfileId: string): HomeFeedResult {
     return () => {
       cancelled = true
     }
-  }, [generation, activeProfileId])
+  }, [generation, libraryKey])
 
   const refresh = useCallback(() => setGeneration((g) => g + 1), [])
 

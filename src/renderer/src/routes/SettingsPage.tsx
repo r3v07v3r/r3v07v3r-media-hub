@@ -682,7 +682,9 @@ export default function SettingsPage() {
     mediaHubSettings,
     refreshMediaHubSettings,
     pushNotification,
-    refreshWatchStatus
+    refreshWatchStatus,
+    refreshProfiles,
+    reloadLibrary
   } = useAppState()
   // null = no form open, 'new' = create form, otherwise the id of the
   // profile being edited.
@@ -784,8 +786,17 @@ export default function SettingsPage() {
           ? `Restored ${result.restored} items from your ${taken} backup.`
           : `Restored ${result.restored} items.`
       })
-      // Everything on screen was read from the library this just replaced.
+      // Everything on screen was read from the library this just replaced —
+      // including the PROFILE LIST, whose ids differ from this machine's
+      // whenever the backup came from another one. Without that refresh the
+      // restored rows belong to profiles missing from the switcher, and the
+      // still-active local profile looks empty until the app is restarted.
       await refreshMediaHubSettings()
+      refreshProfiles()
+      // Bumps the library key every profile-scoped read depends on. The
+      // profile id cannot carry this on its own: a same-profile restore leaves
+      // it identical while replacing every row under it.
+      reloadLibrary()
       refreshWatchStatus()
     } catch (error) {
       pushNotification({

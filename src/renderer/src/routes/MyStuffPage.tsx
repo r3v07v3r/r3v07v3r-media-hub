@@ -14,7 +14,6 @@ import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useAppState } from '@renderer/context/AppStateContext'
 import { Icon } from '@renderer/components/icons/Icon'
-import { ComingSoonSection } from '@renderer/components/placeholder/ComingSoonSection'
 import { useRestoreBrowsingOrigin } from '@renderer/lib/mediaHub/useRestoreBrowsingOrigin'
 import { useMediaHubLists, useMediaHubPlays } from '@renderer/lib/mediaHub/hooks'
 import { resolveArtwork } from '@renderer/lib/artwork'
@@ -136,8 +135,8 @@ function TitleGrid({
  * is a different action, and it lives on the title's own page.
  */
 function HistoryList() {
-  const { activeProfileId } = useAppState()
-  const { plays, loaded, remove } = useMediaHubPlays(activeProfileId)
+  const { libraryKey } = useAppState()
+  const { plays, loaded, remove } = useMediaHubPlays(libraryKey)
   if (!loaded) return <p className={styles.empty}>Reading your history…</p>
   if (plays.length === 0) {
     return (
@@ -194,11 +193,10 @@ function monthLabel(month: string, index: number, all: { month: string }[]): str
  * never opens this tab.
  */
 function StatsView() {
-  // Profile-keyed like the hooks in lib/mediaHub/hooks.ts, and for the same
-  // reason: this reads IPC directly, main re-scopes the database on a switch,
-  // and a tab left mounted across one would otherwise keep showing the
-  // previous profile's totals.
-  const { activeProfileId } = useAppState()
+  // Library-keyed like the hooks in lib/mediaHub/hooks.ts, and for the same
+  // reasons: this reads IPC directly, and both a profile switch and a restore
+  // change what is underneath it while this tab stays mounted.
+  const { libraryKey } = useAppState()
   const [stats, setStats] = useState<ViewingStats | null>(null)
   const [loaded, setLoaded] = useState(() => !window.api?.mediaHub)
 
@@ -219,7 +217,7 @@ function StatsView() {
     return () => {
       cancelled = true
     }
-  }, [activeProfileId])
+  }, [libraryKey])
 
   if (!loaded) return <p className={styles.empty}>Working it out…</p>
   if (!stats || stats.totalPlays === 0) {
@@ -324,8 +322,8 @@ function ListsView({
   watchlist: MediaItem[]
   onRemoveFromWatchlist: (media: MediaItem) => void
 }) {
-  const { openDetail, activeProfileId } = useAppState()
-  const { lists, loaded, create, rename, remove, removeItem } = useMediaHubLists(activeProfileId)
+  const { openDetail, libraryKey } = useAppState()
+  const { lists, loaded, create, rename, remove, removeItem } = useMediaHubLists(libraryKey)
   // null selects My List; a list id selects that one.
   const [selected, setSelected] = useState<string | null>(null)
   const [items, setItems] = useState<CustomListItem[]>([])
@@ -527,9 +525,9 @@ function airDayLabel(day: string, today: string): string {
  * regrouping.
  */
 function CalendarView() {
-  // Profile-keyed for the same reason as StatsView above — the calendar is
-  // built from the ACTIVE profile's tracked shows.
-  const { openDetail, activeProfileId } = useAppState()
+  // Library-keyed for the same reasons as StatsView above — the calendar is
+  // built from the active profile's tracked shows.
+  const { openDetail, libraryKey } = useAppState()
   // Seeded from whether there is a bridge at all: outside the desktop app
   // there is nothing to wait for, and an effect that says so synchronously
   // cascades a render.
@@ -550,7 +548,7 @@ function CalendarView() {
     return () => {
       cancelled = true
     }
-  }, [activeProfileId])
+  }, [libraryKey])
 
   const today = new Date().toISOString().slice(0, 10)
   const days = useMemo(() => {
@@ -678,26 +676,6 @@ export default function MyStuffPage() {
     () => catalog.filter((m) => dislikedIds.has(m.id)),
     [catalog, dislikedIds]
   )
-
-  // The one case where the whole page has nothing to say. Every other empty
-  // tab says so in place, which keeps the tabs themselves from vanishing
-  // under somebody mid-navigation.
-  const everythingEmpty =
-    listItems.length === 0 &&
-    progressItems.length === 0 &&
-    watchedItems.length === 0 &&
-    ratedItems.length === 0 &&
-    droppedItems.length === 0
-
-  if (everythingEmpty && tab !== 'history' && tab !== 'stats' && tab !== 'calendar') {
-    return (
-      <ComingSoonSection
-        icon="mystuff"
-        title="My Stuff"
-        description="Titles you save with “My List” show up here, along with what you have watched, rated and set aside. Nothing yet — try adding something from the Home dashboard."
-      />
-    )
-  }
 
   return (
     <div className={styles.wrap}>

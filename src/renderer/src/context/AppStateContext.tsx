@@ -180,6 +180,22 @@ interface AppStateValue {
   ratings: Map<string, number>
   /** Records a score, or clears it with 0. */
   rateMedia: (id: string, score: number) => Promise<void>
+  /**
+   * Identifies the library currently on screen — the active profile, plus a
+   * counter that moves whenever the rows underneath it are replaced wholesale.
+   *
+   * Anything reading profile-scoped data through IPC should depend on this
+   * rather than on the profile id: restoring a backup replaces every row while
+   * usually leaving the id untouched.
+   */
+  libraryKey: string
+  /** Call after replacing the library wholesale (a restore), so every view
+   *  derived from it re-reads. */
+  reloadLibrary: () => void
+  /** Re-reads the profile list. Needed after a restore as well as after a
+   *  create/delete: a backup from another machine carries that machine's
+   *  profile ids, and they are merged into settings by the import. */
+  refreshProfiles: () => void
   toggleDisliked: (media: MediaItem) => void
 
   // Continue Watching — seeded from the media-hub backend's
@@ -458,14 +474,17 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   const [continueWatching, setContinueWatching] = useState<ContinueWatchingItem[]>(
     startupContinueWatchingFallback
   )
-  // Each of these is scoped to the active profile in main, and re-reads when
-  // it changes — see the note above useMediaHubWatchedIds. Without the
-  // argument a profile switch left the previous profile's data on screen while
-  // every write went to the newly scoped database.
-  const homeFeed = useMediaHubHomeFeed(activeProfileId)
-  const watchedIdsResult = useMediaHubWatchedIds(activeProfileId)
-  const dislikedIdsResult = useMediaHubDislikedIds(activeProfileId)
-  const ratingsResult = useMediaHubRatings(activeProfileId)
+  // Bumped by reloadLibrary below. Part of the key rather than a separate
+  // dependency so there is one value to pass around and one thing to get
+  // wrong — see the note above useMediaHubWatchedIds.
+  const [libraryEpoch, setLibraryEpoch] = useState(0)
+  const libraryKey = `${activeProfileId}:${libraryEpoch}`
+  const reloadLibrary = useCallback(() => setLibraryEpoch((n) => n + 1), [])
+
+  const homeFeed = useMediaHubHomeFeed(libraryKey)
+  const watchedIdsResult = useMediaHubWatchedIds(libraryKey)
+  const dislikedIdsResult = useMediaHubDislikedIds(libraryKey)
+  const ratingsResult = useMediaHubRatings(libraryKey)
   const browseCatalog = useMediaHubBrowseCatalog(
     myList,
     watchedIdsResult.watchedIds,
@@ -2170,6 +2189,9 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       toggleDisliked,
       ratings: ratingsResult.ratings,
       rateMedia: ratingsResult.rate,
+      libraryKey,
+      reloadLibrary,
+      refreshProfiles,
       continueWatching,
       markContinueWatching,
       removeContinueWatching,
@@ -2266,6 +2288,9 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       toggleDisliked,
       ratingsResult.ratings,
       ratingsResult.rate,
+      libraryKey,
+      reloadLibrary,
+      refreshProfiles,
       continueWatching,
       markContinueWatching,
       removeContinueWatching,

@@ -203,8 +203,8 @@ export function ProgressPanel({
  * every title page would be noise.
  */
 function AddToListButton({ media }: { media: MediaItem }) {
-  const { activeProfileId } = useAppState()
-  const { lists, add, removeItem } = useMediaHubLists(activeProfileId)
+  const { libraryKey } = useAppState()
+  const { lists, add, removeItem } = useMediaHubLists(libraryKey)
   const [open, setOpen] = useState(false)
   const [memberOf, setMemberOf] = useState<Set<string>>(new Set())
 

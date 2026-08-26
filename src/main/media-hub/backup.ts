@@ -169,8 +169,22 @@ export function readBackup(filePath: string): BackupFile {
   // far and then threw would have replaced the library and skipped putting the
   // profiles back, leaving every restored row owned by a profile that does not
   // exist.
-  if (!Array.isArray(backup.profiles)) {
-    throw new Error('That backup is missing its profiles and was not restored.')
+  // At least one profile with a real id — not merely an array.
+  //
+  // Every row in every table above is owned by a profile id, so a file with
+  // `profiles: []` or `[{}]` describes a library nobody can reach. Restoring
+  // it would delete the existing rows, write orphans in their place, and
+  // report success. An array was the check after the last round of review;
+  // it was not enough.
+  const usableProfiles = Array.isArray(backup.profiles)
+    ? backup.profiles.filter(
+        (profile) =>
+          typeof (profile as { id?: unknown })?.id === 'string' &&
+          String((profile as { id: string }).id).trim().length > 0
+      )
+    : []
+  if (usableProfiles.length === 0) {
+    throw new Error('That backup has no profiles in it and was not restored.')
   }
 
   return backup as BackupFile

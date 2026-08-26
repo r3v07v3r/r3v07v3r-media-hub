@@ -101,7 +101,14 @@ function PlayerControls() {
   const [controlsVisible, setControlsVisible] = useState(true)
   const [menu, setMenu] = useState<Menu>(null)
   const [roomRailOpen, setRoomRailOpen] = useState(false)
-  const [subtitleResults, setSubtitleResults] = useState<SubtitleResult[] | null>(null)
+  // Carries the title it was searched for. Without that, an autoplayed episode
+  // opened the subtitle menu on the PREVIOUS episode's results and, because
+  // the search short-circuits when results already exist, never looked for its
+  // own.
+  const [subtitleResults, setSubtitleResults] = useState<{
+    key: string
+    results: SubtitleResult[]
+  } | null>(null)
   const [subtitleSearchError, setSubtitleSearchError] = useState<string | null>(null)
   const [pendingSubtitleId, setPendingSubtitleId] = useState<string | null>(null)
   const [subtitleDelay, setSubtitleDelay] = useState(0)
@@ -145,6 +152,14 @@ function PlayerControls() {
   const subtitleStyle = session?.settings.subtitleStyle ?? DEFAULT_SUBTITLE_STYLE
   const subtitleStyled = !isSubtitleStyleDefault(subtitleStyle)
   const nightMode = session?.settings.nightModeEnabled === true
+
+  // One identity for the title on screen, used by everything below that has to
+  // belong to a title rather than to the session. Autoplay keeps this whole
+  // component mounted across an episode change, so anything cached without a
+  // key here follows the viewer into the next episode.
+  const mediaKey = media
+    ? `${media.id}:${media.seasonNumber ?? ''}:${media.episodeNumber ?? ''}`
+    : ''
 
   const party = usePartySync({
     timePos,
@@ -694,23 +709,36 @@ function PlayerControls() {
   // --- Skip intro/credits (anime only) -------------------------------------
   // Needs a real duration: Aniskip matches submissions by proximity to episode
   // length and 400s without it.
-  const skipTimesRef = useRef(false)
+  // The latch remembers WHICH episode was fetched, not merely that something
+  // was. As a bare boolean it never reset, so an autoplayed episode kept the
+  // previous one's intro and credits timings and never asked for its own —
+  // offering to skip to a timestamp from a different episode.
+  const skipTimesFetchedFor = useRef('')
   const [skipTimes, setSkipTimes] = useState<{
+    key: string
     intro?: { start: number; end: number }
     credits?: { start: number; end: number }
   } | null>(null)
   useEffect(() => {
-    if (skipTimesRef.current || !media || media.kind !== 'anime' || !duration) return
-    skipTimesRef.current = true
+    if (!media || media.kind !== 'anime' || !duration) return
+    if (skipTimesFetchedFor.current === mediaKey) return
+    skipTimesFetchedFor.current = mediaKey
     window.api?.mediaHub?.playback
       .skipTimes(media.id, media.episodeNumber ?? 1, Math.round(duration))
-      .then((times) => setSkipTimes(times ?? null))
+      .then((times) => setSkipTimes(times ? { ...times, key: mediaKey } : null))
       .catch(() => {})
-  }, [media, duration])
+  }, [media, mediaKey, duration])
   // Derived, not stored: which skip window we are inside is a pure function of
   // the current position and the fetched times, and time-pos changes several
   // times a second — holding it in state would mean a setState per tick.
+  // Null while a search for THIS title has not landed, which is what makes the
+  // menu say "Searching…" rather than showing the last episode's list.
+  const currentSubtitleResults = subtitleResults?.key === mediaKey ? subtitleResults.results : null
+
   const skipWindow = ((): { label: string; end: number } | null => {
+    // Only surfaced while it still belongs to the episode being played — the
+    // fetch for the next one is in flight for a moment after it starts.
+    if (skipTimes?.key !== mediaKey) return null
     const inWindow = (w?: { start: number; end: number }): boolean =>
       Boolean(w && timePos >= w.start && timePos < w.end)
     if (inWindow(skipTimes?.intro)) return { label: 'Skip intro', end: skipTimes!.intro!.end }
@@ -719,7 +747,7 @@ function PlayerControls() {
   })()
 
   // --- Scrub-bar thumbnail previews ----------------------------------------
-  const thumbnailCache = useRef(new Map<number, string | null>())
+  const thumbnailCache = useRef(new Map<string, string | null>())
   const scrubRequest = useRef(0)
   const scrubDebounce = useRef<ReturnType<typeof setTimeout> | null>(null)
   const handleScrubberHover = useCallback(
@@ -733,7 +761,11 @@ function PlayerControls() {
         Math.min(rect.width - SCRUB_PREVIEW_WIDTH / 2, event.clientX - rect.left)
       )
       const bucket = Math.floor(time / THUMBNAIL_BUCKET_SECONDS) * THUMBNAIL_BUCKET_SECONDS
-      const cached = thumbnailCache.current.get(bucket)
+      // Keyed by title as well as by time bucket: mpv captures from whatever
+      // file is open, so an autoplayed episode was served the previous one's
+      // frames for every bucket it happened to share.
+      const cacheKey = `${mediaKey}:${bucket}`
+      const cached = thumbnailCache.current.get(cacheKey)
       setPreview({ x, time, url: cached ?? null })
       if (cached !== undefined) return
       if (scrubDebounce.current) clearTimeout(scrubDebounce.current)
@@ -744,14 +776,14 @@ function PlayerControls() {
         window.api?.mediaHub?.playback
           .thumbnail(bucket)
           .then((url) => {
-            thumbnailCache.current.set(bucket, url)
+            thumbnailCache.current.set(cacheKey, url)
             if (scrubRequest.current !== requestId) return
             setPreview((current) => (current ? { ...current, url } : current))
           })
           .catch(() => {})
       }, 250)
     },
-    [duration]
+    [duration, mediaKey]
   )
   useEffect(
     () => () => {
@@ -763,20 +795,21 @@ function PlayerControls() {
   // --- Subtitles ------------------------------------------------------------
   const searchSubtitles = useCallback(async () => {
     setMenu('subtitles')
-    if (!media || subtitleResults) return
+    if (!media) return
+    if (subtitleResults?.key === mediaKey) return
     setSubtitleSearchError(null)
     try {
       const results = await window.api?.mediaHub?.subtitles.search(
         { id: media.id, type: media.kind, title: media.title },
         { season: media.seasonNumber, episode: media.episodeNumber }
       )
-      setSubtitleResults(results ?? [])
+      setSubtitleResults({ key: mediaKey, results: results ?? [] })
     } catch (error) {
       // Only successful searches are cached, so a failure retries next time the
       // menu opens — the "connect a provider in Settings" recovery loop.
       setSubtitleSearchError(error instanceof Error ? error.message : 'Subtitle search failed.')
     }
-  }, [media, subtitleResults])
+  }, [media, mediaKey, subtitleResults])
 
   const applyOnlineSubtitle = useCallback(
     async (subtitle: SubtitleResult) => {
@@ -1167,13 +1200,13 @@ function PlayerControls() {
                 {subtitleSearchError && (
                   <span className={styles.menuNote}>{subtitleSearchError}</span>
                 )}
-                {!subtitleSearchError && subtitleResults === null && (
+                {!subtitleSearchError && currentSubtitleResults === null && (
                   <span className={styles.menuNote}>Searching…</span>
                 )}
-                {!subtitleSearchError && subtitleResults?.length === 0 && (
+                {!subtitleSearchError && currentSubtitleResults?.length === 0 && (
                   <span className={styles.menuNote}>No results</span>
                 )}
-                {subtitleResults?.map((subtitle) => (
+                {currentSubtitleResults?.map((subtitle) => (
                   <button
                     key={subtitle.id}
                     type="button"

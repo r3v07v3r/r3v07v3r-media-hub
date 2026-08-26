@@ -156,6 +156,22 @@ db.exportBackup(backupFile, {
   fs.writeFileSync(noProfiles, JSON.stringify(stripped), 'utf8')
   assert.throws(() => guarded.importBackup(noProfiles), /profiles/i)
 
+  // An array of profiles is not the same as a USABLE one. Every row in every
+  // table is owned by a profile id, so a file with none describes a library
+  // nobody can reach — restoring it would delete what is here, write orphans,
+  // and report success.
+  for (const [name, profiles] of [
+    ['empty-profiles', []],
+    ['idless-profiles', [{ name: 'No id' }]],
+    ['blank-id', [{ id: '   ' }]]
+  ] as const) {
+    const file = path.join(dir, `${name}.json`)
+    const copy = JSON.parse(fs.readFileSync(backupFile, 'utf8'))
+    copy.profiles = profiles
+    fs.writeFileSync(file, JSON.stringify(copy), 'utf8')
+    assert.throws(() => guarded.importBackup(file), /no profiles/i, name)
+  }
+
   assert.equal(guarded.isTracked('tt-keep'), true, 'no refused file changed anything')
   assert.equal(guarded.tracked().length, 1, 'and nothing was deleted on the way to refusing')
   guarded.close()
