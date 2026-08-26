@@ -110,14 +110,25 @@
   font-weight: 600;
 }
 .collectionWord {
-  position: absolute;
   /* Keep the oversized mood word in its own visual lane; the live title
-     count on the right must remain crisp at every desktop width. */
-  right: clamp(150px, 12vw, 205px);
-  bottom: 12px;
+     count on the right must remain crisp at every desktop width. Naming
+     a grid area makes that area the containing block, so `right: 0` is
+     the title column's edge — the count column is content-sized and a
+     fixed offset guessed from the right edge cannot track it. Only the
+     lead mood is drawn here (see MoodExplorePage): a joined list
+     outgrows the lane and gets clipped mid-word. */
+  position: absolute;
+  /* Both end lines are named explicitly: an `auto` end line on an
+     absolutely-positioned grid child resolves to the container's padding
+     edge, not to a one-track span, which puts it back over the count. */
+  grid-row: 1 / 2;
+  grid-column: 3 / 4;
+  right: 0;
+  bottom: -8px;
   z-index: 0;
-  max-width: 38%;
+  max-width: 100%;
   overflow: hidden;
+  pointer-events: none;
   color: color-mix(in srgb, var(--mood-accent) 13%, transparent);
   font-family: var(--font-display);
   font-size: clamp(32px, 4vw, 65px);
@@ -167,7 +178,21 @@
   .titleGroup h1 {
     font-size: 21px;
   }
-  .collectionMeta,
+  /* The name and count can't be dropped here — they are the only place
+     the page says which mood this is and how much it found. Given its
+     own full-width row instead, left-aligned with the title above it. */
+  .collectionMeta {
+    grid-column: 1 / -1;
+    grid-auto-flow: column;
+    justify-content: start;
+    justify-items: start;
+    align-items: baseline;
+    gap: 10px;
+    padding: 0;
+    border-left: none;
+    text-align: left;
+  }
+  /* Decorative only — nothing is lost by dropping it at this width. */
   .collectionWord {
     display: none;
   }

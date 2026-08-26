@@ -810,6 +810,20 @@ export const MOOD_CATEGORIES: MoodCategory[] = [
   }
 ]
 
+/** Display labels for a list of mood ids, silently dropping ids that no
+    longer exist in the catalog. Shared so the Home tray and the full
+    collection page can never disagree about how an id reads. */
+export function moodLabelsFor(ids: string[]): string[] {
+  return ids
+    .map((id) => MOOD_CATEGORIES.find((mood) => mood.id === id)?.label)
+    .filter((label): label is string => Boolean(label))
+}
+
+/** The mood a combined selection takes its accent, icon and copy from. */
+export function leadMoodFor(ids: string[]): MoodCategory | undefined {
+  return MOOD_CATEGORIES.find((mood) => mood.id === ids[0])
+}
+
 // Small hand-tagged anime pool — mock/offline fallback only for the Anime
 // page and its hero (see useMediaHubBrowseCatalog/useMediaHubHomeFeed's
 // "live" flag: this never blends with real Kitsu data, it's what shows

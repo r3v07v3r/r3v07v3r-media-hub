@@ -311,29 +311,6 @@ ul {
   }
 }
 
-/* Outward-expanding ring "ping" — used for energy nodes on the nav spine
-   and momentary confirmation pulses (e.g. completed items). */
-.pulse-ring {
-  position: absolute;
-  inset: 0;
-  border-radius: 50%;
-  border: 1px solid currentColor;
-  opacity: 0;
-  pointer-events: none;
-  animation: pulseRing var(--motion-pulse) var(--ease-smooth) infinite;
-  animation-delay: var(--pulse-delay, 0s);
-}
-@keyframes pulseRing {
-  0% {
-    transform: scale(0.55);
-    opacity: 0.65;
-  }
-  100% {
-    transform: scale(2.1);
-    opacity: 0;
-  }
-}
-
 /* One diagonal light sweep on hover/active — used on cards and the
    search field during processing. */
 .light-sweep {

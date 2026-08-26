@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { MOOD_CATEGORIES } from '@renderer/data/mockData'
+import { MOOD_CATEGORIES, leadMoodFor, moodLabelsFor } from '@renderer/data/mockData'
 import { useAppState } from '@renderer/context/AppStateContext'
 import { Icon } from '@renderer/components/icons/Icon'
 import { useReducedMotion } from '@renderer/hooks/useReducedMotion'
@@ -167,9 +167,7 @@ export function MoodBrowser() {
     }
     return picks
   }, [rankedResults, shownIds])
-  const moodLabels = activeMoods
-    .map((id) => MOOD_CATEGORIES.find((mood) => mood.id === id)?.label)
-    .filter((label): label is string => Boolean(label))
+  const moodLabels = moodLabelsFor(activeMoods)
   // Three outcomes read identically from spotlightPicks alone: nothing
   // matched, nothing has arrived to match against yet, and nothing could
   // be fetched at all. Only the first is the person's filters, and only
@@ -197,7 +195,7 @@ export function MoodBrowser() {
     )
   }, [catalogStillArriving, rankedResults, catalogKindStates])
 
-  const spotlightMood = MOOD_CATEGORIES.find((mood) => mood.id === activeMoods[0])
+  const spotlightMood = leadMoodFor(activeMoods)
 
   const clearFilter = useCallback(() => {
     setActiveMood(null)
