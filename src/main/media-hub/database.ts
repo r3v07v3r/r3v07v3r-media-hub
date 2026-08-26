@@ -106,6 +106,34 @@ function latestReleased(videos: EpisodeLike[] | undefined, now: Date): EpisodePo
 // value as `SQLOutputValue` throughout.
 type Row = Record<string, SQLOutputValue>
 
+/**
+ * A stored runtime as a number of minutes.
+ *
+ * The value is a DISPLAY string from whichever source supplied the title —
+ * "48 min", "2h 15m", "1 h 30", or a bare "148" — so the shape has to be
+ * recognised rather than assumed. Taking the first number, which is what this
+ * used to do, read "2h 15m" as two minutes: a comment listing that exact form
+ * as supported sat directly above the regex that could not parse it, and the
+ * stats under-reported a film by most of its length.
+ *
+ * Anything unrecognisable is 0 rather than a guess — a title contributing
+ * nothing to an estimate is honest, where a wrong number is not.
+ */
+function runtimeMinutes(value: unknown): number {
+  const text = String(value ?? '').toLowerCase()
+  if (!text) return 0
+  // An explicit hours-and-minutes form wins, including when the minutes are
+  // absent ("2h") or unlabelled ("1 h 30").
+  const hours = text.match(/(\d+)\s*h/)
+  if (hours) {
+    const rest = text.slice(text.indexOf(hours[0]) + hours[0].length)
+    const minutes = rest.match(/(\d+)/)
+    return Number(hours[1]) * 60 + (minutes ? Number(minutes[1]) : 0)
+  }
+  const plain = text.match(/(\d+)/)
+  return plain ? Number(plain[1]) : 0
+}
+
 function toEpisodePosition(row: Row | undefined): EpisodePosition {
   if (!row) return { season: 0, episode: 0 }
   return { season: (row.season as number) || 0, episode: (row.episode as number) || 0 }
@@ -657,11 +685,8 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
             if (name) genres.set(name, (genres.get(name) ?? 0) + 1)
           }
 
-          // The stored runtime is a display string ("48 min", "2h 15m",
-          // "148"), so the leading number is the only part worth trusting.
           if (!runtimeByTitle.has(id)) {
-            const parsed = Number(String(meta.runtime ?? '').match(/\d+/)?.[0] ?? 0)
-            runtimeByTitle.set(id, Number.isFinite(parsed) ? parsed : 0)
+            runtimeByTitle.set(id, runtimeMinutes(meta.runtime))
           }
           minutes += runtimeByTitle.get(id) ?? 0
 

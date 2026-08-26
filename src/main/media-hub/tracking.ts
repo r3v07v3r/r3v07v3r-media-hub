@@ -211,8 +211,8 @@ const RECONCILE_COOLDOWN_MS = 5 * 60 * 1000
  * part of several of these keys where it already was; this adds the half that
  * was missing.
  */
-function reconcileKey(prefix: string): string {
-  return `${prefix}:${getDatabase().activeProfile()}`
+function reconcileKey(prefix: string, profileId = getDatabase().activeProfile()): string {
+  return `${prefix}:${profileId}`
 }
 
 const RECONCILE_COOLDOWN_KEY_PREFIX = 'reconcile:cooldown:v1'
@@ -250,6 +250,11 @@ const RECONCILE_RESULT_KEY_PREFIX = 'reconcile:result:v2'
  */
 interface CachedReconcileResult {
   account: string
+  /** Which profile's history produced these. Stamped for exactly the reason
+   *  the account is, and checked the same way on the way back out — the key
+   *  alone is not enough, because a row can outlive the profile it was written
+   *  for and a stale one must not be served rather than merely re-keyed. */
+  profile: string
   discrepancies: WatchStatusDiscrepancy[]
 }
 
@@ -267,11 +272,24 @@ interface CachedReconcileResult {
  * account has to be captured before the work starts and discarded if it
  * changed, the same way simklWatchedSnapshot already does.
  */
-function writeReconcileResult(account: string, discrepancies: WatchStatusDiscrepancy[]): void {
+function writeReconcileResult(
+  account: string,
+  profile: string,
+  discrepancies: WatchStatusDiscrepancy[]
+): void {
   if (!account || simklAccountMark() !== account) return
+  // The profile gets the same treatment the account already had, and for the
+  // same reason: computeMovieDiscrepancies awaits Simkl and metadata, and
+  // switching profiles during it is an ordinary thing to do. Resolving the
+  // key at WRITE time filed profile A's discrepancies under whoever was
+  // active by the time the work finished — so B could be offered A's rows,
+  // and resolving one would rewrite B's history.
+  if (!profile || getDatabase().activeProfile() !== profile) return
   getDatabase().putCache<CachedReconcileResult>(
-    reconcileKey(RECONCILE_RESULT_KEY_PREFIX),
-    { account, discrepancies },
+    // The captured profile, not the live one. Identical while the guard above
+    // holds, and explicit so it stays right if that guard is ever loosened.
+    reconcileKey(RECONCILE_RESULT_KEY_PREFIX, profile),
+    { account, profile, discrepancies },
     RECONCILE_COOLDOWN_MS
   )
 }
@@ -282,10 +300,13 @@ function cachedReconcileResult(): WatchStatusDiscrepancy[] {
   // No account connected matches no stamp — never the empty-string
   // account a malformed row might carry.
   if (!account) return []
+  const profile = getDatabase().activeProfile()
   const row = getDatabase().getCache<CachedReconcileResult>(
     reconcileKey(RECONCILE_RESULT_KEY_PREFIX)
   )
-  return row?.account === account && Array.isArray(row.discrepancies) ? row.discrepancies : []
+  return row?.account === account && row.profile === profile && Array.isArray(row.discrepancies)
+    ? row.discrepancies
+    : []
 }
 /** Ids someone has explicitly said to stop asking about — kept far longer
  *  than the cooldown above (this is a decision, not a rate limit), but
@@ -815,8 +836,9 @@ export async function runBackgroundWatchSync(): Promise<void> {
   if (db.getCache(reconcileKey(RECONCILE_COOLDOWN_KEY_PREFIX))) return
   db.putCache(reconcileKey(RECONCILE_COOLDOWN_KEY_PREFIX), true, RECONCILE_COOLDOWN_MS)
   const account = simklAccountMark()
+  const profile = db.activeProfile()
   try {
-    writeReconcileResult(account, await computeMovieDiscrepancies('background'))
+    writeReconcileResult(account, profile, await computeMovieDiscrepancies('background'))
   } catch (error) {
     logError('job:watch-sync', error)
   }
@@ -1124,9 +1146,10 @@ export function registerTrackingIpc(): void {
     }
     db.putCache(reconcileKey(RECONCILE_COOLDOWN_KEY_PREFIX), true, RECONCILE_COOLDOWN_MS)
     const account = simklAccountMark()
+    const profile = db.activeProfile()
     try {
       const discrepancies = await computeMovieDiscrepancies()
-      writeReconcileResult(account, discrepancies)
+      writeReconcileResult(account, profile, discrepancies)
       // Anything confirmed moments ago is settled, whatever Simkl's
       // all-items view says — that read can lag its own write, and
       // re-asking about a title someone just resolved is the exact

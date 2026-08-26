@@ -103,12 +103,22 @@ function tempDb() {
   const db = tempDb()
   db.markWatched({ id: 'a', type: 'movie', title: 'Plain number', runtime: '120' })
   db.markWatched({ id: 'b', type: 'movie', title: 'With units', runtime: '90 min' })
+  // Hours-and-minutes is a form the sources really use, and taking the first
+  // number read this as two minutes rather than 135 — under-reporting a film
+  // by most of its length.
+  db.markWatched({ id: 'e', type: 'movie', title: 'Hours', runtime: '2h 15m' })
+  db.markWatched({ id: 'f', type: 'movie', title: 'Whole hours', runtime: '2h' })
+  db.markWatched({ id: 'g', type: 'movie', title: 'Spaced', runtime: '1 h 30' })
   // No runtime at all contributes nothing rather than throwing off the total
   // with a guess.
   db.markWatched({ id: 'c', type: 'movie', title: 'Unknown length' })
   db.markWatched({ id: 'd', type: 'movie', title: 'Nonsense', runtime: 'ages' })
 
-  assert.equal(db.viewingStats().estimatedHours, Math.round((120 + 90) / 60))
+  assert.equal(
+    db.viewingStats().estimatedHours,
+    Math.round((120 + 90 + 135 + 120 + 90) / 60),
+    'every documented runtime form is counted in minutes'
+  )
   db.close()
 }
 

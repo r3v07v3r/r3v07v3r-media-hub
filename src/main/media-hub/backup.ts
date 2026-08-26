@@ -187,6 +187,33 @@ export function readBackup(filePath: string): BackupFile {
     throw new Error('That backup has no profiles in it and was not restored.')
   }
 
+  // And every row has to belong to one of them.
+  //
+  // A file can carry one superficially valid profile while every row names a
+  // different owner — the shape a partial or hand-edited export takes. Nothing
+  // above catches that: the tables are present and non-empty, the profile
+  // array has an entry. Restoring it would delete the existing library, write
+  // rows no profile can reach, and report success.
+  //
+  // list_items is checked through its parent list rather than directly: it has
+  // no profile column, deliberately, because a list_id already names one.
+  const declared = new Set(usableProfiles.map((profile) => String((profile as { id: string }).id)))
+  const listOwners = new Map<string, string>()
+  for (const row of backup.tables.lists as Row[]) {
+    listOwners.set(String(row.list_id), String(row.profile_id))
+  }
+  for (const table of BACKUP_TABLES) {
+    for (const row of backup.tables[table] as Row[]) {
+      const owner =
+        table === 'list_items' ? listOwners.get(String(row.list_id)) : String(row.profile_id)
+      if (owner === undefined || !declared.has(owner)) {
+        throw new Error(
+          `That backup contains ${table} belonging to a profile it does not include, and was not restored.`
+        )
+      }
+    }
+  }
+
   return backup as BackupFile
 }
 

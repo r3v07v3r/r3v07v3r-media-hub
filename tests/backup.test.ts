@@ -172,6 +172,26 @@ db.exportBackup(backupFile, {
     assert.throws(() => guarded.importBackup(file), /no profiles/i, name)
   }
 
+  // One valid-looking profile, but rows owned by somebody else. Nothing above
+  // catches this — the tables are present and non-empty and the profile array
+  // has an entry — yet restoring it would delete the library and write rows no
+  // profile can reach.
+  const orphaned = path.join(dir, 'orphaned.json')
+  const wrongOwner = JSON.parse(fs.readFileSync(backupFile, 'utf8'))
+  wrongOwner.profiles = [{ id: 'somebody-else', name: 'Nobody here' }]
+  fs.writeFileSync(orphaned, JSON.stringify(wrongOwner), 'utf8')
+  assert.throws(() => guarded.importBackup(orphaned), /does not include/i)
+
+  // A list_item whose parent list is not in the file is the same failure,
+  // reached through the one table that has no profile column of its own.
+  const strayItem = path.join(dir, 'stray-item.json')
+  const withStray = JSON.parse(fs.readFileSync(backupFile, 'utf8'))
+  withStray.tables.list_items = [
+    { list_id: 'no-such-list', content_id: 'tt1', sort_order: 0, added_at: '', metadata_json: '{}' }
+  ]
+  fs.writeFileSync(strayItem, JSON.stringify(withStray), 'utf8')
+  assert.throws(() => guarded.importBackup(strayItem), /list_items/i)
+
   assert.equal(guarded.isTracked('tt-keep'), true, 'no refused file changed anything')
   assert.equal(guarded.tracked().length, 1, 'and nothing was deleted on the way to refusing')
   guarded.close()
