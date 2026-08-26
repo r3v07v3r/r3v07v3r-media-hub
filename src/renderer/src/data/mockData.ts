@@ -745,13 +745,69 @@ export const AI_PICKS: Recommendation[] = [
 
 // ---------- Mood catalog (also used to seed the "browse by mood" filter) ----------
 export const MOOD_CATEGORIES: MoodCategory[] = [
-  { id: 'thrilling', label: 'Thrilling', icon: 'pulse', hue: 210, accent: '#18a9ff' },
-  { id: 'emotional', label: 'Emotional', icon: 'heart', hue: 330, accent: '#ff4fa7' },
-  { id: 'mind-bending', label: 'Mind-Bending', icon: 'planet', hue: 265, accent: '#8d4dff' },
-  { id: 'feel-good', label: 'Feel Good', icon: 'smiley', hue: 48, accent: '#f4cb45' },
-  { id: 'family', label: 'Family', icon: 'people', hue: 165, accent: '#2fd39b' },
-  { id: 'sci-fi', label: 'Sci-Fi', icon: 'planet', hue: 195, accent: '#38e5ff' },
-  { id: 'action', label: 'Action', icon: 'lightning', hue: 28, accent: '#ff7a28' }
+  {
+    id: 'thrilling',
+    label: 'Thrilling',
+    headline: 'Keep your pulse up.',
+    description: 'High-stakes stories built to move at full speed.',
+    icon: 'pulse',
+    hue: 210,
+    accent: '#18a9ff'
+  },
+  {
+    id: 'emotional',
+    label: 'Emotional',
+    headline: 'Stories that stay with you.',
+    description: 'Heartfelt watches for when you want to feel something.',
+    icon: 'heart',
+    hue: 330,
+    accent: '#ff4fa7'
+  },
+  {
+    id: 'mind-bending',
+    label: 'Mind-Bending',
+    headline: 'Leave certainty behind.',
+    description: 'Ideas, mysteries, and worlds that reward a second thought.',
+    icon: 'planet',
+    hue: 265,
+    accent: '#8d4dff'
+  },
+  {
+    id: 'feel-good',
+    label: 'Feel Good',
+    headline: 'Leave a little lighter.',
+    description: 'Easygoing stories with warmth, wit, and a bright finish.',
+    icon: 'smiley',
+    hue: 48,
+    accent: '#f4cb45'
+  },
+  {
+    id: 'family',
+    label: 'Family',
+    headline: 'Make room on the couch.',
+    description: 'Shared adventures and familiar favourites for everyone nearby.',
+    icon: 'people',
+    hue: 165,
+    accent: '#2fd39b'
+  },
+  {
+    id: 'sci-fi',
+    label: 'Sci-Fi',
+    headline: 'Beyond the known.',
+    description: 'Future worlds, distant galaxies, and possibilities without limits.',
+    icon: 'planet',
+    hue: 195,
+    accent: '#38e5ff'
+  },
+  {
+    id: 'action',
+    label: 'Action',
+    headline: 'Turn the energy all the way up.',
+    description: 'Big momentum, close calls, and no time to look away.',
+    icon: 'lightning',
+    hue: 28,
+    accent: '#ff7a28'
+  }
 ]
 
 // Small hand-tagged anime pool — mock/offline fallback only for the Anime

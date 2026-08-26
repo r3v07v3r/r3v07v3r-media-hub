@@ -35,6 +35,18 @@ export default function MoodExplorePage() {
     .map((id) => MOOD_CATEGORIES.find((mood) => mood.id === id)?.label)
     .filter((label): label is string => Boolean(label))
   const leadMood = MOOD_CATEGORIES.find((mood) => mood.id === moods[0])
+  const moodHeading =
+    moods.length === 1 && leadMood
+      ? leadMood.headline
+      : moodLabels.length > 1
+        ? `A ${moodLabels.join(' + ')} blend.`
+        : 'Choose a mood.'
+  const moodDescription =
+    moods.length === 1 && leadMood
+      ? leadMood.description
+      : moodLabels.length > 1
+        ? 'A wider mix, selected from every mood you chose.'
+        : 'Return home and choose a mood to explore its full collection.'
   const results = useMemo(
     () =>
       rankMoodSpotlight(catalog, recommendations, moods, {
@@ -84,14 +96,23 @@ export default function MoodExplorePage() {
           <Icon name={leadMood?.icon ?? 'sparkle'} size={18} />
         </div>
         <div className={styles.titleGroup}>
-          <span className={styles.kicker}>Mood collection</span>
-          <h1>{moodLabels.length > 0 ? moodLabels.join(' + ') : 'Choose a mood'}</h1>
-          <p>
-            {moodLabels.length > 0
-              ? `${results.length} titles selected from your library.`
-              : 'Return home and choose a mood to explore its full collection.'}
-          </p>
+          <span className={styles.kicker}>Tonight&apos;s mood</span>
+          <h1>{moodHeading}</h1>
+          <p>{moodDescription}</p>
         </div>
+        {moodLabels.length > 0 && (
+          <div className={styles.collectionMeta}>
+            <span className={styles.collectionName}>{moodLabels.join(' + ')}</span>
+            <span className={styles.collectionCount}>
+              {results.length} title{results.length === 1 ? '' : 's'} to explore
+            </span>
+          </div>
+        )}
+        {moodLabels.length > 0 && (
+          <span className={styles.collectionWord} aria-hidden="true">
+            {moodLabels.join(' + ')}
+          </span>
+        )}
       </header>
 
       <section className={styles.results} aria-label={moodLabels.join(' + ') || 'Mood results'}>

@@ -98,6 +98,10 @@ export interface Recommendation {
 export interface MoodCategory {
   id: string
   label: string
+  /** The human-facing promise for a single-mood collection page. */
+  headline: string
+  /** A concise cue for the kind of watch this mood is meant to surface. */
+  description: string
   icon: string
   hue: number
   accent: string
