@@ -55,6 +55,7 @@ import {
   startupTrackedIdsFallback,
   useMediaHubBrowseCatalog,
   useMediaHubDislikedIds,
+  useMediaHubRatings,
   useMediaHubHomeFeed,
   useMediaHubWatchedIds,
   type CatalogKindState
@@ -173,6 +174,12 @@ interface AppStateValue {
   // (disliked:add/remove) instead of tracking:toggle. Drives
   // MediaItem.disliked (see adapters.ts) and the Hide Disliked filter.
   dislikedIds: Set<string>
+  /** What the active profile has scored each title, 1-10, keyed by content id.
+   *  Absent means unrated — see shared/media-hub/rating.ts on why that is not
+   *  the same as a low score. */
+  ratings: Map<string, number>
+  /** Records a score, or clears it with 0. */
+  rateMedia: (id: string, score: number) => Promise<void>
   toggleDisliked: (media: MediaItem) => void
 
   // Continue Watching — seeded from the media-hub backend's
@@ -451,6 +458,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   const homeFeed = useMediaHubHomeFeed()
   const watchedIdsResult = useMediaHubWatchedIds()
   const dislikedIdsResult = useMediaHubDislikedIds()
+  const ratingsResult = useMediaHubRatings()
   const browseCatalog = useMediaHubBrowseCatalog(
     myList,
     watchedIdsResult.watchedIds,
@@ -2119,6 +2127,8 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       toggleMyList,
       dislikedIds,
       toggleDisliked,
+      ratings: ratingsResult.ratings,
+      rateMedia: ratingsResult.rate,
       continueWatching,
       markContinueWatching,
       removeContinueWatching,
@@ -2212,6 +2222,8 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       toggleMyList,
       dislikedIds,
       toggleDisliked,
+      ratingsResult.ratings,
+      ratingsResult.rate,
       continueWatching,
       markContinueWatching,
       removeContinueWatching,

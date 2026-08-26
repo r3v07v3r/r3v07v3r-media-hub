@@ -546,6 +546,60 @@ export function useMediaHubDislikedIds(): DislikedIdsResult {
   return useMemo(() => ({ dislikedIds, loaded, refresh }), [dislikedIds, loaded, refresh])
 }
 
+export interface RatingsResult {
+  /** Score by content id, 1-10. A title absent from the map is unrated, which
+   *  is not the same as rated badly — see shared/media-hub/rating.ts. */
+  ratings: Map<string, number>
+  /** Applies a score (or 0 to clear) and adopts whatever the backend reports
+   *  back, so the map on screen is the map that was stored. */
+  rate: (id: string, score: number) => Promise<void>
+}
+
+export function useMediaHubRatings(): RatingsResult {
+  const [ratings, setRatings] = useState<Map<string, number>>(new Map())
+
+  useEffect(() => {
+    let cancelled = false
+    const api = window.api?.mediaHub
+    if (!api) return
+    api.ratings
+      .list()
+      .then((result) => {
+        if (cancelled) return
+        setRatings(new Map(Object.entries(result.ratings)))
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  const rate = useCallback(async (id: string, score: number) => {
+    const api = window.api?.mediaHub
+    if (!api) return
+    // Optimistic, then reconciled with what came back. The write is local
+    // SQLite and effectively instant, but it also kicks off a recommendation
+    // rebuild — waiting for the round trip to move a button somebody just
+    // pressed would make rating feel slower than it is.
+    setRatings((previous) => {
+      const next = new Map(previous)
+      if (score > 0) next.set(id, score)
+      else next.delete(id)
+      return next
+    })
+    try {
+      const result = await api.ratings.set(id, score)
+      setRatings(new Map(Object.entries(result.ratings)))
+    } catch {
+      // The optimistic value stands rather than snapping back: a failed write
+      // here is almost always a closed database on shutdown, and reverting a
+      // score somebody just chose would be the more confusing outcome.
+    }
+  }, [])
+
+  return useMemo(() => ({ ratings, rate }), [ratings, rate])
+}
+
 export interface HomeFeedResult {
   // The declared interface type, not `ReturnType<typeof
   // continueWatchingEntryToItem>` — this list now has a second source (a

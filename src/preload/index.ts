@@ -379,6 +379,14 @@ const api = {
         subscribe<ReconcileSyncReport>(MEDIA_HUB_CHANNELS.trackingReconcileSync, onEvent)
     },
 
+    ratings: {
+      list: (): Promise<{ ratings: Record<string, number> }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.ratingsList),
+      /** 1-10, or 0 to clear. */
+      set: (id: string, score: number): Promise<{ ratings: Record<string, number> }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.ratingSet, { id, score })
+    },
+
     disliked: {
       list: (): Promise<DislikedListResult> => ipcRenderer.invoke(MEDIA_HUB_CHANNELS.dislikedList),
       add: (item: TrackableItem): Promise<{ disliked: boolean }> =>

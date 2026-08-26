@@ -70,3 +70,84 @@
     height: auto;
   }
 }
+
+/* The person's own score. Separated from the crowd gauges above by a rule
+   rather than a heading gap, because when a title has no crowd ratings at all
+   this is the only thing in the panel and a floating divider would look like
+   a mistake. */
+.yours {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.gaugeRow + .yours {
+  margin-top: 18px;
+  padding-top: 18px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.yoursHead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.yoursHeading {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--text-primary);
+}
+
+.yoursValue {
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.scale {
+  display: flex;
+  gap: 4px;
+}
+
+.scaleButton {
+  flex: 1 1 0;
+  min-width: 0;
+  appearance: none;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-small);
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  padding: 7px 0;
+  cursor: pointer;
+  transition:
+    background var(--transition-fast),
+    color var(--transition-fast),
+    border-color var(--transition-fast);
+}
+
+.scaleButton:hover {
+  border-color: var(--border-active);
+  color: var(--text-primary);
+}
+
+/* Filled up to the chosen score rather than only marking it, so the level
+   reads at a glance the way a bar does — the number is still there for the
+   exact value. */
+.scaleButtonOn {
+  background: var(--accent-yellow);
+  border-color: var(--accent-yellow);
+  color: #06121f;
+}
+
+.scaleButton:focus-visible {
+  outline: 2px solid var(--accent-cyan);
+  outline-offset: 2px;
+}

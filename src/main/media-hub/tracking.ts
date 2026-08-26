@@ -1149,6 +1149,24 @@ export function registerTrackingIpc(): void {
     return { disliked: getDatabase().disliked() }
   })
 
+  handle<undefined, { ratings: Record<string, number> }>(MEDIA_HUB_CHANNELS.ratingsList, () => ({
+    ratings: Object.fromEntries(getDatabase().ratings())
+  }))
+
+  handle<{ id: string; score: number }, { ratings: Record<string, number> }>(
+    MEDIA_HUB_CHANNELS.ratingSet,
+    (_e, payload) => {
+      const db = getDatabase()
+      db.rate(String(payload?.id ?? ''), Number(payload?.score))
+      // A score changes what the ranking learns from this person's history —
+      // both the genres it prefers and the names it has learned to look for.
+      // Rebuilding here is what makes rating something feel like it did
+      // anything, rather than waiting for the next scheduled pass.
+      requestRecommendationsRebuild()
+      return { ratings: Object.fromEntries(db.ratings()) }
+    }
+  )
+
   handle<TrackableItem, { disliked: boolean }>(MEDIA_HUB_CHANNELS.dislikedAdd, (_e, item) => {
     getDatabase().dislike(item)
     requestRecommendationsRebuild()

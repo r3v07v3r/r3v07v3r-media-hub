@@ -68,6 +68,11 @@ export const MEDIA_HUB_CHANNELS = {
   trackingReconcileCheck: 'mediahub:tracking:reconcile-check',
   trackingReconcileResolve: 'mediahub:tracking:reconcile-resolve',
   trackingReconcileSync: 'mediahub:tracking:reconcile-sync', // push event — a queued "keep local" batch went out (or didn't)
+  /** A personal 1-10 score. Sending 0 clears it — see database.ts's `rate`
+   *  and shared/media-hub/rating.ts on why "no opinion" is an absence rather
+   *  than a zero. */
+  ratingSet: 'mediahub:rating:set',
+  ratingsList: 'mediahub:ratings:list',
   dislikedList: 'mediahub:disliked:list',
   dislikedAdd: 'mediahub:disliked:add',
   dislikedRemove: 'mediahub:disliked:remove',

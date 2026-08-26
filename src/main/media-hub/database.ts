@@ -8,6 +8,7 @@
 import { DatabaseSync, type SQLOutputValue, type StatementSync } from 'node:sqlite'
 import { readBackup, restoreBackup, writeBackup, type RestoreSummary } from './backup'
 import { migrate } from './migrations'
+import { MAX_RATING, MIN_RATING, ratingWeight } from '../../shared/media-hub/rating'
 import type {
   CatalogItem,
   Episode,
@@ -141,6 +142,16 @@ export interface MediaHubDatabase {
   /** How many times each title has been played by the active profile, keyed by
    *  content id. Titles never played are absent rather than zero. */
   playCounts(): Map<string, number>
+  /**
+   * Records what the active profile thought of a title, 1-10. A score outside
+   * that range — including the 0 the UI sends when somebody clears their
+   * rating — removes it instead, because "no opinion" and "the lowest possible
+   * opinion" are different things and only one of them should weigh on what
+   * gets recommended.
+   */
+  rate(contentId: string | number, score: number): void
+  /** Every score the active profile has given, keyed by content id. */
+  ratings(): Map<string, number>
   /** Writes every profile's library to one JSON file — see backup.ts for what
    *  a backup does and does not carry. NOT scoped to the active profile:
    *  a backup is of the install, not of whoever happens to be watching. */
@@ -207,6 +218,9 @@ export interface MediaHubDatabase {
 
 interface PreparedQueries {
   track: StatementSync
+  rate: StatementSync
+  clearRating: StatementSync
+  ratings: StatementSync
   recordPlay: StatementSync
   deletePlays: StatementSync
   playCounts: StatementSync
@@ -383,6 +397,12 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
     playCounts: sql.prepare(
       'SELECT content_id,COUNT(*) AS plays FROM plays WHERE profile_id=? GROUP BY content_id'
     ),
+    rate: sql.prepare(
+      `INSERT INTO ratings(profile_id,content_id,score,rated_at) VALUES(@profile,@id,@score,@now)
+       ON CONFLICT(profile_id,content_id) DO UPDATE SET score=excluded.score,rated_at=excluded.rated_at`
+    ),
+    clearRating: sql.prepare('DELETE FROM ratings WHERE profile_id=? AND content_id=?'),
+    ratings: sql.prepare('SELECT content_id,score FROM ratings WHERE profile_id=?'),
     dislike: sql.prepare(
       `INSERT INTO disliked(profile_id,content_id,type,title,poster,metadata_json,disliked_at)
        VALUES(@profile,@id,@type,@title,@poster,@json,@now)
@@ -456,6 +476,42 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
         // be shown to the person choosing the file — "That is not an R3 Media
         // Hub backup" needs no prefix explaining which subsystem said so.
         throw error as Error
+      }
+    },
+
+    rate(contentId, score) {
+      try {
+        const id = String(contentId)
+        const value = Math.round(Number(score))
+        if (!Number.isFinite(value) || value < MIN_RATING || value > MAX_RATING) {
+          durable(() => q.clearRating.run(currentProfileId, id))
+          return
+        }
+        durable(() =>
+          q.rate.run({
+            profile: currentProfileId,
+            id,
+            score: value,
+            now: new Date().toISOString()
+          })
+        )
+      } catch (error) {
+        return fail(error as Error)
+      }
+    },
+
+    ratings() {
+      try {
+        const scores = new Map<string, number>()
+        for (const row of q.ratings.all(currentProfileId) as Row[]) {
+          scores.set(String(row.content_id), Number(row.score))
+        }
+        return scores
+      } catch {
+        // Best-effort like the other reads here. No ratings means the ranking
+        // weighs every watched title equally, which is exactly what it did
+        // before ratings existed.
+        return new Map()
       }
     },
 
@@ -665,10 +721,19 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
     },
 
     preferredGenres(limit = 3) {
+      // Weighted by what the person thought of each title, not by how many
+      // times its genres appear. Before ratings existed this counted a film
+      // somebody finished and resented exactly as heavily as one they loved,
+      // which is how a genre nobody actually enjoys ends up leading the row.
+      // An unrated title still weighs 1, so a library nobody has rated
+      // produces precisely the old answer — see ratingWeight.
+      const scores = db.ratings()
       const counts = new Map<string, number>()
       for (const item of db.history()) {
+        const weight = ratingWeight(scores.get(String(item.id)))
+        if (weight === 0) continue
         for (const genre of item.genres || []) {
-          counts.set(genre, (counts.get(genre) || 0) + 1)
+          counts.set(genre, (counts.get(genre) || 0) + weight)
         }
       }
       return [...counts]

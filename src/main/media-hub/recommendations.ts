@@ -37,6 +37,7 @@ import {
   watchCadenceProfile,
   type ScoredRecommendation
 } from '../../shared/media-hub/catalog-logic'
+import { ratingWeight } from '../../shared/media-hub/rating'
 import { creditsFor } from './credits'
 import { getDatabase } from './dbState'
 import { logError } from './logger'
@@ -320,7 +321,17 @@ export async function rebuildRecommendations(
   // from cache only: whatever the background enrichment pass has covered
   // so far is what this run gets, and an install where it has covered
   // nothing yet ranks exactly as it did before credits existed.
-  const taste = buildTasteProfile(creditsFor(history.map((entry) => String(entry.id))).values())
+  // Each watched title's credits, paired with what the person thought of it.
+  // An unrated title weighs 1, so a library nobody has rated builds exactly
+  // the profile it built before ratings existed — see ratingWeight.
+  const scores = db.ratings()
+  const watchedCredits = creditsFor(history.map((entry) => String(entry.id)))
+  const taste = buildTasteProfile(
+    [...watchedCredits].map(([id, credits]) => ({
+      credits,
+      weight: ratingWeight(scores.get(id))
+    }))
+  )
   const candidates = pool.filter((item) => keep(item, exclusions))
   const credits = creditsFor(candidates.map((item) => String(item.id)))
 

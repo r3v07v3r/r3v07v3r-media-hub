@@ -584,6 +584,15 @@ export function applyCadence(
  * actually watches. Lowercased throughout, so matching is case-insensitive
  * without every comparison having to remember that.
  */
+/**
+ * One watched title's credits, and what the person thought of it.
+ *
+ * Bare credits are still accepted and mean "no opinion recorded", which
+ * weighs 1 — the neutral value that makes an unrated library rank exactly as
+ * it did before ratings existed. See shared/media-hub/rating.ts.
+ */
+export type WeightedCredits = TitleCredits | { credits: TitleCredits; weight: number }
+
 export interface TasteProfile {
   cast: ReadonlySet<string>
   creators: ReadonlySet<string>
@@ -643,11 +652,33 @@ const KEYWORD_CEILING_SHARE = 0.25
 /** Below this many enriched titles the ceiling above is measuring noise, so it is not applied at all. */
 const MIN_TITLES_FOR_CEILING = 20
 
-function topNames(counts: Map<string, number>, limit: number): Set<string> {
+/**
+ * The top `limit` names, by how much they are liked — but only among those
+ * seen often enough to be a preference at all.
+ *
+ * TWO tallies, deliberately, because they answer two different questions.
+ * `appearances` gates: has this name turned up in enough separate titles to
+ * be evidence of anything (see MIN_APPEARANCES). `weights` ranks: of the
+ * names that clear that bar, which does this person actually like — a
+ * director in two films they both loved outranking one in three they merely
+ * finished.
+ *
+ * Collapsing them into one weighted number would quietly undo the gate: a
+ * single title rated 10 carries a weight of 2, which would clear a threshold
+ * of 2 on its own and make one loved film enough to establish a "taste" —
+ * exactly what MIN_APPEARANCES exists to prevent.
+ */
+function topNames(
+  appearances: Map<string, number>,
+  weights: Map<string, number>,
+  limit: number
+): Set<string> {
   return new Set(
-    [...counts]
+    [...appearances]
       .filter(([, count]) => count >= MIN_APPEARANCES)
-      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+      .sort(
+        (a, b) => (weights.get(b[0]) ?? 0) - (weights.get(a[0]) ?? 0) || a[0].localeCompare(b[0])
+      )
       .slice(0, limit)
       .map(([name]) => name)
   )
@@ -661,24 +692,36 @@ function topNames(counts: Map<string, number>, limit: number): Set<string> {
  * question of where credits come from — and which titles have them yet —
  * belongs entirely to the caller.
  */
-export function buildTasteProfile(watched: Iterable<TitleCredits>): TasteProfile {
+export function buildTasteProfile(watched: Iterable<WeightedCredits>): TasteProfile {
   const cast = new Map<string, number>()
   const creators = new Map<string, number>()
   const keywords = new Map<string, number>()
+  const castWeight = new Map<string, number>()
+  const creatorWeight = new Map<string, number>()
+  const keywordWeight = new Map<string, number>()
   let titles = 0
-  const bump = (counts: Map<string, number>, values: string[] | undefined): void => {
+  const bump = (
+    counts: Map<string, number>,
+    weights: Map<string, number>,
+    values: string[] | undefined,
+    weight: number
+  ): void => {
     for (const value of values || []) {
       const name = String(value).trim().toLowerCase()
-      if (name) counts.set(name, (counts.get(name) || 0) + 1)
+      if (!name) continue
+      counts.set(name, (counts.get(name) || 0) + 1)
+      weights.set(name, (weights.get(name) || 0) + weight)
     }
   }
 
-  for (const credits of watched) {
+  for (const entry of watched) {
+    const credits = 'credits' in entry ? entry.credits : entry
     if (!credits) continue
+    const weight = 'weight' in entry ? entry.weight : 1
     titles += 1
-    bump(cast, credits.cast)
-    bump(creators, credits.creators)
-    bump(keywords, credits.keywords)
+    bump(cast, castWeight, credits.cast, weight)
+    bump(creators, creatorWeight, credits.creators, weight)
+    bump(keywords, keywordWeight, credits.keywords, weight)
   }
 
   // Both filters are keyword-only. A performer or a director in most of
@@ -692,9 +735,9 @@ export function buildTasteProfile(watched: Iterable<TitleCredits>): TasteProfile
   }
 
   return {
-    cast: topNames(cast, MAX_CAST_TASTE),
-    creators: topNames(creators, MAX_CREATOR_TASTE),
-    keywords: topNames(meaningful, MAX_KEYWORD_TASTE)
+    cast: topNames(cast, castWeight, MAX_CAST_TASTE),
+    creators: topNames(creators, creatorWeight, MAX_CREATOR_TASTE),
+    keywords: topNames(meaningful, keywordWeight, MAX_KEYWORD_TASTE)
   }
 }
 

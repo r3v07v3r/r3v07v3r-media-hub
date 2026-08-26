@@ -1,6 +1,8 @@
 'use client'
 
+import { useAppState } from '@renderer/context/AppStateContext'
 import type { MediaItem } from '@renderer/types'
+import { MAX_RATING, ratingLabel } from '@shared/media-hub/rating'
 import styles from './RatingsPanel.module.css'
 
 function Gauge({
@@ -80,16 +82,63 @@ export function RatingsPanel({ media }: { media: MediaItem }) {
     })
   }
 
-  if (gauges.length === 0) return null
-
+  // Unlike the gauges, the personal score is always offered: a title nobody
+  // has ever rated is exactly the one worth asking about, and "no crowd
+  // ratings for this" is no reason to withhold the control.
   return (
     <section className={`${styles.panel} glass-panel`} aria-label="Ratings">
-      <h2 className={styles.heading}>Crowd Ratings</h2>
-      <div className={styles.gaugeRow}>
-        {gauges.map((g) => (
-          <Gauge key={g.label} {...g} />
+      {gauges.length > 0 && (
+        <>
+          <h2 className={styles.heading}>Crowd Ratings</h2>
+          <div className={styles.gaugeRow}>
+            {gauges.map((g) => (
+              <Gauge key={g.label} {...g} />
+            ))}
+          </div>
+        </>
+      )}
+      <YourRating media={media} />
+    </section>
+  )
+}
+
+/**
+ * The person's own 1-10 score.
+ *
+ * Ten buttons rather than a slider or a star widget: a slider makes an exact
+ * score fiddly to hit and impossible to keyboard, and stars would have to be
+ * halved to reach ten — which is the scale Simkl, MyAnimeList, AniList and
+ * Trakt all speak, and the one worth storing. Pressing the current score
+ * again clears it, because withdrawing an opinion should not need a second
+ * control.
+ */
+function YourRating({ media }: { media: MediaItem }) {
+  const { ratings, rateMedia } = useAppState()
+  const score = ratings.get(media.id) ?? 0
+
+  return (
+    <div className={styles.yours}>
+      <div className={styles.yoursHead}>
+        <h3 className={styles.yoursHeading}>Your rating</h3>
+        <span className={styles.yoursValue}>
+          {score > 0 ? `${score}/10 · ${ratingLabel(score)}` : 'Not rated'}
+        </span>
+      </div>
+      <div className={styles.scale} role="radiogroup" aria-label={`Your rating for ${media.title}`}>
+        {Array.from({ length: MAX_RATING }, (_, index) => index + 1).map((value) => (
+          <button
+            key={value}
+            type="button"
+            role="radio"
+            aria-checked={score === value}
+            aria-label={`${value} out of 10 — ${ratingLabel(value)}`}
+            className={`${styles.scaleButton} ${value <= score ? styles.scaleButtonOn : ''}`}
+            onClick={() => void rateMedia(media.id, score === value ? 0 : value)}
+          >
+            {value}
+          </button>
         ))}
       </div>
-    </section>
+    </div>
   )
 }

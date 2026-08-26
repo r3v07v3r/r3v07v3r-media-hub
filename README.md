@@ -44,6 +44,9 @@ play something. Optional metadata, tracking, and subtitle services add to the ex
   and starts after a short countdown. Turn it off under **Settings → Playback → Episodes**.
 - **Track what you watch** locally and, if desired, sync compatible activity with Simkl and
   MyAnimeList.
+- **Rate what you have seen** out of 10 on a title's page. Scores are private to the profile that
+  gave them, and they steer what gets suggested — a genre watched often but enjoyed little stops
+  leading the recommendations.
 - **Build a personal library** in **My Stuff**, including watchlisted, liked, disliked, watched,
   and in-progress titles.
 - **Manage downloads** and optionally connect Jellyfin, Sonarr, Radarr, and qBittorrent.
