@@ -4,7 +4,7 @@ import { useMemo } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useAppState } from '@renderer/context/AppStateContext'
 import { MoodCategory } from '@renderer/types'
-import { MOOD_CATEGORIES } from '@renderer/data/mockData'
+import { MOOD_CATEGORIES, leadMoodFor, moodLabelsFor } from '@renderer/data/mockData'
 import { Icon } from '@renderer/components/icons/Icon'
 import { MediaGrid } from '@renderer/components/category/MediaGrid'
 import { rankMoodSpotlight } from '@renderer/lib/mediaHub/moodSpotlight'
@@ -31,22 +31,26 @@ export default function MoodExplorePage() {
   const [searchParams] = useSearchParams()
   const moodParam = searchParams.get('mood')
   const moods = useMemo(() => selectedMoodIds(moodParam, MOOD_CATEGORIES), [moodParam])
-  const moodLabels = moods
-    .map((id) => MOOD_CATEGORIES.find((mood) => mood.id === id)?.label)
-    .filter((label): label is string => Boolean(label))
-  const leadMood = MOOD_CATEGORIES.find((mood) => mood.id === moods[0])
-  const moodHeading =
-    moods.length === 1 && leadMood
-      ? leadMood.headline
-      : moodLabels.length > 1
-        ? `A ${moodLabels.join(' + ')} blend.`
-        : 'Choose a mood.'
-  const moodDescription =
-    moods.length === 1 && leadMood
-      ? leadMood.description
-      : moodLabels.length > 1
-        ? 'A wider mix, selected from every mood you chose.'
-        : 'Return home and choose a mood to explore its full collection.'
+  const moodLabels = moodLabelsFor(moods)
+  const leadMood = leadMoodFor(moods)
+  const collectionName = moodLabels.join(' + ')
+  // Heading and blurb are decided once, together: they describe the same
+  // selection, so a future state can't be added to one and missed in the
+  // other.
+  const moodCopy =
+    moodLabels.length === 0
+      ? {
+          heading: 'Choose a mood.',
+          description: 'Return home and choose a mood to explore its full collection.'
+        }
+      : moodLabels.length === 1 && leadMood
+        ? { heading: leadMood.headline, description: leadMood.description }
+        : {
+            // "An Emotional + Action blend", not "A Emotional + ..." —
+            // several mood labels are vowel-initial.
+            heading: `${/^[aeiou]/i.test(moodLabels[0]) ? 'An' : 'A'} ${collectionName} blend.`,
+            description: 'A wider mix, selected from every mood you chose.'
+          }
   const results = useMemo(
     () =>
       rankMoodSpotlight(catalog, recommendations, moods, {
@@ -97,25 +101,36 @@ export default function MoodExplorePage() {
         </div>
         <div className={styles.titleGroup}>
           <span className={styles.kicker}>Tonight&apos;s mood</span>
-          <h1>{moodHeading}</h1>
-          <p>{moodDescription}</p>
+          {/* The visible heading is the mood's promise, but the accessible
+              name still has to say which collection this is — it's what
+              heading navigation announces. */}
+          <h1 aria-label={collectionName ? `${collectionName} — ${moodCopy.heading}` : undefined}>
+            {moodCopy.heading}
+          </h1>
+          <p>{moodCopy.description}</p>
         </div>
         {moodLabels.length > 0 && (
-          <div className={styles.collectionMeta}>
-            <span className={styles.collectionName}>{moodLabels.join(' + ')}</span>
-            <span className={styles.collectionCount}>
-              {results.length} title{results.length === 1 ? '' : 's'} to explore
+          <>
+            <div className={styles.collectionMeta}>
+              <span className={styles.collectionName}>{collectionName}</span>
+              <span className={styles.collectionCount}>
+                {/* Nothing has been read yet, so "0 titles" would be a
+                    claim about sources that were never opened. */}
+                {stillArriving
+                  ? 'Gathering titles…'
+                  : `${results.length} title${results.length === 1 ? '' : 's'} to explore`}
+              </span>
+            </div>
+            {/* Lead mood only: the joined list overruns its lane and gets
+                clipped mid-word at this size. */}
+            <span className={styles.collectionWord} aria-hidden="true">
+              {moodLabels[0]}
             </span>
-          </div>
-        )}
-        {moodLabels.length > 0 && (
-          <span className={styles.collectionWord} aria-hidden="true">
-            {moodLabels.join(' + ')}
-          </span>
+          </>
         )}
       </header>
 
-      <section className={styles.results} aria-label={moodLabels.join(' + ') || 'Mood results'}>
+      <section className={styles.results} aria-label={collectionName || 'Mood results'}>
         {/* Results are showing but nothing could refresh them — qualify
             them rather than replace them. With none showing, the grid's
             own error state below carries the failure and the Retry. */}
@@ -140,9 +155,7 @@ export default function MoodExplorePage() {
           }
           onRetry={refreshCatalog}
           emptyTitle={
-            moodLabels.length > 0
-              ? `No ${moodLabels.join(' + ')} titles to show`
-              : 'No mood selected'
+            moodLabels.length > 0 ? `No ${collectionName} titles to show` : 'No mood selected'
           }
           emptyMessage={
             moodLabels.length > 0
