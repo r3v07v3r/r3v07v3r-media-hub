@@ -45,6 +45,7 @@ import type {
   PartyStatusResult,
   PlaybackPositionResult,
   PlayRecord,
+  ViewingStats,
   PlaybackPrepareProgress,
   PlaybackResult,
   ProfilePublic,
@@ -385,6 +386,10 @@ const api = {
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.playsList),
       remove: (playId: number): Promise<{ plays: PlayRecord[] }> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.playDelete, { playId })
+    },
+
+    stats: {
+      get: (): Promise<ViewingStats> => ipcRenderer.invoke(MEDIA_HUB_CHANNELS.statsGet)
     },
 
     ratings: {

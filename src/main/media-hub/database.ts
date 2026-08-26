@@ -16,7 +16,8 @@ import type {
   MediaKind,
   PlayRecord,
   TrackedItem,
-  TrackedUpdate
+  TrackedUpdate,
+  ViewingStats
 } from '../../shared/media-hub/types'
 
 /** JSON.parse that falls back instead of throwing on malformed/absent data. */
@@ -165,6 +166,16 @@ export interface MediaHubDatabase {
   /** Removes one play. Returns false when it was already gone — two clicks on
    *  the same row is not an error. */
   deletePlay(playId: number): boolean
+  /**
+   * What the active profile's viewing adds up to.
+   *
+   * Computed on demand rather than stored, unlike the recommendation ranking.
+   * The two look similar and are not: that one runs on the LAUNCH path
+   * against a two-thousand-title catalog crawl, this one runs when somebody
+   * opens a tab, against rows already on disk. Storing it would buy
+   * milliseconds and cost a staleness problem.
+   */
+  viewingStats(): ViewingStats
   /** Writes every profile's library to one JSON file — see backup.ts for what
    *  a backup does and does not carry. NOT scoped to the active profile:
    *  a backup is of the install, not of whoever happens to be watching. */
@@ -231,6 +242,7 @@ export interface MediaHubDatabase {
 
 interface PreparedQueries {
   track: StatementSync
+  statsRows: StatementSync
   plays: StatementSync
   deletePlay: StatementSync
   rate: StatementSync
@@ -417,6 +429,12 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
        FROM plays WHERE profile_id=? ORDER BY watched_at DESC, play_id DESC LIMIT ?`
     ),
     deletePlay: sql.prepare('DELETE FROM plays WHERE profile_id=? AND play_id=?'),
+    // One pass over the profile's plays, joined to nothing. Everything the
+    // stats need is already on the row or in its stored metadata, which is
+    // what keeps this a local read rather than a catalog crawl.
+    statsRows: sql.prepare(
+      'SELECT content_id,type,title,season,episode,watched_at,metadata_json FROM plays WHERE profile_id=?'
+    ),
     rate: sql.prepare(
       `INSERT INTO ratings(profile_id,content_id,score,rated_at) VALUES(@profile,@id,@score,@now)
        ON CONFLICT(profile_id,content_id) DO UPDATE SET score=excluded.score,rated_at=excluded.rated_at`
@@ -517,6 +535,113 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
         )
       } catch (error) {
         return fail(error as Error)
+      }
+    },
+
+    viewingStats() {
+      const empty: ViewingStats = {
+        totalPlays: 0,
+        totalTitles: 0,
+        estimatedHours: 0,
+        byMonth: [],
+        topGenres: [],
+        byKind: [],
+        mostPlayed: []
+      }
+      try {
+        const rows = q.statsRows.all(currentProfileId) as Row[]
+
+        const titles = new Map<string, { title: string; plays: number }>()
+        // Keyed by the exact thing watched, not by the title. For a film those
+        // are the same; for a series they are not, and conflating them makes
+        // two DIFFERENT episodes look like a rewatch — which is the whole
+        // question the "seen again" list answers.
+        const repeats = new Map<string, number>()
+        const genres = new Map<string, number>()
+        const kinds = new Map<MediaKind, number>()
+        const months = new Map<string, number>()
+        // Runtime is a property of the TITLE, not of each viewing, but a
+        // rewatch really is more time spent — so minutes accumulate per play
+        // while the runtime itself is looked up once per title.
+        const runtimeByTitle = new Map<string, number>()
+        let minutes = 0
+
+        for (const row of rows) {
+          const id = String(row.content_id)
+          const meta = parse<Partial<TrackedItem>>(row.metadata_json as string, {})
+          const title = String(row.title ?? meta.title ?? 'Untitled')
+          const existing = titles.get(id)
+          if (existing) existing.plays += 1
+          else titles.set(id, { title, plays: 1 })
+
+          const kind = (row.type as MediaKind) || 'movie'
+          kinds.set(kind, (kinds.get(kind) ?? 0) + 1)
+
+          for (const genre of meta.genres ?? []) {
+            const name = String(genre).trim()
+            if (name) genres.set(name, (genres.get(name) ?? 0) + 1)
+          }
+
+          // The stored runtime is a display string ("48 min", "2h 15m",
+          // "148"), so the leading number is the only part worth trusting.
+          if (!runtimeByTitle.has(id)) {
+            const parsed = Number(String(meta.runtime ?? '').match(/\d+/)?.[0] ?? 0)
+            runtimeByTitle.set(id, Number.isFinite(parsed) ? parsed : 0)
+          }
+          minutes += runtimeByTitle.get(id) ?? 0
+
+          // Sliced off the ISO string rather than parsed into a Date: these
+          // are timestamps this app wrote, always ISO, and a Date per row over
+          // thousands of them is real main-thread time for a substring.
+          const episodeKey = `${id}:${row.season ?? ''}:${row.episode ?? ''}`
+          repeats.set(episodeKey, (repeats.get(episodeKey) ?? 0) + 1)
+
+          const month = String(row.watched_at).slice(0, 7)
+          if (/^\d{4}-\d{2}$/.test(month)) months.set(month, (months.get(month) ?? 0) + 1)
+        }
+
+        // The last twelve months INCLUDING the ones with nothing in them — a
+        // chart that silently omits a quiet month draws a misleading line.
+        const now = new Date()
+        const byMonth: { month: string; plays: number }[] = []
+        for (let back = 11; back >= 0; back--) {
+          const point = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - back, 1))
+          const key = point.toISOString().slice(0, 7)
+          byMonth.push({ month: key, plays: months.get(key) ?? 0 })
+        }
+
+        const rank = <T>(entries: Map<T, number>, limit: number): [T, number][] =>
+          [...entries]
+            .sort((a, b) => b[1] - a[1] || String(a[0]).localeCompare(String(b[0])))
+            .slice(0, limit)
+
+        return {
+          totalPlays: rows.length,
+          totalTitles: titles.size,
+          estimatedHours: Math.round(minutes / 60),
+          byMonth,
+          topGenres: rank(genres, 8).map(([genre, plays]) => ({ genre, plays })),
+          byKind: rank(kinds, 3).map(([kind, plays]) => ({ kind, plays })),
+          // How many times the most-repeated single thing in each title was
+          // watched. A film seen twice reports 2; a series reports 2 only if
+          // some ONE episode was seen twice, not because two episodes were
+          // seen once each.
+          mostPlayed: [...titles]
+            .map(([contentId, entry]) => {
+              let most = 0
+              for (const [key, count] of repeats) {
+                if (key.startsWith(`${contentId}:`) && count > most) most = count
+              }
+              return { contentId, title: entry.title, plays: most }
+            })
+            .filter((entry) => entry.plays > 1)
+            .sort((a, b) => b.plays - a.plays || a.title.localeCompare(b.title))
+            .slice(0, 6)
+        }
+      } catch {
+        // Best-effort like every other read here: a stats page that cannot be
+        // computed shows nothing, it does not take the page down with it.
+        return empty
       }
     },
 

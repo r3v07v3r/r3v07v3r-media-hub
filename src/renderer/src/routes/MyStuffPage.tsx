@@ -10,7 +10,7 @@
 // navigation stays at seven, and everything about "what I have watched and
 // what I mean to" belongs behind one destination.
 
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useAppState } from '@renderer/context/AppStateContext'
 import { Icon } from '@renderer/components/icons/Icon'
@@ -23,10 +23,10 @@ import { WatchStatusBadge } from '@renderer/components/media/WatchStatusBadge'
 import { getWatchStatus } from '@renderer/lib/mediaHub/watchStatus'
 import { applyWatchStateFilters } from '@renderer/lib/mediaHub/categoryFilters'
 import type { MediaItem } from '@renderer/types'
-import type { PlayRecord } from '@shared/media-hub/types'
+import type { PlayRecord, ViewingStats } from '@shared/media-hub/types'
 import styles from './MyStuff.module.css'
 
-type TabId = 'list' | 'progress' | 'watched' | 'rated' | 'history' | 'dropped'
+type TabId = 'list' | 'progress' | 'watched' | 'rated' | 'history' | 'stats' | 'dropped'
 
 const TABS: { id: TabId; label: string }[] = [
   { id: 'list', label: 'My List' },
@@ -34,6 +34,7 @@ const TABS: { id: TabId; label: string }[] = [
   { id: 'watched', label: 'Watched' },
   { id: 'rated', label: 'Rated' },
   { id: 'history', label: 'History' },
+  { id: 'stats', label: 'Stats' },
   { id: 'dropped', label: 'Not for me' }
 ]
 
@@ -166,6 +167,135 @@ function HistoryList() {
   )
 }
 
+/** The month label under each bar: "Mar", and the year when it changes. */
+function monthLabel(month: string, index: number, all: { month: string }[]): string {
+  const [year, monthNumber] = month.split('-')
+  const name = new Date(Date.UTC(Number(year), Number(monthNumber) - 1, 1)).toLocaleDateString(
+    undefined,
+    { month: 'short' }
+  )
+  const previousYear = index > 0 ? all[index - 1].month.slice(0, 4) : null
+  return previousYear && previousYear !== year ? `${name} ${year.slice(2)}` : name
+}
+
+/**
+ * What the viewing adds up to.
+ *
+ * Fetched on mount, not held in app state: nothing else reads it, and it is a
+ * full pass over the plays table that would be pure waste for anybody who
+ * never opens this tab.
+ */
+function StatsView() {
+  const [stats, setStats] = useState<ViewingStats | null>(null)
+  const [loaded, setLoaded] = useState(() => !window.api?.mediaHub)
+
+  useEffect(() => {
+    let cancelled = false
+    const api = window.api?.mediaHub
+    if (!api) return
+    api.stats
+      .get()
+      .then((result) => {
+        if (cancelled) return
+        setStats(result)
+        setLoaded(true)
+      })
+      .catch(() => {
+        if (!cancelled) setLoaded(true)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  if (!loaded) return <p className={styles.empty}>Working it out…</p>
+  if (!stats || stats.totalPlays === 0) {
+    return (
+      <p className={styles.empty}>
+        Nothing to count yet. Numbers appear here once you have finished something.
+      </p>
+    )
+  }
+
+  const busiestMonth = Math.max(1, ...stats.byMonth.map((point) => point.plays))
+  const topGenrePlays = Math.max(1, ...stats.topGenres.map((entry) => entry.plays))
+
+  return (
+    <div className={styles.stats}>
+      <div className={styles.statRow}>
+        <div className={styles.stat}>
+          <span className={styles.statValue}>{stats.totalPlays}</span>
+          <span className={styles.statLabel}>Viewings</span>
+        </div>
+        <div className={styles.stat}>
+          <span className={styles.statValue}>{stats.totalTitles}</span>
+          <span className={styles.statLabel}>Titles</span>
+        </div>
+        <div className={styles.stat}>
+          <span className={styles.statValue}>{stats.estimatedHours}</span>
+          {/* "About" rather than a precise figure, because it is one: a play
+              records what was watched and when, not for how long, so a title
+              stopped at 85% still counts for its full runtime. Saying so is
+              better than implying a precision that is not there. */}
+          <span className={styles.statLabel}>Hours, about</span>
+        </div>
+      </div>
+
+      <section className={styles.statSection}>
+        <h2 className={styles.statHeading}>Last twelve months</h2>
+        <div className={styles.chart}>
+          {stats.byMonth.map((point, index) => (
+            <div key={point.month} className={styles.chartColumn}>
+              <div
+                className={styles.chartBar}
+                style={{ height: `${Math.round((point.plays / busiestMonth) * 100)}%` }}
+                title={`${point.plays} in ${point.month}`}
+              />
+              <span className={styles.chartLabel}>
+                {monthLabel(point.month, index, stats.byMonth)}
+              </span>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      {stats.topGenres.length > 0 && (
+        <section className={styles.statSection}>
+          <h2 className={styles.statHeading}>What you watch</h2>
+          <ul className={styles.bars}>
+            {stats.topGenres.map((entry) => (
+              <li key={entry.genre} className={styles.bar}>
+                <span className={styles.barLabel}>{entry.genre}</span>
+                <span className={styles.barTrack}>
+                  <span
+                    className={styles.barFill}
+                    style={{ width: `${Math.round((entry.plays / topGenrePlays) * 100)}%` }}
+                  />
+                </span>
+                <span className={styles.barValue}>{entry.plays}</span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
+      {stats.mostPlayed.length > 0 && (
+        <section className={styles.statSection}>
+          <h2 className={styles.statHeading}>Seen again</h2>
+          <ul className={styles.bars}>
+            {stats.mostPlayed.map((entry) => (
+              <li key={entry.contentId} className={styles.bar}>
+                <span className={styles.barLabel}>{entry.title}</span>
+                <span className={styles.barValue}>{entry.plays}&times;</span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+    </div>
+  )
+}
+
 export default function MyStuffPage() {
   const {
     myList,
@@ -239,7 +369,7 @@ export default function MyStuffPage() {
     ratedItems.length === 0 &&
     droppedItems.length === 0
 
-  if (everythingEmpty && tab !== 'history') {
+  if (everythingEmpty && tab !== 'history' && tab !== 'stats') {
     return (
       <ComingSoonSection
         icon="mystuff"
@@ -301,6 +431,8 @@ export default function MyStuffPage() {
       )}
 
       {tab === 'history' && <HistoryList />}
+
+      {tab === 'stats' && <StatsView />}
 
       {tab === 'dropped' && (
         <TitleGrid

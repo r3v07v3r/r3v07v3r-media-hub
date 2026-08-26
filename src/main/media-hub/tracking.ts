@@ -23,6 +23,7 @@ import type {
   MarkWatchedResult,
   PlaybackPositionResult,
   PlayRecord,
+  ViewingStats,
   PendingWatchStatusPush,
   ReconcileCheckResult,
   ReconcileResolution,
@@ -1153,6 +1154,8 @@ export function registerTrackingIpc(): void {
   handle<undefined, { plays: PlayRecord[] }>(MEDIA_HUB_CHANNELS.playsList, () => ({
     plays: getDatabase().plays()
   }))
+
+  handle<undefined, ViewingStats>(MEDIA_HUB_CHANNELS.statsGet, () => getDatabase().viewingStats())
 
   handle<{ playId: number }, { plays: PlayRecord[] }>(
     MEDIA_HUB_CHANNELS.playDelete,

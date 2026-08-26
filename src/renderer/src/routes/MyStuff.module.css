@@ -225,3 +225,148 @@
   font-size: 12px;
   color: var(--text-secondary);
 }
+
+/* ---- Stats ------------------------------------------------------------- */
+
+.stats {
+  display: flex;
+  flex-direction: column;
+  gap: 32px;
+  max-width: 780px;
+}
+
+.statRow {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 1px;
+  background: var(--border-subtle);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-medium);
+  overflow: hidden;
+}
+
+.stat {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 18px 20px;
+  background: var(--panel);
+}
+
+.statValue {
+  font-size: 30px;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: -0.02em;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+.statLabel {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.statSection {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.statHeading {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--text-primary);
+}
+
+/* Twelve fixed columns rather than auto-fit: a month with nothing in it is
+   part of the shape, and letting the count drive the layout would make a
+   quiet year draw a different chart from a busy one. */
+.chart {
+  display: grid;
+  grid-template-columns: repeat(12, 1fr);
+  gap: 6px;
+  height: 140px;
+  align-items: end;
+}
+
+.chartColumn {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 6px;
+  height: 100%;
+  min-width: 0;
+}
+
+.chartBar {
+  width: 100%;
+  border-radius: 4px 4px 2px 2px;
+  background: linear-gradient(180deg, var(--accent-cyan), var(--accent-blue));
+  /* A month with no viewings still draws a sliver, so the axis reads as a row
+     of months rather than as a gap where data is missing. */
+  min-height: 3px;
+}
+
+.chartLabel {
+  font-size: 10px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.bars {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.bar {
+  display: grid;
+  grid-template-columns: minmax(90px, 150px) minmax(0, 1fr) 44px;
+  align-items: center;
+  gap: 12px;
+}
+
+/* The "watched more than once" list has no track, so its label and value sit
+   at either end of the row instead. */
+.bar:has(> .barLabel + .barValue) {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.barLabel {
+  font-size: 13px;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.barTrack {
+  height: 8px;
+  border-radius: var(--radius-pill);
+  background: var(--panel);
+  border: 1px solid var(--border-subtle);
+  overflow: hidden;
+}
+
+.barFill {
+  display: block;
+  height: 100%;
+  background: var(--accent-violet);
+}
+
+.barValue {
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}

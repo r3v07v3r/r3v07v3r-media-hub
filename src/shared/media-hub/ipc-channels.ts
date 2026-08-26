@@ -76,6 +76,8 @@ export const MEDIA_HUB_CHANNELS = {
    *  listed twice. See main/media-hub/database.ts's `plays`. */
   playsList: 'mediahub:plays:list',
   playDelete: 'mediahub:plays:delete',
+  /** What the viewing adds up to — see database.ts's `viewingStats`. */
+  statsGet: 'mediahub:stats:get',
   ratingsList: 'mediahub:ratings:list',
   dislikedList: 'mediahub:disliked:list',
   dislikedAdd: 'mediahub:disliked:add',

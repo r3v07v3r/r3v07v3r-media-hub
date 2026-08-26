@@ -360,6 +360,45 @@ export interface PlayRecord {
   poster: string
 }
 
+/**
+ * What somebody's viewing adds up to.
+ *
+ * Computed from `plays` and the metadata stored alongside each row, so it
+ * needs no catalog and no network — a stat page that could not be drawn
+ * offline would be a strange thing to have.
+ */
+export interface ViewingStats {
+  /** Every recorded viewing, including rewatches. */
+  totalPlays: number
+  /** Distinct titles, so a series binged for a month counts once. */
+  totalTitles: number
+  /**
+   * Estimated hours, from each title's stored runtime.
+   *
+   * ESTIMATED is the honest word and the UI says so. A play records what was
+   * watched and when, not for how long — somebody who stopped at 85% is
+   * counted for the whole runtime, and a title whose metadata carries no
+   * runtime at all contributes nothing. The alternative, storing a duration
+   * per play, is a schema change for a number nobody reads to the minute.
+   */
+  estimatedHours: number
+  /** How many plays fall in each of the last twelve months, oldest first. */
+  byMonth: { month: string; plays: number }[]
+  /** Most-watched genres, by play count, highest first. */
+  topGenres: { genre: string; plays: number }[]
+  /** Plays split by kind, for the three the catalog has. */
+  byKind: { kind: MediaKind; plays: number }[]
+  /**
+   * Titles with something in them seen more than once, and how many times.
+   *
+   * Counted per EPISODE rather than per title: two different episodes of a
+   * series are not a rewatch, and grouping by title alone would report every
+   * show anybody has watched two of as "seen again". For a film the two are
+   * the same thing.
+   */
+  mostPlayed: { contentId: string; title: string; plays: number }[]
+}
+
 export interface ContinueWatchingEntry extends CatalogItem {
   continueSeason: number
   continueEpisode: number

@@ -51,7 +51,8 @@ play something. Optional metadata, tracking, and subtitle services add to the ex
   gave them, and they steer what gets suggested — a genre watched often but enjoyed little stops
   leading the recommendations.
 - **Build a personal library** in **My Stuff**, with tabs for your list, what is in progress, what
-  you have finished, what you have rated, your full viewing history, and what you have set aside.
+  you have finished, what you have rated, your full viewing history, your stats, and what you
+  have set aside.
   Any single viewing can be removed from the history without un-watching the episode.
 - **Manage downloads** and optionally connect Jellyfin, Sonarr, Radarr, and qBittorrent.
 - **Ask Sonarr or Radarr for a title** straight from its page, picking the quality profile and
