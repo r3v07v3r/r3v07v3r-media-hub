@@ -564,6 +564,13 @@ export interface MediaHubPublicSettings {
    *  same as picking the first OpenSubtitles search result manually would
    *  — see PlaybackOverlay.tsx's own "Always have subtitles" effect. */
   autoSubtitlesEnabled: boolean
+  /** On by default: reaching the end of an episode offers the next one on a
+   *  post-play card and starts it when the countdown runs out (see
+   *  AUTOPLAY_NEXT_COUNTDOWN_SECONDS in shared/media-hub/player.ts). Movies
+   *  and the last episode of a title have nothing to advance to and are
+   *  unaffected either way. A party FOLLOWER never advances on its own
+   *  whatever this says — the host owns what plays there. */
+  autoplayNextEnabled: boolean
   /** Decorative UI animation (idle ambient motion, not playback itself) — layered alongside, not replacing, the automatic motion-suspend-during-playback behavior in global.css. */
   uiAnimationsEnabled: boolean
   /** Whether the Home dashboard's live CPU/GPU/RAM/network gauges (PerformanceWidget) are shown. Device/UI preference, not account data — survives logout like uiAnimationsEnabled. */

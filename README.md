@@ -40,6 +40,8 @@ play something. Optional metadata, tracking, and subtitle services add to the ex
   seasons, episodes, ratings, and recommendations.
 - **Play from local files, a media server, or TorBox** with automatic source selection,
   audio-language preferences, playback buffering, subtitle selection, and resume progress.
+- **Keep watching a series** — when an episode ends, the next one is offered on a post-play card
+  and starts after a short countdown. Turn it off under **Settings → Playback → Episodes**.
 - **Track what you watch** locally and, if desired, sync compatible activity with Simkl and
   MyAnimeList.
 - **Build a personal library** in **My Stuff**, including watchlisted, liked, disliked, watched,
@@ -131,18 +133,18 @@ Playback requires either **TorBox** or your own connected media/download service
 both is supported; the app applies the local → media server → download stream priority described
 above. Metadata, tracking, subtitle, and relay services remain optional:
 
-| Service             | Purpose                                                                              |
-| ------------------- | ------------------------------------------------------------------------------------ |
-| **TMDB**            | Richer artwork and metadata.                                                         |
-| **OMDb**            | Additional movie and series ratings, including Rotten Tomatoes data where available. |
-| **Simkl**           | Account-based watch tracking and catalog enrichment.                                 |
-| **MyAnimeList**     | Anime list and progress synchronization.                                             |
-| **SubDL**           | Search for and automatically apply subtitles, with no daily download limit.          |
-| **OpenSubtitles**   | The same, from a second catalogue (a free account allows 5 downloads per day).        |
-| **Jellyfin**        | Play content from an existing personal media library.                                |
-| **Sonarr / Radarr** | Connect series and movie management to the local download workflow.                  |
-| **qBittorrent**     | Supply and manage downloads for the local playback workflow.                         |
-| **R3 Party Sync**   | Relay Watch Party traffic when a direct connection is not suitable.                  |
+| Service             | Purpose                                                                                                                            |
+| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| **TMDB**            | Richer artwork and metadata.                                                                                                       |
+| **OMDb**            | Additional movie and series ratings, including Rotten Tomatoes data where available.                                               |
+| **Simkl**           | Account-based watch tracking and catalog enrichment.                                                                               |
+| **MyAnimeList**     | Anime list and progress synchronization.                                                                                           |
+| **SubDL**           | Search for and automatically apply subtitles, with no daily download limit.                                                        |
+| **OpenSubtitles**   | The same, from a second catalogue (a free account allows 5 downloads per day).                                                     |
+| **Jellyfin**        | Play content from an existing personal media library.                                                                              |
+| **Sonarr / Radarr** | Connect series and movie management to the local download workflow.                                                                |
+| **qBittorrent**     | Supply and manage downloads for the local playback workflow.                                                                       |
+| **R3 Party Sync**   | Relay Watch Party traffic when a direct connection is not suitable.                                                                |
 | **Ollama**          | Run the AI assistant and recommendations on a language model you host yourself. Detected automatically when it is on this machine. |
 
 Add or remove these integrations from **Settings**. API credentials are entered in the desktop

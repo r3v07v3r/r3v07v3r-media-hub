@@ -128,6 +128,16 @@ export function registerAppIpc(): void {
     }
   )
 
+  handle<unknown, { autoplayNextEnabled: boolean }>(
+    MEDIA_HUB_CHANNELS.settingsSetAutoplayNext,
+    (_event, value) => {
+      const settings = readSettings()
+      settings.autoplayNextEnabled = value !== false
+      writeSettings(settings)
+      return { autoplayNextEnabled: settings.autoplayNextEnabled }
+    }
+  )
+
   handle<unknown, { uiAnimationsEnabled: boolean }>(
     MEDIA_HUB_CHANNELS.settingsSetUiAnimations,
     (_event, value) => {

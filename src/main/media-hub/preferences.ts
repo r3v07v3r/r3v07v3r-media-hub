@@ -48,6 +48,7 @@ export function publicSettings(settings: Record<string, unknown> = {}): MediaHub
     playbackBuffer: normalizePlaybackBuffer(settings.playbackBuffer),
     videoScaling: normalizeVideoScaling(settings.videoScaling),
     autoSubtitlesEnabled: settings.autoSubtitlesEnabled !== false,
+    autoplayNextEnabled: settings.autoplayNextEnabled !== false,
     uiAnimationsEnabled: settings.uiAnimationsEnabled !== false,
     performancePanelVisible: settings.performancePanelVisible !== false,
     maxStreamResolution: Number(settings.maxStreamResolution) || 0,
@@ -101,6 +102,7 @@ export function logoutSettings(
   | 'playbackBuffer'
   | 'videoScaling'
   | 'autoSubtitlesEnabled'
+  | 'autoplayNextEnabled'
   | 'uiAnimationsEnabled'
   | 'performancePanelVisible'
   | 'maxStreamResolution'
@@ -121,6 +123,7 @@ export function logoutSettings(
     playbackBuffer: normalizePlaybackBuffer(settings.playbackBuffer),
     videoScaling: normalizeVideoScaling(settings.videoScaling),
     autoSubtitlesEnabled: settings.autoSubtitlesEnabled !== false,
+    autoplayNextEnabled: settings.autoplayNextEnabled !== false,
     uiAnimationsEnabled: settings.uiAnimationsEnabled !== false,
     performancePanelVisible: settings.performancePanelVisible !== false,
     maxStreamResolution: Number(settings.maxStreamResolution) || 0,

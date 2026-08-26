@@ -711,6 +711,12 @@ export default function SettingsPage() {
       await saveSetting('settings.auto-subtitles', () => api.settings.setAutoSubtitles(enabled))
   }
 
+  async function handleSetAutoplayNext(enabled: boolean) {
+    const api = window.api?.mediaHub
+    if (api)
+      await saveSetting('settings.autoplay-next', () => api.settings.setAutoplayNext(enabled))
+  }
+
   async function handleSetSubtitleLanguage(language: string) {
     const api = window.api?.mediaHub
     if (api)
@@ -935,6 +941,22 @@ export default function SettingsPage() {
             <p>Choose language, quality, and connection preferences.</p>
           </header>
           <div ref={playbackGridBinding} className={styles.groupGrid}>
+            <section
+              className={`${styles.section} glass-panel`}
+              aria-labelledby="settings-episodes"
+            >
+              <h2 id="settings-episodes" className={styles.sectionTitle}>
+                Episodes
+              </h2>
+              <ToggleRow
+                icon="play"
+                title="Play the next episode"
+                description="When an episode ends, offer the next one and start it after a short countdown. Movies and last episodes are unaffected."
+                checked={mediaHubSettings?.autoplayNextEnabled ?? true}
+                onChange={handleSetAutoplayNext}
+              />
+            </section>
+
             <section
               className={`${styles.section} glass-panel`}
               aria-labelledby="settings-subtitles"

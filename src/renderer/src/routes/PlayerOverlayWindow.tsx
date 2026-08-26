@@ -24,7 +24,12 @@ import { PlayerWindowProvider, usePlayerWindow } from '@renderer/context/PlayerW
 import { usePartySync } from '@renderer/hooks/usePartySync'
 import { usePlayerTracking } from '@renderer/hooks/usePlayerTracking'
 import { PlayerSessionRail } from '@renderer/components/party/PlayerSessionRail'
-import { MAX_PLAYER_VOLUME, PLAYER_VOLUME_STEP } from '@shared/media-hub/player'
+import {
+  AUTOPLAY_NEXT_COUNTDOWN_SECONDS,
+  MAX_PLAYER_VOLUME,
+  PLAYER_VOLUME_STEP
+} from '@shared/media-hub/player'
+import type { NextEpisodeRef } from '@shared/media-hub/nextEpisode'
 import type { SubtitleResult } from '@shared/media-hub/types'
 import {
   DEFAULT_VIDEO_FIT,
@@ -72,6 +77,8 @@ function PlayerControls() {
   const [preview, setPreview] = useState<{ x: number; time: number; url: string | null } | null>(
     null
   )
+  const [countdown, setCountdown] = useState(AUTOPLAY_NEXT_COUNTDOWN_SECONDS)
+  const [countdownFor, setCountdownFor] = useState<string | null>(null)
   const idleTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const paused = state.paused ?? true
@@ -117,9 +124,67 @@ function PlayerControls() {
     onMarkWatched: useCallback(() => ui({ type: 'mark-watched' }), [ui])
   })
 
+  // The post-play card, derived rather than stored — there is no state here
+  // that main is not already the authority on, and storing a copy would only
+  // create a second one to keep in step.
+  //
+  // A party FOLLOWER never gets the card, whatever the setting says: the host
+  // owns what plays in a room, and a follower that advanced on its own would
+  // leave the party watching two different episodes with no way back. The host
+  // does get it — startPartyPlayback on the main-window side announces whatever
+  // it starts, so the room follows along exactly as it would from a click.
+  const autoplay: NextEpisodeRef | null =
+    state.eofReached === true && !party.following && session?.settings.autoplayNextEnabled !== false
+      ? (session?.nextUp ?? null)
+      : null
+  const autoplayKey = autoplay ? `${media?.id ?? ''}:${autoplay.season}:${autoplay.episode}` : null
+
+  // Restart the countdown when the card changes subject, adjusted during render
+  // rather than in an effect — the same pattern SidebarNavigation uses for its
+  // route-keyed state, and the reason this component holds a key alongside the
+  // number instead of resetting it from a useEffect.
+  if (countdownFor !== autoplayKey) {
+    setCountdownFor(autoplayKey)
+    setCountdown(AUTOPLAY_NEXT_COUNTDOWN_SECONDS)
+  }
+
+  // Which card has already been acted on. Needed because `eofReached` stays
+  // true until the next file actually opens: without it, the tick below would
+  // keep re-raising play-next for the whole time the next episode spends
+  // resolving, which is a stream search rather than an instant cut.
+  const [startedNextFor, setStartedNextFor] = useState<string | null>(null)
+  const startNext = useCallback(
+    (next: NextEpisodeRef, key: string) => {
+      setStartedNextFor(key)
+      tracking.savePositionNow()
+      ui({ type: 'play-next', season: next.season, episode: next.episode })
+    },
+    [tracking, ui]
+  )
+  const startingNext = autoplayKey !== null && startedNextFor === autoplayKey
+
+  // One tick per second while the card is up. The last tick starts the episode
+  // rather than writing a zero somebody would see, and it goes through the same
+  // call the Play now button makes, so there is only one way in.
+  //
+  // Both the count and the start happen INSIDE the timeout, never in the effect
+  // body — an effect that sets state synchronously cascades a render, and the
+  // countdown would run its whole length in a single frame.
+  useEffect(() => {
+    if (!autoplay || !autoplayKey || startingNext) return
+    const timer = setTimeout(() => {
+      if (countdown <= 1) startNext(autoplay, autoplayKey)
+      else setCountdown(countdown - 1)
+    }, 1000)
+    return () => clearTimeout(timer)
+  }, [autoplay, autoplayKey, countdown, startingNext, startNext])
+
   // A menu or an in-flight sync has to pin the controls open — otherwise the
   // idle timer closes the surface out from under someone mid-selection.
-  const pinned = menu !== null || party.syncing || roomRailOpen
+  // The post-play card pins too. The window is click-through whenever the
+  // controls are hidden, so a card whose buttons appeared without this would
+  // pass every click straight through to mpv — visible, and unpressable.
+  const pinned = menu !== null || party.syncing || roomRailOpen || autoplay !== null
 
   const revealControls = useCallback(() => {
     setControlsVisible(true)
@@ -618,6 +683,36 @@ function PlayerControls() {
         <button type="button" className={styles.skipButton} onClick={() => seekTo(skipWindow.end)}>
           {skipWindow.label}
         </button>
+      )}
+
+      {/* Post-play. Outside the controls bar for the same reason the skip
+          button is: it has to be usable without moving the mouse first, and it
+          outlives the bar's idle fade. */}
+      {autoplay && autoplayKey && (
+        <div className={styles.postPlay} role="dialog" aria-label="Up next">
+          <p className={styles.postPlayLabel}>Up next</p>
+          <p className={styles.postPlayTitle}>
+            {`S${String(autoplay.season).padStart(2, '0')}E${String(autoplay.episode).padStart(2, '0')}`}
+            {autoplay.title ? ` — ${autoplay.title}` : ''}
+          </p>
+          <div className={styles.postPlayActions}>
+            <button
+              type="button"
+              className={styles.postPlayPrimary}
+              disabled={startingNext}
+              onClick={() => startNext(autoplay, autoplayKey)}
+            >
+              {/* The card stays up while the next episode resolves — it is a
+                  stream search, not an instant cut — so it says what is
+                  happening instead of offering a button that has already been
+                  pressed. */}
+              {startingNext ? 'Starting…' : `Play now (${countdown})`}
+            </button>
+            <button type="button" className={styles.postPlaySecondary} onClick={closePlayer}>
+              Stop
+            </button>
+          </div>
+        </div>
       )}
 
       <div

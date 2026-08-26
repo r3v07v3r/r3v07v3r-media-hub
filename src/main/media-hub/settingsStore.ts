@@ -69,6 +69,7 @@ export interface MediaHubRawSettings {
   /** GPU scaling quality — see shared/media-hub/videoScaling.ts. */
   videoScaling?: string
   autoSubtitlesEnabled?: boolean
+  autoplayNextEnabled?: boolean
   uiAnimationsEnabled?: boolean
   performancePanelVisible?: boolean
   maxStreamResolution?: number

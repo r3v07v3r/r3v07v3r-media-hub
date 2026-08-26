@@ -262,8 +262,19 @@ async function attachObservers(): Promise<void> {
     // A build that does not know the property must not take the rest of the
     // observers down with it — every one of those the UI genuinely needs.
     .catch(() => {})
+  // Reported in BOTH directions, unlike every other observer here that filters
+  // for the value it cares about.
+  //
+  // State patches merge (see PlayerWindowContext's applyPatch), so a key that
+  // is only ever sent as `true` can never go back — and this one has to. mpv
+  // clears eof-reached when the next `loadfile` opens, but dropping that edge
+  // left the overlay believing the file had ended for the whole rest of the
+  // session. The overlay's end-of-file effect re-runs whenever the playing
+  // title changes, so with a stuck `true` the SECOND title played in one
+  // session was marked watched the instant it started, at position zero.
+  // Autoplay makes that path the normal one rather than the rare one.
   await player.observe('eof-reached', (value) => {
-    if (value === true) queuePatch({ eofReached: true }, true)
+    queuePatch({ eofReached: value === true }, true)
   })
   // A track list can change mid-playback (sub-add), so it is observed rather
   // than only read once at load.
@@ -703,8 +714,12 @@ export async function startPlayerSession(
   // still on screen and still playing until `loadfile` replaces it, so its
   // track menus are still the truthful ones. A first title has no outgoing
   // snapshot at all, which makes this a no-op outside a real title change.
+  // nextUp goes with the media, not with the tracks and settings kept above.
+  // It names an episode of the OUTGOING title; leaving it standing would hang
+  // the old show's next episode off the incoming one's post-play card until
+  // resolveNextUp got around to replacing it.
   const outgoing = getSessionSnapshot()
-  if (outgoing?.media) pushSessionSnapshot({ ...outgoing, media: null })
+  if (outgoing?.media) pushSessionSnapshot({ ...outgoing, media: null, nextUp: null })
 
   // EVERY title starts at its own level, because mpv keeps `volume` across
   // `loadfile` and a boost belongs to the film it was needed for — carrying

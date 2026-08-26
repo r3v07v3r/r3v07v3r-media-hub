@@ -11,8 +11,20 @@
 // Everything here is structurally cloneable: it travels over Electron IPC.
 
 import type { MediaTracks } from './types'
+import type { NextEpisodeRef } from './nextEpisode'
 import type { VideoFitMode } from './videoFit'
 import type { VideoPictureControl } from './videoPicture'
+
+/**
+ * How long the post-play card counts down before starting the next episode.
+ *
+ * Ten seconds is the figure the players people compare this one to have
+ * settled on (Netflix, Plex and Jellyfin are all within a second or two of
+ * it), and the reasoning behind it is worth keeping: long enough to read the
+ * next episode's name and press Stop on purpose, short enough that sitting
+ * through it never feels like being made to wait.
+ */
+export const AUTOPLAY_NEXT_COUNTDOWN_SECONDS = 10
 
 /**
  * Loudest the player can be asked to go, as a multiplier of the source's own
@@ -67,12 +79,27 @@ export interface PlayerSessionSnapshot {
   /** Seconds to resume from, already applied to mpv as its `start` option —
    *  present so the UI can show it, not so it can seek there itself. */
   resumeSeconds: number
+  /**
+   * The episode that follows this one, for the post-play card — null for a
+   * movie, for the last episode of a title, and for the whole of the window
+   * before it has been worked out.
+   *
+   * Resolved by main AFTER the first snapshot goes out, and pushed as a
+   * second one, because finding it means a metadata read that playback must
+   * never wait behind (see playbackSession.ts's resolveNextUp). The overlay
+   * therefore has to treat this as "not known YET" rather than "there is
+   * none" — which costs it nothing, since it has no use for the value until
+   * the file ends.
+   */
+  nextUp: NextEpisodeRef | null
   settings: {
     /** 3 | 8 | 15 — see shared/media-hub/playbackBuffer.ts. */
     bufferSeconds: number
     autoSubtitlesEnabled: boolean
     subtitleLanguage: string
     audioLanguage: string
+    /** Whether reaching the end of an episode offers the next one. */
+    autoplayNextEnabled: boolean
   }
 }
 
@@ -186,6 +213,17 @@ export type PlayerUiEvent =
   | { type: 'stop-playback'; watched: boolean }
   | { type: 'mark-watched' }
   | { type: 'refresh-watch-status' }
+  /** Start the next episode — raised by the post-play card, either because its
+   *  countdown ran out or because somebody pressed Play now.
+   *
+   *  The coordinate travels with the event rather than being recomputed on the
+   *  other side. The main window holds the MediaItem but not the episode list
+   *  (only main resolves that, into the session's `nextUp`), so recomputing
+   *  there would mean a second metadata read that could disagree with the
+   *  episode the person was just shown. This says "start the one on the card",
+   *  which is the only answer that can't surprise them. Main-window side
+   *  revalidates both numbers before playing anything. */
+  | { type: 'play-next'; season: number; episode: number }
   | { type: 'notify'; tone: 'info' | 'error' | 'success'; message: string }
   /** Overlay -> main -> main window: OPEN the party panel. A command, for a
    *  panel that is not open yet — the only one of these three that main passes

@@ -1281,6 +1281,13 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   }, [])
 
   const startPlaybackRef = useRef<(media: MediaItem) => Promise<boolean>>(async () => false)
+  // Same forward-reference trick as startPlaybackRef above, for the same
+  // reason: the player's ui-event listener is subscribed before
+  // startPartyPlayback is defined, and re-subscribing it on every identity
+  // change would drop events raised in the gap.
+  const startPartyPlaybackRef = useRef<
+    (media: MediaItem, opts?: { season?: number; episode?: number }) => Promise<void>
+  >(async () => {})
   const startPlayback = useCallback(
     async (media: MediaItem): Promise<boolean> => {
       if (mediaHubSettings && !mediaHubSettings.torboxConnected) {
@@ -1525,6 +1532,24 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
             .catch(() => {})
           return
         }
+        case 'play-next': {
+          const media = playbackMediaForEventsRef.current
+          if (!media) return
+          // Revalidated rather than trusted, even though the only sender is our
+          // own overlay: these two numbers go straight into a stream resolve,
+          // and a non-integer would produce a mediaId no addon can answer and a
+          // failure the person could not explain.
+          const season = Number(event.season)
+          const episode = Number(event.episode)
+          if (!Number.isInteger(season) || !Number.isInteger(episode)) return
+          if (season < 0 || episode < 1) return
+          // startPartyPlayback, not startPlayback: outside a room it is the
+          // same call, and inside one it announces the episode so the room
+          // follows the host into it exactly as it would from a click. A
+          // follower never reaches here — the overlay does not offer the card.
+          void startPartyPlaybackRef.current(media, { season, episode })
+          return
+        }
         case 'refresh-watch-status':
           refreshWatchStatusRef.current()
           return
@@ -1608,6 +1633,9 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     },
     [startPlayback, partyStatus]
   )
+  useEffect(() => {
+    startPartyPlaybackRef.current = startPartyPlayback
+  }, [startPartyPlayback])
 
   // Follower side of the above: unwrap an incoming `nowPlaying` (see
   // watchParty.ts's handlePartyMessage — every message type other than
