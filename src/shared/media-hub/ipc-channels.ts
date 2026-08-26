@@ -19,6 +19,7 @@ export const MEDIA_HUB_CHANNELS = {
   settingsSetAutoSubtitles: 'mediahub:settings:set-auto-subtitles',
   settingsSetAutoplayNext: 'mediahub:settings:set-autoplay-next',
   settingsSetWatchRegion: 'mediahub:settings:set-watch-region',
+  settingsSetNotifications: 'mediahub:settings:set-notifications',
   settingsSetUiAnimations: 'mediahub:settings:set-ui-animations',
   settingsSetPerformancePanelVisible: 'mediahub:settings:set-performance-panel-visible',
   settingsSetStreamLimits: 'mediahub:settings:set-stream-limits',

@@ -196,6 +196,8 @@ const api = {
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.settingsSetAutoplayNext, enabled),
       setWatchRegion: (region: string): Promise<{ watchRegion: string }> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.settingsSetWatchRegion, region),
+      setNotifications: (enabled: boolean): Promise<{ notificationsEnabled: boolean }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.settingsSetNotifications, enabled),
       exportBackup: (): Promise<{ filePath: string | null }> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.backupExport),
       importBackup: (): Promise<{ restored: number; createdAt: string } | null> =>

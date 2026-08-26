@@ -216,6 +216,16 @@ export function registerAppIpc(): void {
     }
   )
 
+  handle<unknown, { notificationsEnabled: boolean }>(
+    MEDIA_HUB_CHANNELS.settingsSetNotifications,
+    (_event, value) => {
+      const settings = readSettings()
+      settings.notificationsEnabled = value === true
+      writeSettings(settings)
+      return { notificationsEnabled: settings.notificationsEnabled }
+    }
+  )
+
   handle<unknown, { autoplayNextEnabled: boolean }>(
     MEDIA_HUB_CHANNELS.settingsSetAutoplayNext,
     (_event, value) => {

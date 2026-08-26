@@ -70,6 +70,9 @@ export interface MediaHubRawSettings {
   videoScaling?: string
   autoSubtitlesEnabled?: boolean
   autoplayNextEnabled?: boolean
+  /** Desktop notifications for new episodes of tracked shows. Off until
+   *  somebody turns it on — see main/media-hub/notifications.ts. */
+  notificationsEnabled?: boolean
   /** ISO 3166-1 alpha-2, for "where to watch" — availability is exactly the
    *  thing that differs by country, so there is no global answer. Unset means
    *  fall back to the machine's own locale. */

@@ -66,6 +66,9 @@ play something. Optional metadata, tracking, and subtitle services add to the ex
   catalogued by Kitsu id, which neither service can look up.
 - **Watch together in Rooms** over a direct LAN/WAN connection or an optional R3 Party Sync
   relay, with a shared queue, synchronized playback, and short-lived encrypted room chat.
+- **Hear about new episodes** of anything in My List, as a desktop notification. Off until you
+  turn it on in **Settings → General**, checked a few times a day, and never while you are
+  watching something.
 - **Use separate profiles**, including Kids and PIN-protected profiles. Each profile keeps its
   own list, watch history, ratings and resume points.
 - **Back up your library** to a single file and restore it on another machine, from

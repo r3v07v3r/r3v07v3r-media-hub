@@ -714,6 +714,10 @@ export interface MediaHubPublicSettings {
    *  unaffected either way. A party FOLLOWER never advances on its own
    *  whatever this says — the host owns what plays there. */
   autoplayNextEnabled: boolean
+  /** Whether a new episode of a tracked show raises a desktop notification.
+   *  Off by default: an app that starts notifying because it was updated has
+   *  made a decision that was not its to make. */
+  notificationsEnabled: boolean
   /** Which country "where to watch" answers for, ISO 3166-1 alpha-2. Always a
    *  real value in the snapshot: an unset setting resolves to the machine's
    *  locale before it gets here, so the Settings pane shows what is in use

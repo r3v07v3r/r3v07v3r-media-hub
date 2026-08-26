@@ -797,6 +797,12 @@ export default function SettingsPage() {
     }
   }
 
+  async function handleSetNotifications(enabled: boolean) {
+    const api = window.api?.mediaHub
+    if (api)
+      await saveSetting('settings.notifications', () => api.settings.setNotifications(enabled))
+  }
+
   async function handleSetWatchRegion(region: string) {
     const api = window.api?.mediaHub
     if (api) await saveSetting('settings.watch-region', () => api.settings.setWatchRegion(region))
@@ -991,6 +997,13 @@ export default function SettingsPage() {
               <h2 id="settings-perf" className={styles.sectionTitle}>
                 Performance &amp; Display
               </h2>
+              <ToggleRow
+                icon="notification"
+                title="Notify me about new episodes"
+                description="A desktop notification when something in My List has a new episode out. Checked a few times a day, and never while you are watching something."
+                checked={mediaHubSettings?.notificationsEnabled ?? false}
+                onChange={handleSetNotifications}
+              />
               <ToggleRow
                 icon="cpu"
                 title="System performance panel"

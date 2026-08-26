@@ -33,6 +33,7 @@ import { catalogData } from './catalog'
 import { enrichCredits } from './credits'
 import { getDatabase } from './dbState'
 import { logError } from './logger'
+import { runNewEpisodeCheck } from './notifications'
 import { pruneIdleSessions } from './streamCache'
 import { runBackgroundWatchSync } from './tracking'
 import { onRebuildRequested, rebuildRecommendations } from './recommendations'
@@ -221,6 +222,26 @@ export function startBackgroundJobs(): void {
         )
       }
     }
+  })
+
+  registerRecurringJob({
+    name: 'new-episodes',
+    label: 'Checking for new episodes',
+    // Six-hourly. Air dates land on a day, not a minute, and something out
+    // this morning is no less out this afternoon — checking more often would
+    // be a metadata pass per hour to tell somebody something they will hear
+    // either way.
+    everyMs: 6 * 60 * 60 * 1000,
+    // Well after launch, and after the catalog refresh above has had a chance
+    // to fill the metadata this reads. On a cold start it would otherwise be
+    // the thing that triggers every one of those fetches itself.
+    firstRunAfterMs: 10 * 60 * 1000,
+    priority: 'maintenance',
+    // Deferred rather than skipped while something is playing, like everything
+    // else here — a notification is the last thing anybody wants mid-film, and
+    // it will still be true afterwards.
+    maxPressure: 'idle',
+    run: runNewEpisodeCheck
   })
 
   registerRecurringJob({

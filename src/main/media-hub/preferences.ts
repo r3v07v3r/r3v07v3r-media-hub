@@ -50,6 +50,7 @@ export function publicSettings(settings: Record<string, unknown> = {}): MediaHub
     videoScaling: normalizeVideoScaling(settings.videoScaling),
     autoSubtitlesEnabled: settings.autoSubtitlesEnabled !== false,
     autoplayNextEnabled: settings.autoplayNextEnabled !== false,
+    notificationsEnabled: settings.notificationsEnabled === true,
     watchRegion: watchRegion(),
     uiAnimationsEnabled: settings.uiAnimationsEnabled !== false,
     performancePanelVisible: settings.performancePanelVisible !== false,
@@ -105,6 +106,7 @@ export function logoutSettings(
   | 'videoScaling'
   | 'autoSubtitlesEnabled'
   | 'autoplayNextEnabled'
+  | 'notificationsEnabled'
   | 'watchRegion'
   | 'uiAnimationsEnabled'
   | 'performancePanelVisible'
@@ -127,6 +129,7 @@ export function logoutSettings(
     videoScaling: normalizeVideoScaling(settings.videoScaling),
     autoSubtitlesEnabled: settings.autoSubtitlesEnabled !== false,
     autoplayNextEnabled: settings.autoplayNextEnabled !== false,
+    notificationsEnabled: settings.notificationsEnabled === true,
     watchRegion: watchRegion(),
     uiAnimationsEnabled: settings.uiAnimationsEnabled !== false,
     performancePanelVisible: settings.performancePanelVisible !== false,
