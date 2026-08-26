@@ -25,7 +25,12 @@ export default function PersonPage() {
   const { name } = useParams<{ name: string }>()
   const navigate = useNavigate()
   const { myList, dislikedIds } = useAppState()
-  const person = decodeURIComponent(name ?? '')
+  // NOT decoded again. React Router hands back an already-decoded segment, so
+  // a second pass either throws URIError on a name carrying a literal percent
+  // ("100%") or silently reinterprets escape-like text ("%20") as a space.
+  // This runs during render, so the throw took the whole page down — for a
+  // credit somebody merely clicked.
+  const person = name ?? ''
   const [result, setResult] = useState<PersonCreditsResult | null>(null)
   const [loadedFor, setLoadedFor] = useState<string | null>(
     // Outside the desktop app there is no bridge and nothing to wait for, so

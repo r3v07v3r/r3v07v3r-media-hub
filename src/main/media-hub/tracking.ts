@@ -200,7 +200,22 @@ interface SimklPinPollResponse {
  *  this is deliberately a floor on ATTEMPTS, not on confirmed successes,
  *  so a broken connection doesn't get hammered either. */
 const RECONCILE_COOLDOWN_MS = 5 * 60 * 1000
-const RECONCILE_COOLDOWN_KEY = 'reconcile:cooldown:v1'
+/**
+ * Every reconcile record is scoped to a profile.
+ *
+ * Reconciliation compares the LOCAL watch history against Simkl's, and the
+ * local half became profile-scoped with the schema. These keys were stamped
+ * only with the Simkl account, so a discrepancy raised for profile A could be
+ * offered while profile B was active — and resolving it would either rewrite
+ * B's newly scoped history or push A's decision to Simkl. The account is still
+ * part of several of these keys where it already was; this adds the half that
+ * was missing.
+ */
+function reconcileKey(prefix: string): string {
+  return `${prefix}:${getDatabase().activeProfile()}`
+}
+
+const RECONCILE_COOLDOWN_KEY_PREFIX = 'reconcile:cooldown:v1'
 /**
  * The most recent diff, kept for as long as the cooldown that produced it.
  *
@@ -216,7 +231,7 @@ const RECONCILE_COOLDOWN_KEY = 'reconcile:cooldown:v1'
  * cooldown reads it rather than being told nothing happened. The work is
  * still done once per cooldown window; it is just no longer wasted.
  */
-const RECONCILE_RESULT_KEY = 'reconcile:result:v2'
+const RECONCILE_RESULT_KEY_PREFIX = 'reconcile:result:v2'
 
 /**
  * A cached diff, stamped with whose account it was computed against.
@@ -255,7 +270,7 @@ interface CachedReconcileResult {
 function writeReconcileResult(account: string, discrepancies: WatchStatusDiscrepancy[]): void {
   if (!account || simklAccountMark() !== account) return
   getDatabase().putCache<CachedReconcileResult>(
-    RECONCILE_RESULT_KEY,
+    reconcileKey(RECONCILE_RESULT_KEY_PREFIX),
     { account, discrepancies },
     RECONCILE_COOLDOWN_MS
   )
@@ -267,7 +282,9 @@ function cachedReconcileResult(): WatchStatusDiscrepancy[] {
   // No account connected matches no stamp — never the empty-string
   // account a malformed row might carry.
   if (!account) return []
-  const row = getDatabase().getCache<CachedReconcileResult>(RECONCILE_RESULT_KEY)
+  const row = getDatabase().getCache<CachedReconcileResult>(
+    reconcileKey(RECONCILE_RESULT_KEY_PREFIX)
+  )
   return row?.account === account && Array.isArray(row.discrepancies) ? row.discrepancies : []
 }
 /** Ids someone has explicitly said to stop asking about — kept far longer
@@ -275,11 +292,11 @@ function cachedReconcileResult(): WatchStatusDiscrepancy[] {
  *  not forever: 90 days gives a genuinely stale dismissal a chance to
  *  resurface rather than being silently suppressed for the life of the
  *  install. */
-const RECONCILE_IGNORED_KEY = 'reconcile:ignored:v1'
+const RECONCILE_IGNORED_KEY_PREFIX = 'reconcile:ignored:v1'
 const RECONCILE_IGNORED_TTL_MS = 90 * 24 * 60 * 60 * 1000
 
 function ignoredReconcileIds(): Set<string> {
-  return new Set(getDatabase().getCache<string[]>(RECONCILE_IGNORED_KEY) || [])
+  return new Set(getDatabase().getCache<string[]>(reconcileKey(RECONCILE_IGNORED_KEY_PREFIX)) || [])
 }
 
 function addIgnoredReconcileId(id: string): void {
@@ -290,9 +307,14 @@ function addIgnoredReconcileId(id: string): void {
   // losing one brings the title straight back to the review panel that
   // has already told the person it was handled. See database.ts's
   // `durable` helper for why the store defaults the other way.
-  getDatabase().putCache(RECONCILE_IGNORED_KEY, [...ids], RECONCILE_IGNORED_TTL_MS, {
-    durable: true
-  })
+  getDatabase().putCache(
+    reconcileKey(RECONCILE_IGNORED_KEY_PREFIX),
+    [...ids],
+    RECONCILE_IGNORED_TTL_MS,
+    {
+      durable: true
+    }
+  )
 }
 
 /** Titles this app gave up trying to push, after enough failed attempts
@@ -305,7 +327,7 @@ function addIgnoredReconcileId(id: string): void {
  *  that happened between this app and ONE account — another account has
  *  never been asked, and suppressing the title there would hide a
  *  disagreement nobody has ruled on. Same 90-day expiry either way. */
-const RECONCILE_ABANDONED_KEY = 'reconcile:abandoned:v1'
+const RECONCILE_ABANDONED_KEY_PREFIX = 'reconcile:abandoned:v1'
 
 interface AbandonedRecord {
   account: string
@@ -313,7 +335,9 @@ interface AbandonedRecord {
 }
 
 function abandonedReconcileIds(): Set<string> {
-  const stored = getDatabase().getCache<AbandonedRecord>(RECONCILE_ABANDONED_KEY)
+  const stored = getDatabase().getCache<AbandonedRecord>(
+    reconcileKey(RECONCILE_ABANDONED_KEY_PREFIX)
+  )
   if (!stored?.ids?.length || stored.account !== simklAccountMark()) return new Set()
   return new Set(stored.ids)
 }
@@ -328,9 +352,14 @@ function addAbandonedReconcileId(id: string): boolean {
   const record: AbandonedRecord = { account: simklAccountMark(), ids: [...ids] }
   // Durable for the same reason as addIgnoredReconcileId: the person has
   // already been told this title is no longer being flagged.
-  getDatabase().putCache(RECONCILE_ABANDONED_KEY, record, RECONCILE_IGNORED_TTL_MS, {
-    durable: true
-  })
+  getDatabase().putCache(
+    reconcileKey(RECONCILE_ABANDONED_KEY_PREFIX),
+    record,
+    RECONCILE_IGNORED_TTL_MS,
+    {
+      durable: true
+    }
+  )
   return abandonedReconcileIds().has(id)
 }
 
@@ -341,7 +370,7 @@ function addAbandonedReconcileId(id: string): boolean {
  *  outlive a failed push or the app being closed — otherwise the exact
  *  titles they already ruled on come back on the next launch, which is
  *  the bug this queue exists to end. */
-const RECONCILE_PENDING_KEY = 'reconcile:pending:v2'
+const RECONCILE_PENDING_KEY_PREFIX = 'reconcile:pending:v2'
 const RECONCILE_PENDING_TTL_MS = 90 * 24 * 60 * 60 * 1000
 
 /** The queue as persisted: entries plus WHOSE they are. */
@@ -369,7 +398,7 @@ const PENDING_FLUSH_DELAY_MS = 3000
  *  title for ninety days. A decision nobody has tried yet is never
  *  subject to this — going out promptly is the entire promise of the
  *  batch timer. */
-const RECONCILE_RETRY_KEY = 'reconcile:retry-cooldown:v1'
+const RECONCILE_RETRY_KEY_PREFIX = 'reconcile:retry-cooldown:v1'
 const RECONCILE_RETRY_COOLDOWN_MS = 5 * 60 * 1000
 
 let flushTimer: NodeJS.Timeout | null = null
@@ -424,7 +453,7 @@ let flushAgain = false
  *  queue stamped with any other connection is ignored outright — see
  *  simklAccountMark. */
 function pendingPushes(): PendingWatchStatusPush[] {
-  const stored = getDatabase().getCache<PendingQueue>(RECONCILE_PENDING_KEY)
+  const stored = getDatabase().getCache<PendingQueue>(reconcileKey(RECONCILE_PENDING_KEY_PREFIX))
   if (!stored?.entries?.length) return []
   return stored.account === simklAccountMark() ? stored.entries : []
 }
@@ -446,9 +475,14 @@ function writePendingPushes(queue: PendingWatchStatusPush[]): boolean {
   // strength of this write succeeding, and nothing else remembers the
   // choice. Losing it to a power cut is the exact failure the queue was
   // built to stop, just with a different cause.
-  getDatabase().putCache(RECONCILE_PENDING_KEY, payload, RECONCILE_PENDING_TTL_MS, {
-    durable: true
-  })
+  getDatabase().putCache(
+    reconcileKey(RECONCILE_PENDING_KEY_PREFIX),
+    payload,
+    RECONCILE_PENDING_TTL_MS,
+    {
+      durable: true
+    }
+  )
   // The whole payload, not just which ids are present: a flush that only
   // bumped `attempts` (or corrected `remoteWatched`) leaves the id set
   // identical, so comparing ids would call a rejected write a success
@@ -527,7 +561,7 @@ async function pushPendingToServices(priority: TaskPriority): Promise<Set<string
   if (!simklCredentials().accessToken) return new Set()
 
   // A decision nobody has tried yet always goes out. One that has
-  // already failed waits for the retry pacing — see RECONCILE_RETRY_KEY
+  // already failed waits for the retry pacing — see the retry-cooldown record
   // for what each of the two cooldowns is protecting.
   // The pacing holds a deadline, so a wake-up can be armed for exactly
   // what is left of the window rather than a fresh full one.
@@ -778,8 +812,8 @@ export async function runBackgroundWatchSync(): Promise<void> {
   // stand down along with the rest of the job once playback starts.
   await flushPendingPushes('background')
   const db = getDatabase()
-  if (db.getCache(RECONCILE_COOLDOWN_KEY)) return
-  db.putCache(RECONCILE_COOLDOWN_KEY, true, RECONCILE_COOLDOWN_MS)
+  if (db.getCache(reconcileKey(RECONCILE_COOLDOWN_KEY_PREFIX))) return
+  db.putCache(reconcileKey(RECONCILE_COOLDOWN_KEY_PREFIX), true, RECONCILE_COOLDOWN_MS)
   const account = simklAccountMark()
   try {
     writeReconcileResult(account, await computeMovieDiscrepancies('background'))
@@ -815,13 +849,20 @@ function flushPendingPushes(priority: TaskPriority = 'interactive'): Promise<Set
 /** When the next retry is allowed: the later of what was written down
  *  and what this session remembers. */
 function retryPacingDeadline(): number {
-  return Math.max(retryPacingUntil, getDatabase().getCache<number>(RECONCILE_RETRY_KEY) ?? 0)
+  return Math.max(
+    retryPacingUntil,
+    getDatabase().getCache<number>(reconcileKey(RECONCILE_RETRY_KEY_PREFIX)) ?? 0
+  )
 }
 
 function startRetryPacing(): void {
   const until = Date.now() + RECONCILE_RETRY_COOLDOWN_MS
   retryPacingUntil = until
-  getDatabase().putCache(RECONCILE_RETRY_KEY, until, RECONCILE_RETRY_COOLDOWN_MS)
+  getDatabase().putCache(
+    reconcileKey(RECONCILE_RETRY_KEY_PREFIX),
+    until,
+    RECONCILE_RETRY_COOLDOWN_MS
+  )
 }
 
 function scheduleRetry(delayMs: number = RECONCILE_RETRY_COOLDOWN_MS): void {
@@ -1072,7 +1113,7 @@ export function registerTrackingIpc(): void {
     // budget is the flush's own retry pacing, which applies to entries
     // that have already failed and never to one nobody has tried.
     const justPushed = await flushPendingPushes()
-    if (db.getCache(RECONCILE_COOLDOWN_KEY)) {
+    if (db.getCache(reconcileKey(RECONCILE_COOLDOWN_KEY_PREFIX))) {
       // Inside the cooldown, but that no longer means "nothing to say" —
       // the background watch-sync job may have run the diff moments ago.
       // Reported as ran: false, which is the truth (this call did not run
@@ -1081,7 +1122,7 @@ export function registerTrackingIpc(): void {
       const cached = cachedReconcileResult()
       return { ran: false, discrepancies: cached.filter((d) => !justPushed.has(d.id)) }
     }
-    db.putCache(RECONCILE_COOLDOWN_KEY, true, RECONCILE_COOLDOWN_MS)
+    db.putCache(reconcileKey(RECONCILE_COOLDOWN_KEY_PREFIX), true, RECONCILE_COOLDOWN_MS)
     const account = simklAccountMark()
     try {
       const discrepancies = await computeMovieDiscrepancies()

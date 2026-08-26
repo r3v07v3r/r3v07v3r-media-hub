@@ -968,6 +968,19 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   const [syncDiscrepancies, setSyncDiscrepancies] = useState<WatchStatusDiscrepancy[]>([])
   const [syncReviewOpen, setSyncReviewOpen] = useState(false)
 
+  // Discarded when the library underneath them changes — a profile switch, or
+  // a restore. A discrepancy is a claim about ONE profile's history against
+  // Simkl's, and resolving a stale one would either rewrite the newly active
+  // profile's history or push the previous profile's decision to the account.
+  // Reset during render rather than from an effect, which would cascade a
+  // render and leave one frame in which the panel could still be acted on.
+  const [discrepanciesFor, setDiscrepanciesFor] = useState(libraryKey)
+  if (discrepanciesFor !== libraryKey) {
+    setDiscrepanciesFor(libraryKey)
+    setSyncDiscrepancies([])
+    setSyncReviewOpen(false)
+  }
+
   useEffect(() => {
     const api = window.api?.mediaHub?.tracking
     if (!api) return
