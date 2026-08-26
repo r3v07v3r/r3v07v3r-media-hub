@@ -355,9 +355,9 @@ interface AbandonedRecord {
   ids: string[]
 }
 
-function abandonedReconcileIds(): Set<string> {
+function abandonedReconcileIds(profile: string = getDatabase().activeProfile()): Set<string> {
   const stored = getDatabase().getCache<AbandonedRecord>(
-    reconcileKey(RECONCILE_ABANDONED_KEY_PREFIX)
+    reconcileKey(RECONCILE_ABANDONED_KEY_PREFIX, profile)
   )
   if (!stored?.ids?.length || stored.account !== simklAccountMark()) return new Set()
   return new Set(stored.ids)
@@ -367,14 +367,20 @@ function abandonedReconcileIds(): Set<string> {
  *  read-it-back terms as writePendingPushes — a title can only be
  *  treated as given up on once the record saying so exists, or the pass
  *  that reports it goes straight on to ask about it again. */
-function addAbandonedReconcileId(id: string): boolean {
-  const ids = abandonedReconcileIds()
+/** `profile` for the same reason pendingPushes takes one: this is written
+ *  from inside the flush, AFTER its requests, so the live profile is not
+ *  necessarily the one the flush is about. */
+function addAbandonedReconcileId(
+  id: string,
+  profile: string = getDatabase().activeProfile()
+): boolean {
+  const ids = abandonedReconcileIds(profile)
   ids.add(id)
   const record: AbandonedRecord = { account: simklAccountMark(), ids: [...ids] }
   // Durable for the same reason as addIgnoredReconcileId: the person has
   // already been told this title is no longer being flagged.
   getDatabase().putCache(
-    reconcileKey(RECONCILE_ABANDONED_KEY_PREFIX),
+    reconcileKey(RECONCILE_ABANDONED_KEY_PREFIX, profile),
     record,
     RECONCILE_IGNORED_TTL_MS,
     {
@@ -473,8 +479,20 @@ let flushAgain = false
 /** Queued decisions belonging to the account connected right now. A
  *  queue stamped with any other connection is ignored outright — see
  *  simklAccountMark. */
-function pendingPushes(): PendingWatchStatusPush[] {
-  const stored = getDatabase().getCache<PendingQueue>(reconcileKey(RECONCILE_PENDING_KEY_PREFIX))
+/**
+ * `profile` is a parameter rather than a lookup for the same reason the
+ * account stamp is captured rather than derived: every caller that straddles
+ * an `await` has to keep talking about the profile it STARTED with. A flush
+ * that read A's queue, awaited Simkl, and then wrote back under whoever was
+ * active by then applied A's outcome to B's decisions.
+ *
+ * Defaulted for the synchronous callers, where the two are the same value and
+ * spelling it out would only be noise.
+ */
+function pendingPushes(profile: string = getDatabase().activeProfile()): PendingWatchStatusPush[] {
+  const stored = getDatabase().getCache<PendingQueue>(
+    reconcileKey(RECONCILE_PENDING_KEY_PREFIX, profile)
+  )
   if (!stored?.entries?.length) return []
   return stored.account === simklAccountMark() ? stored.entries : []
 }
@@ -489,7 +507,10 @@ function pendingPushes(): PendingWatchStatusPush[] {
  * and callers that are about to tell someone "your choice is kept" have
  * something to check.
  */
-function writePendingPushes(queue: PendingWatchStatusPush[]): boolean {
+function writePendingPushes(
+  queue: PendingWatchStatusPush[],
+  profile: string = getDatabase().activeProfile()
+): boolean {
   const payload: PendingQueue = { account: simklAccountMark(), entries: queue }
   // Durable, and this is the row that most needs it: it IS the record of
   // an acknowledged "keep local" — the panel drops the discrepancy on the
@@ -497,7 +518,7 @@ function writePendingPushes(queue: PendingWatchStatusPush[]): boolean {
   // choice. Losing it to a power cut is the exact failure the queue was
   // built to stop, just with a different cause.
   getDatabase().putCache(
-    reconcileKey(RECONCILE_PENDING_KEY_PREFIX),
+    reconcileKey(RECONCILE_PENDING_KEY_PREFIX, profile),
     payload,
     RECONCILE_PENDING_TTL_MS,
     {
@@ -509,7 +530,7 @@ function writePendingPushes(queue: PendingWatchStatusPush[]): boolean {
   // identical, so comparing ids would call a rejected write a success
   // and let a failing entry sit at the same attempt count forever,
   // never reaching the cap that is supposed to stop it.
-  return JSON.stringify(pendingPushes()) === JSON.stringify(queue)
+  return JSON.stringify(pendingPushes(profile)) === JSON.stringify(queue)
 }
 
 /**
@@ -569,7 +590,17 @@ function pushItemFor(entry: PendingWatchStatusPush): SimklPushItem {
  * that Simkl's own all-items view may not reflect yet.
  */
 async function pushPendingToServices(priority: TaskPriority): Promise<Set<string>> {
-  const queue = pendingPushes()
+  // The profile this flush is ABOUT, captured before the first await and used
+  // for every queue read and write below.
+  //
+  // The account already worked this way, a few lines down, for the identical
+  // reason: a flush issues its requests one after another, and switching
+  // profile during it is as ordinary as signing out during it. Resolving the
+  // profile at write time applied A's confirmed-or-failed outcome to B's
+  // queue — removing B's decision on the strength of A's result, and leaving
+  // A's own queue stale enough to be pushed again later.
+  const profile = getDatabase().activeProfile()
+  const queue = pendingPushes(profile)
   if (!queue.length) return new Set()
   // Not connected — keep everything queued rather than failing attempts
   // against a service that was never asked. Being signed out isn't a push
@@ -680,7 +711,7 @@ async function pushPendingToServices(priority: TaskPriority): Promise<Set<string
 
   // Requests went out, so the pacing starts now — including for the
   // entries this flush is about to mark as having failed.
-  if (sendable.length) startRetryPacing()
+  if (sendable.length) startRetryPacing(profile)
 
   // Nothing below this point is true of the account now connected: the
   // queue these results describe has already been dropped, so writing
@@ -726,7 +757,10 @@ async function pushPendingToServices(priority: TaskPriority): Promise<Set<string
   // requests above were in flight belongs to the next flush, not this
   // one's verdict.
   const { queue: remaining, abandoned } = applyPushOutcome(
-    pendingPushes(),
+    // The captured profile, like every other queue touch in this function:
+    // this read happens after the requests above and would otherwise pick up
+    // whichever profile is active by now.
+    pendingPushes(profile),
     [...confirmed, ...settled],
     failed
   )
@@ -743,13 +777,13 @@ async function pushPendingToServices(priority: TaskPriority): Promise<Set<string
   const letGo: PendingWatchStatusPush[] = []
   const stillHeld: PendingWatchStatusPush[] = []
   for (const entry of abandoned) {
-    ;(addAbandonedReconcileId(entry.id) ? letGo : stillHeld).push(entry)
+    ;(addAbandonedReconcileId(entry.id, profile) ? letGo : stillHeld).push(entry)
   }
 
   // Entries that were pushed and stayed queued now know something new
   // about the remote side — see withPushedRemoteState.
   const kept = withPushedRemoteState([...remaining, ...stillHeld], pushedValue)
-  const persisted = writePendingPushes(kept)
+  const persisted = writePendingPushes(kept, profile)
   // A successful write only vouches for what THIS flush corrected. An
   // entry carrying staleness from an earlier one was written straight
   // back out with that same stale value — the write succeeding says
@@ -805,7 +839,7 @@ async function pushPendingToServices(priority: TaskPriority): Promise<Set<string
     // the failure cooldown would sit on a corrected decision for five
     // minutes. The cooldown is for entries that actually failed.
     if (onDisk.some((entry) => entry.attempts === 0)) scheduleFlush()
-    else scheduleRetry(retryPacingDeadline() - Date.now())
+    else scheduleRetry(retryPacingDeadline(profile) - Date.now())
   }
   return confirmed
 }
@@ -870,18 +904,20 @@ function flushPendingPushes(priority: TaskPriority = 'interactive'): Promise<Set
 
 /** When the next retry is allowed: the later of what was written down
  *  and what this session remembers. */
-function retryPacingDeadline(): number {
+function retryPacingDeadline(profile: string = getDatabase().activeProfile()): number {
   return Math.max(
     retryPacingUntil,
-    getDatabase().getCache<number>(reconcileKey(RECONCILE_RETRY_KEY_PREFIX)) ?? 0
+    getDatabase().getCache<number>(reconcileKey(RECONCILE_RETRY_KEY_PREFIX, profile)) ?? 0
   )
 }
 
-function startRetryPacing(): void {
+/** `profile` for the same reason as the two above — this is armed after the
+ *  flush's requests have gone out. */
+function startRetryPacing(profile: string = getDatabase().activeProfile()): void {
   const until = Date.now() + RECONCILE_RETRY_COOLDOWN_MS
   retryPacingUntil = until
   getDatabase().putCache(
-    reconcileKey(RECONCILE_RETRY_KEY_PREFIX),
+    reconcileKey(RECONCILE_RETRY_KEY_PREFIX, profile),
     until,
     RECONCILE_RETRY_COOLDOWN_MS
   )
@@ -1338,6 +1374,11 @@ export function registerTrackingIpc(): void {
 
   handle<undefined, HomePersonalizedResult>(MEDIA_HUB_CHANNELS.homePersonalized, async () => {
     const db = getDatabase()
+    // Which profile this whole response is about, captured before the first
+    // read. The cold branch below awaits three catalogs before it stores
+    // anything — see storeRecommendations on why the write cannot resolve
+    // this for itself.
+    const profile = db.activeProfile()
     // Local only — see trackingList's own comment above for why: a live/
     // cached Simkl merge here means Continue Watching and the
     // recommendation filter can both keep treating a freshly-unmarked
@@ -1403,7 +1444,10 @@ export function registerTrackingIpc(): void {
           })
       // announce: false — this handler returns the same list to the same
       // renderer on the next line. See storeRecommendations.
-      storeRecommendations(full, preferredGenres, { announce: false })
+      // The profile this request is ABOUT. The cold path awaits catalog reads
+      // before reaching here, so the write must not resolve the profile for
+      // itself — see storeRecommendations.
+      storeRecommendations(full, preferredGenres, { announce: false, profile })
       // Through the same cadence pass the stored path uses, so the row is
       // ordered the same way whichever branch produced it.
       recommendations = applyCadence(full, watchCadenceProfile(history), SERVED_COUNT)

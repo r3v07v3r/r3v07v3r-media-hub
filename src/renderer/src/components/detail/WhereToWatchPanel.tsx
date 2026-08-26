@@ -37,8 +37,17 @@ function Row({ label, providers }: { label: string; providers: WatchProvidersRes
 }
 
 export function WhereToWatchPanel({ media }: { media: MediaItem }) {
-  const [result, setResult] = useState<WatchProvidersResult | null>(null)
+  // The answer carries the title it is about.
+  //
+  // Navigating from one movie to another reuses this component, so a bare
+  // result stayed on screen under the new title while its lookup ran — and if
+  // that lookup failed, or the new title had no supported id at all, it stayed
+  // there indefinitely, confidently listing the first film's services on the
+  // second film's page. Keying it means a mismatched answer is simply not
+  // rendered, with no ordering in which it can be.
+  const [result, setResult] = useState<{ key: string; value: WatchProvidersResult } | null>(null)
   const kind = media.mediaKind ?? (media.mediaType === 'series' ? 'series' : 'movie')
+  const lookupKey = `${kind}:${media.id}`
 
   useEffect(() => {
     const api = window.api?.mediaHub
@@ -50,27 +59,35 @@ export function WhereToWatchPanel({ media }: { media: MediaItem }) {
     api.catalog
       .providers(kind, media.id)
       .then((found) => {
-        if (!cancelled) setResult(found)
+        if (!cancelled) setResult({ key: lookupKey, value: found })
       })
-      .catch(() => {})
+      .catch(() => {
+        // Nothing to show and nothing to keep: the panel disappears rather
+        // than leaving the previous title's services standing.
+        if (!cancelled) setResult(null)
+      })
     return () => {
       cancelled = true
     }
-  }, [kind, media.id])
+  }, [kind, media.id, lookupKey])
 
-  if (!result) return null
-  const anything = result.stream.length || result.rent.length || result.buy.length
+  // A result for a different title is no result at all — which also covers
+  // the early return above, where an unsupported id leaves the last answer
+  // untouched rather than replacing it.
+  if (result?.key !== lookupKey) return null
+  const providers = result.value
+  const anything = providers.stream.length || providers.rent.length || providers.buy.length
   if (!anything) return null
 
   return (
     <section className={`${styles.panel} glass-panel`} aria-label="Where to watch">
       <div className={styles.head}>
         <h2 className={styles.heading}>Where to watch</h2>
-        <span className={styles.region}>{result.region}</span>
+        <span className={styles.region}>{providers.region}</span>
       </div>
-      <Row label="Streaming" providers={result.stream} />
-      <Row label="Rent" providers={result.rent} />
-      <Row label="Buy" providers={result.buy} />
+      <Row label="Streaming" providers={providers.stream} />
+      <Row label="Rent" providers={providers.rent} />
+      <Row label="Buy" providers={providers.buy} />
       {/* TMDB carries JustWatch's data and asks that it be credited. Saying so
           is also the honest thing: this is not the app's own answer. */}
       <p className={styles.credit}>

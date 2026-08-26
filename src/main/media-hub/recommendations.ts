@@ -269,16 +269,26 @@ export function readStoredRecommendations(
 export function storeRecommendations(
   ranked: ScoredRecommendation[],
   preferredGenres: string[],
-  { announce = true }: { announce?: boolean } = {}
+  {
+    announce = true,
+    profile = getDatabase().activeProfile()
+  }: { announce?: boolean; profile?: string } = {}
 ): void {
   if (!ranked.length) return
+  // A ranking belongs to the profile whose history produced it. Both callers
+  // build it across awaits — a catalog read at minimum — so resolving the key
+  // here would file A's taste-ranked titles under whoever is active by the
+  // time the build lands. Discarded rather than mis-filed: a switch means
+  // this ranking is about somebody who is no longer looking at it, and the
+  // incoming profile's own rebuild is already the right answer.
+  if (getDatabase().activeProfile() !== profile) return
   const payload: StoredRecommendations = {
     entries: ranked.slice(0, STORED_COUNT),
     builtAt: Date.now(),
     preferredGenres
   }
   try {
-    getDatabase().putCache(storeKey(), payload, STORE_TTL_MS)
+    getDatabase().putCache(storeKey(profile), payload, STORE_TTL_MS)
   } catch (error) {
     logError('recommendations:store', error)
     return
@@ -326,6 +336,10 @@ export async function rebuildRecommendations(
   if (!pool.length) return 0
 
   const db = getDatabase()
+  // Captured before the catalog reads above have been consumed and before the
+  // ranking below — see storeRecommendations on why the write cannot resolve
+  // it for itself.
+  const profile = db.activeProfile()
   const history = db.history()
   const exclusions = liveExclusions(history)
   const preferredGenres = db.preferredGenres(4)
@@ -359,6 +373,6 @@ export async function rebuildRecommendations(
 
   if (!ranked.length) return 0
 
-  storeRecommendations(ranked, preferredGenres)
+  storeRecommendations(ranked, preferredGenres, { profile })
   return Math.min(ranked.length, STORED_COUNT)
 }
