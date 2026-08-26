@@ -133,9 +133,14 @@ interface MarkSeasonWatchedPayload {
   episodes?: SeasonEpisodePlayback[]
 }
 
-interface ScrobbleStartPayload {
+interface ScrobblePayload {
+  action: 'start' | 'pause' | 'stop'
   item: SimklPushItem
   playback?: PlaybackPosition
+  /** How far through, 0-100. Simkl uses it to decide whether a `stop` means
+   *  "finished" or "gave up", so sending it honestly matters more than the
+   *  other two fields. */
+  progress?: number
 }
 
 interface GetPositionPayload {
@@ -1441,14 +1446,27 @@ export function registerTrackingIpc(): void {
     return { ok: true }
   })
 
-  handle<ScrobbleStartPayload, { connected: boolean }>(
-    MEDIA_HUB_CHANNELS.simklScrobbleStart,
-    async (_e, { item, playback }) => {
+  handle<ScrobblePayload, { connected: boolean }>(
+    MEDIA_HUB_CHANNELS.simklScrobble,
+    async (_e, payload) => {
       if (!simklCredentials().accessToken) return { connected: false }
-      await simklRequest('/scrobble/start', {
-        method: 'POST',
-        body: JSON.stringify(scrobblePayload(item, playback || {}, 0))
-      })
+      const action = payload?.action
+      if (action !== 'start' && action !== 'pause' && action !== 'stop') {
+        return { connected: true }
+      }
+      const progress = Math.min(100, Math.max(0, Number(payload?.progress) || 0))
+      try {
+        await simklRequest(`/scrobble/${action}`, {
+          method: 'POST',
+          body: JSON.stringify(scrobblePayload(payload.item, payload.playback || {}, progress))
+        })
+      } catch (error) {
+        // Never surfaced. A scrobble is a courtesy to a third-party service:
+        // it must not interrupt playback, and an account whose token expired
+        // mid-film should not produce an error over the video every time
+        // somebody pauses. The local history is the record either way.
+        logError('simkl:scrobble', error)
+      }
       return { connected: true }
     }
   )

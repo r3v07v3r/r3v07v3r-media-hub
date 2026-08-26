@@ -553,11 +553,18 @@ const api = {
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.simklPoll, userCode),
       disconnect: (): Promise<{ ok: true }> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.simklDisconnect),
-      scrobbleStart: (
+      scrobble: (
+        action: 'start' | 'pause' | 'stop',
         item: SimklPushItem,
-        playback?: PlaybackPosition
+        playback?: PlaybackPosition,
+        progress?: number
       ): Promise<{ connected: boolean }> =>
-        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.simklScrobbleStart, { item, playback })
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.simklScrobble, {
+          action,
+          item,
+          playback,
+          progress
+        })
     },
 
     mal: {

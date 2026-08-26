@@ -284,6 +284,16 @@ export type PlayerUiEvent =
    *  which is the only answer that can't surprise them. Main-window side
    *  revalidates both numbers before playing anything. */
   | { type: 'play-next'; season: number; episode: number }
+  /** Report in-progress playback to the tracking services.
+   *
+   *  Raised on TRANSITIONS only — started, paused, stopped — not on a timer.
+   *  Simkl's scrobble endpoints are a state machine, not a heartbeat, and a
+   *  call per tick would be a request every few seconds for the whole length
+   *  of a film.
+   *
+   *  Like mark-watched, this carries no item: building the payload needs the
+   *  full MediaItem and that record lives in the main window. */
+  | { type: 'scrobble'; action: 'start' | 'pause' | 'stop'; progress: number }
   | { type: 'notify'; tone: 'info' | 'error' | 'success'; message: string }
   /** Overlay -> main -> main window: OPEN the party panel. A command, for a
    *  panel that is not open yet — the only one of these three that main passes

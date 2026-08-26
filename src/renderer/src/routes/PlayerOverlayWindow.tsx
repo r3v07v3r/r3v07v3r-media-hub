@@ -354,8 +354,15 @@ function PlayerControls() {
   // (the window being destroyed outright).
   const closePlayer = useCallback(() => {
     tracking.savePositionNow()
+    // The one transition the scrobble effect above cannot observe: the window
+    // is going away, so there is no later render to notice it in.
+    ui({
+      type: 'scrobble',
+      action: 'stop',
+      progress: duration > 0 ? Math.round((timePos / duration) * 100) : 0
+    })
     ui({ type: 'stop-playback', watched: tracking.markedWatched() })
-  }, [tracking, ui])
+  }, [tracking, ui, duration, timePos])
 
   /** Applies a partial change over the style in force, as one command. */
   const applySubtitleStyle = useCallback(
@@ -364,6 +371,41 @@ function PlayerControls() {
     },
     [command, subtitleStyle]
   )
+
+  // Tell the tracking services what is happening, on TRANSITIONS only.
+  //
+  // Simkl's scrobble endpoints are a state machine — start, pause, stop — not
+  // a heartbeat, so this fires when the playing state or the title changes and
+  // at no other time. A call per tick would be a request every few seconds for
+  // the length of a film, for a service that wants three.
+  //
+  // A party FOLLOWER still scrobbles: they really are watching it, whoever
+  // pressed play. What they must not do is act on the transition themselves,
+  // and this does not — it only reports.
+  const scrobbleState = useRef<{ key: string; playing: boolean } | null>(null)
+  useEffect(() => {
+    if (!media) return
+    const key = `${media.id}:${media.seasonNumber ?? ''}:${media.episodeNumber ?? ''}`
+    const previous = scrobbleState.current
+    const playing = !paused && state.eofReached !== true
+    if (previous?.key === key && previous.playing === playing) return
+
+    // Progress is read off the live clock rather than stored, because the only
+    // consumer of it is Simkl deciding whether a `stop` was "finished" or
+    // "gave up" — and that is a question about where the person actually was.
+    const progress = duration > 0 ? Math.round((timePos / duration) * 100) : 0
+
+    // A title change stops the OUTGOING one before starting the new one, or
+    // Simkl is left holding a scrobble for something that is no longer playing.
+    if (previous && previous.key !== key) ui({ type: 'scrobble', action: 'stop', progress })
+    scrobbleState.current = { key, playing }
+    ui({ type: 'scrobble', action: playing ? 'start' : 'pause', progress })
+    // timePos and duration are deliberately NOT dependencies: they change
+    // every tick, and depending on them would turn this into the heartbeat it
+    // exists not to be. They are read at the moment a transition happens,
+    // which is the only moment their value is wanted.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [media, paused, state.eofReached, ui])
 
   // The sleep timer's clock. One tick per second while a deadline is set,
   // reaching zero by stopping playback through exactly the path the close

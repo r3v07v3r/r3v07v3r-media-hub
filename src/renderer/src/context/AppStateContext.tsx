@@ -1569,6 +1569,22 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
           void startPartyPlaybackRef.current(media, { season, episode })
           return
         }
+        case 'scrobble': {
+          const media = playbackMediaForEventsRef.current
+          if (!media) return
+          // Fire and forget. A scrobble is a courtesy to a third-party
+          // service; nothing in this app waits on it, and a failure is logged
+          // in main rather than shown over the video.
+          window.api?.mediaHub?.simkl
+            .scrobble(
+              event.action,
+              mediaItemToTrackablePayload(media),
+              { season: media.seasonNumber, episode: media.episodeNumber },
+              event.progress
+            )
+            .catch(() => {})
+          return
+        }
         case 'refresh-watch-status':
           refreshWatchStatusRef.current()
           return
