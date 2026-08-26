@@ -51,7 +51,7 @@ import { isLikelyFranchiseSibling, rankSimilarTitles } from '../../shared/media-
 import { coalesce, coalesceScope, type TaskPriority } from './taskScheduler'
 import { buildGroupedAnimeVideos, groupAnimeCatalog, kitsuRealEpisodes } from './animeSeasons'
 import { omdbRottenTomatoesRating } from './omdb'
-import { titleCredits, titlesFeaturing } from './credits'
+import { searchCredits, titleCredits, titlesFeaturing } from './credits'
 import { watchProviders, watchRegion } from './watchProviders'
 
 const catalogUrls: Record<'movie' | 'series', string> = {
@@ -1108,7 +1108,30 @@ export function registerCatalogIpc(): void {
       if (!isValidCatalogKind(kind)) throw new Error('Unsupported catalog.')
       const q = String(query || '').trim()
       if (q.length < 2) return []
-      return kind === 'anime' ? kitsuSearch(q) : simklSearch(kind, q)
+      const byTitle = kind === 'anime' ? await kitsuSearch(q) : await simklSearch(kind, q)
+
+      // Then the same query against everything already known about each
+      // title's cast, creators and story labels. This is what makes typing a
+      // director's name find their films rather than only films with their
+      // name in the title — the rows are already on disk, so it costs a map
+      // lookup rather than a request.
+      //
+      // AFTER the title matches and never reordering them: somebody typing a
+      // title wants that title first, and a cast match is a useful second
+      // thought rather than a competing answer.
+      const seen = new Set(byTitle.map((item) => String(item.id)))
+      const pool = await catalogData(kind, false, 'interactive').catch(() => [] as CatalogItem[])
+      const byId = new Map(pool.map((item) => [String(item.id), item]))
+      const { people, labels } = searchCredits(byId.keys(), q)
+      const extra: CatalogItem[] = []
+      for (const id of [...people, ...labels]) {
+        if (seen.has(id)) continue
+        const item = byId.get(id)
+        if (!item) continue
+        seen.add(id)
+        extra.push(item)
+      }
+      return [...byTitle, ...extra]
     }
   )
 
