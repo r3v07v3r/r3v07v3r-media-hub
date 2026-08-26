@@ -399,6 +399,31 @@ export interface ViewingStats {
   mostPlayed: { contentId: string; title: string; plays: number }[]
 }
 
+/**
+ * A named collection somebody made themselves.
+ *
+ * Distinct from My List, which is the watchlist the tracking services sync
+ * against and which every profile has exactly one of. These are arbitrary —
+ * "Rewatch with Dad", "Halloween", "Started and gave up" — and belong to
+ * nobody but the person who made them.
+ */
+export interface CustomList {
+  id: string
+  name: string
+  /** How many titles are in it, so the picker can say so without a second
+   *  read per list. */
+  count: number
+  createdAt: string
+}
+
+export interface CustomListItem {
+  contentId: string
+  title: string
+  poster: string
+  type: MediaKind
+  addedAt: string
+}
+
 export interface ContinueWatchingEntry extends CatalogItem {
   continueSeason: number
   continueEpisode: number

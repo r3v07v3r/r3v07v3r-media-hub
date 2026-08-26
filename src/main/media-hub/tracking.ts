@@ -22,6 +22,8 @@ import type {
   HomePersonalizedResult,
   MarkWatchedResult,
   PlaybackPositionResult,
+  CustomList,
+  CustomListItem,
   PlayRecord,
   ViewingStats,
   PendingWatchStatusPush,
@@ -1156,6 +1158,68 @@ export function registerTrackingIpc(): void {
   }))
 
   handle<undefined, ViewingStats>(MEDIA_HUB_CHANNELS.statsGet, () => getDatabase().viewingStats())
+
+  // Lists. Every mutation answers with the whole (short) collection rather
+  // than an ok/not-ok, so the renderer never has to guess what the counts are
+  // now — a list's size changes on every add and remove.
+  handle<undefined, { lists: CustomList[] }>(MEDIA_HUB_CHANNELS.listsList, () => ({
+    lists: getDatabase().lists()
+  }))
+
+  handle<{ name: string }, { lists: CustomList[]; created: CustomList }>(
+    MEDIA_HUB_CHANNELS.listsCreate,
+    (_e, payload) => {
+      const db = getDatabase()
+      const created = db.createList(String(payload?.name ?? ''))
+      return { lists: db.lists(), created }
+    }
+  )
+
+  handle<{ listId: string; name: string }, { lists: CustomList[] }>(
+    MEDIA_HUB_CHANNELS.listsRename,
+    (_e, payload) => {
+      const db = getDatabase()
+      db.renameList(String(payload?.listId ?? ''), String(payload?.name ?? ''))
+      return { lists: db.lists() }
+    }
+  )
+
+  handle<{ listId: string }, { lists: CustomList[] }>(
+    MEDIA_HUB_CHANNELS.listsDelete,
+    (_e, payload) => {
+      const db = getDatabase()
+      db.deleteList(String(payload?.listId ?? ''))
+      return { lists: db.lists() }
+    }
+  )
+
+  handle<{ listId: string }, { items: CustomListItem[] }>(
+    MEDIA_HUB_CHANNELS.listsItems,
+    (_e, payload) => ({ items: getDatabase().listItems(String(payload?.listId ?? '')) })
+  )
+
+  handle<{ listId: string; item: TrackableItem }, { lists: CustomList[] }>(
+    MEDIA_HUB_CHANNELS.listsAdd,
+    (_e, payload) => {
+      const db = getDatabase()
+      db.addToList(String(payload?.listId ?? ''), payload?.item ?? { id: '' })
+      return { lists: db.lists() }
+    }
+  )
+
+  handle<{ listId: string; contentId: string }, { lists: CustomList[] }>(
+    MEDIA_HUB_CHANNELS.listsRemove,
+    (_e, payload) => {
+      const db = getDatabase()
+      db.removeFromList(String(payload?.listId ?? ''), String(payload?.contentId ?? ''))
+      return { lists: db.lists() }
+    }
+  )
+
+  handle<{ contentId: string }, { listIds: string[] }>(
+    MEDIA_HUB_CHANNELS.listsContaining,
+    (_e, payload) => ({ listIds: getDatabase().listsContaining(String(payload?.contentId ?? '')) })
+  )
 
   handle<{ playId: number }, { plays: PlayRecord[] }>(
     MEDIA_HUB_CHANNELS.playDelete,

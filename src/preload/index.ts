@@ -44,6 +44,8 @@ import type {
   PartyQueueEntry,
   PartyStatusResult,
   PlaybackPositionResult,
+  CustomList,
+  CustomListItem,
   PlayRecord,
   ViewingStats,
   PlaybackPrepareProgress,
@@ -390,6 +392,25 @@ const api = {
 
     stats: {
       get: (): Promise<ViewingStats> => ipcRenderer.invoke(MEDIA_HUB_CHANNELS.statsGet)
+    },
+
+    lists: {
+      list: (): Promise<{ lists: CustomList[] }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.listsList),
+      create: (name: string): Promise<{ lists: CustomList[]; created: CustomList }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.listsCreate, { name }),
+      rename: (listId: string, name: string): Promise<{ lists: CustomList[] }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.listsRename, { listId, name }),
+      remove: (listId: string): Promise<{ lists: CustomList[] }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.listsDelete, { listId }),
+      items: (listId: string): Promise<{ items: CustomListItem[] }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.listsItems, { listId }),
+      add: (listId: string, item: TrackableItem): Promise<{ lists: CustomList[] }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.listsAdd, { listId, item }),
+      removeItem: (listId: string, contentId: string): Promise<{ lists: CustomList[] }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.listsRemove, { listId, contentId }),
+      containing: (contentId: string): Promise<{ listIds: string[] }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.listsContaining, { contentId })
     },
 
     ratings: {

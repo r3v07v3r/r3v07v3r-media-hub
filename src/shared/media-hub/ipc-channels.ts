@@ -78,6 +78,16 @@ export const MEDIA_HUB_CHANNELS = {
   playDelete: 'mediahub:plays:delete',
   /** What the viewing adds up to — see database.ts's `viewingStats`. */
   statsGet: 'mediahub:stats:get',
+  /** Named collections somebody made themselves — distinct from My List,
+   *  which is the watchlist the tracking services sync against. */
+  listsList: 'mediahub:lists:list',
+  listsCreate: 'mediahub:lists:create',
+  listsRename: 'mediahub:lists:rename',
+  listsDelete: 'mediahub:lists:delete',
+  listsItems: 'mediahub:lists:items',
+  listsAdd: 'mediahub:lists:add',
+  listsRemove: 'mediahub:lists:remove',
+  listsContaining: 'mediahub:lists:containing',
   ratingsList: 'mediahub:ratings:list',
   dislikedList: 'mediahub:disliked:list',
   dislikedAdd: 'mediahub:disliked:add',

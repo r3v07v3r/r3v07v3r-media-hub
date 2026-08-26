@@ -5,6 +5,7 @@
 // from this project's bundled @types/node (see node_modules/@types/node/
 // sqlite.d.ts) which already ships the v22 `node:sqlite` surface, so no
 // ambient declarations were needed here.
+import crypto from 'node:crypto'
 import { DatabaseSync, type SQLOutputValue, type StatementSync } from 'node:sqlite'
 import { readBackup, restoreBackup, writeBackup, type RestoreSummary } from './backup'
 import { migrate } from './migrations'
@@ -14,6 +15,8 @@ import type {
   Episode,
   HistoryEntry,
   MediaKind,
+  CustomList,
+  CustomListItem,
   PlayRecord,
   TrackedItem,
   TrackedUpdate,
@@ -154,6 +157,21 @@ export interface MediaHubDatabase {
   rate(contentId: string | number, score: number): void
   /** Every score the active profile has given, keyed by content id. */
   ratings(): Map<string, number>
+  /** The active profile's own named lists, with their sizes. */
+  lists(): CustomList[]
+  /** Creates a list and returns it. Names are not unique — two lists called
+   *  "Halloween" is somebody's business, not an error to raise at them. */
+  createList(name: string): CustomList
+  renameList(listId: string, name: string): boolean
+  /** Removes the list and everything in it (the foreign key cascades). */
+  deleteList(listId: string): boolean
+  listItems(listId: string): CustomListItem[]
+  /** Adds a title, or updates the metadata already stored for it. */
+  addToList(listId: string, item: Partial<CatalogItem> & { id: unknown }): boolean
+  removeFromList(listId: string, contentId: string | number): boolean
+  /** Which of this profile's lists a title is in — one read for a picker that
+   *  has to tick several boxes at once. */
+  listsContaining(contentId: string | number): string[]
   /**
    * The active profile's viewing, newest first — one row per play rather than
    * one per title, so a rewatch appears twice.
@@ -242,6 +260,16 @@ export interface MediaHubDatabase {
 
 interface PreparedQueries {
   track: StatementSync
+  lists: StatementSync
+  createList: StatementSync
+  renameList: StatementSync
+  deleteList: StatementSync
+  nextListOrder: StatementSync
+  listItems: StatementSync
+  addListItem: StatementSync
+  removeListItem: StatementSync
+  listOwned: StatementSync
+  listMembership: StatementSync
   statsRows: StatementSync
   plays: StatementSync
   deletePlay: StatementSync
@@ -432,6 +460,40 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
     // One pass over the profile's plays, joined to nothing. Everything the
     // stats need is already on the row or in its stored metadata, which is
     // what keeps this a local read rather than a catalog crawl.
+    lists: sql.prepare(
+      `SELECT l.list_id, l.name, l.created_at, COUNT(i.content_id) AS count
+       FROM lists l LEFT JOIN list_items i ON i.list_id = l.list_id
+       WHERE l.profile_id=? GROUP BY l.list_id ORDER BY l.sort_order, l.created_at`
+    ),
+    createList: sql.prepare(
+      'INSERT INTO lists(list_id,profile_id,name,sort_order,created_at) VALUES(?,?,?,?,?)'
+    ),
+    renameList: sql.prepare('UPDATE lists SET name=? WHERE profile_id=? AND list_id=?'),
+    // list_items has ON DELETE CASCADE and foreign keys are on, so its rows go
+    // with the list rather than being orphaned.
+    deleteList: sql.prepare('DELETE FROM lists WHERE profile_id=? AND list_id=?'),
+    nextListOrder: sql.prepare(
+      'SELECT COALESCE(MAX(sort_order), -1) + 1 AS next FROM lists WHERE profile_id=?'
+    ),
+    // Scoped through the parent list rather than carrying its own profile
+    // column: a list_id already belongs to exactly one profile, and a second
+    // copy of that fact is a second thing that can disagree.
+    listItems: sql.prepare(
+      `SELECT i.content_id, i.added_at, i.metadata_json FROM list_items i
+       JOIN lists l ON l.list_id = i.list_id
+       WHERE l.profile_id=? AND i.list_id=? ORDER BY i.sort_order, i.added_at DESC`
+    ),
+    addListItem: sql.prepare(
+      `INSERT INTO list_items(list_id,content_id,sort_order,added_at,metadata_json)
+       VALUES(@list,@id,@order,@now,@json)
+       ON CONFLICT(list_id,content_id) DO UPDATE SET metadata_json=excluded.metadata_json`
+    ),
+    removeListItem: sql.prepare('DELETE FROM list_items WHERE list_id=? AND content_id=?'),
+    listOwned: sql.prepare('SELECT 1 FROM lists WHERE profile_id=? AND list_id=?'),
+    listMembership: sql.prepare(
+      `SELECT i.list_id FROM list_items i JOIN lists l ON l.list_id = i.list_id
+       WHERE l.profile_id=? AND i.content_id=?`
+    ),
     statsRows: sql.prepare(
       'SELECT content_id,type,title,season,episode,watched_at,metadata_json FROM plays WHERE profile_id=?'
     ),
@@ -642,6 +704,122 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
         // Best-effort like every other read here: a stats page that cannot be
         // computed shows nothing, it does not take the page down with it.
         return empty
+      }
+    },
+
+    lists() {
+      try {
+        return (q.lists.all(currentProfileId) as Row[]).map((row) => ({
+          id: String(row.list_id),
+          name: String(row.name),
+          count: Number(row.count) || 0,
+          createdAt: String(row.created_at)
+        }))
+      } catch {
+        return []
+      }
+    },
+
+    createList(name) {
+      try {
+        const trimmed = String(name || '')
+          .trim()
+          .slice(0, 80)
+        if (!trimmed) throw new Error('A list needs a name.')
+        const id = crypto.randomUUID()
+        const now = new Date().toISOString()
+        const order = Number((q.nextListOrder.get(currentProfileId) as Row | undefined)?.next ?? 0)
+        durable(() => q.createList.run(id, currentProfileId, trimmed, order, now))
+        return { id, name: trimmed, count: 0, createdAt: now }
+      } catch (error) {
+        return fail(error as Error)
+      }
+    },
+
+    renameList(listId, name) {
+      try {
+        const trimmed = String(name || '')
+          .trim()
+          .slice(0, 80)
+        if (!trimmed) return false
+        return durable(
+          () => q.renameList.run(trimmed, currentProfileId, String(listId)).changes > 0
+        )
+      } catch (error) {
+        return fail(error as Error)
+      }
+    },
+
+    deleteList(listId) {
+      try {
+        return durable(() => q.deleteList.run(currentProfileId, String(listId)).changes > 0)
+      } catch (error) {
+        return fail(error as Error)
+      }
+    },
+
+    listItems(listId) {
+      try {
+        return (q.listItems.all(currentProfileId, String(listId)) as Row[]).map((row) => {
+          const meta = parse<Partial<TrackedItem>>(row.metadata_json as string, {})
+          return {
+            contentId: String(row.content_id),
+            title: String(meta.title ?? 'Untitled'),
+            poster: String(meta.poster ?? ''),
+            type: (meta.type ?? 'movie') as MediaKind,
+            addedAt: String(row.added_at)
+          }
+        })
+      } catch {
+        return []
+      }
+    },
+
+    addToList(listId, item) {
+      try {
+        const id = String(listId)
+        // Checked rather than trusted: the list id crosses IPC, and without
+        // this a renderer could write into another profile's list — the
+        // list_items table has no profile column of its own, deliberately, so
+        // this IS the check.
+        if (!q.listOwned.get(currentProfileId, id)) return false
+        const value = normalizeTitle(item)
+        durable(() =>
+          q.addListItem.run({
+            list: id,
+            id: value.id,
+            // Newest first within a list, which is what the read's ORDER BY
+            // resolves to once every row shares an order of 0. Explicit
+            // ordering is a later feature; this is the sensible default until
+            // there is something to drag.
+            order: 0,
+            now: new Date().toISOString(),
+            json: JSON.stringify(value)
+          })
+        )
+        return true
+      } catch (error) {
+        return fail(error as Error)
+      }
+    },
+
+    removeFromList(listId, contentId) {
+      try {
+        const id = String(listId)
+        if (!q.listOwned.get(currentProfileId, id)) return false
+        return durable(() => q.removeListItem.run(id, String(contentId)).changes > 0)
+      } catch (error) {
+        return fail(error as Error)
+      }
+    },
+
+    listsContaining(contentId) {
+      try {
+        return (q.listMembership.all(currentProfileId, String(contentId)) as Row[]).map((row) =>
+          String(row.list_id)
+        )
+      } catch {
+        return []
       }
     },
 

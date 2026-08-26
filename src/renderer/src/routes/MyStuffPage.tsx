@@ -16,20 +16,20 @@ import { useAppState } from '@renderer/context/AppStateContext'
 import { Icon } from '@renderer/components/icons/Icon'
 import { ComingSoonSection } from '@renderer/components/placeholder/ComingSoonSection'
 import { useRestoreBrowsingOrigin } from '@renderer/lib/mediaHub/useRestoreBrowsingOrigin'
-import { useMediaHubPlays } from '@renderer/lib/mediaHub/hooks'
+import { useMediaHubLists, useMediaHubPlays } from '@renderer/lib/mediaHub/hooks'
 import { resolveArtwork } from '@renderer/lib/artwork'
 import { ArtworkImage } from '@renderer/components/media/ArtworkImage'
 import { WatchStatusBadge } from '@renderer/components/media/WatchStatusBadge'
 import { getWatchStatus } from '@renderer/lib/mediaHub/watchStatus'
 import { applyWatchStateFilters } from '@renderer/lib/mediaHub/categoryFilters'
 import type { MediaItem } from '@renderer/types'
-import type { PlayRecord, ViewingStats } from '@shared/media-hub/types'
+import type { CustomListItem, PlayRecord, ViewingStats } from '@shared/media-hub/types'
 import styles from './MyStuff.module.css'
 
 type TabId = 'list' | 'progress' | 'watched' | 'rated' | 'history' | 'stats' | 'dropped'
 
 const TABS: { id: TabId; label: string }[] = [
-  { id: 'list', label: 'My List' },
+  { id: 'list', label: 'Lists' },
   { id: 'progress', label: 'In progress' },
   { id: 'watched', label: 'Watched' },
   { id: 'rated', label: 'Rated' },
@@ -296,6 +296,194 @@ function StatsView() {
   )
 }
 
+/**
+ * My List and any named lists somebody has made, behind one set of chips.
+ *
+ * My List is deliberately first and cannot be renamed or deleted: it is the
+ * watchlist the tracking services sync against, not one collection among
+ * several. The custom lists beside it are arbitrary and belong to nobody but
+ * the person who made them.
+ */
+function ListsView({
+  watchlist,
+  onRemoveFromWatchlist
+}: {
+  watchlist: MediaItem[]
+  onRemoveFromWatchlist: (media: MediaItem) => void
+}) {
+  const { lists, loaded, create, rename, remove, removeItem } = useMediaHubLists()
+  // null selects My List; a list id selects that one.
+  const [selected, setSelected] = useState<string | null>(null)
+  const [items, setItems] = useState<CustomListItem[]>([])
+  const [naming, setNaming] = useState(false)
+  const [draftName, setDraftName] = useState('')
+  const { openDetail } = useAppState()
+
+  // A selected list that has just been deleted falls back to My List rather
+  // than leaving the chips with nothing highlighted.
+  const selectedList = lists.find((list) => list.id === selected) ?? null
+  const effective = selectedList?.id ?? null
+
+  useEffect(() => {
+    if (!effective) return
+    let cancelled = false
+    window.api?.mediaHub?.lists
+      .items(effective)
+      .then((result) => {
+        if (!cancelled) setItems(result.items)
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+    // `lists` is a dependency because a remove changes the counts, and what is
+    // shown has to change with them.
+  }, [effective, lists])
+
+  async function submitName() {
+    const name = draftName.trim()
+    setNaming(false)
+    setDraftName('')
+    if (!name) return
+    const created = await create(name)
+    if (created) setSelected(created.id)
+  }
+
+  return (
+    <>
+      <div className={styles.chips}>
+        <button
+          type="button"
+          className={`${styles.chip} ${effective === null ? styles.chipActive : ''}`}
+          onClick={() => setSelected(null)}
+        >
+          My List <span className={styles.chipCount}>{watchlist.length}</span>
+        </button>
+        {lists.map((list) => (
+          <button
+            key={list.id}
+            type="button"
+            className={`${styles.chip} ${effective === list.id ? styles.chipActive : ''}`}
+            onClick={() => setSelected(list.id)}
+          >
+            {list.name} <span className={styles.chipCount}>{list.count}</span>
+          </button>
+        ))}
+        {naming ? (
+          <form
+            className={styles.chipForm}
+            onSubmit={(event) => {
+              event.preventDefault()
+              void submitName()
+            }}
+          >
+            <input
+              autoFocus
+              className={styles.chipInput}
+              value={draftName}
+              maxLength={80}
+              placeholder="List name"
+              aria-label="New list name"
+              onChange={(event) => setDraftName(event.target.value)}
+              onBlur={() => void submitName()}
+              onKeyDown={(event) => {
+                if (event.key === 'Escape') {
+                  setNaming(false)
+                  setDraftName('')
+                }
+              }}
+            />
+          </form>
+        ) : (
+          <button
+            type="button"
+            className={styles.chip}
+            onClick={() => setNaming(true)}
+            disabled={!loaded}
+          >
+            + New list
+          </button>
+        )}
+      </div>
+
+      {effective === null || !selectedList ? (
+        <TitleGrid
+          items={watchlist}
+          emptyMessage="Nothing saved yet. Add a title with My List and it appears here."
+          action={{ label: 'Remove', onClick: onRemoveFromWatchlist }}
+        />
+      ) : (
+        <>
+          <div className={styles.listActions}>
+            <button
+              type="button"
+              className={styles.remove}
+              onClick={() => {
+                const name = window.prompt('Rename this list', selectedList.name)
+                if (name !== null) void rename(effective, name)
+              }}
+            >
+              Rename
+            </button>
+            <button
+              type="button"
+              className={styles.remove}
+              onClick={() => {
+                // Confirmed because it takes the contents with it: the foreign
+                // key cascades, and there is no undo behind this.
+                if (window.confirm(`Delete "${selectedList.name}" and everything in it?`)) {
+                  void remove(effective)
+                  setSelected(null)
+                }
+              }}
+            >
+              Delete list
+            </button>
+          </div>
+          {items.length === 0 ? (
+            <p className={styles.empty}>
+              Nothing in this list yet. Add titles from their own page.
+            </p>
+          ) : (
+            <div className={styles.grid}>
+              {items.map((item) => (
+                <div key={item.contentId} className={styles.card}>
+                  <button
+                    type="button"
+                    className={styles.art}
+                    onClick={() =>
+                      // A stored row carries only what a list needs to draw
+                      // itself, so opening one hands the catalog an id and a
+                      // kind rather than pretending this is a full MediaItem.
+                      openDetail({ id: item.contentId, mediaKind: item.type } as MediaItem)
+                    }
+                  >
+                    {item.poster ? (
+                      <img className={styles.artImage} src={item.poster} alt="" />
+                    ) : null}
+                  </button>
+                  <div className={styles.info}>
+                    <span className={styles.title}>{item.title}</span>
+                    <button
+                      type="button"
+                      className={styles.remove}
+                      onClick={() => void removeItem(effective, item.contentId)}
+                      aria-label={`Remove ${item.title} from ${selectedList.name}`}
+                    >
+                      <Icon name="x" size={12} />
+                      Remove
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </>
+      )}
+    </>
+  )
+}
+
 export default function MyStuffPage() {
   const {
     myList,
@@ -398,13 +586,7 @@ export default function MyStuffPage() {
         ))}
       </div>
 
-      {tab === 'list' && (
-        <TitleGrid
-          items={listItems}
-          emptyMessage="Nothing saved yet. Add a title with “My List” and it appears here."
-          action={{ label: 'Remove', onClick: (media) => toggleMyList(media) }}
-        />
-      )}
+      {tab === 'list' && <ListsView watchlist={listItems} onRemoveFromWatchlist={toggleMyList} />}
 
       {tab === 'progress' && (
         <TitleGrid

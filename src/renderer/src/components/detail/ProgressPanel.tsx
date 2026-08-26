@@ -2,7 +2,9 @@
 
 import type { ContinueWatchingItem, MediaItem } from '@renderer/types'
 import type { DetailAdapterConfig } from '@renderer/lib/mediaHub/detailAdapters'
+import { useEffect, useState } from 'react'
 import { Icon } from '@renderer/components/icons/Icon'
+import { useMediaHubLists } from '@renderer/lib/mediaHub/hooks'
 import styles from './ProgressPanel.module.css'
 
 export interface ProgressPanelProps {
@@ -115,6 +117,7 @@ export function ProgressPanel({
         >
           {inMyList ? config.trackedLabel : config.trackLabel}
         </button>
+        <AddToListButton media={media} />
       </div>
 
       {config.isEpisodic ? (
@@ -182,5 +185,91 @@ export function ProgressPanel({
         </div>
       )}
     </section>
+  )
+}
+
+/**
+ * "Add to a list" — a menu of the person's own named lists, with a tick beside
+ * the ones this title is already in.
+ *
+ * Membership is fetched when the menu OPENS rather than with the page. Most
+ * visits to a title page never touch this, and a query per detail page for a
+ * control nobody pressed is exactly the kind of cost the roadmap's fourth
+ * ground rule exists to prevent.
+ *
+ * Renders nothing when there are no lists AND the person has not opened it —
+ * the first list has to be made in My Stuff, and a permanently empty menu on
+ * every title page would be noise.
+ */
+function AddToListButton({ media }: { media: MediaItem }) {
+  const { lists, add, removeItem } = useMediaHubLists()
+  const [open, setOpen] = useState(false)
+  const [memberOf, setMemberOf] = useState<Set<string>>(new Set())
+
+  useEffect(() => {
+    if (!open) return
+    let cancelled = false
+    window.api?.mediaHub?.lists
+      .containing(media.id)
+      .then((result) => {
+        if (!cancelled) setMemberOf(new Set(result.listIds))
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [open, media.id, lists])
+
+  if (lists.length === 0) return null
+
+  function toggle(listId: string): void {
+    if (memberOf.has(listId)) {
+      void removeItem(listId, media.id)
+      setMemberOf((previous) => {
+        const next = new Set(previous)
+        next.delete(listId)
+        return next
+      })
+      return
+    }
+    void add(listId, {
+      id: media.id,
+      type: media.mediaKind ?? (media.mediaType === 'series' ? 'series' : 'movie'),
+      title: media.title,
+      poster: media.posterUrl ?? '',
+      year: media.releaseYear ? String(media.releaseYear) : ''
+    })
+    setMemberOf((previous) => new Set(previous).add(listId))
+  }
+
+  return (
+    <span className={styles.listPicker}>
+      <button
+        type="button"
+        className={styles.followChip}
+        aria-expanded={open}
+        onClick={() => setOpen((value) => !value)}
+      >
+        <Icon name="plus" size={13} />
+        Add to list
+      </button>
+      {open && (
+        <div className={styles.listMenu} role="menu">
+          {lists.map((list) => (
+            <button
+              key={list.id}
+              type="button"
+              role="menuitemcheckbox"
+              aria-checked={memberOf.has(list.id)}
+              className={styles.listMenuItem}
+              onClick={() => toggle(list.id)}
+            >
+              {list.name}
+              {memberOf.has(list.id) ? ' ✓' : ''}
+            </button>
+          ))}
+        </div>
+      )}
+    </span>
   )
 }

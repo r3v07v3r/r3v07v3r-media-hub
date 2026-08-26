@@ -20,7 +20,13 @@
 // taste in films.
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import type { CatalogItem, HistoryEntry, MediaKind, PlayRecord } from '@shared/media-hub/types'
+import type {
+  CatalogItem,
+  CustomList,
+  HistoryEntry,
+  MediaKind,
+  PlayRecord
+} from '@shared/media-hub/types'
 import type { ContinueWatchingItem, MediaItem, Recommendation } from '@renderer/types'
 import { AI_PICKS, CATALOG, CONTINUE_WATCHING, FEATURED_ITEMS } from '@renderer/data/mockData'
 import {
@@ -544,6 +550,110 @@ export function useMediaHubDislikedIds(): DislikedIdsResult {
 
   const refresh = useCallback(() => setGeneration((g) => g + 1), [])
   return useMemo(() => ({ dislikedIds, loaded, refresh }), [dislikedIds, loaded, refresh])
+}
+
+/** Matches the preload's own local alias — the minimum a title needs to be
+ *  written into a list, which is a partial catalog item with a real id. */
+type TrackableItem = Partial<CatalogItem> & { id: string }
+
+export interface ListsResult {
+  lists: CustomList[]
+  loaded: boolean
+  create: (name: string) => Promise<CustomList | null>
+  rename: (listId: string, name: string) => Promise<void>
+  remove: (listId: string) => Promise<void>
+  add: (listId: string, item: TrackableItem) => Promise<void>
+  removeItem: (listId: string, contentId: string) => Promise<void>
+}
+
+/**
+ * The active profile's own named lists.
+ *
+ * Every mutation adopts the collection the backend answers with rather than
+ * patching the local copy: a list's COUNT changes on every add and remove, and
+ * keeping a second tally in the renderer is how a picker ends up saying "3
+ * titles" over a list of four.
+ */
+export function useMediaHubLists(): ListsResult {
+  const [lists, setLists] = useState<CustomList[]>([])
+  const [loaded, setLoaded] = useState(() => !window.api?.mediaHub)
+
+  useEffect(() => {
+    let cancelled = false
+    const api = window.api?.mediaHub
+    if (!api) return
+    api.lists
+      .list()
+      .then((result) => {
+        if (cancelled) return
+        setLists(result.lists)
+        setLoaded(true)
+      })
+      .catch(() => {
+        if (!cancelled) setLoaded(true)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  const create = useCallback(async (name: string) => {
+    const api = window.api?.mediaHub
+    if (!api) return null
+    try {
+      const result = await api.lists.create(name)
+      setLists(result.lists)
+      return result.created
+    } catch {
+      return null
+    }
+  }, [])
+
+  const mutate = useCallback(async (run: () => Promise<{ lists: CustomList[] }>) => {
+    try {
+      setLists((await run()).lists)
+    } catch {
+      // Best-effort, like the rest of these: the collection on screen stays as
+      // it was rather than being cleared by a failed write.
+    }
+  }, [])
+
+  const rename = useCallback(
+    async (listId: string, name: string) => {
+      const api = window.api?.mediaHub
+      if (api) await mutate(() => api.lists.rename(listId, name))
+    },
+    [mutate]
+  )
+
+  const remove = useCallback(
+    async (listId: string) => {
+      const api = window.api?.mediaHub
+      if (api) await mutate(() => api.lists.remove(listId))
+    },
+    [mutate]
+  )
+
+  const add = useCallback(
+    async (listId: string, item: TrackableItem) => {
+      const api = window.api?.mediaHub
+      if (api) await mutate(() => api.lists.add(listId, item))
+    },
+    [mutate]
+  )
+
+  const removeItem = useCallback(
+    async (listId: string, contentId: string) => {
+      const api = window.api?.mediaHub
+      if (api) await mutate(() => api.lists.removeItem(listId, contentId))
+    },
+    [mutate]
+  )
+
+  return useMemo(
+    () => ({ lists, loaded, create, rename, remove, add, removeItem }),
+    [lists, loaded, create, rename, remove, add, removeItem]
+  )
 }
 
 export interface PlaysResult {

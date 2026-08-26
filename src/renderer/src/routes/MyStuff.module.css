@@ -370,3 +370,87 @@
   font-variant-numeric: tabular-nums;
   text-align: right;
 }
+
+/* ---- List chips -------------------------------------------------------- */
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 20px;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  appearance: none;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  padding: 6px 14px;
+  cursor: pointer;
+  transition:
+    color var(--transition-fast),
+    border-color var(--transition-fast),
+    background var(--transition-fast);
+}
+
+.chip:hover:not(:disabled) {
+  color: var(--text-primary);
+  border-color: var(--border-active);
+}
+
+.chip:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.chipActive {
+  color: var(--text-primary);
+  border-color: var(--border-active);
+  background: var(--panel);
+}
+
+/* Tabular so a list going from 9 to 10 does not nudge the chip wider. */
+.chipCount {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.chipForm {
+  display: contents;
+}
+
+.chipInput {
+  border: 1px solid var(--border-active);
+  border-radius: var(--radius-pill);
+  background: var(--panel);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 12.5px;
+  padding: 6px 14px;
+  width: 150px;
+}
+
+.chipInput:focus-visible {
+  outline: 2px solid var(--accent-cyan);
+  outline-offset: 1px;
+}
+
+.chip:focus-visible {
+  outline: 2px solid var(--accent-cyan);
+  outline-offset: 2px;
+}
+
+.listActions {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 16px;
+}
