@@ -21,6 +21,8 @@
 // special-cased TORBOX-prefixed URLs.
 
 import type {
+  CacheSessionMeta,
+  CacheSourceRef,
   BootstrapResult,
   LibraryItem,
   PlaybackResult,
@@ -48,6 +50,7 @@ import { sanitizeTrackers } from './security'
 import { catalogData } from './catalog'
 import { isAllowedRemoteMediaUrl } from './playback'
 import { jellyfinFingerprint } from './jellyfin'
+import { findLocalCacheCandidate } from './streamCache'
 import { findMediaServerCandidate, mediaServerConfig, mediaServerStreamUrl } from './mediaSources'
 import { preparePlayback } from './playbackSession'
 import { reportPreparation } from './playbackProgress'
@@ -150,6 +153,39 @@ function streamReleaseText(stream: StreamCandidate): string {
   return text.split('\n')[0]
 }
 
+/**
+ * Whether a copy is good enough to stop the search at its tier.
+ *
+ * The rule is "nearest source that actually delivers the quality asked
+ * for": with a target set, a nearer copy below it is passed over and the
+ * next tier is tried. A target of 0 ("Any") accepts anything, and an
+ * unknown resolution is accepted rather than discarded — refusing to play
+ * a copy we hold because its metadata is thin would be worse than playing
+ * it.
+ */
+function meetsQualityTarget(resolution: number | undefined, target: number | undefined): boolean {
+  if (!target) return true
+  if (!resolution) return true
+  return resolution >= target
+}
+
+/** The cache-session identity for a resolve request, in exactly the shape
+ *  play:stream writes. Returns undefined when the caller did not supply
+ *  one, which disables the local tier rather than guessing wrong. */
+function cacheMetaFor(
+  payload: StreamResolvePayload,
+  title: string | undefined
+): CacheSessionMeta | undefined {
+  const key = payload.cacheKey
+  if (!key?.catalogId) return undefined
+  return {
+    title: title ?? '',
+    catalogId: key.catalogId,
+    seasonNumber: key.seasonNumber,
+    episodeNumber: key.episodeNumber
+  }
+}
+
 /** Narrows a persisted settings value to a known preference. An unknown
  *  or absent value means the default, never a crash — settings files
  *  outlive the code that wrote them. */
@@ -190,6 +226,11 @@ interface StreamResolvePayload {
    *  See titleMatchesRelease's own doc comment for what this guards
    *  against. */
   title?: string
+  /** The identity play:stream will store on the cache session. Supplied so
+   *  the local-cache tier compares like with like instead of guessing it
+   *  from `id` — see the preload comment on resolve(). Optional: without
+   *  it the local tier simply does not fire. */
+  cacheKey?: { catalogId?: string; seasonNumber?: number; episodeNumber?: number }
 }
 
 interface PlayStreamPayload {
@@ -273,7 +314,8 @@ export function registerTorBoxIpc(): void {
 
   handle<StreamResolvePayload, StreamResolveResult>(
     MEDIA_HUB_CHANNELS.streamResolve,
-    async (_e, { type, id, title }) => {
+    async (_e, payload) => {
+      const { type, id, title } = payload
       const auth = getTorBoxToken()
       const mediaServer = mediaServerConfig()
       // Either source alone is a complete configuration. Only having
@@ -308,6 +350,36 @@ export function registerTorBoxIpc(): void {
       // answer that hadn't changed.
       const recent = db.getCache<StreamResolveResult>(key)
       if (recent) return recent
+
+      // TIER 1 — already on this machine.
+      //
+      // Answered from the filesystem alone: no source contacted, no
+      // network touched, so a title we already hold plays with the link
+      // down. A COMPLETE session is returned outright; a partial one is
+      // returned carrying the release it holds (sourceRef), so the tiers
+      // below resume that same encode rather than a different one.
+      //
+      // Subject to the quality target like every other tier: a cached
+      // 720p copy does not win when 1080p was asked for.
+      const cached = await findLocalCacheCandidate(cacheMetaFor(payload, title))
+      if (cached && meetsQualityTarget(cached.resolution, limits.maxResolution)) {
+        const candidate: StreamCandidate = {
+          source: 'localcache',
+          cacheToken: cached.token,
+          complete: cached.complete,
+          name: cached.title,
+          resolution: cached.resolution,
+          cached: true,
+          compatible: true,
+          exact: true,
+          ...(cached.sourceRef ?? {})
+        }
+        if (cached.complete) {
+          const result: StreamResolveResult = { streams: [candidate], best: candidate }
+          db.putCache(key, result, 60 * 60 * 1000)
+          return result
+        }
+      }
 
       // Asked BEFORE the remembered-stream path below, not after.
       //
@@ -557,6 +629,17 @@ export function registerTorBoxIpc(): void {
       // opens it the same way and the same stream gets remembered. Shared
       // as a closure rather than duplicated so the two branches can never
       // drift on cache metadata or the last-stream memo.
+      // Recorded on the session so tier 1 can tell later WHICH encode these
+      // bytes are. Without it a partial session cannot be safely resumed —
+      // resuming against a different release of the same title splices two
+      // files together and plays corrupt video.
+      const sourceRef: CacheSourceRef = {
+        source: stream?.source ?? 'torbox',
+        infoHash: stream?.infoHash,
+        itemId: stream?.itemId,
+        mediaSourceId: stream?.mediaSourceId
+      }
+
       const finish = async (url: string): Promise<PlaybackResult> => {
         const result = await preparePlayback(
           url,
@@ -567,7 +650,9 @@ export function registerTorBoxIpc(): void {
                 catalogId,
                 mediaKind: type as 'movie' | 'series' | 'anime' | undefined,
                 seasonNumber: season,
-                episodeNumber: episode
+                episodeNumber: episode,
+                sourceRef,
+                resolution: Number(stream?.resolution) || undefined
               }
             : undefined
         )
@@ -580,6 +665,36 @@ export function registerTorBoxIpc(): void {
           getDatabase().putCache(lastStreamKey(type, resolveId), stream, LAST_STREAM_TTL_MS)
         }
         return result
+      }
+
+      // Tier 1's own tail. Same memo and metadata handling as `finish`,
+      // but preparePlayback opens the existing session instead of a link.
+      const finishLocal = async (cacheToken: string): Promise<PlaybackResult> => {
+        const result = await preparePlayback(
+          '',
+          title
+            ? {
+                title,
+                posterUrl,
+                catalogId,
+                mediaKind: type as 'movie' | 'series' | 'anime' | undefined,
+                seasonNumber: season,
+                episodeNumber: episode
+              }
+            : undefined,
+          cacheToken
+        )
+        if (type && resolveId) {
+          getDatabase().putCache(lastStreamKey(type, resolveId), stream, LAST_STREAM_TTL_MS)
+        }
+        return result
+      }
+
+      // Tier 1: the bytes are already on this disk. No URL to build, no
+      // source to contact — hand the cache session straight to the player.
+      if (stream?.source === 'localcache' && stream.complete && stream.cacheToken) {
+        reportPreparation('buffer', 'Playing from this computer')
+        return finishLocal(String(stream.cacheToken))
       }
 
       // The media server needs none of the TorBox machinery below — no

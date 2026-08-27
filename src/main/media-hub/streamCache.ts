@@ -49,7 +49,11 @@ import { assertPublicMediaUrl, defaultResolveHost, fetchMediaWithRetry } from '.
 import { logError } from './logger'
 import { formatMegabytes, reportPreparation } from './playbackProgress'
 import { readSettings } from './settingsStore'
-import type { CacheSessionMeta, StreamCacheEntry } from '../../shared/media-hub/types'
+import type {
+  CacheSessionMeta,
+  CacheSourceRef,
+  StreamCacheEntry
+} from '../../shared/media-hub/types'
 
 const CHUNK_BYTES = 4 * 1024 * 1024
 const HEAD_BYTES = 16 * 1024 * 1024
@@ -465,6 +469,13 @@ export interface StreamCache {
   stop(): Promise<void>
   /** stop() + delete the session's chunk directory. */
   deleteSession(): Promise<void>
+  /** Tier 1: open an already-complete session from disk, with no network.
+   *  See startLocal's own comment for why this is separate from start(). */
+  startLocal(
+    sessionToken: string,
+    durationSeconds: number | undefined,
+    meta?: CacheSessionMeta
+  ): Promise<StreamCacheStartResult>
 }
 
 export interface CreateStreamCacheOptions {
@@ -1080,6 +1091,64 @@ export function createStreamCache({
     }
   }
 
+  /**
+   * Opens an already-complete session straight from disk — tier 1.
+   *
+   * No remote URL, no assertPublicMediaUrl, no fetch, no fill loop: every
+   * byte is already here, so this plays with the network unplugged. That
+   * is the whole reason tier 1 exists ahead of everything else.
+   *
+   * fullRetention is forced on, which is what stops evictOutsideRetained
+   * deleting chunks of a file we deliberately hold complete. Only ever
+   * called for a session findLocalCacheCandidate reported `complete`.
+   */
+  async function startLocal(
+    sessionToken: string,
+    inputDurationSeconds: number | undefined,
+    meta?: CacheSessionMeta
+  ): Promise<StreamCacheStartResult> {
+    await stopInternal(false)
+    // Always the disk store: a memory session cannot have survived to be
+    // adopted, so a local candidate is by definition on disk.
+    store = diskChunkStore
+    token = sessionToken
+    activeCacheTokens.add(token)
+    cacheRoot = cacheRootDir()
+    remoteUrl = ''
+    durationSeconds = inputDurationSeconds
+    maxBytes = Number.POSITIVE_INFINITY
+    downloadComplete = true
+    behindSeconds = DEFAULT_BEHIND_SECONDS
+    aheadSeconds = DEFAULT_AHEAD_SECONDS
+    chunks.clear()
+    waiters.clear()
+    readerPositions.clear()
+
+    await listen()
+
+    const stored = JSON.parse(
+      await fsp.readFile(metaFilePath(cacheRoot, token), 'utf8')
+    ) as StoredMeta
+    totalBytes = stored.totalBytes
+    if (totalBytes === null) throw new Error('That cached copy has no recorded length.')
+
+    await adoptExistingChunks()
+    // Everything is present by contract, so the fill frontier is the end of
+    // the file — serveRange's isNearFillFrontier checks must not think
+    // there is a download still catching up.
+    fillFrontierByte = totalBytes
+    highWatermarkByte = totalBytes
+    fullRetention = true
+    settleFullRetentionWaiters(true)
+    generation += 1
+    // Refresh the meta so the session's own record stays current (an
+    // adopted session keeps its original sourceRef and resolution).
+    void writeMeta({ ...stored, ...meta }, cacheRoot, token)
+
+    reportPreparation('buffer', 'Playing from this computer — already downloaded')
+    return { url: `${origin}/stream/${token}`, totalBytes, fullRetention: true }
+  }
+
   async function start(
     inputRemoteUrl: string,
     inputDurationSeconds: number | undefined,
@@ -1324,7 +1393,8 @@ export function createStreamCache({
     fullRetentionReady,
     waitForFullRetentionReady,
     stop,
-    deleteSession
+    deleteSession,
+    startLocal
   }
 }
 
@@ -1374,6 +1444,100 @@ export async function pruneIdleSessions(maxAgeMs = 24 * 60 * 60 * 1000): Promise
  * `cacheRoot`) so the list always reflects wherever the cache is CURRENTLY
  * configured to live, same as pruneIdleSessions/clearAllSessions below.
  */
+/** What a local cache session can offer for a title, decided entirely from
+ *  disk — no source contacted, no network touched. */
+export interface LocalCacheCandidate {
+  token: string
+  /** Every byte present: playable offline, and safe to adopt without any
+   *  cross-release check because there is nothing left to fetch. */
+  complete: boolean
+  cachedBytes: number
+  totalBytes: number | null
+  resolution?: number
+  /** Which release these bytes are. Required to resume a partial session;
+   *  absent on sessions written before this was recorded. */
+  sourceRef?: CacheSourceRef
+  title: string
+}
+
+/**
+ * Tier 1 of the source order: is this title already on this machine?
+ *
+ * Deliberately does NOT take a remoteTotalBytes argument, which is the
+ * whole point — findReusableSession cannot run until a source has been
+ * chosen and contacted, so it can never be a first tier. This answers from
+ * the filesystem alone, which is what makes "play what we already have
+ * before asking anyone" possible on a slow or absent connection.
+ *
+ * Returns the best match: a complete session beats a partial one, and
+ * among partials the one holding the most bytes wins.
+ */
+export async function findLocalCacheCandidate(
+  meta: CacheSessionMeta | undefined
+): Promise<LocalCacheCandidate | null> {
+  const key = cacheContentKey(meta)
+  if (!key) return null
+  // Resolve consults this BEFORE its own try/catch, so a throw here would
+  // take the whole resolution down rather than just skipping a tier. It
+  // must degrade to "nothing cached" for every failure, including
+  // cacheRootDir itself (which needs Electron's app and is absent in
+  // tests).
+  let root: string
+  try {
+    root = cacheRootDir()
+  } catch {
+    return null
+  }
+  let entries: fs.Dirent[]
+  try {
+    entries = await fsp.readdir(root, { withFileTypes: true })
+  } catch {
+    return null
+  }
+
+  let best: LocalCacheCandidate | null = null
+  for (const entry of entries) {
+    if (!entry.isDirectory() || !SESSION_TOKEN_RE.test(entry.name)) continue
+    try {
+      const stored = JSON.parse(
+        await fsp.readFile(metaFilePath(root, entry.name), 'utf8')
+      ) as StoredMeta
+      if (cacheContentKey(stored) !== key) continue
+
+      let cachedBytes = 0
+      for (const file of await fsp.readdir(path.join(root, entry.name))) {
+        if (!file.startsWith('chunk-') || !file.endsWith('.bin')) continue
+        cachedBytes += (await fsp.stat(path.join(root, entry.name, file))).size
+      }
+      if (cachedBytes <= 0) continue
+
+      const candidate: LocalCacheCandidate = {
+        token: entry.name,
+        complete: stored.totalBytes !== null && cachedBytes >= stored.totalBytes,
+        cachedBytes,
+        totalBytes: stored.totalBytes,
+        resolution: stored.resolution,
+        sourceRef: stored.sourceRef,
+        title: stored.title
+      }
+      // A partial session with no recorded release cannot be safely
+      // resumed — there is no way to know which encode its bytes are.
+      if (!candidate.complete && !candidate.sourceRef) continue
+      if (
+        !best ||
+        (candidate.complete && !best.complete) ||
+        (candidate.complete === best.complete && candidate.cachedBytes > best.cachedBytes)
+      ) {
+        best = candidate
+      }
+    } catch {
+      // Unreadable meta means an unidentifiable session; pruneIdleSessions
+      // deals with it. Never a candidate.
+    }
+  }
+  return best
+}
+
 export async function listCacheSessions(activeToken: string): Promise<StreamCacheEntry[]> {
   const root = cacheRootDir()
   let entries: fs.Dirent[]

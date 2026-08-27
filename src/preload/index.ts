@@ -492,8 +492,18 @@ const api = {
     },
 
     stream: {
-      resolve: (type: string, id: string, title?: string): Promise<StreamResolveResult> =>
-        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.streamResolve, { type, id, title }),
+      // `cacheKey` carries the SAME catalogId/season/episode that play()
+      // stores on the cache session, so resolve's local-cache tier can
+      // identify an existing session without reconstructing the identity
+      // from `id` — a reconstruction that silently misses for anime, whose
+      // id is `kitsuId:episode` with no season segment.
+      resolve: (
+        type: string,
+        id: string,
+        title?: string,
+        cacheKey?: { catalogId?: string; seasonNumber?: number; episodeNumber?: number }
+      ): Promise<StreamResolveResult> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.streamResolve, { type, id, title, cacheKey }),
       // `type`/`resolveId` are optional and only used so the main process
       // can remember "the stream that actually worked" under the exact key
       // stream:resolve looked it up by (see torbox.ts's lastStreamKey) —

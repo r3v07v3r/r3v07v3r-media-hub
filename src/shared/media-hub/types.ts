@@ -221,7 +221,32 @@ export interface LibraryItem {
 /** Where a candidate can be played from. Absent means 'torbox', so every
  *  candidate already persisted in the stream cache stays valid without a
  *  migration — the field was introduced when the media server was. */
-export type StreamSource = 'torbox' | 'mediaserver'
+/**
+ * Where a playable copy lives, in preference order. The ordering is the
+ * product rule ("nearest source that meets the quality target wins"), so it
+ * is declared once here and read by resolve rather than re-stated per call
+ * site.
+ *
+ *  localcache  - already on this machine's disk; needs no network at all
+ *  lancache    - the on-site pre-fetch daemon (not yet implemented)
+ *  mediaserver - a configured Jellyfin library
+ *  torbox      - the debrid service, over the internet
+ */
+export type StreamSource = 'localcache' | 'lancache' | 'mediaserver' | 'torbox'
+
+/** Lowest number wins. Absent `source` is 'torbox', which must therefore
+ *  keep torbox's rank so pre-existing persisted candidates still sort
+ *  correctly. */
+export const STREAM_SOURCE_RANK: Record<StreamSource, number> = {
+  localcache: 0,
+  lancache: 1,
+  mediaserver: 2,
+  torbox: 3
+}
+
+export function streamSourceRank(source: StreamSource | undefined): number {
+  return STREAM_SOURCE_RANK[source ?? 'torbox']
+}
 
 // A discovered stream candidate (from a scraper add-on or a configured
 // media server), after availability checking and ranking merge in
@@ -236,6 +261,11 @@ export interface StreamCandidate {
    *  media sources (a library can hold more than one file per item). */
   itemId?: string
   mediaSourceId?: string
+  /** localcache candidates only — which cache session holds the bytes, and
+   *  whether it holds all of them. Only a complete session can be played
+   *  without contacting any source. */
+  cacheToken?: string
+  complete?: boolean
   name?: string
   title?: string
   sources?: string[]
@@ -341,6 +371,24 @@ export interface BlockedDownload {
  *  show a poster/title for it instead of a bare opaque token. `catalogId`
  *  is the bare catalog id (routable via /:segment/:id) — distinct from the
  *  composite `imdbId:season:episode` key used for stream resolution. */
+/**
+ * Identifies the exact release a cache session holds.
+ *
+ * Recorded so a PARTIAL session can be resumed against the same release it
+ * was started from. Without it, adopting a partial session and resuming
+ * from whatever the resolver picks this time can splice two different
+ * encodes of the same film together — the failure the totalBytes check
+ * used to prevent by refusing adoption outright.
+ */
+export interface CacheSourceRef {
+  source: StreamSource
+  /** torbox */
+  infoHash?: string
+  /** mediaserver */
+  itemId?: string
+  mediaSourceId?: string
+}
+
 export interface CacheSessionMeta {
   title: string
   posterUrl?: string
@@ -348,6 +396,13 @@ export interface CacheSessionMeta {
   mediaKind?: 'movie' | 'series' | 'anime'
   seasonNumber?: number
   episodeNumber?: number
+  /** Which release these bytes are. Absent on sessions written before this
+   *  existed — those stay partial-adoption-ineligible, which is the old
+   *  behaviour and safe. */
+  sourceRef?: CacheSourceRef
+  /** Resolution tier of the cached copy, so the quality target can be
+   *  applied to it without re-contacting any source. */
+  resolution?: number
 }
 
 /** One entry in the Downloads page's "Cached Streams" list. */

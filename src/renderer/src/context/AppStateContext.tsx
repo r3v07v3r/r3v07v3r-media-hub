@@ -1398,7 +1398,11 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       setResolvingMedia({ id: media.id, title: media.title, stage: 'resolving' })
       try {
         const resolved = await runPlaybackPreparationStage(
-          api.stream.resolve(kind, resolveId, media.title),
+          api.stream.resolve(kind, resolveId, media.title, {
+            catalogId: media.id,
+            seasonNumber: media.seasonNumber,
+            episodeNumber: media.episodeNumber
+          }),
           'resolving',
           30_000,
           controller.signal
