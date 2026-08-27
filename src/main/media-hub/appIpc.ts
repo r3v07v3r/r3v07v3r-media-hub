@@ -12,7 +12,11 @@ import crypto from 'node:crypto'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { MEDIA_HUB_CHANNELS } from '../../shared/media-hub/ipc-channels'
-import type { MediaHubPublicSettings, MediaHubSettingsSnapshot } from '../../shared/media-hub/types'
+import type {
+  MediaHubPublicSettings,
+  MediaHubSettingsSnapshot,
+  SavedFilter
+} from '../../shared/media-hub/types'
 import { readBackup } from './backup'
 import { watchRegion } from './watchProviders'
 import { getDatabase } from './dbState'
@@ -31,6 +35,8 @@ import {
 interface RestoreResult {
   restored: number
   createdAt: string
+  /** Who the app switched back to — see backup.ts's activeProfileId. */
+  activeProfileId: string
 }
 
 import { normalizePlaybackBuffer } from '../../shared/media-hub/playbackBuffer'
@@ -156,7 +162,8 @@ export function registerAppIpc(): void {
     if (result.canceled || !result.filePath) return { filePath: null }
     getDatabase().exportBackup(result.filePath, {
       appVersion: app.getVersion(),
-      profiles: (readSettings().profiles ?? []) as unknown as Record<string, unknown>[]
+      profiles: (readSettings().profiles ?? []) as unknown as Record<string, unknown>[],
+      activeProfileId: getDatabase().activeProfile()
     })
     return { filePath: result.filePath }
   })
@@ -195,11 +202,18 @@ export function registerAppIpc(): void {
       byId.set(id, incoming as (typeof existing)[number])
     }
     settings.profiles = [...byId.values()]
+    // Back to whoever was watching when the backup was taken. Restoring the
+    // rows and leaving somebody else active is the shape that made this
+    // confusing: the data was correct, and the library on screen belonged to a
+    // different person.
+    settings.activeProfileId = summary.activeProfileId
     writeSettings(settings)
+    getDatabase().setActiveProfile(summary.activeProfileId)
 
     return {
       restored: Object.values(summary.restored).reduce((total, n) => total + n, 0),
-      createdAt: summary.createdAt
+      createdAt: summary.createdAt,
+      activeProfileId: summary.activeProfileId
     }
   })
 
@@ -217,6 +231,42 @@ export function registerAppIpc(): void {
       settings.watchRegion = /^[A-Z]{2}$/.test(next) ? next : undefined
       writeSettings(settings)
       return { watchRegion: watchRegion() }
+    }
+  )
+
+  handle<{ name: string; kind: string; query: string }, { savedFilters: SavedFilter[] }>(
+    MEDIA_HUB_CHANNELS.settingsSaveFilter,
+    (_event, payload) => {
+      const settings = readSettings()
+      const name = String(payload?.name ?? '')
+        .trim()
+        .slice(0, 60)
+      const kind = String(payload?.kind ?? '')
+      if (!name || !['movie', 'series', 'anime'].includes(kind)) {
+        return { savedFilters: publicSettings(settings).savedFilters }
+      }
+      // The id is minted here rather than in the renderer, so a saved view
+      // cannot collide with one made in another window.
+      const entry = {
+        id: crypto.randomUUID(),
+        name,
+        kind,
+        query: String(payload?.query ?? '')
+      }
+      settings.savedFilters = [...(settings.savedFilters ?? []), entry]
+      writeSettings(settings)
+      return { savedFilters: publicSettings(settings).savedFilters }
+    }
+  )
+
+  handle<{ id: string }, { savedFilters: SavedFilter[] }>(
+    MEDIA_HUB_CHANNELS.settingsDeleteFilter,
+    (_event, payload) => {
+      const settings = readSettings()
+      const id = String(payload?.id ?? '')
+      settings.savedFilters = (settings.savedFilters ?? []).filter((entry) => entry.id !== id)
+      writeSettings(settings)
+      return { savedFilters: publicSettings(settings).savedFilters }
     }
   )
 

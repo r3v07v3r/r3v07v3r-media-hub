@@ -6,7 +6,14 @@
 // both main-process code (relative import) and renderer code
 // (`@shared/media-hub/catalog-logic`) with no Electron/Node dependency.
 
-import { AiringState, CatalogItem, HistoryEntry, MediaKind, TitleCredits } from './types'
+import {
+  AiringState,
+  CatalogItem,
+  HistoryEntry,
+  MediaKind,
+  RecommendationReason,
+  TitleCredits
+} from './types'
 
 export interface FilterCatalogOptions {
   includeGenres?: string[]
@@ -370,7 +377,32 @@ export function rankSimilarTitles(
 export interface ScoredRecommendation {
   item: CatalogItem
   score: number
+  /**
+   * The signal that contributed most to `score`, if any did — see
+   * RecommendationReason. Absent when nothing about this person's viewing
+   * picked it out, which is the ordinary case for a title carried purely by
+   * its own rating.
+   */
+  reason?: RecommendationReason
 }
+
+/**
+ * Tie-break order for which signal gets to explain a title.
+ *
+ * Only consulted when two contributions come out numerically equal, which
+ * they can: three cast matches and a current-year release are both worth
+ * 24 and 18 respectively today, and those weights move. Earlier is
+ * stronger, ordered by how much the reason actually tells somebody —
+ * "this continues something you finished" is a specific fact about them,
+ * "it came out this year" is true of everyone.
+ */
+export const RECOMMENDATION_REASON_ORDER: readonly RecommendationReason['kind'][] = [
+  'continues',
+  'creator',
+  'cast',
+  'genre',
+  'new'
+]
 
 /** Share of viewing by kind, 0..1, summing to 1. */
 export type CadenceShares = Record<MediaKind, number>
@@ -758,24 +790,65 @@ const MAX_CAST_MATCHES = 3
 const MAX_CREATOR_MATCHES = 2
 const MAX_KEYWORD_MATCHES = 4
 
-function overlap(values: string[] | undefined, liked: ReadonlySet<string>, cap: number): number {
-  if (!values?.length || !liked.size) return 0
-  let hits = 0
-  for (const value of values) {
-    if (liked.has(String(value).trim().toLowerCase())) hits += 1
-    if (hits >= cap) break
-  }
-  return hits
+/** How many of `values` this person likes, and the first of them by name. */
+interface Overlap {
+  hits: number
+  /**
+   * The matched value AS WRITTEN in the credits, not the lowercased form the
+   * comparison runs on — this is the half that ends up in front of somebody,
+   * and "because you like zendaya" is not a sentence this app should produce.
+   */
+  first: string
 }
 
+const NO_OVERLAP: Overlap = { hits: 0, first: '' }
+
+function overlap(values: string[] | undefined, liked: ReadonlySet<string>, cap: number): Overlap {
+  if (!values?.length || !liked.size) return NO_OVERLAP
+  let hits = 0
+  let first = ''
+  for (const value of values) {
+    if (liked.has(String(value).trim().toLowerCase())) {
+      hits += 1
+      if (!first) first = String(value).trim()
+    }
+    if (hits >= cap) break
+  }
+  return hits ? { hits, first } : NO_OVERLAP
+}
+
+/**
+ * What one candidate shares with this person's taste, kept apart rather
+ * than summed.
+ *
+ * The parts are needed separately because they have to explain themselves
+ * afterwards (see RecommendationReason): a single total says a title
+ * matched, but not whether it matched on a director they follow or an
+ * actor they keep watching, and those are different sentences.
+ *
+ * Keywords contribute to the score and deliberately never to a reason.
+ * They are TMDB's internal vocabulary — "dystopia", "based on novel" — and
+ * quoting one back reads as the machine talking about itself.
+ */
+interface Affinity {
+  score: number
+  cast: Overlap
+  creators: Overlap
+}
+
+const NO_AFFINITY: Affinity = { score: 0, cast: NO_OVERLAP, creators: NO_OVERLAP }
+
 /** What one title's cast, creators and story-type labels are worth against a taste profile. */
-function affinityScore(credits: TitleCredits | undefined, taste: TasteProfile): number {
-  if (!credits) return 0
-  return (
-    overlap(credits.cast, taste.cast, MAX_CAST_MATCHES) * CAST_MATCH +
-    overlap(credits.creators, taste.creators, MAX_CREATOR_MATCHES) * CREATOR_MATCH +
-    overlap(credits.keywords, taste.keywords, MAX_KEYWORD_MATCHES) * KEYWORD_MATCH
-  )
+function affinityScore(credits: TitleCredits | undefined, taste: TasteProfile): Affinity {
+  if (!credits) return NO_AFFINITY
+  const cast = overlap(credits.cast, taste.cast, MAX_CAST_MATCHES)
+  const creators = overlap(credits.creators, taste.creators, MAX_CREATOR_MATCHES)
+  const keywords = overlap(credits.keywords, taste.keywords, MAX_KEYWORD_MATCHES)
+  return {
+    score: cast.hits * CAST_MATCH + creators.hits * CREATOR_MATCH + keywords.hits * KEYWORD_MATCH,
+    cast,
+    creators
+  }
 }
 
 // Home recommendations are ranked locally and deterministically. A small
@@ -924,7 +997,14 @@ export function rankPersonalizedRecommendationsScored(
   }
 
   // Give the strong continuation boost only to the first later instalment.
-  const nextFranchiseIds = new Set<string>()
+  //
+  // A map rather than a set: the boost is by far the strongest signal in
+  // the ranking, so it is the one most often asked to explain itself, and
+  // "because you watched something" is not an explanation. The value is the
+  // title that earned it. First writer wins — the loop walks the history
+  // newest-first, so a title following several things somebody watched is
+  // attributed to the most recent of them, which is the one they remember.
+  const nextFranchise = new Map<string, string>()
   const askedAlready = new Set<string>()
   for (const watchedEntry of history) {
     const watchedTitle = watchedEntry?.title
@@ -949,20 +1029,29 @@ export function rankPersonalizedRecommendationsScored(
       if (!tokensAreFranchiseSiblings(sourceTokens, candidate.tokens)) continue
       if (!next || isEarlierInstalment(candidate, next)) next = candidate
     }
-    if (next) nextFranchiseIds.add(String(next.item.id))
+    if (next && !nextFranchise.has(String(next.item.id))) {
+      nextFranchise.set(String(next.item.id), watchedTitle)
+    }
   }
 
   return unwatched
     .map(({ item, year }) => {
-      const genreMatches = (item.genres || []).filter((genre) =>
-        preferred.has(String(genre).toLowerCase())
-      ).length
+      let genreMatches = 0
+      let matchedGenre = ''
+      for (const genre of item.genres || []) {
+        if (!preferred.has(String(genre).toLowerCase())) continue
+        genreMatches += 1
+        // As the catalog spells it, not as the affinity set lowercased it.
+        if (!matchedGenre) matchedGenre = String(genre).trim()
+      }
       const recentReleaseBoost = year === currentYear ? 18 : year === currentYear - 1 ? 8 : 0
-      const continuationBoost = nextFranchiseIds.has(String(item.id)) ? 100 : 0
+      const continuedFrom = nextFranchise.get(String(item.id))
+      const continuationBoost = continuedFrom ? 100 : 0
       const rating = Math.min(Math.max(Number.parseFloat(item.rating) || 0, 0), 10)
       // Nothing at all until the background enrichment pass has been round
       // — see PersonalizedRecommendationOptions.credits.
-      const affinity = credits && taste ? affinityScore(credits.get(String(item.id)), taste) : 0
+      const affinity =
+        credits && taste ? affinityScore(credits.get(String(item.id)), taste) : NO_AFFINITY
       return {
         item,
         year,
@@ -971,8 +1060,22 @@ export function rankPersonalizedRecommendationsScored(
           recentReleaseBoost +
           genreMatches * 12 +
           rating +
-          affinity -
-          (abandonedIds?.has(String(item.id)) ? ABANDONED_PENALTY : 0)
+          affinity.score -
+          (abandonedIds?.has(String(item.id)) ? ABANDONED_PENALTY : 0),
+        // Built from the very numbers above, so what a card says and what
+        // put it there cannot disagree. The rating is not among them: every
+        // title has one, so it separates nothing and explains nothing.
+        reason: strongestReason([
+          { kind: 'continues', detail: continuedFrom ?? '', weight: continuationBoost },
+          {
+            kind: 'creator',
+            detail: affinity.creators.first,
+            weight: affinity.creators.hits * CREATOR_MATCH
+          },
+          { kind: 'cast', detail: affinity.cast.first, weight: affinity.cast.hits * CAST_MATCH },
+          { kind: 'genre', detail: matchedGenre, weight: genreMatches * 12 },
+          { kind: 'new', detail: year ? String(year) : '', weight: recentReleaseBoost }
+        ])
       }
     })
     .sort(
@@ -981,7 +1084,40 @@ export function rankPersonalizedRecommendationsScored(
         (b.year || 0) - (a.year || 0) ||
         a.item.title.localeCompare(b.item.title)
     )
-    .map(({ item, score }) => ({ item, score }))
+    .map(({ item, score, reason }) => (reason ? { item, score, reason } : { item, score }))
+}
+
+/** One candidate explanation and what it was worth to the score. */
+interface ReasonCandidate {
+  kind: RecommendationReason['kind']
+  detail: string
+  weight: number
+}
+
+/**
+ * The signal that contributed most, or nothing.
+ *
+ * Nothing is a real answer and a common one: a title carried by its own
+ * rating alone matched nothing about this person, and inventing a reason
+ * for it — "highly rated", true of half the catalog — would teach people
+ * that the chips are decoration. A candidate with no evidence to point at
+ * is dropped for the same reason, however much it scored.
+ */
+function strongestReason(candidates: ReasonCandidate[]): RecommendationReason | undefined {
+  let best: ReasonCandidate | null = null
+  for (const candidate of candidates) {
+    if (candidate.weight <= 0 || !candidate.detail) continue
+    if (
+      !best ||
+      candidate.weight > best.weight ||
+      (candidate.weight === best.weight &&
+        RECOMMENDATION_REASON_ORDER.indexOf(candidate.kind) <
+          RECOMMENDATION_REASON_ORDER.indexOf(best.kind))
+    ) {
+      best = candidate
+    }
+  }
+  return best ? { kind: best.kind, detail: best.detail } : undefined
 }
 
 export function subtitlesInadequate(

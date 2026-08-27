@@ -6,6 +6,8 @@ import type {
   MalReconcilePreview,
   SimklPinStart,
   SimklStatus,
+  TraktStartResult,
+  TraktStatusResult,
   MalStatus,
   PartyMode
 } from '@shared/media-hub/types'
@@ -1509,6 +1511,292 @@ export function OllamaSection() {
         )}
         <StatusLine status={status} />
       </div>
+    </section>
+  )
+}
+
+/**
+ * Trakt — device-code sign-in, the same shape as Simkl's above.
+ *
+ * Two credential fields rather than one, because Trakt's token exchange takes
+ * a client secret where Simkl's PIN flow does not. The secret is written once
+ * and never read back: main stores it through safeStorage and only ever
+ * answers "is it configured", so a saved secret cannot be recovered from the
+ * renderer.
+ */
+export function TraktSection() {
+  // An import writes straight into the database from main, so nothing in the
+  // renderer knows its history just changed. Without this, a person imports
+  // years of viewing and every grid, badge and suggestion row goes on showing
+  // the pre-import answer until they restart.
+  const { reloadLibrary } = useAppState()
+  const [clientId, setClientId] = useState('')
+  const [clientSecret, setClientSecret] = useState('')
+  const [status, setStatus] = useState<TraktStatusResult | null>(null)
+  const [pending, setPending] = useState<TraktStartResult | null>(null)
+  const [connectStatus, setConnectStatus] = useState<Status>({ kind: 'idle' })
+
+  useEffect(() => {
+    const api = window.api?.mediaHub
+    if (!api) return
+    api.trakt
+      .status()
+      .then(setStatus)
+      .catch(() => {})
+  }, [])
+
+  // Polls until the code is approved or runs out, at the interval Trakt asks
+  // for — the same loop the Simkl card above runs, and it honours the server's
+  // interval rather than choosing one, since Trakt answers 429 to anything
+  // faster.
+  useEffect(() => {
+    if (!pending) return
+    const api = window.api?.mediaHub
+    if (!api) return
+    let cancelled = false
+    let remaining = pending.expiresIn
+    const id = setInterval(
+      () => {
+        remaining -= pending.interval
+        if (remaining <= 0) {
+          if (!cancelled) {
+            setConnectStatus({ kind: 'error', message: 'Code expired — try again.' })
+            setPending(null)
+          }
+          clearInterval(id)
+          return
+        }
+        api.trakt
+          .poll()
+          .then((result) => {
+            if (cancelled || result.state === 'pending') return
+            clearInterval(id)
+            setPending(null)
+            if (result.state === 'connected') {
+              setConnectStatus({ kind: 'ok', message: 'Connected.' })
+              api.trakt
+                .status()
+                .then(setStatus)
+                .catch(() => {})
+              return
+            }
+            setConnectStatus({
+              kind: 'error',
+              message:
+                result.state === 'denied'
+                  ? 'Sign-in was declined on Trakt.'
+                  : result.state === 'expired'
+                    ? 'Code expired — try again.'
+                    : (result.message ?? 'Trakt sign-in failed.')
+            })
+          })
+          .catch(() => {})
+      },
+      Math.max(pending.interval, 2) * 1000
+    )
+    return () => {
+      cancelled = true
+      clearInterval(id)
+    }
+    // Re-armed only when a fresh code is issued: `pending` carries the
+    // interval and the deadline, so a new code means a new loop.
+  }, [pending])
+
+  async function saveCredentials() {
+    const api = window.api?.mediaHub
+    if (!api || !clientId.trim() || !clientSecret.trim()) return
+    setConnectStatus({ kind: 'busy' })
+    try {
+      setStatus(await api.trakt.configure(clientId.trim(), clientSecret.trim()))
+      // Cleared from the field once saved: it is in the keychain now, and
+      // leaving a secret sitting in a text input is the kind of thing a
+      // screenshot catches.
+      setClientSecret('')
+      setConnectStatus({ kind: 'ok', message: 'Saved.' })
+    } catch (error) {
+      setConnectStatus({
+        kind: 'error',
+        message: error instanceof Error ? error.message : 'Could not save those details.'
+      })
+    }
+  }
+
+  async function startConnect() {
+    const api = window.api?.mediaHub
+    if (!api) return
+    setConnectStatus({ kind: 'busy' })
+    try {
+      setPending(await api.trakt.start())
+      setConnectStatus({ kind: 'idle' })
+    } catch (error) {
+      setConnectStatus({
+        kind: 'error',
+        message: error instanceof Error ? error.message : 'Could not start Trakt sign-in.'
+      })
+    }
+  }
+
+  // Deliberately its own status line, not `connectStatus`. An import runs
+  // for as long as the account is large, and sharing the connection card's
+  // status would replace "Connected." with a spinner and then lose the
+  // import's own result the next time anything touched the connection.
+  const [importStatus, setImportStatus] = useState<Status>({ kind: 'idle' })
+
+  async function runImport() {
+    const api = window.api?.mediaHub
+    if (!api) return
+    setImportStatus({ kind: 'busy' })
+    try {
+      const summary = await api.trakt.import()
+      // Reports what was WRITTEN, not what Trakt offered. Running this twice
+      // legitimately reports nothing the second time, and saying "imported
+      // 400 items" over 400 rows that were already here would be a lie the
+      // second run tells about the first.
+      const parts = [
+        `${summary.plays} ${summary.plays === 1 ? 'viewing' : 'viewings'}`,
+        `${summary.ratings} ${summary.ratings === 1 ? 'rating' : 'ratings'}`
+      ]
+      if (summary.plays || summary.ratings) reloadLibrary()
+      setImportStatus({
+        kind: 'ok',
+        message:
+          summary.plays || summary.ratings
+            ? `Added ${parts.join(' and ')}.${summary.skipped ? ` ${summary.skipped} could not be matched.` : ''}`
+            : 'Everything on Trakt was already here.'
+      })
+    } catch (error) {
+      setImportStatus({
+        kind: 'error',
+        message: error instanceof Error ? error.message : 'Could not read your Trakt library.'
+      })
+    }
+  }
+
+  async function disconnect() {
+    const api = window.api?.mediaHub
+    if (!api) return
+    setConnectStatus({ kind: 'busy' })
+    setImportStatus({ kind: 'idle' })
+    await api.trakt.disconnect().catch(() => {})
+    setPending(null)
+    setConnectStatus({ kind: 'idle' })
+    api.trakt
+      .status()
+      .then(setStatus)
+      .catch(() => {})
+  }
+
+  const connected = status?.connected ?? false
+  const configured = status?.configured ?? false
+
+  return (
+    <section className={`${styles.section} glass-panel`} aria-labelledby="settings-trakt">
+      <div className={styles.serviceHead}>
+        <h2 id="settings-trakt" className={styles.sectionTitle} style={{ marginBottom: 0 }}>
+          Trakt
+        </h2>
+        <ConnectionBadge connected={connected} />
+      </div>
+      <p className={styles.rowDescription} style={{ marginBottom: 10 }}>
+        Syncs watched episodes, ratings and in-progress playback to your Trakt account. Movies and
+        series only — anime is catalogued by Kitsu id, which Trakt cannot look up.
+      </p>
+
+      {connected ? (
+        <div className={styles.serviceFields} style={{ flexDirection: 'column', gap: 8 }}>
+          <div className={styles.serviceActions}>
+            <span className={styles.rowDescription}>
+              Signed in{status?.username ? ` as ${status.username}` : ''}.
+            </span>
+            <button
+              type="button"
+              className={styles.testButton}
+              onClick={runImport}
+              disabled={importStatus.kind === 'busy'}
+            >
+              Import my Trakt library
+            </button>
+            <button type="button" className={styles.testButton} onClick={disconnect}>
+              Disconnect
+            </button>
+            <StatusLine status={connectStatus} />
+          </div>
+          <span className={styles.rowDescription}>
+            Brings your watched history and ratings here, keeping their original dates. Safe to run
+            more than once — it only fills in what is missing and never changes what is already
+            here.
+          </span>
+          <StatusLine status={importStatus} />
+        </div>
+      ) : pending ? (
+        <div className={styles.serviceFields} style={{ flexDirection: 'column', gap: 8 }}>
+          <span className={styles.rowDescription}>
+            Enter this code at{' '}
+            <button
+              type="button"
+              className={styles.testButton}
+              style={{ padding: '2px 8px' }}
+              onClick={() => window.api?.mediaHub?.openExternal(pending.verificationUrl)}
+            >
+              {pending.verificationUrl}
+            </button>
+          </span>
+          <span
+            className={styles.fieldInput}
+            style={{
+              fontFamily: 'var(--font-display)',
+              fontSize: 20,
+              letterSpacing: 4,
+              textAlign: 'center',
+              width: 'fit-content'
+            }}
+          >
+            {pending.userCode}
+          </span>
+          <StatusLine status={{ kind: 'busy' }} />
+        </div>
+      ) : (
+        <div className={styles.serviceFields} style={{ flexDirection: 'column', gap: 8 }}>
+          <label className={styles.field}>
+            <span className={styles.fieldLabel}>Client ID</span>
+            <input
+              className={styles.fieldInput}
+              value={clientId}
+              onChange={(event) => setClientId(event.target.value)}
+              placeholder="From your Trakt API application"
+            />
+          </label>
+          <label className={styles.field}>
+            <span className={styles.fieldLabel}>Client secret</span>
+            <input
+              className={styles.fieldInput}
+              type="password"
+              value={clientSecret}
+              onChange={(event) => setClientSecret(event.target.value)}
+              placeholder={configured ? 'Saved — enter again to replace' : 'From the same page'}
+            />
+          </label>
+          <div className={styles.serviceActions}>
+            <button
+              type="button"
+              className={styles.testButton}
+              disabled={!clientId.trim() || !clientSecret.trim()}
+              onClick={saveCredentials}
+            >
+              Save
+            </button>
+            <button
+              type="button"
+              className={styles.testButton}
+              disabled={!configured}
+              onClick={startConnect}
+            >
+              Sign in
+            </button>
+            <StatusLine status={connectStatus} />
+          </div>
+        </div>
+      )}
     </section>
   )
 }

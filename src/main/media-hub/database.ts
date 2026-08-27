@@ -14,6 +14,7 @@ import type {
   CatalogItem,
   Episode,
   HistoryEntry,
+  ImportedPlay,
   MediaKind,
   CustomList,
   CustomListItem,
@@ -240,7 +241,7 @@ export interface MediaHubDatabase {
    *  a backup is of the install, not of whoever happens to be watching. */
   exportBackup(
     filePath: string,
-    options: { appVersion: string; profiles: Record<string, unknown>[] }
+    options: { appVersion: string; profiles: Record<string, unknown>[]; activeProfileId: string }
   ): void
   /** Replaces every backed-up table with the file's contents, or changes
    *  nothing. Also not profile-scoped, for the same reason. */
@@ -254,6 +255,38 @@ export interface MediaHubDatabase {
     playback?: { season?: number; episode?: number }
   ): TrackedItem
   unmarkWatched(id: string | number, season?: number, episode?: number): boolean
+  /**
+   * Writes viewings brought in from another service, keeping their real
+   * dates, in one transaction, without overwriting anything already here.
+   *
+   * Not markWatched in a loop, for three separate reasons:
+   *
+   *  - markWatched stamps NOW. A Trakt history is years deep, and dating it
+   *    today would put all of it at the top of recently-watched and teach
+   *    the cadence profile that this person watches everything at whatever
+   *    hour they pressed Import.
+   *  - markWatched runs one durable() transaction per row, and durable()
+   *    toggles `synchronous` around an fsync. A few thousand rows is a few
+   *    thousand fsyncs. This is one.
+   *  - markWatched's plays insert is a bare append, so running an import
+   *    twice would double every play and report the whole library as
+   *    rewatched. These skip a viewing already recorded at the same instant,
+   *    which makes the import repeatable.
+   *
+   * Existing rows are never modified. An import FILLS GAPS: if this profile
+   * already has an episode marked, the local date is the one somebody here
+   * actually saw happen, and the remote copy does not get to move it.
+   *
+   * Returns how many viewings were genuinely new.
+   */
+  importWatched(rows: ImportedPlay[]): number
+  /**
+   * Writes ratings from another service, skipping every title already rated
+   * here. Same gap-filling rule as importWatched, and for the stronger
+   * version of the same reason: a score is somebody's opinion, and the one
+   * they last gave in this app is the current one.
+   */
+  importRatings(rows: { id: string; score: number }[]): number
   history(): HistoryEntry[]
   dislike(item: Partial<CatalogItem> & { id: unknown }, now?: Date): TrackedItem
   undislike(id: string | number): boolean
@@ -300,6 +333,9 @@ export interface MediaHubDatabase {
 }
 
 interface PreparedQueries {
+  importWatched: StatementSync
+  importPlay: StatementSync
+  importRating: StatementSync
   track: StatementSync
   lists: StatementSync
   createList: StatementSync
@@ -498,6 +534,33 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
        FROM plays WHERE profile_id=? ORDER BY watched_at DESC, play_id DESC LIMIT ?`
     ),
     deletePlay: sql.prepare('DELETE FROM plays WHERE profile_id=? AND play_id=?'),
+    // The import pair — see importWatched. Both are deliberately
+    // non-destructive: DO NOTHING rather than the DO UPDATE `watched` uses,
+    // and a NOT EXISTS guard where recordPlay appends unconditionally.
+    importWatched: sql.prepare(
+      `INSERT INTO watch_history(profile_id,watch_key,content_id,type,title,season,episode,watched_at,metadata_json)
+       VALUES(@profile,@key,@id,@type,@title,@season,@episode,@now,@json)
+       ON CONFLICT(profile_id,watch_key) DO NOTHING`
+    ),
+    // Matched on the instant as well as the episode, because that is what
+    // makes one viewing the SAME viewing. A genuine rewatch has its own
+    // timestamp and is still recorded; re-running the import is not.
+    importPlay: sql.prepare(
+      `INSERT INTO plays(profile_id,content_id,type,title,season,episode,watched_at,metadata_json)
+       SELECT @profile,@id,@type,@title,@season,@episode,@now,@json
+       WHERE NOT EXISTS (
+         SELECT 1 FROM plays WHERE profile_id=@profile AND content_id=@id
+           AND season IS @season AND episode IS @episode AND watched_at=@now
+       )`
+    ),
+    // No ON CONFLICT clause at all, on purpose: an existing row means this
+    // person already said what they thought, here, and the import does not
+    // get an opinion about that.
+    importRating: sql.prepare(
+      `INSERT INTO ratings(profile_id,content_id,score,rated_at)
+       VALUES(@profile,@id,@score,@now)
+       ON CONFLICT(profile_id,content_id) DO NOTHING`
+    ),
     // One pass over the profile's plays, joined to nothing. Everything the
     // stats need is already on the row or in its stored metadata, which is
     // what keeps this a local read rather than a catalog crawl.
@@ -1059,6 +1122,84 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
         return value
       } catch (error) {
         return fail(error as Error)
+      }
+    },
+
+    importWatched(rows) {
+      try {
+        const list = Array.isArray(rows) ? rows : []
+        if (!list.length) return 0
+        let added = 0
+        // One transaction for the whole import — see the interface comment.
+        durable(() => {
+          sql.exec('BEGIN')
+          try {
+            for (const row of list) {
+              const value = normalizeTitle({ ...row, id: row.id })
+              const season = Number.isFinite(row.season) ? (row.season as number) : null
+              const episode = Number.isFinite(row.episode) ? (row.episode as number) : null
+              const params = {
+                profile: currentProfileId,
+                id: value.id,
+                type: value.type,
+                title: value.title,
+                season,
+                episode,
+                now: row.watchedAt,
+                json: JSON.stringify(value)
+              }
+              q.importWatched.run({
+                ...params,
+                key: `${value.id}:${season ?? 'movie'}:${episode ?? 'movie'}`
+              })
+              added += Number(q.importPlay.run(params).changes || 0)
+            }
+            sql.exec('COMMIT')
+          } catch (error) {
+            sql.exec('ROLLBACK')
+            throw error
+          }
+        })
+        return added
+      } catch (error) {
+        return fail(error as Error) as unknown as number
+      }
+    },
+
+    importRatings(rows) {
+      try {
+        const list = Array.isArray(rows) ? rows : []
+        if (!list.length) return 0
+        const now = new Date().toISOString()
+        let added = 0
+        durable(() => {
+          sql.exec('BEGIN')
+          try {
+            for (const row of list) {
+              const score = Math.round(Number(row?.score))
+              // Out of range is dropped rather than clamped. A score this app
+              // cannot represent is not somebody's opinion rounded — it is a
+              // row we did not understand, and guessing at it would write an
+              // opinion nobody gave.
+              if (!Number.isFinite(score) || score < MIN_RATING || score > MAX_RATING) continue
+              added += Number(
+                q.importRating.run({
+                  profile: currentProfileId,
+                  id: String(row.id),
+                  score,
+                  now
+                }).changes || 0
+              )
+            }
+            sql.exec('COMMIT')
+          } catch (error) {
+            sql.exec('ROLLBACK')
+            throw error
+          }
+        })
+        return added
+      } catch (error) {
+        return fail(error as Error) as unknown as number
       }
     },
 

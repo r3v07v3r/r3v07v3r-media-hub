@@ -48,8 +48,14 @@ import type {
   CustomListItem,
   CalendarEntry,
   PersonCreditsResult,
+  TitleCollectionResult,
   WatchProvidersResult,
   PlayRecord,
+  SavedFilter,
+  ImportSummary,
+  TraktPollResult,
+  TraktStartResult,
+  TraktStatusResult,
   ViewingStats,
   PlaybackPrepareProgress,
   PlaybackResult,
@@ -198,10 +204,21 @@ const api = {
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.settingsSetWatchRegion, region),
       setNotifications: (enabled: boolean): Promise<{ notificationsEnabled: boolean }> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.settingsSetNotifications, enabled),
+      saveFilter: (
+        name: string,
+        kind: MediaKind,
+        query: string
+      ): Promise<{ savedFilters: SavedFilter[] }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.settingsSaveFilter, { name, kind, query }),
+      deleteFilter: (id: string): Promise<{ savedFilters: SavedFilter[] }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.settingsDeleteFilter, { id }),
       exportBackup: (): Promise<{ filePath: string | null }> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.backupExport),
-      importBackup: (): Promise<{ restored: number; createdAt: string } | null> =>
-        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.backupImport),
+      importBackup: (): Promise<{
+        restored: number
+        createdAt: string
+        activeProfileId: string
+      } | null> => ipcRenderer.invoke(MEDIA_HUB_CHANNELS.backupImport),
       setUiAnimations: (enabled: boolean): Promise<{ uiAnimationsEnabled: boolean }> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.settingsSetUiAnimations, enabled),
       setPerformancePanelVisible: (
@@ -348,6 +365,10 @@ const api = {
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.catalogPerson, { person }),
       providers: (type: MediaKind, id: string): Promise<WatchProvidersResult> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.catalogProviders, { type, id }),
+      collection: (id: string): Promise<TitleCollectionResult> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.catalogCollection, { id }),
+      rating: (type: MediaKind, id: string): Promise<{ rating: string; region: string }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.catalogRating, { type, id }),
       calendar: (): Promise<{ entries: CalendarEntry[] }> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.calendarGet)
     },
@@ -430,8 +451,12 @@ const api = {
       list: (): Promise<{ ratings: Record<string, number> }> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.ratingsList),
       /** 1-10, or 0 to clear. */
-      set: (id: string, score: number): Promise<{ ratings: Record<string, number> }> =>
-        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.ratingSet, { id, score })
+      set: (
+        id: string,
+        score: number,
+        media?: { type: MediaKind; title: string }
+      ): Promise<{ ratings: Record<string, number> }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.ratingSet, { id, score, ...media })
     },
 
     disliked: {
@@ -575,6 +600,19 @@ const api = {
           playback,
           progress
         })
+    },
+
+    trakt: {
+      status: (): Promise<TraktStatusResult> => ipcRenderer.invoke(MEDIA_HUB_CHANNELS.traktStatus),
+      /** Saves the app credential. The secret never comes back out. */
+      configure: (clientId: string, clientSecret: string): Promise<TraktStatusResult> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.traktConfigure, { clientId, clientSecret }),
+      start: (): Promise<TraktStartResult> => ipcRenderer.invoke(MEDIA_HUB_CHANNELS.traktStart),
+      poll: (): Promise<TraktPollResult> => ipcRenderer.invoke(MEDIA_HUB_CHANNELS.traktPoll),
+      /** Pulls this account's history and ratings in. Repeatable — see db.importWatched. */
+      import: (): Promise<ImportSummary> => ipcRenderer.invoke(MEDIA_HUB_CHANNELS.traktImport),
+      disconnect: (): Promise<{ ok: true }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.traktDisconnect)
     },
 
     mal: {

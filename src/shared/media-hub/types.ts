@@ -172,6 +172,20 @@ export interface CalendarEntry {
   airsOn: string
 }
 
+/**
+ * The film series a title belongs to.
+ *
+ * `parts` excludes the title itself — the question is what ELSE is in the
+ * series — and every entry carries an IMDb id, because one that could not be
+ * resolved back to this catalog would be a card nobody can open.
+ */
+export interface TitleCollectionResult {
+  /** TMDB's own name for the series, e.g. "The Dune Collection". Empty when
+   *  the title belongs to no collection, which is true of most films. */
+  name: string
+  parts: CatalogItem[]
+}
+
 export interface PersonCreditsResult {
   person: string
   cast: CatalogItem[]
@@ -363,6 +377,65 @@ export interface TitleCredits {
   keywords: string[]
 }
 
+/**
+ * Why one title was suggested — the signal that actually put it where it
+ * is in the ranking, not a caption written over the result.
+ *
+ * Emitted by the ranker itself (see catalog-logic.ts's
+ * rankPersonalizedRecommendationsScored) for exactly that reason: a reason
+ * derived afterwards would be a second, independently-wrong opinion about
+ * an ordering it did not produce, and would drift the moment the scoring
+ * changed. This one is the same comparison the score is made of.
+ *
+ * Kept OFF CatalogItem deliberately. A catalog item is a fact about a
+ * title and is cached as one, shared across every profile on the machine;
+ * a reason is a fact about one person's history, and filing it on the
+ * title would put one profile's viewing into a row the next profile reads.
+ */
+export interface RecommendationReason {
+  /** Which signal won — see RECOMMENDATION_REASON_ORDER in catalog-logic.ts. */
+  kind: 'continues' | 'creator' | 'cast' | 'genre' | 'new'
+  /**
+   * The evidence, in the person's own terms: the title they finished, the
+   * name they keep coming back to, the genre they watch. Always something
+   * that was really matched — never a guess, and never a placeholder, so a
+   * reason with nothing to point at is simply not emitted.
+   */
+  detail: string
+}
+
+/**
+ * One viewing brought in from somewhere else — a Trakt history row, and
+ * whatever import comes after it.
+ *
+ * `watchedAt` is the WHOLE point and the reason this is not just a
+ * TrackedItem. An import that stamps everything "now" puts a decade of
+ * somebody's viewing at the top of their recently-watched, and teaches the
+ * cadence profile (see catalog-logic.ts) that they watch everything at
+ * whatever time of day they happened to press Import.
+ */
+export interface ImportedPlay {
+  id: string
+  type: MediaKind
+  title: string
+  year?: string
+  /** Null for a film. Season 0 is the specials convention and is not null. */
+  season?: number | null
+  episode?: number | null
+  /** ISO 8601, as the source recorded it. */
+  watchedAt: string
+}
+
+/** What an import actually changed. Every field is a count of NEW rows, not of rows offered. */
+export interface ImportSummary {
+  /** Viewings written. Excludes anything already recorded — an import is repeatable. */
+  plays: number
+  /** Ratings written. Excludes titles already rated here, which are not overwritten. */
+  ratings: number
+  /** Rows the source offered that could not be matched to a title this app knows. */
+  skipped: number
+}
+
 export interface TrackedItem {
   id: string
   simklId: number | null
@@ -506,6 +579,16 @@ export interface HomePersonalizedResult {
   updates: TrackedUpdate[]
   continueWatching: ContinueWatchingEntry[]
   recommendations: CatalogItem[]
+  /**
+   * Why each suggestion is there, by title id — see RecommendationReason.
+   *
+   * A sidecar map rather than a field on the items, so every existing
+   * consumer of `recommendations` is untouched and the reasons stay out of
+   * the shared, profile-blind catalog cache. Sparse on purpose: a title
+   * that matched nothing in particular has no entry, and the card simply
+   * shows no chip rather than one saying nothing.
+   */
+  recommendationReasons: Record<string, RecommendationReason>
   preferredGenres: string[]
 }
 
@@ -674,6 +757,23 @@ export interface ProfileVerifyPinResult {
 // Settings / connection status
 // ---------------------------------------------------------------------
 
+/**
+ * A filter combination somebody named and kept.
+ *
+ * `query` is the serialised search-param string the browse pages already use
+ * for their filter state — so a saved view is applied by navigating to it,
+ * and anything the filter bar learns to express is saveable for free with no
+ * second schema to keep in step.
+ */
+export interface SavedFilter {
+  id: string
+  name: string
+  /** Which browse page it belongs to. A runtime filter means nothing on the
+   *  series page, so a saved view is only offered on the kind it was made on. */
+  kind: MediaKind
+  query: string
+}
+
 export interface Theme {
   id: string
   name: string
@@ -714,6 +814,16 @@ export interface MediaHubPublicSettings {
    *  unaffected either way. A party FOLLOWER never advances on its own
    *  whatever this says — the host owns what plays there. */
   autoplayNextEnabled: boolean
+  /**
+   * Named filter combinations, per browse page.
+   *
+   * Device-level rather than per-profile, deliberately, and sitting beside
+   * hideWatchedDefault for the same reason: these describe how somebody likes
+   * to BROWSE rather than what they have watched. Keeping them out of the
+   * profile-scoped store also keeps them out of a boundary this codebase has
+   * already had to get right in several places.
+   */
+  savedFilters: SavedFilter[]
   /** Whether a new episode of a tracked show raises a desktop notification.
    *  Off by default: an app that starts notifying because it was updated has
    *  made a decision that was not its to make. */
@@ -865,6 +975,28 @@ export interface SimklPollResult {
   connected: boolean
   user?: Record<string, unknown>
   pending?: boolean
+  message?: string
+}
+
+export interface TraktStatusResult {
+  connected: boolean
+  /** Both halves of the app credential are saved. Sign-in is not offered
+   *  until this is true, because the device flow needs the secret. */
+  configured: boolean
+  username?: string
+}
+
+export interface TraktStartResult {
+  /** What the person types into trakt.tv. */
+  userCode: string
+  verificationUrl: string
+  /** Seconds Trakt asks the app to wait between polls. */
+  interval: number
+  expiresIn: number
+}
+
+export interface TraktPollResult {
+  state: 'pending' | 'connected' | 'expired' | 'denied' | 'error'
   message?: string
 }
 

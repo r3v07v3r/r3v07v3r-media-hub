@@ -11,7 +11,6 @@
 // what I mean to" belongs behind one destination.
 
 import { useEffect, useMemo, useState } from 'react'
-import { Link } from 'react-router-dom'
 import { useAppState } from '@renderer/context/AppStateContext'
 import { Icon } from '@renderer/components/icons/Icon'
 import { useRestoreBrowsingOrigin } from '@renderer/lib/mediaHub/useRestoreBrowsingOrigin'
@@ -326,7 +325,14 @@ function ListsView({
   const { lists, loaded, create, rename, remove, removeItem } = useMediaHubLists(libraryKey)
   // null selects My List; a list id selects that one.
   const [selected, setSelected] = useState<string | null>(null)
-  const [items, setItems] = useState<CustomListItem[]>([])
+  // Carries the list it came from.
+  //
+  // Switching from one list to another kept the previous list's titles on
+  // screen until the new fetch landed — and Remove reads the SELECTED list id
+  // with the ROW's content id, so a click in that window called
+  // removeItem(newList, oldTitle): a silent no-op at best, and at worst
+  // removing something from a list nobody was looking at.
+  const [items, setItems] = useState<{ key: string; values: CustomListItem[] } | null>(null)
   const [naming, setNaming] = useState(false)
   const [draftName, setDraftName] = useState('')
   // A selected list that has just been deleted falls back to My List rather
@@ -340,7 +346,7 @@ function ListsView({
     window.api?.mediaHub?.lists
       .items(effective)
       .then((result) => {
-        if (!cancelled) setItems(result.items)
+        if (!cancelled) setItems({ key: effective, values: result.items })
       })
       .catch(() => {})
     return () => {
@@ -349,6 +355,10 @@ function ListsView({
     // `lists` is a dependency because a remove changes the counts, and what is
     // shown has to change with them.
   }, [effective, lists])
+
+  // Null while a fetch for THIS list has not landed, which is what stops the
+  // previous list's rows being rendered — and clicked — under the new one.
+  const currentItems = items?.key === effective ? items.values : null
 
   async function submitName() {
     const name = draftName.trim()
@@ -450,13 +460,15 @@ function ListsView({
               Delete list
             </button>
           </div>
-          {items.length === 0 ? (
+          {currentItems === null ? (
+            <p className={styles.empty}>Opening…</p>
+          ) : currentItems.length === 0 ? (
             <p className={styles.empty}>
               Nothing in this list yet. Add titles from their own page.
             </p>
           ) : (
             <div className={styles.grid}>
-              {items.map((item) => (
+              {currentItems.map((item) => (
                 <div key={item.contentId} className={styles.card}>
                   <button
                     type="button"
@@ -735,10 +747,6 @@ export default function MyStuffPage() {
           action={{ label: 'Restore', onClick: (media) => toggleDisliked(media) }}
         />
       )}
-
-      <Link to="/" className={styles.backLink}>
-        ← Back to Home
-      </Link>
     </div>
   )
 }

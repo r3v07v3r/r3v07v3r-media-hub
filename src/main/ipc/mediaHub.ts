@@ -29,6 +29,7 @@ import { registerPlayerIpc } from '../media-hub/playerBridge'
 import { registerProfilesIpc } from '../media-hub/profiles'
 import { registerSubtitlesIpc } from '../media-hub/subtitlesService'
 import { registerTorBoxIpc } from '../media-hub/torbox'
+import { registerTraktIpc } from '../media-hub/traktClient'
 import { registerTrackingIpc } from '../media-hub/tracking'
 import { registerWatchPartyIpc } from '../media-hub/watchParty'
 import { registerFriendsIpc, restoreFriendsGroup } from '../media-hub/friends'
@@ -42,6 +43,7 @@ export function registerMediaHubIpc(): void {
   registerCalendarIpc()
   registerAnimeStoryIpc()
   registerTrackingIpc()
+  registerTraktIpc()
   registerMalIpc()
   registerSubtitlesIpc()
   registerPlaybackIpc()

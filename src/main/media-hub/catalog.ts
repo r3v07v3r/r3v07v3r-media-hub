@@ -25,6 +25,7 @@ import type {
   Episode,
   MediaKind,
   PersonCreditsResult,
+  TitleCollectionResult,
   WatchProvidersResult
 } from '../../shared/media-hub/types'
 import { MEDIA_HUB_CHANNELS } from '../../shared/media-hub/ipc-channels'
@@ -52,6 +53,8 @@ import { coalesce, coalesceScope, type TaskPriority } from './taskScheduler'
 import { buildGroupedAnimeVideos, groupAnimeCatalog, kitsuRealEpisodes } from './animeSeasons'
 import { omdbRottenTomatoesRating } from './omdb'
 import { searchCredits, titleCredits, titlesFeaturing } from './credits'
+import { titleCollection } from './collection'
+import { contentRating } from './contentRating'
 import { watchProviders, watchRegion } from './watchProviders'
 
 const catalogUrls: Record<'movie' | 'series', string> = {
@@ -1175,6 +1178,23 @@ export function registerCatalogIpc(): void {
         return { region: watchRegion(), stream: [], rent: [], buy: [], link: '' }
       return watchProviders(type, String(payload?.id ?? ''))
     }
+  )
+
+  handle<{ type: MediaKind; id: string }, { rating: string; region: string }>(
+    MEDIA_HUB_CHANNELS.catalogRating,
+    async (_e, payload) => {
+      const type = payload?.type
+      if (!isValidCatalogKind(type)) return { rating: '', region: watchRegion() }
+      return {
+        rating: await contentRating(type, String(payload?.id ?? '')),
+        region: watchRegion()
+      }
+    }
+  )
+
+  handle<{ id: string }, TitleCollectionResult>(
+    MEDIA_HUB_CHANNELS.catalogCollection,
+    async (_e, payload) => titleCollection(String(payload?.id ?? ''))
   )
 
   handle<string, ConnectResult>(MEDIA_HUB_CHANNELS.tmdbConnect, async (_e, raw) => {

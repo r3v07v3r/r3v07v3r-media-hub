@@ -13,7 +13,9 @@ streaming apps people compare everything to.
 
 ## Progress
 
-Sixteen features shipped on `claude/competitive-feature-analysis-4de25a`. All 36
+Eighteen features shipped. Sixteen merged as PR #105 and released in
+`v1.0.83-preview.70`; collection pages, content ratings and fixes from hands-on
+testing of that build are on `claude/post-preview70-fixes`. All 36
 registered tests pass, both TypeScript projects typecheck, and ESLint reports
 zero errors.
 
@@ -39,6 +41,8 @@ everything except the two structural items.**
 | Sonarr/Radarr requests       | 4     | Lookup by IMDb id through the server, add with a chosen profile and folder, search on add.                                                                                     |
 | qBittorrent control          | 4     | Pause, resume and remove, with keeping or deleting the files asked separately.                                                                                                 |
 | Notifications                | 4     | New episodes of tracked shows, off by default, deferred while watching.                                                                                                        |
+| Collection pages             | 3     | The rest of a film's series, from TMDB data the similar-titles pass already fetched and discarded.                                                                             |
+| Content ratings              | 3     | The age certificate for your region, and the prerequisite for parental controls.                                                                                               |
 
 ### Corrected along the way
 

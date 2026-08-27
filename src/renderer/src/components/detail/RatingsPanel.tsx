@@ -133,7 +133,12 @@ function YourRating({ media }: { media: MediaItem }) {
             aria-checked={score === value}
             aria-label={`${value} out of 10 — ${ratingLabel(value)}`}
             className={`${styles.scaleButton} ${value <= score ? styles.scaleButtonOn : ''}`}
-            onClick={() => void rateMedia(media.id, score === value ? 0 : value)}
+            onClick={() =>
+              void rateMedia(media.id, score === value ? 0 : value, {
+                type: media.mediaKind ?? (media.mediaType === 'series' ? 'series' : 'movie'),
+                title: media.title
+              })
+            }
           >
             {value}
           </button>
