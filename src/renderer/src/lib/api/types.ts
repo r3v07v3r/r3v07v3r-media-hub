@@ -21,7 +21,8 @@ export const SERVICE_LABELS: Record<ServiceId, string> = {
   jellyfin: 'Jellyfin',
   sonarr: 'Sonarr',
   radarr: 'Radarr',
-  qbittorrent: 'qBittorrent'
+  qbittorrent: 'qBittorrent',
+  prowlarr: 'Prowlarr'
 }
 
 export function isConfigured(config: ServiceConfig | undefined): config is ServiceConfig {

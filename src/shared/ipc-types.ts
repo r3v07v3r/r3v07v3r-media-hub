@@ -43,7 +43,7 @@ export interface ServiceConfig {
   enabled: boolean
 }
 
-export type ServiceId = 'jellyfin' | 'sonarr' | 'radarr' | 'qbittorrent'
+export type ServiceId = 'jellyfin' | 'sonarr' | 'radarr' | 'qbittorrent' | 'prowlarr'
 
 export type ServiceSettings = Record<ServiceId, ServiceConfig>
 
@@ -57,7 +57,8 @@ export const DEFAULT_SERVICE_SETTINGS: ServiceSettings = {
   jellyfin: { ...DEFAULT_SERVICE_CONFIG },
   sonarr: { ...DEFAULT_SERVICE_CONFIG },
   radarr: { ...DEFAULT_SERVICE_CONFIG },
-  qbittorrent: { ...DEFAULT_SERVICE_CONFIG }
+  qbittorrent: { ...DEFAULT_SERVICE_CONFIG },
+  prowlarr: { ...DEFAULT_SERVICE_CONFIG }
 }
 
 // Generic outbound HTTP proxy — requests run in the main process (plain

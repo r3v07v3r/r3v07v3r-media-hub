@@ -13,17 +13,17 @@ streaming apps people compare everything to.
 
 ## Progress
 
-Twenty-nine features shipped. Sixteen merged as PR #105 and released in
+Thirty features shipped. Sixteen merged as PR #105 and released in
 `v1.0.83-preview.70`; everything since — collection pages, content ratings,
 fixes from hands-on testing of that build, Trakt in both directions, saved
 filters, explained recommendations, the player's remaining mpv capabilities,
 subtitle hash matching, IMDb ratings import, a deeper catalog, chapter-based
-skip-intro for movies and series, and Letterboxd import — is on
-`claude/post-preview70-fixes`. All 46 registered tests pass, both TypeScript
-projects typecheck, and ESLint reports zero errors.
+skip-intro for movies and series, Letterboxd import, and indexer visibility
+— is on `claude/post-preview70-fixes`. All 46 registered tests pass, both
+TypeScript projects typecheck, and ESLint reports zero errors.
 
-**Phase 0, 1, 2 and 3 are all complete. Only Phase 4 has anything left: the
-two structural items and indexer visibility.**
+**Phase 0, 1, 2 and 3 are all complete. Only Phase 4's two structural items
+are left — everything else in the roadmap is done.**
 
 | Shipped                           | Phase | What landed                                                                                                                                                                    |
 | ---------------------------------- | ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -56,6 +56,7 @@ two structural items and indexer visibility.**
 | Sonarr/Radarr requests            | 4     | Lookup by IMDb id through the server, add with a chosen profile and folder, search on add.                                                                                     |
 | qBittorrent control               | 4     | Pause, resume and remove, with keeping or deleting the files asked separately.                                                                                                 |
 | Notifications                     | 4     | New episodes of tracked shows, off by default, deferred while watching.                                                                                                        |
+| Indexer visibility                | 4     | Connect Prowlarr as a fifth service; the Downloads page names any indexer currently in a failure backoff, so "no results" from Sonarr/Radarr stops being unexplained. Silent when everything is healthy. |
 
 ### Corrected along the way
 
@@ -172,14 +173,13 @@ them at all.
 Four services are connected and mostly watched rather than used. Independent of every other phase —
 the best standalone win if you want something to ship this week.
 
-Request/queue control and notifications shipped — see the Progress table. The two structural
-items and indexer visibility remain:
+Request/queue control, notifications and indexer visibility shipped — see the Progress table. The
+two structural items remain:
 
 | Work                        | Effort | What it is                                                                                                                                                                                              |
 | --------------------------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Jellyfin as a real source   | L      | `jellyfin.ts` is `testConnection` plus `getResumeItems`. Browse the library, and make it an actual playback candidate — the README's local → server → download order is not what `stream:resolve` does. |
 | Debrid provider abstraction | L      | Extract a provider interface (resolve, cache status, play URL) from `torbox.ts` and add Real-Debrid and AllDebrid behind it. An adoption ceiling more than a feature.                                   |
-| Indexer visibility          | S      | Surface Prowlarr alongside the Servarr pair, so a failed search says which indexer failed.                                                                                                              |
 
 ## Phase 5 — Reach beyond this window
 
