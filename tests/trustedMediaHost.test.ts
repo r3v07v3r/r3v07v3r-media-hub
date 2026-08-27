@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict'
+import { buildStreamUrl } from '../src/main/media-hub/jellyfin'
+import { assertPlayableUrl } from '../src/main/media-hub/mpv'
 import {
   assertPublicMediaUrl,
   clearTrustedMediaHosts,
@@ -131,6 +133,22 @@ async function main(): Promise<void> {
 
   const followed = await safeFetchMedia(PRIVATE, {}, sameHostFetch, async () => ['192.168.1.50'])
   assert.equal(followed.status, 200, 'a redirect within the trusted host is followed')
+
+  // --- 10. End to end: the URL the Jellyfin client builds must pass the
+  // gate mpv actually enforces. This is the join between the two halves of
+  // the feature, and the one that silently breaks if either side drifts.
+  const config = { baseUrl: 'http://192.168.1.50:8096', apiKey: 'abc' }
+  const streamUrl = buildStreamUrl(config, 'item-1', 'source-1')
+
+  clearTrustedMediaHosts()
+  assert.throws(
+    () => assertPlayableUrl(streamUrl),
+    /valid HTTPS media URL/,
+    'a media-server URL is refused by mpv until its host is configured'
+  )
+
+  setTrustedMediaHosts([config.baseUrl])
+  assertPlayableUrl(streamUrl)
 
   clearTrustedMediaHosts()
 }
