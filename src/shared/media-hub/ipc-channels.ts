@@ -61,6 +61,9 @@ export const MEDIA_HUB_CHANNELS = {
   catalogProviders: 'mediahub:catalog:providers',
   /** The film series a title belongs to — see main/media-hub/collection.ts. */
   catalogCollection: 'mediahub:catalog:collection',
+  /** The age certificate for a title in the person's region — see
+   *  main/media-hub/contentRating.ts. */
+  catalogRating: 'mediahub:catalog:rating',
   /** Episodes of tracked shows around now — see main/media-hub/calendar.ts. */
   calendarGet: 'mediahub:calendar:get',
   homePersonalized: 'mediahub:home:personalized',

@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import type { MediaItem } from '@renderer/types'
 import type { DetailAdapterConfig } from '@renderer/lib/mediaHub/detailAdapters'
 import { useAppState } from '@renderer/context/AppStateContext'
@@ -26,7 +26,44 @@ const COLLAPSE_LENGTH = 320
  * the detail page), anime has no cast, and a title TMDB has never heard of
  * has none of them.
  */
+/**
+ * The age certificate for a title, in the person's own region.
+ *
+ * Fetched here rather than folded into the metadata pipeline: it is one string
+ * that only this panel reads, it is region-scoped where the metadata cache is
+ * not, and a title page that never scrolls this far should not have paid for
+ * it. Keyed to its subject, like every other fetch on this page.
+ */
+function useContentRating(media: MediaItem): { rating: string; region: string } | null {
+  const [result, setResult] = useState<{
+    key: string
+    value: { rating: string; region: string }
+  } | null>(null)
+  const kind = media.mediaKind ?? (media.mediaType === 'series' ? 'series' : 'movie')
+
+  useEffect(() => {
+    const api = window.api?.mediaHub
+    if (!api || kind === 'anime' || !/^tt\d+$/.test(media.id)) return
+    let cancelled = false
+    api.catalog
+      .rating(kind, media.id)
+      .then((found) => {
+        if (!cancelled) setResult({ key: media.id, value: found })
+      })
+      .catch(() => {
+        if (!cancelled) setResult(null)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [kind, media.id])
+
+  if (result?.key !== media.id) return null
+  return result.value.rating ? result.value : null
+}
+
 export function AboutPanel({ media, config }: { media: MediaItem; config: DetailAdapterConfig }) {
+  const certificate = useContentRating(media)
   const [expanded, setExpanded] = useState(false)
   const description = media.description ?? ''
   const isLong = description.length > COLLAPSE_LENGTH
@@ -59,6 +96,16 @@ export function AboutPanel({ media, config }: { media: MediaItem; config: Detail
           <div className={styles.fact}>
             <dt>Released</dt>
             <dd>{media.releaseYear}</dd>
+          </div>
+        )}
+        {certificate && (
+          <div className={styles.fact}>
+            {/* The region is part of the fact, not decoration: certification
+                bodies are national, and the same film is PG-13 in one country
+                and 12A in another. A bare "12" would be a claim about
+                nowhere. */}
+            <dt>Rated ({certificate.region})</dt>
+            <dd>{certificate.rating}</dd>
           </div>
         )}
         {media.status && (

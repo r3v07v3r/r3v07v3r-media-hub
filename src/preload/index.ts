@@ -354,6 +354,8 @@ const api = {
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.catalogProviders, { type, id }),
       collection: (id: string): Promise<TitleCollectionResult> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.catalogCollection, { id }),
+      rating: (type: MediaKind, id: string): Promise<{ rating: string; region: string }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.catalogRating, { type, id }),
       calendar: (): Promise<{ entries: CalendarEntry[] }> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.calendarGet)
     },
