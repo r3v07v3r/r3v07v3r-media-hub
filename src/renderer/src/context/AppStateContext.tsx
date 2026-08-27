@@ -178,8 +178,14 @@ interface AppStateValue {
    *  Absent means unrated — see shared/media-hub/rating.ts on why that is not
    *  the same as a low score. */
   ratings: Map<string, number>
-  /** Records a score, or clears it with 0. */
-  rateMedia: (id: string, score: number) => Promise<void>
+  /** Records a score, or clears it with 0. `media` is optional and only used
+   *  to push the score onward to Trakt, which files movies and shows
+   *  separately and cannot tell them apart from an IMDb id. */
+  rateMedia: (
+    id: string,
+    score: number,
+    media?: { type: MediaKind; title: string }
+  ) => Promise<void>
   /**
    * Identifies the library currently on screen — the active profile, plus a
    * counter that moves whenever the rows underneath it are replaced wholesale.

@@ -28,6 +28,60 @@ import type { VideoPictureControl } from './videoPicture'
 export const AUTOPLAY_NEXT_COUNTDOWN_SECONDS = 10
 
 /**
+ * What pressing the A-B loop control does next, given what is currently set
+ * and where playback is right now.
+ *
+ * Three presses, three states: nothing set -> A only -> A and B (which is
+ * also the instant mpv actually starts looping, once both are known — see
+ * PlayerCommand's set-ab-loop) -> cleared. Pulled out of the click handler
+ * that drives it so the ordering logic — the part actually worth getting
+ * wrong — is something a test can pin down rather than only living inside a
+ * React callback.
+ */
+export function nextAbLoopPoint(
+  current: { a: number; b: number | null } | null,
+  positionSeconds: number
+): { a: number; b: number | null } | null {
+  if (!current) return { a: positionSeconds, b: null }
+  if (current.b === null) {
+    // Whichever timestamp is LATER becomes B. Somebody can press the second
+    // point before realising they wanted to loop back to a moment that
+    // already passed, and mpv's loop only ever plays forward — a>b would not
+    // error, it would just never loop, which reads as this feature being
+    // broken rather than as a person having pressed the buttons out of order.
+    return { a: Math.min(current.a, positionSeconds), b: Math.max(current.a, positionSeconds) }
+  }
+  return null
+}
+
+/**
+ * The filename a screenshot is saved under — built from what is actually on
+ * screen rather than a generic "screenshot", so a folder of them sorts and
+ * reads the way somebody would want a folder of screenshots to.
+ *
+ * Windows' reserved filename characters are the strictest of the three
+ * platforms this ships to, so satisfying them satisfies all three.
+ */
+export function screenshotFilename(
+  media: { title: string; seasonNumber?: number; episodeNumber?: number } | null,
+  now: Date
+): string {
+  const stamp = now.toISOString().replace(/:/g, '-').replace(/\..+$/, '').replace('T', ' ')
+  const label = media
+    ? [
+        media.title,
+        media.seasonNumber && media.episodeNumber
+          ? `S${String(media.seasonNumber).padStart(2, '0')}E${String(media.episodeNumber).padStart(2, '0')}`
+          : null
+      ]
+        .filter(Boolean)
+        .join(' - ')
+    : 'Screenshot'
+  const safe = label.replace(/[/:*?"<>|]/g, '').trim() || 'Untitled'
+  return `${safe} - ${stamp}.jpg`
+}
+
+/**
  * Loudest the player can be asked to go, as a multiplier of the source's own
  * level: 1 is the untouched signal, 2 is twice it.
  *
@@ -207,6 +261,13 @@ export interface PlayerStatePatch {
  * stream, because nothing needs to — seeking, switching audio, and switching
  * subtitles are all in-place operations on a demuxer that stays open.
  */
+/** What a command's promise resolves to. Only screenshot ever sets `path` —
+ *  every other command's caller ignores this beyond `ok`. */
+export interface PlayerCommandResult {
+  ok: true
+  path?: string
+}
+
 export type PlayerCommand =
   | { type: 'play' }
   | { type: 'pause' }
@@ -244,6 +305,33 @@ export type PlayerCommand =
   | { type: 'set-picture-control'; control: VideoPictureControl; value: number }
   /** Returns every picture control to the original, unadjusted picture. */
   | { type: 'reset-picture-controls' }
+  /** Steps exactly one frame forward. mpv pauses first if it was not already
+   *  paused — there is no "step while playing", the same way there is not in
+   *  any other player. Does nothing for an audio-only stream. */
+  | { type: 'frame-step' }
+  /** One frame back. Slower than frame-step — mpv has to reseek and redecode
+   *  from the nearest keyframe rather than simply advancing the demuxer — but
+   *  exact, which is the only way a scrub-precision control is worth having. */
+  | { type: 'frame-back-step' }
+  /**
+   * Sets, moves, or clears the A-B loop points. `null` for either half clears
+   * that point rather than setting it to zero, since zero is a real, useful
+   * loop start.
+   *
+   * Both points are always sent together rather than one at a time: mpv loops
+   * the instant BOTH `ab-loop-a` and `ab-loop-b` are set, so setting them one
+   * property at a time would start looping on whichever half landed second,
+   * against whatever the OTHER one was left at from a previous point — a
+   * three-second loop nobody asked for. Sending the pair the overlay's own
+   * state already has is what makes "set A" a no-op on playback and "set B"
+   * the only moment looping actually begins.
+   */
+  | { type: 'set-ab-loop'; a: number | null; b: number | null }
+  /** Saves the frame on screen right now to disk. Captures the LIVE playing
+   *  instance, unlike the scrub-bar preview thumbnails (see mpv.ts's
+   *  captureThumbnail) — a screenshot IS a request to save whatever is
+   *  currently showing, where a preview is not allowed to move it. */
+  | { type: 'screenshot' }
 
 /**
  * Main -> overlay. An input that arrived at mpv's own window rather than the

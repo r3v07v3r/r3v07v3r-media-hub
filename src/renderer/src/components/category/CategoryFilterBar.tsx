@@ -24,8 +24,10 @@ import {
   EPISODES_BUCKETS,
   RATING_THRESHOLDS,
   SORT_OPTIONS,
-  RUNTIME_SORT_OPTIONS
+  RUNTIME_SORT_OPTIONS,
+  filterStateToSearchParams
 } from '@renderer/lib/mediaHub/categoryFilters'
+import { useAppState } from '@renderer/context/AppStateContext'
 import styles from './CategoryFilterBar.module.css'
 
 export interface CategoryFilterBarProps {
@@ -36,6 +38,9 @@ export interface CategoryFilterBarProps {
   items: MediaItem[]
   filters: CategoryFilterState
   onChange: (next: CategoryFilterState) => void
+  /** Applies a saved view by its serialised query — the page owns the URL, so
+   *  it does the navigating. */
+  onApplySaved: (query: string) => void
   resultCount: number
 }
 
@@ -44,8 +49,31 @@ export function CategoryFilterBar({
   items,
   filters,
   onChange,
+  onApplySaved,
   resultCount
 }: CategoryFilterBarProps) {
+  const { mediaHubSettings, refreshMediaHubSettings } = useAppState()
+  const mine = (mediaHubSettings?.savedFilters ?? []).filter((saved) => saved.kind === config.kind)
+
+  async function saveCurrentFilter(name: string): Promise<void> {
+    const api = window.api?.mediaHub
+    if (!api) return
+    // The current filter state serialised exactly as the URL carries it, so a
+    // saved view is applied by navigating to it and anything the bar learns to
+    // express is saveable with no second schema.
+    await api.settings
+      .saveFilter(name, config.kind, filterStateToSearchParams(filters).toString())
+      .catch(() => {})
+    refreshMediaHubSettings()
+  }
+
+  async function deleteFilter(id: string): Promise<void> {
+    const api = window.api?.mediaHub
+    if (!api) return
+    await api.settings.deleteFilter(id).catch(() => {})
+    refreshMediaHubSettings()
+  }
+
   const genres = availableGenres(items)
   const years = availableYears(items)
   const statuses = availableStatuses(items)
@@ -86,6 +114,30 @@ export function CategoryFilterBar({
       <span className={styles.icon} aria-hidden="true">
         <Icon name="filter" />
       </span>
+
+      {/* Saved views for THIS page only: a runtime filter means nothing on the
+          series page, so offering a movie view there would be offering
+          something that cannot apply. */}
+      {mine.map((saved) => (
+        <span key={saved.id} className={styles.savedChip}>
+          <button
+            type="button"
+            className={styles.savedApply}
+            onClick={() => onApplySaved(saved.query)}
+            title={saved.name}
+          >
+            {saved.name}
+          </button>
+          <button
+            type="button"
+            className={styles.savedRemove}
+            aria-label={`Delete the saved view ${saved.name}`}
+            onClick={() => void deleteFilter(saved.id)}
+          >
+            <Icon name="x" size={10} />
+          </button>
+        </span>
+      ))}
 
       <select
         className={styles.select}
@@ -249,6 +301,22 @@ export function CategoryFilterBar({
         <button type="button" className={styles.clearButton} onClick={reset}>
           <Icon name="x" />
           Clear
+        </button>
+      )}
+
+      {/* Offered only when there is something worth keeping. A "save this
+          view" button over an unfiltered page would be inviting people to
+          bookmark the default. */}
+      {hasActiveFilter && (
+        <button
+          type="button"
+          className={styles.clear}
+          onClick={() => {
+            const name = window.prompt('Name this view')
+            if (name?.trim()) void saveCurrentFilter(name.trim())
+          }}
+        >
+          Save view
         </button>
       )}
 

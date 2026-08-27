@@ -23,10 +23,12 @@ import type {
   MarkWatchedResult,
   PlaybackPositionResult,
   CustomList,
+  MediaKind,
   CustomListItem,
   PlayRecord,
   ViewingStats,
   PendingWatchStatusPush,
+  RecommendationReason,
   ReconcileCheckResult,
   ReconcileResolution,
   ReconcileResolveResult,
@@ -53,6 +55,7 @@ import {
   abandonedIds,
   liveExclusions,
   readStoredRecommendations,
+  reasonsFor,
   requestRecommendationsRebuild,
   storeRecommendations,
   SERVED_COUNT
@@ -65,6 +68,12 @@ import { mapWithLimit, type TaskPriority } from './taskScheduler'
 import { handle } from './ipcGuard'
 import { logError } from './logger'
 import { pushMalProgress } from './malSync'
+import {
+  pushTraktHistory,
+  pushTraktRating,
+  pushTraktScrobble,
+  pushTraktSeasonHistory
+} from './traktClient'
 import {
   encrypt,
   readSettings,
@@ -1093,6 +1102,12 @@ export function registerTrackingIpc(): void {
         '/sync/history',
         historyPayload(item, playback || {})
       )
+      // Not awaited into the result. Trakt is a third service alongside two
+      // that already report their own outcome, and a person who has connected
+      // all three should not have "I finished this" wait on the slowest of
+      // them — the local row is the record either way, and a Trakt failure is
+      // logged in traktClient rather than surfaced.
+      void pushTraktHistory(item, playback || {}, 'add')
       return { ok: true, ...simklResult, ...(await pushMalProgress(item)) }
     }
   )
@@ -1104,6 +1119,7 @@ export function registerTrackingIpc(): void {
       getDatabase().unmarkWatched(item.id, p.season, p.episode)
       requestRecommendationsRebuild()
       const simklResult = await syncSimklHistory('/sync/history/remove', historyPayload(item, p))
+      void pushTraktHistory(item, p, 'remove')
       return { ok: true, ...simklResult, ...(await pushMalProgress(item)) }
     }
   )
@@ -1112,17 +1128,22 @@ export function registerTrackingIpc(): void {
     MEDIA_HUB_CHANNELS.trackingMarkSeasonWatched,
     async (_e, { item, season, episodes }) => {
       const list = Array.isArray(episodes) ? episodes : []
+      const episodeNumbers = list.map((p) => p.episode)
       const db = getDatabase()
       for (const playback of list) db.markWatched(item, playback)
       requestRecommendationsRebuild()
       const simklResult = await syncSimklHistory(
         '/sync/history',
-        seasonHistoryPayload(
-          item,
-          season,
-          list.map((p) => p.episode)
-        )
+        seasonHistoryPayload(item, season, episodeNumbers)
       )
+      // Not awaited into the result, same as the single-episode handler
+      // above — a Trakt failure is logged in traktClient rather than making
+      // "mark this season watched" wait on the slowest connected service.
+      // This was missing entirely until now: the single-episode handler got
+      // a Trakt push when Trakt sync was added, but this batch action did
+      // not, which left every episode of a season marked watched here still
+      // unwatched on a connected Trakt account.
+      void pushTraktSeasonHistory(item, season, episodeNumbers)
       return { ok: true, ...simklResult, ...(await pushMalProgress(item)) }
     }
   )
@@ -1343,19 +1364,35 @@ export function registerTrackingIpc(): void {
     ratings: Object.fromEntries(getDatabase().ratings())
   }))
 
-  handle<{ id: string; score: number }, { ratings: Record<string, number> }>(
-    MEDIA_HUB_CHANNELS.ratingSet,
-    (_e, payload) => {
-      const db = getDatabase()
-      db.rate(String(payload?.id ?? ''), Number(payload?.score))
-      // A score changes what the ranking learns from this person's history —
-      // both the genres it prefers and the names it has learned to look for.
-      // Rebuilding here is what makes rating something feel like it did
-      // anything, rather than waiting for the next scheduled pass.
-      requestRecommendationsRebuild()
-      return { ratings: Object.fromEntries(db.ratings()) }
-    }
-  )
+  // `type` and `title` ride along purely for the Trakt push: Trakt chooses
+  // between its movies and shows collections by kind, and neither the ratings
+  // table nor the id itself can answer that — an IMDb id is the same shape for
+  // both.
+  handle<
+    { id: string; score: number; type?: MediaKind; title?: string },
+    { ratings: Record<string, number> }
+  >(MEDIA_HUB_CHANNELS.ratingSet, (_e, payload) => {
+    const db = getDatabase()
+    db.rate(String(payload?.id ?? ''), Number(payload?.score))
+    // Trakt keeps ratings too, and a score given here should not have to be
+    // given again there. Sent with whatever the local row knows about the
+    // title; a 0 is this app's "cleared" signal and reaches Trakt as a
+    // removal rather than as a 1 — see pushTraktRating.
+    void pushTraktRating(
+      {
+        id: String(payload?.id ?? ''),
+        type: payload?.type ?? 'movie',
+        title: payload?.title ?? ''
+      },
+      Number(payload?.score)
+    )
+    // A score changes what the ranking learns from this person's history —
+    // both the genres it prefers and the names it has learned to look for.
+    // Rebuilding here is what makes rating something feel like it did
+    // anything, rather than waiting for the next scheduled pass.
+    requestRecommendationsRebuild()
+    return { ratings: Object.fromEntries(db.ratings()) }
+  })
 
   handle<TrackableItem, { disliked: boolean }>(MEDIA_HUB_CHANNELS.dislikedAdd, (_e, item) => {
     getDatabase().dislike(item)
@@ -1394,10 +1431,12 @@ export function registerTrackingIpc(): void {
     // waiting for eighteen rows it could have read from disk.
     const stored = readStoredRecommendations(exclusions, history)
     let recommendations: CatalogItem[]
+    let recommendationReasons: Record<string, RecommendationReason>
     let preferredGenres: string[]
 
     if (stored) {
       recommendations = stored.items
+      recommendationReasons = stored.reasons
       preferredGenres = stored.preferredGenres
     } else {
       // Nothing stored yet (a fresh install, a bumped STORE_KEY), or too
@@ -1451,6 +1490,12 @@ export function registerTrackingIpc(): void {
       // Through the same cadence pass the stored path uses, so the row is
       // ordered the same way whichever branch produced it.
       recommendations = applyCadence(full, watchCadenceProfile(history), SERVED_COUNT)
+      // Thinner than the stored path's, and knowingly so. This branch ranks
+      // without credits or a taste profile (see the comment above), so the
+      // only reasons it can produce are the ones the catalog alone
+      // supports — a franchise continuation, a genre, a release year. The
+      // background rebuild fills in the rest within minutes.
+      recommendationReasons = reasonsFor(recommendations, full)
     }
 
     // See tracking:list above — same fan-out, same bound, and the two
@@ -1467,6 +1512,7 @@ export function registerTrackingIpc(): void {
       updates: db.trackedUpdates(details),
       continueWatching: continueWatchingList(details, history).slice(0, 18),
       recommendations,
+      recommendationReasons,
       preferredGenres
     }
   })
@@ -1557,12 +1603,24 @@ export function registerTrackingIpc(): void {
   handle<ScrobblePayload, { connected: boolean }>(
     MEDIA_HUB_CHANNELS.simklScrobble,
     async (_e, payload) => {
-      if (!simklCredentials().accessToken) return { connected: false }
       const action = payload?.action
+      // Read once, independent of whether Simkl is connected — Trakt below
+      // must not be gated behind it. `connected` in the return value still
+      // means "Simkl", the channel's own name and the only thing any
+      // existing caller reads it for.
+      const simklConnected = Boolean(simklCredentials().accessToken)
       if (action !== 'start' && action !== 'pause' && action !== 'stop') {
-        return { connected: true }
+        return { connected: simklConnected }
       }
       const progress = Math.min(100, Math.max(0, Number(payload?.progress) || 0))
+      // Both services hear the same transitions, independently of each
+      // other. This used to sit behind the Simkl-connected check above, so a
+      // Trakt-only account (Simkl never connected) never received a single
+      // scrobble despite the setting promising otherwise — Trakt's own
+      // scrobble endpoints are the same start/pause/stop state machine and
+      // owe Simkl's connection state nothing.
+      void pushTraktScrobble(payload.item, payload.playback || {}, action, progress)
+      if (!simklConnected) return { connected: false }
       try {
         await simklRequest(`/scrobble/${action}`, {
           method: 'POST',

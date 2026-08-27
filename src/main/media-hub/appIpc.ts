@@ -12,8 +12,16 @@ import crypto from 'node:crypto'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { MEDIA_HUB_CHANNELS } from '../../shared/media-hub/ipc-channels'
-import type { MediaHubPublicSettings, MediaHubSettingsSnapshot } from '../../shared/media-hub/types'
+import type {
+  ImportSummary,
+  MediaHubPublicSettings,
+  MediaHubSettingsSnapshot,
+  SavedFilter
+} from '../../shared/media-hub/types'
+import { parseImdbRatingsCsv } from '../../shared/media-hub/importCsv'
+import { importLetterboxdLibrary } from './letterboxdImport'
 import { readBackup } from './backup'
+import { requestRecommendationsRebuild } from './recommendations'
 import { watchRegion } from './watchProviders'
 import { getDatabase } from './dbState'
 import { handle } from './ipcGuard'
@@ -31,6 +39,8 @@ import {
 interface RestoreResult {
   restored: number
   createdAt: string
+  /** Who the app switched back to — see backup.ts's activeProfileId. */
+  activeProfileId: string
 }
 
 import { normalizePlaybackBuffer } from '../../shared/media-hub/playbackBuffer'
@@ -156,7 +166,8 @@ export function registerAppIpc(): void {
     if (result.canceled || !result.filePath) return { filePath: null }
     getDatabase().exportBackup(result.filePath, {
       appVersion: app.getVersion(),
-      profiles: (readSettings().profiles ?? []) as unknown as Record<string, unknown>[]
+      profiles: (readSettings().profiles ?? []) as unknown as Record<string, unknown>[],
+      activeProfileId: getDatabase().activeProfile()
     })
     return { filePath: result.filePath }
   })
@@ -195,12 +206,70 @@ export function registerAppIpc(): void {
       byId.set(id, incoming as (typeof existing)[number])
     }
     settings.profiles = [...byId.values()]
+    // Back to whoever was watching when the backup was taken. Restoring the
+    // rows and leaving somebody else active is the shape that made this
+    // confusing: the data was correct, and the library on screen belonged to a
+    // different person.
+    settings.activeProfileId = summary.activeProfileId
     writeSettings(settings)
+    getDatabase().setActiveProfile(summary.activeProfileId)
 
     return {
       restored: Object.values(summary.restored).reduce((total, n) => total + n, 0),
-      createdAt: summary.createdAt
+      createdAt: summary.createdAt,
+      activeProfileId: summary.activeProfileId
     }
+  })
+
+  handle<undefined, ImportSummary | null>(MEDIA_HUB_CHANNELS.importImdbRatings, async (event) => {
+    const win = BrowserWindow.fromWebContents(event.sender)
+    const options = {
+      title: 'Import ratings from IMDb',
+      properties: ['openFile' as const],
+      // IMDb's own export is unambiguously named ratings.csv — the filter is
+      // by extension rather than by that exact name, since somebody may well
+      // have renamed the download.
+      filters: [{ name: 'IMDb ratings export', extensions: ['csv'] }]
+    }
+    const result = win
+      ? await dialog.showOpenDialog(win, options)
+      : await dialog.showOpenDialog(options)
+    const filePath = result.filePaths?.[0]
+    if (result.canceled || !filePath) return null
+
+    // utf-8 rather than the file's own declared encoding: IMDb's export has
+    // been UTF-8 (with a BOM some tools add and Node's utf-8 decoder already
+    // strips) for as long as this format has existed.
+    const text = await fsp.readFile(filePath, 'utf-8')
+    const parsed = parseImdbRatingsCsv(text)
+    const ratings = getDatabase().importRatings(parsed.rows)
+    // What was just written changes what the ranking should suggest — see
+    // recommendations.ts's own comment on this after a Trakt import, which
+    // this mirrors exactly.
+    requestRecommendationsRebuild()
+    // No `plays` from this source at all: IMDb's ratings export is opinions,
+    // not a watch history — it has no equivalent to Trakt's /sync/history.
+    return { plays: 0, ratings, skipped: parsed.skipped }
+  })
+
+  handle<undefined, ImportSummary | null>(MEDIA_HUB_CHANNELS.importLetterboxd, async (event) => {
+    const win = BrowserWindow.fromWebContents(event.sender)
+    const options = {
+      title: 'Import from Letterboxd',
+      properties: ['openFile' as const],
+      // Letterboxd's "Export Your Data" is always a zip — there is no loose
+      // CSV to pick instead, since diary.csv and ratings.csv both live
+      // inside it.
+      filters: [{ name: 'Letterboxd export', extensions: ['zip'] }]
+    }
+    const result = win
+      ? await dialog.showOpenDialog(win, options)
+      : await dialog.showOpenDialog(options)
+    const filePath = result.filePaths?.[0]
+    if (result.canceled || !filePath) return null
+
+    const archive = await fsp.readFile(filePath)
+    return importLetterboxdLibrary(archive)
   })
 
   handle<unknown, { watchRegion: string }>(
@@ -217,6 +286,42 @@ export function registerAppIpc(): void {
       settings.watchRegion = /^[A-Z]{2}$/.test(next) ? next : undefined
       writeSettings(settings)
       return { watchRegion: watchRegion() }
+    }
+  )
+
+  handle<{ name: string; kind: string; query: string }, { savedFilters: SavedFilter[] }>(
+    MEDIA_HUB_CHANNELS.settingsSaveFilter,
+    (_event, payload) => {
+      const settings = readSettings()
+      const name = String(payload?.name ?? '')
+        .trim()
+        .slice(0, 60)
+      const kind = String(payload?.kind ?? '')
+      if (!name || !['movie', 'series', 'anime'].includes(kind)) {
+        return { savedFilters: publicSettings(settings).savedFilters }
+      }
+      // The id is minted here rather than in the renderer, so a saved view
+      // cannot collide with one made in another window.
+      const entry = {
+        id: crypto.randomUUID(),
+        name,
+        kind,
+        query: String(payload?.query ?? '')
+      }
+      settings.savedFilters = [...(settings.savedFilters ?? []), entry]
+      writeSettings(settings)
+      return { savedFilters: publicSettings(settings).savedFilters }
+    }
+  )
+
+  handle<{ id: string }, { savedFilters: SavedFilter[] }>(
+    MEDIA_HUB_CHANNELS.settingsDeleteFilter,
+    (_event, payload) => {
+      const settings = readSettings()
+      const id = String(payload?.id ?? '')
+      settings.savedFilters = (settings.savedFilters ?? []).filter((entry) => entry.id !== id)
+      writeSettings(settings)
+      return { savedFilters: publicSettings(settings).savedFilters }
     }
   )
 

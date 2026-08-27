@@ -20,6 +20,9 @@ export const MEDIA_HUB_CHANNELS = {
   settingsSetAutoplayNext: 'mediahub:settings:set-autoplay-next',
   settingsSetWatchRegion: 'mediahub:settings:set-watch-region',
   settingsSetNotifications: 'mediahub:settings:set-notifications',
+  /** Named filter combinations for the browse pages — see SavedFilter. */
+  settingsSaveFilter: 'mediahub:settings:save-filter',
+  settingsDeleteFilter: 'mediahub:settings:delete-filter',
   settingsSetUiAnimations: 'mediahub:settings:set-ui-animations',
   settingsSetPerformancePanelVisible: 'mediahub:settings:set-performance-panel-visible',
   settingsSetStreamLimits: 'mediahub:settings:set-stream-limits',
@@ -32,6 +35,14 @@ export const MEDIA_HUB_CHANNELS = {
    *  read one back. See main/media-hub/backup.ts for what a backup carries. */
   backupExport: 'mediahub:backup:export',
   backupImport: 'mediahub:backup:import',
+  /** Reads IMDb's "export your ratings" CSV — a file the person downloads
+   *  from IMDb themselves, picked with a native file dialog. See
+   *  shared/media-hub/importCsv.ts for why this needs no title matching. */
+  importImdbRatings: 'mediahub:import:imdb-ratings',
+  /** Reads a Letterboxd "Export Your Data" zip, picked with a native file
+   *  dialog. See main/media-hub/letterboxdImport.ts for the title/year
+   *  resolution this needs that IMDb's import does not. */
+  importLetterboxd: 'mediahub:import:letterboxd',
   logout: 'mediahub:account:logout',
   torboxConnect: 'mediahub:torbox:connect',
   torboxDisconnect: 'mediahub:torbox:disconnect',
@@ -59,6 +70,11 @@ export const MEDIA_HUB_CHANNELS = {
   /** Where a title can be streamed, rented or bought, in the person's own
    *  region — see main/media-hub/watchProviders.ts. */
   catalogProviders: 'mediahub:catalog:providers',
+  /** The film series a title belongs to — see main/media-hub/collection.ts. */
+  catalogCollection: 'mediahub:catalog:collection',
+  /** The age certificate for a title in the person's region — see
+   *  main/media-hub/contentRating.ts. */
+  catalogRating: 'mediahub:catalog:rating',
   /** Episodes of tracked shows around now — see main/media-hub/calendar.ts. */
   calendarGet: 'mediahub:calendar:get',
   homePersonalized: 'mediahub:home:personalized',
@@ -177,6 +193,16 @@ export const MEDIA_HUB_CHANNELS = {
   /** start / pause / stop, which is the shape Simkl's scrobble endpoints
    *  actually are — a state machine rather than a heartbeat. */
   simklScrobble: 'mediahub:simkl:scrobble',
+
+  // Trakt — device-code sign-in, mirroring Simkl's PIN flow. See
+  // main/media-hub/traktClient.ts.
+  traktStatus: 'mediahub:trakt:status',
+  traktConfigure: 'mediahub:trakt:configure',
+  traktStart: 'mediahub:trakt:start',
+  traktPoll: 'mediahub:trakt:poll',
+  /** Pulls a connected Trakt account's history and ratings into this profile. */
+  traktImport: 'mediahub:trakt:import',
+  traktDisconnect: 'mediahub:trakt:disconnect',
 
   // MyAnimeList
   malStatus: 'mediahub:mal:status',

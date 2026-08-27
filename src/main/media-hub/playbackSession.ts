@@ -128,6 +128,15 @@ export function subtitleCacheDir(): string {
   return path.join(app.getPath('userData'), 'subtitles-cache')
 }
 
+/** StreamCache's local URL for whatever is playing right now, or empty
+ *  string when nothing is. See activeCacheUrl above — same URL thumbnail
+ *  capture reads from, for the same reason: no second connection to the
+ *  remote link. Used by movieHash.ts to hash the exact release somebody is
+ *  actually watching for a frame-accurate subtitle search. */
+export function activeStreamUrl(): string {
+  return activeCacheUrl
+}
+
 function clearActiveSubtitle(): void {
   if (activeSubtitlePath) {
     try {

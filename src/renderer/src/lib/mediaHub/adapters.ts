@@ -13,10 +13,12 @@ import type {
   ContinueWatchingEntry,
   HistoryEntry,
   MediaKind,
+  RecommendationReason,
   TrackedItem,
   TrackedItemEnriched
 } from '@shared/media-hub/types'
 import { episodeWatchState } from '@shared/media-hub/catalog-logic'
+import { recommendationReasonLabel } from '@shared/media-hub/recommendationReason'
 import type { OllamaTitleRef } from '@shared/media-hub/ollama'
 import type { MediaItem, MediaType, Recommendation } from '@renderer/types'
 import { initialsFromTitle, tintFromSeed } from './tint'
@@ -178,6 +180,10 @@ export interface CatalogItemAdapterContext {
   historyById?: ReadonlyMap<string, HistoryEntry[]>
   /** ids explicitly marked "Not interested" (from disliked:list) — drives MediaItem.disliked. */
   dislikedIds?: Set<string>
+  /** Why the ranker put THIS title in the suggestion row — home:personalized's
+   *  `recommendationReasons`, looked up per item. Only meaningful for
+   *  catalogItemToRecommendation; every other conversion ignores it. */
+  reason?: RecommendationReason
 }
 
 /** Groups a flat watch history by content id, once, for callers about to
@@ -400,9 +406,21 @@ export function catalogItemToRecommendation(
     preferredGenres.length === 0
       ? 70
       : Math.min(97, 60 + matchedGenres.length * 15 + (parseRating(item.rating) ?? 0) * 2)
-  const reasons = matchedGenres.length
-    ? matchedGenres.map((g) => `Matches your taste for ${g}`)
-    : ['Popular right now']
+  // The reason the RANKER gave, not one re-derived here.
+  //
+  // What this replaces was a second opinion about an ordering it did not
+  // produce: it re-matched genres case-sensitively where the ranking
+  // lowercases, so the two could disagree about the same title, and where
+  // it found nothing it asserted "Popular right now" — a claim about a
+  // figure this app has never measured, over a title that was in fact
+  // there because of a franchise continuation, a director, or nothing in
+  // particular. Nothing consumed it, which is the only reason that never
+  // reached anybody.
+  //
+  // Empty when the ranker had nothing to point at. Callers render that as
+  // no chip, not as an empty one — see recommendationReasonLabel.
+  const label = recommendationReasonLabel(context.reason)
+  const reasons = label ? [label] : []
 
   const media = catalogItemToMediaItem(item, context)
   return {

@@ -67,6 +67,19 @@ export interface BackupFile {
   /** Profiles as they were, so a restored install has somewhere to put the
    *  rows. Never carries a PIN hash or salt — see writeBackup. */
   readonly profiles: unknown[]
+  /**
+   * Who was watching when the backup was taken.
+   *
+   * Restoring switches back to them, which is the only reading of "restore"
+   * that matches what people expect: put it back the way it was. Without it,
+   * taking a backup as one profile and restoring it while another is active
+   * replaced the data and left you looking at somebody else's library —
+   * technically correct and thoroughly confusing.
+   *
+   * Optional because backups written before this existed have no answer; the
+   * restore falls back to the first declared profile rather than staying put.
+   */
+  readonly activeProfileId?: string
   readonly tables: Record<string, Row[]>
 }
 
@@ -75,6 +88,10 @@ export interface RestoreSummary {
   readonly restored: Record<string, number>
   readonly profiles: number
   readonly createdAt: string
+  /** Who to switch back to — the profile that was active when the backup was
+   *  taken, or the first one it declares when it predates that field. Always a
+   *  real id, because a file with no usable profile is refused outright. */
+  readonly activeProfileId: string
 }
 
 /**
@@ -88,7 +105,7 @@ export interface RestoreSummary {
 export function writeBackup(
   sql: DatabaseSync,
   filePath: string,
-  options: { appVersion: string; profiles: Record<string, unknown>[] }
+  options: { appVersion: string; profiles: Record<string, unknown>[]; activeProfileId: string }
 ): void {
   const tables: Record<string, Row[]> = {}
   for (const table of BACKUP_TABLES) {
@@ -115,6 +132,7 @@ export function writeBackup(
     createdAt: new Date().toISOString(),
     appVersion: options.appVersion,
     profiles,
+    activeProfileId: options.activeProfileId,
     tables
   }
 
@@ -274,10 +292,18 @@ export function restoreBackup(sql: DatabaseSync, backup: BackupFile): RestoreSum
     )
   }
 
+  const declared = (backup.profiles as { id?: unknown }[])
+    .map((profile) => String(profile?.id ?? ''))
+    .filter(Boolean)
+  const wanted = String(backup.activeProfileId ?? '')
   return {
     restored,
-    profiles: Array.isArray(backup.profiles) ? backup.profiles.length : 0,
-    createdAt: String(backup.createdAt ?? '')
+    profiles: declared.length,
+    createdAt: String(backup.createdAt ?? ''),
+    // Only honoured when the file actually declares that profile — an
+    // activeProfileId naming somebody the backup does not contain would switch
+    // into a library that is not there.
+    activeProfileId: declared.includes(wanted) ? wanted : declared[0]
   }
 }
 

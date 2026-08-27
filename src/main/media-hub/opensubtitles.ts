@@ -16,6 +16,12 @@ export interface OpenSubtitlesSearchPlayback {
   language?: string
   season?: number
   episode?: number
+  /** The release somebody is actually watching, hashed off the live stream
+   *  — see main/media-hub/movieHash.ts. Undefined whenever it could not be
+   *  computed, which is the ordinary case (a source with no known length, a
+   *  slow tail read, or simply too small a file) and not an error. */
+  movieHash?: string
+  movieBytes?: number
 }
 
 /**
@@ -32,6 +38,9 @@ export interface OpenSubtitlesRawEntry {
     download_count?: unknown
     uploader?: { name?: unknown }
     hearing_impaired?: unknown
+    /** Present only when the search included a moviehash — see
+     *  buildSearchParams. True on the rows that matched it. */
+    moviehash_match?: unknown
   }
 }
 
@@ -51,6 +60,17 @@ export function buildSearchParams(
   if (item?.type !== 'movie') {
     if (Number.isFinite(playback.season)) params.season_number = playback.season as number
     if (Number.isFinite(playback.episode)) params.episode_number = playback.episode as number
+  }
+  // Sent ALONGSIDE imdb_id/query, never instead of it: OpenSubtitles ranks a
+  // hash match first when both are present and falls back to the title match
+  // on its own the moment the hash misses (a re-encode, a different release
+  // nobody has hashed and uploaded yet) — so adding this can only improve the
+  // result, never narrow it the way replacing imdb_id with it would.
+  if (playback.movieHash) {
+    params.moviehash = playback.movieHash
+    if (Number.isFinite(playback.movieBytes)) {
+      params.moviebytesize = playback.movieBytes as number
+    }
   }
   return params
 }
@@ -72,6 +92,7 @@ export function normalizeSubtitleResult(entry: unknown): SubtitleResult {
     releaseName: String(a.release || ''),
     downloadCount: Number(a.download_count) || 0,
     uploader: String(a.uploader?.name || 'Anonymous'),
-    hearingImpaired: Boolean(a.hearing_impaired)
+    hearingImpaired: Boolean(a.hearing_impaired),
+    hashMatch: a.moviehash_match === true
   }
 }

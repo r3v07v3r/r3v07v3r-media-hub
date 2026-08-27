@@ -16,7 +16,7 @@ const MATCH_CLASS: Record<string, string> = {
   low: styles.matchLow
 }
 
-export function MediaCard({ media }: { media: MediaItem }) {
+export function MediaCard({ media, reason }: { media: MediaItem; reason?: string }) {
   const { openDetail, startPartyPlayback, openContextMenu, continueWatching, resolvingMedia } =
     useAppState()
   const artwork = resolveArtwork(media)
@@ -91,6 +91,21 @@ export function MediaCard({ media }: { media: MediaItem }) {
           <Icon name="more-horizontal" />
         </button>
         <div className={styles.cardOverlay}>
+          {/* Why this title is in the row at all — the signal the ranker
+              actually scored it on, not a caption over the result (see
+              shared/media-hub/recommendationReason.ts). Above the title
+              rather than below the match%, because it is the thing that
+              answers "why am I being shown this", and it should be read
+              before the title rather than after the numbers.
+
+              Absent whenever the ranker had nothing to point at, which is
+              ordinary: a title carried by its own rating alone gets no
+              chip rather than a chip that says nothing. */}
+          {reason && (
+            <span className={styles.reasonChip} title={reason}>
+              {reason}
+            </span>
+          )}
           <span className={styles.cardTitle}>{media.title}</span>
           {/* 10-foot-interface pass: "★ 8.6   IMDb 8.6 / 93% Match" hierarchy
               — star+rating is now the bright primary group, a vertical

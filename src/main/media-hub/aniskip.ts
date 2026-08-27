@@ -18,9 +18,11 @@
 // shared cross-module utility" convention; this is a 30-day-cached, once-
 // per-title cost either way.
 //
-// No equivalent skip-time source exists for movies/series (Aniskip is
-// anime-only) — this feature is deliberately anime-only, not a gap left to
-// fill in later.
+// Aniskip itself is anime-only — it is a community database of anime
+// submissions and has no equivalent for anything else — but skip-intro as
+// a FEATURE is not: movies and series read their own chapter marks instead
+// (see shared/media-hub/skipChapters.ts), a different source entirely, from
+// the renderer, with no network request and nothing in this file.
 
 import { fetchJson, type HttpError } from './httpClient'
 import { logError } from './logger'

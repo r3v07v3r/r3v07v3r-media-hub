@@ -9,6 +9,7 @@ import {
   TmdbSection,
   OmdbSection,
   SimklSection,
+  TraktSection,
   MalSection,
   SubDLSection,
   OllamaSection,
@@ -690,7 +691,9 @@ export default function SettingsPage() {
   // profile being edited.
   const [editingProfile, setEditingProfile] = useState<string | 'new' | null>(null)
   // Which of the two backup actions is in flight, so only that button says so.
-  const [backupBusy, setBackupBusy] = useState<'export' | 'import' | null>(null)
+  const [backupBusy, setBackupBusy] = useState<'export' | 'import' | 'imdb' | 'letterboxd' | null>(
+    null
+  )
   const [networkInfo, setNetworkInfo] = useState<NetworkInfoResult | null>(null)
   const [speedTest, setSpeedTest] = useState<{
     kind: 'idle' | 'busy' | 'ok' | 'error'
@@ -792,6 +795,10 @@ export default function SettingsPage() {
       // restored rows belong to profiles missing from the switcher, and the
       // still-active local profile looks empty until the app is restarted.
       await refreshMediaHubSettings()
+      // Profiles BEFORE the library reload: main has already switched the
+      // active profile to whoever the backup was taken by, and the renderer
+      // has to learn both the new list and which of them is current before
+      // anything re-reads against it.
       refreshProfiles()
       // Bumps the library key every profile-scoped read depends on. The
       // profile id cannot carry this on its own: a same-profile restore leaves
@@ -802,6 +809,64 @@ export default function SettingsPage() {
       pushNotification({
         tone: 'error',
         message: error instanceof Error ? error.message : 'That backup could not be restored.'
+      })
+    } finally {
+      setBackupBusy(null)
+    }
+  }
+
+  async function handleImportImdbRatings() {
+    const api = window.api?.mediaHub
+    if (!api) return
+    setBackupBusy('imdb')
+    try {
+      const result = await api.settings.importImdbRatings()
+      // A cancelled picker, like the backup restore above.
+      if (!result) return
+      pushNotification({
+        tone: 'success',
+        message:
+          result.ratings || result.skipped
+            ? `Added ${result.ratings} ${result.ratings === 1 ? 'rating' : 'ratings'}.${
+                result.skipped ? ` ${result.skipped} rows could not be read.` : ''
+              }`
+            : 'Everything in that file was already here.'
+      })
+      // A rating changes what the ranking should suggest — see the same
+      // reload after a Trakt import.
+      reloadLibrary()
+    } catch (error) {
+      pushNotification({
+        tone: 'error',
+        message: error instanceof Error ? error.message : 'That file could not be read.'
+      })
+    } finally {
+      setBackupBusy(null)
+    }
+  }
+
+  async function handleImportLetterboxd() {
+    const api = window.api?.mediaHub
+    if (!api) return
+    setBackupBusy('letterboxd')
+    try {
+      const result = await api.settings.importLetterboxd()
+      // A cancelled picker, like the two imports above.
+      if (!result) return
+      pushNotification({
+        tone: 'success',
+        message:
+          result.plays || result.ratings
+            ? `Added ${result.plays} ${result.plays === 1 ? 'viewing' : 'viewings'} and ${result.ratings} ${result.ratings === 1 ? 'rating' : 'ratings'}.${
+                result.skipped ? ` ${result.skipped} rows could not be matched.` : ''
+              }`
+            : 'Everything in that export was already here.'
+      })
+      reloadLibrary()
+    } catch (error) {
+      pushNotification({
+        tone: 'error',
+        message: error instanceof Error ? error.message : 'That export could not be read.'
       })
     } finally {
       setBackupBusy(null)
@@ -1055,10 +1120,26 @@ export default function SettingsPage() {
               <ActionRow
                 icon="refresh"
                 title="Restore a backup"
-                description="Replaces what is here with the contents of a backup file. Nothing changes unless the whole restore succeeds."
+                description="Puts your library back the way the backup file has it, and switches to the profile that was active when it was taken. Replaces what is here rather than merging, and nothing changes unless the whole restore succeeds."
                 label="Restore…"
                 busy={backupBusy === 'import'}
                 onClick={handleImportBackup}
+              />
+              <ActionRow
+                icon="star"
+                title="Import ratings from IMDb"
+                description="Reads the ratings.csv IMDb gives you from Your Ratings → Export. Matched by IMDb id, so nothing is guessed at — safe to run more than once, since a title already rated here keeps the score you gave it."
+                label="Import…"
+                busy={backupBusy === 'imdb'}
+                onClick={handleImportImdbRatings}
+              />
+              <ActionRow
+                icon="movies"
+                title="Import from Letterboxd"
+                description="Reads the diary and ratings from Letterboxd's Export Your Data (Settings → Data → Export). Needs TMDB connected above to match titles, and only imports one it can match exactly — this can take a few minutes for a large diary."
+                label="Import…"
+                busy={backupBusy === 'letterboxd'}
+                onClick={handleImportLetterboxd}
               />
             </section>
 
@@ -1341,6 +1422,7 @@ export default function SettingsPage() {
             <TmdbSection />
             <OmdbSection />
             <SimklSection />
+            <TraktSection />
             <MalSection />
             <SubDLSection />
             <OpenSubtitlesSection />

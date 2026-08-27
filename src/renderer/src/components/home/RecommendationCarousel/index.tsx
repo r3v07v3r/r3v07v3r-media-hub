@@ -169,7 +169,9 @@ export function RecommendationCarousel() {
               ? Array.from({ length: 6 }).map((_, i) => (
                   <li key={i} className={styles.skeletonCard} aria-hidden="true" />
                 ))
-              : picks.map((rec) => <MediaCard key={rec.media.id} media={rec.media} />)}
+              : picks.map((rec) => (
+                  <MediaCard key={rec.media.id} media={rec.media} reason={rec.reasons[0]} />
+                ))}
           </ul>
           {!loading && canScrollBack && (
             <button

@@ -28,7 +28,7 @@
 //
 // Stale order, never stale membership.
 
-import type { CatalogItem, HistoryEntry } from '../../shared/media-hub/types'
+import type { CatalogItem, HistoryEntry, RecommendationReason } from '../../shared/media-hub/types'
 import { MEDIA_HUB_CHANNELS } from '../../shared/media-hub/ipc-channels'
 import {
   applyCadence,
@@ -54,7 +54,10 @@ import type { TaskPriority } from './taskScheduler'
  * serving the previous version's ordering back for hours, out of a cache
  * nobody thought to clear.
  */
-const STORE_KEY_PREFIX = 'recommendations:v2'
+// v3: entries carry the signal that put them there (ScoredRecommendation's
+// `reason`), which a v2 list has no field for — a stale one would serve a
+// whole row of unexplained cards until the next rebuild hours later.
+const STORE_KEY_PREFIX = 'recommendations:v3'
 
 /**
  * Where one profile's ranked list lives.
@@ -206,6 +209,32 @@ export function abandonedIds(now = Date.now()): Set<string> {
 }
 
 /**
+ * Why each of `items` is there, drawn from the ranking that produced them.
+ *
+ * Built for the served row only, not for the whole stored buffer: this
+ * crosses the IPC boundary on every Home load, and forty explanations for
+ * eighteen cards is thirty-eight strings nobody will read.
+ *
+ * Sparse, because reasons are. A title carried by its own rating alone has
+ * no entry — see strongestReason in catalog-logic.ts — and its card shows
+ * no chip rather than one saying nothing.
+ */
+export function reasonsFor(
+  items: CatalogItem[],
+  entries: ScoredRecommendation[]
+): Record<string, RecommendationReason> {
+  const byId = new Map(
+    entries.filter((entry) => entry.reason).map((entry) => [String(entry.item.id), entry.reason!])
+  )
+  const reasons: Record<string, RecommendationReason> = {}
+  for (const item of items) {
+    const reason = byId.get(String(item.id))
+    if (reason) reasons[String(item.id)] = reason
+  }
+  return reasons
+}
+
+/**
  * The stored ranking, re-filtered against what is true now and re-ordered
  * for what time it is now.
  *
@@ -218,7 +247,11 @@ export function readStoredRecommendations(
   exclusions: LiveExclusions,
   history: HistoryEntry[],
   now = new Date()
-): { items: CatalogItem[]; preferredGenres: string[] } | null {
+): {
+  items: CatalogItem[]
+  reasons: Record<string, RecommendationReason>
+  preferredGenres: string[]
+} | null {
   let stored: StoredRecommendations | null = null
   try {
     // allowExpired: see STORE_TTL_MS. An old ordering is a far better
@@ -248,6 +281,7 @@ export function readStoredRecommendations(
 
   return {
     items,
+    reasons: reasonsFor(items, surviving),
     preferredGenres: Array.isArray(stored.preferredGenres) ? stored.preferredGenres : []
   }
 }

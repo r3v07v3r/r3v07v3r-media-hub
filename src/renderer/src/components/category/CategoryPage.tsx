@@ -158,6 +158,7 @@ export function CategoryPage({ config }: { config: CategoryConfig }) {
           config={config}
           items={kindItems}
           filters={filters}
+          onApplySaved={(query) => setSearchParams(new URLSearchParams(query), { replace: true })}
           onChange={setFilters}
           resultCount={filteredSorted.length}
         />

@@ -742,7 +742,9 @@ export interface RatingsResult {
   ratings: Map<string, number>
   /** Applies a score (or 0 to clear) and adopts whatever the backend reports
    *  back, so the map on screen is the map that was stored. */
-  rate: (id: string, score: number) => Promise<void>
+  /** `media` is optional and only used to push the score onward to Trakt,
+   *  which needs the kind to file it — see tracking.ts's rating handler. */
+  rate: (id: string, score: number, media?: { type: MediaKind; title: string }) => Promise<void>
 }
 
 export function useMediaHubRatings(libraryKey: string): RatingsResult {
@@ -764,28 +766,31 @@ export function useMediaHubRatings(libraryKey: string): RatingsResult {
     }
   }, [libraryKey])
 
-  const rate = useCallback(async (id: string, score: number) => {
-    const api = window.api?.mediaHub
-    if (!api) return
-    // Optimistic, then reconciled with what came back. The write is local
-    // SQLite and effectively instant, but it also kicks off a recommendation
-    // rebuild — waiting for the round trip to move a button somebody just
-    // pressed would make rating feel slower than it is.
-    setRatings((previous) => {
-      const next = new Map(previous)
-      if (score > 0) next.set(id, score)
-      else next.delete(id)
-      return next
-    })
-    try {
-      const result = await api.ratings.set(id, score)
-      setRatings(new Map(Object.entries(result.ratings)))
-    } catch {
-      // The optimistic value stands rather than snapping back: a failed write
-      // here is almost always a closed database on shutdown, and reverting a
-      // score somebody just chose would be the more confusing outcome.
-    }
-  }, [])
+  const rate = useCallback(
+    async (id: string, score: number, media?: { type: MediaKind; title: string }) => {
+      const api = window.api?.mediaHub
+      if (!api) return
+      // Optimistic, then reconciled with what came back. The write is local
+      // SQLite and effectively instant, but it also kicks off a recommendation
+      // rebuild — waiting for the round trip to move a button somebody just
+      // pressed would make rating feel slower than it is.
+      setRatings((previous) => {
+        const next = new Map(previous)
+        if (score > 0) next.set(id, score)
+        else next.delete(id)
+        return next
+      })
+      try {
+        const result = await api.ratings.set(id, score, media)
+        setRatings(new Map(Object.entries(result.ratings)))
+      } catch {
+        // The optimistic value stands rather than snapping back: a failed write
+        // here is almost always a closed database on shutdown, and reverting a
+        // score somebody just chose would be the more confusing outcome.
+      }
+    },
+    []
+  )
 
   return useMemo(() => ({ ratings, rate }), [ratings, rate])
 }
@@ -861,7 +866,12 @@ export function useMediaHubHomeFeed(libraryKey: string): HomeFeedResult {
         const next = {
           continueWatching: result.continueWatching.map(continueWatchingEntryToItem),
           recommendations: result.recommendations.map((item) =>
-            catalogItemToRecommendation(item, result.preferredGenres, { trackedIds })
+            catalogItemToRecommendation(item, result.preferredGenres, {
+              trackedIds,
+              // Sparse by design — a title nothing picked out has no entry,
+              // and its card shows no chip. See RecommendationReason.
+              reason: result.recommendationReasons?.[String(item.id)]
+            })
           ),
           featured: result.recommendations
             .slice(0, 6)
