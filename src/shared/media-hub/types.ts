@@ -882,6 +882,28 @@ export interface SimklPollResult {
   message?: string
 }
 
+export interface TraktStatusResult {
+  connected: boolean
+  /** Both halves of the app credential are saved. Sign-in is not offered
+   *  until this is true, because the device flow needs the secret. */
+  configured: boolean
+  username?: string
+}
+
+export interface TraktStartResult {
+  /** What the person types into trakt.tv. */
+  userCode: string
+  verificationUrl: string
+  /** Seconds Trakt asks the app to wait between polls. */
+  interval: number
+  expiresIn: number
+}
+
+export interface TraktPollResult {
+  state: 'pending' | 'connected' | 'expired' | 'denied' | 'error'
+  message?: string
+}
+
 export interface MalStatus {
   connected: boolean
   clientId: string

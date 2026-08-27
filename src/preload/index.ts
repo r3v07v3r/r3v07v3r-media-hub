@@ -51,6 +51,9 @@ import type {
   TitleCollectionResult,
   WatchProvidersResult,
   PlayRecord,
+  TraktPollResult,
+  TraktStartResult,
+  TraktStatusResult,
   ViewingStats,
   PlaybackPrepareProgress,
   PlaybackResult,
@@ -438,8 +441,12 @@ const api = {
       list: (): Promise<{ ratings: Record<string, number> }> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.ratingsList),
       /** 1-10, or 0 to clear. */
-      set: (id: string, score: number): Promise<{ ratings: Record<string, number> }> =>
-        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.ratingSet, { id, score })
+      set: (
+        id: string,
+        score: number,
+        media?: { type: MediaKind; title: string }
+      ): Promise<{ ratings: Record<string, number> }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.ratingSet, { id, score, ...media })
     },
 
     disliked: {
@@ -583,6 +590,17 @@ const api = {
           playback,
           progress
         })
+    },
+
+    trakt: {
+      status: (): Promise<TraktStatusResult> => ipcRenderer.invoke(MEDIA_HUB_CHANNELS.traktStatus),
+      /** Saves the app credential. The secret never comes back out. */
+      configure: (clientId: string, clientSecret: string): Promise<TraktStatusResult> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.traktConfigure, { clientId, clientSecret }),
+      start: (): Promise<TraktStartResult> => ipcRenderer.invoke(MEDIA_HUB_CHANNELS.traktStart),
+      poll: (): Promise<TraktPollResult> => ipcRenderer.invoke(MEDIA_HUB_CHANNELS.traktPoll),
+      disconnect: (): Promise<{ ok: true }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.traktDisconnect)
     },
 
     mal: {

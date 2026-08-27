@@ -9,6 +9,7 @@ import {
   TmdbSection,
   OmdbSection,
   SimklSection,
+  TraktSection,
   MalSection,
   SubDLSection,
   OllamaSection,
@@ -1345,6 +1346,7 @@ export default function SettingsPage() {
             <TmdbSection />
             <OmdbSection />
             <SimklSection />
+            <TraktSection />
             <MalSection />
             <SubDLSection />
             <OpenSubtitlesSection />

@@ -183,6 +183,14 @@ export const MEDIA_HUB_CHANNELS = {
    *  actually are — a state machine rather than a heartbeat. */
   simklScrobble: 'mediahub:simkl:scrobble',
 
+  // Trakt — device-code sign-in, mirroring Simkl's PIN flow. See
+  // main/media-hub/traktClient.ts.
+  traktStatus: 'mediahub:trakt:status',
+  traktConfigure: 'mediahub:trakt:configure',
+  traktStart: 'mediahub:trakt:start',
+  traktPoll: 'mediahub:trakt:poll',
+  traktDisconnect: 'mediahub:trakt:disconnect',
+
   // MyAnimeList
   malStatus: 'mediahub:mal:status',
   malStart: 'mediahub:mal:start',

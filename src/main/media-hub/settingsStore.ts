@@ -31,6 +31,16 @@ export interface MediaHubRawSettings {
   torboxToken?: string
   simklClientId?: string
   simklAccessToken?: string
+  /** Trakt's device flow needs both halves of the app credential, unlike
+   *  Simkl's PIN flow — the token exchange takes the secret. Both are stored
+   *  through the same safeStorage path as every other credential. */
+  traktClientId?: string
+  traktClientSecret?: string
+  traktAccessToken?: string
+  traktRefreshToken?: string
+  /** Epoch ms. Trakt tokens last about three months and carry a refresh
+   *  token; this is what decides when to use it. */
+  traktExpiresAt?: number
   malClientId?: string
   malClientSecret?: string
   malAccessToken?: string
@@ -253,6 +263,28 @@ export function clearTorBoxToken(): void {
 export interface SimklCredentials {
   clientId: string
   accessToken: string
+}
+
+export interface TraktCredentials {
+  clientId: string
+  clientSecret: string
+  accessToken: string
+  refreshToken: string
+  /** Epoch ms, or 0 when nothing is stored. */
+  expiresAt: number
+}
+
+export function traktCredentials(): TraktCredentials {
+  const settings = readSettings()
+  return {
+    clientId: settings.traktClientId || '',
+    // The secret is a credential like any other and is never returned to the
+    // renderer — only the "is it configured" boolean crosses that boundary.
+    clientSecret: decrypt(settings.traktClientSecret),
+    accessToken: decrypt(settings.traktAccessToken),
+    refreshToken: decrypt(settings.traktRefreshToken),
+    expiresAt: Number(settings.traktExpiresAt) || 0
+  }
 }
 
 export function simklCredentials(): SimklCredentials {

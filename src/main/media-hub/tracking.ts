@@ -23,6 +23,7 @@ import type {
   MarkWatchedResult,
   PlaybackPositionResult,
   CustomList,
+  MediaKind,
   CustomListItem,
   PlayRecord,
   ViewingStats,
@@ -65,6 +66,7 @@ import { mapWithLimit, type TaskPriority } from './taskScheduler'
 import { handle } from './ipcGuard'
 import { logError } from './logger'
 import { pushMalProgress } from './malSync'
+import { pushTraktHistory, pushTraktRating, pushTraktScrobble } from './traktClient'
 import {
   encrypt,
   readSettings,
@@ -1093,6 +1095,12 @@ export function registerTrackingIpc(): void {
         '/sync/history',
         historyPayload(item, playback || {})
       )
+      // Not awaited into the result. Trakt is a third service alongside two
+      // that already report their own outcome, and a person who has connected
+      // all three should not have "I finished this" wait on the slowest of
+      // them — the local row is the record either way, and a Trakt failure is
+      // logged in traktClient rather than surfaced.
+      void pushTraktHistory(item, playback || {}, 'add')
       return { ok: true, ...simklResult, ...(await pushMalProgress(item)) }
     }
   )
@@ -1104,6 +1112,7 @@ export function registerTrackingIpc(): void {
       getDatabase().unmarkWatched(item.id, p.season, p.episode)
       requestRecommendationsRebuild()
       const simklResult = await syncSimklHistory('/sync/history/remove', historyPayload(item, p))
+      void pushTraktHistory(item, p, 'remove')
       return { ok: true, ...simklResult, ...(await pushMalProgress(item)) }
     }
   )
@@ -1343,19 +1352,35 @@ export function registerTrackingIpc(): void {
     ratings: Object.fromEntries(getDatabase().ratings())
   }))
 
-  handle<{ id: string; score: number }, { ratings: Record<string, number> }>(
-    MEDIA_HUB_CHANNELS.ratingSet,
-    (_e, payload) => {
-      const db = getDatabase()
-      db.rate(String(payload?.id ?? ''), Number(payload?.score))
-      // A score changes what the ranking learns from this person's history —
-      // both the genres it prefers and the names it has learned to look for.
-      // Rebuilding here is what makes rating something feel like it did
-      // anything, rather than waiting for the next scheduled pass.
-      requestRecommendationsRebuild()
-      return { ratings: Object.fromEntries(db.ratings()) }
-    }
-  )
+  // `type` and `title` ride along purely for the Trakt push: Trakt chooses
+  // between its movies and shows collections by kind, and neither the ratings
+  // table nor the id itself can answer that — an IMDb id is the same shape for
+  // both.
+  handle<
+    { id: string; score: number; type?: MediaKind; title?: string },
+    { ratings: Record<string, number> }
+  >(MEDIA_HUB_CHANNELS.ratingSet, (_e, payload) => {
+    const db = getDatabase()
+    db.rate(String(payload?.id ?? ''), Number(payload?.score))
+    // Trakt keeps ratings too, and a score given here should not have to be
+    // given again there. Sent with whatever the local row knows about the
+    // title; a 0 is this app's "cleared" signal and reaches Trakt as a
+    // removal rather than as a 1 — see pushTraktRating.
+    void pushTraktRating(
+      {
+        id: String(payload?.id ?? ''),
+        type: payload?.type ?? 'movie',
+        title: payload?.title ?? ''
+      },
+      Number(payload?.score)
+    )
+    // A score changes what the ranking learns from this person's history —
+    // both the genres it prefers and the names it has learned to look for.
+    // Rebuilding here is what makes rating something feel like it did
+    // anything, rather than waiting for the next scheduled pass.
+    requestRecommendationsRebuild()
+    return { ratings: Object.fromEntries(db.ratings()) }
+  })
 
   handle<TrackableItem, { disliked: boolean }>(MEDIA_HUB_CHANNELS.dislikedAdd, (_e, item) => {
     getDatabase().dislike(item)
@@ -1563,6 +1588,9 @@ export function registerTrackingIpc(): void {
         return { connected: true }
       }
       const progress = Math.min(100, Math.max(0, Number(payload?.progress) || 0))
+      // Both services hear the same transitions. Trakt's own scrobble
+      // endpoints are the same start/pause/stop state machine.
+      void pushTraktScrobble(payload.item, payload.playback || {}, action, progress)
       try {
         await simklRequest(`/scrobble/${action}`, {
           method: 'POST',
