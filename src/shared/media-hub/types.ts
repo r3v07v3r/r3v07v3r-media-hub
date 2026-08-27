@@ -404,6 +404,38 @@ export interface RecommendationReason {
   detail: string
 }
 
+/**
+ * One viewing brought in from somewhere else — a Trakt history row, and
+ * whatever import comes after it.
+ *
+ * `watchedAt` is the WHOLE point and the reason this is not just a
+ * TrackedItem. An import that stamps everything "now" puts a decade of
+ * somebody's viewing at the top of their recently-watched, and teaches the
+ * cadence profile (see catalog-logic.ts) that they watch everything at
+ * whatever time of day they happened to press Import.
+ */
+export interface ImportedPlay {
+  id: string
+  type: MediaKind
+  title: string
+  year?: string
+  /** Null for a film. Season 0 is the specials convention and is not null. */
+  season?: number | null
+  episode?: number | null
+  /** ISO 8601, as the source recorded it. */
+  watchedAt: string
+}
+
+/** What an import actually changed. Every field is a count of NEW rows, not of rows offered. */
+export interface ImportSummary {
+  /** Viewings written. Excludes anything already recorded — an import is repeatable. */
+  plays: number
+  /** Ratings written. Excludes titles already rated here, which are not overwritten. */
+  ratings: number
+  /** Rows the source offered that could not be matched to a title this app knows. */
+  skipped: number
+}
+
 export interface TrackedItem {
   id: string
   simklId: number | null

@@ -165,3 +165,140 @@ export function hasTraktContent(payload: TraktSyncPayload): boolean {
 
 /** Kinds this app can push. Exported so callers can say why they skipped. */
 export const TRAKT_PUSHABLE_KINDS: readonly MediaKind[] = ['movie', 'series']
+
+// ---------------------------------------------------------------------------
+// Reading Trakt back.
+//
+// The other direction, and a different problem. Pushing is about producing
+// a shape Trakt accepts; pulling is about deciding which of ITS rows this
+// app can honestly claim to recognise.
+//
+// The answer is the same line drawn everywhere else here: an IMDb id, or
+// nothing. Trakt returns rows carrying only a TMDB or TVDB id — its own
+// catalog is wider than this one — and there is no id in those rows this
+// app's tables are keyed by. Those rows are COUNTED and skipped, never
+// matched by title: a confident wrong match writes somebody else's viewing
+// into this person's history, where it will quietly steer every
+// recommendation from then on.
+//
+// An episode is filed under its SHOW's IMDb id, not the episode's. That is
+// how this app keys watch history — one content id plus season and episode
+// columns — and Trakt supplies both halves in the same row.
+// ---------------------------------------------------------------------------
+
+import type { ImportedPlay } from '../../shared/media-hub/types'
+
+/** The fields this app reads off a Trakt title. Everything else is ignored. */
+interface TraktTitleRow {
+  title?: unknown
+  year?: unknown
+  ids?: { imdb?: unknown }
+}
+
+export interface TraktHistoryRow {
+  watched_at?: unknown
+  type?: unknown
+  movie?: TraktTitleRow
+  show?: TraktTitleRow
+  episode?: { season?: unknown; number?: unknown }
+}
+
+export interface TraktRatingRow {
+  rating?: unknown
+  rated_at?: unknown
+  movie?: TraktTitleRow
+  show?: TraktTitleRow
+}
+
+/** What a parse understood, and what it had to leave behind. */
+export interface ParsedImport<T> {
+  rows: T[]
+  skipped: number
+}
+
+function imdbId(row: TraktTitleRow | undefined): string {
+  const id = String(row?.ids?.imdb ?? '')
+  return /^tt\d+$/.test(id) ? id : ''
+}
+
+/** A finite integer, or null. Season 0 is the specials convention and survives. */
+function coordinate(value: unknown): number | null {
+  const parsed = Number(value)
+  // `value ?? null` first, because Number(null) is 0 — which would file every
+  // coordinate-less row as season 0 episode 0.
+  return value === null || value === undefined || !Number.isFinite(parsed)
+    ? null
+    : Math.trunc(parsed)
+}
+
+/**
+ * Trakt's /sync/history rows as viewings this app can store.
+ *
+ * `watched_at` is carried through untouched. It is the field the whole
+ * import exists to preserve — see ImportedPlay — and a row without a usable
+ * one is skipped rather than dated today.
+ */
+export function parseTraktHistory(payload: unknown): ParsedImport<ImportedPlay> {
+  const list = Array.isArray(payload) ? (payload as TraktHistoryRow[]) : []
+  const rows: ImportedPlay[] = []
+  let skipped = 0
+  for (const entry of list) {
+    const watchedAt = String(entry?.watched_at ?? '').trim()
+    // Parseable, not merely present: this string is written straight into a
+    // date column that every history view, stat and cadence calculation
+    // sorts on.
+    if (!watchedAt || Number.isNaN(Date.parse(watchedAt))) {
+      skipped += 1
+      continue
+    }
+    const isEpisode = entry?.type === 'episode' || Boolean(entry?.episode)
+    const source = isEpisode ? entry?.show : entry?.movie
+    const id = imdbId(source)
+    if (!id) {
+      skipped += 1
+      continue
+    }
+    rows.push({
+      id,
+      type: isEpisode ? 'series' : 'movie',
+      title: String(source?.title ?? '').trim() || 'Untitled',
+      year: source?.year ? String(source.year) : '',
+      season: isEpisode ? coordinate(entry?.episode?.season) : null,
+      episode: isEpisode ? coordinate(entry?.episode?.number) : null,
+      watchedAt
+    })
+  }
+  return { rows, skipped }
+}
+
+/**
+ * Trakt's /sync/ratings/{movies,shows} rows as scores this app can store.
+ *
+ * Both services use the same 1-10 scale, so nothing is rescaled — a rescale
+ * is a place for an off-by-one to change somebody's opinion. Anything
+ * outside it is skipped by the writer (see importRatings) rather than
+ * clamped.
+ */
+export function parseTraktRatings(
+  payload: unknown
+): ParsedImport<{ id: string; score: number; type: 'movie' | 'series'; title: string }> {
+  const list = Array.isArray(payload) ? (payload as TraktRatingRow[]) : []
+  const rows: { id: string; score: number; type: 'movie' | 'series'; title: string }[] = []
+  let skipped = 0
+  for (const entry of list) {
+    const source = entry?.movie ?? entry?.show
+    const id = imdbId(source)
+    const score = Math.round(Number(entry?.rating))
+    if (!id || !Number.isFinite(score) || score < 1 || score > 10) {
+      skipped += 1
+      continue
+    }
+    rows.push({
+      id,
+      score,
+      type: entry?.movie ? 'movie' : 'series',
+      title: String(source?.title ?? '').trim() || 'Untitled'
+    })
+  }
+  return { rows, skipped }
+}

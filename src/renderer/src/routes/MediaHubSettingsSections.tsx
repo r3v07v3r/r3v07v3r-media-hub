@@ -1525,6 +1525,11 @@ export function OllamaSection() {
  * renderer.
  */
 export function TraktSection() {
+  // An import writes straight into the database from main, so nothing in the
+  // renderer knows its history just changed. Without this, a person imports
+  // years of viewing and every grid, badge and suggestion row goes on showing
+  // the pre-import answer until they restart.
+  const { reloadLibrary } = useAppState()
   const [clientId, setClientId] = useState('')
   const [clientSecret, setClientSecret] = useState('')
   const [status, setStatus] = useState<TraktStatusResult | null>(null)
@@ -1593,7 +1598,8 @@ export function TraktSection() {
       cancelled = true
       clearInterval(id)
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- re-armed only when a fresh code is issued
+    // Re-armed only when a fresh code is issued: `pending` carries the
+    // interval and the deadline, so a new code means a new loop.
   }, [pending])
 
   async function saveCredentials() {
@@ -1630,10 +1636,47 @@ export function TraktSection() {
     }
   }
 
+  // Deliberately its own status line, not `connectStatus`. An import runs
+  // for as long as the account is large, and sharing the connection card's
+  // status would replace "Connected." with a spinner and then lose the
+  // import's own result the next time anything touched the connection.
+  const [importStatus, setImportStatus] = useState<Status>({ kind: 'idle' })
+
+  async function runImport() {
+    const api = window.api?.mediaHub
+    if (!api) return
+    setImportStatus({ kind: 'busy' })
+    try {
+      const summary = await api.trakt.import()
+      // Reports what was WRITTEN, not what Trakt offered. Running this twice
+      // legitimately reports nothing the second time, and saying "imported
+      // 400 items" over 400 rows that were already here would be a lie the
+      // second run tells about the first.
+      const parts = [
+        `${summary.plays} ${summary.plays === 1 ? 'viewing' : 'viewings'}`,
+        `${summary.ratings} ${summary.ratings === 1 ? 'rating' : 'ratings'}`
+      ]
+      if (summary.plays || summary.ratings) reloadLibrary()
+      setImportStatus({
+        kind: 'ok',
+        message:
+          summary.plays || summary.ratings
+            ? `Added ${parts.join(' and ')}.${summary.skipped ? ` ${summary.skipped} could not be matched.` : ''}`
+            : 'Everything on Trakt was already here.'
+      })
+    } catch (error) {
+      setImportStatus({
+        kind: 'error',
+        message: error instanceof Error ? error.message : 'Could not read your Trakt library.'
+      })
+    }
+  }
+
   async function disconnect() {
     const api = window.api?.mediaHub
     if (!api) return
     setConnectStatus({ kind: 'busy' })
+    setImportStatus({ kind: 'idle' })
     await api.trakt.disconnect().catch(() => {})
     setPending(null)
     setConnectStatus({ kind: 'idle' })
@@ -1660,14 +1703,30 @@ export function TraktSection() {
       </p>
 
       {connected ? (
-        <div className={styles.serviceActions}>
+        <div className={styles.serviceFields} style={{ flexDirection: 'column', gap: 8 }}>
+          <div className={styles.serviceActions}>
+            <span className={styles.rowDescription}>
+              Signed in{status?.username ? ` as ${status.username}` : ''}.
+            </span>
+            <button
+              type="button"
+              className={styles.testButton}
+              onClick={runImport}
+              disabled={importStatus.kind === 'busy'}
+            >
+              Import my Trakt library
+            </button>
+            <button type="button" className={styles.testButton} onClick={disconnect}>
+              Disconnect
+            </button>
+            <StatusLine status={connectStatus} />
+          </div>
           <span className={styles.rowDescription}>
-            Signed in{status?.username ? ` as ${status.username}` : ''}.
+            Brings your watched history and ratings here, keeping their original dates. Safe to run
+            more than once — it only fills in what is missing and never changes what is already
+            here.
           </span>
-          <button type="button" className={styles.testButton} onClick={disconnect}>
-            Disconnect
-          </button>
-          <StatusLine status={connectStatus} />
+          <StatusLine status={importStatus} />
         </div>
       ) : pending ? (
         <div className={styles.serviceFields} style={{ flexDirection: 'column', gap: 8 }}>

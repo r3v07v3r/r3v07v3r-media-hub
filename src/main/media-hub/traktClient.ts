@@ -17,6 +17,7 @@ import { app } from 'electron'
 
 import { MEDIA_HUB_CHANNELS } from '../../shared/media-hub/ipc-channels'
 import type {
+  ImportSummary,
   TraktPollResult,
   TraktStartResult,
   TraktStatusResult
@@ -24,9 +25,13 @@ import type {
 import { fetchJson } from './httpClient'
 import { handle } from './ipcGuard'
 import { logError } from './logger'
+import { getDatabase } from './dbState'
+import { requestRecommendationsRebuild } from './recommendations'
 import {
   hasTraktContent,
   historyPayload,
+  parseTraktHistory,
+  parseTraktRatings,
   ratingsPayload,
   scrobblePayload,
   type TraktPlaybackPosition,
@@ -326,6 +331,107 @@ export async function pushTraktScrobble(
   }
 }
 
+// ---------------------------------------------------------------------------
+// The pull.
+//
+// Everything above sends; this reads back. It is the half somebody needs
+// exactly once — the day they connect an account they have been using for
+// years — and it is the half where a mistake is expensive, because it
+// writes into the table every recommendation, badge and statistic is
+// derived from.
+//
+// It writes through db.importWatched / db.importRatings and NOT through the
+// mark-watched IPC handler, which is deliberate and load-bearing: that
+// handler pushes to Trakt. Importing five hundred rows through it would
+// send all five hundred straight back where they came from, and do it
+// while the import is still running.
+// ---------------------------------------------------------------------------
+
+/** Rows per request. Trakt caps its pagination well below this on some
+ *  endpoints and simply returns fewer; the loop below reads the short page
+ *  as "that was the end", which is true either way. */
+const IMPORT_PAGE_SIZE = 100
+
+/**
+ * How many pages one endpoint may be walked.
+ *
+ * A backstop against a server that keeps answering with full pages
+ * forever, not a considered library size — 20,000 viewings is far past any
+ * real Trakt account. Reaching it is REPORTED rather than swallowed: a
+ * silent truncation would read as "your history is now imported" over a
+ * partial copy.
+ */
+const IMPORT_MAX_PAGES = 200
+
+async function readAllPages(pathname: string): Promise<{ rows: unknown[]; truncated: boolean }> {
+  const rows: unknown[] = []
+  const join = pathname.includes('?') ? '&' : '?'
+  for (let page = 1; page <= IMPORT_MAX_PAGES; page += 1) {
+    const batch = await traktRequest<unknown[]>(
+      `${pathname}${join}page=${page}&limit=${IMPORT_PAGE_SIZE}`,
+      {},
+      // An import is somebody waiting at a settings screen, but it is also
+      // potentially hundreds of requests. 'background' keeps it behind
+      // anything the app is doing to paint a window.
+      'background'
+    )
+    if (!Array.isArray(batch) || !batch.length) return { rows, truncated: false }
+    rows.push(...batch)
+    // A short page is the last page on every Trakt endpoint this walks.
+    if (batch.length < IMPORT_PAGE_SIZE) return { rows, truncated: false }
+  }
+  return { rows, truncated: true }
+}
+
+/**
+ * Brings a Trakt account's watched history and ratings into this profile.
+ *
+ * Gap-filling, never overwriting, and repeatable — see db.importWatched.
+ * Pressing Import twice does nothing the second time, which matters because
+ * the honest thing to do about a partial import is to run it again.
+ */
+export async function importTraktLibrary(): Promise<ImportSummary> {
+  const db = getDatabase()
+  // The profile this import is FOR, captured before the first request. Every
+  // page below is an await, and a switch mid-import would otherwise pour one
+  // person's viewing history into whoever is active by the time it lands —
+  // the same failure the stored recommendations and the reconcile results
+  // each had to be taught about.
+  const profile = db.activeProfile()
+
+  const history = await readAllPages('/sync/history')
+  const movieRatings = await readAllPages('/sync/ratings/movies')
+  const showRatings = await readAllPages('/sync/ratings/shows')
+
+  if (db.activeProfile() !== profile) {
+    throw new Error('Profile changed while importing — nothing was written.')
+  }
+
+  const plays = parseTraktHistory(history.rows)
+  const rated = [parseTraktRatings(movieRatings.rows), parseTraktRatings(showRatings.rows)]
+
+  const summary: ImportSummary = {
+    plays: db.importWatched(plays.rows),
+    ratings: db.importRatings(rated.flatMap((parsed) => parsed.rows)),
+    skipped: plays.skipped + rated.reduce((total, parsed) => total + parsed.skipped, 0)
+  }
+
+  // Not silent. See IMPORT_MAX_PAGES — a truncated read that reports success
+  // tells somebody their history is imported when part of it is not.
+  if (history.truncated || movieRatings.truncated || showRatings.truncated) {
+    logError(
+      'trakt:import',
+      new Error(`Stopped after ${IMPORT_MAX_PAGES} pages — the import is partial.`)
+    )
+  }
+
+  // What was just written changes what the ranking should suggest, and by a
+  // lot: an import is usually the single largest thing that has ever
+  // happened to this person's history.
+  requestRecommendationsRebuild()
+  return summary
+}
+
 export function registerTraktIpc(): void {
   handle<undefined, TraktStatusResult>(MEDIA_HUB_CHANNELS.traktStatus, () => traktStatus())
 
@@ -368,6 +474,8 @@ export function registerTraktIpc(): void {
     if (outcome.state !== 'pending') pendingDeviceCode = ''
     return outcome
   })
+
+  handle<undefined, ImportSummary>(MEDIA_HUB_CHANNELS.traktImport, () => importTraktLibrary())
 
   handle<undefined, { ok: true }>(MEDIA_HUB_CHANNELS.traktDisconnect, () => {
     clearTraktTokens()

@@ -52,6 +52,7 @@ import type {
   WatchProvidersResult,
   PlayRecord,
   SavedFilter,
+  ImportSummary,
   TraktPollResult,
   TraktStartResult,
   TraktStatusResult,
@@ -608,6 +609,8 @@ const api = {
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.traktConfigure, { clientId, clientSecret }),
       start: (): Promise<TraktStartResult> => ipcRenderer.invoke(MEDIA_HUB_CHANNELS.traktStart),
       poll: (): Promise<TraktPollResult> => ipcRenderer.invoke(MEDIA_HUB_CHANNELS.traktPoll),
+      /** Pulls this account's history and ratings in. Repeatable — see db.importWatched. */
+      import: (): Promise<ImportSummary> => ipcRenderer.invoke(MEDIA_HUB_CHANNELS.traktImport),
       disconnect: (): Promise<{ ok: true }> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.traktDisconnect)
     },

@@ -192,6 +192,8 @@ export const MEDIA_HUB_CHANNELS = {
   traktConfigure: 'mediahub:trakt:configure',
   traktStart: 'mediahub:trakt:start',
   traktPoll: 'mediahub:trakt:poll',
+  /** Pulls a connected Trakt account's history and ratings into this profile. */
+  traktImport: 'mediahub:trakt:import',
   traktDisconnect: 'mediahub:trakt:disconnect',
 
   // MyAnimeList
