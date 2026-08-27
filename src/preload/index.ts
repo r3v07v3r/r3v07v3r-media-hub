@@ -48,6 +48,7 @@ import type {
   CustomListItem,
   CalendarEntry,
   PersonCreditsResult,
+  TitleCollectionResult,
   WatchProvidersResult,
   PlayRecord,
   ViewingStats,
@@ -351,6 +352,8 @@ const api = {
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.catalogPerson, { person }),
       providers: (type: MediaKind, id: string): Promise<WatchProvidersResult> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.catalogProviders, { type, id }),
+      collection: (id: string): Promise<TitleCollectionResult> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.catalogCollection, { id }),
       calendar: (): Promise<{ entries: CalendarEntry[] }> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.calendarGet)
     },

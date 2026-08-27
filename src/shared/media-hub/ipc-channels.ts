@@ -59,6 +59,8 @@ export const MEDIA_HUB_CHANNELS = {
   /** Where a title can be streamed, rented or bought, in the person's own
    *  region — see main/media-hub/watchProviders.ts. */
   catalogProviders: 'mediahub:catalog:providers',
+  /** The film series a title belongs to — see main/media-hub/collection.ts. */
+  catalogCollection: 'mediahub:catalog:collection',
   /** Episodes of tracked shows around now — see main/media-hub/calendar.ts. */
   calendarGet: 'mediahub:calendar:get',
   homePersonalized: 'mediahub:home:personalized',

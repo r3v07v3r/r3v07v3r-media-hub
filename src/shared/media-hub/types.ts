@@ -172,6 +172,20 @@ export interface CalendarEntry {
   airsOn: string
 }
 
+/**
+ * The film series a title belongs to.
+ *
+ * `parts` excludes the title itself — the question is what ELSE is in the
+ * series — and every entry carries an IMDb id, because one that could not be
+ * resolved back to this catalog would be a card nobody can open.
+ */
+export interface TitleCollectionResult {
+  /** TMDB's own name for the series, e.g. "The Dune Collection". Empty when
+   *  the title belongs to no collection, which is true of most films. */
+  name: string
+  parts: CatalogItem[]
+}
+
 export interface PersonCreditsResult {
   person: string
   cast: CatalogItem[]
