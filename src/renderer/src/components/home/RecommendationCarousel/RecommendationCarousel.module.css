@@ -446,3 +446,29 @@
     width: 216px;
   }
 }
+
+/* The "why you're seeing this" chip — see MediaCard.
+   Deliberately quieter than everything else in the overlay: it is context
+   for the title, not a competitor to it, so it sits a step down in size and
+   weight and takes its tint from the accent rather than a colour of its
+   own. `fit-content` keeps the pill the width of its text inside the
+   column-flex overlay, which would otherwise stretch it the full card. */
+.reasonChip {
+  align-self: flex-start;
+  max-width: 100%;
+  width: fit-content;
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+  border: 1px solid color-mix(in srgb, var(--accent-cyan) 35%, transparent);
+  background: color-mix(in srgb, var(--accent-cyan) 14%, rgba(0, 0, 0, 0.55));
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.2px;
+  color: var(--text-primary);
+  text-shadow: 0 1px 6px rgba(0, 0, 0, 0.7);
+  /* A franchise title can be long. One line, clipped, with the full text on
+     the element's own title attribute. */
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

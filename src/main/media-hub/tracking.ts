@@ -28,6 +28,7 @@ import type {
   PlayRecord,
   ViewingStats,
   PendingWatchStatusPush,
+  RecommendationReason,
   ReconcileCheckResult,
   ReconcileResolution,
   ReconcileResolveResult,
@@ -54,6 +55,7 @@ import {
   abandonedIds,
   liveExclusions,
   readStoredRecommendations,
+  reasonsFor,
   requestRecommendationsRebuild,
   storeRecommendations,
   SERVED_COUNT
@@ -1419,10 +1421,12 @@ export function registerTrackingIpc(): void {
     // waiting for eighteen rows it could have read from disk.
     const stored = readStoredRecommendations(exclusions, history)
     let recommendations: CatalogItem[]
+    let recommendationReasons: Record<string, RecommendationReason>
     let preferredGenres: string[]
 
     if (stored) {
       recommendations = stored.items
+      recommendationReasons = stored.reasons
       preferredGenres = stored.preferredGenres
     } else {
       // Nothing stored yet (a fresh install, a bumped STORE_KEY), or too
@@ -1476,6 +1480,12 @@ export function registerTrackingIpc(): void {
       // Through the same cadence pass the stored path uses, so the row is
       // ordered the same way whichever branch produced it.
       recommendations = applyCadence(full, watchCadenceProfile(history), SERVED_COUNT)
+      // Thinner than the stored path's, and knowingly so. This branch ranks
+      // without credits or a taste profile (see the comment above), so the
+      // only reasons it can produce are the ones the catalog alone
+      // supports — a franchise continuation, a genre, a release year. The
+      // background rebuild fills in the rest within minutes.
+      recommendationReasons = reasonsFor(recommendations, full)
     }
 
     // See tracking:list above — same fan-out, same bound, and the two
@@ -1492,6 +1502,7 @@ export function registerTrackingIpc(): void {
       updates: db.trackedUpdates(details),
       continueWatching: continueWatchingList(details, history).slice(0, 18),
       recommendations,
+      recommendationReasons,
       preferredGenres
     }
   })

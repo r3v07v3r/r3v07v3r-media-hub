@@ -377,6 +377,33 @@ export interface TitleCredits {
   keywords: string[]
 }
 
+/**
+ * Why one title was suggested — the signal that actually put it where it
+ * is in the ranking, not a caption written over the result.
+ *
+ * Emitted by the ranker itself (see catalog-logic.ts's
+ * rankPersonalizedRecommendationsScored) for exactly that reason: a reason
+ * derived afterwards would be a second, independently-wrong opinion about
+ * an ordering it did not produce, and would drift the moment the scoring
+ * changed. This one is the same comparison the score is made of.
+ *
+ * Kept OFF CatalogItem deliberately. A catalog item is a fact about a
+ * title and is cached as one, shared across every profile on the machine;
+ * a reason is a fact about one person's history, and filing it on the
+ * title would put one profile's viewing into a row the next profile reads.
+ */
+export interface RecommendationReason {
+  /** Which signal won — see RECOMMENDATION_REASON_ORDER in catalog-logic.ts. */
+  kind: 'continues' | 'creator' | 'cast' | 'genre' | 'new'
+  /**
+   * The evidence, in the person's own terms: the title they finished, the
+   * name they keep coming back to, the genre they watch. Always something
+   * that was really matched — never a guess, and never a placeholder, so a
+   * reason with nothing to point at is simply not emitted.
+   */
+  detail: string
+}
+
 export interface TrackedItem {
   id: string
   simklId: number | null
@@ -520,6 +547,16 @@ export interface HomePersonalizedResult {
   updates: TrackedUpdate[]
   continueWatching: ContinueWatchingEntry[]
   recommendations: CatalogItem[]
+  /**
+   * Why each suggestion is there, by title id — see RecommendationReason.
+   *
+   * A sidecar map rather than a field on the items, so every existing
+   * consumer of `recommendations` is untouched and the reasons stay out of
+   * the shared, profile-blind catalog cache. Sparse on purpose: a title
+   * that matched nothing in particular has no entry, and the card simply
+   * shows no chip rather than one saying nothing.
+   */
+  recommendationReasons: Record<string, RecommendationReason>
   preferredGenres: string[]
 }
 

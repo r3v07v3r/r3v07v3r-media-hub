@@ -866,7 +866,12 @@ export function useMediaHubHomeFeed(libraryKey: string): HomeFeedResult {
         const next = {
           continueWatching: result.continueWatching.map(continueWatchingEntryToItem),
           recommendations: result.recommendations.map((item) =>
-            catalogItemToRecommendation(item, result.preferredGenres, { trackedIds })
+            catalogItemToRecommendation(item, result.preferredGenres, {
+              trackedIds,
+              // Sparse by design — a title nothing picked out has no entry,
+              // and its card shows no chip. See RecommendationReason.
+              reason: result.recommendationReasons?.[String(item.id)]
+            })
           ),
           featured: result.recommendations
             .slice(0, 6)
