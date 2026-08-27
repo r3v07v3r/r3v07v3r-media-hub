@@ -90,6 +90,7 @@ import type {
 import type { OllamaTitleRef } from '../shared/media-hub/ollama'
 import type {
   PlayerCommand,
+  PlayerCommandResult,
   PlayerInputEvent,
   PlayerSessionSnapshot,
   PlayerStatePatch,
@@ -543,7 +544,7 @@ const api = {
      *  listens for onUiEvent, which is how the overlay reaches back into its
      *  state. */
     player: {
-      command: (command: PlayerCommand): Promise<{ ok: true }> =>
+      command: (command: PlayerCommand): Promise<PlayerCommandResult> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.playerCommand, command),
       uiEvent: (event: PlayerUiEvent): Promise<{ ok: true }> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.playerUiEvent, event),

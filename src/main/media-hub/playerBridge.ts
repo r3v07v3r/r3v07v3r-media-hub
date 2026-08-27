@@ -9,14 +9,17 @@
 // reproduces a bug the old code hit and documented: tearing the backend session
 // down from a component unmount broke the *next* title in a watch party.
 
-import { BrowserWindow, screen } from 'electron'
+import { BrowserWindow, app, screen } from 'electron'
+import fs from 'node:fs'
 import path from 'node:path'
 
 import {
   MAX_PLAYER_VOLUME,
   NIGHT_MODE_AUDIO_FILTER,
   PLAYER_VOLUME_STEP,
+  screenshotFilename,
   type PlayerCommand,
+  type PlayerCommandResult,
   type PlayerInputEvent,
   type PlayerSessionSnapshot,
   type PlayerStatePatch,
@@ -819,6 +822,13 @@ export async function startPlayerSession(
   // restore — if there is one — always lands on top of it.
   await player.set('volume', 100).catch(() => {})
 
+  // Same reasoning, same place: mpv keeps ab-loop-a/b across `loadfile` too,
+  // so a loop set on the outgoing episode would otherwise keep silently
+  // repeating a two-second window of whatever plays next. "no" is mpv's own
+  // spelling of "not set" for these two properties, not the number 0.
+  await player.set('ab-loop-a', 'no').catch(() => {})
+  await player.set('ab-loop-b', 'no').catch(() => {})
+
   await player.loadFile(url, {
     startSeconds: options.startSeconds,
     audioLanguage: options.audioLanguage,
@@ -1054,10 +1064,45 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value))
 }
 
+/** Where screenshots land — the OS's own Pictures folder, in a subfolder
+ *  named for this app, exactly where somebody would look for a screenshot
+ *  from any other program on their machine. Not userData: that directory is
+ *  for the app's OWN files, and a person's captured frames are theirs, not
+ *  this app's business to hide inside its settings folder. */
+function screenshotDir(): string {
+  return path.join(app.getPath('pictures'), 'R3 Media Hub')
+}
+
+/**
+ * Captures the frame on screen right now to a file and returns where it
+ * landed.
+ *
+ * `subtitles` rather than `video`: what somebody is asking to save is what
+ * they are LOOKING AT, and that includes whatever subtitle line happens to
+ * be on screen. OSD is irrelevant either way — this app launches mpv with
+ * `--osd-level=0` (see mpv.ts), so there is never an on-screen display to
+ * include or exclude.
+ */
+async function saveScreenshot(): Promise<string> {
+  const dir = screenshotDir()
+  fs.mkdirSync(dir, { recursive: true })
+  const filePath = path.join(
+    dir,
+    screenshotFilename(getSessionSnapshot()?.media ?? null, new Date())
+  )
+  await player.command('screenshot-to-file', filePath, 'subtitles')
+  return filePath
+}
+
+/** What a command handed back beyond the bare acknowledgement — currently
+ *  only screenshot's saved path, which the overlay needs to build its own
+ *  toast (see registerPlayerIpc). Every other case returns nothing. */
+type PlayerCommandOutcome = { path?: string } | void
+
 /** Every value below is renderer-supplied and therefore untrusted, even though
  *  the renderer is our own — the IPC surface is the boundary, not the intent of
  *  the code on the other side of it. */
-async function runCommand(command: PlayerCommand): Promise<void> {
+async function runCommand(command: PlayerCommand): Promise<PlayerCommandOutcome> {
   switch (command.type) {
     case 'play':
       await player.set('pause', false)
@@ -1179,6 +1224,28 @@ async function runCommand(command: PlayerCommand): Promise<void> {
     case 'reset-picture-controls':
       await resetPictureSettings()
       return
+    case 'frame-step':
+      await player.command('frame-step')
+      return
+    case 'frame-back-step':
+      await player.command('frame-back-step')
+      return
+    case 'set-ab-loop': {
+      // "no" is mpv's own way of writing "not set" for these two properties —
+      // NOT the number 0, which is a real, useful loop start a track record
+      // scratch would want. Sending the pair together, always, is what stops
+      // a loop starting on whichever half a click happened to set second (see
+      // the PlayerCommand doc comment).
+      const a = Number.isFinite(command.a) ? clamp(Number(command.a), 0, 86400) : 'no'
+      const b = Number.isFinite(command.b) ? clamp(Number(command.b), 0, 86400) : 'no'
+      await player.set('ab-loop-a', a)
+      await player.set('ab-loop-b', b)
+      return
+    }
+    case 'screenshot': {
+      const savedPath = await saveScreenshot()
+      return { path: savedPath }
+    }
     default: {
       // Exhaustiveness: a new PlayerCommand variant must be handled here.
       const unhandled: never = command
@@ -1269,14 +1336,17 @@ export interface RegisterPlayerIpcOptions {
 export function registerPlayerIpc(options: RegisterPlayerIpcOptions): void {
   subtitleCacheRootFn = options.subtitleCacheDir
 
-  handle<PlayerCommand, { ok: true }>(MEDIA_HUB_CHANNELS.playerCommand, async (_event, command) => {
-    if (!command || typeof command !== 'object' || typeof command.type !== 'string') {
-      throw new Error('Invalid player command.')
+  handle<PlayerCommand, PlayerCommandResult>(
+    MEDIA_HUB_CHANNELS.playerCommand,
+    async (_event, command) => {
+      if (!command || typeof command !== 'object' || typeof command.type !== 'string') {
+        throw new Error('Invalid player command.')
+      }
+      if (!player.running) throw new Error('No title is currently playing.')
+      const outcome = await runCommand(command)
+      return { ok: true, ...(outcome?.path ? { path: outcome.path } : {}) }
     }
-    if (!player.running) throw new Error('No title is currently playing.')
-    await runCommand(command)
-    return { ok: true }
-  })
+  )
 
   handle<PlayerUiEvent, { ok: true }>(MEDIA_HUB_CHANNELS.playerUiEvent, async (_event, uiEvent) => {
     if (!uiEvent || typeof uiEvent !== 'object' || typeof uiEvent.type !== 'string') {

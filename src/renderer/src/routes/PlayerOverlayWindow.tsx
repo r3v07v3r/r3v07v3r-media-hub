@@ -27,7 +27,8 @@ import { PlayerSessionRail } from '@renderer/components/party/PlayerSessionRail'
 import {
   AUTOPLAY_NEXT_COUNTDOWN_SECONDS,
   MAX_PLAYER_VOLUME,
-  PLAYER_VOLUME_STEP
+  PLAYER_VOLUME_STEP,
+  nextAbLoopPoint
 } from '@shared/media-hub/player'
 import type { NextEpisodeRef } from '@shared/media-hub/nextEpisode'
 import type { PlayerSessionMedia } from '@shared/media-hub/player'
@@ -125,6 +126,14 @@ function PlayerControls() {
   // A wall-clock deadline, or 'episode' for "stop when this file ends".
   const [sleep, setSleep] = useState<{ at: number } | 'episode' | null>(null)
   const [sleepRemaining, setSleepRemaining] = useState(0)
+  // Keyed to the title it was set on, the same idiom mediaKey drives skipTimes
+  // and subtitleResults by — not because staying accurate matters as much
+  // here, but because it MUST agree with what main just did: mpv keeps
+  // ab-loop-a/b across loadfile like it keeps volume, so startPlayerSession
+  // resets both to "no" on every title change (see playerBridge.ts). A key
+  // that disagreed with that reset would show a loop as still armed over a
+  // title mpv has already stopped looping.
+  const [abLoop, setAbLoop] = useState<{ key: string; a: number; b: number | null } | null>(null)
   const idleTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const paused = state.paused ?? true
@@ -327,6 +336,32 @@ function PlayerControls() {
     },
     [command]
   )
+
+  // Current point, or none — derived from `abLoop` rather than read off it
+  // directly, so a title change (mediaKey moves on) reads as no loop set
+  // without a second effect to clear it. See the state declaration.
+  const abLoopForMedia = abLoop?.key === mediaKey ? abLoop : null
+
+  // One button cycles through the whole shape: set A, set B (which is also
+  // the moment mpv actually starts looping — see PlayerCommand's
+  // set-ab-loop doc comment), clear. Not gated on `locked` like seeking —
+  // this command travels through the same party-lock question seeking does,
+  // but a loop is a personal scrubbing aid, not a transport action the room
+  // needs to agree on, so it stays local like volume does.
+  const cycleAbLoop = useCallback(() => {
+    // The ordering logic lives in shared/media-hub/player.ts, tested there —
+    // this is just applying whatever it decides, both locally and to mpv.
+    const next = nextAbLoopPoint(abLoopForMedia, timePos)
+    setAbLoop(next ? { key: mediaKey, ...next } : null)
+    void command({ type: 'set-ab-loop', a: next?.a ?? null, b: next?.b ?? null })
+  }, [abLoopForMedia, command, mediaKey, timePos])
+
+  const takeScreenshot = useCallback(() => {
+    void command({ type: 'screenshot' }).then((result) => {
+      if (!result?.path) return
+      ui({ type: 'notify', tone: 'success', message: `Saved screenshot: ${result.path}` })
+    })
+  }, [command, ui])
 
   // The other half of the volume decision main begins by resetting every
   // title to 100%: one being RESUMED comes back at the volume it was left
@@ -706,12 +741,31 @@ function PlayerControls() {
         toggleFullscreen()
       } else if (event.key === 'Escape') {
         handleEscape()
+      } else if (event.key === '.' && !locked) {
+        event.preventDefault()
+        void command({ type: 'frame-step' })
+      } else if (event.key === ',' && !locked) {
+        event.preventDefault()
+        void command({ type: 'frame-back-step' })
+      } else if (event.key === 's' || event.key === 'S') {
+        takeScreenshot()
       }
       revealControls()
     }
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
-  }, [party, seekTo, timePos, nudgeVolume, toggleFullscreen, handleEscape, revealControls])
+  }, [
+    party,
+    seekTo,
+    timePos,
+    nudgeVolume,
+    toggleFullscreen,
+    handleEscape,
+    revealControls,
+    locked,
+    command,
+    takeScreenshot
+  ])
 
   // --- Skip intro/credits (anime only) -------------------------------------
   // Needs a real duration: Aniskip matches submissions by proximity to episode
@@ -1353,6 +1407,50 @@ function PlayerControls() {
                   Night mode{nightMode ? ' ✓' : ''}
                   <span className={styles.menuItemNote}>
                     Evens out quiet dialogue against a loud score.
+                  </span>
+                </button>
+
+                <div className={styles.menuHeading}>Precision</div>
+                <div className={styles.speedRow}>
+                  <button
+                    type="button"
+                    className={styles.speedButton}
+                    disabled={locked}
+                    aria-label="Previous frame"
+                    onClick={() => void command({ type: 'frame-back-step' })}
+                  >
+                    ◁|
+                  </button>
+                  <button
+                    type="button"
+                    className={styles.speedButton}
+                    disabled={locked}
+                    aria-label="Next frame"
+                    onClick={() => void command({ type: 'frame-step' })}
+                  >
+                    |▷
+                  </button>
+                  <button type="button" className={styles.speedButton} onClick={takeScreenshot}>
+                    📷
+                  </button>
+                </div>
+                <button
+                  type="button"
+                  className={styles.menuItem}
+                  disabled={locked}
+                  onClick={cycleAbLoop}
+                >
+                  {!abLoopForMedia
+                    ? 'Set loop start (A)'
+                    : abLoopForMedia.b === null
+                      ? `Loop from ${formatTime(abLoopForMedia.a)} — set end (B)`
+                      : `Looping ${formatTime(abLoopForMedia.a)} – ${formatTime(abLoopForMedia.b)} · tap to clear`}
+                  <span className={styles.menuItemNote}>
+                    {!abLoopForMedia
+                      ? 'Repeats a section — a line of dialogue, a stunt, a song.'
+                      : abLoopForMedia.b === null
+                        ? 'Play to where the loop should end, then press again.'
+                        : ''}
                   </span>
                 </button>
 

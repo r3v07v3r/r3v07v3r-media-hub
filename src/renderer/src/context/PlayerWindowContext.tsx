@@ -29,6 +29,7 @@ import {
 
 import type {
   PlayerCommand,
+  PlayerCommandResult,
   PlayerSessionSnapshot,
   PlayerStatePatch,
   PlayerUiEvent
@@ -43,8 +44,10 @@ export interface PlayerWindowValue {
   state: PlayerStatePatch
   /** Sends a player operation to mpv. Rejections are surfaced as a toast in
    *  the main window rather than thrown at the caller — a failed volume change
-   *  should not take the player UI down with it. */
-  command: (command: PlayerCommand) => Promise<void>
+   *  should not take the player UI down with it. Resolves to undefined on
+   *  that failure path; a caller that needs the result (screenshot's saved
+   *  path, currently the only one) checks for that before reading it. */
+  command: (command: PlayerCommand) => Promise<PlayerCommandResult | undefined>
   /** Raises an action handled by the main window (close, toast, mark watched). */
   ui: (event: PlayerUiEvent) => void
   /** Whether the overlay should receive mouse input. False makes the window
@@ -93,15 +96,16 @@ export function PlayerWindowProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const command = useCallback(
-    async (playerCommand: PlayerCommand) => {
+    async (playerCommand: PlayerCommand): Promise<PlayerCommandResult | undefined> => {
       try {
-        await window.api?.mediaHub?.player?.command(playerCommand)
+        return await window.api?.mediaHub?.player?.command(playerCommand)
       } catch (error) {
         ui({
           tone: 'error',
           type: 'notify',
           message: error instanceof Error ? error.message : 'That playback action failed.'
         })
+        return undefined
       }
     },
     [ui]
