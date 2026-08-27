@@ -240,7 +240,7 @@ export interface MediaHubDatabase {
    *  a backup is of the install, not of whoever happens to be watching. */
   exportBackup(
     filePath: string,
-    options: { appVersion: string; profiles: Record<string, unknown>[] }
+    options: { appVersion: string; profiles: Record<string, unknown>[]; activeProfileId: string }
   ): void
   /** Replaces every backed-up table with the file's contents, or changes
    *  nothing. Also not profile-scoped, for the same reason. */

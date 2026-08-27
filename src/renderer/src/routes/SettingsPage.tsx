@@ -792,6 +792,10 @@ export default function SettingsPage() {
       // restored rows belong to profiles missing from the switcher, and the
       // still-active local profile looks empty until the app is restarted.
       await refreshMediaHubSettings()
+      // Profiles BEFORE the library reload: main has already switched the
+      // active profile to whoever the backup was taken by, and the renderer
+      // has to learn both the new list and which of them is current before
+      // anything re-reads against it.
       refreshProfiles()
       // Bumps the library key every profile-scoped read depends on. The
       // profile id cannot carry this on its own: a same-profile restore leaves
@@ -1055,7 +1059,7 @@ export default function SettingsPage() {
               <ActionRow
                 icon="refresh"
                 title="Restore a backup"
-                description="Replaces what is here with the contents of a backup file. Nothing changes unless the whole restore succeeds."
+                description="Puts your library back the way the backup file has it, and switches to the profile that was active when it was taken. Replaces what is here rather than merging, and nothing changes unless the whole restore succeeds."
                 label="Restore…"
                 busy={backupBusy === 'import'}
                 onClick={handleImportBackup}

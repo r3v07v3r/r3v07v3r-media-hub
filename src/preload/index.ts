@@ -200,8 +200,11 @@ const api = {
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.settingsSetNotifications, enabled),
       exportBackup: (): Promise<{ filePath: string | null }> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.backupExport),
-      importBackup: (): Promise<{ restored: number; createdAt: string } | null> =>
-        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.backupImport),
+      importBackup: (): Promise<{
+        restored: number
+        createdAt: string
+        activeProfileId: string
+      } | null> => ipcRenderer.invoke(MEDIA_HUB_CHANNELS.backupImport),
       setUiAnimations: (enabled: boolean): Promise<{ uiAnimationsEnabled: boolean }> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.settingsSetUiAnimations, enabled),
       setPerformancePanelVisible: (

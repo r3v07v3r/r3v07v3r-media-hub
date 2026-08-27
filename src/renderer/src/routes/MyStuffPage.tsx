@@ -11,7 +11,6 @@
 // what I mean to" belongs behind one destination.
 
 import { useEffect, useMemo, useState } from 'react'
-import { Link } from 'react-router-dom'
 import { useAppState } from '@renderer/context/AppStateContext'
 import { Icon } from '@renderer/components/icons/Icon'
 import { useRestoreBrowsingOrigin } from '@renderer/lib/mediaHub/useRestoreBrowsingOrigin'
@@ -748,10 +747,6 @@ export default function MyStuffPage() {
           action={{ label: 'Restore', onClick: (media) => toggleDisliked(media) }}
         />
       )}
-
-      <Link to="/" className={styles.backLink}>
-        ← Back to Home
-      </Link>
     </div>
   )
 }

@@ -117,6 +117,11 @@ function PlayerControls() {
   )
   const [countdown, setCountdown] = useState(AUTOPLAY_NEXT_COUNTDOWN_SECONDS)
   const [countdownFor, setCountdownFor] = useState<string | null>(null)
+  // Which card's countdown has been called off by a hover. Cancelled rather
+  // than paused: somebody who reached for the card wants the episode to stop
+  // advancing on its own, and having it resume the moment the pointer leaves
+  // would be the countdown they were trying to escape.
+  const [countdownCancelledFor, setCountdownCancelledFor] = useState<string | null>(null)
   // A wall-clock deadline, or 'episode' for "stop when this file ends".
   const [sleep, setSleep] = useState<{ at: number } | 'episode' | null>(null)
   const [sleepRemaining, setSleepRemaining] = useState(0)
@@ -224,6 +229,7 @@ function PlayerControls() {
     [tracking, ui]
   )
   const startingNext = autoplayKey !== null && startedNextFor === autoplayKey
+  const countdownCancelled = autoplayKey !== null && countdownCancelledFor === autoplayKey
 
   // One tick per second while the card is up. The last tick starts the episode
   // rather than writing a zero somebody would see, and it goes through the same
@@ -234,12 +240,13 @@ function PlayerControls() {
   // countdown would run its whole length in a single frame.
   useEffect(() => {
     if (!autoplay || !autoplayKey || startingNext) return
+    if (countdownCancelledFor === autoplayKey) return
     const timer = setTimeout(() => {
       if (countdown <= 1) startNext(autoplay, autoplayKey)
       else setCountdown(countdown - 1)
     }, 1000)
     return () => clearTimeout(timer)
-  }, [autoplay, autoplayKey, countdown, startingNext, startNext])
+  }, [autoplay, autoplayKey, countdown, startingNext, startNext, countdownCancelledFor])
 
   // A menu or an in-flight sync has to pin the controls open — otherwise the
   // idle timer closes the surface out from under someone mid-selection.
@@ -719,15 +726,30 @@ function PlayerControls() {
     intro?: { start: number; end: number }
     credits?: { start: number; end: number }
   } | null>(null)
+  //
+  // The length comes from the SESSION, not from the live clock.
+  //
+  // `duration` prefers mpv's observed value, which lags a title change: on an
+  // autoplay the next episode's media arrives first and mpv reports its
+  // duration a moment later, so a fetch keyed on the live value went out
+  // carrying the PREVIOUS episode's length. Aniskip matches submissions by
+  // proximity to that length, so the answer was a poor match rather than an
+  // error — skip windows landing at times that belong to nothing — and the
+  // latch then stopped it ever being asked again with the right number.
+  //
+  // The session's own tracks are read when the file is opened and pushed with
+  // the snapshot, so this value belongs to the episode being asked about by
+  // construction.
+  const sessionDuration = session?.tracks?.durationSeconds ?? 0
   useEffect(() => {
-    if (!media || media.kind !== 'anime' || !duration) return
+    if (!media || media.kind !== 'anime' || !sessionDuration) return
     if (skipTimesFetchedFor.current === mediaKey) return
     skipTimesFetchedFor.current = mediaKey
     window.api?.mediaHub?.playback
-      .skipTimes(media.id, media.episodeNumber ?? 1, Math.round(duration))
+      .skipTimes(media.id, media.episodeNumber ?? 1, Math.round(sessionDuration))
       .then((times) => setSkipTimes(times ? { ...times, key: mediaKey } : null))
       .catch(() => {})
-  }, [media, mediaKey, duration])
+  }, [media, mediaKey, sessionDuration])
   // Derived, not stored: which skip window we are inside is a pure function of
   // the current position and the fetched times, and time-pos changes several
   // times a second — holding it in state would mean a setState per tick.
@@ -911,7 +933,15 @@ function PlayerControls() {
           button is: it has to be usable without moving the mouse first, and it
           outlives the bar's idle fade. */}
       {autoplay && autoplayKey && (
-        <div className={styles.postPlay} role="dialog" aria-label="Up next">
+        <div
+          className={styles.postPlay}
+          role="dialog"
+          aria-label="Up next"
+          // Pointer OR keyboard focus: somebody tabbing to the button is just
+          // as much in the middle of deciding as somebody reaching for it.
+          onMouseEnter={() => setCountdownCancelledFor(autoplayKey)}
+          onFocus={() => setCountdownCancelledFor(autoplayKey)}
+        >
           <p className={styles.postPlayLabel}>Up next</p>
           <p className={styles.postPlayTitle}>
             {`S${String(autoplay.season).padStart(2, '0')}E${String(autoplay.episode).padStart(2, '0')}`}
@@ -928,7 +958,11 @@ function PlayerControls() {
                   stream search, not an instant cut — so it says what is
                   happening instead of offering a button that has already been
                   pressed. */}
-              {startingNext ? 'Starting…' : `Play now (${countdown})`}
+              {startingNext
+                ? 'Starting…'
+                : countdownCancelled
+                  ? 'Play next'
+                  : `Play now (${countdown})`}
             </button>
             <button type="button" className={styles.postPlaySecondary} onClick={closePlayer}>
               Stop

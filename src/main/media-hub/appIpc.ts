@@ -31,6 +31,8 @@ import {
 interface RestoreResult {
   restored: number
   createdAt: string
+  /** Who the app switched back to — see backup.ts's activeProfileId. */
+  activeProfileId: string
 }
 
 import { normalizePlaybackBuffer } from '../../shared/media-hub/playbackBuffer'
@@ -156,7 +158,8 @@ export function registerAppIpc(): void {
     if (result.canceled || !result.filePath) return { filePath: null }
     getDatabase().exportBackup(result.filePath, {
       appVersion: app.getVersion(),
-      profiles: (readSettings().profiles ?? []) as unknown as Record<string, unknown>[]
+      profiles: (readSettings().profiles ?? []) as unknown as Record<string, unknown>[],
+      activeProfileId: getDatabase().activeProfile()
     })
     return { filePath: result.filePath }
   })
@@ -195,11 +198,18 @@ export function registerAppIpc(): void {
       byId.set(id, incoming as (typeof existing)[number])
     }
     settings.profiles = [...byId.values()]
+    // Back to whoever was watching when the backup was taken. Restoring the
+    // rows and leaving somebody else active is the shape that made this
+    // confusing: the data was correct, and the library on screen belonged to a
+    // different person.
+    settings.activeProfileId = summary.activeProfileId
     writeSettings(settings)
+    getDatabase().setActiveProfile(summary.activeProfileId)
 
     return {
       restored: Object.values(summary.restored).reduce((total, n) => total + n, 0),
-      createdAt: summary.createdAt
+      createdAt: summary.createdAt,
+      activeProfileId: summary.activeProfileId
     }
   })
 

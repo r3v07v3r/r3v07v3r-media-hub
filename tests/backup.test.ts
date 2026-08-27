@@ -42,7 +42,8 @@ db.exportBackup(backupFile, {
   profiles: [
     { id: ALICE, name: 'Alice', pinHash: 'SECRET-HASH', pinSalt: 'SECRET-SALT' },
     { id: BOB, name: 'Bob' }
-  ]
+  ],
+  activeProfileId: ALICE
 })
 
 // ---------------------------------------------------------------------
@@ -96,7 +97,32 @@ db.exportBackup(backupFile, {
 
   assert.equal(summary.restored.tracked, 2)
   assert.equal(summary.profiles, 2)
+  // A restore says who to switch back to, so "restore" means putting things
+  // back the way they were rather than replacing the data and leaving somebody
+  // else's library on screen.
+  assert.equal(summary.activeProfileId, ALICE)
   fresh.close()
+}
+
+// ---------------------------------------------------------------------
+// A backup written before that field existed still restores, landing on the
+// first profile it declares rather than staying wherever it happened to be.
+// ---------------------------------------------------------------------
+{
+  const legacy = path.join(dir, 'legacy.json')
+  const parsed = JSON.parse(fs.readFileSync(backupFile, 'utf8'))
+  delete parsed.activeProfileId
+  fs.writeFileSync(legacy, JSON.stringify(parsed), 'utf8')
+
+  const target = createDatabase(path.join(dir, 'legacy.sqlite'), BOB)
+  assert.equal(target.importBackup(legacy).activeProfileId, ALICE)
+
+  // And an id naming somebody the file does not contain is not honoured —
+  // switching into a library that is not there is worse than not switching.
+  const bogus = path.join(dir, 'bogus-active.json')
+  fs.writeFileSync(bogus, JSON.stringify({ ...parsed, activeProfileId: 'nobody-here' }), 'utf8')
+  assert.equal(target.importBackup(bogus).activeProfileId, ALICE)
+  target.close()
 }
 
 // ---------------------------------------------------------------------
