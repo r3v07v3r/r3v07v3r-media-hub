@@ -598,3 +598,21 @@
   cursor: default;
   opacity: 0.42;
 }
+
+/* "Exact match" flag on a hash-matched subtitle result — see MediaCard's
+   reasonChip for the same reasoning: quieter than the row's own text, tinted
+   from the accent rather than a colour of its own, so it reads as context
+   rather than competing with the release name next to it. */
+.hashMatchBadge {
+  display: inline-block;
+  margin-right: 6px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--accent, #4da3ff);
+  color: var(--accent, #4da3ff);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+  vertical-align: middle;
+}

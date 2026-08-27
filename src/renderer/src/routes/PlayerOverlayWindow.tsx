@@ -1302,6 +1302,15 @@ function PlayerControls() {
                     onClick={() => void applyOnlineSubtitle(subtitle)}
                     disabled={pendingSubtitleId !== null}
                   >
+                    {/* Matched to the exact release being played (see
+                        shared/media-hub/movieHash.ts) rather than to the
+                        title in general — frame-accurate by construction,
+                        which is worth saying up front rather than leaving
+                        somebody to discover it by whether the line lands on
+                        time. */}
+                    {subtitle.hashMatch && (
+                      <span className={styles.hashMatchBadge}>Exact match</span>
+                    )}
                     {pendingSubtitleId === subtitle.id
                       ? 'Loading…'
                       : `${subtitle.language.toUpperCase()} — ${

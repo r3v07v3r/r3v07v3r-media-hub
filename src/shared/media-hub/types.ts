@@ -1062,6 +1062,13 @@ export interface SubtitleResult {
   downloadCount: number
   uploader: string
   hearingImpaired: boolean
+  /** True when this row was matched to the exact release being played, via
+   *  the OpenSubtitles/moviehash algorithm — see main/media-hub/movieHash.ts
+   *  — rather than to the title in general. Always false for SubDL, which
+   *  has no hash-matching endpoint. A hash match is frame-accurate by
+   *  construction: no manual delay nudging needed, because it is keyed to
+   *  the same bytes on screen rather than to the title's IMDb id. */
+  hashMatch: boolean
 }
 
 /** The provider-identifying subset of a SubtitleResult that the renderer

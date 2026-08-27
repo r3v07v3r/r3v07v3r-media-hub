@@ -27,6 +27,7 @@ import type { ConnectResult, SubtitleResult, SubtitleSelection } from '../../sha
 import { fetchJson, type HttpError } from './httpClient'
 import { handle } from './ipcGuard'
 import { logError } from './logger'
+import { computeActiveStreamHash } from './movieHash'
 import {
   buildSearchParams,
   normalizeSubtitleResult,
@@ -318,6 +319,21 @@ export function registerSubtitlesIpc(): void {
         throw new Error('Connect SubDL or OpenSubtitles in Settings to search for subtitles.')
       }
 
+      // Fired off now, awaited only inside the OpenSubtitles branch below —
+      // not before either provider starts. SubDL's search must not wait on
+      // a tail read off a torrent that may not have downloaded it yet; only
+      // the branch that can actually USE the hash pays for computing it, and
+      // even that one only pays up to computeActiveStreamHash's own bounded
+      // timeout, never longer. Imported here rather than at the top of the
+      // file: playbackSession.ts imports THIS module (downloadSubtitleText),
+      // so a static import here would be a cycle — see recommendations.ts's
+      // rebuildRecommendations for the same pattern and the same reason.
+      const movieHashPromise = osOn
+        ? import('./playbackSession').then(({ activeStreamUrl }) =>
+            computeActiveStreamHash(activeStreamUrl())
+          )
+        : Promise.resolve(null)
+
       // Both providers are searched together and failures are per-provider:
       // one being down, rate-limited or holding a stale key must not empty
       // a menu the other could still fill. A provider that is not connected
@@ -328,7 +344,12 @@ export function registerSubtitlesIpc(): void {
           : Promise.resolve<SubtitleResult[]>([]),
         osOn
           ? (async () => {
-              const params = buildSearchParams(item, playback)
+              const movieHash = await movieHashPromise
+              const params = buildSearchParams(item, {
+                ...playback,
+                movieHash: movieHash?.hash,
+                movieBytes: movieHash?.bytes
+              })
               const query = new URLSearchParams(
                 Object.fromEntries(
                   Object.entries(params).map(([key, value]) => [key, String(value)])

@@ -115,7 +115,9 @@ export function normalizeSubdlResult(entry: unknown): SubtitleResult {
     releaseName: String(raw.release_name || raw.name || ''),
     downloadCount: 0,
     uploader: String(raw.author || 'Anonymous'),
-    hearingImpaired: Boolean(raw.hi)
+    hearingImpaired: Boolean(raw.hi),
+    // SubDL has no hash-matching endpoint — see SubtitleResult.hashMatch.
+    hashMatch: false
   }
 }
 
