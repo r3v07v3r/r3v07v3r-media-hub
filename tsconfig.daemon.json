@@ -1,0 +1,8 @@
+{
+  "extends": "@electron-toolkit/tsconfig/tsconfig.node.json",
+  "include": ["daemon/**/*", "src/shared/**/*", "src/main/media-hub/**/*"],
+  "compilerOptions": {
+    "composite": true,
+    "types": ["node"]
+  }
+}
