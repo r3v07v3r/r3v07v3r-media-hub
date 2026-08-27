@@ -35,6 +35,7 @@ import { getDatabase } from './dbState'
 import { logError } from './logger'
 import { runNewEpisodeCheck } from './notifications'
 import { pruneIdleSessions } from './streamCache'
+import { runLanCacheFeeder } from './lanCacheFeeder'
 import { runBackgroundWatchSync } from './tracking'
 import { onRebuildRequested, rebuildRecommendations } from './recommendations'
 import { checkForUpdates } from './autoUpdate'
@@ -269,6 +270,23 @@ export function startBackgroundJobs(): void {
     // rather have. Checks stay off entirely during playback.
     maxPressure: 'busy',
     run: async () => checkForUpdates()
+  })
+
+  registerRecurringJob({
+    name: 'lancache-feeder',
+    label: 'Warming the cache server',
+    // Half-hourly: pre-fetching is by definition not urgent, and the
+    // daemon downloads one file at a time regardless. What this cadence
+    // really bounds is how soon after "track" a title starts arriving
+    // on-site.
+    everyMs: 30 * 60 * 1000,
+    firstRunAfterMs: 4 * 60 * 1000,
+    priority: 'background',
+    // Deferred during playback like everything else: the scraper calls and
+    // the daemon's own TorBox download both compete for the bandwidth the
+    // person watching is using.
+    maxPressure: 'busy',
+    run: runLanCacheFeeder
   })
 
   registerRecurringJob({

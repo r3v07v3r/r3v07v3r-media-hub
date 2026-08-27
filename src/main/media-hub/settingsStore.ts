@@ -108,6 +108,12 @@ export interface MediaHubRawSettings {
    *  is written to disk at any point — see streamCache.ts's
    *  createMemoryChunkStore. */
   cacheMode?: string
+  /** The paired r3-cache daemon (tier 2 of the source order). URL and name
+   *  are plain (LAN machine identity, same class as partySyncUrl); the
+   *  bearer token is encrypted like every other credential in this file. */
+  lanCacheUrl?: string
+  lanCacheName?: string
+  lanCacheToken?: string
   /** Bound on the in-memory buffer, in MB. Clamped by
    *  streamCache.ts's memoryCacheMaxBytes; ignored on disk. */
   memoryCacheMaxMb?: number
@@ -260,6 +266,38 @@ export function decrypt(value: string | undefined): string {
 }
 
 /** The decrypted TorBox API token, or '' if not connected. Gated on onboardingVersion===2 exactly as the original — a token written by an older/incompatible onboarding flow is never trusted. */
+export interface LanCacheConnection {
+  url: string
+  name: string
+  token: string
+}
+
+/** The paired cache daemon, or undefined. Unlike the TorBox token this is
+ *  not gated on onboardingVersion — pairing is its own explicit act. */
+export function getLanCacheConnection(): LanCacheConnection | undefined {
+  const settings = readSettings()
+  const url = String(settings.lanCacheUrl || '').trim()
+  const token = decrypt(settings.lanCacheToken)
+  if (!url || !token) return undefined
+  return { url: url.replace(/\/+$/, ''), name: String(settings.lanCacheName || ''), token }
+}
+
+export function setLanCacheConnection(connection: LanCacheConnection): void {
+  const settings = readSettings()
+  settings.lanCacheUrl = connection.url.trim().replace(/\/+$/, '')
+  settings.lanCacheName = connection.name
+  settings.lanCacheToken = encrypt(connection.token)
+  writeSettings(settings)
+}
+
+export function clearLanCacheConnection(): void {
+  const settings = readSettings()
+  delete settings.lanCacheUrl
+  delete settings.lanCacheName
+  delete settings.lanCacheToken
+  writeSettings(settings)
+}
+
 export function getTorBoxToken(): string {
   const settings = readSettings()
   return settings.onboardingVersion === 2 ? decrypt(settings.torboxToken) : ''

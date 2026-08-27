@@ -3,6 +3,7 @@ import { useAppState } from '@renderer/context/AppStateContext'
 import { Icon } from '@renderer/components/icons/Icon'
 import { useAsyncAction } from '@renderer/hooks/useAsyncAction'
 import { AboutUpdateSection } from './AboutUpdateSection'
+import { LanCacheSection } from './LanCacheSection'
 import { MediaServicesSection } from './MediaServicesSection'
 import {
   TorBoxSection,
@@ -1461,7 +1462,8 @@ export default function SettingsPage() {
             <p>Connect servers, download clients, and your streaming provider.</p>
           </header>
           <div ref={servicesGridBinding} className={`${styles.groupGrid} ${styles.groupGridWide}`}>
-            <MediaServicesSection />
+            <LanCacheSection />
+      <MediaServicesSection />
             <TorBoxSection />
           </div>
         </section>

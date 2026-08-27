@@ -102,6 +102,9 @@ const LANES: Record<string, LaneConfig> = {
   // inter-request gap. Never selected by laneForUrl (the host is whatever
   // the user typed) — jellyfin.ts names this lane explicitly.
   jellyfin: { concurrency: 6 },
+  // The r3-cache daemon: same reasoning as jellyfin — one idle LAN box,
+  // named explicitly by lanCache.ts since the host is user-specific.
+  lancache: { concurrency: 4 },
   update: { concurrency: 1 },
   local: { concurrency: 2 },
   default: { concurrency: 4 }

@@ -54,6 +54,12 @@ import { isAllowedRemoteMediaUrl } from './playback'
 import { jellyfinFingerprint } from './jellyfin'
 import { findLocalCacheCandidate } from './streamCache'
 import { findMediaServerCandidate, mediaServerConfig, mediaServerStreamUrl } from './mediaSources'
+import {
+  findLanCacheCandidate,
+  isLanCacheConnected,
+  lanCacheFingerprint,
+  lanCacheStreamUrl
+} from './lanCache'
 import { preparePlayback } from './playbackSession'
 import { reportPreparation } from './playbackProgress'
 import {
@@ -186,6 +192,56 @@ function cacheMetaFor(
     seasonNumber: key.seasonNumber,
     episodeNumber: key.episodeNumber
   }
+}
+
+/** The two P2P scraper add-ons, queried in parallel and merged — one
+ *  seam shared by the resolve handler and the pre-fetch feeder so the two
+ *  can never drift on where candidates come from. See the resolve
+ *  handler's comment for why both add-ons and why best-effort each. */
+async function fetchDiscoveredRaw(type: string, id: string): Promise<StreamCandidate[]> {
+  const config = cometConfigPath()
+  const [comet, torrentio] = await Promise.all([
+    fetchAddonStreams(
+      `https://cometfortheweebs.midnightignite.me/${config}/stream/${type}/${encodeURIComponent(id)}.json`
+    ),
+    fetchAddonStreams(`https://torrentio.strem.fun/stream/${type}/${encodeURIComponent(id)}.json`)
+  ])
+  return dedupeByInfoHash([...comet, ...torrentio])
+}
+
+/**
+ * The best release to PRE-FETCH for a title — the feeder's half of the
+ * hybrid model. Deliberately no checkcached call: TorBox having it cached
+ * already is not a requirement for the daemon (submitting the torrent so
+ * TorBox starts fetching it is precisely the daemon's job), and the
+ * ranking's `cached` term is meaningless for work scheduled for tonight.
+ * Same title guard, same safety filter, same person's limits as live
+ * resolution.
+ */
+export async function discoverBestPrefetchCandidate(
+  type: string,
+  id: string,
+  title: string | undefined
+): Promise<StreamCandidate | null> {
+  const preferences = readSettings()
+  const limits = {
+    maxResolution: Number(preferences.maxStreamResolution) || 0,
+    maxSizeGb: Number(preferences.maxStreamSizeGb) || 0
+  }
+  const discoveredRaw = await fetchDiscoveredRaw(type, id)
+  if (!discoveredRaw.length) return null
+  const titleFiltered = title
+    ? discoveredRaw.filter((s) => titleMatchesRelease(streamReleaseText(s), title))
+    : discoveredRaw
+  const discovered = titleFiltered.length ? titleFiltered : discoveredRaw
+  return (
+    rankSafeStreams(
+      discovered,
+      preferences.audioLanguage || 'en',
+      limits,
+      resolveSourcePreference(preferences.sourcePreference)
+    )[0] ?? null
+  )
 }
 
 /** Narrows a persisted settings value to a known preference. An unknown
@@ -337,8 +393,8 @@ export function registerTorBoxIpc(): void {
       // person who switches preference, or points at a different server,
       // keeps being served the previous answer for an hour.
       const key =
-        `stream:v3:${type}:${id}:${limits.maxResolution}:${limits.maxSizeGb}` +
-        `:${sourcePreference}:${jellyfinFingerprint(mediaServer)}`
+        `stream:v4:${type}:${id}:${limits.maxResolution}:${limits.maxSizeGb}` +
+        `:${sourcePreference}:${jellyfinFingerprint(mediaServer)}:${lanCacheFingerprint()}`
       const db = getDatabase()
       const audioLanguage = preferences.audioLanguage || 'en'
 
@@ -411,6 +467,26 @@ export function registerTorBoxIpc(): void {
       const recent = db.getCache<StreamResolveResult>(key)
       if (recent) return recent
 
+      // TIER 2 — the on-site cache daemon. Same footing as the media
+      // server below: one LAN round-trip, quality-gated, best-effort. Only
+      // COMPLETE items produce a candidate (the daemon 404s partials on
+      // /stream), so a hit here is playable this second.
+      if (isLanCacheConnected()) {
+        const meta = cacheMetaFor(payload, title)
+        const lanKey = meta
+          ? `${String(meta.catalogId).trim().toLowerCase()}:${meta.seasonNumber ?? ''}:${meta.episodeNumber ?? ''}`
+          : ''
+        const lan = await findLanCacheCandidate(lanKey)
+        if (lan && meetsQualityTarget(lan.resolution, limits.maxResolution)) {
+          const ranked = rankSafeStreams([lan], audioLanguage, limits, sourcePreference)
+          if (ranked.length) {
+            const result: StreamResolveResult = { streams: ranked, best: ranked[0] }
+            db.putCache(key, result, 60 * 60 * 1000)
+            return result
+          }
+        }
+      }
+
       // Asked BEFORE the remembered-stream path below, not after.
       //
       // `laststream` records where a title played FROM last time, with a
@@ -459,7 +535,11 @@ export function registerTorBoxIpc(): void {
         rankSafeStreams([remembered], audioLanguage, limits, sourcePreference).length > 0 &&
         // A remembered stream from a source that is no longer configured
         // must not be replayed — the token or the server has gone.
-        (remembered.source === 'mediaserver' ? Boolean(mediaServer) : Boolean(auth))
+        (remembered.source === 'mediaserver'
+          ? Boolean(mediaServer)
+          : remembered.source === 'lancache'
+            ? isLanCacheConnected()
+            : Boolean(auth))
       if (remembered && rememberedUsable) {
         try {
           const rememberedHash = torrentHash(remembered)
@@ -522,16 +602,7 @@ export function registerTorBoxIpc(): void {
         // pointed to) now 301-redirects here — the "Meteor" add-on it ran
         // was retired in favor of "Comet", a different add-on with an
         // unrelated config schema (see cometConfigPath's own doc comment).
-        const config = cometConfigPath()
-        const [comet, torrentio] = await Promise.all([
-          fetchAddonStreams(
-            `https://cometfortheweebs.midnightignite.me/${config}/stream/${type}/${encodeURIComponent(id)}.json`
-          ),
-          fetchAddonStreams(
-            `https://torrentio.strem.fun/stream/${type}/${encodeURIComponent(id)}.json`
-          )
-        ])
-        const discoveredRaw = dedupeByInfoHash([...comet, ...torrentio])
+        const discoveredRaw = await fetchDiscoveredRaw(type, id)
         // Awaited a second time rather than threaded down from the
         // short-circuit above: awaiting a settled promise is free, and it
         // keeps the add-on calls from ever queueing behind the media
@@ -729,6 +800,18 @@ export function registerTorBoxIpc(): void {
       if (stream?.source === 'localcache' && stream.complete && stream.cacheToken) {
         reportPreparation('buffer', 'Playing from this computer')
         return finishLocal(String(stream.cacheToken))
+      }
+
+      // Tier 2: the cache daemon already fetched the file; its /stream URL
+      // is one LAN hop away and the trusted-host allowlist (populated at
+      // pairing) is what lets mpv open it.
+      if (stream?.source === 'lancache') {
+        const lanUrl = lanCacheStreamUrl(stream)
+        if (!lanUrl) {
+          throw new Error('That cache server is no longer paired. Reconnect it in Settings.')
+        }
+        reportPreparation('link', 'Opening the file on your cache server')
+        return finish(lanUrl)
       }
 
       // The media server needs none of the TorBox machinery below — no

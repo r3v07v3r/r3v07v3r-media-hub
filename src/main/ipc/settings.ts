@@ -9,6 +9,7 @@ import {
   ServiceSettings,
   withServiceDefaults
 } from '../../shared/ipc-types'
+import { getLanCacheConnection } from '../media-hub/settingsStore'
 import { setTrustedMediaHosts } from '../media-hub/playback'
 import { assertTrustedSender } from './trustedSender'
 
@@ -96,9 +97,13 @@ export function getServiceConfig(id: ServiceId): ServiceConfig {
  * which is what makes removal work — see its comment in playback.ts.
  */
 export function publishTrustedMediaHosts(): void {
+  const trusted: string[] = []
   const jellyfin = store.get('services')?.jellyfin
-  const trusted =
-    jellyfin?.enabled && jellyfin.baseUrl.trim() ? [normalizeBaseUrl(jellyfin.baseUrl)] : []
+  if (jellyfin?.enabled && jellyfin.baseUrl.trim()) trusted.push(normalizeBaseUrl(jellyfin.baseUrl))
+  // The paired cache daemon is the other LAN host playback may reach.
+  // Pairing/unpairing calls back into this, so revocation is immediate.
+  const lanCache = getLanCacheConnection()
+  if (lanCache) trusted.push(lanCache.url)
   setTrustedMediaHosts(trusted)
 }
 

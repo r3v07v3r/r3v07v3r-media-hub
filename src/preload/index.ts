@@ -8,6 +8,7 @@ import {
   SystemSnapshot
 } from '../shared/ipc-types'
 import { MEDIA_HUB_CHANNELS } from '../shared/media-hub/ipc-channels'
+import type { LanCacheStatusResponse } from '../shared/lancache/protocol'
 import type {
   AnimeStoryResult,
   BlockedDownload,
@@ -281,6 +282,25 @@ const api = {
 
     account: {
       logout: (): Promise<{ ok: true }> => ipcRenderer.invoke(MEDIA_HUB_CHANNELS.logout)
+    },
+
+    lanCache: {
+      discover: (): Promise<{
+        daemons: Array<{ name: string; host: string; port: number; url: string }>
+        paired: string | null
+      }> => ipcRenderer.invoke(MEDIA_HUB_CHANNELS.lanCacheDiscover),
+      pair: (payload: {
+        url: string
+        code: string
+        shareTorboxToken?: boolean
+      }): Promise<{ ok: boolean; message: string }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.lanCachePair, payload),
+      unpair: (): Promise<{ ok: true }> => ipcRenderer.invoke(MEDIA_HUB_CHANNELS.lanCacheUnpair),
+      status: (): Promise<{
+        connected: boolean
+        status?: LanCacheStatusResponse
+        error?: string
+      }> => ipcRenderer.invoke(MEDIA_HUB_CHANNELS.lanCacheStatus)
     },
 
     torbox: {
