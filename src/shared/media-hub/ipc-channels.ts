@@ -20,6 +20,9 @@ export const MEDIA_HUB_CHANNELS = {
   settingsSetAutoplayNext: 'mediahub:settings:set-autoplay-next',
   settingsSetWatchRegion: 'mediahub:settings:set-watch-region',
   settingsSetNotifications: 'mediahub:settings:set-notifications',
+  /** Named filter combinations for the browse pages — see SavedFilter. */
+  settingsSaveFilter: 'mediahub:settings:save-filter',
+  settingsDeleteFilter: 'mediahub:settings:delete-filter',
   settingsSetUiAnimations: 'mediahub:settings:set-ui-animations',
   settingsSetPerformancePanelVisible: 'mediahub:settings:set-performance-panel-visible',
   settingsSetStreamLimits: 'mediahub:settings:set-stream-limits',

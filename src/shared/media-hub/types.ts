@@ -688,6 +688,23 @@ export interface ProfileVerifyPinResult {
 // Settings / connection status
 // ---------------------------------------------------------------------
 
+/**
+ * A filter combination somebody named and kept.
+ *
+ * `query` is the serialised search-param string the browse pages already use
+ * for their filter state — so a saved view is applied by navigating to it,
+ * and anything the filter bar learns to express is saveable for free with no
+ * second schema to keep in step.
+ */
+export interface SavedFilter {
+  id: string
+  name: string
+  /** Which browse page it belongs to. A runtime filter means nothing on the
+   *  series page, so a saved view is only offered on the kind it was made on. */
+  kind: MediaKind
+  query: string
+}
+
 export interface Theme {
   id: string
   name: string
@@ -728,6 +745,16 @@ export interface MediaHubPublicSettings {
    *  unaffected either way. A party FOLLOWER never advances on its own
    *  whatever this says — the host owns what plays there. */
   autoplayNextEnabled: boolean
+  /**
+   * Named filter combinations, per browse page.
+   *
+   * Device-level rather than per-profile, deliberately, and sitting beside
+   * hideWatchedDefault for the same reason: these describe how somebody likes
+   * to BROWSE rather than what they have watched. Keeping them out of the
+   * profile-scoped store also keeps them out of a boundary this codebase has
+   * already had to get right in several places.
+   */
+  savedFilters: SavedFilter[]
   /** Whether a new episode of a tracked show raises a desktop notification.
    *  Off by default: an app that starts notifying because it was updated has
    *  made a decision that was not its to make. */

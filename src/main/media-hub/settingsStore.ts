@@ -80,6 +80,9 @@ export interface MediaHubRawSettings {
   videoScaling?: string
   autoSubtitlesEnabled?: boolean
   autoplayNextEnabled?: boolean
+  /** Named filter combinations — see SavedFilter. Device-level, like the
+   *  hide-by-default flags beside them. */
+  savedFilters?: { id: string; name: string; kind: string; query: string }[]
   /** Desktop notifications for new episodes of tracked shows. Off until
    *  somebody turns it on — see main/media-hub/notifications.ts. */
   notificationsEnabled?: boolean

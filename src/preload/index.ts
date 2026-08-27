@@ -51,6 +51,7 @@ import type {
   TitleCollectionResult,
   WatchProvidersResult,
   PlayRecord,
+  SavedFilter,
   TraktPollResult,
   TraktStartResult,
   TraktStatusResult,
@@ -202,6 +203,14 @@ const api = {
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.settingsSetWatchRegion, region),
       setNotifications: (enabled: boolean): Promise<{ notificationsEnabled: boolean }> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.settingsSetNotifications, enabled),
+      saveFilter: (
+        name: string,
+        kind: MediaKind,
+        query: string
+      ): Promise<{ savedFilters: SavedFilter[] }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.settingsSaveFilter, { name, kind, query }),
+      deleteFilter: (id: string): Promise<{ savedFilters: SavedFilter[] }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.settingsDeleteFilter, { id }),
       exportBackup: (): Promise<{ filePath: string | null }> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.backupExport),
       importBackup: (): Promise<{

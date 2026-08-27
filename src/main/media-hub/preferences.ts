@@ -5,7 +5,12 @@
 // particular controls what survives an account logout), not a place for
 // "improvements".
 
-import type { MediaHubPublicSettings, Theme, UpdateChannel } from '../../shared/media-hub/types'
+import type {
+  MediaHubPublicSettings,
+  SavedFilter,
+  Theme,
+  UpdateChannel
+} from '../../shared/media-hub/types'
 import { normalizePlaybackBuffer } from '../../shared/media-hub/playbackBuffer'
 import { normalizeVideoScaling } from '../../shared/media-hub/videoScaling'
 import { normalizeOllamaBaseUrl, normalizeOllamaModel } from '../../shared/media-hub/ollama'
@@ -50,6 +55,7 @@ export function publicSettings(settings: Record<string, unknown> = {}): MediaHub
     videoScaling: normalizeVideoScaling(settings.videoScaling),
     autoSubtitlesEnabled: settings.autoSubtitlesEnabled !== false,
     autoplayNextEnabled: settings.autoplayNextEnabled !== false,
+    savedFilters: normalizeSavedFilters(settings.savedFilters),
     notificationsEnabled: settings.notificationsEnabled === true,
     watchRegion: watchRegion(),
     uiAnimationsEnabled: settings.uiAnimationsEnabled !== false,
@@ -96,6 +102,35 @@ export function publicSettings(settings: Record<string, unknown> = {}): MediaHub
  * account data, so it belongs here too, as does the local Ollama address
  * and model.
  */
+/**
+ * Reads stored filters back into a usable shape.
+ *
+ * Every field is checked rather than trusted: this is the one setting whose
+ * value is a list of objects, so a hand-edited or half-written file could
+ * otherwise put an entry with no id into a chip row and produce a view nobody
+ * can select or delete.
+ */
+function normalizeSavedFilters(value: unknown): SavedFilter[] {
+  if (!Array.isArray(value)) return []
+  const kinds = new Set(['movie', 'series', 'anime'])
+  return value
+    .filter(
+      (entry): entry is SavedFilter =>
+        Boolean(entry) &&
+        typeof (entry as SavedFilter).id === 'string' &&
+        (entry as SavedFilter).id.length > 0 &&
+        typeof (entry as SavedFilter).name === 'string' &&
+        typeof (entry as SavedFilter).query === 'string' &&
+        kinds.has(String((entry as SavedFilter).kind))
+    )
+    .map((entry) => ({
+      id: entry.id,
+      name: entry.name,
+      kind: entry.kind,
+      query: entry.query
+    }))
+}
+
 export function logoutSettings(
   settings: Record<string, unknown> = {}
 ): Pick<
@@ -106,6 +141,7 @@ export function logoutSettings(
   | 'videoScaling'
   | 'autoSubtitlesEnabled'
   | 'autoplayNextEnabled'
+  | 'savedFilters'
   | 'notificationsEnabled'
   | 'watchRegion'
   | 'uiAnimationsEnabled'
@@ -129,6 +165,7 @@ export function logoutSettings(
     videoScaling: normalizeVideoScaling(settings.videoScaling),
     autoSubtitlesEnabled: settings.autoSubtitlesEnabled !== false,
     autoplayNextEnabled: settings.autoplayNextEnabled !== false,
+    savedFilters: normalizeSavedFilters(settings.savedFilters),
     notificationsEnabled: settings.notificationsEnabled === true,
     watchRegion: watchRegion(),
     uiAnimationsEnabled: settings.uiAnimationsEnabled !== false,

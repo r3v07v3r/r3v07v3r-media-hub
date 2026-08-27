@@ -12,7 +12,11 @@ import crypto from 'node:crypto'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { MEDIA_HUB_CHANNELS } from '../../shared/media-hub/ipc-channels'
-import type { MediaHubPublicSettings, MediaHubSettingsSnapshot } from '../../shared/media-hub/types'
+import type {
+  MediaHubPublicSettings,
+  MediaHubSettingsSnapshot,
+  SavedFilter
+} from '../../shared/media-hub/types'
 import { readBackup } from './backup'
 import { watchRegion } from './watchProviders'
 import { getDatabase } from './dbState'
@@ -227,6 +231,42 @@ export function registerAppIpc(): void {
       settings.watchRegion = /^[A-Z]{2}$/.test(next) ? next : undefined
       writeSettings(settings)
       return { watchRegion: watchRegion() }
+    }
+  )
+
+  handle<{ name: string; kind: string; query: string }, { savedFilters: SavedFilter[] }>(
+    MEDIA_HUB_CHANNELS.settingsSaveFilter,
+    (_event, payload) => {
+      const settings = readSettings()
+      const name = String(payload?.name ?? '')
+        .trim()
+        .slice(0, 60)
+      const kind = String(payload?.kind ?? '')
+      if (!name || !['movie', 'series', 'anime'].includes(kind)) {
+        return { savedFilters: publicSettings(settings).savedFilters }
+      }
+      // The id is minted here rather than in the renderer, so a saved view
+      // cannot collide with one made in another window.
+      const entry = {
+        id: crypto.randomUUID(),
+        name,
+        kind,
+        query: String(payload?.query ?? '')
+      }
+      settings.savedFilters = [...(settings.savedFilters ?? []), entry]
+      writeSettings(settings)
+      return { savedFilters: publicSettings(settings).savedFilters }
+    }
+  )
+
+  handle<{ id: string }, { savedFilters: SavedFilter[] }>(
+    MEDIA_HUB_CHANNELS.settingsDeleteFilter,
+    (_event, payload) => {
+      const settings = readSettings()
+      const id = String(payload?.id ?? '')
+      settings.savedFilters = (settings.savedFilters ?? []).filter((entry) => entry.id !== id)
+      writeSettings(settings)
+      return { savedFilters: publicSettings(settings).savedFilters }
     }
   )
 
