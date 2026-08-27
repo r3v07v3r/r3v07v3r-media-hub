@@ -101,6 +101,14 @@ export interface StreamLimits {
  *  is NOT one of them — an ordinary BluRay-sourced x264 encode is exactly
  *  what we want to pick. */
 function streamingPenalty(stream: StreamCandidate): number {
+  // A file on the media server is exempt from all of this. Every penalty
+  // below models one problem — the time it takes to pull a huge file over
+  // the internet before playback can start — and that problem does not
+  // exist for a file already sitting on a box one LAN hop away. Penalising
+  // a local remux would be actively backwards: a remux is precisely the
+  // kind of release someone keeps on their own server, and it is the case
+  // the on-site tier handles best.
+  if (stream.source === 'mediaserver') return 0
   const text = streamText(stream)
   let penalty = 0
   // Disc-remux and lossless-audio markers. "BluRay" alone is deliberately
@@ -157,12 +165,14 @@ export function isUnsafeStream(stream: StreamCandidate): boolean {
 export function rankSafeStreams(
   streams: StreamCandidate[],
   preferredLanguage = 'en',
-  limits: StreamLimits = {}
+  limits: StreamLimits = {},
+  sourcePreference: SourcePreference = 'balanced'
 ): StreamCandidate[] {
   return rankStreams(
     streams.filter((s) => !isUnsafeStream(s)),
     preferredLanguage,
-    limits
+    limits,
+    sourcePreference
   )
 }
 
@@ -177,15 +187,42 @@ export function rankSafeStreams(
  */
 const WRONG_LANGUAGE_PENALTY = 40000
 
+/**
+ * What a media-server copy is worth, relative to a TorBox one.
+ *
+ * This is the single knob the three kinds of user differ on, so it is a
+ * setting rather than a constant:
+ *
+ *  - prefer-local: sized above WRONG_LANGUAGE_PENALTY's neighbours so the
+ *    local copy wins essentially always. For the person on a slow link who
+ *    put the file on the server precisely so it would be used.
+ *  - balanced: 5000. Below the `cached` gate (20000), so a local copy
+ *    never beats a "can actually be played right now" distinction, and
+ *    above one resolution step (max 4320), so it wins ties and beats one
+ *    tier down — a local 1080p is preferred to a remote 2160p, a local
+ *    720p is not. Same sizing logic as REMUX_PENALTY above.
+ *  - prefer-quality: 0. The local copy competes on pure merit and wins
+ *    only an exact tie, which the `cached` term already decides its way.
+ */
+export type SourcePreference = 'prefer-local' | 'balanced' | 'prefer-quality'
+
+const LOCAL_SOURCE_BONUS: Record<SourcePreference, number> = {
+  'prefer-local': 60000,
+  balanced: 5000,
+  'prefer-quality': 0
+}
+
 export function rankStreams(
   streams: StreamCandidate[],
   preferredLanguage = 'en',
-  limits: StreamLimits = {}
+  limits: StreamLimits = {},
+  sourcePreference: SourcePreference = 'balanced'
 ): StreamCandidate[] {
   const score = (s: StreamCandidate): number =>
     (s.exact === false ? 0 : 100000) +
     (s.cached === false ? 0 : 20000) +
     (s.compatible === false ? -50000 : 10000) +
+    (s.source === 'mediaserver' ? LOCAL_SOURCE_BONUS[sourcePreference] : 0) +
     streamResolution(s) -
     streamingPenalty(s) -
     // Reported live: a film played with French audio and French subtitles.

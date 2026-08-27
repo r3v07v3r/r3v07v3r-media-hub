@@ -218,10 +218,24 @@ export interface LibraryItem {
   raw: Record<string, unknown>
 }
 
-// A discovered stream candidate (from Meteor), after TorBox cache-checking
-// and ranking merges in `cached`/`compatible`.
+/** Where a candidate can be played from. Absent means 'torbox', so every
+ *  candidate already persisted in the stream cache stays valid without a
+ *  migration — the field was introduced when the media server was. */
+export type StreamSource = 'torbox' | 'mediaserver'
+
+// A discovered stream candidate (from a scraper add-on or a configured
+// media server), after availability checking and ranking merge in
+// `cached`/`compatible`.
 export interface StreamCandidate {
-  infoHash: string
+  source?: StreamSource
+  /** Torrent candidates only. Optional because a media-server item has no
+   *  torrent behind it at all; play:stream requires it on the torbox
+   *  branch and validates it is 40 hex there. */
+  infoHash?: string
+  /** Media-server candidates only — the Jellyfin item and which of its
+   *  media sources (a library can hold more than one file per item). */
+  itemId?: string
+  mediaSourceId?: string
   name?: string
   title?: string
   sources?: string[]

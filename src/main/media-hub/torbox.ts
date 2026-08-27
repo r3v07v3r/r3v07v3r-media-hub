@@ -147,13 +147,23 @@ function streamReleaseText(stream: StreamCandidate): string {
   return text.split('\n')[0]
 }
 
+/** The candidate's torrent hash, lowercased, or '' when it has none.
+ *  StreamCandidate.infoHash became optional when media-server candidates
+ *  joined the same shape — every use below is on a torrent-only path, so
+ *  this narrows once rather than at six call sites. */
+function torrentHash(stream: StreamCandidate): string {
+  return stream.infoHash?.toLowerCase() ?? ''
+}
+
 /** First-seen-wins dedupe across multiple add-ons' results — the same real torrent is often indexed by more than one, and rankStreams should only ever see it once. */
 function dedupeByInfoHash(streams: StreamCandidate[]): StreamCandidate[] {
   const seen = new Set<string>()
   const result: StreamCandidate[] = []
   for (const s of streams) {
-    const hash = s.infoHash.toLowerCase()
-    if (seen.has(hash)) continue
+    const hash = torrentHash(s)
+    // A candidate with no hash cannot be a scraper result; drop it rather
+    // than letting one collapse every other hashless entry onto ''.
+    if (!hash || seen.has(hash)) continue
     seen.add(hash)
     result.push(s)
   }
@@ -284,20 +294,31 @@ export function registerTorBoxIpc(): void {
       const remembered = db.getCache<StreamCandidate>(lastStreamKey(type, id))
       if (remembered && rankSafeStreams([remembered], audioLanguage, limits).length) {
         try {
-          const verified = await torboxFetch<{
-            data?: { hash?: string }[] | Record<string, unknown>
-          }>(`${TORBOX}/torrents/checkcached?format=object&list_files=true`, {
-            method: 'POST',
-            headers: { Authorization: `Bearer ${auth}`, 'Content-Type': 'application/json' },
-            body: JSON.stringify({ hashes: [remembered.infoHash] })
-          })
-          const stillCached = Array.isArray(verified.data)
-            ? verified.data.some(
-                (x) => String(x.hash || x).toLowerCase() === remembered.infoHash.toLowerCase()
-              )
-            : Object.keys(verified.data || {}).some(
-                (h) => h.toLowerCase() === remembered.infoHash.toLowerCase()
-              )
+          const rememberedHash = torrentHash(remembered)
+          // A remembered media-server stream has no TorBox hash to verify.
+          // Its availability check is the play:stream request itself, which
+          // is one cheap LAN round-trip and fails over to a full search
+          // anyway — so re-verifying here would cost a round-trip to
+          // establish something we learn for free a moment later.
+          const stillCached = !rememberedHash
+            ? remembered.source === 'mediaserver'
+            : await (async () => {
+                const verified = await torboxFetch<{
+                  data?: { hash?: string }[] | Record<string, unknown>
+                }>(`${TORBOX}/torrents/checkcached?format=object&list_files=true`, {
+                  method: 'POST',
+                  headers: {
+                    Authorization: `Bearer ${auth}`,
+                    'Content-Type': 'application/json'
+                  },
+                  body: JSON.stringify({ hashes: [rememberedHash] })
+                })
+                return Array.isArray(verified.data)
+                  ? verified.data.some(
+                      (x) => String(x.hash || x).toLowerCase() === rememberedHash
+                    )
+                  : Object.keys(verified.data || {}).some((h) => h.toLowerCase() === rememberedHash)
+              })()
           if (stillCached) {
             const result: StreamResolveResult = { streams: [remembered], best: remembered }
             db.putCache(key, result, 60 * 60 * 1000)
@@ -348,7 +369,7 @@ export function registerTorBoxIpc(): void {
           ? discoveredRaw.filter((s) => titleMatchesRelease(streamReleaseText(s), title))
           : discoveredRaw
         const discovered = titleFiltered.length ? titleFiltered : discoveredRaw
-        const hashes = [...new Set(discovered.map((s) => s.infoHash.toLowerCase()))].slice(0, 100)
+        const hashes = [...new Set(discovered.map(torrentHash))].slice(0, 100)
         const cached = await torboxFetch<{
           data?: { hash?: string }[] | Record<string, unknown>
         }>(`${TORBOX}/torrents/checkcached?format=object&list_files=true`, {
@@ -363,7 +384,7 @@ export function registerTorBoxIpc(): void {
         )
         const streams = rankSafeStreams(
           discovered
-            .filter((s) => available.has(s.infoHash.toLowerCase()))
+            .filter((s) => available.has(torrentHash(s)))
             .map((s) => ({ ...s, cached: true, compatible: true })),
           audioLanguage,
           limits
@@ -394,7 +415,7 @@ export function registerTorBoxIpc(): void {
         if (candidate) {
           try {
             const magnet = new URL('magnet:')
-            magnet.searchParams.set('xt', `urn:btih:${candidate.infoHash.toLowerCase()}`)
+            magnet.searchParams.set('xt', `urn:btih:${torrentHash(candidate)}`)
             for (const tracker of sanitizeTrackers(candidate.sources)) {
               magnet.searchParams.append('tr', tracker)
             }
