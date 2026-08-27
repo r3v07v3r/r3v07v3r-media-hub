@@ -13,7 +13,7 @@ streaming apps people compare everything to.
 
 ## Progress
 
-Twenty-six features shipped. Sixteen merged as PR #105 and released in
+Twenty-seven features shipped. Sixteen merged as PR #105 and released in
 `v1.0.83-preview.70`; everything since — collection pages, content ratings,
 fixes from hands-on testing of that build, Trakt in both directions, saved
 filters, explained recommendations, the player's remaining mpv capabilities,
@@ -21,10 +21,9 @@ and subtitle hash matching — is on `claude/post-preview70-fixes`. All 43
 registered tests pass, both TypeScript projects typecheck, and ESLint reports
 zero errors.
 
-**Phase 0 is complete. Phase 1 has only the anime-specific skip-intro
-detector left. Phase 2 has only Letterboxd import left. Phase 3 has only
-more catalogs left. Phase 4 has the two structural items and indexer
-visibility.**
+**Phase 0 is complete. Phase 3 is complete. Phase 1 has only the
+anime-specific skip-intro detector left. Phase 2 has only Letterboxd import
+left. Phase 4 has the two structural items and indexer visibility.**
 
 | Shipped                           | Phase | What landed                                                                                                                                                                    |
 | ---------------------------------- | ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -51,6 +50,7 @@ visibility.**
 | Content ratings                   | 3     | The age certificate for your region, and the prerequisite for parental controls.                                                                                               |
 | Saved filters                     | 3     | Name a filter combination on any browse page; it comes back as a chip. The value saved is the URL's own filter-state string, so nothing the filter bar learns to express needs a second schema. |
 | Home rows with a reason           | 3     | Each suggestion says why: a franchise continuation, a director or actor you follow, a genre match. Emitted by the ranker itself, from the same numbers the score is made of, so the reason can't disagree with the ordering. |
+| More catalogs                     | 3     | TMDB's now-playing, upcoming and top-rated lists merged straight into the same catalog every browse sort, search and recommendation already reads from — not a new page, a deeper pool. Every existing surface benefits at once. |
 | Sonarr/Radarr requests            | 4     | Lookup by IMDb id through the server, add with a chosen profile and folder, search on add.                                                                                     |
 | qBittorrent control               | 4     | Pause, resume and remove, with keeping or deleting the files asked separately.                                                                                                 |
 | Notifications                     | 4     | New episodes of tracked shows, off by default, deferred while watching.                                                                                                        |
@@ -169,11 +169,7 @@ Mostly rendering work, not fetching work. Cast, creators, TMDB keywords, AniList
 records, and airing state are already cached; search ignores them and in some cases nothing renders
 them at all.
 
-**Done except the last row** — see the Progress table above.
-
-| Work           | Effort | What it is                                                                                                                                                        |
-| -------------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| More catalogs  | M      | New releases, in theatres, coming soon, top rated. Today the pool is trending plus a popularity crawl, which makes everything feel like the same twenty titles. |
+**Done.** See the Progress table above.
 
 ## Phase 4 — Make the connected services do something
 
