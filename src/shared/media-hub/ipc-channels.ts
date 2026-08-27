@@ -26,6 +26,7 @@ export const MEDIA_HUB_CHANNELS = {
   settingsSetUiAnimations: 'mediahub:settings:set-ui-animations',
   settingsSetPerformancePanelVisible: 'mediahub:settings:set-performance-panel-visible',
   settingsSetSourcePreference: 'mediahub:settings:set-source-preference',
+  settingsSetCacheMode: 'mediahub:settings:set-cache-mode',
   settingsSetStreamLimits: 'mediahub:settings:set-stream-limits',
   settingsSetStreamCacheSize: 'mediahub:settings:set-stream-cache-size',
   settingsChooseStreamCacheDir: 'mediahub:settings:choose-stream-cache-dir',

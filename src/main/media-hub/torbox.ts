@@ -48,11 +48,7 @@ import { sanitizeTrackers } from './security'
 import { catalogData } from './catalog'
 import { isAllowedRemoteMediaUrl } from './playback'
 import { jellyfinFingerprint } from './jellyfin'
-import {
-  findMediaServerCandidate,
-  mediaServerConfig,
-  mediaServerStreamUrl
-} from './mediaSources'
+import { findMediaServerCandidate, mediaServerConfig, mediaServerStreamUrl } from './mediaSources'
 import { preparePlayback } from './playbackSession'
 import { reportPreparation } from './playbackProgress'
 import {
@@ -349,9 +345,7 @@ export function registerTorBoxIpc(): void {
                   body: JSON.stringify({ hashes: [rememberedHash] })
                 })
                 return Array.isArray(verified.data)
-                  ? verified.data.some(
-                      (x) => String(x.hash || x).toLowerCase() === rememberedHash
-                    )
+                  ? verified.data.some((x) => String(x.hash || x).toLowerCase() === rememberedHash)
                   : Object.keys(verified.data || {}).some((h) => h.toLowerCase() === rememberedHash)
               })()
           if (stillCached) {

@@ -111,8 +111,20 @@ assert.equal(
 )
 assert.equal(
   rankStreams(
-    [{ infoHash: 'remote-remux', name: 'Film 2019 2160p REMUX TrueHD Atmos', cached: true, compatible: true },
-     { infoHash: 'remote-x264', name: 'Film 2019 1080p WEB-DL x264', cached: true, compatible: true }],
+    [
+      {
+        infoHash: 'remote-remux',
+        name: 'Film 2019 2160p REMUX TrueHD Atmos',
+        cached: true,
+        compatible: true
+      },
+      {
+        infoHash: 'remote-x264',
+        name: 'Film 2019 1080p WEB-DL x264',
+        cached: true,
+        compatible: true
+      }
+    ],
     'en',
     {}
   )[0].infoHash,

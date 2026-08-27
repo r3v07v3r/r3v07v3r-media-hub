@@ -59,6 +59,13 @@ const DEFAULT_AHEAD_SECONDS = 300
 /** Hard floor regardless of what the settings UI offers — see settingsStore.ts's streamCacheMaxGb. Computed from head+tail+behind+ahead at ~25Mbps with headroom for chunk-boundary rounding. */
 export const MIN_CACHE_BYTES = 1.5 * 1024 * 1024 * 1024
 const DISK_SAFETY_MARGIN_BYTES = 2 * 1024 * 1024 * 1024
+/** Memory mode's own cap, in MB. RAM is not disk: MIN_CACHE_BYTES (1.5GB)
+ *  is a sensible floor for a file on a drive and an unacceptable resident
+ *  set for a desktop app, so the memory store is bounded separately and
+ *  never clamped up to that floor. */
+const MEMORY_CACHE_DEFAULT_MB = 512
+const MEMORY_CACHE_MIN_MB = 256
+const MEMORY_CACHE_MAX_MB = 4096
 const DISK_CHECK_INTERVAL_MS = 15_000
 /** How far past the current fill frontier a request can land before it's treated as "just wait a beat" rather than "reposition the whole fetch." */
 const REPOSITION_THRESHOLD_BYTES = CHUNK_BYTES * 2
@@ -121,6 +128,110 @@ function chunkFilePath(root: string, token: string, index: number): string {
 
 function metaFilePath(root: string, token: string): string {
   return path.join(sessionDir(root, token), 'meta.json')
+}
+
+/**
+ * Where a session's chunks physically live.
+ *
+ * Exists so "stream to memory only" is one swapped implementation rather
+ * than a conditional at every I/O site. Everything else in this file —
+ * the retention window, the fill loop, the range server — is written
+ * against chunk indices and does not care which of these is underneath.
+ */
+export interface ChunkStore {
+  /** Whether chunks outlive the process. False for the memory store, and
+   *  that single fact is what makes session reuse, chunk adoption, meta
+   *  files and the Downloads listing all meaningless for it. */
+  readonly persistent: boolean
+  write(root: string, token: string, index: number, data: Buffer): Promise<void>
+  read(root: string, token: string, index: number): Promise<Buffer>
+  remove(root: string, token: string, index: number): Promise<void>
+  /** Drops everything held for a token. A no-op on disk, where the whole
+   *  session directory is removed at once elsewhere. */
+  clear(token: string): void
+}
+
+const diskChunkStore: ChunkStore = {
+  persistent: true,
+  async write(root, token, index, data) {
+    await fsp.mkdir(sessionDir(root, token), { recursive: true })
+    const finalPath = chunkFilePath(root, token, index)
+    const tmpPath = `${finalPath}.tmp`
+    await fsp.writeFile(tmpPath, data)
+    await fsp.rename(tmpPath, finalPath)
+  },
+  read(root, token, index) {
+    return fsp.readFile(chunkFilePath(root, token, index))
+  },
+  async remove(root, token, index) {
+    await fsp.unlink(chunkFilePath(root, token, index))
+  },
+  clear() {
+    // Disk sessions are cleaned up by deleteCacheSession/pruneIdleSessions.
+  }
+}
+
+/**
+ * The "never store media on this machine" store. Nothing is written to
+ * disk at any point — not chunks, not the meta file — so there is nothing
+ * to delete afterwards and nothing to recover if the app dies mid-play.
+ */
+export function createMemoryChunkStore(): ChunkStore {
+  const buffers = new Map<string, Buffer>()
+  const keyFor = (token: string, index: number): string => `${token}:${index}`
+  return {
+    persistent: false,
+    async write(_root, token, index, data) {
+      // Copied rather than stored by reference. `data` arrives as a
+      // subarray of runFill's rolling buffer, and a Buffer view keeps its
+      // entire parent ArrayBuffer alive — retaining views here would pin
+      // far more memory than the cap accounts for.
+      buffers.set(keyFor(token, index), Buffer.from(data))
+    },
+    async read(_root, token, index) {
+      const found = buffers.get(keyFor(token, index))
+      if (!found) {
+        // Shaped like a missing file so serveRange's existing
+        // evicted-under-us recovery path handles it identically.
+        const error = new Error('That part of the stream is no longer in memory.')
+        throw error
+      }
+      return found
+    },
+    async remove(_root, token, index) {
+      buffers.delete(keyFor(token, index))
+    },
+    clear(token) {
+      const prefix = `${token}:`
+      for (const existing of [...buffers.keys()]) {
+        if (existing.startsWith(prefix)) buffers.delete(existing)
+      }
+    }
+  }
+}
+
+/** Reads the person's storage choice. 'memory' keeps every byte in RAM;
+ *  anything else (including an unset value) is the disk default. */
+export function memoryModeEnabled(): boolean {
+  try {
+    return readSettings().cacheMode === 'memory'
+  } catch {
+    return false
+  }
+}
+
+/** The memory cap in bytes, clamped to a range that is actually sane for
+ *  a resident set. */
+export function memoryCacheMaxBytes(): number {
+  let configured = MEMORY_CACHE_DEFAULT_MB
+  try {
+    const raw = Number(readSettings().memoryCacheMaxMb)
+    if (Number.isFinite(raw) && raw > 0) configured = raw
+  } catch {
+    // Unreadable settings fall back to the default rather than failing.
+  }
+  const clamped = Math.min(MEMORY_CACHE_MAX_MB, Math.max(MEMORY_CACHE_MIN_MB, configured))
+  return clamped * 1024 * 1024
 }
 
 interface StoredMeta extends CacheSessionMeta {
@@ -384,6 +495,9 @@ export function createStreamCache({
   let totalBytes: number | null = null
   let maxBytes = MIN_CACHE_BYTES
   let fullRetention = false
+  // Chosen per session in start(); every chunk read/write/evict goes
+  // through it. Disk unless the person asked for memory-only playback.
+  let store: ChunkStore = diskChunkStore
   let downloadComplete = false
   let behindSeconds = DEFAULT_BEHIND_SECONDS
   let aheadSeconds = DEFAULT_AHEAD_SECONDS
@@ -496,7 +610,7 @@ export function createStreamCache({
     for (const index of toEvict) {
       chunks.delete(index)
       try {
-        await fsp.unlink(chunkFilePath(cacheRoot, token, index))
+        await store.remove(cacheRoot, token, index)
       } catch {
         // Already gone, or never fully written — either way, nothing to clean up.
       }
@@ -513,6 +627,9 @@ export function createStreamCache({
     const residentBytes = chunks.size * CHUNK_BYTES
     let freeBytes = Number.POSITIVE_INFINITY
     try {
+      // Free disk space is not the constraint in memory mode — the
+      // configured cap is the only limit that means anything there.
+      if (!store.persistent) throw new Error('memory mode')
       const stat = await fsp.statfs(cacheRoot)
       freeBytes = stat.bavail * stat.bsize
     } catch {
@@ -640,11 +757,7 @@ export function createStreamCache({
   // against) whatever session WAS active when IT started, never whatever
   // start()/reposition() has since reassigned those shared vars to.
   async function writeChunk(root: string, tok: string, index: number, data: Buffer): Promise<void> {
-    await fsp.mkdir(sessionDir(root, tok), { recursive: true })
-    const finalPath = chunkFilePath(root, tok, index)
-    const tmpPath = `${finalPath}.tmp`
-    await fsp.writeFile(tmpPath, data)
-    await fsp.rename(tmpPath, finalPath)
+    await store.write(root, tok, index, data)
   }
 
   /** Sequentially downloads from startByte onward, one connection, until aborted (reposition/stop) or EOF. */
@@ -869,7 +982,7 @@ export function createStreamCache({
         const offsetInChunk = bytePos - chunkStartByte
         let data: Buffer
         try {
-          data = await fsp.readFile(chunkFilePath(cacheRoot, token, index))
+          data = await store.read(cacheRoot, token, index)
         } catch (error) {
           logError('streamCache:readChunk', error)
           // This chunk was 'ready' a moment ago, so the file went away
@@ -975,6 +1088,10 @@ export function createStreamCache({
   ): Promise<StreamCacheStartResult> {
     await assertPublicMediaUrl(inputRemoteUrl, resolveHost)
     await stopInternal(false)
+    // Chosen before anything else in the session exists, because it
+    // decides whether half the machinery below (reuse, adoption, the meta
+    // file) applies at all.
+    store = memoryModeEnabled() ? createMemoryChunkStore() : diskChunkStore
     token = randomBytesImpl(32).toString('hex')
     activeCacheTokens.add(token)
     // Captured once here, not re-read per file operation — see
@@ -986,8 +1103,14 @@ export function createStreamCache({
     // as Infinity here (not clamped to the floor) so squeezeForPressure's
     // cap comparison and the fullRetention check below both read naturally;
     // only actual free-disk-space pressure ever squeezes an unbounded cache.
-    maxBytes =
-      inputMaxBytes === 0 ? Number.POSITIVE_INFINITY : Math.max(MIN_CACHE_BYTES, inputMaxBytes)
+    maxBytes = !store.persistent
+      ? // Memory mode ignores both the disk cap and MIN_CACHE_BYTES: a
+        // 1.5GB floor is reasonable for a file on a drive and is not a
+        // resident set anyone wants. Never unbounded, for the same reason.
+        memoryCacheMaxBytes()
+      : inputMaxBytes === 0
+        ? Number.POSITIVE_INFINITY
+        : Math.max(MIN_CACHE_BYTES, inputMaxBytes)
     downloadComplete = false
     behindSeconds = DEFAULT_BEHIND_SECONDS
     aheadSeconds = DEFAULT_AHEAD_SECONDS
@@ -1013,16 +1136,25 @@ export function createStreamCache({
     // the remote file. Length is what makes this safe rather than merely
     // convenient — a different release of the same title is a different length
     // and is rejected, so the cache cannot be crossed with the wrong bytes.
-    const reusableToken = await findReusableSession(cacheRoot, meta, totalBytes, token)
-    if (reusableToken) {
-      activeCacheTokens.delete(token)
-      token = reusableToken
-      activeCacheTokens.add(token)
-      await adoptExistingChunks()
+    // Both of these are disk-only by nature: there is no previous memory
+    // session to find (the Map died with the last one) and nothing on disk
+    // for a meta file to describe. Skipping them is also what keeps the
+    // promise — memory mode must not write anything, including metadata.
+    if (store.persistent) {
+      const reusableToken = await findReusableSession(cacheRoot, meta, totalBytes, token)
+      if (reusableToken) {
+        activeCacheTokens.delete(token)
+        token = reusableToken
+        activeCacheTokens.add(token)
+        await adoptExistingChunks()
+      }
     }
 
-    fullRetention = totalBytes !== null && maxBytes >= totalBytes
-    void writeMeta(meta, cacheRoot, token)
+    // A memory session can never hold a whole film, so full retention is
+    // off by construction. The renderer already greys out the "Embedded"
+    // subtitle option from this flag, so that follows automatically.
+    fullRetention = store.persistent && totalBytes !== null && maxBytes >= totalBytes
+    if (store.persistent) void writeMeta(meta, cacheRoot, token)
 
     const myGeneration = ++generation
     // Start at the first byte NOT already on disk. The fill is sequential from
@@ -1140,6 +1272,10 @@ export function createStreamCache({
     // finished caching would mean extracting against activeCacheUrl/track
     // state that's already been cleared or replaced by the next title.
     settleFullRetentionWaiters(false)
+    // A memory session ends when playback does — there is no "keep it for
+    // a likely resume" for something that only ever existed in RAM, and
+    // holding it would be both a leak and a broken promise.
+    if (token && !store.persistent) store.clear(token)
     if (token) activeCacheTokens.delete(token)
     // Cleared here, not just removed from activeCacheTokens above —
     // getActiveToken() otherwise kept reporting this now-stopped session as

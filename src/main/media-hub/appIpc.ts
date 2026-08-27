@@ -31,6 +31,8 @@ import { logError } from './logger'
 import { mpvPath, hasActivePlayback, stopPlayback } from './playbackSession'
 import { ollamaConfig, ollamaConnected } from './ollamaService'
 import {
+  normalizeCacheMode,
+  normalizeMemoryCacheMb,
   normalizeSourcePreference,
   normalizeTheme,
   publicSettings,
@@ -374,6 +376,24 @@ export function registerAppIpc(): void {
       return { performancePanelVisible: settings.performancePanelVisible }
     }
   )
+
+  handle<
+    { cacheMode?: unknown; memoryCacheMaxMb?: unknown },
+    { cacheMode: CacheMode; memoryCacheMaxMb: number }
+  >(MEDIA_HUB_CHANNELS.settingsSetCacheMode, (_event, value) => {
+    const settings = readSettings()
+    settings.cacheMode = normalizeCacheMode(value?.cacheMode)
+    // Only written when actually supplied, so flipping the mode back and
+    // forth doesn't quietly reset a size the person chose.
+    if (value?.memoryCacheMaxMb !== undefined) {
+      settings.memoryCacheMaxMb = normalizeMemoryCacheMb(value.memoryCacheMaxMb)
+    }
+    writeSettings(settings)
+    return {
+      cacheMode: normalizeCacheMode(settings.cacheMode),
+      memoryCacheMaxMb: normalizeMemoryCacheMb(settings.memoryCacheMaxMb)
+    }
+  })
 
   handle<{ sourcePreference?: unknown }, { sourcePreference: SourcePreference }>(
     MEDIA_HUB_CHANNELS.settingsSetSourcePreference,

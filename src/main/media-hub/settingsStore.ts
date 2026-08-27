@@ -104,6 +104,13 @@ export interface MediaHubRawSettings {
    *  normalizeSourcePreference (preferences.ts) rather than directly —
    *  an older or hand-edited file may hold anything. */
   sourcePreference?: string
+  /** 'disk' (default) or 'memory'. In memory mode nothing about the media
+   *  is written to disk at any point — see streamCache.ts's
+   *  createMemoryChunkStore. */
+  cacheMode?: string
+  /** Bound on the in-memory buffer, in MB. Clamped by
+   *  streamCache.ts's memoryCacheMaxBytes; ignored on disk. */
+  memoryCacheMaxMb?: number
   connectionSpeedMbps?: number
   /** How much local disk streamCache.ts is allowed to use for the local
    *  rolling playback cache (see playbackSession.ts's

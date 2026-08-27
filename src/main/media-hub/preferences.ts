@@ -6,6 +6,7 @@
 // "improvements".
 
 import type {
+  CacheMode,
   MediaHubPublicSettings,
   SavedFilter,
   SourcePreference,
@@ -92,8 +93,24 @@ export function publicSettings(settings: Record<string, unknown> = {}): MediaHub
     ollamaBaseUrl: normalizeOllamaBaseUrl(settings.ollamaBaseUrl),
     ollamaModel: normalizeOllamaModel(settings.ollamaModel),
     ollamaAutoDetect: settings.ollamaAutoDetect !== false,
-    sourcePreference: normalizeSourcePreference(settings.sourcePreference)
+    sourcePreference: normalizeSourcePreference(settings.sourcePreference),
+    cacheMode: normalizeCacheMode(settings.cacheMode),
+    memoryCacheMaxMb: normalizeMemoryCacheMb(settings.memoryCacheMaxMb)
   }
+}
+
+/** Anything but an explicit 'memory' is the disk default — the safer of
+ *  the two to fall back to, since it is what every existing install does. */
+export function normalizeCacheMode(value: unknown): CacheMode {
+  return value === 'memory' ? 'memory' : 'disk'
+}
+
+/** Kept in step with streamCache.ts's own clamp so the Settings pane can
+ *  never show a number the cache would not actually honour. */
+export function normalizeMemoryCacheMb(value: unknown): number {
+  const raw = Number(value)
+  if (!Number.isFinite(raw) || raw <= 0) return 512
+  return Math.min(4096, Math.max(256, Math.round(raw)))
 }
 
 /** An unknown or absent value is the balanced default — a settings file
@@ -168,6 +185,8 @@ export function logoutSettings(
   | 'ollamaModel'
   | 'ollamaAutoDetect'
   | 'sourcePreference'
+  | 'cacheMode'
+  | 'memoryCacheMaxMb'
 > {
   return {
     theme: normalizeTheme(settings.theme),
@@ -215,6 +234,10 @@ export function logoutSettings(
     // media server on this network, and how much you want it preferred,
     // is a fact about the machine and the connection — not about which
     // account was signed in.
-    sourcePreference: normalizeSourcePreference(settings.sourcePreference)
+    sourcePreference: normalizeSourcePreference(settings.sourcePreference),
+    // Device preferences too: how fast this connection is and whether
+    // media may touch this disk are facts about the machine.
+    cacheMode: normalizeCacheMode(settings.cacheMode),
+    memoryCacheMaxMb: normalizeMemoryCacheMb(settings.memoryCacheMaxMb)
   }
 }

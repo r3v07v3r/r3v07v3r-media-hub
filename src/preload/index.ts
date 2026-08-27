@@ -25,6 +25,7 @@ import type {
   MalStartPayload,
   MalStatus,
   MarkWatchedResult,
+  CacheMode,
   MediaHubSettingsSnapshot,
   SourcePreference,
   MediaKind,
@@ -240,6 +241,14 @@ const api = {
         sourcePreference: SourcePreference
       ): Promise<{ sourcePreference: SourcePreference }> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.settingsSetSourcePreference, { sourcePreference }),
+      setCacheMode: (
+        cacheMode: CacheMode,
+        memoryCacheMaxMb?: number
+      ): Promise<{ cacheMode: CacheMode; memoryCacheMaxMb: number }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.settingsSetCacheMode, {
+          cacheMode,
+          memoryCacheMaxMb
+        }),
       setStreamLimits: (limits: {
         maxStreamResolution: number
         maxStreamSizeGb: number

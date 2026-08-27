@@ -889,7 +889,16 @@ export interface MediaHubPublicSettings {
    *  TorBox one. See core.ts's LOCAL_SOURCE_BONUS for the sizing, and the
    *  Settings pane for the wording shown to the person. */
   sourcePreference: SourcePreference
+  /** 'disk' keeps the rolling chunk cache on disk (the default). 'memory'
+   *  holds it in RAM only and writes nothing about the media to disk at
+   *  any point — for a fast connection, or where a file on the machine is
+   *  the thing being avoided. */
+  cacheMode: CacheMode
+  /** Bound on the in-memory buffer, in MB. Only meaningful in memory mode. */
+  memoryCacheMaxMb: number
 }
+
+export type CacheMode = 'disk' | 'memory'
 
 /** Mirrors core.ts's SourcePreference. Declared here as well because the
  *  renderer must not import from main/. */

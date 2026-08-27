@@ -17,7 +17,12 @@ import {
   WatchPartySection,
   R3PartySyncSection
 } from './MediaHubSettingsSections'
-import type { NetworkInfoResult, ProfilePublic } from '@shared/media-hub/types'
+import type {
+  CacheMode,
+  NetworkInfoResult,
+  ProfilePublic,
+  SourcePreference
+} from '@shared/media-hub/types'
 import styles from './Settings.module.css'
 
 function formatBytes(bytes: number): string {
@@ -48,6 +53,15 @@ const QUALITY_OPTIONS = [
   { value: '1080', label: '1080p' },
   { value: '1440', label: '1440p' },
   { value: '2160', label: '4K' }
+]
+const SOURCE_PREFERENCE_OPTIONS = [
+  { value: 'prefer-local', label: 'Media server' },
+  { value: 'balanced', label: 'Balanced' },
+  { value: 'prefer-quality', label: 'Best quality' }
+]
+const CACHE_MODE_OPTIONS = [
+  { value: 'disk', label: 'Cache to disk' },
+  { value: 'memory', label: 'Memory only' }
 ]
 const SIZE_OPTIONS = [
   { value: '0', label: 'Any' },
@@ -912,6 +926,19 @@ export default function SettingsPage() {
       )
   }
 
+  async function setSourcePreference(sourcePreference: SourcePreference) {
+    const api = window.api?.mediaHub
+    if (api)
+      await saveSetting('settings.source-preference', () =>
+        api.settings.setSourcePreference(sourcePreference)
+      )
+  }
+
+  async function setCacheMode(cacheMode: CacheMode) {
+    const api = window.api?.mediaHub
+    if (api) await saveSetting('settings.cache-mode', () => api.settings.setCacheMode(cacheMode))
+  }
+
   async function setStreamCacheSize(streamCacheMaxGb: number) {
     const api = window.api?.mediaHub
     if (api)
@@ -1272,14 +1299,46 @@ export default function SettingsPage() {
                   setStreamLimits(mediaHubSettings?.maxStreamResolution ?? 0, Number(value))
                 }
               />
-              <CacheSizeRow
-                icon="downloads"
-                title="Stream cache size"
-                description="How much local disk playback can use to buffer ahead and rewind without reopening a connection to the source. Larger also enables extracting embedded subtitle tracks, which needs the whole file cached. Pick a preset or type your own value in GB."
-                valueGb={mediaHubSettings?.streamCacheMaxGb ?? 10}
-                presets={STREAM_CACHE_SIZE_OPTIONS}
-                onChange={setStreamCacheSize}
+              <SegmentedRow
+                icon="display"
+                title="Where to play from"
+                description="A media server on your own network starts instantly and costs no bandwidth. Balanced prefers it unless a noticeably better copy exists elsewhere; Media server prefers it whenever it has the title at all; Best quality ignores where a copy lives and picks the best one."
+                value={mediaHubSettings?.sourcePreference ?? 'balanced'}
+                options={SOURCE_PREFERENCE_OPTIONS}
+                onChange={(value) => setSourcePreference(value as SourcePreference)}
               />
+              <SegmentedRow
+                icon="downloads"
+                title="Storage while playing"
+                description="Cache to disk buffers ahead on your drive, so you can rewind freely and resume later. Memory only keeps everything in RAM and writes nothing about what you watch to disk — it needs a faster connection and gives you a shorter buffer."
+                value={mediaHubSettings?.cacheMode ?? 'disk'}
+                options={CACHE_MODE_OPTIONS}
+                onChange={(value) => setCacheMode(value as CacheMode)}
+              />
+              {mediaHubSettings?.cacheMode === 'memory' ? (
+                <div className={styles.row}>
+                  <div className={styles.rowIcon} aria-hidden="true">
+                    <Icon name="downloads" size={17} />
+                  </div>
+                  <div className={styles.rowText}>
+                    <span className={styles.rowTitle}>Memory buffer</span>
+                    <span className={styles.rowDescription}>
+                      Using up to {mediaHubSettings?.memoryCacheMaxMb ?? 512} MB of RAM. Nothing is
+                      written to disk, so there is nothing left behind when playback stops — and
+                      nothing to resume from either.
+                    </span>
+                  </div>
+                </div>
+              ) : (
+                <CacheSizeRow
+                  icon="downloads"
+                  title="Stream cache size"
+                  description="How much local disk playback can use to buffer ahead and rewind without reopening a connection to the source. Larger also enables extracting embedded subtitle tracks, which needs the whole file cached. Pick a preset or type your own value in GB."
+                  valueGb={mediaHubSettings?.streamCacheMaxGb ?? 10}
+                  presets={STREAM_CACHE_SIZE_OPTIONS}
+                  onChange={setStreamCacheSize}
+                />
+              )}
               <div className={styles.row}>
                 <div className={styles.rowIcon} aria-hidden="true">
                   <Icon name="downloads" size={17} />

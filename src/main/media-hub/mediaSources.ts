@@ -69,7 +69,8 @@ export async function findMediaServerCandidate(
     // anime special-case). Reading that second segment as a season would
     // look an episode up as a film and miss every time. A Jellyfin anime
     // library files those under season 1, which is the useful guess.
-    const isAnimeEpisode = !providerId && parsed.season !== undefined && parsed.episode === undefined
+    const isAnimeEpisode =
+      !providerId && parsed.season !== undefined && parsed.episode === undefined
     const season = isAnimeEpisode ? 1 : parsed.season
     const episode = isAnimeEpisode ? parsed.season : parsed.episode
 
