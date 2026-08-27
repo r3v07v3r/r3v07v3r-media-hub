@@ -475,16 +475,19 @@
    302px against a row that no longer has 480 to give it, so it comes
    down with the row. Sized off vh — height is what is scarce — and
    floored so it never shrinks past the point where the swirl reads as
-   an energy sphere rather than a status dot. */
+   an energy sphere rather than a status dot.
+
+   .orbWrap's own sizing is split off below 1440px: the narrow-width
+   query above already caps it at 128px against a 220px-wide grid
+   column, and this block's min-width:1100px range overlaps that same
+   width band. Letting the clamp (up to 302px) win there — the panel
+   keeps visible overflow for the orb's halo/trail — spills the orb
+   into the hero next to it. */
 @media (min-width: 1100px) and (max-height: 1079px) {
   .panel {
     gap: 12px;
     padding: 10px 8px;
     min-height: 0;
-  }
-  .orbWrap {
-    width: clamp(180px, 27vh, 302px);
-    height: clamp(180px, 27vh, 302px);
   }
   .actions {
     max-width: 200px;
@@ -492,5 +495,17 @@
   .actionButton {
     min-height: 40px;
     padding: 8px 13px;
+  }
+}
+@media (min-width: 1440px) and (max-height: 1079px) {
+  .orbWrap {
+    width: clamp(180px, 27vh, 302px);
+    height: clamp(180px, 27vh, 302px);
+  }
+}
+@media (min-width: 1100px) and (max-width: 1439px) and (max-height: 1079px) {
+  .orbWrap {
+    width: 128px;
+    height: 128px;
   }
 }
