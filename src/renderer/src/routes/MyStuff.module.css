@@ -457,40 +457,51 @@
 
 /* ---- Calendar ---------------------------------------------------------- */
 
-.calendar {
+.calendarWrap {
   display: flex;
   flex-direction: column;
-  gap: 26px;
-  max-width: 720px;
+  gap: 32px;
 }
 
-.calendarDay {
+/* ---- Calendar: "What's airing" strip ------------------------------------ */
+
+.upNext {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 12px;
 }
 
-.calendarDate {
-  margin: 0;
-  font-size: 12px;
-  font-weight: 600;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  color: var(--text-muted);
+.upNextRow {
+  display: flex;
+  align-items: stretch;
+  gap: 12px;
+  overflow-x: auto;
+  padding-bottom: 6px;
 }
 
-/* Today is the line people are looking for, so it is the one that is not
-   muted. */
-.calendarDateToday {
-  color: var(--accent-cyan);
+.upNextItem {
+  display: flex;
+  align-items: stretch;
+  gap: 12px;
+  flex: 0 0 auto;
 }
 
-.calendarEntry {
+/* Marks where "what just aired" ends and "what's coming" begins, so the
+   strip reads as one timeline rather than two unlabelled halves. */
+.upNextDivider {
+  flex: 0 0 auto;
+  width: 1px;
+  align-self: stretch;
+  background: var(--border-active);
+}
+
+.upNextCard {
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: 4px;
   align-items: flex-start;
-  min-width: 0;
+  width: 108px;
+  flex: 0 0 auto;
   appearance: none;
   border: 0;
   background: none;
@@ -500,8 +511,214 @@
   cursor: pointer;
 }
 
-.calendarEntry:focus-visible {
+.upNextCard:focus-visible {
   outline: 2px solid var(--accent-cyan);
   outline-offset: 3px;
+  border-radius: var(--radius-small);
+}
+
+.upNextArt {
+  display: block;
+  width: 108px;
+  height: 62px;
+  border-radius: var(--radius-medium);
+  overflow: hidden;
+  background: var(--panel);
+  border: 1px solid var(--border-subtle);
+}
+
+.upNextArt img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.upNextDay {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.upNextTitle {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-primary);
+  width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.upNextEpisode {
+  font-size: 11px;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.upNextMore {
+  flex: 0 0 auto;
+  align-self: center;
+  appearance: none;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 11.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  padding: 7px 14px;
+  cursor: pointer;
+  transition:
+    color var(--transition-fast),
+    border-color var(--transition-fast);
+}
+
+.upNextMore:hover {
+  color: var(--text-primary);
+  border-color: var(--border-active);
+}
+
+.upNextMore:focus-visible {
+  outline: 2px solid var(--accent-cyan);
+  outline-offset: 2px;
+}
+
+/* ---- Calendar: grid ------------------------------------------------------ */
+
+/* Scrolls sideways rather than squeezing seven columns unreadably narrow on
+   a short window — same reasoning as .tabs above. */
+.calGridScroll {
+  overflow-x: auto;
+}
+
+.calGrid {
+  display: flex;
+  flex-direction: column;
+  min-width: 700px;
+}
+
+.calGridHeader,
+.calGridWeek {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+}
+
+.calGridHeaderCell {
+  padding: 0 4px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  text-align: left;
+}
+
+.calGridCell {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-height: 92px;
+  padding: 8px;
+  border: 1px solid var(--border-subtle);
+  margin: -1px 0 0 -1px;
+}
+
+/* A day already behind isn't waited on any more, so it recedes rather than
+   competing with today and what's ahead for attention. */
+.calGridCellPast {
+  opacity: 0.55;
+}
+
+.calGridCellToday {
+  opacity: 1;
+  background: color-mix(in srgb, var(--accent-cyan) 6%, transparent);
+  border-color: var(--accent-cyan);
+  z-index: 1;
+  position: relative;
+}
+
+.calGridDate {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.calGridCellToday .calGridDate {
+  color: var(--accent-cyan);
+}
+
+.calGridMonth {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.calGridEntries {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.calGridEntry {
+  display: block;
+  width: 100%;
+  appearance: none;
+  border: 0;
+  border-radius: var(--radius-small);
+  background: var(--panel);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  text-align: left;
+  padding: 3px 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.calGridEntry:hover {
+  color: var(--accent-cyan);
+}
+
+.calGridEntry:focus-visible {
+  outline: 2px solid var(--accent-cyan);
+  outline-offset: 1px;
+}
+
+.calGridMore {
+  align-self: flex-start;
+  appearance: none;
+  border: 0;
+  background: none;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 10.5px;
+  font-weight: 600;
+  padding: 0;
+  cursor: pointer;
+}
+
+.calGridMore:hover {
+  color: var(--accent-cyan);
+}
+
+.calGridMore:focus-visible {
+  outline: 2px solid var(--accent-cyan);
+  outline-offset: 2px;
   border-radius: var(--radius-small);
 }
