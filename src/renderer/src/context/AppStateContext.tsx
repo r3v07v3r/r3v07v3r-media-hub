@@ -1351,10 +1351,16 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   >(async () => {})
   const startPlayback = useCallback(
     async (media: MediaItem): Promise<boolean> => {
-      if (mediaHubSettings && !mediaHubSettings.torboxConnected) {
+      // Either source alone is a complete setup — TorBox, a media server,
+      // or both. Only having neither blocks playback.
+      if (
+        mediaHubSettings &&
+        !mediaHubSettings.torboxConnected &&
+        !mediaHubSettings.mediaServerConnected
+      ) {
         pushNotification({
           tone: 'warning',
-          message: 'Connect TorBox in Settings to start playback.'
+          message: 'Connect TorBox or a media server in Settings to start playback.'
         })
         return false
       }

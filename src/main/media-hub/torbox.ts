@@ -41,11 +41,18 @@ import {
   titleMatchesRelease,
   validateTorBoxToken,
   type RawApiPayload,
+  type SourcePreference,
   type TorBoxFile
 } from './core'
 import { sanitizeTrackers } from './security'
 import { catalogData } from './catalog'
 import { isAllowedRemoteMediaUrl } from './playback'
+import { jellyfinFingerprint } from './jellyfin'
+import {
+  findMediaServerCandidate,
+  mediaServerConfig,
+  mediaServerStreamUrl
+} from './mediaSources'
 import { preparePlayback } from './playbackSession'
 import { reportPreparation } from './playbackProgress'
 import {
@@ -145,6 +152,15 @@ async function fetchAddonStreams(url: string): Promise<StreamCandidate[]> {
 function streamReleaseText(stream: StreamCandidate): string {
   const text = stream.title || (stream.description as string | undefined) || stream.name || ''
   return text.split('\n')[0]
+}
+
+/** Narrows a persisted settings value to a known preference. An unknown
+ *  or absent value means the default, never a crash — settings files
+ *  outlive the code that wrote them. */
+function resolveSourcePreference(value: unknown): SourcePreference {
+  return value === 'prefer-local' || value === 'prefer-quality' || value === 'balanced'
+    ? value
+    : 'balanced'
 }
 
 /** The candidate's torrent hash, lowercased, or '' when it has none.
@@ -263,13 +279,26 @@ export function registerTorBoxIpc(): void {
     MEDIA_HUB_CHANNELS.streamResolve,
     async (_e, { type, id, title }) => {
       const auth = getTorBoxToken()
-      if (!auth) throw new Error('TorBox is not connected.')
+      const mediaServer = mediaServerConfig()
+      // Either source alone is a complete configuration. Only having
+      // neither is an error, and it names both so the message is
+      // actionable for whichever one the person meant to set up.
+      if (!auth && !mediaServer) {
+        throw new Error('Connect TorBox or a media server to start playback.')
+      }
       const preferences = readSettings()
       const limits = {
         maxResolution: Number(preferences.maxStreamResolution) || 0,
         maxSizeGb: Number(preferences.maxStreamSizeGb) || 0
       }
-      const key = `stream:v2:${type}:${id}:${limits.maxResolution}:${limits.maxSizeGb}`
+      const sourcePreference = resolveSourcePreference(preferences.sourcePreference)
+      // v2 -> v3: the answer now depends on the source preference and on
+      // which server is configured, so both join the key. Without them a
+      // person who switches preference, or points at a different server,
+      // keeps being served the previous answer for an hour.
+      const key =
+        `stream:v3:${type}:${id}:${limits.maxResolution}:${limits.maxSizeGb}` +
+        `:${sourcePreference}:${jellyfinFingerprint(mediaServer)}`
       const db = getDatabase()
       const audioLanguage = preferences.audioLanguage || 'en'
 
@@ -292,7 +321,13 @@ export function registerTorBoxIpc(): void {
       // limits can both have moved on since. This is the "remember where
       // it played from last and try that first" path.
       const remembered = db.getCache<StreamCandidate>(lastStreamKey(type, id))
-      if (remembered && rankSafeStreams([remembered], audioLanguage, limits).length) {
+      const rememberedUsable =
+        remembered &&
+        rankSafeStreams([remembered], audioLanguage, limits, sourcePreference).length > 0 &&
+        // A remembered stream from a source that is no longer configured
+        // must not be replayed — the token or the server has gone.
+        (remembered.source === 'mediaserver' ? Boolean(mediaServer) : Boolean(auth))
+      if (remembered && rememberedUsable) {
         try {
           const rememberedHash = torrentHash(remembered)
           // A remembered media-server stream has no TorBox hash to verify.
@@ -330,7 +365,42 @@ export function registerTorBoxIpc(): void {
         }
       }
 
+      // The media server is asked in parallel with the scrapers below, not
+      // before them: it is the fast one, so making the (possibly slow,
+      // possibly failing) add-on calls wait on it would throw away the
+      // very latency win it exists to provide.
+      const localLookup = findMediaServerCandidate(id, title)
+
       try {
+        // A local copy that already satisfies the person's quality ceiling
+        // ends the search here — no checkcached round-trip, no add-on
+        // calls waited on. This is the slow-connection payoff: resolution
+        // drops from seconds to a single LAN request.
+        //
+        // prefer-quality opts out by definition: that setting means "look
+        // at everything and pick the best", so short-circuiting on the
+        // first acceptable local copy would silently ignore a better
+        // remote one.
+        if (sourcePreference !== 'prefer-quality') {
+          const local = await localLookup
+          const acceptable =
+            local && rankSafeStreams([local], audioLanguage, limits, sourcePreference)
+          if (acceptable?.length) {
+            const result: StreamResolveResult = { streams: acceptable, best: acceptable[0] }
+            db.putCache(key, result, 60 * 60 * 1000)
+            return result
+          }
+        }
+
+        // No TorBox token: the media server was the only source available,
+        // and it did not have this title. An honest dead end rather than
+        // an error — the renderer distinguishes it from `queued`.
+        if (!auth) {
+          const result: StreamResolveResult = { streams: [], best: null }
+          db.putCache(key, result, 3 * 60 * 1000)
+          return result
+        }
+
         // Two independent P2P scraper add-ons, queried in parallel and
         // merged — found live: Comet alone returned nothing for a
         // brand-new/low-profile anime that Torrentio (which scrapes
@@ -357,7 +427,25 @@ export function registerTorBoxIpc(): void {
           )
         ])
         const discoveredRaw = dedupeByInfoHash([...comet, ...torrentio])
-        if (!discoveredRaw.length) return { streams: [], best: null }
+        // Awaited a second time rather than threaded down from the
+        // short-circuit above: awaiting a settled promise is free, and it
+        // keeps the add-on calls from ever queueing behind the media
+        // server on the prefer-quality path, which skips that block.
+        const local = await localLookup
+        if (!discoveredRaw.length) {
+          // The scrapers found nothing, but the server may still have it —
+          // this is the prefer-quality path, where the short-circuit above
+          // deliberately did not run.
+          const localOnly = local
+            ? rankSafeStreams([local], audioLanguage, limits, sourcePreference)
+            : []
+          const result: StreamResolveResult = {
+            streams: localOnly,
+            best: localOnly[0] ?? null
+          }
+          if (localOnly.length) db.putCache(key, result, 60 * 60 * 1000)
+          return result
+        }
         // Guards against a P2P scraper add-on's own "exact match" flag
         // being wrong for a franchise with several similarly-prefixed
         // entries (found live — see titleMatchesRelease's own doc
@@ -382,12 +470,20 @@ export function registerTorBoxIpc(): void {
             ? cached.data.map((x) => String(x.hash || x).toLowerCase())
             : Object.keys(cached.data || {}).map((x) => x.toLowerCase())
         )
+        // One ranking pass over both sources. On the prefer-quality path
+        // this is where the local copy finally competes; on the others it
+        // is a no-op, because an acceptable local copy already returned
+        // above.
         const streams = rankSafeStreams(
-          discovered
-            .filter((s) => available.has(torrentHash(s)))
-            .map((s) => ({ ...s, cached: true, compatible: true })),
+          [
+            ...discovered
+              .filter((s) => available.has(torrentHash(s)))
+              .map((s) => ({ ...s, cached: true, compatible: true })),
+            ...(local ? [local] : [])
+          ],
           audioLanguage,
-          limits
+          limits,
+          sourcePreference
         )
         if (streams.length) {
           const result: StreamResolveResult = { streams, best: streams[0] }
@@ -410,7 +506,7 @@ export function registerTorBoxIpc(): void {
         // same honest "nothing available yet" result as before this
         // existed, rather than surfacing a harder error for what's meant
         // to be a fallback path.
-        const candidate = rankSafeStreams(discovered, audioLanguage, limits)[0]
+        const candidate = rankSafeStreams(discovered, audioLanguage, limits, sourcePreference)[0]
         let queued = false
         if (candidate) {
           try {
@@ -454,7 +550,49 @@ export function registerTorBoxIpc(): void {
       _e,
       { stream, mediaId, type, resolveId, catalogId, title, posterUrl, season, episode }
     ) => {
+      // Both sources converge here: whatever produced the URL, playback
+      // opens it the same way and the same stream gets remembered. Shared
+      // as a closure rather than duplicated so the two branches can never
+      // drift on cache metadata or the last-stream memo.
+      const finish = async (url: string): Promise<PlaybackResult> => {
+        const result = await preparePlayback(
+          url,
+          title
+            ? {
+                title,
+                posterUrl,
+                catalogId,
+                mediaKind: type as 'movie' | 'series' | 'anime' | undefined,
+                seasonNumber: season,
+                episodeNumber: episode
+              }
+            : undefined
+        )
+        // Only remembered once playback actually started — see
+        // stream:resolve's own "fast path 2" comment for where this gets
+        // read back. Records the stream that was ACTUALLY used, which
+        // isn't always stream:resolve's own top pick (a manual choice
+        // from the stream picker lands here too).
+        if (type && resolveId) {
+          getDatabase().putCache(lastStreamKey(type, resolveId), stream, LAST_STREAM_TTL_MS)
+        }
+        return result
+      }
+
+      // The media server needs none of the TorBox machinery below — no
+      // torrent to find, nothing to submit, no link to mint. The file is
+      // already there; build its URL and open it.
+      if (stream?.source === 'mediaserver') {
+        const mediaUrl = mediaServerStreamUrl(stream)
+        if (!mediaUrl) {
+          throw new Error('That media server is no longer connected. Reconnect it in Settings.')
+        }
+        reportPreparation('link', 'Opening the file on your media server')
+        return finish(mediaUrl)
+      }
+
       const auth = getTorBoxToken()
+      if (!auth) throw new Error('TorBox is not connected.')
       const hash = String(stream?.infoHash || '').toLowerCase()
       if (!/^[a-f0-9]{40}$/.test(hash)) {
         throw new Error('The selected source has no valid torrent hash.')
@@ -548,28 +686,7 @@ export function registerTorBoxIpc(): void {
         reportPreparation('link', "That link wasn't ready — asking TorBox again")
         url = await resolveDownloadUrl(true)
       }
-      const result = await preparePlayback(
-        url,
-        title
-          ? {
-              title,
-              posterUrl,
-              catalogId,
-              mediaKind: type as 'movie' | 'series' | 'anime' | undefined,
-              seasonNumber: season,
-              episodeNumber: episode
-            }
-          : undefined
-      )
-      // Only remembered once playback actually started — see
-      // stream:resolve's own "fast path 2" comment for where this gets
-      // read back. Records the stream that was ACTUALLY used, which isn't
-      // always stream:resolve's own top pick (a manual choice from the
-      // stream picker lands here too).
-      if (type && resolveId) {
-        getDatabase().putCache(lastStreamKey(type, resolveId), stream, LAST_STREAM_TTL_MS)
-      }
-      return result
+      return finish(url)
     }
   )
 

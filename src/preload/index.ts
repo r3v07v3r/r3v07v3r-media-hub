@@ -26,6 +26,7 @@ import type {
   MalStatus,
   MarkWatchedResult,
   MediaHubSettingsSnapshot,
+  SourcePreference,
   MediaKind,
   NetworkInfoResult,
   OllamaAskResult,
@@ -235,6 +236,10 @@ const api = {
         enabled: boolean
       ): Promise<{ performancePanelVisible: boolean }> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.settingsSetPerformancePanelVisible, enabled),
+      setSourcePreference: (
+        sourcePreference: SourcePreference
+      ): Promise<{ sourcePreference: SourcePreference }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.settingsSetSourcePreference, { sourcePreference }),
       setStreamLimits: (limits: {
         maxStreamResolution: number
         maxStreamSizeGb: number

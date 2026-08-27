@@ -100,6 +100,10 @@ export interface MediaHubRawSettings {
   performancePanelVisible?: boolean
   maxStreamResolution?: number
   maxStreamSizeGb?: number
+  /** 'prefer-local' | 'balanced' | 'prefer-quality'. Read through
+   *  normalizeSourcePreference (preferences.ts) rather than directly —
+   *  an older or hand-edited file may hold anything. */
+  sourcePreference?: string
   connectionSpeedMbps?: number
   /** How much local disk streamCache.ts is allowed to use for the local
    *  rolling playback cache (see playbackSession.ts's

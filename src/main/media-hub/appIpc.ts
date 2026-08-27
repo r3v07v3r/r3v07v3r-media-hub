@@ -13,10 +13,12 @@ import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { MEDIA_HUB_CHANNELS } from '../../shared/media-hub/ipc-channels'
 import type {
+  CacheMode,
   ImportSummary,
   MediaHubPublicSettings,
   MediaHubSettingsSnapshot,
-  SavedFilter
+  SavedFilter,
+  SourcePreference
 } from '../../shared/media-hub/types'
 import { parseImdbRatingsCsv } from '../../shared/media-hub/importCsv'
 import { importLetterboxdLibrary } from './letterboxdImport'
@@ -28,7 +30,14 @@ import { handle } from './ipcGuard'
 import { logError } from './logger'
 import { mpvPath, hasActivePlayback, stopPlayback } from './playbackSession'
 import { ollamaConfig, ollamaConnected } from './ollamaService'
-import { normalizeTheme, publicSettings, logoutSettings, THEMES } from './preferences'
+import {
+  normalizeSourcePreference,
+  normalizeTheme,
+  publicSettings,
+  logoutSettings,
+  THEMES
+} from './preferences'
+import { isMediaServerConnected } from './mediaSources'
 import {
   mainWindowFullscreenTarget,
   setMainWindowFullscreen,
@@ -73,6 +82,7 @@ export function registerAppIpc(): void {
       appVersion: app.getVersion(),
       themes: THEMES,
       torboxConnected: Boolean(getTorBoxToken()),
+      mediaServerConnected: isMediaServerConnected(),
       tmdbConnected: Boolean(tmdbCredentials().apiKey),
       omdbConnected: Boolean(omdbCredentials().apiKey),
       osConnected: osConnected(),
@@ -362,6 +372,19 @@ export function registerAppIpc(): void {
       settings.performancePanelVisible = value !== false
       writeSettings(settings)
       return { performancePanelVisible: settings.performancePanelVisible }
+    }
+  )
+
+  handle<{ sourcePreference?: unknown }, { sourcePreference: SourcePreference }>(
+    MEDIA_HUB_CHANNELS.settingsSetSourcePreference,
+    (_event, value) => {
+      const settings = readSettings()
+      // normalizeSourcePreference is the allowlist — anything unrecognised
+      // becomes 'balanced' rather than being written through, so the stored
+      // value is always one this app understands.
+      settings.sourcePreference = normalizeSourcePreference(value?.sourcePreference)
+      writeSettings(settings)
+      return { sourcePreference: normalizeSourcePreference(settings.sourcePreference) }
     }
   )
 

@@ -885,12 +885,24 @@ export interface MediaHubPublicSettings {
    *  turns it back on. The Settings pane says so, since an app that finds a
    *  local model by itself and then stops doing it owes an explanation. */
   ollamaAutoDetect: boolean
+  /** How much a copy on the configured media server is worth relative to a
+   *  TorBox one. See core.ts's LOCAL_SOURCE_BONUS for the sizing, and the
+   *  Settings pane for the wording shown to the person. */
+  sourcePreference: SourcePreference
 }
+
+/** Mirrors core.ts's SourcePreference. Declared here as well because the
+ *  renderer must not import from main/. */
+export type SourcePreference = 'prefer-local' | 'balanced' | 'prefer-quality'
 
 export interface MediaHubSettingsSnapshot extends MediaHubPublicSettings {
   appVersion: string
   themes: Theme[]
   torboxConnected: boolean
+  /** Whether a media server is configured, enabled, and has credentials.
+   *  Playback is gated on having at least one of this and torboxConnected
+   *  — either source alone is a complete setup. */
+  mediaServerConnected: boolean
   tmdbConnected: boolean
   omdbConnected: boolean
   osConnected: boolean

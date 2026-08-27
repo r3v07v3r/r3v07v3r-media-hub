@@ -8,6 +8,7 @@
 import type {
   MediaHubPublicSettings,
   SavedFilter,
+  SourcePreference,
   Theme,
   UpdateChannel
 } from '../../shared/media-hub/types'
@@ -90,8 +91,17 @@ export function publicSettings(settings: Record<string, unknown> = {}): MediaHub
     // appIpc.ts).
     ollamaBaseUrl: normalizeOllamaBaseUrl(settings.ollamaBaseUrl),
     ollamaModel: normalizeOllamaModel(settings.ollamaModel),
-    ollamaAutoDetect: settings.ollamaAutoDetect !== false
+    ollamaAutoDetect: settings.ollamaAutoDetect !== false,
+    sourcePreference: normalizeSourcePreference(settings.sourcePreference)
   }
+}
+
+/** An unknown or absent value is the balanced default — a settings file
+ *  outlives the code that wrote it, and this is read on every snapshot. */
+export function normalizeSourcePreference(value: unknown): SourcePreference {
+  return value === 'prefer-local' || value === 'prefer-quality' || value === 'balanced'
+    ? value
+    : 'balanced'
 }
 
 /**
@@ -157,6 +167,7 @@ export function logoutSettings(
   | 'ollamaBaseUrl'
   | 'ollamaModel'
   | 'ollamaAutoDetect'
+  | 'sourcePreference'
 > {
   return {
     theme: normalizeTheme(settings.theme),
@@ -199,6 +210,11 @@ export function logoutSettings(
     // silently switch it back on.
     ollamaBaseUrl: normalizeOllamaBaseUrl(settings.ollamaBaseUrl),
     ollamaModel: normalizeOllamaModel(settings.ollamaModel),
-    ollamaAutoDetect: settings.ollamaAutoDetect !== false
+    ollamaAutoDetect: settings.ollamaAutoDetect !== false,
+    // Also a device preference, for the same reason: whether there is a
+    // media server on this network, and how much you want it preferred,
+    // is a fact about the machine and the connection — not about which
+    // account was signed in.
+    sourcePreference: normalizeSourcePreference(settings.sourcePreference)
   }
 }
