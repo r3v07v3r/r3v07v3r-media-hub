@@ -31,6 +31,14 @@ interface AuthFile {
 const MAX_ATTEMPTS_PER_MINUTE = 5
 const FAILURES_BEFORE_NEW_CODE = 10
 
+/** Stable, non-secret identity for a paired device — what credentials and
+ *  jobs are keyed by. A hash of the bearer token rather than the token
+ *  itself, so the id can appear in job records and logs without ever
+ *  exposing the credential it derives from. */
+export function deviceIdForToken(token: string): string {
+  return crypto.createHash('sha256').update(token).digest('hex').slice(0, 16)
+}
+
 export interface Pairing {
   /** The code to print on the console / show on /api/ping'd displays.
    *  Regenerated after success or repeated failure — always read it fresh. */
@@ -38,6 +46,8 @@ export interface Pairing {
   /** Exchange a code for a bearer token, or null (wrong code / throttled). */
   tryPair(code: string, deviceName: string): Promise<string | null>
   isAuthorized(token: string | undefined): boolean
+  /** The device id for a presented (already-authorized) token, or ''. */
+  deviceIdFor(token: string | undefined): string
   listDevices(): PairedDevice[]
   revoke(token: string): Promise<void>
   /** Called once at startup to load persisted devices. */
@@ -110,6 +120,15 @@ export function createPairing(dataDir: string): Pairing {
           device.token.length === token.length &&
           crypto.timingSafeEqual(Buffer.from(device.token), Buffer.from(token))
       )
+    },
+    deviceIdFor(token) {
+      if (!token) return ''
+      const matched = devices.find(
+        (device) =>
+          device.token.length === token.length &&
+          crypto.timingSafeEqual(Buffer.from(device.token), Buffer.from(token))
+      )
+      return matched ? deviceIdForToken(matched.token) : ''
     },
     listDevices: () => [...devices],
     async revoke(token) {

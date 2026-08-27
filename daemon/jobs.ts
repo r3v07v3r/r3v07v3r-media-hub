@@ -27,6 +27,9 @@ export interface JobRecord {
   sizeBytes?: number
   /** Tracker list for magnet reconstruction, already sanitized app-side. */
   sources?: string[]
+  /** Which paired device queued this — and therefore WHOSE TorBox account
+   *  the fetch bills. A job is only ever fetched with its owner's token. */
+  ownerDeviceId?: string
   state: JobState
   queuedAt: number
   attempts: number
@@ -96,6 +99,14 @@ export function createJobStore(dataDir: string): JobStore {
           existing.state === 'fetching' ||
           existing.state === 'ready'
         ) {
+          // Ownership healing: a job stuck queued because its owner never
+          // shared a TorBox credential is adopted by a later requester of
+          // the same title — the second household member wanting it may be
+          // the one whose account CAN fetch it.
+          if (existing.state === 'queued' && input.ownerDeviceId) {
+            existing.ownerDeviceId = input.ownerDeviceId
+            schedulePersist()
+          }
           return existing
         }
         jobs = jobs.filter((job) => job !== existing)

@@ -53,7 +53,10 @@ export interface LanCacheStatusResponse {
   usedBytes: number
   budgetBytes: number
   itemCount: number
+  /** Whether the CALLING device's own TorBox account is linked. */
   torboxLinked: boolean
+  /** How many paired devices have linked an account — household total. */
+  linkedDevices: number
   jobs: Array<{
     contentKey: string
     title: string

@@ -72,14 +72,19 @@ schtasks /Create /TN r3-cache /SC ONLOGON /TR "node C:\path\to\r3-cache.cjs"
 (or a shortcut in `shell:startup`). The pairing code prints in its console
 window.
 
-## What the app's checkbox means
+## Multiple people, one daemon
 
-"Allow this server to download with my TorBox account" copies your TorBox
-API key to the daemon's machine (a `0600` file — file permissions, not an
-OS keychain) so it can mint download links and fetch overnight with the
-app closed. Without it the daemon still serves and expires files, but new
-downloads only progress while a paired app is running. Unpairing revokes
-the key from the daemon.
+Each person pairs their own app and, via the checkbox, shares their own
+TorBox key (a `0600` file per device — file permissions, not an OS
+keychain). Every download is made with the account of **whoever asked for
+that title** — the daemon never bills one household member for another's
+watchlist. A job whose owner hasn't shared a key waits, and is adopted
+automatically if someone who has shares wants the same title. Anything
+cached is playable by every paired device — that sharing is the point of
+an on-site cache. Unpairing revokes only your own key.
+
+Auto-start and self-updating (with rollback so it always comes back
+online) are planned but deliberately not built yet.
 
 ## Live verification
 

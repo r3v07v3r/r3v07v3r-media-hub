@@ -73,10 +73,17 @@ export function createFetcher({
   }
 
   async function fetchOne(job: JobRecord): Promise<void> {
-    const token = credentials.torboxToken()
+    // Always the OWNER's account — the person whose request this is pays
+    // with their own TorBox quota, never a housemate's. A job whose owner
+    // has not shared a credential waits; it can still be adopted by a
+    // later requester who has (jobs.enqueue's ownership healing).
+    const token = credentials.tokenForDevice(job.ownerDeviceId ?? '')
     if (!token) {
-      // No credential — the app hasn't opted in (or revoked it). Jobs wait;
-      // the app can also push refreshed links by re-queueing while running.
+      jobs.update(job.contentKey, {
+        lastError: 'Waiting: the requesting device has not shared TorBox access.'
+      })
+      // Backed off, not retried hot: nothing changes until a person acts.
+      nextAttemptAt.set(job.contentKey, Date.now() + 5 * 60_000)
       return
     }
     jobs.update(job.contentKey, { state: 'fetching', attempts: job.attempts + 1 })

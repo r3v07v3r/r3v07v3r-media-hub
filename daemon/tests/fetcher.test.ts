@@ -93,7 +93,9 @@ async function main(): Promise<void> {
     })
     const jobs = createJobStore(root)
     const credentials = createCredentials(root)
-    await credentials.setTorboxToken('stub-token-for-tests')
+    // Multi-user: credentials are keyed by the paired device that shared
+    // them, and a job is fetched with its OWNER's token only.
+    await credentials.setTokenForDevice('device-alice', 'alice-torbox-token')
 
     const fetcher = createFetcher({
       jobs,
@@ -116,7 +118,17 @@ async function main(): Promise<void> {
       infoHash: hash,
       title: 'Movie',
       resolution: 1080,
-      sizeBytes: Buffer.byteLength(CONTENT)
+      sizeBytes: Buffer.byteLength(CONTENT),
+      ownerDeviceId: 'device-alice'
+    })
+
+    // A job owned by someone who never shared a credential must WAIT, not
+    // fetch with another member's account.
+    jobs.enqueue({
+      contentKey: 'tt43::',
+      infoHash: 'e'.repeat(40),
+      title: 'Unfunded Movie',
+      ownerDeviceId: 'device-bob'
     })
 
     fetcher.start()
@@ -131,6 +143,24 @@ async function main(): Promise<void> {
       await new Promise((resolve) => setTimeout(resolve, 100))
     }
     await fetcher.stop()
+
+    const bob = jobs.list().find((candidate) => candidate.contentKey === 'tt43::')
+    assert.equal(bob?.state, 'queued', "bob's job waits — it never borrows alice's account")
+    assert.match(bob?.lastError ?? '', /not shared TorBox access/)
+
+    // Ownership healing: alice also wants the title, so the job adopts her
+    // (credentialed) device and becomes fetchable.
+    jobs.enqueue({
+      contentKey: 'tt43::',
+      infoHash: 'e'.repeat(40),
+      title: 'Unfunded Movie',
+      ownerDeviceId: 'device-alice'
+    })
+    assert.equal(
+      jobs.list().find((candidate) => candidate.contentKey === 'tt43::')?.ownerDeviceId,
+      'device-alice',
+      'a queued job is adopted by a later requester'
+    )
 
     const item = await storage.get(hash)
     assert.ok(item, 'the fetched item exists')

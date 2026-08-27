@@ -211,10 +211,14 @@ export function createDaemonServer(deps: ServerDeps): http.Server {
     }
 
     // --- everything else requires a paired token ---------------------------
-    if (!pairing.isAuthorized(bearerToken(req))) {
+    const callerToken = bearerToken(req)
+    if (!pairing.isAuthorized(callerToken)) {
       json(res, 401, { error: 'Pair with this cache server first.' })
       return
     }
+    // Which household member is asking — the key credentials and job
+    // ownership are scoped by. Every authenticated route has one.
+    const callerDeviceId = pairing.deviceIdFor(callerToken)
 
     if (route === 'GET /api/catalog') {
       // ?keys=a,b,c filters; without it the full picture is returned. The
@@ -266,7 +270,8 @@ export function createDaemonServer(deps: ServerDeps): http.Server {
         fileIdx: Number.isFinite(Number(body.fileIdx)) ? Number(body.fileIdx) : undefined,
         resolution: Number(body.resolution) || undefined,
         sizeBytes: Number(body.sizeBytes) || undefined,
-        sources: Array.isArray(body.sources) ? body.sources.map(String).slice(0, 20) : undefined
+        sources: Array.isArray(body.sources) ? body.sources.map(String).slice(0, 20) : undefined,
+        ownerDeviceId: callerDeviceId
       })
       if (!record) {
         json(res, 400, { error: 'A job needs a contentKey, a 40-hex infoHash, and a title.' })
@@ -294,15 +299,23 @@ export function createDaemonServer(deps: ServerDeps): http.Server {
         budgetBytes: deps.diskBudgetBytes,
         itemCount: (await storage.list()).length,
         jobs: jobs.list().map(summarizeJob),
-        torboxLinked: Boolean(credentials.torboxToken())
+        // The CALLER's own opt-in state — each member sees whether THEIR
+        // account is linked, plus how many household members are.
+        torboxLinked: Boolean(credentials.tokenForDevice(callerDeviceId)),
+        linkedDevices: credentials.linkedDeviceCount()
       })
       return
     }
 
     if (route === 'POST /api/credentials') {
+      // Always scoped to the caller: one member's opt-in (or revocation)
+      // can never touch another member's credential.
       const body = await readBody(req)
-      await credentials.setTorboxToken(String(body.torboxToken ?? ''))
-      json(res, 200, { torboxLinked: Boolean(credentials.torboxToken()) })
+      await credentials.setTokenForDevice(callerDeviceId, String(body.torboxToken ?? ''))
+      json(res, 200, {
+        torboxLinked: Boolean(credentials.tokenForDevice(callerDeviceId)),
+        linkedDevices: credentials.linkedDeviceCount()
+      })
       return
     }
 

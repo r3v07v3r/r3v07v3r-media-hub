@@ -24,7 +24,10 @@ interface DaemonStatus {
   usedBytes: number
   budgetBytes: number
   itemCount: number
+  /** Whether THIS device's TorBox account is linked on the daemon. */
   torboxLinked: boolean
+  /** Household total of devices that linked an account. */
+  linkedDevices: number
   jobs: Array<{ title: string; state: string; progressBytes: number; sizeBytes?: number }>
 }
 
@@ -142,7 +145,7 @@ export function LanCacheSection() {
                 {statusError
                   ? `${paired} — unreachable right now (${statusError})`
                   : status
-                    ? `${paired} — ${status.itemCount} title${status.itemCount === 1 ? '' : 's'}, ${gb(status.usedBytes)} of ${gb(status.budgetBytes)} used${status.torboxLinked ? ', downloads on its own' : ', downloads only while the app runs'}${fetching.length ? ` — fetching “${fetching[0].title}”` : ''}`
+                    ? `${paired} — ${status.itemCount} title${status.itemCount === 1 ? '' : 's'}, ${gb(status.usedBytes)} of ${gb(status.budgetBytes)} used${status.torboxLinked ? ', your account linked' : ', your account not linked'}${status.linkedDevices > 1 ? ` (${status.linkedDevices} people)` : ''}${fetching.length ? ` — fetching “${fetching[0].title}”` : ''}`
                     : paired}
               </span>
             </div>
@@ -210,9 +213,10 @@ export function LanCacheSection() {
               checked={shareTorbox}
               onChange={(event) => setShareTorbox(event.target.checked)}
             />{' '}
-            Allow this server to download with my TorBox account. Your TorBox key is copied to that
-            machine (protected by file permissions, not an OS keychain) so it can fetch overnight
-            with the app closed. Unpairing revokes it.
+            Allow this server to download with my TorBox account. Your key is copied to that machine
+            (protected by file permissions, not an OS keychain) so YOUR titles can be fetched
+            overnight with the app closed. Each person who pairs shares their own account, and every
+            download uses the account of whoever asked for that title. Unpairing revokes yours.
           </label>
           <div className={styles.serviceActions}>
             <button
