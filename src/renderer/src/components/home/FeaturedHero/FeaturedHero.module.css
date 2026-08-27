@@ -567,3 +567,100 @@
     animation: none;
   }
 }
+
+/* ---------- Short windows ----------
+   See HomeDashboard.module.css's own block of the same name and
+   useDashboardLayoutMode.ts for the thresholds.
+
+   The fixed 520px above also quietly stopped being true: its comment
+   says the number exists to match "HomeDashboard/CategoryPage's own grid
+   row floor (minmax(520px, 1fr))", but Home's row 1 was later trimmed to
+   480px without this following it, so at every window size the hero's
+   box was overhanging its own row by 40px and reaching into the AI Picks
+   heading below. Height:100% is the version of that intent that can't
+   drift again — the hero is exactly its row, whatever the row is.
+
+   It needs the row to be a definite size to resolve against, which is
+   why the two dashboards' short-window rules give it one (Home via
+   `1fr` inside a fixed-height grid, CategoryPage via an explicit clamp —
+   that page is deliberately indefinite-height, see its own comment). */
+@media (min-width: 1100px) and (max-height: 1079px) {
+  .hero {
+    height: 100%;
+    padding: 26px 26px 20px;
+  }
+  .content {
+    gap: 9px;
+  }
+  .title {
+    /* Same shape as the base clamp, scaled to the height that is
+       actually scarce here rather than to width — a 1600x850 window has
+       plenty of the latter and none of the former, so `vw` was sizing
+       the title against the wrong axis entirely. */
+    font-size: clamp(30px, 4.6vh, 60px);
+    letter-spacing: 4px;
+  }
+}
+
+@media (min-width: 1100px) and (max-height: 940px) {
+  .hero {
+    padding: 18px 22px 16px;
+  }
+  .content {
+    gap: 7px;
+    /* The orb column is gone at this tier (see AssistantStrip.tsx), so
+       the hero spans the full width and the text block can afford to be
+       wider rather than taller. */
+    max-width: 560px;
+  }
+  .title {
+    font-size: clamp(23px, 3.9vh, 42px);
+    letter-spacing: 3px;
+    /* Two lines, not three. The clamp and the min-height stay paired —
+       that pairing is what stops the actions below jumping as slides
+       rotate between short and long titles (see the base rule) — they
+       just reserve one line less of a budget that no longer has three
+       to give. */
+    -webkit-line-clamp: 2;
+    min-height: 2lh;
+  }
+  .description {
+    font-size: 13px;
+    -webkit-line-clamp: 2;
+    min-height: 2lh;
+    max-width: 470px;
+  }
+  .metaRow {
+    font-size: 13px;
+    gap: 10px;
+  }
+  .actions {
+    margin-top: 2px;
+    gap: 10px;
+  }
+  .watchNow {
+    padding: 10px 20px;
+    font-size: 13.5px;
+    min-height: 40px;
+  }
+  .myList {
+    padding: 10px 18px;
+    font-size: 13px;
+    min-height: 40px;
+  }
+  .selectorWrap {
+    margin-top: 2px;
+  }
+}
+
+/* Below this the hero's own content stops fitting the box even at the
+   compact sizes above — measured at 1280x720, where the cluster ran 12px
+   past the hero and clipped the slide selector off the bottom. The
+   synopsis is what goes: it is the one part of the cluster that is not a
+   control or an identifier, and the narrow layout already makes exactly
+   this call at max-width:1099. */
+@media (min-width: 1100px) and (max-height: 749px) {
+  .description {
+    display: none;
+  }
+}

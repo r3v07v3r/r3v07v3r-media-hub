@@ -143,3 +143,66 @@
     gap: 14px;
   }
 }
+
+/* ---------- Short windows (the height axis) ----------
+   Everything above this point sizes the composition by WIDTH, but the
+   dimension it runs out of first is height: the base grid's own floors
+   (480 + 280 + 190) plus gaps and padding need ~994px of .dashboard,
+   which is a 1080px window with nothing left over. Measured at 1599x853
+   before this pass: the hero's box ran to y=616 over a row that ended at
+   576, the AI Picks row's bottom landed at y=868 against an 853px
+   viewport, and the mood dock — fixed to the window's bottom edge, so it
+   can't be pushed out of the way — covered those cards from y=655 down.
+   Three sections occupying the same 200px of screen.
+
+   Two tiers, both mirrored in useDashboardLayoutMode.ts (the React side
+   of the same thresholds — the orb and the telemetry gauges are removed
+   by unmounting, not by `display: none`, so they stop costing anything
+   rather than merely stopping being visible). Both carry min-width:1100
+   so they never argue with the stacked layout below, which has its own
+   answer already. They come last in the file so they win over the
+   max-width:1439 block where both match. */
+
+/* Tier 1 — trim, don't remove. The composition is intact (orb,
+   telemetry, three columns); the rows just stop insisting on floors the
+   window can't pay for. Row 1 becomes the one that absorbs slack
+   (FeaturedHero switches to height:100% at this tier, so the hero grows
+   into whatever is left rather than staying at a fixed 520), and rows 2
+   and 3 shrink to their own content. */
+@media (min-width: 1100px) and (max-height: 1079px) {
+  .dashboard {
+    grid-template-rows: minmax(320px, 1fr) auto auto;
+    gap: 10px;
+    padding: 8px 22px 12px calc(22px + var(--nav-rail-width, 285px) * 0.8);
+  }
+}
+
+/* Tier 2 — below this the orb column stops being affordable: 302px of
+   sphere (plus halo bleed) in a 260px column, to say a sentence and
+   offer two buttons. Both survive as a ~40px strip across the top (see
+   AssistantStrip.tsx), which is what lets this drop to a single column —
+   and with the telemetry gauges unmounted too, "status" has no occupant
+   left, so the second row spans the full width instead of stopping short
+   of a now-empty 340px. Continue Watching does NOT get its own row here
+   (unlike the stacked breakpoint below): it stays parked on `hero`,
+   floating over the artwork, which costs no vertical space at all. */
+@media (min-width: 1100px) and (max-height: 940px) {
+  .dashboard {
+    grid-template-columns: minmax(0, 1fr);
+    /* The hero's floor is deliberately lower than the tier above's:
+       below ~700px of window the AI Picks row is what gets squeezed if
+       the hero holds out for more (grid shrinks an `auto` track toward
+       its min-content size before it starves an `fr` track's floor),
+       and a squeezed picks row puts the cards under the dock — measured
+       at 1200x660, 20px of card behind the dock's lower edge. A clipped
+       slide-selector in the hero is the cheaper failure of the two. */
+    grid-template-rows: auto minmax(200px, 1fr) auto auto;
+    grid-template-areas:
+      'assistant'
+      'hero'
+      'picks'
+      'mood';
+    gap: 8px;
+    padding: 6px 22px 10px calc(22px + var(--nav-rail-width, 285px) * 0.8);
+  }
+}

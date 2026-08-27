@@ -233,3 +233,25 @@
     bottom: calc(76px + env(safe-area-inset-bottom, 0px));
   }
 }
+
+/* ---------- Short windows ----------
+   See HomeDashboard.module.css's block of the same name. Only one tier
+   here: below the second threshold this widget is not rendered at all
+   (PerformanceWidget.tsx), which also stops the main-process telemetry
+   worker rather than merely hiding its output. This tier is the window
+   that is short but still has room for the column — the gauges just stop
+   setting the height of the row the AI Picks share with them. */
+@media (min-width: 1100px) and (max-height: 1079px) {
+  .widget {
+    width: 128px;
+    gap: 7px;
+    padding: 12px 11px;
+    border-radius: 22px;
+    margin-top: 2px;
+  }
+  .gaugeRingWrap,
+  .gaugeRing {
+    width: 32px;
+    height: 32px;
+  }
+}
