@@ -18,7 +18,7 @@
 //     produces the flicker Electron transparent overlays are known for on
 //     Windows; measured this way, the overlay costs 0 dropped frames.
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { PlayerWindowProvider, usePlayerWindow } from '@renderer/context/PlayerWindowContext'
 import { usePartySync } from '@renderer/hooks/usePartySync'
@@ -30,8 +30,9 @@ import {
   PLAYER_VOLUME_STEP,
   nextAbLoopPoint
 } from '@shared/media-hub/player'
+import { skipWindowsFromChapters } from '@shared/media-hub/skipChapters'
 import type { NextEpisodeRef } from '@shared/media-hub/nextEpisode'
-import type { PlayerSessionMedia } from '@shared/media-hub/player'
+import type { PlayerChapter, PlayerSessionMedia } from '@shared/media-hub/player'
 import type { SubtitleResult } from '@shared/media-hub/types'
 import {
   DEFAULT_SUBTITLE_STYLE,
@@ -59,6 +60,12 @@ import {
 import styles from './PlayerOverlayWindow.module.css'
 
 const CONTROLS_IDLE_MS = 3200
+// A stable reference for "no chapters", rather than a fresh `[]` literal each
+// render — `chapters` (below) feeds chapterSkipTimes's useMemo, and a new
+// array identity every render (even one holding nothing) would invalidate
+// that memo on every tick instead of only when the chapter list actually
+// changes.
+const EMPTY_CHAPTERS: PlayerChapter[] = []
 /** Scrub previews are bucketed so hovering along the bar reuses frames instead
  *  of asking for one per pixel — each is a separate short-lived process. */
 const THUMBNAIL_BUCKET_SECONDS = 5
@@ -160,7 +167,7 @@ function PlayerControls() {
   }
   const pictureAdjusted = Object.values(pictureSettings).some((value) => value !== 0)
   const speed = state.speed ?? 1
-  const chapters = state.chapters ?? []
+  const chapters = state.chapters ?? EMPTY_CHAPTERS
   const currentChapter = state.chapter ?? -1
   const audioDelay = state.audioDelay ?? 0
   const subtitleStyle = session?.settings.subtitleStyle ?? DEFAULT_SUBTITLE_STYLE
@@ -767,7 +774,15 @@ function PlayerControls() {
     takeScreenshot
   ])
 
-  // --- Skip intro/credits (anime only) -------------------------------------
+  // --- Skip intro/credits ---------------------------------------------------
+  // Two independent sources feeding the same `skipTimes` state, one per kind:
+  // anime asks Aniskip's community database (below), everything else reads
+  // the file's OWN chapter marks (skipWindowsFromChapters) when a release
+  // tags one usably — see that module's header for why a chapter mark is
+  // trusted at all where a fuzzy guess would not be. Whichever source
+  // applies to the kind on screen is the only one that ever writes here for
+  // that title, so the two never race or disagree.
+  //
   // Needs a real duration: Aniskip matches submissions by proximity to episode
   // length and 400s without it.
   // The latch remembers WHICH episode was fetched, not merely that something
@@ -804,6 +819,22 @@ function PlayerControls() {
       .then((times) => setSkipTimes(times ? { ...times, key: mediaKey } : null))
       .catch(() => {})
   }, [media, mediaKey, sessionDuration])
+
+  // Movies and series: no database to ask, so this reads the chapter list
+  // mpv has already reported (`chapters`, above) rather than fetching
+  // anything. A useMemo, not an effect+setState like the Aniskip fetch
+  // above needs — nothing here is async, it is a pure function of state
+  // already in hand, and computing it during render is what the "derived,
+  // not stored" comment below is already doing for skipWindow itself. A
+  // momentary empty `chapters` right after a title change (mpv has not
+  // reported the new file's list yet) just yields null for an instant,
+  // which reads correctly as "nothing to offer yet" rather than showing a
+  // stale value the way carrying it in state across the gap could.
+  const chapterSkipTimes = useMemo(() => {
+    if (!media || media.kind === 'anime' || !sessionDuration || !chapters.length) return null
+    const windows = skipWindowsFromChapters(chapters, sessionDuration)
+    return windows ? { ...windows, key: mediaKey } : null
+  }, [media, mediaKey, sessionDuration, chapters])
   // Derived, not stored: which skip window we are inside is a pure function of
   // the current position and the fetched times, and time-pos changes several
   // times a second — holding it in state would mean a setState per tick.
@@ -812,13 +843,17 @@ function PlayerControls() {
   const currentSubtitleResults = subtitleResults?.key === mediaKey ? subtitleResults.results : null
 
   const skipWindow = ((): { label: string; end: number } | null => {
+    // Anime reads the Aniskip fetch above; everything else reads the
+    // chapter-derived memo — see both sources' own comments for why they
+    // are never both populated for the same title.
+    const active = media?.kind === 'anime' ? skipTimes : chapterSkipTimes
     // Only surfaced while it still belongs to the episode being played — the
     // fetch for the next one is in flight for a moment after it starts.
-    if (skipTimes?.key !== mediaKey) return null
+    if (active?.key !== mediaKey) return null
     const inWindow = (w?: { start: number; end: number }): boolean =>
       Boolean(w && timePos >= w.start && timePos < w.end)
-    if (inWindow(skipTimes?.intro)) return { label: 'Skip intro', end: skipTimes!.intro!.end }
-    if (inWindow(skipTimes?.credits)) return { label: 'Skip credits', end: skipTimes!.credits!.end }
+    if (inWindow(active?.intro)) return { label: 'Skip intro', end: active!.intro!.end }
+    if (inWindow(active?.credits)) return { label: 'Skip credits', end: active!.credits!.end }
     return null
   })()
 

@@ -13,17 +13,17 @@ streaming apps people compare everything to.
 
 ## Progress
 
-Twenty-seven features shipped. Sixteen merged as PR #105 and released in
+Twenty-eight features shipped. Sixteen merged as PR #105 and released in
 `v1.0.83-preview.70`; everything since — collection pages, content ratings,
 fixes from hands-on testing of that build, Trakt in both directions, saved
 filters, explained recommendations, the player's remaining mpv capabilities,
-and subtitle hash matching — is on `claude/post-preview70-fixes`. All 43
-registered tests pass, both TypeScript projects typecheck, and ESLint reports
-zero errors.
+subtitle hash matching, IMDb ratings import, a deeper catalog, and chapter-
+based skip-intro for movies and series — is on `claude/post-preview70-fixes`.
+All 45 registered tests pass, both TypeScript projects typecheck, and ESLint
+reports zero errors.
 
-**Phase 0 is complete. Phase 3 is complete. Phase 1 has only the
-anime-specific skip-intro detector left. Phase 2 has only Letterboxd import
-left. Phase 4 has the two structural items and indexer visibility.**
+**Phase 0, 1 and 3 are complete. Phase 2 has only Letterboxd import left.
+Phase 4 has the two structural items and indexer visibility.**
 
 | Shipped                           | Phase | What landed                                                                                                                                                                    |
 | ---------------------------------- | ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -34,6 +34,7 @@ left. Phase 4 has the two structural items and indexer visibility.**
 | Night mode                        | 1     | Loudness normalization, so quiet dialogue survives a loud score.                                                                                                               |
 | Frame step, A-B loop, screenshot  | 1     | The remaining mpv capabilities, one Playback-menu section, keys `.`/`,`/`s` to match mpv/VLC muscle memory.                                                                     |
 | Subtitle hash matching            | 1     | OpenSubtitles' `moviehash`, computed by reading the first/last 64KB off the live StreamCache origin — the concern that deferred this out of Phase 1 originally, resolved with a bounded timeout and a silent fallback to the title search. Frame-accurate sync, badged "Exact match". |
+| Skip intro beyond anime           | 1     | Chapter-derived, for movies and series — reads the release's own chapter marks (`Opening Credits`, `Recap`, ...) rather than a community database, gated by both a literal name allowlist and a plausible position so a mislabeled or coincidental chapter is never trusted. |
 | Ratings                           | 2     | 1-10 per profile, weighting both preferred genres and the taste profile.                                                                                                       |
 | My Stuff tabs + history           | 2     | Eight tabs. A single viewing can be removed without un-watching the episode.                                                                                                   |
 | Stats                             | 2     | Viewings, titles, estimated hours, twelve-month chart, top genres, seen-again counted per episode.                                                                             |
@@ -144,11 +145,9 @@ counts and key shapes survive intact. `tests/databasePruning.test.ts` is the pat
 The best return in the plan. Almost every item is a property mpv already exposes; the work is a menu
 in the overlay and a case in the `PlayerCommand` union, not new playback engineering.
 
-**Done except the last row** — see the Progress table above for what shipped and how.
-
-| Work                     | Effort | What it is                                                                                                                                                                                            |
-| ------------------------ | ------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Skip intro beyond anime  | L      | Chapter-derived first, since many releases carry usable marks. Real detection (fingerprinting across a season) is its own project — ship the chapter path here and let the detector be a later bet. |
+**Done.** See the Progress table above. Real fingerprint detection for a chapter-less release
+(scanning a season for a recurring intro segment) was always scoped out of this phase as its own
+project — see Phase 5.
 
 ## Phase 2 — Tracking that tells the truth
 
