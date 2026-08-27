@@ -68,7 +68,12 @@ import { mapWithLimit, type TaskPriority } from './taskScheduler'
 import { handle } from './ipcGuard'
 import { logError } from './logger'
 import { pushMalProgress } from './malSync'
-import { pushTraktHistory, pushTraktRating, pushTraktScrobble } from './traktClient'
+import {
+  pushTraktHistory,
+  pushTraktRating,
+  pushTraktScrobble,
+  pushTraktSeasonHistory
+} from './traktClient'
 import {
   encrypt,
   readSettings,
@@ -1123,17 +1128,22 @@ export function registerTrackingIpc(): void {
     MEDIA_HUB_CHANNELS.trackingMarkSeasonWatched,
     async (_e, { item, season, episodes }) => {
       const list = Array.isArray(episodes) ? episodes : []
+      const episodeNumbers = list.map((p) => p.episode)
       const db = getDatabase()
       for (const playback of list) db.markWatched(item, playback)
       requestRecommendationsRebuild()
       const simklResult = await syncSimklHistory(
         '/sync/history',
-        seasonHistoryPayload(
-          item,
-          season,
-          list.map((p) => p.episode)
-        )
+        seasonHistoryPayload(item, season, episodeNumbers)
       )
+      // Not awaited into the result, same as the single-episode handler
+      // above — a Trakt failure is logged in traktClient rather than making
+      // "mark this season watched" wait on the slowest connected service.
+      // This was missing entirely until now: the single-episode handler got
+      // a Trakt push when Trakt sync was added, but this batch action did
+      // not, which left every episode of a season marked watched here still
+      // unwatched on a connected Trakt account.
+      void pushTraktSeasonHistory(item, season, episodeNumbers)
       return { ok: true, ...simklResult, ...(await pushMalProgress(item)) }
     }
   )
@@ -1593,15 +1603,24 @@ export function registerTrackingIpc(): void {
   handle<ScrobblePayload, { connected: boolean }>(
     MEDIA_HUB_CHANNELS.simklScrobble,
     async (_e, payload) => {
-      if (!simklCredentials().accessToken) return { connected: false }
       const action = payload?.action
+      // Read once, independent of whether Simkl is connected — Trakt below
+      // must not be gated behind it. `connected` in the return value still
+      // means "Simkl", the channel's own name and the only thing any
+      // existing caller reads it for.
+      const simklConnected = Boolean(simklCredentials().accessToken)
       if (action !== 'start' && action !== 'pause' && action !== 'stop') {
-        return { connected: true }
+        return { connected: simklConnected }
       }
       const progress = Math.min(100, Math.max(0, Number(payload?.progress) || 0))
-      // Both services hear the same transitions. Trakt's own scrobble
-      // endpoints are the same start/pause/stop state machine.
+      // Both services hear the same transitions, independently of each
+      // other. This used to sit behind the Simkl-connected check above, so a
+      // Trakt-only account (Simkl never connected) never received a single
+      // scrobble despite the setting promising otherwise — Trakt's own
+      // scrobble endpoints are the same start/pause/stop state machine and
+      // owe Simkl's connection state nothing.
       void pushTraktScrobble(payload.item, payload.playback || {}, action, progress)
+      if (!simklConnected) return { connected: false }
       try {
         await simklRequest(`/scrobble/${action}`, {
           method: 'POST',

@@ -4,7 +4,8 @@ import {
   DEFAULT_SERVICE_SETTINGS,
   IPC_CHANNELS,
   ServiceConfig,
-  ServiceSettings
+  ServiceSettings,
+  withServiceDefaults
 } from '../../shared/ipc-types'
 import { assertTrustedSender } from './trustedSender'
 
@@ -69,14 +70,20 @@ function mapApiKeys(
 export function registerSettingsIpc(): void {
   ipcMain.handle(IPC_CHANNELS.settingsGet, (event) => {
     assertTrustedSender(event)
-    return mapApiKeys(store.get('services'), decryptApiKey)
+    return mapApiKeys(withServiceDefaults(store.get('services')), decryptApiKey)
   })
 
   ipcMain.handle(IPC_CHANNELS.settingsSet, (event, next: ServiceSettings) => {
     assertTrustedSender(event)
-    if (!isServiceSettings(next)) throw new Error('Invalid service settings.')
-    store.set('services', mapApiKeys(next, encryptApiKey))
-    return mapApiKeys(store.get('services'), decryptApiKey)
+    // Merged BEFORE validation: a renderer that has not reloaded since a new
+    // service ID was added only knows the ones it started with, and saving
+    // its (correct, for what it knows) change must not be rejected just
+    // because a field it never saw is absent — the merge fills that field
+    // from whatever is already stored, same as a read would.
+    const merged = withServiceDefaults(next)
+    if (!isServiceSettings(merged)) throw new Error('Invalid service settings.')
+    store.set('services', mapApiKeys(merged, encryptApiKey))
+    return mapApiKeys(withServiceDefaults(store.get('services')), decryptApiKey)
   })
 }
 

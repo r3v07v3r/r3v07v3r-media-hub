@@ -12,8 +12,10 @@ import {
   hasTraktContent,
   historyPayload,
   isTraktPushable,
+  ratingRemovalPayload,
   ratingsPayload,
   scrobblePayload,
+  seasonHistoryPayload,
   traktIds
 } from '../src/main/media-hub/trakt'
 
@@ -111,5 +113,55 @@ assert.equal(scrobblePayload(movie, {}, Number.NaN)?.progress, 0)
 // Nothing to scrobble is null rather than an empty object — the caller skips
 // the request entirely rather than sending a body Trakt would reject.
 assert.equal(scrobblePayload(anime, { season: 1, episode: 1 }, 50), null)
+
+// ---------------------------------------------------------------------
+// Removing a rating.
+// ---------------------------------------------------------------------
+
+// A movie removal is exactly the same bare shape adding one used, minus the
+// rating field — Trakt keys the removal on the id.
+assert.deepEqual(ratingRemovalPayload(movie), { movies: [{ ids: { imdb: 'tt1160419' } }] })
+
+// A SERIES removal must be bare too — no season/episode hierarchy — because
+// ratingsPayload rates a series at the SHOW level, never adding one. This is
+// the bug this function exists to not repeat: historyPayload, which looks
+// like the obvious thing to reuse here, synthesizes a season 1/episode 1
+// hierarchy when none is given, which would ask Trakt to remove an
+// episode-level record that was never written and leave the real
+// show-level rating in place.
+assert.deepEqual(ratingRemovalPayload(show), { shows: [{ ids: { imdb: 'tt11280740' } }] })
+assert.equal(ratingRemovalPayload(show).shows?.[0].seasons, undefined)
+
+// Anime produces nothing, same as every other push builder here.
+assert.deepEqual(ratingRemovalPayload(anime), {})
+
+// ---------------------------------------------------------------------
+// Marking a whole season watched — one request, every episode.
+// ---------------------------------------------------------------------
+
+// The ordinary case: one show entry, one season, every episode number
+// given, none of them running through historyPayload's single-episode path.
+assert.deepEqual(seasonHistoryPayload(show, 2, [1, 2, 3]), {
+  shows: [
+    {
+      ids: { imdb: 'tt11280740' },
+      seasons: [{ number: 2, episodes: [{ number: 1 }, { number: 2 }, { number: 3 }] }]
+    }
+  ]
+})
+
+// Season 0 survives here too — the same specials convention historyPayload
+// already protects, and `|| 1` would break identically in a batch.
+assert.equal(seasonHistoryPayload(show, 0, [1]).shows?.[0].seasons?.[0].number, 0)
+
+// A movie has no seasons to batch — historyPayload already covers marking
+// one watched, and this refuses rather than inventing a season for it.
+assert.deepEqual(seasonHistoryPayload(movie, 1, [1]), {})
+
+// No episode numbers at all is nothing to send, not an empty seasons array.
+assert.deepEqual(seasonHistoryPayload(show, 1, []), {})
+
+// Anime, same line every other builder here draws.
+assert.deepEqual(seasonHistoryPayload(anime, 1, [1, 2]), {})
 
 console.log('trakt payload tests passed')

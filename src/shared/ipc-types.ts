@@ -61,6 +61,32 @@ export const DEFAULT_SERVICE_SETTINGS: ServiceSettings = {
   prowlarr: { ...DEFAULT_SERVICE_CONFIG }
 }
 
+/**
+ * Fills in any service ID this app knows about that a stored/incoming
+ * object is missing — the migration an upgraded install needs, because
+ * electron-store's `defaults` only applies when the store KEY ITSELF
+ * (`services`) is entirely absent, never when it exists but lacks a nested
+ * field a later release added. An install that saved its settings before
+ * `prowlarr` existed has a four-key object forever without this: reads
+ * silently drop the new service (no card renders for it) and writes get
+ * REJECTED outright by a shape check that requires every current ID to be
+ * present — turning "a new service was added" into "nobody can change
+ * their Jellyfin URL anymore" for every existing install.
+ *
+ * A present entry always wins over the default, whatever its own fields —
+ * this only fills a wholesale-MISSING key. Pure and Electron-free on
+ * purpose (see this file's own header): main/ipc/settings.ts, which pulls
+ * in `electron-store`, is the only caller, and keeping the merge itself
+ * here is what lets it be tested without an Electron harness.
+ */
+export function withServiceDefaults(stored: Partial<ServiceSettings> | undefined): ServiceSettings {
+  const merged = { ...DEFAULT_SERVICE_SETTINGS } as ServiceSettings
+  for (const id of Object.keys(DEFAULT_SERVICE_SETTINGS) as ServiceId[]) {
+    if (stored?.[id]) merged[id] = stored[id] as ServiceConfig
+  }
+  return merged
+}
+
 // Generic outbound HTTP proxy — requests run in the main process (plain
 // Node fetch, no browser CORS enforcement) since self-hosted media-server
 // APIs frequently don't send CORS headers permitting a renderer-origin
