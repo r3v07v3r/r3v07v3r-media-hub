@@ -61,23 +61,104 @@ export function isPrivateAddress(value: string): boolean {
 }
 
 /**
+ * THE ONE DELIBERATE EXCEPTION to everything this file's header says.
+ *
+ * A self-hosted media server (Jellyfin) is, by definition, the exact thing
+ * the SSRF rules above exist to keep playback away from: a plain-http
+ * service on an RFC1918 address. Supporting one as a playback source means
+ * *some* private address has to become reachable — there is no way around
+ * that, so the design goal is to make the hole as small as it can possibly
+ * be, and to keep it in this file where the rest of the boundary lives
+ * rather than letting each call site invent its own bypass.
+ *
+ * What keeps this narrow:
+ *  - Exact `host:port` match. Never a wildcard, never a CIDR range, never
+ *    "any private address is fine now".
+ *  - The set is derived solely from a base URL a person typed into the
+ *    Settings UI, published through `setTrustedMediaHosts`. The renderer
+ *    cannot reach that function; it goes through the settings IPC handler,
+ *    which is already `assertTrustedSender`-guarded.
+ *  - It grants nothing when empty, which is the state for every user who
+ *    hasn't configured a media server. Their behaviour is bit-identical to
+ *    before this existed.
+ *  - It does NOT relax the redirect handling: `safeFetchMedia` re-validates
+ *    every hop through `assertPublicMediaUrl`, so a trusted host cannot
+ *    launder a redirect into some *other* private address.
+ */
+let trustedMediaHosts: ReadonlySet<string> = new Set()
+
+/** Normalizes a URL to the exact `host:port` form the trusted set stores.
+ *  The port is always made explicit — `URL.port` is '' for a protocol's
+ *  default port, so without this a trusted `http://box:80` and an untrusted
+ *  `http://box:8096` would collapse to the same key. */
+function mediaHostKey(url: URL): string {
+  const host = url.hostname.replace(/^\[|\]$/g, '').toLowerCase()
+  const port = url.port || (url.protocol === 'https:' ? '443' : '80')
+  return `${host}:${port}`
+}
+
+/**
+ * Replaces the trusted-host set wholesale (never appends — a host removed
+ * in Settings must stop being trusted immediately). Accepts raw base-URL
+ * strings and normalizes them here so no caller has to know the key format.
+ * Anything unparseable, credential-bearing, or non-http(s) is dropped
+ * rather than throwing: this is called from a settings-save path, and one
+ * malformed saved URL must not break playback for the other source.
+ */
+export function setTrustedMediaHosts(baseUrls: readonly string[]): void {
+  const next = new Set<string>()
+  for (const value of baseUrls) {
+    try {
+      const url = new URL(String(value))
+      if (url.protocol !== 'http:' && url.protocol !== 'https:') continue
+      if (url.username || url.password) continue
+      if (!url.hostname) continue
+      next.add(mediaHostKey(url))
+    } catch {
+      // Ignore — a malformed entry simply grants nothing.
+    }
+  }
+  trustedMediaHosts = next
+}
+
+export function isTrustedMediaHost(url: URL): boolean {
+  return trustedMediaHosts.has(mediaHostKey(url))
+}
+
+/** Test seam / teardown: drops every trusted host. */
+export function clearTrustedMediaHosts(): void {
+  trustedMediaHosts = new Set()
+}
+
+/**
  * Returns true only for https URLs, with no embedded credentials, whose
  * hostname isn't itself a private/loopback IP literal or an
  * internal-only-style name (localhost/.localhost/.local/.lan/.internal).
  * This is a *syntactic* pre-check only — DNS-rebinding is defended against
  * separately, by re-resolving and re-checking actual addresses at fetch
  * time (see `assertPublic` below).
+ *
+ * The single exception is a configured media-server host — see
+ * `trustedMediaHosts` above for why it exists and what bounds it.
  */
 export function isAllowedRemoteMediaUrl(value: unknown): boolean {
   try {
     const url = new URL(String(value))
     const host = url.hostname.replace(/^\[|\]$/g, '').toLowerCase()
 
+    // Hoisted out of the expression below so the trusted-host branch is
+    // subject to them too: credentials in the URL and an empty host are
+    // disqualifying for *every* media URL, trusted or not.
+    if (!host || url.username || url.password) return false
+
+    // The configured media server, which is allowed to be plain http on a
+    // private address — that is the whole point of it.
+    if ((url.protocol === 'http:' || url.protocol === 'https:') && isTrustedMediaHost(url)) {
+      return true
+    }
+
     return (
       url.protocol === 'https:' &&
-      !url.username &&
-      !url.password &&
-      Boolean(host) &&
       !isPrivateAddress(host) &&
       host !== 'localhost' &&
       !host.endsWith('.localhost') &&
@@ -114,6 +195,14 @@ export async function assertPublicMediaUrl(
     throw new Error('Playback requires a valid public HTTPS media URL.')
   }
   const url = new URL(urlValue)
+  // A trusted media-server host resolves to a private address by design —
+  // that IS the address we mean to reach — so the rebinding check below
+  // would reject it every single time. Skipping it here rather than
+  // weakening `isPrivateAddress` keeps the exemption tied to the exact
+  // host:port allowlist instead of leaking into every other caller. Note
+  // the exemption is re-evaluated per redirect hop by safeFetchMedia, so a
+  // trusted host redirecting elsewhere gets no inherited trust.
+  if (isTrustedMediaHost(url)) return
   const addresses = await resolveHost(url.hostname)
   if (!addresses.length || addresses.some(isPrivateAddress)) {
     throw new Error('Playback source resolved to a private network address.')

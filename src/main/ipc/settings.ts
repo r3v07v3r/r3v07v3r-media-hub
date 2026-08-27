@@ -1,12 +1,15 @@
 import { ipcMain, safeStorage } from 'electron'
 import Store from 'electron-store'
 import {
+  DEFAULT_SERVICE_CONFIG,
   DEFAULT_SERVICE_SETTINGS,
   IPC_CHANNELS,
   ServiceConfig,
+  ServiceId,
   ServiceSettings,
   withServiceDefaults
 } from '../../shared/ipc-types'
+import { setTrustedMediaHosts } from '../media-hub/playback'
 import { assertTrustedSender } from './trustedSender'
 
 interface StoreSchema {
@@ -67,7 +70,51 @@ function mapApiKeys(
   ) as ServiceSettings
 }
 
+/**
+ * Reads one service's config with its API key already decrypted.
+ *
+ * This is the deliberate bridge between the two credential stores this app
+ * ended up with: server URLs/keys for Jellyfin/Sonarr/Radarr/qBittorrent
+ * live in `r3-settings` (here), while TorBox/Simkl/MAL/OpenSubtitles live
+ * in media-hub's own settingsStore.ts. Playback now needs to read across
+ * that line. Exposing a reader is the cheap, safe direction — *migrating*
+ * these keys is not, for exactly the legacy-plaintext reason documented on
+ * ENC_PREFIX above.
+ */
+export function getServiceConfig(id: ServiceId): ServiceConfig {
+  const services = store.get('services')
+  const config = services?.[id] ?? DEFAULT_SERVICE_CONFIG
+  return { ...config, apiKey: decryptApiKey(config.apiKey) }
+}
+
+/**
+ * Publishes the media-server host to playback's SSRF allowlist.
+ *
+ * Only an *enabled* service with a parseable base URL is trusted, so
+ * unticking "enabled" in Settings revokes LAN playback access on the spot.
+ * setTrustedMediaHosts replaces the set wholesale rather than appending,
+ * which is what makes removal work — see its comment in playback.ts.
+ */
+export function publishTrustedMediaHosts(): void {
+  const jellyfin = store.get('services')?.jellyfin
+  const trusted =
+    jellyfin?.enabled && jellyfin.baseUrl.trim() ? [normalizeBaseUrl(jellyfin.baseUrl)] : []
+  setTrustedMediaHosts(trusted)
+}
+
+/** Mirrors the renderer's normalizeBaseUrl (lib/api/types.ts) — a saved URL
+ *  routinely has a trailing slash, and `new URL()` is fine with that, but
+ *  keeping the two sides byte-identical avoids a class of "works in Test
+ *  Connection, fails at playback" bug. */
+function normalizeBaseUrl(baseUrl: string): string {
+  return baseUrl.trim().replace(/\/+$/, '')
+}
+
 export function registerSettingsIpc(): void {
+  // Startup: a media server configured in a previous run must be trusted
+  // before the first playback attempt, not only after the next save.
+  publishTrustedMediaHosts()
+
   ipcMain.handle(IPC_CHANNELS.settingsGet, (event) => {
     assertTrustedSender(event)
     return mapApiKeys(withServiceDefaults(store.get('services')), decryptApiKey)
@@ -83,6 +130,9 @@ export function registerSettingsIpc(): void {
     const merged = withServiceDefaults(next)
     if (!isServiceSettings(merged)) throw new Error('Invalid service settings.')
     store.set('services', mapApiKeys(merged, encryptApiKey))
+    // The saved host is the authority for what playback may reach, so
+    // refresh the allowlist in the same tick it changed.
+    publishTrustedMediaHosts()
     return mapApiKeys(withServiceDefaults(store.get('services')), decryptApiKey)
   })
 }
