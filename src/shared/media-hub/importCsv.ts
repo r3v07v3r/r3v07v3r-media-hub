@@ -130,3 +130,145 @@ export function parseImdbRatingsCsv(text: string): ParsedCsvImport<ImdbRatingRow
   }
   return { rows: parsed, skipped }
 }
+
+// ---------------------------------------------------------------------------
+// Letterboxd.
+//
+// Letterboxd's export carries no id at all — no IMDb, no TMDB, just a title
+// and a year — so these two functions hand back exactly that much, and no
+// more. Resolving a (title, year) pair to an IMDb id is main-only work (a
+// TMDB search, then external_ids — see main/media-hub/letterboxdImport.ts)
+// and stays out of this module for the same reason the rest of this file's
+// functions are pure: it needs network I/O these cannot do.
+//
+// Two files, two questions. diary.csv is used for VIEWINGS rather than
+// watched.csv, deliberately: watched.csv's own Date column is documented by
+// Letterboxd as "when you added this to your watched list", not when you
+// watched it — importing it as a play date would be exactly the "decade of
+// viewing lands at the top of recently-watched, today" failure the Trakt
+// import was built to avoid (see traktClient.ts's importTraktLibrary). A
+// film marked watched but never diary-logged has no accurate date
+// anywhere in this export, so it is left out rather than dated with a
+// number known to be wrong. ratings.csv's own Date is honestly labeled as
+// when the rating was GIVEN, which is what a rating date is expected to
+// mean everywhere else in this app too.
+// ---------------------------------------------------------------------------
+
+export interface LetterboxdTitle {
+  name: string
+  year: string
+}
+
+export interface LetterboxdWatchedRow extends LetterboxdTitle {
+  watchedAt: string
+}
+
+/**
+ * Letterboxd's diary.csv as viewings — real per-entry dates, rewatches
+ * included as their own rows (this app's `plays` table is append-only for
+ * exactly this reason).
+ */
+export function parseLetterboxdDiaryCsv(text: string): ParsedCsvImport<LetterboxdWatchedRow> {
+  const { rows } = readByHeader(text)
+  const parsed: LetterboxdWatchedRow[] = []
+  let skipped = 0
+  for (const record of rows) {
+    const name = String(record.Name ?? '').trim()
+    const year = String(record.Year ?? '').trim()
+    const watchedAt = String(record['Watched Date'] ?? '').trim()
+    if (!name || !/^\d{4}$/.test(year) || !watchedAt || Number.isNaN(Date.parse(watchedAt))) {
+      skipped += 1
+      continue
+    }
+    parsed.push({ name, year, watchedAt })
+  }
+  return { rows: parsed, skipped }
+}
+
+export interface LetterboxdRatingRow extends LetterboxdTitle {
+  score: number
+  ratedAt: string
+}
+
+/**
+ * Letterboxd's ratings.csv as ratings this app can store.
+ *
+ * Letterboxd rates in half-stars, 0.5-5; this app rates 1-10. `score * 2` is
+ * an exact conversion with no rounding artifact — every legal half-star
+ * value already lands on a whole number doubled — so `Math.round` here is a
+ * defensive guard against a malformed value, not a real rounding step.
+ */
+export function parseLetterboxdRatingsCsv(text: string): ParsedCsvImport<LetterboxdRatingRow> {
+  const { rows } = readByHeader(text)
+  const parsed: LetterboxdRatingRow[] = []
+  let skipped = 0
+  for (const record of rows) {
+    const name = String(record.Name ?? '').trim()
+    const year = String(record.Year ?? '').trim()
+    const ratedAt = String(record.Date ?? '').trim()
+    const stars = Number(record.Rating)
+    const score = Math.round(stars * 2)
+    if (
+      !name ||
+      !/^\d{4}$/.test(year) ||
+      !ratedAt ||
+      Number.isNaN(Date.parse(ratedAt)) ||
+      !Number.isFinite(stars) ||
+      stars < 0.5 ||
+      stars > 5 ||
+      score < 1 ||
+      score > 10
+    ) {
+      skipped += 1
+      continue
+    }
+    parsed.push({ name, year, score, ratedAt })
+  }
+  return { rows: parsed, skipped }
+}
+
+/**
+ * The candidate shape this app can decide a Letterboxd (title, year) pair
+ * against — the fields a TMDB `/search/movie` result carries, and nothing
+ * this app has to fetch separately to make the call.
+ */
+export interface LetterboxdCandidate {
+  id: number
+  title: string
+  originalTitle: string
+  releaseYear: string
+}
+
+function normalizeLetterboxdTitle(value: string): string {
+  return value.trim().toLowerCase()
+}
+
+/**
+ * Which TMDB search result, if any, is confidently the same film as one
+ * Letterboxd row — the one place this whole import can go quietly wrong,
+ * pulled out as a pure function so the matching RULE can be pinned down by
+ * a test independent of the network call that produces its input.
+ *
+ * Kept deliberately strict, on the same "a confident wrong match is worse
+ * than a missing one" call this app makes everywhere it touches a title it
+ * did not author: the year must match exactly, the title must match
+ * LITERALLY (case/whitespace normalized, nothing fuzzy) against either
+ * TMDB's `title` or `original_title`, and there must be exactly one such
+ * survivor. Zero or more than one both mean "not confident enough" and
+ * return null — a remake sharing a title and year has no third signal
+ * here to break the tie with, so it is left for a person to resolve by
+ * hand rather than guessed at.
+ */
+export function matchLetterboxdCandidate(
+  title: LetterboxdTitle,
+  candidates: readonly LetterboxdCandidate[]
+): number | null {
+  const wanted = normalizeLetterboxdTitle(title.name)
+  const matches = candidates.filter(
+    (candidate) =>
+      candidate.releaseYear === title.year &&
+      (normalizeLetterboxdTitle(candidate.title) === wanted ||
+        normalizeLetterboxdTitle(candidate.originalTitle) === wanted)
+  )
+  return matches.length === 1 ? matches[0].id : null
+}

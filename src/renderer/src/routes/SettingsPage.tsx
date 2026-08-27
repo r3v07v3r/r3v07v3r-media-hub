@@ -691,7 +691,9 @@ export default function SettingsPage() {
   // profile being edited.
   const [editingProfile, setEditingProfile] = useState<string | 'new' | null>(null)
   // Which of the two backup actions is in flight, so only that button says so.
-  const [backupBusy, setBackupBusy] = useState<'export' | 'import' | 'imdb' | null>(null)
+  const [backupBusy, setBackupBusy] = useState<'export' | 'import' | 'imdb' | 'letterboxd' | null>(
+    null
+  )
   const [networkInfo, setNetworkInfo] = useState<NetworkInfoResult | null>(null)
   const [speedTest, setSpeedTest] = useState<{
     kind: 'idle' | 'busy' | 'ok' | 'error'
@@ -837,6 +839,34 @@ export default function SettingsPage() {
       pushNotification({
         tone: 'error',
         message: error instanceof Error ? error.message : 'That file could not be read.'
+      })
+    } finally {
+      setBackupBusy(null)
+    }
+  }
+
+  async function handleImportLetterboxd() {
+    const api = window.api?.mediaHub
+    if (!api) return
+    setBackupBusy('letterboxd')
+    try {
+      const result = await api.settings.importLetterboxd()
+      // A cancelled picker, like the two imports above.
+      if (!result) return
+      pushNotification({
+        tone: 'success',
+        message:
+          result.plays || result.ratings
+            ? `Added ${result.plays} ${result.plays === 1 ? 'viewing' : 'viewings'} and ${result.ratings} ${result.ratings === 1 ? 'rating' : 'ratings'}.${
+                result.skipped ? ` ${result.skipped} rows could not be matched.` : ''
+              }`
+            : 'Everything in that export was already here.'
+      })
+      reloadLibrary()
+    } catch (error) {
+      pushNotification({
+        tone: 'error',
+        message: error instanceof Error ? error.message : 'That export could not be read.'
       })
     } finally {
       setBackupBusy(null)
@@ -1102,6 +1132,14 @@ export default function SettingsPage() {
                 label="Import…"
                 busy={backupBusy === 'imdb'}
                 onClick={handleImportImdbRatings}
+              />
+              <ActionRow
+                icon="movies"
+                title="Import from Letterboxd"
+                description="Reads the diary and ratings from Letterboxd's Export Your Data (Settings → Data → Export). Needs TMDB connected above to match titles, and only imports one it can match exactly — this can take a few minutes for a large diary."
+                label="Import…"
+                busy={backupBusy === 'letterboxd'}
+                onClick={handleImportLetterboxd}
               />
             </section>
 

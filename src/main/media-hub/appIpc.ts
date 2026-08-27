@@ -19,6 +19,7 @@ import type {
   SavedFilter
 } from '../../shared/media-hub/types'
 import { parseImdbRatingsCsv } from '../../shared/media-hub/importCsv'
+import { importLetterboxdLibrary } from './letterboxdImport'
 import { readBackup } from './backup'
 import { requestRecommendationsRebuild } from './recommendations'
 import { watchRegion } from './watchProviders'
@@ -249,6 +250,26 @@ export function registerAppIpc(): void {
     // No `plays` from this source at all: IMDb's ratings export is opinions,
     // not a watch history — it has no equivalent to Trakt's /sync/history.
     return { plays: 0, ratings, skipped: parsed.skipped }
+  })
+
+  handle<undefined, ImportSummary | null>(MEDIA_HUB_CHANNELS.importLetterboxd, async (event) => {
+    const win = BrowserWindow.fromWebContents(event.sender)
+    const options = {
+      title: 'Import from Letterboxd',
+      properties: ['openFile' as const],
+      // Letterboxd's "Export Your Data" is always a zip — there is no loose
+      // CSV to pick instead, since diary.csv and ratings.csv both live
+      // inside it.
+      filters: [{ name: 'Letterboxd export', extensions: ['zip'] }]
+    }
+    const result = win
+      ? await dialog.showOpenDialog(win, options)
+      : await dialog.showOpenDialog(options)
+    const filePath = result.filePaths?.[0]
+    if (result.canceled || !filePath) return null
+
+    const archive = await fsp.readFile(filePath)
+    return importLetterboxdLibrary(archive)
   })
 
   handle<unknown, { watchRegion: string }>(

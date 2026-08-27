@@ -7,7 +7,13 @@
 
 import assert from 'node:assert/strict'
 
-import { parseCsv, parseImdbRatingsCsv } from '../src/shared/media-hub/importCsv'
+import {
+  matchLetterboxdCandidate,
+  parseCsv,
+  parseImdbRatingsCsv,
+  parseLetterboxdDiaryCsv,
+  parseLetterboxdRatingsCsv
+} from '../src/shared/media-hub/importCsv'
 
 // ---------------------------------------------------------------------
 // The parser itself.
@@ -101,3 +107,148 @@ const header =
 }
 
 console.log('import CSV tests passed')
+
+// ---------------------------------------------------------------------
+// Letterboxd — diary.csv (viewings).
+// ---------------------------------------------------------------------
+{
+  const header = 'Date,Name,Year,Letterboxd URI,Rating,Rewatch,Tags,Watched Date'
+  const csv = [
+    header,
+    '2024-03-16,Dune: Part Two,2024,https://boxd.it/abc,4.5,,,2024-03-15',
+    // A rewatch is still its own viewing, with its own date.
+    '2024-06-01,Dune: Part Two,2024,https://boxd.it/abc,,Yes,,2024-05-30'
+  ].join('\n')
+  const { rows, skipped } = parseLetterboxdDiaryCsv(csv)
+  assert.equal(skipped, 0)
+  assert.deepEqual(rows, [
+    { name: 'Dune: Part Two', year: '2024', watchedAt: '2024-03-15' },
+    { name: 'Dune: Part Two', year: '2024', watchedAt: '2024-05-30' }
+  ])
+}
+
+// Rows with nothing usable are skipped: no title, no year, or — the case
+// that matters most — no Watched Date at all. watched.csv's own Date
+// column is deliberately never read as a substitute; see this module's own
+// header on why that column cannot be trusted as a viewing date.
+{
+  const header = 'Date,Name,Year,Letterboxd URI,Rating,Rewatch,Tags,Watched Date'
+  const csv = [
+    header,
+    '2020-01-01,,2020,https://boxd.it/x,,,,2020-01-01',
+    '2020-01-01,Untitled Year,,https://boxd.it/x,,,,2020-01-01',
+    '2020-01-01,Some Film,2020,https://boxd.it/x,,,,',
+    '2020-01-01,Some Film,2020,https://boxd.it/x,,,,not-a-date'
+  ].join('\n')
+  const { rows, skipped } = parseLetterboxdDiaryCsv(csv)
+  assert.equal(rows.length, 0)
+  assert.equal(skipped, 4)
+}
+
+// ---------------------------------------------------------------------
+// Letterboxd — ratings.csv.
+// ---------------------------------------------------------------------
+{
+  const header = 'Date,Name,Year,Letterboxd URI,Rating'
+  const csv = [
+    header,
+    '2023-01-10,Severance,2022,https://boxd.it/def,4.5',
+    '2023-02-01,Cats,2019,https://boxd.it/ghi,0.5'
+  ].join('\n')
+  const { rows, skipped } = parseLetterboxdRatingsCsv(csv)
+  assert.equal(skipped, 0)
+  // Half-star to this app's 1-10 scale is an exact doubling: 4.5 -> 9,
+  // 0.5 -> 1 — the two ends of Letterboxd's whole range.
+  assert.deepEqual(rows, [
+    { name: 'Severance', year: '2022', score: 9, ratedAt: '2023-01-10' },
+    { name: 'Cats', year: '2019', score: 1, ratedAt: '2023-02-01' }
+  ])
+}
+
+// An unrated diary/watched row never reaches ratings.csv at all — Letterboxd
+// only writes an entry here when a star rating was actually given — but a
+// malformed or out-of-range value is still skipped rather than clamped.
+{
+  const header = 'Date,Name,Year,Letterboxd URI,Rating'
+  const csv = [
+    header,
+    '2023-01-01,No Rating,2020,https://boxd.it/x,',
+    '2023-01-01,Bad Rating,2020,https://boxd.it/x,6',
+    '2023-01-01,Zero Rating,2020,https://boxd.it/x,0'
+  ].join('\n')
+  const { rows, skipped } = parseLetterboxdRatingsCsv(csv)
+  assert.equal(rows.length, 0)
+  assert.equal(skipped, 3)
+}
+
+console.log('letterboxd CSV tests passed')
+
+// ---------------------------------------------------------------------
+// Letterboxd's title/year -> TMDB candidate match — the one place this
+// whole import can go quietly wrong, so it gets the most scrutiny.
+// ---------------------------------------------------------------------
+{
+  const candidate = (
+    over: Partial<{ id: number; title: string; originalTitle: string; releaseYear: string }>
+  ) => ({
+    id: 1,
+    title: 'Dune: Part Two',
+    originalTitle: 'Dune: Part Two',
+    releaseYear: '2024',
+    ...over
+  })
+
+  // The ordinary case: one candidate, matching on both name and year.
+  assert.equal(
+    matchLetterboxdCandidate({ name: 'Dune: Part Two', year: '2024' }, [candidate({})]),
+    1
+  )
+
+  // Case and surrounding whitespace do not matter.
+  assert.equal(
+    matchLetterboxdCandidate({ name: '  dune: part two  ', year: '2024' }, [candidate({})]),
+    1
+  )
+
+  // A foreign-language film matched by its ORIGINAL title, not the
+  // (possibly English) `title` TMDB also carries.
+  assert.equal(
+    matchLetterboxdCandidate(
+      { name: 'Le Fabuleux Destin d\u2019Am\u00e9lie Poulain', year: '2001' },
+      [
+        candidate({
+          title: 'Amelie',
+          originalTitle: 'Le Fabuleux Destin d\u2019Am\u00e9lie Poulain',
+          releaseYear: '2001'
+        })
+      ]
+    ),
+    1
+  )
+
+  // The year must match exactly — a title match alone is not enough, since
+  // a remake can share a name across decades.
+  assert.equal(
+    matchLetterboxdCandidate({ name: 'Dune: Part Two', year: '2023' }, [candidate({})]),
+    null
+  )
+
+  // Nothing at all matches.
+  assert.equal(matchLetterboxdCandidate({ name: 'Not Dune', year: '2024' }, [candidate({})]), null)
+
+  // More than one survivor is not a confident match either — a remake
+  // sharing both title and year has no third signal here to break the tie
+  // with, so it is left alone rather than guessed at.
+  assert.equal(
+    matchLetterboxdCandidate({ name: 'Dune: Part Two', year: '2024' }, [
+      candidate({ id: 1 }),
+      candidate({ id: 2 })
+    ]),
+    null
+  )
+
+  // No candidates at all.
+  assert.equal(matchLetterboxdCandidate({ name: 'Dune: Part Two', year: '2024' }, []), null)
+}
+
+console.log('letterboxd matching tests passed')

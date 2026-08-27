@@ -224,6 +224,11 @@ const api = {
        *  file dialog. Null when the picker was cancelled. */
       importImdbRatings: (): Promise<ImportSummary | null> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.importImdbRatings),
+      /** Reads a Letterboxd "Export Your Data" zip, picked with a native
+       *  file dialog. Null when the picker was cancelled; throws (needs a
+       *  connected TMDB key to resolve titles) if TMDB is not configured. */
+      importLetterboxd: (): Promise<ImportSummary | null> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.importLetterboxd),
       setUiAnimations: (enabled: boolean): Promise<{ uiAnimationsEnabled: boolean }> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.settingsSetUiAnimations, enabled),
       setPerformancePanelVisible: (
