@@ -7,32 +7,40 @@ import type { HistoryEntry, TrackedItem } from '../src/shared/media-hub/types'
 // anime must keep its no-season addressing — a mismatch on either doesn't
 // error, it just makes the daemon invisibly never used for that title.
 
-const trackedItem = (overrides: Partial<TrackedItem>): TrackedItem => ({
-  id: 'tt0',
-  simklId: null,
-  type: 'movie',
-  title: 'T',
-  poster: '',
-  background: '',
-  logo: '',
-  year: '',
-  genres: [],
-  description: '',
-  rating: '',
-  runtime: '',
-  trailers: [],
-  ...overrides
-})
+// Explicit-return functions, not `=> ({...})` arrow-objects: TypeScript's
+// parser (though not esbuild's) mis-parses a parenthesized object-literal
+// arrow when a bare block statement follows it later in the file, which is
+// exactly the shape these tests use for case scoping.
+function trackedItem(overrides: Partial<TrackedItem>): TrackedItem {
+  return {
+    id: 'tt0',
+    simklId: null,
+    type: 'movie',
+    title: 'T',
+    poster: '',
+    background: '',
+    logo: '',
+    year: '',
+    genres: [],
+    description: '',
+    rating: '',
+    runtime: '',
+    trailers: [],
+    ...overrides
+  }
+}
 
-const historyEntry = (overrides: Partial<HistoryEntry>): HistoryEntry => ({
-  id: 'tt0',
-  type: 'series',
-  season: null,
-  episode: null,
-  watchedAt: '2026-08-01T00:00:00Z',
-  title: 'T',
-  ...overrides
-})
+function historyEntry(overrides: Partial<HistoryEntry>): HistoryEntry {
+  return {
+    id: 'tt0',
+    type: 'series',
+    season: null,
+    episode: null,
+    watchedAt: '2026-08-01T00:00:00Z',
+    title: 'T',
+    ...overrides
+  }
+}
 
 // A tracked movie is wanted as itself.
 {

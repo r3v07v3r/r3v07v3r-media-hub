@@ -63,11 +63,15 @@ export function LanCacheSection() {
 
   useEffect(() => {
     if (!api) return
-    void api.discover().then((found) => {
+    // Same shape as MediaServicesSection's load effect: always resolve
+    // through a microtask so no setState lands synchronously in the
+    // effect body (react-hooks/set-state-in-effect).
+    void Promise.resolve().then(async () => {
+      const found = await api.discover()
       setPaired(found.paired)
       setDaemons(found.daemons)
+      await refresh()
     })
-    void refresh()
   }, [api, refresh])
 
   if (!api) return null
