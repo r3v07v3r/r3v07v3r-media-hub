@@ -65,7 +65,17 @@ async function main(): Promise<void> {
   // Expiry runs at startup (a daemon that was off for a month has a
   // month of overdue evictions) and hourly after.
   const evict = async (): Promise<void> => {
-    const plan = await storage.runEviction()
+    // Measured fresh each pass: the budget bounds the cache's own use,
+    // but real free space bounds what this shared machine can afford —
+    // see storage.runEviction.
+    let freeBytes: number | null = null
+    try {
+      const stat = await fsp.statfs(config.dataDir)
+      freeBytes = stat.bavail * stat.bsize
+    } catch {
+      // statfs unavailable — the configured budget alone still applies.
+    }
+    const plan = await storage.runEviction(Date.now(), freeBytes)
     for (const [infoHash, reason] of plan) log(`evicted  ${infoHash.slice(0, 8)}… (${reason})`)
   }
   await evict()

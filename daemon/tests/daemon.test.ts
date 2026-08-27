@@ -133,6 +133,44 @@ async function main(): Promise<void> {
       /Invalid file name/
     )
 
+    // --- external disk pressure: the cache yields -------------------------
+    // Two fresh, recently-played items well under the configured budget —
+    // but the DISK is nearly full because something else on the box ate
+    // it. The effective budget tightens and the LRU item goes, keeping the
+    // pressure margin for the machine's more important tenants.
+    {
+      const now = Date.now()
+      const mk = async (hash: string, key: string, lastAccessAt: number): Promise<void> => {
+        const dir = await store.beginItem({
+          contentKey: key,
+          title: key,
+          infoHash: hash,
+          fileName: 'f.mkv',
+          sizeBytes: 4,
+          fetchedAt: now,
+          lastAccessAt
+        })
+        await fsp.writeFile(path.join(dir, 'f.mkv'), 'DATA')
+      }
+      await mk('1'.repeat(40), 'tt-p1::', now - 1000)
+      await mk('2'.repeat(40), 'tt-p2::', now)
+
+      // Plenty of free disk: nothing to do.
+      const calm = await store.runEviction(now, 100 * 1024 ** 3)
+      assert.equal(calm.size, 0, 'no pressure, no eviction')
+
+      // Almost no free disk: itemBytes(8) + free(0) - margin < 8, so the
+      // LRU item is shed even though the configured budget is not hit.
+      const squeezed = await store.runEviction(now, 0)
+      assert.equal(squeezed.get('1'.repeat(40)), 'budget', 'LRU item yields to disk pressure')
+      assert.equal(squeezed.has('2'.repeat(40)), true, 'both go when free space is zero')
+      assert.equal(
+        'tt-p1::' in (await store.tombstones()),
+        false,
+        'pressure evictions do not tombstone — they reflect the disk, not disinterest'
+      )
+    }
+
     // --- pairing ----------------------------------------------------------
     const pairing = createPairing(root)
     await pairing.load()

@@ -46,6 +46,13 @@ export interface EvictionPolicy {
 
 export type EvictionReason = 'hard-max' | 'idle' | 'budget'
 
+/** Free space the REST of the machine must keep, whatever the configured
+ *  budget says. On a shared box (the deployment target is a host that
+ *  also runs a trading system) the cache is the least important tenant,
+ *  so when something else fills the disk, the cache is what yields. Same
+ *  figure the fetcher refuses to start a download without. */
+export const DISK_PRESSURE_MARGIN_BYTES = 2 * 1024 ** 3
+
 /**
  * Which items must go, and why — pure, so the three-layer expiry rule is
  * unit-testable without a filesystem (same design as StreamCache's
@@ -115,8 +122,10 @@ export interface ItemStore {
   /** Refreshes lastAccessAt — this is what the idle TTL counts from. */
   touch(infoHash: string): Promise<void>
   /** Runs the three-layer expiry rule and deletes what it names.
-   *  Returns what was evicted, for the log. */
-  runEviction(now?: number): Promise<Map<string, EvictionReason>>
+   *  `freeBytes` (real free disk right now, when the caller can measure
+   *  it) tightens the budget under external pressure — see runEviction's
+   *  own comment. Returns what was evicted, for the log. */
+  runEviction(now?: number, freeBytes?: number | null): Promise<Map<string, EvictionReason>>
   remove(infoHash: string): Promise<void>
   /** contentKey -> evictedAt for TTL/hard-max evictions still suppressing
    *  a re-queue. Budget evictions do NOT tombstone: they reflect pressure,
@@ -233,9 +242,23 @@ export function createItemStore(
         // See above.
       }
     },
-    async runEviction(now = Date.now()) {
+    async runEviction(now = Date.now(), freeBytes = null) {
       const items = await list()
-      const plan = planEvictions(items, policy, now)
+      // The configured budget bounds what the cache may USE; real free
+      // space bounds what the machine can AFFORD. The effective budget is
+      // whichever is tighter: when something else on the box eats the
+      // disk, the cache shrinks itself (LRU first) until the pressure
+      // margin is honoured again, instead of holding its files while the
+      // more important tenant runs out of room.
+      let budgetBytes = policy.budgetBytes
+      if (typeof freeBytes === 'number' && Number.isFinite(freeBytes)) {
+        const itemBytes = items.reduce((sum, item) => sum + item.presentBytes, 0)
+        budgetBytes = Math.min(
+          budgetBytes,
+          Math.max(0, itemBytes + freeBytes - DISK_PRESSURE_MARGIN_BYTES)
+        )
+      }
+      const plan = planEvictions(items, { ...policy, budgetBytes }, now)
       if (plan.size === 0) return plan
       const stones = await readTombstones()
       for (const [infoHash, reason] of plan) {
