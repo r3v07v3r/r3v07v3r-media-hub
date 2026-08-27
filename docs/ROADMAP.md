@@ -22,8 +22,10 @@ skip-intro for movies and series, Letterboxd import, and indexer visibility
 — is on `claude/post-preview70-fixes`. All 46 registered tests pass, both
 TypeScript projects typecheck, and ESLint reports zero errors.
 
-**Phase 0, 1, 2 and 3 are all complete. Only Phase 4's two structural items
-are left — everything else in the roadmap is done.**
+**Phase 0, 1, 2 and 3 are all complete. Phase 4 is done except two rows kept
+open on purpose — Jellyfin as a real playback source and a debrid provider
+abstraction — both structural bets that touch `stream:resolve` and have no
+live server here to verify against; see that phase's own note.**
 
 | Shipped                           | Phase | What landed                                                                                                                                                                    |
 | ---------------------------------- | ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -173,8 +175,14 @@ them at all.
 Four services are connected and mostly watched rather than used. Independent of every other phase —
 the best standalone win if you want something to ship this week.
 
-Request/queue control, notifications and indexer visibility shipped — see the Progress table. The
-two structural items remain:
+Request/queue control, notifications and indexer visibility shipped — see the Progress table.
+Everything else in this whole roadmap is now done except the two rows below, and those two are a
+deliberate exception rather than unfinished work: both touch `stream:resolve`, the path that
+decides where every playback session's bytes come from, and a mistake there breaks what already
+works rather than merely leaving something missing. Neither Jellyfin nor a debrid competitor has a
+live instance in this project's environment to verify against, the same gap `jellyfin.ts`'s own
+header already flags. Left here, deliberately, on the same terms Phase 5's bets are — decided
+consciously rather than drifted into:
 
 | Work                        | Effort | What it is                                                                                                                                                                                              |
 | --------------------------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
