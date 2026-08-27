@@ -13,7 +13,7 @@ streaming apps people compare everything to.
 
 ## Progress
 
-Twenty-five features shipped. Sixteen merged as PR #105 and released in
+Twenty-six features shipped. Sixteen merged as PR #105 and released in
 `v1.0.83-preview.70`; everything since — collection pages, content ratings,
 fixes from hands-on testing of that build, Trakt in both directions, saved
 filters, explained recommendations, the player's remaining mpv capabilities,
@@ -22,7 +22,7 @@ registered tests pass, both TypeScript projects typecheck, and ESLint reports
 zero errors.
 
 **Phase 0 is complete. Phase 1 has only the anime-specific skip-intro
-detector left. Phase 2 has only Letterboxd/IMDb CSV left. Phase 3 has only
+detector left. Phase 2 has only Letterboxd import left. Phase 3 has only
 more catalogs left. Phase 4 has the two structural items and indexer
 visibility.**
 
@@ -42,6 +42,7 @@ visibility.**
 | Scrobble depth                    | 2     | start / pause / stop to Simkl and Trakt, on transitions. The path existed and had never once run.                                                                              |
 | Trakt sync                        | 2     | Device-code sign-in, history/ratings/scrobble pushed alongside Simkl — mirrors the Simkl split (pure builders in `trakt.ts`, I/O in `traktClient.ts`).                          |
 | Trakt import                      | 2     | Pulls an existing Trakt account's history and ratings in, with their original dates. Gap-filling and repeatable — never overwrites a local play or rating, never doubles one on a second run. |
+| IMDb ratings import               | 2     | Reads IMDb's own "export your ratings" CSV. Matched by IMDb id straight from the file — no title lookup, no guessing — and gap-filling like the Trakt import.                    |
 | Person pages                      | 3     | Cast and crew names open what else of theirs the catalog holds.                                                                                                                |
 | Search by credits                 | 3     | Typing a director's name finds their films, not films with their name in the title.                                                                                            |
 | Where to watch                    | 3     | Streaming, rent and buy for your region, from JustWatch via TMDB.                                                                                                              |
@@ -155,11 +156,12 @@ Two things here are wrong rather than merely missing: a rewatch destroys the rec
 viewing, and `MyStuffPage.tsx` shows only My List while the README promises watched, liked, disliked,
 and in-progress. Fix those, then reach parity.
 
-**Done except the last row** — Trakt now covers both push and pull; see the Progress table above.
+**Done except the last row** — Trakt now covers both push and pull, and IMDb's own ratings export
+reads straight in; see the Progress table above.
 
-| Work               | Effort | What it is                                                                                                             |
-| ------------------ | ------ | ------------------------------------------------------------------------------------------------------------------------ |
-| Letterboxd/IMDb CSV | M      | The remaining half of import/export — Trakt in, and our own data out, both shipped. Letterboxd and IMDb export their history as CSV; this is the thing that makes switching to this app cheap for someone coming from either. |
+| Work                | Effort | What it is                                                                                                                                                                                                     |
+| ------------------- | ------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Letterboxd CSV       | M      | Split from IMDb's import rather than shipped with it: Letterboxd's export carries no id at all, so a row is only safely importable after resolving it to an IMDb id via a TMDB title/year lookup — a real per-row failure mode IMDb's import, matched directly by the id already in its file, never had. |
 
 ## Phase 3 — Discovery on data we already cache
 
