@@ -32,8 +32,10 @@ import {
   historyPayload,
   parseTraktHistory,
   parseTraktRatings,
+  ratingRemovalPayload,
   ratingsPayload,
   scrobblePayload,
+  seasonHistoryPayload,
   type TraktPlaybackPosition,
   type TraktPushItem
 } from './trakt'
@@ -281,6 +283,24 @@ export async function pushTraktHistory(
   }
 }
 
+/** Same as pushTraktHistory, but for a whole season's episodes in one
+ *  request — the "mark this season watched" action's Trakt push, alongside
+ *  the Simkl one that already existed. */
+export async function pushTraktSeasonHistory(
+  item: TraktPushItem,
+  season: number | undefined,
+  episodeNumbers: number[]
+): Promise<void> {
+  const payload = seasonHistoryPayload(item, season, episodeNumbers)
+  if (!hasTraktContent(payload)) return
+  if (!traktCredentials().accessToken) return
+  try {
+    await traktRequest('/sync/history', { method: 'POST', body: JSON.stringify(payload) })
+  } catch (error) {
+    logError('trakt:season-history', error)
+  }
+}
+
 /** Sends a rating, or removes it when the score is this app's "cleared" 0. */
 export async function pushTraktRating(item: TraktPushItem, rating: number): Promise<void> {
   if (!traktCredentials().accessToken) return
@@ -289,13 +309,17 @@ export async function pushTraktRating(item: TraktPushItem, rating: number): Prom
   // separate endpoint for withdrawing one — sending it as a rating would
   // record an opinion that was just taken back.
   if (score === 0) {
-    const removal = ratingsPayload(item, 1)
+    // NOT historyPayload — see ratingRemovalPayload's own doc comment. A
+    // series rating was written at the SHOW level (ratingsPayload never
+    // adds a season/episode hierarchy), and historyPayload synthesizes one
+    // when none is given, which would ask Trakt to remove an episode-level
+    // record that was never written and leave the real rating in place.
+    const removal = ratingRemovalPayload(item)
     if (!hasTraktContent(removal)) return
     try {
       await traktRequest('/sync/ratings/remove', {
         method: 'POST',
-        // The same entry without the score: Trakt keys the removal on the id.
-        body: JSON.stringify(historyPayload(item))
+        body: JSON.stringify(removal)
       })
     } catch (error) {
       logError('trakt:rating-remove', error)

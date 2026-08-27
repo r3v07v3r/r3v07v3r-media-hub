@@ -17,10 +17,9 @@
 // be unit-tested directly — see tests/subdl.test.ts. The network calls live
 // in subtitlesService.ts, matching how opensubtitles.ts is split.
 
-import zlib from 'node:zlib'
-
 import type { SubtitleResult } from '../../shared/media-hub/types'
 import type { OpenSubtitlesSearchItem, OpenSubtitlesSearchPlayback } from './opensubtitles'
+import { inflateZipEntry, readZipCentralDirectory } from './zipArchive'
 
 /** Public host serving the subtitle archives. Search results carry only a
  *  root-relative path (`/subtitle/<id>-<id>.zip`); this is the only host it
@@ -115,7 +114,9 @@ export function normalizeSubdlResult(entry: unknown): SubtitleResult {
     releaseName: String(raw.release_name || raw.name || ''),
     downloadCount: 0,
     uploader: String(raw.author || 'Anonymous'),
-    hearingImpaired: Boolean(raw.hi)
+    hearingImpaired: Boolean(raw.hi),
+    // SubDL has no hash-matching endpoint — see SubtitleResult.hashMatch.
+    hashMatch: false
   }
 }
 
@@ -144,89 +145,16 @@ export function resolveSubdlDownloadUrl(downloadPath: unknown): string {
 
 // --- ZIP reading -----------------------------------------------------------
 //
-// A subtitle archive is the simplest possible zip: a handful of small
-// entries, stored or deflated. Rather than add a dependency for that, this
-// reads the central directory directly and inflates with node:zlib, which
-// is already available in the main process. Hand-rolled to stay consistent
-// with how the rest of this backend avoids new runtime deps.
-
-const EOCD_SIGNATURE = 0x06054b50
-const CENTRAL_FILE_SIGNATURE = 0x02014b50
-const LOCAL_FILE_SIGNATURE = 0x04034b50
+// The actual zip-parsing lives in zipArchive.ts now — a Letterboxd import
+// needs the same central-directory-plus-inflate logic this originally had
+// all to itself, and re-typing a binary format parser per caller is not the
+// kind of "small local duplication" this codebase otherwise prefers over a
+// shared utility. This file keeps the SRT-specific shape: which entry to
+// pick out of an archive, how big is too big, and the encoding fallback.
 
 /** Refuses to inflate anything absurd for a subtitle. A real SRT is tens of
  *  KB; this is a zip-bomb guard, not a real-world limit. */
 const MAX_SUBTITLE_BYTES = 8 * 1024 * 1024
-
-interface ZipEntry {
-  fileName: string
-  compressionMethod: number
-  compressedSize: number
-  uncompressedSize: number
-  localHeaderOffset: number
-}
-
-/** Locates the End Of Central Directory record, scanning back from the end
- *  over the maximum possible trailing comment (64KB). Returns -1 if absent,
- *  which means "not a zip" — e.g. an error page served with a 200. */
-function findEndOfCentralDirectory(buffer: Buffer): number {
-  const earliest = Math.max(0, buffer.length - 0xffff - 22)
-  for (let offset = buffer.length - 22; offset >= earliest; offset--) {
-    if (buffer.readUInt32LE(offset) === EOCD_SIGNATURE) return offset
-  }
-  return -1
-}
-
-function readCentralDirectory(buffer: Buffer): ZipEntry[] {
-  const eocd = findEndOfCentralDirectory(buffer)
-  if (eocd < 0) return []
-
-  const entryCount = buffer.readUInt16LE(eocd + 10)
-  let offset = buffer.readUInt32LE(eocd + 16)
-  const entries: ZipEntry[] = []
-
-  for (let index = 0; index < entryCount; index++) {
-    if (offset + 46 > buffer.length) break
-    if (buffer.readUInt32LE(offset) !== CENTRAL_FILE_SIGNATURE) break
-
-    const nameLength = buffer.readUInt16LE(offset + 28)
-    const extraLength = buffer.readUInt16LE(offset + 30)
-    const commentLength = buffer.readUInt16LE(offset + 32)
-
-    entries.push({
-      fileName: buffer.toString('utf8', offset + 46, offset + 46 + nameLength),
-      compressionMethod: buffer.readUInt16LE(offset + 10),
-      compressedSize: buffer.readUInt32LE(offset + 20),
-      uncompressedSize: buffer.readUInt32LE(offset + 24),
-      localHeaderOffset: buffer.readUInt32LE(offset + 42)
-    })
-
-    offset += 46 + nameLength + extraLength + commentLength
-  }
-
-  return entries
-}
-
-function inflateEntry(buffer: Buffer, entry: ZipEntry): Buffer {
-  const header = entry.localHeaderOffset
-  if (header + 30 > buffer.length || buffer.readUInt32LE(header) !== LOCAL_FILE_SIGNATURE) {
-    throw new Error('The subtitle archive is malformed.')
-  }
-
-  // The local header repeats the name/extra lengths, and they can legally
-  // differ from the central directory's (extra fields especially) — so the
-  // data offset must be computed from the LOCAL header, not the central one.
-  const nameLength = buffer.readUInt16LE(header + 26)
-  const extraLength = buffer.readUInt16LE(header + 28)
-  const start = header + 30 + nameLength + extraLength
-  const data = buffer.subarray(start, start + entry.compressedSize)
-
-  if (entry.compressionMethod === 0) return data
-  if (entry.compressionMethod !== 8) {
-    throw new Error('The subtitle archive uses an unsupported compression method.')
-  }
-  return zlib.inflateRawSync(data, { maxOutputLength: MAX_SUBTITLE_BYTES })
-}
 
 /**
  * Decodes subtitle bytes to text.
@@ -264,7 +192,7 @@ function decodeSubtitleText(bytes: Buffer): string {
  * are routinely zipped with both.
  */
 export function readSrtFromZip(archive: Buffer): string {
-  const candidates = readCentralDirectory(archive).filter(
+  const candidates = readZipCentralDirectory(archive).filter(
     (entry) =>
       entry.fileName.toLowerCase().endsWith('.srt') &&
       !entry.fileName.endsWith('/') &&
@@ -283,5 +211,8 @@ export function readSrtFromZip(archive: Buffer): string {
   // otherwise land in front of the first cue number, where a subtitle parser's
   // timestamp match no longer lines up with the block. Written as an escape
   // rather than a literal so it stays visible to anyone reading the source.
-  return decodeSubtitleText(inflateEntry(archive, entry)).replace(/^\ufeff/, '')
+  return decodeSubtitleText(inflateZipEntry(archive, entry, MAX_SUBTITLE_BYTES)).replace(
+    /^\ufeff/,
+    ''
+  )
 }

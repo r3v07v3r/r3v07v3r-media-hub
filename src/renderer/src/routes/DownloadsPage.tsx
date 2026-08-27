@@ -12,6 +12,7 @@ import {
 } from '@renderer/lib/api/qbittorrent'
 import { useAppState } from '@renderer/context/AppStateContext'
 import { sonarrClient, radarrClient, ServarrQueueItem } from '@renderer/lib/api/servarr'
+import { getIndexerStatus, type FailingIndexer } from '@renderer/lib/api/prowlarr'
 import { isConfigured } from '@renderer/lib/api/types'
 import { BackgroundActivitySection } from '@renderer/components/downloads/BackgroundActivitySection'
 import { ComingSoonSection } from '@renderer/components/placeholder/ComingSoonSection'
@@ -228,6 +229,7 @@ export default function DownloadsPage() {
   const [torrentsLive, setTorrentsLive] = useState(false)
   const [sonarrQueue, setSonarrQueue] = useState<ServarrQueueItem[]>([])
   const [radarrQueue, setRadarrQueue] = useState<ServarrQueueItem[]>([])
+  const [failingIndexers, setFailingIndexers] = useState<FailingIndexer[]>([])
   const [cacheEntries, setCacheEntries] = useState<StreamCacheEntry[]>([])
   const [loaded, setLoaded] = useState(false)
 
@@ -242,10 +244,11 @@ export default function DownloadsPage() {
       if (cancelled) return
       setSettings(s)
 
-      const [qb, sonarr, radarr, cache] = await Promise.all([
+      const [qb, sonarr, radarr, prowlarr, cache] = await Promise.all([
         getTorrents(s.qbittorrent),
         sonarrClient.getQueue(s.sonarr),
         radarrClient.getQueue(s.radarr),
+        getIndexerStatus(s.prowlarr),
         window.api.mediaHub.streamCache.list().catch(() => [] as StreamCacheEntry[])
       ])
       if (cancelled) return
@@ -255,6 +258,7 @@ export default function DownloadsPage() {
       }
       if (sonarr.ok) setSonarrQueue(sonarr.data ?? [])
       if (radarr.ok) setRadarrQueue(radarr.data ?? [])
+      if (prowlarr.ok) setFailingIndexers(prowlarr.data ?? [])
       setCacheEntries(cache ?? [])
       setLoaded(true)
     }
@@ -364,6 +368,39 @@ export default function DownloadsPage() {
               />
             ))
           )}
+        </section>
+      )}
+
+      {/* Diagnostic, not a queue of its own — this is why the two below might
+          be quieter than expected. Silent when Prowlarr is not connected or
+          every indexer is healthy, which is the ordinary case; a generic
+          "no results" from Sonarr/Radarr otherwise gives no way to tell "the
+          release does not exist yet" apart from "half the indexers are
+          locked out on a bad key" — only Prowlarr, which tracks each
+          indexer's own failure state, can say which. */}
+      {isConfigured(settings.prowlarr) && failingIndexers.length > 0 && (
+        <section className={`${styles.section} glass-panel`}>
+          <h2 className={styles.sectionTitle}>
+            <span className={styles.liveDot} style={{ background: '#e0a030' }} />
+            Indexers
+          </h2>
+          <p className={styles.empty}>
+            {failingIndexers.length === 1
+              ? '1 indexer is currently failing in Prowlarr — searches through it will come up short until it recovers.'
+              : `${failingIndexers.length} indexers are currently failing in Prowlarr — searches through them will come up short until they recover.`}
+          </p>
+          {failingIndexers.map((indexer) => (
+            <div key={indexer.id} className={styles.item}>
+              <div className={styles.itemHead}>
+                <span>{indexer.name}</span>
+              </div>
+              {indexer.mostRecentFailure && (
+                <span className={styles.itemMeta}>
+                  Last failed {new Date(indexer.mostRecentFailure).toLocaleString()}
+                </span>
+              )}
+            </div>
+          ))}
         </section>
       )}
 

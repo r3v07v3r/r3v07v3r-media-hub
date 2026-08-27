@@ -49,7 +49,8 @@ interface Options {
   paused: boolean
   cacheAheadSeconds: number
   bufferSeconds: number
-  command: (command: PlayerCommand) => Promise<void>
+  // Return value ignored here — see PlayerWindowContext's `command` for what it resolves to.
+  command: (command: PlayerCommand) => Promise<unknown>
 }
 
 export interface PartySync {

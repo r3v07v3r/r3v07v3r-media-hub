@@ -90,6 +90,7 @@ import type {
 import type { OllamaTitleRef } from '../shared/media-hub/ollama'
 import type {
   PlayerCommand,
+  PlayerCommandResult,
   PlayerInputEvent,
   PlayerSessionSnapshot,
   PlayerStatePatch,
@@ -219,6 +220,15 @@ const api = {
         createdAt: string
         activeProfileId: string
       } | null> => ipcRenderer.invoke(MEDIA_HUB_CHANNELS.backupImport),
+      /** Reads IMDb's own "export your ratings" CSV, picked with a native
+       *  file dialog. Null when the picker was cancelled. */
+      importImdbRatings: (): Promise<ImportSummary | null> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.importImdbRatings),
+      /** Reads a Letterboxd "Export Your Data" zip, picked with a native
+       *  file dialog. Null when the picker was cancelled; throws (needs a
+       *  connected TMDB key to resolve titles) if TMDB is not configured. */
+      importLetterboxd: (): Promise<ImportSummary | null> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.importLetterboxd),
       setUiAnimations: (enabled: boolean): Promise<{ uiAnimationsEnabled: boolean }> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.settingsSetUiAnimations, enabled),
       setPerformancePanelVisible: (
@@ -543,7 +553,7 @@ const api = {
      *  listens for onUiEvent, which is how the overlay reaches back into its
      *  state. */
     player: {
-      command: (command: PlayerCommand): Promise<{ ok: true }> =>
+      command: (command: PlayerCommand): Promise<PlayerCommandResult> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.playerCommand, command),
       uiEvent: (event: PlayerUiEvent): Promise<{ ok: true }> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.playerUiEvent, event),

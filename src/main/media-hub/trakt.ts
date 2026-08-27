@@ -119,6 +119,33 @@ export function historyPayload(
 }
 
 /**
+ * Same as historyPayload, but for a whole batch of episode numbers within
+ * one season at once — the "mark this season watched" action, which is one
+ * Trakt request covering every episode rather than one per episode. Mirrors
+ * simkl.ts's own seasonHistoryPayload, both in shape and in reasoning: a
+ * movie has no seasons to batch, so it is not accepted here at all — the
+ * single-item historyPayload already covers it.
+ */
+export function seasonHistoryPayload(
+  item: TraktPushItem,
+  season: number | undefined,
+  episodeNumbers: number[]
+): TraktSyncPayload {
+  const ids = traktIds(item)
+  if (!ids || !isTraktPushable(item) || item.type !== 'series' || !episodeNumbers.length) return {}
+  return {
+    shows: [
+      {
+        ids,
+        seasons: [
+          { number: numberOr(season, 1), episodes: episodeNumbers.map((number) => ({ number })) }
+        ]
+      }
+    ]
+  }
+}
+
+/**
  * Body for POST /sync/ratings.
  *
  * Rates the TITLE rather than an episode even for a series: this app's own
@@ -133,6 +160,24 @@ export function ratingsPayload(item: TraktPushItem, rating: number): TraktSyncPa
   return item.type === 'movie'
     ? { movies: [{ ids, rating: score }] }
     : { shows: [{ ids, rating: score }] }
+}
+
+/**
+ * Body for POST /sync/ratings/remove.
+ *
+ * The SAME shape ratingsPayload sends when adding one — a bare entry keyed
+ * only by id, with no season/episode hierarchy — because a rating was
+ * recorded at the TITLE level and a removal has to name that same level to
+ * match it. historyPayload is the wrong builder to reuse here even though
+ * its own shape is otherwise close: for a series it synthesizes a season
+ * 1/episode 1 hierarchy when none is given (see its own doc comment),
+ * which asks Trakt to remove an EPISODE-level record that this app never
+ * wrote, leaving the real show-level rating in place.
+ */
+export function ratingRemovalPayload(item: TraktPushItem): TraktSyncPayload {
+  const ids = traktIds(item)
+  if (!ids || !isTraktPushable(item)) return {}
+  return item.type === 'movie' ? { movies: [{ ids }] } : { shows: [{ ids }] }
 }
 
 /**
