@@ -53,7 +53,85 @@ assert.equal(
   'kitsu:123::5'
 )
 
+// --- resuming a partial session from where its bytes came from ------------
+
+async function resumeChecks(): Promise<void> {
+  const { resumeCandidateFor } = await import('../src/main/media-hub/core')
+  const partial = {
+    token: 'a'.repeat(64),
+    complete: false,
+    cachedBytes: 1024,
+    totalBytes: 4096,
+    resolution: 1080,
+    title: 'Sintel'
+  }
+
+  // A TorBox partial resumes as a TorBox candidate for the SAME hash, not
+  // as a localcache one — play has to mint a link for that exact release so
+  // streamCache can adopt the bytes already downloaded.
+  const fromTorbox = resumeCandidateFor(
+    { ...partial, sourceRef: { source: 'torbox', infoHash: 'abc123' } },
+    true,
+    false
+  )
+  assert.equal(fromTorbox?.source, 'torbox')
+  assert.equal(fromTorbox?.infoHash, 'abc123', 'the original release, not a fresh search result')
+  assert.equal(fromTorbox?.resolution, 1080, 'the cached quality is carried forward')
+
+  const fromServer = resumeCandidateFor(
+    { ...partial, sourceRef: { source: 'mediaserver', itemId: 'i1', mediaSourceId: 'm1' } },
+    false,
+    true
+  )
+  assert.equal(fromServer?.source, 'mediaserver')
+  assert.equal(fromServer?.itemId, 'i1')
+  assert.equal(fromServer?.mediaSourceId, 'm1')
+
+  // A source that is no longer configured cannot be re-requested. Falling
+  // through to the normal search is correct: fetching a different encode
+  // beats failing, and streamCache just declines to adopt the mismatch.
+  assert.equal(
+    resumeCandidateFor(
+      { ...partial, sourceRef: { source: 'torbox', infoHash: 'abc123' } },
+      false,
+      true
+    ),
+    null,
+    'no TorBox token means no TorBox resume'
+  )
+  assert.equal(
+    resumeCandidateFor(
+      { ...partial, sourceRef: { source: 'mediaserver', itemId: 'i1', mediaSourceId: 'm1' } },
+      true,
+      false
+    ),
+    null,
+    'a disconnected media server cannot be resumed from'
+  )
+
+  // Sessions written before sourceRef existed have no recorded release, so
+  // there is nothing safe to resume against.
+  assert.equal(resumeCandidateFor(partial, true, true), null, 'no recorded release, no resume')
+
+  // A half-recorded ref is not enough to address the file.
+  assert.equal(
+    resumeCandidateFor({ ...partial, sourceRef: { source: 'torbox' } }, true, true),
+    null,
+    'a torbox ref without an infoHash cannot be re-requested'
+  )
+  assert.equal(
+    resumeCandidateFor(
+      { ...partial, sourceRef: { source: 'mediaserver', itemId: 'i1' } },
+      true,
+      true
+    ),
+    null,
+    'a media-server ref without a mediaSourceId cannot be re-requested'
+  )
+}
+
 async function main(): Promise<void> {
+  await resumeChecks()
   const { findLocalCacheCandidate } = await import('../src/main/media-hub/streamCache')
 
   // findLocalCacheCandidate reads the real cache root, which does not exist

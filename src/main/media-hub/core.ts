@@ -11,6 +11,7 @@
 
 import {
   AnimeStoryLink,
+  CacheSourceRef,
   CatalogItem,
   ContinueWatchingEntry,
   Episode,
@@ -239,6 +240,45 @@ export function rankStreams(
     )
   })
   return [...withinLimits].sort((a, b) => score(b) - score(a))
+}
+
+/**
+ * Rebuilds a candidate for the source a partial session was pulled from, so
+ * the same release can be re-requested and its existing bytes resumed.
+ *
+ * Returns null when the release cannot be re-requested — no recorded
+ * source (sessions predating sourceRef), or that source is no longer
+ * configured. Falling through to the normal search is right in both cases:
+ * better to fetch a different encode than to fail, and streamCache simply
+ * declines to adopt the mismatched bytes.
+ */
+export function resumeCandidateFor(
+  cached: {
+    title: string
+    resolution?: number
+    sourceRef?: CacheSourceRef
+  },
+  torboxConnected: boolean,
+  mediaServerConnected: boolean
+): StreamCandidate | null {
+  const ref = cached.sourceRef
+  if (!ref) return null
+  const base = {
+    name: cached.title,
+    resolution: cached.resolution,
+    cached: true,
+    compatible: true,
+    exact: true
+  }
+  if (ref.source === 'mediaserver' && ref.itemId && ref.mediaSourceId) {
+    if (!mediaServerConnected) return null
+    return { ...base, source: 'mediaserver', itemId: ref.itemId, mediaSourceId: ref.mediaSourceId }
+  }
+  if (ref.source === 'torbox' && ref.infoHash) {
+    if (!torboxConnected) return null
+    return { ...base, source: 'torbox', infoHash: ref.infoHash }
+  }
+  return null
 }
 
 export function validateTorBoxToken(token: unknown): boolean {

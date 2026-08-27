@@ -39,6 +39,7 @@ import {
   cometConfigPath,
   enrichTorBoxItem,
   rankSafeStreams,
+  resumeCandidateFor,
   selectVideoFile,
   titleMatchesRelease,
   validateTorBoxToken,
@@ -353,31 +354,52 @@ export function registerTorBoxIpc(): void {
 
       // TIER 1 — already on this machine.
       //
-      // Answered from the filesystem alone: no source contacted, no
-      // network touched, so a title we already hold plays with the link
-      // down. A COMPLETE session is returned outright; a partial one is
-      // returned carrying the release it holds (sourceRef), so the tiers
-      // below resume that same encode rather than a different one.
+      // Answered from the filesystem alone: no source contacted, no network
+      // touched. Two distinct outcomes, and the partial one is the reason
+      // sessions record where their bytes came from:
       //
-      // Subject to the quality target like every other tier: a cached
-      // 720p copy does not win when 1080p was asked for.
+      //  COMPLETE  play it straight from disk, offline.
+      //  PARTIAL   re-request THE SAME RELEASE from the source it was
+      //            originally pulled from, so the half we already hold is
+      //            resumed rather than abandoned. Handing back a candidate
+      //            for the original source (not a localcache one) is what
+      //            makes that work: play mints a link for that exact
+      //            release, and streamCache.start's own findReusableSession
+      //            then adopts the existing chunks, because the release
+      //            matching means its totalBytes check passes.
+      //
+      // Without this, a partial session was dead weight: the search below
+      // could return a different encode of the same title, whose length
+      // differs, so adoption was refused and the bytes already downloaded
+      // were re-downloaded from scratch.
+      //
+      // Subject to the quality target like every other tier: a cached 720p
+      // copy does not win when 1080p was asked for.
       const cached = await findLocalCacheCandidate(cacheMetaFor(payload, title))
       if (cached && meetsQualityTarget(cached.resolution, limits.maxResolution)) {
-        const candidate: StreamCandidate = {
-          source: 'localcache',
-          cacheToken: cached.token,
-          complete: cached.complete,
-          name: cached.title,
-          resolution: cached.resolution,
-          cached: true,
-          compatible: true,
-          exact: true,
-          ...(cached.sourceRef ?? {})
-        }
         if (cached.complete) {
+          const candidate: StreamCandidate = {
+            source: 'localcache',
+            cacheToken: cached.token,
+            complete: true,
+            name: cached.title,
+            resolution: cached.resolution,
+            cached: true,
+            compatible: true,
+            exact: true
+          }
           const result: StreamResolveResult = { streams: [candidate], best: candidate }
           db.putCache(key, result, 60 * 60 * 1000)
           return result
+        }
+
+        const resume = resumeCandidateFor(cached, Boolean(auth), Boolean(mediaServer))
+        if (resume) {
+          // Deliberately NOT cached under `key`: this is a resume of a
+          // download still in flight, and once it finishes the complete
+          // branch above should take over on the next play rather than a
+          // stale hour-old row sending us back to the source.
+          return { streams: [resume], best: resume }
         }
       }
 
