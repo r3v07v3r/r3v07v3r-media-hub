@@ -206,7 +206,14 @@ function AddToListButton({ media }: { media: MediaItem }) {
   const { libraryKey } = useAppState()
   const { lists, add, removeItem } = useMediaHubLists(libraryKey)
   const [open, setOpen] = useState(false)
-  const [memberOf, setMemberOf] = useState<Set<string>>(new Set())
+  // Carries the title it describes.
+  //
+  // Navigating from one title to another reuses this component, so an open
+  // menu kept the previous title's ticks until the refetch landed. That is not
+  // merely cosmetic: toggle() branches on this set to decide ADD versus
+  // REMOVE, so a click in that window could quietly remove the new title from
+  // a list the person was trying to add it to.
+  const [memberOf, setMemberOf] = useState<{ key: string; ids: Set<string> } | null>(null)
 
   useEffect(() => {
     if (!open) return
@@ -214,7 +221,7 @@ function AddToListButton({ media }: { media: MediaItem }) {
     window.api?.mediaHub?.lists
       .containing(media.id)
       .then((result) => {
-        if (!cancelled) setMemberOf(new Set(result.listIds))
+        if (!cancelled) setMemberOf({ key: media.id, ids: new Set(result.listIds) })
       })
       .catch(() => {})
     return () => {
@@ -224,14 +231,21 @@ function AddToListButton({ media }: { media: MediaItem }) {
 
   if (lists.length === 0) return null
 
+  /** Membership, but only while it belongs to the title on screen. */
+  const current = memberOf?.key === media.id ? memberOf.ids : null
+
   function toggle(listId: string): void {
-    if (memberOf.has(listId)) {
+    // Refuses to act on a belief about a different title. Until membership for
+    // THIS one has landed there is no answer to "is it already in this list",
+    // and guessing either way is how a click adds what it should remove.
+    if (!current) return
+    if (current.has(listId)) {
       void removeItem(listId, media.id)
-      setMemberOf((previous) => {
-        const next = new Set(previous)
-        next.delete(listId)
-        return next
-      })
+      setMemberOf((previous) =>
+        previous
+          ? { key: previous.key, ids: new Set([...previous.ids].filter((id) => id !== listId)) }
+          : previous
+      )
       return
     }
     void add(listId, {
@@ -241,7 +255,9 @@ function AddToListButton({ media }: { media: MediaItem }) {
       poster: media.posterUrl ?? '',
       year: media.releaseYear ? String(media.releaseYear) : ''
     })
-    setMemberOf((previous) => new Set(previous).add(listId))
+    setMemberOf((previous) =>
+      previous ? { key: previous.key, ids: new Set(previous.ids).add(listId) } : previous
+    )
   }
 
   return (
@@ -262,12 +278,12 @@ function AddToListButton({ media }: { media: MediaItem }) {
               key={list.id}
               type="button"
               role="menuitemcheckbox"
-              aria-checked={memberOf.has(list.id)}
+              aria-checked={current?.has(list.id) ?? false}
               className={styles.listMenuItem}
               onClick={() => toggle(list.id)}
             >
               {list.name}
-              {memberOf.has(list.id) ? ' ✓' : ''}
+              {current?.has(list.id) ? ' ✓' : ''}
             </button>
           ))}
         </div>
