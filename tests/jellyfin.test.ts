@@ -1,9 +1,12 @@
 import assert from 'node:assert/strict'
+import http from 'node:http'
 import {
   buildStreamUrl,
+  findEpisode,
   isJellyfinConfigured,
   jellyfinCandidate,
   jellyfinFingerprint,
+  findMovie,
   normalizeBaseUrl,
   parseMediaId,
   resolutionTierForStream,
@@ -129,4 +132,70 @@ assert.equal(
   'the key travels in the query because mpv cannot send a header'
 )
 
-console.log('ok  jellyfin client')
+// --- regression: a server that ignores AnyProviderIdEquals ----------------
+//
+// Caught against a live Jellyfin 10.11. When the provider filter is
+// malformed or unsupported it does NOT error and does NOT return an empty
+// list -- it ignores the filter and returns the whole library. The first
+// version of findMovie took Items[0] on trust, so a search for one film
+// returned a completely different one and would have played it. Nothing
+// downstream can tell that apart from a correct match, which is what makes
+// it worth a server stub rather than a note.
+
+async function providerFilterChecks(): Promise<void> {
+  const library = {
+    Items: [
+      {
+        Id: 'wrong-1',
+        Name: 'Big Buck Bunny',
+        ProviderIds: { Imdb: 'tt1254207' },
+        MediaSources: [{ Id: 'ms-wrong', Path: '/m/bbb.mkv' }]
+      },
+      {
+        Id: 'right-1',
+        Name: 'Sintel',
+        ProviderIds: { Imdb: 'tt1727587' },
+        MediaSources: [{ Id: 'ms-right', Path: '/m/sintel.mkv' }]
+      }
+    ]
+  }
+
+  // Answers every query with the entire library, whatever was asked for.
+  const server = http.createServer((_req, res) => {
+    res.writeHead(200, { 'content-type': 'application/json' })
+    res.end(JSON.stringify(library))
+  })
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+  const port = (server.address() as { port: number }).port
+  const config = { baseUrl: `http://127.0.0.1:${port}`, apiKey: 'test-key' }
+
+  try {
+    const sintel = await findMovie(config, 'tt1727587', 'Sintel')
+    assert.equal(
+      sintel?.Id,
+      'right-1',
+      'the item actually carrying the requested id is the one returned'
+    )
+
+    const missing = await findMovie(config, 'tt9999999', 'Nothing Here')
+    assert.equal(
+      missing,
+      null,
+      'an id no item carries returns nothing — never whichever item sorted first'
+    )
+
+    // The name-search fallback must not rescue a wrong id either: the
+    // title guard has to reject Big Buck Bunny for a Sintel request.
+    const wrongTitle = await findMovie(config, '', 'Sintel')
+    assert.equal(wrongTitle?.Id, 'right-1', 'the name fallback still matches on title')
+
+    const seriesMissing = await findEpisode(config, 'tt9999999', 'Nothing Here', 1, 1)
+    assert.equal(seriesMissing, null, 'the same guard applies to the series lookup')
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()))
+  }
+}
+
+void providerFilterChecks().then(() => {
+  console.log('ok  jellyfin client')
+})

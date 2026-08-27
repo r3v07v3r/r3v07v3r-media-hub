@@ -106,6 +106,27 @@ function providerFilter(imdbId: string): string {
   return `imdb.${imdbId}`
 }
 
+/**
+ * Confirms an item REALLY carries the id we filtered on.
+ *
+ * Never skip this on the grounds that the server was asked to filter.
+ * Caught against a live 10.11 instance: when AnyProviderIdEquals is
+ * malformed or unsupported, Jellyfin does not error and does not return
+ * nothing — it ignores the filter and returns the whole library. Trusting
+ * `Items[0]` there meant a search for one film happily returned a
+ * completely different one, which downstream is indistinguishable from a
+ * correct match and would just play the wrong thing.
+ *
+ * Key casing varies across versions and provider plugins, so the
+ * comparison is case-insensitive on both sides.
+ */
+function matchesProviderId(item: JellyfinItem, imdbId: string): boolean {
+  return Object.entries(item.ProviderIds ?? {}).some(
+    ([key, value]) =>
+      key.toLowerCase() === 'imdb' && String(value).toLowerCase() === imdbId.toLowerCase()
+  )
+}
+
 /** The app's media ids look like `tt1234567` or `tt1234567:1:2`. */
 export function parseMediaId(id: string): { imdbId: string; season?: number; episode?: number } {
   const [imdbId, season, episode] = String(id).split(':')
@@ -130,16 +151,22 @@ export async function findMovie(
   imdbId: string,
   title: string
 ): Promise<JellyfinItem | null> {
-  const byProvider = await request<JellyfinItemsResponse>(config, '/Items', {
-    Recursive: 'true',
-    IncludeItemTypes: 'Movie',
-    AnyProviderIdEquals: providerFilter(imdbId),
-    Fields: FIELDS,
-    Limit: '10'
-  }).catch(() => null)
+  // Only ask when there is actually an id to ask about. An empty filter is
+  // not a narrow query, it is no query — see matchesProviderId.
+  if (imdbId) {
+    const byProvider = await request<JellyfinItemsResponse>(config, '/Items', {
+      Recursive: 'true',
+      IncludeItemTypes: 'Movie',
+      AnyProviderIdEquals: providerFilter(imdbId),
+      Fields: FIELDS,
+      Limit: '10'
+    }).catch(() => null)
 
-  const provided = byProvider?.Items?.find((item) => item.MediaSources?.length)
-  if (provided) return provided
+    const provided = byProvider?.Items?.find(
+      (item) => item.MediaSources?.length && matchesProviderId(item, imdbId)
+    )
+    if (provided) return provided
+  }
 
   if (!title.trim()) return null
   const byName = await request<JellyfinItemsResponse>(config, '/Items', {
@@ -170,15 +197,21 @@ export async function findEpisode(
   season: number,
   episode: number
 ): Promise<JellyfinItem | null> {
-  const byProvider = await request<JellyfinItemsResponse>(config, '/Items', {
-    Recursive: 'true',
-    IncludeItemTypes: 'Series',
-    AnyProviderIdEquals: providerFilter(imdbId),
-    Fields: 'ProviderIds',
-    Limit: '10'
-  }).catch(() => null)
+  let series: JellyfinItem | null = null
 
-  let series = byProvider?.Items?.[0] ?? null
+  if (imdbId) {
+    const byProvider = await request<JellyfinItemsResponse>(config, '/Items', {
+      Recursive: 'true',
+      IncludeItemTypes: 'Series',
+      AnyProviderIdEquals: providerFilter(imdbId),
+      Fields: 'ProviderIds',
+      Limit: '10'
+    }).catch(() => null)
+
+    // Same trap as findMovie, and worse here: Items[0] of an unfiltered
+    // library is simply "whichever series sorted first".
+    series = byProvider?.Items?.find((item) => matchesProviderId(item, imdbId)) ?? null
+  }
 
   if (!series && title.trim()) {
     const byName = await request<JellyfinItemsResponse>(config, '/Items', {
