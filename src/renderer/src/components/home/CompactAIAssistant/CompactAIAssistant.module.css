@@ -416,3 +416,81 @@
   background: var(--accent-violet);
   box-shadow: 0 0 10px 2px rgba(141, 77, 255, 0.75);
 }
+
+/* ---------- Short-window assistant strip ----------
+   The 'compact' layout mode's stand-in for the whole panel (see
+   AssistantStrip.tsx and useDashboardLayoutMode.ts): the orb is gone,
+   the status line and the two Recommend buttons are not. A row rather
+   than a column, because at this tier the dashboard is a single full-
+   width column and horizontal room is the one thing there is plenty of.
+
+   Shares CompactStatusBar's text/dot rules below rather than redefining
+   them — the two are the same statement at different widths. */
+.assistantStrip {
+  grid-area: assistant;
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 2px;
+  min-height: 0;
+  min-width: 0;
+}
+.assistantStrip svg {
+  width: 15px;
+  height: 15px;
+  color: var(--accent-cyan);
+  flex: 0 0 auto;
+}
+/* .actions is a full-width 210px-max column in the panel above; here it
+   is a pair of pills sitting at the end of a row. */
+.assistantStrip .actions {
+  flex-direction: row;
+  width: auto;
+  max-width: none;
+  margin-left: auto;
+  gap: 8px;
+}
+.assistantStrip .actionButton {
+  padding: 6px 14px;
+  /* The 44px touch floor is a mobile requirement; this tier is
+     min-width:1100px and mouse-driven, and 44px here would make the
+     strip cost most of what the orb panel was removed to save. */
+  min-height: 32px;
+  font-size: 11.5px;
+}
+.assistantStrip .actionButton svg {
+  width: 13px;
+  height: 13px;
+  color: var(--accent-blue);
+}
+/* Status text shouldn't push the buttons off the end of a narrow-ish
+   window — it gives way first, the controls don't. */
+.assistantStrip .compactStatusText {
+  flex: 0 1 auto;
+}
+
+/* ---------- Short windows: the orb itself ----------
+   One tier above 'compact', where the panel survives: the sphere is
+   302px against a row that no longer has 480 to give it, so it comes
+   down with the row. Sized off vh — height is what is scarce — and
+   floored so it never shrinks past the point where the swirl reads as
+   an energy sphere rather than a status dot. */
+@media (min-width: 1100px) and (max-height: 1079px) {
+  .panel {
+    gap: 12px;
+    padding: 10px 8px;
+    min-height: 0;
+  }
+  .orbWrap {
+    width: clamp(180px, 27vh, 302px);
+    height: clamp(180px, 27vh, 302px);
+  }
+  .actions {
+    max-width: 200px;
+  }
+  .actionButton {
+    min-height: 40px;
+    padding: 8px 13px;
+  }
+}

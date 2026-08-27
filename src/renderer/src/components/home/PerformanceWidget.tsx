@@ -1,7 +1,8 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { usePerformanceMetrics } from '@renderer/hooks/usePerformanceMetrics'
+import { useDashboardLayoutMode } from '@renderer/hooks/useDashboardLayoutMode'
 import { useAppState } from '@renderer/context/AppStateContext'
 import { Icon } from '@renderer/components/icons/Icon'
 import styles from './PerformanceWidget.module.css'
@@ -80,20 +81,26 @@ function GaugeStack({ metrics }: { metrics: ReturnType<typeof usePerformanceMetr
 
 export function PerformanceWidget() {
   const { mediaHubSettings } = useAppState()
-  const metrics = usePerformanceMetrics()
+  const mode = useDashboardLayoutMode()
+  // On a window too short for the full composition the gauges are the
+  // first thing to go: a ~230px column of ambient numbers nobody came to
+  // Home to read, sitting in the space the AI Picks row needs in order
+  // not to be covered by the mood dock (see useDashboardLayoutMode).
+  // Settings > performance panel still governs the wider windows, where
+  // the column costs nothing.
+  const hidden = mediaHubSettings?.performancePanelVisible === false || mode === 'compact'
+  // Passed down rather than guarded with an early return, because the
+  // saving is not only the pixels: this subscription is what keeps the
+  // main process's WMI-backed telemetry worker alive, and the worker is
+  // reference-counted on renderer subscribers (src/main/ipc/telemetry.ts).
+  // Not subscribing lets it be terminated instead of polling on behalf of
+  // a panel that isn't on screen. (Hooks can't be skipped by returning
+  // early, hence the flag.)
+  const metrics = usePerformanceMetrics(!hidden)
+  const isCompact = mode === 'stacked'
   const [expanded, setExpanded] = useState(false)
-  const [isCompact, setIsCompact] = useState(false)
 
-  useEffect(() => {
-    function apply() {
-      setIsCompact(window.innerWidth <= 1099)
-    }
-    apply()
-    window.addEventListener('resize', apply)
-    return () => window.removeEventListener('resize', apply)
-  }, [])
-
-  if (mediaHubSettings?.performancePanelVisible === false) return null
+  if (hidden) return null
 
   const maxLoad = Math.round(Math.max(metrics.cpu, metrics.gpu, metrics.ram))
   // Edge brightens under load rather than staying a fixed intensity

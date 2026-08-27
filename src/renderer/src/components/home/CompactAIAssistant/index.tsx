@@ -1,9 +1,10 @@
 'use client'
 
-import { useEffect, useState } from 'react'
 import type { CategoryKind } from '@renderer/lib/mediaHub/categoryFilters'
+import { useDashboardLayoutMode } from '@renderer/hooks/useDashboardLayoutMode'
 import { AIOrb } from './AIOrb'
 import { AssistantStatus } from './AssistantStatus'
+import { AssistantStrip } from './AssistantStrip'
 import { RecommendationActions } from './RecommendationActions'
 import { CompactStatusBar } from './CompactStatusBar'
 import styles from './CompactAIAssistant.module.css'
@@ -16,29 +17,25 @@ export interface CompactAIAssistantProps {
 }
 
 export function CompactAIAssistant({ kinds }: CompactAIAssistantProps = {}) {
-  const [isCompact, setIsCompact] = useState(false)
+  // Three different answers, one per layout mode — see
+  // useDashboardLayoutMode for the thresholds and why height is now one
+  // of them:
+  //
+  // 'stacked' (narrow): a single-line status bar. At phone width the
+  //   full panel would eat most of the fold before the hero appeared,
+  //   and there is no horizontal room to keep the buttons beside it.
+  // 'compact' (short): the orb goes, the buttons stay — the whole panel
+  //   becomes one ~40px strip across the top. A 302px sphere plus its
+  //   halo is the single largest thing on the dashboard, and on a
+  //   window under ~940px tall it is the difference between the mood
+  //   dock landing on top of the AI Picks row and everything fitting.
+  // 'short'/'full': unchanged, the orb panel as designed. (The orb
+  //   itself shrinks a little at 'short' — see the media query in
+  //   CompactAIAssistant.module.css.)
+  const mode = useDashboardLayoutMode()
 
-  // Mobile gets a single-line "compact assistant status" (spec section 8,
-  // item 3) instead of the full orb + recommendation-buttons panel — at
-  // phone width the full panel would eat most of the fold before the
-  // hero even appears. Tablet needs the same treatment: the tablet layout
-  // (spec section 7) puts hero first in visual priority ("hero → picks →
-  // continue-watching-carousel → mood"), and the full 300px-tall orb
-  // panel pushed the hero below the fold when it led the single-column
-  // stack — so anything under the 1100px "desktop" threshold collapses
-  // the assistant to the same slim status bar mobile uses.
-  useEffect(() => {
-    function apply() {
-      setIsCompact(window.innerWidth < 1100)
-    }
-    apply()
-    window.addEventListener('resize', apply)
-    return () => window.removeEventListener('resize', apply)
-  }, [])
-
-  if (isCompact) {
-    return <CompactStatusBar />
-  }
+  if (mode === 'stacked') return <CompactStatusBar />
+  if (mode === 'compact') return <AssistantStrip kinds={kinds} />
 
   return (
     <section className={styles.panel} aria-label="AI assistant">

@@ -171,3 +171,51 @@
     overflow-y: auto;
   }
 }
+
+/* ---------- Short windows ----------
+   This page shares Home's grid-area names, and therefore shares its
+   components' short-window rules too — CompactAIAssistant swaps the orb
+   for a strip, FeaturedHero switches to height:100%, the AI Picks cards
+   size off vh. See HomeDashboard.module.css's block of the same name for
+   the reasoning and useDashboardLayoutMode.ts for the thresholds; what
+   follows is only what this page has to say for itself.
+
+   The hero row is given an explicit clamp rather than Home's `1fr`
+   because of the constraint the .continuePanel comment above already
+   documents at length: .page is deliberately indefinite-height (it
+   scrolls, Home doesn't), so a fractional row here never resolves to
+   anything a descendant's percentage can be measured against. A clamp
+   is definite at any window size, which is what .hero's height:100% and
+   .continuePanel's max-height both need. Both numbers below are
+   therefore derived from the same clamp, not chosen separately. */
+@media (min-width: 1100px) and (max-height: 1079px) {
+  .page {
+    grid-template-rows: clamp(330px, 48vh, 520px) auto auto auto;
+    gap: 10px;
+    padding: 8px 22px 12px calc(22px + var(--nav-rail-width, 285px) * 0.8);
+  }
+  .continuePanel {
+    max-height: calc(clamp(330px, 48vh, 520px) - 36px) !important;
+  }
+}
+
+@media (min-width: 1100px) and (max-height: 940px) {
+  .page {
+    /* Single column for the same reason Home takes one: the assistant is
+       a full-width strip now, and there is no "status" column on this
+       page to begin with (PerformanceWidget is Home-only). */
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto clamp(290px, 44vh, 430px) auto auto auto;
+    grid-template-areas:
+      'assistant'
+      'hero'
+      'picks'
+      'filterbar'
+      'content';
+    gap: 8px;
+    padding: 6px 22px 10px calc(22px + var(--nav-rail-width, 285px) * 0.8);
+  }
+  .continuePanel {
+    max-height: calc(clamp(290px, 44vh, 430px) - 24px) !important;
+  }
+}

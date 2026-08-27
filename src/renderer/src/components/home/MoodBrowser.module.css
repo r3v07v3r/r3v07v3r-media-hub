@@ -947,3 +947,89 @@
     display: none;
   }
 }
+
+/* ---------- Short windows ----------
+   See HomeDashboard.module.css's block of the same name.
+
+   The dock is fixed to the window's bottom edge, so unlike every other
+   section on the dashboard it cannot be pushed off the bottom — when the
+   composition above it doesn't fit, the dock is what ends up drawn on
+   top of the AI Picks row rather than what gets clipped. Measured at
+   1599x853: 198px of dock starting at y=655, over cards that ran from
+   y=588 to y=868. Shrinking the dock is therefore doing double duty —
+   it gives the rows above room AND it stops covering them.
+
+   The proportions are kept: icon, word, riser and the deep bottom
+   padding all come down together, so the light still reads as rising out
+   of the window's edge rather than as the same dock with a haircut. */
+@media (min-width: 1100px) and (max-height: 1079px) {
+  .section {
+    min-height: 156px;
+  }
+  .dock {
+    height: 168px;
+  }
+  .target {
+    gap: 10px;
+    padding: 12px 16px 40px;
+  }
+  .moodIcon svg {
+    width: 24px;
+    height: 24px;
+  }
+  .moodLabel {
+    font-size: 11px;
+    letter-spacing: 1.6px;
+  }
+  .riser {
+    height: 92px;
+  }
+  .mood:hover .riser {
+    height: 96px;
+  }
+  .moodActive .riser {
+    height: 114px;
+  }
+}
+
+@media (min-width: 1100px) and (max-height: 940px) {
+  .section {
+    min-height: 126px;
+  }
+  .dock {
+    height: 138px;
+  }
+  .heading {
+    padding-top: 6px;
+    font-size: 10.5px;
+  }
+  .target {
+    gap: 7px;
+    padding: 8px 12px 30px;
+  }
+  .moodIcon svg {
+    width: 21px;
+    height: 21px;
+  }
+  .moodLabel {
+    font-size: 10px;
+    letter-spacing: 1.2px;
+    padding-bottom: 5px;
+  }
+  .riser {
+    height: 74px;
+  }
+  .mood:hover .riser {
+    height: 78px;
+  }
+  .moodActive .riser {
+    height: 94px;
+  }
+  /* The results drawer measures itself against the window too — with a
+     shorter dock below it there is more room, but a 940px window has
+     less of it overall, so the subtraction has to come down with the
+     dock or the drawer's own top edge runs under the top bar. */
+  .spotlight {
+    max-height: calc(100vh - var(--nav-bar-height, 0px) - 170px);
+  }
+}

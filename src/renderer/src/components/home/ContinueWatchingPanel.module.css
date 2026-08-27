@@ -406,3 +406,30 @@
     right: 6px;
   }
 }
+
+/* ---------- Short windows ----------
+   See HomeDashboard.module.css's block of the same name. The panel
+   floats in the hero's own cell, so its ceiling is that cell — which is
+   exactly what gets smaller here. Its margins and floor come down with
+   it; the min-height in particular, since 240px of floor against a hero
+   that may only be ~300px tall would have it overhanging the artwork it
+   is supposed to be sitting on. */
+@media (min-width: 1100px) and (max-height: 1079px) {
+  .panel {
+    margin: 18px 18px 0 0;
+    max-width: 344px;
+    min-height: 180px;
+    max-height: calc(100% - 36px);
+  }
+}
+
+@media (min-width: 1100px) and (max-height: 940px) {
+  .panel {
+    margin: 12px 14px 0 0;
+    max-width: 316px;
+    min-height: 0;
+    max-height: calc(100% - 24px);
+    padding: 13px 12px;
+    border-radius: 22px;
+  }
+}

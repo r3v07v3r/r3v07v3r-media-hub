@@ -14,13 +14,19 @@ function smoothStep(current: number, target: number, amount = 0.35) {
  *  (e.g. this component rendered outside Electron, such as a plain browser
  *  tab during Playwright/dev-server visual verification) rather than
  *  crashing or silently pretending to have live data. */
-export function usePerformanceMetrics() {
+export function usePerformanceMetrics(enabled = true) {
   const reducedMotion = useReducedMotion()
   // The widget this feeds can be mounted but invisible (Home underneath a
   // full-screen movie, or the window minimized) — no reason to keep
   // re-rendering a smoothing tween nobody can see every 220ms.
   const motionSuspended = useMotionSuspended()
-  const skipSmoothing = reducedMotion || motionSuspended
+  // `enabled: false` is the caller saying the gauges aren't on screen at
+  // all (PerformanceWidget on a short window, or with the panel switched
+  // off in Settings) — same treatment as motionSuspended below, which is
+  // the same statement made about a hidden window rather than a hidden
+  // panel: don't subscribe, so main can terminate the telemetry worker,
+  // and don't run the smoothing tween either.
+  const skipSmoothing = reducedMotion || motionSuspended || !enabled
   const [snapshot, setSnapshot] = useState<PerformanceSnapshot>({
     cpu: 0,
     gpu: 0,
@@ -36,7 +42,7 @@ export function usePerformanceMetrics() {
     // subscription as well as the visual tween while it is hidden/minimized
     // so the WMI-backed worker can be terminated instead of continuing to
     // compete with the renderer for CPU nobody can see being spent.
-    if (!window.api?.system || motionSuspended) return
+    if (!window.api?.system || motionSuspended || !enabled) return
     const unsubscribe = window.api.system.subscribe((s) => {
       setLive(true)
       targets.current = {
@@ -48,7 +54,7 @@ export function usePerformanceMetrics() {
       }
     })
     return unsubscribe
-  }, [motionSuspended])
+  }, [motionSuspended, enabled])
 
   useEffect(() => {
     if (skipSmoothing) {

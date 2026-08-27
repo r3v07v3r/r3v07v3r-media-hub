@@ -446,3 +446,65 @@
     width: 216px;
   }
 }
+
+/* ---------- Short windows ----------
+   See HomeDashboard.module.css's block of the same name.
+
+   The 280px floor above is the single largest fixed claim on the
+   dashboard's second row, and it was tuned against a 1080px window (its
+   own comment records the getBoundingClientRect runs). Below that height
+   it stops being a floor and becomes an overhang — the row can't get
+   280px, so it takes them from the mood dock, which is fixed to the
+   window's bottom edge and simply ends up drawn on top of these cards.
+
+   Dropped to 0 here so the row is exactly its content, and the cards
+   are sized off `vh` instead: the card is the thing that has to get
+   smaller when the window is short, and its aspect-ratio means width is
+   how you say that. */
+@media (min-width: 1100px) and (max-height: 1079px) {
+  .section {
+    min-height: 0;
+    gap: 8px;
+  }
+  .card,
+  .skeletonCard {
+    width: clamp(152px, 21vh, 232px);
+  }
+}
+
+@media (min-width: 1100px) and (max-height: 940px) {
+  .heading {
+    font-size: 12px;
+  }
+  .card,
+  .skeletonCard {
+    width: clamp(134px, 19vh, 194px);
+  }
+  .scroller {
+    gap: 12px;
+    padding: 2px 2px 6px;
+  }
+  /* The overlay text scales with the tile rather than staying at the
+     10-foot-interface sizes — those were set for a 255px card, and left
+     alone on a 160px one the title alone would take half the artwork. */
+  .cardTitle {
+    font-size: 14.5px;
+  }
+  .cardRatings {
+    font-size: 11px;
+  }
+  .matchText {
+    font-size: 12px;
+  }
+  .cardOverlay {
+    padding: 8px 11px 10px;
+    gap: 3px;
+  }
+  .playButton {
+    bottom: 10px;
+    right: 10px;
+    width: 30px;
+    height: 30px;
+    min-width: 30px;
+  }
+}
