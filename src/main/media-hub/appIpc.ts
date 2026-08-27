@@ -13,11 +13,14 @@ import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { MEDIA_HUB_CHANNELS } from '../../shared/media-hub/ipc-channels'
 import type {
+  ImportSummary,
   MediaHubPublicSettings,
   MediaHubSettingsSnapshot,
   SavedFilter
 } from '../../shared/media-hub/types'
+import { parseImdbRatingsCsv } from '../../shared/media-hub/importCsv'
 import { readBackup } from './backup'
+import { requestRecommendationsRebuild } from './recommendations'
 import { watchRegion } from './watchProviders'
 import { getDatabase } from './dbState'
 import { handle } from './ipcGuard'
@@ -215,6 +218,37 @@ export function registerAppIpc(): void {
       createdAt: summary.createdAt,
       activeProfileId: summary.activeProfileId
     }
+  })
+
+  handle<undefined, ImportSummary | null>(MEDIA_HUB_CHANNELS.importImdbRatings, async (event) => {
+    const win = BrowserWindow.fromWebContents(event.sender)
+    const options = {
+      title: 'Import ratings from IMDb',
+      properties: ['openFile' as const],
+      // IMDb's own export is unambiguously named ratings.csv — the filter is
+      // by extension rather than by that exact name, since somebody may well
+      // have renamed the download.
+      filters: [{ name: 'IMDb ratings export', extensions: ['csv'] }]
+    }
+    const result = win
+      ? await dialog.showOpenDialog(win, options)
+      : await dialog.showOpenDialog(options)
+    const filePath = result.filePaths?.[0]
+    if (result.canceled || !filePath) return null
+
+    // utf-8 rather than the file's own declared encoding: IMDb's export has
+    // been UTF-8 (with a BOM some tools add and Node's utf-8 decoder already
+    // strips) for as long as this format has existed.
+    const text = await fsp.readFile(filePath, 'utf-8')
+    const parsed = parseImdbRatingsCsv(text)
+    const ratings = getDatabase().importRatings(parsed.rows)
+    // What was just written changes what the ranking should suggest — see
+    // recommendations.ts's own comment on this after a Trakt import, which
+    // this mirrors exactly.
+    requestRecommendationsRebuild()
+    // No `plays` from this source at all: IMDb's ratings export is opinions,
+    // not a watch history — it has no equivalent to Trakt's /sync/history.
+    return { plays: 0, ratings, skipped: parsed.skipped }
   })
 
   handle<unknown, { watchRegion: string }>(

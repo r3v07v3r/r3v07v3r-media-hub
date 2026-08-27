@@ -220,6 +220,10 @@ const api = {
         createdAt: string
         activeProfileId: string
       } | null> => ipcRenderer.invoke(MEDIA_HUB_CHANNELS.backupImport),
+      /** Reads IMDb's own "export your ratings" CSV, picked with a native
+       *  file dialog. Null when the picker was cancelled. */
+      importImdbRatings: (): Promise<ImportSummary | null> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.importImdbRatings),
       setUiAnimations: (enabled: boolean): Promise<{ uiAnimationsEnabled: boolean }> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.settingsSetUiAnimations, enabled),
       setPerformancePanelVisible: (

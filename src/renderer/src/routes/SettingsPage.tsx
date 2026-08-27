@@ -691,7 +691,7 @@ export default function SettingsPage() {
   // profile being edited.
   const [editingProfile, setEditingProfile] = useState<string | 'new' | null>(null)
   // Which of the two backup actions is in flight, so only that button says so.
-  const [backupBusy, setBackupBusy] = useState<'export' | 'import' | null>(null)
+  const [backupBusy, setBackupBusy] = useState<'export' | 'import' | 'imdb' | null>(null)
   const [networkInfo, setNetworkInfo] = useState<NetworkInfoResult | null>(null)
   const [speedTest, setSpeedTest] = useState<{
     kind: 'idle' | 'busy' | 'ok' | 'error'
@@ -807,6 +807,36 @@ export default function SettingsPage() {
       pushNotification({
         tone: 'error',
         message: error instanceof Error ? error.message : 'That backup could not be restored.'
+      })
+    } finally {
+      setBackupBusy(null)
+    }
+  }
+
+  async function handleImportImdbRatings() {
+    const api = window.api?.mediaHub
+    if (!api) return
+    setBackupBusy('imdb')
+    try {
+      const result = await api.settings.importImdbRatings()
+      // A cancelled picker, like the backup restore above.
+      if (!result) return
+      pushNotification({
+        tone: 'success',
+        message:
+          result.ratings || result.skipped
+            ? `Added ${result.ratings} ${result.ratings === 1 ? 'rating' : 'ratings'}.${
+                result.skipped ? ` ${result.skipped} rows could not be read.` : ''
+              }`
+            : 'Everything in that file was already here.'
+      })
+      // A rating changes what the ranking should suggest — see the same
+      // reload after a Trakt import.
+      reloadLibrary()
+    } catch (error) {
+      pushNotification({
+        tone: 'error',
+        message: error instanceof Error ? error.message : 'That file could not be read.'
       })
     } finally {
       setBackupBusy(null)
@@ -1064,6 +1094,14 @@ export default function SettingsPage() {
                 label="Restore…"
                 busy={backupBusy === 'import'}
                 onClick={handleImportBackup}
+              />
+              <ActionRow
+                icon="star"
+                title="Import ratings from IMDb"
+                description="Reads the ratings.csv IMDb gives you from Your Ratings → Export. Matched by IMDb id, so nothing is guessed at — safe to run more than once, since a title already rated here keeps the score you gave it."
+                label="Import…"
+                busy={backupBusy === 'imdb'}
+                onClick={handleImportImdbRatings}
               />
             </section>
 

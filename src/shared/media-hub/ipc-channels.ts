@@ -35,6 +35,10 @@ export const MEDIA_HUB_CHANNELS = {
    *  read one back. See main/media-hub/backup.ts for what a backup carries. */
   backupExport: 'mediahub:backup:export',
   backupImport: 'mediahub:backup:import',
+  /** Reads IMDb's "export your ratings" CSV — a file the person downloads
+   *  from IMDb themselves, picked with a native file dialog. See
+   *  shared/media-hub/importCsv.ts for why this needs no title matching. */
+  importImdbRatings: 'mediahub:import:imdb-ratings',
   logout: 'mediahub:account:logout',
   torboxConnect: 'mediahub:torbox:connect',
   torboxDisconnect: 'mediahub:torbox:disconnect',
