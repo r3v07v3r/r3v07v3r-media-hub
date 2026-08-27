@@ -61,7 +61,11 @@ function streamText(stream: StreamCandidate): string {
   return `${stream.name || ''} ${stream.title || ''} ${stream.description || ''}`.toLowerCase()
 }
 
-function streamResolution(stream: StreamCandidate): number {
+/** Exported so a cache session can record the resolution it actually
+ *  holds. Without it a cached copy stores `undefined`, and the quality
+ *  target then accepts it unconditionally — a cached 720p copy would
+ *  satisfy a 1080p request forever. */
+export function streamResolution(stream: StreamCandidate): number {
   const text = streamText(stream)
   if (/2160|4k/.test(text)) return 2160
   if (/1080/.test(text)) return 1080

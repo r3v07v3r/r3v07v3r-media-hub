@@ -40,6 +40,7 @@ import {
   enrichTorBoxItem,
   rankSafeStreams,
   resumeCandidateFor,
+  streamResolution,
   selectVideoFile,
   titleMatchesRelease,
   validateTorBoxToken,
@@ -349,10 +350,14 @@ export function registerTorBoxIpc(): void {
       // something just watched re-ran the full two-addon search plus a
       // TorBox checkcached call every single time, instead of reusing an
       // answer that hadn't changed.
-      const recent = db.getCache<StreamResolveResult>(key)
-      if (recent) return recent
-
       // TIER 1 — already on this machine.
+      //
+      // Ahead of the resolve cache above deliberately. That cache holds
+      // "which source to use" for an hour, so a title finished downloading
+      // five minutes ago would still route back through TorBox to mint a
+      // link and read a length, purely to end up adopting bytes already on
+      // this disk. Nothing that plays offline should need a round trip to
+      // learn that.
       //
       // Answered from the filesystem alone: no source contacted, no network
       // touched. Two distinct outcomes, and the partial one is the reason
@@ -402,6 +407,9 @@ export function registerTorBoxIpc(): void {
           return { streams: [resume], best: resume }
         }
       }
+
+      const recent = db.getCache<StreamResolveResult>(key)
+      if (recent) return recent
 
       // Asked BEFORE the remembered-stream path below, not after.
       //
@@ -674,7 +682,11 @@ export function registerTorBoxIpc(): void {
                 seasonNumber: season,
                 episodeNumber: episode,
                 sourceRef,
-                resolution: Number(stream?.resolution) || undefined
+                // streamResolution, not stream.resolution: the scrapers
+                // mostly leave that field unset and put the real quality in
+                // the release text, so reading the raw field stores
+                // undefined for nearly every TorBox copy.
+                resolution: stream ? streamResolution(stream) || undefined : undefined
               }
             : undefined
         )

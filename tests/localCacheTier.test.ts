@@ -130,8 +130,31 @@ async function resumeChecks(): Promise<void> {
   )
 }
 
+// --- what a cached copy records as its quality ----------------------------
+// The scrapers mostly leave StreamCandidate.resolution unset and put the
+// quality in the release text, so recording the raw field stored undefined
+// for nearly every TorBox copy — and an undefined resolution passes the
+// quality target unconditionally.
+async function resolutionChecks(): Promise<void> {
+  const { streamResolution } = await import('../src/main/media-hub/core')
+  assert.equal(
+    streamResolution({ infoHash: 'x', name: '[TORRENT] Comet 1080p' }),
+    1080,
+    'read from the release text, which is where the scrapers put it'
+  )
+  assert.equal(streamResolution({ infoHash: 'x', name: 'Film 2160p WEB-DL' }), 2160)
+  assert.equal(streamResolution({ infoHash: 'x', name: 'Film 4K REMUX' }), 2160, '4K is 2160p')
+  assert.equal(
+    streamResolution({ infoHash: 'x', name: 'Film', resolution: 720 }),
+    720,
+    'falls back to the numeric field when the text says nothing'
+  )
+  assert.equal(streamResolution({ infoHash: 'x', name: 'Film' }), 0, 'unknown stays unknown')
+}
+
 async function main(): Promise<void> {
   await resumeChecks()
+  await resolutionChecks()
   const { findLocalCacheCandidate } = await import('../src/main/media-hub/streamCache')
 
   // findLocalCacheCandidate reads the real cache root, which does not exist
