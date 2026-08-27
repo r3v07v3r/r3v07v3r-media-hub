@@ -92,11 +92,12 @@ export function createMdnsAnnouncer(options: {
     }
   }
 
-  function announce(): void {
+  function announce(target?: { address: string; port: number }): void {
     if (!socket) return
     const { answers, additionals } = records()
     const packet = encodeResponse(answers, additionals)
-    socket.send(packet, MDNS_PORT, MDNS_ADDRESS, () => {})
+    if (target) socket.send(packet, target.port, target.address, () => {})
+    else socket.send(packet, MDNS_PORT, MDNS_ADDRESS, () => {})
   }
 
   return {
@@ -108,7 +109,7 @@ export function createMdnsAnnouncer(options: {
           socket?.close()
           socket = null
         })
-        socket.on('message', (message) => {
+        socket.on('message', (message, rinfo) => {
           const decoded = decodeMessage(message)
           if (!decoded || decoded.isResponse) return
           const asked = decoded.questions.some(
@@ -116,7 +117,15 @@ export function createMdnsAnnouncer(options: {
               question.name.toLowerCase() === LANCACHE_SERVICE_TYPE &&
               (question.type === TYPE_PTR || question.type === 255)
           )
-          if (asked) announce()
+          if (!asked) return
+          // RFC 6762 §6.7: a query from a port other than 5353 is a
+          // one-shot ("legacy") querier that is not listening on the
+          // multicast group — it must be answered UNICAST to its source,
+          // or it never hears the reply at all. Found live: the app's
+          // browser binds an ephemeral port and discovery silently found
+          // nothing while multicast-only replies went to a group it had
+          // not joined.
+          announce(rinfo.port !== MDNS_PORT ? rinfo : undefined)
         })
         socket.bind(MDNS_PORT, () => {
           try {

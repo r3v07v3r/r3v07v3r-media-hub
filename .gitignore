@@ -29,3 +29,4 @@ preview-dist/
 # statically linked binary and GitHub hard-rejects any file over 100MB. The
 # pinned tag + sha256 in that script is what makes this reproducible.
 resources/mpv-win/
+dist-daemon/
