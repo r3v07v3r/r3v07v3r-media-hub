@@ -11,6 +11,7 @@ import MyStuffPage from '@renderer/routes/MyStuffPage'
 import DownloadsPage from '@renderer/routes/DownloadsPage'
 import SettingsPage from '@renderer/routes/SettingsPage'
 import MoodExplorePage from '@renderer/routes/MoodExplorePage'
+import PersonPage from '@renderer/routes/PersonPage'
 import PlayerOverlayWindow from '@renderer/routes/PlayerOverlayWindow'
 import { PLAYER_OVERLAY_ROUTE } from '@shared/media-hub/playerRoute'
 
@@ -65,6 +66,9 @@ export default function App() {
               <Route path="/downloads" element={<DownloadsPage />} />
               <Route path="/settings" element={<SettingsPage />} />
               <Route path="/moods" element={<MoodExplorePage />} />
+              {/* A drill-down from a title page, not a nav destination — see
+                  PersonPage's own header. */}
+              <Route path="/people/:name" element={<PersonPage />} />
               {/* A stale bookmark or malformed external deep link should
                   recover to a usable screen instead of rendering an empty
                   application shell. */}

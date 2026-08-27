@@ -125,6 +125,74 @@ export function creditsFor(ids: Iterable<string>): Map<string, TitleCredits> {
   return found
 }
 
+/**
+ * Every cached title this person appears in, as ids.
+ *
+ * Local and cache-only, deliberately. TMDB would give a complete filmography
+ * including everything this app cannot play, which is the wrong answer here:
+ * the useful question on a title page is "what ELSE of theirs can I watch
+ * now", and that is a question about this catalog. Whatever the background
+ * enrichment pass has covered so far is the answer — an install where it has
+ * covered little shows little, and shows more over the following sessions,
+ * which is the same bargain the taste profile already makes.
+ *
+ * Matched on the normalized name because that is all the credits cache holds:
+ * TMDB person ids are not stored, so two different actors who share a name
+ * would collapse into one. Rare enough to accept, and the alternative is a
+ * schema change plus a re-enrichment of every title already covered.
+ */
+export function titlesFeaturing(
+  ids: Iterable<string>,
+  person: string
+): { cast: string[]; creators: string[] } {
+  const needle = String(person).trim().toLowerCase()
+  const cast: string[] = []
+  const creators: string[] = []
+  if (!needle) return { cast, creators }
+  const matches = (values: string[] | undefined): boolean =>
+    (values ?? []).some((value) => String(value).trim().toLowerCase() === needle)
+
+  for (const [id, credits] of creditsFor(ids)) {
+    // Creator first: somebody who both directed and appeared in a film is
+    // listed under the role people came looking for.
+    if (matches(credits.creators)) creators.push(id)
+    else if (matches(credits.cast)) cast.push(id)
+  }
+  return { cast, creators }
+}
+
+/**
+ * Titles whose cast, creators or story labels match `query`.
+ *
+ * The credits cache has been filled for every enriched title since it existed
+ * and only ever fed the ranking. Searching it costs nothing extra — the rows
+ * are already on disk — and it is the difference between a search that finds
+ * "Villeneuve" and one that finds only films with Villeneuve in the TITLE.
+ *
+ * Substring rather than exact, unlike titlesFeaturing: a person clicking a
+ * name means that exact name, and a person typing one is part-way through it.
+ * Ordered so a match ON A NAME beats a match on a story label — somebody
+ * typing "drive" wants the film before everything tagged "driving".
+ */
+export function searchCredits(
+  ids: Iterable<string>,
+  query: string
+): { people: string[]; labels: string[] } {
+  const needle = String(query).trim().toLowerCase()
+  const people: string[] = []
+  const labels: string[] = []
+  // One character matches most of the catalog and means nothing.
+  if (needle.length < 2) return { people, labels }
+  const hit = (values: string[] | undefined): boolean =>
+    (values ?? []).some((value) => String(value).toLowerCase().includes(needle))
+
+  for (const [id, credits] of creditsFor(ids)) {
+    if (hit(credits.cast) || hit(credits.creators)) people.push(id)
+    else if (hit(credits.keywords)) labels.push(id)
+  }
+  return { people, labels }
+}
+
 /** Resolves an IMDb id to TMDB's own, which every other TMDB endpoint needs. Cached, since it is a fixed fact and this runs thousands of times. */
 async function tmdbIdFor(
   kind: 'movie' | 'series',

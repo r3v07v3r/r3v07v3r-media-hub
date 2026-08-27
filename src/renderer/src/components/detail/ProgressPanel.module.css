@@ -152,3 +152,52 @@
   border-color: rgba(39, 230, 154, 0.4);
   background: rgba(39, 230, 154, 0.08);
 }
+
+/* ---- Add to list ------------------------------------------------------- */
+
+.listPicker {
+  position: relative;
+  display: inline-flex;
+}
+
+/* Anchored to the button rather than placed in flow: the panel it sits in is
+   short, and a menu that pushed the stats down would move the thing the
+   person was reading. */
+.listMenu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 5;
+  min-width: 180px;
+  max-height: 240px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  padding: 5px;
+  border-radius: var(--radius-small);
+  border: 1px solid var(--border-subtle);
+  background: var(--panel-strong);
+  backdrop-filter: blur(var(--blur-panel));
+}
+
+.listMenuItem {
+  appearance: none;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 12.5px;
+  text-align: left;
+  padding: 7px 10px;
+  cursor: pointer;
+}
+
+.listMenuItem:hover {
+  background: var(--panel);
+}
+
+.listMenuItem:focus-visible {
+  outline: 2px solid var(--accent-cyan);
+  outline-offset: -2px;
+}

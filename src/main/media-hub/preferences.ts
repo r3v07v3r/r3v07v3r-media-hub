@@ -9,6 +9,7 @@ import type { MediaHubPublicSettings, Theme, UpdateChannel } from '../../shared/
 import { normalizePlaybackBuffer } from '../../shared/media-hub/playbackBuffer'
 import { normalizeVideoScaling } from '../../shared/media-hub/videoScaling'
 import { normalizeOllamaBaseUrl, normalizeOllamaModel } from '../../shared/media-hub/ollama'
+import { watchRegion } from './watchProviders'
 
 export const THEMES: Theme[] = [
   { id: 'neon', name: 'Neon Noir', description: 'Signature magenta command center' },
@@ -48,6 +49,9 @@ export function publicSettings(settings: Record<string, unknown> = {}): MediaHub
     playbackBuffer: normalizePlaybackBuffer(settings.playbackBuffer),
     videoScaling: normalizeVideoScaling(settings.videoScaling),
     autoSubtitlesEnabled: settings.autoSubtitlesEnabled !== false,
+    autoplayNextEnabled: settings.autoplayNextEnabled !== false,
+    notificationsEnabled: settings.notificationsEnabled === true,
+    watchRegion: watchRegion(),
     uiAnimationsEnabled: settings.uiAnimationsEnabled !== false,
     performancePanelVisible: settings.performancePanelVisible !== false,
     maxStreamResolution: Number(settings.maxStreamResolution) || 0,
@@ -101,6 +105,9 @@ export function logoutSettings(
   | 'playbackBuffer'
   | 'videoScaling'
   | 'autoSubtitlesEnabled'
+  | 'autoplayNextEnabled'
+  | 'notificationsEnabled'
+  | 'watchRegion'
   | 'uiAnimationsEnabled'
   | 'performancePanelVisible'
   | 'maxStreamResolution'
@@ -121,6 +128,9 @@ export function logoutSettings(
     playbackBuffer: normalizePlaybackBuffer(settings.playbackBuffer),
     videoScaling: normalizeVideoScaling(settings.videoScaling),
     autoSubtitlesEnabled: settings.autoSubtitlesEnabled !== false,
+    autoplayNextEnabled: settings.autoplayNextEnabled !== false,
+    notificationsEnabled: settings.notificationsEnabled === true,
+    watchRegion: watchRegion(),
     uiAnimationsEnabled: settings.uiAnimationsEnabled !== false,
     performancePanelVisible: settings.performancePanelVisible !== false,
     maxStreamResolution: Number(settings.maxStreamResolution) || 0,

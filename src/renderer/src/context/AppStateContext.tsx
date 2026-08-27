@@ -55,6 +55,7 @@ import {
   startupTrackedIdsFallback,
   useMediaHubBrowseCatalog,
   useMediaHubDislikedIds,
+  useMediaHubRatings,
   useMediaHubHomeFeed,
   useMediaHubWatchedIds,
   type CatalogKindState
@@ -173,6 +174,28 @@ interface AppStateValue {
   // (disliked:add/remove) instead of tracking:toggle. Drives
   // MediaItem.disliked (see adapters.ts) and the Hide Disliked filter.
   dislikedIds: Set<string>
+  /** What the active profile has scored each title, 1-10, keyed by content id.
+   *  Absent means unrated — see shared/media-hub/rating.ts on why that is not
+   *  the same as a low score. */
+  ratings: Map<string, number>
+  /** Records a score, or clears it with 0. */
+  rateMedia: (id: string, score: number) => Promise<void>
+  /**
+   * Identifies the library currently on screen — the active profile, plus a
+   * counter that moves whenever the rows underneath it are replaced wholesale.
+   *
+   * Anything reading profile-scoped data through IPC should depend on this
+   * rather than on the profile id: restoring a backup replaces every row while
+   * usually leaving the id untouched.
+   */
+  libraryKey: string
+  /** Call after replacing the library wholesale (a restore), so every view
+   *  derived from it re-reads. */
+  reloadLibrary: () => void
+  /** Re-reads the profile list. Needed after a restore as well as after a
+   *  create/delete: a backup from another machine carries that machine's
+   *  profile ids, and they are merged into settings by the import. */
+  refreshProfiles: () => void
   toggleDisliked: (media: MediaItem) => void
 
   // Continue Watching — seeded from the media-hub backend's
@@ -313,6 +336,9 @@ interface AppStateValue {
   /** `originLabelOverride`: only needed when opening a title from within
    *  another detail page — see the implementation's own comment. */
   openDetail: (media: MediaItem, originLabelOverride?: string) => void
+  /** Opens what else this catalog has of one person's — see routes/PersonPage.
+   *  A drill-down from a title page, not a nav destination. */
+  openPerson: (name: string) => void
   clearBrowsingOrigin: () => void
 
   // Resolving a stream (stream:resolve, "searching" for a cached source)
@@ -448,9 +474,17 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   const [continueWatching, setContinueWatching] = useState<ContinueWatchingItem[]>(
     startupContinueWatchingFallback
   )
-  const homeFeed = useMediaHubHomeFeed()
-  const watchedIdsResult = useMediaHubWatchedIds()
-  const dislikedIdsResult = useMediaHubDislikedIds()
+  // Bumped by reloadLibrary below. Part of the key rather than a separate
+  // dependency so there is one value to pass around and one thing to get
+  // wrong — see the note above useMediaHubWatchedIds.
+  const [libraryEpoch, setLibraryEpoch] = useState(0)
+  const libraryKey = `${activeProfileId}:${libraryEpoch}`
+  const reloadLibrary = useCallback(() => setLibraryEpoch((n) => n + 1), [])
+
+  const homeFeed = useMediaHubHomeFeed(libraryKey)
+  const watchedIdsResult = useMediaHubWatchedIds(libraryKey)
+  const dislikedIdsResult = useMediaHubDislikedIds(libraryKey)
+  const ratingsResult = useMediaHubRatings(libraryKey)
   const browseCatalog = useMediaHubBrowseCatalog(
     myList,
     watchedIdsResult.watchedIds,
@@ -934,6 +968,19 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   const [syncDiscrepancies, setSyncDiscrepancies] = useState<WatchStatusDiscrepancy[]>([])
   const [syncReviewOpen, setSyncReviewOpen] = useState(false)
 
+  // Discarded when the library underneath them changes — a profile switch, or
+  // a restore. A discrepancy is a claim about ONE profile's history against
+  // Simkl's, and resolving a stale one would either rewrite the newly active
+  // profile's history or push the previous profile's decision to the account.
+  // Reset during render rather than from an effect, which would cascade a
+  // render and leave one frame in which the panel could still be acted on.
+  const [discrepanciesFor, setDiscrepanciesFor] = useState(libraryKey)
+  if (discrepanciesFor !== libraryKey) {
+    setDiscrepanciesFor(libraryKey)
+    setSyncDiscrepancies([])
+    setSyncReviewOpen(false)
+  }
+
   useEffect(() => {
     const api = window.api?.mediaHub?.tracking
     if (!api) return
@@ -1220,6 +1267,14 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   // that prefix itself (it doubled up as "Back to Back to X" before this
   // comment was written). Every other call site omits it and gets the
   // auto-derived label, same as before.
+  const openPerson = useCallback(
+    (name: string) => {
+      const trimmed = String(name || '').trim()
+      if (trimmed) navigate(`/people/${encodeURIComponent(trimmed)}`)
+    },
+    [navigate]
+  )
+
   const openDetail = useCallback(
     (media: MediaItem, originLabelOverride?: string) => {
       const route = `${location.pathname}${location.search}`
@@ -1281,6 +1336,13 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   }, [])
 
   const startPlaybackRef = useRef<(media: MediaItem) => Promise<boolean>>(async () => false)
+  // Same forward-reference trick as startPlaybackRef above, for the same
+  // reason: the player's ui-event listener is subscribed before
+  // startPartyPlayback is defined, and re-subscribing it on every identity
+  // change would drop events raised in the gap.
+  const startPartyPlaybackRef = useRef<
+    (media: MediaItem, opts?: { season?: number; episode?: number }) => Promise<void>
+  >(async () => {})
   const startPlayback = useCallback(
     async (media: MediaItem): Promise<boolean> => {
       if (mediaHubSettings && !mediaHubSettings.torboxConnected) {
@@ -1525,6 +1587,50 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
             .catch(() => {})
           return
         }
+        case 'play-next': {
+          const media = playbackMediaForEventsRef.current
+          if (!media) return
+          // Revalidated rather than trusted, even though the only sender is our
+          // own overlay: these two numbers go straight into a stream resolve,
+          // and a non-integer would produce a mediaId no addon can answer and a
+          // failure the person could not explain.
+          const season = Number(event.season)
+          const episode = Number(event.episode)
+          if (!Number.isInteger(season) || !Number.isInteger(episode)) return
+          if (season < 0 || episode < 1) return
+          // startPartyPlayback, not startPlayback: outside a room it is the
+          // same call, and inside one it announces the episode so the room
+          // follows the host into it exactly as it would from a click. A
+          // follower never reaches here — the overlay does not offer the card.
+          void startPartyPlaybackRef.current(media, { season, episode })
+          return
+        }
+        case 'scrobble': {
+          // The event's OWN subject, never playbackMedia. During a title
+          // change this window's media has usually already been replaced by
+          // the time the overlay's stop arrives, so reading it here sent the
+          // outgoing title's stop for the incoming episode — ending a scrobble
+          // that had just begun and leaving the previous one running.
+          const subject = event.media
+          if (!subject?.id) return
+          // Fire and forget. A scrobble is a courtesy to a third-party
+          // service; nothing in this app waits on it, and a failure is logged
+          // in main rather than shown over the video.
+          window.api?.mediaHub?.simkl
+            .scrobble(
+              event.action,
+              {
+                id: subject.id,
+                type: subject.kind,
+                title: subject.title,
+                year: ''
+              },
+              { season: subject.seasonNumber, episode: subject.episodeNumber },
+              event.progress
+            )
+            .catch(() => {})
+          return
+        }
         case 'refresh-watch-status':
           refreshWatchStatusRef.current()
           return
@@ -1608,6 +1714,9 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     },
     [startPlayback, partyStatus]
   )
+  useEffect(() => {
+    startPartyPlaybackRef.current = startPartyPlayback
+  }, [startPartyPlayback])
 
   // Follower side of the above: unwrap an incoming `nowPlaying` (see
   // watchParty.ts's handlePartyMessage — every message type other than
@@ -2091,6 +2200,11 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       toggleMyList,
       dislikedIds,
       toggleDisliked,
+      ratings: ratingsResult.ratings,
+      rateMedia: ratingsResult.rate,
+      libraryKey,
+      reloadLibrary,
+      refreshProfiles,
       continueWatching,
       markContinueWatching,
       removeContinueWatching,
@@ -2124,6 +2238,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       dismissNotification,
       browsingOrigin,
       openDetail,
+      openPerson,
       clearBrowsingOrigin,
       resolvingMedia,
       cancelPlaybackPreparation,
@@ -2184,6 +2299,11 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       toggleMyList,
       dislikedIds,
       toggleDisliked,
+      ratingsResult.ratings,
+      ratingsResult.rate,
+      libraryKey,
+      reloadLibrary,
+      refreshProfiles,
       continueWatching,
       markContinueWatching,
       removeContinueWatching,
@@ -2215,6 +2335,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       dismissNotification,
       browsingOrigin,
       openDetail,
+      openPerson,
       clearBrowsingOrigin,
       resolvingMedia,
       cancelPlaybackPreparation,

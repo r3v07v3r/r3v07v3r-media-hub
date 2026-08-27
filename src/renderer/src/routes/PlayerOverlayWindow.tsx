@@ -24,8 +24,25 @@ import { PlayerWindowProvider, usePlayerWindow } from '@renderer/context/PlayerW
 import { usePartySync } from '@renderer/hooks/usePartySync'
 import { usePlayerTracking } from '@renderer/hooks/usePlayerTracking'
 import { PlayerSessionRail } from '@renderer/components/party/PlayerSessionRail'
-import { MAX_PLAYER_VOLUME, PLAYER_VOLUME_STEP } from '@shared/media-hub/player'
+import {
+  AUTOPLAY_NEXT_COUNTDOWN_SECONDS,
+  MAX_PLAYER_VOLUME,
+  PLAYER_VOLUME_STEP
+} from '@shared/media-hub/player'
+import type { NextEpisodeRef } from '@shared/media-hub/nextEpisode'
+import type { PlayerSessionMedia } from '@shared/media-hub/player'
 import type { SubtitleResult } from '@shared/media-hub/types'
+import {
+  DEFAULT_SUBTITLE_STYLE,
+  isSubtitleStyleDefault,
+  SUBTITLE_COLORS,
+  SUBTITLE_POSITION_MAX,
+  SUBTITLE_POSITION_MIN,
+  SUBTITLE_SCALE_MAX,
+  SUBTITLE_SCALE_MIN,
+  SUBTITLE_SCALE_STEP,
+  type SubtitleStyle
+} from '@shared/media-hub/subtitleStyle'
 import {
   DEFAULT_VIDEO_FIT,
   VIDEO_FIT_MODES,
@@ -49,7 +66,26 @@ const SCRUB_PREVIEW_WIDTH = 160
  *  live; there is no re-render of anything. */
 const SUBTITLE_DELAY_STEP = 0.25
 
-type Menu = 'audio' | 'subtitles' | 'fit' | 'picture' | null
+type Menu = 'audio' | 'subtitles' | 'fit' | 'picture' | 'playback' | 'chapters' | null
+
+/** What the speed control offers. 1 is listed with the rest rather than being
+ *  a separate "reset", because it is the value people come back to and hunting
+ *  for a differently-shaped control to do it is worse. */
+const SPEED_OPTIONS = [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2] as const
+
+/** How far one press moves the audio offset. Matches the subtitle step above:
+ *  the two corrections are the same job in opposite directions and should not
+ *  behave differently. */
+const AUDIO_DELAY_STEP = 0.05
+
+/** Sleep-timer choices, in minutes. `0` is the end-of-episode option, which is
+ *  not a duration at all — it waits for the file rather than the clock. */
+const SLEEP_OPTIONS = [
+  { minutes: 15, label: '15 minutes' },
+  { minutes: 30, label: '30 minutes' },
+  { minutes: 60, label: '1 hour' },
+  { minutes: 0, label: 'End of episode' }
+] as const
 
 function formatTime(totalSeconds: number): string {
   if (!Number.isFinite(totalSeconds) || totalSeconds < 0) return '0:00'
@@ -65,13 +101,25 @@ function PlayerControls() {
   const [controlsVisible, setControlsVisible] = useState(true)
   const [menu, setMenu] = useState<Menu>(null)
   const [roomRailOpen, setRoomRailOpen] = useState(false)
-  const [subtitleResults, setSubtitleResults] = useState<SubtitleResult[] | null>(null)
+  // Carries the title it was searched for. Without that, an autoplayed episode
+  // opened the subtitle menu on the PREVIOUS episode's results and, because
+  // the search short-circuits when results already exist, never looked for its
+  // own.
+  const [subtitleResults, setSubtitleResults] = useState<{
+    key: string
+    results: SubtitleResult[]
+  } | null>(null)
   const [subtitleSearchError, setSubtitleSearchError] = useState<string | null>(null)
   const [pendingSubtitleId, setPendingSubtitleId] = useState<string | null>(null)
   const [subtitleDelay, setSubtitleDelay] = useState(0)
   const [preview, setPreview] = useState<{ x: number; time: number; url: string | null } | null>(
     null
   )
+  const [countdown, setCountdown] = useState(AUTOPLAY_NEXT_COUNTDOWN_SECONDS)
+  const [countdownFor, setCountdownFor] = useState<string | null>(null)
+  // A wall-clock deadline, or 'episode' for "stop when this file ends".
+  const [sleep, setSleep] = useState<{ at: number } | 'episode' | null>(null)
+  const [sleepRemaining, setSleepRemaining] = useState(0)
   const idleTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const paused = state.paused ?? true
@@ -97,6 +145,21 @@ function PlayerControls() {
     gamma: state.gamma ?? DEFAULT_VIDEO_PICTURE.gamma
   }
   const pictureAdjusted = Object.values(pictureSettings).some((value) => value !== 0)
+  const speed = state.speed ?? 1
+  const chapters = state.chapters ?? []
+  const currentChapter = state.chapter ?? -1
+  const audioDelay = state.audioDelay ?? 0
+  const subtitleStyle = session?.settings.subtitleStyle ?? DEFAULT_SUBTITLE_STYLE
+  const subtitleStyled = !isSubtitleStyleDefault(subtitleStyle)
+  const nightMode = session?.settings.nightModeEnabled === true
+
+  // One identity for the title on screen, used by everything below that has to
+  // belong to a title rather than to the session. Autoplay keeps this whole
+  // component mounted across an episode change, so anything cached without a
+  // key here follows the viewer into the next episode.
+  const mediaKey = media
+    ? `${media.id}:${media.seasonNumber ?? ''}:${media.episodeNumber ?? ''}`
+    : ''
 
   const party = usePartySync({
     timePos,
@@ -117,9 +180,73 @@ function PlayerControls() {
     onMarkWatched: useCallback(() => ui({ type: 'mark-watched' }), [ui])
   })
 
+  // The post-play card, derived rather than stored — there is no state here
+  // that main is not already the authority on, and storing a copy would only
+  // create a second one to keep in step.
+  //
+  // A party FOLLOWER never gets the card, whatever the setting says: the host
+  // owns what plays in a room, and a follower that advanced on its own would
+  // leave the party watching two different episodes with no way back. The host
+  // does get it — startPartyPlayback on the main-window side announces whatever
+  // it starts, so the room follows along exactly as it would from a click.
+  const autoplay: NextEpisodeRef | null =
+    state.eofReached === true &&
+    !party.following &&
+    // A sleep timer set to "end of episode" is somebody saying this is the
+    // last one. Offering the next one anyway — and starting it on a countdown
+    // — would be the app overruling that.
+    sleep !== 'episode' &&
+    session?.settings.autoplayNextEnabled !== false
+      ? (session?.nextUp ?? null)
+      : null
+  const autoplayKey = autoplay ? `${media?.id ?? ''}:${autoplay.season}:${autoplay.episode}` : null
+
+  // Restart the countdown when the card changes subject, adjusted during render
+  // rather than in an effect — the same pattern SidebarNavigation uses for its
+  // route-keyed state, and the reason this component holds a key alongside the
+  // number instead of resetting it from a useEffect.
+  if (countdownFor !== autoplayKey) {
+    setCountdownFor(autoplayKey)
+    setCountdown(AUTOPLAY_NEXT_COUNTDOWN_SECONDS)
+  }
+
+  // Which card has already been acted on. Needed because `eofReached` stays
+  // true until the next file actually opens: without it, the tick below would
+  // keep re-raising play-next for the whole time the next episode spends
+  // resolving, which is a stream search rather than an instant cut.
+  const [startedNextFor, setStartedNextFor] = useState<string | null>(null)
+  const startNext = useCallback(
+    (next: NextEpisodeRef, key: string) => {
+      setStartedNextFor(key)
+      tracking.savePositionNow()
+      ui({ type: 'play-next', season: next.season, episode: next.episode })
+    },
+    [tracking, ui]
+  )
+  const startingNext = autoplayKey !== null && startedNextFor === autoplayKey
+
+  // One tick per second while the card is up. The last tick starts the episode
+  // rather than writing a zero somebody would see, and it goes through the same
+  // call the Play now button makes, so there is only one way in.
+  //
+  // Both the count and the start happen INSIDE the timeout, never in the effect
+  // body — an effect that sets state synchronously cascades a render, and the
+  // countdown would run its whole length in a single frame.
+  useEffect(() => {
+    if (!autoplay || !autoplayKey || startingNext) return
+    const timer = setTimeout(() => {
+      if (countdown <= 1) startNext(autoplay, autoplayKey)
+      else setCountdown(countdown - 1)
+    }, 1000)
+    return () => clearTimeout(timer)
+  }, [autoplay, autoplayKey, countdown, startingNext, startNext])
+
   // A menu or an in-flight sync has to pin the controls open — otherwise the
   // idle timer closes the surface out from under someone mid-selection.
-  const pinned = menu !== null || party.syncing || roomRailOpen
+  // The post-play card pins too. The window is click-through whenever the
+  // controls are hidden, so a card whose buttons appeared without this would
+  // pass every click straight through to mpv — visible, and unpressable.
+  const pinned = menu !== null || party.syncing || roomRailOpen || autoplay !== null
 
   const revealControls = useCallback(() => {
     setControlsVisible(true)
@@ -225,9 +352,22 @@ function PlayerControls() {
 
   // Natural end of file. mpv reports it as a property rather than an element
   // event, but the consequence is the same as the old onEnded.
+  //
+  // Skipped when the 80% auto-mark already fired for this title, which on any
+  // ordinary completion it has — reaching the end means crossing 80% on the
+  // way. Both paths raise the same mark-watched, and that used to be harmless
+  // because the watch-history write was an upsert. It is not harmless now:
+  // marking watched also APPENDS a play, so a single viewing was recorded
+  // twice, inflating the history and the stats and making one watch look like
+  // a rewatch.
+  //
+  // The guard is on the flag rather than on the event, so the case it exists
+  // for still works: a title short enough or seeked past such that 80% never
+  // fired is still marked at the end.
   useEffect(() => {
     if (state.eofReached !== true) return
     tracking.savePositionNow()
+    if (tracking.markedWatched()) return
     ui({ type: 'mark-watched' })
   }, [state.eofReached, tracking, ui])
 
@@ -241,10 +381,139 @@ function PlayerControls() {
   // partway through an episode leaves a tile that reflects it. Teardown's own
   // save stays as the backstop for the paths that never come through here
   // (the window being destroyed outright).
+  // How far through, kept somewhere a callback can read it WITHOUT depending
+  // on it. closePlayer needs the figure at the arbitrary moment somebody
+  // presses the button; closing over `timePos` instead would give it a new
+  // identity roughly eight times a second, and the sleep timer that depends on
+  // it would clear its own timeout before it could ever fire.
+  const progressRef = useRef(0)
+  useEffect(() => {
+    progressRef.current = duration > 0 ? Math.round((timePos / duration) * 100) : 0
+  }, [timePos, duration])
+
   const closePlayer = useCallback(() => {
     tracking.savePositionNow()
+    // The one transition the scrobble effect above cannot observe: the window
+    // is going away, so there is no later render to notice it in.
+    if (media) {
+      ui({ type: 'scrobble', action: 'stop', progress: progressRef.current, media })
+    }
     ui({ type: 'stop-playback', watched: tracking.markedWatched() })
-  }, [tracking, ui])
+  }, [tracking, ui, media])
+
+  /** Applies a partial change over the style in force, as one command. */
+  const applySubtitleStyle = useCallback(
+    (patch: Partial<SubtitleStyle>) => {
+      void command({ type: 'set-subtitle-style', style: { ...subtitleStyle, ...patch } })
+    },
+    [command, subtitleStyle]
+  )
+
+  // Tell the tracking services what is happening, on TRANSITIONS only.
+  //
+  // Simkl's scrobble endpoints are a state machine — start, pause, stop — not
+  // a heartbeat, so this fires when the playing state or the title changes and
+  // at no other time. A call per tick would be a request every few seconds for
+  // the length of a film, for a service that wants three.
+  //
+  // A party FOLLOWER still scrobbles: they really are watching it, whoever
+  // pressed play. What they must not do is act on the transition themselves,
+  // and this does not — it only reports.
+  const scrobbleState = useRef<{
+    key: string
+    playing: boolean
+    media: PlayerSessionMedia
+    /** How far through THAT title was, last time this ran. Kept because the
+     *  live clock has already been replaced by the time an outgoing stop is
+     *  sent — see the stop below. */
+    progress: number
+  } | null>(null)
+  useEffect(() => {
+    if (!media) return
+    const key = `${media.id}:${media.seasonNumber ?? ''}:${media.episodeNumber ?? ''}`
+    const previous = scrobbleState.current
+    const playing = !paused && state.eofReached !== true
+    if (previous?.key === key && previous.playing === playing) return
+
+    // Progress is read off the live clock rather than stored, because the only
+    // consumer of it is Simkl deciding whether a `stop` was "finished" or
+    // "gave up" — and that is a question about where the person actually was.
+    const progress = duration > 0 ? Math.round((timePos / duration) * 100) : 0
+
+    // A title change stops the OUTGOING one before starting the new one, or
+    // Simkl is left holding a scrobble for something that is no longer
+    // playing. The stop carries the PREVIOUS media AND the previous progress:
+    // by the time this runs, startPlayerSession has already cleared the old
+    // session and loaded the new file, so the live clock reads the incoming
+    // episode's near-zero position. Sending that would report the finished
+    // title as abandoned — which is precisely the distinction the progress
+    // figure exists to make.
+    if (previous && previous.key !== key) {
+      ui({
+        type: 'scrobble',
+        action: 'stop',
+        progress: previous.progress,
+        media: previous.media
+      })
+    }
+    scrobbleState.current = { key, playing, media, progress }
+    ui({ type: 'scrobble', action: playing ? 'start' : 'pause', progress, media })
+    // timePos and duration are deliberately NOT dependencies: they change
+    // every tick, and depending on them would turn this into the heartbeat it
+    // exists not to be. They are read at the moment a transition happens,
+    // which is the only moment their value is wanted.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [media, paused, state.eofReached, ui])
+
+  // The sleep timer's clock. One tick per second while a deadline is set,
+  // reaching zero by stopping playback through exactly the path the close
+  // button uses — so the position is saved and the watch status settled the
+  // same way, rather than the window simply vanishing.
+  //
+  // Both the count and the stop happen INSIDE the timeout, never in the effect
+  // body: an effect that sets state synchronously cascades a render, and the
+  // whole hour would elapse in one frame.
+  useEffect(() => {
+    if (sleep === null || sleep === 'episode') return
+    const timer = setTimeout(() => {
+      const remaining = Math.max(0, Math.round((sleep.at - Date.now()) / 1000))
+      if (remaining <= 0) {
+        setSleep(null)
+        closePlayer()
+        return
+      }
+      setSleepRemaining(remaining)
+    }, 250)
+    return () => clearTimeout(timer)
+  }, [sleep, sleepRemaining, closePlayer])
+
+  // The other half of the timer: "end of episode" waits for the file rather
+  // than the clock. Autoplay is already suppressed for this case above, so
+  // reaching the end here means there is genuinely nothing more to do.
+  useEffect(() => {
+    if (sleep !== 'episode' || state.eofReached !== true) return
+    const timer = setTimeout(() => {
+      setSleep(null)
+      closePlayer()
+    }, 0)
+    return () => clearTimeout(timer)
+  }, [sleep, state.eofReached, closePlayer])
+
+  /** Arms, re-arms or cancels the timer. `minutes` of 0 is end-of-episode. */
+  const setSleepTimer = useCallback((minutes: number | null) => {
+    if (minutes === null) {
+      setSleep(null)
+      setSleepRemaining(0)
+      return
+    }
+    if (minutes === 0) {
+      setSleep('episode')
+      setSleepRemaining(0)
+      return
+    }
+    setSleep({ at: Date.now() + minutes * 60_000 })
+    setSleepRemaining(minutes * 60)
+  }, [])
 
   // A terminal failure. The old handler retried once on decode/network errors
   // because the live ffmpeg-to-<video> relay produced transient decode failures
@@ -440,23 +709,36 @@ function PlayerControls() {
   // --- Skip intro/credits (anime only) -------------------------------------
   // Needs a real duration: Aniskip matches submissions by proximity to episode
   // length and 400s without it.
-  const skipTimesRef = useRef(false)
+  // The latch remembers WHICH episode was fetched, not merely that something
+  // was. As a bare boolean it never reset, so an autoplayed episode kept the
+  // previous one's intro and credits timings and never asked for its own —
+  // offering to skip to a timestamp from a different episode.
+  const skipTimesFetchedFor = useRef('')
   const [skipTimes, setSkipTimes] = useState<{
+    key: string
     intro?: { start: number; end: number }
     credits?: { start: number; end: number }
   } | null>(null)
   useEffect(() => {
-    if (skipTimesRef.current || !media || media.kind !== 'anime' || !duration) return
-    skipTimesRef.current = true
+    if (!media || media.kind !== 'anime' || !duration) return
+    if (skipTimesFetchedFor.current === mediaKey) return
+    skipTimesFetchedFor.current = mediaKey
     window.api?.mediaHub?.playback
       .skipTimes(media.id, media.episodeNumber ?? 1, Math.round(duration))
-      .then((times) => setSkipTimes(times ?? null))
+      .then((times) => setSkipTimes(times ? { ...times, key: mediaKey } : null))
       .catch(() => {})
-  }, [media, duration])
+  }, [media, mediaKey, duration])
   // Derived, not stored: which skip window we are inside is a pure function of
   // the current position and the fetched times, and time-pos changes several
   // times a second — holding it in state would mean a setState per tick.
+  // Null while a search for THIS title has not landed, which is what makes the
+  // menu say "Searching…" rather than showing the last episode's list.
+  const currentSubtitleResults = subtitleResults?.key === mediaKey ? subtitleResults.results : null
+
   const skipWindow = ((): { label: string; end: number } | null => {
+    // Only surfaced while it still belongs to the episode being played — the
+    // fetch for the next one is in flight for a moment after it starts.
+    if (skipTimes?.key !== mediaKey) return null
     const inWindow = (w?: { start: number; end: number }): boolean =>
       Boolean(w && timePos >= w.start && timePos < w.end)
     if (inWindow(skipTimes?.intro)) return { label: 'Skip intro', end: skipTimes!.intro!.end }
@@ -465,7 +747,7 @@ function PlayerControls() {
   })()
 
   // --- Scrub-bar thumbnail previews ----------------------------------------
-  const thumbnailCache = useRef(new Map<number, string | null>())
+  const thumbnailCache = useRef(new Map<string, string | null>())
   const scrubRequest = useRef(0)
   const scrubDebounce = useRef<ReturnType<typeof setTimeout> | null>(null)
   const handleScrubberHover = useCallback(
@@ -479,7 +761,11 @@ function PlayerControls() {
         Math.min(rect.width - SCRUB_PREVIEW_WIDTH / 2, event.clientX - rect.left)
       )
       const bucket = Math.floor(time / THUMBNAIL_BUCKET_SECONDS) * THUMBNAIL_BUCKET_SECONDS
-      const cached = thumbnailCache.current.get(bucket)
+      // Keyed by title as well as by time bucket: mpv captures from whatever
+      // file is open, so an autoplayed episode was served the previous one's
+      // frames for every bucket it happened to share.
+      const cacheKey = `${mediaKey}:${bucket}`
+      const cached = thumbnailCache.current.get(cacheKey)
       setPreview({ x, time, url: cached ?? null })
       if (cached !== undefined) return
       if (scrubDebounce.current) clearTimeout(scrubDebounce.current)
@@ -490,14 +776,14 @@ function PlayerControls() {
         window.api?.mediaHub?.playback
           .thumbnail(bucket)
           .then((url) => {
-            thumbnailCache.current.set(bucket, url)
+            thumbnailCache.current.set(cacheKey, url)
             if (scrubRequest.current !== requestId) return
             setPreview((current) => (current ? { ...current, url } : current))
           })
           .catch(() => {})
       }, 250)
     },
-    [duration]
+    [duration, mediaKey]
   )
   useEffect(
     () => () => {
@@ -509,20 +795,21 @@ function PlayerControls() {
   // --- Subtitles ------------------------------------------------------------
   const searchSubtitles = useCallback(async () => {
     setMenu('subtitles')
-    if (!media || subtitleResults) return
+    if (!media) return
+    if (subtitleResults?.key === mediaKey) return
     setSubtitleSearchError(null)
     try {
       const results = await window.api?.mediaHub?.subtitles.search(
         { id: media.id, type: media.kind, title: media.title },
         { season: media.seasonNumber, episode: media.episodeNumber }
       )
-      setSubtitleResults(results ?? [])
+      setSubtitleResults({ key: mediaKey, results: results ?? [] })
     } catch (error) {
       // Only successful searches are cached, so a failure retries next time the
       // menu opens — the "connect a provider in Settings" recovery loop.
       setSubtitleSearchError(error instanceof Error ? error.message : 'Subtitle search failed.')
     }
-  }, [media, subtitleResults])
+  }, [media, mediaKey, subtitleResults])
 
   const applyOnlineSubtitle = useCallback(
     async (subtitle: SubtitleResult) => {
@@ -618,6 +905,36 @@ function PlayerControls() {
         <button type="button" className={styles.skipButton} onClick={() => seekTo(skipWindow.end)}>
           {skipWindow.label}
         </button>
+      )}
+
+      {/* Post-play. Outside the controls bar for the same reason the skip
+          button is: it has to be usable without moving the mouse first, and it
+          outlives the bar's idle fade. */}
+      {autoplay && autoplayKey && (
+        <div className={styles.postPlay} role="dialog" aria-label="Up next">
+          <p className={styles.postPlayLabel}>Up next</p>
+          <p className={styles.postPlayTitle}>
+            {`S${String(autoplay.season).padStart(2, '0')}E${String(autoplay.episode).padStart(2, '0')}`}
+            {autoplay.title ? ` — ${autoplay.title}` : ''}
+          </p>
+          <div className={styles.postPlayActions}>
+            <button
+              type="button"
+              className={styles.postPlayPrimary}
+              disabled={startingNext}
+              onClick={() => startNext(autoplay, autoplayKey)}
+            >
+              {/* The card stays up while the next episode resolves — it is a
+                  stream search, not an instant cut — so it says what is
+                  happening instead of offering a button that has already been
+                  pressed. */}
+              {startingNext ? 'Starting…' : `Play now (${countdown})`}
+            </button>
+            <button type="button" className={styles.postPlaySecondary} onClick={closePlayer}>
+              Stop
+            </button>
+          </div>
+        </div>
       )}
 
       <div
@@ -812,17 +1129,84 @@ function PlayerControls() {
                   </button>
                 </div>
 
+                {/* How they LOOK, as opposed to which track and when. Four
+                    controls, applied as one command: the four are a single
+                    visual decision, and pushing them at mpv separately makes
+                    the subtitle flicker through intermediate states. */}
+                <div className={styles.menuHeading}>Appearance</div>
+                <label className={styles.styleControl}>
+                  <span>
+                    Size<output>{subtitleStyle.scale.toFixed(1)}×</output>
+                  </span>
+                  <input
+                    type="range"
+                    min={SUBTITLE_SCALE_MIN}
+                    max={SUBTITLE_SCALE_MAX}
+                    step={SUBTITLE_SCALE_STEP}
+                    value={subtitleStyle.scale}
+                    aria-label="Subtitle size"
+                    onChange={(event) => applySubtitleStyle({ scale: Number(event.target.value) })}
+                  />
+                </label>
+                <label className={styles.styleControl}>
+                  <span>
+                    Height<output>{subtitleStyle.position}</output>
+                  </span>
+                  <input
+                    type="range"
+                    min={SUBTITLE_POSITION_MIN}
+                    max={SUBTITLE_POSITION_MAX}
+                    step={1}
+                    value={subtitleStyle.position}
+                    aria-label="Subtitle position"
+                    onChange={(event) =>
+                      applySubtitleStyle({ position: Number(event.target.value) })
+                    }
+                  />
+                </label>
+                <div className={styles.colorRow}>
+                  {SUBTITLE_COLORS.map((option) => (
+                    <button
+                      key={option.value}
+                      type="button"
+                      className={`${styles.colorSwatch} ${
+                        subtitleStyle.color === option.value ? styles.colorSwatchOn : ''
+                      }`}
+                      style={{ background: option.hex }}
+                      aria-label={`${option.label} subtitles`}
+                      aria-pressed={subtitleStyle.color === option.value}
+                      onClick={() => applySubtitleStyle({ color: option.value })}
+                    />
+                  ))}
+                  <button
+                    type="button"
+                    className={styles.styleToggle}
+                    aria-pressed={subtitleStyle.background}
+                    onClick={() => applySubtitleStyle({ background: !subtitleStyle.background })}
+                  >
+                    Backdrop{subtitleStyle.background ? ' ✓' : ''}
+                  </button>
+                  <button
+                    type="button"
+                    className={styles.styleToggle}
+                    disabled={!subtitleStyled}
+                    onClick={() => applySubtitleStyle(DEFAULT_SUBTITLE_STYLE)}
+                  >
+                    Reset
+                  </button>
+                </div>
+
                 <div className={styles.menuHeading}>Online subtitles</div>
                 {subtitleSearchError && (
                   <span className={styles.menuNote}>{subtitleSearchError}</span>
                 )}
-                {!subtitleSearchError && subtitleResults === null && (
+                {!subtitleSearchError && currentSubtitleResults === null && (
                   <span className={styles.menuNote}>Searching…</span>
                 )}
-                {!subtitleSearchError && subtitleResults?.length === 0 && (
+                {!subtitleSearchError && currentSubtitleResults?.length === 0 && (
                   <span className={styles.menuNote}>No results</span>
                 )}
-                {subtitleResults?.map((subtitle) => (
+                {currentSubtitleResults?.map((subtitle) => (
                   <button
                     key={subtitle.id}
                     type="button"
@@ -840,6 +1224,173 @@ function PlayerControls() {
               </div>
             )}
           </div>
+
+          {/* Speed, audio sync and the sleep timer — three things that are
+              about how this session plays rather than about the picture, so
+              they share one menu instead of adding three buttons to a bar
+              that is already full. */}
+          <div className={styles.menuWrap}>
+            <button
+              type="button"
+              className={styles.button}
+              onClick={() => setMenu(menu === 'playback' ? null : 'playback')}
+              aria-expanded={menu === 'playback'}
+            >
+              {speed === 1 ? 'Playback' : `${speed}×`}
+              {sleep !== null ? ' · ⏱' : ''}
+              {nightMode ? ' · ☾' : ''}
+            </button>
+            {menu === 'playback' && (
+              <div className={`${styles.menu} ${styles.playbackMenu}`}>
+                <div className={styles.menuHeading}>Speed</div>
+                {/* Hidden outright while following a host. Speed is the lever
+                    partySync's drift correction pulls (see usePartySync), so a
+                    manual choice here would be fighting the sync law and losing
+                    — better not to offer it than to offer it and have it snap
+                    back a second later. */}
+                {party.following ? (
+                  <p className={styles.menuNote}>The host sets the speed in a room.</p>
+                ) : (
+                  <div className={styles.speedRow}>
+                    {SPEED_OPTIONS.map((option) => (
+                      <button
+                        key={option}
+                        type="button"
+                        className={`${styles.speedButton} ${speed === option ? styles.speedButtonOn : ''}`}
+                        aria-pressed={speed === option}
+                        onClick={() => void command({ type: 'set-speed', speed: option })}
+                      >
+                        {option}&times;
+                      </button>
+                    ))}
+                  </div>
+                )}
+
+                <div className={styles.menuHeading}>Audio sync</div>
+                <div className={styles.nudgeRow}>
+                  <button
+                    type="button"
+                    className={styles.nudgeButton}
+                    aria-label="Audio earlier"
+                    onClick={() =>
+                      void command({
+                        type: 'set-audio-delay',
+                        seconds: Number((audioDelay - AUDIO_DELAY_STEP).toFixed(2))
+                      })
+                    }
+                  >
+                    &minus;
+                  </button>
+                  <output className={styles.nudgeValue}>
+                    {audioDelay === 0
+                      ? 'In sync'
+                      : `${audioDelay > 0 ? '+' : ''}${audioDelay.toFixed(2)}s`}
+                  </output>
+                  <button
+                    type="button"
+                    className={styles.nudgeButton}
+                    aria-label="Audio later"
+                    onClick={() =>
+                      void command({
+                        type: 'set-audio-delay',
+                        seconds: Number((audioDelay + AUDIO_DELAY_STEP).toFixed(2))
+                      })
+                    }
+                  >
+                    +
+                  </button>
+                  <button
+                    type="button"
+                    className={styles.nudgeReset}
+                    disabled={audioDelay === 0}
+                    onClick={() => void command({ type: 'set-audio-delay', seconds: 0 })}
+                  >
+                    Reset
+                  </button>
+                </div>
+
+                <div className={styles.menuHeading}>Sound</div>
+                <button
+                  type="button"
+                  className={styles.menuItem}
+                  aria-pressed={nightMode}
+                  onClick={() => void command({ type: 'set-night-mode', enabled: !nightMode })}
+                >
+                  Night mode{nightMode ? ' ✓' : ''}
+                  <span className={styles.menuItemNote}>
+                    Evens out quiet dialogue against a loud score.
+                  </span>
+                </button>
+
+                <div className={styles.menuHeading}>Sleep timer</div>
+                {SLEEP_OPTIONS.map((option) => {
+                  const active =
+                    option.minutes === 0
+                      ? sleep === 'episode'
+                      : sleep !== null && sleep !== 'episode'
+                  return (
+                    <button
+                      key={option.label}
+                      type="button"
+                      className={styles.menuItem}
+                      onClick={() => setSleepTimer(option.minutes)}
+                    >
+                      {option.label}
+                      {option.minutes === 0 && sleep === 'episode' ? ' ✓' : ''}
+                      {option.minutes !== 0 && active
+                        ? ` · ${formatTime(sleepRemaining)} left`
+                        : ''}
+                    </button>
+                  )
+                })}
+                {sleep !== null && (
+                  <button
+                    type="button"
+                    className={styles.menuItem}
+                    onClick={() => setSleepTimer(null)}
+                  >
+                    Cancel timer
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* Absent rather than disabled when a release carries no chapter
+              marks, which is most of them — a permanently greyed-out button is
+              a worse answer than no button. */}
+          {chapters.length > 0 && (
+            <div className={styles.menuWrap}>
+              <button
+                type="button"
+                className={styles.button}
+                onClick={() => setMenu(menu === 'chapters' ? null : 'chapters')}
+                aria-expanded={menu === 'chapters'}
+                disabled={locked}
+              >
+                Chapters
+              </button>
+              {menu === 'chapters' && (
+                <div className={`${styles.menu} ${styles.chapterMenu}`}>
+                  {chapters.map((chapter, index) => (
+                    <button
+                      key={`${index}-${chapter.time}`}
+                      type="button"
+                      className={styles.menuItem}
+                      onClick={() => {
+                        void command({ type: 'set-chapter', index })
+                        setMenu(null)
+                      }}
+                    >
+                      {chapter.title || `Chapter ${index + 1}`}
+                      {index === currentChapter ? ' ✓' : ''}
+                      <span className={styles.menuItemNote}>{formatTime(chapter.time)}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Fit/fill. mpv applies both underlying properties to the frame
               already on screen, so every option here is instant — there is no

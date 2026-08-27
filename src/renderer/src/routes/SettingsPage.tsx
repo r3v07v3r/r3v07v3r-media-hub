@@ -257,6 +257,40 @@ function ToggleRow({
   )
 }
 
+/** A row whose control is a button rather than a switch or a segment — used
+ *  where the setting is an action taken now (export a file, restore one)
+ *  rather than a value that persists. */
+function ActionRow({
+  icon,
+  title,
+  description,
+  label,
+  busy,
+  onClick
+}: {
+  icon: string
+  title: string
+  description: string
+  label: string
+  busy?: boolean
+  onClick: () => void
+}) {
+  return (
+    <div className={styles.row}>
+      <div className={styles.rowIcon} aria-hidden="true">
+        <Icon name={icon} size={17} />
+      </div>
+      <div className={styles.rowText}>
+        <span className={styles.rowTitle}>{title}</span>
+        <span className={styles.rowDescription}>{description}</span>
+      </div>
+      <button type="button" className={styles.testButton} disabled={busy} onClick={onClick}>
+        {busy ? 'Working…' : label}
+      </button>
+    </div>
+  )
+}
+
 /** Inline add/edit form shown below the profile grid — one component for
  *  both create and edit, since the fields are identical apart from a
  *  Delete button and pre-filled values in edit mode. */
@@ -646,11 +680,17 @@ export default function SettingsPage() {
     activeProfileId,
     switchProfile,
     mediaHubSettings,
-    refreshMediaHubSettings
+    refreshMediaHubSettings,
+    pushNotification,
+    refreshWatchStatus,
+    refreshProfiles,
+    reloadLibrary
   } = useAppState()
   // null = no form open, 'new' = create form, otherwise the id of the
   // profile being edited.
   const [editingProfile, setEditingProfile] = useState<string | 'new' | null>(null)
+  // Which of the two backup actions is in flight, so only that button says so.
+  const [backupBusy, setBackupBusy] = useState<'export' | 'import' | null>(null)
   const [networkInfo, setNetworkInfo] = useState<NetworkInfoResult | null>(null)
   const [speedTest, setSpeedTest] = useState<{
     kind: 'idle' | 'busy' | 'ok' | 'error'
@@ -709,6 +749,80 @@ export default function SettingsPage() {
     const api = window.api?.mediaHub
     if (api)
       await saveSetting('settings.auto-subtitles', () => api.settings.setAutoSubtitles(enabled))
+  }
+
+  async function handleExportBackup() {
+    const api = window.api?.mediaHub
+    if (!api) return
+    setBackupBusy('export')
+    try {
+      const result = await api.settings.exportBackup()
+      // A cancelled picker is not a failure and gets no message — the person
+      // closed the dialog, they know what happened.
+      if (result?.filePath) {
+        pushNotification({ tone: 'success', message: 'Backup saved.' })
+      }
+    } catch (error) {
+      pushNotification({
+        tone: 'error',
+        message: error instanceof Error ? error.message : 'The backup could not be saved.'
+      })
+    } finally {
+      setBackupBusy(null)
+    }
+  }
+
+  async function handleImportBackup() {
+    const api = window.api?.mediaHub
+    if (!api) return
+    setBackupBusy('import')
+    try {
+      const result = await api.settings.importBackup()
+      if (!result) return
+      const taken = result.createdAt ? new Date(result.createdAt).toLocaleDateString() : null
+      pushNotification({
+        tone: 'success',
+        message: taken
+          ? `Restored ${result.restored} items from your ${taken} backup.`
+          : `Restored ${result.restored} items.`
+      })
+      // Everything on screen was read from the library this just replaced —
+      // including the PROFILE LIST, whose ids differ from this machine's
+      // whenever the backup came from another one. Without that refresh the
+      // restored rows belong to profiles missing from the switcher, and the
+      // still-active local profile looks empty until the app is restarted.
+      await refreshMediaHubSettings()
+      refreshProfiles()
+      // Bumps the library key every profile-scoped read depends on. The
+      // profile id cannot carry this on its own: a same-profile restore leaves
+      // it identical while replacing every row under it.
+      reloadLibrary()
+      refreshWatchStatus()
+    } catch (error) {
+      pushNotification({
+        tone: 'error',
+        message: error instanceof Error ? error.message : 'That backup could not be restored.'
+      })
+    } finally {
+      setBackupBusy(null)
+    }
+  }
+
+  async function handleSetNotifications(enabled: boolean) {
+    const api = window.api?.mediaHub
+    if (api)
+      await saveSetting('settings.notifications', () => api.settings.setNotifications(enabled))
+  }
+
+  async function handleSetWatchRegion(region: string) {
+    const api = window.api?.mediaHub
+    if (api) await saveSetting('settings.watch-region', () => api.settings.setWatchRegion(region))
+  }
+
+  async function handleSetAutoplayNext(enabled: boolean) {
+    const api = window.api?.mediaHub
+    if (api)
+      await saveSetting('settings.autoplay-next', () => api.settings.setAutoplayNext(enabled))
   }
 
   async function handleSetSubtitleLanguage(language: string) {
@@ -895,6 +1009,13 @@ export default function SettingsPage() {
                 Performance &amp; Display
               </h2>
               <ToggleRow
+                icon="notification"
+                title="Notify me about new episodes"
+                description="A desktop notification when something in My List has a new episode out. Checked a few times a day, and never while you are watching something."
+                checked={mediaHubSettings?.notificationsEnabled ?? false}
+                onChange={handleSetNotifications}
+              />
+              <ToggleRow
                 icon="cpu"
                 title="System performance panel"
                 description="Show live CPU, GPU, RAM, and network gauges on the Home dashboard."
@@ -919,6 +1040,28 @@ export default function SettingsPage() {
               />
             </section>
 
+            <section className={`${styles.section} glass-panel`} aria-labelledby="settings-backup">
+              <h2 id="settings-backup" className={styles.sectionTitle}>
+                Your library
+              </h2>
+              <ActionRow
+                icon="downloads"
+                title="Save a backup"
+                description="Writes every profile's list, history, ratings and resume points to one file. Service credentials are never included — they belong to this machine."
+                label="Save…"
+                busy={backupBusy === 'export'}
+                onClick={handleExportBackup}
+              />
+              <ActionRow
+                icon="refresh"
+                title="Restore a backup"
+                description="Replaces what is here with the contents of a backup file. Nothing changes unless the whole restore succeeds."
+                label="Restore…"
+                busy={backupBusy === 'import'}
+                onClick={handleImportBackup}
+              />
+            </section>
+
             <MoreOptionsSection />
           </div>
         </section>
@@ -935,6 +1078,52 @@ export default function SettingsPage() {
             <p>Choose language, quality, and connection preferences.</p>
           </header>
           <div ref={playbackGridBinding} className={styles.groupGrid}>
+            <section
+              className={`${styles.section} glass-panel`}
+              aria-labelledby="settings-episodes"
+            >
+              <h2 id="settings-episodes" className={styles.sectionTitle}>
+                Episodes
+              </h2>
+              {/* Two letters, typed rather than picked from a list: TMDB
+                  answers for well over a hundred regions, and a dropdown of
+                  all of them is a worse control than a field somebody fills in
+                  once. An empty or malformed value clears the setting, which
+                  puts it back on the machine's own locale. */}
+              <div className={`${styles.row} ${styles.rowSegmented}`}>
+                <div className={styles.rowIcon} aria-hidden="true">
+                  <Icon name="planet" size={17} />
+                </div>
+                <div className={styles.rowText}>
+                  <span className={styles.rowTitle}>Region for “Where to watch”</span>
+                  <span className={styles.rowDescription}>
+                    Two-letter country code. Streaming availability differs by country, so there is
+                    no global answer. Leave it blank to follow this computer&apos;s own region.
+                  </span>
+                </div>
+                <span className={styles.field} style={{ flex: '0 0 88px' }}>
+                  <input
+                    className={styles.fieldInput}
+                    style={{ padding: '5px 10px', fontSize: 12, textAlign: 'center' }}
+                    maxLength={2}
+                    defaultValue={mediaHubSettings?.watchRegion ?? ''}
+                    aria-label="Region for where to watch"
+                    onBlur={(event) => void handleSetWatchRegion(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter') event.currentTarget.blur()
+                    }}
+                  />
+                </span>
+              </div>
+              <ToggleRow
+                icon="play"
+                title="Play the next episode"
+                description="When an episode ends, offer the next one and start it after a short countdown. Movies and last episodes are unaffected."
+                checked={mediaHubSettings?.autoplayNextEnabled ?? true}
+                onChange={handleSetAutoplayNext}
+              />
+            </section>
+
             <section
               className={`${styles.section} glass-panel`}
               aria-labelledby="settings-subtitles"

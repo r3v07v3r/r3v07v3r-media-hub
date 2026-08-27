@@ -37,6 +37,7 @@ import {
   watchCadenceProfile,
   type ScoredRecommendation
 } from '../../shared/media-hub/catalog-logic'
+import { ratingWeight } from '../../shared/media-hub/rating'
 import { creditsFor } from './credits'
 import { getDatabase } from './dbState'
 import { logError } from './logger'
@@ -53,7 +54,21 @@ import type { TaskPriority } from './taskScheduler'
  * serving the previous version's ordering back for hours, out of a cache
  * nobody thought to clear.
  */
-export const STORE_KEY = 'recommendations:v2'
+const STORE_KEY_PREFIX = 'recommendations:v2'
+
+/**
+ * Where one profile's ranked list lives.
+ *
+ * KEYED BY PROFILE, because the ranking is built from that profile's history,
+ * ratings and taste. catalog_cache is not itself profile-scoped — it holds
+ * facts about titles, not about people — so a single fixed key meant that
+ * switching profiles served the previous one's taste-ranked titles and
+ * preferred genres until the shared row happened to be rebuilt, potentially
+ * hours later.
+ */
+export function storeKey(profileId: string = getDatabase().activeProfile()): string {
+  return `${STORE_KEY_PREFIX}:${profileId}`
+}
 
 /**
  * How many ranked titles are kept.
@@ -208,7 +223,7 @@ export function readStoredRecommendations(
   try {
     // allowExpired: see STORE_TTL_MS. An old ordering is a far better
     // answer than a blank row, and this read schedules its replacement.
-    stored = getDatabase().getCache<StoredRecommendations>(STORE_KEY, { allowExpired: true })
+    stored = getDatabase().getCache<StoredRecommendations>(storeKey(), { allowExpired: true })
   } catch (error) {
     logError('recommendations:read', error)
     return null
@@ -254,16 +269,26 @@ export function readStoredRecommendations(
 export function storeRecommendations(
   ranked: ScoredRecommendation[],
   preferredGenres: string[],
-  { announce = true }: { announce?: boolean } = {}
+  {
+    announce = true,
+    profile = getDatabase().activeProfile()
+  }: { announce?: boolean; profile?: string } = {}
 ): void {
   if (!ranked.length) return
+  // A ranking belongs to the profile whose history produced it. Both callers
+  // build it across awaits — a catalog read at minimum — so resolving the key
+  // here would file A's taste-ranked titles under whoever is active by the
+  // time the build lands. Discarded rather than mis-filed: a switch means
+  // this ranking is about somebody who is no longer looking at it, and the
+  // incoming profile's own rebuild is already the right answer.
+  if (getDatabase().activeProfile() !== profile) return
   const payload: StoredRecommendations = {
     entries: ranked.slice(0, STORED_COUNT),
     builtAt: Date.now(),
     preferredGenres
   }
   try {
-    getDatabase().putCache(STORE_KEY, payload, STORE_TTL_MS)
+    getDatabase().putCache(storeKey(profile), payload, STORE_TTL_MS)
   } catch (error) {
     logError('recommendations:store', error)
     return
@@ -311,6 +336,10 @@ export async function rebuildRecommendations(
   if (!pool.length) return 0
 
   const db = getDatabase()
+  // Captured before the catalog reads above have been consumed and before the
+  // ranking below — see storeRecommendations on why the write cannot resolve
+  // it for itself.
+  const profile = db.activeProfile()
   const history = db.history()
   const exclusions = liveExclusions(history)
   const preferredGenres = db.preferredGenres(4)
@@ -320,7 +349,17 @@ export async function rebuildRecommendations(
   // from cache only: whatever the background enrichment pass has covered
   // so far is what this run gets, and an install where it has covered
   // nothing yet ranks exactly as it did before credits existed.
-  const taste = buildTasteProfile(creditsFor(history.map((entry) => String(entry.id))).values())
+  // Each watched title's credits, paired with what the person thought of it.
+  // An unrated title weighs 1, so a library nobody has rated builds exactly
+  // the profile it built before ratings existed — see ratingWeight.
+  const scores = db.ratings()
+  const watchedCredits = creditsFor(history.map((entry) => String(entry.id)))
+  const taste = buildTasteProfile(
+    [...watchedCredits].map(([id, credits]) => ({
+      credits,
+      weight: ratingWeight(scores.get(id))
+    }))
+  )
   const candidates = pool.filter((item) => keep(item, exclusions))
   const credits = creditsFor(candidates.map((item) => String(item.id)))
 
@@ -334,6 +373,6 @@ export async function rebuildRecommendations(
 
   if (!ranked.length) return 0
 
-  storeRecommendations(ranked, preferredGenres)
+  storeRecommendations(ranked, preferredGenres, { profile })
   return Math.min(ranked.length, STORED_COUNT)
 }

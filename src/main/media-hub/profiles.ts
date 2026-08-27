@@ -30,6 +30,7 @@ import type {
   ProfileSetActiveResult,
   ProfileVerifyPinResult
 } from '../../shared/media-hub/types'
+import { getDatabase } from './dbState'
 import { handle } from './ipcGuard'
 import { readSettings, writeSettings } from './settingsStore'
 
@@ -86,6 +87,17 @@ function ensureProfiles(): { profiles: ProfileRecord[]; activeProfileId: string 
   settings.activeProfileId = seeded.id
   writeSettings(settings)
   return { profiles: [seeded], activeProfileId: seeded.id }
+}
+
+/**
+ * Which profile the app is currently acting as.
+ *
+ * Exported for main/index.ts, which needs it before the database exists —
+ * the connection is scoped to a profile from the moment it opens, and the
+ * profile-scoping migration attributes every pre-existing row to it.
+ */
+export function activeProfileId(): string {
+  return ensureProfiles().activeProfileId
 }
 
 function hashPin(pin: string, salt: string): string {
@@ -190,6 +202,12 @@ export function registerProfilesIpc(): void {
       const settings = readSettings()
       settings.activeProfileId = id
       writeSettings(settings)
+      // The database is scoped to one profile at a time (see its
+      // setActiveProfile). Re-scoping it here, in the same handler that
+      // records the switch, is what makes a profile's library actually its
+      // own — without it the setting would change and every query would keep
+      // answering for whoever was active at launch.
+      getDatabase().setActiveProfile(id)
       return { ok: true, activeProfileId: id }
     }
   )
@@ -264,6 +282,12 @@ export function registerProfilesIpc(): void {
     }
     const remaining = profiles.filter((p) => p.id !== id)
     if (remaining.length === profiles.length) throw new Error('That profile no longer exists.')
+    // The rows BEFORE the settings entry, so a failure leaves a profile that
+    // still owns its data rather than data owned by a profile that no longer
+    // exists. Everything a profile owns goes with it: leaving it behind means
+    // a library nothing can reach, which the next backup would faithfully
+    // export and a re-created profile would never see.
+    getDatabase().deleteProfileData(id)
     const settings = readSettings()
     settings.profiles = remaining
     writeSettings(settings)

@@ -20,7 +20,13 @@
 // taste in films.
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import type { CatalogItem, HistoryEntry, MediaKind } from '@shared/media-hub/types'
+import type {
+  CatalogItem,
+  CustomList,
+  HistoryEntry,
+  MediaKind,
+  PlayRecord
+} from '@shared/media-hub/types'
 import type { ContinueWatchingItem, MediaItem, Recommendation } from '@renderer/types'
 import { AI_PICKS, CATALOG, CONTINUE_WATCHING, FEATURED_ITEMS } from '@renderer/data/mockData'
 import {
@@ -467,7 +473,25 @@ export interface WatchedIdsResult {
  * (Movies/Series/Anime grids and My Stuff all need it), not part of the
  * Home-specific personalized feed.
  */
-export function useMediaHubWatchedIds(): WatchedIdsResult {
+/**
+ * Why every library-scoped hook below takes a `libraryKey`.
+ *
+ * The database is scoped to one profile at a time (see its setActiveProfile),
+ * and the renderer's copies of its data are fetched once on mount with no way
+ * to know when that changed underneath them. Two things change it:
+ *
+ *   - SWITCHING PROFILE, which re-scopes every query in main. Without this
+ *     argument the previous profile's watchlist, history, ratings and Continue
+ *     Watching stayed on screen while every write went to the new scope.
+ *   - RESTORING A BACKUP, which replaces the rows themselves. The profile id
+ *     is usually UNCHANGED across that — a same-profile restore keeps it
+ *     exactly — so an id alone would not have been enough.
+ *
+ * Hence a composite key rather than an id: it is never used in the request,
+ * only as a dependency, and it is named for the question it answers, which is
+ * "is this still the same library".
+ */
+export function useMediaHubWatchedIds(libraryKey: string): WatchedIdsResult {
   const [watchedIds, setWatchedIds] = useState<Set<string>>(new Set())
   const [history, setHistory] = useState<HistoryEntry[]>([])
   const [loaded, setLoaded] = useState(false)
@@ -493,7 +517,7 @@ export function useMediaHubWatchedIds(): WatchedIdsResult {
     return () => {
       cancelled = true
     }
-  }, [generation])
+  }, [generation, libraryKey])
 
   // Stable `refresh` and a memoised result object, for the same reason
   // useMediaHubBrowseCatalog above memoises its own: AppStateContext holds
@@ -520,7 +544,7 @@ export interface DislikedIdsResult {
  * sourced MediaItem needs for its `disliked` field (see
  * CatalogItemAdapterContext.dislikedIds).
  */
-export function useMediaHubDislikedIds(): DislikedIdsResult {
+export function useMediaHubDislikedIds(libraryKey: string): DislikedIdsResult {
   const [dislikedIds, setDislikedIds] = useState<Set<string>>(new Set())
   const [loaded, setLoaded] = useState(false)
   const [generation, setGeneration] = useState(0)
@@ -540,10 +564,230 @@ export function useMediaHubDislikedIds(): DislikedIdsResult {
     return () => {
       cancelled = true
     }
-  }, [generation])
+  }, [generation, libraryKey])
 
   const refresh = useCallback(() => setGeneration((g) => g + 1), [])
   return useMemo(() => ({ dislikedIds, loaded, refresh }), [dislikedIds, loaded, refresh])
+}
+
+/** Matches the preload's own local alias — the minimum a title needs to be
+ *  written into a list, which is a partial catalog item with a real id. */
+type TrackableItem = Partial<CatalogItem> & { id: string }
+
+export interface ListsResult {
+  lists: CustomList[]
+  loaded: boolean
+  create: (name: string) => Promise<CustomList | null>
+  rename: (listId: string, name: string) => Promise<void>
+  remove: (listId: string) => Promise<void>
+  add: (listId: string, item: TrackableItem) => Promise<void>
+  removeItem: (listId: string, contentId: string) => Promise<void>
+}
+
+/**
+ * The active profile's own named lists.
+ *
+ * Every mutation adopts the collection the backend answers with rather than
+ * patching the local copy: a list's COUNT changes on every add and remove, and
+ * keeping a second tally in the renderer is how a picker ends up saying "3
+ * titles" over a list of four.
+ */
+export function useMediaHubLists(libraryKey: string): ListsResult {
+  const [lists, setLists] = useState<CustomList[]>([])
+  const [loaded, setLoaded] = useState(() => !window.api?.mediaHub)
+
+  useEffect(() => {
+    let cancelled = false
+    const api = window.api?.mediaHub
+    if (!api) return
+    api.lists
+      .list()
+      .then((result) => {
+        if (cancelled) return
+        setLists(result.lists)
+        setLoaded(true)
+      })
+      .catch(() => {
+        if (!cancelled) setLoaded(true)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [libraryKey])
+
+  const create = useCallback(async (name: string) => {
+    const api = window.api?.mediaHub
+    if (!api) return null
+    try {
+      const result = await api.lists.create(name)
+      setLists(result.lists)
+      return result.created
+    } catch {
+      return null
+    }
+  }, [])
+
+  const mutate = useCallback(async (run: () => Promise<{ lists: CustomList[] }>) => {
+    try {
+      setLists((await run()).lists)
+    } catch {
+      // Best-effort, like the rest of these: the collection on screen stays as
+      // it was rather than being cleared by a failed write.
+    }
+  }, [])
+
+  const rename = useCallback(
+    async (listId: string, name: string) => {
+      const api = window.api?.mediaHub
+      if (api) await mutate(() => api.lists.rename(listId, name))
+    },
+    [mutate]
+  )
+
+  const remove = useCallback(
+    async (listId: string) => {
+      const api = window.api?.mediaHub
+      if (api) await mutate(() => api.lists.remove(listId))
+    },
+    [mutate]
+  )
+
+  const add = useCallback(
+    async (listId: string, item: TrackableItem) => {
+      const api = window.api?.mediaHub
+      if (api) await mutate(() => api.lists.add(listId, item))
+    },
+    [mutate]
+  )
+
+  const removeItem = useCallback(
+    async (listId: string, contentId: string) => {
+      const api = window.api?.mediaHub
+      if (api) await mutate(() => api.lists.removeItem(listId, contentId))
+    },
+    [mutate]
+  )
+
+  return useMemo(
+    () => ({ lists, loaded, create, rename, remove, add, removeItem }),
+    [lists, loaded, create, rename, remove, add, removeItem]
+  )
+}
+
+export interface PlaysResult {
+  plays: PlayRecord[]
+  loaded: boolean
+  /** Removes one viewing and adopts the list the backend reports back. */
+  remove: (playId: number) => Promise<void>
+}
+
+/**
+ * The viewing record, newest first.
+ *
+ * Fetched on mount rather than held in AppStateContext with everything else:
+ * only one tab of one page reads it, it can run to hundreds of rows, and
+ * nothing else in the app needs to re-render when a play is removed.
+ */
+export function useMediaHubPlays(libraryKey: string): PlaysResult {
+  const [plays, setPlays] = useState<PlayRecord[]>([])
+  // Seeded from whether there is an IPC bridge at all: outside the desktop
+  // app (a plain browser tab during dev-server work) there is nothing to wait
+  // for, and saying so at mount is both truthful and cheaper than an effect
+  // that sets it synchronously — which cascades a render.
+  const [loaded, setLoaded] = useState(() => !window.api?.mediaHub)
+
+  useEffect(() => {
+    let cancelled = false
+    const api = window.api?.mediaHub
+    if (!api) return
+    api.plays
+      .list()
+      .then((result) => {
+        if (cancelled) return
+        setPlays(result.plays)
+        setLoaded(true)
+      })
+      .catch(() => {
+        if (!cancelled) setLoaded(true)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [libraryKey])
+
+  const remove = useCallback(async (playId: number) => {
+    const api = window.api?.mediaHub
+    if (!api) return
+    // Optimistic: the row disappears under the click, and the authoritative
+    // list replaces it a moment later. A local SQLite delete is fast enough
+    // that the two are usually indistinguishable, but not so fast that waiting
+    // for it is free.
+    setPlays((previous) => previous.filter((play) => play.playId !== playId))
+    try {
+      const result = await api.plays.remove(playId)
+      setPlays(result.plays)
+    } catch {
+      // The optimistic removal stands. A failed delete here is almost always a
+      // closing database, and putting the row back would be the more
+      // confusing outcome.
+    }
+  }, [])
+
+  return useMemo(() => ({ plays, loaded, remove }), [plays, loaded, remove])
+}
+
+export interface RatingsResult {
+  /** Score by content id, 1-10. A title absent from the map is unrated, which
+   *  is not the same as rated badly — see shared/media-hub/rating.ts. */
+  ratings: Map<string, number>
+  /** Applies a score (or 0 to clear) and adopts whatever the backend reports
+   *  back, so the map on screen is the map that was stored. */
+  rate: (id: string, score: number) => Promise<void>
+}
+
+export function useMediaHubRatings(libraryKey: string): RatingsResult {
+  const [ratings, setRatings] = useState<Map<string, number>>(new Map())
+
+  useEffect(() => {
+    let cancelled = false
+    const api = window.api?.mediaHub
+    if (!api) return
+    api.ratings
+      .list()
+      .then((result) => {
+        if (cancelled) return
+        setRatings(new Map(Object.entries(result.ratings)))
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [libraryKey])
+
+  const rate = useCallback(async (id: string, score: number) => {
+    const api = window.api?.mediaHub
+    if (!api) return
+    // Optimistic, then reconciled with what came back. The write is local
+    // SQLite and effectively instant, but it also kicks off a recommendation
+    // rebuild — waiting for the round trip to move a button somebody just
+    // pressed would make rating feel slower than it is.
+    setRatings((previous) => {
+      const next = new Map(previous)
+      if (score > 0) next.set(id, score)
+      else next.delete(id)
+      return next
+    })
+    try {
+      const result = await api.ratings.set(id, score)
+      setRatings(new Map(Object.entries(result.ratings)))
+    } catch {
+      // The optimistic value stands rather than snapping back: a failed write
+      // here is almost always a closed database on shutdown, and reverting a
+      // score somebody just chose would be the more confusing outcome.
+    }
+  }, [])
+
+  return useMemo(() => ({ ratings, rate }), [ratings, rate])
 }
 
 export interface HomeFeedResult {
@@ -587,7 +831,7 @@ export interface HomeFeedResult {
  * has been re-checked this run", so a caller that needs to distinguish
  * remembered from fresh still can.
  */
-export function useMediaHubHomeFeed(): HomeFeedResult {
+export function useMediaHubHomeFeed(libraryKey: string): HomeFeedResult {
   const [state, setState] = useState<typeof EMPTY_HOME_FEED | null>(null)
   // See useMediaHubBrowseCatalog above for why this is a lazy initializer
   // rather than an effect-driven flip.
@@ -657,7 +901,7 @@ export function useMediaHubHomeFeed(): HomeFeedResult {
     return () => {
       cancelled = true
     }
-  }, [generation])
+  }, [generation, libraryKey])
 
   const refresh = useCallback(() => setGeneration((g) => g + 1), [])
 

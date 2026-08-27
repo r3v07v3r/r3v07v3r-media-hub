@@ -3,6 +3,7 @@
 import { useState } from 'react'
 import type { MediaItem } from '@renderer/types'
 import type { DetailAdapterConfig } from '@renderer/lib/mediaHub/detailAdapters'
+import { useAppState } from '@renderer/context/AppStateContext'
 import styles from './AboutPanel.module.css'
 
 const COLLAPSE_LENGTH = 320
@@ -87,14 +88,16 @@ export function AboutPanel({ media, config }: { media: MediaItem; config: Detail
         {media.creators?.length ? (
           <div className={styles.fact}>
             <dt>{config.isEpisodic ? 'Created by' : 'Director'}</dt>
-            <dd>{media.creators.join(', ')}</dd>
+            <dd>
+              <NameList names={media.creators} />
+            </dd>
           </div>
         ) : null}
       </dl>
       {media.cast?.length ? (
         <div className={styles.people}>
           <h3 className={styles.subheading}>Cast</h3>
-          <p className={styles.names}>{media.cast.join(', ')}</p>
+          <NameList names={media.cast} />
         </div>
       ) : null}
       {media.storyTags?.length ? (
@@ -110,5 +113,32 @@ export function AboutPanel({ media, config }: { media: MediaItem; config: Detail
         </div>
       ) : null}
     </section>
+  )
+}
+
+/**
+ * A row of names, each of which opens what else this catalog has of theirs.
+ *
+ * Buttons rather than links: the destination is a panel over this page, not a
+ * route — there is no URL for "everything with Denis Villeneuve in it", and
+ * inventing one would mean a route that cannot be shared or reloaded into
+ * anything meaningful.
+ *
+ * The separators are rendered between the names rather than inside them, so a
+ * name and its comma never end up as one click target.
+ */
+function NameList({ names }: { names: string[] }) {
+  const { openPerson } = useAppState()
+  return (
+    <span className={styles.names}>
+      {names.map((name, index) => (
+        <span key={`${name}-${index}`}>
+          {index > 0 ? ', ' : ''}
+          <button type="button" className={styles.nameButton} onClick={() => openPerson(name)}>
+            {name}
+          </button>
+        </span>
+      ))}
+    </span>
   )
 }

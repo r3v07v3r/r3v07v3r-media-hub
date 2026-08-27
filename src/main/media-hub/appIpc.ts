@@ -13,6 +13,9 @@ import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { MEDIA_HUB_CHANNELS } from '../../shared/media-hub/ipc-channels'
 import type { MediaHubPublicSettings, MediaHubSettingsSnapshot } from '../../shared/media-hub/types'
+import { readBackup } from './backup'
+import { watchRegion } from './watchProviders'
+import { getDatabase } from './dbState'
 import { handle } from './ipcGuard'
 import { logError } from './logger'
 import { mpvPath, hasActivePlayback, stopPlayback } from './playbackSession'
@@ -23,6 +26,13 @@ import {
   setMainWindowFullscreen,
   toggleMainWindowFullscreen
 } from './windowFullscreen'
+/** What a completed restore reports back — a total worth showing, and when the
+ *  backup was taken, so the confirmation can say which one landed. */
+interface RestoreResult {
+  restored: number
+  createdAt: string
+}
+
 import { normalizePlaybackBuffer } from '../../shared/media-hub/playbackBuffer'
 import { normalizeVideoScaling } from '../../shared/media-hub/videoScaling'
 import { isAllowedExternalUrl } from './security'
@@ -125,6 +135,108 @@ export function registerAppIpc(): void {
       settings.autoSubtitlesEnabled = value !== false
       writeSettings(settings)
       return { autoSubtitlesEnabled: settings.autoSubtitlesEnabled }
+    }
+  )
+
+  // Backup and restore. Both open a native picker rather than taking a path
+  // from the renderer: the renderer must never be able to name a file for main
+  // to read or write, which is the same rule settingsChooseStreamCacheDir
+  // follows and the reason httpProxy exists in the shape it does.
+  handle<undefined, { filePath: string | null }>(MEDIA_HUB_CHANNELS.backupExport, async (event) => {
+    const win = BrowserWindow.fromWebContents(event.sender)
+    const defaultName = `r3-media-hub-${new Date().toISOString().slice(0, 10)}.json`
+    const options = {
+      title: 'Save a backup of your library',
+      defaultPath: defaultName,
+      filters: [{ name: 'R3 Media Hub backup', extensions: ['json'] }]
+    }
+    const result = win
+      ? await dialog.showSaveDialog(win, options)
+      : await dialog.showSaveDialog(options)
+    if (result.canceled || !result.filePath) return { filePath: null }
+    getDatabase().exportBackup(result.filePath, {
+      appVersion: app.getVersion(),
+      profiles: (readSettings().profiles ?? []) as unknown as Record<string, unknown>[]
+    })
+    return { filePath: result.filePath }
+  })
+
+  handle<undefined, RestoreResult | null>(MEDIA_HUB_CHANNELS.backupImport, async (event) => {
+    const win = BrowserWindow.fromWebContents(event.sender)
+    const options = {
+      title: 'Restore a backup',
+      properties: ['openFile' as const],
+      filters: [{ name: 'R3 Media Hub backup', extensions: ['json'] }]
+    }
+    const result = win
+      ? await dialog.showOpenDialog(win, options)
+      : await dialog.showOpenDialog(options)
+    const filePath = result.filePaths?.[0]
+    if (result.canceled || !filePath) return null
+
+    const backup = readBackup(filePath)
+    const summary = getDatabase().importBackup(filePath)
+
+    // The rows are keyed by profile id, so the profiles have to come back too
+    // or a restored library would belong to nobody. Merged by id rather than
+    // replacing the list: a profile that exists on this install and in the
+    // backup is the same profile, and overwriting it would drop the PIN it has
+    // here (a backup deliberately carries no PIN — see backup.ts).
+    const settings = readSettings()
+    const existing = settings.profiles ?? []
+    const byId = new Map(existing.map((profile) => [profile.id, profile]))
+    // Guaranteed an array by readBackup, which refuses a file without one
+    // BEFORE the restore runs — this read happens after the transaction has
+    // committed, so a throw here would mean a replaced library with no
+    // profiles to own it.
+    for (const incoming of backup.profiles as { id?: unknown }[]) {
+      const id = String(incoming?.id ?? '')
+      if (!id || byId.has(id)) continue
+      byId.set(id, incoming as (typeof existing)[number])
+    }
+    settings.profiles = [...byId.values()]
+    writeSettings(settings)
+
+    return {
+      restored: Object.values(summary.restored).reduce((total, n) => total + n, 0),
+      createdAt: summary.createdAt
+    }
+  })
+
+  handle<unknown, { watchRegion: string }>(
+    MEDIA_HUB_CHANNELS.settingsSetWatchRegion,
+    (_event, value) => {
+      const settings = readSettings()
+      const next = String(value ?? '')
+        .trim()
+        .toUpperCase()
+      // An empty or malformed value CLEARS the setting rather than storing
+      // nonsense, which puts the region back on the machine's locale — the
+      // same thing a fresh install does, and the honest reading of "I do not
+      // want to pick one".
+      settings.watchRegion = /^[A-Z]{2}$/.test(next) ? next : undefined
+      writeSettings(settings)
+      return { watchRegion: watchRegion() }
+    }
+  )
+
+  handle<unknown, { notificationsEnabled: boolean }>(
+    MEDIA_HUB_CHANNELS.settingsSetNotifications,
+    (_event, value) => {
+      const settings = readSettings()
+      settings.notificationsEnabled = value === true
+      writeSettings(settings)
+      return { notificationsEnabled: settings.notificationsEnabled }
+    }
+  )
+
+  handle<unknown, { autoplayNextEnabled: boolean }>(
+    MEDIA_HUB_CHANNELS.settingsSetAutoplayNext,
+    (_event, value) => {
+      const settings = readSettings()
+      settings.autoplayNextEnabled = value !== false
+      writeSettings(settings)
+      return { autoplayNextEnabled: settings.autoplayNextEnabled }
     }
   )
 

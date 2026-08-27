@@ -8,6 +8,7 @@ import { registerHttpProxyIpc } from './ipc/httpProxy'
 import { registerMediaHubIpc } from './ipc/mediaHub'
 import { APP_SCHEME, registerAppSchemeAsPrivileged, registerAppSchemeHandler } from './appProtocol'
 import { createDatabase } from './media-hub/database'
+import { activeProfileId } from './media-hub/profiles'
 import { getDatabase, setDatabase } from './media-hub/dbState'
 import { setActiveWindow, sendToRenderer } from './media-hub/rendererBridge'
 import { isAllowedExternalUrl } from './media-hub/security'
@@ -201,7 +202,12 @@ app.whenReady().then(() => {
   // synchronous and handlers only actually run once the renderer calls
   // them (well after this whole block completes), the ordering here is
   // for clarity more than strict necessity.
-  setDatabase(createDatabase(join(app.getPath('userData'), 'media-hub.sqlite')))
+  // Resolved BEFORE the database opens, and seeded here if this is a first
+  // launch: the connection is scoped to a profile from the moment it opens,
+  // and the profile-scoping migration attributes every row that predates
+  // profiles to whichever one is active now — which, on any install that has
+  // never switched, is the only one there has ever been.
+  setDatabase(createDatabase(join(app.getPath('userData'), 'media-hub.sqlite'), activeProfileId()))
   registerMediaHubIpc()
 
   createWindow()

@@ -37,18 +37,42 @@ play something. Optional metadata, tracking, and subtitle services add to the ex
 ### What it can do
 
 - **Browse movies, series, and anime** with search, genre and status filters, title details,
-  seasons, episodes, ratings, and recommendations.
+  seasons, episodes, ratings, and recommendations. Cast and crew names are clickable — they open
+  what else of theirs is in your catalog. Where a title can be streamed, rented or bought in your
+  region is shown alongside, from JustWatch via TMDB.
 - **Play from local files, a media server, or TorBox** with automatic source selection,
   audio-language preferences, playback buffering, subtitle selection, and resume progress.
+- **Control playback properly** — speed from 0.5× to 2×, chapter navigation, audio and subtitle
+  sync offsets, subtitle size, height, colour and backdrop, a night mode that evens out quiet
+  dialogue against a loud score, and a sleep timer that can stop at the end of the episode.
+- **Keep watching a series** — when an episode ends, the next one is offered on a post-play card
+  and starts after a short countdown. Turn it off under **Settings → Playback → Episodes**.
 - **Track what you watch** locally and, if desired, sync compatible activity with Simkl and
   MyAnimeList.
-- **Build a personal library** in **My Stuff**, including watchlisted, liked, disliked, watched,
-  and in-progress titles.
-- **Manage downloads** and optionally connect Jellyfin, Sonarr, Radarr, and qBittorrent.
+- **Rate what you have seen** out of 10 on a title's page. Scores are private to the profile that
+  gave them, and they steer what gets suggested — a genre watched often but enjoyed little stops
+  leading the recommendations.
+- **Build a personal library** in **My Stuff**, with tabs for your lists, what is in progress, what
+  you have finished, what you have rated, a calendar of what is airing, your full viewing
+  history, your stats, and what you
+  have set aside. Make as many named lists as you like alongside My List, and add titles to them
+  from their own page.
+  Any single viewing can be removed from the history without un-watching the episode.
+- **Manage downloads** and optionally connect Jellyfin, Sonarr, Radarr, and qBittorrent. Torrents
+  can be paused, resumed and removed from the Downloads page, with keeping or deleting the files
+  asked separately.
+- **Ask Sonarr or Radarr for a title** straight from its page, picking the quality profile and
+  folder, with a search starting as soon as it is added. Movies and series only — anime is
+  catalogued by Kitsu id, which neither service can look up.
 - **Watch together in Rooms** over a direct LAN/WAN connection or an optional R3 Party Sync
   relay, with a shared queue, synchronized playback, and short-lived encrypted room chat.
-- **Use separate profiles**, including Kids and PIN-protected profiles. Watch history is
-  currently shared between profiles.
+- **Hear about new episodes** of anything in My List, as a desktop notification. Off until you
+  turn it on in **Settings → General**, checked a few times a day, and never while you are
+  watching something.
+- **Use separate profiles**, including Kids and PIN-protected profiles. Each profile keeps its
+  own list, watch history, ratings and resume points.
+- **Back up your library** to a single file and restore it on another machine, from
+  **Settings → General → Your library**. Service credentials stay on the machine that holds them.
 - **Search and ask in one field.** Typing in the top bar searches the movie, series and anime
   catalogs and shows what it finds — real titles you can open, with or without an AI model. With
   one connected, its answer appears underneath: what the top result is, whether it fits what
@@ -131,18 +155,18 @@ Playback requires either **TorBox** or your own connected media/download service
 both is supported; the app applies the local → media server → download stream priority described
 above. Metadata, tracking, subtitle, and relay services remain optional:
 
-| Service             | Purpose                                                                              |
-| ------------------- | ------------------------------------------------------------------------------------ |
-| **TMDB**            | Richer artwork and metadata.                                                         |
-| **OMDb**            | Additional movie and series ratings, including Rotten Tomatoes data where available. |
-| **Simkl**           | Account-based watch tracking and catalog enrichment.                                 |
-| **MyAnimeList**     | Anime list and progress synchronization.                                             |
-| **SubDL**           | Search for and automatically apply subtitles, with no daily download limit.          |
-| **OpenSubtitles**   | The same, from a second catalogue (a free account allows 5 downloads per day).        |
-| **Jellyfin**        | Play content from an existing personal media library.                                |
-| **Sonarr / Radarr** | Connect series and movie management to the local download workflow.                  |
-| **qBittorrent**     | Supply and manage downloads for the local playback workflow.                         |
-| **R3 Party Sync**   | Relay Watch Party traffic when a direct connection is not suitable.                  |
+| Service             | Purpose                                                                                                                            |
+| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| **TMDB**            | Richer artwork and metadata.                                                                                                       |
+| **OMDb**            | Additional movie and series ratings, including Rotten Tomatoes data where available.                                               |
+| **Simkl**           | Account-based watch tracking and catalog enrichment.                                                                               |
+| **MyAnimeList**     | Anime list and progress synchronization.                                                                                           |
+| **SubDL**           | Search for and automatically apply subtitles, with no daily download limit.                                                        |
+| **OpenSubtitles**   | The same, from a second catalogue (a free account allows 5 downloads per day).                                                     |
+| **Jellyfin**        | Play content from an existing personal media library.                                                                              |
+| **Sonarr / Radarr** | Connect series and movie management to the local download workflow.                                                                |
+| **qBittorrent**     | Supply and manage downloads for the local playback workflow.                                                                       |
+| **R3 Party Sync**   | Relay Watch Party traffic when a direct connection is not suitable.                                                                |
 | **Ollama**          | Run the AI assistant and recommendations on a language model you host yourself. Detected automatically when it is on this machine. |
 
 Add or remove these integrations from **Settings**. API credentials are entered in the desktop

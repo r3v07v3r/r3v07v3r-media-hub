@@ -56,6 +56,11 @@ function seedRow(dbPath: string, key: string, expiresAt: number): void {
   raw.close()
 }
 
+// The database is scoped to a profile from the moment it opens (see
+// createDatabase). catalog_cache itself is not profile-scoped — none of
+// these assertions depend on which profile this is, only that there is one.
+const TEST_PROFILE = 'profile-pruning-test'
+
 const DAY_MS = 24 * 60 * 60 * 1000
 const now = Date.now()
 
@@ -64,7 +69,7 @@ console.log('catalog_cache pruning on open')
 check('a row expired within the grace window survives (the offline-fallback case)', () => {
   const dbPath = tempDbPath()
   seedRow(dbPath, 'recently-expired', now - 2 * DAY_MS)
-  const db = createDatabase(dbPath)
+  const db = createDatabase(dbPath, TEST_PROFILE)
   const value = db.getCache<{ v: string }>('recently-expired', { allowExpired: true })
   assert.ok(value, 'a row expired 2 days ago must still be readable as a stale fallback')
   db.close()
@@ -73,7 +78,7 @@ check('a row expired within the grace window survives (the offline-fallback case
 check('a row expired just under the grace boundary survives', () => {
   const dbPath = tempDbPath()
   seedRow(dbPath, 'almost-30-days', now - (30 * DAY_MS - 60_000))
-  const db = createDatabase(dbPath)
+  const db = createDatabase(dbPath, TEST_PROFILE)
   const value = db.getCache<{ v: string }>('almost-30-days', { allowExpired: true })
   assert.ok(value, 'a row just inside the 30-day grace window must survive')
   db.close()
@@ -82,7 +87,7 @@ check('a row expired just under the grace boundary survives', () => {
 check('a row expired well past the grace window is reclaimed', () => {
   const dbPath = tempDbPath()
   seedRow(dbPath, 'long-abandoned', now - 90 * DAY_MS)
-  const db = createDatabase(dbPath)
+  const db = createDatabase(dbPath, TEST_PROFILE)
   const value = db.getCache<{ v: string }>('long-abandoned', { allowExpired: true })
   assert.equal(value, null, 'a row abandoned for 90 days should have been pruned')
   db.close()
@@ -91,7 +96,7 @@ check('a row expired well past the grace window is reclaimed', () => {
 check('a live (not yet expired) row is never touched', () => {
   const dbPath = tempDbPath()
   seedRow(dbPath, 'still-live', now + DAY_MS)
-  const db = createDatabase(dbPath)
+  const db = createDatabase(dbPath, TEST_PROFILE)
   const value = db.getCache<{ v: string }>('still-live')
   assert.ok(value, 'a row that has not expired yet must never be pruned')
   db.close()
@@ -99,7 +104,7 @@ check('a live (not yet expired) row is never touched', () => {
 
 check('pruning does not throw or block opening a database with no expired rows at all', () => {
   const dbPath = tempDbPath()
-  const db = createDatabase(dbPath)
+  const db = createDatabase(dbPath, TEST_PROFILE)
   db.putCache('fresh', { ok: true }, 60_000)
   assert.ok(db.getCache('fresh'))
   db.close()
@@ -110,7 +115,7 @@ check('a mix of fresh, gracefully-stale, and abandoned rows resolves independent
   seedRow(dbPath, 'fresh', now + DAY_MS)
   seedRow(dbPath, 'stale-but-in-grace', now - 5 * DAY_MS)
   seedRow(dbPath, 'abandoned', now - 45 * DAY_MS)
-  const db = createDatabase(dbPath)
+  const db = createDatabase(dbPath, TEST_PROFILE)
   assert.ok(db.getCache('fresh'))
   assert.ok(db.getCache('stale-but-in-grace', { allowExpired: true }))
   assert.equal(db.getCache('abandoned', { allowExpired: true }), null)
@@ -120,10 +125,10 @@ check('a mix of fresh, gracefully-stale, and abandoned rows resolves independent
 check('re-opening an already-pruned database is idempotent', () => {
   const dbPath = tempDbPath()
   seedRow(dbPath, 'abandoned', now - 60 * DAY_MS)
-  const first = createDatabase(dbPath)
+  const first = createDatabase(dbPath, TEST_PROFILE)
   first.close()
   // Second open must not error just because the row is already gone.
-  const second = createDatabase(dbPath)
+  const second = createDatabase(dbPath, TEST_PROFILE)
   assert.equal(second.getCache('abandoned', { allowExpired: true }), null)
   second.close()
 })
@@ -137,7 +142,7 @@ check('re-opening an already-pruned database is idempotent', () => {
 
 check('deleteCache removes a row that an allowExpired reader could still serve', () => {
   const dbPath = tempDbPath()
-  const db = createDatabase(dbPath)
+  const db = createDatabase(dbPath, TEST_PROFILE)
   db.putCache('doomed', { v: 1 }, 60_000)
   db.deleteCache('doomed')
   assert.equal(db.getCache('doomed'), null)
@@ -149,7 +154,7 @@ check('an expired row is still readable, but a deleted one is not', () => {
   const dbPath = tempDbPath()
   seedRow(dbPath, 'expired', now - 5 * DAY_MS)
   seedRow(dbPath, 'deleted', now - 5 * DAY_MS)
-  const db = createDatabase(dbPath)
+  const db = createDatabase(dbPath, TEST_PROFILE)
   db.deleteCache('deleted')
   assert.ok(db.getCache('expired', { allowExpired: true }))
   assert.equal(db.getCache('deleted', { allowExpired: true }), null)
@@ -158,7 +163,7 @@ check('an expired row is still readable, but a deleted one is not', () => {
 
 check('deleting a key that was never cached is a no-op', () => {
   const dbPath = tempDbPath()
-  const db = createDatabase(dbPath)
+  const db = createDatabase(dbPath, TEST_PROFILE)
   db.deleteCache('never-existed')
   assert.equal(db.getCache('never-existed', { allowExpired: true }), null)
   db.close()

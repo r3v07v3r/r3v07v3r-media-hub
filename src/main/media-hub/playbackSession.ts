@@ -38,13 +38,21 @@ import type {
 import { handle } from './ipcGuard'
 import { getPlaybackBufferSeconds } from '../../shared/media-hub/playbackBuffer'
 import { normalizeVideoScaling } from '../../shared/media-hub/videoScaling'
+import type { PlayerSessionMedia } from '../../shared/media-hub/player'
+import { metadata } from './catalog'
+import { nextEpisodeInOrder } from '../../shared/media-hub/nextEpisode'
 import { reportPreparation } from './playbackProgress'
 import { captureThumbnail, mpvPath } from './mpv'
 import {
   addSubtitleFileToPlayer,
+  applyStoredNightMode,
+  applyStoredSubtitleStyle,
+  getSessionSnapshot,
   pushSessionSnapshot,
+  nightModeEnabled,
   startPlayerSession,
-  stopPlayerSession
+  stopPlayerSession,
+  storedSubtitleStyle
 } from './playerBridge'
 import { readSettings } from './settingsStore'
 import { setPressure } from './taskScheduler'
@@ -160,6 +168,52 @@ export async function preparePlayback(
   }
 }
 
+/**
+ * Works out which episode follows the one now playing, and pushes it into the
+ * live session snapshot as a second update.
+ *
+ * Separate from the snapshot push it follows, and awaited by nobody, because
+ * the answer costs a metadata read: warm from the 24h cache most of the time,
+ * but a cold title is a live Cinemeta or Kitsu fetch, and making somebody wait
+ * on that to start watching would be paying an episode ahead of time for
+ * something they may never reach.
+ *
+ * Re-reads the snapshot before writing rather than closing over the one it was
+ * called with. The read it awaits can outlive its own session — stop the title
+ * and start another inside that window and the naive version would hang the
+ * old show's next episode off the new one's card. Comparing identity first
+ * makes that case a no-op instead.
+ */
+async function resolveNextUp(media: PlayerSessionMedia | null): Promise<void> {
+  if (!media?.id || media.kind === 'movie') return
+  if (!Number.isFinite(media.seasonNumber) || !Number.isFinite(media.episodeNumber)) return
+  try {
+    // 'background' so a cold metadata fetch queues behind whatever the person
+    // is actually doing. Nothing is waiting on this.
+    const meta = await metadata(media.kind, media.id, 'background')
+    const next = nextEpisodeInOrder(meta.videos, {
+      season: media.seasonNumber,
+      episode: media.episodeNumber
+    })
+    if (!next) return
+    const current = getSessionSnapshot()
+    if (
+      !current?.media ||
+      current.media.id !== media.id ||
+      current.media.seasonNumber !== media.seasonNumber ||
+      current.media.episodeNumber !== media.episodeNumber
+    ) {
+      return
+    }
+    pushSessionSnapshot({ ...current, nextUp: next })
+  } catch {
+    // Best-effort, like every other metadata read in this file. No next
+    // episode simply means the post-play card does not appear, which is the
+    // same thing that happens at the end of a season — not an error worth
+    // interrupting playback to report.
+  }
+}
+
 async function openPlayback(url: string, cacheMeta?: CacheSessionMeta): Promise<PlaybackResult> {
   activeMediaUrl = url
   // StreamCache is the sole owner of the upstream connection to `url`. It is
@@ -231,28 +285,49 @@ async function openPlayback(url: string, cacheMeta?: CacheSessionMeta): Promise<
   // say which title this is, so without this the control bar has a real
   // scrubber above a blank name. `cacheMeta` already carries exactly these
   // fields because the Downloads page lists cached sessions by them.
+  // Re-applied per title, not once at startup: mpv resets these along with
+  // everything else on `loadfile`, so a look somebody set would quietly revert
+  // on the next episode.
+  const subtitleStyle = storedSubtitleStyle()
+  await applyStoredSubtitleStyle()
+  await applyStoredNightMode()
+
+  const sessionMedia = cacheMeta
+    ? {
+        id: cacheMeta.catalogId ?? '',
+        title: cacheMeta.title,
+        kind: cacheMeta.mediaKind ?? 'movie',
+        seasonNumber: cacheMeta.seasonNumber,
+        episodeNumber: cacheMeta.episodeNumber,
+        posterUrl: cacheMeta.posterUrl
+      }
+    : null
   pushSessionSnapshot({
-    media: cacheMeta
-      ? {
-          id: cacheMeta.catalogId ?? '',
-          title: cacheMeta.title,
-          kind: cacheMeta.mediaKind ?? 'movie',
-          seasonNumber: cacheMeta.seasonNumber,
-          episodeNumber: cacheMeta.episodeNumber,
-          posterUrl: cacheMeta.posterUrl
-        }
-      : null,
+    media: sessionMedia,
     tracks: activeMediaTracks,
     // Resume is applied by the overlay itself (seeks are in-place now), so this
     // is informational rather than something to act on.
     resumeSeconds: 0,
+    // Not known yet, deliberately — see resolveNextUp below, and the field's
+    // own note in shared/media-hub/player.ts about why "not yet" and "none"
+    // look the same here and why that costs the overlay nothing.
+    nextUp: null,
     settings: {
       bufferSeconds: getPlaybackBufferSeconds(settings.playbackBuffer),
       autoSubtitlesEnabled: settings.autoSubtitlesEnabled !== false,
       subtitleLanguage: settings.subtitleLanguage || 'en',
-      audioLanguage: settings.audioLanguage || 'en'
+      audioLanguage: settings.audioLanguage || 'en',
+      autoplayNextEnabled: settings.autoplayNextEnabled !== false,
+      subtitleStyle,
+      nightModeEnabled: nightModeEnabled()
     }
   })
+  // Fire-and-forget, AFTER the snapshot above has gone out. Finding the next
+  // episode is a metadata read — cached in the common case, a live Cinemeta/
+  // Kitsu fetch in the cold one — and playback must never wait behind it.
+  // Nothing needs the answer until the file ends, which is at minimum an
+  // episode away.
+  void resolveNextUp(sessionMedia)
 
   return {
     ok: true,

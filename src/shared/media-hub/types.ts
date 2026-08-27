@@ -118,6 +118,66 @@ export interface AnimeStoryLink {
   item: CatalogItem
 }
 
+/**
+ * What one person has in this catalog.
+ *
+ * Split by role rather than merged, because the two answer different
+ * questions: somebody who followed a director wants their films, somebody who
+ * followed an actor wants their performances, and a single list ordered by
+ * neither serves either.
+ */
+/** One streaming, rental or purchase service, as TMDB reports it. */
+export interface WatchProvider {
+  id: number
+  name: string
+  /** Already resolved to a full image URL, or '' when TMDB has no logo. */
+  logo: string
+}
+
+/**
+ * Where a title can be watched, in one region.
+ *
+ * Region is part of the answer rather than assumed by the caller: availability
+ * is exactly the thing that differs by country, and a list with no country
+ * attached to it is not information.
+ */
+export interface WatchProvidersResult {
+  region: string
+  /** Included with a subscription — free and ad-supported tiers folded in,
+   *  since the distinction that matters tonight is "can I just watch it". */
+  stream: WatchProvider[]
+  rent: WatchProvider[]
+  buy: WatchProvider[]
+  /** JustWatch's own page for the title, which TMDB supplies. */
+  link: string
+}
+
+/**
+ * One episode, on one day.
+ *
+ * Flat rather than grouped by date: the grouping is a presentation decision
+ * (a week grid, a list, a "this week / next week" split) and baking one shape
+ * into the payload would make every other shape a regrouping.
+ */
+export interface CalendarEntry {
+  contentId: string
+  type: MediaKind
+  title: string
+  poster: string
+  season: number
+  episode: number
+  episodeTitle: string
+  /** YYYY-MM-DD, in UTC — the granularity air dates are actually published
+   *  at, so carrying a time would be inventing precision. */
+  airsOn: string
+}
+
+export interface PersonCreditsResult {
+  person: string
+  cast: CatalogItem[]
+  creators: CatalogItem[]
+}
+
 export interface AnimeStoryResult {
   links: AnimeStoryLink[]
   /** False only if the remote lookup failed without a cached answer. */
@@ -339,6 +399,89 @@ export interface HistoryEntry extends Partial<TrackedItem> {
   // Nullable because Simkl's "all items" sync omits last_watched_at for
   // some movies — see watchedFromAllItems in main/media-hub/simkl.ts.
   watchedAt: string | null
+}
+
+/**
+ * One viewing, from the append-only `plays` table.
+ *
+ * Distinct from HistoryEntry above, which is one row per title-and-episode
+ * (the "have I seen this" index). A title watched three times has one
+ * HistoryEntry and three PlayRecords, which is the difference the history
+ * view exists to show.
+ */
+export interface PlayRecord {
+  playId: number
+  contentId: string
+  type: MediaKind
+  title: string
+  season: number | null
+  episode: number | null
+  watchedAt: string
+  poster: string
+}
+
+/**
+ * What somebody's viewing adds up to.
+ *
+ * Computed from `plays` and the metadata stored alongside each row, so it
+ * needs no catalog and no network — a stat page that could not be drawn
+ * offline would be a strange thing to have.
+ */
+export interface ViewingStats {
+  /** Every recorded viewing, including rewatches. */
+  totalPlays: number
+  /** Distinct titles, so a series binged for a month counts once. */
+  totalTitles: number
+  /**
+   * Estimated hours, from each title's stored runtime.
+   *
+   * ESTIMATED is the honest word and the UI says so. A play records what was
+   * watched and when, not for how long — somebody who stopped at 85% is
+   * counted for the whole runtime, and a title whose metadata carries no
+   * runtime at all contributes nothing. The alternative, storing a duration
+   * per play, is a schema change for a number nobody reads to the minute.
+   */
+  estimatedHours: number
+  /** How many plays fall in each of the last twelve months, oldest first. */
+  byMonth: { month: string; plays: number }[]
+  /** Most-watched genres, by play count, highest first. */
+  topGenres: { genre: string; plays: number }[]
+  /** Plays split by kind, for the three the catalog has. */
+  byKind: { kind: MediaKind; plays: number }[]
+  /**
+   * Titles with something in them seen more than once, and how many times.
+   *
+   * Counted per EPISODE rather than per title: two different episodes of a
+   * series are not a rewatch, and grouping by title alone would report every
+   * show anybody has watched two of as "seen again". For a film the two are
+   * the same thing.
+   */
+  mostPlayed: { contentId: string; title: string; plays: number }[]
+}
+
+/**
+ * A named collection somebody made themselves.
+ *
+ * Distinct from My List, which is the watchlist the tracking services sync
+ * against and which every profile has exactly one of. These are arbitrary —
+ * "Rewatch with Dad", "Halloween", "Started and gave up" — and belong to
+ * nobody but the person who made them.
+ */
+export interface CustomList {
+  id: string
+  name: string
+  /** How many titles are in it, so the picker can say so without a second
+   *  read per list. */
+  count: number
+  createdAt: string
+}
+
+export interface CustomListItem {
+  contentId: string
+  title: string
+  poster: string
+  type: MediaKind
+  addedAt: string
 }
 
 export interface ContinueWatchingEntry extends CatalogItem {
@@ -564,6 +707,22 @@ export interface MediaHubPublicSettings {
    *  same as picking the first OpenSubtitles search result manually would
    *  — see PlaybackOverlay.tsx's own "Always have subtitles" effect. */
   autoSubtitlesEnabled: boolean
+  /** On by default: reaching the end of an episode offers the next one on a
+   *  post-play card and starts it when the countdown runs out (see
+   *  AUTOPLAY_NEXT_COUNTDOWN_SECONDS in shared/media-hub/player.ts). Movies
+   *  and the last episode of a title have nothing to advance to and are
+   *  unaffected either way. A party FOLLOWER never advances on its own
+   *  whatever this says — the host owns what plays there. */
+  autoplayNextEnabled: boolean
+  /** Whether a new episode of a tracked show raises a desktop notification.
+   *  Off by default: an app that starts notifying because it was updated has
+   *  made a decision that was not its to make. */
+  notificationsEnabled: boolean
+  /** Which country "where to watch" answers for, ISO 3166-1 alpha-2. Always a
+   *  real value in the snapshot: an unset setting resolves to the machine's
+   *  locale before it gets here, so the Settings pane shows what is in use
+   *  rather than an empty field. */
+  watchRegion: string
   /** Decorative UI animation (idle ambient motion, not playback itself) — layered alongside, not replacing, the automatic motion-suspend-during-playback behavior in global.css. */
   uiAnimationsEnabled: boolean
   /** Whether the Home dashboard's live CPU/GPU/RAM/network gauges (PerformanceWidget) are shown. Device/UI preference, not account data — survives logout like uiAnimationsEnabled. */

@@ -22,6 +22,10 @@ import type {
   HomePersonalizedResult,
   MarkWatchedResult,
   PlaybackPositionResult,
+  CustomList,
+  CustomListItem,
+  PlayRecord,
+  ViewingStats,
   PendingWatchStatusPush,
   ReconcileCheckResult,
   ReconcileResolution,
@@ -129,9 +133,14 @@ interface MarkSeasonWatchedPayload {
   episodes?: SeasonEpisodePlayback[]
 }
 
-interface ScrobbleStartPayload {
+interface ScrobblePayload {
+  action: 'start' | 'pause' | 'stop'
   item: SimklPushItem
   playback?: PlaybackPosition
+  /** How far through, 0-100. Simkl uses it to decide whether a `stop` means
+   *  "finished" or "gave up", so sending it honestly matters more than the
+   *  other two fields. */
+  progress?: number
 }
 
 interface GetPositionPayload {
@@ -191,7 +200,22 @@ interface SimklPinPollResponse {
  *  this is deliberately a floor on ATTEMPTS, not on confirmed successes,
  *  so a broken connection doesn't get hammered either. */
 const RECONCILE_COOLDOWN_MS = 5 * 60 * 1000
-const RECONCILE_COOLDOWN_KEY = 'reconcile:cooldown:v1'
+/**
+ * Every reconcile record is scoped to a profile.
+ *
+ * Reconciliation compares the LOCAL watch history against Simkl's, and the
+ * local half became profile-scoped with the schema. These keys were stamped
+ * only with the Simkl account, so a discrepancy raised for profile A could be
+ * offered while profile B was active — and resolving it would either rewrite
+ * B's newly scoped history or push A's decision to Simkl. The account is still
+ * part of several of these keys where it already was; this adds the half that
+ * was missing.
+ */
+function reconcileKey(prefix: string, profileId = getDatabase().activeProfile()): string {
+  return `${prefix}:${profileId}`
+}
+
+const RECONCILE_COOLDOWN_KEY_PREFIX = 'reconcile:cooldown:v1'
 /**
  * The most recent diff, kept for as long as the cooldown that produced it.
  *
@@ -207,7 +231,7 @@ const RECONCILE_COOLDOWN_KEY = 'reconcile:cooldown:v1'
  * cooldown reads it rather than being told nothing happened. The work is
  * still done once per cooldown window; it is just no longer wasted.
  */
-const RECONCILE_RESULT_KEY = 'reconcile:result:v2'
+const RECONCILE_RESULT_KEY_PREFIX = 'reconcile:result:v2'
 
 /**
  * A cached diff, stamped with whose account it was computed against.
@@ -226,6 +250,11 @@ const RECONCILE_RESULT_KEY = 'reconcile:result:v2'
  */
 interface CachedReconcileResult {
   account: string
+  /** Which profile's history produced these. Stamped for exactly the reason
+   *  the account is, and checked the same way on the way back out — the key
+   *  alone is not enough, because a row can outlive the profile it was written
+   *  for and a stale one must not be served rather than merely re-keyed. */
+  profile: string
   discrepancies: WatchStatusDiscrepancy[]
 }
 
@@ -243,11 +272,24 @@ interface CachedReconcileResult {
  * account has to be captured before the work starts and discarded if it
  * changed, the same way simklWatchedSnapshot already does.
  */
-function writeReconcileResult(account: string, discrepancies: WatchStatusDiscrepancy[]): void {
+function writeReconcileResult(
+  account: string,
+  profile: string,
+  discrepancies: WatchStatusDiscrepancy[]
+): void {
   if (!account || simklAccountMark() !== account) return
+  // The profile gets the same treatment the account already had, and for the
+  // same reason: computeMovieDiscrepancies awaits Simkl and metadata, and
+  // switching profiles during it is an ordinary thing to do. Resolving the
+  // key at WRITE time filed profile A's discrepancies under whoever was
+  // active by the time the work finished — so B could be offered A's rows,
+  // and resolving one would rewrite B's history.
+  if (!profile || getDatabase().activeProfile() !== profile) return
   getDatabase().putCache<CachedReconcileResult>(
-    RECONCILE_RESULT_KEY,
-    { account, discrepancies },
+    // The captured profile, not the live one. Identical while the guard above
+    // holds, and explicit so it stays right if that guard is ever loosened.
+    reconcileKey(RECONCILE_RESULT_KEY_PREFIX, profile),
+    { account, profile, discrepancies },
     RECONCILE_COOLDOWN_MS
   )
 }
@@ -258,19 +300,24 @@ function cachedReconcileResult(): WatchStatusDiscrepancy[] {
   // No account connected matches no stamp — never the empty-string
   // account a malformed row might carry.
   if (!account) return []
-  const row = getDatabase().getCache<CachedReconcileResult>(RECONCILE_RESULT_KEY)
-  return row?.account === account && Array.isArray(row.discrepancies) ? row.discrepancies : []
+  const profile = getDatabase().activeProfile()
+  const row = getDatabase().getCache<CachedReconcileResult>(
+    reconcileKey(RECONCILE_RESULT_KEY_PREFIX)
+  )
+  return row?.account === account && row.profile === profile && Array.isArray(row.discrepancies)
+    ? row.discrepancies
+    : []
 }
 /** Ids someone has explicitly said to stop asking about — kept far longer
  *  than the cooldown above (this is a decision, not a rate limit), but
  *  not forever: 90 days gives a genuinely stale dismissal a chance to
  *  resurface rather than being silently suppressed for the life of the
  *  install. */
-const RECONCILE_IGNORED_KEY = 'reconcile:ignored:v1'
+const RECONCILE_IGNORED_KEY_PREFIX = 'reconcile:ignored:v1'
 const RECONCILE_IGNORED_TTL_MS = 90 * 24 * 60 * 60 * 1000
 
 function ignoredReconcileIds(): Set<string> {
-  return new Set(getDatabase().getCache<string[]>(RECONCILE_IGNORED_KEY) || [])
+  return new Set(getDatabase().getCache<string[]>(reconcileKey(RECONCILE_IGNORED_KEY_PREFIX)) || [])
 }
 
 function addIgnoredReconcileId(id: string): void {
@@ -281,9 +328,14 @@ function addIgnoredReconcileId(id: string): void {
   // losing one brings the title straight back to the review panel that
   // has already told the person it was handled. See database.ts's
   // `durable` helper for why the store defaults the other way.
-  getDatabase().putCache(RECONCILE_IGNORED_KEY, [...ids], RECONCILE_IGNORED_TTL_MS, {
-    durable: true
-  })
+  getDatabase().putCache(
+    reconcileKey(RECONCILE_IGNORED_KEY_PREFIX),
+    [...ids],
+    RECONCILE_IGNORED_TTL_MS,
+    {
+      durable: true
+    }
+  )
 }
 
 /** Titles this app gave up trying to push, after enough failed attempts
@@ -296,15 +348,17 @@ function addIgnoredReconcileId(id: string): void {
  *  that happened between this app and ONE account — another account has
  *  never been asked, and suppressing the title there would hide a
  *  disagreement nobody has ruled on. Same 90-day expiry either way. */
-const RECONCILE_ABANDONED_KEY = 'reconcile:abandoned:v1'
+const RECONCILE_ABANDONED_KEY_PREFIX = 'reconcile:abandoned:v1'
 
 interface AbandonedRecord {
   account: string
   ids: string[]
 }
 
-function abandonedReconcileIds(): Set<string> {
-  const stored = getDatabase().getCache<AbandonedRecord>(RECONCILE_ABANDONED_KEY)
+function abandonedReconcileIds(profile: string = getDatabase().activeProfile()): Set<string> {
+  const stored = getDatabase().getCache<AbandonedRecord>(
+    reconcileKey(RECONCILE_ABANDONED_KEY_PREFIX, profile)
+  )
   if (!stored?.ids?.length || stored.account !== simklAccountMark()) return new Set()
   return new Set(stored.ids)
 }
@@ -313,15 +367,26 @@ function abandonedReconcileIds(): Set<string> {
  *  read-it-back terms as writePendingPushes — a title can only be
  *  treated as given up on once the record saying so exists, or the pass
  *  that reports it goes straight on to ask about it again. */
-function addAbandonedReconcileId(id: string): boolean {
-  const ids = abandonedReconcileIds()
+/** `profile` for the same reason pendingPushes takes one: this is written
+ *  from inside the flush, AFTER its requests, so the live profile is not
+ *  necessarily the one the flush is about. */
+function addAbandonedReconcileId(
+  id: string,
+  profile: string = getDatabase().activeProfile()
+): boolean {
+  const ids = abandonedReconcileIds(profile)
   ids.add(id)
   const record: AbandonedRecord = { account: simklAccountMark(), ids: [...ids] }
   // Durable for the same reason as addIgnoredReconcileId: the person has
   // already been told this title is no longer being flagged.
-  getDatabase().putCache(RECONCILE_ABANDONED_KEY, record, RECONCILE_IGNORED_TTL_MS, {
-    durable: true
-  })
+  getDatabase().putCache(
+    reconcileKey(RECONCILE_ABANDONED_KEY_PREFIX, profile),
+    record,
+    RECONCILE_IGNORED_TTL_MS,
+    {
+      durable: true
+    }
+  )
   return abandonedReconcileIds().has(id)
 }
 
@@ -332,7 +397,7 @@ function addAbandonedReconcileId(id: string): boolean {
  *  outlive a failed push or the app being closed — otherwise the exact
  *  titles they already ruled on come back on the next launch, which is
  *  the bug this queue exists to end. */
-const RECONCILE_PENDING_KEY = 'reconcile:pending:v2'
+const RECONCILE_PENDING_KEY_PREFIX = 'reconcile:pending:v2'
 const RECONCILE_PENDING_TTL_MS = 90 * 24 * 60 * 60 * 1000
 
 /** The queue as persisted: entries plus WHOSE they are. */
@@ -360,7 +425,7 @@ const PENDING_FLUSH_DELAY_MS = 3000
  *  title for ninety days. A decision nobody has tried yet is never
  *  subject to this — going out promptly is the entire promise of the
  *  batch timer. */
-const RECONCILE_RETRY_KEY = 'reconcile:retry-cooldown:v1'
+const RECONCILE_RETRY_KEY_PREFIX = 'reconcile:retry-cooldown:v1'
 const RECONCILE_RETRY_COOLDOWN_MS = 5 * 60 * 1000
 
 let flushTimer: NodeJS.Timeout | null = null
@@ -414,8 +479,20 @@ let flushAgain = false
 /** Queued decisions belonging to the account connected right now. A
  *  queue stamped with any other connection is ignored outright — see
  *  simklAccountMark. */
-function pendingPushes(): PendingWatchStatusPush[] {
-  const stored = getDatabase().getCache<PendingQueue>(RECONCILE_PENDING_KEY)
+/**
+ * `profile` is a parameter rather than a lookup for the same reason the
+ * account stamp is captured rather than derived: every caller that straddles
+ * an `await` has to keep talking about the profile it STARTED with. A flush
+ * that read A's queue, awaited Simkl, and then wrote back under whoever was
+ * active by then applied A's outcome to B's decisions.
+ *
+ * Defaulted for the synchronous callers, where the two are the same value and
+ * spelling it out would only be noise.
+ */
+function pendingPushes(profile: string = getDatabase().activeProfile()): PendingWatchStatusPush[] {
+  const stored = getDatabase().getCache<PendingQueue>(
+    reconcileKey(RECONCILE_PENDING_KEY_PREFIX, profile)
+  )
   if (!stored?.entries?.length) return []
   return stored.account === simklAccountMark() ? stored.entries : []
 }
@@ -430,22 +507,30 @@ function pendingPushes(): PendingWatchStatusPush[] {
  * and callers that are about to tell someone "your choice is kept" have
  * something to check.
  */
-function writePendingPushes(queue: PendingWatchStatusPush[]): boolean {
+function writePendingPushes(
+  queue: PendingWatchStatusPush[],
+  profile: string = getDatabase().activeProfile()
+): boolean {
   const payload: PendingQueue = { account: simklAccountMark(), entries: queue }
   // Durable, and this is the row that most needs it: it IS the record of
   // an acknowledged "keep local" — the panel drops the discrepancy on the
   // strength of this write succeeding, and nothing else remembers the
   // choice. Losing it to a power cut is the exact failure the queue was
   // built to stop, just with a different cause.
-  getDatabase().putCache(RECONCILE_PENDING_KEY, payload, RECONCILE_PENDING_TTL_MS, {
-    durable: true
-  })
+  getDatabase().putCache(
+    reconcileKey(RECONCILE_PENDING_KEY_PREFIX, profile),
+    payload,
+    RECONCILE_PENDING_TTL_MS,
+    {
+      durable: true
+    }
+  )
   // The whole payload, not just which ids are present: a flush that only
   // bumped `attempts` (or corrected `remoteWatched`) leaves the id set
   // identical, so comparing ids would call a rejected write a success
   // and let a failing entry sit at the same attempt count forever,
   // never reaching the cap that is supposed to stop it.
-  return JSON.stringify(pendingPushes()) === JSON.stringify(queue)
+  return JSON.stringify(pendingPushes(profile)) === JSON.stringify(queue)
 }
 
 /**
@@ -505,7 +590,17 @@ function pushItemFor(entry: PendingWatchStatusPush): SimklPushItem {
  * that Simkl's own all-items view may not reflect yet.
  */
 async function pushPendingToServices(priority: TaskPriority): Promise<Set<string>> {
-  const queue = pendingPushes()
+  // The profile this flush is ABOUT, captured before the first await and used
+  // for every queue read and write below.
+  //
+  // The account already worked this way, a few lines down, for the identical
+  // reason: a flush issues its requests one after another, and switching
+  // profile during it is as ordinary as signing out during it. Resolving the
+  // profile at write time applied A's confirmed-or-failed outcome to B's
+  // queue — removing B's decision on the strength of A's result, and leaving
+  // A's own queue stale enough to be pushed again later.
+  const profile = getDatabase().activeProfile()
+  const queue = pendingPushes(profile)
   if (!queue.length) return new Set()
   // Not connected — keep everything queued rather than failing attempts
   // against a service that was never asked. Being signed out isn't a push
@@ -518,7 +613,7 @@ async function pushPendingToServices(priority: TaskPriority): Promise<Set<string
   if (!simklCredentials().accessToken) return new Set()
 
   // A decision nobody has tried yet always goes out. One that has
-  // already failed waits for the retry pacing — see RECONCILE_RETRY_KEY
+  // already failed waits for the retry pacing — see the retry-cooldown record
   // for what each of the two cooldowns is protecting.
   // The pacing holds a deadline, so a wake-up can be armed for exactly
   // what is left of the window rather than a fresh full one.
@@ -616,7 +711,7 @@ async function pushPendingToServices(priority: TaskPriority): Promise<Set<string
 
   // Requests went out, so the pacing starts now — including for the
   // entries this flush is about to mark as having failed.
-  if (sendable.length) startRetryPacing()
+  if (sendable.length) startRetryPacing(profile)
 
   // Nothing below this point is true of the account now connected: the
   // queue these results describe has already been dropped, so writing
@@ -662,7 +757,10 @@ async function pushPendingToServices(priority: TaskPriority): Promise<Set<string
   // requests above were in flight belongs to the next flush, not this
   // one's verdict.
   const { queue: remaining, abandoned } = applyPushOutcome(
-    pendingPushes(),
+    // The captured profile, like every other queue touch in this function:
+    // this read happens after the requests above and would otherwise pick up
+    // whichever profile is active by now.
+    pendingPushes(profile),
     [...confirmed, ...settled],
     failed
   )
@@ -679,13 +777,13 @@ async function pushPendingToServices(priority: TaskPriority): Promise<Set<string
   const letGo: PendingWatchStatusPush[] = []
   const stillHeld: PendingWatchStatusPush[] = []
   for (const entry of abandoned) {
-    ;(addAbandonedReconcileId(entry.id) ? letGo : stillHeld).push(entry)
+    ;(addAbandonedReconcileId(entry.id, profile) ? letGo : stillHeld).push(entry)
   }
 
   // Entries that were pushed and stayed queued now know something new
   // about the remote side — see withPushedRemoteState.
   const kept = withPushedRemoteState([...remaining, ...stillHeld], pushedValue)
-  const persisted = writePendingPushes(kept)
+  const persisted = writePendingPushes(kept, profile)
   // A successful write only vouches for what THIS flush corrected. An
   // entry carrying staleness from an earlier one was written straight
   // back out with that same stale value — the write succeeding says
@@ -741,7 +839,7 @@ async function pushPendingToServices(priority: TaskPriority): Promise<Set<string
     // the failure cooldown would sit on a corrected decision for five
     // minutes. The cooldown is for entries that actually failed.
     if (onDisk.some((entry) => entry.attempts === 0)) scheduleFlush()
-    else scheduleRetry(retryPacingDeadline() - Date.now())
+    else scheduleRetry(retryPacingDeadline(profile) - Date.now())
   }
   return confirmed
 }
@@ -769,11 +867,12 @@ export async function runBackgroundWatchSync(): Promise<void> {
   // stand down along with the rest of the job once playback starts.
   await flushPendingPushes('background')
   const db = getDatabase()
-  if (db.getCache(RECONCILE_COOLDOWN_KEY)) return
-  db.putCache(RECONCILE_COOLDOWN_KEY, true, RECONCILE_COOLDOWN_MS)
+  if (db.getCache(reconcileKey(RECONCILE_COOLDOWN_KEY_PREFIX))) return
+  db.putCache(reconcileKey(RECONCILE_COOLDOWN_KEY_PREFIX), true, RECONCILE_COOLDOWN_MS)
   const account = simklAccountMark()
+  const profile = db.activeProfile()
   try {
-    writeReconcileResult(account, await computeMovieDiscrepancies('background'))
+    writeReconcileResult(account, profile, await computeMovieDiscrepancies('background'))
   } catch (error) {
     logError('job:watch-sync', error)
   }
@@ -805,14 +904,23 @@ function flushPendingPushes(priority: TaskPriority = 'interactive'): Promise<Set
 
 /** When the next retry is allowed: the later of what was written down
  *  and what this session remembers. */
-function retryPacingDeadline(): number {
-  return Math.max(retryPacingUntil, getDatabase().getCache<number>(RECONCILE_RETRY_KEY) ?? 0)
+function retryPacingDeadline(profile: string = getDatabase().activeProfile()): number {
+  return Math.max(
+    retryPacingUntil,
+    getDatabase().getCache<number>(reconcileKey(RECONCILE_RETRY_KEY_PREFIX, profile)) ?? 0
+  )
 }
 
-function startRetryPacing(): void {
+/** `profile` for the same reason as the two above — this is armed after the
+ *  flush's requests have gone out. */
+function startRetryPacing(profile: string = getDatabase().activeProfile()): void {
   const until = Date.now() + RECONCILE_RETRY_COOLDOWN_MS
   retryPacingUntil = until
-  getDatabase().putCache(RECONCILE_RETRY_KEY, until, RECONCILE_RETRY_COOLDOWN_MS)
+  getDatabase().putCache(
+    reconcileKey(RECONCILE_RETRY_KEY_PREFIX, profile),
+    until,
+    RECONCILE_RETRY_COOLDOWN_MS
+  )
 }
 
 function scheduleRetry(delayMs: number = RECONCILE_RETRY_COOLDOWN_MS): void {
@@ -1063,7 +1171,7 @@ export function registerTrackingIpc(): void {
     // budget is the flush's own retry pacing, which applies to entries
     // that have already failed and never to one nobody has tried.
     const justPushed = await flushPendingPushes()
-    if (db.getCache(RECONCILE_COOLDOWN_KEY)) {
+    if (db.getCache(reconcileKey(RECONCILE_COOLDOWN_KEY_PREFIX))) {
       // Inside the cooldown, but that no longer means "nothing to say" —
       // the background watch-sync job may have run the diff moments ago.
       // Reported as ran: false, which is the truth (this call did not run
@@ -1072,11 +1180,12 @@ export function registerTrackingIpc(): void {
       const cached = cachedReconcileResult()
       return { ran: false, discrepancies: cached.filter((d) => !justPushed.has(d.id)) }
     }
-    db.putCache(RECONCILE_COOLDOWN_KEY, true, RECONCILE_COOLDOWN_MS)
+    db.putCache(reconcileKey(RECONCILE_COOLDOWN_KEY_PREFIX), true, RECONCILE_COOLDOWN_MS)
     const account = simklAccountMark()
+    const profile = db.activeProfile()
     try {
       const discrepancies = await computeMovieDiscrepancies()
-      writeReconcileResult(account, discrepancies)
+      writeReconcileResult(account, profile, discrepancies)
       // Anything confirmed moments ago is settled, whatever Simkl's
       // all-items view says — that read can lag its own write, and
       // re-asking about a title someone just resolved is the exact
@@ -1149,6 +1258,105 @@ export function registerTrackingIpc(): void {
     return { disliked: getDatabase().disliked() }
   })
 
+  handle<undefined, { plays: PlayRecord[] }>(MEDIA_HUB_CHANNELS.playsList, () => ({
+    plays: getDatabase().plays()
+  }))
+
+  handle<undefined, ViewingStats>(MEDIA_HUB_CHANNELS.statsGet, () => getDatabase().viewingStats())
+
+  // Lists. Every mutation answers with the whole (short) collection rather
+  // than an ok/not-ok, so the renderer never has to guess what the counts are
+  // now — a list's size changes on every add and remove.
+  handle<undefined, { lists: CustomList[] }>(MEDIA_HUB_CHANNELS.listsList, () => ({
+    lists: getDatabase().lists()
+  }))
+
+  handle<{ name: string }, { lists: CustomList[]; created: CustomList }>(
+    MEDIA_HUB_CHANNELS.listsCreate,
+    (_e, payload) => {
+      const db = getDatabase()
+      const created = db.createList(String(payload?.name ?? ''))
+      return { lists: db.lists(), created }
+    }
+  )
+
+  handle<{ listId: string; name: string }, { lists: CustomList[] }>(
+    MEDIA_HUB_CHANNELS.listsRename,
+    (_e, payload) => {
+      const db = getDatabase()
+      db.renameList(String(payload?.listId ?? ''), String(payload?.name ?? ''))
+      return { lists: db.lists() }
+    }
+  )
+
+  handle<{ listId: string }, { lists: CustomList[] }>(
+    MEDIA_HUB_CHANNELS.listsDelete,
+    (_e, payload) => {
+      const db = getDatabase()
+      db.deleteList(String(payload?.listId ?? ''))
+      return { lists: db.lists() }
+    }
+  )
+
+  handle<{ listId: string }, { items: CustomListItem[] }>(
+    MEDIA_HUB_CHANNELS.listsItems,
+    (_e, payload) => ({ items: getDatabase().listItems(String(payload?.listId ?? '')) })
+  )
+
+  handle<{ listId: string; item: TrackableItem }, { lists: CustomList[] }>(
+    MEDIA_HUB_CHANNELS.listsAdd,
+    (_e, payload) => {
+      const db = getDatabase()
+      db.addToList(String(payload?.listId ?? ''), payload?.item ?? { id: '' })
+      return { lists: db.lists() }
+    }
+  )
+
+  handle<{ listId: string; contentId: string }, { lists: CustomList[] }>(
+    MEDIA_HUB_CHANNELS.listsRemove,
+    (_e, payload) => {
+      const db = getDatabase()
+      db.removeFromList(String(payload?.listId ?? ''), String(payload?.contentId ?? ''))
+      return { lists: db.lists() }
+    }
+  )
+
+  handle<{ contentId: string }, { listIds: string[] }>(
+    MEDIA_HUB_CHANNELS.listsContaining,
+    (_e, payload) => ({ listIds: getDatabase().listsContaining(String(payload?.contentId ?? '')) })
+  )
+
+  handle<{ playId: number }, { plays: PlayRecord[] }>(
+    MEDIA_HUB_CHANNELS.playDelete,
+    (_e, payload) => {
+      const db = getDatabase()
+      db.deletePlay(Number(payload?.playId))
+      // Deliberately does NOT touch watch_history: removing one viewing of an
+      // episode watched three times must not un-watch it. Clearing the badge
+      // is what tracking:unmark-watched is for, and it removes every play of
+      // that episode along with it.
+      return { plays: db.plays() }
+    }
+  )
+
+  handle<undefined, { ratings: Record<string, number> }>(MEDIA_HUB_CHANNELS.ratingsList, () => ({
+    ratings: Object.fromEntries(getDatabase().ratings())
+  }))
+
+  handle<{ id: string; score: number }, { ratings: Record<string, number> }>(
+    MEDIA_HUB_CHANNELS.ratingSet,
+    (_e, payload) => {
+      const db = getDatabase()
+      db.rate(String(payload?.id ?? ''), Number(payload?.score))
+      // A score changes what the ranking learns from this person's history —
+      // both the genres it prefers and the names it has learned to look for.
+      // Rebuilding here is what makes rating something feel like it did
+      // anything, rather than waiting for the next scheduled pass.
+      requestRecommendationsRebuild()
+      return { ratings: Object.fromEntries(db.ratings()) }
+    }
+  )
+
   handle<TrackableItem, { disliked: boolean }>(MEDIA_HUB_CHANNELS.dislikedAdd, (_e, item) => {
     getDatabase().dislike(item)
     requestRecommendationsRebuild()
@@ -1166,6 +1374,11 @@ export function registerTrackingIpc(): void {
 
   handle<undefined, HomePersonalizedResult>(MEDIA_HUB_CHANNELS.homePersonalized, async () => {
     const db = getDatabase()
+    // Which profile this whole response is about, captured before the first
+    // read. The cold branch below awaits three catalogs before it stores
+    // anything — see storeRecommendations on why the write cannot resolve
+    // this for itself.
+    const profile = db.activeProfile()
     // Local only — see trackingList's own comment above for why: a live/
     // cached Simkl merge here means Continue Watching and the
     // recommendation filter can both keep treating a freshly-unmarked
@@ -1231,7 +1444,10 @@ export function registerTrackingIpc(): void {
           })
       // announce: false — this handler returns the same list to the same
       // renderer on the next line. See storeRecommendations.
-      storeRecommendations(full, preferredGenres, { announce: false })
+      // The profile this request is ABOUT. The cold path awaits catalog reads
+      // before reaching here, so the write must not resolve the profile for
+      // itself — see storeRecommendations.
+      storeRecommendations(full, preferredGenres, { announce: false, profile })
       // Through the same cadence pass the stored path uses, so the row is
       // ordered the same way whichever branch produced it.
       recommendations = applyCadence(full, watchCadenceProfile(history), SERVED_COUNT)
@@ -1338,14 +1554,27 @@ export function registerTrackingIpc(): void {
     return { ok: true }
   })
 
-  handle<ScrobbleStartPayload, { connected: boolean }>(
-    MEDIA_HUB_CHANNELS.simklScrobbleStart,
-    async (_e, { item, playback }) => {
+  handle<ScrobblePayload, { connected: boolean }>(
+    MEDIA_HUB_CHANNELS.simklScrobble,
+    async (_e, payload) => {
       if (!simklCredentials().accessToken) return { connected: false }
-      await simklRequest('/scrobble/start', {
-        method: 'POST',
-        body: JSON.stringify(scrobblePayload(item, playback || {}, 0))
-      })
+      const action = payload?.action
+      if (action !== 'start' && action !== 'pause' && action !== 'stop') {
+        return { connected: true }
+      }
+      const progress = Math.min(100, Math.max(0, Number(payload?.progress) || 0))
+      try {
+        await simklRequest(`/scrobble/${action}`, {
+          method: 'POST',
+          body: JSON.stringify(scrobblePayload(payload.item, payload.playback || {}, progress))
+        })
+      } catch (error) {
+        // Never surfaced. A scrobble is a courtesy to a third-party service:
+        // it must not interrupt playback, and an account whose token expired
+        // mid-film should not produce an error over the video every time
+        // somebody pauses. The local history is the record either way.
+        logError('simkl:scrobble', error)
+      }
       return { connected: true }
     }
   )

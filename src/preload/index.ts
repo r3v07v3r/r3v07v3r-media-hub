@@ -44,6 +44,13 @@ import type {
   PartyQueueEntry,
   PartyStatusResult,
   PlaybackPositionResult,
+  CustomList,
+  CustomListItem,
+  CalendarEntry,
+  PersonCreditsResult,
+  WatchProvidersResult,
+  PlayRecord,
+  ViewingStats,
   PlaybackPrepareProgress,
   PlaybackResult,
   ProfilePublic,
@@ -185,6 +192,16 @@ const api = {
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.settingsSetVideoScaling, preset),
       setAutoSubtitles: (enabled: boolean): Promise<{ autoSubtitlesEnabled: boolean }> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.settingsSetAutoSubtitles, enabled),
+      setAutoplayNext: (enabled: boolean): Promise<{ autoplayNextEnabled: boolean }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.settingsSetAutoplayNext, enabled),
+      setWatchRegion: (region: string): Promise<{ watchRegion: string }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.settingsSetWatchRegion, region),
+      setNotifications: (enabled: boolean): Promise<{ notificationsEnabled: boolean }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.settingsSetNotifications, enabled),
+      exportBackup: (): Promise<{ filePath: string | null }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.backupExport),
+      importBackup: (): Promise<{ restored: number; createdAt: string } | null> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.backupImport),
       setUiAnimations: (enabled: boolean): Promise<{ uiAnimationsEnabled: boolean }> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.settingsSetUiAnimations, enabled),
       setPerformancePanelVisible: (
@@ -326,7 +343,13 @@ const api = {
       related: (type: MediaKind, id: string): Promise<CatalogItem[]> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.catalogRelated, { type, id }),
       story: (type: MediaKind, id: string): Promise<AnimeStoryResult> =>
-        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.catalogStory, { type, id })
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.catalogStory, { type, id }),
+      person: (person: string): Promise<PersonCreditsResult> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.catalogPerson, { person }),
+      providers: (type: MediaKind, id: string): Promise<WatchProvidersResult> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.catalogProviders, { type, id }),
+      calendar: (): Promise<{ entries: CalendarEntry[] }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.calendarGet)
     },
 
     home: {
@@ -371,6 +394,44 @@ const api = {
        *  where the actual outcome arrives. */
       onReconcileSync: (onEvent: (report: ReconcileSyncReport) => void): (() => void) =>
         subscribe<ReconcileSyncReport>(MEDIA_HUB_CHANNELS.trackingReconcileSync, onEvent)
+    },
+
+    plays: {
+      list: (): Promise<{ plays: PlayRecord[] }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.playsList),
+      remove: (playId: number): Promise<{ plays: PlayRecord[] }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.playDelete, { playId })
+    },
+
+    stats: {
+      get: (): Promise<ViewingStats> => ipcRenderer.invoke(MEDIA_HUB_CHANNELS.statsGet)
+    },
+
+    lists: {
+      list: (): Promise<{ lists: CustomList[] }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.listsList),
+      create: (name: string): Promise<{ lists: CustomList[]; created: CustomList }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.listsCreate, { name }),
+      rename: (listId: string, name: string): Promise<{ lists: CustomList[] }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.listsRename, { listId, name }),
+      remove: (listId: string): Promise<{ lists: CustomList[] }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.listsDelete, { listId }),
+      items: (listId: string): Promise<{ items: CustomListItem[] }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.listsItems, { listId }),
+      add: (listId: string, item: TrackableItem): Promise<{ lists: CustomList[] }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.listsAdd, { listId, item }),
+      removeItem: (listId: string, contentId: string): Promise<{ lists: CustomList[] }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.listsRemove, { listId, contentId }),
+      containing: (contentId: string): Promise<{ listIds: string[] }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.listsContaining, { contentId })
+    },
+
+    ratings: {
+      list: (): Promise<{ ratings: Record<string, number> }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.ratingsList),
+      /** 1-10, or 0 to clear. */
+      set: (id: string, score: number): Promise<{ ratings: Record<string, number> }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.ratingSet, { id, score })
     },
 
     disliked: {
@@ -502,11 +563,18 @@ const api = {
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.simklPoll, userCode),
       disconnect: (): Promise<{ ok: true }> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.simklDisconnect),
-      scrobbleStart: (
+      scrobble: (
+        action: 'start' | 'pause' | 'stop',
         item: SimklPushItem,
-        playback?: PlaybackPosition
+        playback?: PlaybackPosition,
+        progress?: number
       ): Promise<{ connected: boolean }> =>
-        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.simklScrobbleStart, { item, playback })
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.simklScrobble, {
+          action,
+          item,
+          playback,
+          progress
+        })
     },
 
     mal: {

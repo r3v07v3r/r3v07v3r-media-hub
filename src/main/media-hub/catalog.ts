@@ -23,7 +23,9 @@ import type {
   CatalogListing,
   ConnectResult,
   Episode,
-  MediaKind
+  MediaKind,
+  PersonCreditsResult,
+  WatchProvidersResult
 } from '../../shared/media-hub/types'
 import { MEDIA_HUB_CHANNELS } from '../../shared/media-hub/ipc-channels'
 import { fetchJson } from './httpClient'
@@ -49,7 +51,8 @@ import { isLikelyFranchiseSibling, rankSimilarTitles } from '../../shared/media-
 import { coalesce, coalesceScope, type TaskPriority } from './taskScheduler'
 import { buildGroupedAnimeVideos, groupAnimeCatalog, kitsuRealEpisodes } from './animeSeasons'
 import { omdbRottenTomatoesRating } from './omdb'
-import { titleCredits } from './credits'
+import { searchCredits, titleCredits, titlesFeaturing } from './credits'
+import { watchProviders, watchRegion } from './watchProviders'
 
 const catalogUrls: Record<'movie' | 'series', string> = {
   movie: 'https://v3-cinemeta.strem.io/catalog/movie/top.json',
@@ -1105,7 +1108,30 @@ export function registerCatalogIpc(): void {
       if (!isValidCatalogKind(kind)) throw new Error('Unsupported catalog.')
       const q = String(query || '').trim()
       if (q.length < 2) return []
-      return kind === 'anime' ? kitsuSearch(q) : simklSearch(kind, q)
+      const byTitle = kind === 'anime' ? await kitsuSearch(q) : await simklSearch(kind, q)
+
+      // Then the same query against everything already known about each
+      // title's cast, creators and story labels. This is what makes typing a
+      // director's name find their films rather than only films with their
+      // name in the title — the rows are already on disk, so it costs a map
+      // lookup rather than a request.
+      //
+      // AFTER the title matches and never reordering them: somebody typing a
+      // title wants that title first, and a cast match is a useful second
+      // thought rather than a competing answer.
+      const seen = new Set(byTitle.map((item) => String(item.id)))
+      const pool = await catalogData(kind, false, 'interactive').catch(() => [] as CatalogItem[])
+      const byId = new Map(pool.map((item) => [String(item.id), item]))
+      const { people, labels } = searchCredits(byId.keys(), q)
+      const extra: CatalogItem[] = []
+      for (const id of [...people, ...labels]) {
+        if (seen.has(id)) continue
+        const item = byId.get(id)
+        if (!item) continue
+        seen.add(id)
+        extra.push(item)
+      }
+      return [...byTitle, ...extra]
     }
   )
 
@@ -1114,6 +1140,40 @@ export function registerCatalogIpc(): void {
     async (_e, { type, id }) => {
       if (!isValidCatalogKind(type)) return []
       return similarTitles(type, id)
+    }
+  )
+
+  handle<{ person: string }, PersonCreditsResult>(
+    MEDIA_HUB_CHANNELS.catalogPerson,
+    async (_e, payload) => {
+      const person = String(payload?.person ?? '').trim()
+      const empty = { person, cast: [], creators: [] }
+      if (!person) return empty
+
+      // All three catalogs, from cache only (`false` skips the refresh): this
+      // answers a click on a name, and crawling Kitsu for two thousand anime
+      // to do it would be a twenty-second wait for a list of four films.
+      const pools = await Promise.all(
+        (['movie', 'series', 'anime'] as const).map((kind) =>
+          catalogData(kind, false, 'interactive').catch(() => [] as CatalogItem[])
+        )
+      )
+      const pool = pools.flat()
+      const byId = new Map(pool.map((item) => [String(item.id), item]))
+      const { cast, creators } = titlesFeaturing(byId.keys(), person)
+      const resolve = (ids: string[]): CatalogItem[] =>
+        ids.map((id) => byId.get(id)).filter((item): item is CatalogItem => Boolean(item))
+      return { person, cast: resolve(cast), creators: resolve(creators) }
+    }
+  )
+
+  handle<{ type: MediaKind; id: string }, WatchProvidersResult>(
+    MEDIA_HUB_CHANNELS.catalogProviders,
+    async (_e, payload) => {
+      const type = payload?.type
+      if (!isValidCatalogKind(type))
+        return { region: watchRegion(), stream: [], rent: [], buy: [], link: '' }
+      return watchProviders(type, String(payload?.id ?? ''))
     }
   )
 

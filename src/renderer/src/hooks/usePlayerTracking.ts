@@ -12,7 +12,7 @@
 // (database.ts): under 20s in is never stored, and past 90% clears the bookmark
 // instead of saving one. Those are covered by tests/playbackPosition.test.ts.
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import type { PlayerSessionMedia } from '@shared/media-hub/player'
 
@@ -167,13 +167,40 @@ export function usePlayerTracking({
     onMarkWatchedRef.current()
   }, [timePos, duration])
 
-  return {
-    // Only surfaced while it still belongs to the episode being played.
-    resumeSeconds: resume && resume.key === trackingKey ? resume.seconds : null,
-    consumeResume: () => setResume(null),
-    resumeVolume: resumeVolume && resumeVolume.key === trackingKey ? resumeVolume.volume : null,
-    consumeResumeVolume: () => setResumeVolume(null),
-    markedWatched: () => markedWatchedRef.current,
-    savePositionNow
-  }
+  const consumeResume = useCallback(() => setResume(null), [])
+  const consumeResumeVolume = useCallback(() => setResumeVolume(null), [])
+  const markedWatched = useCallback(() => markedWatchedRef.current, [])
+
+  // MEMOISED, and the memoisation is load-bearing rather than an
+  // optimisation.
+  //
+  // This used to return a fresh object literal on every render, which gave
+  // every useCallback in the overlay that depends on it — closePlayer,
+  // startNext — a new identity on every render too. Any effect depending on
+  // one of those re-ran and cleared its own pending timeout, and mpv's
+  // time-pos patches arrive roughly every 120ms during playback: fast enough
+  // that the sleep timer's 250ms tick could never fire, so a 15-minute timer
+  // counted down forever and stopped nothing. The autoplay countdown survived
+  // only because a second is longer than the gap between renders once a file
+  // has ended, which is luck rather than design.
+  return useMemo(
+    () => ({
+      // Only surfaced while it still belongs to the episode being played.
+      resumeSeconds: resume && resume.key === trackingKey ? resume.seconds : null,
+      consumeResume,
+      resumeVolume: resumeVolume && resumeVolume.key === trackingKey ? resumeVolume.volume : null,
+      consumeResumeVolume,
+      markedWatched,
+      savePositionNow
+    }),
+    [
+      resume,
+      resumeVolume,
+      trackingKey,
+      consumeResume,
+      consumeResumeVolume,
+      markedWatched,
+      savePositionNow
+    ]
+  )
 }

@@ -11,8 +11,21 @@
 // Everything here is structurally cloneable: it travels over Electron IPC.
 
 import type { MediaTracks } from './types'
+import type { NextEpisodeRef } from './nextEpisode'
+import type { SubtitleStyle } from './subtitleStyle'
 import type { VideoFitMode } from './videoFit'
 import type { VideoPictureControl } from './videoPicture'
+
+/**
+ * How long the post-play card counts down before starting the next episode.
+ *
+ * Ten seconds is the figure the players people compare this one to have
+ * settled on (Netflix, Plex and Jellyfin are all within a second or two of
+ * it), and the reasoning behind it is worth keeping: long enough to read the
+ * next episode's name and press Stop on purpose, short enough that sitting
+ * through it never feels like being made to wait.
+ */
+export const AUTOPLAY_NEXT_COUNTDOWN_SECONDS = 10
 
 /**
  * Loudest the player can be asked to go, as a multiplier of the source's own
@@ -32,6 +45,30 @@ import type { VideoPictureControl } from './videoPicture'
 export const MAX_PLAYER_VOLUME = 2
 
 /**
+ * The audio filter behind Night mode.
+ *
+ * The problem it solves is the one that makes people reach for the remote
+ * twice a scene: a film mixed for a cinema puts dialogue thirty decibels below
+ * the score, so the choice is inaudible speech or a explosion that wakes the
+ * house. `dynaudnorm` normalises loudness over a moving window, which lifts
+ * the quiet parts without flattening the loud ones into mush the way a hard
+ * compressor does.
+ *
+ * The numbers are deliberately gentle. `f=200` is a 200ms frame and `g=15` a
+ * fifteen-frame window — roughly three seconds of context, long enough that
+ * the gain does not audibly move within a line of dialogue, which is what
+ * "pumping" sounds like. `p=0.6` leaves headroom rather than driving
+ * everything to the ceiling, and `m=8` caps how much any one passage can be
+ * lifted so a genuinely silent moment stays silent instead of becoming a wall
+ * of amplified room tone.
+ *
+ * Wrapped in mpv's `lavfi=[...]` form rather than passed bare: the bare form
+ * relies on mpv auto-detecting a libavfilter name, which works but is not the
+ * documented spelling.
+ */
+export const NIGHT_MODE_AUDIO_FILTER = 'lavfi=[dynaudnorm=f=200:g=15:p=0.6:m=8]'
+
+/**
  * How far one press of the volume keys moves it, in the same units — 5%.
  *
  * Shared for the same reason as the ceiling: the keys are handled TWICE,
@@ -46,6 +83,13 @@ export const PLAYER_VOLUME_STEP = 0.05
  *  the full MediaItem: that type lives in the renderer, and anything needing
  *  the whole record (mark-watched's trackable payload, for one) is handled by
  *  the main window, which already holds it — see PlayerUiEvent. */
+/** One chapter mark, as mpv reports them. */
+export interface PlayerChapter {
+  title: string
+  /** Seconds from the start of the file. */
+  time: number
+}
+
 export interface PlayerSessionMedia {
   id: string
   title: string
@@ -67,12 +111,32 @@ export interface PlayerSessionSnapshot {
   /** Seconds to resume from, already applied to mpv as its `start` option —
    *  present so the UI can show it, not so it can seek there itself. */
   resumeSeconds: number
+  /**
+   * The episode that follows this one, for the post-play card — null for a
+   * movie, for the last episode of a title, and for the whole of the window
+   * before it has been worked out.
+   *
+   * Resolved by main AFTER the first snapshot goes out, and pushed as a
+   * second one, because finding it means a metadata read that playback must
+   * never wait behind (see playbackSession.ts's resolveNextUp). The overlay
+   * therefore has to treat this as "not known YET" rather than "there is
+   * none" — which costs it nothing, since it has no use for the value until
+   * the file ends.
+   */
+  nextUp: NextEpisodeRef | null
   settings: {
     /** 3 | 8 | 15 — see shared/media-hub/playbackBuffer.ts. */
     bufferSeconds: number
     autoSubtitlesEnabled: boolean
     subtitleLanguage: string
     audioLanguage: string
+    /** Whether reaching the end of an episode offers the next one. */
+    autoplayNextEnabled: boolean
+    /** The stored look, already applied to mpv — present so the menu opens
+     *  showing what is in force rather than the defaults. */
+    subtitleStyle: SubtitleStyle
+    /** Whether loudness normalization is on. */
+    nightModeEnabled: boolean
   }
 }
 
@@ -110,6 +174,15 @@ export interface PlayerStatePatch {
   eofReached?: boolean
   /** Track list changed — e.g. an external subtitle was added. */
   tracks?: MediaTracks
+  /** The file's chapter marks, in order. Empty for the many releases that
+   *  carry none, which is why the chapters button is absent rather than
+   *  disabled when this is empty. */
+  chapters?: PlayerChapter[]
+  /** Index into `chapters` of the one currently playing, or -1. */
+  chapter?: number
+  /** mpv's audio delay in seconds — observed rather than assumed, so the
+   *  control shows what is actually applied after a title change resets it. */
+  audioDelay?: number
   /** Current fit mode. Not observed off mpv like the rest of this patch:
    *  `keepaspect` and `panscan` are two properties describing one user-facing
    *  choice, and main is the side that knows which choice they add up to — so
@@ -151,6 +224,20 @@ export type PlayerCommand =
   /** Manual subtitle timing offset in seconds — the thing VLC users fix in two
    *  keypresses and the old <track>-based pipeline had no way to express. */
   | { type: 'set-subtitle-delay'; seconds: number }
+  /** The same correction for audio, which a badly muxed release needs just as
+   *  often and in the opposite direction. */
+  | { type: 'set-audio-delay'; seconds: number }
+  /** Jump to a chapter by its index in the observed `chapters` list. */
+  | { type: 'set-chapter'; index: number }
+  /** Size, position, colour and background box — see
+   *  shared/media-hub/subtitleStyle.ts. Applied as one command because the
+   *  four are one visual decision and applying them separately makes the
+   *  subtitle flicker through intermediate states. */
+  | { type: 'set-subtitle-style'; style: SubtitleStyle }
+  /** Evens out a mix with quiet dialogue and a loud score — see
+   *  NIGHT_MODE_AUDIO_FILTER. Stored, because somebody who needs it once
+   *  needs it for everything they watch on that setup. */
+  | { type: 'set-night-mode'; enabled: boolean }
   /** How the picture is fitted into the window — see shared/media-hub/videoFit.ts. */
   | { type: 'set-fit-mode'; mode: VideoFitMode }
   /** One of the small set of live MPV picture controls. */
@@ -186,6 +273,37 @@ export type PlayerUiEvent =
   | { type: 'stop-playback'; watched: boolean }
   | { type: 'mark-watched' }
   | { type: 'refresh-watch-status' }
+  /** Start the next episode — raised by the post-play card, either because its
+   *  countdown ran out or because somebody pressed Play now.
+   *
+   *  The coordinate travels with the event rather than being recomputed on the
+   *  other side. The main window holds the MediaItem but not the episode list
+   *  (only main resolves that, into the session's `nextUp`), so recomputing
+   *  there would mean a second metadata read that could disagree with the
+   *  episode the person was just shown. This says "start the one on the card",
+   *  which is the only answer that can't surprise them. Main-window side
+   *  revalidates both numbers before playing anything. */
+  | { type: 'play-next'; season: number; episode: number }
+  /** Report in-progress playback to the tracking services.
+   *
+   *  Raised on TRANSITIONS only — started, paused, stopped — not on a timer.
+   *  Simkl's scrobble endpoints are a state machine, not a heartbeat, and a
+   *  call per tick would be a request every few seconds for the whole length
+   *  of a film.
+   *
+   *  Unlike mark-watched, this DOES carry its subject. A scrobble payload
+   *  needs an id, a kind, a title and a coordinate — all of which the overlay
+   *  already has — where mark-watched needs the full MediaItem, which it does
+   *  not. Carrying it is what makes a title change correct: the outgoing stop
+   *  and the incoming start describe different titles, and a receiver reading
+   *  "whatever is playing now" would race the main window's own state and send
+   *  the stop for the episode that just started. */
+  | {
+      type: 'scrobble'
+      action: 'start' | 'pause' | 'stop'
+      progress: number
+      media: PlayerSessionMedia
+    }
   | { type: 'notify'; tone: 'info' | 'error' | 'success'; message: string }
   /** Overlay -> main -> main window: OPEN the party panel. A command, for a
    *  panel that is not open yet — the only one of these three that main passes

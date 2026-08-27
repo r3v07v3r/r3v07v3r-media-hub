@@ -17,6 +17,9 @@ export const MEDIA_HUB_CHANNELS = {
   settingsSetPlaybackBuffer: 'mediahub:settings:set-playback-buffer',
   settingsSetVideoScaling: 'mediahub:settings:set-video-scaling',
   settingsSetAutoSubtitles: 'mediahub:settings:set-auto-subtitles',
+  settingsSetAutoplayNext: 'mediahub:settings:set-autoplay-next',
+  settingsSetWatchRegion: 'mediahub:settings:set-watch-region',
+  settingsSetNotifications: 'mediahub:settings:set-notifications',
   settingsSetUiAnimations: 'mediahub:settings:set-ui-animations',
   settingsSetPerformancePanelVisible: 'mediahub:settings:set-performance-panel-visible',
   settingsSetStreamLimits: 'mediahub:settings:set-stream-limits',
@@ -25,6 +28,10 @@ export const MEDIA_HUB_CHANNELS = {
   settingsResetStreamCacheDir: 'mediahub:settings:reset-stream-cache-dir',
   settingsSetPartyDisplayName: 'mediahub:settings:set-party-display-name',
   settingsSetHideDefaults: 'mediahub:settings:set-hide-defaults',
+  /** Write every profile's library out to a JSON file the person picks, and
+   *  read one back. See main/media-hub/backup.ts for what a backup carries. */
+  backupExport: 'mediahub:backup:export',
+  backupImport: 'mediahub:backup:import',
   logout: 'mediahub:account:logout',
   torboxConnect: 'mediahub:torbox:connect',
   torboxDisconnect: 'mediahub:torbox:disconnect',
@@ -46,6 +53,14 @@ export const MEDIA_HUB_CHANNELS = {
   catalogSearch: 'mediahub:catalog:search',
   catalogRelated: 'mediahub:catalog:related',
   catalogStory: 'mediahub:catalog:story',
+  /** Everything in the catalog this person appears in, from the credits cache
+   *  — see main/media-hub/credits.ts's titlesFeaturing on why it is local. */
+  catalogPerson: 'mediahub:catalog:person',
+  /** Where a title can be streamed, rented or bought, in the person's own
+   *  region — see main/media-hub/watchProviders.ts. */
+  catalogProviders: 'mediahub:catalog:providers',
+  /** Episodes of tracked shows around now — see main/media-hub/calendar.ts. */
+  calendarGet: 'mediahub:calendar:get',
   homePersonalized: 'mediahub:home:personalized',
   /** Pushed when the stored suggestion list has been rebuilt — see
    *  main/media-hub/recommendations.ts. The Home feed refetches on it
@@ -63,6 +78,27 @@ export const MEDIA_HUB_CHANNELS = {
   trackingReconcileCheck: 'mediahub:tracking:reconcile-check',
   trackingReconcileResolve: 'mediahub:tracking:reconcile-resolve',
   trackingReconcileSync: 'mediahub:tracking:reconcile-sync', // push event — a queued "keep local" batch went out (or didn't)
+  /** A personal 1-10 score. Sending 0 clears it — see database.ts's `rate`
+   *  and shared/media-hub/rating.ts on why "no opinion" is an absence rather
+   *  than a zero. */
+  ratingSet: 'mediahub:rating:set',
+  /** The append-only viewing record — one entry per play, so a rewatch is
+   *  listed twice. See main/media-hub/database.ts's `plays`. */
+  playsList: 'mediahub:plays:list',
+  playDelete: 'mediahub:plays:delete',
+  /** What the viewing adds up to — see database.ts's `viewingStats`. */
+  statsGet: 'mediahub:stats:get',
+  /** Named collections somebody made themselves — distinct from My List,
+   *  which is the watchlist the tracking services sync against. */
+  listsList: 'mediahub:lists:list',
+  listsCreate: 'mediahub:lists:create',
+  listsRename: 'mediahub:lists:rename',
+  listsDelete: 'mediahub:lists:delete',
+  listsItems: 'mediahub:lists:items',
+  listsAdd: 'mediahub:lists:add',
+  listsRemove: 'mediahub:lists:remove',
+  listsContaining: 'mediahub:lists:containing',
+  ratingsList: 'mediahub:ratings:list',
   dislikedList: 'mediahub:disliked:list',
   dislikedAdd: 'mediahub:disliked:add',
   dislikedRemove: 'mediahub:disliked:remove',
@@ -138,7 +174,9 @@ export const MEDIA_HUB_CHANNELS = {
   simklStart: 'mediahub:simkl:start',
   simklPoll: 'mediahub:simkl:poll',
   simklDisconnect: 'mediahub:simkl:disconnect',
-  simklScrobbleStart: 'mediahub:simkl:scrobble-start',
+  /** start / pause / stop, which is the shape Simkl's scrobble endpoints
+   *  actually are — a state machine rather than a heartbeat. */
+  simklScrobble: 'mediahub:simkl:scrobble',
 
   // MyAnimeList
   malStatus: 'mediahub:mal:status',

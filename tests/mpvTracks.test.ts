@@ -419,28 +419,31 @@ async function main(): Promise<void> {
     )
   })
 
-  await checkAsync('a retained player is put back in the window before it is given one', async () => {
-    const { player, sent } = fakePlayer()
-    // What the last session left behind. The mpv PROCESS outlives a session and
-    // keeps its properties, and nothing tracks the app window between sessions
-    // — so leaving fullscreen while stopped goes unheard.
-    await player.setFullscreen(true)
-    sent.length = 0
+  await checkAsync(
+    'a retained player is put back in the window before it is given one',
+    async () => {
+      const { player, sent } = fakePlayer()
+      // What the last session left behind. The mpv PROCESS outlives a session and
+      // keeps its properties, and nothing tracks the app window between sessions
+      // — so leaving fullscreen while stopped goes unheard.
+      await player.setFullscreen(true)
+      sent.length = 0
 
-    // What starting a windowed title on that process has to do, in this order.
-    await player.setFullscreen(false)
-    await player.setBounds({ x: 0, y: 0, width: 1600, height: 900 })
+      // What starting a windowed title on that process has to do, in this order.
+      await player.setFullscreen(false)
+      await player.setBounds({ x: 0, y: 0, width: 1600, height: 900 })
 
-    assert.deepEqual(
-      propertiesWritten(sent),
-      ['fullscreen', 'geometry'],
-      // The other order loses the rectangle: geometry writes are dropped while
-      // mpv still believes it is fullscreen, so the next title's window would
-      // be created from the last session's bounds — screen-sized, over a
-      // windowed app, for as long as the load takes.
-      `stale fullscreen was not cleared before the rectangle: ${sent.join(' ')}`
-    )
-  })
+      assert.deepEqual(
+        propertiesWritten(sent),
+        ['fullscreen', 'geometry'],
+        // The other order loses the rectangle: geometry writes are dropped while
+        // mpv still believes it is fullscreen, so the next title's window would
+        // be created from the last session's bounds — screen-sized, over a
+        // windowed app, for as long as the load takes.
+        `stale fullscreen was not cleared before the rectangle: ${sent.join(' ')}`
+      )
+    }
+  )
 
   await checkAsync('a rejected command names which call failed', async () => {
     const { player } = fakePlayer('error accessing property')

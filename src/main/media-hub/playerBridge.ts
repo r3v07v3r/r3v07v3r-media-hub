@@ -14,6 +14,7 @@ import path from 'node:path'
 
 import {
   MAX_PLAYER_VOLUME,
+  NIGHT_MODE_AUDIO_FILTER,
   PLAYER_VOLUME_STEP,
   type PlayerCommand,
   type PlayerInputEvent,
@@ -37,8 +38,15 @@ import {
   type VideoPictureControl,
   type VideoPictureSettings
 } from '../../shared/media-hub/videoPicture'
+import {
+  DEFAULT_SUBTITLE_STYLE,
+  normalizeSubtitleStyle,
+  subtitleStyleProperties,
+  type SubtitleStyle
+} from '../../shared/media-hub/subtitleStyle'
 import { handle } from './ipcGuard'
 import { logError } from './logger'
+import { readSettings, writeSettings } from './settingsStore'
 import {
   MpvPlayer,
   mpvPath,
@@ -67,6 +75,51 @@ import {
 
 const player = new MpvPlayer()
 let sessionSnapshot: PlayerSessionSnapshot | null = null
+
+/**
+ * Pushes one subtitle look at mpv.
+ *
+ * Best-effort per property rather than all-or-nothing: an mpv build that does
+ * not know one of these must not cost the other three. Nothing here can fail
+ * in a way worth reporting — the worst case is a subtitle that looks the way
+ * it did before.
+ */
+async function applySubtitleStyle(style: SubtitleStyle): Promise<void> {
+  for (const [property, value] of Object.entries(subtitleStyleProperties(style))) {
+    await player.set(property, value).catch(() => {})
+  }
+}
+
+/** The stored look, or the untouched default. Read on every session start,
+ *  because mpv resets these along with everything else on `loadfile`. */
+export function storedSubtitleStyle(): SubtitleStyle {
+  const stored = readSettings().subtitleStyle
+  return stored ? normalizeSubtitleStyle(stored) : DEFAULT_SUBTITLE_STYLE
+}
+
+/** Puts the stored look back on a freshly loaded file. */
+export async function applyStoredSubtitleStyle(): Promise<void> {
+  await applySubtitleStyle(storedSubtitleStyle())
+}
+
+export function nightModeEnabled(): boolean {
+  return readSettings().nightModeEnabled === true
+}
+
+/**
+ * Applies (or clears) the loudness filter.
+ *
+ * An empty chain is how mpv is told to have no filters, not a missing call —
+ * setting `af` to '' is what removes a previously applied one, and skipping
+ * the call would leave the last title's filter in place.
+ *
+ * Re-applied per session for the same reason the subtitle look is: nothing
+ * here should be a setting that quietly stops applying after the first
+ * episode.
+ */
+export async function applyStoredNightMode(): Promise<void> {
+  await player.set('af', nightModeEnabled() ? NIGHT_MODE_AUDIO_FILTER : '').catch(() => {})
+}
 
 // The fit mode is held here rather than in the overlay because the overlay is
 // rebuilt per playback session and mpv is not: a mode chosen on one title has
@@ -262,8 +315,19 @@ async function attachObservers(): Promise<void> {
     // A build that does not know the property must not take the rest of the
     // observers down with it — every one of those the UI genuinely needs.
     .catch(() => {})
+  // Reported in BOTH directions, unlike every other observer here that filters
+  // for the value it cares about.
+  //
+  // State patches merge (see PlayerWindowContext's applyPatch), so a key that
+  // is only ever sent as `true` can never go back — and this one has to. mpv
+  // clears eof-reached when the next `loadfile` opens, but dropping that edge
+  // left the overlay believing the file had ended for the whole rest of the
+  // session. The overlay's end-of-file effect re-runs whenever the playing
+  // title changes, so with a stuck `true` the SECOND title played in one
+  // session was marked watched the instant it started, at position zero.
+  // Autoplay makes that path the normal one rather than the rare one.
   await player.observe('eof-reached', (value) => {
-    if (value === true) queuePatch({ eofReached: true }, true)
+    queuePatch({ eofReached: value === true }, true)
   })
   // A track list can change mid-playback (sub-add), so it is observed rather
   // than only read once at load.
@@ -272,6 +336,32 @@ async function attachObservers(): Promise<void> {
       .then((tracks) => queuePatch({ tracks }, true))
       .catch(() => {})
   })
+
+  // Chapters. Observed rather than read once at load because the list arrives
+  // slightly after the file opens — mpv reports an empty one first — and a
+  // one-shot read would decide a chaptered file has none.
+  await player
+    .observe('chapter-list', (value) => {
+      const list = Array.isArray(value) ? (value as { title?: unknown; time?: unknown }[]) : []
+      const chapters = list
+        .map((chapter) => ({
+          title: String(chapter?.title ?? ''),
+          time: Number(chapter?.time)
+        }))
+        .filter((chapter) => Number.isFinite(chapter.time))
+      queuePatch({ chapters }, true)
+    })
+    .catch(() => {})
+  await player
+    .observe('chapter', (value) => {
+      queuePatch({ chapter: typeof value === 'number' ? value : -1 }, true)
+    })
+    .catch(() => {})
+  await player
+    .observe('audio-delay', (value) => {
+      if (typeof value === 'number') queuePatch({ audioDelay: value })
+    })
+    .catch(() => {})
 
   // The keyboard backstop (see MpvPlayer.bindSafetyKeys). These arrive when
   // mpv's own window has focus rather than the controls overlay, and route to
@@ -703,8 +793,12 @@ export async function startPlayerSession(
   // still on screen and still playing until `loadfile` replaces it, so its
   // track menus are still the truthful ones. A first title has no outgoing
   // snapshot at all, which makes this a no-op outside a real title change.
+  // nextUp goes with the media, not with the tracks and settings kept above.
+  // It names an episode of the OUTGOING title; leaving it standing would hang
+  // the old show's next episode off the incoming one's post-play card until
+  // resolveNextUp got around to replacing it.
   const outgoing = getSessionSnapshot()
-  if (outgoing?.media) pushSessionSnapshot({ ...outgoing, media: null })
+  if (outgoing?.media) pushSessionSnapshot({ ...outgoing, media: null, nextUp: null })
 
   // EVERY title starts at its own level, because mpv keeps `volume` across
   // `loadfile` and a boost belongs to the film it was needed for — carrying
@@ -1021,6 +1115,52 @@ async function runCommand(command: PlayerCommand): Promise<void> {
       const seconds = Number(command.seconds)
       if (!Number.isFinite(seconds)) throw new Error('Invalid subtitle delay.')
       await player.set('sub-delay', clamp(seconds, -60, 60))
+      return
+    }
+    case 'set-audio-delay': {
+      const seconds = Number(command.seconds)
+      if (!Number.isFinite(seconds)) throw new Error('Invalid audio delay.')
+      await player.set('audio-delay', clamp(seconds, -60, 60))
+      return
+    }
+    case 'set-chapter': {
+      const index = Number(command.index)
+      if (!Number.isInteger(index) || index < 0) throw new Error('Invalid chapter.')
+      // mpv clamps an out-of-range chapter to the last one rather than
+      // erroring, which is the behaviour worth having: a chapter list that
+      // changed under a click seeks to the end instead of failing.
+      await player.set('chapter', index)
+      return
+    }
+    case 'set-night-mode': {
+      const enabled = command.enabled === true
+      const settings = readSettings()
+      settings.nightModeEnabled = enabled
+      writeSettings(settings)
+      await applyStoredNightMode()
+      const snapshot = getSessionSnapshot()
+      if (snapshot) {
+        pushSessionSnapshot({
+          ...snapshot,
+          settings: { ...snapshot.settings, nightModeEnabled: enabled }
+        })
+      }
+      return
+    }
+    case 'set-subtitle-style': {
+      // Normalized rather than trusted — this is the IPC boundary, and every
+      // field has an obvious safe reading. Stored as well as applied so the
+      // next title opens looking the same; a look somebody set once and had to
+      // set again every episode would not be worth having.
+      const style = normalizeSubtitleStyle(command.style)
+      await applySubtitleStyle(style)
+      const settings = readSettings()
+      settings.subtitleStyle = style
+      writeSettings(settings)
+      const current = getSessionSnapshot()
+      if (current) {
+        pushSessionSnapshot({ ...current, settings: { ...current.settings, subtitleStyle: style } })
+      }
       return
     }
     case 'set-fit-mode':

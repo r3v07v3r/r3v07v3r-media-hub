@@ -15,6 +15,11 @@ import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { createDatabase } from '../src/main/media-hub/database'
 
+// Every connection is scoped to a profile from the moment it opens (see
+// createDatabase). These assertions do not depend on which profile it is,
+// only that reads and writes agree on one.
+const TEST_PROFILE = 'profile-test'
+
 let pass = 0
 function check(name: string, fn: () => void): void {
   try {
@@ -33,7 +38,7 @@ function tempDbPath(): string {
 }
 
 function tempDb() {
-  return createDatabase(tempDbPath())
+  return createDatabase(tempDbPath(), TEST_PROFILE)
 }
 
 console.log('savePlaybackPosition / getPlaybackPosition — movies')
@@ -207,7 +212,7 @@ check('an existing bookmark table gains the column without losing its rows', () 
     .run('tt1234567:movie:movie', 'tt1234567', null, null, 1450, 7200, new Date().toISOString())
   raw.close()
 
-  const db = createDatabase(dbPath)
+  const db = createDatabase(dbPath, TEST_PROFILE)
   assert.deepEqual(
     db.getPlaybackPosition('tt1234567'),
     { positionSeconds: 1450, durationSeconds: 7200, volume: null },
@@ -288,10 +293,11 @@ check('returns every episode bookmark for one title, and nothing from another', 
   db.savePlaybackPosition('kitsu:2', { season: 1, episode: 1 }, 700, 1400)
   const rows = db.listPlaybackPositions('kitsu:1')
   assert.equal(rows.length, 3)
-  assert.deepEqual(
-    rows.map((r) => `${r.season}:${r.episode}=${r.positionSeconds}`).sort(),
-    ['1:1=300', '1:2=900', '2:5=120']
-  )
+  assert.deepEqual(rows.map((r) => `${r.season}:${r.episode}=${r.positionSeconds}`).sort(), [
+    '1:1=300',
+    '1:2=900',
+    '2:5=120'
+  ])
   assert.ok(rows.every((r) => r.durationSeconds === 1400))
   db.close()
 })
