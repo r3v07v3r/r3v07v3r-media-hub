@@ -31,7 +31,12 @@ import type { StreamCandidate } from '../src/shared/media-hub/types'
 
 const baseUrl = process.env.JELLYFIN_BASE_URL ?? ''
 const apiKey = process.env.JELLYFIN_API_KEY ?? ''
-const searchTitle = process.argv[2] ?? ''
+// An argument shaped like an IMDb id exercises the provider-id path the
+// app actually uses; anything else exercises the title-search fallback.
+const arg = process.argv[2] ?? ''
+const isImdbId = /^tt\d+$/.test(arg)
+const searchImdbId = isImdbId ? arg : ''
+const searchTitle = isImdbId ? '' : arg
 const seasonArg = Number(process.argv[3])
 const episodeArg = Number(process.argv[4])
 
@@ -66,7 +71,8 @@ async function main(): Promise<void> {
   }
 
   console.log(`  server  ${baseUrl}`)
-  console.log(`  title   ${searchTitle || '(none given — lookup will be skipped)'}\n`)
+  console.log(`  lookup  ${isImdbId ? `imdb ${searchImdbId}` : searchTitle || '(none given)'}
+`)
 
   // --- 1. The server answers, and the key is actually accepted -----------
   // /System/Info requires a valid token, unlike /System/Info/Public which
@@ -89,7 +95,7 @@ async function main(): Promise<void> {
     return
   }
 
-  if (!searchTitle) {
+  if (!searchTitle && !searchImdbId) {
     console.log('\n  Pass a title to exercise lookup and playback.\n')
     return
   }
@@ -99,14 +105,14 @@ async function main(): Promise<void> {
   let item: JellyfinItem | null = null
   try {
     item = episodic
-      ? await findEpisode(config, '', searchTitle, seasonArg, episodeArg)
-      : await findMovie(config, '', searchTitle)
+      ? await findEpisode(config, searchImdbId, searchTitle, seasonArg, episodeArg)
+      : await findMovie(config, searchImdbId, searchTitle)
   } catch (error) {
     fail('lookup threw', (error as Error).message)
   }
 
   if (!item) {
-    fail(`no ${episodic ? 'episode' : 'movie'} found for "${searchTitle}"`)
+    fail(`no ${episodic ? 'episode' : 'movie'} found for "${searchImdbId || searchTitle}"`)
     console.log('        (the title guard is strict — it must match the library name)')
     process.exitCode = 1
     return

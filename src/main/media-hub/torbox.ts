@@ -309,6 +309,41 @@ export function registerTorBoxIpc(): void {
       const recent = db.getCache<StreamResolveResult>(key)
       if (recent) return recent
 
+      // Asked BEFORE the remembered-stream path below, not after.
+      //
+      // `laststream` records where a title played FROM last time, with a
+      // 14-day life and no knowledge of the source. Consulting it first
+      // meant that for any title played via TorBox in the last fortnight,
+      // a newly connected media server was never asked at all — the whole
+      // feature silently did nothing until those entries aged out.
+      // Confirmed live: 29 live movie/series entries, every one TorBox,
+      // and not a single stream:v3 row ever written.
+      //
+      // The server is one LAN request and usually answers in milliseconds,
+      // so giving it first refusal costs nothing when it does not have the
+      // title, and the remembered TorBox stream is still right there
+      // underneath when it does not.
+      const localLookup = findMediaServerCandidate(id, title)
+
+      // A local copy that already satisfies the person's quality ceiling
+      // ends the search here — no checkcached round-trip, no add-on calls,
+      // and no remembered-stream lookup. This is the slow-connection
+      // payoff: resolution drops from seconds to a single LAN request.
+      //
+      // prefer-quality opts out by definition: that setting means "look at
+      // everything and pick the best", so short-circuiting on the first
+      // acceptable local copy would silently ignore a better remote one.
+      if (sourcePreference !== 'prefer-quality') {
+        const local = await localLookup
+        const acceptable =
+          local && rankSafeStreams([local], audioLanguage, limits, sourcePreference)
+        if (acceptable?.length) {
+          const result: StreamResolveResult = { streams: acceptable, best: acceptable[0] }
+          db.putCache(key, result, 60 * 60 * 1000)
+          return result
+        }
+      }
+
       // Fast path 2: the stream that actually played last time for this
       // exact title/episode — regardless of how long ago, up to
       // LAST_STREAM_TTL_MS — re-verified with a single-hash checkcached
@@ -359,33 +394,7 @@ export function registerTorBoxIpc(): void {
         }
       }
 
-      // The media server is asked in parallel with the scrapers below, not
-      // before them: it is the fast one, so making the (possibly slow,
-      // possibly failing) add-on calls wait on it would throw away the
-      // very latency win it exists to provide.
-      const localLookup = findMediaServerCandidate(id, title)
-
       try {
-        // A local copy that already satisfies the person's quality ceiling
-        // ends the search here — no checkcached round-trip, no add-on
-        // calls waited on. This is the slow-connection payoff: resolution
-        // drops from seconds to a single LAN request.
-        //
-        // prefer-quality opts out by definition: that setting means "look
-        // at everything and pick the best", so short-circuiting on the
-        // first acceptable local copy would silently ignore a better
-        // remote one.
-        if (sourcePreference !== 'prefer-quality') {
-          const local = await localLookup
-          const acceptable =
-            local && rankSafeStreams([local], audioLanguage, limits, sourcePreference)
-          if (acceptable?.length) {
-            const result: StreamResolveResult = { streams: acceptable, best: acceptable[0] }
-            db.putCache(key, result, 60 * 60 * 1000)
-            return result
-          }
-        }
-
         // No TorBox token: the media server was the only source available,
         // and it did not have this title. An honest dead end rather than
         // an error — the renderer distinguishes it from `queued`.
