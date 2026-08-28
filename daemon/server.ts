@@ -196,18 +196,30 @@ export function createDaemonServer(deps: ServerDeps): http.Server {
         res.end()
         return
       }
+      // Counted BEFORE the awaits below, and released by exactly one
+      // guarded closer. Counting after them left a window where a client
+      // that aborted mid-await was never decremented, and a permanently
+      // non-zero count silently disables every future update; counting
+      // 404s and 416s the other way armed a fresh 30-minute deferral for
+      // requests nobody was watching.
+      let counted = false
+      const releaseStream = (): void => {
+        if (!counted) return
+        counted = false
+        activity.streamClosed()
+      }
+      if (req.method === 'GET') {
+        counted = true
+        activity.streamOpened()
+        res.once('close', releaseStream)
+      }
+
       const item = await storage.get(streamMatch[1])
       if (!item || !item.complete) {
+        releaseStream()
         res.writeHead(404)
         res.end()
         return
-      }
-      // Playing is the access the idle TTL counts from — and the signal
-      // "someone is watching" that blocks update restarts. GET only: a
-      // HEAD probe is not a viewer.
-      if (req.method === 'GET') {
-        activity.streamOpened()
-        res.once('close', () => activity.streamClosed())
       }
       void storage.touch(item.infoHash).catch(() => {})
       const ext = item.fileName.slice(item.fileName.lastIndexOf('.')).toLowerCase()

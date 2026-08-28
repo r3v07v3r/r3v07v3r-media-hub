@@ -11,12 +11,13 @@
 // staged version that fails to boot is abandoned for the last good one.
 
 import crypto from 'node:crypto'
+import fs from 'node:fs'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
 
 import type { ActivityTracker } from './activity'
 import { canRestartNow } from './activity'
-import { stagedBundlePath, versionsDir } from './launcher'
+import { readState, stagedBundlePath, versionsDir } from './launcher'
 import {
   isAllowedAssetUrl,
   isAllowedRedirectUrl,
@@ -181,6 +182,16 @@ export function createUpdater(deps: UpdaterDeps): Updater {
         return
       }
       status.latestSeen = candidate.version
+      // A version the launcher has already blacklisted must never be
+      // staged or applied again. Without this the two halves disagreed
+      // forever: the launcher rolled a version back, the updater saw it
+      // was still the newest release and still on disk, and requested a
+      // restart into it at every idle moment — a daemon that restarted
+      // itself indefinitely and never converged.
+      if (readState(deps.dataDir).bad.includes(candidate.version)) {
+        status.lastError = `${candidate.version} was rolled back here; waiting for a newer release`
+        return
+      }
       if (status.staged === candidate.version) return
       const alreadyStaged = await fsp
         .stat(stagedBundlePath(deps.dataDir, candidate.version))
@@ -223,7 +234,16 @@ export function createUpdater(deps: UpdaterDeps): Updater {
 
   function noteStaged(version: string): void {
     status.staged = version
-    if (!status.stagedAt) status.stagedAt = Date.now()
+    if (!status.stagedAt) {
+      // Dated from the bundle on disk, not from this process. Reading the
+      // clock here restarted the 24h staleness cap on every restart, so a
+      // daemon that restarts often could defer an update forever.
+      try {
+        status.stagedAt = fs.statSync(stagedBundlePath(deps.dataDir, version)).mtimeMs
+      } catch {
+        status.stagedAt = Date.now()
+      }
+    }
     armApplyPoll()
   }
 

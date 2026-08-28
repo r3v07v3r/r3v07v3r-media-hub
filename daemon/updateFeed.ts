@@ -142,10 +142,20 @@ function isLoopbackHost(host: string): boolean {
   return host === '127.0.0.1' || host === '::1' || host === 'localhost'
 }
 
-/** A feed override may serve its own assets, but plaintext only over
- *  loopback: a mirror reachable across a network without TLS re-opens
- *  exactly the MITM-to-RCE path everything else here exists to close. */
+/**
+ * A feed override may serve its own assets, but plaintext only over
+ * loopback: a mirror reachable across a network without TLS re-opens
+ * exactly the MITM-to-RCE path everything else here exists to close.
+ *
+ * A REPO PIN ALWAYS WINS. Without this the host allowance was itself a
+ * bypass: any GitHub feed differing from DEFAULT_FEED by so much as a
+ * query parameter set overrideHost to api.github.com, and this function
+ * then accepted every api.github.com URL by hostname alone — including
+ * `/repos/<attacker>/<repo>/releases/assets/<id>`, which serves asset
+ * bytes. The pin has to be the stronger statement, not the weaker one.
+ */
 function overrideAllowed(parsed: URL, policy: UpdateUrlPolicy): boolean {
+  if (policy.repo) return false
   const host = parsed.hostname.toLowerCase()
   if (!policy.overrideHost || host !== policy.overrideHost.toLowerCase()) return false
   return parsed.protocol === 'https:' || (parsed.protocol === 'http:' && isLoopbackHost(host))
@@ -160,9 +170,15 @@ export function isAllowedAssetUrl(url: string, policy: UpdateUrlPolicy): boolean
     if (overrideAllowed(parsed, policy)) return true
     if (parsed.protocol !== 'https:') return false
     if (!policy.repo) return false
+    // Owner and repo are case-insensitive on GitHub, and the two spellings
+    // genuinely differ in practice: a feed configured as /repos/r3v07v3r/…
+    // gets assets back under /R3v07v3R/…. Comparing case-sensitively would
+    // reject every legitimate update, silently and forever. Only the pinned
+    // prefix is lowercased — the tag and filename beyond it are untouched.
+    const prefix = `/${policy.repo.owner}/${policy.repo.repo}/releases/download/`.toLowerCase()
     return (
       parsed.hostname.toLowerCase() === 'github.com' &&
-      parsed.pathname.startsWith(`/${policy.repo.owner}/${policy.repo.repo}/releases/download/`)
+      parsed.pathname.toLowerCase().startsWith(prefix)
     )
   } catch {
     return false

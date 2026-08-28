@@ -37,20 +37,50 @@ export async function installAutoStart(log: (message: string) => void): Promise<
   const { program, args } = entryCommand()
 
   if (process.platform === 'win32') {
+    // Quoting each part individually: an unquoted path under
+    // "C:\Program Files\..." would be split at the space and schtasks
+    // would register a command that cannot run.
     const command = [program, ...args].map((part) => `"${part}"`).join(' ')
     execFileSync(
       'schtasks',
       ['/Create', '/F', '/TN', TASK_NAME, '/SC', 'ONLOGON', '/TR', command],
       { stdio: 'inherit' }
     )
+    // The rollback design needs a supervisor: a payload that dies hard
+    // must be restarted so the launcher's tripwire can count the failed
+    // boot and fall back. ONLOGON alone only ever starts it once, which
+    // left Windows with no rollback at all — the contract held on Linux
+    // and quietly did not here. /RI restarts the task if it stops.
+    try {
+      execFileSync('schtasks', ['/Change', '/TN', TASK_NAME, '/RI', '1', '/DU', '9999:59'], {
+        stdio: 'inherit'
+      })
+      log('registered a restart interval so a crashed daemon comes back')
+    } catch {
+      log('WARNING: could not set a restart interval — a hard crash will')
+      log('         need a fresh logon to recover on this machine')
+    }
     log(`registered logon task "${TASK_NAME}" -> ${command}`)
-    log('r3-cache will start automatically when you log in. Run it now to pair.')
+    log('r3-cache will start automatically when you log in.')
+    log('Its pairing code is printed in its own console window.')
     return
+  }
+
+  if (process.platform !== 'linux') {
+    // macOS took the Linux branch and wrote a systemd unit into ~/.config
+    // before failing on a missing systemctl — leaving a file that does
+    // nothing and an error that explains nothing.
+    throw new Error(
+      `--install supports Windows and Linux; on ${process.platform} run the daemon yourself ` +
+        '(a launchd plist is not generated).'
+    )
   }
 
   const unitDir = path.join(os.homedir(), '.config', 'systemd', 'user')
   await fsp.mkdir(unitDir, { recursive: true })
-  const execStart = [program, ...args].join(' ')
+  // systemd splits ExecStart on whitespace unless quoted, so a path
+  // containing a space produced a unit that silently never started.
+  const execStart = [program, ...args].map((part) => `"${part}"`).join(' ')
   const unit = `[Unit]
 Description=r3-cache pre-fetch daemon
 After=network.target
@@ -62,6 +92,11 @@ ExecStart=${execStart}
 # version comes back — "it always comes back online".
 Restart=always
 RestartSec=5
+# Deliberately generous: the launcher's own backoff and blacklist are the
+# real circuit breaker, and a unit that gives up entirely (systemd's
+# default start limit) is a daemon that is permanently offline — the one
+# outcome this whole design exists to prevent.
+StartLimitIntervalSec=0
 MemoryMax=512M
 Nice=10
 CPUWeight=20
@@ -79,7 +114,7 @@ WantedBy=default.target
     log('could not enable linger — the daemon will stop when you log out')
   }
   log(`installed and started ${UNIT_NAME} (systemd user unit, enabled)`)
-  log(`pairing code: journalctl --user -u ${TASK_NAME} -n 20`)
+  log(`pairing code: journalctl --user -u r3-cache -n 20`)
 }
 
 export async function uninstallAutoStart(log: (message: string) => void): Promise<void> {

@@ -144,6 +144,68 @@ assert.equal(
   'suffix-lookalike hosts are refused'
 )
 
+// Review finding (P1): a GitHub feed that merely differs from the default
+// — one extra query parameter is enough — used to set overrideHost to
+// api.github.com, and the host allowance ran BEFORE the pin. That made
+// every api.github.com URL acceptable, including another repo's asset
+// endpoint. The pin must be the stronger statement.
+const NEAR_DEFAULT_FEED =
+  'https://api.github.com/repos/R3v07v3R/r3v07v3r-media-hub/releases?per_page=30'
+const PINNED_WITH_HOST = {
+  repo: repoFromFeedUrl(NEAR_DEFAULT_FEED),
+  overrideHost: new URL(NEAR_DEFAULT_FEED).hostname
+}
+assert.equal(
+  isAllowedAssetUrl(
+    'https://api.github.com/repos/attacker/evil/releases/assets/12345',
+    PINNED_WITH_HOST
+  ),
+  false,
+  'a repo pin beats the override host — another repo/s asset endpoint is refused'
+)
+assert.equal(
+  isAllowedAssetUrl('https://api.github.com/anything', PINNED_WITH_HOST),
+  false,
+  'the override host grants nothing at all while a pin exists'
+)
+assert.equal(
+  isAllowedAssetUrl(
+    'https://github.com/R3v07v3R/r3v07v3r-media-hub/releases/download/v1/r3-cache.cjs',
+    PINNED_WITH_HOST
+  ),
+  true,
+  'the pinned repo/s own release download still works from a non-default feed'
+)
+
+// Review finding (P2): GitHub owner/repo are case-insensitive. A feed
+// spelled one way and asset URLs spelled another must still match, or
+// every legitimate update is rejected silently and forever.
+const LOWER_PIN = { repo: { owner: 'r3v07v3r', repo: 'r3v07v3r-media-hub' } }
+assert.equal(
+  isAllowedAssetUrl(
+    'https://github.com/R3v07v3R/r3v07v3r-media-hub/releases/download/v1.0.0/r3-cache.cjs',
+    LOWER_PIN
+  ),
+  true,
+  'a lowercase feed pin accepts GitHub/s canonical mixed-case asset URL'
+)
+assert.equal(
+  isAllowedAssetUrl(
+    'https://github.com/r3v07v3r/R3V07V3R-MEDIA-HUB/releases/download/v1/r3-cache.cjs',
+    PINNED
+  ),
+  true,
+  'casing differences either way still match'
+)
+assert.equal(
+  isAllowedAssetUrl(
+    'https://github.com/R3v07v3R/some-other-repo/releases/download/v1/r3-cache.cjs',
+    LOWER_PIN
+  ),
+  false,
+  'case-insensitivity does not loosen WHICH repo is pinned'
+)
+
 // A feed override serves its own assets — plaintext ONLY over loopback.
 const OVERRIDE = { repo: null, overrideHost: '127.0.0.1' }
 assert.equal(isAllowedAssetUrl('http://127.0.0.1:9000/bundle', OVERRIDE), true)
@@ -263,9 +325,11 @@ assert.equal(
   ])
   assert.equal(older.version, '1.0.89', 'rollback prefers the newest non-bad staged version')
 
-  // markHealthy clears the tripwire and remembers the version.
-  const healthy = markHealthyState(rolled.state, BUILTIN_VERSION_ID)
-  assert.equal(healthy.boot, undefined)
+  // markHealthy STAMPS the tripwire rather than clearing it — clearing was
+  // the critical bug: a version that came up and then crash-looped reset
+  // its own attempt counter every boot and was retried forever.
+  const healthy = markHealthyState(rolled.state, BUILTIN_VERSION_ID, 1_000)
+  assert.equal(healthy.boot?.healthyAt, 1_000, 'healthy is stamped, not erased')
   assert.ok(healthy.good.includes(BUILTIN_VERSION_ID))
 
   // The builtin can never be marked bad — the floor is permanent.
@@ -274,6 +338,47 @@ assert.equal(
     []
   )
   assert.equal(floor.version, BUILTIN_VERSION_ID, 'builtin is retried forever, never abandoned')
+
+  // THE CRITICAL CASE the first design missed entirely: a version that
+  // reaches healthy and then dies quickly, twice. It must be rolled back
+  // exactly like one that never started.
+  const T0 = 1_000_000
+  let crashState = { bad: [] as string[], good: [] as string[] } as Parameters<typeof planBoot>[0]
+  for (let cycle = 0; cycle < 2; cycle++) {
+    const boot = planBoot(crashState, ['2.0.0'], { now: T0 + cycle * 60_000 })
+    assert.equal(boot.version, '2.0.0', `cycle ${cycle}: still trying the staged version`)
+    // It comes up (healthy) and then dies a minute later.
+    crashState = markHealthyState(boot.state, '2.0.0', T0 + cycle * 60_000 + 1_000)
+  }
+  const afterTwoCrashes = planBoot(crashState, ['2.0.0'], { now: T0 + 180_000 })
+  assert.equal(
+    afterTwoCrashes.version,
+    BUILTIN_VERSION_ID,
+    'a version that keeps dying shortly after healthy IS rolled back'
+  )
+  assert.ok(afterTwoCrashes.state.bad.includes('2.0.0'))
+
+  // But a version that ran healthy for a good long while and then died is
+  // bad luck, not a bad build — its attempts are forgiven.
+  const stable = planBoot(
+    {
+      boot: { version: '2.1.0', attempts: 2, healthyAt: T0 },
+      bad: [],
+      good: ['2.1.0']
+    },
+    ['2.1.0'],
+    { now: T0 + 60 * 60 * 1000 }
+  )
+  assert.equal(stable.version, '2.1.0', 'a long-stable version is retried, not blacklisted')
+  assert.equal(stable.state.bad.includes('2.1.0'), false)
+  assert.equal(stable.state.boot?.attempts, 1, 'its attempt count is forgiven')
+
+  // A freshly installed executable must not be shadowed by an older
+  // staged payload left behind by earlier auto-updates.
+  const newerExe = planBoot({ bad: [], good: [] }, ['1.4.0'], { builtinVersion: '1.5.0' })
+  assert.equal(newerExe.version, BUILTIN_VERSION_ID, 'a newer builtin outranks older staged code')
+  const olderExe = planBoot({ bad: [], good: [] }, ['1.6.0'], { builtinVersion: '1.5.0' })
+  assert.equal(olderExe.version, '1.6.0', 'a newer staged version still wins over the builtin')
 }
 
 async function main(): Promise<void> {
@@ -299,6 +404,7 @@ async function main(): Promise<void> {
     await launch({
       dataDir: root,
       launcherVersion: 'test',
+      retryDelayMs: 10,
       builtinRun: async () => {
         await fsp.appendFile(proofPath, 'ran:builtin\n')
         return 'exit'
@@ -316,6 +422,7 @@ async function main(): Promise<void> {
     await launch({
       dataDir: root,
       launcherVersion: 'test',
+      retryDelayMs: 10,
       builtinRun: async () => {
         await fsp.appendFile(proofPath, 'ran:builtin\n')
         return 'exit'
@@ -334,6 +441,7 @@ async function main(): Promise<void> {
     await launch({
       dataDir: root,
       launcherVersion: 'test',
+      retryDelayMs: 10,
       builtinRun: async () => 'exit',
       log: () => {}
     })
@@ -346,6 +454,7 @@ async function main(): Promise<void> {
     await launch({
       dataDir: root,
       launcherVersion: 'test',
+      retryDelayMs: 10,
       builtinRun: async () => 'exit',
       log: () => {}
     })
@@ -364,6 +473,7 @@ async function main(): Promise<void> {
     await launch({
       dataDir: root,
       launcherVersion: 'test',
+      retryDelayMs: 10,
       builtinRun: async () => 'exit',
       log: () => {}
     })
