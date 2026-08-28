@@ -43,11 +43,6 @@ function mediaKindLabel(media: MediaItem): string {
   return 'Series'
 }
 
-function continueWatchingEmptyMessage(config: CategoryConfig): string {
-  if (config.kind === 'movie') return 'Start a movie and it will wait here.'
-  return `Start a ${config.kind} title and its next episode will wait here.`
-}
-
 function uniqueItems(items: MediaItem[]): MediaItem[] {
   const seen = new Set<string>()
   return items.filter((item) => {
@@ -74,6 +69,7 @@ interface ShelfProps {
   onSelect: (media: MediaItem) => void
   onOpen: (media: MediaItem) => void
   emptyMessage: string
+  collapseWhenEmpty?: boolean
 }
 
 function LibraryShelf({
@@ -83,20 +79,25 @@ function LibraryShelf({
   selectedId,
   onSelect,
   onOpen,
-  emptyMessage
+  emptyMessage,
+  collapseWhenEmpty = false
 }: ShelfProps) {
   const scroller = useRef<HTMLUListElement>(null)
+  const isCollapsed = collapseWhenEmpty && items.length === 0
 
   function nudge(direction: -1 | 1) {
     scroller.current?.scrollBy({ left: direction * 460, behavior: 'smooth' })
   }
 
   return (
-    <section className={styles.shelf} aria-label={title}>
+    <section
+      className={`${styles.shelf} ${isCollapsed ? styles.shelfCollapsed : ''}`}
+      aria-label={title}
+    >
       <div className={styles.shelfHeading}>
         <h2>
           <Icon name={icon} size={17} />
-          {title}
+          {isCollapsed ? emptyMessage : title}
         </h2>
         {items.length > 0 && (
           <div className={styles.shelfControls}>
@@ -111,7 +112,7 @@ function LibraryShelf({
         )}
       </div>
 
-      {items.length === 0 ? (
+      {isCollapsed ? null : items.length === 0 ? (
         <EmptyShelf message={emptyMessage} icon={icon} />
       ) : (
         <ul className={styles.shelfScroller} ref={scroller}>
@@ -483,8 +484,24 @@ export function LibraryPage({ config }: { config: CategoryConfig }) {
     <div className={styles.page}>
       <main className={styles.library}>
         <section
-          className={`${styles.hero} glass-panel`}
-          aria-label={`${config.label} library spotlight`}
+          className={`${styles.hero} ${activeHero ? styles.heroClickable : ''} glass-panel`}
+          role={activeHero ? 'link' : undefined}
+          tabIndex={activeHero ? 0 : undefined}
+          aria-label={
+            activeHero
+              ? `Open full details for ${activeHero.title}`
+              : `${config.label} library spotlight`
+          }
+          onClick={() => {
+            if (activeHero) openDetail(activeHero)
+          }}
+          onKeyDown={(event) => {
+            if (event.target !== event.currentTarget || !activeHero) return
+            if (event.key === 'Enter' || event.key === ' ') {
+              event.preventDefault()
+              openDetail(activeHero)
+            }
+          }}
         >
           <div className={styles.heroEnergy} aria-hidden="true" />
           {activeHero && heroArt && (
@@ -529,9 +546,6 @@ export function LibraryPage({ config }: { config: CategoryConfig }) {
                 {score(activeHero) ?? '—'} · {activeHero.releaseYear ?? 'New'} ·{' '}
                 {formatLibraryMeta(activeHero)}
               </p>
-              <button type="button" onClick={() => setSelectedId(activeHero.id)}>
-                Explore title <Icon name="chevron" size={15} />
-              </button>
             </div>
           )}
           {heroItems.length > 1 && (
@@ -541,7 +555,8 @@ export function LibraryPage({ config }: { config: CategoryConfig }) {
                   type="button"
                   key={item.id}
                   className={index === heroIndex ? styles.heroSelectorActive : ''}
-                  onClick={() => {
+                  onClick={(event) => {
+                    event.stopPropagation()
                     setHeroIndex(index)
                     setSelectedId(item.id)
                   }}
@@ -598,7 +613,8 @@ export function LibraryPage({ config }: { config: CategoryConfig }) {
               selectedId={selected?.id ?? null}
               onSelect={(media) => setSelectedId(media.id)}
               onOpen={openDetail}
-              emptyMessage={continueWatchingEmptyMessage(config)}
+              emptyMessage="Finished Everything? 😱"
+              collapseWhenEmpty
             />
             <LibraryShelf
               title="Recommended for you"

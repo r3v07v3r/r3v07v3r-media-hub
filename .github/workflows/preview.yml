@@ -29,6 +29,11 @@ permissions:
   contents: write
 
 jobs:
+  # Verification is part of this workflow, rather than an independent push
+  # check, so no Preview release can publish from an unverified commit.
+  verify:
+    uses: ./.github/workflows/verify.yml
+
   # The r3-cache daemon ships with every app release — same repo, same
   # version, same release page — so the app can judge protocol
   # compatibility from the daemon's /api/ping version alone, and so the
@@ -36,6 +41,7 @@ jobs:
   # already uses. SEA executables embed their platform's Node, hence one
   # leg per OS rather than cross-compilation.
   daemon:
+    needs: verify
     strategy:
       matrix:
         include:
@@ -78,7 +84,7 @@ jobs:
           retention-days: 3
 
   preview:
-    needs: daemon
+    needs: [verify, daemon]
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
