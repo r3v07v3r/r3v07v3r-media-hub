@@ -1,14 +1,14 @@
-/* Anime library console
+/* Shared Movies, Series, and Anime library console.
    Palette: Night Ink #030713, Ion Blue #3A7CFF, Prism Violet #9B5CFF,
    Signal Cyan #50E6FF, Sakura #FF5DAB, Paper #F6F7FB.
-   The signature is the one deliberately expressive element: a diffuse
-   "prism wake" behind the selected anime art, echoing speed lines and
-   transformation light without resorting to literal anime iconography. */
+   The diffuse prism wake is deliberately genre-neutral, letting the active
+   title artwork carry the page's character while all three libraries retain
+   the same browse experience and responsive behaviour. */
 .page {
-  --anime-blue: #3a7cff;
-  --anime-violet: #9b5cff;
-  --anime-cyan: #50e6ff;
-  --anime-pink: #ff5dab;
+  --library-blue: #3a7cff;
+  --library-violet: #9b5cff;
+  --library-cyan: #50e6ff;
+  --library-pink: #ff5dab;
   min-height: 100%;
   display: grid;
   grid-template-columns: minmax(0, 1fr) 300px;
@@ -50,17 +50,28 @@
   position: absolute;
   z-index: -1;
   inset: 0 0 0 auto;
-  width: 71%;
+  width: 78%;
   height: 100%;
   object-fit: cover;
   object-position: center;
   opacity: 0.9;
   filter: saturate(1.18) contrast(1.08);
-  /* The art enters as a broad fade, not as a rectangular backdrop that
-     begins halfway through the hero. The hero's atmospheric shade below
-     reinforces this, but the mask does the actual edge-softening. */
-  -webkit-mask-image: linear-gradient(to right, transparent 0%, rgba(0, 0, 0, 0.24) 14%, #000 37%);
-  mask-image: linear-gradient(to right, transparent 0%, rgba(0, 0, 0, 0.24) 14%, #000 37%);
+  /* Fade across only the artwork's leading eighth, preserving the actual
+     scene and making the image fully visible just after the library copy. */
+  -webkit-mask-image: linear-gradient(
+    to right,
+    transparent 0%,
+    rgba(0, 0, 0, 0.3) 5%,
+    rgba(0, 0, 0, 0.76) 11%,
+    #000 16%
+  );
+  mask-image: linear-gradient(
+    to right,
+    transparent 0%,
+    rgba(0, 0, 0, 0.3) 5%,
+    rgba(0, 0, 0, 0.76) 11%,
+    #000 16%
+  );
 }
 .heroShade {
   position: absolute;
@@ -71,9 +82,10 @@
     linear-gradient(
       90deg,
       rgba(3, 7, 19, 0.98) 0%,
-      rgba(3, 7, 19, 0.93) 24%,
-      rgba(3, 7, 19, 0.71) 40%,
-      rgba(3, 7, 19, 0.28) 60%,
+      rgba(3, 7, 19, 0.94) 20%,
+      rgba(3, 7, 19, 0.76) 25%,
+      rgba(3, 7, 19, 0.46) 34%,
+      rgba(3, 7, 19, 0.25) 54%,
       rgba(3, 7, 19, 0.36) 80%,
       rgba(3, 7, 19, 0.62) 100%
     ),
@@ -100,10 +112,10 @@
   letter-spacing: 1.5px;
   font-family: var(--font-brand);
   font-size: 9px;
-  color: var(--anime-cyan);
+  color: var(--library-cyan);
 }
 .heroKicker svg {
-  color: var(--anime-violet);
+  color: var(--library-violet);
 }
 .hero h1 {
   margin: 8px 0 2px;
@@ -132,13 +144,13 @@
 }
 .featuredCopy {
   align-self: center;
-  padding: 29px 34px 29px clamp(82px, 8vw, 148px);
+  padding: 29px 34px 29px clamp(128px, 11vw, 208px);
   text-shadow:
     0 2px 3px rgba(0, 0, 0, 0.92),
     0 7px 22px rgba(0, 0, 0, 0.82);
 }
 .featuredCopy > span {
-  color: var(--anime-cyan);
+  color: var(--library-cyan);
   text-transform: uppercase;
   letter-spacing: 1.2px;
   font-size: 10px;
@@ -194,7 +206,7 @@
 }
 .heroSelector button.heroSelectorActive {
   width: 37px;
-  background: linear-gradient(90deg, var(--anime-cyan), var(--anime-violet));
+  background: linear-gradient(90deg, var(--library-cyan), var(--library-violet));
 }
 
 .filters {
@@ -245,7 +257,7 @@
   letter-spacing: 0.35px;
 }
 .shelfHeading h2 svg {
-  color: var(--anime-cyan);
+  color: var(--library-cyan);
 }
 .shelfControls {
   display: flex;
@@ -269,7 +281,7 @@
     background var(--transition-fast);
 }
 .shelfControls button:hover {
-  color: var(--anime-cyan);
+  color: var(--library-cyan);
   border-color: rgba(80, 230, 255, 0.65);
   background: rgba(80, 230, 255, 0.08);
 }
@@ -304,7 +316,7 @@
 .tile:focus-visible,
 .tileSelected {
   transform: translateY(-4px);
-  border-color: var(--anime-cyan);
+  border-color: var(--library-cyan);
   box-shadow:
     0 12px 28px rgba(46, 114, 255, 0.25),
     0 0 0 1px rgba(155, 92, 255, 0.32);
@@ -370,7 +382,7 @@
   transform: scale(1);
 }
 .tileOpen:hover {
-  background: var(--anime-violet);
+  background: var(--library-violet);
 }
 .tileCopy {
   position: absolute;
@@ -410,7 +422,7 @@
   font-size: 12px;
 }
 .emptyShelf svg {
-  color: var(--anime-violet);
+  color: var(--library-violet);
 }
 .everything {
   min-width: 0;
@@ -445,7 +457,7 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  color: var(--anime-cyan);
+  color: var(--library-cyan);
   font-size: 12px;
 }
 .noResults {
@@ -476,7 +488,7 @@
 }
 .detailTabs .detailTabActive {
   color: var(--text-primary);
-  border-bottom: 2px solid var(--anime-violet);
+  border-bottom: 2px solid var(--library-violet);
   background: linear-gradient(180deg, rgba(155, 92, 255, 0.2), transparent);
 }
 .detailHero {
@@ -588,7 +600,7 @@
 .primaryAction {
   color: #fff;
   font-weight: 700;
-  background: linear-gradient(100deg, var(--anime-blue), var(--anime-violet));
+  background: linear-gradient(100deg, var(--library-blue), var(--library-violet));
   border-color: transparent;
   box-shadow: 0 7px 18px rgba(71, 83, 255, 0.32);
 }

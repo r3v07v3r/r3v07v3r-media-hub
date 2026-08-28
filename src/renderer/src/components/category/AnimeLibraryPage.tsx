@@ -16,12 +16,12 @@ import {
   sortMediaItems,
   type HideStateDefaults
 } from '@renderer/lib/mediaHub/categoryFilters'
-import { ANIME_CONFIG } from '@renderer/lib/mediaHub/categoryConfig'
+import { ANIME_CONFIG, type CategoryConfig } from '@renderer/lib/mediaHub/categoryConfig'
 import { useRestoreBrowsingOrigin } from '@renderer/lib/mediaHub/useRestoreBrowsingOrigin'
 import { CategoryFilterBar } from './CategoryFilterBar'
 import styles from './AnimeLibraryPage.module.css'
 
-function formatEpisodes(media: MediaItem): string {
+function formatLibraryMeta(media: MediaItem): string {
   if (media.mediaKind === 'movie' || media.mediaType === 'movie') {
     return media.runtimeMinutes ? `${media.runtimeMinutes} min` : 'Feature film'
   }
@@ -30,7 +30,7 @@ function formatEpisodes(media: MediaItem): string {
     return `S${media.seasonNumber} · E${media.episodeNumber}`
   return media.status
     ? media.status.replace(/\b\w/g, (letter) => letter.toUpperCase())
-    : 'Anime series'
+    : mediaKindLabel(media)
 }
 
 function score(media: MediaItem): string | null {
@@ -43,6 +43,11 @@ function mediaKindLabel(media: MediaItem): string {
   return 'Series'
 }
 
+function continueWatchingEmptyMessage(config: CategoryConfig): string {
+  if (config.kind === 'movie') return 'Start a movie and it will wait here.'
+  return `Start a ${config.kind} title and its next episode will wait here.`
+}
+
 function uniqueItems(items: MediaItem[]): MediaItem[] {
   const seen = new Set<string>()
   return items.filter((item) => {
@@ -52,10 +57,10 @@ function uniqueItems(items: MediaItem[]): MediaItem[] {
   })
 }
 
-function EmptyShelf({ message }: { message: string }) {
+function EmptyShelf({ message, icon = 'grid' }: { message: string; icon?: string }) {
   return (
     <div className={styles.emptyShelf}>
-      <Icon name="anime" size={18} />
+      <Icon name={icon} size={18} />
       {message}
     </div>
   )
@@ -71,7 +76,7 @@ interface ShelfProps {
   emptyMessage: string
 }
 
-function AnimeShelf({
+function LibraryShelf({
   title,
   icon,
   items,
@@ -107,11 +112,11 @@ function AnimeShelf({
       </div>
 
       {items.length === 0 ? (
-        <EmptyShelf message={emptyMessage} />
+        <EmptyShelf message={emptyMessage} icon={icon} />
       ) : (
         <ul className={styles.shelfScroller} ref={scroller}>
           {items.map((media) => (
-            <AnimeTile
+            <LibraryTile
               key={media.id}
               media={media}
               selected={media.id === selectedId}
@@ -125,7 +130,7 @@ function AnimeShelf({
   )
 }
 
-function AnimeTile({
+function LibraryTile({
   media,
   selected,
   onSelect,
@@ -185,7 +190,7 @@ function AnimeTile({
         <div className={styles.tileCopy}>
           <span>{media.title}</span>
           <small>
-            {mediaKindLabel(media)} · {media.releaseYear ?? 'New'} · {formatEpisodes(media)}
+            {mediaKindLabel(media)} · {media.releaseYear ?? 'New'} · {formatLibraryMeta(media)}
           </small>
         </div>
       </article>
@@ -193,10 +198,10 @@ function AnimeTile({
   )
 }
 
-/** A deliberately separate grid at the foot of the page: only its first
- * batch mounts initially, then the sentinel grows it as the person scrolls
- * the app's main pane. This keeps a large library from fetching every piece
- * of art merely because the Anime page opened. */
+/** A deliberately separate grid at the foot of every library page: only its
+ * first batch mounts initially, then the sentinel grows it as the person
+ * scrolls the app's main pane. This keeps a large catalog from fetching every
+ * piece of art merely because one category page opened. */
 function EverythingSection({ items, selectedId, onSelect, onOpen, emptyMessage }: ShelfProps) {
   const [visibleCount, setVisibleCount] = useState(24)
   const observerRef = useRef<IntersectionObserver | null>(null)
@@ -235,7 +240,7 @@ function EverythingSection({ items, selectedId, onSelect, onOpen, emptyMessage }
       ) : (
         <ul className={styles.everythingGrid}>
           {visibleItems.map((media) => (
-            <AnimeTile
+            <LibraryTile
               key={media.id}
               media={media}
               selected={media.id === selectedId}
@@ -250,14 +255,14 @@ function EverythingSection({ items, selectedId, onSelect, onOpen, emptyMessage }
   )
 }
 
-function AnimeDetails({ media }: { media: MediaItem | null }) {
+function LibraryDetails({ media, config }: { media: MediaItem | null; config: CategoryConfig }) {
   const { startPartyPlayback, toggleMyList, markContinueWatching, openDetail, resolvingMedia } =
     useAppState()
 
   if (!media) {
     return (
       <aside className={`${styles.details} glass-panel`} aria-label="Title details">
-        <EmptyShelf message="Choose a title to inspect it here." />
+        <EmptyShelf message="Choose a title to inspect it here." icon={config.icon} />
       </aside>
     )
   }
@@ -288,7 +293,7 @@ function AnimeDetails({ media }: { media: MediaItem | null }) {
           <p className={styles.detailKicker}>Selected title</p>
           <h2>{media.title}</h2>
           <p>
-            {media.releaseYear ?? '—'} · {formatEpisodes(media)}
+            {media.releaseYear ?? '—'} · {formatLibraryMeta(media)}
           </p>
         </div>
       </div>
@@ -335,8 +340,10 @@ function AnimeDetails({ media }: { media: MediaItem | null }) {
           <dd>{media.status ?? 'Library title'}</dd>
         </div>
         <div>
-          <dt>Episodes</dt>
-          <dd>{media.totalEpisodes ?? '—'}</dd>
+          <dt>
+            {media.mediaKind === 'movie' || media.mediaType === 'movie' ? 'Runtime' : 'Episodes'}
+          </dt>
+          <dd>{formatLibraryMeta(media)}</dd>
         </div>
       </dl>
 
@@ -371,7 +378,7 @@ function AnimeDetails({ media }: { media: MediaItem | null }) {
   )
 }
 
-export function AnimeLibraryPage() {
+export function LibraryPage({ config }: { config: CategoryConfig }) {
   const {
     catalog,
     catalogKindStates,
@@ -405,14 +412,14 @@ export function AnimeLibraryPage() {
     setSearchParams(filterStateToSearchParams(next), { replace: true })
 
   const library = useMemo(
-    () => catalog.filter((item) => matchesCategoryKind(item, 'anime')),
-    [catalog]
+    () => catalog.filter((item) => matchesCategoryKind(item, config.kind)),
+    [catalog, config.kind]
   )
   const filtered = useMemo(
     () => sortMediaItems(applyCategoryFilters(library, filters), filters.sort),
     [library, filters]
   )
-  const searchActive = categorySearch.kind === 'anime' && categorySearch.query.trim().length > 0
+  const searchActive = categorySearch.kind === config.kind && categorySearch.query.trim().length > 0
   const searchResults = useMemo(
     () => applyWatchStateFilters(categorySearch.results, filters),
     [categorySearch.results, filters]
@@ -429,10 +436,10 @@ export function AnimeLibraryPage() {
     () =>
       uniqueItems(
         continueWatching
-          .filter((entry) => matchesCategoryKind(entry.media, 'anime'))
+          .filter((entry) => matchesCategoryKind(entry.media, config.kind))
           .map((entry) => entry.media)
       ).slice(0, 12),
-    [continueWatching]
+    [continueWatching, config.kind]
   )
   const popular = useMemo(() => {
     const pool = browseItems.length ? [...browseItems] : [...library]
@@ -444,12 +451,17 @@ export function AnimeLibraryPage() {
       )
       .slice(0, 18)
   }, [browseItems, library])
-  // Recommendations come from the personalised home feed, which ranks the
-  // whole catalog. Keeping this rail unfiltered is intentional: the point is
-  // to surface Movies, Series, and Anime alongside the page's anime library.
+  // Recommendations are sourced from the personalised home feed, then
+  // narrowed to the active library. Each category keeps its own relevant
+  // rail: movies on Movies, series on Series, and anime on Anime.
   const recommended = useMemo(
-    () => uniqueItems(recommendations.map((recommendation) => recommendation.media)).slice(0, 18),
-    [recommendations]
+    () =>
+      uniqueItems(
+        recommendations
+          .map((recommendation) => recommendation.media)
+          .filter((media) => matchesCategoryKind(media, config.kind))
+      ).slice(0, 18),
+    [recommendations, config.kind]
   )
   const everythingKey = useMemo(() => browseItems.map((item) => item.id).join('|'), [browseItems])
   const selected = useMemo(
@@ -459,7 +471,7 @@ export function AnimeLibraryPage() {
       ) ?? activeHero,
     [activeHero, browseItems, continuing, heroItems, recommended, selectedId]
   )
-  const kindState = catalogKindStates.anime
+  const kindState = catalogKindStates[config.kind]
   const heroArt = activeHero ? resolveArtwork(activeHero) : null
 
   const completedCount = library.filter((item) => item.completed).length
@@ -470,7 +482,10 @@ export function AnimeLibraryPage() {
   return (
     <div className={styles.page}>
       <main className={styles.library}>
-        <section className={`${styles.hero} glass-panel`} aria-label="Anime library spotlight">
+        <section
+          className={`${styles.hero} glass-panel`}
+          aria-label={`${config.label} library spotlight`}
+        >
           <div className={styles.heroEnergy} aria-hidden="true" />
           {activeHero && heroArt && (
             <ArtworkImage
@@ -485,12 +500,12 @@ export function AnimeLibraryPage() {
           <div className={styles.heroShade} aria-hidden="true" />
           <div className={styles.heroContent}>
             <span className={styles.heroKicker}>
-              <Icon name="anime" size={18} />
-              Anime archive
+              <Icon name={config.icon} size={18} />
+              {config.label} archive
             </span>
-            <h1>Anime</h1>
+            <h1>{config.label}</h1>
             <p className={styles.libraryCount}>
-              {library.length.toLocaleString()} series in your library
+              {library.length.toLocaleString()} {config.pluralLabel} in your library
             </p>
             <div className={styles.stats}>
               <span>
@@ -512,7 +527,7 @@ export function AnimeLibraryPage() {
               <p>
                 <Icon name="star" size={14} />
                 {score(activeHero) ?? '—'} · {activeHero.releaseYear ?? 'New'} ·{' '}
-                {formatEpisodes(activeHero)}
+                {formatLibraryMeta(activeHero)}
               </p>
               <button type="button" onClick={() => setSelectedId(activeHero.id)}>
                 Explore title <Icon name="chevron" size={15} />
@@ -520,7 +535,7 @@ export function AnimeLibraryPage() {
             </div>
           )}
           {heroItems.length > 1 && (
-            <div className={styles.heroSelector} aria-label="Featured anime">
+            <div className={styles.heroSelector} aria-label={`Featured ${config.pluralLabel}`}>
               {heroItems.map((item, index) => (
                 <button
                   type="button"
@@ -540,7 +555,7 @@ export function AnimeLibraryPage() {
 
         <div className={styles.filters}>
           <CategoryFilterBar
-            config={ANIME_CONFIG}
+            config={config}
             items={library}
             filters={filters}
             onApplySaved={(query) => setSearchParams(new URLSearchParams(query), { replace: true })}
@@ -550,7 +565,7 @@ export function AnimeLibraryPage() {
           {kindState === 'failed' && library.length > 0 && (
             <div className={styles.offlineBanner} role="status">
               <Icon name="wifi-off" size={15} />
-              Showing the last Anime library snapshot.
+              Showing the last {config.label} library snapshot.
               <button type="button" onClick={refreshCatalog}>
                 Retry
               </button>
@@ -559,7 +574,7 @@ export function AnimeLibraryPage() {
         </div>
 
         {searchActive ? (
-          <AnimeShelf
+          <LibraryShelf
             title={`Search results for “${categorySearch.query}”`}
             icon="search"
             items={searchResults}
@@ -568,24 +583,24 @@ export function AnimeLibraryPage() {
             onOpen={openDetail}
             emptyMessage={
               categorySearch.loading
-                ? 'Searching the anime catalog…'
+                ? `Searching the ${config.pluralLabel} catalog…`
                 : categorySearch.error
-                  ? 'The anime search could not be reached. Try again.'
-                  : 'No anime matched that search.'
+                  ? `The ${config.pluralLabel} search could not be reached. Try again.`
+                  : `No ${config.pluralLabel} matched that search.`
             }
           />
         ) : (
           <>
-            <AnimeShelf
+            <LibraryShelf
               title="Continue watching"
               icon="clock"
               items={continuing}
               selectedId={selected?.id ?? null}
               onSelect={(media) => setSelectedId(media.id)}
               onOpen={openDetail}
-              emptyMessage="Start an anime and its next episode will wait here."
+              emptyMessage={continueWatchingEmptyMessage(config)}
             />
-            <AnimeShelf
+            <LibraryShelf
               title="Recommended for you"
               icon="sparkle"
               items={recommended}
@@ -594,7 +609,7 @@ export function AnimeLibraryPage() {
               onOpen={openDetail}
               emptyMessage="Watch a few titles and personalised recommendations will appear here."
             />
-            <AnimeShelf
+            <LibraryShelf
               title="Popular in your library"
               icon="sparkle"
               items={popular}
@@ -603,10 +618,10 @@ export function AnimeLibraryPage() {
               onOpen={openDetail}
               emptyMessage={
                 kindState === 'loading'
-                  ? 'Loading your anime library…'
+                  ? `Loading your ${config.pluralLabel} library…`
                   : kindState === 'failed'
-                    ? 'The anime library is unavailable. Retry above.'
-                    : 'No anime matches these filters.'
+                    ? `The ${config.label} library is unavailable. Retry above.`
+                    : `No ${config.pluralLabel} match these filters.`
               }
             />
           </>
@@ -622,20 +637,26 @@ export function AnimeLibraryPage() {
           onOpen={openDetail}
           emptyMessage={
             searchActive
-              ? 'No titles matched that search.'
-              : 'Try widening a filter or clearing it to see more anime.'
+              ? `No ${config.pluralLabel} matched that search.`
+              : `Try widening a filter or clearing it to see more ${config.pluralLabel}.`
           }
         />
 
         {searchActive && (
           <button type="button" className={styles.clearSearch} onClick={clearCategorySearch}>
             <Icon name="x" size={13} />
-            Clear anime search
+            Clear {config.label.toLowerCase()} search
           </button>
         )}
       </main>
 
-      <AnimeDetails media={selected} />
+      <LibraryDetails media={selected} config={config} />
     </div>
   )
+}
+
+/** Compatibility entry point for the Anime route. Movies and Series import
+ * LibraryPage directly, ensuring all three library views share one layout. */
+export function AnimeLibraryPage() {
+  return <LibraryPage config={ANIME_CONFIG} />
 }
