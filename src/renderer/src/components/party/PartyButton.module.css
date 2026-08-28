@@ -1,12 +1,12 @@
 .button {
   position: relative;
-  min-width: 36px;
   height: 36px;
-  padding: 0 10px;
-  border-radius: 50%;
+  padding: 0 14px;
+  border-radius: 18px;
   display: flex;
   align-items: center;
   justify-content: center;
+  gap: 5px;
   color: var(--text-muted);
   border: 1px solid transparent;
   transition:
@@ -14,25 +14,24 @@
     background var(--transition-fast),
     border-color var(--transition-fast);
 }
+/* Always visible — a room-status control that only reveals its own label
+   on hover reads as unlabeled chrome the rest of the time, and this one
+   sits right at the top of the app. */
 .label {
-  display: none;
-  margin-left: 5px;
+  display: inline;
   font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.2px;
+  white-space: nowrap;
 }
 .button:hover {
   color: var(--text-primary);
   background: rgba(255, 255, 255, 0.06);
 }
 .button.active {
-  border-radius: 18px;
   color: var(--accent-cyan);
   border-color: rgba(56, 229, 255, 0.35);
   background: rgba(56, 229, 255, 0.08);
-}
-.button.active .label {
-  display: inline;
 }
 .button[aria-pressed='true'] {
   box-shadow: 0 0 0 3px rgba(56, 229, 255, 0.25);
@@ -40,6 +39,7 @@
 .icon {
   width: 17px;
   height: 17px;
+  flex: 0 0 auto;
 }
 .badge {
   position: absolute;
@@ -56,17 +56,6 @@
   font-weight: 700;
   line-height: 16px;
   text-align: center;
-}
-
-@media (min-width: 1180px) {
-  .button:hover .label,
-  .button[aria-pressed='true'] .label {
-    display: inline;
-  }
-  .button:hover,
-  .button[aria-pressed='true'] {
-    border-radius: 18px;
-  }
 }
 
 .separator {

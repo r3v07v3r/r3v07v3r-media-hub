@@ -174,11 +174,11 @@
 
 /* ---------- Short windows ----------
    This page shares Home's grid-area names, and therefore shares its
-   components' short-window rules too — CompactAIAssistant swaps the orb
-   for a strip, FeaturedHero switches to height:100%, the AI Picks cards
-   size off vh. See HomeDashboard.module.css's block of the same name for
-   the reasoning and useDashboardLayoutMode.ts for the thresholds; what
-   follows is only what this page has to say for itself.
+   components' short-window rules too — CompactAIAssistant swaps its side
+   column for a full-width strip, FeaturedHero switches to height:100%,
+   the AI Picks cards size off vh. See HomeDashboard.module.css's block of
+   the same name for the reasoning and useDashboardLayoutMode.ts for the
+   thresholds; what follows is only what this page has to say for itself.
 
    The hero row is given an explicit clamp rather than Home's `1fr`
    because of the constraint the .continuePanel comment above already
