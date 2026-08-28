@@ -19,7 +19,12 @@ import { createPairing } from './pairing'
 import { createDaemonServer } from './server'
 import { createItemStore } from './storage'
 
-const VERSION = '0.1.0'
+// Stamped at build time by scripts/build-daemon (esbuild --define), so a
+// released daemon carries the same version as the app release it shipped
+// with — which is what lets the app judge protocol compatibility from
+// /api/ping, and what a future self-updater will compare against the
+// release feed. The fallback marks a from-source dev run.
+const VERSION = process.env.R3_CACHE_VERSION || '0.0.0-dev'
 const EVICTION_INTERVAL_MS = 60 * 60 * 1000
 
 function log(message: string): void {

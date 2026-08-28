@@ -21,12 +21,20 @@ Development, from the repo:
 npx tsx daemon/main.ts
 ```
 
-Deployment is one bundled file plus Node ≥ 20:
+Deployment builds two shapes:
 
 ```
-npm run build:daemon        # -> dist-daemon/r3-cache.cjs (~60 KB)
-node r3-cache.cjs
+npm run build:daemon        # -> dist-daemon/r3-cache.cjs (~60 KB, needs Node >= 20)
+npm run build:daemon:sea    # -> + r3-cache-win-x64.exe / r3-cache-linux-x64
+                            #      (self-contained, nothing to install)
 ```
+
+Every Preview release of the app publishes both automatically (see
+.github/workflows/preview.yml): the daemon ships from the same release
+page, stamped with the same version, so the app can judge compatibility
+from `/api/ping` and a future self-updater reads the feed the app's
+updater already uses. For most people "install" is: download the
+executable for your OS from the latest release, run it, pair.
 
 Data lives in `%LOCALAPPDATA%\r3-cache` (Windows) or `~/.local/share/r3-cache`
 (Linux); override with `R3_CACHE_DIR`. An optional `r3-cache.json` in that
