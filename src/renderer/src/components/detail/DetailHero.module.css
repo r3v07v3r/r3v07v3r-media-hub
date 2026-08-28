@@ -35,16 +35,15 @@
   transition: min-height var(--transition-standard, 0.25s ease);
 }
 
-/* Movies have nothing below the hero competing for room (no Next-to-Play/
-   episode list — MediaDetailPage skips those for config.isEpisodic:false),
-   so the hero can afford to be noticeably bigger, and the trailer more
-   prominent, than the shared series/anime height. Top padding trimmed too
-   — pulls the title closer to the hero's own top edge per "move up to the
-   top border so the trailer is very visible" rather than sitting at the
-   same ~40px inset a series page needs room for its season/episode chrome
-   underneath. */
+/* Movies share the series/anime hero height at rest — a taller movie
+   banner is pure empty backdrop between the buttons and the About panel,
+   since the content stack doesn't grow with it. The extra room the trailer
+   wants comes from .heroTrailerOpen below, only while it's actually open.
+   Top padding trimmed — pulls the title closer to the hero's own top edge
+   per "move up to the top border so the trailer is very visible" rather
+   than sitting at the same ~40px inset a series page needs room for its
+   season/episode chrome underneath. */
 .heroMovie {
-  min-height: clamp(420px, 54vh, 640px);
   padding-top: 22px;
 }
 
@@ -53,8 +52,7 @@
    held permanently against the About panel. Applied for the whole time
    the trailer is up (not only while playing, unlike .contentFaded): the
    frame should not resize under someone who has just paused it. */
-.heroTrailerOpen,
-.heroMovie.heroTrailerOpen {
+.heroTrailerOpen {
   min-height: clamp(460px, 66vh, 720px);
 }
 
@@ -62,13 +60,17 @@
   position: absolute;
   inset: 0;
   overflow: hidden;
-  mask-image: linear-gradient(to right, transparent 0%, rgba(0, 0, 0, 0.68) 24%, black 55%),
+  mask-image:
+    linear-gradient(to right, transparent 0%, rgba(0, 0, 0, 0.68) 24%, black 55%),
     linear-gradient(to top, transparent 0%, black 42%);
   mask-composite: intersect;
-  -webkit-mask-image: linear-gradient(to right, transparent 0%, rgba(0, 0, 0, 0.68) 24%, black 55%),
+  -webkit-mask-image:
+    linear-gradient(to right, transparent 0%, rgba(0, 0, 0, 0.68) 24%, black 55%),
     linear-gradient(to top, transparent 0%, black 42%);
   -webkit-mask-composite: source-in;
-  transition: mask-image var(--transition-standard, 0.25s ease), -webkit-mask-image var(--transition-standard, 0.25s ease);
+  transition:
+    mask-image var(--transition-standard, 0.25s ease),
+    -webkit-mask-image var(--transition-standard, 0.25s ease);
 }
 /* This mask exists to fade the left/bottom edges so .content's text stays
    readable against the backdrop image — confirmed live that it was still
@@ -158,7 +160,9 @@
   align-items: center;
   justify-content: center;
   color: var(--text-secondary);
-  transition: color var(--transition-fast), background var(--transition-fast);
+  transition:
+    color var(--transition-fast),
+    background var(--transition-fast);
 }
 .trailerClose:hover {
   color: var(--text-primary);
@@ -203,7 +207,12 @@
   position: absolute;
   inset: 0;
   z-index: 1;
-  background: linear-gradient(90deg, rgba(4, 8, 16, 0.68) 0%, rgba(4, 8, 16, 0.3) 34%, transparent 62%);
+  background: linear-gradient(
+    90deg,
+    rgba(4, 8, 16, 0.68) 0%,
+    rgba(4, 8, 16, 0.3) 34%,
+    transparent 62%
+  );
 }
 .artScrimBottom {
   position: absolute;
@@ -382,10 +391,7 @@
   .hero {
     padding: 26px 24px;
   }
-  /* Only the ceiling moves here — the clamp above already handles short
-     windows, and this breakpoint is about width, not height. */
   .heroMovie {
-    min-height: clamp(420px, 54vh, 560px);
     padding-top: 18px;
   }
   .content {

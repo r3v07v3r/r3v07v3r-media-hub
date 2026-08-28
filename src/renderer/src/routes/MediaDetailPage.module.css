@@ -16,6 +16,15 @@
   min-height: 100%;
   display: grid;
   grid-template-columns: minmax(0, 1fr) 380px;
+  /* auto auto 1fr, and the 1fr is load-bearing: the sidebar spans the
+     hero+main rows, and when it's taller than both (the movie page's
+     normal state — its main column is just the About panel, no episode
+     grid), the grid has to put the surplus height somewhere. With two
+     auto rows it splits the surplus across BOTH, inflating the hero row
+     and opening a dead gap between the hero and About. The 1fr pins the
+     hero row to the hero's own height and sends all surplus to the main
+     row, where it just trails below the About panel harmlessly. */
+  grid-template-rows: auto auto 1fr;
   grid-template-areas:
     'back back'
     'hero sidebar'
@@ -122,6 +131,10 @@
 @media (max-width: 1099px) {
   .page {
     grid-template-columns: 1fr;
+    /* Single column — nothing spans rows here, so the wide layout's
+       auto auto 1fr must not leak in (it would hand the third row the
+       1fr surplus). All-auto rows instead. */
+    grid-template-rows: none;
     grid-template-areas:
       'back'
       'hero'
