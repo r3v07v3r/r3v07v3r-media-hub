@@ -57,6 +57,17 @@ export interface LanCacheStatusResponse {
   torboxLinked: boolean
   /** How many paired devices have linked an account — household total. */
   linkedDevices: number
+  /** Streams being served right now — what update restarts wait on. */
+  activeStreams: number
+  updater: {
+    channel: string
+    enabled: boolean
+    checkedAt: number
+    latestSeen: string
+    staged: string
+    stagedAt: number
+    lastError: string
+  }
   jobs: Array<{
     contentKey: string
     title: string

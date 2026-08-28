@@ -28,6 +28,14 @@ export interface DaemonConfig {
   diskBudgetBytes: number
   /** Friendly name announced over discovery and shown in the app. */
   serverName: string
+  /** Which releases the self-updater follows. 'preview' matches the app's
+   *  fast channel and is the default while that is the only channel
+   *  daemon assets ship on. */
+  updateChannel: 'stable' | 'preview'
+  /** Master switch for self-updating. On by default — the daemon is a
+   *  background process nobody looks at, which is exactly the kind of
+   *  thing that must keep itself current. */
+  autoUpdate: boolean
 }
 
 /** OS-appropriate default data root, overridable via R3_CACHE_DIR. */
@@ -73,6 +81,10 @@ function readOverrides(dataDir: string): Partial<DaemonConfig> {
     if (typeof parsed.serverName === 'string' && parsed.serverName.trim()) {
       out.serverName = parsed.serverName.trim().slice(0, 64)
     }
+    if (parsed.updateChannel === 'stable' || parsed.updateChannel === 'preview') {
+      out.updateChannel = parsed.updateChannel
+    }
+    if (typeof parsed.autoUpdate === 'boolean') out.autoUpdate = parsed.autoUpdate
     return out
   } catch {
     // Absent or unreadable is the normal, zero-config case.
@@ -124,6 +136,8 @@ export function loadConfig(): DaemonConfig {
     hardMaxDays: overrides.hardMaxDays ?? DEFAULTS.hardMaxDays,
     tombstoneDays: overrides.tombstoneDays ?? DEFAULTS.tombstoneDays,
     diskBudgetBytes,
-    serverName: overrides.serverName ?? os.hostname()
+    serverName: overrides.serverName ?? os.hostname(),
+    updateChannel: overrides.updateChannel ?? 'preview',
+    autoUpdate: overrides.autoUpdate ?? true
   }
 }

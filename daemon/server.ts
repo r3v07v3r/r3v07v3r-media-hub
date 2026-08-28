@@ -18,7 +18,9 @@ import fs from 'node:fs'
 import fsp from 'node:fs/promises'
 import http, { type IncomingMessage, type ServerResponse } from 'node:http'
 
+import type { ActivityTracker } from './activity'
 import type { Credentials } from './credentials'
+import type { UpdaterStatus } from './updater'
 import type { JobStore, JobRecord } from './jobs'
 import type { Pairing } from './pairing'
 import type { ItemStore } from './storage'
@@ -40,6 +42,8 @@ export interface ServerDeps {
   jobs: JobStore
   pairing: Pairing
   credentials: Credentials
+  activity: ActivityTracker
+  updaterStatus: () => UpdaterStatus
   serverName: string
   version: string
   diskBudgetBytes: number
@@ -155,7 +159,7 @@ async function serveFile(
 }
 
 export function createDaemonServer(deps: ServerDeps): http.Server {
-  const { storage, jobs, pairing, credentials, serverName, version } = deps
+  const { storage, jobs, pairing, credentials, activity, serverName, version } = deps
 
   return http.createServer((req, res) => {
     void handle(req, res).catch((error) => {
@@ -198,7 +202,13 @@ export function createDaemonServer(deps: ServerDeps): http.Server {
         res.end()
         return
       }
-      // Playing is the access the idle TTL counts from.
+      // Playing is the access the idle TTL counts from — and the signal
+      // "someone is watching" that blocks update restarts. GET only: a
+      // HEAD probe is not a viewer.
+      if (req.method === 'GET') {
+        activity.streamOpened()
+        res.once('close', () => activity.streamClosed())
+      }
       void storage.touch(item.infoHash).catch(() => {})
       const ext = item.fileName.slice(item.fileName.lastIndexOf('.')).toLowerCase()
       await serveFile(
@@ -302,7 +312,9 @@ export function createDaemonServer(deps: ServerDeps): http.Server {
         // The CALLER's own opt-in state — each member sees whether THEIR
         // account is linked, plus how many household members are.
         torboxLinked: Boolean(credentials.tokenForDevice(callerDeviceId)),
-        linkedDevices: credentials.linkedDeviceCount()
+        linkedDevices: credentials.linkedDeviceCount(),
+        activeStreams: activity.snapshot().activeStreams,
+        updater: deps.updaterStatus()
       })
       return
     }

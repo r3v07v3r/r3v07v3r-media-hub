@@ -43,6 +43,21 @@ execFileSync(
 )
 console.log(`[build-daemon] bundle ${bundlePath} (version ${version})`)
 
+// Checksums ride along as release assets. The self-updater REQUIRES the
+// bundle's one: an update it cannot verify is an update it will not
+// install (see daemon/updater.ts).
+const crypto = await import('node:crypto')
+function writeChecksum(filePath) {
+  const digest = crypto.createHash('sha256').update(fs.readFileSync(filePath)).digest('hex')
+  fs.writeFileSync(
+    `${filePath}.sha256`,
+    `${digest}  ${path.basename(filePath)}
+`
+  )
+  return digest
+}
+writeChecksum(bundlePath)
+
 if (!wantSea) process.exit(0)
 
 // --- 2. single executable for this platform --------------------------------
@@ -88,5 +103,6 @@ execFileSync(
 fs.rmSync(seaConfigPath, { force: true })
 fs.rmSync(blobPath, { force: true })
 
+writeChecksum(exePath)
 const megabytes = (fs.statSync(exePath).size / 1024 ** 2).toFixed(0)
 console.log(`[build-daemon] executable ${exePath} (${megabytes} MB, self-contained)`)

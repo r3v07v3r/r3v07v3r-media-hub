@@ -28,6 +28,8 @@ interface DaemonStatus {
   torboxLinked: boolean
   /** Household total of devices that linked an account. */
   linkedDevices: number
+  activeStreams: number
+  updater: { staged: string; latestSeen: string; lastError: string }
   jobs: Array<{ title: string; state: string; progressBytes: number; sizeBytes?: number }>
 }
 
@@ -145,7 +147,7 @@ export function LanCacheSection() {
                 {statusError
                   ? `${paired} — unreachable right now (${statusError})`
                   : status
-                    ? `${paired} — ${status.itemCount} title${status.itemCount === 1 ? '' : 's'}, ${gb(status.usedBytes)} of ${gb(status.budgetBytes)} used${status.torboxLinked ? ', your account linked' : ', your account not linked'}${status.linkedDevices > 1 ? ` (${status.linkedDevices} people)` : ''}${fetching.length ? ` — fetching “${fetching[0].title}”` : ''}`
+                    ? `${paired} — ${status.itemCount} title${status.itemCount === 1 ? '' : 's'}, ${gb(status.usedBytes)} of ${gb(status.budgetBytes)} used${status.torboxLinked ? ', your account linked' : ', your account not linked'}${status.linkedDevices > 1 ? ` (${status.linkedDevices} people)` : ''}${fetching.length ? ` — fetching “${fetching[0].title}”` : ''}${status.updater?.staged ? ` — update ${status.updater.staged} ready, applies when idle` : ''}`
                     : paired}
               </span>
             </div>

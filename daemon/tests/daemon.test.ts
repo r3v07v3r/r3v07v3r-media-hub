@@ -8,6 +8,7 @@ import fsp from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 
+import { createActivityTracker } from '../activity'
 import { createCredentials } from '../credentials'
 import { createJobStore } from '../jobs'
 import { createPairing } from '../pairing'
@@ -204,11 +205,22 @@ async function main(): Promise<void> {
 
     const jobs = createJobStore(root)
     const credentials = createCredentials(root)
+    const activity = createActivityTracker(root)
     const server = createDaemonServer({
       storage: store,
       jobs,
       pairing,
       credentials,
+      activity,
+      updaterStatus: () => ({
+        channel: 'preview',
+        enabled: true,
+        checkedAt: 0,
+        latestSeen: '',
+        staged: '',
+        stagedAt: 0,
+        lastError: ''
+      }),
       serverName: 'test',
       version: '0.0.0',
       diskBudgetBytes: policy.budgetBytes

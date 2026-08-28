@@ -91,8 +91,37 @@ automatically if someone who has shares wants the same title. Anything
 cached is playable by every paired device — that sharing is the point of
 an on-site cache. Unpairing revokes only your own key.
 
-Auto-start and self-updating (with rollback so it always comes back
-online) are planned but deliberately not built yet.
+## Auto-start, self-updating, rollback
+
+First-time setup grants everything the daemon will ever need — after
+this, nobody goes back to it:
+
+```
+r3-cache --install
+```
+
+Windows: a per-user logon Scheduled Task (no admin). Linux: a systemd
+user unit, enabled, with linger. Everything else the daemon does —
+including updates — happens inside the user's own directories, so no
+elevation is ever requested again. `--uninstall` reverses it.
+
+Updates are fully unattended. The daemon polls the app's own GitHub
+release feed (channel: `updateChannel` in r3-cache.json, default
+`preview`), downloads the new bundle plus its sha256, verifies it, and
+STAGES it under `versions/<v>/` — running code is never touched. The
+restart that applies it waits for a moment that interrupts nobody: never
+while a stream is open, never within 30 minutes of one closing, and
+preferring the household's historically quiet hours (a rolling
+hour-of-day histogram); an update that has waited 24 hours applies at
+the first idle moment regardless.
+
+A launcher embedded in the executable makes bad updates self-healing: it
+records a tripwire before booting any version, and a version that fails
+to reach healthy twice is marked bad and never tried again — the daemon
+falls back to the previous good version, or ultimately to the payload
+compiled into the executable itself, which cannot be deleted. Rollback
+is automatic and needs nobody's attention; `autoUpdate: false` in
+r3-cache.json turns the whole mechanism off.
 
 ## Live verification
 
