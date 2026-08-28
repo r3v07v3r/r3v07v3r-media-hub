@@ -1703,7 +1703,7 @@ export function TraktSection() {
       </p>
 
       {connected ? (
-        <div className={styles.serviceFields} style={{ flexDirection: 'column', gap: 8 }}>
+        <div className={`${styles.serviceFields} ${styles.serviceFieldsStacked}`}>
           <div className={styles.serviceActions}>
             <span className={styles.rowDescription}>
               Signed in{status?.username ? ` as ${status.username}` : ''}.
@@ -1729,7 +1729,7 @@ export function TraktSection() {
           <StatusLine status={importStatus} />
         </div>
       ) : pending ? (
-        <div className={styles.serviceFields} style={{ flexDirection: 'column', gap: 8 }}>
+        <div className={`${styles.serviceFields} ${styles.serviceFieldsStacked}`}>
           <span className={styles.rowDescription}>
             Enter this code at{' '}
             <button
@@ -1756,7 +1756,7 @@ export function TraktSection() {
           <StatusLine status={{ kind: 'busy' }} />
         </div>
       ) : (
-        <div className={styles.serviceFields} style={{ flexDirection: 'column', gap: 8 }}>
+        <div className={`${styles.serviceFields} ${styles.serviceFieldsStacked}`}>
           <label className={styles.field}>
             <span className={styles.fieldLabel}>Client ID</span>
             <input
