@@ -596,11 +596,12 @@ export function MalSection() {
     try {
       const result = await api.mal.reconcileApply(preview)
       setPreview(null)
+      const applied = result.toLocal.length + result.toMal.length + result.ratings.length
       setReconcileStatus({
         kind: result.errors.length ? 'error' : 'ok',
-        message: `Applied ${result.toLocal.length + result.toMal.length} update${
-          result.toLocal.length + result.toMal.length === 1 ? '' : 's'
-        }${result.errors.length ? `, ${result.errors.length} failed` : ''}.`
+        message: `Applied ${applied} update${applied === 1 ? '' : 's'}${
+          result.errors.length ? `, ${result.errors.length} failed` : ''
+        }.`
       })
     } catch (error) {
       setReconcileStatus({
@@ -651,6 +652,9 @@ export function MalSection() {
             <p className={styles.rowDescription} style={{ marginTop: 8 }}>
               {preview.toMal.length} update{preview.toMal.length === 1 ? '' : 's'} to push to MAL,{' '}
               {preview.toLocal.length} to pull in locally
+              {preview.ratingsToLocal.length
+                ? `, ${preview.ratingsToLocal.length} rating${preview.ratingsToLocal.length === 1 ? '' : 's'} to pull in`
+                : ''}
               {preview.unmatched.length ? `, ${preview.unmatched.length} unmatched` : ''}.
             </p>
           )}

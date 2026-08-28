@@ -19,14 +19,17 @@ import { app, shell } from 'electron'
 import crypto from 'node:crypto'
 import http from 'node:http'
 import type {
+  HistoryEntry,
   MalReconcileApplyResult,
   MalReconcilePreview,
   MalStartPayload,
   MalStatus,
   MediaKind
 } from '../../shared/media-hub/types'
+import { resolveAnimeGroupTarget } from './animeSeasons'
 import { getDatabase } from './dbState'
 import { fetchJson } from './httpClient'
+import { crossIdsForKitsu, kitsuIdForExternal } from './idBridge'
 import { handle } from './ipcGuard'
 import { logError } from './logger'
 import {
@@ -110,56 +113,19 @@ async function malRequest<T = unknown>(pathname: string, options: RequestInit = 
   })
 }
 
-interface KitsuMappingResponse {
-  data?: Array<{ id?: string | number }>
-}
-
-/** Resolves a MAL id to this app's `kitsu:<id>` catalog id, via Kitsu's cross-reference mapping API. 30-day cached; '' on any failure (not matched, or Kitsu unreachable). */
+/** Resolves a MAL id to this app's `kitsu:<id>` catalog id, via idBridge (Simkl's cross-reference search first, Kitsu's own mapping as fallback). '' on no match. */
 async function resolveKitsuIdForMal(malId: number): Promise<string> {
-  const key = `mal:mapping:kitsu-for-mal:${malId}`
-  const db = getDatabase()
-  const cached = db.getCache<string>(key)
-  if (cached !== null) return cached
-
-  try {
-    const result = await fetchJson<KitsuMappingResponse>(
-      `https://kitsu.io/api/edge/anime?filter[mappingExternalId]=${encodeURIComponent(String(malId))}&filter[mappingExternalSite]=myanimelist/anime`
-    )
-    const kitsuId = result.data?.[0]?.id ? `kitsu:${result.data[0].id}` : ''
-    db.putCache(key, kitsuId, 30 * 24 * 60 * 60 * 1000)
-    return kitsuId
-  } catch {
-    return ''
-  }
+  const kitsuId = await kitsuIdForExternal('mal', malId, 'background')
+  return kitsuId ? `kitsu:${kitsuId}` : ''
 }
 
-interface KitsuMappingsResponse {
-  data?: Array<{ attributes?: { externalSite?: string; externalId?: string | number } }>
-}
-
-/** Inverse of resolveKitsuIdForMal — resolves a `kitsu:<id>` (or bare numeric Kitsu id) to a MAL id. 30-day cached; 0 on any failure/no match. */
+/** Inverse of resolveKitsuIdForMal — resolves a `kitsu:<id>` (or bare numeric Kitsu id) to a MAL id, via idBridge. 0 on no match. */
 async function resolveMalIdForKitsu(kitsuId: string): Promise<number> {
   const numericId = String(kitsuId)
     .replace(/^kitsu:/, '')
     .split(':')[0]
-  const key = `mal:mapping:mal-for-kitsu:${numericId}`
-  const db = getDatabase()
-  const cached = db.getCache<number>(key)
-  if (cached !== null) return cached
-
-  try {
-    const result = await fetchJson<KitsuMappingsResponse>(
-      `https://kitsu.io/api/edge/anime/${encodeURIComponent(numericId)}/mappings`
-    )
-    const match = (result.data || []).find(
-      (m) => m.attributes?.externalSite === 'myanimelist/anime'
-    )
-    const malId = match ? Number(match.attributes?.externalId) || 0 : 0
-    db.putCache(key, malId, 30 * 24 * 60 * 60 * 1000)
-    return malId
-  } catch {
-    return 0
-  }
+  const cross = await crossIdsForKitsu(numericId, 'background')
+  return cross.mal || 0
 }
 
 /**
@@ -388,17 +354,34 @@ export function registerMalIpc(): void {
       throw new Error('Could not read your Simkl watch history — try again in a moment.')
     }
     const history = [...getDatabase().history(), ...remote.entries]
-    const localProgress = localWatchedEpisodeCounts(history)
-    return computeReconciliation(withKitsuIds, localProgress)
+
+    // Each MAL entry's kitsuId is whichever sibling MAL itself matched to —
+    // for a merged franchise (Naruto: Shippuuden, Bleach: Sennen Kessen-hen,
+    // etc.) that is NOT this app's canonical grouped id, and its progress
+    // has to be compared against local history scoped to that sibling's
+    // real position in the group, not the group's combined total. See
+    // resolveAnimeGroupTarget's own doc for why.
+    const withTargets = withKitsuIds.map((entry) => ({
+      ...entry,
+      target: entry.kitsuId ? resolveAnimeGroupTarget(entry.kitsuId) : null
+    }))
+    const localProgress = localProgressByGroupTarget(withTargets, history)
+    const localRatings = Object.fromEntries(getDatabase().ratings())
+    return computeReconciliation(
+      withTargets.map((entry) => ({ ...entry, targetId: entry.target?.id })),
+      localProgress,
+      localRatings
+    )
   })
 
   handle<MalReconcilePreview, MalReconcileApplyResult>(
     MEDIA_HUB_CHANNELS.malReconcileApply,
     async (_event, diff) => {
-      const results: MalReconcileApplyResult = { toLocal: [], toMal: [], errors: [] }
+      const results: MalReconcileApplyResult = { toLocal: [], toMal: [], ratings: [], errors: [] }
 
       for (const item of diff?.toLocal || []) {
         try {
+          const target = resolveAnimeGroupTarget(item.kitsuId)
           const episodeNumbers = Array.from(
             { length: item.toEpisode - item.fromEpisode + 1 },
             (_, i) => item.fromEpisode + i
@@ -407,15 +390,15 @@ export function registerMalIpc(): void {
           // Number.parseInt(String(undefined)) is NaN either way, so this
           // empty string is behaviorally identical) — added only so the
           // literal satisfies SimklPushItem's typed `year` field.
-          const media = { id: item.kitsuId, type: 'anime' as const, title: item.title, year: '' }
+          const media = { id: target.id, type: 'anime' as const, title: item.title, year: '' }
           for (const episode of episodeNumbers) {
-            getDatabase().markWatched(media, { season: 1, episode })
+            getDatabase().markWatched(media, { season: target.season, episode })
           }
           if (simklCredentials().accessToken) {
             try {
               await simklRequest('/sync/history', {
                 method: 'POST',
-                body: JSON.stringify(seasonHistoryPayload(media, 1, episodeNumbers))
+                body: JSON.stringify(seasonHistoryPayload(media, target.season, episodeNumbers))
               })
             } catch (error) {
               logError('mal:reconcile:simkl-push', error)
@@ -440,7 +423,48 @@ export function registerMalIpc(): void {
         }
       }
 
+      for (const item of diff?.ratingsToLocal || []) {
+        try {
+          getDatabase().rate(item.targetId, item.score)
+          results.ratings.push(item.targetId)
+        } catch (error) {
+          results.errors.push({ targetId: item.targetId, error: (error as Error).message })
+        }
+      }
+
       return results
     }
   )
+}
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value)
+}
+
+/**
+ * For each MAL entry (keyed by the raw kitsuId MAL itself matched to),
+ * how many distinct episodes local history has recorded at that entry's
+ * REAL position within its group — not localWatchedEpisodeCounts' bare
+ * per-id total, which for a grouped franchise would be every merged
+ * season's episodes summed together and would never agree with MAL's own
+ * per-entry (per-season) count.
+ */
+function localProgressByGroupTarget(
+  entries: { kitsuId: string; target: { id: string; season: number } | null }[],
+  history: HistoryEntry[]
+): Record<string, number> {
+  const bySeasonKey = new Map<string, Set<string>>()
+  for (const entry of history) {
+    if (!isFiniteNumber(entry.season) || !isFiniteNumber(entry.episode)) continue
+    const key = `${entry.id}:${entry.season}`
+    if (!bySeasonKey.has(key)) bySeasonKey.set(key, new Set())
+    bySeasonKey.get(key)!.add(String(entry.episode))
+  }
+  const counts: Record<string, number> = {}
+  for (const entry of entries) {
+    if (!entry.kitsuId || !entry.target) continue
+    const key = `${entry.target.id}:${entry.target.season}`
+    counts[entry.kitsuId] = bySeasonKey.get(key)?.size || 0
+  }
+  return counts
 }

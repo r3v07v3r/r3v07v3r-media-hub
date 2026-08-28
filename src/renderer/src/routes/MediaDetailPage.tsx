@@ -115,6 +115,15 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
     setMetaStatus('loading')
     setCatalogItem(null)
     setShowTrailer(false)
+    // MediaDetailPage is reused across titles (App.tsx's route has no
+    // `key={id}`, so navigating from one detail page to another re-renders
+    // this same instance rather than remounting it) — without this, a
+    // season explicitly picked on the PREVIOUS title survives into this
+    // one. If that stale season number doesn't exist here (e.g. leaving a
+    // title with a season-0 "Specials" entry for one that starts at season
+    // 1, such as BLEACH: Sennen Kessen-hen), the episode grid renders empty
+    // and no season pill shows active until the person clicks one by hand.
+    setSelectedSeasonOverride(null)
     const api = window.api?.mediaHub
     if (!api) {
       setMetaStatus('error')

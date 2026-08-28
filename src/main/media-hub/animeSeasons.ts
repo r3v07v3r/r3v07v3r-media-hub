@@ -513,6 +513,79 @@ export function combineGroupEpisodeCounts(members: CatalogItem[]): {
 }
 
 /**
+ * Which franchise siblings each crawled anime has, by catalog id, and the
+ * inverse: for ANY raw anime catalog id (the canonical id of a group, one
+ * of its merged siblings, or an ungrouped item), where it actually lives —
+ * the canonical show id it should be read/written under, and its real
+ * position within that group.
+ *
+ * This exists to keep a multi-megabyte JSON.parse off the metadata path
+ * (catalog.ts's groupedIdsFor call) and, more importantly, to give every
+ * tracker sync (MAL, Trakt, Simkl) one shared answer to "where does this
+ * title's progress/rating actually belong." Each tracker hands back its OWN
+ * id for a title, which for a merged franchise (e.g. "Naruto: Shippuuden")
+ * is a sibling's raw id, not this app's canonical grouped id — writing that
+ * progress under the sibling's own id, or under season 1 regardless of its
+ * real position, is exactly the bug that left grouped shows like Naruto/
+ * Naruto: Shippuuden and Bleach/Bleach: Sennen Kessen-hen never showing as
+ * watched even after a full sync.
+ *
+ * Invalidated by hand rather than given a TTL, because there are exactly
+ * two writers (catalog.ts's catalogData and its anime-grouping pass) — a
+ * stale index here would mean a grouped anime silently losing its later
+ * seasons, which is not something to leave to a timer.
+ */
+let animeGroupIndex: Map<string, string[]> | null = null
+
+/** See animeGroupIndex's own doc — built together in one pass since both read the same cached catalog blob. */
+let animeGroupPositionIndex: Map<string, { id: string; season: number }> | null = null
+
+export function invalidateAnimeGroupIndex(): void {
+  animeGroupIndex = null
+  animeGroupPositionIndex = null
+}
+
+function buildAnimeGroupIndexes(): void {
+  const items =
+    getDatabase().getCache<CatalogItem[]>('catalog:v2:anime', { allowExpired: true }) || []
+  const groupIndex = new Map<string, string[]>()
+  const positionIndex = new Map<string, { id: string; season: number }>()
+  for (const item of items) {
+    if (!item.groupedIds?.length) continue
+    const id = String(item.id)
+    groupIndex.set(id, item.groupedIds as string[])
+    // The canonical item is always season 1 of its own group by
+    // construction — see buildGroupedAnimeVideos above, which assigns
+    // season numbers the same way (canonical = i+1 for i=0).
+    positionIndex.set(id, { id, season: 1 })
+    item.groupedIds.forEach((siblingId, index) => {
+      positionIndex.set(String(siblingId), { id, season: index + 2 })
+    })
+  }
+  animeGroupIndex = groupIndex
+  animeGroupPositionIndex = positionIndex
+}
+
+export function groupedIdsFor(catalogId: string): string[] | undefined {
+  if (!animeGroupIndex) buildAnimeGroupIndexes()
+  return animeGroupIndex!.get(String(catalogId))
+}
+
+/**
+ * Resolves any raw anime catalog id to where it actually belongs: the
+ * canonical show id every read/write in this app keys watch history and
+ * ratings on, plus its real season number within that group. An id with no
+ * group (including a canonical item with no siblings, or a title that was
+ * never grouped at all) resolves to itself at season 1 — the same season
+ * buildGroupedAnimeVideos assigns an ungrouped title's own videos to. See
+ * animeGroupIndex's own doc for why this matters to every tracker sync.
+ */
+export function resolveAnimeGroupTarget(catalogId: string): { id: string; season: number } {
+  if (!animeGroupPositionIndex) buildAnimeGroupIndexes()
+  return animeGroupPositionIndex!.get(String(catalogId)) || { id: String(catalogId), season: 1 }
+}
+
+/**
  * Builds the full multi-season episode list for a grouped anime's detail
  * page. canonical.groupedIds (set by groupAnimeCatalog) gives the sibling
  * ids in season order; the canonical item itself is always season 1 of the
