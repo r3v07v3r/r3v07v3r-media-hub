@@ -19,6 +19,7 @@ import type {
 } from '@shared/media-hub/types'
 import { episodeWatchState } from '@shared/media-hub/catalog-logic'
 import { recommendationReasonLabel } from '@shared/media-hub/recommendationReason'
+import { parseRuntimeMinutes } from '@shared/media-hub/runtime'
 import type { OllamaTitleRef } from '@shared/media-hub/ollama'
 import type { MediaItem, MediaType, Recommendation } from '@renderer/types'
 import { initialsFromTitle, tintFromSeed } from './tint'
@@ -102,11 +103,6 @@ export function mediaItemToTrackablePayload(media: MediaItem): {
     year: media.releaseYear ? String(media.releaseYear) : '',
     ...(media.totalEpisodes != null ? { totalEpisodes: media.totalEpisodes } : {})
   }
-}
-
-function parseRuntimeMinutes(runtime: string): number | undefined {
-  const n = parseInt(runtime, 10)
-  return Number.isFinite(n) && n > 0 ? n : undefined
 }
 
 function parseYear(year: string): number | undefined {

@@ -10,6 +10,7 @@ import { DatabaseSync, type SQLOutputValue, type StatementSync } from 'node:sqli
 import { readBackup, restoreBackup, writeBackup, type RestoreSummary } from './backup'
 import { migrate } from './migrations'
 import { MAX_RATING, MIN_RATING, ratingWeight } from '../../shared/media-hub/rating'
+import { runtimeMinutesOrZero } from '../../shared/media-hub/runtime'
 import type {
   CatalogItem,
   Episode,
@@ -106,34 +107,6 @@ function latestReleased(videos: EpisodeLike[] | undefined, now: Date): EpisodePo
 // (e.g. `metadata_json TEXT NOT NULL` -> `string`) rather than leaving the
 // value as `SQLOutputValue` throughout.
 type Row = Record<string, SQLOutputValue>
-
-/**
- * A stored runtime as a number of minutes.
- *
- * The value is a DISPLAY string from whichever source supplied the title —
- * "48 min", "2h 15m", "1 h 30", or a bare "148" — so the shape has to be
- * recognised rather than assumed. Taking the first number, which is what this
- * used to do, read "2h 15m" as two minutes: a comment listing that exact form
- * as supported sat directly above the regex that could not parse it, and the
- * stats under-reported a film by most of its length.
- *
- * Anything unrecognisable is 0 rather than a guess — a title contributing
- * nothing to an estimate is honest, where a wrong number is not.
- */
-function runtimeMinutes(value: unknown): number {
-  const text = String(value ?? '').toLowerCase()
-  if (!text) return 0
-  // An explicit hours-and-minutes form wins, including when the minutes are
-  // absent ("2h") or unlabelled ("1 h 30").
-  const hours = text.match(/(\d+)\s*h/)
-  if (hours) {
-    const rest = text.slice(text.indexOf(hours[0]) + hours[0].length)
-    const minutes = rest.match(/(\d+)/)
-    return Number(hours[1]) * 60 + (minutes ? Number(minutes[1]) : 0)
-  }
-  const plain = text.match(/(\d+)/)
-  return plain ? Number(plain[1]) : 0
-}
 
 function toEpisodePosition(row: Row | undefined): EpisodePosition {
   if (!row) return { season: 0, episode: 0 }
@@ -749,7 +722,7 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
           }
 
           if (!runtimeByTitle.has(id)) {
-            runtimeByTitle.set(id, runtimeMinutes(meta.runtime))
+            runtimeByTitle.set(id, runtimeMinutesOrZero(meta.runtime))
           }
           minutes += runtimeByTitle.get(id) ?? 0
 
