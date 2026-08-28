@@ -31,6 +31,13 @@
   grid-template-columns: minmax(260px, 0.9fr) minmax(270px, 0.7fr);
   align-items: stretch;
 }
+.heroClickable {
+  cursor: pointer;
+}
+.heroClickable:focus-visible {
+  outline: 2px solid var(--library-cyan);
+  outline-offset: 3px;
+}
 .heroEnergy {
   position: absolute;
   z-index: -2;
@@ -176,17 +183,6 @@
 .featuredCopy p svg {
   color: var(--accent-yellow);
 }
-.featuredCopy button {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 8px 0 4px;
-  margin-top: 10px;
-  font-size: 12px;
-  color: var(--text-primary);
-  border-bottom: 1px solid rgba(80, 230, 255, 0.55);
-  text-shadow: 0 2px 6px rgba(0, 0, 0, 0.94);
-}
 .heroSelector {
   position: absolute;
   left: 35px;
@@ -240,6 +236,20 @@
 .shelf {
   min-width: 0;
   margin-top: 27px;
+}
+.shelfCollapsed {
+  margin-top: 18px;
+}
+.shelfCollapsed .shelfHeading {
+  margin-bottom: 0;
+  padding: 12px 15px;
+  border: 1px dashed var(--border-subtle);
+  border-radius: 14px;
+  background: linear-gradient(135deg, rgba(32, 42, 69, 0.3), rgba(8, 13, 25, 0.25));
+}
+.shelfCollapsed .shelfHeading h2 {
+  color: var(--text-secondary);
+  font-size: 15px;
 }
 .shelfHeading {
   display: flex;
