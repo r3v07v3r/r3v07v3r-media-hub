@@ -50,12 +50,17 @@
   position: absolute;
   z-index: -1;
   inset: 0 0 0 auto;
-  width: 67%;
+  width: 71%;
   height: 100%;
   object-fit: cover;
   object-position: center;
   opacity: 0.9;
   filter: saturate(1.18) contrast(1.08);
+  /* The art enters as a broad fade, not as a rectangular backdrop that
+     begins halfway through the hero. The hero's atmospheric shade below
+     reinforces this, but the mask does the actual edge-softening. */
+  -webkit-mask-image: linear-gradient(to right, transparent 0%, rgba(0, 0, 0, 0.24) 14%, #000 37%);
+  mask-image: linear-gradient(to right, transparent 0%, rgba(0, 0, 0, 0.24) 14%, #000 37%);
 }
 .heroShade {
   position: absolute;
@@ -66,8 +71,10 @@
     linear-gradient(
       90deg,
       rgba(3, 7, 19, 0.98) 0%,
-      rgba(3, 7, 19, 0.8) 31%,
-      rgba(3, 7, 19, 0.2) 69%,
+      rgba(3, 7, 19, 0.93) 24%,
+      rgba(3, 7, 19, 0.71) 40%,
+      rgba(3, 7, 19, 0.28) 60%,
+      rgba(3, 7, 19, 0.36) 80%,
       rgba(3, 7, 19, 0.62) 100%
     ),
     linear-gradient(0deg, rgba(3, 7, 19, 0.72), transparent 54%);
@@ -80,7 +87,8 @@
 }
 .heroContent {
   padding: 34px 34px 27px;
-  align-self: end;
+  align-self: center;
+  transform: translateY(-10px);
 }
 .heroKicker,
 .eyebrow,
@@ -124,7 +132,10 @@
 }
 .featuredCopy {
   align-self: center;
-  padding: 29px 29px 29px 10%;
+  padding: 29px 34px 29px clamp(82px, 8vw, 148px);
+  text-shadow:
+    0 2px 3px rgba(0, 0, 0, 0.92),
+    0 7px 22px rgba(0, 0, 0, 0.82);
 }
 .featuredCopy > span {
   color: var(--anime-cyan);
@@ -137,6 +148,9 @@
   margin: 7px 0;
   max-width: 320px;
   font: 700 clamp(22px, 2.2vw, 34px)/0.98 var(--font-display);
+  text-shadow:
+    0 2px 3px rgba(0, 0, 0, 0.96),
+    0 8px 26px rgba(0, 0, 0, 0.9);
 }
 .featuredCopy p {
   display: flex;
@@ -159,6 +173,7 @@
   font-size: 12px;
   color: var(--text-primary);
   border-bottom: 1px solid rgba(80, 230, 255, 0.55);
+  text-shadow: 0 2px 6px rgba(0, 0, 0, 0.94);
 }
 .heroSelector {
   position: absolute;
