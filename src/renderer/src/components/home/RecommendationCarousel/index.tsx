@@ -107,10 +107,10 @@ export function RecommendationCarousel() {
   }
 
   return (
-    <section className={styles.section} aria-label="AI picks for you">
+    <section className={styles.section} aria-label="Recommended for you">
       <h2 className={styles.heading}>
         <Icon name="sparkle" />
-        AI Picks For You
+        Recommended For You
       </h2>
       {/* A populated row can be a failure too, and used to say nothing
           about it: a cold start whose home:personalized threw still has

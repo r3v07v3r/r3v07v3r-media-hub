@@ -1,6 +1,6 @@
 'use client'
 
-import { useMemo, useRef, useState } from 'react'
+import { useCallback, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { useAppState } from '@renderer/context/AppStateContext'
 import { Icon } from '@renderer/components/icons/Icon'
@@ -22,6 +22,9 @@ import { CategoryFilterBar } from './CategoryFilterBar'
 import styles from './AnimeLibraryPage.module.css'
 
 function formatEpisodes(media: MediaItem): string {
+  if (media.mediaKind === 'movie' || media.mediaType === 'movie') {
+    return media.runtimeMinutes ? `${media.runtimeMinutes} min` : 'Feature film'
+  }
   if (media.totalEpisodes) return `${media.totalEpisodes} episodes`
   if (media.seasonNumber && media.episodeNumber)
     return `S${media.seasonNumber} · E${media.episodeNumber}`
@@ -31,8 +34,13 @@ function formatEpisodes(media: MediaItem): string {
 }
 
 function score(media: MediaItem): string | null {
-  const value = media.communityRating ?? media.imdbRating
-  return value ? value.toFixed(1) : null
+  return media.communityRating !== undefined ? media.communityRating.toFixed(1) : null
+}
+
+function mediaKindLabel(media: MediaItem): string {
+  if (media.mediaKind === 'anime') return 'Anime'
+  if (media.mediaKind === 'movie' || media.mediaType === 'movie') return 'Movie'
+  return 'Series'
 }
 
 function uniqueItems(items: MediaItem[]): MediaItem[] {
@@ -81,13 +89,10 @@ function AnimeShelf({
   return (
     <section className={styles.shelf} aria-label={title}>
       <div className={styles.shelfHeading}>
-        <div>
-          <span className={styles.eyebrow}>
-            <Icon name={icon} size={14} />
-            Library rail
-          </span>
-          <h2>{title}</h2>
-        </div>
+        <h2>
+          <Icon name={icon} size={17} />
+          {title}
+        </h2>
         {items.length > 0 && (
           <div className={styles.shelfControls}>
             <span>{items.length} titles</span>
@@ -180,11 +185,68 @@ function AnimeTile({
         <div className={styles.tileCopy}>
           <span>{media.title}</span>
           <small>
-            {media.releaseYear ?? 'New'} · {formatEpisodes(media)}
+            {mediaKindLabel(media)} · {media.releaseYear ?? 'New'} · {formatEpisodes(media)}
           </small>
         </div>
       </article>
     </li>
+  )
+}
+
+/** A deliberately separate grid at the foot of the page: only its first
+ * batch mounts initially, then the sentinel grows it as the person scrolls
+ * the app's main pane. This keeps a large library from fetching every piece
+ * of art merely because the Anime page opened. */
+function EverythingSection({ items, selectedId, onSelect, onOpen, emptyMessage }: ShelfProps) {
+  const [visibleCount, setVisibleCount] = useState(24)
+  const observerRef = useRef<IntersectionObserver | null>(null)
+  const sentinelRef = useCallback(
+    (node: HTMLLIElement | null) => {
+      observerRef.current?.disconnect()
+      observerRef.current = null
+      if (!node) return
+      const observer = new IntersectionObserver(
+        (entries) => {
+          if (entries[0]?.isIntersecting) {
+            setVisibleCount((count) => Math.min(count + 24, items.length))
+          }
+        },
+        { rootMargin: '900px' }
+      )
+      observer.observe(node)
+      observerRef.current = observer
+    },
+    [items.length]
+  )
+  const visibleItems = items.slice(0, visibleCount)
+  const hasMore = visibleCount < items.length
+
+  return (
+    <section className={styles.everything} aria-label="Everything">
+      <div className={styles.shelfHeading}>
+        <h2>
+          <Icon name="grid" size={17} />
+          Everything
+        </h2>
+        {items.length > 0 && <span className={styles.everythingCount}>{items.length} titles</span>}
+      </div>
+      {items.length === 0 ? (
+        <EmptyShelf message={emptyMessage} />
+      ) : (
+        <ul className={styles.everythingGrid}>
+          {visibleItems.map((media) => (
+            <AnimeTile
+              key={media.id}
+              media={media}
+              selected={media.id === selectedId}
+              onSelect={onSelect}
+              onOpen={onOpen}
+            />
+          ))}
+          {hasMore && <li ref={sentinelRef} className={styles.loadSentinel} aria-hidden="true" />}
+        </ul>
+      )}
+    </section>
   )
 }
 
@@ -201,7 +263,9 @@ function AnimeDetails({ media }: { media: MediaItem | null }) {
   }
 
   const artwork = resolveArtwork(media)
-  const rating = score(media)
+  const communityRating = score(media)
+  const imdbRating = media.imdbRating?.toFixed(1)
+  const rottenTomatoesRating = media.rottenTomatoesRating
   const isResolving = resolvingMedia?.id === media.id
 
   return (
@@ -230,15 +294,29 @@ function AnimeDetails({ media }: { media: MediaItem | null }) {
       </div>
 
       <div className={styles.detailScores}>
-        <span>
-          <Icon name="star" size={15} />
-          <b>{rating ?? '—'}</b>
-          Community
-        </span>
-        {media.matchPercentage !== undefined && (
+        {communityRating && (
           <span>
-            <b>{media.matchPercentage}%</b>
-            Match
+            <Icon name="star" size={15} />
+            <b>{communityRating}</b>
+            Community
+          </span>
+        )}
+        {imdbRating && (
+          <span>
+            <b>{imdbRating}</b>
+            IMDb
+          </span>
+        )}
+        {rottenTomatoesRating !== undefined && (
+          <span>
+            <b>{rottenTomatoesRating}%</b>
+            Rotten Tomatoes
+          </span>
+        )}
+        {!communityRating && !imdbRating && rottenTomatoesRating === undefined && (
+          <span>
+            <b>—</b>
+            Ratings unavailable
           </span>
         )}
       </div>
@@ -299,6 +377,7 @@ export function AnimeLibraryPage() {
     catalogKindStates,
     refreshCatalog,
     continueWatching,
+    recommendations,
     categorySearch,
     clearCategorySearch,
     mediaHubSettings,
@@ -365,11 +444,20 @@ export function AnimeLibraryPage() {
       )
       .slice(0, 18)
   }, [browseItems, library])
+  // Recommendations come from the personalised home feed, which ranks the
+  // whole catalog. Keeping this rail unfiltered is intentional: the point is
+  // to surface Movies, Series, and Anime alongside the page's anime library.
+  const recommended = useMemo(
+    () => uniqueItems(recommendations.map((recommendation) => recommendation.media)).slice(0, 18),
+    [recommendations]
+  )
+  const everythingKey = useMemo(() => browseItems.map((item) => item.id).join('|'), [browseItems])
   const selected = useMemo(
     () =>
-      [...browseItems, ...continuing, ...heroItems].find((item) => item.id === selectedId) ??
-      activeHero,
-    [activeHero, browseItems, continuing, heroItems, selectedId]
+      [...browseItems, ...continuing, ...recommended, ...heroItems].find(
+        (item) => item.id === selectedId
+      ) ?? activeHero,
+    [activeHero, browseItems, continuing, heroItems, recommended, selectedId]
   )
   const kindState = catalogKindStates.anime
   const heroArt = activeHero ? resolveArtwork(activeHero) : null
@@ -498,6 +586,15 @@ export function AnimeLibraryPage() {
               emptyMessage="Start an anime and its next episode will wait here."
             />
             <AnimeShelf
+              title="Recommended for you"
+              icon="sparkle"
+              items={recommended}
+              selectedId={selected?.id ?? null}
+              onSelect={(media) => setSelectedId(media.id)}
+              onOpen={openDetail}
+              emptyMessage="Watch a few titles and personalised recommendations will appear here."
+            />
+            <AnimeShelf
               title="Popular in your library"
               icon="sparkle"
               items={popular}
@@ -515,16 +612,26 @@ export function AnimeLibraryPage() {
           </>
         )}
 
+        <EverythingSection
+          key={everythingKey}
+          title="Everything"
+          icon="grid"
+          items={browseItems}
+          selectedId={selected?.id ?? null}
+          onSelect={(media) => setSelectedId(media.id)}
+          onOpen={openDetail}
+          emptyMessage={
+            searchActive
+              ? 'No titles matched that search.'
+              : 'Try widening a filter or clearing it to see more anime.'
+          }
+        />
+
         {searchActive && (
           <button type="button" className={styles.clearSearch} onClick={clearCategorySearch}>
             <Icon name="x" size={13} />
             Clear anime search
           </button>
-        )}
-        {!searchActive && browseItems.length === 0 && kindState !== 'loading' && (
-          <p className={styles.noResults}>
-            Try widening a filter or clearing it to see more anime.
-          </p>
         )}
       </main>
 
