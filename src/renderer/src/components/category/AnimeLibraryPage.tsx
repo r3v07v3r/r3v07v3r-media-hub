@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { useLocation, useSearchParams } from 'react-router-dom'
 import { useAppState } from '@renderer/context/AppStateContext'
 import { Icon } from '@renderer/components/icons/Icon'
 import { ArtworkImage } from '@renderer/components/media/ArtworkImage'
@@ -18,7 +18,7 @@ import {
 } from '@renderer/lib/mediaHub/categoryFilters'
 import { ANIME_CONFIG, type CategoryConfig } from '@renderer/lib/mediaHub/categoryConfig'
 import { useRestoreBrowsingOrigin } from '@renderer/lib/mediaHub/useRestoreBrowsingOrigin'
-import { listChange } from '@renderer/lib/mediaHub/listChange'
+import { useBatchReveal } from '@renderer/lib/mediaHub/useBatchReveal'
 import { CategoryFilterBar } from './CategoryFilterBar'
 import styles from './AnimeLibraryPage.module.css'
 
@@ -214,7 +214,8 @@ function EverythingSection({
   onSelect,
   onOpen,
   emptyMessage,
-  initialVisibleCount
+  initialVisibleCount,
+  viewKey
 }: ShelfProps & {
   /** Seeds the initial reveal batch above EVERYTHING_BATCH — used when
    *  restoring a browsing position (see useRestoreBrowsingOrigin) whose
@@ -223,28 +224,21 @@ function EverythingSection({
    *  restore step to find and scroll to. Only matters on this
    *  component's first mount (a plain useState initializer). */
   initialVisibleCount?: number
+  /** Identifies the current browse view (filters + sort + search state —
+   *  see LibraryPage's own `viewKey`) — the reveal count resets to
+   *  EVERYTHING_BATCH only when THIS changes, not on every `items`
+   *  reference change. See useBatchReveal's own doc comment for why a
+   *  content-only diff can't be trusted to tell a genuine filter/sort/
+   *  search change apart from a catalog-side edit (mark one watched,
+   *  hide-watched dropping a title) within the same view. */
+  viewKey: string
 }) {
-  const [visibleCount, setVisibleCount] = useState(initialVisibleCount ?? EVERYTHING_BATCH)
-  // Mirrors MediaGrid.tsx's own reset logic (see listChange there) rather
-  // than remounting this section on every list change via a `key` prop —
-  // marking a title watched/completed from LibraryDetails re-derives
-  // `browseItems` (a new array, same titles) or, with a hide-watched
-  // filter on, genuinely drops one id from it. A `key`-driven remount
-  // reset visibleCount to EVERYTHING_BATCH either way, collapsing a grid
-  // someone had scrolled hundreds of tiles into and letting the browser
-  // clamp their scroll position back up. `listChange` tells "same"/
-  // "edited"/"different" apart so only a real filter/sort/search change
-  // resets the reveal depth.
-  const [itemsForReset, setItemsForReset] = useState(items)
-  if (itemsForReset !== items) {
-    setItemsForReset(items)
-    const change = listChange(itemsForReset, items)
-    if (change === 'different') {
-      setVisibleCount(EVERYTHING_BATCH)
-    } else if (change === 'edited') {
-      setVisibleCount((count) => Math.min(Math.max(count, EVERYTHING_BATCH), items.length))
-    }
-  }
+  const [visibleCount, setVisibleCount] = useBatchReveal(
+    items,
+    viewKey,
+    EVERYTHING_BATCH,
+    initialVisibleCount
+  )
   const itemsLengthRef = useRef(items.length)
   useEffect(() => {
     itemsLengthRef.current = items.length
@@ -264,7 +258,7 @@ function EverythingSection({
     )
     observer.observe(node)
     observerRef.current = observer
-  }, [])
+  }, [setVisibleCount])
   const visibleItems = items.slice(0, visibleCount)
   const hasMore = visibleCount < items.length
 
@@ -434,6 +428,7 @@ export function LibraryPage({ config }: { config: CategoryConfig }) {
     browsingOrigin
   } = useAppState()
   const [searchParams, setSearchParams] = useSearchParams()
+  const location = useLocation()
   const [heroIndex, setHeroIndex] = useState(0)
   const [selectedId, setSelectedId] = useState<string | null>(null)
 
@@ -468,6 +463,14 @@ export function LibraryPage({ config }: { config: CategoryConfig }) {
     [categorySearch.results, filters]
   )
   const browseItems = searchActive ? searchResults : filtered
+  // Identifies the current browse view for EverythingSection's
+  // reveal-depth reset (see useBatchReveal's own doc comment) — anything
+  // that changes this is a genuine filter/sort/search/kind change the
+  // person navigated to, not a catalog-side edit within the view they're
+  // already looking at.
+  const viewKey = searchActive
+    ? `${config.kind}:search:${categorySearch.query}`
+    : `${config.kind}:filters:${paramsString}`
   const heroItems = useMemo(() => {
     const ranking = [...(filtered.length ? filtered : library)]
     ranking.sort((a, b) => (b.communityRating ?? 0) - (a.communityRating ?? 0))
@@ -511,11 +514,21 @@ export function LibraryPage({ config }: { config: CategoryConfig }) {
   // contextual back navigation (see useRestoreBrowsingOrigin below) finds
   // that tile already mounted instead of it sitting past the default
   // first-24 cutoff.
+  //
+  // Gated on the origin's own route matching where we actually are, same
+  // as useRestoreBrowsingOrigin's own check below — without it, a title
+  // opened from Home/Search and then left via a DIFFERENT navigation
+  // (the sidebar, not contextual Back) leaves a stale BrowsingOrigin
+  // whose focusedItemId can still coincidentally match a catalog id here
+  // (Home's items and this library's are the same underlying catalog),
+  // seeding an arbitrarily deep reveal batch for a restore that
+  // useRestoreBrowsingOrigin correctly never runs.
   const restoreVisibleCount = useMemo(() => {
     if (!browsingOrigin?.focusedItemId) return undefined
+    if (`${location.pathname}${location.search}` !== browsingOrigin.route) return undefined
     const idx = browseItems.findIndex((item) => item.id === browsingOrigin.focusedItemId)
     return idx >= 0 ? Math.ceil((idx + 1) / EVERYTHING_BATCH) * EVERYTHING_BATCH : undefined
-  }, [browsingOrigin, browseItems])
+  }, [browsingOrigin, browseItems, location.pathname, location.search])
   const selected = useMemo(
     () =>
       [...browseItems, ...continuing, ...recommended, ...heroItems].find(
@@ -704,6 +717,7 @@ export function LibraryPage({ config }: { config: CategoryConfig }) {
           onSelect={(media) => setSelectedId(media.id)}
           onOpen={openDetail}
           initialVisibleCount={restoreVisibleCount}
+          viewKey={viewKey}
           emptyMessage={
             searchActive
               ? `No ${config.pluralLabel} matched that search.`
