@@ -1,9 +1,23 @@
 name: Verify
 
 on:
+  workflow_call:
+    inputs:
+      checkout-ref:
+        description: Optional branch, tag, or SHA to verify
+        required: false
+        type: string
+        default: ''
   pull_request: {}
   push:
-    branches: [preview, stable]
+    # Preview invokes this workflow as a required release gate. Keep the
+    # standalone push trigger for stable as a final defence against any
+    # update made outside the promotion workflow.
+    branches: [stable]
+
+concurrency:
+  group: verify-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -12,8 +26,11 @@ jobs:
   app:
     name: App checks
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.checkout-ref }}
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
@@ -22,21 +39,27 @@ jobs:
         run: npm ci --ignore-scripts
       - name: Lint
         run: npm run lint
-      - name: Typecheck
-        run: npm run typecheck
+      # Build includes the node + renderer typechecks and also catches
+      # bundler/import failures that tsc alone cannot see.
+      - name: Build
+        run: npm run build
+      - name: Typecheck daemon
+        run: npm run typecheck:daemon
       - name: Test
         run: npm test
-      # The current upstream advisories are high severity with no available
-      # fix. Still print the full audit and fail automatically if a critical
-      # advisory is introduced.
+      # Print all current production advisories while upstream fixes are
+      # unavailable, and fail automatically if a critical issue appears.
       - name: Audit production dependencies
         run: npm audit --omit=dev --audit-level=critical
 
   party-sync-worker:
     name: Party relay checks
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.checkout-ref }}
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
@@ -46,7 +69,10 @@ jobs:
         run: npm ci --prefix party-sync-worker
       - name: Typecheck relay
         run: npm run typecheck --prefix party-sync-worker
-      # Wrangler's current development dependency tree has an upstream-only
-      # high advisory. Keep it visible and fail if a critical issue appears.
+      - name: Build relay deployment
+        working-directory: party-sync-worker
+        run: npx wrangler deploy --dry-run
+      # Keep upstream-only advisories visible and fail if a critical issue
+      # appears.
       - name: Audit relay dependencies
         run: npm audit --prefix party-sync-worker --audit-level=critical
