@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { useAppState } from '@renderer/context/AppStateContext'
 import { Icon } from '@renderer/components/icons/Icon'
@@ -18,8 +18,13 @@ import {
 } from '@renderer/lib/mediaHub/categoryFilters'
 import { ANIME_CONFIG, type CategoryConfig } from '@renderer/lib/mediaHub/categoryConfig'
 import { useRestoreBrowsingOrigin } from '@renderer/lib/mediaHub/useRestoreBrowsingOrigin'
+import { listChange } from '@renderer/lib/mediaHub/listChange'
 import { CategoryFilterBar } from './CategoryFilterBar'
 import styles from './AnimeLibraryPage.module.css'
+
+/** EverythingSection's reveal batch size — how many more tiles mount each
+ *  time the scroll sentinel comes into view. */
+const EVERYTHING_BATCH = 24
 
 function formatLibraryMeta(media: MediaItem): string {
   if (media.mediaKind === 'movie' || media.mediaType === 'movie') {
@@ -203,27 +208,63 @@ function LibraryTile({
  * first batch mounts initially, then the sentinel grows it as the person
  * scrolls the app's main pane. This keeps a large catalog from fetching every
  * piece of art merely because one category page opened. */
-function EverythingSection({ items, selectedId, onSelect, onOpen, emptyMessage }: ShelfProps) {
-  const [visibleCount, setVisibleCount] = useState(24)
+function EverythingSection({
+  items,
+  selectedId,
+  onSelect,
+  onOpen,
+  emptyMessage,
+  initialVisibleCount
+}: ShelfProps & {
+  /** Seeds the initial reveal batch above EVERYTHING_BATCH — used when
+   *  restoring a browsing position (see useRestoreBrowsingOrigin) whose
+   *  focused tile was further down the list than one batch would
+   *  normally render, so it's actually present in the DOM for the
+   *  restore step to find and scroll to. Only matters on this
+   *  component's first mount (a plain useState initializer). */
+  initialVisibleCount?: number
+}) {
+  const [visibleCount, setVisibleCount] = useState(initialVisibleCount ?? EVERYTHING_BATCH)
+  // Mirrors MediaGrid.tsx's own reset logic (see listChange there) rather
+  // than remounting this section on every list change via a `key` prop —
+  // marking a title watched/completed from LibraryDetails re-derives
+  // `browseItems` (a new array, same titles) or, with a hide-watched
+  // filter on, genuinely drops one id from it. A `key`-driven remount
+  // reset visibleCount to EVERYTHING_BATCH either way, collapsing a grid
+  // someone had scrolled hundreds of tiles into and letting the browser
+  // clamp their scroll position back up. `listChange` tells "same"/
+  // "edited"/"different" apart so only a real filter/sort/search change
+  // resets the reveal depth.
+  const [itemsForReset, setItemsForReset] = useState(items)
+  if (itemsForReset !== items) {
+    setItemsForReset(items)
+    const change = listChange(itemsForReset, items)
+    if (change === 'different') {
+      setVisibleCount(EVERYTHING_BATCH)
+    } else if (change === 'edited') {
+      setVisibleCount((count) => Math.min(Math.max(count, EVERYTHING_BATCH), items.length))
+    }
+  }
+  const itemsLengthRef = useRef(items.length)
+  useEffect(() => {
+    itemsLengthRef.current = items.length
+  }, [items.length])
   const observerRef = useRef<IntersectionObserver | null>(null)
-  const sentinelRef = useCallback(
-    (node: HTMLLIElement | null) => {
-      observerRef.current?.disconnect()
-      observerRef.current = null
-      if (!node) return
-      const observer = new IntersectionObserver(
-        (entries) => {
-          if (entries[0]?.isIntersecting) {
-            setVisibleCount((count) => Math.min(count + 24, items.length))
-          }
-        },
-        { rootMargin: '900px' }
-      )
-      observer.observe(node)
-      observerRef.current = observer
-    },
-    [items.length]
-  )
+  const sentinelRef = useCallback((node: HTMLLIElement | null) => {
+    observerRef.current?.disconnect()
+    observerRef.current = null
+    if (!node) return
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0]?.isIntersecting) {
+          setVisibleCount((count) => Math.min(count + EVERYTHING_BATCH, itemsLengthRef.current))
+        }
+      },
+      { rootMargin: '900px' }
+    )
+    observer.observe(node)
+    observerRef.current = observer
+  }, [])
   const visibleItems = items.slice(0, visibleCount)
   const hasMore = visibleCount < items.length
 
@@ -389,7 +430,8 @@ export function LibraryPage({ config }: { config: CategoryConfig }) {
     categorySearch,
     clearCategorySearch,
     mediaHubSettings,
-    openDetail
+    openDetail,
+    browsingOrigin
   } = useAppState()
   const [searchParams, setSearchParams] = useSearchParams()
   const [heroIndex, setHeroIndex] = useState(0)
@@ -464,7 +506,16 @@ export function LibraryPage({ config }: { config: CategoryConfig }) {
       ).slice(0, 18),
     [recommendations, config.kind]
   )
-  const everythingKey = useMemo(() => browseItems.map((item) => item.id).join('|'), [browseItems])
+  // Seeds EverythingSection's reveal batch past wherever the previously-
+  // focused tile falls, rounded up to a clean batch boundary, so a
+  // contextual back navigation (see useRestoreBrowsingOrigin below) finds
+  // that tile already mounted instead of it sitting past the default
+  // first-24 cutoff.
+  const restoreVisibleCount = useMemo(() => {
+    if (!browsingOrigin?.focusedItemId) return undefined
+    const idx = browseItems.findIndex((item) => item.id === browsingOrigin.focusedItemId)
+    return idx >= 0 ? Math.ceil((idx + 1) / EVERYTHING_BATCH) * EVERYTHING_BATCH : undefined
+  }, [browsingOrigin, browseItems])
   const selected = useMemo(
     () =>
       [...browseItems, ...continuing, ...recommended, ...heroItems].find(
@@ -577,10 +628,12 @@ export function LibraryPage({ config }: { config: CategoryConfig }) {
             onChange={setFilters}
             resultCount={filtered.length}
           />
-          {kindState === 'failed' && library.length > 0 && (
+          {kindState === 'failed' && (
             <div className={styles.offlineBanner} role="status">
               <Icon name="wifi-off" size={15} />
-              Showing the last {config.label} library snapshot.
+              {library.length > 0
+                ? `Showing the last ${config.label} library snapshot.`
+                : `Couldn't reach the media hub backend.`}
               <button type="button" onClick={refreshCatalog}>
                 Retry
               </button>
@@ -644,13 +697,13 @@ export function LibraryPage({ config }: { config: CategoryConfig }) {
         )}
 
         <EverythingSection
-          key={everythingKey}
           title="Everything"
           icon="grid"
           items={browseItems}
           selectedId={selected?.id ?? null}
           onSelect={(media) => setSelectedId(media.id)}
           onOpen={openDetail}
+          initialVisibleCount={restoreVisibleCount}
           emptyMessage={
             searchActive
               ? `No ${config.pluralLabel} matched that search.`
