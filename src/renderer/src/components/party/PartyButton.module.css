@@ -63,3 +63,23 @@
   height: 30px;
   background: var(--border-subtle);
 }
+
+/* Below TopUtilityBar's own compact threshold (see the max-width:900px
+   rule in TopUtilityBar.module.css, which already sheds the clock's date
+   and the brand subtitle at this width) an always-visible label stops
+   being affordable: .status is a fixed-width flex row of icon controls,
+   and adding ~45px back to it here left the search capsule with nowhere
+   to go, overflowing the bar. Reverts to the icon-only circle every
+   other control in this row already is at this width — the badge still
+   shows a member count when in a room, so nothing readable is lost,
+   just the spelled-out word. */
+@media (max-width: 900px) {
+  .button {
+    min-width: 36px;
+    padding: 0 10px;
+    border-radius: 50%;
+  }
+  .label {
+    display: none;
+  }
+}
