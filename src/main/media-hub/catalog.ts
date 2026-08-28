@@ -51,6 +51,7 @@ import {
 import { isLikelyFranchiseSibling, rankSimilarTitles } from '../../shared/media-hub/catalog-logic'
 import { coalesce, coalesceScope, mapWithLimit, type TaskPriority } from './taskScheduler'
 import {
+  ANIME_GROUPED_KEY,
   buildGroupedAnimeVideos,
   groupAnimeCatalog,
   groupedIdsFor,
@@ -98,25 +99,6 @@ const CINEMETA_EXTRA_PAGES = 12
 const CINEMETA_PAGE_SIZE = 100
 
 const CATALOG_TTL_MS = 6 * 60 * 60 * 1000
-
-/**
- * Marks that the anime catalog currently in cache has been through the
- * franchise-grouping pass.
- *
- * Needed because the pass takes minutes and the raw catalog is cached
- * before it starts. Quit in between — closing the app during a crawl is
- * hardly exotic — and the next launch finds a perfectly valid six-hour
- * cache entry, returns it without ever reaching the grouping call, and
- * shows one tile per season for every multi-season franchise until that
- * entry expires. The hourly refresh honours the same cache, so it does
- * not rescue it either.
- *
- * A marker rather than inspecting the catalog for groupedIds: "no item
- * has any siblings" is indistinguishable from "never grouped" by
- * inspection, and guessing wrong there means re-running the largest
- * background job in the app on every cache hit, forever.
- */
-const ANIME_GROUPED_KEY = 'catalog:v2:anime:grouped'
 
 /**
  * How deep into Kitsu's popularity ranking the anime crawl walks, in

@@ -540,6 +540,54 @@ let animeGroupIndex: Map<string, string[]> | null = null
 /** See animeGroupIndex's own doc — built together in one pass since both read the same cached catalog blob. */
 let animeGroupPositionIndex: Map<string, { id: string; season: number }> | null = null
 
+/**
+ * Marks that the anime catalog currently in cache has been through the
+ * franchise-grouping pass.
+ *
+ * Needed because the pass takes minutes and the raw catalog is cached
+ * before it starts. Quit in between — closing the app during a crawl is
+ * hardly exotic — and the next launch finds a perfectly valid six-hour
+ * cache entry, returns it without ever reaching the grouping call, and
+ * shows one tile per season for every multi-season franchise until that
+ * entry expires. The hourly refresh honours the same cache, so it does
+ * not rescue it either.
+ *
+ * A marker rather than inspecting the catalog for groupedIds: "no item
+ * has any siblings" is indistinguishable from "never grouped" by
+ * inspection, and guessing wrong there means re-running the largest
+ * background job in the app on every cache hit, forever.
+ *
+ * Written by catalog.ts (which owns the crawl and the grouping pass); it
+ * lives here because resolveAnimeGroupTarget below is the other reader
+ * that genuinely cannot work without it — see animeGroupingReady.
+ */
+export const ANIME_GROUPED_KEY = 'catalog:v2:anime:grouped'
+
+/**
+ * Whether the anime catalog currently in cache has been grouped, so
+ * resolveAnimeGroupTarget can actually distinguish a merged franchise's
+ * sibling from an ungrouped title.
+ *
+ * Every tracker sync has to check this BEFORE resolving anything. Until
+ * the pass has run, the position index is empty and every id resolves to
+ * itself at season 1 — which is not a neutral fallback, it is precisely
+ * the wrong answer this whole change exists to stop writing: a sibling's
+ * own id at a season nothing reads. A sync started from Settings during
+ * that window would write exactly the unreadable rows it was meant to
+ * fix, and invalidating the index later cannot repair ids already
+ * committed to the database. Two windows to care about, not just a fresh
+ * install: catalog.ts also stamps this false whenever it caches a newly
+ * crawled raw catalog, for the minutes until that catalog is grouped.
+ *
+ * Read with allowExpired to match groupedIdsFor, which reads the catalog
+ * blob itself on the same terms — an aged-out `true` still describes the
+ * aged-out catalog the index would be built from, so refusing on it would
+ * block a sync over data that is in fact perfectly groupable.
+ */
+export function animeGroupingReady(): boolean {
+  return getDatabase().getCache<boolean>(ANIME_GROUPED_KEY, { allowExpired: true }) === true
+}
+
 export function invalidateAnimeGroupIndex(): void {
   animeGroupIndex = null
   animeGroupPositionIndex = null

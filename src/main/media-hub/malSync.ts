@@ -26,7 +26,7 @@ import type {
   MalStatus,
   MediaKind
 } from '../../shared/media-hub/types'
-import { resolveAnimeGroupTarget } from './animeSeasons'
+import { animeGroupingReady, resolveAnimeGroupTarget } from './animeSeasons'
 import { getDatabase } from './dbState'
 import { fetchJson } from './httpClient'
 import { crossIdsForKitsu, kitsuIdForExternal } from './idBridge'
@@ -334,6 +334,16 @@ export function registerMalIpc(): void {
   })
 
   handle<undefined, MalReconcilePreview>(MEDIA_HUB_CHANNELS.malReconcilePreview, async () => {
+    // Nothing on a MAL list is anything but anime, so unlike the Trakt
+    // import there is no "no anime here" case to let through: without the
+    // grouping pass every entry would resolve to itself at season 1 and
+    // the whole preview would be built on the unreadable ids this change
+    // exists to stop writing. See animeGroupingReady.
+    if (!animeGroupingReady()) {
+      throw new Error(
+        'Your anime library is still being organised in the background — try again once it has finished.'
+      )
+    }
     const rawEntries = await fetchAllMalAnimeList()
     const malEntries = rawEntries.map((entry) => normalizeMalEntry(entry as never))
     const withKitsuIds = await Promise.all(
@@ -377,6 +387,15 @@ export function registerMalIpc(): void {
   handle<MalReconcilePreview, MalReconcileApplyResult>(
     MEDIA_HUB_CHANNELS.malReconcileApply,
     async (_event, diff) => {
+      // Re-checked rather than trusted from the preview that produced this
+      // diff: the marker goes back to false whenever a newly crawled raw
+      // catalog is cached (see animeGroupingReady), which can happen in
+      // between somebody pressing Preview and pressing Apply.
+      if (!animeGroupingReady()) {
+        throw new Error(
+          'Your anime library is still being organised in the background — preview the sync again once it has finished.'
+        )
+      }
       const results: MalReconcileApplyResult = { toLocal: [], toMal: [], ratings: [], errors: [] }
 
       for (const item of diff?.toLocal || []) {

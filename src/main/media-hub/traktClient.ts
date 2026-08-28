@@ -23,7 +23,7 @@ import type {
   TraktStartResult,
   TraktStatusResult
 } from '../../shared/media-hub/types'
-import { resolveAnimeGroupTarget } from './animeSeasons'
+import { animeGroupingReady, resolveAnimeGroupTarget } from './animeSeasons'
 import { fetchJson } from './httpClient'
 import { kitsuIdForExternal } from './idBridge'
 import { handle } from './ipcGuard'
@@ -430,11 +430,32 @@ async function readAllPages(pathname: string): Promise<{ rows: unknown[]; trunca
 async function imdbToAnimeTargets(
   imdbIds: string[]
 ): Promise<Map<string, { id: string; season: number }>> {
-  const targets = new Map<string, { id: string; season: number }>()
+  const kitsuIds = new Map<string, number>()
   await mapWithLimit(imdbIds, async (imdbId) => {
     const kitsuId = await kitsuIdForExternal('imdb', imdbId, 'background')
-    if (kitsuId) targets.set(imdbId, resolveAnimeGroupTarget(`kitsu:${kitsuId}`))
+    if (kitsuId) kitsuIds.set(imdbId, kitsuId)
   })
+
+  // Resolved to anime, but with no grouping to resolve them AGAINST: every
+  // id would come back as itself at season 1, which for a merged
+  // franchise's sibling is the exact unreadable row this change exists to
+  // stop writing (see animeGroupingReady). Refusing is the honest move —
+  // an import is repeatable by design, and the alternative is silently
+  // committing ids that a later grouping pass cannot go back and fix.
+  //
+  // Deliberately checked only once something actually resolved to anime:
+  // a library with no anime in it has nothing riding on the grouping pass
+  // and has no business being blocked on it.
+  if (kitsuIds.size && !animeGroupingReady()) {
+    throw new Error(
+      'Your anime library is still being organised in the background — run the import again once it has finished.'
+    )
+  }
+
+  const targets = new Map<string, { id: string; season: number }>()
+  for (const [imdbId, kitsuId] of kitsuIds) {
+    targets.set(imdbId, resolveAnimeGroupTarget(`kitsu:${kitsuId}`))
+  }
   return targets
 }
 
@@ -517,6 +538,15 @@ export async function importTraktLibrary(): Promise<ImportSummary> {
     )
   )
   const animeTargets = await imdbToAnimeTargets(seriesImdbIds)
+
+  // Checked again, not just after the page reads above: the id resolution
+  // is itself a long run of network lookups, and a profile switch during
+  // it would pour this profile's Trakt library into whoever is active by
+  // the time the writes below run — the same failure the guard above
+  // exists to prevent, on the other side of a second await.
+  if (db.activeProfile() !== profile) {
+    throw new Error('Profile changed while importing — nothing was written.')
+  }
 
   const remappedPlays = remapAnimePlays(plays.rows, animeTargets)
   const remappedRatings = rated.flatMap((parsed) => remapAnimeRatings(parsed.rows, animeTargets))
