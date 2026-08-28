@@ -18,10 +18,13 @@ import type { ActivityTracker } from './activity'
 import { canRestartNow } from './activity'
 import { stagedBundlePath, versionsDir } from './launcher'
 import {
-  isAllowedUpdateUrl,
+  isAllowedAssetUrl,
+  isAllowedRedirectUrl,
+  repoFromFeedUrl,
   selectUpdate,
   type FeedRelease,
-  type UpdateChannel
+  type UpdateChannel,
+  type UpdateUrlPolicy
 } from './updateFeed'
 
 const DEFAULT_FEED = 'https://api.github.com/repos/R3v07v3R/r3v07v3r-media-hub/releases?per_page=15'
@@ -36,6 +39,8 @@ const FIRST_CHECK_DELAY_MS = Number(process.env.R3_CACHE_UPDATE_FIRST_MS) || 5 *
 /** How often a staged update re-asks "is now a quiet moment?". */
 const APPLY_POLL_MS = Number(process.env.R3_CACHE_UPDATE_APPLY_MS) || 5 * 60 * 1000
 const MAX_BUNDLE_BYTES = 20 * 1024 * 1024
+const MAX_FEED_BYTES = 4 * 1024 * 1024
+const MAX_REDIRECTS = 5
 
 export interface UpdaterStatus {
   channel: UpdateChannel
@@ -74,7 +79,12 @@ export interface Updater {
 export function createUpdater(deps: UpdaterDeps): Updater {
   const fetchImpl = deps.fetchImpl ?? globalThis.fetch
   const feedUrl = deps.feedUrl ?? process.env.R3_CACHE_UPDATE_FEED ?? DEFAULT_FEED
-  const feedOverrideHost = feedUrl === DEFAULT_FEED ? undefined : new URL(feedUrl).hostname
+  // The download pin is derived from the feed, so "which repo do we
+  // trust" is stated once and cannot drift from "which repo do we poll".
+  const policy: UpdateUrlPolicy = {
+    repo: repoFromFeedUrl(feedUrl),
+    overrideHost: feedUrl === DEFAULT_FEED ? undefined : new URL(feedUrl).hostname
+  }
 
   let checkTimer: NodeJS.Timeout | null = null
   let applyTimer: NodeJS.Timeout | null = null
@@ -89,18 +99,68 @@ export function createUpdater(deps: UpdaterDeps): Updater {
     lastError: ''
   }
 
-  async function download(url: string, maxBytes: number): Promise<Buffer> {
-    if (!isAllowedUpdateUrl(url, feedOverrideHost)) {
-      throw new Error(`update URL not allowed: ${new URL(url).hostname}`)
+  /**
+   * Reads a response body with the cap enforced WHILE STREAMING.
+   *
+   * The first version buffered the whole body and checked its length
+   * afterwards, which is not a cap at all — a hostile host could stream
+   * gigabytes and exhaust memory before the check ran. Content-Length is
+   * honoured up front when offered, and the running total aborts the read
+   * the moment it exceeds the limit either way.
+   */
+  async function readCapped(response: Response, maxBytes: number): Promise<Buffer> {
+    const declared = Number(response.headers.get('content-length'))
+    if (Number.isFinite(declared) && declared > maxBytes) {
+      throw new Error('download larger than expected')
     }
-    const response = await fetchImpl(url, {
-      headers: { Accept: 'application/octet-stream', 'User-Agent': 'r3-cache' },
-      redirect: 'follow'
-    })
-    if (!response.ok) throw new Error(`download failed (${response.status})`)
-    const body = Buffer.from(await response.arrayBuffer())
-    if (body.length > maxBytes) throw new Error('download larger than expected')
-    return body
+    if (!response.body) throw new Error('download had no body')
+    const reader = response.body.getReader()
+    const chunks: Buffer[] = []
+    let total = 0
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      total += value.length
+      if (total > maxBytes) {
+        await reader.cancel()
+        throw new Error('download larger than expected')
+      }
+      chunks.push(Buffer.from(value))
+    }
+    return Buffer.concat(chunks)
+  }
+
+  /**
+   * Fetches an update asset, re-validating EVERY redirect hop.
+   *
+   * redirect:'follow' checked only the first URL, which made the pin
+   * bypassable by any redirect an allowed host could be induced to issue.
+   * Manual redirects mean the chain must start at a repo-pinned release
+   * download and may only continue onto GitHub's asset CDN.
+   */
+  async function download(url: string, maxBytes: number): Promise<Buffer> {
+    if (!isAllowedAssetUrl(url, policy)) {
+      throw new Error(`update asset URL not allowed: ${new URL(url).hostname}`)
+    }
+    let current = url
+    for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
+      const response = await fetchImpl(current, {
+        headers: { Accept: 'application/octet-stream', 'User-Agent': 'r3-cache' },
+        redirect: 'manual'
+      })
+      if (response.status >= 300 && response.status < 400) {
+        const location = response.headers.get('location')
+        if (!location) throw new Error('update redirect had no destination')
+        current = new URL(location, current).toString()
+        if (!isAllowedRedirectUrl(current, policy)) {
+          throw new Error(`update redirected off-allowlist: ${new URL(current).hostname}`)
+        }
+        continue
+      }
+      if (!response.ok) throw new Error(`download failed (${response.status})`)
+      return readCapped(response, maxBytes)
+    }
+    throw new Error('update redirected too many times')
   }
 
   async function checkOnce(): Promise<void> {
@@ -109,7 +169,10 @@ export function createUpdater(deps: UpdaterDeps): Updater {
         headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'r3-cache' }
       })
       if (!response.ok) throw new Error(`feed answered ${response.status}`)
-      const releases = (await response.json()) as FeedRelease[]
+      // Capped like any other download — a feed is an untrusted body too.
+      const releases = JSON.parse(
+        (await readCapped(response, MAX_FEED_BYTES)).toString('utf8')
+      ) as FeedRelease[]
       status.checkedAt = Date.now()
 
       const candidate = selectUpdate(releases, deps.currentVersion, deps.channel)

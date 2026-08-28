@@ -115,6 +115,31 @@ preferring the household's historically quiet hours (a rolling
 hour-of-day histogram); an update that has waited 24 hours applies at
 the first idle moment regardless.
 
+### What the update chain does and does not protect against
+
+Written down because an adversarial review confirmed both, and a security
+property nobody stated is a security property nobody can rely on:
+
+- **Transport and integrity: covered.** Downloads are pinned to this
+  repo's own release-download URLs (derived from the feed URL, so pin and
+  feed cannot drift apart), https-only, every redirect hop re-validated,
+  sizes capped while streaming, and the bundle checked against its
+  published sha256. Arbitrary GitHub-hosted code — the
+  `raw.githubusercontent.com/<anyone>/…` case — is refused at the entry
+  point.
+- **Publisher authenticity: NOT covered.** The sha256 is produced by the
+  same CI job that builds the bundle and published beside it, so it
+  detects corruption and enforces that both assets exist — it does not
+  prove _who_ built the bundle. Anyone able to publish a release, or who
+  compromises the CI token or the GitHub account, can ship code this
+  daemon will install. Closing that needs a signature over the bundle
+  verified against a public key embedded in the launcher; it is a
+  deliberate gap, not an oversight.
+- **Version labels are labels.** Updates must be strictly newer, which
+  blocks a naive downgrade, but a feed-controlling attacker could
+  relabel old vulnerable code with a higher version. Same root cause as
+  the point above.
+
 A launcher embedded in the executable makes bad updates self-healing: it
 records a tripwire before booting any version, and a version that fails
 to reach healthy twice is marked bad and never tried again — the daemon
