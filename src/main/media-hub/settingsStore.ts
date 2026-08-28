@@ -28,6 +28,10 @@ import type { ProfileRecord } from './profiles'
 
 export interface MediaHubRawSettings {
   onboardingVersion?: number
+  /** Which version of the one-time anime watch-history id repair this
+   *  install has had — see animeSyncRepair.ts. Absent on installs that
+   *  predate it, which is exactly who the repair is for. */
+  animeIdRepairVersion?: number
   torboxToken?: string
   simklClientId?: string
   simklAccessToken?: string

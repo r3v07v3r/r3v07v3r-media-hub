@@ -17,16 +17,20 @@ import { app } from 'electron'
 
 import { MEDIA_HUB_CHANNELS } from '../../shared/media-hub/ipc-channels'
 import type {
+  ImportedPlay,
   ImportSummary,
   TraktPollResult,
   TraktStartResult,
   TraktStatusResult
 } from '../../shared/media-hub/types'
+import { animeGroupingReady, resolveAnimeGroupTarget } from './animeSeasons'
 import { fetchJson } from './httpClient'
+import { kitsuIdForExternal } from './idBridge'
 import { handle } from './ipcGuard'
 import { logError } from './logger'
 import { getDatabase } from './dbState'
 import { requestRecommendationsRebuild } from './recommendations'
+import { mapWithLimit, type TaskPriority } from './taskScheduler'
 import {
   hasTraktContent,
   historyPayload,
@@ -40,7 +44,6 @@ import {
   type TraktPushItem
 } from './trakt'
 import { encrypt, readSettings, traktCredentials, writeSettings } from './settingsStore'
-import type { TaskPriority } from './taskScheduler'
 
 const API = 'https://api.trakt.tv'
 
@@ -408,6 +411,94 @@ async function readAllPages(pathname: string): Promise<{ rows: unknown[]; trunca
 }
 
 /**
+ * Trakt has no concept of anime as its own category — everything comes
+ * back from parseTraktHistory/parseTraktRatings typed 'series', keyed by
+ * IMDb id (trakt.ts's imdbId helper), because that is the only id space
+ * Trakt's own data model speaks. Left alone, that means an anime watched
+ * or rated on Trakt writes a row this app's `kitsu:<id>`-keyed anime
+ * catalog can never match — the import reports success while every anime
+ * title in it silently never shows as watched or rated.
+ *
+ * Resolved through idBridge (Simkl's cross-reference search, which carries
+ * a native kitsu id for most anime even when looked up BY imdb id), then
+ * through catalog.ts's resolveAnimeGroupTarget for the same canonical-
+ * show/real-season translation malSync.ts's MAL reconcile-apply uses —
+ * an anime split across multiple Trakt/IMDb entries (e.g. "Naruto" and
+ * "Naruto: Shippuuden" are separate IMDb titles too) still lands on this
+ * app's one merged show.
+ */
+async function imdbToAnimeTargets(
+  imdbIds: string[]
+): Promise<Map<string, { id: string; season: number }>> {
+  const kitsuIds = new Map<string, number>()
+  await mapWithLimit(imdbIds, async (imdbId) => {
+    const kitsuId = await kitsuIdForExternal('imdb', imdbId, 'background')
+    if (kitsuId) kitsuIds.set(imdbId, kitsuId)
+  })
+
+  // Resolved to anime, but with no grouping to resolve them AGAINST: every
+  // id would come back as itself at season 1, which for a merged
+  // franchise's sibling is the exact unreadable row this change exists to
+  // stop writing (see animeGroupingReady). Refusing is the honest move —
+  // an import is repeatable by design, and the alternative is silently
+  // committing ids that a later grouping pass cannot go back and fix.
+  //
+  // Deliberately checked only once something actually resolved to anime:
+  // a library with no anime in it has nothing riding on the grouping pass
+  // and has no business being blocked on it.
+  if (kitsuIds.size && !animeGroupingReady()) {
+    throw new Error(
+      'Your anime library is still being organised in the background — run the import again once it has finished.'
+    )
+  }
+
+  const targets = new Map<string, { id: string; season: number }>()
+  for (const [imdbId, kitsuId] of kitsuIds) {
+    targets.set(imdbId, resolveAnimeGroupTarget(`kitsu:${kitsuId}`))
+  }
+  return targets
+}
+
+/**
+ * Remaps every play row Trakt matched to a known anime onto its canonical
+ * show id. Trakt's own season number is kept as an OFFSET from the
+ * resolved target's season rather than overwritten outright: the common
+ * case — one IMDb id covering exactly one of this app's merged siblings,
+ * so Trakt's season is always 1 — lands exactly on the target season; an
+ * IMDb id that already spans more of the franchise on its own keeps its
+ * episodes internally ordered and non-colliding even if the absolute
+ * season number ends up approximate, which is better than losing that
+ * viewing history outright.
+ */
+function remapAnimePlays(
+  rows: ImportedPlay[],
+  targets: Map<string, { id: string; season: number }>
+): ImportedPlay[] {
+  if (!targets.size) return rows
+  return rows.map((row) => {
+    if (row.type !== 'series') return row
+    const target = targets.get(row.id)
+    if (!target) return row
+    const offset = Number.isFinite(row.season) ? (row.season as number) - 1 : 0
+    return { ...row, id: target.id, type: 'anime', season: target.season + offset }
+  })
+}
+
+/** Same remap as remapAnimePlays, for rating rows — a rating belongs to the
+ *  whole show, so only the id moves, never the (irrelevant here) season. */
+function remapAnimeRatings<T extends { id: string; type: 'movie' | 'series' }>(
+  rows: T[],
+  targets: Map<string, { id: string; season: number }>
+): T[] {
+  if (!targets.size) return rows
+  return rows.map((row) => {
+    if (row.type !== 'series') return row
+    const target = targets.get(row.id)
+    return target ? { ...row, id: target.id } : row
+  })
+}
+
+/**
  * Brings a Trakt account's watched history and ratings into this profile.
  *
  * Gap-filling, never overwriting, and repeatable — see db.importWatched.
@@ -434,9 +525,35 @@ export async function importTraktLibrary(): Promise<ImportSummary> {
   const plays = parseTraktHistory(history.rows)
   const rated = [parseTraktRatings(movieRatings.rows), parseTraktRatings(showRatings.rows)]
 
+  // Trakt has no anime category of its own — everything comes back typed
+  // 'series', keyed by IMDb id, which the app's `kitsu:<id>`-keyed anime
+  // catalog can never match. Resolve every distinct IMDb id from this
+  // import through idBridge once, up front, so the writes below land under
+  // the right canonical show — see imdbToAnimeTargets' own doc.
+  const seriesImdbIds = Array.from(
+    new Set(
+      [...plays.rows, ...rated.flatMap((parsed) => parsed.rows)]
+        .filter((row) => row.type === 'series')
+        .map((row) => row.id)
+    )
+  )
+  const animeTargets = await imdbToAnimeTargets(seriesImdbIds)
+
+  // Checked again, not just after the page reads above: the id resolution
+  // is itself a long run of network lookups, and a profile switch during
+  // it would pour this profile's Trakt library into whoever is active by
+  // the time the writes below run — the same failure the guard above
+  // exists to prevent, on the other side of a second await.
+  if (db.activeProfile() !== profile) {
+    throw new Error('Profile changed while importing — nothing was written.')
+  }
+
+  const remappedPlays = remapAnimePlays(plays.rows, animeTargets)
+  const remappedRatings = rated.flatMap((parsed) => remapAnimeRatings(parsed.rows, animeTargets))
+
   const summary: ImportSummary = {
-    plays: db.importWatched(plays.rows),
-    ratings: db.importRatings(rated.flatMap((parsed) => parsed.rows)),
+    plays: db.importWatched(remappedPlays),
+    ratings: db.importRatings(remappedRatings),
     skipped: plays.skipped + rated.reduce((total, parsed) => total + parsed.skipped, 0)
   }
 
