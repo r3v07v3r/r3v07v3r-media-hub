@@ -36,7 +36,7 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   # Resolve the mutable branch once. Every later job consumes this immutable
@@ -65,7 +65,11 @@ jobs:
 
   promote:
     needs: [resolve-preview, verify]
-    runs-on: windows-latest
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -109,47 +113,46 @@ jobs:
           git merge --ff-only "$PREVIEW_SHA"
           git push origin stable
 
-      - name: Install dependencies
-        run: npm ci
+  # No --prerelease here: this is what makes the release visible to the
+  # Stable channel. Unlike preview.yml, no daemon artifacts are attached
+  # — the daemon build already published alongside the Preview release
+  # being promoted is what stays live; Stable doesn't rebuild its own.
+  release:
+    needs: promote
+    permissions:
+      contents: write
+    uses: ./.github/workflows/build-and-release.yml
+    with:
+      ref: stable
+      version: ${{ needs.promote.outputs.version }}
+      target: stable
+      notes: Promoted from Preview.
+      prerelease: false
 
-      - name: Build
-        run: npm run build
+  bump:
+    needs: [promote, release]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: preview
 
-      # Same pre-create-as-draft, undraft-last pattern as preview.yml —
-      # see that file's own comment for why. No --prerelease here: this is
-      # what makes the release visible to the Stable channel.
-      - name: Create GitHub release (draft)
-        shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+
+      - name: Configure git identity
         run: |
-          gh release create "v${{ steps.version.outputs.version }}" \
-            --repo "${{ github.repository }}" \
-            --target stable \
-            --title "${{ steps.version.outputs.version }}" \
-            --notes "Promoted from Preview." \
-            --draft
-
-      - name: Build installer and upload assets to the draft
-        run: npx electron-builder --win --publish always
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Publish release
-        shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh release edit "v${{ steps.version.outputs.version }}" \
-            --repo "${{ github.repository }}" \
-            --draft=false
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
       - name: Bump preview to the next patch version
         shell: bash
         run: |
-          git checkout -B preview origin/preview
           NEXT=$(node -e "
-            const [maj, min, pat] = '${{ steps.version.outputs.version }}'.split('.').map(Number);
+            const [maj, min, pat] = '${{ needs.promote.outputs.version }}'.split('.').map(Number);
             console.log(\`\${maj}.\${min}.\${pat + 1}\`);
           ")
           node -e "
@@ -159,5 +162,5 @@ jobs:
             fs.writeFileSync('package.json', JSON.stringify(p, null, 2) + '\n');
           "
           git add package.json
-          git commit -m "Bump version to $NEXT after releasing v${{ steps.version.outputs.version }}"
+          git commit -m "Bump version to $NEXT after releasing v${{ needs.promote.outputs.version }}"
           git push origin preview

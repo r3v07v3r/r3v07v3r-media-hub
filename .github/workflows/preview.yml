@@ -26,7 +26,7 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   # Verification is part of this workflow, rather than an independent push
@@ -83,9 +83,16 @@ jobs:
           path: dist-daemon/*
           retention-days: 3
 
-  preview:
-    needs: [verify, daemon]
-    runs-on: windows-latest
+  # run_number is only reused when a failed run of THIS SAME run is
+  # re-run (GitHub keeps run_number, bumps run_attempt instead) — the
+  # exists-check below exists for exactly that case, not for the ordinary
+  # case (every fresh push gets a fresh, never-before-seen number).
+  version:
+    needs: verify
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      exists: ${{ steps.version.outputs.exists }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -94,11 +101,6 @@ jobs:
           node-version: 22
           cache: npm
 
-      # run_number is only reused when a failed run of THIS SAME run is
-      # re-run (GitHub keeps run_number, bumps run_attempt instead) — the
-      # exists-check below exists for exactly that case, not for the
-      # ordinary case (every fresh push gets a fresh, never-before-seen
-      # number).
       - name: Compute this build's Preview version
         id: version
         shell: bash
@@ -115,84 +117,20 @@ jobs:
             echo "exists=false" >> "$GITHUB_OUTPUT"
           fi
 
-      # Never committed — package.json in the actual `preview` branch stays
-      # at its clean base version. Only this checkout, and therefore only
-      # the app binary this specific job produces, carries the suffixed
-      # build version (electron-builder reads it from here for both
-      # app.getVersion() at runtime and the release tag/filename).
-      - name: Apply the build version (this checkout only)
-        if: steps.version.outputs.exists == 'false'
-        shell: bash
-        run: |
-          node -e "
-            const fs = require('fs');
-            const p = require('./package.json');
-            p.version = '${{ steps.version.outputs.version }}';
-            fs.writeFileSync('package.json', JSON.stringify(p, null, 2) + '\n');
-          "
-
-      - name: Install dependencies
-        if: steps.version.outputs.exists == 'false'
-        run: npm ci
-
-      - name: Build
-        if: steps.version.outputs.exists == 'false'
-        run: npm run build
-
-      # Same pre-create-as-draft pattern as the old release.yml, and the
-      # same reason: electron-builder uploading multiple assets to a
-      # release that doesn't exist yet races to create it, which GitHub's
-      # API intermittently 422s on. --prerelease is what actually puts
-      # this on the Preview channel — electron-updater's allowPrerelease
-      # flag (Stable = false, Preview = true) is the only thing that reads
-      # it, filtering which releases each channel ever sees.
-      - name: Create GitHub release (draft prerelease)
-        if: steps.version.outputs.exists == 'false'
-        shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh release create "v${{ steps.version.outputs.version }}" \
-            --repo "${{ github.repository }}" \
-            --target "${{ github.sha }}" \
-            --title "${{ steps.version.outputs.version }}" \
-            --notes "Automated Preview build." \
-            --prerelease \
-            --draft
-
-      - name: Build installer and upload assets to the draft
-        if: steps.version.outputs.exists == 'false'
-        run: npx electron-builder --win --publish always
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      # Attached BEFORE the draft flips public, so the release appears
-      # atomically with the daemon files already on it — the same reason
-      # the draft exists at all (see the create step above).
-      - name: Attach daemon builds to the draft
-        if: steps.version.outputs.exists == 'false'
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          pattern: daemon-*
-          path: daemon-assets
-          merge-multiple: true
-
-      - name: Upload daemon assets
-        if: steps.version.outputs.exists == 'false'
-        shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh release upload "v${{ steps.version.outputs.version }}"             --repo "${{ github.repository }}"             daemon-assets/* --clobber
-
-      # Only now does the release (and its assets) become visible to
-      # electron-updater — atomically, with everything already attached.
-      - name: Publish release
-        if: steps.version.outputs.exists == 'false'
-        shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh release edit "v${{ steps.version.outputs.version }}" \
-            --repo "${{ github.repository }}" \
-            --draft=false
+  # --prerelease is what actually puts this on the Preview channel —
+  # electron-updater's allowPrerelease flag (Stable = false, Preview =
+  # true) is the only thing that reads it, filtering which releases each
+  # channel ever sees.
+  release:
+    needs: [verify, daemon, version]
+    if: needs.version.outputs.exists == 'false'
+    permissions:
+      contents: write
+    uses: ./.github/workflows/build-and-release.yml
+    with:
+      ref: ${{ github.sha }}
+      version: ${{ needs.version.outputs.version }}
+      target: ${{ github.sha }}
+      notes: Automated Preview build.
+      prerelease: true
+      attach-daemon: true
