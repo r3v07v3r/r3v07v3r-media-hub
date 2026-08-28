@@ -15,9 +15,26 @@ const SAME_LIST_OVERLAP = 0.8
  * - `different`: a new filter, sort, or search. Genuinely a fresh result
  *   list, and starting at the top with one batch is right.
  *
- * Ids are unique within a list (see hooks.ts's dedupeById), so the
- * position-wise comparison is exact. Costs one pass, and only when the
- * array identity already differed.
+ * Two things a naive overlap ratio gets wrong, both fixed here:
+ *
+ * 1. A filter that narrows hundreds of titles down to a handful is a
+ *    `different` view, not an `edited` one — but every one of those
+ *    survivors was, tautologically, already present in the bigger list,
+ *    so `shared / min(prev.length, next.length)` was always 1.0 for any
+ *    subset no matter how drastic the narrowing. Dividing by
+ *    `max(...)` instead means the ratio actually reflects how much of
+ *    the LARGER list survived, so a 500 -> 50 filter reads as ~10%
+ *    overlap and correctly resets.
+ * 2. A sort touches every item's id (nothing added or removed) but
+ *    changes their order — full id overlap, same lengths, yet still a
+ *    `different` view per the definition above ("a new filter, sort, or
+ *    search"). An ordinary edit (mark one watched, one new
+ *    recommendation lands) never reorders the titles that survive it,
+ *    so comparing the RELATIVE order of the ids both lists share tells
+ *    the two apart: unchanged relative order is an edit, changed
+ *    relative order is a resort.
+ *
+ * Ids are unique within a list (see hooks.ts's dedupeById).
  *
  * Shared by MediaGrid.tsx (the category pages' results grid) and
  * AnimeLibraryPage.tsx's EverythingSection (the Movies/Series/Anime
@@ -41,10 +58,21 @@ export function listChange(prev: MediaItem[], next: MediaItem[]): 'same' | 'edit
     if (identical) return 'same'
   }
   if (!prev.length || !next.length) return 'different'
+
   const prevIds = new Set(prev.map((item) => item.id))
+  const nextIds = new Set(next.map((item) => item.id))
   let shared = 0
   for (const item of next) {
     if (prevIds.has(item.id)) shared++
   }
-  return shared / Math.min(prev.length, next.length) >= SAME_LIST_OVERLAP ? 'edited' : 'different'
+  if (shared / Math.max(prev.length, next.length) < SAME_LIST_OVERLAP) return 'different'
+
+  // High overlap alone doesn't rule out a pure resort — compare the
+  // relative order of whichever ids both lists share.
+  const prevSharedOrder = prev.filter((item) => nextIds.has(item.id))
+  const nextSharedOrder = next.filter((item) => prevIds.has(item.id))
+  for (let i = 0; i < prevSharedOrder.length; i++) {
+    if (prevSharedOrder[i].id !== nextSharedOrder[i].id) return 'different'
+  }
+  return 'edited'
 }
