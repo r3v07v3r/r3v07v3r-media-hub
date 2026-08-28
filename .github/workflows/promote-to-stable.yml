@@ -39,7 +39,15 @@ permissions:
   contents: write
 
 jobs:
+  # Re-run the exact verification gate immediately before promotion. This
+  # protects manual releases even if repository branch rules are changed.
+  verify:
+    uses: ./.github/workflows/verify.yml
+    with:
+      checkout-ref: preview
+
   promote:
+    needs: verify
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
