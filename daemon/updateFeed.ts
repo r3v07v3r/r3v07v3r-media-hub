@@ -106,25 +106,101 @@ export function selectUpdate(
 }
 
 /**
- * Hosts an update may be downloaded from. The feed URL itself is
- * configurable (tests point it at a stub), but a PRODUCTION feed must not
- * be able to redirect the download to an arbitrary host: assets live on
- * GitHub, full stop. When the feed override is in use, its own host is
- * the one extra allowed origin.
+ * WHERE an update may be downloaded from.
+ *
+ * The first version of this allowed "any GitHub host", which an
+ * adversarial review correctly called out as no constraint at all:
+ * raw.githubusercontent.com serves whatever any GitHub user has ever
+ * committed, and github.com/<anyone>/<repo>/raw/... redirects to it. A
+ * feed that could name an asset URL could therefore name arbitrary
+ * executable code and it would pass. The allowlist now pins to the
+ * RELEASE DOWNLOADS OF ONE REPO — derived from the configured feed URL,
+ * so the pin and the feed can never disagree.
  */
-export function isAllowedUpdateUrl(url: string, feedOverrideHost?: string): boolean {
+export interface UpdateUrlPolicy {
+  /** owner/repo whose release downloads are trusted; null when the feed
+   *  is not a GitHub repo feed. */
+  repo: { owner: string; repo: string } | null
+  /** Host of a non-GitHub feed override (tests, private mirrors). */
+  overrideHost?: string
+}
+
+/** Derives the repo pin from the feed URL — the single source of truth
+ *  for "whose releases is this daemon following". */
+export function repoFromFeedUrl(feedUrl: string): { owner: string; repo: string } | null {
+  try {
+    const url = new URL(feedUrl)
+    if (url.hostname.toLowerCase() !== 'api.github.com') return null
+    const match = /^\/repos\/([^/]+)\/([^/]+)\/releases/.exec(url.pathname)
+    return match ? { owner: match[1], repo: match[2] } : null
+  } catch {
+    return null
+  }
+}
+
+function isLoopbackHost(host: string): boolean {
+  return host === '127.0.0.1' || host === '::1' || host === 'localhost'
+}
+
+/**
+ * A feed override may serve its own assets, but plaintext only over
+ * loopback: a mirror reachable across a network without TLS re-opens
+ * exactly the MITM-to-RCE path everything else here exists to close.
+ *
+ * A REPO PIN ALWAYS WINS. Without this the host allowance was itself a
+ * bypass: any GitHub feed differing from DEFAULT_FEED by so much as a
+ * query parameter set overrideHost to api.github.com, and this function
+ * then accepted every api.github.com URL by hostname alone — including
+ * `/repos/<attacker>/<repo>/releases/assets/<id>`, which serves asset
+ * bytes. The pin has to be the stronger statement, not the weaker one.
+ */
+function overrideAllowed(parsed: URL, policy: UpdateUrlPolicy): boolean {
+  if (policy.repo) return false
+  const host = parsed.hostname.toLowerCase()
+  if (!policy.overrideHost || host !== policy.overrideHost.toLowerCase()) return false
+  return parsed.protocol === 'https:' || (parsed.protocol === 'http:' && isLoopbackHost(host))
+}
+
+/** The FIRST hop: an asset URL straight out of the feed. Pinned to the
+ *  feed's own repo, https, no embedded credentials. */
+export function isAllowedAssetUrl(url: string, policy: UpdateUrlPolicy): boolean {
   try {
     const parsed = new URL(url)
-    if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') return false
-    const host = parsed.hostname.toLowerCase()
-    if (feedOverrideHost && host === feedOverrideHost.toLowerCase()) return true
+    if (parsed.username || parsed.password) return false
+    if (overrideAllowed(parsed, policy)) return true
     if (parsed.protocol !== 'https:') return false
+    if (!policy.repo) return false
+    // Owner and repo are case-insensitive on GitHub, and the two spellings
+    // genuinely differ in practice: a feed configured as /repos/r3v07v3r/…
+    // gets assets back under /R3v07v3R/…. Comparing case-sensitively would
+    // reject every legitimate update, silently and forever. Only the pinned
+    // prefix is lowercased — the tag and filename beyond it are untouched.
+    const prefix = `/${policy.repo.owner}/${policy.repo.repo}/releases/download/`.toLowerCase()
     return (
-      host === 'github.com' ||
-      host === 'api.github.com' ||
-      host === 'objects.githubusercontent.com' ||
-      host.endsWith('.githubusercontent.com')
+      parsed.hostname.toLowerCase() === 'github.com' &&
+      parsed.pathname.toLowerCase().startsWith(prefix)
     )
+  } catch {
+    return false
+  }
+}
+
+/**
+ * LATER hops. GitHub serves release downloads by redirecting to its asset
+ * CDN, so those hosts must be reachable — but only ever as the
+ * continuation of a chain that STARTED at a repo-pinned release URL,
+ * which is what keeps "any githubusercontent content" from being an entry
+ * point. Every hop is re-checked; nothing is trusted because its
+ * predecessor was.
+ */
+export function isAllowedRedirectUrl(url: string, policy: UpdateUrlPolicy): boolean {
+  try {
+    const parsed = new URL(url)
+    if (parsed.username || parsed.password) return false
+    if (overrideAllowed(parsed, policy)) return true
+    if (parsed.protocol !== 'https:') return false
+    const host = parsed.hostname.toLowerCase()
+    return host === 'githubusercontent.com' || host.endsWith('.githubusercontent.com')
   } catch {
     return false
   }

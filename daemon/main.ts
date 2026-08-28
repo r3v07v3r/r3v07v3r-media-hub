@@ -77,6 +77,24 @@ export async function run(api: PayloadApi): Promise<'restart' | 'exit'> {
     resolveOutcome = resolve
   })
 
+  // Installed BEFORE the slow startup work, not after it. The startup
+  // eviction is deliberately a full pass over the cache, which on a large
+  // one is seconds to minutes; with default signal disposition a stop in
+  // that window killed the process outright and left the launcher's
+  // tripwire set, so two ordinary logoffs could blacklist a version that
+  // had never actually failed.
+  let stopping = false
+  const onSignal = (): void => {
+    stopping = true
+    resolveOutcome('exit')
+  }
+  process.on('SIGINT', onSignal)
+  process.on('SIGTERM', onSignal)
+  const releaseSignals = (): void => {
+    process.off('SIGINT', onSignal)
+    process.off('SIGTERM', onSignal)
+  }
+
   const fetcher = createFetcher({ jobs, storage, credentials, dataDir: config.dataDir, log })
   const updater = createUpdater({
     dataDir: config.dataDir,
@@ -124,58 +142,80 @@ export async function run(api: PayloadApi): Promise<'restart' | 'exit'> {
   const evictionTimer = setInterval(() => void evict(), EVICTION_INTERVAL_MS)
   evictionTimer.unref?.()
 
-  await new Promise<void>((resolve, reject) => {
-    server.once('error', reject)
-    server.listen(config.port, '0.0.0.0', resolve)
-  })
-  fetcher.start()
-  mdns.start()
-  updater.start()
+  // Every resource from here on is released by the finally below. Without
+  // it, one throw after listen() left the port bound; the launcher then
+  // retried, hit EADDRINUSE, counted THAT as this version failing, and
+  // blacklisted every staged version in seconds.
+  let listening = false
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const onListenError = (error: Error): void => reject(error)
+      server.once('error', onListenError)
+      server.listen(config.port, '0.0.0.0', () => {
+        // Removed on success so a LATER server error is not silently
+        // swallowed by a listener that only meant to guard startup.
+        server.off('error', onListenError)
+        server.on('error', (error) => log(`server error: ${error.message}`))
+        resolve()
+      })
+    })
+    listening = true
+    fetcher.start()
+    mdns.start()
+    updater.start()
 
-  // Genuinely up: listening, stores loaded, first eviction done. This is
-  // what clears the launcher's boot tripwire — a staged version that never
-  // gets here is rolled back to the last good one.
-  api.markHealthy()
+    // Genuinely up: listening, stores loaded, first eviction done. This
+    // stamps the launcher's tripwire healthy — but does NOT clear it, so a
+    // version that comes up and then dies quickly is still rolled back.
+    api.markHealthy()
 
-  const banner = (code: string): void => {
-    console.log('')
-    console.log('  ┌──────────────────────────────────────────────┐')
-    console.log(`  │  r3-cache ${runningVersion} — "${config.serverName}"`.padEnd(49) + '│')
-    console.log(`  │  port ${config.port} · data ${config.dataDir}`.slice(0, 49).padEnd(49) + '│')
-    console.log(
-      `  │  budget ${(config.diskBudgetBytes / 1024 ** 3).toFixed(0)} GB · idle ${config.idleTtlDays}d · max ${config.hardMaxDays}d`.padEnd(
-        49
-      ) + '│'
-    )
-    console.log('  │                                              │')
-    console.log(`  │  PAIRING CODE:  ${code}                       │`)
-    console.log('  │  Enter this in the app to connect.           │')
-    console.log('  └──────────────────────────────────────────────┘')
-    console.log('')
+    const banner = (code: string): void => {
+      console.log('')
+      console.log('  ┌──────────────────────────────────────────────┐')
+      console.log(`  │  r3-cache ${runningVersion} — "${config.serverName}"`.padEnd(49) + '│')
+      console.log(`  │  port ${config.port} · data ${config.dataDir}`.slice(0, 49).padEnd(49) + '│')
+      console.log(
+        `  │  budget ${(config.diskBudgetBytes / 1024 ** 3).toFixed(0)} GB · idle ${config.idleTtlDays}d · max ${config.hardMaxDays}d`.padEnd(
+          49
+        ) + '│'
+      )
+      console.log('  │                                              │')
+      console.log(`  │  PAIRING CODE:  ${code}                       │`)
+      console.log('  │  Enter this in the app to connect.           │')
+      console.log('  └──────────────────────────────────────────────┘')
+      console.log('')
+    }
+    banner(pairing.currentCode())
+    pairing.onCodeChange(banner)
+
+    const result = await outcome
+    log(result === 'restart' ? 'stopping for update' : 'shutting down')
+    return result
+  } finally {
+    // Runs on EVERY exit from the block above — clean stop, update
+    // restart, or a throw. On 'restart' this process keeps living and the
+    // next payload must be able to bind the port, so nothing here may be
+    // skipped.
+    releaseSignals()
+    clearInterval(evictionTimer)
+    updater.stop()
+    mdns.stop()
+
+    // The fetcher is stopped BEFORE the listening socket closes. It owns
+    // no client connections, and closing the port first meant the daemon
+    // was unreachable for the whole of a mid-flight download's teardown —
+    // dead air during what is supposed to be an invisible update.
+    await fetcher.stop().catch((error) => log(`fetcher stop: ${(error as Error).message}`))
+
+    if (listening) {
+      server.closeAllConnections?.()
+      await new Promise<void>((resolve) => server.close(() => resolve()))
+    }
+    if (stopping) {
+      // A signal decided this; make sure nothing keeps the process alive.
+      activity.snapshot()
+    }
   }
-  banner(pairing.currentCode())
-  pairing.onCodeChange(banner)
-
-  const onSignal = (): void => resolveOutcome('exit')
-  process.on('SIGINT', onSignal)
-  process.on('SIGTERM', onSignal)
-
-  const result = await outcome
-
-  // Teardown, in dependency order. On 'restart' this process lives on and
-  // the NEXT payload must be able to bind the port — closeAllConnections
-  // cuts idle keep-alives that server.close alone would wait out. Streams
-  // cannot be among them: restarts only happen when none are open.
-  log(result === 'restart' ? 'stopping for update' : 'shutting down')
-  process.off('SIGINT', onSignal)
-  process.off('SIGTERM', onSignal)
-  clearInterval(evictionTimer)
-  updater.stop()
-  mdns.stop()
-  server.closeAllConnections?.()
-  await new Promise<void>((resolve) => server.close(() => resolve()))
-  await fetcher.stop()
-  return result
 }
 
 /** True when this file is the process entrypoint (dev tsx run, bundled

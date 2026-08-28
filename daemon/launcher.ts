@@ -30,11 +30,28 @@ import { parseVersion, compareVersions } from './updateFeed'
 
 export const BUILTIN_VERSION_ID = 'builtin'
 const MAX_BOOT_ATTEMPTS = 2
+/**
+ * How long a version must stay healthy before a later crash counts as bad
+ * luck rather than a bad build.
+ *
+ * Without this the rollback machine only ever caught updates that failed
+ * to START. An update that came up, reported healthy, and then died
+ * reliably — a fetcher that throws on one malformed job, an OOM under the
+ * unit's MemoryMax — reset its own attempt counter on every boot and was
+ * retried forever, which is the commoner shape of a bad release and the
+ * one that leaves a daemon effectively offline.
+ */
+const MIN_STABLE_MS = 10 * 60 * 1000
+/** Backoff between in-loop boot attempts. A bare retry made every failure
+ *  a hot loop that re-ran a full eviction pass thousands of times. */
+const BOOT_RETRY_DELAY_MS = 5_000
 
 export interface LauncherState {
-  /** Tripwire: set immediately before booting a version, cleared by
-   *  markHealthy. Present at startup = the last boot never got healthy. */
-  boot?: { version: string; attempts: number }
+  /** Tripwire: set immediately before booting a version. `healthyAt` is
+   *  stamped when the payload reports healthy — the record is NOT cleared,
+   *  because "it started" and "it kept running" are different claims and
+   *  only the second one earns forgiveness (see MIN_STABLE_MS). */
+  boot?: { version: string; attempts: number; healthyAt?: number }
   /** Versions that exhausted their boot attempts. Never booted again. */
   bad: string[]
   /** Versions that reached healthy at least once, newest last. */
@@ -128,21 +145,48 @@ export function listStagedVersions(dataDir: string): string[] {
  * whose tripwire shows attempts >= MAX_BOOT_ATTEMPTS is moved to `bad`
  * here — this is the rollback.
  */
+export interface PlanBootOptions {
+  now?: number
+  /** The version compiled into the running executable, so a freshly
+   *  installed newer build is not shadowed by an older staged one. */
+  builtinVersion?: string
+}
+
 export function planBoot(
   state: LauncherState,
-  staged: readonly string[]
+  staged: readonly string[],
+  options: PlanBootOptions = {}
 ): { version: string; state: LauncherState } {
+  const now = options.now ?? Date.now()
   const bad = new Set(state.bad)
 
-  // The tripwire from a previous boot that never reached healthy.
   let boot = state.boot
-  if (boot && boot.attempts >= MAX_BOOT_ATTEMPTS) {
-    bad.add(boot.version)
-    boot = undefined
+  if (boot) {
+    if (boot.healthyAt !== undefined && now - boot.healthyAt >= MIN_STABLE_MS) {
+      // It ran healthy for long enough to have proved itself; whatever
+      // killed it is not "this build cannot run". Forgive the attempts.
+      boot = undefined
+    } else if (boot.attempts >= MAX_BOOT_ATTEMPTS) {
+      // Never started, or started and died again almost immediately.
+      bad.add(boot.version)
+      boot = undefined
+    }
   }
 
-  const candidates = [...staged.filter((version) => !bad.has(version)), BUILTIN_VERSION_ID]
-  const version = candidates[0]
+  const usable = staged.filter((version) => !bad.has(version))
+  // The builtin is a peer, not only a floor: an executable the person just
+  // installed must not be shadowed by an older payload left in versions/.
+  const newest = usable[0]
+  const builtinWins =
+    !newest ||
+    (options.builtinVersion !== undefined &&
+      (() => {
+        const a = parseVersion(options.builtinVersion)
+        const b = parseVersion(newest)
+        return a !== null && b !== null && compareVersions(a, b) > 0
+      })())
+  const version = builtinWins ? BUILTIN_VERSION_ID : newest
+
   const attempts = boot?.version === version ? boot.attempts + 1 : 1
 
   return {
@@ -155,9 +199,21 @@ export function planBoot(
   }
 }
 
-export function markHealthyState(state: LauncherState, version: string): LauncherState {
+export function markHealthyState(
+  state: LauncherState,
+  version: string,
+  now = Date.now()
+): LauncherState {
+  // Deliberately keeps the boot record. Clearing it here was the bug that
+  // made post-healthy crash loops invisible: the attempt counter reset on
+  // every boot, so `attempts >= MAX_BOOT_ATTEMPTS` was unreachable for any
+  // version that managed to start at all.
   return {
-    boot: undefined,
+    boot: {
+      version,
+      attempts: state.boot?.version === version ? state.boot.attempts : 1,
+      healthyAt: now
+    },
     bad: state.bad,
     good: [...state.good.filter((entry) => entry !== version), version].slice(-5)
   }
@@ -175,6 +231,8 @@ export function pruneKeepList(staged: readonly string[], runningVersion: string)
 export interface LauncherOptions {
   dataDir: string
   launcherVersion: string
+  /** Test seam only — production always uses BOOT_RETRY_DELAY_MS. */
+  retryDelayMs?: number
   /** The payload compiled into this very bundle — the floor that can
    *  never be deleted out from under us. */
   builtinRun: PayloadModule['run']
@@ -190,14 +248,23 @@ export interface LauncherOptions {
  */
 export async function launch(options: LauncherOptions): Promise<void> {
   const { dataDir, log } = options
+  // Seeded from what is ALREADY on disk so a rollback that happened months
+  // ago is not re-announced as news on every boot — the journal is the only
+  // signal an operator has for "did an update just fail".
+  const announced = new Set(readState(dataDir).bad)
+
   for (;;) {
     const staged = listStagedVersions(dataDir)
-    const planned = planBoot(readState(dataDir), staged)
+    const planned = planBoot(readState(dataDir), staged, {
+      builtinVersion: options.launcherVersion
+    })
     writeState(dataDir, planned.state)
 
-    const bootingBad = planned.state.bad.filter((entry) => !readStateBadSnapshot.has(entry))
-    for (const entry of bootingBad) log(`rolled back: ${entry} failed to boot, marked bad`)
-    bootingBad.forEach((entry) => readStateBadSnapshot.add(entry))
+    for (const entry of planned.state.bad) {
+      if (announced.has(entry)) continue
+      announced.add(entry)
+      log(`rolled back: ${entry} failed to boot, marked bad`)
+    }
 
     let payload: PayloadModule['run']
     if (planned.version === BUILTIN_VERSION_ID) {
@@ -211,9 +278,8 @@ export async function launch(options: LauncherOptions): Promise<void> {
         }
         payload = loaded.run
       } catch (error) {
-        // The staged file is unloadable — that is a failed boot attempt,
-        // recorded through the same tripwire the crash path uses.
         log(`staged ${planned.version} unloadable (${(error as Error).message})`)
+        await delay(options.retryDelayMs ?? BOOT_RETRY_DELAY_MS)
         continue
       }
     }
@@ -233,18 +299,43 @@ export async function launch(options: LauncherOptions): Promise<void> {
     try {
       outcome = await payload(api)
     } catch (error) {
-      // A payload that threw after (or during) boot. The tripwire is
-      // still set if it never reached healthy, so the next iteration's
-      // planBoot counts this attempt; if it HAD been healthy this is a
-      // runtime crash of a good version — loop and boot it again.
+      // Another instance already owns the port. That is not this version
+      // failing — counting it would let a second process (which install.ts
+      // itself tells people to start, to read the pairing code) blacklist
+      // every staged version in the RUNNING daemon's shared state file.
+      // Stand down instead, leaving the tripwire as it was found.
+      if ((error as NodeJS.ErrnoException)?.code === 'EADDRINUSE') {
+        log('another r3-cache is already running on this port — exiting')
+        writeState(dataDir, readState(dataDir))
+        return
+      }
       log(`payload ${planned.version} crashed: ${(error as Error).message}`)
+      await delay(options.retryDelayMs ?? BOOT_RETRY_DELAY_MS)
       continue
     }
     if (outcome === 'exit') return
+
+    // A successful run is the moment to tidy: bundles older than the few
+    // most recent are disk noise in a directory whose whole point is to be
+    // budget-managed.
+    for (const stale of pruneKeepList(listStagedVersions(dataDir), planned.version)) {
+      try {
+        fs.rmSync(path.join(versionsDir(dataDir), stale), { recursive: true, force: true })
+        log(`pruned   ${stale}`)
+      } catch {
+        // Disk hygiene is best-effort; never worth failing a restart over.
+      }
+    }
     log('restarting for update')
   }
 }
 
-// Names already logged as rolled-back this process, so the loop does not
-// repeat the message every iteration.
-const readStateBadSnapshot = new Set<string>()
+/** Deliberately NOT unref'd. During a boot retry there is no server
+ *  holding the event loop open, so an unref'd timer let the process exit
+ *  silently mid-backoff — the daemon giving up instead of rolling back,
+ *  which is the one outcome this whole design exists to prevent. */
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms)
+  })
+}
