@@ -62,6 +62,17 @@ function ServiceCard({
           <span className={styles.switchThumb} />
         </button>
       </div>
+      {id === 'jellyfin' && (
+        // Turning Jellyfin on now has playback consequences, not just
+        // metadata ones: it becomes a source the player will pull video
+        // from, which means allowing the player to reach this address on
+        // the local network. Worth saying plainly next to the switch that
+        // does it.
+        <p className={styles.serviceNote}>
+          When enabled, this server is used for playback: titles it already has play from your
+          network instead of being downloaded. Turning it off removes it as a source immediately.
+        </p>
+      )}
       <div className={styles.serviceFields}>
         <label className={styles.field}>
           <span className={styles.fieldLabel}>Server URL</span>

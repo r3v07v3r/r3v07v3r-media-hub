@@ -21,6 +21,8 @@
 // special-cased TORBOX-prefixed URLs.
 
 import type {
+  CacheSessionMeta,
+  CacheSourceRef,
   BootstrapResult,
   LibraryItem,
   PlaybackResult,
@@ -37,15 +39,27 @@ import {
   cometConfigPath,
   enrichTorBoxItem,
   rankSafeStreams,
+  resumeCandidateFor,
+  streamResolution,
   selectVideoFile,
   titleMatchesRelease,
   validateTorBoxToken,
   type RawApiPayload,
+  type SourcePreference,
   type TorBoxFile
 } from './core'
 import { sanitizeTrackers } from './security'
 import { catalogData } from './catalog'
 import { isAllowedRemoteMediaUrl } from './playback'
+import { jellyfinFingerprint } from './jellyfin'
+import { findLocalCacheCandidate } from './streamCache'
+import { findMediaServerCandidate, mediaServerConfig, mediaServerStreamUrl } from './mediaSources'
+import {
+  findLanCacheCandidate,
+  isLanCacheConnected,
+  lanCacheFingerprint,
+  lanCacheStreamUrl
+} from './lanCache'
 import { preparePlayback } from './playbackSession'
 import { reportPreparation } from './playbackProgress'
 import {
@@ -147,13 +161,115 @@ function streamReleaseText(stream: StreamCandidate): string {
   return text.split('\n')[0]
 }
 
+/**
+ * Whether a copy is good enough to stop the search at its tier.
+ *
+ * The rule is "nearest source that actually delivers the quality asked
+ * for": with a target set, a nearer copy below it is passed over and the
+ * next tier is tried. A target of 0 ("Any") accepts anything, and an
+ * unknown resolution is accepted rather than discarded — refusing to play
+ * a copy we hold because its metadata is thin would be worse than playing
+ * it.
+ */
+function meetsQualityTarget(resolution: number | undefined, target: number | undefined): boolean {
+  if (!target) return true
+  if (!resolution) return true
+  return resolution >= target
+}
+
+/** The cache-session identity for a resolve request, in exactly the shape
+ *  play:stream writes. Returns undefined when the caller did not supply
+ *  one, which disables the local tier rather than guessing wrong. */
+function cacheMetaFor(
+  payload: StreamResolvePayload,
+  title: string | undefined
+): CacheSessionMeta | undefined {
+  const key = payload.cacheKey
+  if (!key?.catalogId) return undefined
+  return {
+    title: title ?? '',
+    catalogId: key.catalogId,
+    seasonNumber: key.seasonNumber,
+    episodeNumber: key.episodeNumber
+  }
+}
+
+/** The two P2P scraper add-ons, queried in parallel and merged — one
+ *  seam shared by the resolve handler and the pre-fetch feeder so the two
+ *  can never drift on where candidates come from. See the resolve
+ *  handler's comment for why both add-ons and why best-effort each. */
+async function fetchDiscoveredRaw(type: string, id: string): Promise<StreamCandidate[]> {
+  const config = cometConfigPath()
+  const [comet, torrentio] = await Promise.all([
+    fetchAddonStreams(
+      `https://cometfortheweebs.midnightignite.me/${config}/stream/${type}/${encodeURIComponent(id)}.json`
+    ),
+    fetchAddonStreams(`https://torrentio.strem.fun/stream/${type}/${encodeURIComponent(id)}.json`)
+  ])
+  return dedupeByInfoHash([...comet, ...torrentio])
+}
+
+/**
+ * The best release to PRE-FETCH for a title — the feeder's half of the
+ * hybrid model. Deliberately no checkcached call: TorBox having it cached
+ * already is not a requirement for the daemon (submitting the torrent so
+ * TorBox starts fetching it is precisely the daemon's job), and the
+ * ranking's `cached` term is meaningless for work scheduled for tonight.
+ * Same title guard, same safety filter, same person's limits as live
+ * resolution.
+ */
+export async function discoverBestPrefetchCandidate(
+  type: string,
+  id: string,
+  title: string | undefined
+): Promise<StreamCandidate | null> {
+  const preferences = readSettings()
+  const limits = {
+    maxResolution: Number(preferences.maxStreamResolution) || 0,
+    maxSizeGb: Number(preferences.maxStreamSizeGb) || 0
+  }
+  const discoveredRaw = await fetchDiscoveredRaw(type, id)
+  if (!discoveredRaw.length) return null
+  const titleFiltered = title
+    ? discoveredRaw.filter((s) => titleMatchesRelease(streamReleaseText(s), title))
+    : discoveredRaw
+  const discovered = titleFiltered.length ? titleFiltered : discoveredRaw
+  return (
+    rankSafeStreams(
+      discovered,
+      preferences.audioLanguage || 'en',
+      limits,
+      resolveSourcePreference(preferences.sourcePreference)
+    )[0] ?? null
+  )
+}
+
+/** Narrows a persisted settings value to a known preference. An unknown
+ *  or absent value means the default, never a crash — settings files
+ *  outlive the code that wrote them. */
+function resolveSourcePreference(value: unknown): SourcePreference {
+  return value === 'prefer-local' || value === 'prefer-quality' || value === 'balanced'
+    ? value
+    : 'balanced'
+}
+
+/** The candidate's torrent hash, lowercased, or '' when it has none.
+ *  StreamCandidate.infoHash became optional when media-server candidates
+ *  joined the same shape — every use below is on a torrent-only path, so
+ *  this narrows once rather than at six call sites. */
+function torrentHash(stream: StreamCandidate): string {
+  return stream.infoHash?.toLowerCase() ?? ''
+}
+
 /** First-seen-wins dedupe across multiple add-ons' results — the same real torrent is often indexed by more than one, and rankStreams should only ever see it once. */
 function dedupeByInfoHash(streams: StreamCandidate[]): StreamCandidate[] {
   const seen = new Set<string>()
   const result: StreamCandidate[] = []
   for (const s of streams) {
-    const hash = s.infoHash.toLowerCase()
-    if (seen.has(hash)) continue
+    const hash = torrentHash(s)
+    // A candidate with no hash cannot be a scraper result; drop it rather
+    // than letting one collapse every other hashless entry onto ''.
+    if (!hash || seen.has(hash)) continue
     seen.add(hash)
     result.push(s)
   }
@@ -168,6 +284,11 @@ interface StreamResolvePayload {
    *  See titleMatchesRelease's own doc comment for what this guards
    *  against. */
   title?: string
+  /** The identity play:stream will store on the cache session. Supplied so
+   *  the local-cache tier compares like with like instead of guessing it
+   *  from `id` — see the preload comment on resolve(). Optional: without
+   *  it the local tier simply does not fire. */
+  cacheKey?: { catalogId?: string; seasonNumber?: number; episodeNumber?: number }
 }
 
 interface PlayStreamPayload {
@@ -251,15 +372,29 @@ export function registerTorBoxIpc(): void {
 
   handle<StreamResolvePayload, StreamResolveResult>(
     MEDIA_HUB_CHANNELS.streamResolve,
-    async (_e, { type, id, title }) => {
+    async (_e, payload) => {
+      const { type, id, title } = payload
       const auth = getTorBoxToken()
-      if (!auth) throw new Error('TorBox is not connected.')
+      const mediaServer = mediaServerConfig()
+      // Either source alone is a complete configuration. Only having
+      // neither is an error, and it names both so the message is
+      // actionable for whichever one the person meant to set up.
+      if (!auth && !mediaServer) {
+        throw new Error('Connect TorBox or a media server to start playback.')
+      }
       const preferences = readSettings()
       const limits = {
         maxResolution: Number(preferences.maxStreamResolution) || 0,
         maxSizeGb: Number(preferences.maxStreamSizeGb) || 0
       }
-      const key = `stream:v2:${type}:${id}:${limits.maxResolution}:${limits.maxSizeGb}`
+      const sourcePreference = resolveSourcePreference(preferences.sourcePreference)
+      // v2 -> v3: the answer now depends on the source preference and on
+      // which server is configured, so both join the key. Without them a
+      // person who switches preference, or points at a different server,
+      // keeps being served the previous answer for an hour.
+      const key =
+        `stream:v4:${type}:${id}:${limits.maxResolution}:${limits.maxSizeGb}` +
+        `:${sourcePreference}:${jellyfinFingerprint(mediaServer)}:${lanCacheFingerprint()}`
       const db = getDatabase()
       const audioLanguage = preferences.audioLanguage || 'en'
 
@@ -271,8 +406,121 @@ export function registerTorBoxIpc(): void {
       // something just watched re-ran the full two-addon search plus a
       // TorBox checkcached call every single time, instead of reusing an
       // answer that hadn't changed.
+      // TIER 1 — already on this machine.
+      //
+      // Ahead of the resolve cache above deliberately. That cache holds
+      // "which source to use" for an hour, so a title finished downloading
+      // five minutes ago would still route back through TorBox to mint a
+      // link and read a length, purely to end up adopting bytes already on
+      // this disk. Nothing that plays offline should need a round trip to
+      // learn that.
+      //
+      // Answered from the filesystem alone: no source contacted, no network
+      // touched. Two distinct outcomes, and the partial one is the reason
+      // sessions record where their bytes came from:
+      //
+      //  COMPLETE  play it straight from disk, offline.
+      //  PARTIAL   re-request THE SAME RELEASE from the source it was
+      //            originally pulled from, so the half we already hold is
+      //            resumed rather than abandoned. Handing back a candidate
+      //            for the original source (not a localcache one) is what
+      //            makes that work: play mints a link for that exact
+      //            release, and streamCache.start's own findReusableSession
+      //            then adopts the existing chunks, because the release
+      //            matching means its totalBytes check passes.
+      //
+      // Without this, a partial session was dead weight: the search below
+      // could return a different encode of the same title, whose length
+      // differs, so adoption was refused and the bytes already downloaded
+      // were re-downloaded from scratch.
+      //
+      // Subject to the quality target like every other tier: a cached 720p
+      // copy does not win when 1080p was asked for.
+      const cached = await findLocalCacheCandidate(cacheMetaFor(payload, title))
+      if (cached && meetsQualityTarget(cached.resolution, limits.maxResolution)) {
+        if (cached.complete) {
+          const candidate: StreamCandidate = {
+            source: 'localcache',
+            cacheToken: cached.token,
+            complete: true,
+            name: cached.title,
+            resolution: cached.resolution,
+            cached: true,
+            compatible: true,
+            exact: true
+          }
+          const result: StreamResolveResult = { streams: [candidate], best: candidate }
+          db.putCache(key, result, 60 * 60 * 1000)
+          return result
+        }
+
+        const resume = resumeCandidateFor(cached, Boolean(auth), Boolean(mediaServer))
+        if (resume) {
+          // Deliberately NOT cached under `key`: this is a resume of a
+          // download still in flight, and once it finishes the complete
+          // branch above should take over on the next play rather than a
+          // stale hour-old row sending us back to the source.
+          return { streams: [resume], best: resume }
+        }
+      }
+
       const recent = db.getCache<StreamResolveResult>(key)
       if (recent) return recent
+
+      // TIER 2 — the on-site cache daemon. Same footing as the media
+      // server below: one LAN round-trip, quality-gated, best-effort. Only
+      // COMPLETE items produce a candidate (the daemon 404s partials on
+      // /stream), so a hit here is playable this second.
+      if (isLanCacheConnected()) {
+        const meta = cacheMetaFor(payload, title)
+        const lanKey = meta
+          ? `${String(meta.catalogId).trim().toLowerCase()}:${meta.seasonNumber ?? ''}:${meta.episodeNumber ?? ''}`
+          : ''
+        const lan = await findLanCacheCandidate(lanKey)
+        if (lan && meetsQualityTarget(lan.resolution, limits.maxResolution)) {
+          const ranked = rankSafeStreams([lan], audioLanguage, limits, sourcePreference)
+          if (ranked.length) {
+            const result: StreamResolveResult = { streams: ranked, best: ranked[0] }
+            db.putCache(key, result, 60 * 60 * 1000)
+            return result
+          }
+        }
+      }
+
+      // Asked BEFORE the remembered-stream path below, not after.
+      //
+      // `laststream` records where a title played FROM last time, with a
+      // 14-day life and no knowledge of the source. Consulting it first
+      // meant that for any title played via TorBox in the last fortnight,
+      // a newly connected media server was never asked at all — the whole
+      // feature silently did nothing until those entries aged out.
+      // Confirmed live: 29 live movie/series entries, every one TorBox,
+      // and not a single stream:v3 row ever written.
+      //
+      // The server is one LAN request and usually answers in milliseconds,
+      // so giving it first refusal costs nothing when it does not have the
+      // title, and the remembered TorBox stream is still right there
+      // underneath when it does not.
+      const localLookup = findMediaServerCandidate(id, title)
+
+      // A local copy that already satisfies the person's quality ceiling
+      // ends the search here — no checkcached round-trip, no add-on calls,
+      // and no remembered-stream lookup. This is the slow-connection
+      // payoff: resolution drops from seconds to a single LAN request.
+      //
+      // prefer-quality opts out by definition: that setting means "look at
+      // everything and pick the best", so short-circuiting on the first
+      // acceptable local copy would silently ignore a better remote one.
+      if (sourcePreference !== 'prefer-quality') {
+        const local = await localLookup
+        const acceptable =
+          local && rankSafeStreams([local], audioLanguage, limits, sourcePreference)
+        if (acceptable?.length) {
+          const result: StreamResolveResult = { streams: acceptable, best: acceptable[0] }
+          db.putCache(key, result, 60 * 60 * 1000)
+          return result
+        }
+      }
 
       // Fast path 2: the stream that actually played last time for this
       // exact title/episode — regardless of how long ago, up to
@@ -282,22 +530,41 @@ export function registerTorBoxIpc(): void {
       // limits can both have moved on since. This is the "remember where
       // it played from last and try that first" path.
       const remembered = db.getCache<StreamCandidate>(lastStreamKey(type, id))
-      if (remembered && rankSafeStreams([remembered], audioLanguage, limits).length) {
+      const rememberedUsable =
+        remembered &&
+        rankSafeStreams([remembered], audioLanguage, limits, sourcePreference).length > 0 &&
+        // A remembered stream from a source that is no longer configured
+        // must not be replayed — the token or the server has gone.
+        (remembered.source === 'mediaserver'
+          ? Boolean(mediaServer)
+          : remembered.source === 'lancache'
+            ? isLanCacheConnected()
+            : Boolean(auth))
+      if (remembered && rememberedUsable) {
         try {
-          const verified = await torboxFetch<{
-            data?: { hash?: string }[] | Record<string, unknown>
-          }>(`${TORBOX}/torrents/checkcached?format=object&list_files=true`, {
-            method: 'POST',
-            headers: { Authorization: `Bearer ${auth}`, 'Content-Type': 'application/json' },
-            body: JSON.stringify({ hashes: [remembered.infoHash] })
-          })
-          const stillCached = Array.isArray(verified.data)
-            ? verified.data.some(
-                (x) => String(x.hash || x).toLowerCase() === remembered.infoHash.toLowerCase()
-              )
-            : Object.keys(verified.data || {}).some(
-                (h) => h.toLowerCase() === remembered.infoHash.toLowerCase()
-              )
+          const rememberedHash = torrentHash(remembered)
+          // A remembered media-server stream has no TorBox hash to verify.
+          // Its availability check is the play:stream request itself, which
+          // is one cheap LAN round-trip and fails over to a full search
+          // anyway — so re-verifying here would cost a round-trip to
+          // establish something we learn for free a moment later.
+          const stillCached = !rememberedHash
+            ? remembered.source === 'mediaserver'
+            : await (async () => {
+                const verified = await torboxFetch<{
+                  data?: { hash?: string }[] | Record<string, unknown>
+                }>(`${TORBOX}/torrents/checkcached?format=object&list_files=true`, {
+                  method: 'POST',
+                  headers: {
+                    Authorization: `Bearer ${auth}`,
+                    'Content-Type': 'application/json'
+                  },
+                  body: JSON.stringify({ hashes: [rememberedHash] })
+                })
+                return Array.isArray(verified.data)
+                  ? verified.data.some((x) => String(x.hash || x).toLowerCase() === rememberedHash)
+                  : Object.keys(verified.data || {}).some((h) => h.toLowerCase() === rememberedHash)
+              })()
           if (stillCached) {
             const result: StreamResolveResult = { streams: [remembered], best: remembered }
             db.putCache(key, result, 60 * 60 * 1000)
@@ -310,6 +577,15 @@ export function registerTorBoxIpc(): void {
       }
 
       try {
+        // No TorBox token: the media server was the only source available,
+        // and it did not have this title. An honest dead end rather than
+        // an error — the renderer distinguishes it from `queued`.
+        if (!auth) {
+          const result: StreamResolveResult = { streams: [], best: null }
+          db.putCache(key, result, 3 * 60 * 1000)
+          return result
+        }
+
         // Two independent P2P scraper add-ons, queried in parallel and
         // merged — found live: Comet alone returned nothing for a
         // brand-new/low-profile anime that Torrentio (which scrapes
@@ -326,17 +602,26 @@ export function registerTorBoxIpc(): void {
         // pointed to) now 301-redirects here — the "Meteor" add-on it ran
         // was retired in favor of "Comet", a different add-on with an
         // unrelated config schema (see cometConfigPath's own doc comment).
-        const config = cometConfigPath()
-        const [comet, torrentio] = await Promise.all([
-          fetchAddonStreams(
-            `https://cometfortheweebs.midnightignite.me/${config}/stream/${type}/${encodeURIComponent(id)}.json`
-          ),
-          fetchAddonStreams(
-            `https://torrentio.strem.fun/stream/${type}/${encodeURIComponent(id)}.json`
-          )
-        ])
-        const discoveredRaw = dedupeByInfoHash([...comet, ...torrentio])
-        if (!discoveredRaw.length) return { streams: [], best: null }
+        const discoveredRaw = await fetchDiscoveredRaw(type, id)
+        // Awaited a second time rather than threaded down from the
+        // short-circuit above: awaiting a settled promise is free, and it
+        // keeps the add-on calls from ever queueing behind the media
+        // server on the prefer-quality path, which skips that block.
+        const local = await localLookup
+        if (!discoveredRaw.length) {
+          // The scrapers found nothing, but the server may still have it —
+          // this is the prefer-quality path, where the short-circuit above
+          // deliberately did not run.
+          const localOnly = local
+            ? rankSafeStreams([local], audioLanguage, limits, sourcePreference)
+            : []
+          const result: StreamResolveResult = {
+            streams: localOnly,
+            best: localOnly[0] ?? null
+          }
+          if (localOnly.length) db.putCache(key, result, 60 * 60 * 1000)
+          return result
+        }
         // Guards against a P2P scraper add-on's own "exact match" flag
         // being wrong for a franchise with several similarly-prefixed
         // entries (found live — see titleMatchesRelease's own doc
@@ -348,7 +633,7 @@ export function registerTorBoxIpc(): void {
           ? discoveredRaw.filter((s) => titleMatchesRelease(streamReleaseText(s), title))
           : discoveredRaw
         const discovered = titleFiltered.length ? titleFiltered : discoveredRaw
-        const hashes = [...new Set(discovered.map((s) => s.infoHash.toLowerCase()))].slice(0, 100)
+        const hashes = [...new Set(discovered.map(torrentHash))].slice(0, 100)
         const cached = await torboxFetch<{
           data?: { hash?: string }[] | Record<string, unknown>
         }>(`${TORBOX}/torrents/checkcached?format=object&list_files=true`, {
@@ -361,12 +646,20 @@ export function registerTorBoxIpc(): void {
             ? cached.data.map((x) => String(x.hash || x).toLowerCase())
             : Object.keys(cached.data || {}).map((x) => x.toLowerCase())
         )
+        // One ranking pass over both sources. On the prefer-quality path
+        // this is where the local copy finally competes; on the others it
+        // is a no-op, because an acceptable local copy already returned
+        // above.
         const streams = rankSafeStreams(
-          discovered
-            .filter((s) => available.has(s.infoHash.toLowerCase()))
-            .map((s) => ({ ...s, cached: true, compatible: true })),
+          [
+            ...discovered
+              .filter((s) => available.has(torrentHash(s)))
+              .map((s) => ({ ...s, cached: true, compatible: true })),
+            ...(local ? [local] : [])
+          ],
           audioLanguage,
-          limits
+          limits,
+          sourcePreference
         )
         if (streams.length) {
           const result: StreamResolveResult = { streams, best: streams[0] }
@@ -389,12 +682,12 @@ export function registerTorBoxIpc(): void {
         // same honest "nothing available yet" result as before this
         // existed, rather than surfacing a harder error for what's meant
         // to be a fallback path.
-        const candidate = rankSafeStreams(discovered, audioLanguage, limits)[0]
+        const candidate = rankSafeStreams(discovered, audioLanguage, limits, sourcePreference)[0]
         let queued = false
         if (candidate) {
           try {
             const magnet = new URL('magnet:')
-            magnet.searchParams.set('xt', `urn:btih:${candidate.infoHash.toLowerCase()}`)
+            magnet.searchParams.set('xt', `urn:btih:${torrentHash(candidate)}`)
             for (const tracker of sanitizeTrackers(candidate.sources)) {
               magnet.searchParams.append('tr', tracker)
             }
@@ -433,7 +726,108 @@ export function registerTorBoxIpc(): void {
       _e,
       { stream, mediaId, type, resolveId, catalogId, title, posterUrl, season, episode }
     ) => {
+      // Both sources converge here: whatever produced the URL, playback
+      // opens it the same way and the same stream gets remembered. Shared
+      // as a closure rather than duplicated so the two branches can never
+      // drift on cache metadata or the last-stream memo.
+      // Recorded on the session so tier 1 can tell later WHICH encode these
+      // bytes are. Without it a partial session cannot be safely resumed —
+      // resuming against a different release of the same title splices two
+      // files together and plays corrupt video.
+      const sourceRef: CacheSourceRef = {
+        source: stream?.source ?? 'torbox',
+        infoHash: stream?.infoHash,
+        itemId: stream?.itemId,
+        mediaSourceId: stream?.mediaSourceId
+      }
+
+      const finish = async (url: string): Promise<PlaybackResult> => {
+        const result = await preparePlayback(
+          url,
+          title
+            ? {
+                title,
+                posterUrl,
+                catalogId,
+                mediaKind: type as 'movie' | 'series' | 'anime' | undefined,
+                seasonNumber: season,
+                episodeNumber: episode,
+                sourceRef,
+                // streamResolution, not stream.resolution: the scrapers
+                // mostly leave that field unset and put the real quality in
+                // the release text, so reading the raw field stores
+                // undefined for nearly every TorBox copy.
+                resolution: stream ? streamResolution(stream) || undefined : undefined
+              }
+            : undefined
+        )
+        // Only remembered once playback actually started — see
+        // stream:resolve's own "fast path 2" comment for where this gets
+        // read back. Records the stream that was ACTUALLY used, which
+        // isn't always stream:resolve's own top pick (a manual choice
+        // from the stream picker lands here too).
+        if (type && resolveId) {
+          getDatabase().putCache(lastStreamKey(type, resolveId), stream, LAST_STREAM_TTL_MS)
+        }
+        return result
+      }
+
+      // Tier 1's own tail. Same memo and metadata handling as `finish`,
+      // but preparePlayback opens the existing session instead of a link.
+      const finishLocal = async (cacheToken: string): Promise<PlaybackResult> => {
+        const result = await preparePlayback(
+          '',
+          title
+            ? {
+                title,
+                posterUrl,
+                catalogId,
+                mediaKind: type as 'movie' | 'series' | 'anime' | undefined,
+                seasonNumber: season,
+                episodeNumber: episode
+              }
+            : undefined,
+          cacheToken
+        )
+        if (type && resolveId) {
+          getDatabase().putCache(lastStreamKey(type, resolveId), stream, LAST_STREAM_TTL_MS)
+        }
+        return result
+      }
+
+      // Tier 1: the bytes are already on this disk. No URL to build, no
+      // source to contact — hand the cache session straight to the player.
+      if (stream?.source === 'localcache' && stream.complete && stream.cacheToken) {
+        reportPreparation('buffer', 'Playing from this computer')
+        return finishLocal(String(stream.cacheToken))
+      }
+
+      // Tier 2: the cache daemon already fetched the file; its /stream URL
+      // is one LAN hop away and the trusted-host allowlist (populated at
+      // pairing) is what lets mpv open it.
+      if (stream?.source === 'lancache') {
+        const lanUrl = lanCacheStreamUrl(stream)
+        if (!lanUrl) {
+          throw new Error('That cache server is no longer paired. Reconnect it in Settings.')
+        }
+        reportPreparation('link', 'Opening the file on your cache server')
+        return finish(lanUrl)
+      }
+
+      // The media server needs none of the TorBox machinery below — no
+      // torrent to find, nothing to submit, no link to mint. The file is
+      // already there; build its URL and open it.
+      if (stream?.source === 'mediaserver') {
+        const mediaUrl = mediaServerStreamUrl(stream)
+        if (!mediaUrl) {
+          throw new Error('That media server is no longer connected. Reconnect it in Settings.')
+        }
+        reportPreparation('link', 'Opening the file on your media server')
+        return finish(mediaUrl)
+      }
+
       const auth = getTorBoxToken()
+      if (!auth) throw new Error('TorBox is not connected.')
       const hash = String(stream?.infoHash || '').toLowerCase()
       if (!/^[a-f0-9]{40}$/.test(hash)) {
         throw new Error('The selected source has no valid torrent hash.')
@@ -527,28 +921,7 @@ export function registerTorBoxIpc(): void {
         reportPreparation('link', "That link wasn't ready — asking TorBox again")
         url = await resolveDownloadUrl(true)
       }
-      const result = await preparePlayback(
-        url,
-        title
-          ? {
-              title,
-              posterUrl,
-              catalogId,
-              mediaKind: type as 'movie' | 'series' | 'anime' | undefined,
-              seasonNumber: season,
-              episodeNumber: episode
-            }
-          : undefined
-      )
-      // Only remembered once playback actually started — see
-      // stream:resolve's own "fast path 2" comment for where this gets
-      // read back. Records the stream that was ACTUALLY used, which isn't
-      // always stream:resolve's own top pick (a manual choice from the
-      // stream picker lands here too).
-      if (type && resolveId) {
-        getDatabase().putCache(lastStreamKey(type, resolveId), stream, LAST_STREAM_TTL_MS)
-      }
-      return result
+      return finish(url)
     }
   )
 

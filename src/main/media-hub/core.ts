@@ -11,6 +11,7 @@
 
 import {
   AnimeStoryLink,
+  CacheSourceRef,
   CatalogItem,
   ContinueWatchingEntry,
   Episode,
@@ -60,7 +61,11 @@ function streamText(stream: StreamCandidate): string {
   return `${stream.name || ''} ${stream.title || ''} ${stream.description || ''}`.toLowerCase()
 }
 
-function streamResolution(stream: StreamCandidate): number {
+/** Exported so a cache session can record the resolution it actually
+ *  holds. Without it a cached copy stores `undefined`, and the quality
+ *  target then accepts it unconditionally — a cached 720p copy would
+ *  satisfy a 1080p request forever. */
+export function streamResolution(stream: StreamCandidate): number {
   const text = streamText(stream)
   if (/2160|4k/.test(text)) return 2160
   if (/1080/.test(text)) return 1080
@@ -101,6 +106,14 @@ export interface StreamLimits {
  *  is NOT one of them — an ordinary BluRay-sourced x264 encode is exactly
  *  what we want to pick. */
 function streamingPenalty(stream: StreamCandidate): number {
+  // A file on the media server is exempt from all of this. Every penalty
+  // below models one problem — the time it takes to pull a huge file over
+  // the internet before playback can start — and that problem does not
+  // exist for a file already sitting on a box one LAN hop away. Penalising
+  // a local remux would be actively backwards: a remux is precisely the
+  // kind of release someone keeps on their own server, and it is the case
+  // the on-site tier handles best.
+  if (stream.source === 'mediaserver') return 0
   const text = streamText(stream)
   let penalty = 0
   // Disc-remux and lossless-audio markers. "BluRay" alone is deliberately
@@ -157,12 +170,14 @@ export function isUnsafeStream(stream: StreamCandidate): boolean {
 export function rankSafeStreams(
   streams: StreamCandidate[],
   preferredLanguage = 'en',
-  limits: StreamLimits = {}
+  limits: StreamLimits = {},
+  sourcePreference: SourcePreference = 'balanced'
 ): StreamCandidate[] {
   return rankStreams(
     streams.filter((s) => !isUnsafeStream(s)),
     preferredLanguage,
-    limits
+    limits,
+    sourcePreference
   )
 }
 
@@ -177,15 +192,42 @@ export function rankSafeStreams(
  */
 const WRONG_LANGUAGE_PENALTY = 40000
 
+/**
+ * What a media-server copy is worth, relative to a TorBox one.
+ *
+ * This is the single knob the three kinds of user differ on, so it is a
+ * setting rather than a constant:
+ *
+ *  - prefer-local: sized above WRONG_LANGUAGE_PENALTY's neighbours so the
+ *    local copy wins essentially always. For the person on a slow link who
+ *    put the file on the server precisely so it would be used.
+ *  - balanced: 5000. Below the `cached` gate (20000), so a local copy
+ *    never beats a "can actually be played right now" distinction, and
+ *    above one resolution step (max 4320), so it wins ties and beats one
+ *    tier down — a local 1080p is preferred to a remote 2160p, a local
+ *    720p is not. Same sizing logic as REMUX_PENALTY above.
+ *  - prefer-quality: 0. The local copy competes on pure merit and wins
+ *    only an exact tie, which the `cached` term already decides its way.
+ */
+export type SourcePreference = 'prefer-local' | 'balanced' | 'prefer-quality'
+
+const LOCAL_SOURCE_BONUS: Record<SourcePreference, number> = {
+  'prefer-local': 60000,
+  balanced: 5000,
+  'prefer-quality': 0
+}
+
 export function rankStreams(
   streams: StreamCandidate[],
   preferredLanguage = 'en',
-  limits: StreamLimits = {}
+  limits: StreamLimits = {},
+  sourcePreference: SourcePreference = 'balanced'
 ): StreamCandidate[] {
   const score = (s: StreamCandidate): number =>
     (s.exact === false ? 0 : 100000) +
     (s.cached === false ? 0 : 20000) +
     (s.compatible === false ? -50000 : 10000) +
+    (s.source === 'mediaserver' ? LOCAL_SOURCE_BONUS[sourcePreference] : 0) +
     streamResolution(s) -
     streamingPenalty(s) -
     // Reported live: a film played with French audio and French subtitles.
@@ -202,6 +244,45 @@ export function rankStreams(
     )
   })
   return [...withinLimits].sort((a, b) => score(b) - score(a))
+}
+
+/**
+ * Rebuilds a candidate for the source a partial session was pulled from, so
+ * the same release can be re-requested and its existing bytes resumed.
+ *
+ * Returns null when the release cannot be re-requested — no recorded
+ * source (sessions predating sourceRef), or that source is no longer
+ * configured. Falling through to the normal search is right in both cases:
+ * better to fetch a different encode than to fail, and streamCache simply
+ * declines to adopt the mismatched bytes.
+ */
+export function resumeCandidateFor(
+  cached: {
+    title: string
+    resolution?: number
+    sourceRef?: CacheSourceRef
+  },
+  torboxConnected: boolean,
+  mediaServerConnected: boolean
+): StreamCandidate | null {
+  const ref = cached.sourceRef
+  if (!ref) return null
+  const base = {
+    name: cached.title,
+    resolution: cached.resolution,
+    cached: true,
+    compatible: true,
+    exact: true
+  }
+  if (ref.source === 'mediaserver' && ref.itemId && ref.mediaSourceId) {
+    if (!mediaServerConnected) return null
+    return { ...base, source: 'mediaserver', itemId: ref.itemId, mediaSourceId: ref.mediaSourceId }
+  }
+  if (ref.source === 'torbox' && ref.infoHash) {
+    if (!torboxConnected) return null
+    return { ...base, source: 'torbox', infoHash: ref.infoHash }
+  }
+  return null
 }
 
 export function validateTorBoxToken(token: unknown): boolean {

@@ -159,10 +159,13 @@ function clearActiveSubtitle(): void {
  */
 export async function preparePlayback(
   url: string,
-  cacheMeta?: CacheSessionMeta
+  cacheMeta?: CacheSessionMeta,
+  /** Tier 1: play this already-complete cache session instead of opening a
+   *  remote link. `url` is ignored (and is '') on this path. */
+  localToken?: string
 ): Promise<PlaybackResult> {
   try {
-    return await openPlayback(url, cacheMeta)
+    return await openPlayback(url, cacheMeta, localToken)
   } catch (error) {
     // Nothing is playing, so the backpressure raised below has to come
     // back off here. Every SUCCESSFUL end-of-playback path goes through
@@ -223,7 +226,11 @@ async function resolveNextUp(media: PlayerSessionMedia | null): Promise<void> {
   }
 }
 
-async function openPlayback(url: string, cacheMeta?: CacheSessionMeta): Promise<PlaybackResult> {
+async function openPlayback(
+  url: string,
+  cacheMeta?: CacheSessionMeta,
+  localToken?: string
+): Promise<PlaybackResult> {
   activeMediaUrl = url
   // StreamCache is the sole owner of the upstream connection to `url`. It is
   // started before the player opens anything, and mpv then reads only from its
@@ -244,17 +251,24 @@ async function openPlayback(url: string, cacheMeta?: CacheSessionMeta): Promise<
   // opens rather than after the player appears, so the queue is already
   // quiet by the time the first bytes are being pulled.
   setPressure('playback', 'critical')
-  reportPreparation('connect', 'Connecting to the source')
-  const cacheResult = await streamCache.start(
-    url,
-    // Not known yet — the duration now arrives from mpv after the file opens,
-    // where ffprobe used to supply it before this call. streamCache.setDuration
-    // below closes that gap; until then the retention window uses its
-    // chunk-count fallback.
-    undefined,
-    resolveStreamCacheMaxBytes(),
-    cacheMeta
-  )
+  // Tier 1 skips the connect stage entirely — there is nothing to connect
+  // to. Every byte is already on this disk, so this path works with the
+  // network unplugged, which is the point of putting it first.
+  const cacheResult = localToken
+    ? await streamCache.startLocal(localToken, undefined, cacheMeta)
+    : await (async () => {
+        reportPreparation('connect', 'Connecting to the source')
+        return streamCache.start(
+          url,
+          // Not known yet — the duration now arrives from mpv after the file
+          // opens, where ffprobe used to supply it before this call.
+          // streamCache.setDuration below closes that gap; until then the
+          // retention window uses its chunk-count fallback.
+          undefined,
+          resolveStreamCacheMaxBytes(),
+          cacheMeta
+        )
+      })()
   activeCacheUrl = cacheResult.url
   const settings = readSettings()
   reportPreparation('buffer', 'Opening the file')

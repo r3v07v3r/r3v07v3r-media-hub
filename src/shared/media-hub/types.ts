@@ -218,10 +218,54 @@ export interface LibraryItem {
   raw: Record<string, unknown>
 }
 
-// A discovered stream candidate (from Meteor), after TorBox cache-checking
-// and ranking merges in `cached`/`compatible`.
+/** Where a candidate can be played from. Absent means 'torbox', so every
+ *  candidate already persisted in the stream cache stays valid without a
+ *  migration — the field was introduced when the media server was. */
+/**
+ * Where a playable copy lives, in preference order. The ordering is the
+ * product rule ("nearest source that meets the quality target wins"), so it
+ * is declared once here and read by resolve rather than re-stated per call
+ * site.
+ *
+ *  localcache  - already on this machine's disk; needs no network at all
+ *  lancache    - the on-site pre-fetch daemon (not yet implemented)
+ *  mediaserver - a configured Jellyfin library
+ *  torbox      - the debrid service, over the internet
+ */
+export type StreamSource = 'localcache' | 'lancache' | 'mediaserver' | 'torbox'
+
+/** Lowest number wins. Absent `source` is 'torbox', which must therefore
+ *  keep torbox's rank so pre-existing persisted candidates still sort
+ *  correctly. */
+export const STREAM_SOURCE_RANK: Record<StreamSource, number> = {
+  localcache: 0,
+  lancache: 1,
+  mediaserver: 2,
+  torbox: 3
+}
+
+export function streamSourceRank(source: StreamSource | undefined): number {
+  return STREAM_SOURCE_RANK[source ?? 'torbox']
+}
+
+// A discovered stream candidate (from a scraper add-on or a configured
+// media server), after availability checking and ranking merge in
+// `cached`/`compatible`.
 export interface StreamCandidate {
-  infoHash: string
+  source?: StreamSource
+  /** Torrent candidates only. Optional because a media-server item has no
+   *  torrent behind it at all; play:stream requires it on the torbox
+   *  branch and validates it is 40 hex there. */
+  infoHash?: string
+  /** Media-server candidates only — the Jellyfin item and which of its
+   *  media sources (a library can hold more than one file per item). */
+  itemId?: string
+  mediaSourceId?: string
+  /** localcache candidates only — which cache session holds the bytes, and
+   *  whether it holds all of them. Only a complete session can be played
+   *  without contacting any source. */
+  cacheToken?: string
+  complete?: boolean
   name?: string
   title?: string
   sources?: string[]
@@ -327,6 +371,24 @@ export interface BlockedDownload {
  *  show a poster/title for it instead of a bare opaque token. `catalogId`
  *  is the bare catalog id (routable via /:segment/:id) — distinct from the
  *  composite `imdbId:season:episode` key used for stream resolution. */
+/**
+ * Identifies the exact release a cache session holds.
+ *
+ * Recorded so a PARTIAL session can be resumed against the same release it
+ * was started from. Without it, adopting a partial session and resuming
+ * from whatever the resolver picks this time can splice two different
+ * encodes of the same film together — the failure the totalBytes check
+ * used to prevent by refusing adoption outright.
+ */
+export interface CacheSourceRef {
+  source: StreamSource
+  /** torbox */
+  infoHash?: string
+  /** mediaserver */
+  itemId?: string
+  mediaSourceId?: string
+}
+
 export interface CacheSessionMeta {
   title: string
   posterUrl?: string
@@ -334,6 +396,13 @@ export interface CacheSessionMeta {
   mediaKind?: 'movie' | 'series' | 'anime'
   seasonNumber?: number
   episodeNumber?: number
+  /** Which release these bytes are. Absent on sessions written before this
+   *  existed — those stay partial-adoption-ineligible, which is the old
+   *  behaviour and safe. */
+  sourceRef?: CacheSourceRef
+  /** Resolution tier of the cached copy, so the quality target can be
+   *  applied to it without re-contacting any source. */
+  resolution?: number
 }
 
 /** One entry in the Downloads page's "Cached Streams" list. */
@@ -871,12 +940,33 @@ export interface MediaHubPublicSettings {
    *  turns it back on. The Settings pane says so, since an app that finds a
    *  local model by itself and then stops doing it owes an explanation. */
   ollamaAutoDetect: boolean
+  /** How much a copy on the configured media server is worth relative to a
+   *  TorBox one. See core.ts's LOCAL_SOURCE_BONUS for the sizing, and the
+   *  Settings pane for the wording shown to the person. */
+  sourcePreference: SourcePreference
+  /** 'disk' keeps the rolling chunk cache on disk (the default). 'memory'
+   *  holds it in RAM only and writes nothing about the media to disk at
+   *  any point — for a fast connection, or where a file on the machine is
+   *  the thing being avoided. */
+  cacheMode: CacheMode
+  /** Bound on the in-memory buffer, in MB. Only meaningful in memory mode. */
+  memoryCacheMaxMb: number
 }
+
+export type CacheMode = 'disk' | 'memory'
+
+/** Mirrors core.ts's SourcePreference. Declared here as well because the
+ *  renderer must not import from main/. */
+export type SourcePreference = 'prefer-local' | 'balanced' | 'prefer-quality'
 
 export interface MediaHubSettingsSnapshot extends MediaHubPublicSettings {
   appVersion: string
   themes: Theme[]
   torboxConnected: boolean
+  /** Whether a media server is configured, enabled, and has credentials.
+   *  Playback is gated on having at least one of this and torboxConnected
+   *  — either source alone is a complete setup. */
+  mediaServerConnected: boolean
   tmdbConnected: boolean
   omdbConnected: boolean
   osConnected: boolean

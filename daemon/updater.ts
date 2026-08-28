@@ -1,0 +1,215 @@
+// The updater: polls the release feed, stages verified new versions, and
+// asks for a restart only at a moment that interrupts nobody.
+//
+// Stage and apply are deliberately separate. STAGING (download + verify +
+// write to versions/<v>/) happens the moment a new release is seen — it
+// touches nothing running. APPLYING (restart into the staged version) is
+// gated by activity.ts's canRestartNow: never while a stream is open,
+// never inside the idle grace window, preferring the household's quiet
+// hours, with a 24h staleness cap so updates cannot be deferred forever.
+// The launcher's tripwire-and-rollback handles the remaining risk: a
+// staged version that fails to boot is abandoned for the last good one.
+
+import crypto from 'node:crypto'
+import fsp from 'node:fs/promises'
+import path from 'node:path'
+
+import type { ActivityTracker } from './activity'
+import { canRestartNow } from './activity'
+import { stagedBundlePath, versionsDir } from './launcher'
+import {
+  isAllowedUpdateUrl,
+  selectUpdate,
+  type FeedRelease,
+  type UpdateChannel
+} from './updateFeed'
+
+const DEFAULT_FEED = 'https://api.github.com/repos/R3v07v3R/r3v07v3r-media-hub/releases?per_page=15'
+/** 4h base + up to 2h jitter — a household of daemons must not hit the
+ *  feed on synchronized clocks. */
+const CHECK_BASE_MS = 4 * 60 * 60 * 1000
+const CHECK_JITTER_MS = 2 * 60 * 60 * 1000
+/** Dev/simulation timing overrides. Documented nowhere user-facing on
+ *  purpose: production cadence is not configuration, it is design — but a
+ *  live update rehearsal cannot wait five minutes per step. */
+const FIRST_CHECK_DELAY_MS = Number(process.env.R3_CACHE_UPDATE_FIRST_MS) || 5 * 60 * 1000
+/** How often a staged update re-asks "is now a quiet moment?". */
+const APPLY_POLL_MS = Number(process.env.R3_CACHE_UPDATE_APPLY_MS) || 5 * 60 * 1000
+const MAX_BUNDLE_BYTES = 20 * 1024 * 1024
+
+export interface UpdaterStatus {
+  channel: UpdateChannel
+  enabled: boolean
+  checkedAt: number
+  latestSeen: string
+  staged: string
+  stagedAt: number
+  lastError: string
+}
+
+export interface UpdaterDeps {
+  dataDir: string
+  currentVersion: string
+  channel: UpdateChannel
+  enabled: boolean
+  activity: ActivityTracker
+  /** Resolves the payload's run() with 'restart' — the launcher loop then
+   *  boots the newest staged version. */
+  requestRestart: () => void
+  log: (message: string) => void
+  /** Test seams. */
+  feedUrl?: string
+  fetchImpl?: typeof fetch
+  applyPollMs?: number
+}
+
+export interface Updater {
+  start(): void
+  stop(): void
+  status(): UpdaterStatus
+  /** One immediate check — also the test entrypoint. */
+  checkOnce(): Promise<void>
+}
+
+export function createUpdater(deps: UpdaterDeps): Updater {
+  const fetchImpl = deps.fetchImpl ?? globalThis.fetch
+  const feedUrl = deps.feedUrl ?? process.env.R3_CACHE_UPDATE_FEED ?? DEFAULT_FEED
+  const feedOverrideHost = feedUrl === DEFAULT_FEED ? undefined : new URL(feedUrl).hostname
+
+  let checkTimer: NodeJS.Timeout | null = null
+  let applyTimer: NodeJS.Timeout | null = null
+  let stopped = false
+  const status: UpdaterStatus = {
+    channel: deps.channel,
+    enabled: deps.enabled,
+    checkedAt: 0,
+    latestSeen: '',
+    staged: '',
+    stagedAt: 0,
+    lastError: ''
+  }
+
+  async function download(url: string, maxBytes: number): Promise<Buffer> {
+    if (!isAllowedUpdateUrl(url, feedOverrideHost)) {
+      throw new Error(`update URL not allowed: ${new URL(url).hostname}`)
+    }
+    const response = await fetchImpl(url, {
+      headers: { Accept: 'application/octet-stream', 'User-Agent': 'r3-cache' },
+      redirect: 'follow'
+    })
+    if (!response.ok) throw new Error(`download failed (${response.status})`)
+    const body = Buffer.from(await response.arrayBuffer())
+    if (body.length > maxBytes) throw new Error('download larger than expected')
+    return body
+  }
+
+  async function checkOnce(): Promise<void> {
+    try {
+      const response = await fetchImpl(feedUrl, {
+        headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'r3-cache' }
+      })
+      if (!response.ok) throw new Error(`feed answered ${response.status}`)
+      const releases = (await response.json()) as FeedRelease[]
+      status.checkedAt = Date.now()
+
+      const candidate = selectUpdate(releases, deps.currentVersion, deps.channel)
+      if (!candidate) {
+        status.lastError = ''
+        return
+      }
+      status.latestSeen = candidate.version
+      if (status.staged === candidate.version) return
+      const alreadyStaged = await fsp
+        .stat(stagedBundlePath(deps.dataDir, candidate.version))
+        .then(() => true)
+        .catch(() => false)
+      if (alreadyStaged) {
+        noteStaged(candidate.version)
+        return
+      }
+
+      deps.log(`update ${candidate.version} found (running ${deps.currentVersion}) — staging`)
+      const [bundle, checksumFile] = await Promise.all([
+        download(candidate.bundleUrl, MAX_BUNDLE_BYTES),
+        download(candidate.checksumUrl, 4096)
+      ])
+
+      // The checksum file is "<hex>  <filename>" (shasum convention); only
+      // the hex matters. A mismatch is a hard stop — an update that fails
+      // verification is not retried with less rigour, it is not an update.
+      const expected = /^[a-f0-9]{64}/i.exec(checksumFile.toString('utf8').trim())?.[0]
+      const actual = crypto.createHash('sha256').update(bundle).digest('hex')
+      if (!expected || expected.toLowerCase() !== actual.toLowerCase()) {
+        throw new Error(`checksum mismatch for ${candidate.version}`)
+      }
+
+      const dir = path.join(versionsDir(deps.dataDir), candidate.version)
+      await fsp.mkdir(dir, { recursive: true })
+      const finalPath = stagedBundlePath(deps.dataDir, candidate.version)
+      const tmp = `${finalPath}.${process.pid}.tmp`
+      await fsp.writeFile(tmp, bundle)
+      await fsp.rename(tmp, finalPath)
+      deps.log(`staged   ${candidate.version} (${bundle.length} bytes, checksum verified)`)
+      noteStaged(candidate.version)
+      status.lastError = ''
+    } catch (error) {
+      status.lastError = (error as Error).message
+      deps.log(`update check failed: ${status.lastError}`)
+    }
+  }
+
+  function noteStaged(version: string): void {
+    status.staged = version
+    if (!status.stagedAt) status.stagedAt = Date.now()
+    armApplyPoll()
+  }
+
+  function armApplyPoll(): void {
+    if (applyTimer || stopped || !status.staged) return
+    applyTimer = setInterval(() => {
+      const snapshot = deps.activity.snapshot()
+      const ok = canRestartNow({
+        activeStreams: snapshot.activeStreams,
+        lastStreamAt: snapshot.lastStreamAt,
+        hourCounts: snapshot.hourCounts,
+        stagedAt: status.stagedAt,
+        now: Date.now()
+      })
+      if (!ok) return
+      deps.log(`applying ${status.staged} — nobody is watching`)
+      stop()
+      deps.requestRestart()
+    }, deps.applyPollMs ?? APPLY_POLL_MS)
+    applyTimer.unref?.()
+  }
+
+  function scheduleNextCheck(): void {
+    if (stopped) return
+    const delay = CHECK_BASE_MS + Math.floor(Math.random() * CHECK_JITTER_MS)
+    checkTimer = setTimeout(() => {
+      void checkOnce().finally(scheduleNextCheck)
+    }, delay)
+    checkTimer.unref?.()
+  }
+
+  function stop(): void {
+    stopped = true
+    if (checkTimer) clearTimeout(checkTimer)
+    if (applyTimer) clearInterval(applyTimer)
+    checkTimer = null
+    applyTimer = null
+  }
+
+  return {
+    start() {
+      if (!deps.enabled) return
+      checkTimer = setTimeout(() => {
+        void checkOnce().finally(scheduleNextCheck)
+      }, FIRST_CHECK_DELAY_MS)
+      checkTimer.unref?.()
+    },
+    stop,
+    status: () => ({ ...status }),
+    checkOnce
+  }
+}

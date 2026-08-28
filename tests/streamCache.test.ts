@@ -15,6 +15,7 @@ import {
   cacheContentKey,
   chunkIndexForByte,
   computeRetainedChunkIndices,
+  createMemoryChunkStore,
   findReusableSession
 } from '../src/main/media-hub/streamCache'
 
@@ -308,7 +309,68 @@ check('an episode never matches a different episode of the same show', () => {
   assert.notEqual(s2e5, s2e6)
 })
 
+// --- memory-only store ("never store media on this machine") --------------
+
+check('the memory store round-trips a chunk', () => {
+  const store = createMemoryChunkStore()
+  assert.equal(store.persistent, false, 'memory chunks must not claim to outlive the process')
+  void store.write('/unused', 'tok', 0, Buffer.from('hello'))
+})
+
+async function memoryStoreChecks(): Promise<void> {
+  await checkAsync('reads back exactly what was written', async () => {
+    const store = createMemoryChunkStore()
+    await store.write('/unused', 'tok', 3, Buffer.from('abcdef'))
+    assert.equal((await store.read('/unused', 'tok', 3)).toString(), 'abcdef')
+  })
+
+  await checkAsync('copies the chunk instead of retaining the caller buffer', async () => {
+    // runFill hands write() a subarray of its rolling buffer and then keeps
+    // mutating it. Storing the view would both corrupt the chunk and pin
+    // the whole parent ArrayBuffer, blowing past the configured cap.
+    const store = createMemoryChunkStore()
+    const rolling = Buffer.from('ORIGINAL')
+    await store.write('/unused', 'tok', 0, rolling.subarray(0, 8))
+    rolling.write('OVERWRIT', 0)
+    assert.equal((await store.read('/unused', 'tok', 0)).toString(), 'ORIGINAL')
+  })
+
+  await checkAsync('a missing chunk rejects rather than resolving empty', async () => {
+    const store = createMemoryChunkStore()
+    await assert.rejects(() => store.read('/unused', 'tok', 9))
+  })
+
+  await checkAsync('remove drops one chunk, clear drops one session', async () => {
+    const store = createMemoryChunkStore()
+    await store.write('/unused', 'a', 0, Buffer.from('a0'))
+    await store.write('/unused', 'a', 1, Buffer.from('a1'))
+    await store.write('/unused', 'b', 0, Buffer.from('b0'))
+
+    await store.remove('/unused', 'a', 0)
+    await assert.rejects(() => store.read('/unused', 'a', 0), 'the removed chunk is gone')
+    assert.equal((await store.read('/unused', 'a', 1)).toString(), 'a1', 'its sibling survives')
+
+    store.clear('a')
+    await assert.rejects(() => store.read('/unused', 'a', 1), 'clear drops the whole session')
+    assert.equal((await store.read('/unused', 'b', 0)).toString(), 'b0', 'other sessions untouched')
+  })
+
+  await checkAsync('writes nothing to the filesystem', async () => {
+    // The whole point of the mode: a real cache root is handed in and must
+    // come back untouched.
+    await withTempRoot(async (root) => {
+      const store = createMemoryChunkStore()
+      await store.write(root, 'tok', 0, Buffer.from('secret bytes'))
+      await store.write(root, 'tok', 1, Buffer.from('more secret bytes'))
+      await store.read(root, 'tok', 0)
+      assert.deepEqual(await fsp.readdir(root), [], 'the cache root must stay empty')
+    })
+  })
+}
+
 async function main(): Promise<void> {
+  await memoryStoreChecks()
+
   await checkAsync('adopts a session with the same content AND the same length', async () => {
     await withTempRoot(async (root) => {
       await writeSession(root, TOKEN_A, { title: 'Dune', catalogId: 'tt1', totalBytes: 5000 })

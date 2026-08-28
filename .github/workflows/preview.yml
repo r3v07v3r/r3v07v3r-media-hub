@@ -29,7 +29,56 @@ permissions:
   contents: write
 
 jobs:
+  # The r3-cache daemon ships with every app release — same repo, same
+  # version, same release page — so the app can judge protocol
+  # compatibility from the daemon's /api/ping version alone, and so the
+  # daemon's future self-updater reads the very feed electron-updater
+  # already uses. SEA executables embed their platform's Node, hence one
+  # leg per OS rather than cross-compilation.
+  daemon:
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            artifact: r3-cache-win-x64.exe
+          - os: ubuntu-latest
+            artifact: r3-cache-linux-x64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Same formula as the preview job's version step — run_number is
+      # shared across all jobs of one run, so both stamp identically.
+      - name: Build daemon (bundle + self-contained executable)
+        shell: bash
+        run: |
+          BASE=$(node -p "require('./package.json').version")
+          R3_CACHE_VERSION="${BASE}-preview.${{ github.run_number }}" node scripts/build-daemon.mjs --sea
+
+      # The universal bundle is byte-identical from either leg; the Linux
+      # leg is arbitrarily the one that contributes it, so the merged
+      # download contains each file exactly once.
+      - name: Drop the duplicate bundle (Windows leg)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: rm -f dist-daemon/r3-cache.cjs dist-daemon/r3-cache.cjs.sha256
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: daemon-${{ matrix.os }}
+          path: dist-daemon/*
+          retention-days: 3
+
   preview:
+    needs: daemon
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -110,6 +159,25 @@ jobs:
         run: npx electron-builder --win --publish always
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Attached BEFORE the draft flips public, so the release appears
+      # atomically with the daemon files already on it — the same reason
+      # the draft exists at all (see the create step above).
+      - name: Attach daemon builds to the draft
+        if: steps.version.outputs.exists == 'false'
+        uses: actions/download-artifact@v4
+        with:
+          pattern: daemon-*
+          path: daemon-assets
+          merge-multiple: true
+
+      - name: Upload daemon assets
+        if: steps.version.outputs.exists == 'false'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "v${{ steps.version.outputs.version }}"             --repo "${{ github.repository }}"             daemon-assets/* --clobber
 
       # Only now does the release (and its assets) become visible to
       # electron-updater — atomically, with everything already attached.

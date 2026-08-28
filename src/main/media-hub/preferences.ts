@@ -6,8 +6,10 @@
 // "improvements".
 
 import type {
+  CacheMode,
   MediaHubPublicSettings,
   SavedFilter,
+  SourcePreference,
   Theme,
   UpdateChannel
 } from '../../shared/media-hub/types'
@@ -90,8 +92,33 @@ export function publicSettings(settings: Record<string, unknown> = {}): MediaHub
     // appIpc.ts).
     ollamaBaseUrl: normalizeOllamaBaseUrl(settings.ollamaBaseUrl),
     ollamaModel: normalizeOllamaModel(settings.ollamaModel),
-    ollamaAutoDetect: settings.ollamaAutoDetect !== false
+    ollamaAutoDetect: settings.ollamaAutoDetect !== false,
+    sourcePreference: normalizeSourcePreference(settings.sourcePreference),
+    cacheMode: normalizeCacheMode(settings.cacheMode),
+    memoryCacheMaxMb: normalizeMemoryCacheMb(settings.memoryCacheMaxMb)
   }
+}
+
+/** Anything but an explicit 'memory' is the disk default — the safer of
+ *  the two to fall back to, since it is what every existing install does. */
+export function normalizeCacheMode(value: unknown): CacheMode {
+  return value === 'memory' ? 'memory' : 'disk'
+}
+
+/** Kept in step with streamCache.ts's own clamp so the Settings pane can
+ *  never show a number the cache would not actually honour. */
+export function normalizeMemoryCacheMb(value: unknown): number {
+  const raw = Number(value)
+  if (!Number.isFinite(raw) || raw <= 0) return 512
+  return Math.min(4096, Math.max(256, Math.round(raw)))
+}
+
+/** An unknown or absent value is the balanced default — a settings file
+ *  outlives the code that wrote it, and this is read on every snapshot. */
+export function normalizeSourcePreference(value: unknown): SourcePreference {
+  return value === 'prefer-local' || value === 'prefer-quality' || value === 'balanced'
+    ? value
+    : 'balanced'
 }
 
 /**
@@ -157,6 +184,9 @@ export function logoutSettings(
   | 'ollamaBaseUrl'
   | 'ollamaModel'
   | 'ollamaAutoDetect'
+  | 'sourcePreference'
+  | 'cacheMode'
+  | 'memoryCacheMaxMb'
 > {
   return {
     theme: normalizeTheme(settings.theme),
@@ -199,6 +229,15 @@ export function logoutSettings(
     // silently switch it back on.
     ollamaBaseUrl: normalizeOllamaBaseUrl(settings.ollamaBaseUrl),
     ollamaModel: normalizeOllamaModel(settings.ollamaModel),
-    ollamaAutoDetect: settings.ollamaAutoDetect !== false
+    ollamaAutoDetect: settings.ollamaAutoDetect !== false,
+    // Also a device preference, for the same reason: whether there is a
+    // media server on this network, and how much you want it preferred,
+    // is a fact about the machine and the connection — not about which
+    // account was signed in.
+    sourcePreference: normalizeSourcePreference(settings.sourcePreference),
+    // Device preferences too: how fast this connection is and whether
+    // media may touch this disk are facts about the machine.
+    cacheMode: normalizeCacheMode(settings.cacheMode),
+    memoryCacheMaxMb: normalizeMemoryCacheMb(settings.memoryCacheMaxMb)
   }
 }
