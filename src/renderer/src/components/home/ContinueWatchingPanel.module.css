@@ -38,6 +38,10 @@
   -webkit-backdrop-filter: blur(20px);
   box-shadow: 0 24px 60px rgba(0, 0, 0, 0.5);
 }
+.panelEmpty {
+  min-height: 0;
+  padding: 14px 18px;
+}
 
 /* Perimeter treatment: thin cyan hugging the lower boundary, warm
    orange/red concentrated along the upper-right corner — two distinct
@@ -106,7 +110,13 @@
      opaque through the middle; only the outer ~20px softens, and only
      enough to hint "more content" rather than visibly clip the nearest
      row. */
-  mask-image: linear-gradient(to bottom, transparent 0, black 20px, black calc(100% - 20px), transparent 100%);
+  mask-image: linear-gradient(
+    to bottom,
+    transparent 0,
+    black 20px,
+    black calc(100% - 20px),
+    transparent 100%
+  );
   -webkit-mask-image: linear-gradient(
     to bottom,
     transparent 0,
@@ -333,16 +343,19 @@
 }
 
 .empty {
-  flex: 1;
   display: flex;
-  flex-direction: column;
   align-items: center;
   justify-content: center;
   gap: 8px;
-  color: var(--text-muted);
-  font-size: 12.5px;
+  color: var(--text-secondary);
+  font-family: var(--font-display);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
   text-align: center;
-  padding: 20px 10px;
+}
+.empty svg {
+  color: var(--accent-cyan);
 }
 
 /* Tablet + mobile (spec sections 7/8): Continue Watching becomes a
@@ -368,6 +381,10 @@
        168px-wide/16:9 cards + their title/meta text. */
     min-height: 210px;
     padding: 14px 4px 14px 16px;
+  }
+  .panel.panelEmpty {
+    min-height: 0;
+    padding: 14px 18px;
   }
   .heading {
     padding-right: 12px;
