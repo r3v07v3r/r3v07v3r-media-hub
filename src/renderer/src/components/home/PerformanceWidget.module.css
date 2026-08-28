@@ -4,16 +4,23 @@
    Keeps its own "status" grid cell (row 2, col 3) rather than sharing
    row 1's "hero" cell with Continue Watching — row 1 is only 520px tall
    at minimum and the two together didn't fit without starving Continue
-   Watching's own list down to a single visible row. Top-aligned (was
-   `align-self: stretch` + `justify-content: center`, which centered it
-   in the middle of row 2's 260px, reading as detached from Continue
-   Watching above) and shrunk down, so it hugs the row directly under
-   Continue Watching instead. */
+   Watching's own list down to a single visible row.
+   Aligned to RecommendationCarousel's own card row, not the top of the
+   shared grid row: "picks" has a heading above its cards
+   (RecommendationCarousel.module.css's .heading, 17px) plus the 10px gap
+   before .scrollerWrap plus the scroller's own 3px top padding — 30px
+   total, measured via getBoundingClientRect at 1920x1080 — so this
+   widget's top needs that same offset to land level with the tiles
+   instead of the heading text above them. `align-self: stretch` (rather
+   than a second hand-picked height) makes the bottom edge track
+   whatever "picks" row 2 actually resolves to at any breakpoint, which
+   lands within a few px of the card row's own height without a second
+   magic number to keep in sync with RecommendationCarousel's tile size. */
 .widget {
   grid-area: status;
-  align-self: start;
+  align-self: stretch;
   justify-self: center;
-  margin-top: 4px;
+  margin-top: 30px;
   position: relative;
   display: flex;
   flex-direction: column;
@@ -34,7 +41,6 @@
      still reads as "pill," not "rounded rectangle." */
   border-radius: 26px;
   min-width: 0;
-  cursor: pointer;
   transition: border-color var(--transition-fast);
   /* Brightened from the ambient-dim pass (0.1 -> 0.22) so the shell
      itself is legible as a panel edge from a few metres away, while
@@ -143,17 +149,6 @@
   color: var(--accent-cyan);
 }
 
-.detail {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  font-size: 11px;
-  color: var(--text-muted);
-  opacity: 0.85;
-  padding-top: 7px;
-  border-top: 1px dashed var(--border-subtle);
-}
-
 @media (max-width: 1439px) {
   .widget {
     width: 128px;
@@ -186,6 +181,11 @@
     padding: 8px 12px;
     gap: 8px;
     border-radius: var(--radius-pill);
+    /* Only this collapsed pill is actually clickable (tap to reveal the
+       popover) — the desktop gauge stack above shows everything at rest
+       and isn't a button any more, so the pointer cursor is scoped here
+       rather than on the shared base rule. */
+    cursor: pointer;
   }
   /* Hide the always-rendered inline gauge stack (desktop's default
      content) — the popover below renders its own copy instead, so the
@@ -247,7 +247,11 @@
     gap: 7px;
     padding: 12px 11px;
     border-radius: 22px;
-    margin-top: 2px;
+    /* Same alignment-with-the-tiles reasoning as the base rule's
+       margin-top, recomputed for this tier's own numbers: heading (17px)
+       + .section's 8px gap at this tier (RecommendationCarousel.module.css)
+       + the scroller's unchanged 3px top padding. */
+    margin-top: 28px;
   }
   .gaugeRingWrap,
   .gaugeRing {
