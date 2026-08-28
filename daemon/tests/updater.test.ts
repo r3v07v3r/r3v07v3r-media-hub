@@ -26,7 +26,13 @@ import {
   writeState
 } from '../launcher'
 import { createUpdater } from '../updater'
-import { isAllowedUpdateUrl, isNewerVersion, selectUpdate } from '../updateFeed'
+import {
+  isAllowedAssetUrl,
+  isAllowedRedirectUrl,
+  isNewerVersion,
+  repoFromFeedUrl,
+  selectUpdate
+} from '../updateFeed'
 
 // --- version arithmetic -----------------------------------------------------
 
@@ -68,18 +74,90 @@ const fullAssets = [asset('r3-cache.cjs'), asset('r3-cache.cjs.sha256'), asset('
   assert.equal(selectUpdate(releases, '1.0.85-preview.3', 'preview'), null, 'already current')
 }
 
-// --- download host allowlist ------------------------------------------------
+// --- download allowlist: pinned to the feed's own repo ----------------------
+//
+// An adversarial review found the first version of this trusted "any
+// GitHub host", which is no constraint: raw.githubusercontent.com serves
+// whatever anyone has ever committed. These cases are the pin.
 
-assert.equal(isAllowedUpdateUrl('https://github.com/x/y/releases/download/a/b'), true)
-assert.equal(isAllowedUpdateUrl('https://objects.githubusercontent.com/x'), true)
-assert.equal(isAllowedUpdateUrl('https://evil.example.com/r3-cache.cjs'), false)
-assert.equal(isAllowedUpdateUrl('http://github.com/x'), false, 'plain http refused for GitHub')
-assert.equal(
-  isAllowedUpdateUrl('http://127.0.0.1:9000/x', '127.0.0.1'),
-  true,
-  'the test-feed override host is allowed, and only it'
+assert.deepEqual(
+  repoFromFeedUrl('https://api.github.com/repos/R3v07v3R/r3v07v3r-media-hub/releases?per_page=15'),
+  {
+    owner: 'R3v07v3R',
+    repo: 'r3v07v3r-media-hub'
+  }
 )
-assert.equal(isAllowedUpdateUrl('http://127.0.0.2:9000/x', '127.0.0.1'), false)
+assert.equal(
+  repoFromFeedUrl('http://127.0.0.1:9000/releases'),
+  null,
+  'a non-GitHub feed has no pin'
+)
+
+const PINNED = { repo: { owner: 'R3v07v3R', repo: 'r3v07v3r-media-hub' } }
+
+assert.equal(
+  isAllowedAssetUrl(
+    'https://github.com/R3v07v3R/r3v07v3r-media-hub/releases/download/v1.0.0/r3-cache.cjs',
+    PINNED
+  ),
+  true,
+  'this repo/s own release download is the only entry point'
+)
+assert.equal(
+  isAllowedAssetUrl('https://raw.githubusercontent.com/attacker/x/main/evil.cjs', PINNED),
+  false,
+  'THE finding: arbitrary GitHub-hosted code is not an update'
+)
+assert.equal(
+  isAllowedAssetUrl('https://github.com/attacker/x/releases/download/v1/evil.cjs', PINNED),
+  false,
+  'another repo/s releases are not this daemon/s updates'
+)
+assert.equal(
+  isAllowedAssetUrl('https://github.com/attacker/x/raw/main/evil.cjs', PINNED),
+  false,
+  'the raw redirect trick is refused at the entry point'
+)
+assert.equal(isAllowedAssetUrl('https://evil.example.com/r3-cache.cjs', PINNED), false)
+assert.equal(
+  isAllowedAssetUrl('http://github.com/R3v07v3R/r3v07v3r-media-hub/releases/download/v1/x', PINNED),
+  false,
+  'plain http refused for GitHub'
+)
+assert.equal(
+  isAllowedAssetUrl(
+    'https://user:pw@github.com/R3v07v3R/r3v07v3r-media-hub/releases/download/v1/x',
+    PINNED
+  ),
+  false,
+  'embedded credentials refused'
+)
+
+// Redirect hops: GitHub's asset CDN only, and only as a continuation of a
+// chain that already started at a pinned release URL.
+assert.equal(isAllowedRedirectUrl('https://objects.githubusercontent.com/x', PINNED), true)
+assert.equal(isAllowedRedirectUrl('https://release-assets.githubusercontent.com/y', PINNED), true)
+assert.equal(isAllowedRedirectUrl('https://evil.example.com/x', PINNED), false)
+assert.equal(
+  isAllowedRedirectUrl('https://githubusercontent.com.evil.com/x', PINNED),
+  false,
+  'suffix-lookalike hosts are refused'
+)
+
+// A feed override serves its own assets — plaintext ONLY over loopback.
+const OVERRIDE = { repo: null, overrideHost: '127.0.0.1' }
+assert.equal(isAllowedAssetUrl('http://127.0.0.1:9000/bundle', OVERRIDE), true)
+assert.equal(isAllowedAssetUrl('http://127.0.0.2:9000/bundle', OVERRIDE), false)
+assert.equal(
+  isAllowedAssetUrl('http://mirror.local/bundle', { repo: null, overrideHost: 'mirror.local' }),
+  false,
+  'a networked mirror may not drop TLS'
+)
+assert.equal(
+  isAllowedAssetUrl('https://mirror.local/bundle', { repo: null, overrideHost: 'mirror.local' }),
+  true,
+  'a networked mirror over TLS is fine'
+)
 
 // --- the never-interrupt-playback gate --------------------------------------
 
