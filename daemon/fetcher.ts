@@ -105,13 +105,27 @@ export function createFetcher({
         throw new Error('TorBox has no fetchable file for this torrent yet.')
       }
 
-      // Refuse to start a download the disk cannot hold. The eviction pass
-      // keeps the budget; this keeps the DRIVE — they are different limits.
+      // TWO different limits, both enforced BEFORE a byte is written.
+      //
+      // The drive: what the machine can physically afford.
       const stat = await fsp.statfs(dataDir)
       const free = stat.bavail * stat.bsize
       if (resolved.sizeBytes > 0 && free < resolved.sizeBytes + DISK_MARGIN_BYTES) {
         throw new Error(
           `Not enough free disk for ${(resolved.sizeBytes / 1024 ** 3).toFixed(1)} GB.`
+        )
+      }
+
+      // The budget: what the cache is allowed to use. This used to be left
+      // entirely to the eviction timer, which reclaims space only AFTER it
+      // has been taken — so the cache genuinely sat over its cap between
+      // passes rather than at it. Room is made first now, by evicting
+      // least-recently-accessed items, and a file bigger than the whole
+      // budget is refused instead of either blowing the cap or emptying the
+      // cache to hold one thing.
+      if (resolved.sizeBytes > 0 && !(await storage.makeRoomFor(resolved.sizeBytes))) {
+        throw new Error(
+          `${(resolved.sizeBytes / 1024 ** 3).toFixed(1)} GB does not fit the cache budget.`
         )
       }
 

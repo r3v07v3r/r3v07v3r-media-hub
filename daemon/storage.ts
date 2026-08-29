@@ -259,6 +259,21 @@ export interface ItemStore {
   tombstones(): Promise<Record<string, number>>
   clearTombstone(contentKey: string): Promise<void>
   usedBytes(): Promise<number>
+  /**
+   * Frees space until an incoming item of `bytes` would fit INSIDE the
+   * budget, evicting least-recently-accessed items to do it.
+   *
+   * Called before a fetch starts. Without it the budget was only ever
+   * reclaimed after the fact, on the eviction timer, so the cache genuinely
+   * sat over its cap between passes — 24.8 GB of a 22.6 GB budget, which is
+   * not a rounding error, it is the limit not being a limit.
+   *
+   * Returns false when no amount of evicting would help, which means the
+   * item is bigger than the whole budget. Refusing is the only honest answer
+   * there: fetching it would either blow the cap or evict the entire cache
+   * to hold one file.
+   */
+  makeRoomFor(bytes: number): Promise<boolean>
 }
 
 export function createItemStore(
@@ -470,6 +485,33 @@ export function createItemStore(
     async usedBytes() {
       const items = await list()
       return items.reduce((sum, item) => sum + item.presentBytes, 0)
+    },
+
+    async makeRoomFor(bytes) {
+      if (bytes <= 0) return true
+      // Nothing on disk could make this fit, so evicting would be pure loss.
+      // Checked FIRST, or a too-big item would empty the cache on its way to
+      // failing anyway.
+      if (bytes > policy.budgetBytes) return false
+
+      const items = await list()
+      let used = items.reduce((sum, item) => sum + item.presentBytes, 0)
+      if (used + bytes <= policy.budgetBytes) return true
+
+      // Oldest access first, matching the budget pass in planEvictions — the
+      // two answer the same question and should not answer it differently.
+      const byAge = [...items].sort(
+        (a, b) => a.lastAccessAt - b.lastAccessAt || a.fetchedAt - b.fetchedAt
+      )
+      for (const item of byAge) {
+        if (used + bytes <= policy.budgetBytes) break
+        await remove(item.infoHash)
+        used -= item.presentBytes
+      }
+      // No tombstones. This is pressure, not disinterest — the same reason
+      // the budget pass does not leave them, and tombstoning here would stop
+      // the feeder ever asking for what it just displaced.
+      return used + bytes <= policy.budgetBytes
     }
   }
 }

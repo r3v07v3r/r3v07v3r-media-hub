@@ -1778,6 +1778,65 @@ async function sharingRouteTest(): Promise<void> {
   console.log('ok  sharing')
 }
 
+// ---------------------------------------------------------------------
+// The budget as a limit rather than a target.
+//
+// Eviction reclaims space AFTER it has been taken, so on its own the cache
+// sits over its cap between passes — observed on the live server at 24.8 GB
+// of a 22.6 GB budget. Room is made before a fetch starts instead.
+// ---------------------------------------------------------------------
+
+async function budgetRoomTest(): Promise<void> {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'r3-room-'))
+  const store = createItemStore(root, {
+    idleTtlMs: 60 * DAY,
+    hardMaxMs: 365 * DAY,
+    budgetBytes: 1000,
+    tombstoneMs: 60 * DAY
+  })
+
+  const now = Date.now()
+  const seed = async (hash: string, key: string, bytes: number, age: number): Promise<void> => {
+    const dir = await store.beginItem({
+      contentKey: key,
+      title: key,
+      infoHash: hash,
+      fileName: 'f.mkv',
+      sizeBytes: bytes,
+      fetchedAt: now - age,
+      lastAccessAt: now - age
+    })
+    await fsp.writeFile(path.join(dir, 'f.mkv'), 'x'.repeat(bytes))
+  }
+
+  await seed('a'.repeat(40), 'k-a', 400, 3 * DAY)
+  await seed('b'.repeat(40), 'k-b', 400, 1 * DAY)
+  assert.equal(await store.usedBytes(), 800)
+
+  // Fits without touching anything.
+  assert.equal(await store.makeRoomFor(200), true)
+  assert.equal(await store.usedBytes(), 800, 'nothing is evicted when it already fits')
+
+  // Does not fit: the oldest-accessed item goes, and only that one.
+  assert.equal(await store.makeRoomFor(500), true)
+  assert.equal(await store.get('a'.repeat(40)), null, 'the least recently used item is taken')
+  assert.ok(await store.get('b'.repeat(40)), 'and the newer one is kept')
+  assert.ok((await store.usedBytes()) + 500 <= 1000, 'room really was made')
+
+  // Bigger than the whole budget: refused, and refused WITHOUT emptying the
+  // cache on the way to failing.
+  const before = await store.usedBytes()
+  assert.equal(await store.makeRoomFor(5000), false)
+  assert.equal(await store.usedBytes(), before, 'a hopeless request evicts nothing')
+
+  // Pressure, not disinterest — so no tombstones, or the feeder would stop
+  // asking for exactly what it just displaced.
+  assert.deepEqual(await store.tombstones(), {}, 'making room leaves no tombstone')
+
+  await fsp.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
+  console.log('ok  budget room')
+}
+
 void main()
   .then(() => {
     console.log('ok  r3-cache daemon core')
@@ -1789,5 +1848,6 @@ void main()
   .then(approvalTests)
   .then(deviceRouteTests)
   .then(quotaStoreTest)
+  .then(budgetRoomTest)
   .then(statusScopeTest)
   .then(sharingRouteTest)
