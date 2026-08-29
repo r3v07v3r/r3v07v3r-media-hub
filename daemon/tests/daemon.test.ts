@@ -1144,12 +1144,13 @@ async function deviceRouteTests(): Promise<void> {
   await pairing.load()
   const admin = createAdmin(root)
   await admin.load()
+  const credentials = createCredentials(root)
   const server = createDaemonServer({
     storage: store,
     jobs: createJobStore(root),
     pairing,
     admin,
-    credentials: createCredentials(root),
+    credentials,
     activity: createActivityTracker(root),
     updaterStatus: () => ({
       channel: 'preview',
@@ -1306,7 +1307,19 @@ async function deviceRouteTests(): Promise<void> {
     )
     assert.equal((await act(owner.token, String(guestRow.id), { action: 'nonsense' })).status, 400)
 
+    // The guest shared a TorBox token. Revoking has to take that back too:
+    // the credential outlives the access it was given for otherwise, and the
+    // device that shared it can no longer authenticate to clear it.
+    await credentials.setTokenForDevice(String(guestRow.id), 'guest-torbox-token')
+    assert.equal(credentials.linkedDeviceCount(), 1)
+
     assert.equal((await act(owner.token, String(guestRow.id), { action: 'revoke' })).status, 200)
+    assert.equal(
+      credentials.tokenForDevice(String(guestRow.id)),
+      '',
+      'revoking a device takes back the credential it shared'
+    )
+    assert.equal(credentials.linkedDeviceCount(), 0, 'and stops counting it as linked')
     assert.equal(await statusFor(guest.token), 401, 'a revoked device is out immediately')
 
     // --- "anyone on this network may join" --------------------------------

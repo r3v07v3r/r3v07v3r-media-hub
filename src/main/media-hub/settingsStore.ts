@@ -285,6 +285,17 @@ export interface LanCacheConnection {
    * state, not a different thing.
    */
   pending?: boolean
+  /**
+   * The TorBox opt-in made when this device asked to join, held until
+   * approval can act on it.
+   *
+   * The choice is made at the moment of asking and cannot be honoured then:
+   * a pending token authorises nothing, so posting the credential would be
+   * refused. Without somewhere to keep the answer it was simply discarded,
+   * and the person who ticked the box stayed unlinked with no control
+   * anywhere to try again.
+   */
+  shareTorbox?: boolean
 }
 
 /** The paired cache daemon, or undefined. Unlike the TorBox token this is
@@ -298,7 +309,8 @@ export function getLanCacheConnection(): LanCacheConnection | undefined {
     url: url.replace(/\/+$/, ''),
     name: String(settings.lanCacheName || ''),
     token,
-    ...(settings.lanCachePending === true ? { pending: true } : {})
+    ...(settings.lanCachePending === true ? { pending: true } : {}),
+    ...(settings.lanCacheShareTorbox === true ? { shareTorbox: true } : {})
   }
 }
 
@@ -311,6 +323,8 @@ export function setLanCacheConnection(connection: LanCacheConnection): void {
   // stale flag behind to hold a working connection shut.
   if (connection.pending) settings.lanCachePending = true
   else delete settings.lanCachePending
+  if (connection.shareTorbox) settings.lanCacheShareTorbox = true
+  else delete settings.lanCacheShareTorbox
   writeSettings(settings)
 }
 
@@ -320,6 +334,7 @@ export function clearLanCacheConnection(): void {
   delete settings.lanCacheName
   delete settings.lanCacheToken
   delete settings.lanCachePending
+  delete settings.lanCacheShareTorbox
   writeSettings(settings)
 }
 

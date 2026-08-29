@@ -176,11 +176,24 @@ const OVERSIZED_GB = 25
  */
 const SEEDER_SATURATION = 100
 
-/** Deliberately below one resolution step (2160 - 1080 = 1080), so this
- *  orders candidates WITHIN a quality tier and can never quietly hand
- *  somebody a 1080p copy when they asked for 4K. Choosing between tiers on
- *  availability is a bigger claim than this evidence supports. */
-const SEEDER_WEIGHT = 900
+/**
+ * Below the SMALLEST gap between adjacent resolution steps, so this orders
+ * candidates WITHIN a quality tier and can never quietly hand somebody a
+ * lower tier than they asked for. Choosing between tiers on availability is
+ * a bigger claim than this evidence supports.
+ *
+ * The bound was 900, checked against the 2160-to-1080 gap of 1080 — the
+ * LARGEST step, and the only one the test covered. Every other step is much
+ * smaller (RESOLUTION_STEPS is 480, 720, 1080, 1440, 2160, so the tightest
+ * gap is 240), and 900 cleared three of them: a 720p release with 5000
+ * seeders beat a 1080p one with none, which is exactly the swap the comment
+ * said could not happen. Bounded by the smallest gap now, not the biggest.
+ *
+ * The break-even against an unknown count is unchanged at roughly nine
+ * seeders — it is a ratio within this term, so it does not move with the
+ * term's size.
+ */
+const SEEDER_WEIGHT = 200
 
 /** The seeder count a release advertises, or null when it does not.
  *  Exported for the ranking test. */

@@ -45,6 +45,11 @@ function gb(bytes: number): string {
 
 export function LanCacheSection() {
   const [paired, setPaired] = useState<string | null>(null)
+  /** Whether the connection this card is showing is still waiting to be let
+   *  in. Without it the card called a pending connection 'Paired' and then
+   *  reported it as unreachable, which is two wrong answers rather than the
+   *  one true one. */
+  const [awaitingApproval, setAwaitingApproval] = useState(false)
   const [status, setStatus] = useState<DaemonStatus | null>(null)
   const [statusError, setStatusError] = useState('')
   const [daemons, setDaemons] = useState<DiscoveredDaemon[]>([])
@@ -77,6 +82,12 @@ export function LanCacheSection() {
     // through a microtask so no setState lands synchronously in the
     // effect body (react-hooks/set-state-in-effect).
     void Promise.resolve().then(async () => {
+      // The WAIT itself belongs to the main process, which polls whether or
+      // not this card is open — so this only has to read the answer, and a
+      // device approved while nobody was looking is already connected by the
+      // time anyone gets here.
+      const pair = await api.pairStatus()
+      setAwaitingApproval(pair.state === 'pending')
       const found = await api.discover()
       setPaired(found.paired)
       setDaemons(found.daemons)
@@ -109,6 +120,7 @@ export function LanCacheSection() {
     setMessage({ ok: result.ok, text: result.message })
     setBusy(false)
     if (result.ok) {
+      setAwaitingApproval(Boolean(result.pending))
       const found = await api.discover()
       setPaired(found.paired)
       void refresh()
@@ -121,7 +133,8 @@ export function LanCacheSection() {
     await api.unpair()
     setPaired(null)
     setStatus(null)
-    setMessage({ ok: true, text: 'Unpaired. The server keeps its files until they expire.' })
+    setAwaitingApproval(false)
+    setMessage({ ok: true, text: 'Left. The server keeps its files until they expire.' })
     setBusy(false)
   }
 
@@ -139,7 +152,27 @@ export function LanCacheSection() {
         expires on its own — nothing stays forever.
       </p>
 
-      {paired && (
+      {paired && awaitingApproval && (
+        <div className={styles.row}>
+          <div className={styles.rowText}>
+            <span className={styles.rowTitle}>Waiting to be let in</span>
+            <span className={styles.rowDescription}>
+              {paired} — the administrator of that server approves this device there. Nothing
+              else is needed here.
+            </span>
+          </div>
+          <button
+            type="button"
+            className={styles.testButton}
+            onClick={handleUnpair}
+            disabled={busy}
+          >
+            Cancel
+          </button>
+        </div>
+      )}
+
+      {paired && !awaitingApproval && (
         <>
           <div className={styles.row}>
             <div className={styles.rowIcon} aria-hidden="true">

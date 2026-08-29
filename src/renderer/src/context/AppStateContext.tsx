@@ -1521,19 +1521,25 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         // useful prompt becomes one nobody reads.
         const ceiling = mediaHubSettings?.maxStreamResolution ?? 0
         const got = streamResolution(resolved.best)
-        if (
-          isNoticeablyBelowCeiling(got, ceiling) &&
-          !acceptedLowQuality.current.has(media.id) &&
-          !window.confirm(
-            `The best copy of ${media.title} available right now is ${resolutionLabel(got)}, ` +
-              `below the ${resolutionLabel(ceiling)} you allow. It will be scaled to fit your ` +
-              `screen.\n\nPlay it anyway?`
-          )
-        ) {
-          setResolvingMedia(null)
-          return false
+        if (isNoticeablyBelowCeiling(got, ceiling) && !acceptedLowQuality.current.has(media.id)) {
+          if (
+            !window.confirm(
+              `The best copy of ${media.title} available right now is ${resolutionLabel(got)}, ` +
+                `below the ${resolutionLabel(ceiling)} you allow. It will be scaled to fit your ` +
+                `screen.\n\nPlay it anyway?`
+            )
+          ) {
+            setResolvingMedia(null)
+            return false
+          }
+          // Recorded ONLY on a real acceptance. This used to run on every
+          // resolve, including the ones that met the ceiling and asked
+          // nothing — and since the key is the series rather than the
+          // episode, a first episode that played at full quality silently
+          // bought consent for a later one that only exists at 480p.
+          // Playing a copy that was fine is not agreement to anything.
+          acceptedLowQuality.current.add(media.id)
         }
-        acceptedLowQuality.current.add(media.id)
 
         setResolvingMedia({ id: media.id, title: media.title, stage: 'buffering' })
         const playTask = api.stream.play(resolved.best, mediaId, kind, resolveId, {

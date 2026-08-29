@@ -422,6 +422,17 @@ export function createDaemonServer(deps: ServerDeps): http.Server {
         case 'deny':
         case 'revoke':
           ok = await pairing.removeDevice(targetId)
+          // AND its TorBox token, in the same act.
+          //
+          // Dropping only the pairing record left the shared secret behind in
+          // credentials.json: it still counted as a linked account, jobs owned
+          // by that device could still be fetched with it, and the device that
+          // shared it could never clear it — clearing goes through
+          // /api/credentials, which needs the authentication it just lost. So
+          // the credential outlived the access it was given for, with nobody
+          // left who could take it back. Forgetting a device has to mean
+          // forgetting what it lent us.
+          if (ok) await credentials.setTokenForDevice(targetId, '')
           break
         case 'quota': {
           const raw = body.quotaBytes

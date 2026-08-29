@@ -131,6 +131,100 @@ export async function lanCacheCatalog(keys: string[]): Promise<LanCacheCatalogRe
 }
 
 // ---------------------------------------------------------------------------
+// Waiting to be let in.
+//
+// Approval happens on somebody else's machine, at a time nobody here
+// controls, and the thing it unblocks is the whole cache TIER — not a piece
+// of UI. So the wait is owned by the main process rather than by whichever
+// panel happens to be on screen.
+//
+// It used to be owned by the control centre's Caching section, which meant
+// approval was only ever noticed while that section was open: a person who
+// asked to join from Settings and closed the panel stayed pending forever,
+// with a cache server that had already said yes.
+
+/** How often the main process asks. Slower than the panel's own poll, which
+ *  exists to make the transition feel immediate while somebody is watching
+ *  it; this one is the part that has to work when nobody is. */
+const APPROVAL_POLL_MS = 30_000
+
+let approvalTimer: NodeJS.Timeout | null = null
+
+/**
+ * Asks whether a pending device has been approved, and promotes it if so.
+ *
+ * The single place that transition happens — the timer below and the
+ * renderer's own poll both come through here, so the two cannot promote a
+ * connection differently.
+ */
+async function promoteIfApproved(): Promise<'none' | 'pending' | 'approved'> {
+  const connection = getLanCacheConnection()
+  if (!connection) return 'none'
+  if (!connection.pending) return 'approved'
+  // Deliberately NOT through request(): this is the one call a pending token
+  // is allowed to make, and routing it past the guard that refuses
+  // everything else keeps that exception visible.
+  const answer = await fetchJson<{ status?: string; serverName?: string }>(
+    `${connection.url}/api/pair/status`,
+    { headers: { Authorization: `Bearer ${connection.token}` } },
+    { lane: 'lancache', label: 'cache server' }
+  )
+  if (answer.status !== 'approved') return 'pending'
+
+  setLanCacheConnection({
+    url: connection.url,
+    name: answer.serverName ?? connection.name,
+    token: connection.token
+  })
+  // Approval is what actually grants the player access to this LAN host, so
+  // the trusted-host list is refreshed HERE — the moment that now carries
+  // the authority pairing used to.
+  refreshTrustedHostsRef?.()
+
+  // And the opt-in the person made when they asked, which could not be
+  // honoured then because a pending token authorises nothing. Sent once;
+  // the flag is already gone from the connection written above, so a later
+  // call cannot re-send it.
+  if (connection.shareTorbox) {
+    const torboxToken = getTorBoxToken()
+    if (torboxToken) {
+      await request('/api/credentials', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ torboxToken })
+      }).catch((error) => logError('lancache:credentials', error))
+    }
+  }
+  return 'approved'
+}
+
+/** Runs the wait while, and only while, there is something to wait for. */
+function syncApprovalPolling(): void {
+  const connection = getLanCacheConnection()
+  const wanted = Boolean(connection?.pending)
+  if (wanted && !approvalTimer) {
+    approvalTimer = setInterval(() => {
+      void promoteIfApproved()
+        .then((state) => {
+          if (state !== 'pending') syncApprovalPolling()
+        })
+        // A daemon that is off or unreachable is the ordinary case while
+        // waiting — somebody has to walk to it. Keep asking.
+        .catch(() => {})
+    }, APPROVAL_POLL_MS)
+    // Never a reason to hold the process open.
+    approvalTimer.unref?.()
+  } else if (!wanted && approvalTimer) {
+    clearInterval(approvalTimer)
+    approvalTimer = null
+  }
+}
+
+/** Set once at registration. Module-level because promoteIfApproved runs
+ *  from a timer, outside any IPC call that could carry it. */
+let refreshTrustedHostsRef: (() => void) | null = null
+
+// ---------------------------------------------------------------------------
 // IPC: discovery, pairing, status — the Settings pane's surface.
 
 interface DeviceActionPayload {
@@ -149,6 +243,11 @@ interface PairPayload {
 }
 
 export function registerLanCacheIpc(refreshTrustedHosts: () => void): void {
+  refreshTrustedHostsRef = refreshTrustedHosts
+  // A device can be left waiting across a restart, so the wait resumes at
+  // startup rather than only after somebody opens the panel again.
+  syncApprovalPolling()
+
   handle(MEDIA_HUB_CHANNELS.lanCacheDiscover, async () => {
     const found = await discoverLanCaches()
     return { daemons: found, paired: getLanCacheConnection()?.url ?? null }
@@ -199,12 +298,19 @@ export function registerLanCacheIpc(refreshTrustedHosts: () => void): void {
           url,
           name: paired.serverName ?? ping.serverName,
           token: paired.token,
-          ...(pending ? { pending: true } : {})
+          ...(pending ? { pending: true } : {}),
+          // The opt-in is KEPT rather than acted on while pending: a pending
+          // token authorises nothing, so posting the credential now would
+          // simply be refused. promoteIfApproved sends it the moment
+          // approval lands.
+          ...(pending && payload?.shareTorboxToken ? { shareTorbox: true } : {})
         })
         if (pending) {
-          // Nothing is granted yet — not the trusted-host entry, and not
-          // the TorBox copy below. Both wait for approval, which is the
-          // point of asking.
+          // Nothing is granted yet — not the trusted-host entry, and not the
+          // TorBox copy below. Both wait for approval, which is the point of
+          // asking. The wait itself belongs to the main process, so it runs
+          // whether or not any panel is open to watch it.
+          syncApprovalPolling()
           return {
             ok: true,
             pending: true,
@@ -242,6 +348,8 @@ export function registerLanCacheIpc(refreshTrustedHosts: () => void): void {
     }
     clearLanCacheConnection()
     refreshTrustedHosts()
+    // Nothing left to wait for.
+    syncApprovalPolling()
     return { ok: true }
   })
 
@@ -265,30 +373,13 @@ export function registerLanCacheIpc(refreshTrustedHosts: () => void): void {
   handle(MEDIA_HUB_CHANNELS.lanCachePairStatus, async () => {
     const connection = getLanCacheConnection()
     if (!connection) return { state: 'none' as const }
-    if (!connection.pending) return { state: 'approved' as const, name: connection.name }
     try {
-      // Deliberately NOT through request(): this is the one call a pending
-      // token is allowed to make, and routing it past the same guard that
-      // refuses everything else keeps that exception visible.
-      const answer = await fetchJson<{ status?: string; serverName?: string }>(
-        `${connection.url}/api/pair/status`,
-        { headers: { Authorization: `Bearer ${connection.token}` } },
-        { lane: 'lancache', label: 'cache server' }
-      )
-      if (answer.status === 'approved') {
-        setLanCacheConnection({
-          url: connection.url,
-          name: answer.serverName ?? connection.name,
-          token: connection.token
-        })
-        // Approval is what actually grants the player access to this host,
-        // so the trusted-host list is refreshed HERE rather than at the
-        // pairing request — the same rule as before, moved to the moment
-        // that now carries the authority.
-        refreshTrustedHosts()
-        return { state: 'approved' as const, name: answer.serverName ?? connection.name }
-      }
-      return { state: 'pending' as const, name: connection.name }
+      // Through the same promotion path the timer uses, so a panel watching
+      // this cannot end up with a connection promoted differently from one
+      // the background wait promoted.
+      const state = await promoteIfApproved()
+      syncApprovalPolling()
+      return { state, name: getLanCacheConnection()?.name ?? connection.name }
     } catch (error) {
       return { state: 'pending' as const, name: connection.name, error: (error as Error).message }
     }

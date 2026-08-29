@@ -191,12 +191,53 @@ console.log('ok  stream selection resolution and size limits')
     'an all-unknown set is ordered by everything else, undisturbed'
   )
 
-  // Never flips a resolution tier: the term is capped below one step.
+  // Never flips a resolution tier — checked against EVERY adjacent pair, not
+  // just the widest one.
+  //
+  // This assertion used to cover only 2160-vs-1080, whose 1080-point gap the
+  // old 900-point weight happened to clear. Every other step is far narrower
+  // (the tightest is 720 to 480, at 240), and 900 cleared three of them: a
+  // 720p release with 5000 seeders outranked a 1080p one with none. The bug
+  // was invisible precisely because the one pair under test was the one pair
+  // that worked.
+  //
+  // Set on the resolution FIELD rather than in the name, because
+  // streamResolution only recognises 2160, 1080 and 720 in text — 1440 and
+  // 480 only ever arrive numerically, and testing them through the text path
+  // would silently score both candidates 0 and prove nothing.
+  const numeric = (infoHash: string, seeders: number | null, resolution: number): StreamCandidate =>
+    ({
+      infoHash,
+      name: 'Film',
+      title: seeders === null ? 'Film.mkv 💾 4.0 GB' : `Film.mkv 👤 ${seeders} 💾 4.0 GB`,
+      resolution,
+      cached: false,
+      compatible: true,
+      exact: true
+    }) as StreamCandidate
+  for (const [higher, lower] of [
+    [2160, 1440],
+    [1440, 1080],
+    [1080, 720],
+    [720, 480]
+  ]) {
+    assert.equal(
+      rankStreams(
+        [numeric('better', 0, higher), numeric('worse', 5000, lower)],
+        'en',
+        {},
+        'balanced'
+      )[0].infoHash,
+      'better',
+      `no number of seeders promotes ${lower} over ${higher}`
+    )
+  }
+
+  // And the term still does the job it exists for, inside a tier.
   assert.equal(
-    rankStreams([uncached('hd', 2081, 2160), uncached('sd', 5000, 1080)], 'en', {}, 'balanced')[0]
-      .infoHash,
-    'hd',
-    'seeders order within a tier and never override the resolution the person asked for'
+    rankStreams([uncached('few', 1), uncached('many', 400)], 'en', {}, 'balanced')[0].infoHash,
+    'many',
+    'seeders still order candidates within one tier'
   )
 
   // A cached candidate needs no peers at all — and Comet's `👤 0` results are
