@@ -20,7 +20,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useAppState } from '@renderer/context/AppStateContext'
-import SettingsPage from '@renderer/routes/SettingsPage'
+import SettingsPage, { type SettingsCategory } from '@renderer/routes/SettingsPage'
 import styles from './ControlCentre.module.css'
 import { CachingSection } from './sections/CachingSection'
 import { PipelineSection } from './sections/PipelineSection'
@@ -30,6 +30,7 @@ import { MatrixRain } from './MatrixRain'
 import {
   CONTROL_CENTRE_SECTIONS,
   DEFAULT_CONTROL_CENTRE_SECTION,
+  SETTINGS_CATEGORY_FOR,
   type ControlCentreSectionId
 } from './sections'
 
@@ -147,7 +148,12 @@ export function ControlCentreFace() {
               inert={entry.id !== section}
               className={styles.content}
             >
-              {entry.id === 'settings' ? <SettingsPage embedded /> : null}
+              {SETTINGS_CATEGORY_FOR[entry.id] ? (
+                <SettingsPage
+                  embedded
+                  category={SETTINGS_CATEGORY_FOR[entry.id] as SettingsCategory}
+                />
+              ) : null}
               {entry.id === 'caching' ? <CachingSection /> : null}
               {entry.id === 'pipeline' ? <PipelineSection onNavigate={setSection} /> : null}
               {entry.id === 'services' ? <ServicesSection /> : null}
