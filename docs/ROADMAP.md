@@ -307,6 +307,15 @@ fetch is running, or why the budget is full, without it. Adding an owner label (
 a name the person chose when pairing) to that payload is the prerequisite for the shared half of
 this, and is small.
 
+**And one real hole, specified separately.** Ownership is enforced for spending and ignored for
+seeing: `GET /api/catalog` with no `keys` filter hands **every cached item, with titles, to any
+paired device**, and `/stream/{infoHash}` authorises on "is this token paired" rather than on who
+owns the item. So anybody in the house can enumerate what everyone else has watched. Private-by-
+default items, sharing with everyone or with named people, and an administrator claimed by the
+first device to pair are designed in [CACHE-PERMISSIONS.md](CACHE-PERMISSIONS.md) — including the
+dedupe tension that makes it interesting (a cache exists to hold one copy; privacy wants two) and
+the limits worth stating out loud rather than implying.
+
 **Rooms are the existing precedent, not a new problem.** A party already has a host who owns the
 queue and the member-control toggles (`SessionHub.tsx`), and Friends groups are deliberately
 host-less so they survive anyone going offline (`friends.ts`). Both models already work; Server
