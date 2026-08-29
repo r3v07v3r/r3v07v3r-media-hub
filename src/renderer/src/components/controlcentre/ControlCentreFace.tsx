@@ -20,7 +20,6 @@
 
 import { useCallback, useEffect, useRef } from 'react'
 import { useAppState } from '@renderer/context/AppStateContext'
-import { Icon } from '@renderer/components/icons/Icon'
 import SettingsPage from '@renderer/routes/SettingsPage'
 import styles from './ControlCentre.module.css'
 
@@ -104,20 +103,14 @@ export function ControlCentreFace() {
       // rather than by not existing.
       inert={!controlCentreOpen}
     >
-      <header className={styles.header}>
-        <div>
-          <h2 className={styles.title}>R3 Media Control Hub</h2>
-          <p className={styles.subtitle}>System &amp; Settings</p>
-        </div>
-        <button
-          type="button"
-          className={styles.close}
-          onClick={close}
-          aria-label="Close control centre"
-        >
-          <Icon name="x" />
-        </button>
-      </header>
+      {/* No header and no close button, deliberately. The R3 bar directly
+          above this face is the edge the two faces share: it already says
+          which side you are looking at (see Brand, which relabels itself),
+          and its cog is what turns the cube back. A heading here repeated
+          the bar, and a close button repeated the cog.
+
+          Escape still closes — that is a keyboard affordance, not a
+          duplicated control. */}
       <div className={styles.body}>
         <div className={styles.content}>
           <SettingsPage embedded />
