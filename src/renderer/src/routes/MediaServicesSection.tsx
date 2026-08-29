@@ -189,8 +189,16 @@ export function MediaServicesSection() {
       ))}
       <div className={`${styles.serviceSaveCard} glass-panel`}>
         <div>
-          <strong>Service changes</strong>
-          <span>{dirty ? 'Changes are ready to save.' : 'Everything is up to date.'}</span>
+          {/* It used to say "Service changes", which named itself and
+              explained nothing — it reads as a card ABOUT something rather
+              than as the Save control for the cards beside it. It says what
+              it acts on and what saving does now. */}
+          <strong>Server details</strong>
+          <span>
+            {dirty
+              ? 'Unsaved edits to the servers above. Saving stores them and starts using them.'
+              : 'Every address and key above is saved.'}
+          </span>
         </div>
         <button
           type="button"
