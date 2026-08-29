@@ -51,6 +51,96 @@
   color: var(--text-primary);
 }
 
+/* ---------- The rail and the panel beside it ----------
+
+   The rail sits on the LEFT, in the same column the app face puts its own
+   nav rail. Not decoration: the two faces are sides of one object, and a
+   rail that jumped across the screen when the cube turned would break the
+   impression that anything solid was rotating. */
+.layout {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+}
+
+.rail {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 22px 14px;
+  border-right: 1px solid var(--border-subtle);
+  /* Its own scroller. The panel beside it is long, and a rail that
+     scrolled away with the content would leave no way back without
+     scrolling to the top first. */
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.railButton {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 10px 14px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 0.88rem;
+  font-weight: 540;
+  text-align: left;
+  cursor: pointer;
+  white-space: nowrap;
+  transition:
+    background 180ms var(--ease-smooth),
+    border-color 180ms var(--ease-smooth),
+    color 180ms var(--ease-smooth);
+}
+
+.railButton:hover,
+.railButton:focus-visible {
+  color: var(--text-primary);
+  border-color: var(--border-subtle);
+}
+
+.railButtonActive {
+  background: rgba(39, 230, 154, 0.12);
+  border-color: var(--border-active);
+  color: var(--accent-cyan);
+}
+
+.railIcon {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+}
+
+html[data-motion-user-disabled='true'] .railButton {
+  transition: none;
+}
+
+@media (max-width: 767px) {
+  /* Too narrow for a rail and a panel side by side, so the rail becomes a
+     scrolling strip across the top and the labels carry it. */
+  .layout {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  .rail {
+    flex-direction: row;
+    padding: 12px;
+    border-right: none;
+    border-bottom: 1px solid var(--border-subtle);
+    overflow-x: auto;
+  }
+
+  .railButton {
+    flex: none;
+  }
+}
+
 /* The scrolling body. Deliberately the scroll container rather than the
    panel itself: the panel is what carries the 3D transform, and animating a
    transform on an element that is also scrolling is where Electron's
@@ -69,6 +159,17 @@
   display: flex;
   flex-direction: column;
   gap: 20px;
+}
+
+/* The `hidden` attribute sets display:none through a UA rule, and ANY
+   author `display` beats it — so .content above silently un-hid every
+   inactive panel and the sections stacked on top of each other. Caught by
+   looking at it; the markup was already correct.
+
+   Restated here at higher specificity rather than by dropping the flex
+   layout: the panels genuinely are columns when they are shown. */
+.content[hidden] {
+  display: none;
 }
 
 /* ---------- The one thing the token override cannot reach ----------

@@ -18,10 +18,17 @@
 // The settings sections are HOSTED, not rewritten — they render exactly as
 // they do on the old page.
 
-import { useCallback, useEffect, useRef } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useAppState } from '@renderer/context/AppStateContext'
 import SettingsPage from '@renderer/routes/SettingsPage'
 import styles from './ControlCentre.module.css'
+import { CachingSection } from './sections/CachingSection'
+import { ControlCentreNav } from './ControlCentreNav'
+import {
+  CONTROL_CENTRE_SECTIONS,
+  DEFAULT_CONTROL_CENTRE_SECTION,
+  type ControlCentreSectionId
+} from './sections'
 
 /** Everything focusable, for the tab trap. Excludes anything explicitly
  *  removed from the tab order so a disabled control cannot swallow focus. */
@@ -31,6 +38,10 @@ const FOCUSABLE =
 export function ControlCentreFace() {
   const { controlCentreOpen, setControlCentreOpen } = useAppState()
   const panelRef = useRef<HTMLDivElement | null>(null)
+  // Kept across opens on purpose. Coming back to the section you were last
+  // in is what a control centre does; resetting to the front page every
+  // time the cube turns would make a two-step task a four-step one.
+  const [section, setSection] = useState<ControlCentreSectionId>(DEFAULT_CONTROL_CENTRE_SECTION)
   /** What had focus before this face turned toward the viewer, so turning
    *  away can hand it back rather than dumping the caret at the top of the
    *  document. */
@@ -111,9 +122,28 @@ export function ControlCentreFace() {
 
           Escape still closes — that is a keyboard affordance, not a
           duplicated control. */}
-      <div className={styles.body}>
-        <div className={styles.content}>
-          <SettingsPage embedded />
+      <div className={styles.layout}>
+        <ControlCentreNav active={section} onSelect={setSection} />
+        <div className={styles.body}>
+          {CONTROL_CENTRE_SECTIONS.map((entry) => (
+            <div
+              key={entry.id}
+              id={`cc-panel-${entry.id}`}
+              role="tabpanel"
+              aria-labelledby={`cc-tab-${entry.id}`}
+              // Unmounting the inactive panels would throw away every bit of
+              // in-progress state in them — a half-typed server URL, a
+              // pending pairing poll — each time somebody looked at another
+              // section. Hidden and inert keeps them out of the tab order
+              // and out of the accessibility tree without that cost.
+              hidden={entry.id !== section}
+              inert={entry.id !== section}
+              className={styles.content}
+            >
+              {entry.id === 'settings' ? <SettingsPage embedded /> : null}
+              {entry.id === 'caching' ? <CachingSection /> : null}
+            </div>
+          ))}
         </div>
       </div>
     </div>

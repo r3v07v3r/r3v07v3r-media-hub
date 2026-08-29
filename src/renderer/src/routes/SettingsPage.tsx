@@ -1585,7 +1585,12 @@ export default function SettingsPage({ embedded = false }: { embedded?: boolean 
             <p>Connect servers, download clients, and your streaming provider.</p>
           </header>
           <div ref={servicesGridBinding} className={`${styles.groupGrid} ${styles.groupGridWide}`}>
-            <LanCacheSection />
+            {/* Only on the standalone /settings route. Inside the control
+                centre the cache server has its own section in the rail,
+                with the administration this card cannot hold, and two
+                copies of the pairing flow on one surface is a way to have
+                them disagree. */}
+            {!embedded && <LanCacheSection />}
             <MediaServicesSection />
             <TorBoxSection />
           </div>
