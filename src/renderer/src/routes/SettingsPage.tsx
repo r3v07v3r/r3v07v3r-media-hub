@@ -1409,8 +1409,10 @@ export default function SettingsPage() {
                 <div className={styles.rowText}>
                   <span className={styles.rowTitle}>Connection recommendation</span>
                   <span className={styles.rowDescription}>
-                    Runs only when requested and downloads about 1 MB. It considers this screen and
-                    saves suggested limits without locking them.
+                    Runs only when requested. Downloads 1 MB, and keeps going only if that finishes
+                    too fast to measure — a slow or metered connection is never asked for more than
+                    the 1 MB. It considers this screen and saves suggested limits without locking
+                    them.
                   </span>
                 </div>
                 <button
@@ -1463,7 +1465,7 @@ export default function SettingsPage() {
           </header>
           <div ref={servicesGridBinding} className={`${styles.groupGrid} ${styles.groupGridWide}`}>
             <LanCacheSection />
-      <MediaServicesSection />
+            <MediaServicesSection />
             <TorBoxSection />
           </div>
         </section>
