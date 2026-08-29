@@ -104,7 +104,7 @@ export function AboutUpdateSection() {
       </h2>
 
       <div className={styles.versionRow}>
-        <span className={styles.versionLabel}>R3 Media Center</span>
+        <span className={styles.versionLabel}>R3 Media Hub</span>
         <span className={styles.versionNumber}>{version ? `v${version}` : '—'}</span>
       </div>
 

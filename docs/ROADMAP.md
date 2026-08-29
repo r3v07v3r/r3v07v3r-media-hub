@@ -234,6 +234,59 @@ decided deliberately rather than drifted into halfway.
   trust problem before it is a feature: `ipcGuard.ts` assumes only our own renderer ever speaks to
   main. Worth doing, worth doing slowly.
 
+## Phase 4.5 — Viewer and Server Control
+
+Agreed 2026-08-29, deliberately scheduled AFTER the next major release: a navigation split is the
+highest-risk-to-polish change there is, and none of it is a new capability. Written down now so it
+is built from a decision rather than assembled in pieces.
+
+### The problem
+
+The app has quietly grown a second audience. Six settings categories, eleven service cards, a
+Downloads page carrying qBittorrent, two \*arr queues, Prowlarr indexer health and cached streams,
+plus cache-server pairing, relay config, stream-cache sizing, update channels and a speed test.
+That is an operator console living inside a viewing app, and the person who wants to watch
+something has to walk past all of it. Every competitor separates these — Plex has a server
+dashboard, Jellyfin a Dashboard, the \*arrs a System page.
+
+### What actually moves
+
+The line is ownership, not difficulty: **does this belong to the person, or to the installation?**
+Everything on the left is still theirs on a machine somebody else administers.
+
+| Stays in Viewer                                                                                                                                                                                                                                         | Moves to Server Control                                                                                                                                                                                                 |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Playback, subtitle and audio language, episodes/autoplay, appearance and animations, notifications, profiles, My Stuff, backup and the three imports, and the tracking accounts (Simkl, Trakt, MAL) — those are a person's own history, not a server's. | Jellyfin, Sonarr, Radarr, qBittorrent, Prowlarr, TorBox, the r3-cache pairing, stream-cache size and location, the party relay, network address and speed test, update channel, background activity, and the error log. |
+
+Ollama is the one genuine judgement call. It is a connection like the rest, but the assistant and
+Recommend Next are features a viewer uses directly. Proposal: the connection lives in Server
+Control, and Viewer keeps a read-only line saying whether AI is available.
+
+### Build it in this order
+
+1. **The Server dashboard, as one new destination.** This is the only part that is a NEW
+   capability rather than a relocation, and it is the part that was asked for: which component is
+   doing what, live connection health, throughput, and errors in one place. `activityGet` /
+   `activityChanged` already report running work (see `taskScheduler.ts`), and `logError` is
+   already called everywhere — but nothing surfaces it, so a failing subtitle provider or an
+   unreachable daemon is invisible unless somebody happens to be watching the right card. Shipping
+   this alone is worth doing even if the split never happens.
+2. **Move the operator settings behind it**, once the grouping has been lived with.
+3. **The mode toggle last**, if it is still wanted — by then it is a nav change over an already
+   correct grouping, not a redesign.
+
+### Constraints that are already decided
+
+- **Kids profiles never see Server Control.** `profiles.ts` already models `isKid`, and the PIN
+  mechanism already exists — gating this is reuse, not new work, and it is the first thing that
+  makes the Kids profile mean something beyond a label.
+- **No new IPC for step 1.** Everything the dashboard needs is already crossing the bridge; it is a
+  presentation problem. An error log is the one addition, and it belongs beside `logger.ts` rather
+  than as a new subsystem.
+- **The Downloads page is the precedent, not a casualty.** It already aggregates four backends and
+  is where people look for "what is happening". Server Control either absorbs it or links to it —
+  what must not happen is two pages that both half-answer the question.
+
 ## Phase 6 — The long tail
 
 None of it blocks anything, and all of it separates an app people use from one they recommend. Pick
