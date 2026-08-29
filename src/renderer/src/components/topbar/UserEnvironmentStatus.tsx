@@ -7,6 +7,7 @@ import { useWeather } from '@renderer/hooks/useWeather'
 import { Icon } from '@renderer/components/icons/Icon'
 import { PartyButton } from '@renderer/components/party/PartyButton'
 import { SyncNotificationButton } from './SyncNotificationButton'
+import { ControlCentreButton } from './ControlCentreButton'
 import styles from './TopUtilityBar.module.css'
 
 export function UserEnvironmentStatus() {
@@ -37,6 +38,7 @@ export function UserEnvironmentStatus() {
 
   return (
     <div className={styles.status}>
+      <ControlCentreButton />
       <SyncNotificationButton />
       <PartyButton />
 

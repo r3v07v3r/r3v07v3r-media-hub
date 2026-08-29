@@ -681,7 +681,13 @@ function useColumnPackGrid<TGroup extends HTMLElement = HTMLElement>() {
   return [gridBinding, groupBinding] as const
 }
 
-export default function SettingsPage() {
+/**
+ * `embedded` is set when this is hosted inside the control centre rather
+ * than rendered as the /settings route. It only suppresses the page-level
+ * heading — every control below behaves identically, which is the point:
+ * the sections were re-homed, not rewritten.
+ */
+export default function SettingsPage({ embedded = false }: { embedded?: boolean } = {}) {
   const tileAreaRef = useRef<HTMLDivElement>(null)
   const [generalGridBinding, generalGroupBinding] = useColumnPackGrid<HTMLElement>()
   const [playbackGridBinding, playbackGroupBinding] = useColumnPackGrid<HTMLElement>()
@@ -1056,12 +1062,19 @@ export default function SettingsPage() {
   return (
     <div className={styles.wrap}>
       <div className={styles.pageHeader}>
-        <div>
-          <h1 className={styles.heading}>Settings</h1>
-          <p className={styles.headingDescription}>
-            Manage playback, services, and your R3 experience.
-          </p>
-        </div>
+        {/* Hidden when hosted inside the control centre, which supplies its
+            own heading — two <h1>s describing the same content is a worse
+            document outline, not just visual duplication. The category nav
+            below stays either way: jumping between groups is more useful in
+            the panel than it ever was on the page. */}
+        {!embedded && (
+          <div>
+            <h1 className={styles.heading}>Settings</h1>
+            <p className={styles.headingDescription}>
+              Manage playback, services, and your R3 experience.
+            </p>
+          </div>
+        )}
         <nav className={styles.categoryNav} aria-label="Settings categories">
           {[
             ['settings-general', 'General'],

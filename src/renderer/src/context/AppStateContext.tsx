@@ -239,6 +239,13 @@ interface AppStateValue {
   syncDiscrepancies: WatchStatusDiscrepancy[]
   syncReviewOpen: boolean
   setSyncReviewOpen: Dispatch<SetStateAction<boolean>>
+  /** The control centre — the settings/system surface that folds down from
+   *  the top bar (see components/controlcentre/ControlCentre.tsx). Global
+   *  rather than local to the top bar because two other things open it: the
+   *  sidebar's Settings entry, and the /settings route, which exists now
+   *  only to deep-link into this. */
+  controlCentreOpen: boolean
+  setControlCentreOpen: Dispatch<SetStateAction<boolean>>
   resolveSyncDiscrepancy: (
     discrepancy: WatchStatusDiscrepancy,
     resolution: ReconcileResolution
@@ -1022,6 +1029,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   // repeated Simkl requests.
   const [syncDiscrepancies, setSyncDiscrepancies] = useState<WatchStatusDiscrepancy[]>([])
   const [syncReviewOpen, setSyncReviewOpen] = useState(false)
+  const [controlCentreOpen, setControlCentreOpen] = useState(false)
 
   // Discarded when the library underneath them changes — a profile switch, or
   // a restore. A discrepancy is a claim about ONE profile's history against
@@ -2389,7 +2397,9 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       uiActivity,
       syncDiscrepancies,
       syncReviewOpen,
+      controlCentreOpen,
       setSyncReviewOpen,
+      setControlCentreOpen,
       resolveSyncDiscrepancy
     }),
     [
@@ -2486,6 +2496,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       uiActivity,
       syncDiscrepancies,
       syncReviewOpen,
+      controlCentreOpen,
       resolveSyncDiscrepancy
     ]
   )
