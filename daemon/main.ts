@@ -26,6 +26,7 @@ import { installAutoStart, uninstallAutoStart } from './install'
 import { createJobStore } from './jobs'
 import { launch, type PayloadApi } from './launcher'
 import { createMdnsAnnouncer } from './mdns'
+import { createAdmin } from './admin'
 import { createPairing } from './pairing'
 import { createDaemonServer } from './server'
 import { createItemStore } from './storage'
@@ -67,10 +68,17 @@ export async function run(api: PayloadApi): Promise<'restart' | 'exit'> {
     tombstoneMs: config.tombstoneDays * dayMs
   })
   const pairing = createPairing(config.dataDir)
+  const admin = createAdmin(config.dataDir)
   const credentials = createCredentials(config.dataDir)
   const jobs = createJobStore(config.dataDir)
   const activity = createActivityTracker(config.dataDir)
-  await Promise.all([pairing.load(), credentials.load(), jobs.load(), activity.load()])
+  await Promise.all([
+    pairing.load(),
+    admin.load(),
+    credentials.load(),
+    jobs.load(),
+    activity.load()
+  ])
 
   // Stamp entitlement onto anything written before the fields existed.
   // Runs once — migrateEntitlement skips items that already carry a
@@ -124,6 +132,7 @@ export async function run(api: PayloadApi): Promise<'restart' | 'exit'> {
     storage,
     jobs,
     pairing,
+    admin,
     credentials,
     activity,
     updaterStatus: () => updater.status(),
@@ -203,6 +212,25 @@ export async function run(api: PayloadApi): Promise<'restart' | 'exit'> {
     banner(pairing.currentCode())
     pairing.onCodeChange(banner)
 
+    // An unclaimed server says so, repeatedly and loudly.
+    //
+    // The exposure this covers is real: the daemon announces itself over
+    // mDNS and is built to run at boot on a box nobody looks at, so an
+    // unclaimed one sitting for a week is claimable by whoever finds it.
+    // Saying it once at startup would scroll away in a log nobody reads;
+    // repeating it is what makes an operator notice they never finished
+    // setting the thing up.
+    if (admin.isUnclaimed()) {
+      const warn = (): void => {
+        if (!admin.isUnclaimed()) return
+        log('UNCLAIMED — no administrator yet. Open the app on this network and claim it.')
+      }
+      warn()
+      const timer = setInterval(warn, 5 * 60_000)
+      // Never hold the process open for a warning.
+      timer.unref?.()
+    }
+
     const result = await outcome
     log(result === 'restart' ? 'stopping for update' : 'shutting down')
     return result
@@ -262,6 +290,20 @@ async function entry(): Promise<void> {
   }
 
   const config = loadConfig()
+
+  // Console recovery. The console stays the root of trust — not because
+  // anyone should have to use it, but because on a box you physically
+  // control it is the one authority that cannot be taken remotely. This is
+  // the way back from a lost admin device, and the reason claiming can be
+  // bounded without stranding anybody.
+  if (argv.includes('--claim-admin')) {
+    const admin = createAdmin(config.dataDir)
+    await admin.load()
+    await admin.reopen()
+    log('claiming reopened — the next device to claim from the app becomes administrator')
+    return
+  }
+
   await launch({
     dataDir: config.dataDir,
     launcherVersion: VERSION,

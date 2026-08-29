@@ -23,6 +23,7 @@ import type { Credentials } from './credentials'
 import type { UpdaterStatus } from './updater'
 import type { JobStore, JobRecord } from './jobs'
 import type { Pairing } from './pairing'
+import type { Admin } from './admin'
 import { isEntitled, type ItemStore } from './storage'
 
 const MAX_BODY_BYTES = 1024 * 1024
@@ -41,6 +42,7 @@ export interface ServerDeps {
   storage: ItemStore
   jobs: JobStore
   pairing: Pairing
+  admin: Admin
   credentials: Credentials
   activity: ActivityTracker
   updaterStatus: () => UpdaterStatus
@@ -159,7 +161,7 @@ async function serveFile(
 }
 
 export function createDaemonServer(deps: ServerDeps): http.Server {
-  const { storage, jobs, pairing, credentials, activity, serverName, version } = deps
+  const { storage, jobs, pairing, credentials, activity, serverName, version, admin} = deps
 
   return http.createServer((req, res) => {
     void handle(req, res).catch((error) => {
@@ -174,9 +176,44 @@ export function createDaemonServer(deps: ServerDeps): http.Server {
 
     // --- unauthenticated ---------------------------------------------------
     if (route === 'GET /api/ping') {
-      json(res, 200, { product: 'r3-cache', serverName, version })
+      // `unclaimed` is deliberately on the UNAUTHENTICATED ping: an app that
+      // has just discovered this daemon over mDNS needs to know whether to
+      // offer the claim button before it has any credential. It leaks only
+      // that nobody administers this server yet, which is precisely what the
+      // installer needs to see and what the design wants said loudly.
+      json(res, 200, {
+        product: 'r3-cache',
+        serverName,
+        version,
+        unclaimed: admin.isUnclaimed()
+      })
       return
     }
+    // Claiming needs a paired token (so the claimer is a real device with
+    // an identity) but obviously cannot require admin — nobody is admin
+    // yet. It sits here, above the admin gate, for that reason.
+    if (route === 'POST /api/admin/claim') {
+      const claimToken = bearerToken(req)
+      if (!pairing.isAuthorized(claimToken)) {
+        json(res, 401, { error: 'Pair with this cache server first.' })
+        return
+      }
+      const claimed = await admin.claim(pairing.deviceIdFor(claimToken))
+      if (!claimed) {
+        // Already administered. Says so plainly rather than pretending to
+        // succeed — and names the recovery path, because the console is the
+        // only authority that can reopen this and somebody locked out needs
+        // to know that.
+        json(res, 409, {
+          error: 'This server already has an administrator.',
+          recovery: 'Run the daemon with --claim-admin at its console to reopen claiming.'
+        })
+        return
+      }
+      json(res, 200, { isAdmin: true })
+      return
+    }
+
     if (route === 'POST /api/pair') {
       const body = await readBody(req)
       const token = await pairing.tryPair(String(body.code ?? ''), String(body.deviceName ?? ''))

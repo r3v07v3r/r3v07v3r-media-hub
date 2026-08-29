@@ -9,6 +9,7 @@ import os from 'node:os'
 import path from 'node:path'
 
 import { createActivityTracker } from '../activity'
+import { createAdmin } from '../admin'
 import { createCredentials } from '../credentials'
 import { createJobStore } from '../jobs'
 import { createPairing, deviceIdForToken } from '../pairing'
@@ -211,10 +212,13 @@ async function main(): Promise<void> {
     const jobs = createJobStore(root)
     const credentials = createCredentials(root)
     const activity = createActivityTracker(root)
+    const admin = createAdmin(root)
+    await admin.load()
     const server = createDaemonServer({
       storage: store,
       jobs,
       pairing,
+      admin,
       credentials,
       activity,
       updaterStatus: () => ({
@@ -478,10 +482,13 @@ async function indistinguishabilityTest(): Promise<void> {
   const jobs = createJobStore(root)
   const credentials = createCredentials(root)
   const activity = createActivityTracker(root)
+  const admin = createAdmin(root)
+  await admin.load()
   const server = createDaemonServer({
     storage: store,
     jobs,
     pairing,
+    admin,
     credentials,
     activity,
     updaterStatus: () => ({
@@ -541,9 +548,158 @@ async function indistinguishabilityTest(): Promise<void> {
   console.log('ok  "not for you" is indistinguishable from "not here"')
 }
 
+// ---------------------------------------------------------------------
+// Claiming the server.
+//
+// The button is the easy part; the BOUND is what needed care. Pure
+// first-come leaves an unclaimed headless daemon open to whoever finds it,
+// and this one is advertised over mDNS and runs at boot on a box nobody
+// looks at — so "the first person to connect" a week after install is not
+// necessarily the installer.
+// ---------------------------------------------------------------------
+
+async function claimTests(): Promise<void> {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'r3-claim-'))
+  const admin = createAdmin(root)
+  await admin.load()
+
+  assert.equal(admin.isUnclaimed(), true, 'a fresh server is unclaimed')
+  assert.equal(admin.adminDeviceId(), '', 'and has no administrator')
+
+  // An unclaimed server must not call every stranger its administrator.
+  assert.equal(admin.isAdmin('anybody'), false, 'unclaimed does not mean everyone is admin')
+  assert.equal(admin.isAdmin(''), false, 'and an unknown token is nobody')
+
+  assert.equal(await admin.claim('device-one'), true, 'the first claim succeeds')
+  assert.equal(admin.isAdmin('device-one'), true)
+  assert.equal(admin.isUnclaimed(), false, 'and the server is no longer claimable')
+
+  assert.equal(await admin.claim('device-two'), false, 'a second device cannot take it')
+  assert.equal(admin.isAdmin('device-two'), false)
+  assert.equal(admin.adminDeviceId(), 'device-one', 'the original admin is untouched')
+
+  // A retried request from the holder must not fail confusingly.
+  assert.equal(await admin.claim('device-one'), true, 're-claiming by the holder is a no-op')
+
+  // Persisted, not just in memory — the whole point is surviving a restart.
+  const reloaded = createAdmin(root)
+  await reloaded.load()
+  assert.equal(reloaded.isAdmin('device-one'), true, 'the claim survives a restart')
+  assert.equal(reloaded.isUnclaimed(), false)
+
+
+  // --claim-admin: the console is the root of trust, and the way back from
+  // a lost admin device.
+  await reloaded.reopen()
+  assert.equal(reloaded.isUnclaimed(), true, '--claim-admin reopens claiming')
+  assert.equal(await reloaded.claim('device-two'), true, 'and the next device can take it')
+  assert.equal(reloaded.isAdmin('device-two'), true)
+  assert.equal(
+    reloaded.isAdmin('device-one'),
+    false,
+    'the previous administrator is replaced, not added to'
+  )
+
+
+  // Reopening is spent by the claim it permits, not left standing.
+  assert.equal(reloaded.isUnclaimed(), false, 'reopening does not stay open')
+  assert.equal(await reloaded.claim('device-three'), false, 'so a third device is still refused')
+
+  await fsp.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
+  console.log('ok  admin claim and its bound')
+}
+
+// ---------------------------------------------------------------------
+// The claim over HTTP, including the flag an app needs before it has any
+// credential.
+// ---------------------------------------------------------------------
+
+async function claimRouteTest(): Promise<void> {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'r3-claimhttp-'))
+  const store = createItemStore(root, {
+    idleTtlMs: 60_000,
+    hardMaxMs: 600_000,
+    budgetBytes: 10 ** 9,
+    tombstoneMs: 60_000
+  })
+  const pairing = createPairing(root)
+  await pairing.load()
+  const tokenA = await pairing.tryPair(pairing.currentCode(), 'first device')
+  const tokenB = await pairing.tryPair(pairing.currentCode(), 'second device')
+  assert.ok(tokenA && tokenB, 'two devices paired')
+
+  const admin = createAdmin(root)
+  await admin.load()
+  const server = createDaemonServer({
+    storage: store,
+    jobs: createJobStore(root),
+    pairing,
+    admin,
+    credentials: createCredentials(root),
+    activity: createActivityTracker(root),
+    updaterStatus: () => ({
+      channel: 'preview',
+      enabled: true,
+      checkedAt: 0,
+      latestSeen: '',
+      staged: '',
+      stagedAt: 0,
+      lastError: ''
+    }),
+    serverName: 'test',
+    version: '0.0.0',
+    diskBudgetBytes: 10 ** 9
+  })
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+  const base = `http://127.0.0.1:${(server.address() as { port: number }).port}`
+
+  try {
+    // `unclaimed` rides on the UNAUTHENTICATED ping on purpose: an app that
+    // has just found this daemon over mDNS must decide whether to offer the
+    // claim button before it holds any credential.
+    const ping = (await (await fetch(`${base}/api/ping`)).json()) as { unclaimed?: boolean }
+    assert.equal(ping.unclaimed, true, 'an unclaimed server advertises it on ping')
+
+    // Claiming still needs a paired token — the claimer must be a real
+    // device with an identity — but obviously cannot require admin.
+    assert.equal(
+      (await fetch(`${base}/api/admin/claim`, { method: 'POST' })).status,
+      401,
+      'claiming requires pairing'
+    )
+
+    const claimed = await fetch(`${base}/api/admin/claim`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${tokenA}` }
+    })
+    assert.equal(claimed.status, 200, 'the first paired device may claim')
+
+    const second = await fetch(`${base}/api/admin/claim`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${tokenB}` }
+    })
+    assert.equal(second.status, 409, 'a second device is refused')
+    const body = (await second.json()) as { recovery?: string }
+    assert.match(
+      String(body.recovery),
+      /--claim-admin/,
+      'and is told how to recover, since only the console can reopen it'
+    )
+
+    const after = (await (await fetch(`${base}/api/ping`)).json()) as { unclaimed?: boolean }
+    assert.equal(after.unclaimed, false, 'ping stops advertising once claimed')
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()))
+    await fsp.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
+  }
+  console.log('ok  claim route')
+}
+
 void main()
   .then(() => {
     console.log('ok  r3-cache daemon core')
   })
   .then(entitlementTests)
   .then(indistinguishabilityTest)
+  .then(claimTests)
+  .then(claimRouteTest)
