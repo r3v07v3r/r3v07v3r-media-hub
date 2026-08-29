@@ -248,7 +248,14 @@ export function CachingSection() {
   const approved = devices.filter((device) => device.status === 'approved')
   const usedShare = status && status.budgetBytes > 0 ? status.usedBytes / status.budgetBytes : 0
   const myShare =
-    status && status.quotaBytes ? Math.min(1, status.usedByMeBytes / status.quotaBytes) : 0
+    status && status.quotaBytes && status.usedByMeBytes !== undefined
+      ? Math.min(1, status.usedByMeBytes / status.quotaBytes)
+      : 0
+  /** A server built before per-device figures and administration existed.
+   *  Detected by the fields being ABSENT rather than by a version string —
+   *  what the app can offer depends on what this server actually answers,
+   *  not on what its number implies. */
+  const olderServer = Boolean(status) && status?.unclaimed === undefined
 
   return (
     <div className={styles.wrap}>
@@ -443,6 +450,23 @@ export function CachingSection() {
               </>
             )}
           </section>
+
+          {olderServer && (
+            <section className={`${styles.card} ${styles.claim} glass-panel`}>
+              <span className={styles.claimIcon} aria-hidden="true">
+                <Icon name="info" size={18} />
+              </span>
+              <div>
+                <h3 className={styles.cardTitle}>This server is running an older build</h3>
+                <p className={styles.note}>
+                  It answers without the per-device figures, so &ldquo;Yours&rdquo; and the other
+                  devices&rsquo; queue are blank, and it has no notion of an administrator yet —
+                  which is why there is nothing here to take. It updates itself; this appears
+                  once it has.
+                </p>
+              </div>
+            </section>
+          )}
 
           {/* Claiming is offered only while the server says nobody owns it.
               It is on the unauthenticated ping for exactly this reason: an

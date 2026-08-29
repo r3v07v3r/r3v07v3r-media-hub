@@ -795,8 +795,27 @@ function useColumnPackGrid<TGroup extends HTMLElement = HTMLElement>(enabled = t
  * heading — every control below behaves identically, which is the point:
  * the sections were re-homed, not rewritten.
  */
-export default function SettingsPage({ embedded = false }: { embedded?: boolean } = {}) {
+/** The category ids this page is divided into — the same list the control
+ *  centre's rail uses to give each one its own entry. */
+export type SettingsCategory =
+  | 'general'
+  | 'playback'
+  | 'services'
+  | 'accounts'
+  | 'ai'
+  | 'community'
+
+export default function SettingsPage({
+  embedded = false,
+  category
+}: { embedded?: boolean; category?: SettingsCategory } = {}) {
   const tileAreaRef = useRef<HTMLDivElement>(null)
+  /** With no category asked for, every group renders — the standalone
+   *  /settings route, unchanged. With one, only that group does, which is
+   *  what lets the control centre give each its own rail entry instead of a
+   *  strip of tabs above one long scroll. */
+  const shows = (id: SettingsCategory): boolean => !category || category === id
+
   const [generalGridBinding, generalGroupBinding] = useColumnPackGrid<HTMLElement>(!embedded)
   const [playbackGridBinding, playbackGroupBinding] = useColumnPackGrid<HTMLElement>(!embedded)
   const [servicesGridBinding, servicesGroupBinding] = useColumnPackGrid<HTMLElement>(!embedded)
@@ -1183,6 +1202,11 @@ export default function SettingsPage({ embedded = false }: { embedded?: boolean 
             </p>
           </div>
         )}
+        {/* The strip is a way to jump between groups on one long page. With
+            each group on its own rail entry there is nothing to jump
+            between, and a second row of the same names would just be the
+            navigation twice. */}
+        {!category && (
         <nav className={styles.categoryNav} aria-label="Settings categories">
           {[
             ['settings-general', 'General'],
@@ -1201,9 +1225,11 @@ export default function SettingsPage({ embedded = false }: { embedded?: boolean 
             </button>
           ))}
         </nav>
+        )}
       </div>
 
       <div className={styles.tileArea} ref={tileAreaRef}>
+        {shows('general') && (
         <section
           id="settings-general"
           ref={generalGroupBinding}
@@ -1295,7 +1321,9 @@ export default function SettingsPage({ embedded = false }: { embedded?: boolean 
             <MoreOptionsSection />
           </div>
         </section>
+        )}
 
+        {shows('playback') && (
         <section
           id="settings-playback"
           ref={playbackGroupBinding}
@@ -1572,7 +1600,9 @@ export default function SettingsPage({ embedded = false }: { embedded?: boolean 
             </section>
           </div>
         </section>
+        )}
 
+        {shows('services') && (
         <section
           id="settings-services"
           ref={servicesGroupBinding}
@@ -1595,7 +1625,9 @@ export default function SettingsPage({ embedded = false }: { embedded?: boolean 
             <TorBoxSection />
           </div>
         </section>
+        )}
 
+        {shows('accounts') && (
         <section
           id="settings-accounts"
           ref={accountsGroupBinding}
@@ -1617,11 +1649,13 @@ export default function SettingsPage({ embedded = false }: { embedded?: boolean 
             <OpenSubtitlesSection />
           </div>
         </section>
+        )}
 
         {/* Its own group rather than a tile inside General: this is the one
             place that decides whether the app's AI features do anything at
             all, and it should be as findable as the account connections
             above it. */}
+        {shows('ai') && (
         <section
           id="settings-ai"
           ref={aiGroupBinding}
@@ -1637,7 +1671,9 @@ export default function SettingsPage({ embedded = false }: { embedded?: boolean 
             <OllamaSection />
           </div>
         </section>
+        )}
 
+        {shows('community') && (
         <section
           id="settings-community"
           ref={communityGroupBinding}
@@ -1745,6 +1781,7 @@ export default function SettingsPage({ embedded = false }: { embedded?: boolean 
             </section>
           </div>
         </section>
+        )}
       </div>
     </div>
   )

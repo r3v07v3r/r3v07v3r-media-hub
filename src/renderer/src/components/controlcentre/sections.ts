@@ -11,14 +11,6 @@
 
 export const CONTROL_CENTRE_SECTIONS = [
   {
-    id: 'caching',
-    label: 'Caching',
-    icon: 'stack',
-    /** Read by the nav for its aria-description and by the section header,
-     *  so the two cannot describe the same surface differently. */
-    blurb: 'The cache server on your network — what it holds, and who may use it.'
-  },
-  {
     id: 'pipeline',
     label: 'Pipeline',
     icon: 'net',
@@ -28,16 +20,71 @@ export const CONTROL_CENTRE_SECTIONS = [
     id: 'services',
     label: 'Services',
     icon: 'grid',
-    blurb: 'What each connected service is doing, and the controls it offers.'
+    blurb: 'What each connected service is doing right now.'
   },
   {
-    id: 'settings',
-    label: 'Settings',
+    id: 'caching',
+    label: 'Caching',
+    icon: 'stack',
+    /** Read by the nav for its aria-description and by the section header,
+     *  so the two cannot describe the same surface differently. */
+    blurb: 'The cache server on your network — what it holds, and who may use it.'
+  },
+  // The settings page's own categories, each with its own entry rather than
+  // a strip of tabs above one long scroll. Same content, reachable in one
+  // click instead of two.
+  {
+    id: 'general',
+    label: 'General',
     icon: 'settings',
-    blurb: 'Playback, services, accounts and the rest of your R3 experience.'
+    blurb: 'App updates, display preferences, and everyday behaviour.'
+  },
+  {
+    id: 'playback',
+    label: 'Playback',
+    icon: 'play-outline',
+    blurb: 'Language, quality, subtitles and connection preferences.'
+  },
+  {
+    id: 'media-services',
+    label: 'Media servers',
+    icon: 'tv',
+    /** NOT 'Services' — that is the live-status section above. The settings
+     *  group's own heading is 'Media services', so the rail borrows that
+     *  rather than inventing a third name for the same thing. */
+    blurb: 'Servers, download clients and your streaming provider.'
+  },
+  {
+    id: 'accounts',
+    label: 'Accounts',
+    icon: 'people',
+    blurb: 'Accounts and metadata sources.'
+  },
+  {
+    id: 'ai',
+    label: 'AI',
+    icon: 'sparkle',
+    blurb: 'The local model behind the assistant and recommendations.'
+  },
+  {
+    id: 'community',
+    label: 'Community',
+    icon: 'heart',
+    blurb: 'Watch parties and profiles.'
   }
 ] as const
 
 export type ControlCentreSectionId = (typeof CONTROL_CENTRE_SECTIONS)[number]['id']
 
-export const DEFAULT_CONTROL_CENTRE_SECTION: ControlCentreSectionId = 'settings'
+export const DEFAULT_CONTROL_CENTRE_SECTION: ControlCentreSectionId = 'pipeline'
+
+/** Rail entry -> the settings category it renders. Everything not listed
+ *  here is a section of its own rather than a slice of the settings page. */
+export const SETTINGS_CATEGORY_FOR: Partial<Record<ControlCentreSectionId, string>> = {
+  general: 'general',
+  playback: 'playback',
+  'media-services': 'services',
+  accounts: 'accounts',
+  ai: 'ai',
+  community: 'community'
+}
