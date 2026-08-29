@@ -33,6 +33,17 @@ interface DiscoveredDaemon {
 const PAIR_POLL_MS = 4000
 const STATUS_POLL_MS = 15_000
 
+/** How long ago, in the coarsest unit that is still useful — the question
+ *  this answers is "has it looked recently", not "exactly when". */
+function ago(at: number | undefined): string {
+  if (!at) return 'never'
+  const minutes = Math.max(0, Math.round((Date.now() - at) / 60_000))
+  if (minutes < 1) return 'just now'
+  if (minutes < 60) return `${minutes} min ago`
+  const hours = Math.round(minutes / 60)
+  return hours < 48 ? `${hours} h ago` : `${Math.round(hours / 24)} d ago`
+}
+
 function bytes(value: number | null | undefined): string {
   if (value === null || value === undefined) return '—'
   if (value < 1024 ** 3) return `${Math.max(0, Math.round(value / 1024 ** 2))} MB`
@@ -442,9 +453,54 @@ export function CachingSection() {
                   </ul>
                 )}
 
-                {status.updater?.staged && (
+                {/* The whole updater state, not just the staged line.
+
+                    "Why has it not updated yet" has several correct answers —
+                    it has not looked yet (it checks every four to six hours),
+                    it looked and there was nothing newer, it staged one and is
+                    waiting for a quiet hour, or it tried and failed — and one
+                    line about a staged version could not tell them apart. All
+                    four are in what the daemon already reports; it was simply
+                    not being shown. */}
+                {status.updater && (
+                  <dl className={styles.facts}>
+                    <div>
+                      <dt>Update channel</dt>
+                      <dd className={styles.factSmall}>{status.updater.channel || '—'}</dd>
+                    </div>
+                    <div>
+                      <dt>Last checked</dt>
+                      <dd className={styles.factSmall}>{ago(status.updater.checkedAt)}</dd>
+                    </div>
+                    <div>
+                      <dt>Newest seen</dt>
+                      <dd className={styles.factSmall}>
+                        {status.updater.latestSeen || '—'}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>Staged</dt>
+                      <dd className={styles.factSmall}>{status.updater.staged || 'nothing'}</dd>
+                    </div>
+                  </dl>
+                )}
+
+                {status.updater?.staged ? (
                   <p className={styles.note}>
-                    Update {status.updater.staged} is ready and applies when the server is idle.
+                    {status.updater.staged} is ready. It applies once no one has streamed for
+                    half an hour and the hour is a quiet one for this household — or after 24
+                    hours staged, whichever comes first.
+                  </p>
+                ) : (
+                  <p className={styles.note}>
+                    Nothing staged. The server looks for a new build every four to six hours, so
+                    a release published since its last check has not been seen yet.
+                  </p>
+                )}
+
+                {status.updater?.lastError && (
+                  <p className={`${styles.message} ${styles.messageError}`}>
+                    Last update attempt failed: {status.updater.lastError}
                   </p>
                 )}
               </>
