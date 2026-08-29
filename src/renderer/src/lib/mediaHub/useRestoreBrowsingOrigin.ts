@@ -5,11 +5,11 @@ import { restoreBrowsingOrigin } from './browsingContext'
 
 /**
  * Applies a captured BrowsingOrigin's scroll/rail/focus restoration once,
- * when this page's route matches the origin the person came FROM before
- * opening a detail page (see AppStateContext's openDetail/browsingOrigin).
- * A no-op if there's no pending origin, or if one exists but is for a
- * different route (e.g. the person opened a title from Search, went back,
- * then separately navigated here some other way).
+ * when this page's route matches the origin a Back press just stepped out
+ * of (see AppStateContext's popBrowsingOrigin/pendingRestore). A no-op if
+ * nothing is pending, or if what is pending is for a different route (e.g.
+ * the person opened a title from Search, went back, then separately
+ * navigated here some other way).
  *
  * Call from any page a detail page can be opened from (category pages,
  * Home, My Stuff). `ready` should reflect whether this page's own content
@@ -17,24 +17,27 @@ import { restoreBrowsingOrigin } from './browsingContext'
  * an empty page.
  */
 export function useRestoreBrowsingOrigin(ready: boolean): void {
-  const { browsingOrigin, clearBrowsingOrigin } = useAppState()
+  const { pendingRestore, clearPendingRestore } = useAppState()
   const location = useLocation()
   const appliedRef = useRef(false)
   // Snapshotted once, at this component instance's first render — NOT a
-  // live subscription to browsingOrigin. The page a title gets opened
-  // FROM is, by construction, the same route openDetail just captured an
-  // origin FOR (that's the whole point — you capture where you currently
-  // are). A live dependency on browsingOrigin meant that the instant
-  // openDetail set it, THIS SAME still-mounted page's route trivially
-  // matched its own freshly-captured origin.route, so it self-consumed
-  // and cleared the origin via the rAFs below before ever navigating back
-  // to it — confirmed live via a debug trace (browsingOrigin went
-  // null -> {captured origin} -> null, all before the detail page ever
-  // read it). Freezing the value at mount sidesteps this: a fresh mount
-  // only happens when this route is actually navigated TO (initial visit,
-  // or the contextual back button's navigate(origin.route)), never while
-  // continuing to sit on the page that just captured it.
-  const originAtMountRef = useRef(browsingOrigin)
+  // live subscription. Kept from when this read the trail directly, where
+  // it was load-bearing: the page a title gets opened FROM is, by
+  // construction, the same route openDetail just captured an origin FOR
+  // (that's the whole point — you capture where you currently are), so a
+  // live dependency meant that the instant openDetail set it, THIS SAME
+  // still-mounted page's route trivially matched its own freshly-captured
+  // origin.route and it self-consumed via the rAFs below before ever
+  // navigating back to it — confirmed live via a debug trace (the value
+  // went null -> {captured origin} -> null, all before the detail page
+  // ever read it).
+  //
+  // `pendingRestore` is written only by an actual Back press, never by
+  // openDetail, so that particular race is gone at the source. The
+  // snapshot stays anyway: a fresh mount is exactly the moment a restore
+  // is wanted, and freezing the value keeps this a genuinely one-shot
+  // effect rather than one that re-arms on unrelated state changes.
+  const originAtMountRef = useRef(pendingRestore)
 
   useEffect(() => {
     const origin = originAtMountRef.current
@@ -59,12 +62,12 @@ export function useRestoreBrowsingOrigin(ready: boolean): void {
         if (appliedRef.current) return
         appliedRef.current = true
         restoreBrowsingOrigin(origin)
-        clearBrowsingOrigin()
+        clearPendingRestore()
       })
     })
     return () => {
       cancelAnimationFrame(raf1)
       cancelAnimationFrame(raf2)
     }
-  }, [ready, location.pathname, location.search, clearBrowsingOrigin])
+  }, [ready, location.pathname, location.search, clearPendingRestore])
 }

@@ -55,6 +55,7 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
   const config = DETAIL_CONFIGS[kind]
   const {
     browsingOrigin,
+    popBrowsingOrigin,
     activeProfileId,
     profiles,
     myList,
@@ -408,8 +409,14 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
   }, [browsingOrigin, config.path])
 
   function handleBack(): void {
-    if (browsingOrigin) navigate(browsingOrigin.route)
-    else navigate(`/${config.path}`)
+    // Pops as it goes, so a chain opened through the Rest of the series /
+    // Similar panels unwinds one step per press all the way back to the
+    // grid it started from. Reading the top without popping left the
+    // button pointed at the page it had just returned to — /movies/:id
+    // does not remount when only the id changes, so nothing downstream
+    // ever consumed the entry.
+    const origin = popBrowsingOrigin()
+    navigate(origin ? origin.route : `/${config.path}`)
   }
 
   function handlePlay(season?: number, episode?: number): void {
