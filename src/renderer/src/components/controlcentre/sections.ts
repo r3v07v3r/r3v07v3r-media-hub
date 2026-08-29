@@ -19,6 +19,18 @@ export const CONTROL_CENTRE_SECTIONS = [
     blurb: 'The cache server on your network — what it holds, and who may use it.'
   },
   {
+    id: 'pipeline',
+    label: 'Pipeline',
+    icon: 'net',
+    blurb: 'How a title gets from you asking for it to it playing.'
+  },
+  {
+    id: 'services',
+    label: 'Services',
+    icon: 'grid',
+    blurb: 'What each connected service is doing, and the controls it offers.'
+  },
+  {
     id: 'settings',
     label: 'Settings',
     icon: 'settings',

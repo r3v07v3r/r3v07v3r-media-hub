@@ -1,0 +1,89 @@
+/* The flow, drawn as a single vertical path rather than as boxes and
+   arrows. A path has one reading order and survives an empty step; a box
+   diagram has to decide what an empty box looks like, and every answer to
+   that is worse than a gap in a line. */
+
+.flow {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.stage {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  gap: 14px;
+}
+
+.marker {
+  position: relative;
+  display: flex;
+  justify-content: center;
+}
+
+.dot {
+  position: relative;
+  z-index: 1;
+  width: 11px;
+  height: 11px;
+  margin-top: 5px;
+  border-radius: 50%;
+  border: 1px solid var(--border-subtle);
+  background: var(--panel-strong);
+}
+
+/* Filled means "something is doing this step". The empty ring is not the
+   only signal — the row itself says what is missing in words. */
+.dotFilled {
+  border-color: var(--accent-blue);
+  background: var(--accent-blue);
+  box-shadow: 0 0 12px rgba(39, 230, 154, 0.4);
+}
+
+.line {
+  position: absolute;
+  top: 14px;
+  bottom: -6px;
+  left: 50%;
+  width: 1px;
+  transform: translateX(-50%);
+  background: linear-gradient(180deg, var(--border-active), var(--border-subtle));
+}
+
+.body {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding-bottom: 22px;
+}
+
+.stageLabel {
+  font-size: 0.95rem;
+  font-weight: 560;
+}
+
+.parts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.part {
+  padding: 5px 11px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border-subtle);
+  background: rgba(39, 230, 154, 0.07);
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
+/* An empty step is a sentence, not a ghost chip. A dimmed brand name would
+   say "this exists but is off"; what is true is "nobody set this up". */
+.emptySlot {
+  font-size: 0.82rem;
+  line-height: 1.5;
+  color: var(--text-muted);
+  font-style: italic;
+}

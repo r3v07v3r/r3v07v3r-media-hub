@@ -23,6 +23,8 @@ import { useAppState } from '@renderer/context/AppStateContext'
 import SettingsPage from '@renderer/routes/SettingsPage'
 import styles from './ControlCentre.module.css'
 import { CachingSection } from './sections/CachingSection'
+import { PipelineSection } from './sections/PipelineSection'
+import { ServicesSection } from './sections/ServicesSection'
 import { ControlCentreNav } from './ControlCentreNav'
 import {
   CONTROL_CENTRE_SECTIONS,
@@ -142,6 +144,8 @@ export function ControlCentreFace() {
             >
               {entry.id === 'settings' ? <SettingsPage embedded /> : null}
               {entry.id === 'caching' ? <CachingSection /> : null}
+              {entry.id === 'pipeline' ? <PipelineSection /> : null}
+              {entry.id === 'services' ? <ServicesSection /> : null}
             </div>
           ))}
         </div>
