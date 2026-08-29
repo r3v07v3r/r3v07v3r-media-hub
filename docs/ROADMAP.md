@@ -271,9 +271,46 @@ Control, and Viewer keeps a read-only line saying whether AI is available.
    already called everywhere — but nothing surfaces it, so a failing subtitle provider or an
    unreachable daemon is invisible unless somebody happens to be watching the right card. Shipping
    this alone is worth doing even if the split never happens.
-2. **Move the operator settings behind it**, once the grouping has been lived with.
-3. **The mode toggle last**, if it is still wanted — by then it is a nav change over an already
+2. **Owner labels on the shared parts** — the daemon protocol addition below, so the cache server's
+   queue can say whose fetch is running and whose account it bills.
+3. **Move the operator settings behind it**, once the grouping has been lived with.
+4. **The mode toggle last**, if it is still wanted — by then it is a nav change over an already
    correct grouping, not a redesign.
+
+### One or two people operate the shared parts
+
+Added 2026-08-29, and it changes the shape of this: the split is not "my machine's admin screen".
+Some of what moves is genuinely **shared between people** — the cache server, Rooms, and the
+download stack when several installs point at the same qBittorrent/\*arr box. In a household one or
+two people run those and everybody else just watches.
+
+**Operator is a property of an installation, not a synced role, and there is nothing to change
+about that.** This app has no central account and no server that could hold a permission — each
+person runs their own copy with their own settings. Whoever has qBittorrent's URL and password, or
+has paired to the cache server, IS the operator on that machine, by construction. So Server Control
+should appear when an install actually has operator-owned services configured, with an explicit
+toggle to hide it (the lounge machine is paired to the cache server and should still not offer to
+reconfigure it) rather than a permission check that would only be theatre.
+
+**Say plainly what is and is not enforced.** The cache daemon has real per-person isolation and
+already implements it: credentials are stored per paired device (`credentials.ts`, keyed by a hash
+of the pairing token), every job records `ownerDeviceId`, and a fetch only ever bills its own
+owner's TorBox account — never a housemate's. That is a genuine boundary. qBittorrent, Sonarr,
+Radarr and TorBox have none: two people who both hold the credentials both have full control, which
+is true today and does not change. A screen called "Server Control" must not imply an authorization
+model the app does not have, so the dashboard should show _who_ an action belongs to and never
+suggest it is gating one.
+
+**The one protocol gap.** `LanCacheStatusResponse.jobs` carries contentKey, title, state, attempts
+and progress — but no owner, even though the daemon knows it. A household view cannot say whose
+fetch is running, or why the budget is full, without it. Adding an owner label (not the device id —
+a name the person chose when pairing) to that payload is the prerequisite for the shared half of
+this, and is small.
+
+**Rooms are the existing precedent, not a new problem.** A party already has a host who owns the
+queue and the member-control toggles (`SessionHub.tsx`), and Friends groups are deliberately
+host-less so they survive anyone going offline (`friends.ts`). Both models already work; Server
+Control surfaces them rather than redesigning them.
 
 ### Constraints that are already decided
 
