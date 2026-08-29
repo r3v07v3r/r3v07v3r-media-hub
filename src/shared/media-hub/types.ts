@@ -926,6 +926,16 @@ export interface MediaHubPublicSettings {
   cacheMode: CacheMode
   /** Bound on the in-memory buffer, in MB. Only meaningful in memory mode. */
   memoryCacheMaxMb: number
+  /**
+   * Whether this install may keep MEDIA on the disk at all.
+   *
+   * false is a promise, not a preference: cacheMode is forced to memory
+   * behind it (see preferences.ts effectiveCacheMode), so the disk stays
+   * clean whatever the saved mode says. The app's own library, history and
+   * settings are unaffected — this is about video, not about forgetting
+   * what you watched.
+   */
+  storeMedia: boolean
 }
 
 export type CacheMode = 'disk' | 'memory'
@@ -956,6 +966,10 @@ export interface MediaHubSettingsSnapshot extends MediaHubPublicSettings {
    *  of inventing an answer, and "Recommend Next ..." falls back to its own
    *  catalog pick rather than pretending a model chose it. */
   ollamaConnected: boolean
+  /** Whether the storage question has ever been answered. False on a fresh
+   *  install and nowhere else — this is what the first-run prompt keys on,
+   *  which is why it is distinct from storeMedia being true or false. */
+  storagePolicyChosen: boolean
 }
 
 /** What a probe of an Ollama instance found — see main/media-hub/ollamaService.ts. */

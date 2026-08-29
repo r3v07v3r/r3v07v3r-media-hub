@@ -32,6 +32,7 @@ import { mpvPath, hasActivePlayback, stopPlayback } from './playbackSession'
 import { ollamaConfig, ollamaConnected } from './ollamaService'
 import {
   normalizeCacheMode,
+  effectiveCacheMode,
   normalizeMemoryCacheMb,
   normalizeSourcePreference,
   normalizeTheme,
@@ -91,7 +92,11 @@ export function registerAppIpc(): void {
       subdlConnected: subdlConnected(),
       partySyncConnected: Boolean(partySyncCredentials().url && partySyncCredentials().inviteKey),
       playerAvailable: Boolean(mpvPath),
-      ollamaConnected: ollamaConnected()
+      ollamaConnected: ollamaConnected(),
+      // Whether the question has been PUT, which the stored flag alone
+      // cannot say: absent and false both read as false once it is a
+      // boolean, and only one of them should raise the first-run prompt.
+      storagePolicyChosen: readSettings().storeMedia !== undefined
     }
   })
 
@@ -394,6 +399,25 @@ export function registerAppIpc(): void {
       memoryCacheMaxMb: normalizeMemoryCacheMb(settings.memoryCacheMaxMb)
     }
   })
+
+  handle<{ storeMedia?: boolean }, { storeMedia: boolean; cacheMode: CacheMode }>(
+    MEDIA_HUB_CHANNELS.settingsSetStoreMedia,
+    (_event, value) => {
+      const settings = readSettings()
+      const storeMedia = value?.storeMedia !== false
+      settings.storeMedia = storeMedia
+      writeSettings(settings)
+      return {
+        storeMedia,
+        // The mode the app will ACTUALLY use, which is what the caller has
+        // to render — saying "disk" back to somebody who just chose stream
+        // only would be the exact contradiction this setting exists to
+        // prevent. The saved mode underneath is left as it was, so turning
+        // storage back on restores their earlier choice.
+        cacheMode: effectiveCacheMode(settings)
+      }
+    }
+  )
 
   handle<{ sourcePreference?: unknown }, { sourcePreference: SourcePreference }>(
     MEDIA_HUB_CHANNELS.settingsSetSourcePreference,

@@ -49,6 +49,7 @@ import { assertPublicMediaUrl, defaultResolveHost, fetchMediaWithRetry } from '.
 import { logError } from './logger'
 import { formatMegabytes, reportPreparation } from './playbackProgress'
 import { readSettings } from './settingsStore'
+import { effectiveCacheMode } from './preferences'
 import type {
   CacheSessionMeta,
   CacheSourceRef,
@@ -218,7 +219,12 @@ export function createMemoryChunkStore(): ChunkStore {
  *  anything else (including an unset value) is the disk default. */
 export function memoryModeEnabled(): boolean {
   try {
-    return readSettings().cacheMode === 'memory'
+    // Through effectiveCacheMode, not the raw field: this is the function
+    // that decides whether a byte reaches the disk, so it has to honour a
+    // stream-only answer even though that answer lives in a different
+    // setting. Reading cacheMode directly here was the gap that would have
+    // made "stream only" a label on a checkbox.
+    return effectiveCacheMode(readSettings()) === 'memory'
   } catch {
     return false
   }

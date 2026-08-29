@@ -94,8 +94,12 @@ export function publicSettings(settings: Record<string, unknown> = {}): MediaHub
     ollamaModel: normalizeOllamaModel(settings.ollamaModel),
     ollamaAutoDetect: settings.ollamaAutoDetect !== false,
     sourcePreference: normalizeSourcePreference(settings.sourcePreference),
-    cacheMode: normalizeCacheMode(settings.cacheMode),
-    memoryCacheMaxMb: normalizeMemoryCacheMb(settings.memoryCacheMaxMb)
+    cacheMode: effectiveCacheMode(settings),
+    memoryCacheMaxMb: normalizeMemoryCacheMb(settings.memoryCacheMaxMb),
+    // Absent means never asked, and the app has to behave as though the
+    // answer were yes until somebody says otherwise — every existing
+    // install predates the question and already stores.
+    storeMedia: settings.storeMedia !== false
   }
 }
 
@@ -103,6 +107,27 @@ export function publicSettings(settings: Record<string, unknown> = {}): MediaHub
  *  the two to fall back to, since it is what every existing install does. */
 export function normalizeCacheMode(value: unknown): CacheMode {
   return value === 'memory' ? 'memory' : 'disk'
+}
+
+/**
+ * The cache mode actually in force, which is not always the one saved.
+ *
+ * A person who answered "stream only" is promised that nothing lands on
+ * their disk, and a promise the backend does not keep is theatre — hiding
+ * the disk controls would leave the saved value still reading 'disk' and
+ * streamCache still writing. So the policy WINS over the stored mode, here,
+ * in the one function everything else reads, rather than being re-enforced
+ * in each place that happens to care.
+ *
+ * The stored mode is deliberately left untouched underneath: turning storage
+ * back on should restore the choice made before it, not a default.
+ */
+export function effectiveCacheMode(settings: {
+  cacheMode?: unknown
+  storeMedia?: boolean
+}): CacheMode {
+  if (settings.storeMedia === false) return 'memory'
+  return normalizeCacheMode(settings.cacheMode)
 }
 
 /** Kept in step with streamCache.ts's own clamp so the Settings pane can
@@ -237,7 +262,7 @@ export function logoutSettings(
     sourcePreference: normalizeSourcePreference(settings.sourcePreference),
     // Device preferences too: how fast this connection is and whether
     // media may touch this disk are facts about the machine.
-    cacheMode: normalizeCacheMode(settings.cacheMode),
+    cacheMode: effectiveCacheMode(settings),
     memoryCacheMaxMb: normalizeMemoryCacheMb(settings.memoryCacheMaxMb)
   }
 }
