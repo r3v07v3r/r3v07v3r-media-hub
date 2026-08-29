@@ -33,6 +33,10 @@ interface AdminFile {
    *  already happened, then clears itself, so recovery is a deliberate act
    *  at the console rather than a standing hole. */
   reopened?: boolean
+  /** 'anyone on this network may join'. Off by default: the safe reading of
+   *  a missing field is the restrictive one. On, a device that asks to pair
+   *  is approved on arrival instead of waiting for the admin. */
+  openJoin?: boolean
 }
 
 export interface Admin {
@@ -48,6 +52,9 @@ export interface Admin {
   claim(deviceId: string): Promise<boolean>
   /** Console recovery: allows one further claim. */
   reopen(): Promise<void>
+  /** Whether new devices join without waiting for approval. */
+  openJoin(): boolean
+  setOpenJoin(value: boolean): Promise<void>
   load(): Promise<void>
 }
 
@@ -84,9 +91,21 @@ export function createAdmin(dataDir: string): Admin {
       // so a retried request cannot fail confusingly.
       if (state.adminDeviceId === deviceId) return true
       if (state.adminDeviceId && state.reopened !== true) return false
-      state = { adminDeviceId: deviceId, claimedAt: Date.now() }
+      // Drops `reopened` — that is the point, a reopening is spent by the
+      // claim it permits — but carries openJoin across. Claiming changes WHO
+      // administers the box, not what they have configured on it, and
+      // silently flipping a persisted setting during a recovery is the kind
+      // of surprise nobody would think to check for.
+      state = { adminDeviceId: deviceId, claimedAt: Date.now(), ...(state.openJoin === true ? { openJoin: true } : {}) }
       await persist()
       return true
+    },
+    openJoin() {
+      return state.openJoin === true
+    },
+    async setOpenJoin(value) {
+      state = { ...state, openJoin: value === true }
+      await persist()
     },
     async reopen() {
       state = { ...state, reopened: true }
@@ -98,7 +117,8 @@ export function createAdmin(dataDir: string): Admin {
         state = {
           adminDeviceId: String(parsed.adminDeviceId ?? ''),
           claimedAt: Number(parsed.claimedAt) || 0,
-          ...(parsed.reopened === true ? { reopened: true } : {})
+          ...(parsed.reopened === true ? { reopened: true } : {}),
+          ...(parsed.openJoin === true ? { openJoin: true } : {})
         }
       } catch {
         // No file yet: unclaimed, which is the correct starting state for a

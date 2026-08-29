@@ -587,6 +587,16 @@ async function claimTests(): Promise<void> {
   assert.equal(reloaded.isAdmin('device-one'), true, 'the claim survives a restart')
   assert.equal(reloaded.isUnclaimed(), false)
 
+  // openJoin is an admin PREFERENCE, not authorisation state, and it lives
+  // in the same file. It has to survive a restart like the claim does, and
+  // survive a takeover: claiming decides who administers the box, not what
+  // they have configured on it, and a persisted setting that silently flips
+  // during a recovery is exactly the kind of change nobody thinks to check.
+  assert.equal(reloaded.openJoin(), false, 'the network is not open by default')
+  await reloaded.setOpenJoin(true)
+  const afterRestart = createAdmin(root)
+  await afterRestart.load()
+  assert.equal(afterRestart.openJoin(), true, 'the switch survives a restart')
 
   // --claim-admin: the console is the root of trust, and the way back from
   // a lost admin device.
@@ -600,6 +610,11 @@ async function claimTests(): Promise<void> {
     'the previous administrator is replaced, not added to'
   )
 
+  assert.equal(
+    reloaded.openJoin(),
+    true,
+    'and survives the takeover — claiming changes the administrator, not their settings'
+  )
 
   // Reopening is spent by the claim it permits, not left standing.
   assert.equal(reloaded.isUnclaimed(), false, 'reopening does not stay open')
@@ -695,6 +710,316 @@ async function claimRouteTest(): Promise<void> {
   console.log('ok  claim route')
 }
 
+// ---------------------------------------------------------------------
+// Approval — a token is no longer the same thing as permission.
+//
+// Before this, "holds a token" and "may use the server" were one state,
+// because the only way to get a token was to read a code off the console.
+// Splitting them is what lets the code go away in A5: asking to join is
+// something anyone on the LAN may do, and being let in is something only
+// the administrator can grant.
+//
+// The subtle case is the DEVICES THAT WERE ALREADY HERE. They have no
+// status field at all, and reading a missing field restrictively — the
+// right default everywhere else in this feature — would log every working
+// device out of a daemon its owner already runs.
+// ---------------------------------------------------------------------
+
+async function approvalTests(): Promise<void> {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'r3-approve-'))
+  const pairing = createPairing(root)
+  await pairing.load()
+
+  // A device from before approval existed: paired with the console code,
+  // no status field.
+  const legacy = await pairing.tryPair(pairing.currentCode(), 'the old laptop')
+  assert.ok(legacy)
+  assert.equal(
+    pairing.listDevices().find((d) => d.token === legacy)?.status,
+    undefined,
+    'the code path does not stamp a status'
+  )
+  assert.equal(
+    pairing.isAuthorized(legacy),
+    true,
+    'and an unstamped device keeps working — absence means approved'
+  )
+
+  // A device that asked to join.
+  const pendingToken = await pairing.requestPairing('the new tablet')
+  const pendingId = deviceIdForToken(pendingToken)
+  assert.equal(
+    pairing.isAuthorized(pendingToken),
+    false,
+    'a pending device holds a real token and is authorised for nothing'
+  )
+  assert.equal(
+    pairing.deviceIdFor(pendingToken),
+    pendingId,
+    'but it still has an identity, or it could not ask about itself'
+  )
+  assert.equal(pairing.findByToken(pendingToken)?.deviceName, 'the new tablet')
+
+  assert.equal(await pairing.setStatus(pendingId, 'approved'), true)
+  assert.equal(pairing.isAuthorized(pendingToken), true, 'approval turns the token on')
+  assert.ok(
+    (pairing.findByToken(pendingToken)?.approvedAt ?? 0) > 0,
+    'and records when, so the admin list can say'
+  )
+
+  assert.equal(
+    await pairing.setStatus('0'.repeat(16), 'approved'),
+    false,
+    'approving a device that is not here fails rather than inventing one'
+  )
+
+  // Quota is stored per device; null clears back to the server default
+  // rather than storing a zero, which would read as "allowed nothing".
+  assert.equal(await pairing.setQuota(pendingId, 5_000), true)
+  assert.equal(pairing.findByToken(pendingToken)?.quotaBytes, 5_000)
+  assert.equal(await pairing.setQuota(pendingId, null), true)
+  assert.equal(
+    pairing.findByToken(pendingToken)?.quotaBytes,
+    undefined,
+    'clearing a quota removes it, rather than setting it to nothing'
+  )
+
+  // All of it has to survive a restart, including the distinction between
+  // "no status because it is old" and "no status because it is pending".
+  const second = await pairing.requestPairing('still waiting')
+  const reloaded = createPairing(root)
+  await reloaded.load()
+  assert.equal(reloaded.isAuthorized(legacy), true, 'the legacy device survives a restart')
+  assert.equal(reloaded.isAuthorized(pendingToken), true, 'so does an approval')
+  assert.equal(reloaded.isAuthorized(second), false, 'and so does a pending state')
+
+  assert.equal(await reloaded.removeDevice(deviceIdForToken(second)), true)
+  assert.equal(reloaded.findByToken(second), null, 'a removed device is gone')
+  assert.equal(
+    await reloaded.removeDevice(deviceIdForToken(second)),
+    false,
+    'and removing it again reports that there was nothing to remove'
+  )
+
+  await fsp.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
+  console.log('ok  device approval')
+}
+
+// ---------------------------------------------------------------------
+// The same rules over HTTP, plus the bootstrap that has to work once the
+// pairing code is gone: on an unclaimed server there is nobody to approve
+// anyone, so joining must not require an approver who cannot exist yet.
+// ---------------------------------------------------------------------
+
+async function deviceRouteTests(): Promise<void> {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'r3-devices-'))
+  const store = createItemStore(root, {
+    idleTtlMs: 60_000,
+    hardMaxMs: 600_000,
+    budgetBytes: 10 ** 9,
+    tombstoneMs: 60_000
+  })
+  const pairing = createPairing(root)
+  await pairing.load()
+  const admin = createAdmin(root)
+  await admin.load()
+  const server = createDaemonServer({
+    storage: store,
+    jobs: createJobStore(root),
+    pairing,
+    admin,
+    credentials: createCredentials(root),
+    activity: createActivityTracker(root),
+    updaterStatus: () => ({
+      channel: 'preview',
+      enabled: true,
+      checkedAt: 0,
+      latestSeen: '',
+      staged: '',
+      stagedAt: 0,
+      lastError: ''
+    }),
+    serverName: 'test',
+    version: '0.0.0',
+    diskBudgetBytes: 10 ** 9
+  })
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+  const base = `http://127.0.0.1:${(server.address() as { port: number }).port}`
+
+  const pair = async (deviceName: string): Promise<{ token: string; status: string }> =>
+    (await (
+      await fetch(`${base}/api/pair`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ deviceName })
+      })
+    ).json()) as { token: string; status: string }
+
+  const statusFor = async (token: string): Promise<number> =>
+    (await fetch(`${base}/api/status`, { headers: { Authorization: `Bearer ${token}` } })).status
+
+  const act = async (
+    token: string,
+    id: string,
+    body: Record<string, unknown>
+  ): Promise<Response> =>
+    fetch(`${base}/api/admin/devices/${id}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify(body)
+    })
+
+  try {
+    // --- bootstrap ------------------------------------------------------
+    // Nobody administers this box yet. Waiting for approval here would
+    // deadlock the first install, and it would not buy anything: any device
+    // on the LAN can currently take admin outright via /api/admin/claim,
+    // which is strictly more than being let in as a user.
+    const owner = await pair('the owner')
+    assert.equal(owner.status, 'approved', 'the first device joins an unclaimed server')
+
+    const claimed = await fetch(`${base}/api/admin/claim`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${owner.token}` }
+    })
+    assert.equal(claimed.status, 200)
+
+    // --- and now the window is shut --------------------------------------
+    const guest = await pair('a guest')
+    assert.equal(guest.status, 'pending', 'once claimed, joining waits for the administrator')
+    assert.equal(await statusFor(guest.token), 401, 'and a pending token opens nothing')
+
+    // The one thing a pending device may do.
+    const asked = await fetch(`${base}/api/pair/status`, {
+      headers: { Authorization: `Bearer ${guest.token}` }
+    })
+    assert.equal(asked.status, 200)
+    assert.equal(((await asked.json()) as { status: string }).status, 'pending')
+    assert.equal(
+      (await fetch(`${base}/api/pair/status`, { headers: { Authorization: 'Bearer nope' } })).status,
+      401,
+      'a token this server never issued is told nothing'
+    )
+
+    // --- the admin list ---------------------------------------------------
+    assert.equal(
+      (
+        await fetch(`${base}/api/admin/devices`, {
+          headers: { Authorization: `Bearer ${guest.token}` }
+        })
+      ).status,
+      401,
+      'a pending device cannot read the device list'
+    )
+
+    const listed = await fetch(`${base}/api/admin/devices`, {
+      headers: { Authorization: `Bearer ${owner.token}` }
+    })
+    assert.equal(listed.status, 200)
+    const listBody = await listed.text()
+    assert.equal(
+      listBody.includes(guest.token) || listBody.includes(owner.token),
+      false,
+      'the device list never carries a credential — ids only'
+    )
+    const devices = (JSON.parse(listBody) as { devices: Array<Record<string, unknown>> }).devices
+    assert.equal(devices.length, 2)
+    const guestRow = devices.find((d) => d.deviceName === 'a guest')!
+    const ownerRow = devices.find((d) => d.deviceName === 'the owner')!
+    assert.equal(guestRow.status, 'pending')
+    assert.equal(ownerRow.isAdmin, true)
+    assert.equal(ownerRow.isYou, true)
+    assert.equal(guestRow.isAdmin, false)
+
+    // --- approve ----------------------------------------------------------
+    assert.equal(
+      (await act(guest.token, String(guestRow.id), { action: 'approve' })).status,
+      401,
+      'a pending device cannot approve itself'
+    )
+    assert.equal(
+      await statusFor(guest.token),
+      401,
+      'and the refusal actually refused — it is still shut out'
+    )
+
+    assert.equal((await act(owner.token, String(guestRow.id), { action: 'approve' })).status, 200)
+    assert.equal(await statusFor(guest.token), 200, 'an approved device may use the server')
+    assert.equal(
+      (
+        await fetch(`${base}/api/admin/devices`, {
+          headers: { Authorization: `Bearer ${guest.token}` }
+        })
+      ).status,
+      403,
+      'but approval is not administration'
+    )
+    assert.equal(
+      (await act(guest.token, String(guestRow.id), { action: 'quota', quotaBytes: 10 ** 12 }))
+        .status,
+      403,
+      'and an approved device cannot write itself a quota'
+    )
+
+    // --- the footgun ------------------------------------------------------
+    assert.equal(
+      (await act(owner.token, String(ownerRow.id), { action: 'revoke' })).status,
+      409,
+      'the admin cannot revoke their own device out of the building'
+    )
+    assert.equal(await statusFor(owner.token), 200, 'and the refusal left them working')
+
+    // --- quota, and revoke ------------------------------------------------
+    assert.equal(
+      (await act(owner.token, String(guestRow.id), { action: 'quota', quotaBytes: 1234 })).status,
+      200
+    )
+    assert.equal(
+      pairing.listDevices().find((d) => deviceIdForToken(d.token) === guestRow.id)?.quotaBytes,
+      1234
+    )
+    assert.equal(
+      (await act(owner.token, '0'.repeat(16), { action: 'approve' })).status,
+      404,
+      'acting on a device that is not here is a 404, not a silent success'
+    )
+    assert.equal((await act(owner.token, String(guestRow.id), { action: 'nonsense' })).status, 400)
+
+    assert.equal((await act(owner.token, String(guestRow.id), { action: 'revoke' })).status, 200)
+    assert.equal(await statusFor(guest.token), 401, 'a revoked device is out immediately')
+
+    // --- "anyone on this network may join" --------------------------------
+    const setOpen = await fetch(`${base}/api/admin/settings`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', Authorization: `Bearer ${owner.token}` },
+      body: JSON.stringify({ openJoin: true })
+    })
+    assert.equal(setOpen.status, 200)
+    assert.equal(((await setOpen.json()) as { openJoin: boolean }).openJoin, true)
+
+    const walkIn = await pair('a walk-in')
+    assert.equal(walkIn.status, 'approved', 'with the switch on, joining does not wait')
+
+    // Off again, and the door shuts on the next arrival — not retroactively
+    // on the ones already let in.
+    await fetch(`${base}/api/admin/settings`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', Authorization: `Bearer ${owner.token}` },
+      body: JSON.stringify({ openJoin: false })
+    })
+    assert.equal((await pair('too late')).status, 'pending')
+    assert.equal(
+      await statusFor(walkIn.token),
+      200,
+      'closing the switch does not evict whoever came through it'
+    )
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()))
+    await fsp.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
+  }
+  console.log('ok  device routes')
+}
+
 void main()
   .then(() => {
     console.log('ok  r3-cache daemon core')
@@ -703,3 +1028,5 @@ void main()
   .then(indistinguishabilityTest)
   .then(claimTests)
   .then(claimRouteTest)
+  .then(approvalTests)
+  .then(deviceRouteTests)

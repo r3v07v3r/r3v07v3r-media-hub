@@ -18,10 +18,32 @@ import crypto from 'node:crypto'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
 
-interface PairedDevice {
+export interface PairedDevice {
   token: string
   deviceName: string
   createdAt: number
+  /**
+   * 'approved' — may use the server. 'pending' — holds a token and can do
+   * nothing but ask whether it has been let in yet.
+   *
+   * ABSENT MEANS APPROVED, and this is the one place in this feature where
+   * absence reads permissively rather than restrictively. Devices that
+   * paired before approval existed did so by presenting the code off the
+   * console, which was the authority at the time. Treating them as pending
+   * would lock working devices out of a daemon their owner already runs —
+   * a regression dressed as a security improvement.
+   */
+  status?: 'pending' | 'approved'
+  approvedAt?: number
+  /** Per-device allocation, set by the admin. Unset means the server-wide
+   *  default applies — see A4; nothing enforces this yet. */
+  quotaBytes?: number
+}
+
+/** Approval state, resolving the absent-means-approved rule in ONE place so
+ *  no caller has to remember it. */
+export function isApproved(device: PairedDevice): boolean {
+  return device.status !== 'pending'
 }
 
 interface AuthFile {
@@ -49,6 +71,17 @@ export interface Pairing {
   /** The device id for a presented (already-authorized) token, or ''. */
   deviceIdFor(token: string | undefined): string
   listDevices(): PairedDevice[]
+  /** The device behind a token regardless of approval — what a pending
+   *  device needs in order to ask whether it has been let in yet. */
+  findByToken(token: string | undefined): PairedDevice | null
+  /** Registers a device awaiting approval and returns its token. The token
+   *  is real and authorises NOTHING until an admin approves it. */
+  requestPairing(deviceName: string): Promise<string>
+  /** Admin actions, addressed by device id rather than by token — the admin
+   *  never sees another device's credential. */
+  setStatus(deviceId: string, status: 'approved' | 'pending'): Promise<boolean>
+  setQuota(deviceId: string, quotaBytes: number | null): Promise<boolean>
+  removeDevice(deviceId: string): Promise<boolean>
   revoke(token: string): Promise<void>
   /** Called once at startup to load persisted devices. */
   load(): Promise<void>
@@ -80,6 +113,23 @@ export function createPairing(dataDir: string): Pairing {
     const tmp = `${authPath}.tmp`
     await fsp.writeFile(tmp, JSON.stringify(payload), { mode: 0o600 })
     await fsp.rename(tmp, authPath)
+  }
+
+  /** Constant-time token lookup. Factored out so every caller compares a
+   *  credential the same way — a plain === here would be a timing oracle on
+   *  the one secret this daemon has. */
+  function matchDevice(token: string | undefined): PairedDevice | null {
+    if (!token) return null
+    for (const device of devices) {
+      if (device.token.length !== token.length) continue
+      if (crypto.timingSafeEqual(Buffer.from(device.token), Buffer.from(token))) return device
+    }
+    return null
+  }
+
+  function findById(deviceId: string): PairedDevice | undefined {
+    if (!deviceId) return undefined
+    return devices.find((device) => deviceIdForToken(device.token) === deviceId)
   }
 
   return {
@@ -114,21 +164,54 @@ export function createPairing(dataDir: string): Pairing {
       return token
     },
     isAuthorized(token) {
-      if (!token) return false
-      return devices.some(
-        (device) =>
-          device.token.length === token.length &&
-          crypto.timingSafeEqual(Buffer.from(device.token), Buffer.from(token))
-      )
+      // A PENDING device holds a real token and is not authorised for
+      // anything. Holding a token is the result of asking to join; being
+      // approved is the result of somebody saying yes.
+      const device = matchDevice(token)
+      return Boolean(device && isApproved(device))
+    },
+    findByToken(token) {
+      return matchDevice(token)
     },
     deviceIdFor(token) {
-      if (!token) return ''
-      const matched = devices.find(
-        (device) =>
-          device.token.length === token.length &&
-          crypto.timingSafeEqual(Buffer.from(device.token), Buffer.from(token))
-      )
+      const matched = matchDevice(token)
       return matched ? deviceIdForToken(matched.token) : ''
+    },
+    async requestPairing(deviceName) {
+      const token = crypto.randomBytes(32).toString('hex')
+      devices.push({
+        token,
+        deviceName: String(deviceName || 'unnamed device').slice(0, 64),
+        createdAt: Date.now(),
+        status: 'pending'
+      })
+      await persist()
+      return token
+    },
+    async setStatus(deviceId, status) {
+      const device = findById(deviceId)
+      if (!device) return false
+      device.status = status
+      if (status === 'approved') device.approvedAt = Date.now()
+      await persist()
+      return true
+    },
+    async setQuota(deviceId, quotaBytes) {
+      const device = findById(deviceId)
+      if (!device) return false
+      // null clears it back to the server default rather than storing a
+      // zero, which would read as 'allowed nothing'.
+      if (quotaBytes === null) delete device.quotaBytes
+      else device.quotaBytes = Math.max(0, Math.floor(quotaBytes))
+      await persist()
+      return true
+    },
+    async removeDevice(deviceId) {
+      const before = devices.length
+      devices = devices.filter((device) => deviceIdForToken(device.token) !== deviceId)
+      if (devices.length === before) return false
+      await persist()
+      return true
     },
     listDevices: () => [...devices],
     async revoke(token) {

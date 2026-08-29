@@ -22,7 +22,7 @@ import type { ActivityTracker } from './activity'
 import type { Credentials } from './credentials'
 import type { UpdaterStatus } from './updater'
 import type { JobStore, JobRecord } from './jobs'
-import type { Pairing } from './pairing'
+import { deviceIdForToken, isApproved, type Pairing } from './pairing'
 import type { Admin } from './admin'
 import { isEntitled, type ItemStore } from './storage'
 
@@ -216,12 +216,61 @@ export function createDaemonServer(deps: ServerDeps): http.Server {
 
     if (route === 'POST /api/pair') {
       const body = await readBody(req)
-      const token = await pairing.tryPair(String(body.code ?? ''), String(body.deviceName ?? ''))
-      if (!token) {
-        json(res, 403, { error: 'Pairing code not accepted.' })
+      const deviceName = String(body.deviceName ?? '')
+      const code = String(body.code ?? '')
+
+      // The code path stays until A5. Removing it here would strand every
+      // app build that still sends one, and the plan's order exists because
+      // approval has to be provably working before the old door closes.
+      if (code) {
+        const token = await pairing.tryPair(code, deviceName)
+        if (!token) {
+          json(res, 403, { error: 'Pairing code not accepted.' })
+          return
+        }
+        json(res, 200, { token, serverName, status: 'approved' })
         return
       }
-      json(res, 200, { token, serverName })
+
+      // Codeless: ask to join, and wait. The token issued here is real and
+      // authorises NOTHING — every authenticated route goes through
+      // isAuthorized, which now requires approval.
+      const token = await pairing.requestPairing(deviceName)
+
+      // Two ways to skip the wait, and only two.
+      //
+      // openJoin is the admin's explicit 'anyone on this network may join'.
+      //
+      // isUnclaimed is the bootstrap, and it does not widen anything: while
+      // nobody administers this box, ANY device on the LAN can already take
+      // admin outright via /api/admin/claim, which is strictly more than
+      // being let in as a user. Making pairing wait for an approver who
+      // cannot exist yet would just deadlock the first install once the
+      // code goes away in A5. Same window, already bounded by the console.
+      const autoApprove = admin.openJoin() || admin.isUnclaimed()
+      if (autoApprove) await pairing.setStatus(deviceIdForToken(token), 'approved')
+      json(res, 200, {
+        token,
+        serverName,
+        status: autoApprove ? 'approved' : 'pending'
+      })
+      return
+    }
+
+    // A pending device's ONE capability: asking whether it has been let in.
+    // Above the auth gate by necessity — isAuthorized says no to exactly the
+    // devices that need this answer.
+    if (route === 'GET /api/pair/status') {
+      const device = pairing.findByToken(bearerToken(req))
+      if (!device) {
+        json(res, 401, { error: 'Unknown device.' })
+        return
+      }
+      json(res, 200, {
+        status: isApproved(device) ? 'approved' : 'pending',
+        serverName,
+        deviceName: device.deviceName
+      })
       return
     }
 
@@ -295,6 +344,103 @@ export function createDaemonServer(deps: ServerDeps): http.Server {
     // Which household member is asking — the key credentials and job
     // ownership are scoped by. Every authenticated route has one.
     const callerDeviceId = pairing.deviceIdFor(callerToken)
+
+    // --- admin: the cache server's own administration ----------------------
+    //
+    // Gated on admin.isAdmin, which is decided by the daemon from what it
+    // has on disk. Never on anything the caller sends — a lock the backend
+    // does not enforce is theatre.
+    //
+    // Note what is NOT here: no route that lists or streams another device's
+    // items. The admin has a shell on this box and can read every file on
+    // it, so this is not a security boundary — but building the capability
+    // into the product would make 'the admin can browse your library' a
+    // feature rather than a property of owning the hardware.
+    const isAdminCaller = admin.isAdmin(callerDeviceId)
+
+    if (route === 'GET /api/admin/devices') {
+      if (!isAdminCaller) {
+        json(res, 403, { error: 'Only the administrator of this server can do that.' })
+        return
+      }
+      json(res, 200, {
+        // Tokens never leave pairing.ts. Everything here is addressed by the
+        // device id, which is a hash of the token and safe to show.
+        devices: pairing.listDevices().map((device) => ({
+          id: deviceIdForToken(device.token),
+          deviceName: device.deviceName,
+          createdAt: device.createdAt,
+          status: isApproved(device) ? 'approved' : 'pending',
+          approvedAt: device.approvedAt ?? 0,
+          quotaBytes: device.quotaBytes ?? null,
+          isAdmin: admin.isAdmin(deviceIdForToken(device.token)),
+          isYou: deviceIdForToken(device.token) === callerDeviceId
+        })),
+        openJoin: admin.openJoin()
+      })
+      return
+    }
+
+    const deviceMatch = /^\/api\/admin\/devices\/([a-f0-9]{16})$/.exec(url.pathname)
+    if (deviceMatch && req.method === 'POST') {
+      if (!isAdminCaller) {
+        json(res, 403, { error: 'Only the administrator of this server can do that.' })
+        return
+      }
+      const targetId = deviceMatch[1]
+      const body = await readBody(req)
+      const action = String(body.action ?? '')
+
+      // Removing your own device locks you out of a box only the console can
+      // reopen. Refused explicitly rather than left as a one-click mistake.
+      if ((action === 'deny' || action === 'revoke') && targetId === callerDeviceId) {
+        json(res, 409, {
+          error: 'That is this device. Removing it would lock you out.',
+          recovery: 'Run the daemon with --claim-admin at its console to reopen claiming.'
+        })
+        return
+      }
+
+      let ok = false
+      switch (action) {
+        case 'approve':
+          ok = await pairing.setStatus(targetId, 'approved')
+          break
+        // deny (never approved) and revoke (was approved) are the same act —
+        // forget the device — and are named separately only because they read
+        // differently to the admin. Kept as one implementation so they cannot
+        // drift into meaning different things.
+        case 'deny':
+        case 'revoke':
+          ok = await pairing.removeDevice(targetId)
+          break
+        case 'quota': {
+          const raw = body.quotaBytes
+          ok = await pairing.setQuota(targetId, raw === null ? null : Number(raw))
+          break
+        }
+        default:
+          json(res, 400, { error: 'Unknown action.' })
+          return
+      }
+      if (!ok) {
+        json(res, 404, { error: 'No such device.' })
+        return
+      }
+      json(res, 200, { ok: true })
+      return
+    }
+
+    if (route === 'POST /api/admin/settings') {
+      if (!isAdminCaller) {
+        json(res, 403, { error: 'Only the administrator of this server can do that.' })
+        return
+      }
+      const body = await readBody(req)
+      if (typeof body.openJoin === 'boolean') await admin.setOpenJoin(body.openJoin)
+      json(res, 200, { openJoin: admin.openJoin() })
+      return
+    }
 
     if (route === 'GET /api/catalog') {
       // ?keys=a,b,c is now REQUIRED, and the unfiltered branch is gone.
