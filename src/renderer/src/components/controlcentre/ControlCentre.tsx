@@ -30,6 +30,44 @@ import styles from './ControlCentre.module.css'
  */
 const CUBE_HEIGHT_VH = 88
 
+/**
+ * The rotation, shaped rather than eased.
+ *
+ * A single easing curve cannot describe what this needs to do. The brief is
+ * three distinct movements: the face you are looking at tilts back slowly
+ * enough to read as a solid turning, then the cube swings through and almost
+ * CLICKS onto its next side, then it settles. An ease-out curve (which is
+ * what this had) does the opposite — fastest at the start, so the tilt is
+ * over before you have seen it.
+ *
+ * So the rotation is keyframed, and `times` is what carries the meaning: the
+ * first third of the duration covers only 16 of the 90 degrees. That is the
+ * slow pull-back. The next third covers 62 — the swing. The last stretch
+ * overshoots four degrees past flat and comes back, which is the click.
+ *
+ * Overshoot rather than a spring, deliberately: a spring's overshoot depends
+ * on velocity and mass and would vary with duration, and this needs to land
+ * the same way every time.
+ */
+const OPEN_DURATION = 0.78
+const OPEN_KEYFRAMES = [-90, -74, -12, 4, 0]
+const OPEN_TIMES = [0, 0.36, 0.7, 0.87, 1]
+/** Per-segment easing. easeIn while it is winding up, easeOut once it is
+ *  falling into place — a single curve across all four would flatten the
+ *  distinction the keyframes exist to create. */
+const OPEN_EASES = ['easeIn', 'easeIn', 'easeOut', 'easeOut'] as const
+
+/**
+ * Closing is the same shape reversed, so the cube visibly rolls back the way
+ * it came rather than snapping away. Slightly quicker — dismissal should not
+ * make you wait — but not so much quicker that it stops reading as the same
+ * object moving.
+ */
+const CLOSE_DURATION = 0.6
+const CLOSE_KEYFRAMES = [0, 4, -12, -74, -90]
+const CLOSE_TIMES = [0, 0.13, 0.3, 0.64, 1]
+const CLOSE_EASES = ['easeIn', 'easeIn', 'easeOut', 'easeOut'] as const
+
 /** Everything focusable, for the tab trap. Excludes anything explicitly
  *  removed from the tab order so a disabled control cannot swallow focus. */
 const FOCUSABLE =
@@ -112,11 +150,8 @@ export function ControlCentre({ children }: { children: React.ReactNode }) {
   // functional and invisible. These transforms are also driven by
   // framer-motion in JS, which the CSS suspend rule could not stop anyway.
   const motionOff = useMotionUserDisabled()
-  const duration = motionOff ? 0 : 0.52
-  // Closing is faster than opening on purpose. Opening is the moment worth
-  // dressing; closing is something you do to get back to what you were
-  // doing, and matching the two makes dismissal feel sticky.
-  const exitDuration = motionOff ? 0 : 0.32
+  const duration = motionOff ? 0 : OPEN_DURATION
+  const exitDuration = motionOff ? 0 : CLOSE_DURATION
   const ease = [0.22, 1, 0.36, 1] as const
 
   return (
@@ -168,9 +203,18 @@ export function ControlCentre({ children }: { children: React.ReactNode }) {
               `translateZ(-${CUBE_HEIGHT_VH / 2}dvh) rotateX(${rotateX})`
             }
             initial={{ rotateX: -90 }}
-            animate={{ rotateX: 0 }}
-            exit={{ rotateX: -90, transition: { duration: exitDuration, ease } }}
-            transition={{ duration, ease }}
+            animate={{ rotateX: motionOff ? 0 : OPEN_KEYFRAMES }}
+            exit={{
+              rotateX: motionOff ? -90 : CLOSE_KEYFRAMES,
+              transition: motionOff
+                ? { duration: 0 }
+                : { duration: exitDuration, times: CLOSE_TIMES, ease: [...CLOSE_EASES] }
+            }}
+            transition={
+              motionOff
+                ? { duration: 0 }
+                : { duration, times: OPEN_TIMES, ease: [...OPEN_EASES] }
+            }
           >
             <div className={`${styles.face} ${styles.faceLid}`} aria-hidden="true" />
             <div

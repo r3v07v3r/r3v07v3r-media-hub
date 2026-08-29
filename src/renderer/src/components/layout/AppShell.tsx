@@ -5,6 +5,7 @@ import { SidebarNavigation } from '@renderer/components/sidebar/SidebarNavigatio
 import { GlobalOverlays } from '@renderer/components/overlays/GlobalOverlays'
 import { useMotionSuspended } from '@renderer/hooks/useMotionSuspended'
 import { useMotionUserDisabled } from '@renderer/hooks/useMotionUserDisabled'
+import { useAppState } from '@renderer/context/AppStateContext'
 import styles from './AppShell.module.css'
 
 export function AppShell({ children }: { children: React.ReactNode }) {
@@ -26,6 +27,25 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     document.documentElement.dataset.motionUserDisabled = motionUserDisabled ? 'true' : 'false'
   }, [motionUserDisabled])
+
+  // Drives the app's own retreat while the control centre is open — the
+  // interface tilts and pulls back as the cube rolls forward over it, so the
+  // two read as one movement in depth rather than a panel appearing on top of
+  // a static page.
+  //
+  // An attribute on <html> rather than a prop threaded through the layout,
+  // matching the two motion flags above: the three elements that move are
+  // siblings in this grid, and none of them owns the state.
+  //
+  // Deliberately NOT applied to .shell itself, which would be the obvious
+  // place. A transform on an ancestor becomes the containing block for every
+  // position:fixed descendant — and GlobalOverlays (which hosts the control
+  // centre) is inside .shell, so transforming it collapses the very overlay
+  // this is reacting to. The three children move instead.
+  const { controlCentreOpen } = useAppState()
+  useEffect(() => {
+    document.documentElement.dataset.controlCentre = controlCentreOpen ? 'true' : 'false'
+  }, [controlCentreOpen])
 
   return (
     <div className={styles.shell}>

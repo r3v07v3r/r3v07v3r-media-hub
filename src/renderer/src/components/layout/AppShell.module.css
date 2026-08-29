@@ -132,3 +132,45 @@
       "sidebar";
   }
 }
+
+/* ---------- The app retreating behind the control centre ----------
+
+   As the cube rolls forward, the interface it is covering tilts away and
+   pulls back, so the two movements read as one gesture in depth. Without
+   this the cube turns over a completely static page and the depth stops at
+   the panel edge.
+
+   Applied to these three children rather than to .shell, and that is not a
+   style preference: a transform on an ancestor becomes the containing block
+   for its position:fixed descendants, and the control centre stage is fixed
+   and lives inside .shell (via GlobalOverlays). Transforming .shell
+   collapses the stage to 0x0 — verified the hard way while building this.
+
+   Timed to lead the cube slightly (0.62s against the cube's 0.78s) so the
+   retreat is already underway when the front face arrives, which is what
+   makes the cube feel like it is pushing the page back rather than landing
+   on it. */
+html[data-control-centre='true'] .topbar,
+html[data-control-centre='true'] .sidebar,
+html[data-control-centre='true'] .main {
+  transform: perspective(1600px) translateY(-1.2%) translateZ(-90px) rotateX(2.4deg);
+  filter: brightness(0.55) saturate(0.85);
+}
+
+.topbar,
+.sidebar,
+.main {
+  transform-origin: 50% 0%;
+  transition:
+    transform 620ms var(--ease-smooth),
+    filter 620ms var(--ease-smooth);
+}
+
+/* The standing "UI animations" preference kills the movement but keeps the
+   end state — global.css only pauses `animation`, never `transition`, so a
+   transition has to be switched off explicitly or it would still glide. */
+html[data-motion-user-disabled='true'] .topbar,
+html[data-motion-user-disabled='true'] .sidebar,
+html[data-motion-user-disabled='true'] .main {
+  transition: none;
+}
