@@ -55,6 +55,7 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
   const config = DETAIL_CONFIGS[kind]
   const {
     browsingOrigin,
+    popBrowsingOrigin,
     activeProfileId,
     profiles,
     myList,
@@ -115,6 +116,15 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
     setMetaStatus('loading')
     setCatalogItem(null)
     setShowTrailer(false)
+    // MediaDetailPage is reused across titles (App.tsx's route has no
+    // `key={id}`, so navigating from one detail page to another re-renders
+    // this same instance rather than remounting it) — without this, a
+    // season explicitly picked on the PREVIOUS title survives into this
+    // one. If that stale season number doesn't exist here (e.g. leaving a
+    // title with a season-0 "Specials" entry for one that starts at season
+    // 1, such as BLEACH: Sennen Kessen-hen), the episode grid renders empty
+    // and no season pill shows active until the person clicks one by hand.
+    setSelectedSeasonOverride(null)
     const api = window.api?.mediaHub
     if (!api) {
       setMetaStatus('error')
@@ -408,8 +418,14 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
   }, [browsingOrigin, config.path])
 
   function handleBack(): void {
-    if (browsingOrigin) navigate(browsingOrigin.route)
-    else navigate(`/${config.path}`)
+    // Pops as it goes, so a chain opened through the Rest of the series /
+    // Similar panels unwinds one step per press all the way back to the
+    // grid it started from. Reading the top without popping left the
+    // button pointed at the page it had just returned to — /movies/:id
+    // does not remount when only the id changes, so nothing downstream
+    // ever consumed the entry.
+    const origin = popBrowsingOrigin()
+    navigate(origin ? origin.route : `/${config.path}`)
   }
 
   function handlePlay(season?: number, episode?: number): void {

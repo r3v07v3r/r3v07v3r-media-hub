@@ -572,6 +572,18 @@
   flex-wrap: wrap;
 }
 
+.serviceFieldsStacked {
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* .field's 200px flex basis sizes width in the usual horizontal service
+   forms. In a column it becomes height, so stacked credentials need their
+   natural content height instead. */
+.serviceFieldsStacked > .field {
+  flex: 0 0 auto;
+}
+
 .field {
   display: flex;
   flex-direction: column;

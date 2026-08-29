@@ -16,6 +16,7 @@ import {
   parseYear,
   titleSortKey
 } from '../../shared/media-hub/catalogFields'
+import { runtimeMinutesOrZero } from '../../shared/media-hub/runtime'
 import type {
   CatalogItem,
   Episode,
@@ -55,6 +56,18 @@ type EpisodeLike = Episode & { firstAired?: string }
 interface EpisodePosition {
   season: number
   episode: number
+}
+
+/**
+ * One "these rows are actually that title" instruction for remapContentIds.
+ * `seasonOffset` shifts each moved row's season — a merged franchise's
+ * sibling was written as its own season 1, and belongs at whatever season
+ * it really occupies inside the group.
+ */
+export interface ContentIdRemap {
+  fromId: string
+  toId: string
+  seasonOffset: number
 }
 
 /** Normalizes an arbitrary catalog-ish item into the shape we persist for tracked/watched rows. */
@@ -112,34 +125,6 @@ function latestReleased(videos: EpisodeLike[] | undefined, now: Date): EpisodePo
 // (e.g. `metadata_json TEXT NOT NULL` -> `string`) rather than leaving the
 // value as `SQLOutputValue` throughout.
 type Row = Record<string, SQLOutputValue>
-
-/**
- * A stored runtime as a number of minutes.
- *
- * The value is a DISPLAY string from whichever source supplied the title —
- * "48 min", "2h 15m", "1 h 30", or a bare "148" — so the shape has to be
- * recognised rather than assumed. Taking the first number, which is what this
- * used to do, read "2h 15m" as two minutes: a comment listing that exact form
- * as supported sat directly above the regex that could not parse it, and the
- * stats under-reported a film by most of its length.
- *
- * Anything unrecognisable is 0 rather than a guess — a title contributing
- * nothing to an estimate is honest, where a wrong number is not.
- */
-function runtimeMinutes(value: unknown): number {
-  const text = String(value ?? '').toLowerCase()
-  if (!text) return 0
-  // An explicit hours-and-minutes form wins, including when the minutes are
-  // absent ("2h") or unlabelled ("1 h 30").
-  const hours = text.match(/(\d+)\s*h/)
-  if (hours) {
-    const rest = text.slice(text.indexOf(hours[0]) + hours[0].length)
-    const minutes = rest.match(/(\d+)/)
-    return Number(hours[1]) * 60 + (minutes ? Number(minutes[1]) : 0)
-  }
-  const plain = text.match(/(\d+)/)
-  return plain ? Number(plain[1]) : 0
-}
 
 function toEpisodePosition(row: Row | undefined): EpisodePosition {
   if (!row) return { season: 0, episode: 0 }
@@ -388,6 +373,24 @@ export interface MediaHubDatabase {
    * they last gave in this app is the current one.
    */
   importRatings(rows: { id: string; score: number }[]): number
+  /**
+   * Moves watch history, plays and ratings from one content id onto
+   * another, for EVERY profile on the install.
+   *
+   * Deliberately not profile-scoped, unlike almost everything above: this
+   * repairs rows written under an id nothing reads any more (see
+   * animeSyncRepair.ts), and those rows belong to whoever happened to be
+   * active when the old sync wrote them — a repair that only fixed the
+   * profile that happens to be active at launch would leave every other
+   * profile's library broken with no way to ask for it again.
+   *
+   * Rows are moved, never duplicated, and a move that would collide with a
+   * row already at the destination is dropped rather than overwriting it:
+   * the destination row is the one the app has been reading all along, and
+   * its date is the viewing somebody can actually see. Returns how many
+   * rows were genuinely relocated.
+   */
+  remapContentIds(mappings: ContentIdRemap[]): number
   history(): HistoryEntry[]
   dislike(item: Partial<CatalogItem> & { id: unknown }, now?: Date): TrackedItem
   undislike(id: string | number): boolean
@@ -469,6 +472,12 @@ interface PreparedQueries {
   importWatched: StatementSync
   importPlay: StatementSync
   importRating: StatementSync
+  remapWatched: StatementSync
+  dropRemappedWatched: StatementSync
+  remapPlays: StatementSync
+  dropRemappedPlays: StatementSync
+  remapRating: StatementSync
+  dropRemappedRating: StatementSync
   track: StatementSync
   lists: StatementSync
   createList: StatementSync
@@ -691,6 +700,54 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
            AND season IS @season AND episode IS @episode AND watched_at=@now
        )`
     ),
+    // The repair trio — see remapContentIds. Each is "copy the rows to the
+    // new id, letting the primary key drop anything already there", paired
+    // with a delete of whatever remains behind at the old id. Not scoped to
+    // a profile: the rows being repaired can belong to any of them.
+    //
+    // Three things have to change together, and missing any one leaves a
+    // row that is moved in name only:
+    //
+    //  - watch_key embeds the id AND the season, so it is rebuilt, not
+    //    carried over. The season is cast to INTEGER first: @offset binds
+    //    as a float, so a bare CAST(... AS TEXT) yields '2.0' and the key
+    //    stops matching the `${id}:${season}:${episode}` form markWatched
+    //    writes and unmarkWatched looks up.
+    //  - metadata_json carries its own copy of the id, and history() reads
+    //    THAT rather than content_id — leave it and every row comes back
+    //    still claiming to be the sibling it no longer is.
+    //  - type moves to 'anime' in both places, since a row arriving from
+    //    an IMDb-keyed Trakt import was written as 'series'.
+    remapWatched: sql.prepare(
+      `INSERT INTO watch_history(profile_id,watch_key,content_id,type,title,season,episode,watched_at,metadata_json)
+       SELECT profile_id,
+              @to || ':' || CAST(CAST(season + @offset AS INTEGER) AS TEXT) || ':' || CAST(episode AS TEXT),
+              @to,'anime',title,CAST(season + @offset AS INTEGER),episode,watched_at,
+              json_set(metadata_json,'$.id',@to,'$.type','anime')
+         FROM watch_history
+        WHERE content_id=@from AND season IS NOT NULL AND episode IS NOT NULL
+       ON CONFLICT(profile_id,watch_key) DO NOTHING`
+    ),
+    dropRemappedWatched: sql.prepare('DELETE FROM watch_history WHERE content_id=?'),
+    // plays has no uniqueness to arbitrate with (it is an append-only
+    // record, and a rewatch is legitimately two rows), so the copy is
+    // unconditional and the delete below is what stops it doubling.
+    remapPlays: sql.prepare(
+      `INSERT INTO plays(profile_id,content_id,type,title,season,episode,watched_at,metadata_json)
+       SELECT profile_id,@to,'anime',title,CAST(season + @offset AS INTEGER),episode,watched_at,
+              json_set(metadata_json,'$.id',@to,'$.type','anime')
+         FROM plays
+        WHERE content_id=@from AND season IS NOT NULL AND episode IS NOT NULL`
+    ),
+    dropRemappedPlays: sql.prepare('DELETE FROM plays WHERE content_id=?'),
+    // A rating already given to the canonical show wins — same rule as
+    // importRating just below, and for the same reason.
+    remapRating: sql.prepare(
+      `INSERT INTO ratings(profile_id,content_id,score,rated_at)
+       SELECT profile_id,@to,score,rated_at FROM ratings WHERE content_id=@from
+       ON CONFLICT(profile_id,content_id) DO NOTHING`
+    ),
+    dropRemappedRating: sql.prepare('DELETE FROM ratings WHERE content_id=?'),
     // No ON CONFLICT clause at all, on purpose: an existing row means this
     // person already said what they thought, here, and the import does not
     // get an opinion about that.
@@ -947,7 +1004,7 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
           }
 
           if (!runtimeByTitle.has(id)) {
-            runtimeByTitle.set(id, runtimeMinutes(meta.runtime))
+            runtimeByTitle.set(id, runtimeMinutesOrZero(meta.runtime))
           }
           minutes += runtimeByTitle.get(id) ?? 0
 
@@ -1396,6 +1453,51 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
           }
         })
         return added
+      } catch (error) {
+        return fail(error as Error) as unknown as number
+      }
+    },
+
+    remapContentIds(mappings) {
+      try {
+        const list = Array.isArray(mappings) ? mappings : []
+        if (!list.length) return 0
+        let moved = 0
+        durable(() => {
+          sql.exec('BEGIN')
+          try {
+            for (const map of list) {
+              const from = String(map.fromId)
+              const to = String(map.toId)
+              const offset = Number(map.seasonOffset) || 0
+              if (!from || !to || from === to) continue
+
+              // Every profile at once, and every row of that id — see the
+              // interface comment for why this one method is not scoped to
+              // the active profile.
+              //
+              // OR IGNORE, then DELETE what did not move: node:sqlite has
+              // no UPDATE ... ON CONFLICT, and an UPDATE that collides with
+              // an existing destination row would abort the whole
+              // transaction. Inserting the moved copy first lets the
+              // primary keys arbitrate — a destination row already there
+              // wins and the source is simply dropped.
+              moved += Number(q.remapWatched.run({ from, to, offset }).changes || 0)
+              q.dropRemappedWatched.run(from)
+
+              q.remapPlays.run({ from, to, offset })
+              q.dropRemappedPlays.run(from)
+
+              q.remapRating.run({ from, to })
+              q.dropRemappedRating.run(from)
+            }
+            sql.exec('COMMIT')
+          } catch (error) {
+            sql.exec('ROLLBACK')
+            throw error
+          }
+        })
+        return moved
       } catch (error) {
         return fail(error as Error) as unknown as number
       }

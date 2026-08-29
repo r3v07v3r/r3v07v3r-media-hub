@@ -48,7 +48,12 @@ export async function titleCollection(imdbId: string): Promise<TitleCollectionRe
   if (!apiKey) return EMPTY
 
   const db = getDatabase()
-  const cacheKey = `collection:v1:${imdbId}`
+  // v2, not v1: entries written before the parts below carried a complete
+  // CatalogItem are the malformed shape that crashed the detail page, and
+  // they live for a month. Bumping the key retires them on first read
+  // rather than leaving anyone who already opened a franchise film with a
+  // black window until the TTL runs out.
+  const cacheKey = `collection:v2:${imdbId}`
   const cached = db.getCache<TitleCollectionResult>(cacheKey)
   if (cached) return cached
 
@@ -93,13 +98,30 @@ export async function titleCollection(imdbId: string): Promise<TitleCollectionRe
             if (!/^tt\d+$/.test(partImdb)) return null
             const poster = String(part?.poster_path ?? '')
             const released = String(part?.release_date ?? '')
+            // Every field CatalogItem declares, not just the five this
+            // panel happens to draw. A part built with a cast over a partial
+            // object crossed the IPC boundary as a CatalogItem-shaped lie,
+            // and the renderer's catalogItemToMediaItem — which reads
+            // `genres` unguarded — threw on the missing array, taking the
+            // whole React tree down with it: opening any film that belongs
+            // to a TMDB collection blanked the window. The empty strings
+            // and arrays are what "TMDB's collection endpoint does not
+            // carry this" honestly looks like.
             return {
               id: partImdb,
               type: 'movie',
               title: String(part?.title ?? 'Untitled'),
               poster: poster ? `https://image.tmdb.org/t/p/w342${poster}` : '',
-              year: released.slice(0, 4)
-            } as CatalogItem
+              background: '',
+              logo: '',
+              year: released.slice(0, 4),
+              description: '',
+              rating: '',
+              runtime: '',
+              genres: [],
+              videos: [],
+              trailers: []
+            }
           } catch {
             return null
           }

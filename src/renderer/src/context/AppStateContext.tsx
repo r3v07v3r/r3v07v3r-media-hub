@@ -78,9 +78,18 @@ import { buildMediaId } from '@renderer/lib/mediaHub/streamId'
 import {
   captureBrowsingOrigin,
   deriveBrowsingLabel,
+  isDetailRoute,
   type BrowsingOrigin
 } from '@renderer/lib/mediaHub/browsingContext'
 import { useOverlayActions } from '@renderer/context/OverlayContext'
+
+/** How many steps back the contextual trail remembers. A drill-down chain
+ *  this long is already pathological (each step is a title opened from
+ *  another title's page); the cap exists so the trail cannot grow without
+ *  bound, not because anyone is expected to reach it. Oldest entries drop
+ *  first, so the most recent steps — the ones anyone actually presses Back
+ *  through — always survive. */
+const MAX_TRAIL = 20
 
 /** movie/series/anime -> the route each one's detail page lives at — the
  *  same plural/singular forms App.tsx's own /movies, /series, /anime
@@ -343,6 +352,13 @@ interface AppStateValue {
   // detail page's contextual back control can return to exactly that
   // spot. See lib/mediaHub/browsingContext.ts and
   // lib/mediaHub/useRestoreBrowsingOrigin.ts (the page-side half of this).
+  //
+  // Those snapshots form a TRAIL, not a single slot, because a title page
+  // can open another title page (Rest of the series, Similar, Story) — so
+  // "where Back goes" is a stack that unwinds one step per press, and
+  // popBrowsingOrigin is how a page takes that step.
+  /** The top of the trail — where a Back press goes next, and the title it
+   *  is labelled with. Null once the chain is fully unwound. */
   browsingOrigin: BrowsingOrigin | null
   /** `originLabelOverride`: only needed when opening a title from within
    *  another detail page — see the implementation's own comment. */
@@ -350,7 +366,14 @@ interface AppStateValue {
   /** Opens what else this catalog has of one person's — see routes/PersonPage.
    *  A drill-down from a title page, not a nav destination. */
   openPerson: (name: string) => void
-  clearBrowsingOrigin: () => void
+  /** Steps one level back out, returning where to navigate to (null when
+   *  there is nowhere left, so the caller can fall back to its category
+   *  page). Also parks that entry as `pendingRestore` for the destination. */
+  popBrowsingOrigin: () => BrowsingOrigin | null
+  /** What the last Back press stepped out of, for the page it landed on to
+   *  restore its scroll/rail/focus from. Consumed once, then cleared. */
+  pendingRestore: BrowsingOrigin | null
+  clearPendingRestore: () => void
 
   // Resolving a stream (stream:resolve, "searching" for a cached source)
   // and starting it (stream:play, "buffering" — spinning up the proxy or
@@ -530,13 +553,28 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     similarSource: 'model' | 'catalog' | null
     searching: boolean
   }>({ results: [], similar: [], similarSource: null, searching: false })
-  const [browsingOrigin, setBrowsingOrigin] = useState<BrowsingOrigin | null>(null)
+  // A STACK, not a slot. Opening a title from another title (the Rest of
+  // the series / Similar / Story panels) pushes a second origin, and a
+  // single slot meant the first one was simply overwritten: after
+  // Movie 1 -> its sequel, backing out of the sequel returned to Movie 1
+  // and then pointed the button at Movie 1's own route, so pressing Back
+  // again navigated to the page already on screen. The trail was one deep
+  // and the way out of a franchise was a loop.
+  const [browsingTrail, setBrowsingTrail] = useState<BrowsingOrigin[]>([])
+  // The entry a Back press just consumed, handed to the destination page
+  // so it can restore scroll/rail/focus. Separate from the trail because
+  // the trail is "where Back goes next" while this is "what just
+  // happened" — and because it is only ever written by an actual Back,
+  // never by openDetail, which is what keeps a page from matching an
+  // origin captured for itself (see useRestoreBrowsingOrigin's own note
+  // on the self-consumption bug that shape used to cause).
+  const [pendingRestore, setPendingRestore] = useState<BrowsingOrigin | null>(null)
+  const browsingOrigin = browsingTrail.length > 0 ? browsingTrail[browsingTrail.length - 1] : null
   // Titles the person has already agreed to watch below their quality
   // ceiling. Session-scoped and deliberately not persisted: it exists so a
   // 480p series does not re-ask on every autoplayed episode, not to record
   // a preference.
   const acceptedLowQuality = useRef<Set<string>>(new Set())
-
   const [resolvingMedia, setResolvingMedia] = useState<{
     id: string
     title: string
@@ -1303,13 +1341,45 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
           categorySearch,
           activeMood
         })
-      setBrowsingOrigin(captureBrowsingOrigin(route, label))
+      const captured = captureBrowsingOrigin(route, label)
+      setBrowsingTrail((trail) =>
+        // Opening a title from ANOTHER title extends the chain already in
+        // progress; opening one from a grid, Home or search starts a fresh
+        // chain, which is also what keeps the trail from accumulating
+        // stale entries across a session when someone leaves a detail page
+        // by the nav rail instead of the back button.
+        (isDetailRoute(location.pathname) ? [...trail, captured] : [captured]).slice(-MAX_TRAIL)
+      )
+      // A new drill-down invalidates any restore the last Back left pending.
+      setPendingRestore(null)
       closeContextMenu()
       navigate(mediaKindToDetailPath(media))
     },
     [location.pathname, location.search, categorySearch, activeMood, navigate, closeContextMenu]
   )
-  const clearBrowsingOrigin = useCallback(() => setBrowsingOrigin(null), [])
+
+  /**
+   * Takes one step back out: pops the trail and returns the entry that was
+   * on top, having also parked it as `pendingRestore` for the page about to
+   * mount. Null when the trail is empty — the caller (a detail page opened
+   * by deep link, or one whose chain has been fully unwound) falls back to
+   * its own category route.
+   *
+   * The pop and the navigate are deliberately one action. Leaving the entry
+   * on the trail until the destination "used" it worked for a browse page,
+   * which remounts and consumes it, but not for a destination that is
+   * itself a detail page: /movies/:id does not remount when only the id
+   * changes, so nothing ever consumed it and Back stayed pointed at the
+   * page it had just returned to.
+   */
+  const popBrowsingOrigin = useCallback((): BrowsingOrigin | null => {
+    if (!browsingOrigin) return null
+    setBrowsingTrail((trail) => trail.slice(0, -1))
+    setPendingRestore(browsingOrigin)
+    return browsingOrigin
+  }, [browsingOrigin])
+
+  const clearPendingRestore = useCallback(() => setPendingRestore(null), [])
 
   // Playback gate (spec decision: keep the dashboard visible without a
   // TorBox connection, only gate actual playback). `mediaHubSettings ===
@@ -2288,7 +2358,9 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       browsingOrigin,
       openDetail,
       openPerson,
-      clearBrowsingOrigin,
+      popBrowsingOrigin,
+      pendingRestore,
+      clearPendingRestore,
       resolvingMedia,
       cancelPlaybackPreparation,
       playbackMedia,
@@ -2385,7 +2457,9 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       browsingOrigin,
       openDetail,
       openPerson,
-      clearBrowsingOrigin,
+      popBrowsingOrigin,
+      pendingRestore,
+      clearPendingRestore,
       resolvingMedia,
       cancelPlaybackPreparation,
       playbackMedia,

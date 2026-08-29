@@ -1,0 +1,129 @@
+name: Build and release
+
+# Reusable release tail shared by preview.yml and promote-to-stable.yml:
+# checkout at `ref`, stamp package.json to `version`, build the installer,
+# and publish it as a GitHub release targeting `target`. Pre-created as a
+# draft and undrafted last so the release never appears to
+# update-checkers with assets still missing — the same reasoning that was
+# previously duplicated in both callers. `attach-daemon` additionally
+# pulls in this run's `daemon-*` artifacts (Preview only — Stable ships
+# the daemon build already published alongside the Preview release it's
+# promoting, so it doesn't rebuild or reattach one).
+
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: Branch, tag, or SHA to build from
+        required: true
+        type: string
+      version:
+        description: Version to stamp into package.json and use for the release tag/title
+        required: true
+        type: string
+      target:
+        description: Branch or SHA the release is created against
+        required: true
+        type: string
+      notes:
+        description: Release notes body
+        required: true
+        type: string
+      prerelease:
+        description: Publish as a prerelease (Preview channel) rather than Stable
+        required: true
+        type: boolean
+      attach-daemon:
+        description: Download this run's daemon-* artifacts and attach them to the release
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-release:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref }}
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+
+      # Never committed by this job — the caller owns package.json's
+      # committed version; this checkout only carries the version that
+      # ends up in the built binary (app.getVersion(), release tag/filename).
+      - name: Stamp the build version (this checkout only)
+        shell: bash
+        run: |
+          node -e "
+            const fs = require('fs');
+            const p = require('./package.json');
+            p.version = '${{ inputs.version }}';
+            fs.writeFileSync('package.json', JSON.stringify(p, null, 2) + '\n');
+          "
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      # Pre-created as a draft: electron-builder uploading multiple assets
+      # to a release that doesn't exist yet races to create it, which
+      # GitHub's API intermittently 422s on.
+      - name: Create GitHub release (draft)
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "v${{ inputs.version }}" \
+            --repo "${{ github.repository }}" \
+            --target "${{ inputs.target }}" \
+            --title "${{ inputs.version }}" \
+            --notes "${{ inputs.notes }}" \
+            --draft \
+            ${{ inputs.prerelease && '--prerelease' || '' }}
+
+      - name: Build installer and upload assets to the draft
+        run: npx electron-builder --win --publish always
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Attached BEFORE the draft flips public, so the release appears
+      # atomically with the daemon files already on it.
+      - name: Attach daemon builds to the draft
+        if: inputs.attach-daemon
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: daemon-*
+          path: daemon-assets
+          merge-multiple: true
+
+      - name: Upload daemon assets
+        if: inputs.attach-daemon
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "v${{ inputs.version }}" \
+            --repo "${{ github.repository }}" \
+            daemon-assets/* --clobber
+
+      # Only now does the release (and its assets) become visible to
+      # electron-updater — atomically, with everything already attached.
+      - name: Publish release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release edit "v${{ inputs.version }}" \
+            --repo "${{ github.repository }}" \
+            --draft=false

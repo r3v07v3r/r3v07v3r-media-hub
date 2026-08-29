@@ -141,9 +141,14 @@ const GENRE_MOOD_KEYWORDS: Record<string, string[]> = {
   documentary: ['mind-bending']
 }
 
-function genresToMoods(genres: string[]): string[] {
+// `genres` is declared non-optional on CatalogItem, but this runs on the far
+// side of an IPC boundary — the type is a promise about the payload, not a
+// guarantee of it, and a normalizer that omitted the array once already made
+// this throw and blank the entire window (see collection.ts). Tolerating the
+// absence here costs one guard; not tolerating it costs the app.
+function genresToMoods(genres: string[] | undefined): string[] {
   const moods = new Set<string>()
-  for (const genre of genres) {
+  for (const genre of genres ?? []) {
     const key = genre.trim().toLowerCase()
     for (const [needle, tags] of Object.entries(GENRE_MOOD_KEYWORDS)) {
       if (key.includes(needle)) tags.forEach((tag) => moods.add(tag))
@@ -293,7 +298,7 @@ export function catalogItemToMediaItem(
     logoUrl: item.logo || undefined,
     releaseYear: parseYear(item.year),
     runtimeMinutes: parseRuntimeMinutes(item.runtime),
-    genres: item.genres,
+    genres: item.genres ?? [],
     moods: genresToMoods(item.genres),
     // Present only on a resolved detail-page item — the catalog list
     // carries none of these (see credits.ts on why they are not on the

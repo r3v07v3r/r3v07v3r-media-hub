@@ -1,8 +1,8 @@
 // How a CatalogItem's stringly-typed fields become the numbers the browse
 // grid filters and sorts on.
 //
-// These live in shared/ and nowhere else on purpose. The same three values
-// are derived twice in this app and MUST agree: once in the renderer, where
+// These live in shared/ and nowhere else on purpose. The same values are
+// derived twice in this app and MUST agree: once in the renderer, where
 // adapters.ts maps a CatalogItem onto the MediaItem the grid renders, and
 // once in main, where the catalog crawl writes typed columns into
 // catalog_index for SQL to filter and sort on. Two copies of "what counts as
@@ -14,16 +14,19 @@
 // year must not sort as year 0 and must not match a year filter — "unknown"
 // and "nineteen hundred" are different answers.
 
-/**
- * Minutes from a runtime string.
- *
- * `parseInt`, not `Number`, because the sources write a unit: Cinemeta and
- * Simkl both produce strings like `"142 min"`, and Number("142 min") is NaN.
- */
-export function parseRuntimeMinutes(runtime: string): number | undefined {
-  const n = parseInt(runtime, 10)
-  return Number.isFinite(n) && n > 0 ? n : undefined
-}
+// Runtime is NOT parsed here. It has its own module — see runtime.ts — and
+// re-exporting it rather than reimplementing it is the whole point of this
+// file: main writes catalog_index.runtime_min from the same function the
+// renderer displays and filters on.
+//
+// This deliberately replaced a local `parseInt(runtime, 10)`, which is wrong
+// in a way that only shows on some titles: it reads "1h 40min" as 1. That is
+// the bug behind every feature film's card reading a 1-3 minute runtime, and
+// runtime.ts fixes it by recognising the hours-and-minutes form. Keeping a
+// second, simpler parser here would have written runtime_min = 1 into the
+// index for exactly those titles while the renderer showed 100 — a filter
+// meaning two different things on the two sides of the same question.
+export { parseRuntimeMinutes } from './runtime'
 
 /**
  * A four-digit year from a year string.

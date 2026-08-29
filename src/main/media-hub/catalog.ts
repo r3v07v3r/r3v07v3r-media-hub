@@ -50,7 +50,14 @@ import {
 } from './core'
 import { isLikelyFranchiseSibling, rankSimilarTitles } from '../../shared/media-hub/catalog-logic'
 import { coalesce, coalesceScope, type TaskPriority } from './taskScheduler'
-import { buildGroupedAnimeVideos, groupAnimeCatalog, kitsuRealEpisodes } from './animeSeasons'
+import {
+  ANIME_GROUPED_KEY,
+  buildGroupedAnimeVideos,
+  groupAnimeCatalog,
+  groupedIdsFor,
+  invalidateAnimeGroupIndex,
+  kitsuRealEpisodes
+} from './animeSeasons'
 import { omdbRottenTomatoesRating } from './omdb'
 import { searchCredits, titleCredits, titlesFeaturing } from './credits'
 import { titleCollection } from './collection'
@@ -132,25 +139,6 @@ const CINEMETA_EXTRA_PAGES = 39
 const CINEMETA_PAGE_SIZE = 50
 
 const CATALOG_TTL_MS = 6 * 60 * 60 * 1000
-
-/**
- * Marks that the anime catalog currently in cache has been through the
- * franchise-grouping pass.
- *
- * Needed because the pass takes minutes and the raw catalog is cached
- * before it starts. Quit in between — closing the app during a crawl is
- * hardly exotic — and the next launch finds a perfectly valid six-hour
- * cache entry, returns it without ever reaching the grouping call, and
- * shows one tile per season for every multi-season franchise until that
- * entry expires. The hourly refresh honours the same cache, so it does
- * not rescue it either.
- *
- * A marker rather than inspecting the catalog for groupedIds: "no item
- * has any siblings" is indistinguishable from "never grouped" by
- * inspection, and guessing wrong there means re-running the largest
- * background job in the app on every cache hit, forever.
- */
-const ANIME_GROUPED_KEY = 'catalog:v2:anime:grouped'
 
 /**
  * How deep into Kitsu's popularity ranking the anime crawl walks, in
@@ -246,47 +234,11 @@ function runAnimeGrouping(items: CatalogItem[], generation: number): void {
   animeGrouping = { generation, promise }
 }
 
-/**
- * Which franchise siblings each crawled anime has, by catalog id.
- *
- * This exists to keep a multi-megabyte JSON.parse off the metadata path.
- * getCache is a synchronous SQLite read followed by a parse of the WHOLE
- * catalog blob, and the groupedIds lookup below runs for every anime whose
- * metadata is being resolved — which, on a launch with a cold metadata
- * cache, is once per tracked anime. Parsing two thousand catalog entries
- * per tracked title, on the thread that answers the window, is precisely
- * the kind of stall this whole change set exists to remove.
- *
- * Only the ids are kept, not the entries: this is the one field the hot
- * path needs, and holding the full parsed catalog in memory to serve it
- * would trade a repeated parse for a permanent tens-of-megabytes
- * footprint. The rarely-taken fallback path further down still reads the
- * whole catalog, because it genuinely needs whole entries and only runs
- * when a live metadata fetch has already failed.
- *
- * Invalidated by hand rather than given a TTL, because there are exactly
- * two writers (catalogData and the grouping pass) and both are in this
- * file — a stale index here would mean a grouped anime silently losing
- * its later seasons, which is not something to leave to a timer.
- */
-let animeGroupIndex: Map<string, string[]> | null = null
-
-function invalidateAnimeGroupIndex(): void {
-  animeGroupIndex = null
-}
-
-function groupedIdsFor(catalogId: string): string[] | undefined {
-  if (!animeGroupIndex) {
-    const items =
-      getDatabase().getCache<CatalogItem[]>('catalog:v2:anime', { allowExpired: true }) || []
-    animeGroupIndex = new Map(
-      items
-        .filter((item) => item.groupedIds?.length)
-        .map((item) => [String(item.id), item.groupedIds as string[]])
-    )
-  }
-  return animeGroupIndex.get(String(catalogId))
-}
+// groupedIdsFor/invalidateAnimeGroupIndex (which franchise siblings each
+// crawled anime has, by catalog id, and the cache-invalidation hook the
+// grouping pass and catalogData use) now live in animeSeasons.ts alongside
+// resolveAnimeGroupTarget, the inverse lookup every tracker sync (MAL,
+// Trakt, Simkl) needs — see that module for the full doc.
 
 /** Cached (7d) Kitsu genre/category titles for one anime id. */
 async function kitsuCategories(id: string, priority: TaskPriority): Promise<string[]> {
