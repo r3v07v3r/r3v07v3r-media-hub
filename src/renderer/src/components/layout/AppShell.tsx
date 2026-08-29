@@ -127,7 +127,16 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         >
           {/* Face one: the app itself. This is the grid that used to be on
               .shell, moved down a level so it can be a face. */}
-          <div className={`${styles.face} ${styles.faceApp}`} aria-hidden={controlCentreOpen}>
+          {/* aria-hidden AND inert. aria-hidden alone hid the app from a
+              screen reader while leaving every control in it tabbable, so
+              Tab from the control centre walked into a face that was
+              physically turned away — the same rule ControlCentreFace
+              already applies to itself in the other direction. */}
+          <div
+            className={`${styles.face} ${styles.faceApp}`}
+            aria-hidden={controlCentreOpen}
+            inert={controlCentreOpen}
+          >
             <div className={`${styles.sidebar} thin-scroll`}>
               <SidebarNavigation />
             </div>

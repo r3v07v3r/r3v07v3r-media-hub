@@ -51,6 +51,9 @@
      therefore where the hinge is. Looking "down" the hinge is what makes the
      far face appear from behind the bar. */
   perspective-origin: 50% 0%;
+  /* The cube's clip lives HERE, on the one element in this scene that is not
+     itself transformed, and that is the whole point — see .face below. */
+  overflow: hidden;
 }
 
 .cube {
@@ -69,7 +72,25 @@
      breaks the solid instantly. */
   backface-visibility: hidden;
   -webkit-backface-visibility: hidden;
-  overflow: hidden;
+
+  /* NO `overflow: hidden` HERE, and this is load-bearing.
+
+     A clip on a 3D-ROTATED element is computed in that element's own
+     untransformed box, and hit testing then looks for the pointer inside
+     that pre-rotation rectangle. Painting still comes out right, so the
+     control centre looked perfect and was completely dead: every click on
+     it fell straight through to .stage. Confirmed by hit-testing the
+     settled-open geometry — elementFromPoint over a control on the settings
+     face returned .stage, and returned the control the moment this one
+     declaration came off.
+
+     Only the settings face was affected, which is why it survived review:
+     the app face composes to no rotation at all, so its clip and its hit
+     testing agree.
+
+     `clip-path: inset(0)` is NOT a substitute — it was tried, and it breaks
+     hit testing in exactly the same way. The clip has to be on an element
+     that is not being rotated, which is .stage. */
 }
 
 /* Face one: the app. The grid that used to be on .shell. */
