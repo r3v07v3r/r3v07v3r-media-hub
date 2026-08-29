@@ -17,6 +17,27 @@ import path from 'node:path'
 
 import type { CacheSourceRef } from '../src/shared/media-hub/types'
 
+/**
+ * May this device see and stream this item?
+ *
+ * ONE function, deliberately. Entitlement is checked on the catalog listing
+ * and on the stream route, and those two answers must never diverge — an
+ * item you cannot see but can stream, or vice versa, is the bug this whole
+ * feature exists to prevent.
+ *
+ * Reads absence as the restrictive case throughout: no `visibility` means
+ * private, no `entitled` means nobody but the owner. An item written before
+ * these fields existed must not become world-readable because a property is
+ * missing — except where it has no identifiable owner at all, which
+ * migrateEntitlement below marks explicitly rather than inferring here.
+ */
+export function isEntitled(item: ItemMeta, deviceId: string): boolean {
+  if (item.visibility === 'shared') return true
+  if (!deviceId) return false
+  if (item.ownerDeviceId && item.ownerDeviceId === deviceId) return true
+  return Array.isArray(item.entitled) && item.entitled.includes(deviceId)
+}
+
 export interface ItemMeta {
   /** catalogId:season:episode — the SAME key the app's cacheContentKey
    *  produces, so daemon and app agree on identity without translation. */
@@ -29,6 +50,37 @@ export interface ItemMeta {
   sourceRef?: CacheSourceRef
   fetchedAt: number
   lastAccessAt: number
+  /**
+   * Who paid for this. Copied from the job's ownerDeviceId at beginItem —
+   * ownership was already tracked for SPENDING (fetcher.ts bills this
+   * device's TorBox token) and simply never recorded on the item, which is
+   * why it could not be used for reading.
+   *
+   * Absent on items written before entitlement existed. Those are the
+   * `unknown owner` case the migration below treats as shared: nobody can
+   * be identified as their owner, and stranding them where no one can reach
+   * them is worse than leaving them visible.
+   */
+  ownerDeviceId?: string
+  /**
+   * 'private' — only devices in `entitled` may see or stream it.
+   * 'shared'  — any paired device may.
+   *
+   * Absent means private: an item written before this field existed must not
+   * become readable by everyone because a property is missing.
+   */
+  visibility?: 'private' | 'shared'
+  /**
+   * Device ids that may see and stream this item.
+   *
+   * A SET, not a single owner, because the cache holds one copy: when a
+   * second device asks for a hash already held, it is added here and streams
+   * the existing file rather than triggering a second download. That is the
+   * whole point of a shared cache, and it reveals nothing — the asker named
+   * that exact release, and could have fetched it on their own account
+   * anyway.
+   */
+  entitled?: string[]
 }
 
 export interface StoredItem extends ItemMeta {
@@ -42,9 +94,18 @@ export interface EvictionPolicy {
   idleTtlMs: number
   hardMaxMs: number
   budgetBytes: number
+  /**
+   * Per-device allocation in bytes, keyed by device id.
+   *
+   * A device that is not in this map has NO quota and is bounded only by
+   * the whole-disk budget — which is the state every existing install is
+   * in, and the reason this can land without changing what any running
+   * cache does. An empty or absent map makes the quota pass a no-op.
+   */
+  quotas?: ReadonlyMap<string, number>
 }
 
-export type EvictionReason = 'hard-max' | 'idle' | 'budget'
+export type EvictionReason = 'hard-max' | 'idle' | 'quota' | 'budget'
 
 /** Free space the REST of the machine must keep, whatever the configured
  *  budget says. On a shared box (the deployment target is a host that
@@ -62,7 +123,9 @@ export const DISK_PRESSURE_MARGIN_BYTES = 2 * 1024 ** 3
  *  1. hard-max — nothing survives past hardMaxMs after fetch, full stop.
  *     This is the user's explicit "even if it's marked or being watched".
  *  2. idle     — untouched for idleTtlMs since last access.
- *  3. budget   — if what remains still exceeds budgetBytes, evict least
+ *  3. quota    — a device over its own allocation loses ITS OWN items,
+ *     oldest-accessed first, and nobody else's.
+ *  4. budget   — if what remains still exceeds budgetBytes, evict least
  *     recently accessed until it fits. Keeps the disk bounded even when
  *     everything is young and busy.
  */
@@ -80,11 +143,52 @@ export function planEvictions(
     else survivors.push(item)
   }
 
-  let remaining = survivors.reduce((sum, item) => sum + item.presentBytes, 0)
+  // --- quota: each device against its own allocation ---------------------
+  //
+  // Charged to the FETCHER, once. An item is counted against ownerDeviceId
+  // and against nobody else, however many devices are entitled to it —
+  // charge every entitled device and the accounting is gamed by sharing
+  // everything; charge nobody and it is gamed by sharing everything too.
+  //
+  // Ordered by the item's lastAccessAt, which touch() advances for whoever
+  // streamed it. So something one person is still watching is not evicted
+  // because the device that originally fetched it lost interest — the
+  // owner pays for it, but the household's interest keeps it.
+  //
+  // Items with no owner (the pre-multi-user files) are charged to nobody
+  // and reachable only by the whole-disk pass below. There is no device to
+  // bill them to, and inventing one would evict a stranger's files.
+  if (policy.quotas && policy.quotas.size > 0) {
+    const byOwner = new Map<string, StoredItem[]>()
+    for (const item of survivors) {
+      if (!item.ownerDeviceId) continue
+      const owned = byOwner.get(item.ownerDeviceId)
+      if (owned) owned.push(item)
+      else byOwner.set(item.ownerDeviceId, [item])
+    }
+    for (const [deviceId, quota] of policy.quotas) {
+      const owned = byOwner.get(deviceId)
+      if (!owned) continue
+      let used = owned.reduce((sum, item) => sum + item.presentBytes, 0)
+      if (used <= quota) continue
+      const byAge = [...owned].sort(
+        (a, b) => a.lastAccessAt - b.lastAccessAt || a.fetchedAt - b.fetchedAt
+      )
+      for (const item of byAge) {
+        if (used <= quota) break
+        out.set(item.infoHash, 'quota')
+        used -= item.presentBytes
+      }
+    }
+  }
+
+  // --- budget: the whole disk, on top of everything above ----------------
+  const kept = survivors.filter((item) => !out.has(item.infoHash))
+  let remaining = kept.reduce((sum, item) => sum + item.presentBytes, 0)
   if (remaining > policy.budgetBytes) {
     // Oldest access first. Stable beyond that on fetchedAt so the plan is
     // deterministic when access times tie (e.g. never-played items).
-    const byAge = [...survivors].sort(
+    const byAge = [...kept].sort(
       (a, b) => a.lastAccessAt - b.lastAccessAt || a.fetchedAt - b.fetchedAt
     )
     for (const item of byAge) {
@@ -125,8 +229,29 @@ export interface ItemStore {
    *  `freeBytes` (real free disk right now, when the caller can measure
    *  it) tightens the budget under external pressure — see runEviction's
    *  own comment. Returns what was evicted, for the log. */
-  runEviction(now?: number, freeBytes?: number | null): Promise<Map<string, EvictionReason>>
+  runEviction(
+    now?: number,
+    freeBytes?: number | null,
+    quotas?: ReadonlyMap<string, number> | null
+  ): Promise<Map<string, EvictionReason>>
   remove(infoHash: string): Promise<void>
+  /** Adds a device to an item's entitled set. This is the dedupe path: a
+   *  device asking for a hash already held is entitled to the existing copy
+   *  rather than triggering a second download of the same file. */
+  grantEntitlement(infoHash: string, deviceId: string): Promise<void>
+  /** Replaces an item's visibility and entitled set outright — what the
+   *  owner uses to share or un-share something they fetched. Returns false
+   *  if the item is not here. The OWNER is always kept entitled: dropping
+   *  yourself from your own item leaves a file you pay for and cannot
+   *  reach, which is a mistake, not a choice. */
+  setSharing(
+    infoHash: string,
+    visibility: 'private' | 'shared',
+    entitled: readonly string[]
+  ): Promise<boolean>
+  /** Stamps entitlement onto items written before the fields existed.
+   *  Returns how many it changed, so startup can say so once. */
+  migrateEntitlement(): Promise<number>
   /** contentKey -> evictedAt for TTL/hard-max evictions still suppressing
    *  a re-queue. Budget evictions do NOT tombstone: they reflect pressure,
    *  not disinterest, and tombstoning them would let one oversized fetch
@@ -242,7 +367,65 @@ export function createItemStore(
         // See above.
       }
     },
-    async runEviction(now = Date.now(), freeBytes = null) {
+    async grantEntitlement(infoHash, deviceId) {
+      if (!deviceId) return
+      const item = await readItem(infoHash)
+      if (!item) return
+      const entitled = new Set(item.entitled ?? [])
+      if (item.ownerDeviceId) entitled.add(item.ownerDeviceId)
+      if (entitled.has(deviceId)) return
+      entitled.add(deviceId)
+      const meta: Record<string, unknown> = { ...item, entitled: [...entitled] }
+      // Derived fields are computed on read; only real metadata goes to disk.
+      delete meta.presentBytes
+      delete meta.complete
+      await writeJsonAtomic(path.join(itemsDir, infoHash, 'meta.json'), meta)
+    },
+
+    async setSharing(infoHash, visibility, entitled) {
+      const item = await readItem(infoHash)
+      if (!item) return false
+      const next = new Set(entitled)
+      if (item.ownerDeviceId) next.add(item.ownerDeviceId)
+      const meta: Record<string, unknown> = { ...item, visibility, entitled: [...next] }
+      delete meta.presentBytes
+      delete meta.complete
+      await writeJsonAtomic(path.join(itemsDir, infoHash, 'meta.json'), meta)
+      return true
+    },
+
+    async migrateEntitlement() {
+      // Neither default is safe to apply quietly to items that predate the
+      // rule, so the two cases are distinguished explicitly rather than
+      // falling through isEntitled's absence handling:
+      //
+      //   known owner   -> private, entitled to that owner
+      //   unknown owner -> SHARED, because nobody can be identified as its
+      //                    owner and stranding a file where no one can reach
+      //                    it is worse than leaving it visible
+      //
+      // The unknown-owner case is real, not defensive: credentials.ts
+      // documents the pre-multi-user files that have no owner at all.
+      let changed = 0
+      for (const item of await list()) {
+        if (item.visibility) continue
+        const meta: Record<string, unknown> = { ...item }
+        delete meta.presentBytes
+        delete meta.complete
+        if (item.ownerDeviceId) {
+          meta.visibility = 'private'
+          meta.entitled = [item.ownerDeviceId]
+        } else {
+          meta.visibility = 'shared'
+          meta.entitled = []
+        }
+        await writeJsonAtomic(path.join(itemsDir, item.infoHash, 'meta.json'), meta)
+        changed++
+      }
+      return changed
+    },
+
+    async runEviction(now = Date.now(), freeBytes = null, quotas = null) {
       const items = await list()
       // The configured budget bounds what the cache may USE; real free
       // space bounds what the machine can AFFORD. The effective budget is
@@ -258,12 +441,16 @@ export function createItemStore(
           Math.max(0, itemBytes + freeBytes - DISK_PRESSURE_MARGIN_BYTES)
         )
       }
-      const plan = planEvictions(items, { ...policy, budgetBytes }, now)
+      const plan = planEvictions(items, { ...policy, budgetBytes, quotas: quotas ?? undefined }, now)
       if (plan.size === 0) return plan
       const stones = await readTombstones()
       for (const [infoHash, reason] of plan) {
         await remove(infoHash)
-        if (reason !== 'budget') {
+        // Only DISINTEREST leaves a tombstone. hard-max and idle mean
+        // nobody wanted this; budget and quota mean somebody wanted it and
+        // there was no room, and a tombstone would then suppress the refetch
+        // the moment room appeared.
+        if (reason === 'hard-max' || reason === 'idle') {
           const item = items.find((candidate) => candidate.infoHash === infoHash)
           if (item?.contentKey) stones[item.contentKey] = now
         }

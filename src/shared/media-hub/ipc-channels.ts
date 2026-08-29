@@ -31,6 +31,15 @@ export const MEDIA_HUB_CHANNELS = {
   lanCachePair: 'mediahub:lancache:pair',
   lanCacheUnpair: 'mediahub:lancache:unpair',
   lanCacheStatus: 'mediahub:lancache:status',
+  /** Poll while a pairing request waits for the server's administrator. */
+  lanCachePairStatus: 'mediahub:lancache:pair-status',
+  /** Take Super Admin of an unclaimed cache server. */
+  lanCacheClaim: 'mediahub:lancache:claim',
+  /** Admin only: the device list, one device's approve/deny/revoke/quota,
+   *  and the server-wide join and allocation settings. */
+  lanCacheDevices: 'mediahub:lancache:devices',
+  lanCacheDeviceAction: 'mediahub:lancache:device-action',
+  lanCacheAdminSettings: 'mediahub:lancache:admin-settings',
   settingsSetStreamLimits: 'mediahub:settings:set-stream-limits',
   settingsSetStreamCacheSize: 'mediahub:settings:set-stream-cache-size',
   settingsChooseStreamCacheDir: 'mediahub:settings:choose-stream-cache-dir',
@@ -61,11 +70,23 @@ export const MEDIA_HUB_CHANNELS = {
   openExternal: 'mediahub:open:external',
   updateCheck: 'mediahub:update:check',
   updateInstall: 'mediahub:update:install',
+  /** The short 'what changed' note for the running build, and for an
+   *  offered update once one is known. See media-hub/releaseNotes.ts. */
+  updateNotes: 'mediahub:update:notes',
   updateSetChannel: 'mediahub:update:set-channel',
   updateStatus: 'mediahub:update:status', // push event
 
   // Catalog / search / metadata
   catalogList: 'mediahub:catalog:list',
+  /** One filtered, sorted, paged slice of the library, straight out of
+   *  catalog_index — the browse grid's data source once it stops holding the
+   *  whole catalog in memory. Returns the page AND the total number of
+   *  matches, which is what the category hero quotes. */
+  catalogQuery: 'mediahub:catalog:query',
+  /** The genre/year/status values that actually occur for one kind, for the
+   *  filter bar's dropdowns. Over the whole library, not over the slice that
+   *  happens to be loaded. */
+  catalogFacets: 'mediahub:catalog:facets',
   catalogMeta: 'mediahub:catalog:meta',
   catalogSearch: 'mediahub:catalog:search',
   catalogRelated: 'mediahub:catalog:related',
@@ -180,8 +201,6 @@ export const MEDIA_HUB_CHANNELS = {
    *  controls' idle countdown ran during the load and a cold stream slower than
    *  it started the film with the bar already faded out. */
   playerControlsShown: 'mediahub:player:controls-shown', // push event
-  libraryList: 'mediahub:library:list',
-  libraryPlay: 'mediahub:library:play',
   streamCacheList: 'mediahub:stream-cache:list',
   streamCacheDelete: 'mediahub:stream-cache:delete',
 

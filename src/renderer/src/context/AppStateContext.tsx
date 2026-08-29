@@ -62,6 +62,11 @@ import {
 } from '@renderer/lib/mediaHub/hooks'
 import type { CategoryKind } from '@renderer/lib/mediaHub/categoryFilters'
 import { MAX_PROMPT_TITLES } from '@shared/media-hub/ollama'
+import {
+  isNoticeablyBelowCeiling,
+  resolutionLabel,
+  streamResolution
+} from '@shared/media-hub/streamQuality'
 import { mediaItemToTitleRef } from '@renderer/lib/mediaHub/adapters'
 import {
   recentlyWatchedRefs,
@@ -234,6 +239,13 @@ interface AppStateValue {
   syncDiscrepancies: WatchStatusDiscrepancy[]
   syncReviewOpen: boolean
   setSyncReviewOpen: Dispatch<SetStateAction<boolean>>
+  /** The control centre — the settings/system surface that folds down from
+   *  the top bar (see components/controlcentre/ControlCentre.tsx). Global
+   *  rather than local to the top bar because two other things open it: the
+   *  sidebar's Settings entry, and the /settings route, which exists now
+   *  only to deep-link into this. */
+  controlCentreOpen: boolean
+  setControlCentreOpen: Dispatch<SetStateAction<boolean>>
   resolveSyncDiscrepancy: (
     discrepancy: WatchStatusDiscrepancy,
     resolution: ReconcileResolution
@@ -565,6 +577,11 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   // on the self-consumption bug that shape used to cause).
   const [pendingRestore, setPendingRestore] = useState<BrowsingOrigin | null>(null)
   const browsingOrigin = browsingTrail.length > 0 ? browsingTrail[browsingTrail.length - 1] : null
+  // Titles the person has already agreed to watch below their quality
+  // ceiling. Session-scoped and deliberately not persisted: it exists so a
+  // 480p series does not re-ask on every autoplayed episode, not to record
+  // a preference.
+  const acceptedLowQuality = useRef<Set<string>>(new Set())
   const [resolvingMedia, setResolvingMedia] = useState<{
     id: string
     title: string
@@ -1012,6 +1029,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   // repeated Simkl requests.
   const [syncDiscrepancies, setSyncDiscrepancies] = useState<WatchStatusDiscrepancy[]>([])
   const [syncReviewOpen, setSyncReviewOpen] = useState(false)
+  const [controlCentreOpen, setControlCentreOpen] = useState(false)
 
   // Discarded when the library underneath them changes — a profile switch, or
   // a restore. A discrepancy is a claim about ONE profile's history against
@@ -1495,6 +1513,34 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
           })
           return false
         }
+
+        // An old film that only exists at 480p is still worth watching — the
+        // player upscales — so a shortfall is never a refusal, only a
+        // question. Asked once per title per session: without that, a 480p
+        // series would ask again on every autoplayed episode, which is how a
+        // useful prompt becomes one nobody reads.
+        const ceiling = mediaHubSettings?.maxStreamResolution ?? 0
+        const got = streamResolution(resolved.best)
+        if (isNoticeablyBelowCeiling(got, ceiling) && !acceptedLowQuality.current.has(media.id)) {
+          if (
+            !window.confirm(
+              `The best copy of ${media.title} available right now is ${resolutionLabel(got)}, ` +
+                `below the ${resolutionLabel(ceiling)} you allow. It will be scaled to fit your ` +
+                `screen.\n\nPlay it anyway?`
+            )
+          ) {
+            setResolvingMedia(null)
+            return false
+          }
+          // Recorded ONLY on a real acceptance. This used to run on every
+          // resolve, including the ones that met the ceiling and asked
+          // nothing — and since the key is the series rather than the
+          // episode, a first episode that played at full quality silently
+          // bought consent for a later one that only exists at 480p.
+          // Playing a copy that was fine is not agreement to anything.
+          acceptedLowQuality.current.add(media.id)
+        }
+
         setResolvingMedia({ id: media.id, title: media.title, stage: 'buffering' })
         const playTask = api.stream.play(resolved.best, mediaId, kind, resolveId, {
           catalogId: media.id,
@@ -2357,7 +2403,9 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       uiActivity,
       syncDiscrepancies,
       syncReviewOpen,
+      controlCentreOpen,
       setSyncReviewOpen,
+      setControlCentreOpen,
       resolveSyncDiscrepancy
     }),
     [
@@ -2454,6 +2502,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       uiActivity,
       syncDiscrepancies,
       syncReviewOpen,
+      controlCentreOpen,
       resolveSyncDiscrepancy
     ]
   )

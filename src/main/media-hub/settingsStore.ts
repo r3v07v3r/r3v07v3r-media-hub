@@ -274,6 +274,28 @@ export interface LanCacheConnection {
   url: string
   name: string
   token: string
+  /**
+   * A token issued but not yet approved by the server's administrator.
+   *
+   * The token is real and authorises nothing, so the connection has to be
+   * REMEMBERED (the app must be able to ask 'am I in yet' after a restart)
+   * without being USED (every source lookup and stream would 401). Hence a
+   * flag on the stored connection rather than a second slot: there is only
+   * ever one cache server, and a pending one is that server in an earlier
+   * state, not a different thing.
+   */
+  pending?: boolean
+  /**
+   * The TorBox opt-in made when this device asked to join, held until
+   * approval can act on it.
+   *
+   * The choice is made at the moment of asking and cannot be honoured then:
+   * a pending token authorises nothing, so posting the credential would be
+   * refused. Without somewhere to keep the answer it was simply discarded,
+   * and the person who ticked the box stayed unlinked with no control
+   * anywhere to try again.
+   */
+  shareTorbox?: boolean
 }
 
 /** The paired cache daemon, or undefined. Unlike the TorBox token this is
@@ -283,7 +305,13 @@ export function getLanCacheConnection(): LanCacheConnection | undefined {
   const url = String(settings.lanCacheUrl || '').trim()
   const token = decrypt(settings.lanCacheToken)
   if (!url || !token) return undefined
-  return { url: url.replace(/\/+$/, ''), name: String(settings.lanCacheName || ''), token }
+  return {
+    url: url.replace(/\/+$/, ''),
+    name: String(settings.lanCacheName || ''),
+    token,
+    ...(settings.lanCachePending === true ? { pending: true } : {}),
+    ...(settings.lanCacheShareTorbox === true ? { shareTorbox: true } : {})
+  }
 }
 
 export function setLanCacheConnection(connection: LanCacheConnection): void {
@@ -291,6 +319,12 @@ export function setLanCacheConnection(connection: LanCacheConnection): void {
   settings.lanCacheUrl = connection.url.trim().replace(/\/+$/, '')
   settings.lanCacheName = connection.name
   settings.lanCacheToken = encrypt(connection.token)
+  // Written only when true, and deleted otherwise, so approval leaves no
+  // stale flag behind to hold a working connection shut.
+  if (connection.pending) settings.lanCachePending = true
+  else delete settings.lanCachePending
+  if (connection.shareTorbox) settings.lanCacheShareTorbox = true
+  else delete settings.lanCacheShareTorbox
   writeSettings(settings)
 }
 
@@ -299,6 +333,8 @@ export function clearLanCacheConnection(): void {
   delete settings.lanCacheUrl
   delete settings.lanCacheName
   delete settings.lanCacheToken
+  delete settings.lanCachePending
+  delete settings.lanCacheShareTorbox
   writeSettings(settings)
 }
 

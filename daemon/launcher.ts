@@ -301,7 +301,7 @@ export async function launch(options: LauncherOptions): Promise<void> {
     } catch (error) {
       // Another instance already owns the port. That is not this version
       // failing — counting it would let a second process (which install.ts
-      // itself tells people to start, to read the pairing code) blacklist
+      // itself tells people to start) blacklist
       // every staged version in the RUNNING daemon's shared state file.
       // Stand down instead, leaving the tripwire as it was found.
       if ((error as NodeJS.ErrnoException)?.code === 'EADDRINUSE') {

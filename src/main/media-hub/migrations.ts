@@ -241,8 +241,137 @@ const profilesAndPlays: Migration = {
   }
 }
 
+/**
+ * Migration 2 — the accumulating title index.
+ *
+ * The browse catalog used to live in `catalog_cache` as ONE row per kind: a
+ * single JSON blob holding the whole crawl, rewritten wholesale every six
+ * hours and read back in full on every `catalog:list`. That shape is what
+ * capped the library — not the sources, which go far deeper (Cinemeta still
+ * returns full pages past skip=20000 for movies, and Kitsu reports 22,317
+ * anime). A blob has to be small enough to parse and ship on the launch path,
+ * so the crawl had to stay shallow, and every refresh REPLACED it — a title
+ * that fell out of Cinemeta's top window fell out of the library with it.
+ *
+ * Rows here accumulate instead. A crawl upserts what it saw and touches
+ * nothing else, so the index only ever grows and `first_seen` survives every
+ * later refresh of the same title.
+ *
+ * NOT profile-scoped, unlike migration 1's tables. This is shared cache data,
+ * the same as `catalog_cache` (which migration 1 also left alone): what
+ * Cinemeta lists is not a fact about who is signed in, and duplicating tens
+ * of thousands of rows per profile would be pure waste.
+ *
+ * NO PER-EPISODE DATA, deliberately. Episode positions are what make a series
+ * entry several times heavier than a movie one, and the only thing that reads
+ * them off a catalog entry is the browse grid's "Completed" badge — which can
+ * only ever be true for a title that has watch history (see isSeriesCompleted
+ * in the renderer's adapters.ts). So the counts live here for the grid's
+ * season/episode labels, and `completed` is computed against `watch_history`
+ * at query time for the handful of ids that have any. Full episode lists stay
+ * where they already are: metadata()'s own 24h per-title cache.
+ *
+ * Genres get their own table because they are a many-to-many filter facet. A
+ * JSON column would force a scan of every row for every genre filter and for
+ * every "which genres exist" query the filter bar asks.
+ *
+ * `title_sort` is the lowercased title and nothing more — NOT article-stripped.
+ * The sort it has to reproduce is `title.localeCompare(title)`, which files
+ * "The Matrix" under T; stripping articles here would change what the A-Z sort
+ * means as a side effect of moving it into SQL. See catalogFields.ts.
+ *
+ * The typed columns (`year`, `rating`, `runtime_min`) are derived by the same
+ * shared parsers the renderer uses to build a MediaItem, for the same reason:
+ * a filter must not mean one thing in SQL and another in memory. Anything that
+ * does not parse stays NULL rather than becoming 0, so "unknown year" and
+ * "year 0" remain distinguishable to every query.
+ */
+const catalogIndex: Migration = {
+  name: 'catalog-index',
+  apply(sql) {
+    sql.exec(`
+      CREATE TABLE catalog_index(
+        id TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        title TEXT NOT NULL,
+        title_sort TEXT NOT NULL,
+        year INTEGER,
+        rating REAL,
+        runtime_min INTEGER,
+        status TEXT,
+        poster TEXT,
+        background TEXT,
+        logo TEXT,
+        description TEXT,
+        total_seasons INTEGER,
+        total_episodes INTEGER,
+        simkl_id TEXT,
+        grouped_ids TEXT,
+        rank INTEGER,
+        source TEXT,
+        first_seen INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY(id, kind)
+      );
+      CREATE TABLE catalog_index_genre(
+        id TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        genre TEXT NOT NULL,
+        PRIMARY KEY(id, kind, genre)
+      );
+      CREATE INDEX idx_cindex_browse ON catalog_index(kind, rank);
+      CREATE INDEX idx_cindex_year ON catalog_index(kind, year DESC);
+      CREATE INDEX idx_cindex_rating ON catalog_index(kind, rating DESC);
+      CREATE INDEX idx_cindex_title ON catalog_index(kind, title_sort);
+      CREATE INDEX idx_cindex_genre ON catalog_index_genre(kind, genre);
+    `)
+  }
+}
+
+/**
+ * Migration 3 — how many of a series' episodes have actually aired.
+ *
+ * The browse grid's "Completed" badge is not "every episode watched", it is
+ * "every episode that has AIRED watched" — a show someone is fully caught up
+ * on counts, or a still-running series could never earn the badge (see
+ * isSeriesCompleted and airedEpisodes in the renderer's adapters.ts). That
+ * denominator used to come from the per-episode `videos` array on the catalog
+ * blob, and migration 2 deliberately stopped storing per-episode data at all,
+ * because it is what made a series row several times heavier than a movie one.
+ *
+ * So the COUNT is stored instead of the episodes. It is computed at crawl time
+ * with exactly the rule airedEpisodes applies — not unplayable, and either no
+ * release date or one already past — which matters for the two sources
+ * behaving differently: Cinemeta ships a real date per episode, so this is a
+ * genuine aired count, while Kitsu's synthesized episodes carry none, and
+ * `!released` counts as aired there, so it equals the total. Both are what
+ * the in-memory version already concluded from the same data.
+ *
+ * It goes stale between crawls, by at most the six-hour refresh interval, and
+ * only ever in the direction of under-counting a just-aired episode. That is
+ * the honest trade for not storing tens of thousands of episode rows: a badge
+ * that appears a few hours late, rather than a denominator that is wrong in
+ * both directions forever.
+ *
+ * Nullable, and NOT backfilled: rows written by migration 2's crawl have no
+ * aired count and must read as "unknown" rather than as zero, or every series
+ * already in the index would read as complete-with-nothing-aired until its
+ * next refresh. The next crawl fills it.
+ */
+const airedEpisodes: Migration = {
+  name: 'aired-episode-counts',
+  apply(sql) {
+    sql.exec('ALTER TABLE catalog_index ADD COLUMN aired_episodes INTEGER')
+  }
+}
+
 /** Ordered, and the order IS the version. Append only. */
-const MIGRATIONS: readonly Migration[] = [baseline, profilesAndPlays]
+const MIGRATIONS: readonly Migration[] = [
+  baseline,
+  profilesAndPlays,
+  catalogIndex,
+  airedEpisodes
+]
 
 /** How many migrations exist — a database at this version is fully current. */
 export const SCHEMA_VERSION = MIGRATIONS.length

@@ -11,6 +11,14 @@
 // requirement.
 
 import type { MediaItem } from '@renderer/types'
+import {
+  bucketTest,
+  findBucket,
+  EPISODES_BUCKETS,
+  EPISODE_LENGTH_BUCKETS,
+  RUNTIME_BUCKETS,
+  SEASONS_BUCKETS
+} from '@shared/media-hub/catalogFilters'
 
 export type CategoryKind = 'movie' | 'series' | 'anime'
 
@@ -150,42 +158,23 @@ export function filterStateToSearchParams(filters: CategoryFilterState): URLSear
   return params
 }
 
-export interface Bucket {
-  value: string
-  label: string
-  test: (n: number) => boolean
-}
-
-export const RUNTIME_BUCKETS: Bucket[] = [
-  { value: 'short', label: 'Under 90 min', test: (m) => m < 90 },
-  { value: 'medium', label: '90–120 min', test: (m) => m >= 90 && m <= 120 },
-  { value: 'long', label: 'Over 120 min', test: (m) => m > 120 }
-]
-
-export const SEASONS_BUCKETS: Bucket[] = [
-  { value: '1', label: '1 season', test: (n) => n === 1 },
-  { value: '2-4', label: '2–4 seasons', test: (n) => n >= 2 && n <= 4 },
-  { value: '5plus', label: '5+ seasons', test: (n) => n >= 5 }
-]
-
-export const EPISODE_LENGTH_BUCKETS: Bucket[] = [
-  { value: 'short', label: 'Under 30 min', test: (m) => m < 30 },
-  { value: 'medium', label: '30–45 min', test: (m) => m >= 30 && m <= 45 },
-  { value: 'long', label: 'Over 45 min', test: (m) => m > 45 }
-]
-
-export const EPISODES_BUCKETS: Bucket[] = [
-  { value: 'short', label: 'Under 13 episodes', test: (n) => n < 13 },
-  { value: 'medium', label: '13–26 episodes', test: (n) => n >= 13 && n <= 26 },
-  { value: 'long', label: '26+ episodes', test: (n) => n > 26 }
-]
-
-export const RATING_THRESHOLDS = [
-  { value: '9', label: '9+' },
-  { value: '8', label: '8+' },
-  { value: '7', label: '7+' },
-  { value: '6', label: '6+' }
-]
+// Bucket definitions and RATING_THRESHOLDS moved to
+// @shared/media-hub/catalogFilters, and are re-exported below so this
+// module stays the one import site the category pages already use.
+//
+// They had to move because main now runs the SAME filters as SQL over
+// catalog_index. A `test: (n) => n >= 90 && n <= 120` closure cannot
+// become a WHERE clause, so leaving them here would have meant writing
+// every boundary twice and hoping the two copies stayed in step. They
+// are ranges now, and both sides derive from the same numbers.
+export {
+  RUNTIME_BUCKETS,
+  SEASONS_BUCKETS,
+  EPISODE_LENGTH_BUCKETS,
+  EPISODES_BUCKETS,
+  RATING_THRESHOLDS,
+  type Bucket
+} from '@shared/media-hub/catalogFilters'
 
 export const SORT_OPTIONS: { value: SortKey; label: string }[] = [
   { value: 'trending', label: 'Trending' },
@@ -261,21 +250,36 @@ export function applyCategoryFilters(
     if (filters.year && String(item.releaseYear ?? '') !== filters.year) return false
     if (filters.minRating != null && (item.communityRating ?? 0) < filters.minRating) return false
 
+    // `findBucket` returning undefined (a stale bookmark naming a bucket that
+    // no longer exists) still means "matches nothing", not "no filter" — the
+    // same as the old `!bucket` guard. A null measurement is excluded too: a
+    // title with no known runtime is not evidence of a short one.
     if (filters.runtimeBucket) {
-      const bucket = RUNTIME_BUCKETS.find((b) => b.value === filters.runtimeBucket)
-      if (!bucket || item.runtimeMinutes == null || !bucket.test(item.runtimeMinutes)) return false
+      const bucket = findBucket(RUNTIME_BUCKETS, filters.runtimeBucket)
+      if (!bucket || item.runtimeMinutes == null || !bucketTest(bucket)(item.runtimeMinutes)) {
+        return false
+      }
     }
     if (filters.seasonsBucket) {
-      const bucket = SEASONS_BUCKETS.find((b) => b.value === filters.seasonsBucket)
-      if (!bucket || item.totalSeasons == null || !bucket.test(item.totalSeasons)) return false
+      const bucket = findBucket(SEASONS_BUCKETS, filters.seasonsBucket)
+      if (!bucket || item.totalSeasons == null || !bucketTest(bucket)(item.totalSeasons)) {
+        return false
+      }
     }
     if (filters.episodeLengthBucket) {
-      const bucket = EPISODE_LENGTH_BUCKETS.find((b) => b.value === filters.episodeLengthBucket)
-      if (!bucket || item.runtimeMinutes == null || !bucket.test(item.runtimeMinutes)) return false
+      // Deliberately runtimeMinutes, not a separate field: for a series the
+      // stored runtime IS the per-episode length. Same column the runtime
+      // bucket reads, different boundaries.
+      const bucket = findBucket(EPISODE_LENGTH_BUCKETS, filters.episodeLengthBucket)
+      if (!bucket || item.runtimeMinutes == null || !bucketTest(bucket)(item.runtimeMinutes)) {
+        return false
+      }
     }
     if (filters.episodesBucket) {
-      const bucket = EPISODES_BUCKETS.find((b) => b.value === filters.episodesBucket)
-      if (!bucket || item.totalEpisodes == null || !bucket.test(item.totalEpisodes)) return false
+      const bucket = findBucket(EPISODES_BUCKETS, filters.episodesBucket)
+      if (!bucket || item.totalEpisodes == null || !bucketTest(bucket)(item.totalEpisodes)) {
+        return false
+      }
     }
     if (filters.status && item.status !== filters.status) return false
 

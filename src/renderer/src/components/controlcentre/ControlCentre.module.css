@@ -1,0 +1,206 @@
+/* The control centre — the settings/system surface that folds down from the
+   top bar. See ControlCentre.tsx for the transition itself; this file is the
+   surface it lands on, and the colour shift that tells you where you are. */
+
+.panel {
+  /* -------------------------------------------------------------------
+     THE COLOUR SHIFT.
+
+     Every one of these is a token global.css already defines on :root, and
+     every child of this panel reads them without knowing anything has
+     changed — a button styled `background: var(--accent-blue)` comes out
+     matrix green in here and stays exactly as it was everywhere else.
+
+     That inheritance is the entire reason this approach was chosen over
+     restyling components: there are ~4,900 lines of settings UI moving in
+     here, and none of it needs to be touched.
+
+     Known exception, documented so nobody hunts for it: PerformanceWidget's
+     gauge computes its colour ramp in JavaScript, so it cannot inherit
+     these. It takes the ramp as props instead — see SystemStatusStrip.
+     ------------------------------------------------------------------- */
+  --accent-blue: #27e69a;
+  --accent-cyan: #6bffc0;
+  --accent-violet: #16b378;
+  --accent-magenta: #27e69a;
+  --border-subtle: rgba(39, 230, 154, 0.22);
+  --border-active: rgba(39, 230, 154, 0.62);
+  --text-secondary: #8fdcb8;
+  --text-muted: #4f8f74;
+  --panel: rgba(4, 18, 12, 0.72);
+  --panel-strong: rgba(5, 22, 15, 0.92);
+  --background-elevated: rgba(3, 14, 9, 0.86);
+
+  /* The cube's FRONT face. Pushed out along Z by half the cube side so it
+     and the lid meet at a shared edge rather than intersecting through each
+     other's middle. */
+  width: 100%;
+  height: 100%;
+
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+
+  background:
+    linear-gradient(180deg, rgba(6, 26, 18, 0.96) 0%, rgba(2, 10, 7, 0.98) 100%);
+  border-bottom: 1px solid var(--border-active);
+  box-shadow:
+    0 40px 120px rgba(0, 0, 0, 0.7),
+    0 0 90px rgba(39, 230, 154, 0.09);
+  color: var(--text-primary);
+}
+
+/* ---------- The rail and the panel beside it ----------
+
+   The rail sits on the LEFT, in the same column the app face puts its own
+   nav rail. Not decoration: the two faces are sides of one object, and a
+   rail that jumped across the screen when the cube turned would break the
+   impression that anything solid was rotating. */
+.layout {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+}
+
+.rail {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 22px 14px;
+  border-right: 1px solid var(--border-subtle);
+  /* Its own scroller. The panel beside it is long, and a rail that
+     scrolled away with the content would leave no way back without
+     scrolling to the top first. */
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.railButton {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 10px 14px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 0.88rem;
+  font-weight: 540;
+  text-align: left;
+  cursor: pointer;
+  white-space: nowrap;
+  transition:
+    background 180ms var(--ease-smooth),
+    border-color 180ms var(--ease-smooth),
+    color 180ms var(--ease-smooth);
+}
+
+.railButton:hover,
+.railButton:focus-visible {
+  color: var(--text-primary);
+  border-color: var(--border-subtle);
+}
+
+.railButtonActive {
+  background: rgba(39, 230, 154, 0.12);
+  border-color: var(--border-active);
+  color: var(--accent-cyan);
+}
+
+.railIcon {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+}
+
+html[data-motion-user-disabled='true'] .railButton {
+  transition: none;
+}
+
+@media (max-width: 767px) {
+  /* Too narrow for a rail and a panel side by side, so the rail becomes a
+     scrolling strip across the top and the labels carry it. */
+  .layout {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  .rail {
+    flex-direction: row;
+    padding: 12px;
+    border-right: none;
+    border-bottom: 1px solid var(--border-subtle);
+    overflow-x: auto;
+  }
+
+  .railButton {
+    flex: none;
+  }
+}
+
+/* The scrolling body. Deliberately the scroll container rather than the
+   panel itself: the panel is what carries the 3D transform, and animating a
+   transform on an element that is also scrolling is where Electron's
+   compositor gets expensive. */
+.body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 22px 28px 32px;
+}
+
+/* Everything below the fold's hinge fades in slightly after the panel has
+   started opening, so the content is not visibly skewed mid-rotation. */
+.content {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+/* The `hidden` attribute sets display:none through a UA rule, and ANY
+   author `display` beats it — so .content above silently un-hid every
+   inactive panel and the sections stacked on top of each other. Caught by
+   looking at it; the markup was already correct.
+
+   Restated here at higher specificity rather than by dropping the flex
+   layout: the panels genuinely are columns when they are shown. */
+.content[hidden] {
+  display: none;
+}
+
+/* ---------- The one thing the token override cannot reach ----------
+
+   `.glass-panel` (global.css) is what every settings card is built on, and
+   it hardcodes its colours rather than reading tokens:
+
+     background: linear-gradient(145deg, rgba(18, 26, 42, .78), rgba(5, 10, 19, .64));
+     border: 1px solid rgba(143, 183, 224, .2);
+
+   So the panel around them turned green and every card inside stayed navy —
+   caught by looking at it, not by the typecheck. Restyled here, scoped to
+   this panel, rather than changed in global.css: that class is used across
+   the whole app and this is the one place it should look different.
+
+   :global() because .glass-panel is a plain global class, not a CSS-module
+   local — without it the selector would be renamed and match nothing. */
+.panel :global(.glass-panel) {
+  background: linear-gradient(145deg, rgba(8, 32, 22, 0.78), rgba(2, 12, 8, 0.66));
+  border-color: rgba(39, 230, 154, 0.2);
+  box-shadow:
+    0 20px 50px rgba(0, 0, 0, 0.45),
+    inset 0 1px 0 rgba(107, 255, 192, 0.06);
+}
+
+@media (max-width: 767px) {
+  .header {
+    padding: 14px 16px 12px;
+  }
+
+  .body {
+    padding: 16px 16px 24px;
+  }
+}

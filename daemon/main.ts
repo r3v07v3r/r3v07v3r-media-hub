@@ -4,8 +4,9 @@
 //   r3-cache --install            (register auto-start, once)
 //   r3-cache                      (run in this console)
 //
-// Zero-config by contract: run it, read the pairing code off this console,
-// type it into the app. Everything else — storage location, disk budget,
+// Zero-config by contract: run it, then claim it from the app on the same
+// network and approve whatever else asks to join. Everything else —
+// storage location, disk budget,
 // expiry, retries, and from now on UPDATES — has a default and maintains
 // itself. An optional r3-cache.json beside the data directory overrides;
 // see config.ts.
@@ -26,7 +27,8 @@ import { installAutoStart, uninstallAutoStart } from './install'
 import { createJobStore } from './jobs'
 import { launch, type PayloadApi } from './launcher'
 import { createMdnsAnnouncer } from './mdns'
-import { createPairing } from './pairing'
+import { createAdmin } from './admin'
+import { createPairing, deviceIdForToken, isApproved } from './pairing'
 import { createDaemonServer } from './server'
 import { createItemStore } from './storage'
 import { createUpdater } from './updater'
@@ -67,10 +69,32 @@ export async function run(api: PayloadApi): Promise<'restart' | 'exit'> {
     tombstoneMs: config.tombstoneDays * dayMs
   })
   const pairing = createPairing(config.dataDir)
+  const admin = createAdmin(config.dataDir)
   const credentials = createCredentials(config.dataDir)
   const jobs = createJobStore(config.dataDir)
   const activity = createActivityTracker(config.dataDir)
-  await Promise.all([pairing.load(), credentials.load(), jobs.load(), activity.load()])
+  await Promise.all([
+    pairing.load(),
+    admin.load(),
+    credentials.load(),
+    jobs.load(),
+    activity.load()
+  ])
+
+  // Stamp entitlement onto anything written before the fields existed.
+  // Runs once — migrateEntitlement skips items that already carry a
+  // visibility — and says so plainly, because the effect is user-visible:
+  // items that every paired device could previously see are now private to
+  // whoever fetched them, and someone will want to know why a housemate's
+  // film vanished from their list.
+  const migrated = await storage.migrateEntitlement()
+  if (migrated > 0) {
+    log(
+      `entitlement: ${migrated} existing item(s) marked. Items with a known ` +
+        'owner are now private to that device; items with no identifiable ' +
+        'owner were left shared. Re-share from the app if needed.'
+    )
+  }
 
   let resolveOutcome!: (outcome: 'restart' | 'exit') => void
   const outcome = new Promise<'restart' | 'exit'>((resolve) => {
@@ -109,6 +133,7 @@ export async function run(api: PayloadApi): Promise<'restart' | 'exit'> {
     storage,
     jobs,
     pairing,
+    admin,
     credentials,
     activity,
     updaterStatus: () => updater.status(),
@@ -135,7 +160,29 @@ export async function run(api: PayloadApi): Promise<'restart' | 'exit'> {
     } catch {
       // statfs unavailable — the configured budget alone still applies.
     }
-    const plan = await storage.runEviction(Date.now(), freeBytes)
+    // Per-device allocations, rebuilt each pass so an admin's change takes
+    // effect on the next eviction rather than on the next restart.
+    //
+    // A device with no quota of its own falls back to the admin's default
+    // share of the budget, and if there is no default either it is simply
+    // absent from the map — bounded only by the whole disk, exactly as
+    // every install behaved before quotas existed. That absence is the
+    // migration: nothing changes until somebody sets a number.
+    //
+    // Items owned by a device that is no longer paired keep their owner id
+    // and fall out of the map with it, so they are bounded by the disk
+    // budget alone. Reclaiming a revoked device's files is a deletion
+    // decision that deserves its own design, not a side effect of this.
+    const quotas = new Map<string, number>()
+    const percent = admin.defaultQuotaPercent()
+    const fallback = percent > 0 ? Math.floor((config.diskBudgetBytes * percent) / 100) : null
+    for (const device of pairing.listDevices()) {
+      if (!isApproved(device)) continue
+      const quota = device.quotaBytes ?? fallback
+      if (typeof quota !== 'number') continue
+      quotas.set(deviceIdForToken(device.token), quota)
+    }
+    const plan = await storage.runEviction(Date.now(), freeBytes, quotas)
     for (const [infoHash, reason] of plan) log(`evicted  ${infoHash.slice(0, 8)}… (${reason})`)
   }
   await evict()
@@ -169,24 +216,43 @@ export async function run(api: PayloadApi): Promise<'restart' | 'exit'> {
     // version that comes up and then dies quickly is still rolled back.
     api.markHealthy()
 
-    const banner = (code: string): void => {
-      console.log('')
-      console.log('  ┌──────────────────────────────────────────────┐')
-      console.log(`  │  r3-cache ${runningVersion} — "${config.serverName}"`.padEnd(49) + '│')
-      console.log(`  │  port ${config.port} · data ${config.dataDir}`.slice(0, 49).padEnd(49) + '│')
-      console.log(
-        `  │  budget ${(config.diskBudgetBytes / 1024 ** 3).toFixed(0)} GB · idle ${config.idleTtlDays}d · max ${config.hardMaxDays}d`.padEnd(
-          49
-        ) + '│'
-      )
-      console.log('  │                                              │')
-      console.log(`  │  PAIRING CODE:  ${code}                       │`)
-      console.log('  │  Enter this in the app to connect.           │')
-      console.log('  └──────────────────────────────────────────────┘')
-      console.log('')
+    // No pairing code any more — devices ask to join and the administrator
+    // approves them from the app. The banner says what the box IS, which is
+    // what somebody at this console still needs: which server, which port,
+    // which disk budget.
+    console.log('')
+    console.log('  ┌──────────────────────────────────────────────┐')
+    console.log(`  │  r3-cache ${runningVersion} — "${config.serverName}"`.padEnd(49) + '│')
+    console.log(`  │  port ${config.port} · data ${config.dataDir}`.slice(0, 49).padEnd(49) + '│')
+    console.log(
+      `  │  budget ${(config.diskBudgetBytes / 1024 ** 3).toFixed(0)} GB · idle ${config.idleTtlDays}d · max ${config.hardMaxDays}d`.padEnd(
+        49
+      ) + '│'
+    )
+    console.log('  │                                              │')
+    console.log('  │  Devices ask to join from the app.           │')
+    console.log('  │  The administrator approves them there.      │')
+    console.log('  └──────────────────────────────────────────────┘')
+    console.log('')
+
+    // An unclaimed server says so, repeatedly and loudly.
+    //
+    // The exposure this covers is real: the daemon announces itself over
+    // mDNS and is built to run at boot on a box nobody looks at, so an
+    // unclaimed one sitting for a week is claimable by whoever finds it.
+    // Saying it once at startup would scroll away in a log nobody reads;
+    // repeating it is what makes an operator notice they never finished
+    // setting the thing up.
+    if (admin.isUnclaimed()) {
+      const warn = (): void => {
+        if (!admin.isUnclaimed()) return
+        log('UNCLAIMED — no administrator yet. Open the app on this network and claim it.')
+      }
+      warn()
+      const timer = setInterval(warn, 5 * 60_000)
+      // Never hold the process open for a warning.
+      timer.unref?.()
     }
-    banner(pairing.currentCode())
-    pairing.onCodeChange(banner)
 
     const result = await outcome
     log(result === 'restart' ? 'stopping for update' : 'shutting down')
@@ -247,6 +313,20 @@ async function entry(): Promise<void> {
   }
 
   const config = loadConfig()
+
+  // Console recovery. The console stays the root of trust — not because
+  // anyone should have to use it, but because on a box you physically
+  // control it is the one authority that cannot be taken remotely. This is
+  // the way back from a lost admin device, and the reason claiming can be
+  // bounded without stranding anybody.
+  if (argv.includes('--claim-admin')) {
+    const admin = createAdmin(config.dataDir)
+    await admin.load()
+    await admin.reopen()
+    log('claiming reopened — the next device to claim from the app becomes administrator')
+    return
+  }
+
   await launch({
     dataDir: config.dataDir,
     launcherVersion: VERSION,

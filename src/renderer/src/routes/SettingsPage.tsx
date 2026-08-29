@@ -102,6 +102,94 @@ const SUBTITLE_LANGUAGE_OPTIONS: { value: string; label: string }[] = [
   { value: 'ko', label: 'KO' }
 ]
 
+/**
+ * An ordered setting as a slider rather than a row of pills.
+ *
+ * Six of this page's option sets are SCALES — video quality, download size,
+ * stream cache size, playback buffer, video scaling, and the media-server-to-
+ * best-quality preference. Rendering a scale as six equal buttons throws away
+ * the one thing that matters about it: that the options have an order, and
+ * that "more" lies in a direction. It also costs the most horizontal room of
+ * anything on the page, which is what pushed controls to the far edge of
+ * their cards.
+ *
+ * A slider says both at once — where you are, and which way is more.
+ *
+ * Built on a real <input type="range"> rather than a custom-drawn track,
+ * because that brings the whole keyboard model with it: arrows step, Home and
+ * End jump to the ends, Page Up/Down move by more, and every screen reader
+ * already knows what it is. The one thing it does not know is that this scale
+ * is not numeric, which is what aria-valuetext is for — it reads "1080p",
+ * never "3 of 6".
+ *
+ * The slider carries the INDEX, not the value: these scales are ordered but
+ * not evenly spaced (480, 720, 1080, 1440, 2160) and some are not numbers at
+ * all ("Unlimited" is the top of the cache scale and the value 0). Index is
+ * the only thing that is genuinely linear.
+ */
+function SliderRow({
+  icon,
+  title,
+  description,
+  value,
+  options,
+  onChange
+}: {
+  icon: string
+  title: string
+  description: string
+  value: string
+  options: { value: string; label: string }[]
+  onChange: (v: string) => void
+}) {
+  const index = Math.max(
+    0,
+    options.findIndex((option) => option.value === value)
+  )
+  const current = options[index] ?? options[0]
+  // 0 and 100 would put the fill under the thumb's own radius at the ends.
+  const percent = options.length > 1 ? (index / (options.length - 1)) * 100 : 0
+
+  return (
+    <div className={`${styles.row} ${styles.rowSlider}`}>
+      <div className={styles.rowIcon} aria-hidden="true">
+        <Icon name={icon} size={17} />
+      </div>
+      <div className={styles.rowText}>
+        <div className={styles.sliderHead}>
+          <span className={styles.rowTitle}>{title}</span>
+          {/* The value belongs beside the title, not under the thumb: it is
+              the answer to "what is this set to", and it should not move. */}
+          <span className={styles.sliderValue}>{current.label}</span>
+        </div>
+        <span className={styles.rowDescription}>{description}</span>
+        <input
+          type="range"
+          className={styles.slider}
+          min={0}
+          max={options.length - 1}
+          step={1}
+          value={index}
+          aria-label={title}
+          aria-valuetext={current.label}
+          style={{ ["--fill" as string]: `${percent}%` }}
+          onChange={(event) => {
+            const next = options[Number(event.target.value)]
+            if (next && next.value !== value) onChange(next.value)
+          }}
+        />
+        {/* Only the ends are labelled. Labelling every stop reintroduces the
+            width problem the pills had, and the current value is already
+            named above — these two only have to say which way is more. */}
+        <div className={styles.sliderScale} aria-hidden="true">
+          <span>{options[0].label}</span>
+          <span>{options[options.length - 1].label}</span>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function SegmentedRow({
   icon,
   title,
@@ -633,7 +721,22 @@ function MoreOptionsSection() {
  * all inside useLayoutEffect, so the oversized scratch state it passes
  * through is never painted.
  */
-function useColumnPackGrid<TGroup extends HTMLElement = HTMLElement>() {
+/**
+ * Measures each category's cards and pins an explicit pixel width on the
+ * grid and its group, so the filmstrip's `flex-flow: column wrap` packs
+ * into columns without clipping.
+ *
+ * `enabled` exists because the control centre face does NOT want this. It
+ * lays the same cards out as a responsive CSS grid, and an inline pixel
+ * width beats any stylesheet — which is exactly what went wrong: the packer
+ * pinned one group at 1458px inside a 1160px parent, and the rest at 340px,
+ * so five of the six categories collapsed to a single column while the
+ * first overflowed. The symptom looked like a grid bug and was not one.
+ *
+ * When disabled it also CLEARS any width it previously set, so toggling
+ * between the two layouts cannot leave a stale measurement behind.
+ */
+function useColumnPackGrid<TGroup extends HTMLElement = HTMLElement>(enabled = true) {
   const gridRef = useRef<HTMLDivElement>(null)
   const groupRef = useRef<TGroup>(null)
   const gridBinding = useCallback((node: HTMLDivElement | null) => {
@@ -647,6 +750,11 @@ function useColumnPackGrid<TGroup extends HTMLElement = HTMLElement>() {
     const grid = gridRef.current
     const group = groupRef.current
     if (!grid || !group) return
+    if (!enabled) {
+      grid.style.width = ''
+      group.style.width = ''
+      return
+    }
 
     function pack(): void {
       const grid = gridRef.current
@@ -676,19 +784,25 @@ function useColumnPackGrid<TGroup extends HTMLElement = HTMLElement>() {
       window.removeEventListener('resize', pack)
       observer.disconnect()
     }
-  }, [])
+  }, [enabled])
 
   return [gridBinding, groupBinding] as const
 }
 
-export default function SettingsPage() {
+/**
+ * `embedded` is set when this is hosted inside the control centre rather
+ * than rendered as the /settings route. It only suppresses the page-level
+ * heading — every control below behaves identically, which is the point:
+ * the sections were re-homed, not rewritten.
+ */
+export default function SettingsPage({ embedded = false }: { embedded?: boolean } = {}) {
   const tileAreaRef = useRef<HTMLDivElement>(null)
-  const [generalGridBinding, generalGroupBinding] = useColumnPackGrid<HTMLElement>()
-  const [playbackGridBinding, playbackGroupBinding] = useColumnPackGrid<HTMLElement>()
-  const [servicesGridBinding, servicesGroupBinding] = useColumnPackGrid<HTMLElement>()
-  const [accountsGridBinding, accountsGroupBinding] = useColumnPackGrid<HTMLElement>()
-  const [communityGridBinding, communityGroupBinding] = useColumnPackGrid<HTMLElement>()
-  const [aiGridBinding, aiGroupBinding] = useColumnPackGrid<HTMLElement>()
+  const [generalGridBinding, generalGroupBinding] = useColumnPackGrid<HTMLElement>(!embedded)
+  const [playbackGridBinding, playbackGroupBinding] = useColumnPackGrid<HTMLElement>(!embedded)
+  const [servicesGridBinding, servicesGroupBinding] = useColumnPackGrid<HTMLElement>(!embedded)
+  const [accountsGridBinding, accountsGroupBinding] = useColumnPackGrid<HTMLElement>(!embedded)
+  const [communityGridBinding, communityGroupBinding] = useColumnPackGrid<HTMLElement>(!embedded)
+  const [aiGridBinding, aiGroupBinding] = useColumnPackGrid<HTMLElement>(!embedded)
   const {
     isOffline,
     setIsOffline,
@@ -1054,14 +1168,21 @@ export default function SettingsPage() {
   }, [])
 
   return (
-    <div className={styles.wrap}>
+    <div className={`${styles.wrap} ${embedded ? styles.embedded : ''}`}>
       <div className={styles.pageHeader}>
-        <div>
-          <h1 className={styles.heading}>Settings</h1>
-          <p className={styles.headingDescription}>
-            Manage playback, services, and your R3 experience.
-          </p>
-        </div>
+        {/* Hidden when hosted inside the control centre, which supplies its
+            own heading — two <h1>s describing the same content is a worse
+            document outline, not just visual duplication. The category nav
+            below stays either way: jumping between groups is more useful in
+            the panel than it ever was on the page. */}
+        {!embedded && (
+          <div>
+            <h1 className={styles.heading}>Settings</h1>
+            <p className={styles.headingDescription}>
+              Manage playback, services, and your R3 experience.
+            </p>
+          </div>
+        )}
         <nav className={styles.categoryNav} aria-label="Settings categories">
           {[
             ['settings-general', 'General'],
@@ -1115,7 +1236,7 @@ export default function SettingsPage() {
                 checked={mediaHubSettings?.performancePanelVisible ?? true}
                 onChange={handleTogglePerformancePanel}
               />
-              <SegmentedRow
+              <SliderRow
                 icon="clock"
                 title="Playback buffer"
                 description="How far ahead to keep loading while you watch. Higher settings ride out a slow or unstable connection and let you pause, let it fill, and resume without waiting — at the cost of more memory. Playback still starts straight away either way."
@@ -1123,7 +1244,7 @@ export default function SettingsPage() {
                 options={PLAYBACK_BUFFER_OPTIONS}
                 onChange={handleSetPlaybackBuffer}
               />
-              <SegmentedRow
+              <SliderRow
                 icon="cpu"
                 title="Video scaling"
                 description="How video is resized to fit your screen, done on the GPU while playing. Sharp is crisper on older, lower-resolution titles; it can ring slightly on very noisy sources, which is why it isn't the default."
@@ -1280,7 +1401,7 @@ export default function SettingsPage() {
                 checked={isOffline}
                 onChange={setIsOffline}
               />
-              <SegmentedRow
+              <SliderRow
                 icon="display"
                 title="Maximum video quality"
                 description={`Avoid releases sharper than this display needs.${speedTest.quality ? ` ${speedTest.quality}p recommended by the last test.` : ''}`}
@@ -1290,7 +1411,7 @@ export default function SettingsPage() {
                   setStreamLimits(Number(value), mediaHubSettings?.maxStreamSizeGb ?? 0)
                 }
               />
-              <SegmentedRow
+              <SliderRow
                 icon="download"
                 title="Maximum download size"
                 description={`Prefer releases at or below this size.${speedTest.size ? ` ${speedTest.size} GB recommended by the last test.` : ''}`}
@@ -1300,7 +1421,7 @@ export default function SettingsPage() {
                   setStreamLimits(mediaHubSettings?.maxStreamResolution ?? 0, Number(value))
                 }
               />
-              <SegmentedRow
+              <SliderRow
                 icon="display"
                 title="Where to play from"
                 description="A media server on your own network starts instantly and costs no bandwidth. Balanced prefers it unless a noticeably better copy exists elsewhere; Media server prefers it whenever it has the title at all; Best quality ignores where a copy lives and picks the best one."
@@ -1409,8 +1530,10 @@ export default function SettingsPage() {
                 <div className={styles.rowText}>
                   <span className={styles.rowTitle}>Connection recommendation</span>
                   <span className={styles.rowDescription}>
-                    Runs only when requested and downloads about 1 MB. It considers this screen and
-                    saves suggested limits without locking them.
+                    Runs only when requested. Downloads 1 MB, and keeps going only if that finishes
+                    too fast to measure — a slow or metered connection is never asked for more than
+                    the 1 MB. It considers this screen and saves suggested limits without locking
+                    them.
                   </span>
                 </div>
                 <button
@@ -1462,8 +1585,13 @@ export default function SettingsPage() {
             <p>Connect servers, download clients, and your streaming provider.</p>
           </header>
           <div ref={servicesGridBinding} className={`${styles.groupGrid} ${styles.groupGridWide}`}>
-            <LanCacheSection />
-      <MediaServicesSection />
+            {/* Only on the standalone /settings route. Inside the control
+                centre the cache server has its own section in the rail,
+                with the administration this card cannot hold, and two
+                copies of the pairing flow on one surface is a way to have
+                them disagree. */}
+            {!embedded && <LanCacheSection />}
+            <MediaServicesSection />
             <TorBoxSection />
           </div>
         </section>

@@ -8,87 +8,93 @@ import {
   SystemSnapshot
 } from '../shared/ipc-types'
 import { MEDIA_HUB_CHANNELS } from '../shared/media-hub/ipc-channels'
-import type { LanCacheStatusResponse } from '../shared/lancache/protocol'
 import type {
+  LanCacheDevicesResponse,
+  LanCacheStatusResponse
+} from '../shared/lancache/protocol'
+import type {
+  ActivitySnapshot,
   AnimeStoryResult,
   BlockedDownload,
   BootstrapResult,
+  CacheMode,
+  CacheSessionMeta,
+  CalendarEntry,
+  CatalogFacets,
   CatalogItem,
   CatalogListing,
+  CatalogQuery,
+  CatalogQueryResult,
   ConnectResult,
   ConnectionTestResult,
+  CustomList,
+  CustomListItem,
   DislikedListResult,
   EpisodePlaybackPosition,
+  FriendActivity,
+  FriendMessage,
+  FriendsStatus,
   HomePersonalizedResult,
-  LibraryItem,
+  ImportSummary,
   MalReconcileApplyResult,
   MalReconcilePreview,
   MalStartPayload,
   MalStatus,
   MarkWatchedResult,
-  CacheMode,
   MediaHubSettingsSnapshot,
-  SourcePreference,
   MediaKind,
   NetworkInfoResult,
   OllamaAskResult,
   OllamaRecommendResult,
   OllamaStatus,
+  PartyChatMessage,
   PartyEventPayload,
   PartyHostResult,
   PartyMode,
-  FriendActivity,
-  FriendMessage,
-  FriendsStatus,
   PartyNowPlayingPayload,
-  PartyPreparingPayload,
   PartyPlaybackAction,
-  PartyChatMessage,
+  PartyPreparingPayload,
   PartyQueueEntry,
   PartyStatusResult,
-  PlaybackPositionResult,
-  CustomList,
-  CustomListItem,
-  CalendarEntry,
   PersonCreditsResult,
-  TitleCollectionResult,
-  WatchProvidersResult,
   PlayRecord,
-  SavedFilter,
-  ImportSummary,
-  TraktPollResult,
-  TraktStartResult,
-  TraktStatusResult,
-  ViewingStats,
+  PlaybackPositionResult,
   PlaybackPrepareProgress,
   PlaybackResult,
   ProfilePublic,
-  ProfilesListResult,
   ProfileSetActiveResult,
   ProfileVerifyPinResult,
+  ProfilesListResult,
+  RecommendationsChanged,
   ReconcileCheckResult,
   ReconcileResolution,
   ReconcileResolveResult,
   ReconcileSyncReport,
+  ReleaseNotesResult,
+  SavedFilter,
   SimklPinStart,
   SimklPollResult,
   SimklStatus,
-  WatchStatusDiscrepancy,
   SkipTimes,
-  CacheSessionMeta,
-  ActivitySnapshot,
-  RecommendationsChanged,
+  SourcePreference,
   StreamCacheEntry,
   StreamCandidate,
   StreamResolveResult,
   SubtitleResult,
   SubtitleSelection,
   SubtitlesApplyResult,
+  TitleCollectionResult,
   TorBoxConnectResult,
   TrackingListResult,
-  UpdateCheckResult,
+  TraktPollResult,
+  TraktStartResult,
+  TraktStatusResult,
   UpdateChannel,
-  UpdateStatusPayload
+  UpdateCheckResult,
+  UpdateStatusPayload,
+  ViewingStats,
+  WatchProvidersResult,
+  WatchStatusDiscrepancy
 } from '../shared/media-hub/types'
 import type { OllamaTitleRef } from '../shared/media-hub/ollama'
 import type {
@@ -291,16 +297,39 @@ const api = {
       }> => ipcRenderer.invoke(MEDIA_HUB_CHANNELS.lanCacheDiscover),
       pair: (payload: {
         url: string
-        code: string
         shareTorboxToken?: boolean
-      }): Promise<{ ok: boolean; message: string }> =>
+      }): Promise<{ ok: boolean; message: string; pending?: boolean }> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.lanCachePair, payload),
       unpair: (): Promise<{ ok: true }> => ipcRenderer.invoke(MEDIA_HUB_CHANNELS.lanCacheUnpair),
       status: (): Promise<{
         connected: boolean
         status?: LanCacheStatusResponse
         error?: string
-      }> => ipcRenderer.invoke(MEDIA_HUB_CHANNELS.lanCacheStatus)
+      }> => ipcRenderer.invoke(MEDIA_HUB_CHANNELS.lanCacheStatus),
+      /** Poll while a request waits for approval. Flips itself to
+       *  'approved' — and grants the player access — the moment the server
+       *  says yes, so the UI only has to ask. */
+      pairStatus: (): Promise<{
+        state: 'none' | 'pending' | 'approved'
+        name?: string
+        error?: string
+      }> => ipcRenderer.invoke(MEDIA_HUB_CHANNELS.lanCachePairStatus),
+      claim: (): Promise<{ ok: boolean; message: string }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.lanCacheClaim),
+      devices: (): Promise<
+        ({ ok: true } & LanCacheDevicesResponse) | { ok: false; message: string }
+      > => ipcRenderer.invoke(MEDIA_HUB_CHANNELS.lanCacheDevices),
+      deviceAction: (payload: {
+        id: string
+        action: 'approve' | 'deny' | 'revoke' | 'quota'
+        quotaBytes?: number | null
+      }): Promise<{ ok: boolean; message?: string }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.lanCacheDeviceAction, payload),
+      adminSettings: (payload: {
+        openJoin?: boolean
+        defaultQuotaPercent?: number
+      }): Promise<{ ok: boolean; message?: string }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.lanCacheAdminSettings, payload)
     },
 
     torbox: {
@@ -387,6 +416,9 @@ const api = {
 
     update: {
       check: (): Promise<UpdateCheckResult> => ipcRenderer.invoke(MEDIA_HUB_CHANNELS.updateCheck),
+      /** What the running build changed. Read once when the card mounts —
+       *  it cannot change while the app is running. */
+      notes: (): Promise<ReleaseNotesResult> => ipcRenderer.invoke(MEDIA_HUB_CHANNELS.updateNotes),
       install: (): Promise<{ ok: boolean }> => ipcRenderer.invoke(MEDIA_HUB_CHANNELS.updateInstall),
       setChannel: (channel: UpdateChannel): Promise<{ ok: true; channel: UpdateChannel }> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.updateSetChannel, channel),
@@ -397,6 +429,13 @@ const api = {
     catalog: {
       list: (kind: MediaKind, force: boolean = false): Promise<CatalogListing> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.catalogList, { kind, force }),
+      /** One filtered, sorted, paged slice of the library. Unlike `list`,
+       *  this never triggers a crawl — it reports what the index already
+       *  holds, so it is safe on a keystroke-driven path. */
+      query: (query: CatalogQuery): Promise<CatalogQueryResult> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.catalogQuery, query),
+      facets: (kind: MediaKind): Promise<CatalogFacets> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.catalogFacets, { kind }),
       meta: (type: MediaKind, id: string): Promise<CatalogItem> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.catalogMeta, { type, id }),
       search: (kind: MediaKind, query: string): Promise<CatalogItem[]> =>
@@ -626,12 +665,6 @@ const api = {
        *  status, open the party panel). */
       onUiEvent: (onEvent: (event: PlayerUiEvent) => void): (() => void) =>
         subscribe<PlayerUiEvent>(MEDIA_HUB_CHANNELS.playerUiEvent, onEvent)
-    },
-
-    library: {
-      list: (): Promise<LibraryItem[]> => ipcRenderer.invoke(MEDIA_HUB_CHANNELS.libraryList),
-      play: (item: Record<string, unknown>): Promise<PlaybackResult> =>
-        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.libraryPlay, item)
     },
 
     simkl: {

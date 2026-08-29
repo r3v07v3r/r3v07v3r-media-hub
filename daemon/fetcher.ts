@@ -124,7 +124,15 @@ export function createFetcher({
         resolution: job.resolution,
         sourceRef: { source: 'torbox', infoHash: job.infoHash },
         fetchedAt: Date.now(),
-        lastAccessAt: Date.now()
+        lastAccessAt: Date.now(),
+        // Ownership was already tracked for SPENDING — the token used just
+        // above is this device's — and simply never recorded on the item,
+        // which is why it could not be used for reading. Recording it here
+        // is what makes the item privately readable by the person who paid
+        // for it.
+        ownerDeviceId: job.ownerDeviceId,
+        visibility: 'private',
+        entitled: job.ownerDeviceId ? [job.ownerDeviceId] : []
       })
       const filePath = path.join(dir, resolved.fileName)
 
