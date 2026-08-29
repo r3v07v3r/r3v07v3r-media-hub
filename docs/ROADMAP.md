@@ -311,10 +311,14 @@ this, and is small.
 seeing: `GET /api/catalog` with no `keys` filter hands **every cached item, with titles, to any
 paired device**, and `/stream/{infoHash}` authorises on "is this token paired" rather than on who
 owns the item. So anybody in the house can enumerate what everyone else has watched. Private-by-
-default items, sharing with everyone or with named people, and an administrator claimed by the
-first device to pair are designed in [CACHE-PERMISSIONS.md](CACHE-PERMISSIONS.md) — including the
-dedupe tension that makes it interesting (a cache exists to hold one copy; privacy wants two) and
-the limits worth stating out loud rather than implying.
+default items, sharing with everyone or with named people, per-person storage quotas, and a Super
+Admin claimed with a button are designed in [CACHE-PERMISSIONS.md](CACHE-PERMISSIONS.md) — which
+also drops the pairing code entirely, replacing it with in-app approval.
+
+**The build order there is not negotiable: entitlement first, then remove the code.** Today
+"paired" means "may stream everything", so dropping the code before entitlement is enforced would
+let anyone on the LAN watch the whole cache. Afterwards, pairing buys almost nothing on its own,
+which is exactly what makes open pairing reasonable.
 
 **Rooms are the existing precedent, not a new problem.** A party already has a host who owns the
 queue and the member-control toggles (`SessionHub.tsx`), and Friends groups are deliberately
