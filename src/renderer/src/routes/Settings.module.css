@@ -1056,13 +1056,43 @@
 /* Ends only. Labelling every stop would reintroduce the width problem the
    pills had, and the current value is already named above the track — these
    two exist to say which way is "more". */
+/* One label per stop, spread so each sits over its own notch rather than
+   over the gap beside it: equal-width cells, text centred, and the two ends
+   pulled back to the track's edges so the first and last line up with the
+   thumb's own travel. */
 .sliderScale {
-  display: flex;
-  justify-content: space-between;
-  gap: 8px;
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+  gap: 2px;
   margin-top: 2px;
   font-size: 10px;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--text-muted);
+}
+
+.sliderStop,
+.sliderStopActive {
+  text-align: center;
+  /* Long labels (UNLIMITED, MEDIA SERVER) must not widen their cell and
+     push every other label off its notch. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sliderScale > :first-child {
+  text-align: left;
+}
+
+.sliderScale > :last-child {
+  text-align: right;
+}
+
+/* The selected stop. Marked by weight and colour together — colour alone
+   at 10px uppercase is not a difference everyone can see. */
+.sliderStopActive {
+  color: var(--accent-cyan);
+  font-weight: 700;
 }
