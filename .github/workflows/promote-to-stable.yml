@@ -92,6 +92,25 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # Before the build, for the same reason preview.yml does it there: the
+      # note is packaged into the app, not fetched at runtime. The range walks
+      # back to the previous STABLE tag, so a promotion describes everything
+      # since the last Stable release rather than since the last Preview.
+      - name: Generate release notes
+        id: notes
+        shell: bash
+        run: |
+          node scripts/release-notes.mjs > /dev/null
+          {
+            echo 'body<<RELEASE_NOTES_EOF'
+            if [ -s resources/release-notes.txt ]; then
+              cat resources/release-notes.txt
+            else
+              echo 'Promoted from Preview.'
+            fi
+            echo 'RELEASE_NOTES_EOF'
+          } >> "$GITHUB_OUTPUT"
+
       - name: Build
         run: npm run build
 
@@ -107,7 +126,7 @@ jobs:
             --repo "${{ github.repository }}" \
             --target stable \
             --title "${{ steps.version.outputs.version }}" \
-            --notes "Promoted from Preview." \
+            --notes "${{ steps.notes.outputs.body }}" \
             --draft
 
       - name: Build installer and upload assets to the draft

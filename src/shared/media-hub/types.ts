@@ -1316,6 +1316,18 @@ export interface UpdateStatusPayload {
   version?: string
   percent?: number
   message?: string
+  /** What the OFFERED version changes, from the release body electron-updater
+   *  already carries — so an update can be read about before it is installed.
+   *  Absent on states that describe no particular version. */
+  releaseNotes?: string
+}
+
+/** What the About card shows under the version. */
+export interface ReleaseNotesResult {
+  /** The running build's own note, or '' when it shipped without one (any
+   *  build made outside the release workflow). */
+  current: string
+  version: string
 }
 
 export interface UpdateCheckResult {

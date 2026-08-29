@@ -20,6 +20,7 @@ import type {
   DislikedListResult,
   EpisodePlaybackPosition,
   HomePersonalizedResult,
+  ReleaseNotesResult,
   MalReconcileApplyResult,
   MalReconcilePreview,
   MalStartPayload,
@@ -386,6 +387,9 @@ const api = {
 
     update: {
       check: (): Promise<UpdateCheckResult> => ipcRenderer.invoke(MEDIA_HUB_CHANNELS.updateCheck),
+      /** What the running build changed. Read once when the card mounts —
+       *  it cannot change while the app is running. */
+      notes: (): Promise<ReleaseNotesResult> => ipcRenderer.invoke(MEDIA_HUB_CHANNELS.updateNotes),
       install: (): Promise<{ ok: boolean }> => ipcRenderer.invoke(MEDIA_HUB_CHANNELS.updateInstall),
       setChannel: (channel: UpdateChannel): Promise<{ ok: true; channel: UpdateChannel }> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.updateSetChannel, channel),
