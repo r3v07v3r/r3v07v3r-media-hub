@@ -1,8 +1,28 @@
+/* How far the field extends above the face, behind the top bar. A little
+   more than the bar's own height, so a column has already fallen a short way
+   before it clears the chrome — but not so much that most of the canvas is
+   being drawn above the window and thrown away. */
+:root {
+  --rain-overhang: 120px;
+}
+
 .rain {
   position: absolute;
-  inset: 0;
+  /* Starts well ABOVE this face and runs past its bottom edge.
+
+     The point is where a column is when you first see it. Sized to the
+     panel, every stream began exactly at the top of the panel, so the whole
+     field appeared to switch on along one line. Started above the bar, a
+     column is already falling by the time it clears the bar's lower edge —
+     so the rain reads as coming out from behind the chrome, which is what it
+     is meant to look like.
+
+     The bar covers the overhang: it is z-index 30 over this face and paints
+     an opaque surface of its own while the control centre is open. */
+  top: calc(-1 * var(--rain-overhang));
+  left: 0;
   width: 100%;
-  height: 100%;
+  height: calc(100% + var(--rain-overhang));
   /* Behind every control on the face. The panel's own background sits at the
      bottom of the stack, this sits on top of it, and all the content sits on
      top of this. */
@@ -15,12 +35,22 @@
      designed, not something this is allowed to erode. */
   opacity: 0.5;
   /* Fades out toward the bottom so the rain reads as depth behind the
-     content rather than as a texture laid over the whole panel. */
-  mask-image: linear-gradient(180deg, rgba(0, 0, 0, 1) 0%, rgba(0, 0, 0, 0.15) 78%, transparent 100%);
+     content rather than as a texture laid over the whole panel. Stops are
+     kept off the very top: that end is behind the bar, and fading it there
+     would thin the columns out exactly where they are supposed to emerge
+     at full strength. */
+  mask-image: linear-gradient(
+    180deg,
+    rgba(0, 0, 0, 1) 0%,
+    rgba(0, 0, 0, 1) 30%,
+    rgba(0, 0, 0, 0.16) 82%,
+    transparent 100%
+  );
   -webkit-mask-image: linear-gradient(
     180deg,
     rgba(0, 0, 0, 1) 0%,
-    rgba(0, 0, 0, 0.15) 78%,
+    rgba(0, 0, 0, 1) 30%,
+    rgba(0, 0, 0, 0.16) 82%,
     transparent 100%
   );
 }
