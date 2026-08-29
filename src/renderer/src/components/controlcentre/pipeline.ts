@@ -1,0 +1,219 @@
+// What the pipeline is made of.
+//
+// The stages a title passes through, and the things that can occupy each
+// one. Kept apart from the component so the diagram, the tab strip and the
+// config panel all read the same list — three views of one pipeline that
+// disagreed about what is in it would be worse than no diagram.
+//
+// EVERY NODE HERE IS REAL. There is no entry for Jellyseerr, Bazarr,
+// SABnzbd, NZBGet, Unpackerr or a transcoder, because this app integrates
+// with none of them: a node you can click that cannot do anything is worse
+// than an empty slot, and subtitles are fetched by the app itself, so there
+// is nothing for Bazarr to do here even if somebody ran one.
+
+import type { ServiceId } from '@shared/ipc-types'
+
+/** Where a node's settings actually live, which decides what the panel
+ *  below the diagram can offer for it. */
+export type NodeConfig =
+  /** One of the five servers in ServiceSettings: address, key, on/off, and
+   *  a connection test — all editable right here. */
+  | { kind: 'service'; service: ServiceId }
+  /** An account linked elsewhere in the app (TorBox, the subtitle
+   *  providers). Shown with its live state and a pointer to where it is
+   *  linked, rather than a second copy of a credential form. */
+  | { kind: 'account'; where: string }
+  /** The app itself, or something it ships with. Nothing to configure. */
+  | { kind: 'builtin' }
+
+export interface PipelineNode {
+  id: string
+  label: string
+  /** One line on what this specific thing does at this stage. */
+  detail: string
+  icon: string
+  config: NodeConfig
+}
+
+export interface PipelineStage {
+  id: string
+  label: string
+  icon: string
+  /** What this step is for, in the person's terms. */
+  blurb: string
+  nodes: PipelineNode[]
+  /** Shown when nothing in the stage is active. Says what WOULD go here, so
+   *  an empty stage is an instruction rather than a gap. */
+  empty: string
+}
+
+export const PIPELINE: PipelineStage[] = [
+  {
+    id: 'request',
+    label: 'Request',
+    icon: 'search',
+    blurb: 'You ask for something',
+    empty: '',
+    nodes: [
+      {
+        id: 'r3-browse',
+        label: 'R3',
+        detail: 'Search and browse',
+        icon: 'home',
+        config: { kind: 'builtin' }
+      }
+    ]
+  },
+  {
+    id: 'index',
+    label: 'Discovery',
+    icon: 'planet',
+    blurb: 'Something finds releases',
+    empty: '',
+    nodes: [
+      {
+        id: 'prowlarr',
+        label: 'Prowlarr',
+        detail: 'Indexer manager',
+        icon: 'net',
+        config: { kind: 'service', service: 'prowlarr' }
+      },
+      {
+        id: 'r3-scrapers',
+        label: 'R3 scrapers',
+        detail: 'Built in',
+        icon: 'stack',
+        config: { kind: 'builtin' }
+      }
+    ]
+  },
+  {
+    id: 'manage',
+    label: 'Management',
+    icon: 'calendar',
+    blurb: 'Something decides what to keep',
+    empty: 'Sonarr or Radarr would track series and films and ask for them itself.',
+    nodes: [
+      {
+        id: 'sonarr',
+        label: 'Sonarr',
+        detail: 'Series',
+        icon: 'tv',
+        config: { kind: 'service', service: 'sonarr' }
+      },
+      {
+        id: 'radarr',
+        label: 'Radarr',
+        detail: 'Films',
+        icon: 'movies',
+        config: { kind: 'service', service: 'radarr' }
+      }
+    ]
+  },
+  {
+    id: 'download',
+    label: 'Download',
+    icon: 'downloads',
+    blurb: 'Something fetches it',
+    empty: 'Nothing can download. Link TorBox or connect qBittorrent.',
+    nodes: [
+      {
+        id: 'torbox',
+        label: 'TorBox',
+        detail: 'Debrid',
+        icon: 'lightning',
+        config: { kind: 'account', where: 'Settings → Accounts' }
+      },
+      {
+        id: 'qbittorrent',
+        label: 'qBittorrent',
+        detail: 'Torrent client',
+        icon: 'downloads',
+        config: { kind: 'service', service: 'qbittorrent' }
+      }
+    ]
+  },
+  {
+    id: 'process',
+    label: 'Process',
+    icon: 'waveform',
+    blurb: 'Subtitles are found',
+    empty: 'No subtitle service is linked, so only subtitles inside the file are used.',
+    nodes: [
+      {
+        id: 'opensubtitles',
+        label: 'OpenSubtitles',
+        detail: 'Subtitles',
+        icon: 'name',
+        config: { kind: 'account', where: 'Settings → Accounts' }
+      },
+      {
+        id: 'subdl',
+        label: 'SubDL',
+        detail: 'Subtitles',
+        icon: 'name',
+        config: { kind: 'account', where: 'Settings → Accounts' }
+      }
+    ]
+  },
+  {
+    id: 'storage',
+    label: 'Storage',
+    icon: 'stack',
+    blurb: 'It is kept on the way past',
+    empty: '',
+    nodes: [
+      {
+        id: 'playback-cache',
+        label: 'Playback cache',
+        detail: 'Rolling, local',
+        icon: 'cpu',
+        config: { kind: 'builtin' }
+      },
+      {
+        id: 'lan-cache',
+        label: 'Cache server',
+        detail: 'On your network',
+        icon: 'wifi',
+        config: { kind: 'account', where: 'the Caching section' }
+      },
+      {
+        id: 'jellyfin-library',
+        label: 'Jellyfin',
+        detail: 'Library',
+        icon: 'grid',
+        config: { kind: 'service', service: 'jellyfin' }
+      }
+    ]
+  },
+  {
+    id: 'play',
+    label: 'Stream / play',
+    icon: 'play-outline',
+    blurb: 'It plays',
+    empty: 'No player was found, so playback cannot start.',
+    nodes: [
+      {
+        id: 'mpv',
+        label: 'mpv',
+        detail: 'Bundled player',
+        icon: 'play',
+        config: { kind: 'builtin' }
+      },
+      {
+        id: 'jellyfin-play',
+        label: 'Jellyfin',
+        detail: 'Media server',
+        icon: 'tv',
+        config: { kind: 'service', service: 'jellyfin' }
+      }
+    ]
+  }
+]
+
+/** Flat lookup, so a tab strip or a deep link does not have to walk the
+ *  stages to resolve an id. */
+export const PIPELINE_NODES: Record<string, { node: PipelineNode; stage: PipelineStage }> =
+  Object.fromEntries(
+    PIPELINE.flatMap((stage) => stage.nodes.map((node) => [node.id, { node, stage }]))
+  )

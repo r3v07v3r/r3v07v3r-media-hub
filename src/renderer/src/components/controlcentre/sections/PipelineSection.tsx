@@ -1,186 +1,383 @@
 'use client'
 
-// The pipeline — how a play actually flows through this install.
+// The pipeline — how a play actually flows through this install, as a thing
+// you can point at and change.
 //
-// Drawn from what is CONFIGURED, not from a fixed picture of an ideal
-// setup. A stage nobody has filled shows as an empty slot with a plain
-// sentence about what would go there; it does not show a greyed-out brand,
-// because that implies a capability sitting behind a switch when what is
-// actually missing is a server nobody has set up.
+// Read left to right, this is the order a title takes: you ask for
+// something, something finds it, something decides to keep it, something
+// fetches it, subtitles are found, it is stored on the way past, it plays.
 //
-// Read top to bottom, this is the order a title takes: you ask for
-// something, something finds it, something fetches it, something stores it,
-// something plays it.
+// DRAWN FROM WHAT IS CONFIGURED, not from a picture of an ideal setup. A
+// node that nothing backs is dimmed and says so; a stage with nothing in it
+// says what would go there. What it never does is draw a brand this app has
+// no integration with — see pipeline.ts for the list and why.
 //
-// Two stages are the app itself, and they are drawn like every other stage
-// rather than being left out. "Where does the search happen" is a question
-// somebody looking at this diagram will have, and the honest answer is
-// "here", not silence.
+// Clicking a node selects it and brings up its settings underneath.
+// Selecting is separate from switching a service ON, deliberately: those
+// are one click apart rather than the same click, so pointing at your
+// download client to look at it cannot turn it off.
 
-import { useEffect, useState } from 'react'
-import { DEFAULT_SERVICE_SETTINGS, type ServiceSettings } from '@shared/ipc-types'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { DEFAULT_SERVICE_SETTINGS, type ServiceConfig, type ServiceSettings } from '@shared/ipc-types'
+import { Icon } from '@renderer/components/icons/Icon'
 import { useAppState } from '@renderer/context/AppStateContext'
+import { testConnection as testJellyfin } from '@renderer/lib/api/jellyfin'
+import { sonarrClient, radarrClient } from '@renderer/lib/api/servarr'
+import { testConnection as testQbittorrent } from '@renderer/lib/api/qbittorrent'
+import { testConnection as testProwlarr } from '@renderer/lib/api/prowlarr'
+import type { ConnectionTestResult } from '@renderer/lib/api/types'
+import { PIPELINE, PIPELINE_NODES, type PipelineNode } from '../pipeline'
 import styles from './CachingSection.module.css'
 import own from './PipelineSection.module.css'
 
-interface Stage {
-  key: string
-  /** What this step does, in the person's terms — not the vendor's. */
-  label: string
-  /** The things doing it. Empty means nothing is configured for it. */
-  parts: string[]
-  /** Shown in place of the parts when there are none. Says what WOULD go
-   *  here, so an empty slot is an instruction rather than a gap. */
-  empty: string
-}
+const TESTERS = {
+  jellyfin: testJellyfin,
+  sonarr: sonarrClient.testConnection,
+  radarr: radarrClient.testConnection,
+  qbittorrent: testQbittorrent,
+  prowlarr: testProwlarr
+} as const
+
+const SECRET_LABEL = {
+  jellyfin: 'API key',
+  sonarr: 'API key',
+  radarr: 'API key',
+  qbittorrent: 'Username:password',
+  prowlarr: 'API key'
+} as const
 
 export function PipelineSection() {
   const { mediaHubSettings } = useAppState()
   const [services, setServices] = useState<ServiceSettings | null>(null)
-  const [lanCacheName, setLanCacheName] = useState<string | null>(null)
+  const [lanCache, setLanCache] = useState(false)
+  const [selected, setSelected] = useState<string>('r3-browse')
+  const [dirty, setDirty] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [test, setTest] = useState<{ id: string; result: ConnectionTestResult } | null>(null)
 
   useEffect(() => {
     void Promise.resolve().then(async () => {
       setServices(
         window.api?.settings ? await window.api.settings.get() : DEFAULT_SERVICE_SETTINGS
       )
-      const lanCache = window.api?.mediaHub?.lanCache
-      if (!lanCache) return
-      const pair = await lanCache.pairStatus()
-      // Only an APPROVED cache server is part of the pipeline. A pending
-      // one holds a token that authorises nothing, so drawing it here
+      const api = window.api?.mediaHub?.lanCache
+      if (!api) return
+      // Only an APPROVED cache server is part of the pipeline. A pending one
+      // holds a token that authorises nothing, so drawing it as present
       // would show a step that cannot run.
-      setLanCacheName(pair.state === 'approved' ? (pair.name ?? 'cache server') : null)
+      setLanCache((await api.pairStatus()).state === 'approved')
     })
   }, [])
+
+  /** Whether a node is actually doing its job right now. The one place that
+   *  question is answered, so the diagram, the dimming and the config panel
+   *  cannot disagree about it. */
+  const isLive = useCallback(
+    (node: PipelineNode): boolean => {
+      if (node.config.kind === 'service') {
+        const config = services?.[node.config.service]
+        return Boolean(config?.enabled && config.baseUrl.trim())
+      }
+      if (node.config.kind === 'builtin') {
+        return node.id === 'mpv' ? Boolean(mediaHubSettings?.playerAvailable) : true
+      }
+      if (node.id === 'torbox') return Boolean(mediaHubSettings?.torboxConnected)
+      if (node.id === 'opensubtitles') return Boolean(mediaHubSettings?.osConnected)
+      if (node.id === 'subdl') return Boolean(mediaHubSettings?.subdlConnected)
+      if (node.id === 'lan-cache') return lanCache
+      return false
+    },
+    [services, mediaHubSettings, lanCache]
+  )
+
+  const patch = (next: ServiceConfig): void => {
+    const entry = PIPELINE_NODES[selected]
+    if (!services || entry?.node.config.kind !== 'service') return
+    setServices({ ...services, [entry.node.config.service]: next })
+    setDirty(true)
+  }
+
+  const save = async (): Promise<void> => {
+    if (!services || !window.api?.settings) return
+    setBusy(true)
+    setServices(await window.api.settings.set(services))
+    setDirty(false)
+    setBusy(false)
+  }
+
+  const runTest = async (): Promise<void> => {
+    const entry = PIPELINE_NODES[selected]
+    if (!services || entry?.node.config.kind !== 'service') return
+    const id = entry.node.config.service
+    setBusy(true)
+    setTest({ id: selected, result: await TESTERS[id](services[id]) })
+    setBusy(false)
+  }
+
+  const selectedEntry = PIPELINE_NODES[selected]
+  const stageOf = selectedEntry?.stage
+  /** The tabs are the OTHER nodes in the same stage, because that is the
+   *  choice being made — which tool fills this step — rather than a flat
+   *  list of everything in the pipeline. */
+  const tabs = useMemo(() => stageOf?.nodes ?? [], [stageOf])
 
   const header = (
     <header className={styles.head}>
       <h2 className={styles.title}>Pipeline</h2>
       <p className={styles.blurb}>
-        How a title gets from you asking for it to it playing, through the services this install
-        actually has. Empty steps are ones nothing is set up for.
+        How a title gets from you asking for it to it playing. Click any step to choose what fills
+        it and set it up.
       </p>
     </header>
   )
 
-  // Only the service list is waited for, and it resolves immediately even
-  // with no bridge. A MISSING snapshot is not a loading state — it reads as
-  // 'nothing is linked', which draws the diagram with its steps empty and
-  // their instructions showing. That is the honest picture of a fresh
-  // install, and it is what somebody who opened this to find out what to set
-  // up needs to see.
   if (!services) return <div className={styles.wrap}>{header}</div>
-  const hub = mediaHubSettings
-
-  const on = (id: keyof ServiceSettings): boolean =>
-    services[id].enabled && Boolean(services[id].baseUrl.trim())
-
-  const stages: Stage[] = [
-    {
-      key: 'request',
-      label: 'You ask for something',
-      parts: ['R3 search and browse'],
-      empty: ''
-    },
-    {
-      key: 'index',
-      label: 'Something finds releases',
-      parts: [...(on('prowlarr') ? ['Prowlarr'] : []), 'R3 built-in scrapers'],
-      empty: ''
-    },
-    {
-      key: 'manage',
-      label: 'Something decides what to keep',
-      parts: [...(on('sonarr') ? ['Sonarr'] : []), ...(on('radarr') ? ['Radarr'] : [])],
-      empty: 'Sonarr or Radarr would go here, tracking series and films and asking for them itself.'
-    },
-    {
-      key: 'fetch',
-      label: 'Something fetches it',
-      parts: [
-        ...(hub?.torboxConnected ? ['TorBox'] : []),
-        ...(on('qbittorrent') ? ['qBittorrent'] : [])
-      ],
-      empty: 'Nothing can download. Link TorBox or connect qBittorrent.'
-    },
-    {
-      key: 'subtitles',
-      label: 'Subtitles are found',
-      parts: [
-        ...(hub?.osConnected ? ['OpenSubtitles'] : []),
-        ...(hub?.subdlConnected ? ['SubDL'] : [])
-      ],
-      // Deliberately no Bazarr: this app fetches subtitles itself, so there
-      // is nothing for Bazarr to do in this pipeline even if it were set up.
-      empty: 'No subtitle service is linked, so only subtitles inside the file itself are used.'
-    },
-    {
-      key: 'store',
-      label: 'It is stored on the way past',
-      parts: [
-        hub?.cacheMode === 'memory'
-          ? 'Playback cache (memory only)'
-          : 'Playback cache (disk)',
-        ...(lanCacheName ? [`${lanCacheName} (network cache)`] : []),
-        ...(on('jellyfin') ? ['Jellyfin library'] : [])
-      ],
-      empty: ''
-    },
-    {
-      key: 'play',
-      label: 'It plays',
-      parts: [
-        ...(hub?.playerAvailable ? ['mpv'] : []),
-        ...(on('jellyfin') ? ['Jellyfin'] : [])
-      ],
-      empty: 'No player was found. Playback will not start until one is available.'
-    }
-  ]
 
   return (
-    <div className={styles.wrap}>
+    <div className={`${styles.wrap} ${own.wide}`}>
       {header}
 
-      <ol className={own.flow}>
-        {stages.map((stage, index) => (
-          <li key={stage.key} className={own.stage}>
-            <span className={own.marker} aria-hidden="true">
-              <span className={`${own.dot} ${stage.parts.length ? own.dotFilled : ''}`} />
-              {/* The connector is drawn on every stage but the last, so the
-                  column reads as one path rather than as a list. */}
-              {index < stages.length - 1 && <span className={own.line} />}
-            </span>
-            <div className={own.body}>
-              <span className={own.stageLabel}>{stage.label}</span>
-              {stage.parts.length > 0 ? (
-                <span className={own.parts}>
-                  {stage.parts.map((part) => (
-                    <span key={part} className={own.part}>
-                      {part}
-                    </span>
-                  ))}
-                </span>
-              ) : (
-                <span className={own.emptySlot}>{stage.empty}</span>
-              )}
-            </div>
-          </li>
-        ))}
-      </ol>
+      <div className={own.legend}>
+        <span className={own.legendItem}>
+          <span className={`${own.dot} ${own.dotLive}`} /> Active
+        </span>
+        <span className={own.legendItem}>
+          <span className={own.dot} /> Available, not set up
+        </span>
+      </div>
 
-      <section className={`${styles.card} glass-panel`}>
-        <h3 className={styles.cardTitle}>Which copy wins</h3>
+      {/* Scrolls sideways rather than wrapping. Seven stages wrapped onto two
+          rows stop reading as a left-to-right path, which is the only thing
+          this diagram is for. */}
+      <div className={own.flowScroll}>
+        <ol className={own.flow}>
+          {PIPELINE.map((stage, index) => {
+            const liveCount = stage.nodes.filter(isLive).length
+            return (
+              <li key={stage.id} className={own.stage}>
+                <div className={own.stageHead}>
+                  <span className={own.stageIcon} aria-hidden="true">
+                    <Icon name={stage.icon} size={14} />
+                  </span>
+                  <span className={own.stageLabel}>{stage.label}</span>
+                </div>
+                <p className={own.stageBlurb}>{stage.blurb}</p>
+
+                <div className={own.nodes}>
+                  {stage.nodes.map((node) => {
+                    const live = isLive(node)
+                    return (
+                      <button
+                        key={node.id}
+                        type="button"
+                        aria-pressed={node.id === selected}
+                        className={`${own.node} ${live ? own.nodeLive : ''} ${
+                          node.id === selected ? own.nodeSelected : ''
+                        }`}
+                        onClick={() => {
+                          setSelected(node.id)
+                          setTest(null)
+                        }}
+                      >
+                        <span className={own.nodeIcon} aria-hidden="true">
+                          <Icon name={node.icon} size={16} />
+                        </span>
+                        <span className={own.nodeText}>
+                          <span className={own.nodeLabel}>{node.label}</span>
+                          <span className={own.nodeDetail}>{node.detail}</span>
+                        </span>
+                        <span
+                          className={`${own.dot} ${live ? own.dotLive : ''}`}
+                          aria-hidden="true"
+                        />
+                      </button>
+                    )
+                  })}
+                </div>
+
+                {liveCount === 0 && stage.empty && (
+                  <p className={own.stageEmpty}>{stage.empty}</p>
+                )}
+
+                {/* Between stages, not after the last one, so the row reads
+                    as a path with an end rather than as one that trails off. */}
+                {index < PIPELINE.length - 1 && (
+                  <span className={own.connector} aria-hidden="true">
+                    <Icon name="chevron" size={16} />
+                  </span>
+                )}
+              </li>
+            )
+          })}
+        </ol>
+      </div>
+
+      {/* ---------- the selected step's settings ---------- */}
+      {selectedEntry && (
+        <section className={`${styles.card} glass-panel`}>
+          <div className={own.tabs} role="tablist" aria-label={`${stageOf?.label} options`}>
+            {tabs.map((node) => (
+              <button
+                key={node.id}
+                type="button"
+                role="tab"
+                aria-selected={node.id === selected}
+                className={`${own.tab} ${node.id === selected ? own.tabActive : ''}`}
+                onClick={() => {
+                  setSelected(node.id)
+                  setTest(null)
+                }}
+              >
+                {node.label}
+              </button>
+            ))}
+          </div>
+
+          <ConfigPanel
+            node={selectedEntry.node}
+            stageLabel={stageOf?.label ?? ''}
+            services={services}
+            live={isLive(selectedEntry.node)}
+            dirty={dirty}
+            busy={busy}
+            test={test?.id === selected ? test.result : null}
+            onPatch={patch}
+            onSave={save}
+            onTest={runTest}
+          />
+        </section>
+      )}
+    </div>
+  )
+}
+
+function ConfigPanel({
+  node,
+  stageLabel,
+  services,
+  live,
+  dirty,
+  busy,
+  test,
+  onPatch,
+  onSave,
+  onTest
+}: {
+  node: PipelineNode
+  stageLabel: string
+  services: ServiceSettings
+  live: boolean
+  dirty: boolean
+  busy: boolean
+  test: ConnectionTestResult | null
+  onPatch: (next: ServiceConfig) => void
+  onSave: () => Promise<void>
+  onTest: () => Promise<void>
+}) {
+  if (node.config.kind === 'builtin') {
+    return (
+      <p className={styles.note}>
+        {node.label} is part of R3 itself and fills this step with nothing to set up.
+        {node.id === 'mpv' && !live
+          ? ' The bundled player was not found, so playback cannot start.'
+          : ''}
+      </p>
+    )
+  }
+
+  if (node.config.kind === 'account') {
+    return (
+      <div className={own.panelBody}>
         <p className={styles.note}>
-          {/* The one genuine preference in the pipeline, stated in the
-              same words the Settings slider uses so the two agree. */}
-          {hub?.sourcePreference === 'prefer-local'
-            ? 'A copy on your own network is preferred, even at lower quality.'
-            : hub?.sourcePreference === 'prefer-quality'
-              ? 'The best release wins, even when a local copy exists.'
-              : 'Local copies and quality are weighed against each other.'}
+          {live
+            ? `${node.label} is linked and filling this step.`
+            : `${node.label} is not linked, so it is not part of the pipeline yet.`}
         </p>
-      </section>
+        {/* A second copy of a credential form is a second place for it to be
+            wrong. This says where the real one is instead. */}
+        <p className={styles.note}>Linked in {node.config.where}.</p>
+      </div>
+    )
+  }
+
+  const id = node.config.service
+  const config = services[id]
+
+  return (
+    <div className={own.panelBody}>
+      <div className={own.enableRow}>
+        <span className={styles.toggleText}>
+          <span className={styles.toggleTitle}>Use {node.label} for {stageLabel.toLowerCase()}</span>
+          <span className={styles.note}>
+            {config.baseUrl.trim()
+              ? config.enabled
+                ? 'On — this step runs through it.'
+                : 'Off — the step falls to whatever else is in it.'
+              : 'Needs an address before it can be switched on.'}
+          </span>
+        </span>
+        <button
+          type="button"
+          role="switch"
+          aria-checked={config.enabled}
+          aria-label={`Use ${node.label}`}
+          className={`${styles.switch} ${config.enabled ? styles.switchOn : ''}`}
+          onClick={() => onPatch({ ...config, enabled: !config.enabled })}
+        >
+          <span className={styles.switchThumb} />
+        </button>
+      </div>
+
+      <label className={styles.field}>
+        <span className={styles.fieldLabel}>Address</span>
+        <input
+          className={styles.fieldInput}
+          type="text"
+          spellCheck={false}
+          placeholder="http://192.168.1.20:8989"
+          value={config.baseUrl}
+          onChange={(event) => onPatch({ ...config, baseUrl: event.target.value })}
+        />
+      </label>
+
+      <label className={styles.field}>
+        <span className={styles.fieldLabel}>{SECRET_LABEL[id]}</span>
+        <input
+          className={styles.fieldInput}
+          // Not `type="password"`: this is a self-hosted service key on the
+          // person's own machine, and hiding it only stops them checking it
+          // against the one their server shows.
+          type="text"
+          spellCheck={false}
+          value={config.apiKey}
+          onChange={(event) => onPatch({ ...config, apiKey: event.target.value })}
+        />
+      </label>
+
+      <div className={styles.actions}>
+        <button
+          type="button"
+          className={styles.ghostButton}
+          onClick={() => void onTest()}
+          disabled={busy || !config.baseUrl.trim()}
+        >
+          Test connection
+        </button>
+        <button
+          type="button"
+          className={styles.primaryButton}
+          onClick={() => void onSave()}
+          disabled={busy || !dirty}
+        >
+          {dirty ? 'Save' : 'Saved'}
+        </button>
+      </div>
+
+      {test && (
+        <p className={`${styles.message} ${test.ok ? styles.messageOk : styles.messageError}`}>
+          {test.message}
+        </p>
+      )}
     </div>
   )
 }
