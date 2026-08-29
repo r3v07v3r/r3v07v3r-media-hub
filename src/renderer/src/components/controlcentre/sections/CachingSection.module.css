@@ -316,6 +316,24 @@ html[data-motion-user-disabled='true'] .meterFill {
 /* The episode, beside the series title it shares with its neighbours. Set
    apart so the row scans as "show, then which one" rather than as one long
    string. */
+/* Why this entry is on the server, and for whom. Reads as a label rather
+   than as part of the title, which is why it is a chip and not more text. */
+.jobReason {
+  flex: none;
+  margin-left: 6px;
+  padding: 1px 8px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border-subtle);
+  background: rgba(39, 230, 154, 0.08);
+  font-size: 0.68rem;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  /* A long device name must not push the title out of the row. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 42%;
+}
+
 .jobEpisode {
   flex: none;
   margin-left: 8px;

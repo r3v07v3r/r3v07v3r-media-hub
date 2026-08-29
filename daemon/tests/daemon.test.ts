@@ -202,7 +202,7 @@ console.log('ok  eviction planner')
   assert.equal(
     plan.has('d'.repeat(40)),
     false,
-    "bob keeps the oldest file on the disk — it is not his overspend"
+    'bob keeps the oldest file on the disk — it is not his overspend'
   )
 }
 
@@ -298,7 +298,10 @@ console.log('ok  eviction planner')
   )
   assert.equal(
     planEvictions(
-      [orphan, item({ infoHash: 'b'.repeat(40), presentBytes: 900, fetchedAt: now, lastAccessAt: 2 * DAY })],
+      [
+        orphan,
+        item({ infoHash: 'b'.repeat(40), presentBytes: 900, fetchedAt: now, lastAccessAt: 2 * DAY })
+      ],
       { ...policy, quotas },
       now
     ).get('a'.repeat(40)),
@@ -571,6 +574,38 @@ async function main(): Promise<void> {
         body: JSON.stringify({ contentKey: '', infoHash: 'zz', title: '' })
       })
       assert.equal(bad.status, 400)
+
+      // The queue's reason survives the wire, and only the two real values
+      // do. It is rendered as a label on the caching page, so an arbitrary
+      // string reaching the record would be a caller writing UI text.
+      const queueWith = async (key: string, reason: unknown): Promise<string | undefined> => {
+        await fetch(`${base}/api/jobs`, {
+          method: 'POST',
+          headers: { ...auth, 'content-type': 'application/json' },
+          body: JSON.stringify({ contentKey: key, infoHash: 'e'.repeat(40), title: 'T', reason })
+        })
+        return jobs.list().find((job) => job.contentKey === key)?.reason
+      }
+      assert.equal(await queueWith('r-1', 'watching'), 'watching')
+      assert.equal(await queueWith('r-2', 'prefetch'), 'prefetch')
+      for (const rubbish of ['WATCHING', 'seeding', '', 1, true, null, {}]) {
+        assert.equal(
+          await queueWith(`r-junk-${JSON.stringify(rubbish)}`, rubbish),
+          undefined,
+          `an unknown reason is dropped, not stored: ${JSON.stringify(rubbish)}`
+        )
+      }
+
+      // A prefetch somebody has since started watching is upgraded, and the
+      // reverse is not: a watch is not demoted by a later watchlist add.
+      await queueWith('r-2', 'watching')
+      assert.equal(jobs.list().find((job) => job.contentKey === 'r-2')?.reason, 'watching')
+      await queueWith('r-2', 'prefetch')
+      assert.equal(
+        jobs.list().find((job) => job.contentKey === 'r-2')?.reason,
+        'watching',
+        'a queued watch stays a watch'
+      )
 
       // --- /stream: token gating and Range contract -----------------------
       assert.equal((await fetch(`${base}/stream/${hashC}`)).status, 403, 'no token, no bytes')
@@ -1181,11 +1216,7 @@ async function deviceRouteTests(): Promise<void> {
   const statusFor = async (token: string): Promise<number> =>
     (await fetch(`${base}/api/status`, { headers: { Authorization: `Bearer ${token}` } })).status
 
-  const act = async (
-    token: string,
-    id: string,
-    body: Record<string, unknown>
-  ): Promise<Response> =>
+  const act = async (token: string, id: string, body: Record<string, unknown>): Promise<Response> =>
     fetch(`${base}/api/admin/devices/${id}`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', Authorization: `Bearer ${token}` },
@@ -1219,7 +1250,8 @@ async function deviceRouteTests(): Promise<void> {
     assert.equal(asked.status, 200)
     assert.equal(((await asked.json()) as { status: string }).status, 'pending')
     assert.equal(
-      (await fetch(`${base}/api/pair/status`, { headers: { Authorization: 'Bearer nope' } })).status,
+      (await fetch(`${base}/api/pair/status`, { headers: { Authorization: 'Bearer nope' } }))
+        .status,
       401,
       'a token this server never issued is told nothing'
     )
@@ -1487,10 +1519,7 @@ async function quotaStoreTest(): Promise<void> {
   assert.equal(plan.size, 1, 'and nothing else is')
   assert.equal(await store.get('a'.repeat(40)), null, 'the file is really gone')
   assert.ok(await store.get('b'.repeat(40)), 'her newer one stays')
-  assert.ok(
-    await store.get('c'.repeat(40)),
-    "bob's older file stays — it is not his overspend"
-  )
+  assert.ok(await store.get('c'.repeat(40)), "bob's older file stays — it is not his overspend")
 
   const stones = await store.tombstones()
   assert.equal(
@@ -1553,8 +1582,18 @@ async function statusScopeTest(): Promise<void> {
   await seed('a'.repeat(40), 'k-a', ownerId, 'ABCDEFGH')
   await seed('b'.repeat(40), 'k-b', guestId, 'XY')
 
-  jobs.enqueue({ contentKey: 'k-mine', infoHash: 'c'.repeat(40), title: 'Owner Fetch', ownerDeviceId: ownerId })
-  jobs.enqueue({ contentKey: 'k-theirs', infoHash: 'd'.repeat(40), title: 'Guest Fetch', ownerDeviceId: guestId })
+  jobs.enqueue({
+    contentKey: 'k-mine',
+    infoHash: 'c'.repeat(40),
+    title: 'Owner Fetch',
+    ownerDeviceId: ownerId
+  })
+  jobs.enqueue({
+    contentKey: 'k-theirs',
+    infoHash: 'd'.repeat(40),
+    title: 'Guest Fetch',
+    ownerDeviceId: guestId
+  })
 
   const server = createDaemonServer({
     storage: store,
@@ -1599,17 +1638,36 @@ async function statusScopeTest(): Promise<void> {
     assert.equal(ownerStatus.itemCount, 2, 'the whole-server totals stay whole-server')
     assert.equal(ownerStatus.usedBytes, 10)
 
-    // Scoped queue: your own work in full, everyone else's as a number.
+    // Scoped queue, with ONE exception, and it is deliberate.
+    //
+    // The rule everywhere else in this feature is that admin is not a master
+    // key: the administrator decides who may join and how much room they
+    // get, and is not thereby entitled to their library. The queue is the
+    // one place that is relaxed, because somebody running the box has to be
+    // able to answer "why is this thing saturated" and "who is filling the
+    // disk", and a list of anonymous rows answers neither. It is the work
+    // the hardware is doing, attributed to the device that asked for it —
+    // not a record of what anyone has watched. Every other read stays shut:
+    // the catalogue, the streams and the items are all still owner-only.
     assert.deepEqual(
-      (ownerStatus.jobs as Array<{ title: string }>).map((job) => job.title),
-      ['Owner Fetch']
+      (ownerStatus.jobs as Array<{ title: string; ownerName?: string }>).map(
+        (job) => `${job.title}/${job.ownerName}`
+      ),
+      ['Owner Fetch/the owner', 'Guest Fetch/a guest'],
+      'the administrator sees the whole queue, each row attributed to a device'
     )
-    assert.equal(ownerStatus.othersJobCount, 1, 'and enough to explain why the server is busy')
     assert.equal(
-      JSON.stringify(ownerStatus).includes('Guest Fetch'),
-      false,
-      "the administrator is not shown another device's titles either"
+      ownerStatus.othersJobCount,
+      0,
+      'and nothing is withheld from them, so nothing is reported as withheld'
     )
+    // A member is unchanged: their own work in full, everyone else's as a
+    // number, and no titles.
+    assert.deepEqual(
+      (guestStatus.jobs as Array<{ title: string }>).map((job) => job.title),
+      ['Guest Fetch']
+    )
+    assert.equal(guestStatus.othersJobCount, 1, 'and enough to explain why the server is busy')
     assert.equal(
       JSON.stringify(guestStatus).includes('Owner Fetch'),
       false,
@@ -1712,11 +1770,7 @@ async function sharingRouteTest(): Promise<void> {
     const missing = await share(strangerToken, 'f'.repeat(40), { visibility: 'shared' })
     assert.equal(forbidden.status, missing.status)
     assert.equal(await forbidden.text(), await missing.text())
-    assert.equal(
-      (await store.get(hash))!.visibility,
-      'private',
-      'and the refusal actually refused'
-    )
+    assert.equal((await store.get(hash))!.visibility, 'private', 'and the refusal actually refused')
 
     // The owner opens it up.
     const opened = await share(ownerToken, hash, { visibility: 'shared' })
@@ -1754,9 +1808,15 @@ async function sharingRouteTest(): Promise<void> {
 
     // Garbage in the entitled list is dropped rather than stored.
     const cleaned = (await (
-      await share(ownerToken, hash, { visibility: 'private', entitled: ['../etc', 'ZZZ', strangerId] })
+      await share(ownerToken, hash, {
+        visibility: 'private',
+        entitled: ['../etc', 'ZZZ', strangerId]
+      })
     ).json()) as { entitled: string[] }
-    assert.deepEqual(cleaned.entitled.filter((id) => !/^[a-f0-9]{16}$/.test(id)), [])
+    assert.deepEqual(
+      cleaned.entitled.filter((id) => !/^[a-f0-9]{16}$/.test(id)),
+      []
+    )
 
     // The admin may change sharing — they can already delete the file — but
     // this route changes access, it does not grant it. Admin cannot add
@@ -1920,7 +1980,10 @@ async function myItemsTest(): Promise<void> {
       'only the items this device paid for'
     )
     const theirs = await mineFor(otherToken)
-    assert.deepEqual(theirs.map((i) => i.contentKey), ['k-theirs'])
+    assert.deepEqual(
+      theirs.map((i) => i.contentKey),
+      ['k-theirs']
+    )
 
     // The two ways this could quietly become the deleted catalog again.
     const body = JSON.stringify(mine)
@@ -1948,7 +2011,7 @@ async function myItemsTest(): Promise<void> {
     assert.equal(
       await removeAs(otherToken, 'a'.repeat(40)),
       404,
-      "another device cannot delete an item it does not own"
+      'another device cannot delete an item it does not own'
     )
     assert.ok(await store.get('a'.repeat(40)), 'and the refusal actually refused')
     assert.equal(

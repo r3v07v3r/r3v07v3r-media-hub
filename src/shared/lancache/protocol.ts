@@ -100,6 +100,9 @@ export interface LanCacheJobPayload {
   resolution?: number
   sizeBytes?: number
   sources?: string[]
+  /** Why the feeder asked for it — see WantedTitle.reason. Absent on jobs
+   *  queued before this existed, and on anything queued by hand. */
+  reason?: 'watching' | 'prefetch'
 }
 
 export interface LanCacheStatusResponse {
@@ -164,6 +167,13 @@ export interface LanCacheStatusResponse {
     /** Absent for films, and for any key that is not catalogId:season:episode. */
     season?: number
     episode?: number
+    /** Why it is queued: 'watching' is the next episode of something
+     *  somebody is partway through, 'prefetch' is from a watchlist. Absent
+     *  on jobs queued before this existed. */
+    reason?: 'watching' | 'prefetch'
+    /** The device that queued it. Sent to the ADMIN only — every other
+     *  caller sees just its own jobs, so its own name would say nothing. */
+    ownerName?: string
     lastError?: string
   }>
 }

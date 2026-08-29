@@ -30,6 +30,10 @@ export interface JobRecord {
   /** Which paired device queued this — and therefore WHOSE TorBox account
    *  the fetch bills. A job is only ever fetched with its owner's token. */
   ownerDeviceId?: string
+  /** Why this was asked for: 'watching' is the next episode of something
+   *  somebody is partway through, 'prefetch' is from a watchlist. Absent on
+   *  jobs queued before it existed. */
+  reason?: 'watching' | 'prefetch'
   state: JobState
   queuedAt: number
   attempts: number
@@ -105,6 +109,18 @@ export function createJobStore(dataDir: string): JobStore {
           // the one whose account CAN fetch it.
           if (existing.state === 'queued' && input.ownerDeviceId) {
             existing.ownerDeviceId = input.ownerDeviceId
+            schedulePersist()
+          }
+          // A prefetch that somebody has since started watching is a watch.
+          // Only ever upgraded, never the other way: once a person is
+          // partway through the series, a second device adding it to a
+          // watchlist does not make the queue less urgent than it was.
+          if (
+            existing.state === 'queued' &&
+            input.reason === 'watching' &&
+            existing.reason !== 'watching'
+          ) {
+            existing.reason = 'watching'
             schedulePersist()
           }
           return existing
