@@ -28,6 +28,7 @@ import { testConnection as testJellyfin } from '@renderer/lib/api/jellyfin'
 import { sonarrClient, radarrClient } from '@renderer/lib/api/servarr'
 import { testConnection as testQbittorrent } from '@renderer/lib/api/qbittorrent'
 import { testConnection as testProwlarr } from '@renderer/lib/api/prowlarr'
+import { testConnection as testBazarr } from '@renderer/lib/api/bazarr'
 import type { ConnectionTestResult } from '@renderer/lib/api/types'
 import { PIPELINE, PIPELINE_NODES, type PipelineNode } from '../pipeline'
 import styles from './CachingSection.module.css'
@@ -38,7 +39,8 @@ const TESTERS = {
   sonarr: sonarrClient.testConnection,
   radarr: radarrClient.testConnection,
   qbittorrent: testQbittorrent,
-  prowlarr: testProwlarr
+  prowlarr: testProwlarr,
+  bazarr: testBazarr
 } as const
 
 const SECRET_LABEL = {
@@ -46,7 +48,8 @@ const SECRET_LABEL = {
   sonarr: 'API key',
   radarr: 'API key',
   qbittorrent: 'Username:password',
-  prowlarr: 'API key'
+  prowlarr: 'API key',
+  bazarr: 'API key'
 } as const
 
 export function PipelineSection({ onNavigate }: { onNavigate?: (section: 'caching') => void }) {
