@@ -47,7 +47,18 @@ export function watchRegion(): string {
     .trim()
     .toUpperCase()
   if (/^[A-Z]{2}$/.test(stored)) return stored
-  const locale = electron().app?.getLocale?.() ?? ''
+  // Guarded, not just deferred. readSettings() above already answers {}
+  // when there is no Electron to find a settings file with; this is the
+  // other half of the same tolerance. The locale is a GUESS at the region —
+  // one that is wrong often enough to be correctable in Settings — so a
+  // guess that throws is strictly worse than falling through to the default
+  // below.
+  let locale = ''
+  try {
+    locale = electron().app?.getLocale?.() ?? ''
+  } catch {
+    // Not running inside Electron. 'US' it is.
+  }
   const guess = locale.split(/[-_]/)[1]?.toUpperCase() ?? ''
   return /^[A-Z]{2}$/.test(guess) ? guess : 'US'
 }
