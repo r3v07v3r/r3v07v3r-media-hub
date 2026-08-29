@@ -753,14 +753,21 @@ export function CachingSection() {
                             ? ` · ${Math.round((job.progressBytes / job.sizeBytes) * 100)}%`
                             : ''}
                         </span>
-                        <button
-                          type="button"
-                          className={styles.ghostButton}
-                          disabled={busy}
-                          onClick={() => handleCancelJob(job.contentKey)}
-                        >
-                          Cancel
-                        </button>
+                        {/* Only where there is something to cancel. A
+                            finished fetch stays listed for an hour and a
+                            stopped one for a day, and the daemon cannot
+                            cancel either — the button did nothing on those
+                            rows and reported that it had worked. */}
+                        {(job.state === 'queued' || job.state === 'fetching') && (
+                          <button
+                            type="button"
+                            className={styles.ghostButton}
+                            disabled={busy}
+                            onClick={() => handleCancelJob(job.contentKey)}
+                          >
+                            Cancel
+                          </button>
+                        )}
                       </li>
                     ))}
                   </ul>

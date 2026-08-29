@@ -62,17 +62,23 @@ export async function run(api: PayloadApi): Promise<'restart' | 'exit'> {
   await fsp.mkdir(config.dataDir, { recursive: true, mode: 0o700 })
 
   const dayMs = 24 * 60 * 60 * 1000
-  const storage = createItemStore(config.dataDir, {
-    idleTtlMs: config.idleTtlDays * dayMs,
-    hardMaxMs: config.hardMaxDays * dayMs,
-    budgetBytes: config.diskBudgetBytes,
-    tombstoneMs: config.tombstoneDays * dayMs
-  })
+  const activity = createActivityTracker(config.dataDir)
+  const storage = createItemStore(
+    config.dataDir,
+    {
+      idleTtlMs: config.idleTtlDays * dayMs,
+      hardMaxMs: config.hardMaxDays * dayMs,
+      budgetBytes: config.diskBudgetBytes,
+      tombstoneMs: config.tombstoneDays * dayMs
+    },
+    // Neither eviction path may delete a file somebody has a stream open
+    // against. The tracker is built just above for this reason.
+    { isStreaming: (infoHash) => activity.isStreaming(infoHash) }
+  )
   const pairing = createPairing(config.dataDir)
   const admin = createAdmin(config.dataDir)
   const credentials = createCredentials(config.dataDir)
   const jobs = createJobStore(config.dataDir)
-  const activity = createActivityTracker(config.dataDir)
   await Promise.all([
     pairing.load(),
     admin.load(),

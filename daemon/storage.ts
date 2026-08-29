@@ -278,8 +278,18 @@ export interface ItemStore {
 
 export function createItemStore(
   dataDir: string,
-  policy: EvictionPolicy & { tombstoneMs: number }
+  policy: EvictionPolicy & { tombstoneMs: number },
+  /**
+   * Whether an item has a /stream response open against it right now.
+   *
+   * Injected rather than imported so the store stays testable without a
+   * running server, and defaults to "nothing is playing" — which is the
+   * old behaviour, so a caller that does not wire it up is no worse off
+   * than before.
+   */
+  options: { isStreaming?: (infoHash: string) => boolean } = {}
 ): ItemStore {
+  const isStreaming = options.isStreaming ?? ((): boolean => false)
   const itemsDir = path.join(dataDir, 'items')
   const tombstonePath = path.join(dataDir, 'tombstones.json')
 
@@ -464,6 +474,16 @@ export function createItemStore(
       if (plan.size === 0) return plan
       const stones = await readTombstones()
       for (const [infoHash, reason] of plan) {
+        // Not while somebody is watching it. The stream route opens a new
+        // file handle per Range request, so on Unix the request in flight
+        // finishes against the unlinked file and the next seek gets a 404
+        // mid-film; on Windows the delete fails against the open handle
+        // and the pass churns. It stays in the plan's way for one hour,
+        // which is the interval this runs at anyway.
+        if (isStreaming(infoHash)) {
+          plan.delete(infoHash)
+          continue
+        }
         await remove(infoHash)
         // Only DISINTEREST leaves a tombstone. hard-max and idle mean
         // nobody wanted this; budget and quota mean somebody wanted it and
@@ -515,6 +535,11 @@ export function createItemStore(
       // Oldest access first, matching the budget pass in planEvictions — the
       // two answer the same question and should not answer it differently.
       const byAge = [...items]
+        // Nor anything with a reader on it, for the same reason the
+        // hourly pass skips those: freeing space by deleting the film
+        // somebody is watching is not a trade worth making, and the fetch
+        // that wanted the room can wait or fail honestly.
+        .filter((item) => !isStreaming(item.infoHash))
         // NEVER the item being fetched. A partial is the least-recently
         // accessed thing in the cache almost by definition — nobody has
         // watched it, it is not finished — so plain LRU picks it first,

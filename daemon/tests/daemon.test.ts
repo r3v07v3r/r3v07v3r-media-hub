@@ -2002,6 +2002,68 @@ async function budgetRoomTest(): Promise<void> {
   )
   assert.equal(shouldRetryAfterFailure({ state: 'ready' } as JobRecord), false)
 
+  // --- what is being watched is not evicted ----------------------------
+  //
+  // The stream route opens a NEW file handle per Range request, so deleting
+  // an item with a reader on it does not merely inconvenience it: on Unix
+  // the request in flight finishes against the unlinked file and the next
+  // seek gets a 404 in the middle of the film, and on Windows the delete
+  // fails against the open handle and the pass churns against it. Both
+  // eviction paths therefore skip it.
+  const watchRoot = await fsp.mkdtemp(path.join(os.tmpdir(), 'r3-watch-'))
+  const streaming = new Set<string>()
+  const watchStore = createItemStore(
+    watchRoot,
+    { idleTtlMs: 60 * DAY, hardMaxMs: 365 * DAY, budgetBytes: 1000, tombstoneMs: 60 * DAY },
+    { isStreaming: (infoHash) => streaming.has(infoHash) }
+  )
+  const watchedHash = 'e'.repeat(40)
+  const idleHash = 'f'.repeat(40)
+  const seedInto = async (hash: string, key: string, bytes: number, age: number): Promise<void> => {
+    const dir = await watchStore.beginItem({
+      contentKey: key,
+      title: key,
+      infoHash: hash,
+      fileName: 'f.mkv',
+      sizeBytes: bytes,
+      fetchedAt: now - age,
+      lastAccessAt: now - age
+    })
+    await fsp.writeFile(path.join(dir, 'f.mkv'), 'x'.repeat(bytes))
+  }
+  // The one being watched is also the oldest, so LRU would take it first.
+  await seedInto(watchedHash, 'k-watched', 500, 9 * DAY)
+  await seedInto(idleHash, 'k-idle', 400, 1 * DAY)
+  streaming.add(watchedHash)
+
+  assert.equal(await watchStore.makeRoomFor(400), true)
+  assert.ok(
+    await watchStore.get(watchedHash),
+    'making room does not delete the film somebody is watching'
+  )
+  assert.equal(await watchStore.get(idleHash), null, 'it takes the next-oldest instead')
+
+  // The hourly pass has the same duty. Aged past the hard maximum, the one
+  // with a reader on it still stays.
+  await seedInto('a1'.repeat(20), 'k-old', 100, 400 * DAY)
+  streaming.add('a1'.repeat(20))
+  const plan = await watchStore.runEviction(now)
+  assert.equal(
+    plan.has('a1'.repeat(20)),
+    false,
+    'and the hourly pass leaves an open stream alone too'
+  )
+  assert.ok(await watchStore.get('a1'.repeat(20)), 'the file is still there')
+  // Released, it goes on the next pass — deferred, not exempt.
+  streaming.delete('a1'.repeat(20))
+  assert.equal(
+    (await watchStore.runEviction(now)).has('a1'.repeat(20)),
+    true,
+    'once nobody is watching it, it is evicted as normal'
+  )
+
+  await fsp.rm(watchRoot, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
+
   console.log('ok  budget room')
 }
 
@@ -2175,6 +2237,28 @@ async function myItemsTest(): Promise<void> {
       jobs.list().some((job) => job.contentKey === 'tt-mine::1:2'),
       false,
       'and it leaves the queue'
+    )
+
+    // NOTHING TO CANCEL IS NOT A SUCCESS. A ready record stays listed for
+    // an hour and a stopped one for a day; jobs.cancel touches neither, and
+    // the route used to report 200 regardless, so the button did nothing
+    // and said it had worked.
+    jobs.enqueue({
+      contentKey: 'k-finished',
+      infoHash: '9'.repeat(40),
+      title: 'Finished',
+      ownerDeviceId: mineId
+    })
+    jobs.update('k-finished', { state: 'ready' })
+    assert.equal(
+      await cancelAs(mineToken, 'k-finished'),
+      409,
+      'a fetch that has already finished cannot be cancelled, and says so'
+    )
+    assert.equal(
+      jobs.list().find((job) => job.contentKey === 'k-finished')?.state,
+      'ready',
+      'and the record is untouched'
     )
 
     // THE ADMINISTRATOR MAY STOP WORK, matching the remove route and

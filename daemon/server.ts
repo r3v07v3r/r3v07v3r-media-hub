@@ -296,11 +296,11 @@ export function createDaemonServer(deps: ServerDeps): http.Server {
       const releaseStream = (): void => {
         if (!counted) return
         counted = false
-        activity.streamClosed()
+        activity.streamClosed(streamMatch[1])
       }
       if (req.method === 'GET') {
         counted = true
-        activity.streamOpened()
+        activity.streamOpened(streamMatch[1])
         res.once('close', releaseStream)
       }
 
@@ -524,7 +524,16 @@ export function createDaemonServer(deps: ServerDeps): http.Server {
         json(res, 404, { error: 'No such job.' })
         return
       }
-      jobs.cancel(contentKey)
+      // THERE HAS TO BE SOMETHING TO CANCEL. A ready record lingers for an
+      // hour and an expired one for a day, both still listed, and
+      // jobs.cancel does not touch either — it returned false and the route
+      // reported success anyway, so the button did nothing and said it had
+      // worked. Saying so plainly is better than a silent no-op, and the
+      // button is no longer offered on those rows either.
+      if (!jobs.cancel(contentKey)) {
+        json(res, 409, { error: 'That fetch has already finished or stopped.' })
+        return
+      }
       json(res, 200, { ok: true })
       return
     }
