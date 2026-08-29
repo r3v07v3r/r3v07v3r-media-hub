@@ -492,6 +492,36 @@ export function createDaemonServer(deps: ServerDeps): http.Server {
       return
     }
 
+    // The caller's OWN items, which is the one listing entitlement allows.
+    //
+    // The unfiltered catalog was deleted in A1 because it handed every
+    // paired device the whole disk with titles. This is the opposite: it is
+    // scoped to ownerDeviceId, so it can only ever return what this device
+    // paid for. Without it there is no way for somebody to see their own
+    // cached titles in order to share them, which left the sharing route
+    // built and unreachable.
+    if (route === 'GET /api/items/mine') {
+      const mine = (await storage.list()).filter(
+        (item) => item.ownerDeviceId === callerDeviceId
+      )
+      json(res, 200, {
+        items: mine.map((item) => ({
+          infoHash: item.infoHash,
+          contentKey: item.contentKey,
+          title: item.title,
+          sizeBytes: item.presentBytes,
+          complete: item.complete,
+          lastAccessAt: item.lastAccessAt,
+          visibility: item.visibility === 'shared' ? 'shared' : 'private',
+          // A COUNT, not the ids. The owner needs to know whether anyone
+          // else can reach it; naming which devices would tell them about
+          // households they are not part of.
+          sharedWith: Math.max(0, (item.entitled ?? []).length - 1)
+        }))
+      })
+      return
+    }
+
     if (route === 'GET /api/catalog') {
       // ?keys=a,b,c is now REQUIRED, and the unfiltered branch is gone.
       //

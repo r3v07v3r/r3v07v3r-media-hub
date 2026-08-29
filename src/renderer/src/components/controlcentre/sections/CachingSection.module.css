@@ -280,6 +280,29 @@ html[data-motion-user-disabled='true'] .meterFill {
   font-size: 0.88rem;
 }
 
+/* The per-device allocation, sat between the name and the Remove button.
+   Narrow on purpose: it is a number of GB, not a field to write in. */
+.deviceQuota {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.deviceQuotaLabel {
+  font-size: 0.7rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.deviceQuota .fieldInput {
+  width: 84px;
+  padding: 5px 8px;
+  font-size: 0.8rem;
+  text-align: right;
+}
+
 .tag {
   padding: 2px 8px;
   border-radius: var(--radius-pill);

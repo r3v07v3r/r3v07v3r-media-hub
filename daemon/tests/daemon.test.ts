@@ -1837,6 +1837,124 @@ async function budgetRoomTest(): Promise<void> {
   console.log('ok  budget room')
 }
 
+// ---------------------------------------------------------------------
+// Your own items, and only your own.
+//
+// This is the listing entitlement allows, and the one the sharing controls
+// need to exist at all. The unfiltered catalog was deleted for handing every
+// paired device the whole disk with titles; this must not quietly bring it
+// back by a different name.
+// ---------------------------------------------------------------------
+
+async function myItemsTest(): Promise<void> {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'r3-mine-'))
+  const store = createItemStore(root, {
+    idleTtlMs: 60_000,
+    hardMaxMs: 600_000,
+    budgetBytes: 10 ** 9,
+    tombstoneMs: 60_000
+  })
+  const pairing = createPairing(root)
+  await pairing.load()
+  const admin = createAdmin(root)
+  await admin.load()
+  const mineToken = await joinApproved(pairing, 'my device')
+  const otherToken = await joinApproved(pairing, 'their device')
+  const mineId = deviceIdForToken(mineToken)
+  const otherId = deviceIdForToken(otherToken)
+
+  const seed = async (hash: string, key: string, owner: string | undefined): Promise<void> => {
+    const dir = await store.beginItem({
+      contentKey: key,
+      title: key,
+      infoHash: hash,
+      fileName: 'f.mkv',
+      sizeBytes: 4,
+      fetchedAt: Date.now(),
+      lastAccessAt: Date.now(),
+      ...(owner ? { ownerDeviceId: owner, visibility: 'private', entitled: [owner] } : {})
+    })
+    await fsp.writeFile(path.join(dir, 'f.mkv'), 'ABCD')
+  }
+  await seed('a'.repeat(40), 'k-mine-1', mineId)
+  await seed('b'.repeat(40), 'k-mine-2', mineId)
+  await seed('c'.repeat(40), 'k-theirs', otherId)
+  await seed('d'.repeat(40), 'k-orphan', undefined)
+
+  const server = createDaemonServer({
+    storage: store,
+    jobs: createJobStore(root),
+    pairing,
+    admin,
+    credentials: createCredentials(root),
+    activity: createActivityTracker(root),
+    updaterStatus: () => ({
+      channel: 'preview',
+      enabled: true,
+      checkedAt: 0,
+      latestSeen: '',
+      staged: '',
+      stagedAt: 0,
+      lastError: ''
+    }),
+    serverName: 'test',
+    version: '0.0.0',
+    diskBudgetBytes: 10 ** 9
+  })
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+  const base = `http://127.0.0.1:${(server.address() as { port: number }).port}`
+
+  const mineFor = async (token: string): Promise<Array<Record<string, unknown>>> =>
+    (
+      (await (
+        await fetch(`${base}/api/items/mine`, { headers: { Authorization: `Bearer ${token}` } })
+      ).json()) as { items: Array<Record<string, unknown>> }
+    ).items
+
+  try {
+    const mine = await mineFor(mineToken)
+    assert.deepEqual(
+      mine.map((i) => i.contentKey).sort(),
+      ['k-mine-1', 'k-mine-2'],
+      'only the items this device paid for'
+    )
+    const theirs = await mineFor(otherToken)
+    assert.deepEqual(theirs.map((i) => i.contentKey), ['k-theirs'])
+
+    // The two ways this could quietly become the deleted catalog again.
+    const body = JSON.stringify(mine)
+    assert.equal(body.includes('k-theirs'), false, "another device's title never appears")
+    assert.equal(
+      body.includes('k-orphan'),
+      false,
+      'and neither does an item with no identifiable owner'
+    )
+
+    // Sharing state comes back so the control can render, but the entitled
+    // list is a COUNT — naming ids would describe households the caller is
+    // not part of.
+    assert.equal(mine[0].visibility, 'private')
+    assert.equal(mine[0].sharedWith, 0)
+    assert.equal(body.includes(otherId), false, 'no other device id is disclosed')
+
+    await fetch(`${base}/api/items/${'a'.repeat(40)}/sharing`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', Authorization: `Bearer ${mineToken}` },
+      body: JSON.stringify({ visibility: 'shared' })
+    })
+    const after = await mineFor(mineToken)
+    assert.equal(
+      after.find((i) => i.contentKey === 'k-mine-1')?.visibility,
+      'shared',
+      'and the listing reflects a change made through the sharing route'
+    )
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()))
+    await fsp.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
+  }
+  console.log('ok  own items listing')
+}
+
 void main()
   .then(() => {
     console.log('ok  r3-cache daemon core')
@@ -1851,3 +1969,4 @@ void main()
   .then(budgetRoomTest)
   .then(statusScopeTest)
   .then(sharingRouteTest)
+  .then(myItemsTest)
