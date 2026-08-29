@@ -188,6 +188,13 @@ html[data-motion-user-disabled='true'] .meterFill {
   color: var(--text-muted);
 }
 
+/* Version strings and timestamps are text, not figures — at the facts'
+   default size they read as though they were the headline number. */
+.factSmall {
+  font-size: 0.86rem !important;
+  font-variant-numeric: normal !important;
+}
+
 .facts dd {
   margin: 0;
   font-size: 1.05rem;
