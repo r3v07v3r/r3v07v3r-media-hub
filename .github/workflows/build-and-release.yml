@@ -1,8 +1,9 @@
 name: Build and release
 
 # Reusable release tail shared by preview.yml and promote-to-stable.yml:
-# checkout at `ref`, stamp package.json to `version`, build the installer,
-# and publish it as a GitHub release targeting `target`. Pre-created as a
+# checkout at `ref`, stamp package.json to `version`, generate the release
+# note, build the installer, and publish it as a GitHub release targeting
+# `target`. Pre-created as a
 # draft and undrafted last so the release never appears to
 # update-checkers with assets still missing — the same reasoning that was
 # previously duplicated in both callers. `attach-daemon` additionally
@@ -26,7 +27,10 @@ on:
         required: true
         type: string
       notes:
-        description: Release notes body
+        description: >-
+          Fallback release-notes body, used only when there is nothing to
+          summarise since the previous tag. The body is normally generated
+          from the commits themselves - see the "Generate release notes" step.
         required: true
         type: string
       prerelease:
@@ -48,9 +52,13 @@ jobs:
     permissions:
       contents: write
     steps:
+      # fetch-depth: 0 because scripts/release-notes.mjs walks the commits
+      # back to the previous v* tag - a shallow clone has neither those
+      # commits nor the tags, and would silently produce an empty note.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.ref }}
+          fetch-depth: 0
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -73,6 +81,28 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # Before the build, deliberately: this writes resources/release-notes.txt,
+      # which electron-builder packages (asarUnpack'd out of app.asar, read by
+      # main/media-hub/releaseNotes.ts), so the About card's note ships inside
+      # the build it describes rather than being fetched at runtime. The same
+      # text becomes the GitHub release body below, so the two can never
+      # disagree. Passed on as a file rather than a step output because commit
+      # subjects are untrusted shell input - nothing here is interpolated into
+      # a command line.
+      - name: Generate release notes
+        shell: bash
+        env:
+          FALLBACK_NOTES: ${{ inputs.notes }}
+        run: |
+          node scripts/release-notes.mjs > /dev/null
+          if [ -s resources/release-notes.txt ]; then
+            cp resources/release-notes.txt "$RUNNER_TEMP/release-body.txt"
+          else
+            printf '%s\n' "$FALLBACK_NOTES" > "$RUNNER_TEMP/release-body.txt"
+          fi
+          echo "Release body:"
+          cat "$RUNNER_TEMP/release-body.txt"
+
       - name: Build
         run: npm run build
 
@@ -88,7 +118,7 @@ jobs:
             --repo "${{ github.repository }}" \
             --target "${{ inputs.target }}" \
             --title "${{ inputs.version }}" \
-            --notes "${{ inputs.notes }}" \
+            --notes-file "$RUNNER_TEMP/release-body.txt" \
             --draft \
             ${{ inputs.prerelease && '--prerelease' || '' }}
 

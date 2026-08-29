@@ -126,6 +126,7 @@ jobs:
       ref: stable
       version: ${{ needs.promote.outputs.version }}
       target: stable
+      # Fallback only - see the same input in preview.yml.
       notes: Promoted from Preview.
       prerelease: false
 

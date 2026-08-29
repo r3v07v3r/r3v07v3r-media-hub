@@ -131,6 +131,10 @@ jobs:
       ref: ${{ github.sha }}
       version: ${{ needs.version.outputs.version }}
       target: ${{ github.sha }}
+      # Fallback only: build-and-release.yml generates the real body from the
+      # commit subjects since the previous tag, and writes the same text into
+      # resources/ so the About card shows it. This is what publishes when
+      # there is nothing to summarise.
       notes: Automated Preview build.
       prerelease: true
       attach-daemon: true
