@@ -1060,7 +1060,7 @@ export default function SettingsPage({ embedded = false }: { embedded?: boolean 
   }, [])
 
   return (
-    <div className={styles.wrap}>
+    <div className={`${styles.wrap} ${embedded ? styles.embedded : ''}`}>
       <div className={styles.pageHeader}>
         {/* Hidden when hosted inside the control centre, which supplies its
             own heading — two <h1>s describing the same content is a worse

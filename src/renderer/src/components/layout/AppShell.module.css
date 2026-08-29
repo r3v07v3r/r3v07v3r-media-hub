@@ -166,3 +166,82 @@
       'sidebar';
   }
 }
+
+/* ---------- The bar merging into the settings face ----------
+
+   The bar is the edge the two faces share, so while the settings face is
+   forward it should read as the top of THAT surface — not as the app's
+   chrome parked above something green. Recolouring it was not enough: it
+   still looked like a separate component sitting on a different background.
+
+   So it stops drawing a surface of its own. The green runs up behind it,
+   the seam disappears, and what is left is the mark, the field and the
+   controls floating on one continuous face.
+
+   Scoped to the topbar wrapper rather than reaching into TopUtilityBar's
+   own module: this is a fact about the shell's two modes, not about how the
+   bar is built. */
+html[data-control-centre='true'] .topbar {
+  --accent-blue: #27e69a;
+  --accent-cyan: #6bffc0;
+  --border-subtle: rgba(39, 230, 154, 0.22);
+  --border-active: rgba(39, 230, 154, 0.62);
+  --text-secondary: #8fdcb8;
+  --text-muted: #4f8f74;
+  /* NOT transparent. The settings face starts BELOW the bar, so a
+     transparent bar shows the app's own nebula backdrop through it — the
+     opposite of merging. It carries the face's own gradient instead, picking
+     up where the face's top edge leaves off, so the two are one continuous
+     green surface with no seam to see. */
+  background: linear-gradient(180deg, rgba(7, 30, 21, 0.98) 0%, rgba(6, 26, 18, 0.96) 100%);
+  border-bottom-color: transparent;
+}
+
+.topbar {
+  /* Matched to the cube so the edge changes colour as the faces turn,
+     rather than snapping before or after them. */
+  transition:
+    background 620ms var(--ease-smooth),
+    border-color 620ms var(--ease-smooth);
+}
+
+html[data-motion-user-disabled='true'] .topbar {
+  transition: none;
+}
+
+/* The bar's own modules hardcode their blues rather than reading tokens —
+   the brand mark's glow, the notification button, the assistant field's
+   border and its animated wave, the avatar tint. A scoped token override
+   cannot reach any of them, so the bar kept a blue field and blue waves
+   sitting on a green surface, which is most of what made it look unlinked.
+
+   Recoloured here with a hue-rotate rather than by editing six selectors
+   across two modules: every one of those blues is the same family, so one
+   filter moves them together and keeps their relative brightness and
+   opacity intact. It also cannot fall out of step with the originals if
+   someone restyles the bar later.
+
+   :global on the descendants because they belong to TopUtilityBar's and
+   AIAssistantInput's modules, not to this one. */
+html[data-control-centre='true'] .topbar :global(header) > * {
+  /* -32deg, not +118. The bar's blues sit around hue 188 (cyan) and the
+     face's green is around 156, so the rotation is a SHORT step down the
+     wheel. Rotating the long way round landed them in magenta — visibly
+     worse than the blue it replaced. */
+  filter: hue-rotate(-32deg) saturate(1.05);
+  transition: filter 620ms var(--ease-smooth);
+}
+
+/* The cog is already green and is the one control that must NOT shift —
+   it is the way back, and rotating its hue would take it somewhere else. */
+html[data-control-centre='true'] .topbar :global(header) > *:has([aria-expanded]) {
+  filter: none;
+}
+
+.topbar :global(header) > * {
+  transition: filter 620ms var(--ease-smooth);
+}
+
+html[data-motion-user-disabled='true'] .topbar :global(header) > * {
+  transition: none;
+}
