@@ -26,6 +26,7 @@ import { CachingSection } from './sections/CachingSection'
 import { PipelineSection } from './sections/PipelineSection'
 import { ServicesSection } from './sections/ServicesSection'
 import { ControlCentreNav } from './ControlCentreNav'
+import { MatrixRain } from './MatrixRain'
 import {
   CONTROL_CENTRE_SECTIONS,
   DEFAULT_CONTROL_CENTRE_SECTION,
@@ -124,6 +125,10 @@ export function ControlCentreFace() {
 
           Escape still closes — that is a keyboard affordance, not a
           duplicated control. */}
+      {/* Behind the layout, and told when the face is actually facing the
+          viewer — there is no point drawing rain onto a side of a cube that
+          is turned away. */}
+      <MatrixRain active={controlCentreOpen} />
       <div className={styles.layout}>
         <ControlCentreNav active={section} onSelect={setSection} />
         <div className={styles.body}>

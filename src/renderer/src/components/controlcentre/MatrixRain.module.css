@@ -1,0 +1,26 @@
+.rain {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  /* Behind every control on the face. The panel's own background sits at the
+     bottom of the stack, this sits on top of it, and all the content sits on
+     top of this. */
+  z-index: 0;
+  /* Decoration cannot be allowed to make a button harder to hit, so it
+     cannot be hit at all. */
+  pointer-events: none;
+  /* Kept low enough that the surface reads identically with the canvas
+     removed — the text contrast on top of it is the contrast that was
+     designed, not something this is allowed to erode. */
+  opacity: 0.5;
+  /* Fades out toward the bottom so the rain reads as depth behind the
+     content rather than as a texture laid over the whole panel. */
+  mask-image: linear-gradient(180deg, rgba(0, 0, 0, 1) 0%, rgba(0, 0, 0, 0.15) 78%, transparent 100%);
+  -webkit-mask-image: linear-gradient(
+    180deg,
+    rgba(0, 0, 0, 1) 0%,
+    rgba(0, 0, 0, 0.15) 78%,
+    transparent 100%
+  );
+}

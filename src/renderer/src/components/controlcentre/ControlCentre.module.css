@@ -49,6 +49,9 @@
     0 40px 120px rgba(0, 0, 0, 0.7),
     0 0 90px rgba(39, 230, 154, 0.09);
   color: var(--text-primary);
+  /* The rain canvas is absolutely positioned against this. */
+  position: relative;
+  isolation: isolate;
 }
 
 /* ---------- The rail and the panel beside it ----------
@@ -58,6 +61,9 @@
    rail that jumped across the screen when the cube turned would break the
    impression that anything solid was rotating. */
 .layout {
+  /* Above the rain canvas, which sits at z-index 0. */
+  position: relative;
+  z-index: 1;
   flex: 1 1 auto;
   min-height: 0;
   display: grid;
@@ -202,5 +208,126 @@ html[data-motion-user-disabled='true'] .railButton {
 
   .body {
     padding: 16px 16px 24px;
+  }
+}
+
+/* ---------- The glitch ----------
+
+   Cards flicker like a panel that dropped a frame rendering itself.
+
+   THE RULE THIS IS BUILT AROUND: it may never move anything, resize
+   anything, or make anything harder to read while it is happening. A card
+   that jumps under a cursor mid-click is not atmosphere, it is a bug that
+   somebody asked for. So the effect is opacity and a hairline colour shift
+   only — no transform, no layout property, and never on text the person
+   might be reading at that moment.
+
+   MOSTLY OFF. The animation is 9 seconds of nothing with roughly a tenth of
+   a second of disturbance in it. A flicker that reads as a glitch has to be
+   rare and short; at any higher rate it stops reading as a fault in the
+   render and starts reading as a fault in the app.
+
+   Each card is offset by its position so they never fire together — one
+   panel glitching is a machine under load, all of them at once is a strobe.
+*/
+@keyframes ccGlitch {
+  0%,
+  96.4%,
+  100% {
+    opacity: 1;
+    border-color: var(--border-subtle);
+  }
+  96.8% {
+    opacity: 0.55;
+    border-color: var(--border-active);
+  }
+  97.2% {
+    opacity: 1;
+  }
+  97.6% {
+    opacity: 0.78;
+    border-color: var(--accent-cyan);
+  }
+  98.1% {
+    opacity: 1;
+    border-color: var(--border-subtle);
+  }
+}
+
+/* Gated on the face actually being toward the viewer. The control centre is
+   the far side of a cube that exists all the time and is looked at rarely,
+   so the DEFAULT state of every effect here is off — an infinite animation
+   ticking on a surface nobody can see is pure cost. The rain does the same
+   thing in JS; this is the CSS half. */
+html[data-control-centre='true'] .panel :global(.glass-panel) {
+  animation: ccGlitch 9s steps(1, end) infinite;
+}
+
+/* Staggered so the field never flickers in unison. Prime-ish offsets rather
+   than even ones, so the pattern does not visibly repeat. */
+.panel :global(.glass-panel):nth-of-type(2n) {
+  animation-delay: -2.3s;
+}
+
+.panel :global(.glass-panel):nth-of-type(3n) {
+  animation-delay: -5.1s;
+}
+
+.panel :global(.glass-panel):nth-of-type(5n) {
+  animation-delay: -7.4s;
+}
+
+/* A scanline crawling down the face — the other half of the look, and the
+   one that costs nothing: a single gradient moved by transform on its own
+   layer, compositor-only, no repaint. */
+.panel::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background: linear-gradient(
+    180deg,
+    transparent 0%,
+    rgba(107, 255, 192, 0.05) 45%,
+    rgba(107, 255, 192, 0.09) 50%,
+    rgba(107, 255, 192, 0.05) 55%,
+    transparent 100%
+  );
+}
+
+html[data-control-centre='true'] .panel::after {
+  animation: ccScan 7.5s linear infinite;
+}
+
+@keyframes ccScan {
+  from {
+    transform: translateY(-100%);
+  }
+  to {
+    transform: translateY(100%);
+  }
+}
+
+/* Every opt-out this app already honours. The glitch is the first thing
+   somebody sensitive to motion would want gone, and 'decorative' is exactly
+   what these flags mean. */
+html[data-motion-user-disabled='true'] .panel :global(.glass-panel),
+html[data-motion-suspended='true'] .panel :global(.glass-panel),
+html[data-motion-user-disabled='true'] .panel::after,
+html[data-motion-suspended='true'] .panel::after {
+  animation: none;
+}
+
+/* Matched to the ENABLING selector's shape on purpose. Gating the effects
+   behind html[data-control-centre='true'] raised their specificity, and a
+   bare `.panel .glass-panel` here would have quietly stopped winning — an
+   accessibility opt-out that silently stops applying is the worst kind of
+   regression, because nothing about it looks broken to whoever it still
+   works for. */
+@media (prefers-reduced-motion: reduce) {
+  html[data-control-centre='true'] .panel :global(.glass-panel),
+  html[data-control-centre='true'] .panel::after {
+    animation: none;
   }
 }
