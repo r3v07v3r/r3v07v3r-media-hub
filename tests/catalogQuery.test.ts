@@ -486,7 +486,7 @@ check('filters combine as AND', () => {
 
 check('an empty index answers rather than throwing', () => {
   const db = tempDb()
-  assert.deepEqual(db.indexQuery({ kind: 'anime' }), { items: [], total: 0 })
+  assert.deepEqual(db.indexQuery({ kind: 'anime' }), { items: [], total: 0, completedIds: [] })
   db.close()
 })
 
@@ -593,6 +593,208 @@ check('facets match what the dropdowns derived from the same pool', () => {
   const facets = db.indexFacets('movie')
   assert.deepEqual(facets.genres, availableGenres(asMedia))
   assert.deepEqual(facets.years, availableYears(asMedia))
+})
+
+// ---------------------------------------------------------------------
+// 7. Watch state — applied by the query, not to its result.
+//
+// These have to run in SQL or paging breaks: filtering a returned page
+// makes it shrink unpredictably (ask for 30, render 22) and makes `total`
+// describe something other than what the person is looking at.
+// ---------------------------------------------------------------------
+
+/** A series whose episodes all aired in the past. */
+function airedSeries(id: string, episodes: number): CatalogItem {
+  return item(id, {
+    type: 'series',
+    videos: Array.from({ length: episodes }, (_unused, i) => ({
+      id: `${id}:1:${i + 1}`,
+      season: 1,
+      episode: i + 1,
+      number: i + 1,
+      title: '',
+      released: '2000-01-01T00:00:00.000Z'
+    }))
+  })
+}
+
+check('aired counts exclude episodes that have not been broadcast yet', () => {
+  // The badge's denominator is what has AIRED, not what will exist — or a
+  // still-running series could never be complete. See migration 3.
+  const db = tempDb()
+  const future = new Date(Date.now() + 30 * 24 * 3600 * 1000).toISOString()
+  db.indexUpsert('series', [
+    item('tt1', {
+      type: 'series',
+      videos: [
+        {
+          id: 'a',
+          season: 1,
+          episode: 1,
+          number: 1,
+          title: '',
+          released: '2000-01-01T00:00:00.000Z'
+        },
+        { id: 'b', season: 1, episode: 2, number: 2, title: '', released: future }
+      ]
+    })
+  ])
+  db.markWatched({ id: 'tt1', type: 'series', title: 'tt1' }, { season: 1, episode: 1 })
+  const result = db.indexQuery({ kind: 'series' })
+  assert.deepEqual(result.completedIds, ['tt1'], 'caught up on everything aired counts as complete')
+  db.close()
+})
+
+check('an episode with no release date counts as aired, as it did in memory', () => {
+  // Kitsu synthesizes episodes with no dates, and airedEpisodes treats
+  // `!released` as aired. Reproducing that keeps anime behaving as before.
+  const db = tempDb()
+  db.indexUpsert('anime', [
+    item('kitsu:1', {
+      type: 'anime',
+      videos: [
+        { id: 'a', season: 1, episode: 1, number: 1, title: '', released: '' },
+        { id: 'b', season: 1, episode: 2, number: 2, title: '', released: '' }
+      ]
+    })
+  ])
+  db.markWatched({ id: 'kitsu:1', type: 'anime', title: 'a' }, { season: 1, episode: 1 })
+  assert.deepEqual(db.indexQuery({ kind: 'anime' }).completedIds, [], 'one of two is not complete')
+  db.markWatched({ id: 'kitsu:1', type: 'anime', title: 'a' }, { season: 1, episode: 2 })
+  assert.deepEqual(db.indexQuery({ kind: 'anime' }).completedIds, ['kitsu:1'])
+  db.close()
+})
+
+check('a series is complete only once every aired episode is watched', () => {
+  const db = tempDb()
+  db.indexUpsert('series', [airedSeries('tt1', 3)])
+  assert.deepEqual(db.indexQuery({ kind: 'series' }).completedIds, [], 'nothing watched')
+  db.markWatched({ id: 'tt1', type: 'series', title: 'tt1' }, { season: 1, episode: 1 })
+  db.markWatched({ id: 'tt1', type: 'series', title: 'tt1' }, { season: 1, episode: 2 })
+  assert.deepEqual(db.indexQuery({ kind: 'series' }).completedIds, [], 'partway through')
+  db.markWatched({ id: 'tt1', type: 'series', title: 'tt1' }, { season: 1, episode: 3 })
+  assert.deepEqual(db.indexQuery({ kind: 'series' }).completedIds, ['tt1'])
+  db.close()
+})
+
+check('rewatching one episode does not complete a series', () => {
+  // Documents the intent; note that the guarantee comes from watch_history's
+  // own key, not from the query. markWatched upserts on (profile, watch_key)
+  // where watch_key is "<id>:<season>:<episode>", so three viewings of
+  // episode one are one row. The COUNT(DISTINCT) in COMPLETED_SQL is
+  // belt-and-braces on top of that uniqueness — confirmed by mutation:
+  // swapping it for COUNT(*) changes no result here, because there is no
+  // duplicate for it to over-count. Repeat viewings live in `plays`.
+  const db = tempDb()
+  db.indexUpsert('series', [airedSeries('tt1', 3)])
+  for (let i = 0; i < 3; i++) {
+    db.markWatched({ id: 'tt1', type: 'series', title: 'tt1' }, { season: 1, episode: 1 })
+  }
+  assert.deepEqual(db.indexQuery({ kind: 'series' }).completedIds, [])
+  db.close()
+})
+
+check('a movie is complete exactly when it is watched', () => {
+  const db = tempDb()
+  db.indexUpsert('movie', [item('tt1'), item('tt2')])
+  db.markWatched({ id: 'tt1', type: 'movie', title: 'tt1' })
+  assert.deepEqual(db.indexQuery({ kind: 'movie' }).completedIds, ['tt1'])
+  db.close()
+})
+
+check('a series with no known aired count is never complete', () => {
+  // Rows written before migration 3 have no aired count. "Unknown" must read
+  // as not-complete, or every one of them would show the badge on the
+  // strength of a denominator nobody has.
+  const db = tempDb()
+  db.indexUpsert('series', [item('tt1', { type: 'series' })])
+  db.markWatched({ id: 'tt1', type: 'series', title: 'tt1' }, { season: 1, episode: 1 })
+  assert.deepEqual(db.indexQuery({ kind: 'series' }).completedIds, [])
+  db.close()
+})
+
+check('hide filters exclude in the query, and total follows', () => {
+  const db = tempDb()
+  db.indexUpsert('movie', [item('seen'), item('hated'), item('fresh')])
+  db.markWatched({ id: 'seen', type: 'movie', title: 'seen' })
+  db.dislike({ id: 'hated', type: 'movie', title: 'hated' })
+
+  const watched = db.indexQuery({ kind: 'movie', hideWatched: true })
+  assert.deepEqual(
+    watched.items.map((x) => x.id),
+    ['hated', 'fresh']
+  )
+  assert.equal(watched.total, 2, 'total counts what survived the exclusion')
+
+  const disliked = db.indexQuery({ kind: 'movie', hideDisliked: true })
+  assert.deepEqual(
+    disliked.items.map((x) => x.id),
+    ['seen', 'fresh']
+  )
+  assert.equal(disliked.total, 2)
+
+  // A watched movie is a completed movie, so hideCompleted drops it too.
+  const completed = db.indexQuery({ kind: 'movie', hideCompleted: true })
+  assert.deepEqual(
+    completed.items.map((x) => x.id),
+    ['hated', 'fresh']
+  )
+
+  const both = db.indexQuery({ kind: 'movie', hideWatched: true, hideDisliked: true })
+  assert.deepEqual(
+    both.items.map((x) => x.id),
+    ['fresh']
+  )
+  assert.equal(both.total, 1)
+  db.close()
+})
+
+check('watch state is scoped to the active profile', () => {
+  // catalog_index is shared across profiles (see migration 2) while
+  // watch_history is not. One person marking a film watched must not empty
+  // it from another's grid — which is exactly what a query that forgot to
+  // scope the join would do.
+  const db = tempDb()
+  db.indexUpsert('movie', [item('tt1')])
+  db.markWatched({ id: 'tt1', type: 'movie', title: 'tt1' })
+  assert.equal(db.indexQuery({ kind: 'movie', hideWatched: true }).total, 0)
+  assert.deepEqual(db.indexQuery({ kind: 'movie' }).completedIds, ['tt1'])
+
+  db.setActiveProfile('someone-else')
+  assert.equal(
+    db.indexQuery({ kind: 'movie', hideWatched: true }).total,
+    1,
+    "another profile's viewing must not hide it here"
+  )
+  assert.deepEqual(
+    db.indexQuery({ kind: 'movie' }).completedIds,
+    [],
+    'nor mark it complete for them'
+  )
+  // The catalog row itself is shared and unaffected either way.
+  assert.equal(db.indexCount('movie'), 1)
+  db.close()
+})
+
+check('exclusions page correctly rather than thinning each page', () => {
+  // The failure this prevents: filtering the RETURNED page instead of the
+  // query, so a request for 10 renders 6 and the next page starts in the
+  // wrong place.
+  const db = tempDb()
+  db.indexUpsert(
+    'movie',
+    Array.from({ length: 30 }, (_unused, i) => item(`n${i}`))
+  )
+  for (let i = 0; i < 30; i += 2) {
+    db.markWatched({ id: `n${i}`, type: 'movie', title: `n${i}` })
+  }
+  const first = db.indexQuery({ kind: 'movie', hideWatched: true, limit: 10, offset: 0 })
+  const second = db.indexQuery({ kind: 'movie', hideWatched: true, limit: 10, offset: 10 })
+  assert.equal(first.total, 15, 'total is the unwatched count, not the library size')
+  assert.equal(first.items.length, 10, 'a full page is a full page')
+  assert.equal(second.items.length, 5, 'and the last one is short, not thinned')
+  assert.equal(new Set([...first.items, ...second.items].map((x) => x.id)).size, 15)
+  db.close()
 })
 
 console.log(`\n${pass} passed`)

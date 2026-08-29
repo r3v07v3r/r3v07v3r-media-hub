@@ -328,8 +328,50 @@ const catalogIndex: Migration = {
   }
 }
 
+/**
+ * Migration 3 — how many of a series' episodes have actually aired.
+ *
+ * The browse grid's "Completed" badge is not "every episode watched", it is
+ * "every episode that has AIRED watched" — a show someone is fully caught up
+ * on counts, or a still-running series could never earn the badge (see
+ * isSeriesCompleted and airedEpisodes in the renderer's adapters.ts). That
+ * denominator used to come from the per-episode `videos` array on the catalog
+ * blob, and migration 2 deliberately stopped storing per-episode data at all,
+ * because it is what made a series row several times heavier than a movie one.
+ *
+ * So the COUNT is stored instead of the episodes. It is computed at crawl time
+ * with exactly the rule airedEpisodes applies — not unplayable, and either no
+ * release date or one already past — which matters for the two sources
+ * behaving differently: Cinemeta ships a real date per episode, so this is a
+ * genuine aired count, while Kitsu's synthesized episodes carry none, and
+ * `!released` counts as aired there, so it equals the total. Both are what
+ * the in-memory version already concluded from the same data.
+ *
+ * It goes stale between crawls, by at most the six-hour refresh interval, and
+ * only ever in the direction of under-counting a just-aired episode. That is
+ * the honest trade for not storing tens of thousands of episode rows: a badge
+ * that appears a few hours late, rather than a denominator that is wrong in
+ * both directions forever.
+ *
+ * Nullable, and NOT backfilled: rows written by migration 2's crawl have no
+ * aired count and must read as "unknown" rather than as zero, or every series
+ * already in the index would read as complete-with-nothing-aired until its
+ * next refresh. The next crawl fills it.
+ */
+const airedEpisodes: Migration = {
+  name: 'aired-episode-counts',
+  apply(sql) {
+    sql.exec('ALTER TABLE catalog_index ADD COLUMN aired_episodes INTEGER')
+  }
+}
+
 /** Ordered, and the order IS the version. Append only. */
-const MIGRATIONS: readonly Migration[] = [baseline, profilesAndPlays, catalogIndex]
+const MIGRATIONS: readonly Migration[] = [
+  baseline,
+  profilesAndPlays,
+  catalogIndex,
+  airedEpisodes
+]
 
 /** How many migrations exist — a database at this version is fully current. */
 export const SCHEMA_VERSION = MIGRATIONS.length

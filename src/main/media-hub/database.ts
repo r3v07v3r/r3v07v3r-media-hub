@@ -170,23 +170,45 @@ function fail(error: Error): never {
  * "no episode data" from "confirmed zero episodes" — the same distinction
  * seasonEpisodeCounts is careful to preserve by returning undefined.
  */
-function indexEpisodeCounts(item: CatalogItem): {
+function indexEpisodeCounts(
+  item: CatalogItem,
+  now: number
+): {
   totalSeasons: number | null
   totalEpisodes: number | null
+  airedEpisodes: number | null
 } {
+  // The same rule airedEpisodes (renderer/lib/mediaHub/adapters.ts) applies:
+  // not synthetic, and either no release date or one already past. `!released`
+  // counting as aired is deliberate there and reproduced here — Kitsu's
+  // synthesized episodes carry no dates, so for anime this equals the total,
+  // which is the answer the in-memory version already reached.
+  const aired = (item.videos || []).filter(
+    (v) => !v.unplayable && (!v.released || new Date(v.released).getTime() <= now)
+  ).length
+
   if (item.episodeCounts) {
     return {
       totalSeasons: item.episodeCounts.totalSeasons,
-      totalEpisodes: item.episodeCounts.totalEpisodes
+      totalEpisodes: item.episodeCounts.totalEpisodes,
+      // A grouped anime's `videos` only covers its first season, so counting
+      // aired episodes off it would under-report the franchise badly. The
+      // supplied total is the better answer, and anime has no per-episode
+      // dates to be more precise with anyway.
+      airedEpisodes: item.episodeCounts.totalEpisodes
     }
   }
   // `unplayable` entries are synthetic — promotional clips reassigned into a
   // fabricated season 0 by disambiguateVideos — so they are excluded here
   // exactly as the grid excludes them, or they would inflate both counts.
   const playable = (item.videos || []).filter((v) => !v.unplayable)
-  if (!playable.length) return { totalSeasons: null, totalEpisodes: null }
+  if (!playable.length) return { totalSeasons: null, totalEpisodes: null, airedEpisodes: null }
   const seasons = new Set(playable.map((v) => v.season).filter((s) => Number.isFinite(s)))
-  return { totalSeasons: seasons.size || null, totalEpisodes: playable.length }
+  return {
+    totalSeasons: seasons.size || null,
+    totalEpisodes: playable.length,
+    airedEpisodes: aired || null
+  }
 }
 
 /** ASCII unit separator. Matches the `char(31)` indexList joins genres
@@ -228,32 +250,48 @@ function splitGenres(value: SQLOutputValue | undefined): string[] {
  * bookmark into "show everything", which is the opposite of what the
  * original's `if (!bucket) return false` did.
  */
-function indexWhere(query: CatalogQuery): { sql: string; values: SQLInputValue[] } {
-  const clauses: string[] = ['kind = ?']
-  const values: SQLInputValue[] = [query.kind]
+function indexWhere(
+  query: CatalogQuery,
+  profileId: string
+): { sql: string; values: Record<string, SQLInputValue>; usesProfile: boolean } {
+  const clauses: string[] = ['kind = @kind']
+  // Named rather than positional, because the watch-state clauses below
+  // reference @profile from inside subqueries and the same value is needed
+  // again in the SELECT list — positions would have to be counted by hand
+  // across fragments that are only conditionally present.
+  const values: Record<string, SQLInputValue> = { kind: query.kind }
+  // node:sqlite REJECTS a named parameter the statement does not use
+  // ("Unknown named parameter"), so @profile is bound only when a clause
+  // actually references it. The count query has no watch-state clause
+  // unless one was asked for; the select query always does, because
+  // COMPLETED_SQL is in its column list. `usesProfile` is what lets each
+  // statement be given exactly the parameters it names.
+  let usesProfile = false
+  let n = 0
+  const bind = (value: SQLInputValue): string => {
+    const name = `v${n++}`
+    values[name] = value
+    return `@${name}`
+  }
 
   if (query.genre) {
     clauses.push(
-      'EXISTS (SELECT 1 FROM catalog_index_genre g WHERE g.id = catalog_index.id AND g.kind = catalog_index.kind AND g.genre = ?)'
+      `EXISTS (SELECT 1 FROM catalog_index_genre g WHERE g.id = catalog_index.id AND g.kind = catalog_index.kind AND g.genre = ${bind(query.genre)})`
     )
-    values.push(query.genre)
   }
   if (query.year) {
     const year = parseInt(query.year, 10)
     if (Number.isFinite(year)) {
-      clauses.push('year = ?')
-      values.push(year)
+      clauses.push(`year = ${bind(year)}`)
     } else {
       clauses.push('0')
     }
   }
   if (query.minRating != null) {
-    clauses.push('COALESCE(rating, 0) >= ?')
-    values.push(query.minRating)
+    clauses.push(`COALESCE(rating, 0) >= ${bind(query.minRating)}`)
   }
   if (query.status) {
-    clauses.push('status = ?')
-    values.push(query.status)
+    clauses.push(`status = ${bind(query.status)}`)
   }
 
   const buckets: [string | null | undefined, Bucket[], string][] = [
@@ -275,17 +313,70 @@ function indexWhere(query: CatalogQuery): { sql: string; values: SQLInputValue[]
     }
     clauses.push(`${column} IS NOT NULL`)
     if (bucket.min != null) {
-      clauses.push(`${column} >= ?`)
-      values.push(bucket.min)
+      clauses.push(`${column} >= ${bind(bucket.min)}`)
     }
     if (bucket.max != null) {
-      clauses.push(`${column} <= ?`)
-      values.push(bucket.max)
+      clauses.push(`${column} <= ${bind(bucket.max)}`)
     }
   }
 
-  return { sql: clauses.join(' AND '), values }
+  // The watch-state exclusions run HERE, in the same query, not over the
+  // returned page — see CatalogQuery's own note on why filtering afterwards
+  // makes both the page size and `total` wrong once anything is paged.
+  if (query.hideWatched) {
+    clauses.push(`NOT ${WATCHED_SQL}`)
+    usesProfile = true
+  }
+  if (query.hideDisliked) {
+    clauses.push(`NOT ${DISLIKED_SQL}`)
+    usesProfile = true
+  }
+  if (query.hideCompleted) {
+    clauses.push(`NOT ${COMPLETED_SQL}`)
+    usesProfile = true
+  }
+  if (usesProfile) values.profile = profileId
+
+  return { sql: clauses.join(' AND '), values, usesProfile }
 }
+
+/**
+ * SQL expressions for one profile's relationship to a catalog row.
+ *
+ * `watched` and `disliked` are exact — they are existence checks against the
+ * two tables that define them.
+ *
+ * `completed` is an APPROXIMATION, and the difference is worth stating rather
+ * than discovering. The in-memory version (isSeriesCompleted, via
+ * episodeWatchState) intersects the watch history with the actual list of
+ * aired episodes, so a history row for an episode the catalog does not list
+ * contributes nothing. The index stores the aired COUNT, not the episodes —
+ * that is the whole reason a series row is not several KB — so this counts
+ * distinct watched (season, episode) pairs and compares against it.
+ *
+ * The two answers differ only for a title where someone has watched episodes
+ * OUTSIDE the catalog's own episode list while still missing some inside it:
+ * their outside viewings can push the count over the line early. That needs a
+ * catalog entry whose episode list is incomplete for a show the person is
+ * partway through, which is uncommon and, when it happens, shows a badge a
+ * little early rather than corrupting anything. The detail page still
+ * computes the exact answer from real episodes.
+ *
+ * A movie has no episodes: it is complete exactly when it has been watched,
+ * which is what the in-memory version says too.
+ */
+const WATCHED_SQL =
+  'EXISTS (SELECT 1 FROM watch_history wh WHERE wh.profile_id = @profile AND wh.content_id = catalog_index.id)'
+const DISLIKED_SQL =
+  'EXISTS (SELECT 1 FROM disliked d WHERE d.profile_id = @profile AND d.content_id = catalog_index.id)'
+const WATCHED_EPISODES_SQL =
+  "(SELECT COUNT(DISTINCT wh.season || ':' || wh.episode) FROM watch_history wh" +
+  ' WHERE wh.profile_id = @profile AND wh.content_id = catalog_index.id' +
+  ' AND wh.season IS NOT NULL AND wh.episode IS NOT NULL)'
+const COMPLETED_SQL =
+  `(CASE WHEN catalog_index.kind = 'movie' THEN (${WATCHED_SQL})` +
+  ` WHEN catalog_index.aired_episodes IS NULL OR catalog_index.aired_episodes <= 0 THEN 0` +
+  ` ELSE (${WATCHED_EPISODES_SQL}) >= catalog_index.aired_episodes END)`
 
 /**
  * The ORDER BY for one sort key.
@@ -979,8 +1070,8 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
     // would let whichever source happened to be written second ERASE a good
     // value with an empty string. Blank never overwrites non-blank.
     indexPut: sql.prepare(
-      `INSERT INTO catalog_index(id,kind,title,title_sort,year,rating,runtime_min,status,poster,background,logo,description,total_seasons,total_episodes,simkl_id,grouped_ids,rank,source,first_seen,updated_at)
-       VALUES(@id,@kind,@title,@titleSort,@year,@rating,@runtime,@status,@poster,@background,@logo,@description,@totalSeasons,@totalEpisodes,@simklId,@groupedIds,@rank,@source,@now,@now)
+      `INSERT INTO catalog_index(id,kind,title,title_sort,year,rating,runtime_min,status,poster,background,logo,description,total_seasons,total_episodes,aired_episodes,simkl_id,grouped_ids,rank,source,first_seen,updated_at)
+       VALUES(@id,@kind,@title,@titleSort,@year,@rating,@runtime,@status,@poster,@background,@logo,@description,@totalSeasons,@totalEpisodes,@airedEpisodes,@simklId,@groupedIds,@rank,@source,@now,@now)
        ON CONFLICT(id,kind) DO UPDATE SET
          title=excluded.title,
          title_sort=excluded.title_sort,
@@ -994,6 +1085,7 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
          description=COALESCE(NULLIF(excluded.description,''),catalog_index.description),
          total_seasons=COALESCE(excluded.total_seasons,catalog_index.total_seasons),
          total_episodes=COALESCE(excluded.total_episodes,catalog_index.total_episodes),
+         aired_episodes=COALESCE(excluded.aired_episodes,catalog_index.aired_episodes),
          simkl_id=COALESCE(excluded.simkl_id,catalog_index.simkl_id),
          grouped_ids=COALESCE(excluded.grouped_ids,catalog_index.grouped_ids),
          rank=excluded.rank,
@@ -1933,7 +2025,7 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
             // to (see normalizeMeta) — it can never be routed to, opened or
             // played, so it must not take a row.
             if (!id) return
-            const counts = indexEpisodeCounts(item)
+            const counts = indexEpisodeCounts(item, now)
             q.indexPut.run({
               id,
               kind,
@@ -1954,6 +2046,7 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
               // it once here is what lets the index drop `videos` entirely.
               totalSeasons: counts.totalSeasons,
               totalEpisodes: counts.totalEpisodes,
+              airedEpisodes: counts.airedEpisodes,
               simklId: item.simklId != null ? String(item.simklId) : null,
               groupedIds: item.groupedIds?.length ? JSON.stringify(item.groupedIds) : null,
               rank: rankBase + offset,
@@ -2002,14 +2095,14 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
       // and precompiling them all to avoid one prepare on a keystroke-driven
       // path would be the wrong trade.
       try {
-        const where = indexWhere(query)
+        const where = indexWhere(query, currentProfileId)
         const limit = Math.max(0, Math.min(query.limit ?? 60, 500))
         const offset = Math.max(0, query.offset ?? 0)
         const total = Number(
           (
             sql
               .prepare(`SELECT COUNT(*) AS n FROM catalog_index WHERE ${where.sql}`)
-              .get(...where.values) as Row | undefined
+              .get(where.values) as Row | undefined
           )?.n ?? 0
         )
         const rows = sql
@@ -2017,19 +2110,22 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
             `SELECT id,kind,title,year,rating,runtime_min,status,poster,background,logo,description,
                     total_seasons,total_episodes,simkl_id,grouped_ids,
                     (SELECT group_concat(genre, char(31)) FROM catalog_index_genre g
-                      WHERE g.id = catalog_index.id AND g.kind = catalog_index.kind) AS genres
-             FROM catalog_index WHERE ${where.sql} ${indexOrderBy(query.sort)} LIMIT ? OFFSET ?`
+                      WHERE g.id = catalog_index.id AND g.kind = catalog_index.kind) AS genres,
+                    ${COMPLETED_SQL} AS completed
+             FROM catalog_index WHERE ${where.sql} ${indexOrderBy(query.sort)}
+             LIMIT @limit OFFSET @offset`
           )
-          .all(...where.values, limit, offset) as Row[]
+          .all({ ...where.values, profile: currentProfileId, limit, offset }) as Row[]
         return {
           items: rows.map((row) => indexRowToItem(row, query.kind, splitGenres(row.genres))),
-          total
+          total,
+          completedIds: rows.filter((row) => Number(row.completed) === 1).map((row) => String(row.id))
         }
       } catch {
         // Best-effort like every other read here. An empty page with a zero
         // total reads as "nothing matches", which is a survivable answer for
         // a browse grid; throwing would blank the window.
-        return { items: [], total: 0 }
+        return { items: [], total: 0, completedIds: [] }
       }
     },
 

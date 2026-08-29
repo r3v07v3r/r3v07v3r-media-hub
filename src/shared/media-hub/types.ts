@@ -1481,6 +1481,19 @@ export interface CatalogQuery {
   episodeLengthBucket?: string | null
   episodesBucket?: string | null
   status?: string | null
+  /**
+   * The three watch-state exclusions, applied by the SAME query rather than
+   * by the caller afterwards.
+   *
+   * This is not an optimisation. Filtering a returned page client-side makes
+   * pages shrink unpredictably — ask for 30, render 22 — and makes `total` a
+   * number that does not describe what the person is looking at. Both are
+   * invisible while the whole catalog is in memory and immediately wrong
+   * once it is paged.
+   */
+  hideWatched?: boolean
+  hideCompleted?: boolean
+  hideDisliked?: boolean
   sort?: CatalogSortKey
   offset?: number
   limit?: number
@@ -1492,6 +1505,17 @@ export interface CatalogQueryResult {
    *  This is what the category hero should quote — the size of the result,
    *  not the size of the page that came back. */
   total: number
+  /**
+   * Which of `items` count as finished, resolved against watch history.
+   *
+   * Returned separately rather than set on the CatalogItems because a
+   * CatalogItem describes a title and this describes one profile's
+   * relationship to it — the same row is complete for one person and not for
+   * another. `watched` and `disliked` are deliberately NOT here: the
+   * renderer already holds those id sets globally, and only `completed`
+   * needs a denominator (aired episodes) that lives in the database.
+   */
+  completedIds: string[]
 }
 
 /**

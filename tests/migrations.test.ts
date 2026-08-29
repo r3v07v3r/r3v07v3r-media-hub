@@ -250,6 +250,21 @@ function userVersion(sql: DatabaseSync): number {
   assert.ok(columns.has('title_sort'), 'the A-Z sort has a column to use')
   assert.ok(!columns.has('videos'), 'no per-episode data is stored here')
 
+  // Migration 3. The Completed badge counts AIRED episodes, not all of them,
+  // and the index stores the count rather than the episodes — so this column
+  // is the badge's whole denominator.
+  assert.equal(columns.get('aired_episodes'), 'INTEGER')
+  // Nullable and not backfilled on purpose: a row written by migration 2's
+  // crawl has no aired count, and "unknown" must read as not-complete. A
+  // DEFAULT 0 here would be worse than useless — it would be a denominator
+  // every series satisfies.
+  const airedNotNull = sql
+    .prepare('PRAGMA table_info(catalog_index)')
+    .all()
+    .filter((r) => String((r as Record<string, unknown>).name) === 'aired_episodes')
+    .map((r) => Number((r as Record<string, unknown>).notnull))
+  assert.deepEqual(airedNotNull, [0], 'aired_episodes must be nullable')
+
   // A composite key on (id, kind), so the same imdb id can legitimately be
   // both a movie and a series without one evicting the other.
   const indexes = new Set(
