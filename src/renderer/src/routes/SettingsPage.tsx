@@ -178,12 +178,20 @@ function SliderRow({
             if (next && next.value !== value) onChange(next.value)
           }}
         />
-        {/* Only the ends are labelled. Labelling every stop reintroduces the
-            width problem the pills had, and the current value is already
-            named above — these two only have to say which way is more. */}
+        {/* EVERY STOP IS LABELLED, and the one in effect is marked.
+            Labelling only the ends said which way was "more" and left you
+            counting notches to work out where the thumb had landed — the
+            value named above told you what it WAS, but not where it sat on
+            the scale, or what the next step along would be. */}
         <div className={styles.sliderScale} aria-hidden="true">
-          <span>{options[0].label}</span>
-          <span>{options[options.length - 1].label}</span>
+          {options.map((option, i) => (
+            <span
+              key={option.value}
+              className={i === index ? styles.sliderStopActive : styles.sliderStop}
+            >
+              {option.label}
+            </span>
+          ))}
         </div>
       </div>
     </div>
@@ -1449,7 +1457,7 @@ export default function SettingsPage({
                   setStreamLimits(mediaHubSettings?.maxStreamResolution ?? 0, Number(value))
                 }
               />
-              <SliderRow
+              <SegmentedRow
                 icon="display"
                 title="Where to play from"
                 description="A media server on your own network starts instantly and costs no bandwidth. Balanced prefers it unless a noticeably better copy exists elsewhere; Media server prefers it whenever it has the title at all; Best quality ignores where a copy lives and picks the best one."
@@ -1457,9 +1465,72 @@ export default function SettingsPage({
                 options={SOURCE_PREFERENCE_OPTIONS}
                 onChange={(value) => setSourcePreference(value as SourcePreference)}
               />
+              <div className={styles.row}>
+                <div className={styles.rowIcon} aria-hidden="true">
+                  <Icon name="gauge" size={17} />
+                </div>
+                <div className={styles.rowText}>
+                  <span className={styles.rowTitle}>Connection recommendation</span>
+                  <span className={styles.rowDescription}>
+                    Runs only when requested. Downloads 1 MB, and keeps going only if that finishes
+                    too fast to measure — a slow or metered connection is never asked for more than
+                    the 1 MB. It considers this screen and saves suggested limits without locking
+                    them.
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  className={styles.testButton}
+                  disabled={speedTest.kind === 'busy'}
+                  onClick={runSpeedTest}
+                >
+                  {speedTest.kind === 'busy'
+                    ? 'Testing…'
+                    : mediaHubSettings?.connectionSpeedMbps
+                      ? 'Retest'
+                      : 'Run test'}
+                </button>
+              </div>
+              {(speedTest.message || mediaHubSettings?.connectionSpeedMbps) && (
+                <span
+                  className={`${styles.statusMessage} ${speedTest.kind === 'error' ? styles.statusError : styles.statusOk}`}
+                >
+                  {speedTest.message ||
+                    `Last result: ${mediaHubSettings?.connectionSpeedMbps} Mbps.`}
+                </span>
+              )}
+              <div className={styles.row}>
+                <div className={styles.rowIcon} aria-hidden="true">
+                  <Icon name="net" size={17} />
+                </div>
+                <div className={styles.rowText}>
+                  <span className={styles.rowTitle}>Local network address</span>
+                  <span className={styles.rowDescription}>
+                    What Watch Party shares on your LAN when hosting directly.
+                  </span>
+                </div>
+                <span className={styles.rowValue}>{networkInfo?.lanIp ?? '—'}</span>
+              </div>
+            </section>
+            {/* ITS OWN CARD, lifted out of Network.
+
+                Network had grown to eight rows and was by far the tallest
+                panel on the face — the thing that made the column run off
+                the bottom. It also mixed two unrelated questions: what to
+                fetch and how good it should be, versus what to keep on disk
+                while it plays.
+
+                Splitting them is what makes the second question skippable.
+                Somebody streaming straight from TorBox and keeping nothing
+                can ignore this whole card, and the rows that only mean
+                something on disk disappear the moment they say so. */}
+            <section className={`${styles.section} glass-panel`} aria-labelledby="settings-storage">
+              <h2 id="settings-storage" className={styles.sectionTitle}>
+                Storage while playing
+              </h2>
               <SegmentedRow
                 icon="downloads"
-                title="Storage while playing"
+                title="Where the buffer lives"
                 description="Cache to disk buffers ahead on your drive, so you can rewind freely and resume later. Memory only keeps everything in RAM and writes nothing about what you watch to disk — it needs a faster connection and gives you a shorter buffer."
                 value={mediaHubSettings?.cacheMode ?? 'disk'}
                 options={CACHE_MODE_OPTIONS}
@@ -1489,6 +1560,13 @@ export default function SettingsPage({
                   onChange={setStreamCacheSize}
                 />
               )}
+              {/* DISK ONLY. Where the cache lives and a button to clear it
+                  mean nothing when nothing is being written to disk — in
+                  memory-only they were two controls that could not do
+                  anything, which is exactly the redundancy worth removing
+                  rather than greying out. */}
+              {mediaHubSettings?.cacheMode !== 'memory' && (
+                <>
               <div className={styles.row}>
                 <div className={styles.rowIcon} aria-hidden="true">
                   <Icon name="downloads" size={17} />
@@ -1551,52 +1629,8 @@ export default function SettingsPage({
                   {streamCacheClearStatus.message}
                 </span>
               )}
-              <div className={styles.row}>
-                <div className={styles.rowIcon} aria-hidden="true">
-                  <Icon name="gauge" size={17} />
-                </div>
-                <div className={styles.rowText}>
-                  <span className={styles.rowTitle}>Connection recommendation</span>
-                  <span className={styles.rowDescription}>
-                    Runs only when requested. Downloads 1 MB, and keeps going only if that finishes
-                    too fast to measure — a slow or metered connection is never asked for more than
-                    the 1 MB. It considers this screen and saves suggested limits without locking
-                    them.
-                  </span>
-                </div>
-                <button
-                  type="button"
-                  className={styles.testButton}
-                  disabled={speedTest.kind === 'busy'}
-                  onClick={runSpeedTest}
-                >
-                  {speedTest.kind === 'busy'
-                    ? 'Testing…'
-                    : mediaHubSettings?.connectionSpeedMbps
-                      ? 'Retest'
-                      : 'Run test'}
-                </button>
-              </div>
-              {(speedTest.message || mediaHubSettings?.connectionSpeedMbps) && (
-                <span
-                  className={`${styles.statusMessage} ${speedTest.kind === 'error' ? styles.statusError : styles.statusOk}`}
-                >
-                  {speedTest.message ||
-                    `Last result: ${mediaHubSettings?.connectionSpeedMbps} Mbps.`}
-                </span>
+                </>
               )}
-              <div className={styles.row}>
-                <div className={styles.rowIcon} aria-hidden="true">
-                  <Icon name="net" size={17} />
-                </div>
-                <div className={styles.rowText}>
-                  <span className={styles.rowTitle}>Local network address</span>
-                  <span className={styles.rowDescription}>
-                    What Watch Party shares on your LAN when hosting directly.
-                  </span>
-                </div>
-                <span className={styles.rowValue}>{networkInfo?.lanIp ?? '—'}</span>
-              </div>
             </section>
           </div>
         </section>
