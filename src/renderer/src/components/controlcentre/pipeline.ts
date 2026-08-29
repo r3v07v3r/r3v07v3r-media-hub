@@ -10,6 +10,14 @@
 // with none of them: a node you can click that cannot do anything is worse
 // than an empty slot, and subtitles are fetched by the app itself, so there
 // is nothing for Bazarr to do here even if somebody ran one.
+//
+// R3'S OWN FUNCTION COMES FIRST in every stage that has one, because it is
+// what runs when nothing else is set up — and a stage whose only live node
+// sat below two dark ones read as though nothing was doing the job at all.
+// Something always is. R3 tracks what you are watching and works out what is
+// wanted next (shared/lancache/wantedList.ts) whether or not Sonarr exists,
+// and the player reads the subtitle tracks inside a file whether or not a
+// subtitle service is linked. Those are real steps and they are drawn.
 
 import type { ServiceId } from '@shared/ipc-types'
 
@@ -42,9 +50,11 @@ export interface PipelineStage {
   /** What this step is for, in the person's terms. */
   blurb: string
   nodes: PipelineNode[]
-  /** Shown when nothing in the stage is active. Says what WOULD go here, so
-   *  an empty stage is an instruction rather than a gap. */
-  empty: string
+  /** Shown when no OUTSIDE service is filling this stage — R3's own function
+   *  does not count, or the hint would vanish the moment the stage stopped
+   *  being empty and take its suggestion with it. Says what adding something
+   *  would buy, rather than reporting a deficiency. */
+  hint: string
 }
 
 export const PIPELINE: PipelineStage[] = [
@@ -53,7 +63,7 @@ export const PIPELINE: PipelineStage[] = [
     label: 'Request',
     icon: 'search',
     blurb: 'You ask for something',
-    empty: '',
+    hint: '',
     nodes: [
       {
         id: 'r3-browse',
@@ -69,21 +79,21 @@ export const PIPELINE: PipelineStage[] = [
     label: 'Discovery',
     icon: 'planet',
     blurb: 'Something finds releases',
-    empty: '',
+    hint: '',
     nodes: [
-      {
-        id: 'prowlarr',
-        label: 'Prowlarr',
-        detail: 'Indexer manager',
-        icon: 'net',
-        config: { kind: 'service', service: 'prowlarr' }
-      },
       {
         id: 'r3-scrapers',
         label: 'R3 scrapers',
         detail: 'Built in',
         icon: 'stack',
         config: { kind: 'builtin' }
+      },
+      {
+        id: 'prowlarr',
+        label: 'Prowlarr',
+        detail: 'Indexer manager',
+        icon: 'net',
+        config: { kind: 'service', service: 'prowlarr' }
       }
     ]
   },
@@ -92,8 +102,15 @@ export const PIPELINE: PipelineStage[] = [
     label: 'Management',
     icon: 'calendar',
     blurb: 'Something decides what to keep',
-    empty: 'Sonarr or Radarr would track series and films and ask for them itself.',
+    hint: 'Sonarr or Radarr can take this over, with their own quality rules and release profiles.',
     nodes: [
+      {
+        id: 'r3-tracking',
+        label: 'R3 tracking',
+        detail: 'My List, next up',
+        icon: 'tracked',
+        config: { kind: 'builtin' }
+      },
       {
         id: 'sonarr',
         label: 'Sonarr',
@@ -115,7 +132,7 @@ export const PIPELINE: PipelineStage[] = [
     label: 'Download',
     icon: 'downloads',
     blurb: 'Something fetches it',
-    empty: 'Nothing can download. Link TorBox or connect qBittorrent.',
+    hint: 'Nothing can fetch a release yet. Link TorBox or connect qBittorrent.',
     nodes: [
       {
         id: 'torbox',
@@ -138,8 +155,15 @@ export const PIPELINE: PipelineStage[] = [
     label: 'Process',
     icon: 'waveform',
     blurb: 'Subtitles are found',
-    empty: 'No subtitle service is linked, so only subtitles inside the file are used.',
+    hint: 'Only what is already in the file. Link a subtitle service to search for more.',
     nodes: [
+      {
+        id: 'embedded-subs',
+        label: 'In the file',
+        detail: 'Embedded tracks',
+        icon: 'name',
+        config: { kind: 'builtin' }
+      },
       {
         id: 'opensubtitles',
         label: 'OpenSubtitles',
@@ -161,7 +185,7 @@ export const PIPELINE: PipelineStage[] = [
     label: 'Storage',
     icon: 'stack',
     blurb: 'It is kept on the way past',
-    empty: '',
+    hint: '',
     nodes: [
       {
         id: 'playback-cache',
@@ -191,7 +215,7 @@ export const PIPELINE: PipelineStage[] = [
     label: 'Stream / play',
     icon: 'play-outline',
     blurb: 'It plays',
-    empty: 'No player was found, so playback cannot start.',
+    hint: '',
     nodes: [
       {
         id: 'mpv',

@@ -54,7 +54,16 @@
   margin-right: 26px;
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-large);
-  background: rgba(255, 255, 255, 0.015);
+  /* Frosted, not opaque. The rain still moves behind the column — that is
+     the look — but the nodes sit on a settled surface instead of directly
+     on moving glyphs, which is what makes a selection easy to pick out.
+
+     Seven of these is the whole cost, and only while this section is open.
+     A backdrop-filter per NODE would be forty-odd and was not worth it: the
+     column carries the effect and the nodes read fine against it. */
+  background: rgba(6, 26, 18, 0.42);
+  backdrop-filter: blur(14px) saturate(1.15);
+  -webkit-backdrop-filter: blur(14px) saturate(1.15);
 }
 
 .stage:last-child {
@@ -107,7 +116,7 @@
   padding: 9px 10px;
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-medium, 12px);
-  background: rgba(0, 0, 0, 0.22);
+  background: rgba(0, 0, 0, 0.34);
   color: var(--text-secondary);
   text-align: left;
   cursor: pointer;
@@ -185,7 +194,7 @@
   box-shadow: 0 0 8px rgba(39, 230, 154, 0.6);
 }
 
-.stageEmpty {
+.stageHint {
   margin: 2px 0 0;
   font-size: 0.72rem;
   line-height: 1.45;
