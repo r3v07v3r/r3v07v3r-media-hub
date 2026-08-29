@@ -149,7 +149,7 @@ export function ControlCentreFace() {
             >
               {entry.id === 'settings' ? <SettingsPage embedded /> : null}
               {entry.id === 'caching' ? <CachingSection /> : null}
-              {entry.id === 'pipeline' ? <PipelineSection /> : null}
+              {entry.id === 'pipeline' ? <PipelineSection onNavigate={setSection} /> : null}
               {entry.id === 'services' ? <ServicesSection /> : null}
             </div>
           ))}

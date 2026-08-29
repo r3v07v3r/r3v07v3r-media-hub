@@ -27,10 +27,17 @@ export type NodeConfig =
   /** One of the five servers in ServiceSettings: address, key, on/off, and
    *  a connection test — all editable right here. */
   | { kind: 'service'; service: ServiceId }
-  /** An account linked elsewhere in the app (TorBox, the subtitle
-   *  providers). Shown with its live state and a pointer to where it is
-   *  linked, rather than a second copy of a credential form. */
-  | { kind: 'account'; where: string }
+  /** An account with credentials, linked and unlinked right here. The
+   *  `account` id selects which fields and which bridge call — those live in
+   *  the section, because this file is the shape of the pipeline and not a
+   *  place to put IPC. */
+  | { kind: 'account'; account: 'torbox' | 'opensubtitles' | 'subdl' }
+  /** The cache server, whose setup is a multi-step join-and-be-approved flow
+   *  that already has a section of its own. The ONLY node that sends you
+   *  somewhere else, and it is a button that takes you there rather than a
+   *  sentence telling you to go: two places holding a pending pairing would
+   *  be two places for it to disagree. */
+  | { kind: 'section'; section: 'caching' }
   /** The app itself, or something it ships with. Nothing to configure. */
   | { kind: 'builtin' }
 
@@ -139,7 +146,7 @@ export const PIPELINE: PipelineStage[] = [
         label: 'TorBox',
         detail: 'Debrid',
         icon: 'lightning',
-        config: { kind: 'account', where: 'Settings → Accounts' }
+        config: { kind: 'account', account: 'torbox' }
       },
       {
         id: 'qbittorrent',
@@ -169,14 +176,14 @@ export const PIPELINE: PipelineStage[] = [
         label: 'OpenSubtitles',
         detail: 'Subtitles',
         icon: 'name',
-        config: { kind: 'account', where: 'Settings → Accounts' }
+        config: { kind: 'account', account: 'opensubtitles' }
       },
       {
         id: 'subdl',
         label: 'SubDL',
         detail: 'Subtitles',
         icon: 'name',
-        config: { kind: 'account', where: 'Settings → Accounts' }
+        config: { kind: 'account', account: 'subdl' }
       }
     ]
   },
@@ -199,7 +206,7 @@ export const PIPELINE: PipelineStage[] = [
         label: 'Cache server',
         detail: 'On your network',
         icon: 'wifi',
-        config: { kind: 'account', where: 'the Caching section' }
+        config: { kind: 'section', section: 'caching' }
       },
       {
         id: 'jellyfin-library',
