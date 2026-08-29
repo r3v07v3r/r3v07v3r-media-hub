@@ -48,6 +48,14 @@ function ago(at: number | undefined): string {
   return hours < 48 ? `${hours} h ago` : `${Math.round(hours / 24)} d ago`
 }
 
+/** SxxEyy, zero padded. "S2 · E7" and "S12 · E7" do not line up in a list;
+ *  the padded form is the one people already read on release names. */
+function episodeLabel(season?: number, episode?: number): string {
+  if (season === undefined || episode === undefined) return ''
+  const pad = (n: number): string => String(n).padStart(2, '0')
+  return `S${pad(season)}E${pad(episode)}`
+}
+
 function bytes(value: number | null | undefined): string {
   if (value === null || value === undefined) return '—'
   if (value < 1024 ** 3) return `${Math.max(0, Math.round(value / 1024 ** 2))} MB`
@@ -168,9 +176,9 @@ export function CachingSection() {
     <header className={styles.head}>
       <h2 className={styles.title}>Caching</h2>
       <p className={styles.blurb}>
-        A machine on your own network that fetches what you plan to watch ahead of time, so
-        playback starts one LAN hop away instead of over a slow link. Everything it stores expires
-        on its own.
+        A machine on your own network that fetches what you plan to watch ahead of time, so playback
+        starts one LAN hop away instead of over a slow link. Everything it stores expires on its
+        own.
       </p>
     </header>
   )
@@ -184,14 +192,11 @@ export function CachingSection() {
       <div className={styles.wrap}>
         {header}
         <section className={`${styles.card} glass-panel`}>
-          <p className={styles.note}>
-            Cache servers are managed from the desktop app.
-          </p>
+          <p className={styles.note}>Cache servers are managed from the desktop app.</p>
         </section>
       </div>
     )
   }
-
 
   const guard = async (work: () => Promise<void>): Promise<void> => {
     mutatingRef.current = true
@@ -283,10 +288,7 @@ export function CachingSection() {
       await refreshMyItems()
     })
 
-  const handleAdminSetting = (patch: {
-    openJoin?: boolean
-    defaultQuotaPercent?: number
-  }): void =>
+  const handleAdminSetting = (patch: { openJoin?: boolean; defaultQuotaPercent?: number }): void =>
     void guard(async () => {
       const result = await api.adminSettings(patch)
       if (!result.ok) setMessage({ ok: false, text: result.message ?? 'That did not work.' })
@@ -318,11 +320,16 @@ export function CachingSection() {
             <h3 className={styles.cardTitle}>Waiting to be let in</h3>
             <p className={styles.note}>
               This device has asked to join {pairedUrl ?? 'the cache server'}. Whoever administers
-              that server approves it there — nothing else is needed here, and this will notice
-              when it happens.
+              that server approves it there — nothing else is needed here, and this will notice when
+              it happens.
             </p>
           </div>
-          <button type="button" className={styles.ghostButton} onClick={handleLeave} disabled={busy}>
+          <button
+            type="button"
+            className={styles.ghostButton}
+            onClick={handleLeave}
+            disabled={busy}
+          >
             Cancel
           </button>
         </section>
@@ -415,8 +422,8 @@ export function CachingSection() {
                 <p className={styles.note}>
                   It answers without the per-device figures, so &ldquo;Yours&rdquo; and the other
                   devices&rsquo; queue are blank, and it has no notion of an administrator yet —
-                  which is why there is nothing here to take. It updates itself; this appears
-                  once it has.
+                  which is why there is nothing here to take. It updates itself; this appears once
+                  it has.
                 </p>
               </div>
             </section>
@@ -458,8 +465,7 @@ export function CachingSection() {
                 <div>
                   <h3 className={styles.cardTitle}>Devices</h3>
                   <p className={styles.note}>
-                    You administer this server. Devices ask to join and wait here until you say
-                    yes.
+                    You administer this server. Devices ask to join and wait here until you say yes.
                   </p>
                 </div>
               </div>
@@ -569,8 +575,8 @@ export function CachingSection() {
                     Anyone on this network may join without asking
                   </span>
                   <span className={styles.note}>
-                    Convenient on a network only your household reaches. Off, every new device
-                    waits for you.
+                    Convenient on a network only your household reaches. Off, every new device waits
+                    for you.
                   </span>
                 </span>
                 {/* A switch rather than a checkbox: it is the same
@@ -621,7 +627,9 @@ export function CachingSection() {
               <div>
                 <h3 className={styles.cardTitle}>{status?.serverName ?? 'Cache server'}</h3>
                 <p className={styles.note}>
-                  {statusError ? `${pairedUrl} — unreachable right now (${statusError})` : pairedUrl}
+                  {statusError
+                    ? `${pairedUrl} — unreachable right now (${statusError})`
+                    : pairedUrl}
                 </p>
               </div>
               <button
@@ -646,8 +654,8 @@ export function CachingSection() {
                       />
                     </span>
                     <span className={styles.meterValue}>
-                      {bytes(status.usedBytes)} of {bytes(status.budgetBytes)} ·{' '}
-                      {status.itemCount} title{status.itemCount === 1 ? '' : 's'}
+                      {bytes(status.usedBytes)} of {bytes(status.budgetBytes)} · {status.itemCount}{' '}
+                      title{status.itemCount === 1 ? '' : 's'}
                     </span>
                   </div>
                   <div className={styles.meter}>
@@ -673,13 +681,18 @@ export function CachingSection() {
                     <dd>{status.activeStreams}</dd>
                   </div>
                   <div>
-                    <dt>Your queue</dt>
+                    {/* An administrator is shown the whole queue, so calling
+                        it "yours" would be wrong; everyone else is looking at
+                        a list that really is only their own. */}
+                    <dt>{status.isAdmin ? 'Queue' : 'Your queue'}</dt>
                     <dd>{status.jobs.length}</dd>
                   </div>
-                  <div>
-                    <dt>Other devices&apos; queue</dt>
-                    <dd>{status.othersJobCount}</dd>
-                  </div>
+                  {Boolean(status.othersJobCount) && (
+                    <div>
+                      <dt>Other devices&apos; queue</dt>
+                      <dd>{status.othersJobCount}</dd>
+                    </div>
+                  )}
                   <div>
                     <dt>Your TorBox account</dt>
                     <dd>{status.torboxLinked ? 'Linked' : 'Not linked'}</dd>
@@ -698,7 +711,17 @@ export function CachingSection() {
                               They were always different episodes. */}
                           {job.season !== undefined && job.episode !== undefined && (
                             <span className={styles.jobEpisode}>
-                              S{job.season} · E{job.episode}
+                              {episodeLabel(job.season, job.episode)}
+                            </span>
+                          )}
+                          {/* What this entry is doing on the server. The reason comes from
+                                the wanted list, which already knew; the name is sent to the
+                                administrator only, since anyone else is looking at a list of
+                                their own jobs where it could only ever say "you". */}
+                          {job.reason && (
+                            <span className={styles.jobReason}>
+                              {job.reason === 'watching' ? 'Watching' : 'Prefetch'}
+                              {job.ownerName ? `: ${job.ownerName}` : ''}
                             </span>
                           )}
                         </span>
@@ -743,9 +766,7 @@ export function CachingSection() {
                     </div>
                     <div>
                       <dt>Newest seen</dt>
-                      <dd className={styles.factSmall}>
-                        {status.updater.latestSeen || '—'}
-                      </dd>
+                      <dd className={styles.factSmall}>{status.updater.latestSeen || '—'}</dd>
                     </div>
                     <div>
                       <dt>Staged</dt>
@@ -756,14 +777,14 @@ export function CachingSection() {
 
                 {status.updater?.staged ? (
                   <p className={styles.note}>
-                    {status.updater.staged} is ready. It applies once no one has streamed for
-                    half an hour and the hour is a quiet one for this household — or after 24
-                    hours staged, whichever comes first.
+                    {status.updater.staged} is ready. It applies once no one has streamed for half
+                    an hour and the hour is a quiet one for this household — or after 24 hours
+                    staged, whichever comes first.
                   </p>
                 ) : (
                   <p className={styles.note}>
-                    Nothing staged. The server looks for a new build every four to six hours, so
-                    a release published since its last check has not been seen yet.
+                    Nothing staged. The server looks for a new build every four to six hours, so a
+                    release published since its last check has not been seen yet.
                   </p>
                 )}
 
@@ -776,12 +797,10 @@ export function CachingSection() {
             )}
           </section>
 
-
           {/* Claiming is offered only while the server says nobody owns it.
               It is on the unauthenticated ping for exactly this reason: an
               app that has just found a daemon has to know whether to show
               this before it holds any credential. */}
-
 
           {/* YOUR OWN TITLES, and who else can reach them.
 
@@ -801,8 +820,8 @@ export function CachingSection() {
                 <div>
                   <h3 className={styles.cardTitle}>What you have cached</h3>
                   <p className={styles.note}>
-                    Titles you fetched onto this server. Shared ones can be streamed by anyone
-                    else who has joined it; private ones only by you.
+                    Titles you fetched onto this server. Shared ones can be streamed by anyone else
+                    who has joined it; private ones only by you.
                   </p>
                 </div>
               </div>

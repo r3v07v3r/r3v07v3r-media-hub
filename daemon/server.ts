@@ -161,7 +161,7 @@ async function serveFile(
 }
 
 export function createDaemonServer(deps: ServerDeps): http.Server {
-  const { storage, jobs, pairing, credentials, activity, serverName, version, admin} = deps
+  const { storage, jobs, pairing, credentials, activity, serverName, version, admin } = deps
 
   return http.createServer((req, res) => {
     void handle(req, res).catch((error) => {
@@ -524,9 +524,7 @@ export function createDaemonServer(deps: ServerDeps): http.Server {
     }
 
     if (route === 'GET /api/items/mine') {
-      const mine = (await storage.list()).filter(
-        (item) => item.ownerDeviceId === callerDeviceId
-      )
+      const mine = (await storage.list()).filter((item) => item.ownerDeviceId === callerDeviceId)
       json(res, 200, {
         items: mine.map((item) => ({
           infoHash: item.infoHash,
@@ -575,8 +573,7 @@ export function createDaemonServer(deps: ServerDeps): http.Server {
         .list()
         .filter(
           (job) =>
-            (job.state === 'queued' || job.state === 'fetching') &&
-            wanted.has(job.contentKey)
+            (job.state === 'queued' || job.state === 'fetching') && wanted.has(job.contentKey)
         )
       const tombstones = await storage.tombstones()
       json(res, 200, {
@@ -635,6 +632,10 @@ export function createDaemonServer(deps: ServerDeps): http.Server {
         resolution: Number(body.resolution) || undefined,
         sizeBytes: Number(body.sizeBytes) || undefined,
         sources: Array.isArray(body.sources) ? body.sources.map(String).slice(0, 20) : undefined,
+        // Why the app wants it, for the queue to show. Matched against the
+        // two it may be rather than cast, so an unknown value is dropped
+        // instead of being stored and rendered as a label nobody wrote.
+        reason: body.reason === 'watching' || body.reason === 'prefetch' ? body.reason : undefined,
         ownerDeviceId: callerDeviceId
       })
       if (!record) {
@@ -680,6 +681,24 @@ export function createDaemonServer(deps: ServerDeps): http.Server {
       // without saying what anyone is fetching.
       const allJobs = jobs.list()
       const mine = allJobs.filter((job) => job.ownerDeviceId === callerDeviceId)
+
+      // WHO SEES WHOSE, and this is a deliberate change of position.
+      //
+      // Jobs were scoped to the caller with no exception for the admin, on
+      // the grounds that admin is not a master key. That still holds for
+      // items — nothing lists another device's files. But a cache list that
+      // cannot say who wants a title cannot answer the first question an
+      // administrator has about their own disk: whose is this, and why.
+      //
+      // So the ADMIN sees the whole queue with owner names; every other
+      // device still sees only its own. The narrow reading: on a server you
+      // administer, the queue is operational information about your
+      // hardware. It is still a real disclosure, and it is confined to the
+      // one person who already decides who may join at all.
+      const deviceNames = new Map(
+        pairing.listDevices().map((device) => [deviceIdForToken(device.token), device.deviceName])
+      )
+      const visibleJobs = isAdminCaller ? allJobs : mine
       json(res, 200, {
         serverName,
         version,
@@ -692,8 +711,13 @@ export function createDaemonServer(deps: ServerDeps): http.Server {
         quotaBytes: callerDevice?.quotaBytes ?? effectiveDefaultQuota(),
         isAdmin: admin.isAdmin(callerDeviceId),
         unclaimed: admin.isUnclaimed(),
-        jobs: mine.map(summarizeJob),
-        othersJobCount: allJobs.length - mine.length,
+        jobs: visibleJobs.map((job) => summarizeJob(job, deviceNames.get(job.ownerDeviceId ?? ''))),
+        // What is on this server that the caller is NOT being shown. For a
+        // member that is everyone else's work — enough to explain why the
+        // box is busy without saying what it is busy with. For the admin,
+        // who now sees the queue in full, nothing is withheld, so it is 0
+        // rather than a number that double-counts what is already listed.
+        othersJobCount: allJobs.length - visibleJobs.length,
         // The CALLER's own opt-in state — each member sees whether THEIR
         // account is linked, plus how many household members are.
         torboxLinked: Boolean(credentials.tokenForDevice(callerDeviceId)),
@@ -745,8 +769,7 @@ export function createDaemonServer(deps: ServerDeps): http.Server {
     const sharingMatch = /^\/api\/items\/([a-f0-9]{40})\/sharing$/.exec(url.pathname)
     if (sharingMatch && req.method === 'POST') {
       const item = await storage.get(sharingMatch[1])
-      const mayChange =
-        Boolean(item) && (item?.ownerDeviceId === callerDeviceId || isAdminCaller)
+      const mayChange = Boolean(item) && (item?.ownerDeviceId === callerDeviceId || isAdminCaller)
       // Same shape as the stream route: somebody who may not touch this
       // item learns nothing about whether it is here.
       if (!item || !mayChange) {
@@ -790,9 +813,11 @@ function episodeOf(contentKey: string): { season?: number; episode?: number } {
   return { season, episode }
 }
 
-function summarizeJob(job: JobRecord): Record<string, unknown> {
+function summarizeJob(job: JobRecord, ownerName?: string): Record<string, unknown> {
   return {
     contentKey: job.contentKey,
+    reason: job.reason,
+    ownerName,
     title: job.title,
     state: job.state,
     attempts: job.attempts,
