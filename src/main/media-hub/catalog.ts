@@ -19,8 +19,11 @@
 // job.
 
 import type {
+  CatalogFacets,
   CatalogItem,
   CatalogListing,
+  CatalogQuery,
+  CatalogQueryResult,
   ConnectResult,
   Episode,
   MediaKind,
@@ -1095,6 +1098,10 @@ interface CatalogListPayload {
   force?: unknown
 }
 
+interface CatalogFacetsPayload {
+  kind?: unknown
+}
+
 interface CatalogMetaPayload {
   type: MediaKind
   id: string
@@ -1119,6 +1126,25 @@ export function registerCatalogIpc(): void {
       const force = payload?.force === true
       if (!isValidCatalogKind(kind)) throw new Error('Unsupported catalog.')
       return catalogListing(kind, force)
+    }
+  )
+
+  // Reads the index directly and does NOT crawl. That is deliberate: this is
+  // a keystroke-driven path (every filter change is a new query), and a
+  // handler that could trigger a six-hourly crawl on a dropdown change would
+  // put a network round trip behind a UI control. Filling the index stays the
+  // job of catalog:list and the background refresh; this only ever reports
+  // what is already there.
+  handle<CatalogQuery, CatalogQueryResult>(MEDIA_HUB_CHANNELS.catalogQuery, async (_e, query) => {
+    if (!isValidCatalogKind(query?.kind)) throw new Error('Unsupported catalog.')
+    return getDatabase().indexQuery(query)
+  })
+
+  handle<CatalogFacetsPayload, CatalogFacets>(
+    MEDIA_HUB_CHANNELS.catalogFacets,
+    async (_e, { kind }) => {
+      if (!isValidCatalogKind(kind)) throw new Error('Unsupported catalog.')
+      return getDatabase().indexFacets(kind)
     }
   )
 

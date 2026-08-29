@@ -6,7 +6,12 @@
 // sqlite.d.ts) which already ships the v22 `node:sqlite` surface, so no
 // ambient declarations were needed here.
 import crypto from 'node:crypto'
-import { DatabaseSync, type SQLOutputValue, type StatementSync } from 'node:sqlite'
+import {
+  DatabaseSync,
+  type SQLInputValue,
+  type SQLOutputValue,
+  type StatementSync
+} from 'node:sqlite'
 import { readBackup, restoreBackup, writeBackup, type RestoreSummary } from './backup'
 import { migrate } from './migrations'
 import { MAX_RATING, MIN_RATING, ratingWeight } from '../../shared/media-hub/rating'
@@ -16,9 +21,21 @@ import {
   parseYear,
   titleSortKey
 } from '../../shared/media-hub/catalogFields'
+import {
+  findBucket,
+  EPISODES_BUCKETS,
+  EPISODE_LENGTH_BUCKETS,
+  RUNTIME_BUCKETS,
+  SEASONS_BUCKETS,
+  type Bucket
+} from '../../shared/media-hub/catalogFilters'
 import { runtimeMinutesOrZero } from '../../shared/media-hub/runtime'
 import type {
+  CatalogFacets,
   CatalogItem,
+  CatalogQuery,
+  CatalogQueryResult,
+  CatalogSortKey,
   Episode,
   HistoryEntry,
   ImportedPlay,
@@ -188,6 +205,125 @@ function splitGenres(value: SQLOutputValue | undefined): string[] {
   return String(value)
     .split(GENRE_DELIMITER)
     .filter(Boolean)
+}
+
+/**
+ * The WHERE fragments and bound values for one browse query.
+ *
+ * Every clause here reproduces a specific line of the renderer's
+ * applyCategoryFilters, and the NULL handling is the part worth reading
+ * twice — it is where a SQL rewrite most easily changes a filter's meaning
+ * without looking like it has:
+ *
+ *  - `year = ?` excludes rows with no year, because the original compared
+ *    `String(releaseYear ?? '')` against the filter and '' never matched.
+ *  - `COALESCE(rating,0) >= ?` treats an unrated title as 0, because the
+ *    original wrote `(communityRating ?? 0) < minRating`.
+ *  - every bucket requires its column to be NOT NULL, because the original
+ *    bailed on `item.<field> == null` before it ever ran the test. A title
+ *    with no known runtime is not evidence of a short one.
+ *
+ * A bucket value that resolves to no bucket contributes `0` — matches
+ * nothing — rather than being dropped. Dropping it would turn a stale
+ * bookmark into "show everything", which is the opposite of what the
+ * original's `if (!bucket) return false` did.
+ */
+function indexWhere(query: CatalogQuery): { sql: string; values: SQLInputValue[] } {
+  const clauses: string[] = ['kind = ?']
+  const values: SQLInputValue[] = [query.kind]
+
+  if (query.genre) {
+    clauses.push(
+      'EXISTS (SELECT 1 FROM catalog_index_genre g WHERE g.id = catalog_index.id AND g.kind = catalog_index.kind AND g.genre = ?)'
+    )
+    values.push(query.genre)
+  }
+  if (query.year) {
+    const year = parseInt(query.year, 10)
+    if (Number.isFinite(year)) {
+      clauses.push('year = ?')
+      values.push(year)
+    } else {
+      clauses.push('0')
+    }
+  }
+  if (query.minRating != null) {
+    clauses.push('COALESCE(rating, 0) >= ?')
+    values.push(query.minRating)
+  }
+  if (query.status) {
+    clauses.push('status = ?')
+    values.push(query.status)
+  }
+
+  const buckets: [string | null | undefined, Bucket[], string][] = [
+    [query.runtimeBucket, RUNTIME_BUCKETS, 'runtime_min'],
+    [query.seasonsBucket, SEASONS_BUCKETS, 'total_seasons'],
+    // Deliberately the same column as the runtime bucket: for a series the
+    // stored runtime IS the per-episode length. Different boundaries, one
+    // measurement — matching applyCategoryFilters, which reads
+    // item.runtimeMinutes for both.
+    [query.episodeLengthBucket, EPISODE_LENGTH_BUCKETS, 'runtime_min'],
+    [query.episodesBucket, EPISODES_BUCKETS, 'total_episodes']
+  ]
+  for (const [value, list, column] of buckets) {
+    if (!value) continue
+    const bucket = findBucket(list, value)
+    if (!bucket) {
+      clauses.push('0')
+      continue
+    }
+    clauses.push(`${column} IS NOT NULL`)
+    if (bucket.min != null) {
+      clauses.push(`${column} >= ?`)
+      values.push(bucket.min)
+    }
+    if (bucket.max != null) {
+      clauses.push(`${column} <= ?`)
+      values.push(bucket.max)
+    }
+  }
+
+  return { sql: clauses.join(' AND '), values }
+}
+
+/**
+ * The ORDER BY for one sort key.
+ *
+ * `rank, id` is appended to every one of them, and it is not decoration.
+ * JavaScript's Array.prototype.sort is stable, so the in-memory sort this
+ * replaces left equal-valued titles in their original (rank) order; SQLite
+ * guarantees no such thing. Without an explicit total order, two titles with
+ * the same year could swap between two calls — which for a PAGED reader
+ * means seeing one of them twice and the other never.
+ *
+ * COALESCE mirrors the original's `?? 0` on every nullable term, so an
+ * unknown year sorts where "year 0" would rather than wherever SQLite
+ * happens to put NULL.
+ *
+ * KNOWN, BOUNDED DIFFERENCE: 'title-asc' was `a.title.localeCompare(b.title)`
+ * and is now `ORDER BY title_sort`, a byte comparison over the lowercased
+ * title. The two agree for ASCII titles, which is the overwhelming majority
+ * here, but can disagree on accented or non-Latin ones — SQLite has no
+ * locale-aware collation without ICU, and inventing an approximation of one
+ * would be a worse kind of wrong than a documented limit.
+ */
+function indexOrderBy(sort: CatalogSortKey | undefined): string {
+  switch (sort) {
+    case 'title-asc':
+      return 'ORDER BY title_sort, rank, id'
+    case 'year-desc':
+      return 'ORDER BY COALESCE(year, 0) DESC, rank, id'
+    case 'rating-desc':
+      return 'ORDER BY COALESCE(rating, 0) DESC, rank, id'
+    case 'runtime-asc':
+      return 'ORDER BY COALESCE(runtime_min, 0) ASC, rank, id'
+    case 'runtime-desc':
+      return 'ORDER BY COALESCE(runtime_min, 0) DESC, rank, id'
+    // 'trending' is the crawl's own merged order, which is what `rank` holds.
+    default:
+      return 'ORDER BY rank, id'
+  }
 }
 
 /**
@@ -463,6 +599,14 @@ export interface MediaHubDatabase {
    *  `episodeCounts` carries the stored totals — the index holds no
    *  per-episode data at all (see migration 2). */
   indexList(kind: MediaKind, limit: number, offset?: number): CatalogItem[]
+  /** One filtered, sorted, paged slice of the library, plus how many titles
+   *  match the filters in total. See indexWhere/indexOrderBy for how each
+   *  clause maps onto the in-memory filter it reproduces. */
+  indexQuery(query: CatalogQuery): CatalogQueryResult
+  /** The genre/year/status values that actually occur for one kind — the
+   *  filter bar's dropdown contents, over the whole library rather than
+   *  over whatever slice happens to be loaded. */
+  indexFacets(kind: MediaKind): CatalogFacets
   trackedUpdates(details: CatalogItem[], now?: Date): TrackedUpdate[]
   close(): void
   filename: string
@@ -517,6 +661,9 @@ interface PreparedQueries {
   indexPutGenre: StatementSync
   indexCount: StatementSync
   indexList: StatementSync
+  facetGenres: StatementSync
+  facetYears: StatementSync
+  facetStatuses: StatementSync
   lastEpisode: StatementSync
   savePosition: StatementSync
   clearPosition: StatementSync
@@ -862,6 +1009,18 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
       'INSERT OR IGNORE INTO catalog_index_genre(id,kind,genre) VALUES(?,?,?)'
     ),
     indexCount: sql.prepare('SELECT COUNT(*) AS n FROM catalog_index WHERE kind=?'),
+    // Facets deliberately exclude the empty/absent values, matching what the
+    // dropdowns did over the loaded array: `if (g)`, `if (item.releaseYear)`,
+    // `if (item.status)`. An "unknown" option would filter to nothing.
+    facetGenres: sql.prepare(
+      "SELECT DISTINCT genre FROM catalog_index_genre WHERE kind=? AND genre<>''"
+    ),
+    facetYears: sql.prepare(
+      'SELECT DISTINCT year FROM catalog_index WHERE kind=? AND year IS NOT NULL ORDER BY year DESC'
+    ),
+    facetStatuses: sql.prepare(
+      "SELECT DISTINCT status FROM catalog_index WHERE kind=? AND status IS NOT NULL AND status<>''"
+    ),
     // `, id` is a deliberate tiebreaker, not noise. Without a total order
     // SQLite may return equal-rank rows in any order between calls, and a
     // paged reader would then see the same title twice on two pages while
@@ -1834,6 +1993,66 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
         )
       } catch {
         return []
+      }
+    },
+
+    indexQuery(query) {
+      // Built and prepared per call rather than kept in `q`, because the
+      // shape genuinely varies: eight optional filters is 256 combinations,
+      // and precompiling them all to avoid one prepare on a keystroke-driven
+      // path would be the wrong trade.
+      try {
+        const where = indexWhere(query)
+        const limit = Math.max(0, Math.min(query.limit ?? 60, 500))
+        const offset = Math.max(0, query.offset ?? 0)
+        const total = Number(
+          (
+            sql
+              .prepare(`SELECT COUNT(*) AS n FROM catalog_index WHERE ${where.sql}`)
+              .get(...where.values) as Row | undefined
+          )?.n ?? 0
+        )
+        const rows = sql
+          .prepare(
+            `SELECT id,kind,title,year,rating,runtime_min,status,poster,background,logo,description,
+                    total_seasons,total_episodes,simkl_id,grouped_ids,
+                    (SELECT group_concat(genre, char(31)) FROM catalog_index_genre g
+                      WHERE g.id = catalog_index.id AND g.kind = catalog_index.kind) AS genres
+             FROM catalog_index WHERE ${where.sql} ${indexOrderBy(query.sort)} LIMIT ? OFFSET ?`
+          )
+          .all(...where.values, limit, offset) as Row[]
+        return {
+          items: rows.map((row) => indexRowToItem(row, query.kind, splitGenres(row.genres))),
+          total
+        }
+      } catch {
+        // Best-effort like every other read here. An empty page with a zero
+        // total reads as "nothing matches", which is a survivable answer for
+        // a browse grid; throwing would blank the window.
+        return { items: [], total: 0 }
+      }
+    },
+
+    indexFacets(kind) {
+      // Ordering matches what the dropdowns already did over the loaded
+      // array: genres and statuses by localeCompare, years newest first.
+      // localeCompare is applied here in JS rather than by SQL for the same
+      // reason indexOrderBy documents — SQLite has no locale-aware
+      // collation — and it is affordable here because a facet list is
+      // dozens of values, not tens of thousands of rows.
+      try {
+        const genres = (
+          q.facetGenres.all(kind) as Row[]
+        ).map((row) => String(row.genre))
+        const years = (q.facetYears.all(kind) as Row[]).map((row) => Number(row.year))
+        const statuses = (q.facetStatuses.all(kind) as Row[]).map((row) => String(row.status))
+        return {
+          genres: genres.sort((a, b) => a.localeCompare(b)),
+          years,
+          statuses: statuses.sort((a, b) => a.localeCompare(b))
+        }
+      } catch {
+        return { genres: [], years: [], statuses: [] }
       }
     },
 

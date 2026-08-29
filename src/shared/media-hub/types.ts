@@ -1445,3 +1445,67 @@ export interface CatalogListing {
   items: CatalogItem[]
   stale: boolean
 }
+
+/** The browse grid's sort orders. Mirrors the renderer's own SortKey — the
+ *  same six the sort dropdown offers — because the sort is now applied by
+ *  SQL over catalog_index rather than in memory over a loaded array. */
+export type CatalogSortKey =
+  | 'trending'
+  | 'title-asc'
+  | 'year-desc'
+  | 'rating-desc'
+  | 'runtime-asc'
+  | 'runtime-desc'
+
+/**
+ * One page of the browse grid, as a question for the database.
+ *
+ * Every field is the URL-facing value the category page already carries in
+ * its query string (see the renderer's CategoryFilterState), so a filter
+ * bar's state maps to one of these directly rather than through a
+ * translation layer that could reinterpret it.
+ *
+ * Absent and null both mean "not filtering on this". A bucket value that no
+ * longer exists means "matches nothing", NOT "no filter" — a stale bookmark
+ * should show an empty grid rather than silently show everything.
+ */
+export interface CatalogQuery {
+  kind: MediaKind
+  genre?: string | null
+  /** As a string, matching the URL. Compared against the stored year. */
+  year?: string | null
+  minRating?: number | null
+  /** Bucket `value`s from shared/media-hub/catalogFilters. */
+  runtimeBucket?: string | null
+  seasonsBucket?: string | null
+  episodeLengthBucket?: string | null
+  episodesBucket?: string | null
+  status?: string | null
+  sort?: CatalogSortKey
+  offset?: number
+  limit?: number
+}
+
+export interface CatalogQueryResult {
+  items: CatalogItem[]
+  /** How many titles match the filters in total, ignoring offset/limit.
+   *  This is what the category hero should quote — the size of the result,
+   *  not the size of the page that came back. */
+  total: number
+}
+
+/**
+ * The values that actually occur in the library for one kind, for the filter
+ * bar's dropdowns.
+ *
+ * Replaces deriving the option lists from whatever happened to be loaded.
+ * That was the only thing available while the whole catalog lived in one
+ * array, but it meant the genre list described the loaded slice rather than
+ * the library — and the deeper the catalog got, the more the two diverged.
+ */
+export interface CatalogFacets {
+  genres: string[]
+  /** Newest first, matching the dropdown's own order. */
+  years: number[]
+  statuses: string[]
+}

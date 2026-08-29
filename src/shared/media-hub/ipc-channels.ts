@@ -69,6 +69,15 @@ export const MEDIA_HUB_CHANNELS = {
 
   // Catalog / search / metadata
   catalogList: 'mediahub:catalog:list',
+  /** One filtered, sorted, paged slice of the library, straight out of
+   *  catalog_index — the browse grid's data source once it stops holding the
+   *  whole catalog in memory. Returns the page AND the total number of
+   *  matches, which is what the category hero quotes. */
+  catalogQuery: 'mediahub:catalog:query',
+  /** The genre/year/status values that actually occur for one kind, for the
+   *  filter bar's dropdowns. Over the whole library, not over the slice that
+   *  happens to be loaded. */
+  catalogFacets: 'mediahub:catalog:facets',
   catalogMeta: 'mediahub:catalog:meta',
   catalogSearch: 'mediahub:catalog:search',
   catalogRelated: 'mediahub:catalog:related',
