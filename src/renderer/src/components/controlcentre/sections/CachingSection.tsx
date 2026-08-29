@@ -390,146 +390,6 @@ export function CachingSection() {
       {/* ---------- JOINED ---------- */}
       {pairState === 'approved' && (
         <>
-          <section className={`${styles.card} glass-panel`}>
-            <div className={styles.cardHead}>
-              <div>
-                <h3 className={styles.cardTitle}>{status?.serverName ?? 'Cache server'}</h3>
-                <p className={styles.note}>
-                  {statusError ? `${pairedUrl} — unreachable right now (${statusError})` : pairedUrl}
-                </p>
-              </div>
-              <button
-                type="button"
-                className={styles.ghostButton}
-                onClick={handleLeave}
-                disabled={busy}
-              >
-                Leave
-              </button>
-            </div>
-
-            {status && (
-              <>
-                <div className={styles.meters}>
-                  <div className={styles.meter}>
-                    <span className={styles.meterLabel}>The whole server</span>
-                    <span className={styles.meterTrack}>
-                      <span
-                        className={styles.meterFill}
-                        style={{ width: `${Math.min(100, usedShare * 100)}%` }}
-                      />
-                    </span>
-                    <span className={styles.meterValue}>
-                      {bytes(status.usedBytes)} of {bytes(status.budgetBytes)} ·{' '}
-                      {status.itemCount} title{status.itemCount === 1 ? '' : 's'}
-                    </span>
-                  </div>
-                  <div className={styles.meter}>
-                    <span className={styles.meterLabel}>Yours</span>
-                    <span className={styles.meterTrack}>
-                      <span
-                        className={styles.meterFill}
-                        style={{ width: `${Math.min(100, myShare * 100)}%` }}
-                      />
-                    </span>
-                    <span className={styles.meterValue}>
-                      {bytes(status.usedByMeBytes)}
-                      {status.quotaBytes === null
-                        ? ' · no allocation set'
-                        : ` of ${bytes(status.quotaBytes)}`}
-                    </span>
-                  </div>
-                </div>
-
-                <dl className={styles.facts}>
-                  <div>
-                    <dt>Streaming now</dt>
-                    <dd>{status.activeStreams}</dd>
-                  </div>
-                  <div>
-                    <dt>Your queue</dt>
-                    <dd>{status.jobs.length}</dd>
-                  </div>
-                  <div>
-                    <dt>Other devices&apos; queue</dt>
-                    <dd>{status.othersJobCount}</dd>
-                  </div>
-                  <div>
-                    <dt>Your TorBox account</dt>
-                    <dd>{status.torboxLinked ? 'Linked' : 'Not linked'}</dd>
-                  </div>
-                </dl>
-
-                {status.jobs.length > 0 && (
-                  <ul className={styles.jobs}>
-                    {status.jobs.map((job) => (
-                      <li key={job.contentKey} className={styles.job}>
-                        <span className={styles.jobTitle}>{job.title}</span>
-                        <span className={styles.jobState}>
-                          {job.state}
-                          {job.sizeBytes
-                            ? ` · ${Math.round((job.progressBytes / job.sizeBytes) * 100)}%`
-                            : ''}
-                        </span>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-
-                {/* The whole updater state, not just the staged line.
-
-                    "Why has it not updated yet" has several correct answers —
-                    it has not looked yet (it checks every four to six hours),
-                    it looked and there was nothing newer, it staged one and is
-                    waiting for a quiet hour, or it tried and failed — and one
-                    line about a staged version could not tell them apart. All
-                    four are in what the daemon already reports; it was simply
-                    not being shown. */}
-                {status.updater && (
-                  <dl className={styles.facts}>
-                    <div>
-                      <dt>Update channel</dt>
-                      <dd className={styles.factSmall}>{status.updater.channel || '—'}</dd>
-                    </div>
-                    <div>
-                      <dt>Last checked</dt>
-                      <dd className={styles.factSmall}>{ago(status.updater.checkedAt)}</dd>
-                    </div>
-                    <div>
-                      <dt>Newest seen</dt>
-                      <dd className={styles.factSmall}>
-                        {status.updater.latestSeen || '—'}
-                      </dd>
-                    </div>
-                    <div>
-                      <dt>Staged</dt>
-                      <dd className={styles.factSmall}>{status.updater.staged || 'nothing'}</dd>
-                    </div>
-                  </dl>
-                )}
-
-                {status.updater?.staged ? (
-                  <p className={styles.note}>
-                    {status.updater.staged} is ready. It applies once no one has streamed for
-                    half an hour and the hour is a quiet one for this household — or after 24
-                    hours staged, whichever comes first.
-                  </p>
-                ) : (
-                  <p className={styles.note}>
-                    Nothing staged. The server looks for a new build every four to six hours, so
-                    a release published since its last check has not been seen yet.
-                  </p>
-                )}
-
-                {status.updater?.lastError && (
-                  <p className={`${styles.message} ${styles.messageError}`}>
-                    Last update attempt failed: {status.updater.lastError}
-                  </p>
-                )}
-              </>
-            )}
-          </section>
-
           {olderServer && (
             <section className={`${styles.card} ${styles.claim} glass-panel`}>
               <span className={styles.claimIcon} aria-hidden="true">
@@ -546,11 +406,14 @@ export function CachingSection() {
               </div>
             </section>
           )}
+          {/* ADMIN FIRST, above the status card.
 
-          {/* Claiming is offered only while the server says nobody owns it.
-              It is on the unauthenticated ping for exactly this reason: an
-              app that has just found a daemon has to know whether to show
-              this before it holds any credential. */}
+              Claiming and the device list were underneath it, and the
+              status card is tall — meters, four figures, the queue and the
+              updater — so "Administer it" sat below the fold and was found
+              by accident. Status is reference and can wait; an unclaimed
+              server and a device waiting for approval are things to ACT on,
+              and they belong where they are seen. */}
           {status?.unclaimed && (
             <section className={`${styles.card} ${styles.claim} glass-panel`}>
               <span className={styles.claimIcon} aria-hidden="true">
@@ -574,7 +437,6 @@ export function CachingSection() {
               </button>
             </section>
           )}
-
           {status?.isAdmin && (
             <section className={`${styles.card} glass-panel`}>
               <div className={styles.cardHead}>
@@ -739,6 +601,152 @@ export function CachingSection() {
               </label>
             </section>
           )}
+          <section className={`${styles.card} glass-panel`}>
+            <div className={styles.cardHead}>
+              <div>
+                <h3 className={styles.cardTitle}>{status?.serverName ?? 'Cache server'}</h3>
+                <p className={styles.note}>
+                  {statusError ? `${pairedUrl} — unreachable right now (${statusError})` : pairedUrl}
+                </p>
+              </div>
+              <button
+                type="button"
+                className={styles.ghostButton}
+                onClick={handleLeave}
+                disabled={busy}
+              >
+                Leave
+              </button>
+            </div>
+
+            {status && (
+              <>
+                <div className={styles.meters}>
+                  <div className={styles.meter}>
+                    <span className={styles.meterLabel}>The whole server</span>
+                    <span className={styles.meterTrack}>
+                      <span
+                        className={styles.meterFill}
+                        style={{ width: `${Math.min(100, usedShare * 100)}%` }}
+                      />
+                    </span>
+                    <span className={styles.meterValue}>
+                      {bytes(status.usedBytes)} of {bytes(status.budgetBytes)} ·{' '}
+                      {status.itemCount} title{status.itemCount === 1 ? '' : 's'}
+                    </span>
+                  </div>
+                  <div className={styles.meter}>
+                    <span className={styles.meterLabel}>Yours</span>
+                    <span className={styles.meterTrack}>
+                      <span
+                        className={styles.meterFill}
+                        style={{ width: `${Math.min(100, myShare * 100)}%` }}
+                      />
+                    </span>
+                    <span className={styles.meterValue}>
+                      {bytes(status.usedByMeBytes)}
+                      {status.quotaBytes === null
+                        ? ' · no allocation set'
+                        : ` of ${bytes(status.quotaBytes)}`}
+                    </span>
+                  </div>
+                </div>
+
+                <dl className={styles.facts}>
+                  <div>
+                    <dt>Streaming now</dt>
+                    <dd>{status.activeStreams}</dd>
+                  </div>
+                  <div>
+                    <dt>Your queue</dt>
+                    <dd>{status.jobs.length}</dd>
+                  </div>
+                  <div>
+                    <dt>Other devices&apos; queue</dt>
+                    <dd>{status.othersJobCount}</dd>
+                  </div>
+                  <div>
+                    <dt>Your TorBox account</dt>
+                    <dd>{status.torboxLinked ? 'Linked' : 'Not linked'}</dd>
+                  </div>
+                </dl>
+
+                {status.jobs.length > 0 && (
+                  <ul className={styles.jobs}>
+                    {status.jobs.map((job) => (
+                      <li key={job.contentKey} className={styles.job}>
+                        <span className={styles.jobTitle}>{job.title}</span>
+                        <span className={styles.jobState}>
+                          {job.state}
+                          {job.sizeBytes
+                            ? ` · ${Math.round((job.progressBytes / job.sizeBytes) * 100)}%`
+                            : ''}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+
+                {/* The whole updater state, not just the staged line.
+
+                    "Why has it not updated yet" has several correct answers —
+                    it has not looked yet (it checks every four to six hours),
+                    it looked and there was nothing newer, it staged one and is
+                    waiting for a quiet hour, or it tried and failed — and one
+                    line about a staged version could not tell them apart. All
+                    four are in what the daemon already reports; it was simply
+                    not being shown. */}
+                {status.updater && (
+                  <dl className={styles.facts}>
+                    <div>
+                      <dt>Update channel</dt>
+                      <dd className={styles.factSmall}>{status.updater.channel || '—'}</dd>
+                    </div>
+                    <div>
+                      <dt>Last checked</dt>
+                      <dd className={styles.factSmall}>{ago(status.updater.checkedAt)}</dd>
+                    </div>
+                    <div>
+                      <dt>Newest seen</dt>
+                      <dd className={styles.factSmall}>
+                        {status.updater.latestSeen || '—'}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>Staged</dt>
+                      <dd className={styles.factSmall}>{status.updater.staged || 'nothing'}</dd>
+                    </div>
+                  </dl>
+                )}
+
+                {status.updater?.staged ? (
+                  <p className={styles.note}>
+                    {status.updater.staged} is ready. It applies once no one has streamed for
+                    half an hour and the hour is a quiet one for this household — or after 24
+                    hours staged, whichever comes first.
+                  </p>
+                ) : (
+                  <p className={styles.note}>
+                    Nothing staged. The server looks for a new build every four to six hours, so
+                    a release published since its last check has not been seen yet.
+                  </p>
+                )}
+
+                {status.updater?.lastError && (
+                  <p className={`${styles.message} ${styles.messageError}`}>
+                    Last update attempt failed: {status.updater.lastError}
+                  </p>
+                )}
+              </>
+            )}
+          </section>
+
+
+          {/* Claiming is offered only while the server says nobody owns it.
+              It is on the unauthenticated ping for exactly this reason: an
+              app that has just found a daemon has to know whether to show
+              this before it holds any credential. */}
+
 
           {/* YOUR OWN TITLES, and who else can reach them.
 
