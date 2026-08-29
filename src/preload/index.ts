@@ -297,8 +297,6 @@ const api = {
       }> => ipcRenderer.invoke(MEDIA_HUB_CHANNELS.lanCacheDiscover),
       pair: (payload: {
         url: string
-        /** Omit to ask to join and wait for the server's administrator. */
-        code?: string
         shareTorboxToken?: boolean
       }): Promise<{ ok: boolean; message: string; pending?: boolean }> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.lanCachePair, payload),

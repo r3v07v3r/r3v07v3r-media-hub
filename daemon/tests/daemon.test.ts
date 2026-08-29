@@ -12,11 +12,22 @@ import { createActivityTracker } from '../activity'
 import { createAdmin } from '../admin'
 import { createCredentials } from '../credentials'
 import { createJobStore } from '../jobs'
-import { createPairing, deviceIdForToken } from '../pairing'
+import { createPairing, deviceIdForToken, isApproved, type Pairing } from '../pairing'
 import { createDaemonServer } from '../server'
 import { createItemStore, isEntitled, planEvictions, type StoredItem } from '../storage'
 
 const DAY = 24 * 60 * 60 * 1000
+
+/** Joins and approves in one step — what every test that used to call
+ *  tryPair(currentCode()) actually wanted: a device this daemon will
+ *  answer. Approval is exercised properly by approvalTests and
+ *  deviceRouteTests; everywhere else it is setup, not the subject. */
+async function joinApproved(pairing: Pairing, deviceName: string): Promise<string> {
+  const token = await pairing.requestPairing(deviceName)
+  assert.ok(token, `pairing request for ${deviceName} was accepted`)
+  await pairing.setStatus(deviceIdForToken(token), 'approved')
+  return token
+}
 
 function item(overrides: Partial<StoredItem>): StoredItem {
   return {
@@ -438,19 +449,40 @@ async function main(): Promise<void> {
     // --- pairing ----------------------------------------------------------
     const pairing = createPairing(root)
     await pairing.load()
-    const code = pairing.currentCode()
-    assert.equal(await pairing.tryPair('000000' === code ? '111111' : '000000', 'x'), null)
-    const token = await pairing.tryPair(code, 'test device')
-    assert.ok(token, 'the correct code pairs')
-    assert.notEqual(pairing.currentCode(), code, 'a code is single-use')
-    assert.equal(pairing.isAuthorized(token!), true)
+    const token = await joinApproved(pairing, 'test device')
+    assert.equal(pairing.isAuthorized(token), true)
     assert.equal(pairing.isAuthorized('f'.repeat(64)), false)
-    // Throttle: the two attempts above + three more exhaust the minute.
-    for (let i = 0; i < 3; i++) await pairing.tryPair('999999', 'x')
+    // The request is unauthenticated now that there is no code to present,
+    // so it is throttled — otherwise anyone on the LAN could fill an
+    // administrator's approval list and this daemon's auth.json.
+    // RATE, on its own. Each accepted request is approved immediately so
+    // the queue never fills — otherwise the cap would stop the loop first
+    // and this would pass with no rate limit at all.
+    let accepted = 0
+    for (let i = 0; i < 20; i++) {
+      const requested = await pairing.requestPairing(`flood-${i}`)
+      if (!requested) continue
+      accepted++
+      await pairing.setStatus(deviceIdForToken(requested), 'approved')
+    }
+    assert.ok(accepted > 0, 'a real device can still get in')
+    assert.ok(accepted <= 10, `joining is rate-limited (accepted ${accepted} in a minute)`)
     assert.equal(
-      await pairing.tryPair(pairing.currentCode(), 'x'),
+      await pairing.requestPairing('one more'),
       null,
-      'attempts are rate-limited even with the right code'
+      'and the refusal is a refusal, not a slower yes'
+    )
+
+    // THE QUEUE CAP, on its own, on a daemon whose minute is unspent. It is
+    // the limit that actually protects the administrator: the rate limit
+    // only slows a flood, this is what stops it accumulating.
+    const fresh = createPairing(await fsp.mkdtemp(path.join(os.tmpdir(), 'r3-cap-')))
+    await fresh.load()
+    for (let i = 0; i < 20; i++) await fresh.requestPairing(`waiting-${i}`)
+    assert.equal(
+      fresh.listDevices().filter((device) => !isApproved(device)).length,
+      8,
+      'the pending queue is capped'
     )
 
     // --- HTTP surface -----------------------------------------------------
@@ -465,9 +497,9 @@ async function main(): Promise<void> {
       lastAccessAt: Date.now(),
       // Owned by the device this test pairs as. Without an owner the item is
       // private to nobody and correctly invisible, which is the new rule.
-      ownerDeviceId: deviceIdForToken(token!),
+      ownerDeviceId: deviceIdForToken(token),
       visibility: 'private',
-      entitled: [deviceIdForToken(token!)]
+      entitled: [deviceIdForToken(token)]
     })
     await fsp.writeFile(path.join(dirC, 'served.mkv'), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ')
 
@@ -721,7 +753,7 @@ async function indistinguishabilityTest(): Promise<void> {
   })
   const pairing = createPairing(root)
   await pairing.load()
-  const token = await pairing.tryPair(pairing.currentCode(), 'prober')
+  const token = await joinApproved(pairing, 'prober')
   assert.ok(token, 'paired')
 
   // Owned by somebody else entirely — the prober is paired, and still must
@@ -920,8 +952,8 @@ async function claimRouteTest(): Promise<void> {
   })
   const pairing = createPairing(root)
   await pairing.load()
-  const tokenA = await pairing.tryPair(pairing.currentCode(), 'first device')
-  const tokenB = await pairing.tryPair(pairing.currentCode(), 'second device')
+  const tokenA = await joinApproved(pairing, 'first device')
+  const tokenB = await joinApproved(pairing, 'second device')
   assert.ok(tokenA && tokenB, 'two devices paired')
 
   const admin = createAdmin(root)
@@ -1011,23 +1043,30 @@ async function approvalTests(): Promise<void> {
   const pairing = createPairing(root)
   await pairing.load()
 
-  // A device from before approval existed: paired with the console code,
-  // no status field.
-  const legacy = await pairing.tryPair(pairing.currentCode(), 'the old laptop')
-  assert.ok(legacy)
+  // A device from before approval existed. It cannot be made through the
+  // API any more — there is no code to present and every new device is
+  // stamped — so it is written the way a real upgraded install has it: a
+  // token in auth.json with no status field at all.
+  const legacy = 'a'.repeat(64)
+  await fsp.writeFile(
+    path.join(root, 'auth.json'),
+    JSON.stringify({ devices: [{ token: legacy, deviceName: 'the old laptop', createdAt: 1 }] })
+  )
+  await pairing.load()
   assert.equal(
     pairing.listDevices().find((d) => d.token === legacy)?.status,
     undefined,
-    'the code path does not stamp a status'
+    'the stored device has no status at all'
   )
   assert.equal(
     pairing.isAuthorized(legacy),
     true,
-    'and an unstamped device keeps working — absence means approved'
+    'and it keeps working — absence means approved, or the upgrade logs everyone out'
   )
 
   // A device that asked to join.
   const pendingToken = await pairing.requestPairing('the new tablet')
+  assert.ok(pendingToken, 'the request was accepted')
   const pendingId = deviceIdForToken(pendingToken)
   assert.equal(
     pairing.isAuthorized(pendingToken),
@@ -1068,6 +1107,7 @@ async function approvalTests(): Promise<void> {
   // All of it has to survive a restart, including the distinction between
   // "no status because it is old" and "no status because it is pending".
   const second = await pairing.requestPairing('still waiting')
+  assert.ok(second, 'and so was the second')
   const reloaded = createPairing(root)
   await reloaded.load()
   assert.equal(reloaded.isAuthorized(legacy), true, 'the legacy device survives a restart')
@@ -1307,6 +1347,26 @@ async function deviceRouteTests(): Promise<void> {
       body: JSON.stringify({ openJoin: false })
     })
     assert.equal((await pair('too late')).status, 'pending')
+
+    // A refused request must come back as a refusal, not as a 200 with no
+    // token in it — the app stores what it is handed, and a null token
+    // written to disk is a connection that can never work and never
+    // explains itself. Whether the rate limit or the queue cap fires first
+    // is not the point; that the route surfaces EITHER as a 429 is.
+    let refused = 0
+    for (let i = 0; i < 12; i++) {
+      const response = await fetch(`${base}/api/pair`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ deviceName: `crowd-${i}` })
+      })
+      if (response.status === 429) refused++
+      else {
+        const body = (await response.json()) as { token?: string }
+        assert.ok(body.token, 'an accepted request always carries a token')
+      }
+    }
+    assert.ok(refused > 0, 'the daemon eventually says no, and says it with a 429')
     assert.equal(
       await statusFor(walkIn.token),
       200,
@@ -1417,8 +1477,8 @@ async function statusScopeTest(): Promise<void> {
   await admin.load()
   const jobs = createJobStore(root)
 
-  const ownerToken = (await pairing.tryPair(pairing.currentCode(), 'the owner'))!
-  const guestToken = (await pairing.tryPair(pairing.currentCode(), 'a guest'))!
+  const ownerToken = (await joinApproved(pairing, 'the owner'))!
+  const guestToken = (await joinApproved(pairing, 'a guest'))!
   const ownerId = deviceIdForToken(ownerToken)
   const guestId = deviceIdForToken(guestToken)
   await admin.claim(ownerId)
@@ -1539,9 +1599,9 @@ async function sharingRouteTest(): Promise<void> {
   const admin = createAdmin(root)
   await admin.load()
 
-  const adminToken = (await pairing.tryPair(pairing.currentCode(), 'admin device'))!
-  const ownerToken = (await pairing.tryPair(pairing.currentCode(), 'owner device'))!
-  const strangerToken = (await pairing.tryPair(pairing.currentCode(), 'stranger'))!
+  const adminToken = (await joinApproved(pairing, 'admin device'))!
+  const ownerToken = (await joinApproved(pairing, 'owner device'))!
+  const strangerToken = (await joinApproved(pairing, 'stranger'))!
   const ownerId = deviceIdForToken(ownerToken)
   const strangerId = deviceIdForToken(strangerToken)
   await admin.claim(deviceIdForToken(adminToken))

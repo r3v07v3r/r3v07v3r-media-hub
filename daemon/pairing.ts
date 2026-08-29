@@ -1,18 +1,28 @@
-// Pairing: the one-time handshake that turns "a daemon on the network"
-// into "MY daemon".
+// Pairing: how a device becomes one this daemon will answer.
 //
 // The threat model is modest but real: anything on the LAN can see the
 // mDNS announcement and reach the HTTP port, and a media cache that serves
 // whoever asks — or accepts download jobs from whoever asks — is wrong.
-// A 6-digit code displayed where the daemon runs proves the person at the
-// app can see the daemon's console, which is exactly the authority that
-// should grant access.
 //
-// A 6-digit space is brute-forceable at network speed, so the code is not
-// enough on its own: attempts are throttled, and the code is REPLACED
-// after a burst of failures or a success. Issued bearer tokens are
-// long-lived and persisted (0600) — pairing is once per device, not per
-// session.
+// THE SIX-DIGIT CODE IS GONE. It proved the person at the app could see
+// the daemon's console, which was a real authority and a genuinely awkward
+// one: it meant walking to the machine, or reading a log off a headless box
+// nobody has a screen for. Approval replaces it with a better answer to the
+// same question — the person who already owns this server says yes — and
+// the code could only come out once approval was provably working, which is
+// why this is the last stage of that work rather than the first.
+//
+// What replaces the code's protections:
+//   - a 6-digit space was brute-forceable, so attempts were throttled and
+//     the code rotated. Asking to join is no longer a guess, so there is
+//     nothing to brute-force — but the REQUEST is now unauthenticated, so
+//     it is throttled and the pending queue is capped, or anyone on the LAN
+//     could fill an admin's screen and this file's disk.
+//   - a code was single-use, which bounded how many devices one glance at
+//     the console could admit. Approval bounds that directly instead.
+//
+// Issued bearer tokens are long-lived and persisted (0600) — joining is
+// once per device, not per session.
 
 import crypto from 'node:crypto'
 import fsp from 'node:fs/promises'
@@ -50,8 +60,21 @@ interface AuthFile {
   devices: PairedDevice[]
 }
 
-const MAX_ATTEMPTS_PER_MINUTE = 5
-const FAILURES_BEFORE_NEW_CODE = 10
+/** Requests per minute from anywhere. Joining is a once-per-device act, so
+ *  ten is generous for somebody setting up a household in one sitting and
+ *  still bounds a flood. */
+const MAX_REQUESTS_PER_MINUTE = 10
+
+/** How many devices may sit unapproved at once. Past this the daemon says
+ *  no until the administrator clears some: an unbounded queue is a way for
+ *  anyone on the network to fill an admin's screen and this file's disk,
+ *  and 'ask again later' is a much better failure than either.
+ *
+ *  Deliberately BELOW the per-minute allowance, so the two limits are
+ *  independently reachable — a cap that could only be hit after the rate
+ *  limit had already refused everything would be a rule nobody could
+ *  observe, in either a test or the real world. */
+const MAX_PENDING_DEVICES = 8
 
 /** Stable, non-secret identity for a paired device — what credentials and
  *  jobs are keyed by. A hash of the bearer token rather than the token
@@ -62,11 +85,6 @@ export function deviceIdForToken(token: string): string {
 }
 
 export interface Pairing {
-  /** The code to print on the console / show on /api/ping'd displays.
-   *  Regenerated after success or repeated failure — always read it fresh. */
-  currentCode(): string
-  /** Exchange a code for a bearer token, or null (wrong code / throttled). */
-  tryPair(code: string, deviceName: string): Promise<string | null>
   isAuthorized(token: string | undefined): boolean
   /** The device id for a presented (already-authorized) token, or ''. */
   deviceIdFor(token: string | undefined): string
@@ -74,9 +92,10 @@ export interface Pairing {
   /** The device behind a token regardless of approval — what a pending
    *  device needs in order to ask whether it has been let in yet. */
   findByToken(token: string | undefined): PairedDevice | null
-  /** Registers a device awaiting approval and returns its token. The token
-   *  is real and authorises NOTHING until an admin approves it. */
-  requestPairing(deviceName: string): Promise<string>
+  /** Registers a device awaiting approval and returns its token, or null
+   *  when the request is throttled or too many devices are already waiting.
+   *  The token is real and authorises NOTHING until an admin approves it. */
+  requestPairing(deviceName: string): Promise<string | null>
   /** Admin actions, addressed by device id rather than by token — the admin
    *  never sees another device's credential. */
   setStatus(deviceId: string, status: 'approved' | 'pending'): Promise<boolean>
@@ -85,29 +104,12 @@ export interface Pairing {
   revoke(token: string): Promise<void>
   /** Called once at startup to load persisted devices. */
   load(): Promise<void>
-  /** Fires when the code changes, so the console banner can reprint it. */
-  onCodeChange(listener: (code: string) => void): void
-}
-
-function newCode(): string {
-  // crypto-random, zero-padded, never Math.random.
-  return String(crypto.randomInt(0, 1_000_000)).padStart(6, '0')
 }
 
 export function createPairing(dataDir: string): Pairing {
   const authPath = path.join(dataDir, 'auth.json')
   let devices: PairedDevice[] = []
-  let code = newCode()
-  let failures = 0
   let attemptTimestamps: number[] = []
-  const listeners: Array<(code: string) => void> = []
-
-  function rotateCode(): void {
-    code = newCode()
-    failures = 0
-    for (const listener of listeners) listener(code)
-  }
-
   async function persist(): Promise<void> {
     const payload: AuthFile = { devices }
     const tmp = `${authPath}.tmp`
@@ -133,36 +135,6 @@ export function createPairing(dataDir: string): Pairing {
   }
 
   return {
-    currentCode: () => code,
-    async tryPair(candidate, deviceName) {
-      const now = Date.now()
-      attemptTimestamps = attemptTimestamps.filter((at) => now - at < 60_000)
-      if (attemptTimestamps.length >= MAX_ATTEMPTS_PER_MINUTE) return null
-      attemptTimestamps.push(now)
-
-      // timingSafeEqual over same-length buffers — a 6-digit code is small
-      // enough that a comparison-time oracle would actually help a guesser.
-      const a = Buffer.from(String(candidate).padStart(6, '0'))
-      const b = Buffer.from(code)
-      const match = a.length === b.length && crypto.timingSafeEqual(a, b)
-      if (!match) {
-        failures += 1
-        if (failures >= FAILURES_BEFORE_NEW_CODE) rotateCode()
-        return null
-      }
-
-      const token = crypto.randomBytes(32).toString('hex')
-      devices.push({
-        token,
-        deviceName: String(deviceName || 'unnamed device').slice(0, 64),
-        createdAt: now
-      })
-      await persist()
-      // A code is single-use: pairing succeeded, so the next pairing needs
-      // a fresh one read off the console again.
-      rotateCode()
-      return token
-    },
     isAuthorized(token) {
       // A PENDING device holds a real token and is not authorised for
       // anything. Holding a token is the result of asking to join; being
@@ -178,11 +150,21 @@ export function createPairing(dataDir: string): Pairing {
       return matched ? deviceIdForToken(matched.token) : ''
     },
     async requestPairing(deviceName) {
+      // The cap is checked first, and without spending an attempt: a device
+      // arriving at a full queue was refused by the queue, and charging it
+      // for the rate limit as well would make the two indistinguishable.
+      if (devices.filter((device) => !isApproved(device)).length >= MAX_PENDING_DEVICES) {
+        return null
+      }
+      const now = Date.now()
+      attemptTimestamps = attemptTimestamps.filter((at) => now - at < 60_000)
+      if (attemptTimestamps.length >= MAX_REQUESTS_PER_MINUTE) return null
+      attemptTimestamps.push(now)
       const token = crypto.randomBytes(32).toString('hex')
       devices.push({
         token,
         deviceName: String(deviceName || 'unnamed device').slice(0, 64),
-        createdAt: Date.now(),
+        createdAt: now,
         status: 'pending'
       })
       await persist()
@@ -229,9 +211,6 @@ export function createPairing(dataDir: string): Pairing {
       } catch {
         // First run — no devices yet.
       }
-    },
-    onCodeChange(listener) {
-      listeners.push(listener)
     }
   }
 }

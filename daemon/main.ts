@@ -4,8 +4,9 @@
 //   r3-cache --install            (register auto-start, once)
 //   r3-cache                      (run in this console)
 //
-// Zero-config by contract: run it, read the pairing code off this console,
-// type it into the app. Everything else — storage location, disk budget,
+// Zero-config by contract: run it, then claim it from the app on the same
+// network and approve whatever else asks to join. Everything else —
+// storage location, disk budget,
 // expiry, retries, and from now on UPDATES — has a default and maintains
 // itself. An optional r3-cache.json beside the data directory overrides;
 // see config.ts.
@@ -215,24 +216,24 @@ export async function run(api: PayloadApi): Promise<'restart' | 'exit'> {
     // version that comes up and then dies quickly is still rolled back.
     api.markHealthy()
 
-    const banner = (code: string): void => {
-      console.log('')
-      console.log('  ┌──────────────────────────────────────────────┐')
-      console.log(`  │  r3-cache ${runningVersion} — "${config.serverName}"`.padEnd(49) + '│')
-      console.log(`  │  port ${config.port} · data ${config.dataDir}`.slice(0, 49).padEnd(49) + '│')
-      console.log(
-        `  │  budget ${(config.diskBudgetBytes / 1024 ** 3).toFixed(0)} GB · idle ${config.idleTtlDays}d · max ${config.hardMaxDays}d`.padEnd(
-          49
-        ) + '│'
-      )
-      console.log('  │                                              │')
-      console.log(`  │  PAIRING CODE:  ${code}                       │`)
-      console.log('  │  Enter this in the app to connect.           │')
-      console.log('  └──────────────────────────────────────────────┘')
-      console.log('')
-    }
-    banner(pairing.currentCode())
-    pairing.onCodeChange(banner)
+    // No pairing code any more — devices ask to join and the administrator
+    // approves them from the app. The banner says what the box IS, which is
+    // what somebody at this console still needs: which server, which port,
+    // which disk budget.
+    console.log('')
+    console.log('  ┌──────────────────────────────────────────────┐')
+    console.log(`  │  r3-cache ${runningVersion} — "${config.serverName}"`.padEnd(49) + '│')
+    console.log(`  │  port ${config.port} · data ${config.dataDir}`.slice(0, 49).padEnd(49) + '│')
+    console.log(
+      `  │  budget ${(config.diskBudgetBytes / 1024 ** 3).toFixed(0)} GB · idle ${config.idleTtlDays}d · max ${config.hardMaxDays}d`.padEnd(
+        49
+      ) + '│'
+    )
+    console.log('  │                                              │')
+    console.log('  │  Devices ask to join from the app.           │')
+    console.log('  │  The administrator approves them there.      │')
+    console.log('  └──────────────────────────────────────────────┘')
+    console.log('')
 
     // An unclaimed server says so, repeatedly and loudly.
     //

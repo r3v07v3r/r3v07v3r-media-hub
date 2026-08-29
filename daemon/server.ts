@@ -224,25 +224,23 @@ export function createDaemonServer(deps: ServerDeps): http.Server {
     if (route === 'POST /api/pair') {
       const body = await readBody(req)
       const deviceName = String(body.deviceName ?? '')
-      const code = String(body.code ?? '')
 
-      // The code path stays until A5. Removing it here would strand every
-      // app build that still sends one, and the plan's order exists because
-      // approval has to be provably working before the old door closes.
-      if (code) {
-        const token = await pairing.tryPair(code, deviceName)
-        if (!token) {
-          json(res, 403, { error: 'Pairing code not accepted.' })
-          return
-        }
-        json(res, 200, { token, serverName, status: 'approved' })
+      // No code. The device asks, and the token it gets back authorises
+      // NOTHING — every authenticated route goes through isAuthorized,
+      // which requires approval.
+      //
+      // The device NAME is what the administrator sees in the approval
+      // list, so an unnamed request is one nobody can sensibly say yes to.
+      const token = await pairing.requestPairing(deviceName)
+      if (!token) {
+        // Throttled, or too many devices already waiting. 429 rather than
+        // 403: nothing was refused about this device, it was refused about
+        // the timing, and an app that retries later should be told so.
+        json(res, 429, {
+          error: 'Too many devices are waiting to join. Try again shortly.'
+        })
         return
       }
-
-      // Codeless: ask to join, and wait. The token issued here is real and
-      // authorises NOTHING — every authenticated route goes through
-      // isAuthorized, which now requires approval.
-      const token = await pairing.requestPairing(deviceName)
 
       // Two ways to skip the wait, and only two.
       //
@@ -251,9 +249,8 @@ export function createDaemonServer(deps: ServerDeps): http.Server {
       // isUnclaimed is the bootstrap, and it does not widen anything: while
       // nobody administers this box, ANY device on the LAN can already take
       // admin outright via /api/admin/claim, which is strictly more than
-      // being let in as a user. Making pairing wait for an approver who
-      // cannot exist yet would just deadlock the first install once the
-      // code goes away in A5. Same window, already bounded by the console.
+      // being let in as a user. Making the first device wait for an approver
+      // who cannot exist yet would deadlock every fresh install.
       const autoApprove = admin.openJoin() || admin.isUnclaimed()
       if (autoApprove) await pairing.setStatus(deviceIdForToken(token), 'approved')
       json(res, 200, {

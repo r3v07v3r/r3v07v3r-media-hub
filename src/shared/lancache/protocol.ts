@@ -20,9 +20,10 @@ export interface LanCachePingResponse {
   unclaimed?: boolean
 }
 
-/** What POST /api/pair answers. A codeless request returns a real token
- *  that authorises NOTHING until an administrator approves it, so the app
- *  must store the token and then poll GET /api/pair/status. */
+/** What POST /api/pair answers. The request carries a device name and
+ *  nothing else — there is no code any more. The token that comes back
+ *  authorises NOTHING until an administrator approves it, so the app must
+ *  store it and then poll GET /api/pair/status. */
 export interface LanCachePairResponse {
   token?: string
   serverName?: string

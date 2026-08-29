@@ -1,6 +1,26 @@
 # r3-cache permissions — design
 
-Agreed 2026-08-29, to be built after the next major release.
+Agreed 2026-08-29. **Built 2026-08-29**, in the order this document
+mandates: entitlement, the Super Admin claim, device approval, per-device
+allocation, then — and only then — the removal of the pairing code.
+
+Two things landed differently from the plan below, both deliberately and
+both documented at the point of departure in the code:
+
+- **The job list is scoped, not annotated.** This document called for jobs
+  to gain an owner name. `/api/status` already handed every paired device
+  the TITLES of everything the household was fetching — the same read-side
+  hole entitlement closes on the catalog, sitting on the queue instead of
+  the disk — so adding names would have widened it from "what does this
+  household watch" to "who watches what". A device now sees its own queue
+  and a COUNT of everyone else's.
+- **The join request is throttled and the pending queue is capped.** The
+  six-digit code was brute-forceable, so attempts were rate-limited. Asking
+  to join is not a guess, so there is nothing to brute-force — but the
+  request is now unauthenticated, and without a bound anyone on the network
+  could fill an administrator's approval list and the daemon's auth.json.
+
+The rest is as written.
 
 1. **No pairing code.** Reading a 6-digit code off `journalctl` is the worst step in the product.
 2. What a person caches is **private by default** — shareable with everyone, or with named people.

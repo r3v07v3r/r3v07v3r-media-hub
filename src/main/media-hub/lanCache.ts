@@ -142,9 +142,7 @@ interface DeviceActionPayload {
 
 interface PairPayload {
   url: string
-  /** Optional. Present only while the console code still exists; without
-   *  one the request asks to join and waits for an administrator. */
-  code?: string
+
   /** The explicit opt-in: copy the TorBox token to the daemon so it can
    *  fetch overnight with no app running. Never implied. */
   shareTorboxToken?: boolean
@@ -164,7 +162,7 @@ export function registerLanCacheIpc(refreshTrustedHosts: () => void): void {
         .replace(/\/+$/, '')
       if (!/^https?:\/\//.test(url)) return { ok: false, message: 'Enter the server URL.' }
       try {
-        // Identity check first: refuse to send a pairing code to something
+        // Identity check first: refuse to ask to join something
         // that is not an r3-cache daemon at all.
         const ping = await fetchJson<LanCachePingResponse>(
           `${url}/api/ping`,
@@ -174,7 +172,6 @@ export function registerLanCacheIpc(refreshTrustedHosts: () => void): void {
         if (ping.product !== 'r3-cache') {
           return { ok: false, message: 'That server is not an r3-cache daemon.' }
         }
-        const code = String(payload?.code || '')
         const paired = await fetchJson<LanCachePairResponse>(
           `${url}/api/pair`,
           {
@@ -183,16 +180,18 @@ export function registerLanCacheIpc(refreshTrustedHosts: () => void): void {
             // The device NAME is sent either way: it is what the server's
             // administrator sees in the approval list, so an unnamed
             // request is one nobody can sensibly say yes to.
-            body: JSON.stringify({ ...(code ? { code } : {}), deviceName: os.hostname() })
+            body: JSON.stringify({ deviceName: os.hostname() })
           },
           { lane: 'lancache', label: 'cache server' }
         )
         if (!paired.token) {
+          // The daemon refuses a request when too many devices are already
+          // waiting, or when they are arriving too fast. Both are temporary
+          // and neither is about this device, so the wording says to try
+          // again rather than suggesting something is wrong here.
           return {
             ok: false,
-            message: code
-              ? 'The pairing code was not accepted.'
-              : 'The cache server did not accept the request.'
+            message: 'The cache server is not taking requests right now. Try again shortly.'
           }
         }
         const pending = paired.status === 'pending'

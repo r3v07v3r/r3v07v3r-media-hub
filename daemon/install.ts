@@ -62,7 +62,7 @@ export async function installAutoStart(log: (message: string) => void): Promise<
     }
     log(`registered logon task "${TASK_NAME}" -> ${command}`)
     log('r3-cache will start automatically when you log in.')
-    log('Its pairing code is printed in its own console window.')
+    log('Open the app on this network to claim and join it.')
     return
   }
 
@@ -114,7 +114,7 @@ WantedBy=default.target
     log('could not enable linger — the daemon will stop when you log out')
   }
   log(`installed and started ${UNIT_NAME} (systemd user unit, enabled)`)
-  log(`pairing code: journalctl --user -u r3-cache -n 20`)
+  log(`logs: journalctl --user -u r3-cache -n 20`)
 }
 
 export async function uninstallAutoStart(log: (message: string) => void): Promise<void> {
