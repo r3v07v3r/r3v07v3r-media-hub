@@ -17,6 +17,27 @@ import path from 'node:path'
 
 import type { CacheSourceRef } from '../src/shared/media-hub/types'
 
+/**
+ * May this device see and stream this item?
+ *
+ * ONE function, deliberately. Entitlement is checked on the catalog listing
+ * and on the stream route, and those two answers must never diverge — an
+ * item you cannot see but can stream, or vice versa, is the bug this whole
+ * feature exists to prevent.
+ *
+ * Reads absence as the restrictive case throughout: no `visibility` means
+ * private, no `entitled` means nobody but the owner. An item written before
+ * these fields existed must not become world-readable because a property is
+ * missing — except where it has no identifiable owner at all, which
+ * migrateEntitlement below marks explicitly rather than inferring here.
+ */
+export function isEntitled(item: ItemMeta, deviceId: string): boolean {
+  if (item.visibility === 'shared') return true
+  if (!deviceId) return false
+  if (item.ownerDeviceId && item.ownerDeviceId === deviceId) return true
+  return Array.isArray(item.entitled) && item.entitled.includes(deviceId)
+}
+
 export interface ItemMeta {
   /** catalogId:season:episode — the SAME key the app's cacheContentKey
    *  produces, so daemon and app agree on identity without translation. */
@@ -29,6 +50,37 @@ export interface ItemMeta {
   sourceRef?: CacheSourceRef
   fetchedAt: number
   lastAccessAt: number
+  /**
+   * Who paid for this. Copied from the job's ownerDeviceId at beginItem —
+   * ownership was already tracked for SPENDING (fetcher.ts bills this
+   * device's TorBox token) and simply never recorded on the item, which is
+   * why it could not be used for reading.
+   *
+   * Absent on items written before entitlement existed. Those are the
+   * `unknown owner` case the migration below treats as shared: nobody can
+   * be identified as their owner, and stranding them where no one can reach
+   * them is worse than leaving them visible.
+   */
+  ownerDeviceId?: string
+  /**
+   * 'private' — only devices in `entitled` may see or stream it.
+   * 'shared'  — any paired device may.
+   *
+   * Absent means private: an item written before this field existed must not
+   * become readable by everyone because a property is missing.
+   */
+  visibility?: 'private' | 'shared'
+  /**
+   * Device ids that may see and stream this item.
+   *
+   * A SET, not a single owner, because the cache holds one copy: when a
+   * second device asks for a hash already held, it is added here and streams
+   * the existing file rather than triggering a second download. That is the
+   * whole point of a shared cache, and it reveals nothing — the asker named
+   * that exact release, and could have fetched it on their own account
+   * anyway.
+   */
+  entitled?: string[]
 }
 
 export interface StoredItem extends ItemMeta {
@@ -127,6 +179,13 @@ export interface ItemStore {
    *  own comment. Returns what was evicted, for the log. */
   runEviction(now?: number, freeBytes?: number | null): Promise<Map<string, EvictionReason>>
   remove(infoHash: string): Promise<void>
+  /** Adds a device to an item's entitled set. This is the dedupe path: a
+   *  device asking for a hash already held is entitled to the existing copy
+   *  rather than triggering a second download of the same file. */
+  grantEntitlement(infoHash: string, deviceId: string): Promise<void>
+  /** Stamps entitlement onto items written before the fields existed.
+   *  Returns how many it changed, so startup can say so once. */
+  migrateEntitlement(): Promise<number>
   /** contentKey -> evictedAt for TTL/hard-max evictions still suppressing
    *  a re-queue. Budget evictions do NOT tombstone: they reflect pressure,
    *  not disinterest, and tombstoning them would let one oversized fetch
@@ -242,6 +301,52 @@ export function createItemStore(
         // See above.
       }
     },
+    async grantEntitlement(infoHash, deviceId) {
+      if (!deviceId) return
+      const item = await readItem(infoHash)
+      if (!item) return
+      const entitled = new Set(item.entitled ?? [])
+      if (item.ownerDeviceId) entitled.add(item.ownerDeviceId)
+      if (entitled.has(deviceId)) return
+      entitled.add(deviceId)
+      const meta: Record<string, unknown> = { ...item, entitled: [...entitled] }
+      // Derived fields are computed on read; only real metadata goes to disk.
+      delete meta.presentBytes
+      delete meta.complete
+      await writeJsonAtomic(path.join(itemsDir, infoHash, 'meta.json'), meta)
+    },
+
+    async migrateEntitlement() {
+      // Neither default is safe to apply quietly to items that predate the
+      // rule, so the two cases are distinguished explicitly rather than
+      // falling through isEntitled's absence handling:
+      //
+      //   known owner   -> private, entitled to that owner
+      //   unknown owner -> SHARED, because nobody can be identified as its
+      //                    owner and stranding a file where no one can reach
+      //                    it is worse than leaving it visible
+      //
+      // The unknown-owner case is real, not defensive: credentials.ts
+      // documents the pre-multi-user files that have no owner at all.
+      let changed = 0
+      for (const item of await list()) {
+        if (item.visibility) continue
+        const meta: Record<string, unknown> = { ...item }
+        delete meta.presentBytes
+        delete meta.complete
+        if (item.ownerDeviceId) {
+          meta.visibility = 'private'
+          meta.entitled = [item.ownerDeviceId]
+        } else {
+          meta.visibility = 'shared'
+          meta.entitled = []
+        }
+        await writeJsonAtomic(path.join(itemsDir, item.infoHash, 'meta.json'), meta)
+        changed++
+      }
+      return changed
+    },
+
     async runEviction(now = Date.now(), freeBytes = null) {
       const items = await list()
       // The configured budget bounds what the cache may USE; real free

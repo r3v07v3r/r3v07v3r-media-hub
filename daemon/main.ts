@@ -72,6 +72,21 @@ export async function run(api: PayloadApi): Promise<'restart' | 'exit'> {
   const activity = createActivityTracker(config.dataDir)
   await Promise.all([pairing.load(), credentials.load(), jobs.load(), activity.load()])
 
+  // Stamp entitlement onto anything written before the fields existed.
+  // Runs once — migrateEntitlement skips items that already carry a
+  // visibility — and says so plainly, because the effect is user-visible:
+  // items that every paired device could previously see are now private to
+  // whoever fetched them, and someone will want to know why a housemate's
+  // film vanished from their list.
+  const migrated = await storage.migrateEntitlement()
+  if (migrated > 0) {
+    log(
+      `entitlement: ${migrated} existing item(s) marked. Items with a known ` +
+        'owner are now private to that device; items with no identifiable ' +
+        'owner were left shared. Re-share from the app if needed.'
+    )
+  }
+
   let resolveOutcome!: (outcome: 'restart' | 'exit') => void
   const outcome = new Promise<'restart' | 'exit'>((resolve) => {
     resolveOutcome = resolve

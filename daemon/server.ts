@@ -23,7 +23,7 @@ import type { Credentials } from './credentials'
 import type { UpdaterStatus } from './updater'
 import type { JobStore, JobRecord } from './jobs'
 import type { Pairing } from './pairing'
-import type { ItemStore } from './storage'
+import { isEntitled, type ItemStore } from './storage'
 
 const MAX_BODY_BYTES = 1024 * 1024
 
@@ -214,8 +214,25 @@ export function createDaemonServer(deps: ServerDeps): http.Server {
         res.once('close', releaseStream)
       }
 
+      // ENTITLEMENT, and the reason the two failures below are one branch.
+      //
+      // Authorising on "is this token paired" was the hole: pairing bought
+      // the right to stream every item in the cache. It authorises on
+      // entitlement now — but WHICH failure occurred must not be
+      // observable.
+      //
+      // Torrent infohashes for popular titles are public. A daemon that
+      // answers "not for you" differently from "not here" is fully
+      // enumerable: walk a few thousand known hashes and you learn exactly
+      // what this household watches, without ever being entitled to any of
+      // it. So a hash the caller may not have and a hash that does not
+      // exist produce the SAME status and the SAME empty body, from the
+      // same statement — not two branches that happen to match today and
+      // drift the first time someone adds a helpful message to one of them.
+      const streamDevice = pairing.deviceIdFor(url.searchParams.get('token') ?? undefined)
       const item = await storage.get(streamMatch[1])
-      if (!item || !item.complete) {
+      const mayStream = Boolean(item && item.complete && isEntitled(item, streamDevice ?? ''))
+      if (!mayStream || !item) {
         releaseStream()
         res.writeHead(404)
         res.end()
@@ -243,22 +260,37 @@ export function createDaemonServer(deps: ServerDeps): http.Server {
     const callerDeviceId = pairing.deviceIdFor(callerToken)
 
     if (route === 'GET /api/catalog') {
-      // ?keys=a,b,c filters; without it the full picture is returned. The
-      // feeder needs all three states to make a correct decision: cached
-      // (skip), in-flight (skip), tombstoned (skip — recently evicted, do
-      // not immediately refill).
+      // ?keys=a,b,c is now REQUIRED, and the unfiltered branch is gone.
+      //
+      // It used to return every cached item, with titles, to any paired
+      // device — the read-side hole this whole feature closes. It was also
+      // dead weight: the app never asked for it. lanCacheFeeder always
+      // passes keys derived from its own watchlist and returns early on an
+      // empty want-list, and resolve asks about exactly one key. So it is
+      // deleted rather than fixed; there is nothing to preserve.
+      //
+      // The feeder still gets all three states it needs to decide — cached,
+      // in-flight, tombstoned — just only for keys it named.
       const filter = (url.searchParams.get('keys') ?? '')
         .split(',')
         .map((key) => key.trim())
         .filter(Boolean)
-      const wanted = filter.length ? new Set(filter) : null
-      const items = (await storage.list()).filter((item) => !wanted || wanted.has(item.contentKey))
+      if (!filter.length) {
+        json(res, 200, { items: [], inFlight: [], tombstoned: [] })
+        return
+      }
+      const wanted = new Set(filter)
+      // Scoped to the asker. Same predicate the stream route uses, so what
+      // you can see and what you can play can never disagree.
+      const items = (await storage.list()).filter(
+        (item) => wanted.has(item.contentKey) && isEntitled(item, callerDeviceId ?? '')
+      )
       const inFlight = jobs
         .list()
         .filter(
           (job) =>
             (job.state === 'queued' || job.state === 'fetching') &&
-            (!wanted || wanted.has(job.contentKey))
+            wanted.has(job.contentKey)
         )
       const tombstones = await storage.tombstones()
       json(res, 200, {
@@ -276,15 +308,39 @@ export function createDaemonServer(deps: ServerDeps): http.Server {
           progressBytes: job.progressBytes ?? 0,
           sizeBytes: job.sizeBytes
         })),
-        tombstoned: wanted
-          ? Object.keys(tombstones).filter((key) => wanted.has(key))
-          : Object.keys(tombstones)
+        tombstoned: Object.keys(tombstones).filter((key) => wanted.has(key))
       })
       return
     }
 
     if (route === 'POST /api/jobs') {
       const body = await readBody(req)
+      // DEDUPE, and the reason a cache is worth running at all.
+      //
+      // If this hash is already on disk, the asker is entitled to the copy
+      // that exists rather than causing a second download of the same file.
+      // Private-by-default would otherwise collide head-on with the point of
+      // a shared cache: two people wanting one film would cost two copies of
+      // the disk and two copies of the bandwidth.
+      //
+      // This reveals nothing. The caller named that exact infohash, so they
+      // already knew the release existed, and could have fetched it on their
+      // own account regardless.
+      //
+      // The residual leak, named rather than papered over: they can infer
+      // from the speed that it was already here. That is the price of a
+      // shared cache being shared, and a fake delay would cost real time to
+      // hide something a determined observer measures anyway.
+      const dedupeHash = String(body.infoHash ?? '').toLowerCase()
+      if (callerDeviceId && /^[a-f0-9]{40}$/.test(dedupeHash)) {
+        const held = await storage.get(dedupeHash)
+        if (held?.complete) {
+          await storage.grantEntitlement(dedupeHash, callerDeviceId)
+          await storage.clearTombstone(held.contentKey)
+          json(res, 200, { state: 'ready' })
+          return
+        }
+      }
       const record = jobs.enqueue({
         contentKey: String(body.contentKey ?? ''),
         infoHash: String(body.infoHash ?? '').toLowerCase(),
