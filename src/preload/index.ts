@@ -20,7 +20,6 @@ import type {
   DislikedListResult,
   EpisodePlaybackPosition,
   HomePersonalizedResult,
-  LibraryItem,
   MalReconcileApplyResult,
   MalReconcilePreview,
   MalStartPayload,
@@ -626,12 +625,6 @@ const api = {
        *  status, open the party panel). */
       onUiEvent: (onEvent: (event: PlayerUiEvent) => void): (() => void) =>
         subscribe<PlayerUiEvent>(MEDIA_HUB_CHANNELS.playerUiEvent, onEvent)
-    },
-
-    library: {
-      list: (): Promise<LibraryItem[]> => ipcRenderer.invoke(MEDIA_HUB_CHANNELS.libraryList),
-      play: (item: Record<string, unknown>): Promise<PlaybackResult> =>
-        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.libraryPlay, item)
     },
 
     simkl: {

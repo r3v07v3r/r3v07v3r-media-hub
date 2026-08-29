@@ -180,8 +180,6 @@ export const MEDIA_HUB_CHANNELS = {
    *  controls' idle countdown ran during the load and a cold stream slower than
    *  it started the film with the bar already faded out. */
   playerControlsShown: 'mediahub:player:controls-shown', // push event
-  libraryList: 'mediahub:library:list',
-  libraryPlay: 'mediahub:library:play',
   streamCacheList: 'mediahub:stream-cache:list',
   streamCacheDelete: 'mediahub:stream-cache:delete',
 

@@ -16,7 +16,6 @@ import {
   ContinueWatchingEntry,
   Episode,
   HistoryEntry,
-  LibraryItem,
   MediaKind,
   StreamCandidate,
   Trailer
@@ -740,17 +739,6 @@ export function parseReleaseName(value: string): ParsedReleaseName {
   return { title: readableTitle(name) || 'Untitled', year, season, episode }
 }
 
-function librarySourceName(raw: RawApiPayload): string {
-  const files: RawApiPayload[] = raw.files || raw.file_list || []
-  return (
-    raw.name ||
-    raw.filename ||
-    files.find((f) => /\.(mkv|mp4|avi|mov|webm|m4v|ts)$/i.test(f.name || f.short_name || ''))
-      ?.name ||
-    'Untitled'
-  )
-}
-
 function mediaKey(value: string): string {
   return String(value || '')
     .normalize('NFKD')
@@ -775,44 +763,6 @@ export function titleMatchesRelease(releaseText: string, requestedTitle: string)
   if (!requestedTitle.trim()) return true
   const parsed = parseReleaseName(releaseText)
   return mediaKey(parsed.title) === mediaKey(requestedTitle)
-}
-
-export function enrichTorBoxItem(raw: RawApiPayload, catalog: CatalogItem[] = []): LibraryItem {
-  const parsed = parseReleaseName(librarySourceName(raw))
-  const key = mediaKey(parsed.title)
-  const matches = catalog.filter((x) => mediaKey(x.title) === key)
-  const match = matches.find((x) => !parsed.year || String(x.year) === parsed.year) || matches[0]
-  // Original JS: `match?.type||(parsed.season?'series':'movie')` — match.type
-  // comes from the shared CatalogItem catalog and can be 'anime', but
-  // LibraryItem.mediaType only models 'movie'|'series' (library entries
-  // don't carry an anime distinction). The original had no runtime guard
-  // against this either, so the value is preserved as-is via a cast rather
-  // than redesigning the fallback behavior.
-  const mediaType = (match?.type || (parsed.season ? 'series' : 'movie')) as 'movie' | 'series'
-  return {
-    id: String(raw.id || raw.torrent_id || raw.hash || librarySourceName(raw)),
-    title: match?.title || parsed.title,
-    type: 'library',
-    mediaType,
-    year: match?.year || parsed.year || raw.download_state || raw.state || '',
-    season: parsed.season,
-    episode: parsed.episode,
-    poster: match?.poster || raw.poster || '',
-    background: match?.background || raw.background || '',
-    description: match?.description || '',
-    rating: match?.rating || '',
-    runtime: match?.runtime || '',
-    genres: match?.genres || [],
-    metadataId: match?.id || '',
-    raw
-  }
-}
-
-export function selectPlayableStream(streams?: StreamCandidate[]): StreamCandidate | null {
-  const playable = (streams || []).filter(
-    (s) => typeof s.url === 'string' && /^https?:\/\//.test(s.url)
-  )
-  return rankStreams(playable)[0] || null
 }
 
 export interface TorBoxFile {

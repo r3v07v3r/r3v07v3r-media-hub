@@ -198,55 +198,30 @@ export interface AnimeStoryResult {
   checked: boolean
 }
 
-// TorBox `mylist` items matched against the cached catalogs by parsed
-// release-name (see enrichTorBoxItem in core.ts).
-export interface LibraryItem {
-  id: string
-  title: string
-  type: 'library'
-  mediaType: 'movie' | 'series'
-  year: string
-  season: number | null
-  episode: number | null
-  poster: string
-  background: string
-  description: string
-  rating: string
-  runtime: string
-  genres: string[]
-  metadataId: string
-  raw: Record<string, unknown>
-}
-
-/** Where a candidate can be played from. Absent means 'torbox', so every
- *  candidate already persisted in the stream cache stays valid without a
- *  migration — the field was introduced when the media server was. */
 /**
- * Where a playable copy lives, in preference order. The ordering is the
- * product rule ("nearest source that meets the quality target wins"), so it
- * is declared once here and read by resolve rather than re-stated per call
- * site.
+ * Where a playable copy lives. Absent means 'torbox', so every candidate
+ * already persisted in the stream cache stays valid without a migration —
+ * the field was introduced when the media server was.
  *
  *  localcache  - already on this machine's disk; needs no network at all
- *  lancache    - the on-site pre-fetch daemon (not yet implemented)
+ *  lancache    - the on-site pre-fetch daemon (main/media-hub/lanCache.ts)
  *  mediaserver - a configured Jellyfin library
  *  torbox      - the debrid service, over the internet
+ *
+ * PREFERENCE IS NOT A PROPERTY OF THIS TYPE. There was once a
+ * STREAM_SOURCE_RANK here declaring a strict 0..3 ordering, described as
+ * "read by resolve" — it never was, by resolve or anything else, and the
+ * only thing that referenced it was a test asserting 0 < 1 < 2 < 3 against
+ * the constant itself. What actually decides the source is split in two and
+ * lives with the code that does it: torbox.ts's streamResolve short-circuits
+ * on localcache and then lancache (each quality-gated), and core.ts's
+ * rankStreams then SCORES mediaserver against torbox, weighted by the user's
+ * SourcePreference — which on 'prefer-quality' deliberately stops caring
+ * where a copy lives at all. A single numeric rank cannot express that, and
+ * having one here invited exactly the wrong summary of it (see the README's
+ * old "local → server → download" section).
  */
 export type StreamSource = 'localcache' | 'lancache' | 'mediaserver' | 'torbox'
-
-/** Lowest number wins. Absent `source` is 'torbox', which must therefore
- *  keep torbox's rank so pre-existing persisted candidates still sort
- *  correctly. */
-export const STREAM_SOURCE_RANK: Record<StreamSource, number> = {
-  localcache: 0,
-  lancache: 1,
-  mediaserver: 2,
-  torbox: 3
-}
-
-export function streamSourceRank(source: StreamSource | undefined): number {
-  return STREAM_SOURCE_RANK[source ?? 'torbox']
-}
 
 // A discovered stream candidate (from a scraper add-on or a configured
 // media server), after availability checking and ranking merge in

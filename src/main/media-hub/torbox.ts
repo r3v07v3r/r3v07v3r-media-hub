@@ -24,7 +24,6 @@ import type {
   CacheSessionMeta,
   CacheSourceRef,
   BootstrapResult,
-  LibraryItem,
   PlaybackResult,
   StreamCandidate,
   StreamResolveResult,
@@ -37,7 +36,6 @@ import { handle } from './ipcGuard'
 import { logError } from './logger'
 import {
   cometConfigPath,
-  enrichTorBoxItem,
   rankSafeStreams,
   resumeCandidateFor,
   streamResolution,
@@ -49,7 +47,6 @@ import {
   type TorBoxFile
 } from './core'
 import { sanitizeTrackers } from './security'
-import { catalogData } from './catalog'
 import { isAllowedRemoteMediaUrl } from './playback'
 import { jellyfinFingerprint } from './jellyfin'
 import { findLocalCacheCandidate } from './streamCache'
@@ -925,36 +922,4 @@ export function registerTorBoxIpc(): void {
     }
   )
 
-  handle<undefined, LibraryItem[]>(MEDIA_HUB_CHANNELS.libraryList, async () => {
-    const [result, catalogs] = await Promise.all([
-      torbox<RawApiPayload>('/torrents/mylist', { limit: 100, bypass_cache: false }),
-      Promise.all(
-        (['movie', 'series', 'anime'] as const).map((kind) => catalogData(kind).catch(() => []))
-      )
-    ])
-    const raw: RawApiPayload[] = Array.isArray(result.data) ? result.data : []
-    return raw.map((item) => enrichTorBoxItem(item, catalogs.flat()))
-  })
-
-  handle<RawApiPayload, PlaybackResult>(MEDIA_HUB_CHANNELS.libraryPlay, async (_e, item) => {
-    const auth = getTorBoxToken()
-    const files = (item.files || item.file_list || []) as TorBoxFile[]
-    const file = selectVideoFile(files)
-    if (!file) throw new Error('No matching video file was found in this TorBox item.')
-    const torrentId = item.id || item.torrent_id
-    if (!torrentId) throw new Error('TorBox item has no torrent ID.')
-    const fileId = file.id || file.file_id
-    const result = await torboxFetch<{ data?: string | { url?: string; download_url?: string } }>(
-      `${TORBOX}/torrents/requestdl?token=${encodeURIComponent(auth)}&torrent_id=${encodeURIComponent(torrentId)}&file_id=${encodeURIComponent(String(fileId))}&redirect=false`
-    )
-    const url =
-      typeof result.data === 'string' ? result.data : result.data?.url || result.data?.download_url
-    if (!url) throw new Error('TorBox did not return a playable URL.')
-    // Best-effort only — the raw TorBox payload has no poster and its
-    // catalog match (see enrichTorBoxItem) isn't recomputed here, so this
-    // session shows up in the Downloads page's Cached Streams list with a
-    // release-name title and no artwork rather than not at all.
-    const title = String(item.name || item.filename || '').trim()
-    return preparePlayback(url, title ? { title, catalogId: item.metadataId } : undefined)
-  })
 }
