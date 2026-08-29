@@ -260,7 +260,10 @@ async function withTempRoot(fn: (root: string) => Promise<void>): Promise<void> 
   try {
     await fn(root)
   } finally {
-    await fsp.rm(root, { recursive: true, force: true })
+    // Windows can hold handles on the session files a moment after they are
+    // written, so a bare rm hits ENOTEMPTY and fails a test that actually
+    // passed. This is teardown — retrying costs nothing.
+    await fsp.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
   }
 }
 

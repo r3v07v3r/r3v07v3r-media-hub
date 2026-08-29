@@ -282,7 +282,10 @@ async function main(): Promise<void> {
       await new Promise<void>((resolve) => server.close(() => resolve()))
     }
   } finally {
-    await fsp.rm(root, { recursive: true, force: true })
+    // Windows can hold handles on the files just served out of items/ for a
+    // moment after close() resolves, so a bare rm hits ENOTEMPTY and fails a
+    // test that actually passed. This is teardown — retrying costs nothing.
+    await fsp.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
   }
 }
 

@@ -483,7 +483,10 @@ async function main(): Promise<void> {
       'a version that kept killing the process is abandoned via the tripwire'
     )
   } finally {
-    await fsp.rm(root, { recursive: true, force: true })
+    // Windows can hold handles on the proof/state files the launcher wrote for
+    // a moment after the run ends, so a bare rm hits ENOTEMPTY and fails a test
+    // that actually passed. This is teardown — retrying costs nothing.
+    await fsp.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
   }
 
   // --- updater integration: stage-and-verify against a stub feed -----------
@@ -581,7 +584,10 @@ async function main(): Promise<void> {
       feedServer.close()
     }
   } finally {
-    await fsp.rm(updRoot, { recursive: true, force: true })
+    // Windows can hold handles on the staged bundle for a moment after the
+    // updater and feed server stop, so a bare rm hits ENOTEMPTY and fails a test
+    // that actually passed. This is teardown — retrying costs nothing.
+    await fsp.rm(updRoot, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
   }
 }
 

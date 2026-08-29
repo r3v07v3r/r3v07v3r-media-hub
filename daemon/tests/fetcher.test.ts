@@ -177,7 +177,10 @@ async function main(): Promise<void> {
     clearTrustedMediaHosts()
     contentServer.close()
     torboxServer.close()
-    await fsp.rm(root, { recursive: true, force: true })
+    // Windows can hold handles on the downloaded item for a moment after the
+    // servers close, so a bare rm hits ENOTEMPTY and fails a test that actually
+    // passed. This is teardown — retrying costs nothing.
+    await fsp.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
   }
 }
 
