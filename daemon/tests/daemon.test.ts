@@ -94,6 +94,268 @@ const policy = { idleTtlMs: 14 * DAY, hardMaxMs: 30 * DAY, budgetBytes: 1000 }
 
 console.log('ok  eviction planner')
 
+// --- planEvictions: per-device allocation ----------------------------------
+//
+// Eviction stops being one global LRU here, which makes this the riskiest
+// change to existing behaviour in the whole feature: it deletes real files,
+// and per-device accounting changes WHICH ones. So the first thing asserted
+// is that it changes nothing at all until somebody sets a number.
+
+{
+  const now = 5 * DAY
+  const items = [
+    item({
+      infoHash: 'a'.repeat(40),
+      presentBytes: 400,
+      ownerDeviceId: 'alice',
+      fetchedAt: now,
+      lastAccessAt: 1 * DAY
+    }),
+    item({
+      infoHash: 'b'.repeat(40),
+      presentBytes: 400,
+      ownerDeviceId: 'alice',
+      fetchedAt: now,
+      lastAccessAt: 2 * DAY
+    })
+  ]
+
+  // No quota map: byte-for-byte the old behaviour. This is what every
+  // running cache does, and it has to keep doing it after this lands.
+  assert.equal(planEvictions(items, policy, now).size, 0, 'no quotas means no quota evictions')
+  assert.equal(
+    planEvictions(items, { ...policy, quotas: new Map() }, now).size,
+    0,
+    'and an empty map is not a quota of zero'
+  )
+
+  // A device absent from the map is unquotaed, not quotaed at nothing.
+  assert.equal(
+    planEvictions(items, { ...policy, quotas: new Map([['bob', 10]]) }, now).size,
+    0,
+    "another device's quota does not reach alice's items"
+  )
+}
+
+{
+  // Over quota: the device loses ITS OWN oldest-accessed items, and stops
+  // as soon as it fits.
+  const now = 5 * DAY
+  const plan = planEvictions(
+    [
+      item({
+        infoHash: 'a'.repeat(40),
+        presentBytes: 300,
+        ownerDeviceId: 'alice',
+        fetchedAt: now,
+        lastAccessAt: 1 * DAY
+      }),
+      item({
+        infoHash: 'b'.repeat(40),
+        presentBytes: 300,
+        ownerDeviceId: 'alice',
+        fetchedAt: now,
+        lastAccessAt: 2 * DAY
+      }),
+      item({
+        infoHash: 'c'.repeat(40),
+        presentBytes: 300,
+        ownerDeviceId: 'alice',
+        fetchedAt: now,
+        lastAccessAt: 3 * DAY
+      }),
+      // Bob is well under his own allocation and must not be touched, even
+      // though his item is the least recently accessed on the whole disk.
+      item({
+        infoHash: 'd'.repeat(40),
+        presentBytes: 100,
+        ownerDeviceId: 'bob',
+        fetchedAt: now,
+        lastAccessAt: 0
+      })
+    ],
+    {
+      ...policy,
+      // 900 held against 700 allowed: one 300 file takes her to 600, so
+      // exactly one goes.
+      quotas: new Map([
+        ['alice', 700],
+        ['bob', 500]
+      ])
+    },
+    now
+  )
+  assert.equal(plan.get('a'.repeat(40)), 'quota', "alice's oldest goes first")
+  assert.equal(plan.has('b'.repeat(40)), false, 'and eviction stops once she fits')
+  assert.equal(plan.has('c'.repeat(40)), false)
+  assert.equal(
+    plan.has('d'.repeat(40)),
+    false,
+    "bob keeps the oldest file on the disk — it is not his overspend"
+  )
+}
+
+{
+  // A shared item is charged ONCE, to the device that fetched it.
+  //
+  // Charge every entitled device and sharing becomes the way to make an
+  // item cost everybody; charge nobody and sharing becomes the way to make
+  // it cost no-one. Either way the accounting is gamed by the same move.
+  const now = 5 * DAY
+  const shared = item({
+    infoHash: 'a'.repeat(40),
+    presentBytes: 900,
+    ownerDeviceId: 'alice',
+    entitled: ['alice', 'bob', 'carol'],
+    visibility: 'shared',
+    fetchedAt: now,
+    lastAccessAt: 4 * DAY
+  })
+  const bobs = item({
+    infoHash: 'b'.repeat(40),
+    presentBytes: 100,
+    ownerDeviceId: 'bob',
+    fetchedAt: now,
+    lastAccessAt: 1 * DAY
+  })
+  const quotas = new Map([
+    ['alice', 500],
+    ['bob', 500]
+  ])
+  const plan = planEvictions([shared, bobs], { ...policy, quotas }, now)
+  assert.equal(plan.get('a'.repeat(40)), 'quota', 'the fetcher pays for what she fetched')
+  assert.equal(
+    plan.has('b'.repeat(40)),
+    false,
+    'and being entitled to it costs bob nothing — he is at 100 of 500, not 1000'
+  )
+}
+
+{
+  // lastAccessAt is the newest touch by ANYONE entitled, because touch()
+  // advances it for whoever streamed the file. So an item the household is
+  // still watching is not evicted because the device that originally
+  // fetched it lost interest.
+  const now = 5 * DAY
+  const plan = planEvictions(
+    [
+      // Alice fetched this and never went back — but somebody entitled
+      // played it yesterday, which is what lastAccessAt records.
+      item({
+        infoHash: 'a'.repeat(40),
+        presentBytes: 300,
+        ownerDeviceId: 'alice',
+        entitled: ['alice', 'bob'],
+        fetchedAt: 0,
+        lastAccessAt: 4 * DAY
+      }),
+      item({
+        infoHash: 'b'.repeat(40),
+        presentBytes: 300,
+        ownerDeviceId: 'alice',
+        fetchedAt: 0,
+        lastAccessAt: 1 * DAY
+      })
+    ],
+    { ...policy, quotas: new Map([['alice', 300]]) },
+    now
+  )
+  assert.equal(
+    plan.get('b'.repeat(40)),
+    'quota',
+    'the genuinely untouched item goes, not the one somebody is still watching'
+  )
+  assert.equal(plan.has('a'.repeat(40)), false)
+}
+
+{
+  // Ownerless items — the pre-multi-user files — are charged to nobody.
+  // There is no device to bill them to, and picking one would evict a
+  // stranger's files. They remain reachable through the whole-disk pass.
+  const now = 5 * DAY
+  const orphan = item({
+    infoHash: 'a'.repeat(40),
+    presentBytes: 900,
+    fetchedAt: now,
+    lastAccessAt: 1 * DAY
+  })
+  const quotas = new Map([['alice', 10]])
+  assert.equal(
+    planEvictions([orphan], { ...policy, quotas }, now).size,
+    0,
+    'an unowned item is charged to nobody'
+  )
+  assert.equal(
+    planEvictions(
+      [orphan, item({ infoHash: 'b'.repeat(40), presentBytes: 900, fetchedAt: now, lastAccessAt: 2 * DAY })],
+      { ...policy, quotas },
+      now
+    ).get('a'.repeat(40)),
+    'budget',
+    'but the whole-disk budget still reaches it'
+  )
+}
+
+{
+  // The whole disk still bounds everything, on top of quotas — and the
+  // budget pass must not re-charge what the quota pass already took, or it
+  // evicts far more than it needed to.
+  const now = 5 * DAY
+  const plan = planEvictions(
+    [
+      item({
+        infoHash: 'a'.repeat(40),
+        presentBytes: 700,
+        ownerDeviceId: 'alice',
+        fetchedAt: now,
+        lastAccessAt: 1 * DAY
+      }),
+      item({
+        infoHash: 'b'.repeat(40),
+        presentBytes: 700,
+        ownerDeviceId: 'alice',
+        fetchedAt: now,
+        lastAccessAt: 2 * DAY
+      }),
+      item({
+        infoHash: 'c'.repeat(40),
+        presentBytes: 200,
+        ownerDeviceId: 'bob',
+        fetchedAt: now,
+        lastAccessAt: 3 * DAY
+      })
+    ],
+    { ...policy, quotas: new Map([['alice', 700]]) },
+    now
+  )
+  // Alice is 700 over her allocation, so her oldest goes. What is left is
+  // 900 against a 1000 budget, so the budget pass has nothing to do.
+  assert.equal(plan.get('a'.repeat(40)), 'quota')
+  assert.equal(plan.size, 1, 'the budget pass counts what the quota pass already removed')
+}
+
+{
+  // Quota does not override the two passes above it: an item past the hard
+  // max is gone for that reason regardless of whose allocation it sits in.
+  const now = 31 * DAY
+  const plan = planEvictions(
+    [
+      item({
+        infoHash: 'a'.repeat(40),
+        presentBytes: 900,
+        ownerDeviceId: 'alice',
+        fetchedAt: 0,
+        lastAccessAt: now - 1
+      })
+    ],
+    { ...policy, quotas: new Map([['alice', 10]]) },
+    now
+  )
+  assert.equal(plan.get('a'.repeat(40)), 'hard-max', 'age still beats allocation')
+}
+
+console.log('ok  per-device allocation')
+
 async function main(): Promise<void> {
   const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'r3-cache-test-'))
   try {
@@ -597,6 +859,24 @@ async function claimTests(): Promise<void> {
   const afterRestart = createAdmin(root)
   await afterRestart.load()
   assert.equal(afterRestart.openJoin(), true, 'the switch survives a restart')
+  // The default allocation is a PERCENTAGE of the budget, not a fixed
+  // figure: the same number has to be sensible on a 500 GB laptop and a
+  // 20 TB server. 0 means there is no default at all, which is the state
+  // that keeps every existing install behaving exactly as it did.
+  assert.equal(afterRestart.defaultQuotaPercent(), 0, 'there is no default allocation')
+  await afterRestart.setDefaultQuotaPercent(25)
+  assert.equal(afterRestart.defaultQuotaPercent(), 25)
+  await afterRestart.setDefaultQuotaPercent(430)
+  assert.equal(afterRestart.defaultQuotaPercent(), 100, 'a nonsense figure is clamped, not stored')
+  await afterRestart.setDefaultQuotaPercent(-5)
+  assert.equal(afterRestart.defaultQuotaPercent(), 0)
+  await afterRestart.setDefaultQuotaPercent(30)
+  const thirdBoot = createAdmin(root)
+  await thirdBoot.load()
+  assert.equal(thirdBoot.defaultQuotaPercent(), 30, 'and it survives a restart')
+  // Set on the instance the takeover below runs against, so that assertion
+  // is about state this object actually holds.
+  await reloaded.setDefaultQuotaPercent(30)
 
   // --claim-admin: the console is the root of trust, and the way back from
   // a lost admin device.
@@ -615,6 +895,7 @@ async function claimTests(): Promise<void> {
     true,
     'and survives the takeover — claiming changes the administrator, not their settings'
   )
+  assert.equal(reloaded.defaultQuotaPercent(), 30, 'so does the default allocation')
 
   // Reopening is spent by the claim it permits, not left standing.
   assert.equal(reloaded.isUnclaimed(), false, 'reopening does not stay open')
@@ -997,6 +1278,24 @@ async function deviceRouteTests(): Promise<void> {
     assert.equal(setOpen.status, 200)
     assert.equal(((await setOpen.json()) as { openJoin: boolean }).openJoin, true)
 
+    // The admin sets a share; the daemon says what that comes to on THIS
+    // disk, so the choice is made against a real figure rather than a ratio.
+    const quotaSet = await fetch(`${base}/api/admin/settings`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', Authorization: `Bearer ${owner.token}` },
+      body: JSON.stringify({ defaultQuotaPercent: 20 })
+    })
+    assert.equal(
+      ((await quotaSet.json()) as { defaultQuotaPercent: number }).defaultQuotaPercent,
+      20
+    )
+    const withDefault = (await (
+      await fetch(`${base}/api/admin/devices`, {
+        headers: { Authorization: `Bearer ${owner.token}` }
+      })
+    ).json()) as { defaultQuotaBytes: number; diskBudgetBytes: number }
+    assert.equal(withDefault.defaultQuotaBytes, Math.floor(withDefault.diskBudgetBytes / 5))
+
     const walkIn = await pair('a walk-in')
     assert.equal(walkIn.status, 'approved', 'with the switch on, joining does not wait')
 
@@ -1020,6 +1319,78 @@ async function deviceRouteTests(): Promise<void> {
   console.log('ok  device routes')
 }
 
+// ---------------------------------------------------------------------
+// Allocation on real files, and the one thing quota eviction must NOT do.
+//
+// A tombstone means "nobody wanted this" and suppresses a refetch. Age and
+// idleness are evidence of that; running out of room is not. An item taken
+// for space is one somebody DID want, so tombstoning it would stop the
+// cache refetching it the moment room appeared.
+// ---------------------------------------------------------------------
+
+async function quotaStoreTest(): Promise<void> {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'r3-quota-'))
+  const store = createItemStore(root, {
+    idleTtlMs: 60 * DAY,
+    hardMaxMs: 365 * DAY,
+    budgetBytes: 10 ** 9,
+    tombstoneMs: 60 * DAY
+  })
+
+  const now = Date.now()
+  const seed = async (hash: string, key: string, owner: string, age: number): Promise<void> => {
+    const dir = await store.beginItem({
+      contentKey: key,
+      title: key,
+      infoHash: hash,
+      fileName: 'f.mkv',
+      sizeBytes: 4,
+      fetchedAt: now - age,
+      lastAccessAt: now - age,
+      ownerDeviceId: owner,
+      visibility: 'private',
+      entitled: [owner]
+    })
+    await fsp.writeFile(path.join(dir, 'f.mkv'), 'ABCD')
+  }
+
+  await seed('a'.repeat(40), 'k-a', 'alice', 3 * DAY)
+  await seed('b'.repeat(40), 'k-b', 'alice', 1 * DAY)
+  await seed('c'.repeat(40), 'k-c', 'bob', 5 * DAY)
+
+  // No quotas: nothing happens. The default state of every install.
+  assert.equal((await store.runEviction(now)).size, 0, 'no allocation, no eviction')
+  assert.ok(await store.get('a'.repeat(40)))
+
+  // Alice holds 8 bytes against 4 allowed; bob holds 4 against 8.
+  const plan = await store.runEviction(
+    now,
+    null,
+    new Map([
+      ['alice', 4],
+      ['bob', 8]
+    ])
+  )
+  assert.equal(plan.get('a'.repeat(40)), 'quota', "alice's oldest is taken")
+  assert.equal(plan.size, 1, 'and nothing else is')
+  assert.equal(await store.get('a'.repeat(40)), null, 'the file is really gone')
+  assert.ok(await store.get('b'.repeat(40)), 'her newer one stays')
+  assert.ok(
+    await store.get('c'.repeat(40)),
+    "bob's older file stays — it is not his overspend"
+  )
+
+  const stones = await store.tombstones()
+  assert.equal(
+    'k-a' in stones,
+    false,
+    'a quota eviction leaves no tombstone: somebody wanted this, there was no room'
+  )
+
+  await fsp.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
+  console.log('ok  allocation on disk')
+}
+
 void main()
   .then(() => {
     console.log('ok  r3-cache daemon core')
@@ -1030,3 +1401,4 @@ void main()
   .then(claimRouteTest)
   .then(approvalTests)
   .then(deviceRouteTests)
+  .then(quotaStoreTest)

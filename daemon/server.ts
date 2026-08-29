@@ -376,7 +376,15 @@ export function createDaemonServer(deps: ServerDeps): http.Server {
           isAdmin: admin.isAdmin(deviceIdForToken(device.token)),
           isYou: deviceIdForToken(device.token) === callerDeviceId
         })),
-        openJoin: admin.openJoin()
+        openJoin: admin.openJoin(),
+        defaultQuotaPercent: admin.defaultQuotaPercent(),
+        // What the percentage actually works out to on THIS disk, so the
+        // admin is choosing against a real figure rather than a ratio.
+        defaultQuotaBytes:
+          admin.defaultQuotaPercent() > 0
+            ? Math.floor((deps.diskBudgetBytes * admin.defaultQuotaPercent()) / 100)
+            : null,
+        diskBudgetBytes: deps.diskBudgetBytes
       })
       return
     }
@@ -438,7 +446,13 @@ export function createDaemonServer(deps: ServerDeps): http.Server {
       }
       const body = await readBody(req)
       if (typeof body.openJoin === 'boolean') await admin.setOpenJoin(body.openJoin)
-      json(res, 200, { openJoin: admin.openJoin() })
+      if (body.defaultQuotaPercent !== undefined) {
+        await admin.setDefaultQuotaPercent(Number(body.defaultQuotaPercent))
+      }
+      json(res, 200, {
+        openJoin: admin.openJoin(),
+        defaultQuotaPercent: admin.defaultQuotaPercent()
+      })
       return
     }
 

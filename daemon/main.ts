@@ -27,7 +27,7 @@ import { createJobStore } from './jobs'
 import { launch, type PayloadApi } from './launcher'
 import { createMdnsAnnouncer } from './mdns'
 import { createAdmin } from './admin'
-import { createPairing } from './pairing'
+import { createPairing, deviceIdForToken, isApproved } from './pairing'
 import { createDaemonServer } from './server'
 import { createItemStore } from './storage'
 import { createUpdater } from './updater'
@@ -159,7 +159,29 @@ export async function run(api: PayloadApi): Promise<'restart' | 'exit'> {
     } catch {
       // statfs unavailable — the configured budget alone still applies.
     }
-    const plan = await storage.runEviction(Date.now(), freeBytes)
+    // Per-device allocations, rebuilt each pass so an admin's change takes
+    // effect on the next eviction rather than on the next restart.
+    //
+    // A device with no quota of its own falls back to the admin's default
+    // share of the budget, and if there is no default either it is simply
+    // absent from the map — bounded only by the whole disk, exactly as
+    // every install behaved before quotas existed. That absence is the
+    // migration: nothing changes until somebody sets a number.
+    //
+    // Items owned by a device that is no longer paired keep their owner id
+    // and fall out of the map with it, so they are bounded by the disk
+    // budget alone. Reclaiming a revoked device's files is a deletion
+    // decision that deserves its own design, not a side effect of this.
+    const quotas = new Map<string, number>()
+    const percent = admin.defaultQuotaPercent()
+    const fallback = percent > 0 ? Math.floor((config.diskBudgetBytes * percent) / 100) : null
+    for (const device of pairing.listDevices()) {
+      if (!isApproved(device)) continue
+      const quota = device.quotaBytes ?? fallback
+      if (typeof quota !== 'number') continue
+      quotas.set(deviceIdForToken(device.token), quota)
+    }
+    const plan = await storage.runEviction(Date.now(), freeBytes, quotas)
     for (const [infoHash, reason] of plan) log(`evicted  ${infoHash.slice(0, 8)}… (${reason})`)
   }
   await evict()

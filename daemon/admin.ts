@@ -37,6 +37,12 @@ interface AdminFile {
    *  a missing field is the restrictive one. On, a device that asks to pair
    *  is approved on arrival instead of waiting for the admin. */
   openJoin?: boolean
+  /** Share of the disk budget each approved device may hold, as a whole
+   *  percentage. 0 or absent means NO default quota — devices are bounded
+   *  only by the whole-disk budget, which is what every existing install
+   *  does today. A percentage rather than a fixed figure because the same
+   *  number has to be sensible on a 500 GB laptop and a 20 TB server. */
+  defaultQuotaPercent?: number
 }
 
 export interface Admin {
@@ -55,6 +61,9 @@ export interface Admin {
   /** Whether new devices join without waiting for approval. */
   openJoin(): boolean
   setOpenJoin(value: boolean): Promise<void>
+  /** 0 means no default allocation at all. */
+  defaultQuotaPercent(): number
+  setDefaultQuotaPercent(percent: number): Promise<void>
   load(): Promise<void>
 }
 
@@ -96,7 +105,12 @@ export function createAdmin(dataDir: string): Admin {
       // administers the box, not what they have configured on it, and
       // silently flipping a persisted setting during a recovery is the kind
       // of surprise nobody would think to check for.
-      state = { adminDeviceId: deviceId, claimedAt: Date.now(), ...(state.openJoin === true ? { openJoin: true } : {}) }
+      state = {
+        adminDeviceId: deviceId,
+        claimedAt: Date.now(),
+        ...(state.openJoin === true ? { openJoin: true } : {}),
+        ...(state.defaultQuotaPercent ? { defaultQuotaPercent: state.defaultQuotaPercent } : {})
+      }
       await persist()
       return true
     },
@@ -105,6 +119,17 @@ export function createAdmin(dataDir: string): Admin {
     },
     async setOpenJoin(value) {
       state = { ...state, openJoin: value === true }
+      await persist()
+    },
+    defaultQuotaPercent() {
+      return state.defaultQuotaPercent ?? 0
+    },
+    async setDefaultQuotaPercent(percent) {
+      // Clamped rather than rejected: a nonsense figure from a future UI
+      // should land on a sane one, not leave the server in a state where
+      // every device is allowed nothing or more than the disk holds.
+      const clamped = Math.max(0, Math.min(100, Math.floor(Number(percent) || 0)))
+      state = { ...state, defaultQuotaPercent: clamped }
       await persist()
     },
     async reopen() {
@@ -118,7 +143,10 @@ export function createAdmin(dataDir: string): Admin {
           adminDeviceId: String(parsed.adminDeviceId ?? ''),
           claimedAt: Number(parsed.claimedAt) || 0,
           ...(parsed.reopened === true ? { reopened: true } : {}),
-          ...(parsed.openJoin === true ? { openJoin: true } : {})
+          ...(parsed.openJoin === true ? { openJoin: true } : {}),
+          ...(Number(parsed.defaultQuotaPercent) > 0
+            ? { defaultQuotaPercent: Math.min(100, Math.floor(Number(parsed.defaultQuotaPercent))) }
+            : {})
         }
       } catch {
         // No file yet: unclaimed, which is the correct starting state for a
