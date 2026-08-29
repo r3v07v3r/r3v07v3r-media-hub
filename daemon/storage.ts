@@ -239,6 +239,16 @@ export interface ItemStore {
    *  device asking for a hash already held is entitled to the existing copy
    *  rather than triggering a second download of the same file. */
   grantEntitlement(infoHash: string, deviceId: string): Promise<void>
+  /** Replaces an item's visibility and entitled set outright — what the
+   *  owner uses to share or un-share something they fetched. Returns false
+   *  if the item is not here. The OWNER is always kept entitled: dropping
+   *  yourself from your own item leaves a file you pay for and cannot
+   *  reach, which is a mistake, not a choice. */
+  setSharing(
+    infoHash: string,
+    visibility: 'private' | 'shared',
+    entitled: readonly string[]
+  ): Promise<boolean>
   /** Stamps entitlement onto items written before the fields existed.
    *  Returns how many it changed, so startup can say so once. */
   migrateEntitlement(): Promise<number>
@@ -370,6 +380,18 @@ export function createItemStore(
       delete meta.presentBytes
       delete meta.complete
       await writeJsonAtomic(path.join(itemsDir, infoHash, 'meta.json'), meta)
+    },
+
+    async setSharing(infoHash, visibility, entitled) {
+      const item = await readItem(infoHash)
+      if (!item) return false
+      const next = new Set(entitled)
+      if (item.ownerDeviceId) next.add(item.ownerDeviceId)
+      const meta: Record<string, unknown> = { ...item, visibility, entitled: [...next] }
+      delete meta.presentBytes
+      delete meta.complete
+      await writeJsonAtomic(path.join(itemsDir, infoHash, 'meta.json'), meta)
+      return true
     },
 
     async migrateEntitlement() {

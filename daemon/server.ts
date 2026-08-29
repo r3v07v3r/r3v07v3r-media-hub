@@ -170,6 +170,13 @@ export function createDaemonServer(deps: ServerDeps): http.Server {
     })
   })
 
+  /** The default allocation as a byte figure on THIS disk, or null when no
+   *  default is set — which is every install until an admin sets one. */
+  function effectiveDefaultQuota(): number | null {
+    const percent = admin.defaultQuotaPercent()
+    return percent > 0 ? Math.floor((deps.diskBudgetBytes * percent) / 100) : null
+  }
+
   async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const url = new URL(req.url ?? '/', 'http://daemon.invalid')
     const route = `${req.method} ${url.pathname}`
@@ -380,10 +387,7 @@ export function createDaemonServer(deps: ServerDeps): http.Server {
         defaultQuotaPercent: admin.defaultQuotaPercent(),
         // What the percentage actually works out to on THIS disk, so the
         // admin is choosing against a real figure rather than a ratio.
-        defaultQuotaBytes:
-          admin.defaultQuotaPercent() > 0
-            ? Math.floor((deps.diskBudgetBytes * admin.defaultQuotaPercent()) / 100)
-            : null,
+        defaultQuotaBytes: effectiveDefaultQuota(),
         diskBudgetBytes: deps.diskBudgetBytes
       })
       return
@@ -567,13 +571,44 @@ export function createDaemonServer(deps: ServerDeps): http.Server {
     }
 
     if (route === 'GET /api/status') {
+      const allItems = await storage.list()
+      // What the CALLER holds, which is what a quota is measured against.
+      // Charged the same way the eviction planner charges it — to the
+      // fetcher, once — or the figure shown would not be the figure
+      // enforced.
+      const usedByMeBytes = allItems
+        .filter((candidate) => candidate.ownerDeviceId === callerDeviceId)
+        .reduce((sum, candidate) => sum + candidate.presentBytes, 0)
+      const callerDevice = pairing
+        .listDevices()
+        .find((device) => deviceIdForToken(device.token) === callerDeviceId)
+
+      // JOBS ARE SCOPED, and this is a deliberate departure from the plan,
+      // which said jobs would gain an owner name.
+      //
+      // They already carried titles and went to every paired device, which
+      // is the same read-side hole entitlement closed for the catalog —
+      // just on the queue instead of the disk. Attaching names to that list
+      // would have widened it from 'what does this household watch' to 'who
+      // watches what'. So a device sees its own queue, and everyone else's
+      // work appears as a count: enough to explain why the server is busy,
+      // without saying what anyone is fetching.
+      const allJobs = jobs.list()
+      const mine = allJobs.filter((job) => job.ownerDeviceId === callerDeviceId)
       json(res, 200, {
         serverName,
         version,
         usedBytes: await storage.usedBytes(),
         budgetBytes: deps.diskBudgetBytes,
-        itemCount: (await storage.list()).length,
-        jobs: jobs.list().map(summarizeJob),
+        itemCount: allItems.length,
+        usedByMeBytes,
+        // The allocation this device is actually held to. null means none
+        // is set and the whole-disk budget is the only bound.
+        quotaBytes: callerDevice?.quotaBytes ?? effectiveDefaultQuota(),
+        isAdmin: admin.isAdmin(callerDeviceId),
+        unclaimed: admin.isUnclaimed(),
+        jobs: mine.map(summarizeJob),
+        othersJobCount: allJobs.length - mine.length,
         // The CALLER's own opt-in state — each member sees whether THEIR
         // account is linked, plus how many household members are.
         torboxLinked: Boolean(credentials.tokenForDevice(callerDeviceId)),
@@ -592,6 +627,35 @@ export function createDaemonServer(deps: ServerDeps): http.Server {
       json(res, 200, {
         torboxLinked: Boolean(credentials.tokenForDevice(callerDeviceId)),
         linkedDevices: credentials.linkedDeviceCount()
+      })
+      return
+    }
+
+    // Sharing: the owner decides who else may see and stream what they
+    // fetched. Admin is allowed too, because the admin can already delete
+    // it — but note what admin does NOT get: this route changes access, it
+    // does not grant it. An admin cannot add themselves.
+    const sharingMatch = /^\/api\/items\/([a-f0-9]{40})\/sharing$/.exec(url.pathname)
+    if (sharingMatch && req.method === 'POST') {
+      const item = await storage.get(sharingMatch[1])
+      const mayChange =
+        Boolean(item) && (item?.ownerDeviceId === callerDeviceId || isAdminCaller)
+      // Same shape as the stream route: somebody who may not touch this
+      // item learns nothing about whether it is here.
+      if (!item || !mayChange) {
+        json(res, 404, { error: 'No such item.' })
+        return
+      }
+      const body = await readBody(req)
+      const visibility = body.visibility === 'shared' ? 'shared' : 'private'
+      const entitled = Array.isArray(body.entitled)
+        ? body.entitled.map((id) => String(id)).filter((id) => /^[a-f0-9]{16}$/.test(id))
+        : (item.entitled ?? [])
+      await storage.setSharing(item.infoHash, visibility, entitled)
+      const updated = await storage.get(item.infoHash)
+      json(res, 200, {
+        visibility: updated?.visibility ?? visibility,
+        entitled: updated?.entitled ?? []
       })
       return
     }

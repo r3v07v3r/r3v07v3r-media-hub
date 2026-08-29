@@ -1391,6 +1391,281 @@ async function quotaStoreTest(): Promise<void> {
   console.log('ok  allocation on disk')
 }
 
+// ---------------------------------------------------------------------
+// What the app is told, and what it is deliberately not told.
+//
+// /api/status is the "what is this server doing" view every paired device
+// polls. It grew the figures a control centre needs — the caller's own
+// usage against its own allocation, and whether the caller administers
+// the box — and lost something at the same time: the queue used to hand
+// every paired device the TITLES of everything the household was
+// fetching, which is the read-side hole entitlement closed on the
+// catalog, just on the queue instead of the disk.
+// ---------------------------------------------------------------------
+
+async function statusScopeTest(): Promise<void> {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'r3-status-'))
+  const store = createItemStore(root, {
+    idleTtlMs: 60_000,
+    hardMaxMs: 600_000,
+    budgetBytes: 10 ** 9,
+    tombstoneMs: 60_000
+  })
+  const pairing = createPairing(root)
+  await pairing.load()
+  const admin = createAdmin(root)
+  await admin.load()
+  const jobs = createJobStore(root)
+
+  const ownerToken = (await pairing.tryPair(pairing.currentCode(), 'the owner'))!
+  const guestToken = (await pairing.tryPair(pairing.currentCode(), 'a guest'))!
+  const ownerId = deviceIdForToken(ownerToken)
+  const guestId = deviceIdForToken(guestToken)
+  await admin.claim(ownerId)
+
+  const seed = async (hash: string, key: string, owner: string, bytes: string): Promise<void> => {
+    const dir = await store.beginItem({
+      contentKey: key,
+      title: key,
+      infoHash: hash,
+      fileName: 'f.mkv',
+      sizeBytes: bytes.length,
+      fetchedAt: Date.now(),
+      lastAccessAt: Date.now(),
+      ownerDeviceId: owner,
+      visibility: 'private',
+      entitled: [owner]
+    })
+    await fsp.writeFile(path.join(dir, 'f.mkv'), bytes)
+  }
+  await seed('a'.repeat(40), 'k-a', ownerId, 'ABCDEFGH')
+  await seed('b'.repeat(40), 'k-b', guestId, 'XY')
+
+  jobs.enqueue({ contentKey: 'k-mine', infoHash: 'c'.repeat(40), title: 'Owner Fetch', ownerDeviceId: ownerId })
+  jobs.enqueue({ contentKey: 'k-theirs', infoHash: 'd'.repeat(40), title: 'Guest Fetch', ownerDeviceId: guestId })
+
+  const server = createDaemonServer({
+    storage: store,
+    jobs,
+    pairing,
+    admin,
+    credentials: createCredentials(root),
+    activity: createActivityTracker(root),
+    updaterStatus: () => ({
+      channel: 'preview',
+      enabled: true,
+      checkedAt: 0,
+      latestSeen: '',
+      staged: '',
+      stagedAt: 0,
+      lastError: ''
+    }),
+    serverName: 'test',
+    version: '0.0.0',
+    diskBudgetBytes: 1000
+  })
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+  const base = `http://127.0.0.1:${(server.address() as { port: number }).port}`
+
+  const statusAs = async (token: string): Promise<Record<string, unknown>> =>
+    (await (
+      await fetch(`${base}/api/status`, { headers: { Authorization: `Bearer ${token}` } })
+    ).json()) as Record<string, unknown>
+
+  try {
+    const ownerStatus = await statusAs(ownerToken)
+    const guestStatus = await statusAs(guestToken)
+
+    assert.equal(ownerStatus.isAdmin, true, 'the claiming device is told it administers the box')
+    assert.equal(guestStatus.isAdmin, false, 'and nobody else is')
+    assert.equal(ownerStatus.unclaimed, false)
+
+    // Charged to the fetcher, once — the same rule the eviction planner
+    // applies, or the figure shown is not the figure enforced.
+    assert.equal(ownerStatus.usedByMeBytes, 8)
+    assert.equal(guestStatus.usedByMeBytes, 2)
+    assert.equal(ownerStatus.itemCount, 2, 'the whole-server totals stay whole-server')
+    assert.equal(ownerStatus.usedBytes, 10)
+
+    // Scoped queue: your own work in full, everyone else's as a number.
+    assert.deepEqual(
+      (ownerStatus.jobs as Array<{ title: string }>).map((job) => job.title),
+      ['Owner Fetch']
+    )
+    assert.equal(ownerStatus.othersJobCount, 1, 'and enough to explain why the server is busy')
+    assert.equal(
+      JSON.stringify(ownerStatus).includes('Guest Fetch'),
+      false,
+      "the administrator is not shown another device's titles either"
+    )
+    assert.equal(
+      JSON.stringify(guestStatus).includes('Owner Fetch'),
+      false,
+      'and the leak is closed in both directions'
+    )
+
+    // Allocation: none set, so the whole-disk budget is the only bound.
+    assert.equal(ownerStatus.quotaBytes, null, 'no allocation is set on a fresh server')
+    await admin.setDefaultQuotaPercent(20)
+    assert.equal((await statusAs(guestToken)).quotaBytes, 200, 'a default reaches every device')
+    await pairing.setQuota(guestId, 350)
+    assert.equal(
+      (await statusAs(guestToken)).quotaBytes,
+      350,
+      "and the device's own allocation wins over the default"
+    )
+    assert.equal((await statusAs(ownerToken)).quotaBytes, 200, 'without disturbing anyone else')
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()))
+    await fsp.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
+  }
+  console.log('ok  status is scoped to the caller')
+}
+
+// ---------------------------------------------------------------------
+// Sharing — the owner deciding who else may reach what they fetched.
+// ---------------------------------------------------------------------
+
+async function sharingRouteTest(): Promise<void> {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'r3-sharing-'))
+  const store = createItemStore(root, {
+    idleTtlMs: 60_000,
+    hardMaxMs: 600_000,
+    budgetBytes: 10 ** 9,
+    tombstoneMs: 60_000
+  })
+  const pairing = createPairing(root)
+  await pairing.load()
+  const admin = createAdmin(root)
+  await admin.load()
+
+  const adminToken = (await pairing.tryPair(pairing.currentCode(), 'admin device'))!
+  const ownerToken = (await pairing.tryPair(pairing.currentCode(), 'owner device'))!
+  const strangerToken = (await pairing.tryPair(pairing.currentCode(), 'stranger'))!
+  const ownerId = deviceIdForToken(ownerToken)
+  const strangerId = deviceIdForToken(strangerToken)
+  await admin.claim(deviceIdForToken(adminToken))
+
+  const hash = 'a'.repeat(40)
+  const dir = await store.beginItem({
+    contentKey: 'k-a',
+    title: 'Something Private',
+    infoHash: hash,
+    fileName: 'f.mkv',
+    sizeBytes: 4,
+    fetchedAt: Date.now(),
+    lastAccessAt: Date.now(),
+    ownerDeviceId: ownerId,
+    visibility: 'private',
+    entitled: [ownerId]
+  })
+  await fsp.writeFile(path.join(dir, 'f.mkv'), 'ABCD')
+
+  const server = createDaemonServer({
+    storage: store,
+    jobs: createJobStore(root),
+    pairing,
+    admin,
+    credentials: createCredentials(root),
+    activity: createActivityTracker(root),
+    updaterStatus: () => ({
+      channel: 'preview',
+      enabled: true,
+      checkedAt: 0,
+      latestSeen: '',
+      staged: '',
+      stagedAt: 0,
+      lastError: ''
+    }),
+    serverName: 'test',
+    version: '0.0.0',
+    diskBudgetBytes: 10 ** 9
+  })
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+  const base = `http://127.0.0.1:${(server.address() as { port: number }).port}`
+
+  const share = async (token: string, target: string, body: unknown): Promise<Response> =>
+    fetch(`${base}/api/items/${target}/sharing`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify(body)
+    })
+
+  try {
+    // A device with no claim on the item cannot tell it apart from one that
+    // is not here — the same property the stream route carries, for the
+    // same reason: infohashes are public and a differing answer enumerates
+    // the disk.
+    const forbidden = await share(strangerToken, hash, { visibility: 'shared' })
+    const missing = await share(strangerToken, 'f'.repeat(40), { visibility: 'shared' })
+    assert.equal(forbidden.status, missing.status)
+    assert.equal(await forbidden.text(), await missing.text())
+    assert.equal(
+      (await store.get(hash))!.visibility,
+      'private',
+      'and the refusal actually refused'
+    )
+
+    // The owner opens it up.
+    const opened = await share(ownerToken, hash, { visibility: 'shared' })
+    assert.equal(opened.status, 200)
+    assert.equal((await store.get(hash))!.visibility, 'shared')
+    assert.equal(
+      (await fetch(`${base}/stream/${hash}?token=${strangerToken}`)).status,
+      200,
+      'and the stranger can now stream it'
+    )
+
+    // Back to private, entitling one named device.
+    const scoped = await share(ownerToken, hash, {
+      visibility: 'private',
+      entitled: [strangerId]
+    })
+    assert.equal(scoped.status, 200)
+    const after = (await scoped.json()) as { entitled: string[] }
+    assert.ok(
+      after.entitled.includes(ownerId),
+      'the owner stays entitled — dropping yourself leaves a file you pay for and cannot reach'
+    )
+    assert.ok(after.entitled.includes(strangerId))
+
+    // Omitting `entitled` means 'leave it alone', not 'clear it'. A request
+    // that only flips visibility must not silently revoke everyone who was
+    // already let in.
+    const visibilityOnly = (await (
+      await share(ownerToken, hash, { visibility: 'private' })
+    ).json()) as { entitled: string[] }
+    assert.ok(
+      visibilityOnly.entitled.includes(strangerId),
+      'an omitted entitled list is preserved, not emptied'
+    )
+
+    // Garbage in the entitled list is dropped rather than stored.
+    const cleaned = (await (
+      await share(ownerToken, hash, { visibility: 'private', entitled: ['../etc', 'ZZZ', strangerId] })
+    ).json()) as { entitled: string[] }
+    assert.deepEqual(cleaned.entitled.filter((id) => !/^[a-f0-9]{16}$/.test(id)), [])
+
+    // The admin may change sharing — they can already delete the file — but
+    // this route changes access, it does not grant it. Admin cannot add
+    // themselves through it, because the entitled list they send is the one
+    // that is stored, and it is the OWNER who is preserved, not the caller.
+    const byAdmin = await share(adminToken, hash, { visibility: 'private', entitled: [] })
+    assert.equal(byAdmin.status, 200)
+    const adminResult = (await byAdmin.json()) as { entitled: string[] }
+    assert.deepEqual(adminResult.entitled, [ownerId], 'only the owner is preserved')
+    assert.equal(
+      (await fetch(`${base}/stream/${hash}?token=${adminToken}`)).status,
+      404,
+      'so the administrator still cannot stream it'
+    )
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()))
+    await fsp.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
+  }
+  console.log('ok  sharing')
+}
+
 void main()
   .then(() => {
     console.log('ok  r3-cache daemon core')
@@ -1402,3 +1677,5 @@ void main()
   .then(approvalTests)
   .then(deviceRouteTests)
   .then(quotaStoreTest)
+  .then(statusScopeTest)
+  .then(sharingRouteTest)
