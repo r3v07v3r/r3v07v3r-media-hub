@@ -425,7 +425,7 @@ export function LibraryPage({ config }: { config: CategoryConfig }) {
     clearCategorySearch,
     mediaHubSettings,
     openDetail,
-    browsingOrigin
+    pendingRestore
   } = useAppState()
   const [searchParams, setSearchParams] = useSearchParams()
   const location = useLocation()
@@ -515,6 +515,12 @@ export function LibraryPage({ config }: { config: CategoryConfig }) {
   // that tile already mounted instead of it sitting past the default
   // first-24 cutoff.
   //
+  // Reads `pendingRestore` — what a Back press just stepped out of — not
+  // the trail's top, which is where the NEXT Back would go. Since Back now
+  // pops as it navigates (the back trail is a stack, so a chain of titles
+  // opened from one another unwinds a step per press), the entry being
+  // restored is no longer on the trail by the time this page mounts.
+  //
   // Gated on the origin's own route matching where we actually are, same
   // as useRestoreBrowsingOrigin's own check below — without it, a title
   // opened from Home/Search and then left via a DIFFERENT navigation
@@ -524,11 +530,11 @@ export function LibraryPage({ config }: { config: CategoryConfig }) {
   // seeding an arbitrarily deep reveal batch for a restore that
   // useRestoreBrowsingOrigin correctly never runs.
   const restoreVisibleCount = useMemo(() => {
-    if (!browsingOrigin?.focusedItemId) return undefined
-    if (`${location.pathname}${location.search}` !== browsingOrigin.route) return undefined
-    const idx = browseItems.findIndex((item) => item.id === browsingOrigin.focusedItemId)
+    if (!pendingRestore?.focusedItemId) return undefined
+    if (`${location.pathname}${location.search}` !== pendingRestore.route) return undefined
+    const idx = browseItems.findIndex((item) => item.id === pendingRestore.focusedItemId)
     return idx >= 0 ? Math.ceil((idx + 1) / EVERYTHING_BATCH) * EVERYTHING_BATCH : undefined
-  }, [browsingOrigin, browseItems, location.pathname, location.search])
+  }, [pendingRestore, browseItems, location.pathname, location.search])
   const selected = useMemo(
     () =>
       [...browseItems, ...continuing, ...recommended, ...heroItems].find(

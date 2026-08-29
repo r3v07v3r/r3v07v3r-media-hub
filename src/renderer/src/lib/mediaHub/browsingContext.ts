@@ -23,6 +23,18 @@ export interface BrowsingOrigin {
   railScroll: Record<string, number>
 }
 
+/** The detail routes — the ones a title page lives at, as opposed to a
+ *  browse page a drill-down chain starts from. App.tsx registers exactly
+ *  these three patterns (`/movies/:id`, `/series/:id`, `/anime/:id`); a
+ *  bare `/movies` is a browse page, `/movies/tt0111161` is a title.
+ *
+ *  Used to tell "opening a title from a grid" (the start of a new trail)
+ *  apart from "opening a title from another title" (a step deeper into
+ *  the one already in progress) — see AppStateContext's openDetail.  */
+export function isDetailRoute(pathname: string): boolean {
+  return /^\/(movies|series|anime)\/[^/]+$/.test(pathname)
+}
+
 /** Snapshots the current page once, at the moment a detail page is opened from it. */
 export function captureBrowsingOrigin(route: string, label: string): BrowsingOrigin {
   const main = document.getElementById('main-content')
