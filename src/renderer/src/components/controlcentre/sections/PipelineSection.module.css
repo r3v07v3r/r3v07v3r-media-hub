@@ -227,13 +227,6 @@
   box-shadow: 0 0 8px rgba(39, 230, 154, 0.6);
 }
 
-.stageHint {
-  margin: 2px 0 0;
-  font-size: 0.72rem;
-  line-height: 1.45;
-  font-style: italic;
-  color: var(--text-muted);
-}
 
 /* Sits in the margin between two columns, centred on the stage's own
    height, so the row reads as one path rather than as separate boxes. */

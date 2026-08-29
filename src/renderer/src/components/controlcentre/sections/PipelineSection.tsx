@@ -7,11 +7,13 @@
 // something, something finds it, something decides to keep it, something
 // fetches it, subtitles are found, it is stored on the way past, it plays.
 //
-// DRAWN FROM WHAT IS CONFIGURED, not from a picture of an ideal setup. A
-// node that nothing backs is dimmed; a stage with no OUTSIDE service in it
-// says what adding one would buy. What it never does is draw a brand this
-// app has no integration with — see pipeline.ts for the list and why, and
-// for why R3's own function is drawn first in every stage that has one.
+// DRAWN FROM WHAT IS SET UP, not from a picture of an ideal setup. What a
+// stage is missing is answered by its + rather than by prose underneath it:
+// the + lists exactly what could go there and sets it up in one step, which
+// a sentence saying the same thing could only duplicate. What the diagram
+// never does is draw a brand this app has no integration with — see
+// pipeline.ts for the list and why, and for why R3's own function is drawn
+// first in every stage that has one.
 //
 // Clicking a node selects it and brings up its settings underneath.
 // Selecting is separate from switching a service ON, deliberately: those
@@ -205,12 +207,6 @@ export function PipelineSection({ onNavigate }: { onNavigate?: (section: 'cachin
       <div className={own.flowScroll}>
         <ol className={own.flow}>
           {PIPELINE.map((stage, index) => {
-            // The hint is about OUTSIDE services only. R3's own function is
-            // live in several stages by definition, so counting it would
-            // hide the suggestion in exactly the stages that most want one.
-            const outsideLive = stage.nodes.some(
-              (node) => node.config.kind !== 'builtin' && isLive(node)
-            )
             const present = stage.nodes.filter(isPresent)
             const addable = stage.nodes.filter((node) => !isPresent(node))
             return (
@@ -269,7 +265,6 @@ export function PipelineSection({ onNavigate }: { onNavigate?: (section: 'cachin
                   })}
                 </div>
 
-                {!outsideLive && stage.hint && <p className={own.stageHint}>{stage.hint}</p>}
 
                 {/* Between stages, not after the last one, so the row reads
                     as a path with an end rather than as one that trails off. */}

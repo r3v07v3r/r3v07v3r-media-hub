@@ -57,11 +57,6 @@ export interface PipelineStage {
   /** What this step is for, in the person's terms. */
   blurb: string
   nodes: PipelineNode[]
-  /** Shown when no OUTSIDE service is filling this stage — R3's own function
-   *  does not count, or the hint would vanish the moment the stage stopped
-   *  being empty and take its suggestion with it. Says what adding something
-   *  would buy, rather than reporting a deficiency. */
-  hint: string
 }
 
 export const PIPELINE: PipelineStage[] = [
@@ -70,7 +65,6 @@ export const PIPELINE: PipelineStage[] = [
     label: 'Request',
     icon: 'search',
     blurb: 'You ask for something',
-    hint: '',
     nodes: [
       {
         id: 'r3-browse',
@@ -86,7 +80,6 @@ export const PIPELINE: PipelineStage[] = [
     label: 'Discovery',
     icon: 'planet',
     blurb: 'Something finds releases',
-    hint: '',
     nodes: [
       {
         id: 'r3-scrapers',
@@ -109,7 +102,6 @@ export const PIPELINE: PipelineStage[] = [
     label: 'Management',
     icon: 'calendar',
     blurb: 'Something decides what to keep',
-    hint: 'Sonarr or Radarr can take this over, with their own quality rules and release profiles.',
     nodes: [
       {
         id: 'r3-tracking',
@@ -139,7 +131,6 @@ export const PIPELINE: PipelineStage[] = [
     label: 'Download',
     icon: 'downloads',
     blurb: 'Something fetches it',
-    hint: 'Nothing can fetch a release yet. Link TorBox or connect qBittorrent.',
     nodes: [
       {
         id: 'torbox',
@@ -162,7 +153,6 @@ export const PIPELINE: PipelineStage[] = [
     label: 'Process',
     icon: 'waveform',
     blurb: 'Subtitles are found',
-    hint: 'Only what is already in the file. Link a subtitle service to search for more.',
     nodes: [
       {
         id: 'embedded-subs',
@@ -192,7 +182,6 @@ export const PIPELINE: PipelineStage[] = [
     label: 'Storage',
     icon: 'stack',
     blurb: 'It is kept on the way past',
-    hint: '',
     nodes: [
       {
         id: 'playback-cache',
@@ -222,7 +211,6 @@ export const PIPELINE: PipelineStage[] = [
     label: 'Stream / play',
     icon: 'play-outline',
     blurb: 'It plays',
-    hint: '',
     nodes: [
       {
         id: 'mpv',
