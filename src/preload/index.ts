@@ -346,6 +346,10 @@ const api = {
         visibility: 'private' | 'shared'
       }): Promise<{ ok: boolean; message?: string }> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.lanCacheSetSharing, payload),
+      removeItem: (payload: { infoHash: string }): Promise<{ ok: boolean; message?: string }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.lanCacheRemoveItem, payload),
+      cancelJob: (payload: { contentKey: string }): Promise<{ ok: boolean; message?: string }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.lanCacheCancelJob, payload),
     },
 
     torbox: {
