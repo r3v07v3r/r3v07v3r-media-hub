@@ -71,13 +71,32 @@ export function MatrixRain({ active }: Props) {
     // small text is the difference between "rain" and "smudge".
     const resize = (): void => {
       const ratio = Math.min(window.devicePixelRatio || 1, 2)
-      const rect = canvas.getBoundingClientRect()
-      width = Math.max(1, Math.floor(rect.width))
-      height = Math.max(1, Math.floor(rect.height))
+      // LAYOUT SIZE, never getBoundingClientRect.
+      //
+      // This canvas lives on a face of a 3D cube. getBoundingClientRect
+      // returns the PROJECTED box, and while the cube is turned the face is
+      // seen almost edge-on — measured at 8px tall for an element that is
+      // genuinely 374. Sizing the backing store from that gave an 8px-tall
+      // image stretched over the whole face: horizontal detail survived, all
+      // vertical detail was destroyed, and the glyphs came out as vertical
+      // streaks. That was the "lines" — not the trail, not the font.
+      //
+      // offsetWidth/offsetHeight are the untransformed layout box, so they
+      // are right whichever way the cube is facing. It is also why the
+      // ResizeObserver never rescued it: the layout box never changed, only
+      // the projection did.
+      const width0 = canvas.offsetWidth
+      const height0 = canvas.offsetHeight
+      width = Math.max(1, Math.floor(width0))
+      height = Math.max(1, Math.floor(height0))
       canvas.width = Math.floor(width * ratio)
       canvas.height = Math.floor(height * ratio)
       context.setTransform(ratio, 0, 0, ratio, 0, 0)
-      context.font = `${FONT_SIZE}px "Courier New", ui-monospace, monospace`
+      // Courier New carries the Latin and digits but has no katakana, so
+      // those characters fall through to whatever the system picks. Naming a
+      // Japanese face explicitly keeps that from varying by machine —
+      // per-character fallback means Latin still comes from Courier.
+      context.font = `${FONT_SIZE}px "Courier New", "MS Gothic", "Yu Gothic", ui-monospace, monospace`
       context.textBaseline = 'top'
       const count = Math.ceil(width / FONT_SIZE)
       columns = Array.from({ length: count }, () =>
