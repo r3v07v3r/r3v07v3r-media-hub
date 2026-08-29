@@ -142,14 +142,22 @@ export function createJobStore(dataDir: string): JobStore {
       // A fetching job is marked rather than removed — the fetch loop owns
       // the in-flight download and checks state between chunks.
       jobs = jobs.filter((job) => !(job.contentKey === contentKey && job.state === 'queued'))
+      // TWO WAYS TO CANCEL SOMETHING, and the count only sees one of them.
+      // Comparing lengths reported false for the case that had most
+      // obviously worked — stopping a download in flight — because that
+      // path marks the record instead of dropping it. The route reads this
+      // to decide between "stopped" and "there was nothing to stop", so it
+      // has to mean "did anything change".
+      let changed = jobs.length !== before
       for (const job of jobs) {
         if (job.contentKey === contentKey && job.state === 'fetching') {
           job.state = 'expired'
           job.lastError = 'Cancelled.'
+          changed = true
         }
       }
       schedulePersist()
-      return jobs.length !== before
+      return changed
     },
     nextQueued() {
       const queued = jobs

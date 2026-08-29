@@ -2299,6 +2299,29 @@ async function myItemsTest(): Promise<void> {
       'and it leaves the queue'
     )
 
+    // STOPPING A DOWNLOAD IN FLIGHT IS A CANCELLATION, and has to be
+    // reported as one. A fetching job is MARKED rather than removed — the
+    // fetch loop owns the download and checks state between chunks — so a
+    // cancel that compares queue lengths sees no change and calls the one
+    // case that most obviously worked a failure.
+    jobs.enqueue({
+      contentKey: 'k-inflight',
+      infoHash: 'a'.repeat(40),
+      title: 'In Flight',
+      ownerDeviceId: mineId
+    })
+    jobs.update('k-inflight', { state: 'fetching' })
+    assert.equal(
+      await cancelAs(mineToken, 'k-inflight'),
+      200,
+      'cancelling a download in progress reports success'
+    )
+    assert.equal(
+      jobs.list().find((job) => job.contentKey === 'k-inflight')?.state,
+      'expired',
+      'and the fetch loop is told to stop at its next chunk'
+    )
+
     // NOTHING TO CANCEL IS NOT A SUCCESS. A ready record stays listed for
     // an hour and a stopped one for a day; jobs.cancel touches neither, and
     // the route used to report 200 regardless, so the button did nothing

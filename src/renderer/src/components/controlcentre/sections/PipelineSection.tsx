@@ -467,7 +467,19 @@ function ConfigPanel({
   }
 
   if (node.config.kind === 'account') {
-    return <AccountPanel node={node} account={node.config.account} live={live} />
+    // KEYED BY ACCOUNT, deliberately. Switching between two account tabs
+    // changes neither the component type nor its position, so React reuses
+    // the instance and its draft state comes with it — a half-typed
+    // OpenSubtitles key would appear in the SubDL form and be submitted to
+    // the wrong service. The key makes each provider its own form.
+    return (
+      <AccountPanel
+        key={node.config.account}
+        node={node}
+        account={node.config.account}
+        live={live}
+      />
+    )
   }
 
   const id = node.config.service
