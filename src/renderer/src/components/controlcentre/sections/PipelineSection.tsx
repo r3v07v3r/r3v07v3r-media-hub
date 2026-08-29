@@ -21,7 +21,12 @@
 // download client to look at it cannot turn it off.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { DEFAULT_SERVICE_SETTINGS, type ServiceConfig, type ServiceSettings } from '@shared/ipc-types'
+import {
+  DEFAULT_SERVICE_SETTINGS,
+  type ServiceConfig,
+  type ServiceId,
+  type ServiceSettings
+} from '@shared/ipc-types'
 import { Icon } from '@renderer/components/icons/Icon'
 import { useAppState } from '@renderer/context/AppStateContext'
 import { testConnection as testJellyfin } from '@renderer/lib/api/jellyfin'
@@ -55,6 +60,10 @@ const SECRET_LABEL = {
 export function PipelineSection({ onNavigate }: { onNavigate?: (section: 'caching') => void }) {
   const { mediaHubSettings } = useAppState()
   const [services, setServices] = useState<ServiceSettings | null>(null)
+  /** Which services THIS panel changed, so a save merges them onto the
+   *  newest settings rather than replacing the lot. A ref, not state:
+   *  nothing renders from it and it must not schedule a render. */
+  const edited = useRef<Set<ServiceId>>(new Set())
   const [lanCache, setLanCache] = useState(false)
   const [selected, setSelected] = useState<string>('r3-browse')
   const [dirty, setDirty] = useState(false)
@@ -66,9 +75,7 @@ export function PipelineSection({ onNavigate }: { onNavigate?: (section: 'cachin
 
   useEffect(() => {
     void Promise.resolve().then(async () => {
-      setServices(
-        window.api?.settings ? await window.api.settings.get() : DEFAULT_SERVICE_SETTINGS
-      )
+      setServices(window.api?.settings ? await window.api.settings.get() : DEFAULT_SERVICE_SETTINGS)
       const api = window.api?.mediaHub?.lanCache
       if (!api) return
       // Only an APPROVED cache server is part of the pipeline. A pending one
@@ -143,6 +150,7 @@ export function PipelineSection({ onNavigate }: { onNavigate?: (section: 'cachin
   const patch = (next: ServiceConfig): void => {
     const entry = PIPELINE_NODES[selected]
     if (!services || entry?.node.config.kind !== 'service') return
+    edited.current.add(entry.node.config.service)
     setServices({ ...services, [entry.node.config.service]: next })
     setDirty(true)
   }
@@ -150,7 +158,16 @@ export function PipelineSection({ onNavigate }: { onNavigate?: (section: 'cachin
   const save = async (): Promise<void> => {
     if (!services || !window.api?.settings) return
     setBusy(true)
-    setServices(await window.api.settings.set(services))
+    // WRITTEN ONTO THE LATEST, not over it. settings.set takes the whole
+    // object, and this panel is mounted alongside Media servers, which
+    // edits the same one: saving the snapshot this component read at mount
+    // would silently undo anything configured there since. Only the
+    // services actually touched here are carried across.
+    const latest = await window.api.settings.get()
+    const merged = { ...latest }
+    for (const id of edited.current) merged[id] = services[id]
+    setServices(await window.api.settings.set(merged))
+    edited.current.clear()
     setDirty(false)
     setBusy(false)
   }
@@ -268,7 +285,6 @@ export function PipelineSection({ onNavigate }: { onNavigate?: (section: 'cachin
                   })}
                 </div>
 
-
                 {/* Between stages, not after the last one, so the row reads
                     as a path with an end rather than as one that trails off. */}
                 {index < PIPELINE.length - 1 && (
@@ -316,37 +332,35 @@ export function PipelineSection({ onNavigate }: { onNavigate?: (section: 'cachin
               <p className={styles.note}>{addingStage.blurb}</p>
             </header>
             <ul className={own.addList}>
-              {addingStage.nodes.filter((node) => !isPresent(node)).map((node) => (
-                <li key={node.id}>
-                  <button
-                    type="button"
-                    className={own.addOption}
-                    onClick={() => {
-                      setSelected(node.id)
-                      setTest(null)
-                      setAdding(null)
-                    }}
-                  >
-                    <span className={own.nodeIcon} aria-hidden="true">
-                      <Icon name={node.icon} size={16} />
-                    </span>
-                    <span className={own.nodeText}>
-                      <span className={own.nodeLabel}>{node.label}</span>
-                      <span className={own.nodeDetail}>{node.detail}</span>
-                    </span>
-                    <span className={own.addGo} aria-hidden="true">
-                      <Icon name="chevron" size={14} />
-                    </span>
-                  </button>
-                </li>
-              ))}
+              {addingStage.nodes
+                .filter((node) => !isPresent(node))
+                .map((node) => (
+                  <li key={node.id}>
+                    <button
+                      type="button"
+                      className={own.addOption}
+                      onClick={() => {
+                        setSelected(node.id)
+                        setTest(null)
+                        setAdding(null)
+                      }}
+                    >
+                      <span className={own.nodeIcon} aria-hidden="true">
+                        <Icon name={node.icon} size={16} />
+                      </span>
+                      <span className={own.nodeText}>
+                        <span className={own.nodeLabel}>{node.label}</span>
+                        <span className={own.nodeDetail}>{node.detail}</span>
+                      </span>
+                      <span className={own.addGo} aria-hidden="true">
+                        <Icon name="chevron" size={14} />
+                      </span>
+                    </button>
+                  </li>
+                ))}
             </ul>
             <div className={styles.actions}>
-              <button
-                type="button"
-                className={styles.ghostButton}
-                onClick={() => setAdding(null)}
-              >
+              <button type="button" className={styles.ghostButton} onClick={() => setAdding(null)}>
                 Close
               </button>
             </div>
@@ -439,9 +453,9 @@ function ConfigPanel({
             : `No ${node.label.toLowerCase()} is joined yet.`}
         </p>
         <p className={styles.note}>
-          Joining one is a few steps — finding it, asking, and being approved by whoever
-          administers it — so it has a section of its own rather than a second copy here that
-          could disagree with it.
+          Joining one is a few steps — finding it, asking, and being approved by whoever administers
+          it — so it has a section of its own rather than a second copy here that could disagree
+          with it.
         </p>
         <div className={styles.actions}>
           <button type="button" className={styles.primaryButton} onClick={onGoToCaching}>
@@ -463,7 +477,9 @@ function ConfigPanel({
     <div className={own.panelBody}>
       <div className={own.enableRow}>
         <span className={styles.toggleText}>
-          <span className={styles.toggleTitle}>Use {node.label} for {stageLabel.toLowerCase()}</span>
+          <span className={styles.toggleTitle}>
+            Use {node.label} for {stageLabel.toLowerCase()}
+          </span>
           <span className={styles.note}>
             {config.baseUrl.trim()
               ? config.enabled
@@ -579,7 +595,10 @@ function AccountPanel({
           : account === 'subdl'
             ? await api.subdl.connect(apiKey.trim())
             : await api.openSubtitles.connect(apiKey.trim(), username.trim(), password)
-      setMessage({ ok: result.ok, text: result.message || (result.ok ? 'Connected.' : 'Could not connect.') })
+      setMessage({
+        ok: result.ok,
+        text: result.message || (result.ok ? 'Connected.' : 'Could not connect.')
+      })
       if (result.ok) {
         setApiKey('')
         setUsername('')

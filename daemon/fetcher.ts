@@ -36,6 +36,11 @@ export interface FetcherDeps {
   credentials: Credentials
   dataDir: string
   log: (message: string) => void
+  /** The allocation the job's owner is held to, or null for "no allocation
+   *  set". Supplied as a callback rather than a map because an admin can
+   *  change it at any time and a fetch decided on a stale copy is exactly
+   *  the kind of thing that goes unnoticed. */
+  quotaFor?: (deviceId: string) => number | null
   /** Test seam: the TorBox resolve step, injectable so the download loop
    *  can be exercised against a stub content host. Production always uses
    *  the real client. */
@@ -70,6 +75,7 @@ export function createFetcher({
   credentials,
   dataDir,
   log,
+  quotaFor = () => null,
   resolveDownloadImpl = resolveDownload
 }: FetcherDeps): Fetcher {
   let running = false
@@ -141,6 +147,32 @@ export function createFetcher({
       // least-recently-accessed items, and a file bigger than the whole
       // budget is refused instead of either blowing the cap or emptying the
       // cache to hold one thing.
+      // THE OWNER'S ALLOCATION, checked before a byte is fetched.
+      //
+      // makeRoomFor below bounds this against the whole-disk budget, which
+      // an 8 GB film under a 2 GB device allocation passes cleanly. It then
+      // downloads in full, and the hourly quota pass deletes it for being
+      // over that allocation — leaving no tombstone, deliberately, because
+      // quota pressure is not disinterest. So the feeder asks again, and
+      // the same gigabytes are spent on the same doomed download for as
+      // long as the title stays wanted.
+      //
+      // Refused outright instead, and expired rather than retried: no
+      // amount of waiting makes a file smaller than it is. It says whose
+      // allocation and by how much, because the fix is somebody raising it.
+      const quota = job.ownerDeviceId ? quotaFor(job.ownerDeviceId) : null
+      if (quota !== null && resolved.sizeBytes > quota) {
+        jobs.update(job.contentKey, {
+          state: 'expired',
+          lastError:
+            `${(resolved.sizeBytes / 1024 ** 3).toFixed(1)} GB does not fit this device's ` +
+            `${(quota / 1024 ** 3).toFixed(1)} GB allocation.`
+        })
+        nextAttemptAt.delete(job.contentKey)
+        log(`refused  ${job.title}: over the owner's allocation`)
+        return
+      }
+
       // The infoHash is passed so a resume is not charged for the bytes it
       // has already written — and so the partial itself is not what gets
       // evicted to make room for it.

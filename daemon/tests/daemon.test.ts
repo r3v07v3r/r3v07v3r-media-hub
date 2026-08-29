@@ -13,7 +13,7 @@ import { createAdmin } from '../admin'
 import { createCredentials } from '../credentials'
 import { createJobStore } from '../jobs'
 import type { JobRecord } from '../jobs'
-import { shouldRetryAfterFailure } from '../fetcher'
+import { createFetcher, shouldRetryAfterFailure } from '../fetcher'
 import { createPairing, deviceIdForToken, isApproved, type Pairing } from '../pairing'
 import { createDaemonServer } from '../server'
 import { createItemStore, isEntitled, planEvictions, type StoredItem } from '../storage'
@@ -2063,6 +2063,66 @@ async function budgetRoomTest(): Promise<void> {
   )
 
   await fsp.rm(watchRoot, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
+
+  // --- a file that cannot fit the owner's allocation is not fetched ----
+  //
+  // The whole-disk budget is not the only bound. An 8 GB film under a 2 GB
+  // device allocation passes the budget check cleanly, downloads in full,
+  // and is then deleted by the hourly quota pass — which leaves no
+  // tombstone, deliberately, because quota pressure is not disinterest. So
+  // the feeder asks again and the same gigabytes go down the same drain for
+  // as long as the title stays wanted. It is refused before the first byte
+  // instead, and expired rather than retried: waiting does not shrink it.
+  const quotaRoot = await fsp.mkdtemp(path.join(os.tmpdir(), 'r3-quota-'))
+  const quotaJobs = createJobStore(quotaRoot)
+  const quotaStore = createItemStore(quotaRoot, {
+    idleTtlMs: 60 * DAY,
+    hardMaxMs: 365 * DAY,
+    budgetBytes: 100 * 1024 ** 3,
+    tombstoneMs: 60 * DAY
+  })
+  const quotaCreds = createCredentials(quotaRoot)
+  await quotaCreds.load()
+  await quotaCreds.setTokenForDevice('device-1', 'torbox-token')
+  let resolves = 0
+  const quotaFetcher = createFetcher({
+    jobs: quotaJobs,
+    storage: quotaStore,
+    credentials: quotaCreds,
+    dataDir: quotaRoot,
+    log: () => {},
+    quotaFor: (deviceId) => (deviceId === 'device-1' ? 2 * 1024 ** 3 : null),
+    resolveDownloadImpl: async () => {
+      resolves += 1
+      return {
+        url: 'http://127.0.0.1:1/never-fetched.mkv',
+        fileName: 'never-fetched.mkv',
+        sizeBytes: 8 * 1024 ** 3
+      }
+    }
+  })
+  quotaJobs.enqueue({
+    contentKey: 'tt-big::1:1',
+    infoHash: 'c'.repeat(40),
+    title: 'Too Big',
+    ownerDeviceId: 'device-1'
+  })
+  quotaFetcher.start()
+  // Long enough for the loop to pick the job up and decide; the download
+  // itself would need a content host, and the point is that it never runs.
+  await new Promise((resolve) => setTimeout(resolve, 300))
+  await quotaFetcher.stop()
+  const refused = quotaJobs.list().find((job) => job.contentKey === 'tt-big::1:1')
+  assert.equal(refused?.state, 'expired', 'a file over the owner allocation is refused, not queued')
+  assert.match(
+    refused?.lastError ?? '',
+    /allocation/,
+    'and it says why, since the fix is somebody raising it'
+  )
+  assert.equal(resolves, 1, 'decided once, not retried in a loop')
+  assert.equal((await quotaStore.list()).length, 0, 'nothing was written')
+
+  await fsp.rm(quotaRoot, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
 
   console.log('ok  budget room')
 }

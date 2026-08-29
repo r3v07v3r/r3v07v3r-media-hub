@@ -125,7 +125,17 @@ export async function run(api: PayloadApi): Promise<'restart' | 'exit'> {
     process.off('SIGTERM', onSignal)
   }
 
-  const fetcher = createFetcher({ jobs, storage, credentials, dataDir: config.dataDir, log })
+  const fetcher = createFetcher({
+    jobs,
+    storage,
+    credentials,
+    dataDir: config.dataDir,
+    log,
+    // The same allocation the eviction pass enforces. Read through one
+    // function so a fetch cannot be admitted against a rule the sweep will
+    // then apply differently an hour later.
+    quotaFor: (deviceId) => deviceQuotas().get(deviceId) ?? null
+  })
   const updater = createUpdater({
     dataDir: config.dataDir,
     currentVersion: runningVersion,
@@ -157,28 +167,22 @@ export async function run(api: PayloadApi): Promise<'restart' | 'exit'> {
   // Expiry runs at startup (a daemon that was off for a month has a month
   // of overdue evictions) and hourly after. Real free space is measured
   // fresh each pass — the budget bounds the cache's own use, but free
-  // space bounds what this shared machine can afford.
-  const evict = async (): Promise<void> => {
-    let freeBytes: number | null = null
-    try {
-      const stat = await fsp.statfs(config.dataDir)
-      freeBytes = stat.bavail * stat.bsize
-    } catch {
-      // statfs unavailable — the configured budget alone still applies.
-    }
-    // Per-device allocations, rebuilt each pass so an admin's change takes
-    // effect on the next eviction rather than on the next restart.
-    //
-    // A device with no quota of its own falls back to the admin's default
-    // share of the budget, and if there is no default either it is simply
-    // absent from the map — bounded only by the whole disk, exactly as
-    // every install behaved before quotas existed. That absence is the
-    // migration: nothing changes until somebody sets a number.
-    //
-    // Items owned by a device that is no longer paired keep their owner id
-    // and fall out of the map with it, so they are bounded by the disk
-    // budget alone. Reclaiming a revoked device's files is a deletion
-    // decision that deserves its own design, not a side effect of this.
+  /**
+   * Per-device allocations, rebuilt on each read so an admin's change takes
+   * effect on the next eviction or fetch rather than on the next restart.
+   *
+   * A device with no quota of its own falls back to the admin's default
+   * share of the budget, and if there is no default either it is simply
+   * absent from the map -- bounded only by the whole disk, exactly as every
+   * install behaved before quotas existed. That absence is the migration:
+   * nothing changes until somebody sets a number.
+   *
+   * Items owned by a device that is no longer paired keep their owner id
+   * and fall out of the map with it, so they are bounded by the disk budget
+   * alone. Reclaiming a revoked device's files is a deletion decision that
+   * deserves its own design, not a side effect of this.
+   */
+  const deviceQuotas = (): Map<string, number> => {
     const quotas = new Map<string, number>()
     const percent = admin.defaultQuotaPercent()
     const fallback = percent > 0 ? Math.floor((config.diskBudgetBytes * percent) / 100) : null
@@ -188,7 +192,19 @@ export async function run(api: PayloadApi): Promise<'restart' | 'exit'> {
       if (typeof quota !== 'number') continue
       quotas.set(deviceIdForToken(device.token), quota)
     }
-    const plan = await storage.runEviction(Date.now(), freeBytes, quotas)
+    return quotas
+  }
+
+  // space bounds what this shared machine can afford.
+  const evict = async (): Promise<void> => {
+    let freeBytes: number | null = null
+    try {
+      const stat = await fsp.statfs(config.dataDir)
+      freeBytes = stat.bavail * stat.bsize
+    } catch {
+      // statfs unavailable — the configured budget alone still applies.
+    }
+    const plan = await storage.runEviction(Date.now(), freeBytes, deviceQuotas())
     for (const [infoHash, reason] of plan) log(`evicted  ${infoHash.slice(0, 8)}… (${reason})`)
   }
   await evict()

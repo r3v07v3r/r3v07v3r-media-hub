@@ -916,6 +916,20 @@ export function createStreamCache({
     const root = cacheRoot
     const previous = token
     store = createMemoryChunkStore()
+    // THE LIMITS COME WITH THE STORE. maxBytes and fullRetention were set
+    // for a session on a disk: a 10 GB cap is reasonable there and is not a
+    // resident set anybody wants, and fullRetention makes
+    // evictOutsideRetained a deliberate no-op — so a film smaller than the
+    // disk cap would have been held whole, in RAM, with nothing allowed to
+    // evict it. start() derives both from the store for exactly this
+    // reason, and swapping the store without re-deriving them turned a
+    // privacy setting into an out-of-memory bug.
+    maxBytes = memoryCacheMaxBytes()
+    fullRetention = false
+    // Whole-file coverage is now provably impossible for this session, so
+    // anyone waiting on it hears that at once instead of sitting out their
+    // own timeout -- the same courtesy the disk-pressure downgrade pays.
+    settleFullRetentionWaiters(false)
     await reposition(fillFrontierByte)
     await fsp.rm(sessionDir(root, previous), { recursive: true, force: true })
   }
