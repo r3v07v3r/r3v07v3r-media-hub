@@ -123,7 +123,13 @@ export function createFetcher({
       // least-recently-accessed items, and a file bigger than the whole
       // budget is refused instead of either blowing the cap or emptying the
       // cache to hold one thing.
-      if (resolved.sizeBytes > 0 && !(await storage.makeRoomFor(resolved.sizeBytes))) {
+      // The infoHash is passed so a resume is not charged for the bytes it
+      // has already written — and so the partial itself is not what gets
+      // evicted to make room for it.
+      if (
+        resolved.sizeBytes > 0 &&
+        !(await storage.makeRoomFor(resolved.sizeBytes, job.infoHash))
+      ) {
         throw new Error(
           `${(resolved.sizeBytes / 1024 ** 3).toFixed(1)} GB does not fit the cache budget.`
         )

@@ -149,23 +149,29 @@ export function CachingSection() {
         setPairState(pair.state)
         if (pair.state === 'approved') {
           setMessage({ ok: true, text: 'Approved. This device may use the cache server.' })
-          await refreshStatus()
+          await Promise.all([refreshStatus(), refreshMyItems()])
         }
       })()
     }, PAIR_POLL_MS)
     return () => window.clearInterval(timer)
-  }, [api, pairState, refreshStatus])
+  }, [api, pairState, refreshStatus, refreshMyItems])
 
   // Joined: keep the figures live, and the device list with them when this
   // device administers the server.
+  //
+  // The owned-item list polls WITH the status, not just on the actions that
+  // change it. A fetch queued here finishes on the server minutes later, and
+  // without this the finished title never appears under what you have
+  // cached — so it cannot be shared or removed until the app is restarted,
+  // which is the point at which somebody assumes the fetch failed.
   useEffect(() => {
     if (!api || pairState !== 'approved') return
     const timer = window.setInterval(() => {
       if (mutatingRef.current) return
-      void refreshStatus()
+      void Promise.all([refreshStatus(), refreshMyItems()])
     }, STATUS_POLL_MS)
     return () => window.clearInterval(timer)
-  }, [api, pairState, refreshStatus])
+  }, [api, pairState, refreshStatus, refreshMyItems])
 
   useEffect(() => {
     if (!api || !status?.isAdmin) return

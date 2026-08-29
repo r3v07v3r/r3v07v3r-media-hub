@@ -1893,6 +1893,89 @@ async function budgetRoomTest(): Promise<void> {
   // asking for exactly what it just displaced.
   assert.deepEqual(await store.tombstones(), {}, 'making room leaves no tombstone')
 
+  // --- resuming a partial ---------------------------------------------
+  //
+  // A retried fetch is already partly on disk, and those bytes are already
+  // counted. Charging the full size again evicts for space that was never
+  // free — and since a partial is the least-recently-accessed thing in the
+  // cache almost by definition (nobody has watched it, it is not finished),
+  // plain LRU deletes the very partial the room was being made for. On a
+  // slow link that restarts a multi-gigabyte download on every attempt.
+  const resumeRoot = await fsp.mkdtemp(path.join(os.tmpdir(), 'r3-resume-'))
+  const resumeStore = createItemStore(resumeRoot, {
+    idleTtlMs: 60 * DAY,
+    hardMaxMs: 365 * DAY,
+    budgetBytes: 1000,
+    tombstoneMs: 60 * DAY
+  })
+  const partialHash = 'c'.repeat(40)
+  const neighbourHash = 'd'.repeat(40)
+  // The partial: 600 of an eventual 700, and the OLDEST thing here.
+  const partialDir = await resumeStore.beginItem({
+    contentKey: 'k-partial',
+    title: 'k-partial',
+    infoHash: partialHash,
+    fileName: 'f.mkv',
+    sizeBytes: 700,
+    fetchedAt: now - 5 * DAY,
+    lastAccessAt: now - 5 * DAY
+  })
+  await fsp.writeFile(path.join(partialDir, 'f.mkv'), 'x'.repeat(600))
+  const neighbourDir = await resumeStore.beginItem({
+    contentKey: 'k-neighbour',
+    title: 'k-neighbour',
+    infoHash: neighbourHash,
+    fileName: 'f.mkv',
+    sizeBytes: 300,
+    fetchedAt: now,
+    lastAccessAt: now
+  })
+  await fsp.writeFile(path.join(neighbourDir, 'f.mkv'), 'x'.repeat(300))
+  assert.equal(await resumeStore.usedBytes(), 900)
+
+  // 700 total, 600 already held: only 100 is new, and 900 + 100 fits 1000.
+  // Nothing needs to go.
+  assert.equal(await resumeStore.makeRoomFor(700, partialHash), true)
+  assert.ok(
+    await resumeStore.get(partialHash),
+    'the partial being resumed is not evicted to make room for itself'
+  )
+  assert.ok(
+    await resumeStore.get(neighbourHash),
+    'and nothing else is taken for bytes already held'
+  )
+  assert.equal(await resumeStore.usedBytes(), 900)
+
+  // And when room genuinely IS needed, it comes from somewhere else. 900
+  // total against 600 held is 300 new, which does not fit alongside the
+  // neighbour — so something has to go, and the oldest thing here is the
+  // partial itself. This is the case plain LRU gets wrong.
+  assert.equal(await resumeStore.makeRoomFor(900, partialHash), true)
+  assert.ok(
+    await resumeStore.get(partialHash),
+    'the partial survives an eviction pass it triggered, though it is the oldest'
+  )
+  assert.equal(
+    await resumeStore.get(neighbourHash),
+    null,
+    'the room comes from the next-oldest item instead'
+  )
+
+  // Without the hash it is a fresh 700 on top of 900 — which really does
+  // need room, and the partial is then fair game like anything else.
+  assert.equal(await resumeStore.makeRoomFor(700), true)
+  assert.equal(await resumeStore.get(partialHash), null, 'an unrelated fetch still evicts by age')
+
+  // A resume of something bigger than the whole budget is still refused:
+  // the ceiling is the file's full size, not what is left of it.
+  assert.equal(
+    await resumeStore.makeRoomFor(5000, partialHash),
+    false,
+    'a resume does not get past the budget ceiling'
+  )
+
+  await fsp.rm(resumeRoot, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
+
   await fsp.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
   console.log('ok  budget room')
 }

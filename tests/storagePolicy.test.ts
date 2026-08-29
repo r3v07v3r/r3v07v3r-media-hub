@@ -9,7 +9,11 @@
 
 import assert from 'node:assert/strict'
 
-import { effectiveCacheMode, normalizeCacheMode } from '../src/main/media-hub/preferences'
+import {
+  effectiveCacheMode,
+  logoutSettings,
+  normalizeCacheMode
+} from '../src/main/media-hub/preferences'
 
 // --- the resolver ----------------------------------------------------------
 
@@ -48,6 +52,41 @@ assert.equal(
   'disk',
   'the raw normaliser still reports what was saved, policy aside'
 )
+
+// --- signing out ----------------------------------------------------------
+//
+// logoutSettings is the projection kept when an account signs out: device
+// facts stay, account facts go. The storage answer is a device fact — it is
+// about this disk — and it has to survive, for two separate reasons.
+
+// It is not a two-state value. "Never asked" must stay never-asked, or the
+// first-run dialog is skipped for somebody who signed out before answering.
+assert.equal(
+  'storeMedia' in logoutSettings({}),
+  false,
+  'an unanswered question is not answered by signing out'
+)
+
+// And an answer must not be forgotten. The dialog cannot be dismissed, so
+// dropping the flag would put it back in front of somebody who has already
+// dealt with it, every time they sign out.
+assert.equal(logoutSettings({ storeMedia: false }).storeMedia, false)
+assert.equal(logoutSettings({ storeMedia: true }).storeMedia, true)
+
+// The RAW mode is kept, not the effective one. Writing the effective mode
+// back would resolve the policy into the stored value: 'disk' would be
+// overwritten with 'memory' and could never be recovered by turning storage
+// on again — which is exactly what effectiveCacheMode promises not to do.
+assert.equal(
+  logoutSettings({ storeMedia: false, cacheMode: 'disk' }).cacheMode,
+  'disk',
+  'stream-only does not consume the saved disk preference on the way out'
+)
+assert.equal(logoutSettings({ storeMedia: true, cacheMode: 'memory' }).cacheMode, 'memory')
+
+// And the projection still resolves correctly afterwards — the promise is
+// kept by the resolver, not by what was written.
+assert.equal(effectiveCacheMode(logoutSettings({ storeMedia: false, cacheMode: 'disk' })), 'memory')
 
 // publicSettings is deliberately NOT exercised here: it reaches
 // watchProviders, which calls electron's app.getLocale(), so importing it

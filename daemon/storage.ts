@@ -273,7 +273,7 @@ export interface ItemStore {
    * there: fetching it would either blow the cap or evict the entire cache
    * to hold one file.
    */
-  makeRoomFor(bytes: number): Promise<boolean>
+  makeRoomFor(bytes: number, keepInfoHash?: string): Promise<boolean>
 }
 
 export function createItemStore(
@@ -456,7 +456,11 @@ export function createItemStore(
           Math.max(0, itemBytes + freeBytes - DISK_PRESSURE_MARGIN_BYTES)
         )
       }
-      const plan = planEvictions(items, { ...policy, budgetBytes, quotas: quotas ?? undefined }, now)
+      const plan = planEvictions(
+        items,
+        { ...policy, budgetBytes, quotas: quotas ?? undefined },
+        now
+      )
       if (plan.size === 0) return plan
       const stones = await readTombstones()
       for (const [infoHash, reason] of plan) {
@@ -487,31 +491,47 @@ export function createItemStore(
       return items.reduce((sum, item) => sum + item.presentBytes, 0)
     },
 
-    async makeRoomFor(bytes) {
+    async makeRoomFor(bytes, keepInfoHash) {
       if (bytes <= 0) return true
       // Nothing on disk could make this fit, so evicting would be pure loss.
       // Checked FIRST, or a too-big item would empty the cache on its way to
-      // failing anyway.
+      // failing anyway. Measured against the FULL size, not the remainder:
+      // a file bigger than the whole budget is refused whether or not half
+      // of it is already down.
       if (bytes > policy.budgetBytes) return false
 
       const items = await list()
       let used = items.reduce((sum, item) => sum + item.presentBytes, 0)
-      if (used + bytes <= policy.budgetBytes) return true
+      // A RESUMED fetch is already partly on disk, and those bytes are
+      // already in `used`. Asking for the full size again counts them twice
+      // and evicts to make room for space that is not free to begin with.
+      // Only the remainder is new.
+      const held = keepInfoHash
+        ? (items.find((item) => item.infoHash === keepInfoHash)?.presentBytes ?? 0)
+        : 0
+      const need = Math.max(0, bytes - held)
+      if (used + need <= policy.budgetBytes) return true
 
       // Oldest access first, matching the budget pass in planEvictions — the
       // two answer the same question and should not answer it differently.
-      const byAge = [...items].sort(
-        (a, b) => a.lastAccessAt - b.lastAccessAt || a.fetchedAt - b.fetchedAt
-      )
+      const byAge = [...items]
+        // NEVER the item being fetched. A partial is the least-recently
+        // accessed thing in the cache almost by definition — nobody has
+        // watched it, it is not finished — so plain LRU picks it first,
+        // deletes the partial it was called to make room for, and the fetch
+        // starts from zero again on every retry. On the slow link this
+        // daemon exists for, that is the expensive failure.
+        .filter((item) => item.infoHash !== keepInfoHash)
+        .sort((a, b) => a.lastAccessAt - b.lastAccessAt || a.fetchedAt - b.fetchedAt)
       for (const item of byAge) {
-        if (used + bytes <= policy.budgetBytes) break
+        if (used + need <= policy.budgetBytes) break
         await remove(item.infoHash)
         used -= item.presentBytes
       }
       // No tombstones. This is pressure, not disinterest — the same reason
       // the budget pass does not leave them, and tombstoning here would stop
       // the feeder ever asking for what it just displaced.
-      return used + bytes <= policy.budgetBytes
+      return used + need <= policy.budgetBytes
     }
   }
 }
