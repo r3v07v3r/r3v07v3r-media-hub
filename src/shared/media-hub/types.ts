@@ -1116,16 +1116,27 @@ export interface MalReconcileToMal {
   watchedEpisodes: number
 }
 
+/** A MAL rating to pull in locally — targetId is the canonical grouped show
+ *  id (see catalog.ts's resolveAnimeGroupTarget), not the raw kitsuId MAL's
+ *  entry matched to, since a rating belongs to the whole show. */
+export interface MalReconcileRatingToLocal {
+  targetId: string
+  title: string
+  score: number
+}
+
 export interface MalReconcilePreview {
   toMal: MalReconcileToMal[]
   toLocal: MalReconcileToLocal[]
+  ratingsToLocal: MalReconcileRatingToLocal[]
   unmatched: unknown[]
 }
 
 export interface MalReconcileApplyResult {
   toLocal: string[]
   toMal: number[]
-  errors: { kitsuId?: string; malId?: number; error: string }[]
+  ratings: string[]
+  errors: { kitsuId?: string; malId?: number; targetId?: string; error: string }[]
 }
 
 /** Which online subtitle service a SubtitleResult came from. The two are

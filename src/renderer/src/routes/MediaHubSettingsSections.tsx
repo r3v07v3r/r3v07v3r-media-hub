@@ -596,11 +596,12 @@ export function MalSection() {
     try {
       const result = await api.mal.reconcileApply(preview)
       setPreview(null)
+      const applied = result.toLocal.length + result.toMal.length + result.ratings.length
       setReconcileStatus({
         kind: result.errors.length ? 'error' : 'ok',
-        message: `Applied ${result.toLocal.length + result.toMal.length} update${
-          result.toLocal.length + result.toMal.length === 1 ? '' : 's'
-        }${result.errors.length ? `, ${result.errors.length} failed` : ''}.`
+        message: `Applied ${applied} update${applied === 1 ? '' : 's'}${
+          result.errors.length ? `, ${result.errors.length} failed` : ''
+        }.`
       })
     } catch (error) {
       setReconcileStatus({
@@ -651,6 +652,9 @@ export function MalSection() {
             <p className={styles.rowDescription} style={{ marginTop: 8 }}>
               {preview.toMal.length} update{preview.toMal.length === 1 ? '' : 's'} to push to MAL,{' '}
               {preview.toLocal.length} to pull in locally
+              {preview.ratingsToLocal.length
+                ? `, ${preview.ratingsToLocal.length} rating${preview.ratingsToLocal.length === 1 ? '' : 's'} to pull in`
+                : ''}
               {preview.unmatched.length ? `, ${preview.unmatched.length} unmatched` : ''}.
             </p>
           )}
@@ -1703,7 +1707,7 @@ export function TraktSection() {
       </p>
 
       {connected ? (
-        <div className={styles.serviceFields} style={{ flexDirection: 'column', gap: 8 }}>
+        <div className={`${styles.serviceFields} ${styles.serviceFieldsStacked}`}>
           <div className={styles.serviceActions}>
             <span className={styles.rowDescription}>
               Signed in{status?.username ? ` as ${status.username}` : ''}.
@@ -1729,7 +1733,7 @@ export function TraktSection() {
           <StatusLine status={importStatus} />
         </div>
       ) : pending ? (
-        <div className={styles.serviceFields} style={{ flexDirection: 'column', gap: 8 }}>
+        <div className={`${styles.serviceFields} ${styles.serviceFieldsStacked}`}>
           <span className={styles.rowDescription}>
             Enter this code at{' '}
             <button
@@ -1756,7 +1760,7 @@ export function TraktSection() {
           <StatusLine status={{ kind: 'busy' }} />
         </div>
       ) : (
-        <div className={styles.serviceFields} style={{ flexDirection: 'column', gap: 8 }}>
+        <div className={`${styles.serviceFields} ${styles.serviceFieldsStacked}`}>
           <label className={styles.field}>
             <span className={styles.fieldLabel}>Client ID</span>
             <input

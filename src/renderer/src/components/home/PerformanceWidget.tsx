@@ -98,6 +98,12 @@ export function PerformanceWidget() {
   // early, hence the flag.)
   const metrics = usePerformanceMetrics(!hidden)
   const isCompact = mode === 'stacked'
+  // Only the compact/mobile pill needs this: collapsed down to a single
+  // "23% CPU" summary, tapping it to reveal the full gauge stack is
+  // genuinely showing more information. The full desktop widget below
+  // already shows every gauge at rest — a click there used to reveal a
+  // `.detail` block repeating the same three percentages as plain text,
+  // which wasn't revealing anything, just restating it.
   const [expanded, setExpanded] = useState(false)
 
   if (hidden) return null
@@ -107,6 +113,17 @@ export function PerformanceWidget() {
   // (motion spec section 5/14: "occasionally brighten," "edge can
   // brighten based on system load").
   const highLoad = maxLoad >= 80
+
+  if (!isCompact) {
+    return (
+      <div
+        className={`${styles.widget} glass-panel animated-edge edge-idle ${highLoad ? 'edge-active' : ''}`}
+        aria-label="System performance"
+      >
+        <GaugeStack metrics={metrics} />
+      </div>
+    )
+  }
 
   return (
     <div
@@ -118,33 +135,16 @@ export function PerformanceWidget() {
         if (e.key === 'Enter') setExpanded((v) => !v)
       }}
       aria-expanded={expanded}
-      aria-label={
-        isCompact ? 'System performance — tap to expand' : 'System performance — click for details'
-      }
+      aria-label="System performance — tap to expand"
     >
-      {isCompact ? (
-        <>
-          <span className={styles.compactSummary}>
-            <Icon name="cpu" />
-            {maxLoad}%
-          </span>
-          {expanded && (
-            <div className={`${styles.popover} glass-panel`} onClick={(e) => e.stopPropagation()}>
-              <GaugeStack metrics={metrics} />
-            </div>
-          )}
-        </>
-      ) : (
-        <>
+      <span className={styles.compactSummary}>
+        <Icon name="cpu" />
+        {maxLoad}%
+      </span>
+      {expanded && (
+        <div className={`${styles.popover} glass-panel`} onClick={(e) => e.stopPropagation()}>
           <GaugeStack metrics={metrics} />
-          {expanded && (
-            <div className={styles.detail}>
-              <span>CPU {metrics.cpu.toFixed(1)}%</span>
-              <span>GPU {metrics.gpu.toFixed(1)}%</span>
-              <span>RAM {metrics.ram.toFixed(1)}%</span>
-            </div>
-          )}
-        </>
+        </div>
       )}
     </div>
   )
