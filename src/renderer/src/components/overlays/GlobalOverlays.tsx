@@ -7,8 +7,6 @@ import { ProfilePinPrompt } from '@renderer/components/profiles/ProfilePinPrompt
 import { SessionHub } from '@renderer/components/party/SessionHub'
 import { PartyLoadingOverlay } from '@renderer/components/party/PartyLoadingOverlay'
 import { PlaybackPreparationOverlay } from './PlaybackPreparationOverlay'
-import { ControlCentre } from '@renderer/components/controlcentre/ControlCentre'
-import SettingsPage from '@renderer/routes/SettingsPage'
 
 export function GlobalOverlays() {
   return (
@@ -33,15 +31,6 @@ export function GlobalOverlays() {
           which also means the per-title `key` remount that used to reset the
           player's local state is now that window's own concern, and the mpv
           handle is no longer tied to any React lifecycle at all. */}
-      {/* The control centre hosts the settings sections rather than
-          duplicating them — see ControlCentre.tsx. It lives here with the
-          other global overlays because three things open it (the top bar's
-          cog, the sidebar's Settings entry, the /settings route) and none of
-          them owns it. AnimatePresence inside means SettingsPage only mounts
-          while the panel is actually open. */}
-      <ControlCentre>
-        <SettingsPage embedded />
-      </ControlCentre>
       <SessionHub />
       <PartyLoadingOverlay />
       <NotificationLayer />

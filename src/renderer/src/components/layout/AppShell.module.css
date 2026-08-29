@@ -1,72 +1,121 @@
+/* The shell is two rows: the bar, and the cube.
+
+   The bar is the DIVIDE — the edge the app face and the settings face share.
+   It sits above the cube and never rotates, which is what makes the two read
+   as sides of one object hinged along it rather than as two screens being
+   swapped.
+
+   Everything that used to be this grid's "sidebar" and "main" areas now lives
+   one level down, inside the cube's app face. The rules are unchanged; they
+   moved. */
+
 .shell {
   position: relative;
   height: 100dvh;
   width: 100vw;
   display: grid;
-  grid-template-columns: auto 1fr;
+  grid-template-columns: 1fr;
   grid-template-rows: auto 1fr;
   grid-template-areas:
-    "topbar topbar"
-    "sidebar main";
+    'topbar'
+    'stage';
   overflow: hidden;
 }
 
 .topbar {
   grid-area: topbar;
-  z-index: 20;
-  /* Same min-width:0 fix as .main/.sidebar — the topbar shares the
-     mobile layout's single 1fr column, so its own content (search field,
-     weather/clock/avatar cluster) would otherwise set the column's
-     implicit minimum width and stretch every row (including the bottom
-     nav) to match, silently overflowing the viewport. */
+  /* Above the cube, so the face rotating underneath passes behind the bar
+     rather than over it. */
+  z-index: 30;
+  /* Same min-width:0 fix as the faces below — the topbar shares the mobile
+     layout's single 1fr column, so its own content (search field,
+     weather/clock/avatar cluster) would otherwise set the column's implicit
+     minimum width and stretch every row to match, silently overflowing the
+     viewport. */
   min-width: 0;
+}
+
+/* ---------- The cube ---------- */
+
+.stage {
+  grid-area: stage;
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  /* Perspective applies to a element's CHILDREN, so it belongs here rather
+     than on .cube. Without it the rotation is an orthographic squash: the
+     faces still turn, but nothing converges, so it reads as two rectangles
+     shearing rather than a solid rolling over. */
+  perspective: 1600px;
+  /* The vanishing point sits at the top edge — where the bar is, and
+     therefore where the hinge is. Looking "down" the hinge is what makes the
+     far face appear from behind the bar. */
+  perspective-origin: 50% 0%;
+}
+
+.cube {
+  position: absolute;
+  inset: 0;
+  transform-style: preserve-3d;
+  transform-origin: 50% 50%;
+  will-change: transform;
+}
+
+.face {
+  position: absolute;
+  inset: 0;
+  /* Opaque from the front, invisible from behind. Without this the far
+     face's content shows through the near one as the cube turns, which
+     breaks the solid instantly. */
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+  overflow: hidden;
+}
+
+/* Face one: the app. The grid that used to be on .shell. */
+.faceApp {
+  transform: translateZ(50vh);
+  display: grid;
+  grid-template-columns: auto 1fr;
+  grid-template-areas: 'sidebar main';
+}
+
+/* Face two: the control centre, at 90 degrees to the app and pushed out by
+   the same depth, so the two meet along the edge the bar sits on. */
+.faceSettings {
+  transform: rotateX(90deg) translateZ(50vh);
 }
 
 .sidebar {
   grid-area: sidebar;
   z-index: 15;
-  /* Same fix as .main below: without min-width:0, a grid item's implicit
-     minimum size is its content's min-content width. At the mobile
-     breakpoint the bottom nav's 6 non-shrinking items (5 primary + More)
-     have enough combined min-content width to overflow the 1fr track
-     silently (clipped by .shell's overflow:hidden, not reflowed), which
-     was cutting the last couple of nav items off-screen. */
+  /* Without min-width:0, a grid item's implicit minimum size is its
+     content's min-content width. At the mobile breakpoint the bottom nav's 6
+     non-shrinking items (5 primary + More) have enough combined min-content
+     width to overflow the 1fr track silently (clipped by .face's overflow,
+     not reflowed), which was cutting the last couple of nav items
+     off-screen. */
   min-width: 0;
   min-height: 0;
-  /* The rail itself is no longer full-height (see .rail in
-     SidebarNavigation.module.css — it's sized to fit its buttons, not
-     the whole column), so this flex column is what actually centers it
-     vertically within the sidebar's grid track. Mobile overrides the
-     rail to width:100%/height:auto inside its own media query, and the
-     mobile grid row is already content-sized, so this centering is a
-     no-op there rather than a conflict.
-
-     "safe center" (not plain "center") plus a scroll fallback matter
-     in practice: this column's real height comes from 100dvh on
-     .shell, and some embedding contexts (e.g. an iframe/webview whose
-     visible frame doesn't match what dvh resolves against) can end up
-     reporting a taller box than what's actually on screen. Plain
-     center would then center the nav buttons inside that oversized,
-     partly-offscreen box — with .shell's overflow:hidden, that leaves
-     the buttons genuinely unreachable, not just visually off-center.
-     "safe center" falls back to start-alignment instead of overflowing
-     off both edges, and overflow-y:auto means if the rail is ever
-     taller than the visible column for any reason, it's still
-     reachable by scrolling this column instead of the whole shell. */
+  /* The rail is sized to fit its buttons, not the whole column (see .rail in
+     SidebarNavigation.module.css), so this flex column is what centers it
+     vertically. "safe center" (not plain "center") plus a scroll fallback
+     matter in practice: this column's height comes from the cube face, and
+     some embedding contexts can report a taller box than what is actually on
+     screen. Plain center would then center the nav buttons inside that
+     oversized, partly-offscreen box — with overflow hidden, that leaves the
+     buttons genuinely unreachable. */
   display: flex;
   flex-direction: column;
   justify-content: safe center;
   overflow-y: auto;
-  /* The rail is sized to its own buttons, not to this column (see .rail
-     in SidebarNavigation.module.css), so most of this full-height column
-     is empty, transparent — and, until this rule, still hit-testable.
-     That mattered once MoodBrowser's dock became a full-width band along
-     the bottom of the window: this column sits above it (z-index 15 vs
-     .main's 5), so its empty lower half was silently swallowing clicks
-     on the first mood. Hit-testing is disabled for the column itself and
-     restored on .rail, which is the only thing in here that draws
-     anything. Wheel events over the rail still bubble to this element,
-     so the overflow-y:auto fallback above keeps working. */
+  /* The rail is sized to its own buttons, so most of this full-height column
+     is empty, transparent — and, until this rule, still hit-testable. That
+     mattered once MoodBrowser's dock became a full-width band along the
+     bottom: this column sits above it (z-index 15 vs .main's 5), so its
+     empty lower half was silently swallowing clicks on the first mood. Hit
+     testing is disabled for the column and restored on .rail, which is the
+     only thing in here that draws anything. */
   pointer-events: none;
 }
 
@@ -75,38 +124,24 @@
   min-width: 0;
   min-height: 0;
   overflow-y: auto;
-  /* Compositing fix: leaving overflow-x unset here does NOT mean
-     "visible." Per the CSS overflow spec, when overflow-y is anything
-     other than 'visible' (here, 'auto', needed for real vertical
-     scrolling) and overflow-x is left at its 'visible' default, the
-     browser silently upgrades overflow-x's COMPUTED value to 'auto' too
-     — confirmed via getComputedStyle in this exact build, it's not a
-     theoretical concern. An 'auto' axis clips content that overflows it
-     via negative margins (you can't scroll left of 0 in LTR flow to
-     reveal it), which is what was actually cutting off MoodBrowser's
-     under-the-nav bleed (see .section in MoodBrowser.module.css) — not
-     a z-index/stacking problem, a genuine clip, verified by forcing
-     overflow:visible at runtime and watching the clipped "TH" of
-     "Thrilling" reappear.
+  /* Compositing fix: leaving overflow-x unset here does NOT mean "visible."
+     Per the CSS overflow spec, when overflow-y is anything other than
+     'visible' (here 'auto', needed for real vertical scrolling) and
+     overflow-x is left at its 'visible' default, the browser silently
+     upgrades overflow-x's COMPUTED value to 'auto' too. An 'auto' axis clips
+     content that overflows it via negative margins, which is what was
+     cutting off MoodBrowser's under-the-nav bleed — not a z-index/stacking
+     problem, a genuine clip.
 
-     The fix: instead of fighting that quirk (which would mean moving
-     vertical scroll off this element and risking the pinned topbar/
-     sidebar behavior), give .main's own box the same negative-margin
-     bleed MoodBrowser's .section already uses, so the bled content
-     lands INSIDE .main's border-box instead of overflowing it — nothing
-     left to clip. HomeDashboard's .dashboard padding-left absorbs the
-     matching compensation so every OTHER child (hero, AI Picks, etc.)
-     still starts at exactly the same on-screen x as before; only
-     MoodBrowser's own further negative margin (unchanged) reaches into
-     the extra room this now legitimately contains. Both use the same
-     --nav-rail-width-driven calc, so this stays correct at every rail
-     state (expanded/collapsed/mobile-hidden) automatically. */
+     The fix: give .main's own box the same negative-margin bleed
+     MoodBrowser's .section already uses, so the bled content lands INSIDE
+     .main's border-box instead of overflowing it. HomeDashboard's padding
+     absorbs the matching compensation so every OTHER child still starts at
+     exactly the same on-screen x as before. Both use the same
+     --nav-rail-width-driven calc, so this stays correct at every rail state
+     automatically. */
   margin-left: calc(var(--nav-rail-width, 285px) * -0.8);
   width: calc(100% + var(--nav-rail-width, 285px) * 0.8);
-  /* .shell (the outer grid) still has its own overflow: hidden and a
-     fixed 100vw width, so none of this risks an actual page-level
-     horizontal scrollbar — the extra room only ever reaches into the
-     sidebar's own grid track, never past the viewport edge. */
   position: relative;
   z-index: 5;
 }
@@ -115,62 +150,19 @@
 
 /* Tablet / compact window: collapse nav to icon rail */
 @media (max-width: 1099px) {
-  .shell {
+  .faceApp {
     grid-template-columns: auto 1fr;
   }
 }
 
-/* Mobile: dedicated layout — bottom nav instead of a rail, so the shell
+/* Mobile: dedicated layout — bottom nav instead of a rail, so the app face
    reflows to a single column with the nav pinned along the bottom. */
 @media (max-width: 767px) {
-  .shell {
+  .faceApp {
     grid-template-columns: 1fr;
-    grid-template-rows: auto 1fr auto;
+    grid-template-rows: 1fr auto;
     grid-template-areas:
-      "topbar"
-      "main"
-      "sidebar";
+      'main'
+      'sidebar';
   }
-}
-
-/* ---------- The app retreating behind the control centre ----------
-
-   As the cube rolls forward, the interface it is covering tilts away and
-   pulls back, so the two movements read as one gesture in depth. Without
-   this the cube turns over a completely static page and the depth stops at
-   the panel edge.
-
-   Applied to these three children rather than to .shell, and that is not a
-   style preference: a transform on an ancestor becomes the containing block
-   for its position:fixed descendants, and the control centre stage is fixed
-   and lives inside .shell (via GlobalOverlays). Transforming .shell
-   collapses the stage to 0x0 — verified the hard way while building this.
-
-   Timed to lead the cube slightly (0.62s against the cube's 0.78s) so the
-   retreat is already underway when the front face arrives, which is what
-   makes the cube feel like it is pushing the page back rather than landing
-   on it. */
-html[data-control-centre='true'] .topbar,
-html[data-control-centre='true'] .sidebar,
-html[data-control-centre='true'] .main {
-  transform: perspective(1600px) translateY(-1.2%) translateZ(-90px) rotateX(2.4deg);
-  filter: brightness(0.55) saturate(0.85);
-}
-
-.topbar,
-.sidebar,
-.main {
-  transform-origin: 50% 0%;
-  transition:
-    transform 620ms var(--ease-smooth),
-    filter 620ms var(--ease-smooth);
-}
-
-/* The standing "UI animations" preference kills the movement but keeps the
-   end state — global.css only pauses `animation`, never `transition`, so a
-   transition has to be switched off explicitly or it would still glide. */
-html[data-motion-user-disabled='true'] .topbar,
-html[data-motion-user-disabled='true'] .sidebar,
-html[data-motion-user-disabled='true'] .main {
-  transition: none;
 }
