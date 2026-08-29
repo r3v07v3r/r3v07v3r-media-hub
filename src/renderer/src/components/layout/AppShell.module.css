@@ -51,9 +51,18 @@
      therefore where the hinge is. Looking "down" the hinge is what makes the
      far face appear from behind the bar. */
   perspective-origin: 50% 0%;
-  /* The cube's clip lives HERE, on the one element in this scene that is not
-     itself transformed, and that is the whole point — see .face below. */
-  overflow: hidden;
+  /* NOT clipped, so the control centre's rain can start ABOVE this row and
+     fall out from behind the bar rather than popping into existence at its
+     lower edge.
+
+     Nothing needs the clip. Anything a face paints upward lands in the bar's
+     row, and the bar is z-index 30 with an opaque surface of its own, so it
+     covers it; anything painted past the window edge is clipped by .shell,
+     which is overflow: hidden already.
+
+     What must NEVER come back is a clip on .face — see the note there. This
+     one was only ever a stand-in for that, and it turns out the scene did
+     not need either. */
 }
 
 .cube {
