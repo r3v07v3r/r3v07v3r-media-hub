@@ -27,6 +27,8 @@ export const MEDIA_HUB_CHANNELS = {
   settingsSetPerformancePanelVisible: 'mediahub:settings:set-performance-panel-visible',
   settingsSetSourcePreference: 'mediahub:settings:set-source-preference',
   settingsSetCacheMode: 'mediahub:settings:set-cache-mode',
+  /** The one-time storage question, answerable again from Settings. */
+  settingsSetStoreMedia: 'mediahub:settings:set-store-media',
   lanCacheDiscover: 'mediahub:lancache:discover',
   lanCachePair: 'mediahub:lancache:pair',
   lanCacheUnpair: 'mediahub:lancache:unpair',

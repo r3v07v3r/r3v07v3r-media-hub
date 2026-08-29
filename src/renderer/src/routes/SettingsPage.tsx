@@ -1088,6 +1088,11 @@ export default function SettingsPage({
       )
   }
 
+  async function setStoreMedia(storeMedia: boolean) {
+    const api = window.api?.mediaHub
+    if (api) await saveSetting('settings.store-media', () => api.settings.setStoreMedia(storeMedia))
+  }
+
   async function setCacheMode(cacheMode: CacheMode) {
     const api = window.api?.mediaHub
     if (api) await saveSetting('settings.cache-mode', () => api.settings.setCacheMode(cacheMode))
@@ -1541,6 +1546,23 @@ export default function SettingsPage({
               <h2 id="settings-storage" className={styles.sectionTitle}>
                 Storage while playing
               </h2>
+              {/* THE QUESTION EVERYTHING ELSE IN THIS CARD DEPENDS ON.
+
+                  Asked once at first run and answerable again here. "No"
+                  is a promise rather than a preference: the main process
+                  forces the cache to memory behind it (preferences.ts
+                  effectiveCacheMode), so the disk stays clean whatever the
+                  saved mode says — hiding these controls is the cosmetic
+                  half of it, not the mechanism. */}
+              <ToggleRow
+                icon="downloads"
+                title="Keep media on this device"
+                description="Off streams everything and writes no video to your disk — the buffer lives in memory and is gone when playback stops. Your library, history and settings are kept either way."
+                checked={mediaHubSettings?.storeMedia !== false}
+                onChange={(value) => setStoreMedia(value)}
+              />
+              {mediaHubSettings?.storeMedia !== false && (
+                <>
               <SegmentedRow
                 icon="downloads"
                 title="Where the buffer lives"
@@ -1641,6 +1663,8 @@ export default function SettingsPage({
                 >
                   {streamCacheClearStatus.message}
                 </span>
+              )}
+                </>
               )}
                 </>
               )}

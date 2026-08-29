@@ -2,6 +2,7 @@ import { AIResponsePanel } from './AIResponsePanel'
 import { ContextMenu } from './ContextMenu'
 import { NotificationLayer } from './NotificationLayer'
 import { SyncReviewPanel } from './SyncReviewPanel'
+import { StoragePolicyPrompt } from './StoragePolicyPrompt'
 import { ProfilePinPrompt } from '@renderer/components/profiles/ProfilePinPrompt'
 import { SessionHub } from '@renderer/components/party/SessionHub'
 import { PartyLoadingOverlay } from '@renderer/components/party/PartyLoadingOverlay'
@@ -34,6 +35,10 @@ export function GlobalOverlays() {
       <NotificationLayer />
       <SyncReviewPanel />
       <ProfilePinPrompt />
+      {/* Last, so it paints over every other overlay. It is the one thing
+          that has to be answered before the app is used, and it renders
+          nothing at all once it has been. */}
+      <StoragePolicyPrompt />
     </div>
   )
 }

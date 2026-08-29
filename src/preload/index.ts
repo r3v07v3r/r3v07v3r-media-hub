@@ -248,6 +248,12 @@ const api = {
         sourcePreference: SourcePreference
       ): Promise<{ sourcePreference: SourcePreference }> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.settingsSetSourcePreference, { sourcePreference }),
+      /** The storage question. Answers with the mode actually in force, not
+       *  the one saved — saying "disk" back to somebody who just chose
+       *  stream only would be the contradiction this setting exists to
+       *  prevent. */
+      setStoreMedia: (storeMedia: boolean): Promise<{ storeMedia: boolean; cacheMode: CacheMode }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.settingsSetStoreMedia, { storeMedia }),
       setCacheMode: (
         cacheMode: CacheMode,
         memoryCacheMaxMb?: number
