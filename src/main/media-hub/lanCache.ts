@@ -10,6 +10,8 @@ import os from 'node:os'
 
 import type {
   LanCacheCatalogResponse,
+  LanCacheDevicesResponse,
+  LanCachePairResponse,
   LanCachePingResponse,
   LanCacheJobPayload,
   LanCacheStatusResponse
@@ -43,8 +45,18 @@ function request<T>(pathname: string, init: RequestInit = {}): Promise<T> {
   )
 }
 
+/**
+ * Whether there is a cache server this app may actually USE.
+ *
+ * A pending connection is deliberately false here. Its token is real but
+ * authorises nothing until the server's administrator approves it, so
+ * every source lookup and stream through it would 401 — and a tier that
+ * fails on every call is worse than a tier that is switched off, because
+ * it costs a round-trip per playback to learn the same thing.
+ */
 export function isLanCacheConnected(): boolean {
-  return Boolean(getLanCacheConnection())
+  const connection = getLanCacheConnection()
+  return Boolean(connection && !connection.pending)
 }
 
 /** For resolve-cache keys — same rationale as jellyfinFingerprint: the URL
@@ -121,9 +133,18 @@ export async function lanCacheCatalog(keys: string[]): Promise<LanCacheCatalogRe
 // ---------------------------------------------------------------------------
 // IPC: discovery, pairing, status — the Settings pane's surface.
 
+interface DeviceActionPayload {
+  id: string
+  action: 'approve' | 'deny' | 'revoke' | 'quota'
+  /** For 'quota' only. null clears it back to the server default. */
+  quotaBytes?: number | null
+}
+
 interface PairPayload {
   url: string
-  code: string
+  /** Optional. Present only while the console code still exists; without
+   *  one the request asks to join and waits for an administrator. */
+  code?: string
   /** The explicit opt-in: copy the TorBox token to the daemon so it can
    *  fetch overnight with no app running. Never implied. */
   shareTorboxToken?: boolean
@@ -135,7 +156,7 @@ export function registerLanCacheIpc(refreshTrustedHosts: () => void): void {
     return { daemons: found, paired: getLanCacheConnection()?.url ?? null }
   })
 
-  handle<PairPayload, { ok: boolean; message: string }>(
+  handle<PairPayload, { ok: boolean; message: string; pending?: boolean }>(
     MEDIA_HUB_CHANNELS.lanCachePair,
     async (_event, payload) => {
       const url = String(payload?.url || '')
@@ -153,21 +174,44 @@ export function registerLanCacheIpc(refreshTrustedHosts: () => void): void {
         if (ping.product !== 'r3-cache') {
           return { ok: false, message: 'That server is not an r3-cache daemon.' }
         }
-        const paired = await fetchJson<{ token?: string; serverName?: string }>(
+        const code = String(payload?.code || '')
+        const paired = await fetchJson<LanCachePairResponse>(
           `${url}/api/pair`,
           {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ code: String(payload?.code || ''), deviceName: os.hostname() })
+            // The device NAME is sent either way: it is what the server's
+            // administrator sees in the approval list, so an unnamed
+            // request is one nobody can sensibly say yes to.
+            body: JSON.stringify({ ...(code ? { code } : {}), deviceName: os.hostname() })
           },
           { lane: 'lancache', label: 'cache server' }
         )
-        if (!paired.token) return { ok: false, message: 'The pairing code was not accepted.' }
+        if (!paired.token) {
+          return {
+            ok: false,
+            message: code
+              ? 'The pairing code was not accepted.'
+              : 'The cache server did not accept the request.'
+          }
+        }
+        const pending = paired.status === 'pending'
         setLanCacheConnection({
           url,
           name: paired.serverName ?? ping.serverName,
-          token: paired.token
+          token: paired.token,
+          ...(pending ? { pending: true } : {})
         })
+        if (pending) {
+          // Nothing is granted yet — not the trusted-host entry, and not
+          // the TorBox copy below. Both wait for approval, which is the
+          // point of asking.
+          return {
+            ok: true,
+            pending: true,
+            message: `Waiting for ${paired.serverName ?? 'the cache server'}'s administrator to approve this device.`
+          }
+        }
         // Pairing is what grants the player access to this LAN host.
         refreshTrustedHosts()
 
@@ -211,4 +255,113 @@ export function registerLanCacheIpc(refreshTrustedHosts: () => void): void {
       return { connected: true as const, error: (error as Error).message }
     }
   })
+
+  // --- pending pairing, and the server's own administration ---------------
+  //
+  // Pairing no longer necessarily ends in access. A codeless request gets a
+  // real token that authorises nothing until the server's administrator
+  // approves it, so the app stores the connection as PENDING and polls.
+  // Everything below is the surface a control centre needs to run that.
+
+  handle(MEDIA_HUB_CHANNELS.lanCachePairStatus, async () => {
+    const connection = getLanCacheConnection()
+    if (!connection) return { state: 'none' as const }
+    if (!connection.pending) return { state: 'approved' as const, name: connection.name }
+    try {
+      // Deliberately NOT through request(): this is the one call a pending
+      // token is allowed to make, and routing it past the same guard that
+      // refuses everything else keeps that exception visible.
+      const answer = await fetchJson<{ status?: string; serverName?: string }>(
+        `${connection.url}/api/pair/status`,
+        { headers: { Authorization: `Bearer ${connection.token}` } },
+        { lane: 'lancache', label: 'cache server' }
+      )
+      if (answer.status === 'approved') {
+        setLanCacheConnection({
+          url: connection.url,
+          name: answer.serverName ?? connection.name,
+          token: connection.token
+        })
+        // Approval is what actually grants the player access to this host,
+        // so the trusted-host list is refreshed HERE rather than at the
+        // pairing request — the same rule as before, moved to the moment
+        // that now carries the authority.
+        refreshTrustedHosts()
+        return { state: 'approved' as const, name: answer.serverName ?? connection.name }
+      }
+      return { state: 'pending' as const, name: connection.name }
+    } catch (error) {
+      return { state: 'pending' as const, name: connection.name, error: (error as Error).message }
+    }
+  })
+
+  handle<void, { ok: boolean; message: string }>(MEDIA_HUB_CHANNELS.lanCacheClaim, async () => {
+    if (!isLanCacheConnected()) return { ok: false, message: 'No cache server is paired.' }
+    try {
+      await request('/api/admin/claim', { method: 'POST' })
+      return { ok: true, message: 'You administer this cache server.' }
+    } catch (error) {
+      return { ok: false, message: (error as Error).message }
+    }
+  })
+
+  handle(MEDIA_HUB_CHANNELS.lanCacheDevices, async () => {
+    if (!isLanCacheConnected()) return { ok: false as const, message: 'No cache server is paired.' }
+    try {
+      return { ok: true as const, ...(await request<LanCacheDevicesResponse>('/api/admin/devices')) }
+    } catch (error) {
+      return { ok: false as const, message: (error as Error).message }
+    }
+  })
+
+  handle<DeviceActionPayload, { ok: boolean; message?: string }>(
+    MEDIA_HUB_CHANNELS.lanCacheDeviceAction,
+    async (_event, payload) => {
+      // Validated here rather than passed through: the renderer is the least
+      // trusted caller in this process, and the daemon's route is addressed
+      // by an id that goes straight into a URL.
+      const id = String(payload?.id ?? '')
+      if (!/^[a-f0-9]{16}$/.test(id)) return { ok: false, message: 'Unknown device.' }
+      const action = payload?.action
+      if (action !== 'approve' && action !== 'deny' && action !== 'revoke' && action !== 'quota') {
+        return { ok: false, message: 'Unknown action.' }
+      }
+      try {
+        await request(`/api/admin/devices/${id}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action,
+            ...(action === 'quota'
+              ? { quotaBytes: payload?.quotaBytes ?? null }
+              : {})
+          })
+        })
+        return { ok: true }
+      } catch (error) {
+        return { ok: false, message: (error as Error).message }
+      }
+    }
+  )
+
+  handle<{ openJoin?: boolean; defaultQuotaPercent?: number }, { ok: boolean; message?: string }>(
+    MEDIA_HUB_CHANNELS.lanCacheAdminSettings,
+    async (_event, payload) => {
+      try {
+        await request('/api/admin/settings', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            ...(typeof payload?.openJoin === 'boolean' ? { openJoin: payload.openJoin } : {}),
+            ...(typeof payload?.defaultQuotaPercent === 'number'
+              ? { defaultQuotaPercent: payload.defaultQuotaPercent }
+              : {})
+          })
+        })
+        return { ok: true }
+      } catch (error) {
+        return { ok: false, message: (error as Error).message }
+      }
+    }
+  )
 }

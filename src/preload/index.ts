@@ -8,7 +8,10 @@ import {
   SystemSnapshot
 } from '../shared/ipc-types'
 import { MEDIA_HUB_CHANNELS } from '../shared/media-hub/ipc-channels'
-import type { LanCacheStatusResponse } from '../shared/lancache/protocol'
+import type {
+  LanCacheDevicesResponse,
+  LanCacheStatusResponse
+} from '../shared/lancache/protocol'
 import type {
   ActivitySnapshot,
   AnimeStoryResult,
@@ -294,16 +297,41 @@ const api = {
       }> => ipcRenderer.invoke(MEDIA_HUB_CHANNELS.lanCacheDiscover),
       pair: (payload: {
         url: string
-        code: string
+        /** Omit to ask to join and wait for the server's administrator. */
+        code?: string
         shareTorboxToken?: boolean
-      }): Promise<{ ok: boolean; message: string }> =>
+      }): Promise<{ ok: boolean; message: string; pending?: boolean }> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.lanCachePair, payload),
       unpair: (): Promise<{ ok: true }> => ipcRenderer.invoke(MEDIA_HUB_CHANNELS.lanCacheUnpair),
       status: (): Promise<{
         connected: boolean
         status?: LanCacheStatusResponse
         error?: string
-      }> => ipcRenderer.invoke(MEDIA_HUB_CHANNELS.lanCacheStatus)
+      }> => ipcRenderer.invoke(MEDIA_HUB_CHANNELS.lanCacheStatus),
+      /** Poll while a request waits for approval. Flips itself to
+       *  'approved' — and grants the player access — the moment the server
+       *  says yes, so the UI only has to ask. */
+      pairStatus: (): Promise<{
+        state: 'none' | 'pending' | 'approved'
+        name?: string
+        error?: string
+      }> => ipcRenderer.invoke(MEDIA_HUB_CHANNELS.lanCachePairStatus),
+      claim: (): Promise<{ ok: boolean; message: string }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.lanCacheClaim),
+      devices: (): Promise<
+        ({ ok: true } & LanCacheDevicesResponse) | { ok: false; message: string }
+      > => ipcRenderer.invoke(MEDIA_HUB_CHANNELS.lanCacheDevices),
+      deviceAction: (payload: {
+        id: string
+        action: 'approve' | 'deny' | 'revoke' | 'quota'
+        quotaBytes?: number | null
+      }): Promise<{ ok: boolean; message?: string }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.lanCacheDeviceAction, payload),
+      adminSettings: (payload: {
+        openJoin?: boolean
+        defaultQuotaPercent?: number
+      }): Promise<{ ok: boolean; message?: string }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.lanCacheAdminSettings, payload)
     },
 
     torbox: {

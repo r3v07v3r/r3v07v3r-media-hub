@@ -31,6 +31,15 @@ export const MEDIA_HUB_CHANNELS = {
   lanCachePair: 'mediahub:lancache:pair',
   lanCacheUnpair: 'mediahub:lancache:unpair',
   lanCacheStatus: 'mediahub:lancache:status',
+  /** Poll while a pairing request waits for the server's administrator. */
+  lanCachePairStatus: 'mediahub:lancache:pair-status',
+  /** Take Super Admin of an unclaimed cache server. */
+  lanCacheClaim: 'mediahub:lancache:claim',
+  /** Admin only: the device list, one device's approve/deny/revoke/quota,
+   *  and the server-wide join and allocation settings. */
+  lanCacheDevices: 'mediahub:lancache:devices',
+  lanCacheDeviceAction: 'mediahub:lancache:device-action',
+  lanCacheAdminSettings: 'mediahub:lancache:admin-settings',
   settingsSetStreamLimits: 'mediahub:settings:set-stream-limits',
   settingsSetStreamCacheSize: 'mediahub:settings:set-stream-cache-size',
   settingsChooseStreamCacheDir: 'mediahub:settings:choose-stream-cache-dir',
