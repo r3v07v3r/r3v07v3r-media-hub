@@ -429,6 +429,28 @@ export async function catalogListing(
       if (kind === 'anime' && db.getCache<boolean>(ANIME_GROUPED_KEY) !== true) {
         startAnimeGrouping(cached)
       }
+      // Seed the index from the blob we already hold, but only when it has
+      // nothing for this kind.
+      //
+      // Without this the index stays EMPTY for up to a full TTL after the
+      // upgrade that creates it, because this early return is the common
+      // path: the crawl below — the only other thing that writes the index —
+      // runs on a cache MISS, and a warm cache means it never runs at all.
+      // Found by launching the app rather than by any test, all of which
+      // called indexUpsert directly and so never met this branch.
+      //
+      // Guarded on being empty rather than done unconditionally: this runs on
+      // every catalog:list, several times per launch, and re-upserting
+      // thousands of rows each time to learn nothing would be a real cost on
+      // a path somebody is waiting for. Once seeded the count is non-zero and
+      // this never fires again; the crawl keeps it current from then on.
+      //
+      // The rows are the same merged, deduped items the crawl would have
+      // written, so seeding cannot disagree with crawling — it only happens
+      // sooner.
+      if (!db.indexCount(kind)) {
+        db.indexUpsert(kind, cached, { source: 'cache-seed' })
+      }
       // A cache entry inside its TTL is current by definition — this is
       // the ordinary hit, not the expired fallback below.
       return { items: cached, stale: false }
