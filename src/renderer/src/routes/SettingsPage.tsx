@@ -15,7 +15,6 @@ import {
   SubDLSection,
   OllamaSection,
   OpenSubtitlesSection,
-  WatchPartySection,
   R3PartySyncSection
 } from './MediaHubSettingsSections'
 import type {
@@ -1734,7 +1733,6 @@ export default function SettingsPage({
             <p>Set up shared viewing and choose who is watching.</p>
           </header>
           <div ref={communityGridBinding} className={styles.groupGrid}>
-            <WatchPartySection />
             <R3PartySyncSection />
 
             <section

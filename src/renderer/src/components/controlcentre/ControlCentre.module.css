@@ -260,21 +260,89 @@ html[data-motion-user-disabled='true'] .railButton {
    ticking on a surface nobody can see is pure cost. The rain does the same
    thing in JS; this is the CSS half. */
 html[data-control-centre='true'] .panel :global(.glass-panel) {
-  animation: ccGlitch 9s steps(1, end) infinite;
+  animation: ccGlitch 7.3s steps(1, end) infinite;
 }
 
-/* Staggered so the field never flickers in unison. Prime-ish offsets rather
-   than even ones, so the pattern does not visibly repeat. */
-.panel :global(.glass-panel):nth-of-type(2n) {
-  animation-delay: -2.3s;
+/* DESYNCHRONISED BY DURATION, not just by delay.
+
+   The stagger used to be three nth-of-type rules with fixed offsets on one
+   shared 9s duration. That gave four distinct rhythms at most, every card
+   in a bucket fired together, and because the period was identical they
+   re-aligned on every cycle — so the whole field appeared to flash at once,
+   forever.
+
+   Twelve (duration, delay) pairs cycling by nth-child instead. The
+   durations share no small common multiple, which is the part that matters:
+   two cards that happen to flash together once will not do it again for a
+   very long time, because their periods drift apart rather than repeating.
+   The varying duration also varies the flash ITSELF — the disturbance is a
+   fixed percentage of the cycle, so a 14.3s card blinks for about twice as
+   long as a 7.3s one.
+
+   EVERY RULE CARRIES THE html[data-control-centre] PREFIX, and it has to.
+   The base rule above is gated on that attribute, which makes it one
+   specificity step stronger than a bare `.panel .glass-panel:nth-...`. The
+   original stagger was written without it and was therefore silently
+   overridden by the shared duration it was trying to vary — which is why
+   the whole field flashed in unison rather than being staggered at all. */
+html[data-control-centre='true'] .panel :global(.glass-panel):nth-child(12n + 1) {
+  animation-duration: 7.3s;
+  animation-delay: -0.4s;
 }
 
-.panel :global(.glass-panel):nth-of-type(3n) {
-  animation-delay: -5.1s;
+html[data-control-centre='true'] .panel :global(.glass-panel):nth-child(12n + 2) {
+  animation-duration: 11.9s;
+  animation-delay: -5.2s;
 }
 
-.panel :global(.glass-panel):nth-of-type(5n) {
-  animation-delay: -7.4s;
+html[data-control-centre='true'] .panel :global(.glass-panel):nth-child(12n + 3) {
+  animation-duration: 9.1s;
+  animation-delay: -2.7s;
+}
+
+html[data-control-centre='true'] .panel :global(.glass-panel):nth-child(12n + 4) {
+  animation-duration: 13.7s;
+  animation-delay: -8.9s;
+}
+
+html[data-control-centre='true'] .panel :global(.glass-panel):nth-child(12n + 5) {
+  animation-duration: 8.3s;
+  animation-delay: -6.1s;
+}
+
+html[data-control-centre='true'] .panel :global(.glass-panel):nth-child(12n + 6) {
+  animation-duration: 12.7s;
+  animation-delay: -1.3s;
+}
+
+html[data-control-centre='true'] .panel :global(.glass-panel):nth-child(12n + 7) {
+  animation-duration: 10.1s;
+  animation-delay: -7.7s;
+}
+
+html[data-control-centre='true'] .panel :global(.glass-panel):nth-child(12n + 8) {
+  animation-duration: 14.3s;
+  animation-delay: -3.5s;
+}
+
+html[data-control-centre='true'] .panel :global(.glass-panel):nth-child(12n + 9) {
+  animation-duration: 7.9s;
+  animation-delay: -9.4s;
+}
+
+html[data-control-centre='true'] .panel :global(.glass-panel):nth-child(12n + 10) {
+  animation-duration: 11.3s;
+  animation-delay: -4.8s;
+}
+
+html[data-control-centre='true'] .panel :global(.glass-panel):nth-child(12n + 11) {
+  animation-duration: 9.7s;
+  animation-delay: -11.2s;
+}
+
+html[data-control-centre='true'] .panel :global(.glass-panel):nth-child(12n + 12) {
+  animation-duration: 13.1s;
+  animation-delay: -2.1s;
 }
 
 /* A scanline crawling down the face — the other half of the look, and the
