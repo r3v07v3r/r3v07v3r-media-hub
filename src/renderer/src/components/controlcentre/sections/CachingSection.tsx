@@ -51,8 +51,13 @@ function ago(at: number | undefined): string {
 /** SxxEyy, zero padded. "S2 · E7" and "S12 · E7" do not line up in a list;
  *  the padded form is the one people already read on release names. */
 function episodeLabel(season?: number, episode?: number): string {
-  if (season === undefined || episode === undefined) return ''
-  const pad = (n: number): string => String(n).padStart(2, '0')
+  if (episode === undefined) return ''
+  const pad = (value: number): string => String(value).padStart(2, '0')
+  // Anime is frequently numbered straight through with no season at all,
+  // so an episode on its own is a real key rather than a malformed one. It
+  // gets E07 instead of an invented S00, which would be a claim about the
+  // release that nobody made. A film has neither and gets no chip.
+  if (season === undefined) return `E${pad(episode)}`
   return `S${pad(season)}E${pad(episode)}`
 }
 
@@ -536,7 +541,7 @@ export function CachingSection() {
                       <input
                         className={styles.fieldInput}
                         type="number"
-                        min={0}
+                        min={1}
                         step={1}
                         placeholder="default"
                         aria-label={`Allocation for ${device.deviceName} in GB`}
@@ -547,9 +552,19 @@ export function CachingSection() {
                         }
                         disabled={busy}
                         onBlur={(event) => {
+                          // ZERO IS BLANK, not an allocation of nothing.
+                          // This field's own help text calls an empty value
+                          // the default and warns that zero would be an
+                          // accidental lockout, but zero was being sent as a
+                          // real quota -- and the next hourly pass evicts
+                          // every item belonging to a device that is over
+                          // its allocation, which for an allocation of zero
+                          // is all of them. Clearing a box should not wipe a
+                          // member's cache.
                           const raw = event.target.value.trim()
-                          const gb = raw === '' ? null : Math.max(0, Math.round(Number(raw)))
-                          if (gb !== null && !Number.isFinite(gb)) return
+                          const parsed = raw === '' ? null : Math.round(Number(raw))
+                          if (parsed !== null && !Number.isFinite(parsed)) return
+                          const gb = parsed === null || parsed <= 0 ? null : parsed
                           handleDevice(device.id, 'quota', gb === null ? null : gb * 1024 ** 3)
                         }}
                         onKeyDown={(event) => {
@@ -715,7 +730,7 @@ export function CachingSection() {
                               queue holding several episodes of one show was
                               several identical rows — the "duplicates".
                               They were always different episodes. */}
-                          {job.season !== undefined && job.episode !== undefined && (
+                          {job.episode !== undefined && (
                             <span className={styles.jobEpisode}>
                               {episodeLabel(job.season, job.episode)}
                             </span>

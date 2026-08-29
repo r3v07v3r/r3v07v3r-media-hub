@@ -28,7 +28,12 @@ import { watchRegion } from './watchProviders'
 import { getDatabase } from './dbState'
 import { handle } from './ipcGuard'
 import { logError } from './logger'
-import { mpvPath, hasActivePlayback, stopPlayback } from './playbackSession'
+import {
+  mpvPath,
+  hasActivePlayback,
+  stopPlayback,
+  applyStoragePolicyToPlayback
+} from './playbackSession'
 import { ollamaConfig, ollamaConnected } from './ollamaService'
 import {
   normalizeCacheMode,
@@ -407,6 +412,15 @@ export function registerAppIpc(): void {
       const storeMedia = value?.storeMedia !== false
       settings.storeMedia = storeMedia
       writeSettings(settings)
+      // The session already playing is switched over too, not just the next
+      // one. Persisting the answer alone left the active stream cache
+      // writing to disk until playback stopped, which is the one moment the
+      // promise most needed keeping. Not awaited: the answer is saved and
+      // the caller can be told so immediately, and the swap is ordered
+      // internally against the fill loop rather than against this reply.
+      void applyStoragePolicyToPlayback().catch((error) =>
+        logError('settings:setStoreMedia', error)
+      )
       return {
         storeMedia,
         // The mode the app will ACTUALLY use, which is what the caller has

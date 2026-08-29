@@ -12,6 +12,8 @@ import { createActivityTracker } from '../activity'
 import { createAdmin } from '../admin'
 import { createCredentials } from '../credentials'
 import { createJobStore } from '../jobs'
+import type { JobRecord } from '../jobs'
+import { shouldRetryAfterFailure } from '../fetcher'
 import { createPairing, deviceIdForToken, isApproved, type Pairing } from '../pairing'
 import { createDaemonServer } from '../server'
 import { createItemStore, isEntitled, planEvictions, type StoredItem } from '../storage'
@@ -1977,6 +1979,29 @@ async function budgetRoomTest(): Promise<void> {
   await fsp.rm(resumeRoot, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
 
   await fsp.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
+  // --- a cancel is not a network failure -------------------------------
+  //
+  // jobs.cancel marks a fetching job 'expired'; the read loop notices,
+  // keeps the partial and breaks, and the short file then raises the
+  // incomplete-download error. That arrives in the fetcher's catch looking
+  // exactly like a dropped connection, where the record used to be put
+  // straight back to 'queued' — so Cancel reported success and the
+  // download resumed after the backoff, still spending the owner's TorBox
+  // quota. Only a record still in the state this pass was working on is
+  // retried.
+  assert.equal(shouldRetryAfterFailure({ state: 'fetching' } as JobRecord), true)
+  assert.equal(
+    shouldRetryAfterFailure({ state: 'expired' } as JobRecord),
+    false,
+    'a cancelled fetch stays cancelled'
+  )
+  assert.equal(
+    shouldRetryAfterFailure(undefined),
+    false,
+    'and a job removed outright is not resurrected'
+  )
+  assert.equal(shouldRetryAfterFailure({ state: 'ready' } as JobRecord), false)
+
   console.log('ok  budget room')
 }
 
@@ -2152,6 +2177,57 @@ async function myItemsTest(): Promise<void> {
       'and it leaves the queue'
     )
 
+    // THE ADMINISTRATOR MAY STOP WORK, matching the remove route and
+    // following from the queue being visible to them at all: they are shown
+    // it to answer "why is this box saturated", and a view with no way to
+    // act on it does not answer that. It stays narrow — stopping a fetch is
+    // not reading what anyone has watched.
+    jobs.enqueue({
+      contentKey: 'tt-theirs::3:4',
+      infoHash: '7'.repeat(40),
+      title: 'Theirs Again',
+      ownerDeviceId: otherId
+    })
+    await admin.claim(mineId)
+    assert.equal(
+      await cancelAs(mineToken, 'tt-theirs::3:4'),
+      200,
+      "the administrator may cancel another device's fetch"
+    )
+    assert.equal(
+      jobs.list().some((job) => job.contentKey === 'tt-theirs::3:4'),
+      false,
+      'and it really leaves the queue'
+    )
+
+    // REMOVING A PARTIAL STOPS ITS FETCH FIRST. An incomplete item is
+    // listed and removable while its job is still downloading into the very
+    // directory about to be deleted: on Unix the write continues into an
+    // unlinked file and the job is re-queued when its final stat fails, and
+    // on Windows the recursive delete fails against the open handle. Either
+    // way the title comes back.
+    await seed('8'.repeat(40), 'k-partial', mineId)
+    jobs.enqueue({
+      contentKey: 'k-partial',
+      infoHash: '8'.repeat(40),
+      title: 'Still Fetching',
+      ownerDeviceId: mineId
+    })
+    assert.equal(
+      (
+        await fetch(`${base}/api/items/${'8'.repeat(40)}/remove`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${mineToken}` }
+        })
+      ).status,
+      200
+    )
+    assert.equal(
+      jobs.list().some((job) => job.contentKey === 'k-partial'),
+      false,
+      'the fetch is cancelled with the bytes, not left running against a deleted directory'
+    )
+
     // WHAT MADE THE QUEUE LOOK FULL OF DUPLICATES. A job's title is the
     // SERIES title, so two episodes of one show were two identical rows.
     // The season and episode come from the contentKey, parsed from the end
@@ -2179,6 +2255,35 @@ async function myItemsTest(): Promise<void> {
       ['2x7', '2x8'],
       'two rows with the same title are told apart by their episode'
     )
+
+    // A FILM HAS NO EPISODE, and must not be given one. Its key is
+    // `id::` — both segments empty — and Number('') is 0, so converting
+    // before checking labelled every movie in the queue S00E00.
+    jobs.enqueue({
+      contentKey: 'tt-film::',
+      infoHash: '5'.repeat(40),
+      title: 'A Film',
+      ownerDeviceId: mineId
+    })
+    // Anime is often numbered straight through with no season, so this is
+    // a real key. It gets the episode alone rather than an invented S00.
+    jobs.enqueue({
+      contentKey: 'tt-anime::7',
+      infoHash: '6'.repeat(40),
+      title: 'An Anime',
+      ownerDeviceId: mineId
+    })
+    const labelled = (
+      (await (
+        await fetch(`${base}/api/status`, { headers: { Authorization: `Bearer ${mineToken}` } })
+      ).json()) as { jobs: Array<{ title: string; season?: number; episode?: number }> }
+    ).jobs
+    const film = labelled.find((job) => job.title === 'A Film')
+    assert.equal(film?.season, undefined, 'a film is not season zero')
+    assert.equal(film?.episode, undefined, 'nor episode zero')
+    const anime = labelled.find((job) => job.title === 'An Anime')
+    assert.equal(anime?.season, undefined, 'an unseasoned key does not invent a season')
+    assert.equal(anime?.episode, 7, 'but its episode is still shown')
     assert.equal(body.includes(otherId), false, 'no other device id is disclosed')
 
     await fetch(`${base}/api/items/${'a'.repeat(40)}/sharing`, {

@@ -133,6 +133,18 @@ export function subtitleCacheDir(): string {
  *  capture reads from, for the same reason: no second connection to the
  *  remote link. Used by movieHash.ts to hash the exact release somebody is
  *  actually watching for a frame-accurate subtitle search. */
+/**
+ * Re-applies the storage answer to whatever is playing right now.
+ *
+ * Called when the setting changes rather than only when a session starts,
+ * because the change that matters most is the one made mid-film: without
+ * this, "do not keep media on this device" took effect on the NEXT title
+ * and the current one carried on filling the disk.
+ */
+export async function applyStoragePolicyToPlayback(): Promise<void> {
+  await streamCache.applyStoragePolicy()
+}
+
 export function activeStreamUrl(): string {
   return activeCacheUrl
 }

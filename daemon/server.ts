@@ -512,7 +512,13 @@ export function createDaemonServer(deps: ServerDeps): http.Server {
       const body = await readBody(req)
       const contentKey = String(body.contentKey ?? '')
       const job = jobs.list().find((candidate) => candidate.contentKey === contentKey)
-      if (!job || job.ownerDeviceId !== callerDeviceId) {
+      // Owner or admin, matching the remove route below and following from
+      // the queue being visible to the admin at all: the reason they are
+      // shown it is to answer "why is this box saturated", and a view with
+      // no way to act on it does not answer that. It stays narrow — the
+      // admin can stop work, not read what anyone has watched.
+      const mayCancel = Boolean(job) && (job?.ownerDeviceId === callerDeviceId || isAdminCaller)
+      if (!job || !mayCancel) {
         // Same shape as everywhere else: a job that is not yours is
         // indistinguishable from one that does not exist.
         json(res, 404, { error: 'No such job.' })
@@ -758,6 +764,14 @@ export function createDaemonServer(deps: ServerDeps): http.Server {
         json(res, 404, { error: 'No such item.' })
         return
       }
+      // The FETCH GOES FIRST, and it has to. An incomplete item is listed
+      // and removable, and its job may still be downloading into the very
+      // directory about to be deleted: on Unix the write continues into an
+      // unlinked file and the job is re-queued when its final stat fails,
+      // and on Windows the recursive delete fails outright against the open
+      // handle. Either way the title comes back. Cancelling first stops the
+      // fetch loop between chunks, which is where it already checks.
+      jobs.cancel(item.contentKey)
       await storage.remove(item.infoHash)
       // No tombstone. A deliberate delete is not the feeder being told the
       // household lost interest — if it is still on somebody's list it
@@ -807,9 +821,20 @@ export function createDaemonServer(deps: ServerDeps): http.Server {
 function episodeOf(contentKey: string): { season?: number; episode?: number } {
   const parts = contentKey.split(':')
   if (parts.length < 3) return {}
-  const episode = Number(parts.at(-1))
-  const season = Number(parts.at(-2))
-  if (!Number.isFinite(season) || !Number.isFinite(episode)) return {}
+  // EMPTINESS IS CHECKED BEFORE CONVERSION, because Number('') is 0 and
+  // Number.isFinite(0) is true. A film's key is `id::` — both segments
+  // empty — so converting first labelled every movie in the queue S00E00.
+  const rawSeason = (parts.at(-2) ?? '').trim()
+  const rawEpisode = (parts.at(-1) ?? '').trim()
+  if (rawEpisode === '') return {}
+  const episode = Number(rawEpisode)
+  if (!Number.isInteger(episode) || episode < 0) return {}
+  // Anime is often numbered straight through with no season at all, so
+  // `id::7` is a real key and not a malformed one. It gets the episode
+  // alone rather than an invented season 0.
+  if (rawSeason === '') return { episode }
+  const season = Number(rawSeason)
+  if (!Number.isInteger(season) || season < 0) return { episode }
   return { season, episode }
 }
 

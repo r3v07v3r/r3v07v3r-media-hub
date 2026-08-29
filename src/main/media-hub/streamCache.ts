@@ -482,6 +482,11 @@ export interface StreamCache {
     durationSeconds: number | undefined,
     meta?: CacheSessionMeta
   ): Promise<StreamCacheStartResult>
+  /** Re-reads the storage answer and applies it to the session already
+   *  playing — see the implementation for why that cannot wait for the
+   *  next start(). A no-op unless a disk session is running and the
+   *  answer is now "stream only". */
+  applyStoragePolicy(): Promise<void>
 }
 
 export interface CreateStreamCacheOptions {
@@ -886,6 +891,33 @@ export function createStreamCache({
     if (hadOpenFetch) await new Promise((resolve) => setTimeout(resolve, RECONNECT_GRACE_MS))
     if (generation !== myGeneration) return
     void runFill(targetByte, myGeneration)
+  }
+
+  /**
+   * Applies the storage answer to the session ALREADY playing.
+   *
+   * The store is chosen once, in start(), which meant somebody who turned
+   * storage off halfway through a film had the REST of that film written to
+   * their disk anyway. The promise was broken at the exact moment it was
+   * being made, and the setting is most likely to be changed precisely when
+   * somebody has noticed what is happening and wants it to stop.
+   *
+   * So the live session is swapped onto a memory store and what it has
+   * already written is deleted. Playback continues: reads for those chunks
+   * now miss, which is a case serveRange already recovers from by
+   * refetching, the same as a chunk evicted under disk pressure.
+   *
+   * reposition() first, and that ordering matters — it bumps the generation
+   * and aborts the open fetch, so a disk write already in flight cannot
+   * land after the delete and quietly recreate the files just removed.
+   */
+  async function applyStoragePolicy(): Promise<void> {
+    if (!token || !store.persistent || !memoryModeEnabled()) return
+    const root = cacheRoot
+    const previous = token
+    store = createMemoryChunkStore()
+    await reposition(fillFrontierByte)
+    await fsp.rm(sessionDir(root, previous), { recursive: true, force: true })
   }
 
   function isNearFillFrontier(byte: number): boolean {
@@ -1400,7 +1432,8 @@ export function createStreamCache({
     waitForFullRetentionReady,
     stop,
     deleteSession,
-    startLocal
+    startLocal,
+    applyStoragePolicy
   }
 }
 

@@ -46,6 +46,24 @@ export interface FetcherDeps {
   ) => Promise<ResolvedDownload | null>
 }
 
+/**
+ * Whether a pass that ended in an error should be tried again.
+ *
+ * Only if the record is still the one this pass was working on. jobs.cancel
+ * marks a fetching job 'expired' (or removes a queued one outright), the
+ * read loop notices and breaks with a partial, and the short file raises an
+ * incomplete-download error — so a cancel arrives here looking exactly like
+ * a network failure. Retrying it would resume a download somebody stopped
+ * and keep spending their TorBox quota, with the UI reporting the cancel as
+ * successful.
+ *
+ * Split out because the fetch loop around it cannot run without TorBox, and
+ * this is the part with a rule in it.
+ */
+export function shouldRetryAfterFailure(current: JobRecord | undefined): boolean {
+  return current?.state === 'fetching'
+}
+
 export function createFetcher({
   jobs,
   storage,
@@ -213,6 +231,22 @@ export function createFetcher({
       nextAttemptAt.delete(job.contentKey)
       log(`fetched  ${job.title} (${(finalSize / 1024 ** 3).toFixed(2)} GB)`)
     } catch (error) {
+      // CANCELLED WHILE IN FLIGHT is not a failure to retry.
+      //
+      // jobs.cancel marks a fetching job 'expired'; the read loop above
+      // notices, keeps the partial and breaks, and the short file then
+      // raises the incomplete-download error — landing here, where the
+      // record used to be put straight back to 'queued'. Cancel therefore
+      // reported success and the download resumed after the backoff,
+      // spending the owner's TorBox quota on something they had stopped.
+      // A record that is no longer 'fetching' was taken away from this
+      // pass deliberately, and is left exactly as it was found.
+      const current = jobs.list().find((candidate) => candidate.contentKey === job.contentKey)
+      if (!shouldRetryAfterFailure(current)) {
+        nextAttemptAt.delete(job.contentKey)
+        log(`cancelled ${job.title}`)
+        return
+      }
       const attempts = job.attempts + 1
       const backoff = RETRY_BACKOFF_MS[Math.min(attempts - 1, RETRY_BACKOFF_MS.length - 1)]
       nextAttemptAt.set(job.contentKey, Date.now() + backoff)
