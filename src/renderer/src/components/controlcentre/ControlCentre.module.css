@@ -2,22 +2,90 @@
    top bar. See ControlCentre.tsx for the transition itself; this file is the
    surface it lands on, and the colour shift that tells you where you are. */
 
-.scrim {
+/* ---------------------------------------------------------------------
+   THE CUBE.
+
+   The first attempt rotated a single panel from rotateX(-90deg) to 0. That
+   is a lid flapping open, and it reads flat for a reason that is structural
+   rather than cosmetic: with one face there is never a second surface on
+   screen, so nothing establishes depth and the rotation degrades to a
+   vertical squash.
+
+   This is a real cube. Two faces sit at 90 degrees to each other, each
+   pushed out from the shared centre by half the cube side (--cc-depth), so
+   they meet along a genuine edge:
+
+     lid    rotateX(90deg) translateZ(depth)   <- the top face
+     panel  rotateX(0)     translateZ(depth)   <- the front face
+
+   Rotating the CONTAINER from -90deg to 0 rolls the cube forward: the lid
+   turns away as the panel turns in, and through the middle of the movement
+   both are visible at once, meeting at their edge. That edge is the whole
+   effect.
+   --------------------------------------------------------------------- */
+
+.stage {
   position: fixed;
   inset: 0;
   z-index: 60;
-  display: flex;
-  flex-direction: column;
-  align-items: stretch;
   background: rgba(1, 4, 9, 0.62);
   backdrop-filter: blur(6px);
-  /* The fold needs a vanishing point to rotate against. Without a
-     perspective the rotateX below is an orthographic squash — the panel
-     gets shorter but never reads as tilting away from you, which is the
-     whole effect. Set on the parent, not the panel, because perspective
-     applies to a element's CHILDREN. */
-  perspective: 1800px;
-  perspective-origin: 50% 0%;
+  /* Perspective belongs on the PARENT of the transformed element — it
+     applies to a element's children, not to itself. Without it the cube is
+     an orthographic projection: the faces still rotate, but with no
+     convergence, so it reads as two rectangles shearing rather than a solid
+     turning. Tighter than a typical page perspective (1400 vs 1800+)
+     because a shallower vanishing point exaggerates the depth, which is the
+     point here.
+
+     perspective-origin sits above centre so the cube is seen slightly from
+     above — the angle the mock draws it at, and the one where the top face
+     is actually visible as it rotates. */
+  perspective: 1400px;
+  perspective-origin: 50% 22%;
+}
+
+.cube {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  /* A definite height is required, not a nicety: --cc-depth is half of it,
+     and the two faces are positioned by that number. With an auto height
+     the faces would not meet at an edge and the solid would come apart. */
+  height: var(--cc-height);
+  transform-style: preserve-3d;
+  transform-origin: 50% 50%;
+  will-change: transform;
+}
+
+.face {
+  position: absolute;
+  inset: 0;
+  /* Each face is opaque from the front and invisible from behind. Without
+     this you see the panel's content mirrored through the lid as the cube
+     turns, which instantly breaks the illusion of a solid. */
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+}
+
+/* The top face — the surface you are looking at before the panel arrives,
+   and the one that turns away as it does. Deliberately not blank: the
+   scanlines give the rotation something to catch the light on, so the edge
+   is legible while it moves. */
+.faceLid {
+  transform: rotateX(90deg) translateZ(var(--cc-depth));
+  background:
+    repeating-linear-gradient(
+      180deg,
+      rgba(39, 230, 154, 0.07) 0px,
+      rgba(39, 230, 154, 0.07) 1px,
+      transparent 1px,
+      transparent 4px
+    ),
+    linear-gradient(180deg, rgba(6, 30, 20, 0.98), rgba(2, 10, 7, 0.99));
+  border-bottom: 1px solid rgba(39, 230, 154, 0.5);
+  box-shadow: inset 0 -30px 60px rgba(39, 230, 154, 0.06);
 }
 
 .panel {
@@ -49,17 +117,15 @@
   --panel-strong: rgba(5, 22, 15, 0.92);
   --background-elevated: rgba(3, 14, 9, 0.86);
 
-  position: relative;
-  transform-origin: top center;
-  /* Its own stacking/3D context so the fold composites as one layer rather
-     than transforming every descendant individually. */
-  transform-style: preserve-3d;
-  will-change: transform, opacity;
+  /* The cube's FRONT face. Pushed out along Z by half the cube side so it
+     and the lid meet at a shared edge rather than intersecting through each
+     other's middle. */
+  transform: translateZ(var(--cc-depth));
 
   display: flex;
   flex-direction: column;
   min-height: 0;
-  max-height: 100dvh;
+  height: 100%;
 
   background:
     linear-gradient(180deg, rgba(6, 26, 18, 0.96) 0%, rgba(2, 10, 7, 0.98) 100%);

@@ -19,6 +19,17 @@ import { useMotionUserDisabled } from '@renderer/hooks/useMotionUserDisabled'
 import { Icon } from '@renderer/components/icons/Icon'
 import styles from './ControlCentre.module.css'
 
+/**
+ * The cube's side, in dvh — and therefore how tall the control centre is.
+ *
+ * A cube needs a KNOWN side length: both faces are placed at half of it
+ * along Z, so this cannot be `auto` or the two faces stop meeting at an
+ * edge and the solid comes apart mid-rotation. 88 leaves the app visible
+ * behind the stage at the bottom, which is what keeps it feeling like a
+ * panel over the app rather than a page swap.
+ */
+const CUBE_HEIGHT_VH = 88
+
 /** Everything focusable, for the tab trap. Excludes anything explicitly
  *  removed from the tab order so a disabled control cannot swallow focus. */
 const FOCUSABLE =
@@ -112,40 +123,65 @@ export function ControlCentre({ children }: { children: React.ReactNode }) {
     <AnimatePresence>
       {controlCentreOpen && (
         <motion.div
-          className={styles.scrim}
+          className={styles.stage}
+          style={
+            {
+              // The cube's side length, and half of it. Both faces are placed
+              // by the second value, so it has to be exactly half the first or
+              // the solid comes apart at the edge.
+              '--cc-height': `${CUBE_HEIGHT_VH}dvh`,
+              '--cc-depth': `${CUBE_HEIGHT_VH / 2}dvh`
+            } as React.CSSProperties
+          }
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
           transition={{ duration: motionOff ? 0 : 0.24, ease }}
           onMouseDown={(event) => {
-            // Only a click on the scrim itself, so a drag that ends outside
+            // Only a click on the stage itself, so a drag that ends outside
             // the panel (selecting text, releasing a slider) does not close it.
             if (event.target === event.currentTarget) close()
           }}
         >
+          {/* The CUBE rotates — not the panel. That distinction is the whole
+              difference between this and a lid flapping open: the container
+              turns, carrying both faces, so through the middle of the
+              movement the lid and the panel are on screen together, meeting
+              at their shared edge.
+
+              No opacity on this element. Fading a 3D solid in makes it read
+              as a picture of a cube rather than a cube; the faces are opaque
+              and the rotation alone does the work. */}
           <motion.div
-            ref={panelRef}
-            className={styles.panel}
-            role="dialog"
-            aria-modal="true"
-            aria-label="Control centre"
-            tabIndex={-1}
-            onKeyDown={onKeyDown}
-            // The fold: the panel is hinged along its top edge and swings
-            // down into place. rotateX alone would look like a squash — the
-            // scrim's `perspective` is what makes it read as depth.
-            initial={{ rotateX: -90, opacity: 0 }}
-            animate={{ rotateX: 0, opacity: 1 }}
-            // The exit carries its own, shorter transition — see
-            // exitDuration. Set here rather than on the shared `transition`
-            // prop, which framer-motion applies to enter and exit alike.
-            exit={{
-              rotateX: -90,
-              opacity: 0,
-              transition: { duration: exitDuration, ease }
-            }}
-            transition={{ duration, ease, opacity: { duration: duration * 0.6 } }}
+            className={styles.cube}
+            // The cube is pushed BACK by exactly the depth its front face is
+            // pushed forward, so that face lands on the screen plane (z = 0)
+            // instead of floating toward the viewer.
+            //
+            // Without this the panel is magnified by perspective/(perspective
+            // - depth): about 1.15x in a small window and ~1.45x in a full
+            // one, which crops the header — caught by seeing the title render
+            // as "OL HUB" with its left edge off screen. transformTemplate is
+            // how the order is guaranteed: translate first, then rotate, so
+            // the rotation still happens about the cube's own centre.
+            transformTemplate={({ rotateX }) =>
+              `translateZ(-${CUBE_HEIGHT_VH / 2}dvh) rotateX(${rotateX})`
+            }
+            initial={{ rotateX: -90 }}
+            animate={{ rotateX: 0 }}
+            exit={{ rotateX: -90, transition: { duration: exitDuration, ease } }}
+            transition={{ duration, ease }}
           >
+            <div className={`${styles.face} ${styles.faceLid}`} aria-hidden="true" />
+            <div
+              ref={panelRef}
+              className={`${styles.face} ${styles.panel}`}
+              role="dialog"
+              aria-modal="true"
+              aria-label="Control centre"
+              tabIndex={-1}
+              onKeyDown={onKeyDown}
+            >
             <div className={styles.hinge} aria-hidden="true" />
             <header className={styles.header}>
               <div>
@@ -171,6 +207,7 @@ export function ControlCentre({ children }: { children: React.ReactNode }) {
             >
               <div className={styles.content}>{children}</div>
             </motion.div>
+            </div>
           </motion.div>
         </motion.div>
       )}
