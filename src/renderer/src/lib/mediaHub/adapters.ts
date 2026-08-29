@@ -18,6 +18,7 @@ import type {
   TrackedItemEnriched
 } from '@shared/media-hub/types'
 import { episodeWatchState } from '@shared/media-hub/catalog-logic'
+import { parseRating, parseRuntimeMinutes, parseYear } from '@shared/media-hub/catalogFields'
 import { recommendationReasonLabel } from '@shared/media-hub/recommendationReason'
 import type { OllamaTitleRef } from '@shared/media-hub/ollama'
 import type { MediaItem, MediaType, Recommendation } from '@renderer/types'
@@ -104,20 +105,11 @@ export function mediaItemToTrackablePayload(media: MediaItem): {
   }
 }
 
-function parseRuntimeMinutes(runtime: string): number | undefined {
-  const n = parseInt(runtime, 10)
-  return Number.isFinite(n) && n > 0 ? n : undefined
-}
-
-function parseYear(year: string): number | undefined {
-  const n = parseInt(year, 10)
-  return Number.isFinite(n) && n > 0 ? n : undefined
-}
-
-function parseRating(rating: string): number | undefined {
-  const n = Number(rating)
-  return Number.isFinite(n) && n > 0 ? n : undefined
-}
+// parseRuntimeMinutes/parseYear/parseRating used to be defined right here.
+// They moved to @shared/media-hub/catalogFields because main now derives the
+// same three values when it writes catalog_index, and SQL filters/sorts on
+// the result — two copies would be free to drift into meaning different
+// things on the two sides of the same filter. See that module's own comment.
 
 // The backend has no mood taxonomy at all (CatalogItem carries genres, not
 // moods) — MoodBrowser's mood pills only mean something for MediaItems that

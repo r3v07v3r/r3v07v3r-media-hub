@@ -10,6 +10,12 @@ import { DatabaseSync, type SQLOutputValue, type StatementSync } from 'node:sqli
 import { readBackup, restoreBackup, writeBackup, type RestoreSummary } from './backup'
 import { migrate } from './migrations'
 import { MAX_RATING, MIN_RATING, ratingWeight } from '../../shared/media-hub/rating'
+import {
+  parseRating,
+  parseRuntimeMinutes,
+  parseYear,
+  titleSortKey
+} from '../../shared/media-hub/catalogFields'
 import type {
   CatalogItem,
   Episode,
@@ -143,6 +149,101 @@ function toEpisodePosition(row: Row | undefined): EpisodePosition {
 /** The JS original always threw; typed as `never` so callers can still satisfy their declared return types. */
 function fail(error: Error): never {
   throw new Error('Local database error: ' + error.message)
+}
+
+/**
+ * The season/episode totals to store for one catalog item.
+ *
+ * Applies the same precedence the browse grid already uses (see
+ * seasonEpisodeCounts in the renderer's adapters.ts): a normalizer's own
+ * `episodeCounts` wins when present — a grouped anime's `videos` only ever
+ * covers its first season, so deriving from it would under-report the
+ * franchise — and everything else derives from the episode positions.
+ *
+ * Doing this once, here, at write time is what lets the index drop `videos`
+ * entirely: it is the only thing the grid needed that array for, other than
+ * the Completed badge, which is computed against watch history instead.
+ *
+ * `null` rather than 0 when there is nothing to count, so a query can tell
+ * "no episode data" from "confirmed zero episodes" — the same distinction
+ * seasonEpisodeCounts is careful to preserve by returning undefined.
+ */
+function indexEpisodeCounts(item: CatalogItem): {
+  totalSeasons: number | null
+  totalEpisodes: number | null
+} {
+  if (item.episodeCounts) {
+    return {
+      totalSeasons: item.episodeCounts.totalSeasons,
+      totalEpisodes: item.episodeCounts.totalEpisodes
+    }
+  }
+  // `unplayable` entries are synthetic — promotional clips reassigned into a
+  // fabricated season 0 by disambiguateVideos — so they are excluded here
+  // exactly as the grid excludes them, or they would inflate both counts.
+  const playable = (item.videos || []).filter((v) => !v.unplayable)
+  if (!playable.length) return { totalSeasons: null, totalEpisodes: null }
+  const seasons = new Set(playable.map((v) => v.season).filter((s) => Number.isFinite(s)))
+  return { totalSeasons: seasons.size || null, totalEpisodes: playable.length }
+}
+
+/** ASCII unit separator. Matches the `char(31)` indexList joins genres
+ *  with -- a delimiter no genre name can contain, unlike a comma. */
+const GENRE_DELIMITER = '\u001f'
+
+/**
+ * Unpacks the genre list group_concat'd into one column by indexList.
+ *
+ * NULL when a title has no genre rows at all, which is a normal state — not
+ * every source tags every title — so it has to read as "no genres" rather
+ * than as one genre named "null".
+ */
+function splitGenres(value: SQLOutputValue | undefined): string[] {
+  if (value == null) return []
+  return String(value)
+    .split(GENRE_DELIMITER)
+    .filter(Boolean)
+}
+
+/**
+ * Rebuilds a CatalogItem from an index row.
+ *
+ * `videos` is deliberately empty and `episodeCounts` carries the stored
+ * totals — the index holds no per-episode data (migration 2), and
+ * seasonEpisodeCounts already prefers `episodeCounts` over deriving from
+ * `videos`, so the grid's season/episode labels are unaffected by the
+ * absence. The Completed badge is the one thing that genuinely needed the
+ * positions, and it is resolved against watch history instead.
+ *
+ * The stringly-typed fields go back out as strings because CatalogItem is
+ * what every existing consumer expects; this is a boundary, not a redesign
+ * of the shape.
+ */
+function indexRowToItem(row: Row, kind: MediaKind, genres: string[]): CatalogItem {
+  const seasons = row.total_seasons as number | null
+  const episodes = row.total_episodes as number | null
+  const simklId = row.simkl_id == null ? undefined : Number(row.simkl_id)
+  return {
+    id: String(row.id),
+    title: String(row.title ?? ''),
+    type: kind,
+    poster: String(row.poster ?? ''),
+    background: String(row.background ?? ''),
+    logo: String(row.logo ?? ''),
+    year: row.year == null ? '' : String(row.year),
+    status: String(row.status ?? ''),
+    description: String(row.description ?? ''),
+    rating: row.rating == null ? '' : String(row.rating),
+    runtime: row.runtime_min == null ? '' : `${row.runtime_min} min`,
+    genres,
+    videos: [],
+    trailers: [],
+    ...(Number.isFinite(simklId) && simklId ? { simklId } : {}),
+    ...(row.grouped_ids ? { groupedIds: parse<string[]>(String(row.grouped_ids), []) } : {}),
+    ...(seasons != null && episodes != null
+      ? { episodeCounts: { totalSeasons: seasons, totalEpisodes: episodes } }
+      : {})
+  }
 }
 
 export interface PlaybackPositionResult {
@@ -327,6 +428,38 @@ export interface MediaHubDatabase {
    *  stale fallback — this is for a payload that has become WRONG rather
    *  than merely old, and must not be served again. */
   deleteCache(key: string): void
+  /**
+   * Records what a crawl saw into the accumulating title index.
+   *
+   * ACCUMULATES — it never deletes, and `first_seen` is never overwritten.
+   * That is the whole point of the table (see migration 2): the catalog it
+   * replaces was a single blob rewritten wholesale every six hours, so a
+   * title that fell out of Cinemeta's top window fell out of the library
+   * with it. Here, a crawl that no longer mentions a title simply leaves its
+   * row alone.
+   *
+   * `rank` is the item's position in `items`, offset by `rankBase` — callers
+   * pass the merged, deduped order (Simkl trending first, then Cinemeta's
+   * depth), which is the ordering the browse grid's default "trending" sort
+   * reproduces. Rows the crawl did NOT see keep whatever rank they had
+   * rather than being pushed to the end.
+   *
+   * One transaction for the whole batch: at full crawl depth this is
+   * thousands of rows, and a statement-at-a-time loop outside a transaction
+   * is one fsync per row.
+   */
+  indexUpsert(
+    kind: MediaKind,
+    items: readonly CatalogItem[],
+    opts?: { source?: string; rankBase?: number; now?: number }
+  ): void
+  /** How many titles of one kind the index holds. This is the real library
+   *  size — the number the category hero should be quoting. */
+  indexCount(kind: MediaKind): number
+  /** Titles of one kind in `rank` order. `videos` comes back empty and
+   *  `episodeCounts` carries the stored totals — the index holds no
+   *  per-episode data at all (see migration 2). */
+  indexList(kind: MediaKind, limit: number, offset?: number): CatalogItem[]
   trackedUpdates(details: CatalogItem[], now?: Date): TrackedUpdate[]
   close(): void
   filename: string
@@ -370,6 +503,11 @@ interface PreparedQueries {
   putCache: StatementSync
   getCache: StatementSync
   deleteCache: StatementSync
+  indexPut: StatementSync
+  indexClearGenres: StatementSync
+  indexPutGenre: StatementSync
+  indexCount: StatementSync
+  indexList: StatementSync
   lastEpisode: StatementSync
   savePosition: StatementSync
   clearPosition: StatementSync
@@ -627,6 +765,66 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
     ),
     getCache: sql.prepare('SELECT payload_json,expires_at FROM catalog_cache WHERE cache_key=?'),
     deleteCache: sql.prepare('DELETE FROM catalog_cache WHERE cache_key=?'),
+    // `first_seen` is absent from the DO UPDATE SET on purpose — it is the
+    // one column a re-crawl must never touch.
+    //
+    // The COALESCE(NULLIF(...)) pairs are not decoration. The same title
+    // arrives from more than one source (Simkl trending and Cinemeta's depth
+    // overlap heavily) and they do not carry the same fields: a Simkl entry
+    // has no logo, a Cinemeta one has no simkl_id. A plain `excluded.logo`
+    // would let whichever source happened to be written second ERASE a good
+    // value with an empty string. Blank never overwrites non-blank.
+    indexPut: sql.prepare(
+      `INSERT INTO catalog_index(id,kind,title,title_sort,year,rating,runtime_min,status,poster,background,logo,description,total_seasons,total_episodes,simkl_id,grouped_ids,rank,source,first_seen,updated_at)
+       VALUES(@id,@kind,@title,@titleSort,@year,@rating,@runtime,@status,@poster,@background,@logo,@description,@totalSeasons,@totalEpisodes,@simklId,@groupedIds,@rank,@source,@now,@now)
+       ON CONFLICT(id,kind) DO UPDATE SET
+         title=excluded.title,
+         title_sort=excluded.title_sort,
+         year=COALESCE(excluded.year,catalog_index.year),
+         rating=COALESCE(excluded.rating,catalog_index.rating),
+         runtime_min=COALESCE(excluded.runtime_min,catalog_index.runtime_min),
+         status=COALESCE(NULLIF(excluded.status,''),catalog_index.status),
+         poster=COALESCE(NULLIF(excluded.poster,''),catalog_index.poster),
+         background=COALESCE(NULLIF(excluded.background,''),catalog_index.background),
+         logo=COALESCE(NULLIF(excluded.logo,''),catalog_index.logo),
+         description=COALESCE(NULLIF(excluded.description,''),catalog_index.description),
+         total_seasons=COALESCE(excluded.total_seasons,catalog_index.total_seasons),
+         total_episodes=COALESCE(excluded.total_episodes,catalog_index.total_episodes),
+         simkl_id=COALESCE(excluded.simkl_id,catalog_index.simkl_id),
+         grouped_ids=COALESCE(excluded.grouped_ids,catalog_index.grouped_ids),
+         rank=excluded.rank,
+         source=excluded.source,
+         updated_at=excluded.updated_at`
+    ),
+    // Genres are replaced wholesale per title rather than merged: unlike the
+    // scalar fields above, a shorter genre list is a legitimate correction
+    // (a source dropping a mis-tagged genre), and there is no way to tell
+    // that apart from "this source carries fewer genres" by merging.
+    indexClearGenres: sql.prepare('DELETE FROM catalog_index_genre WHERE id=? AND kind=?'),
+    indexPutGenre: sql.prepare(
+      'INSERT OR IGNORE INTO catalog_index_genre(id,kind,genre) VALUES(?,?,?)'
+    ),
+    indexCount: sql.prepare('SELECT COUNT(*) AS n FROM catalog_index WHERE kind=?'),
+    // `, id` is a deliberate tiebreaker, not noise. Without a total order
+    // SQLite may return equal-rank rows in any order between calls, and a
+    // paged reader would then see the same title twice on two pages while
+    // another never appeared at all.
+    // Genres come back per row, via a correlated lookup on the genre table's
+    // own index, rather than by reading every genre for the kind and joining
+    // in JS. At browse scale that difference is the whole cost of the query:
+    // one page is 30 rows, and the library it is being drawn from is tens of
+    // thousands of titles with several genres each.
+    //
+    // char(31) — ASCII unit separator — rather than the default comma,
+    // because a genre containing the delimiter would otherwise split into
+    // two genres that do not exist.
+    indexList: sql.prepare(
+      `SELECT id,kind,title,year,rating,runtime_min,status,poster,background,logo,description,
+              total_seasons,total_episodes,simkl_id,grouped_ids,
+              (SELECT group_concat(genre, char(31)) FROM catalog_index_genre g
+                WHERE g.id = catalog_index.id AND g.kind = catalog_index.kind) AS genres
+       FROM catalog_index WHERE kind=? ORDER BY rank, id LIMIT ? OFFSET ?`
+    ),
     lastEpisode: sql.prepare(
       'SELECT season,episode FROM watch_history WHERE profile_id=? AND content_id=? AND season IS NOT NULL ORDER BY season DESC,episode DESC LIMIT 1'
     ),
@@ -1460,6 +1658,80 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
       } catch {
         // Best-effort, same convention as every other cache operation in
         // this file — a failed delete must not surface to callers.
+      }
+    },
+
+    indexUpsert(kind, items, { source = '', rankBase = 0, now = Date.now() } = {}) {
+      if (!items.length) return
+      try {
+        sql.exec('BEGIN')
+        try {
+          items.forEach((item, offset) => {
+            const id = String(item?.id || '')
+            // An idless entry is what a malformed source record normalizes
+            // to (see normalizeMeta) — it can never be routed to, opened or
+            // played, so it must not take a row.
+            if (!id) return
+            const counts = indexEpisodeCounts(item)
+            q.indexPut.run({
+              id,
+              kind,
+              title: String(item.title || ''),
+              titleSort: titleSortKey(item.title),
+              year: parseYear(item.year) ?? null,
+              rating: parseRating(item.rating) ?? null,
+              runtime: parseRuntimeMinutes(item.runtime) ?? null,
+              status: String(item.status || ''),
+              poster: String(item.poster || ''),
+              background: String(item.background || ''),
+              logo: String(item.logo || ''),
+              description: String(item.description || ''),
+              // Prefer the normalizer's own combined totals when it supplied
+              // them (grouped anime), and otherwise derive from the episode
+              // positions this item still carries — the SAME precedence the
+              // browse grid's seasonEpisodeCounts already applies. Deriving
+              // it once here is what lets the index drop `videos` entirely.
+              totalSeasons: counts.totalSeasons,
+              totalEpisodes: counts.totalEpisodes,
+              simklId: item.simklId != null ? String(item.simklId) : null,
+              groupedIds: item.groupedIds?.length ? JSON.stringify(item.groupedIds) : null,
+              rank: rankBase + offset,
+              source,
+              now
+            })
+            q.indexClearGenres.run(id, kind)
+            for (const genre of item.genres || []) {
+              const name = String(genre || '').trim()
+              if (name) q.indexPutGenre.run(id, kind, name)
+            }
+          })
+          sql.exec('COMMIT')
+        } catch (error) {
+          sql.exec('ROLLBACK')
+          throw error
+        }
+      } catch {
+        // Best-effort, like every other cache write here. A failed index
+        // write costs this crawl's contribution and nothing else — the rows
+        // already in the index are untouched, and the next crawl retries.
+      }
+    },
+
+    indexCount(kind) {
+      try {
+        return Number((q.indexCount.get(kind) as Row | undefined)?.n ?? 0)
+      } catch {
+        return 0
+      }
+    },
+
+    indexList(kind, limit, offset = 0) {
+      try {
+        return (q.indexList.all(kind, limit, offset) as Row[]).map((row) =>
+          indexRowToItem(row, kind, splitGenres(row.genres))
+        )
+      } catch {
+        return []
       }
     },
 
