@@ -9,7 +9,10 @@ import assert from 'node:assert/strict'
 // The signature of that bug is what this table exists to prevent coming back:
 // every explicit choice behaved WORSE than "Any", because 0 skipped the check
 // entirely while any real number turned the maximum into a minimum.
-function withinQualityCeiling(resolution: number | undefined, ceiling: number | undefined): boolean {
+function withinQualityCeiling(
+  resolution: number | undefined,
+  ceiling: number | undefined
+): boolean {
   if (!ceiling) return true
   if (!resolution) return true
   return resolution <= ceiling
@@ -63,3 +66,41 @@ for (const resolution of [480, 720, 1080, 1440, 2160]) {
 }
 
 console.log('ok  quality ceiling')
+
+// --- when the shortfall is worth interrupting somebody over -----------------
+import { isNoticeablyBelowCeiling, resolutionLabel } from '../src/shared/media-hub/streamQuality'
+
+const warn: Array<[number, number, boolean, string]> = [
+  // One step down is what a ceiling is FOR. No dialog.
+  [1440, 2160, false, '1440p under a 4K cap is the ordinary case'],
+  [720, 1080, false, '720p under a 1080p cap is the ordinary case'],
+  [480, 720, false, '480p under a 720p cap is one step'],
+
+  // Two steps is where somebody would be surprised.
+  [480, 1080, true, '480p when 1080p was allowed is worth asking about'],
+  [720, 2160, true, '720p when 4K was allowed is worth asking about'],
+  [480, 2160, true, 'and 480p under a 4K cap certainly is'],
+
+  // Nothing meaningful to say.
+  [480, 0, false, '"Any" expresses no preference to fall short of'],
+  [0, 1080, false, 'an unknown resolution is not a shortfall'],
+  [1080, 1080, false, 'meeting the ceiling is not a shortfall'],
+  [2160, 1080, false, 'exceeding it is certainly not']
+]
+for (const [got, ceiling, expected, why] of warn) {
+  assert.equal(isNoticeablyBelowCeiling(got, ceiling), expected, why)
+}
+
+// The warning names what you get, so the label has to read like the setting.
+assert.equal(resolutionLabel(2160), '4K')
+assert.equal(resolutionLabel(1080), '1080p')
+assert.equal(resolutionLabel(480), '480p')
+
+// A shortfall is never a refusal: anything the ceiling allows is still
+// playable, warned about or not. This is the promise the whole change rests
+// on — an old film that only exists at 480p still plays.
+for (const got of [480, 720, 1080]) {
+  assert.ok(withinQualityCeiling(got, 2160), `${got}p is still playable under a 4K cap`)
+}
+
+console.log('ok  low-quality warning threshold')

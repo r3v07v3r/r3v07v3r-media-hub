@@ -29,6 +29,7 @@ import {
 } from '../../shared/media-hub/catalog-logic'
 import { releaseTextMentionsExecutable } from '../../shared/media-hub/unsafeFiles'
 import { releaseLacksPreferredLanguage } from '../../shared/media-hub/language'
+import { streamResolution, streamText } from '../../shared/media-hub/streamQuality'
 
 export { airingStatus, episodeWatchState, filterCatalog, isItemWatched, subtitlesInadequate }
 
@@ -56,21 +57,12 @@ export function createRoomCode(random: () => number = Math.random): string {
  *  in `description` — e.g. "Interstellar.2014.2160p.PROPER.IMAX.REMUX.DV.
  *  HDR10+.TrueHD.7.1.Atmos-...mkv ... 💾 63.0 GB". Scoring on name alone
  *  meant every candidate looked identical apart from the resolution. */
-function streamText(stream: StreamCandidate): string {
-  return `${stream.name || ''} ${stream.title || ''} ${stream.description || ''}`.toLowerCase()
-}
-
-/** Exported so a cache session can record the resolution it actually
- *  holds. Without it a cached copy stores `undefined`, and the quality
- *  target then accepts it unconditionally — a cached 720p copy would
- *  satisfy a 1080p request forever. */
-export function streamResolution(stream: StreamCandidate): number {
-  const text = streamText(stream)
-  if (/2160|4k/.test(text)) return 2160
-  if (/1080/.test(text)) return 1080
-  if (/720/.test(text)) return 720
-  return stream.resolution || 0
-}
+// Both moved to shared/media-hub/streamQuality.ts, and re-exported here so
+// this module's own callers are unchanged: the renderer needs the identical
+// answer to decide whether to warn before playing, and two implementations of
+// "is this 1080p" would eventually disagree in the one way that matters —
+// warning about a title that played perfectly well.
+export { streamResolution, streamText }
 
 function streamSizeGb(stream: StreamCandidate): number | null {
   const text = streamText(stream)
