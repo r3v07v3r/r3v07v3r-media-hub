@@ -17,7 +17,11 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Icon } from '@renderer/components/icons/Icon'
-import type { LanCacheDevice, LanCacheStatusResponse } from '@shared/lancache/protocol'
+import type {
+  LanCacheDevice,
+  LanCacheOwnItem,
+  LanCacheStatusResponse
+} from '@shared/lancache/protocol'
 import styles from './CachingSection.module.css'
 
 interface DiscoveredDaemon {
@@ -65,6 +69,7 @@ export function CachingSection() {
   const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null)
 
   const [devices, setDevices] = useState<LanCacheDevice[]>([])
+  const [myItems, setMyItems] = useState<LanCacheOwnItem[]>([])
   const [openJoin, setOpenJoin] = useState(false)
   const [defaultPercent, setDefaultPercent] = useState(0)
   const [defaultQuotaBytes, setDefaultQuotaBytes] = useState<number | null>(null)
@@ -86,6 +91,14 @@ export function CachingSection() {
       setStatus(null)
       setStatusError('')
     }
+  }, [api])
+
+  const refreshMyItems = useCallback(async () => {
+    if (!api) return
+    const result = await api.myItems()
+    // An older daemon has no such route and answers ok:false. Empty list,
+    // no error — the section already says the server predates this work.
+    setMyItems(result.ok ? result.items : [])
   }, [api])
 
   const refreshDevices = useCallback(async () => {
@@ -110,9 +123,12 @@ export function CachingSection() {
       setDaemons(found.daemons)
       setPairedUrl(found.paired)
       setPairState(pair.state)
-      if (pair.state === 'approved') await refreshStatus()
+      if (pair.state === 'approved') {
+        await refreshStatus()
+        await refreshMyItems()
+      }
     })
-  }, [api, refreshStatus])
+  }, [api, refreshStatus, refreshMyItems])
 
   // Waiting for approval: ask, slowly, until the answer changes. The main
   // process is what flips the stored connection to approved, so this only
@@ -243,6 +259,13 @@ export function CachingSection() {
       if (!result.ok) setMessage({ ok: false, text: result.message ?? 'That did not work.' })
       await refreshDevices()
       await refreshStatus()
+    })
+
+  const handleSharing = (infoHash: string, visibility: 'private' | 'shared'): void =>
+    void guard(async () => {
+      const result = await api.setSharing({ infoHash, visibility })
+      if (!result.ok) setMessage({ ok: false, text: result.message ?? 'That did not work.' })
+      await refreshMyItems()
     })
 
   const handleAdminSetting = (patch: {
@@ -610,6 +633,41 @@ export function CachingSection() {
                           : bytes(device.quotaBytes)}
                       </span>
                     </span>
+                    {/* The per-device allocation, editable. The daemon has
+                        accepted this since quotas landed and there was no
+                        way to send it — the default slider set everyone the
+                        same share, which is not what per-device means.
+
+                        Blank clears it back to the default rather than
+                        meaning zero: an allocation of nothing would be a way
+                        to lock somebody out by the back door, and the daemon
+                        already treats null as "use the default". */}
+                    <label className={styles.deviceQuota}>
+                      <span className={styles.deviceQuotaLabel}>GB</span>
+                      <input
+                        className={styles.fieldInput}
+                        type="number"
+                        min={0}
+                        step={1}
+                        placeholder="default"
+                        aria-label={`Allocation for ${device.deviceName} in GB`}
+                        defaultValue={
+                          device.quotaBytes === null
+                            ? ''
+                            : String(Math.round(device.quotaBytes / 1024 ** 3))
+                        }
+                        disabled={busy}
+                        onBlur={(event) => {
+                          const raw = event.target.value.trim()
+                          const gb = raw === '' ? null : Math.max(0, Math.round(Number(raw)))
+                          if (gb !== null && !Number.isFinite(gb)) return
+                          handleDevice(device.id, 'quota', gb === null ? null : gb * 1024 ** 3)
+                        }}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter') (event.target as HTMLInputElement).blur()
+                        }}
+                      />
+                    </label>
                     {/* Revoking your own device would lock you out of a
                         server only its console can reopen. The daemon
                         refuses it outright; the button is not offered
@@ -679,6 +737,66 @@ export function CachingSection() {
                   disabled={busy}
                 />
               </label>
+            </section>
+          )}
+
+          {/* YOUR OWN TITLES, and who else can reach them.
+
+              The daemon has had the sharing route since entitlement landed
+              and nothing could call it: there was no way to see your own
+              items, because A1 deleted the listing that showed everybody
+              everything. /api/items/mine is the narrow replacement — scoped
+              to what this device paid for, which is the one listing
+              entitlement allows.
+
+              Not gated on being the administrator. These are your files;
+              deciding who else may watch them is the owner's call, and the
+              admin has no special claim on it. */}
+          {myItems.length > 0 && (
+            <section className={`${styles.card} glass-panel`}>
+              <div className={styles.cardHead}>
+                <div>
+                  <h3 className={styles.cardTitle}>What you have cached</h3>
+                  <p className={styles.note}>
+                    Titles you fetched onto this server. Shared ones can be streamed by anyone
+                    else who has joined it; private ones only by you.
+                  </p>
+                </div>
+              </div>
+              <ul className={styles.deviceList}>
+                {myItems.map((item) => (
+                  <li key={item.infoHash} className={styles.deviceRow}>
+                    <span className={styles.deviceText}>
+                      <span className={styles.deviceName}>{item.title}</span>
+                      <span className={styles.deviceMeta}>
+                        {bytes(item.sizeBytes)}
+                        {item.complete ? '' : ' · still fetching'}
+                        {item.visibility === 'shared'
+                          ? ' · shared with everyone here'
+                          : item.sharedWith > 0
+                            ? ` · shared with ${item.sharedWith} device${item.sharedWith === 1 ? '' : 's'}`
+                            : ' · only you'}
+                      </span>
+                    </span>
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={item.visibility === 'shared'}
+                      aria-label={`Share ${item.title} with everyone on this server`}
+                      className={`${styles.switch} ${item.visibility === 'shared' ? styles.switchOn : ''}`}
+                      disabled={busy}
+                      onClick={() =>
+                        handleSharing(
+                          item.infoHash,
+                          item.visibility === 'shared' ? 'private' : 'shared'
+                        )
+                      }
+                    >
+                      <span className={styles.switchThumb} />
+                    </button>
+                  </li>
+                ))}
+              </ul>
             </section>
           )}
         </>

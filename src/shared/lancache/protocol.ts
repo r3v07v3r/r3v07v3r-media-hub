@@ -43,6 +43,23 @@ export interface LanCacheDevice {
   isYou: boolean
 }
 
+/** One title this device fetched onto the cache server. Only ever the
+ *  CALLER's own — see the daemon's /api/items/mine and why the unfiltered
+ *  catalog was deleted. */
+export interface LanCacheOwnItem {
+  infoHash: string
+  contentKey: string
+  title: string
+  sizeBytes: number
+  complete: boolean
+  lastAccessAt: number
+  visibility: 'private' | 'shared'
+  /** How many OTHER devices are entitled to it. A count, not ids: the owner
+   *  needs to know whether anyone else can reach it, and naming who would
+   *  describe households the caller is not part of. */
+  sharedWith: number
+}
+
 export interface LanCacheDevicesResponse {
   devices: LanCacheDevice[]
   openJoin: boolean

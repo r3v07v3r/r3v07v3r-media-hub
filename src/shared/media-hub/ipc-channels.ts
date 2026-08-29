@@ -42,6 +42,9 @@ export const MEDIA_HUB_CHANNELS = {
   lanCacheDevices: 'mediahub:lancache:devices',
   lanCacheDeviceAction: 'mediahub:lancache:device-action',
   lanCacheAdminSettings: 'mediahub:lancache:admin-settings',
+  /** The caller's own cached titles, and the sharing control over them. */
+  lanCacheMyItems: 'mediahub:lancache:my-items',
+  lanCacheSetSharing: 'mediahub:lancache:set-sharing',
   settingsSetStreamLimits: 'mediahub:settings:set-stream-limits',
   settingsSetStreamCacheSize: 'mediahub:settings:set-stream-cache-size',
   settingsChooseStreamCacheDir: 'mediahub:settings:choose-stream-cache-dir',
