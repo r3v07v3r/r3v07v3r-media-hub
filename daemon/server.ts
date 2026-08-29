@@ -500,6 +500,29 @@ export function createDaemonServer(deps: ServerDeps): http.Server {
     // paid for. Without it there is no way for somebody to see their own
     // cached titles in order to share them, which left the sharing route
     // built and unreachable.
+    // Cancel a queued or in-flight fetch. YOUR OWN only: the queue is
+    // scoped to the caller everywhere else, and a route that cancelled by
+    // contentKey alone would let any paired device stop a housemate's
+    // download without ever being able to see it.
+    //
+    // The admin gets no exception. Revoking a device already cancels its
+    // jobs, which is the administrative lever over somebody else's work;
+    // reaching into a queue item by item is not.
+    if (route === 'POST /api/jobs/cancel') {
+      const body = await readBody(req)
+      const contentKey = String(body.contentKey ?? '')
+      const job = jobs.list().find((candidate) => candidate.contentKey === contentKey)
+      if (!job || job.ownerDeviceId !== callerDeviceId) {
+        // Same shape as everywhere else: a job that is not yours is
+        // indistinguishable from one that does not exist.
+        json(res, 404, { error: 'No such job.' })
+        return
+      }
+      jobs.cancel(contentKey)
+      json(res, 200, { ok: true })
+      return
+    }
+
     if (route === 'GET /api/items/mine') {
       const mine = (await storage.list()).filter(
         (item) => item.ownerDeviceId === callerDeviceId
@@ -697,6 +720,28 @@ export function createDaemonServer(deps: ServerDeps): http.Server {
     // fetched. Admin is allowed too, because the admin can already delete
     // it — but note what admin does NOT get: this route changes access, it
     // does not grant it. An admin cannot add themselves.
+    // Delete a cached item. Owner or admin, matching the sharing route
+    // above and for the same stated reason: the admin can already remove the
+    // file from a shell, so refusing here would imply a boundary that does
+    // not exist. What the admin still cannot do is FIND somebody else's
+    // items — there is no route that lists them — so this is reclaiming
+    // space you can already point at, not a licence to browse.
+    const removeMatch = /^\/api\/items\/([a-f0-9]{40})\/remove$/.exec(url.pathname)
+    if (removeMatch && req.method === 'POST') {
+      const item = await storage.get(removeMatch[1])
+      const mayRemove = Boolean(item) && (item?.ownerDeviceId === callerDeviceId || isAdminCaller)
+      if (!item || !mayRemove) {
+        json(res, 404, { error: 'No such item.' })
+        return
+      }
+      await storage.remove(item.infoHash)
+      // No tombstone. A deliberate delete is not the feeder being told the
+      // household lost interest — if it is still on somebody's list it
+      // should be allowed to come back.
+      json(res, 200, { ok: true })
+      return
+    }
+
     const sharingMatch = /^\/api\/items\/([a-f0-9]{40})\/sharing$/.exec(url.pathname)
     if (sharingMatch && req.method === 'POST') {
       const item = await storage.get(sharingMatch[1])
@@ -726,6 +771,25 @@ export function createDaemonServer(deps: ServerDeps): http.Server {
   }
 }
 
+/**
+ * A contentKey is catalogId:season:episode, and the title on a job is the
+ * SERIES title — so a queue holding four episodes of two shows listed "Star
+ * Trek: Strange New Worlds" twice and "Outer Banks" twice with nothing to
+ * tell the rows apart. They were never duplicates; they were different
+ * episodes, described identically.
+ *
+ * Parsed from the END, the same way fetcher.ts does it, because a catalogId
+ * can itself contain colons.
+ */
+function episodeOf(contentKey: string): { season?: number; episode?: number } {
+  const parts = contentKey.split(':')
+  if (parts.length < 3) return {}
+  const episode = Number(parts.at(-1))
+  const season = Number(parts.at(-2))
+  if (!Number.isFinite(season) || !Number.isFinite(episode)) return {}
+  return { season, episode }
+}
+
 function summarizeJob(job: JobRecord): Record<string, unknown> {
   return {
     contentKey: job.contentKey,
@@ -734,6 +798,8 @@ function summarizeJob(job: JobRecord): Record<string, unknown> {
     attempts: job.attempts,
     progressBytes: job.progressBytes ?? 0,
     sizeBytes: job.sizeBytes,
+    resolution: job.resolution,
+    ...episodeOf(job.contentKey),
     lastError: job.lastError
   }
 }

@@ -152,11 +152,18 @@ export interface LanCacheStatusResponse {
   }
   jobs: Array<{
     contentKey: string
+    /** The SERIES title. Two episodes of one show carry the same one, which
+     *  is why season/episode below exist — without them a queue of episodes
+     *  reads as a list of duplicates. */
     title: string
     state: string
     attempts: number
     progressBytes: number
     sizeBytes?: number
+    resolution?: number
+    /** Absent for films, and for any key that is not catalogId:season:episode. */
+    season?: number
+    episode?: number
     lastError?: string
   }>
 }

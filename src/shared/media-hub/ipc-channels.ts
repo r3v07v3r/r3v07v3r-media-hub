@@ -45,6 +45,10 @@ export const MEDIA_HUB_CHANNELS = {
   /** The caller's own cached titles, and the sharing control over them. */
   lanCacheMyItems: 'mediahub:lancache:my-items',
   lanCacheSetSharing: 'mediahub:lancache:set-sharing',
+  /** Remove one of your own cached titles, or cancel one of your own
+   *  fetches. Both scoped to the caller by the daemon, not by the UI. */
+  lanCacheRemoveItem: 'mediahub:lancache:remove-item',
+  lanCacheCancelJob: 'mediahub:lancache:cancel-job',
   settingsSetStreamLimits: 'mediahub:settings:set-stream-limits',
   settingsSetStreamCacheSize: 'mediahub:settings:set-stream-cache-size',
   settingsChooseStreamCacheDir: 'mediahub:settings:choose-stream-cache-dir',

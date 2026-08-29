@@ -1881,9 +1881,10 @@ async function myItemsTest(): Promise<void> {
   await seed('c'.repeat(40), 'k-theirs', otherId)
   await seed('d'.repeat(40), 'k-orphan', undefined)
 
+  const jobs = createJobStore(root)
   const server = createDaemonServer({
     storage: store,
-    jobs: createJobStore(root),
+    jobs,
     pairing,
     admin,
     credentials: createCredentials(root),
@@ -1935,6 +1936,103 @@ async function myItemsTest(): Promise<void> {
     // not part of.
     assert.equal(mine[0].visibility, 'private')
     assert.equal(mine[0].sharedWith, 0)
+
+    // REMOVAL. Yours goes; somebody else's is indistinguishable from absent.
+    const removeAs = async (token: string, hash: string): Promise<number> =>
+      (
+        await fetch(`${base}/api/items/${hash}/remove`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}` }
+        })
+      ).status
+    assert.equal(
+      await removeAs(otherToken, 'a'.repeat(40)),
+      404,
+      "another device cannot delete an item it does not own"
+    )
+    assert.ok(await store.get('a'.repeat(40)), 'and the refusal actually refused')
+    assert.equal(
+      await removeAs(otherToken, 'f'.repeat(40)),
+      404,
+      'with the same answer as a hash that is not here'
+    )
+    assert.equal(await removeAs(mineToken, 'b'.repeat(40)), 200, 'the owner may delete their own')
+    assert.equal(await store.get('b'.repeat(40)), null, 'and the file is gone')
+    assert.equal(
+      'k-mine-2' in (await store.tombstones()),
+      false,
+      'a deliberate delete leaves no tombstone — it is not lost interest'
+    )
+
+    // CANCELLING A QUEUED FETCH, scoped the same way. The queue is per
+    // device everywhere else, so a route that cancelled by contentKey alone
+    // would let anyone stop a housemate's download without being able to
+    // see it — and the admin gets no exception, because revoking a device
+    // is the administrative lever over its work, not reaching in item by
+    // item.
+    jobs.enqueue({
+      contentKey: 'tt-mine::1:2',
+      infoHash: '1'.repeat(40),
+      title: 'Mine',
+      ownerDeviceId: mineId
+    })
+    jobs.enqueue({
+      contentKey: 'tt-theirs::1:2',
+      infoHash: '2'.repeat(40),
+      title: 'Theirs',
+      ownerDeviceId: otherId
+    })
+    const cancelAs = async (token: string, contentKey: string): Promise<number> =>
+      (
+        await fetch(`${base}/api/jobs/cancel`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', Authorization: `Bearer ${token}` },
+          body: JSON.stringify({ contentKey })
+        })
+      ).status
+    assert.equal(
+      await cancelAs(mineToken, 'tt-theirs::1:2'),
+      404,
+      "one device cannot cancel another's fetch"
+    )
+    assert.ok(
+      jobs.list().some((job) => job.contentKey === 'tt-theirs::1:2'),
+      'and the refusal actually refused'
+    )
+    assert.equal(await cancelAs(mineToken, 'tt-mine::1:2'), 200, 'the owner may cancel their own')
+    assert.equal(
+      jobs.list().some((job) => job.contentKey === 'tt-mine::1:2'),
+      false,
+      'and it leaves the queue'
+    )
+
+    // WHAT MADE THE QUEUE LOOK FULL OF DUPLICATES. A job's title is the
+    // SERIES title, so two episodes of one show were two identical rows.
+    // The season and episode come from the contentKey, parsed from the end
+    // because a catalogId can contain colons of its own.
+    jobs.enqueue({
+      contentKey: 'tt99::2:7',
+      infoHash: '3'.repeat(40),
+      title: 'Same Show',
+      ownerDeviceId: mineId
+    })
+    jobs.enqueue({
+      contentKey: 'tt99::2:8',
+      infoHash: '4'.repeat(40),
+      title: 'Same Show',
+      ownerDeviceId: mineId
+    })
+    const queue = (
+      (await (
+        await fetch(`${base}/api/status`, { headers: { Authorization: `Bearer ${mineToken}` } })
+      ).json()) as { jobs: Array<{ title: string; season?: number; episode?: number }> }
+    ).jobs.filter((job) => job.title === 'Same Show')
+    assert.equal(queue.length, 2)
+    assert.deepEqual(
+      queue.map((job) => `${job.season}x${job.episode}`).sort(),
+      ['2x7', '2x8'],
+      'two rows with the same title are told apart by their episode'
+    )
     assert.equal(body.includes(otherId), false, 'no other device id is disclosed')
 
     await fetch(`${base}/api/items/${'a'.repeat(40)}/sharing`, {

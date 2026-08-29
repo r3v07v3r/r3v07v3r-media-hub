@@ -261,6 +261,21 @@ export function CachingSection() {
       await refreshStatus()
     })
 
+  const handleCancelJob = (contentKey: string): void =>
+    void guard(async () => {
+      const result = await api.cancelJob({ contentKey })
+      if (!result.ok) setMessage({ ok: false, text: result.message ?? 'That did not work.' })
+      await refreshStatus()
+    })
+
+  const handleRemoveItem = (infoHash: string): void =>
+    void guard(async () => {
+      const result = await api.removeItem({ infoHash })
+      if (!result.ok) setMessage({ ok: false, text: result.message ?? 'That did not work.' })
+      await refreshMyItems()
+      await refreshStatus()
+    })
+
   const handleSharing = (infoHash: string, visibility: 'private' | 'shared'): void =>
     void guard(async () => {
       const result = await api.setSharing({ infoHash, visibility })
@@ -675,13 +690,33 @@ export function CachingSection() {
                   <ul className={styles.jobs}>
                     {status.jobs.map((job) => (
                       <li key={job.contentKey} className={styles.job}>
-                        <span className={styles.jobTitle}>{job.title}</span>
+                        <span className={styles.jobTitle}>
+                          <span className={styles.jobTitleText}>{job.title}</span>
+                          {/* The title on a job is the SERIES title, so a
+                              queue holding several episodes of one show was
+                              several identical rows — the "duplicates".
+                              They were always different episodes. */}
+                          {job.season !== undefined && job.episode !== undefined && (
+                            <span className={styles.jobEpisode}>
+                              S{job.season} · E{job.episode}
+                            </span>
+                          )}
+                        </span>
                         <span className={styles.jobState}>
                           {job.state}
+                          {job.resolution ? ` · ${job.resolution}p` : ''}
                           {job.sizeBytes
                             ? ` · ${Math.round((job.progressBytes / job.sizeBytes) * 100)}%`
                             : ''}
                         </span>
+                        <button
+                          type="button"
+                          className={styles.ghostButton}
+                          disabled={busy}
+                          onClick={() => handleCancelJob(job.contentKey)}
+                        >
+                          Cancel
+                        </button>
                       </li>
                     ))}
                   </ul>
@@ -801,6 +836,19 @@ export function CachingSection() {
                       }
                     >
                       <span className={styles.switchThumb} />
+                    </button>
+                    {/* Deleting a title you fetched. Reclaims the space now
+                        rather than waiting for the idle TTL, and leaves no
+                        tombstone — a deliberate delete is not the feeder
+                        being told the household lost interest, so it may
+                        come back if it is still on somebody's list. */}
+                    <button
+                      type="button"
+                      className={styles.ghostButton}
+                      disabled={busy}
+                      onClick={() => handleRemoveItem(item.infoHash)}
+                    >
+                      Remove
                     </button>
                   </li>
                 ))}

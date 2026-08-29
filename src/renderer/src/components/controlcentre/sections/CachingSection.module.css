@@ -271,13 +271,23 @@ html[data-motion-user-disabled='true'] .meterFill {
   white-space: nowrap;
 }
 
+/* A row, not a truncating box. The overflow that keeps a long title in
+   bounds belongs on the TEXT — with it on the container, the episode chip
+   beside it was clipped away exactly when the title was long enough to make
+   the chip worth having. */
 .jobTitle {
   flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  font-size: 0.88rem;
+}
+
+.jobTitleText {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 0.88rem;
 }
 
 /* The per-device allocation, sat between the name and the Remove button.
@@ -301,6 +311,21 @@ html[data-motion-user-disabled='true'] .meterFill {
   padding: 5px 8px;
   font-size: 0.8rem;
   text-align: right;
+}
+
+/* The episode, beside the series title it shares with its neighbours. Set
+   apart so the row scans as "show, then which one" rather than as one long
+   string. */
+.jobEpisode {
+  flex: none;
+  margin-left: 8px;
+  padding: 1px 7px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border-subtle);
+  font-size: 0.68rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-secondary);
+  white-space: nowrap;
 }
 
 .tag {

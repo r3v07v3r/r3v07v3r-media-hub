@@ -489,4 +489,39 @@ export function registerLanCacheIpc(refreshTrustedHosts: () => void): void {
       }
     }
   )
+
+  handle<{ infoHash?: string }, { ok: boolean; message?: string }>(
+    MEDIA_HUB_CHANNELS.lanCacheRemoveItem,
+    async (_event, payload) => {
+      const infoHash = String(payload?.infoHash ?? '')
+      if (!/^[a-f0-9]{40}$/.test(infoHash)) return { ok: false, message: 'Unknown item.' }
+      try {
+        await request(`/api/items/${infoHash}/remove`, { method: 'POST' })
+        return { ok: true }
+      } catch (error) {
+        return { ok: false, message: (error as Error).message }
+      }
+    }
+  )
+
+  handle<{ contentKey?: string }, { ok: boolean; message?: string }>(
+    MEDIA_HUB_CHANNELS.lanCacheCancelJob,
+    async (_event, payload) => {
+      // The contentKey goes in the BODY, not the path: it contains colons
+      // and a catalogId can contain more of them, so a path segment would
+      // need escaping on both sides to survive the round trip.
+      const contentKey = String(payload?.contentKey ?? '')
+      if (!contentKey) return { ok: false, message: 'Unknown job.' }
+      try {
+        await request('/api/jobs/cancel', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ contentKey })
+        })
+        return { ok: true }
+      } catch (error) {
+        return { ok: false, message: (error as Error).message }
+      }
+    }
+  )
 }
