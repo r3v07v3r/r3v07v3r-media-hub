@@ -310,7 +310,7 @@ export function PipelineSection({ onNavigate }: { onNavigate?: (section: 'cachin
           >
             <header className={own.addHead}>
               <h3 className={styles.cardTitle}>Add to {addingStage.label.toLowerCase()}</h3>
-              <p className={styles.note}>{addingStage.blurb}.</p>
+              <p className={styles.note}>{addingStage.blurb}</p>
             </header>
             <ul className={own.addList}>
               {addingStage.nodes.filter((node) => !isPresent(node)).map((node) => (
