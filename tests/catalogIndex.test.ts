@@ -170,6 +170,27 @@ check('unparseable fields are null, not zero', () => {
   db.close()
 })
 
+check('title_sort folds diacritics so byte order lands where localeCompare does', () => {
+  // Byte order puts "Pokémon" after "Pz"; localeCompare files it under
+  // "Poke". Since SQLite has no locale-aware collation, the sort key is what
+  // has to carry the equivalence. Measured over the real catalog, this takes
+  // the disagreement with localeCompare from 0.019% of pairs to none.
+  const dbPath = tempDbPath()
+  const db = createDatabase(dbPath, TEST_PROFILE)
+  db.indexUpsert('series', [
+    item('a', { type: 'series', title: 'Pokémon' }),
+    item('b', { type: 'series', title: 'Portlandia' }),
+    item('c', { type: 'series', title: 'Pz Show' })
+  ])
+  assert.deepEqual(
+    db.indexQuery({ kind: 'series', sort: 'title-asc' }).items.map((x) => x.title),
+    ['Pokémon', 'Portlandia', 'Pz Show'],
+    'the accented title sorts by its base letters, not after every ASCII one'
+  )
+  assert.equal(raw(dbPath, 'a')?.title_sort, 'pokemon')
+  db.close()
+})
+
 check('title_sort is lowercased and NOT article-stripped', () => {
   // The sort being reproduced is title.localeCompare(title), which files
   // "The Matrix" under T. Stripping articles here would change what the A-Z

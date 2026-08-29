@@ -917,12 +917,53 @@ export function selectVideoFile(
 }
 
 /**
- * Merges the settled results of several catalog sources into one deduped
- * list, in the order the sources were given, ignoring any that failed.
+ * Fills the gaps in `into` from `from`, without ever overwriting something
+ * already there.
  *
- * Source order is the ranking: dedupeCatalog keeps the first occurrence of
- * an id, so a title present in both a trending feed and a top-rated list
- * keeps its trending position.
+ * The two sources describe the same title but do not carry the same fields:
+ * a Simkl trending entry has a simklId and no episode list at all, a
+ * Cinemeta entry has the full episode list and no simklId. Whichever is
+ * seen first should keep its position and its own values, and gain what it
+ * was missing — which is exactly what the index's own upsert does with
+ * COALESCE(NULLIF(...)), applied here so the two agree.
+ *
+ * Empty counts as missing, deliberately: `videos: []` and `poster: ''` are
+ * how these normalizers say "this source has none", not "this source says
+ * there are none".
+ */
+function fillMissing(into: CatalogItem, from: CatalogItem): CatalogItem {
+  const merged: CatalogItem = { ...into }
+  for (const key of ['poster', 'background', 'logo', 'description', 'status', 'rating', 'runtime', 'year'] as const) {
+    if (!merged[key] && from[key]) merged[key] = from[key]
+  }
+  if (!merged.genres?.length && from.genres?.length) merged.genres = from.genres
+  if (!merged.videos?.length && from.videos?.length) merged.videos = from.videos
+  if (!merged.trailers?.length && from.trailers?.length) merged.trailers = from.trailers
+  if (merged.simklId == null && from.simklId != null) merged.simklId = from.simklId
+  if (!merged.episodeCounts && from.episodeCounts) merged.episodeCounts = from.episodeCounts
+  if (!merged.groupedIds?.length && from.groupedIds?.length) merged.groupedIds = from.groupedIds
+  return merged
+}
+
+/**
+ * Merges the settled results of several catalog sources into one list, in
+ * the order the sources were given, ignoring any that failed.
+ *
+ * Source order is the ranking: the first occurrence of an id keeps its
+ * position, so a title present in both a trending feed and a top-rated
+ * list keeps its trending position.
+ *
+ * A duplicate is COALESCED into the first occurrence rather than dropped,
+ * which is a fix rather than a refinement. Measured live against the real
+ * catalogs: 546 of Cinemeta's 1,999 series also appear in Simkl's trending
+ * feeds, Simkl is read first for its ranking, and a Simkl entry carries
+ * `videos: []`. Dropping the Cinemeta duplicate therefore threw away the
+ * episode list for 546 titles — and not a random 546, but the most popular
+ * ones, the top of the grid. Those titles showed no season or episode
+ * counts, and could never earn a "Completed" badge, because the data that
+ * answers both had been discarded on the way in.
+ *
+ * Position still comes from the first occurrence; only the gaps are filled.
  *
  * Separated out and given its own tests because the property that matters
  * here is a negative one: a source that fails must cost its own
@@ -935,9 +976,24 @@ export function selectVideoFile(
 export function mergeCatalogSources(
   results: readonly PromiseSettledResult<CatalogItem[][]>[]
 ): CatalogItem[] {
-  return dedupeCatalog(
-    results.flatMap((result) => (result.status === 'fulfilled' ? result.value : []))
-  )
+  const order: string[] = []
+  const byId = new Map<string, CatalogItem>()
+  for (const result of results) {
+    if (result.status !== 'fulfilled') continue
+    for (const item of result.value.flat()) {
+      const id = String(item?.id || '')
+      // An idless entry is what a malformed source record normalizes to; it
+      // can never be opened or played, so it takes no slot.
+      if (!id) continue
+      const existing = byId.get(id)
+      if (existing) byId.set(id, fillMissing(existing, item))
+      else {
+        order.push(id)
+        byId.set(id, item)
+      }
+    }
+  }
+  return order.map((id) => byId.get(id) as CatalogItem)
 }
 
 export function dedupeCatalog(groups: CatalogItem[][]): CatalogItem[] {

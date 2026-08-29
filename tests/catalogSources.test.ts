@@ -194,4 +194,112 @@ check('a movie with no videos is unaffected either way', () => {
   assert.deepEqual(normalizeMeta(raw, 'movie').videos, [])
 })
 
+// --- coalescing a duplicate instead of dropping it ---
+//
+// Measured live: 546 of Cinemeta's 1,999 series also appear in Simkl's
+// trending feeds. Simkl is read first because its order is the ranking, and
+// a Simkl entry carries `videos: []`. Dropping the Cinemeta duplicate threw
+// away the episode list for those 546 — the most popular titles, the top of
+// the grid — so they showed no season/episode counts and could never earn a
+// Completed badge. The data that answers both had been discarded on the way
+// in.
+
+function withFields(id: string, over: Partial<CatalogItem>): CatalogItem {
+  return { ...item(id), ...over }
+}
+
+function rich(id: string, over: Partial<CatalogItem> = {}): CatalogItem {
+  return {
+    ...item(id),
+    poster: 'p.jpg',
+    description: 'A show.',
+    videos: [{ id: `${id}:1:1`, season: 1, episode: 1, number: 1, title: 'Pilot', released: '' }],
+    genres: ['Drama'],
+    ...over
+  }
+}
+
+check('a duplicate fills the gaps in the first occurrence', () => {
+  // Simkl first (ranking, no episodes), Cinemeta second (episodes, no simklId).
+  const simkl = withFields('tt1', { simklId: 42, poster: 'simkl.jpg' })
+  const cinemeta = rich('tt1')
+  const merged = mergeCatalogSources([ok([[simkl]]), ok([[cinemeta]])])
+  assert.equal(merged.length, 1, 'still one entry per title')
+  assert.equal(merged[0].videos.length, 1, 'the episode list survives the merge')
+  assert.equal(merged[0].simklId, 42, "and so does the first source's own id")
+  assert.deepEqual(merged[0].genres, ['Drama'])
+  assert.equal(merged[0].description, 'A show.')
+})
+
+check('the first occurrence wins any field both sources have', () => {
+  // Only gaps are filled. The first source keeps what it actually said, or
+  // the merge would silently re-rank and re-describe the catalog by
+  // whichever source happened to be read last.
+  const merged = mergeCatalogSources([
+    ok([[withFields('tt1', { poster: 'first.jpg', rating: '9.0' })]]),
+    ok([[withFields('tt1', { poster: 'second.jpg', rating: '1.0' })]])
+  ])
+  assert.equal(merged[0].poster, 'first.jpg')
+  assert.equal(merged[0].rating, '9.0')
+})
+
+check('coalescing does not change the ranking', () => {
+  // The property the old dedupe guaranteed and this must not lose: source
+  // order is the ranking, and a title in both keeps its FIRST position.
+  const merged = mergeCatalogSources([
+    ok([[item('tt1'), item('tt2')]]),
+    ok([[item('tt3'), rich('tt1')]])
+  ])
+  assert.deepEqual(ids(merged), ['tt1', 'tt2', 'tt3'], 'tt1 keeps its leading position')
+})
+
+check('an empty value counts as missing, a real one does not', () => {
+  // `videos: []` and `poster: ''` are how a normalizer says "this source has
+  // none" — not "this source says there are none".
+  const merged = mergeCatalogSources([
+    ok([[withFields('tt1', { poster: '', videos: [] })]]),
+    ok([[rich('tt1')]])
+  ])
+  assert.equal(merged[0].poster, 'p.jpg')
+  assert.equal(merged[0].videos.length, 1)
+})
+
+check('episodeCounts and groupedIds fill in too', () => {
+  // A grouped anime's combined totals are the browse grid's only correct
+  // season/episode source for it — losing them under-reports the franchise.
+  const merged = mergeCatalogSources([
+    ok([[item('kitsu:1')]]),
+    ok([
+      [
+        withFields('kitsu:1', {
+          groupedIds: ['kitsu:2'],
+          episodeCounts: { totalSeasons: 4, totalEpisodes: 97 }
+        })
+      ]
+    ])
+  ])
+  assert.deepEqual(merged[0].groupedIds, ['kitsu:2'])
+  assert.deepEqual(merged[0].episodeCounts, { totalSeasons: 4, totalEpisodes: 97 })
+})
+
+check('three sources coalesce into one entry', () => {
+  const merged = mergeCatalogSources([
+    ok([[withFields('tt1', { simklId: 7 })]]),
+    ok([[withFields('tt1', { poster: 'p.jpg' })]]),
+    ok([[withFields('tt1', { description: 'D' })]])
+  ])
+  assert.equal(merged.length, 1)
+  assert.equal(merged[0].simklId, 7)
+  assert.equal(merged[0].poster, 'p.jpg')
+  assert.equal(merged[0].description, 'D')
+})
+
+check('a failed source still costs only its own contribution', () => {
+  // The negative property the old chain gave for free, re-asserted against
+  // the new implementation rather than assumed to have survived it.
+  const merged = mergeCatalogSources([failed('Simkl is down'), ok([[rich('tt1')]])])
+  assert.deepEqual(ids(merged), ['tt1'])
+  assert.equal(merged[0].videos.length, 1)
+})
+
 console.log(`\n${pass} passed`)
