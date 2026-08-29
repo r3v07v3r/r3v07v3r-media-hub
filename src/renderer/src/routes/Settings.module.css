@@ -751,3 +751,31 @@
   align-items: center;
   gap: 6px;
 }
+
+/* Release notes under the version, in the About card. Capped in height as
+   well as in characters: the 500-char limit is enforced where the note is
+   read, and this is the visual backstop so a long one scrolls inside its own
+   box rather than pushing the Settings page around. */
+.notes {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-subtle);
+}
+.notesLabel {
+  display: block;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+}
+.notesBody {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  max-height: 8.5em;
+  overflow-y: auto;
+}

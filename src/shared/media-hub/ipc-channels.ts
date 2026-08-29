@@ -61,6 +61,9 @@ export const MEDIA_HUB_CHANNELS = {
   openExternal: 'mediahub:open:external',
   updateCheck: 'mediahub:update:check',
   updateInstall: 'mediahub:update:install',
+  /** The short 'what changed' note for the running build, and for an
+   *  offered update once one is known. See media-hub/releaseNotes.ts. */
+  updateNotes: 'mediahub:update:notes',
   updateSetChannel: 'mediahub:update:set-channel',
   updateStatus: 'mediahub:update:status', // push event
 
@@ -180,8 +183,6 @@ export const MEDIA_HUB_CHANNELS = {
    *  controls' idle countdown ran during the load and a cold stream slower than
    *  it started the film with the bar already faded out. */
   playerControlsShown: 'mediahub:player:controls-shown', // push event
-  libraryList: 'mediahub:library:list',
-  libraryPlay: 'mediahub:library:play',
   streamCacheList: 'mediahub:stream-cache:list',
   streamCacheDelete: 'mediahub:stream-cache:delete',
 

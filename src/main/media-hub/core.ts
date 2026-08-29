@@ -16,7 +16,6 @@ import {
   ContinueWatchingEntry,
   Episode,
   HistoryEntry,
-  LibraryItem,
   MediaKind,
   StreamCandidate,
   Trailer
@@ -30,6 +29,7 @@ import {
 } from '../../shared/media-hub/catalog-logic'
 import { releaseTextMentionsExecutable } from '../../shared/media-hub/unsafeFiles'
 import { releaseLacksPreferredLanguage } from '../../shared/media-hub/language'
+import { streamResolution, streamText } from '../../shared/media-hub/streamQuality'
 
 export { airingStatus, episodeWatchState, filterCatalog, isItemWatched, subtitlesInadequate }
 
@@ -57,21 +57,12 @@ export function createRoomCode(random: () => number = Math.random): string {
  *  in `description` — e.g. "Interstellar.2014.2160p.PROPER.IMAX.REMUX.DV.
  *  HDR10+.TrueHD.7.1.Atmos-...mkv ... 💾 63.0 GB". Scoring on name alone
  *  meant every candidate looked identical apart from the resolution. */
-function streamText(stream: StreamCandidate): string {
-  return `${stream.name || ''} ${stream.title || ''} ${stream.description || ''}`.toLowerCase()
-}
-
-/** Exported so a cache session can record the resolution it actually
- *  holds. Without it a cached copy stores `undefined`, and the quality
- *  target then accepts it unconditionally — a cached 720p copy would
- *  satisfy a 1080p request forever. */
-export function streamResolution(stream: StreamCandidate): number {
-  const text = streamText(stream)
-  if (/2160|4k/.test(text)) return 2160
-  if (/1080/.test(text)) return 1080
-  if (/720/.test(text)) return 720
-  return stream.resolution || 0
-}
+// Both moved to shared/media-hub/streamQuality.ts, and re-exported here so
+// this module's own callers are unchanged: the renderer needs the identical
+// answer to decide whether to warn before playing, and two implementations of
+// "is this 1080p" would eventually disagree in the one way that matters —
+// warning about a title that played perfectly well.
+export { streamResolution, streamText }
 
 function streamSizeGb(stream: StreamCandidate): number | null {
   const text = streamText(stream)
@@ -148,6 +139,65 @@ const REMUX_PENALTY = 8000
  *  gate — a cached monster is preferred to an uncached anything, because
  *  the uncached one can't be played at all right now. */
 const OVERSIZED_GB = 25
+
+/**
+ * How well seeded an UNCACHED release is — the one thing the scrapers have
+ * always reported and the ranking has never read.
+ *
+ * Both add-ons put it in the same place, confirmed live against
+ * `torrentio.strem.fun` and the Comet instance on 2026-08-29: a `👤 N` run
+ * in the text streamText already builds. Torrentio carried one on all 66
+ * results for a test title (5 to 2081, median 13); Comet on 807 of 1628.
+ *
+ * WHY IT MATTERS MORE THAN IT LOOKS. When nothing is cached, resolve does not
+ * merely rank — it SUBMITS the winner to TorBox to start caching (see the
+ * `queued` path). That choice was previously blind to whether a release had
+ * two seeders or two thousand, so the app could commit somebody's account, and
+ * their evening, to a torrent that was never going to arrive.
+ *
+ * ABSENCE IS NEUTRAL, WHICH IS NOT THE SAME AS ZERO — OR AS NOTHING. Half of
+ * Comet's results carry no count at all, so scoring a missing count as "0
+ * seeders" would systematically demote one whole add-on for saying nothing.
+ * Awarding no bonus is just as wrong for the same reason: it would put an
+ * unknown release below one advertising a single seeder, which is precisely
+ * backwards. An unknown therefore scores the MIDPOINT of this term's own
+ * range, so it loses to a well-seeded release, beats a barely-seeded one, and
+ * a set where nothing reports a count is shifted by a constant and so ordered
+ * exactly as it was before. The break-even is around nine seeders.
+ *
+ * UNCACHED ONLY. A cached candidate is already on TorBox's disk and needs no
+ * peers whatsoever — and Comet's `👤 0` entries are largely debrid-account
+ * results, which are exactly the most playable ones. Scoring them on seeders
+ * would punish them for a number that does not apply to them.
+ *
+ * SATURATING, because the risk is not linear: 0 to 30 seeders is the whole
+ * question and 500 to 5000 is noise. Above SEEDER_SATURATION the term stops
+ * growing.
+ */
+const SEEDER_SATURATION = 100
+
+/** Deliberately below one resolution step (2160 - 1080 = 1080), so this
+ *  orders candidates WITHIN a quality tier and can never quietly hand
+ *  somebody a 1080p copy when they asked for 4K. Choosing between tiers on
+ *  availability is a bigger claim than this evidence supports. */
+const SEEDER_WEIGHT = 900
+
+/** The seeder count a release advertises, or null when it does not.
+ *  Exported for the ranking test. */
+export function streamSeeders(stream: StreamCandidate): number | null {
+  const match = streamText(stream).match(/\u{1F464}\s*([\d,]+)/u)
+  if (!match) return null
+  const value = Number(match[1].replace(/,/g, ''))
+  return Number.isFinite(value) && value >= 0 ? value : null
+}
+
+function seederBonus(stream: StreamCandidate): number {
+  if (stream.cached !== false) return 0
+  const seeders = streamSeeders(stream)
+  if (seeders === null) return SEEDER_WEIGHT / 2
+  const ratio = Math.log10(seeders + 1) / Math.log10(SEEDER_SATURATION + 1)
+  return Math.round(SEEDER_WEIGHT * Math.min(1, ratio))
+}
 
 /**
  * Whether a release advertises executable content — its own name, or the
@@ -228,7 +278,10 @@ export function rankStreams(
     (s.cached === false ? 0 : 20000) +
     (s.compatible === false ? -50000 : 10000) +
     (s.source === 'mediaserver' ? LOCAL_SOURCE_BONUS[sourcePreference] : 0) +
-    streamResolution(s) -
+    streamResolution(s) +
+    // Only ever separates uncached candidates, and only within a resolution
+    // tier — see seederBonus for both bounds and why absence is not zero.
+    seederBonus(s) -
     streamingPenalty(s) -
     // Reported live: a film played with French audio and French subtitles.
     // Track selection can't fix that one — a dub is a different release,
@@ -771,17 +824,6 @@ export function parseReleaseName(value: string): ParsedReleaseName {
   return { title: readableTitle(name) || 'Untitled', year, season, episode }
 }
 
-function librarySourceName(raw: RawApiPayload): string {
-  const files: RawApiPayload[] = raw.files || raw.file_list || []
-  return (
-    raw.name ||
-    raw.filename ||
-    files.find((f) => /\.(mkv|mp4|avi|mov|webm|m4v|ts)$/i.test(f.name || f.short_name || ''))
-      ?.name ||
-    'Untitled'
-  )
-}
-
 function mediaKey(value: string): string {
   return String(value || '')
     .normalize('NFKD')
@@ -806,44 +848,6 @@ export function titleMatchesRelease(releaseText: string, requestedTitle: string)
   if (!requestedTitle.trim()) return true
   const parsed = parseReleaseName(releaseText)
   return mediaKey(parsed.title) === mediaKey(requestedTitle)
-}
-
-export function enrichTorBoxItem(raw: RawApiPayload, catalog: CatalogItem[] = []): LibraryItem {
-  const parsed = parseReleaseName(librarySourceName(raw))
-  const key = mediaKey(parsed.title)
-  const matches = catalog.filter((x) => mediaKey(x.title) === key)
-  const match = matches.find((x) => !parsed.year || String(x.year) === parsed.year) || matches[0]
-  // Original JS: `match?.type||(parsed.season?'series':'movie')` — match.type
-  // comes from the shared CatalogItem catalog and can be 'anime', but
-  // LibraryItem.mediaType only models 'movie'|'series' (library entries
-  // don't carry an anime distinction). The original had no runtime guard
-  // against this either, so the value is preserved as-is via a cast rather
-  // than redesigning the fallback behavior.
-  const mediaType = (match?.type || (parsed.season ? 'series' : 'movie')) as 'movie' | 'series'
-  return {
-    id: String(raw.id || raw.torrent_id || raw.hash || librarySourceName(raw)),
-    title: match?.title || parsed.title,
-    type: 'library',
-    mediaType,
-    year: match?.year || parsed.year || raw.download_state || raw.state || '',
-    season: parsed.season,
-    episode: parsed.episode,
-    poster: match?.poster || raw.poster || '',
-    background: match?.background || raw.background || '',
-    description: match?.description || '',
-    rating: match?.rating || '',
-    runtime: match?.runtime || '',
-    genres: match?.genres || [],
-    metadataId: match?.id || '',
-    raw
-  }
-}
-
-export function selectPlayableStream(streams?: StreamCandidate[]): StreamCandidate | null {
-  const playable = (streams || []).filter(
-    (s) => typeof s.url === 'string' && /^https?:\/\//.test(s.url)
-  )
-  return rankStreams(playable)[0] || null
 }
 
 export interface TorBoxFile {

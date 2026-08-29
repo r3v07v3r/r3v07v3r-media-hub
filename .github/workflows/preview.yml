@@ -52,6 +52,11 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # release-notes.mjs walks back to the previous tag, which a shallow
+          # clone does not contain — without this every release would report
+          # its whole history, or nothing.
+          fetch-depth: 0
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -88,6 +93,11 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # release-notes.mjs walks back to the previous tag, which a shallow
+          # clone does not contain — without this every release would report
+          # its whole history, or nothing.
+          fetch-depth: 0
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -135,6 +145,27 @@ jobs:
         if: steps.version.outputs.exists == 'false'
         run: npm ci
 
+      # BEFORE the build on purpose: this writes resources/release-notes.txt,
+      # which electron-builder then packages, so the note ships inside the
+      # build it describes rather than being fetched at runtime. The same text
+      # becomes the release body below, so the card and the release can never
+      # disagree. See scripts/release-notes.mjs and media-hub/releaseNotes.ts.
+      - name: Generate release notes
+        id: notes
+        if: steps.version.outputs.exists == 'false'
+        shell: bash
+        run: |
+          node scripts/release-notes.mjs > /dev/null
+          {
+            echo 'body<<RELEASE_NOTES_EOF'
+            if [ -s resources/release-notes.txt ]; then
+              cat resources/release-notes.txt
+            else
+              echo 'Automated Preview build.'
+            fi
+            echo 'RELEASE_NOTES_EOF'
+          } >> "$GITHUB_OUTPUT"
+
       - name: Build
         if: steps.version.outputs.exists == 'false'
         run: npm run build
@@ -156,7 +187,7 @@ jobs:
             --repo "${{ github.repository }}" \
             --target "${{ github.sha }}" \
             --title "${{ steps.version.outputs.version }}" \
-            --notes "Automated Preview build." \
+            --notes "${{ steps.notes.outputs.body }}" \
             --prerelease \
             --draft
 

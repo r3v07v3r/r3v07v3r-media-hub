@@ -62,6 +62,11 @@ import {
 } from '@renderer/lib/mediaHub/hooks'
 import type { CategoryKind } from '@renderer/lib/mediaHub/categoryFilters'
 import { MAX_PROMPT_TITLES } from '@shared/media-hub/ollama'
+import {
+  isNoticeablyBelowCeiling,
+  resolutionLabel,
+  streamResolution
+} from '@shared/media-hub/streamQuality'
 import { mediaItemToTitleRef } from '@renderer/lib/mediaHub/adapters'
 import {
   recentlyWatchedRefs,
@@ -526,6 +531,12 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     searching: boolean
   }>({ results: [], similar: [], similarSource: null, searching: false })
   const [browsingOrigin, setBrowsingOrigin] = useState<BrowsingOrigin | null>(null)
+  // Titles the person has already agreed to watch below their quality
+  // ceiling. Session-scoped and deliberately not persisted: it exists so a
+  // 480p series does not re-ask on every autoplayed episode, not to record
+  // a preference.
+  const acceptedLowQuality = useRef<Set<string>>(new Set())
+
   const [resolvingMedia, setResolvingMedia] = useState<{
     id: string
     title: string
@@ -1424,6 +1435,28 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
           })
           return false
         }
+
+        // An old film that only exists at 480p is still worth watching — the
+        // player upscales — so a shortfall is never a refusal, only a
+        // question. Asked once per title per session: without that, a 480p
+        // series would ask again on every autoplayed episode, which is how a
+        // useful prompt becomes one nobody reads.
+        const ceiling = mediaHubSettings?.maxStreamResolution ?? 0
+        const got = streamResolution(resolved.best)
+        if (
+          isNoticeablyBelowCeiling(got, ceiling) &&
+          !acceptedLowQuality.current.has(media.id) &&
+          !window.confirm(
+            `The best copy of ${media.title} available right now is ${resolutionLabel(got)}, ` +
+              `below the ${resolutionLabel(ceiling)} you allow. It will be scaled to fit your ` +
+              `screen.\n\nPlay it anyway?`
+          )
+        ) {
+          setResolvingMedia(null)
+          return false
+        }
+        acceptedLowQuality.current.add(media.id)
+
         setResolvingMedia({ id: media.id, title: media.title, stage: 'buffering' })
         const playTask = api.stream.play(resolved.best, mediaId, kind, resolveId, {
           catalogId: media.id,
