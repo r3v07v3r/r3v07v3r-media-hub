@@ -159,19 +159,39 @@ function streamReleaseText(stream: StreamCandidate): string {
 }
 
 /**
- * Whether a copy is good enough to stop the search at its tier.
+ * Whether a copy from a nearer tier is usable, given the person's ceiling.
  *
- * The rule is "nearest source that actually delivers the quality asked
- * for": with a target set, a nearer copy below it is passed over and the
- * next tier is tried. A target of 0 ("Any") accepts anything, and an
- * unknown resolution is accepted rather than discarded — refusing to play
- * a copy we hold because its metadata is thin would be worse than playing
- * it.
+ * `maxResolution` is a MAXIMUM. The Settings row is "Maximum video quality —
+ * avoid releases sharper than this display needs", and the speed test writes
+ * it as `min(what the line can carry, what the screen can show)`. So the only
+ * question a near tier has to answer is whether its copy is within it.
+ *
+ * THIS USED TO READ `resolution >= target`, treating the ceiling as a floor,
+ * and the damage grew with the setting: at "4K" the local-cache tier could
+ * only fire for a 2160p copy, so a 1080p file already on this disk was passed
+ * over and re-downloaded from TorBox. At "1080p" a 720p copy on the LAN cache
+ * was skipped the same way. Only "Any" behaved correctly, because 0 skips the
+ * check — every explicit choice made it worse, which is the signature of an
+ * inverted comparison rather than a tuning problem.
+ *
+ * The intent behind the old rule was real — do not settle for a poor copy
+ * when something better exists — but it cannot be expressed with a ceiling,
+ * and there is no separate "preferred quality" setting to express it with.
+ * The trade is now made deliberately and told to the person instead of being
+ * enforced silently: a copy already on this machine or on the LAN is played,
+ * and `belowCeiling` on the result says when what they got is a full tier or
+ * more below what they allowed, so the renderer can ask before playing it.
+ *
+ * An unknown resolution is accepted rather than discarded — refusing to play
+ * a copy we hold because its metadata is thin would be worse than playing it.
  */
-function meetsQualityTarget(resolution: number | undefined, target: number | undefined): boolean {
-  if (!target) return true
+function withinQualityCeiling(
+  resolution: number | undefined,
+  ceiling: number | undefined
+): boolean {
+  if (!ceiling) return true
   if (!resolution) return true
-  return resolution >= target
+  return resolution <= ceiling
 }
 
 /** The cache-session identity for a resolve request, in exactly the shape
@@ -434,7 +454,7 @@ export function registerTorBoxIpc(): void {
       // Subject to the quality target like every other tier: a cached 720p
       // copy does not win when 1080p was asked for.
       const cached = await findLocalCacheCandidate(cacheMetaFor(payload, title))
-      if (cached && meetsQualityTarget(cached.resolution, limits.maxResolution)) {
+      if (cached && withinQualityCeiling(cached.resolution, limits.maxResolution)) {
         if (cached.complete) {
           const candidate: StreamCandidate = {
             source: 'localcache',
@@ -474,7 +494,7 @@ export function registerTorBoxIpc(): void {
           ? `${String(meta.catalogId).trim().toLowerCase()}:${meta.seasonNumber ?? ''}:${meta.episodeNumber ?? ''}`
           : ''
         const lan = await findLanCacheCandidate(lanKey)
-        if (lan && meetsQualityTarget(lan.resolution, limits.maxResolution)) {
+        if (lan && withinQualityCeiling(lan.resolution, limits.maxResolution)) {
           const ranked = rankSafeStreams([lan], audioLanguage, limits, sourcePreference)
           if (ranked.length) {
             const result: StreamResolveResult = { streams: ranked, best: ranked[0] }
