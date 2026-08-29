@@ -1,7 +1,6 @@
 import { AIResponsePanel } from './AIResponsePanel'
 import { ContextMenu } from './ContextMenu'
 import { NotificationLayer } from './NotificationLayer'
-import { OfflineBanner } from './OfflineBanner'
 import { SyncReviewPanel } from './SyncReviewPanel'
 import { ProfilePinPrompt } from '@renderer/components/profiles/ProfilePinPrompt'
 import { SessionHub } from '@renderer/components/party/SessionHub'
@@ -21,7 +20,6 @@ export function GlobalOverlays() {
     // shot entrances need to always finish; only ambient/idle looping
     // animation was ever meant to pause.
     <div data-motion-exempt="true">
-      <OfflineBanner />
       <AIResponsePanel />
       <ContextMenu />
       <PlaybackPreparationOverlay />

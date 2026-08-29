@@ -846,8 +846,6 @@ export default function SettingsPage({
   const [communityGridBinding, communityGroupBinding] = useColumnPackGrid<HTMLElement>(!embedded)
   const [aiGridBinding, aiGroupBinding] = useColumnPackGrid<HTMLElement>(!embedded)
   const {
-    isOffline,
-    setIsOffline,
     profiles,
     activeProfileId,
     switchProfile,
@@ -1453,13 +1451,6 @@ export default function SettingsPage({
               <h2 id="settings-network" className={styles.sectionTitle}>
                 Network
               </h2>
-              <ToggleRow
-                icon={isOffline ? 'wifi-off' : 'wifi'}
-                title="Simulate offline mode"
-                description="Preview how R3 behaves without a network connection."
-                checked={isOffline}
-                onChange={setIsOffline}
-              />
               <SliderRow
                 icon="display"
                 title="Maximum video quality"
