@@ -1145,9 +1145,10 @@ async function deviceRouteTests(): Promise<void> {
   const admin = createAdmin(root)
   await admin.load()
   const credentials = createCredentials(root)
+  const jobs = createJobStore(root)
   const server = createDaemonServer({
     storage: store,
-    jobs: createJobStore(root),
+    jobs,
     pairing,
     admin,
     credentials,
@@ -1313,6 +1314,29 @@ async function deviceRouteTests(): Promise<void> {
     await credentials.setTokenForDevice(String(guestRow.id), 'guest-torbox-token')
     assert.equal(credentials.linkedDeviceCount(), 1)
 
+    // And the work being done on its behalf. Clearing the credential alone
+    // does not stop a fetch that already copied the token, and leaves queued
+    // jobs parked on 'waiting for TorBox access' forever.
+    jobs.enqueue({
+      contentKey: 'tt-guest-queued::',
+      infoHash: '1'.repeat(40),
+      title: 'Guest Queued',
+      ownerDeviceId: String(guestRow.id)
+    })
+    jobs.enqueue({
+      contentKey: 'tt-guest-fetching::',
+      infoHash: '2'.repeat(40),
+      title: 'Guest Fetching',
+      ownerDeviceId: String(guestRow.id)
+    })
+    jobs.update('tt-guest-fetching::', { state: 'fetching' })
+    jobs.enqueue({
+      contentKey: 'tt-owner::',
+      infoHash: '3'.repeat(40),
+      title: 'Owner Job',
+      ownerDeviceId: String(ownerRow.id)
+    })
+
     assert.equal((await act(owner.token, String(guestRow.id), { action: 'revoke' })).status, 200)
     assert.equal(
       credentials.tokenForDevice(String(guestRow.id)),
@@ -1320,6 +1344,21 @@ async function deviceRouteTests(): Promise<void> {
       'revoking a device takes back the credential it shared'
     )
     assert.equal(credentials.linkedDeviceCount(), 0, 'and stops counting it as linked')
+    assert.equal(
+      jobs.list().some((job) => job.contentKey === 'tt-guest-queued::'),
+      false,
+      'a revoked device leaves no queued job behind to retry forever'
+    )
+    assert.equal(
+      jobs.list().find((job) => job.contentKey === 'tt-guest-fetching::')?.state,
+      'expired',
+      'and an in-flight fetch is marked so the download loop aborts it'
+    )
+    assert.equal(
+      jobs.list().find((job) => job.contentKey === 'tt-owner::')?.state,
+      'queued',
+      "and nobody else's work is touched"
+    )
     assert.equal(await statusFor(guest.token), 401, 'a revoked device is out immediately')
 
     // --- "anyone on this network may join" --------------------------------

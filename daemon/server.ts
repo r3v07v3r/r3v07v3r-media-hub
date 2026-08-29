@@ -422,17 +422,41 @@ export function createDaemonServer(deps: ServerDeps): http.Server {
         case 'deny':
         case 'revoke':
           ok = await pairing.removeDevice(targetId)
-          // AND its TorBox token, in the same act.
+          // AND its TorBox token, AND the work being done on its behalf, in
+          // the same act. Forgetting a device has to mean forgetting what it
+          // lent us and what we were doing for it.
           //
-          // Dropping only the pairing record left the shared secret behind in
-          // credentials.json: it still counted as a linked account, jobs owned
-          // by that device could still be fetched with it, and the device that
-          // shared it could never clear it — clearing goes through
-          // /api/credentials, which needs the authentication it just lost. So
-          // the credential outlived the access it was given for, with nobody
-          // left who could take it back. Forgetting a device has to mean
-          // forgetting what it lent us.
-          if (ok) await credentials.setTokenForDevice(targetId, '')
+          // The credential: dropping only the pairing record left the shared
+          // secret behind in credentials.json, still counted as a linked
+          // account and still usable — and the device that shared it could
+          // never clear it, because clearing goes through /api/credentials,
+          // which needs the authentication it had just lost.
+          //
+          // The jobs: clearing the credential does NOT stop a fetch already
+          // running, because fetchOne copies the token into a local before
+          // the first byte. Left alone it would keep spending the revoked
+          // person's TorBox quota after their access was taken away, and
+          // finish by writing an item entitled only to a device that no
+          // longer exists — a file nobody on this server can read. Queued
+          // jobs fare no better: with no credential they park on 'waiting
+          // for TorBox access' and retry every five minutes forever.
+          //
+          // jobs.cancel handles both halves through the mechanism that
+          // already exists: queued entries are dropped, and a fetching one is
+          // marked expired, which the download loop notices between chunks
+          // and aborts on.
+          //
+          // What this deliberately does NOT do is delete the items that
+          // device already fetched. Reclaiming those is a deletion decision
+          // that deserves its own design rather than being a side effect of
+          // revoking access — the whole-disk budget still bounds them in the
+          // meantime.
+          if (ok) {
+            await credentials.setTokenForDevice(targetId, '')
+            for (const job of jobs.list()) {
+              if (job.ownerDeviceId === targetId) jobs.cancel(job.contentKey)
+            }
+          }
           break
         case 'quota': {
           const raw = body.quotaBytes

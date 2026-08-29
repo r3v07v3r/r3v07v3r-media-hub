@@ -51,6 +51,11 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.ref }}
+          # Full history AND tags, for the release note below. The default
+          # shallow checkout has neither, so `git describe --tags` finds
+          # nothing and the note collapses to the single commit that was
+          # fetched — a step that appears to work and says nothing useful.
+          fetch-depth: 0
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -91,6 +96,14 @@ jobs:
             --notes "${{ inputs.notes }}" \
             --draft \
             ${{ inputs.prerelease && '--prerelease' || '' }}
+
+      # BEFORE electron-builder, so the note ships inside the build it
+      # describes. Without this step resources/release-notes.txt was never
+      # written — it is gitignored and this script is its only writer — so
+      # every installer shipped without one and the About card's
+      # "what changed" was permanently blank.
+      - name: Write the release note into resources/
+        run: npm run release-notes
 
       - name: Build installer and upload assets to the draft
         run: npx electron-builder --win --publish always
