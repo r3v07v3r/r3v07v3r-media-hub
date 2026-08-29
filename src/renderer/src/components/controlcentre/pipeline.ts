@@ -54,7 +54,9 @@ export interface PipelineStage {
   id: string
   label: string
   icon: string
-  /** What this step is for, in the person's terms. */
+  /** What this step does, as a label rather than a sentence — it sits under
+   *  the stage name in the diagram and heads the add list, so it is never
+   *  punctuated as prose. */
   blurb: string
   nodes: PipelineNode[]
 }
@@ -64,7 +66,7 @@ export const PIPELINE: PipelineStage[] = [
     id: 'request',
     label: 'Request',
     icon: 'search',
-    blurb: 'You ask for something',
+    blurb: 'Ask for Something',
     nodes: [
       {
         id: 'r3-browse',
@@ -79,7 +81,7 @@ export const PIPELINE: PipelineStage[] = [
     id: 'index',
     label: 'Discovery',
     icon: 'planet',
-    blurb: 'Something finds releases',
+    blurb: 'Find Releases',
     nodes: [
       {
         id: 'r3-scrapers',
@@ -101,7 +103,7 @@ export const PIPELINE: PipelineStage[] = [
     id: 'manage',
     label: 'Management',
     icon: 'calendar',
-    blurb: 'Something decides what to keep',
+    blurb: 'Decide what to keep',
     nodes: [
       {
         id: 'r3-tracking',
@@ -130,7 +132,7 @@ export const PIPELINE: PipelineStage[] = [
     id: 'download',
     label: 'Download',
     icon: 'downloads',
-    blurb: 'Something fetches it',
+    blurb: 'Fetch it',
     nodes: [
       {
         id: 'torbox',
@@ -152,7 +154,7 @@ export const PIPELINE: PipelineStage[] = [
     id: 'process',
     label: 'Process',
     icon: 'waveform',
-    blurb: 'Subtitles are found',
+    blurb: 'Extra Subtitles',
     nodes: [
       {
         id: 'embedded-subs',
@@ -181,7 +183,7 @@ export const PIPELINE: PipelineStage[] = [
     id: 'storage',
     label: 'Storage',
     icon: 'stack',
-    blurb: 'It is kept on the way past',
+    blurb: 'Keep what & where',
     nodes: [
       {
         id: 'playback-cache',
@@ -210,7 +212,7 @@ export const PIPELINE: PipelineStage[] = [
     id: 'play',
     label: 'Stream / play',
     icon: 'play-outline',
-    blurb: 'It plays',
+    blurb: 'Playback',
     nodes: [
       // The ONLY node in this stage, because this app has exactly one
       // player. Jellyfin used to sit here too and that was simply wrong:
