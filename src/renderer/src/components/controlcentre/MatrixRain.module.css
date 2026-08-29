@@ -34,23 +34,35 @@
      removed — the text contrast on top of it is the contrast that was
      designed, not something this is allowed to erode. */
   opacity: 0.5;
-  /* Fades out toward the bottom so the rain reads as depth behind the
-     content rather than as a texture laid over the whole panel. Stops are
-     kept off the very top: that end is behind the bar, and fading it there
-     would thin the columns out exactly where they are supposed to emerge
-     at full strength. */
+  /* Fades in at the top and out at the bottom, both in PIXELS keyed off the
+     overhang rather than in percentages.
+
+     The top matters most. The overhang puts the first --rain-overhang of
+     canvas behind the bar, so the rain appeared at full strength the instant
+     it cleared the chrome — a hard horizontal edge across the face. The ramp
+     starts exactly where the bar ends and runs 80px, so columns emerge
+     instead of switching on. Percentages could not do this: the fade would
+     move with the panel's height and land in the wrong place on every
+     section.
+
+     The bottom fade is what keeps the rain reading as depth behind the
+     content rather than as a texture laid over it. */
   mask-image: linear-gradient(
     180deg,
-    rgba(0, 0, 0, 1) 0%,
-    rgba(0, 0, 0, 1) 30%,
-    rgba(0, 0, 0, 0.16) 82%,
+    transparent 0,
+    transparent var(--rain-overhang),
+    rgba(0, 0, 0, 1) calc(var(--rain-overhang) + 80px),
+    rgba(0, 0, 0, 1) 62%,
+    rgba(0, 0, 0, 0.16) 86%,
     transparent 100%
   );
   -webkit-mask-image: linear-gradient(
     180deg,
-    rgba(0, 0, 0, 1) 0%,
-    rgba(0, 0, 0, 1) 30%,
-    rgba(0, 0, 0, 0.16) 82%,
+    transparent 0,
+    transparent var(--rain-overhang),
+    rgba(0, 0, 0, 1) calc(var(--rain-overhang) + 80px),
+    rgba(0, 0, 0, 1) 62%,
+    rgba(0, 0, 0, 0.16) 86%,
     transparent 100%
   );
 }

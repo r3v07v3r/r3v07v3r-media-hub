@@ -31,9 +31,9 @@ import styles from './MatrixRain.module.css'
 const GLYPHS = 'ｱｲｳｴｵｶｷｸｹｺｻｼｽｾｿﾀﾁﾂﾃﾄﾅﾆﾇﾈﾉﾊﾋﾌﾍﾎﾏﾐﾑﾒﾓﾔﾕﾖﾗﾘﾙﾚﾛﾜﾝ0123456789ABCDEFZ:."=*+-<>'
 
 /** Rain reads correctly at a fraction of display rate, and every frame not
- *  drawn is battery. 18 is fast enough to flow and slow enough to keep the
- *  glyphs legible as glyphs rather than smearing. */
-const FPS = 18
+ *  drawn is battery. 14 is fast enough to flow and slow enough that each
+ *  character is on screen long enough to be read as a character. */
+const FPS = 14
 const FRAME_MS = 1000 / FPS
 
 const FONT_SIZE = 15
@@ -96,23 +96,38 @@ export function MatrixRain({ active }: Props) {
       if (now - last < FRAME_MS) return
       last = now
 
-      // The trail: instead of clearing, paint the whole field with a low
-      // alpha of the background so previous glyphs decay over several
-      // frames. That fade IS the tail — there is no per-glyph history kept.
-      context.fillStyle = 'rgba(2, 10, 7, 0.09)'
+      // THE TRAIL, and it has to be destination-out.
+      //
+      // The obvious version — paint the background over everything at low
+      // alpha — does not fade anything on a transparent canvas. A
+      // translucent source-over fill ADDS alpha: a pixel goes
+      // 0.22 + 0.78a per frame, converging on opaque, so the colour drifts
+      // toward the fill while the alpha channel saturates. Two things went
+      // wrong with that. The canvas slowly became a solid dark slab over the
+      // panel behind it, and the glyphs never actually left — measured at 25
+      // rows of trail, the entire height of the face, which is exactly the
+      // vertical lines this was meant to be.
+      //
+      // destination-out multiplies the existing alpha instead: a becomes
+      // 0.78a, true exponential decay to genuinely transparent. Ten or so
+      // frames to invisibility, one row per frame, so the tail is about ten
+      // glyphs — the length that reads as rain.
+      context.globalCompositeOperation = "destination-out"
+      context.fillStyle = "rgba(0, 0, 0, 0.22)"
       context.fillRect(0, 0, width, height)
+      context.globalCompositeOperation = "source-over"
 
       for (let i = 0; i < columns.length; i++) {
         const x = i * FONT_SIZE
         const y = columns[i] * FONT_SIZE
-        const glyph = GLYPHS[Math.floor(Math.random() * GLYPHS.length)]
 
-        // The leading glyph is brighter than its tail, which is what gives
-        // each column a head to follow.
-        context.fillStyle = 'rgba(190, 255, 225, 0.55)'
-        context.fillText(glyph, x, y)
-        context.fillStyle = 'rgba(39, 230, 154, 0.30)'
-        context.fillText(GLYPHS[Math.floor(Math.random() * GLYPHS.length)], x, y - FONT_SIZE)
+        // ONE glyph per column per frame, at the head. Drawing a second at
+        // the previous row painted a different random character over one
+        // already there, so every position was struck twice with different
+        // ink — which is what smeared the characters into a streak. The fade
+        // above is what makes the tail; it does not need help.
+        context.fillStyle = 'rgba(205, 255, 235, 0.92)'
+        context.fillText(GLYPHS[Math.floor(Math.random() * GLYPHS.length)], x, y)
 
         if (y > height && Math.random() > RESTART_CHANCE) columns[i] = 0
         else columns[i]++
