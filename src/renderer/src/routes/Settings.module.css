@@ -396,6 +396,16 @@
 }
 
 .segmentButton {
+  /* Fill the pill rather than bunching at its left end. The group is already
+     the full width of the row, so left-aligned buttons left a stretch of
+     empty track that read as a control which had failed to load.
+
+     `1 1 auto`, not `1 1 0`: growing from each label's OWN width keeps the
+     proportions sane, so "Unlimited" stays wider than "2 GB" instead of every
+     cell being forced equal and cramping the longest one. Wrapping still
+     works — the group wraps first by base size, then each line fills. */
+  flex: 1 1 auto;
+  text-align: center;
   padding: 5px 12px;
   border-radius: var(--radius-pill);
   font-size: 12px;

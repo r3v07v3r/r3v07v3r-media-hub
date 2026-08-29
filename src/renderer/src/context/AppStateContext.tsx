@@ -453,8 +453,6 @@ interface AppStateValue {
   combinedMoods: string[]
   toggleCombinedMood: (moodId: string) => void
 
-  isOffline: boolean
-  setIsOffline: (v: boolean) => void
 
   // Single global "what is the system doing" signal for the motion
   // system — derived from assistantState/playback rather than tracked
@@ -597,7 +595,6 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   const [playbackTracks, setPlaybackTracks] = useState<MediaTracks | null>(null)
   const [activeMood, setActiveMood] = useState<string | null>(null)
   const [combinedMoods, setCombinedMoods] = useState<string[]>([])
-  const [isOffline, setIsOffline] = useState(false)
   // The RAW backend rows behind categorySearch, not the MediaItems the rest
   // of the app reads. Those carry watched/completed/disliked/inMyList flags
   // baked in at the moment they were mapped, and a search now outlives the
@@ -2398,8 +2395,6 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       setActiveMood,
       combinedMoods,
       toggleCombinedMood,
-      isOffline,
-      setIsOffline,
       uiActivity,
       syncDiscrepancies,
       syncReviewOpen,
@@ -2498,7 +2493,6 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       activeMood,
       combinedMoods,
       toggleCombinedMood,
-      isOffline,
       uiActivity,
       syncDiscrepancies,
       syncReviewOpen,
