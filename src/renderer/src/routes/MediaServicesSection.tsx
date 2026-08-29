@@ -9,6 +9,7 @@ import { testConnection as testJellyfin } from '@renderer/lib/api/jellyfin'
 import { sonarrClient, radarrClient } from '@renderer/lib/api/servarr'
 import { testConnection as testQbittorrent } from '@renderer/lib/api/qbittorrent'
 import { testConnection as testProwlarr } from '@renderer/lib/api/prowlarr'
+import { testConnection as testBazarr } from '@renderer/lib/api/bazarr'
 import { SERVICE_LABELS, ConnectionTestResult } from '@renderer/lib/api/types'
 import styles from './Settings.module.css'
 
@@ -17,7 +18,8 @@ const TESTERS: Record<ServiceId, (config: ServiceConfig) => Promise<ConnectionTe
   sonarr: sonarrClient.testConnection,
   radarr: radarrClient.testConnection,
   qbittorrent: testQbittorrent,
-  prowlarr: testProwlarr
+  prowlarr: testProwlarr,
+  bazarr: testBazarr
 }
 
 const SECRET_LABEL: Record<ServiceId, string> = {
@@ -25,7 +27,8 @@ const SECRET_LABEL: Record<ServiceId, string> = {
   sonarr: 'API Key',
   radarr: 'API Key',
   qbittorrent: 'Username:Password',
-  prowlarr: 'API Key'
+  prowlarr: 'API Key',
+  bazarr: 'API Key'
 }
 
 type TestState = { status: 'idle' | 'testing' | 'ok' | 'error'; message?: string }

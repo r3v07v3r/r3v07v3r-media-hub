@@ -176,6 +176,23 @@ export const PIPELINE: PipelineStage[] = [
         detail: 'Subtitles',
         icon: 'name',
         config: { kind: 'account', account: 'subdl' }
+      },
+      // Here rather than under Discovery, which is where it was asked for:
+      // Discovery is about finding RELEASES, and Bazarr finds subtitles.
+      // Putting it beside the other two subtitle sources is what makes the
+      // stage the place you compare them.
+      //
+      // Its role is narrower than the other two and the label says so. Bazarr
+      // works on library FILES, addressed by Sonarr/Radarr ids, so it cannot
+      // fetch anything for a title being streamed from TorBox. What it covers
+      // is the media-server path: play a copy from your library and the
+      // subtitles beside it are the ones Bazarr fetched.
+      {
+        id: 'bazarr',
+        label: 'Bazarr',
+        detail: 'Library subtitles',
+        icon: 'name',
+        config: { kind: 'service', service: 'bazarr' }
       }
     ]
   },

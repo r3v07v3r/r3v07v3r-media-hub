@@ -43,7 +43,7 @@ export interface ServiceConfig {
   enabled: boolean
 }
 
-export type ServiceId = 'jellyfin' | 'sonarr' | 'radarr' | 'qbittorrent' | 'prowlarr'
+export type ServiceId = 'jellyfin' | 'sonarr' | 'radarr' | 'qbittorrent' | 'prowlarr' | 'bazarr'
 
 export type ServiceSettings = Record<ServiceId, ServiceConfig>
 
@@ -58,7 +58,8 @@ export const DEFAULT_SERVICE_SETTINGS: ServiceSettings = {
   sonarr: { ...DEFAULT_SERVICE_CONFIG },
   radarr: { ...DEFAULT_SERVICE_CONFIG },
   qbittorrent: { ...DEFAULT_SERVICE_CONFIG },
-  prowlarr: { ...DEFAULT_SERVICE_CONFIG }
+  prowlarr: { ...DEFAULT_SERVICE_CONFIG },
+  bazarr: { ...DEFAULT_SERVICE_CONFIG }
 }
 
 /**

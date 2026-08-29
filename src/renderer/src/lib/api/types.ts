@@ -22,7 +22,8 @@ export const SERVICE_LABELS: Record<ServiceId, string> = {
   sonarr: 'Sonarr',
   radarr: 'Radarr',
   qbittorrent: 'qBittorrent',
-  prowlarr: 'Prowlarr'
+  prowlarr: 'Prowlarr',
+  bazarr: 'Bazarr'
 }
 
 export function isConfigured(config: ServiceConfig | undefined): config is ServiceConfig {

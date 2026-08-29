@@ -37,6 +37,7 @@ import {
   type QbTorrent
 } from '@renderer/lib/api/qbittorrent'
 import { getIndexerStatus, testConnection as testProwlarr } from '@renderer/lib/api/prowlarr'
+import { testConnection as testBazarr } from '@renderer/lib/api/bazarr'
 import { SERVICE_LABELS, type ConnectionTestResult } from '@renderer/lib/api/types'
 import styles from './CachingSection.module.css'
 import own from './ServicesSection.module.css'
@@ -46,7 +47,8 @@ const TESTERS: Record<ServiceId, (config: ServiceConfig) => Promise<ConnectionTe
   sonarr: sonarrClient.testConnection,
   radarr: radarrClient.testConnection,
   qbittorrent: testQbittorrent,
-  prowlarr: testProwlarr
+  prowlarr: testProwlarr,
+  bazarr: testBazarr
 }
 
 /** What each service is FOR, in the pipeline's terms. The cards are sorted
@@ -57,10 +59,11 @@ const ROLE: Record<ServiceId, string> = {
   sonarr: 'Manages series',
   radarr: 'Manages films',
   qbittorrent: 'Downloads',
-  jellyfin: 'Serves your library'
+  jellyfin: 'Serves your library',
+  bazarr: 'Subtitles for your library'
 }
 
-const ORDER: ServiceId[] = ['prowlarr', 'sonarr', 'radarr', 'qbittorrent', 'jellyfin']
+const ORDER: ServiceId[] = ['prowlarr', 'sonarr', 'radarr', 'qbittorrent', 'bazarr', 'jellyfin']
 
 const REFRESH_MS = 20_000
 
