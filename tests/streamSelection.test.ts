@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { rankStreams } from '../src/main/media-hub/core'
+import { rankStreams, streamSeeders } from '../src/main/media-hub/core'
 import type { StreamCandidate } from '../src/shared/media-hub/types'
 
 const streams: StreamCandidate[] = [
@@ -133,3 +133,86 @@ assert.equal(
 )
 
 console.log('ok  stream selection resolution and size limits')
+
+// --- seeders, for uncached candidates only ---------------------------------
+// Both add-ons advertise a `👤 N` run in the text streamText already builds
+// (confirmed live 2026-08-29). Until this landed, nothing read it — including
+// the `queued` path, which submits the winner to TorBox to start caching, so
+// the app could commit an account to a torrent nobody was seeding.
+{
+  const uncached = (infoHash: string, seeders: number | null, resolution = 1080): StreamCandidate =>
+    ({
+      infoHash,
+      name: `Film ${resolution}p`,
+      title: seeders === null ? 'Film.mkv 💾 4.0 GB' : `Film.mkv 👤 ${seeders} 💾 4.0 GB`,
+      cached: false,
+      compatible: true,
+      exact: true
+    }) as StreamCandidate
+
+  assert.equal(streamSeeders(uncached('a', 284)), 284, 'reads the advertised count')
+  assert.equal(streamSeeders(uncached('a', 0)), 0, 'zero is a real answer')
+  assert.equal(streamSeeders(uncached('a', null)), null, 'a release that says nothing reports null')
+  assert.equal(
+    streamSeeders({ infoHash: 'a', title: 'Film 👤 2,081 💾 4.0 GB' } as StreamCandidate),
+    2081,
+    'thousands separators, as Torrentio writes them'
+  )
+
+  // Within a tier, the better-seeded release wins.
+  assert.equal(
+    rankStreams([uncached('dead', 2), uncached('alive', 400)], 'en', {}, 'balanced')[0].infoHash,
+    'alive',
+    'a well-seeded release beats a barely-seeded one of the same quality'
+  )
+
+  // ABSENCE IS NEUTRAL, which is neither zero nor no-bonus. Comet omits the
+  // count on about half its results, so an unknown must not lose to a release
+  // advertising a single seeder — but it must still lose to a healthy one.
+  assert.equal(
+    rankStreams([uncached('silent', null), uncached('barely', 1)], 'en', {}, 'balanced')[0]
+      .infoHash,
+    'silent',
+    'an unknown seeder count beats a release advertising almost none'
+  )
+  assert.equal(
+    rankStreams([uncached('silent', null), uncached('healthy', 400)], 'en', {}, 'balanced')[0]
+      .infoHash,
+    'healthy',
+    'and still loses to a well-seeded one'
+  )
+  // A set where nothing reports a count is shifted by a constant, so the
+  // ordering is exactly what it was before this term existed.
+  assert.deepEqual(
+    rankStreams([uncached('sd', null, 1080), uncached('hd', null, 2160)], 'en', {}, 'balanced').map(
+      (s) => s.infoHash
+    ),
+    ['hd', 'sd'],
+    'an all-unknown set is ordered by everything else, undisturbed'
+  )
+
+  // Never flips a resolution tier: the term is capped below one step.
+  assert.equal(
+    rankStreams([uncached('hd', 2081, 2160), uncached('sd', 5000, 1080)], 'en', {}, 'balanced')[0]
+      .infoHash,
+    'hd',
+    'seeders order within a tier and never override the resolution the person asked for'
+  )
+
+  // A cached candidate needs no peers at all — and Comet's `👤 0` results are
+  // largely debrid-cached, which are the MOST playable, not the least.
+  const cachedNoSeeders = {
+    infoHash: 'cached',
+    name: 'Film 1080p',
+    title: 'Film.mkv 👤 0 💾 4.0 GB',
+    cached: true,
+    compatible: true,
+    exact: true
+  } as StreamCandidate
+  assert.equal(
+    rankStreams([cachedNoSeeders, uncached('seeded', 5000)], 'en', {}, 'balanced')[0].infoHash,
+    'cached',
+    'cached beats well-seeded-but-uncached; seeders never apply to a cached copy'
+  )
+}
+console.log('ok  seeder ranking')

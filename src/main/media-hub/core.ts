@@ -149,6 +149,65 @@ const REMUX_PENALTY = 8000
 const OVERSIZED_GB = 25
 
 /**
+ * How well seeded an UNCACHED release is — the one thing the scrapers have
+ * always reported and the ranking has never read.
+ *
+ * Both add-ons put it in the same place, confirmed live against
+ * `torrentio.strem.fun` and the Comet instance on 2026-08-29: a `👤 N` run
+ * in the text streamText already builds. Torrentio carried one on all 66
+ * results for a test title (5 to 2081, median 13); Comet on 807 of 1628.
+ *
+ * WHY IT MATTERS MORE THAN IT LOOKS. When nothing is cached, resolve does not
+ * merely rank — it SUBMITS the winner to TorBox to start caching (see the
+ * `queued` path). That choice was previously blind to whether a release had
+ * two seeders or two thousand, so the app could commit somebody's account, and
+ * their evening, to a torrent that was never going to arrive.
+ *
+ * ABSENCE IS NEUTRAL, WHICH IS NOT THE SAME AS ZERO — OR AS NOTHING. Half of
+ * Comet's results carry no count at all, so scoring a missing count as "0
+ * seeders" would systematically demote one whole add-on for saying nothing.
+ * Awarding no bonus is just as wrong for the same reason: it would put an
+ * unknown release below one advertising a single seeder, which is precisely
+ * backwards. An unknown therefore scores the MIDPOINT of this term's own
+ * range, so it loses to a well-seeded release, beats a barely-seeded one, and
+ * a set where nothing reports a count is shifted by a constant and so ordered
+ * exactly as it was before. The break-even is around nine seeders.
+ *
+ * UNCACHED ONLY. A cached candidate is already on TorBox's disk and needs no
+ * peers whatsoever — and Comet's `👤 0` entries are largely debrid-account
+ * results, which are exactly the most playable ones. Scoring them on seeders
+ * would punish them for a number that does not apply to them.
+ *
+ * SATURATING, because the risk is not linear: 0 to 30 seeders is the whole
+ * question and 500 to 5000 is noise. Above SEEDER_SATURATION the term stops
+ * growing.
+ */
+const SEEDER_SATURATION = 100
+
+/** Deliberately below one resolution step (2160 - 1080 = 1080), so this
+ *  orders candidates WITHIN a quality tier and can never quietly hand
+ *  somebody a 1080p copy when they asked for 4K. Choosing between tiers on
+ *  availability is a bigger claim than this evidence supports. */
+const SEEDER_WEIGHT = 900
+
+/** The seeder count a release advertises, or null when it does not.
+ *  Exported for the ranking test. */
+export function streamSeeders(stream: StreamCandidate): number | null {
+  const match = streamText(stream).match(/\u{1F464}\s*([\d,]+)/u)
+  if (!match) return null
+  const value = Number(match[1].replace(/,/g, ''))
+  return Number.isFinite(value) && value >= 0 ? value : null
+}
+
+function seederBonus(stream: StreamCandidate): number {
+  if (stream.cached !== false) return 0
+  const seeders = streamSeeders(stream)
+  if (seeders === null) return SEEDER_WEIGHT / 2
+  const ratio = Math.log10(seeders + 1) / Math.log10(SEEDER_SATURATION + 1)
+  return Math.round(SEEDER_WEIGHT * Math.min(1, ratio))
+}
+
+/**
  * Whether a release advertises executable content — its own name, or the
  * file listing some scraper add-ons put in `description` (see streamText).
  *
@@ -227,7 +286,10 @@ export function rankStreams(
     (s.cached === false ? 0 : 20000) +
     (s.compatible === false ? -50000 : 10000) +
     (s.source === 'mediaserver' ? LOCAL_SOURCE_BONUS[sourcePreference] : 0) +
-    streamResolution(s) -
+    streamResolution(s) +
+    // Only ever separates uncached candidates, and only within a resolution
+    // tier — see seederBonus for both bounds and why absence is not zero.
+    seederBonus(s) -
     streamingPenalty(s) -
     // Reported live: a film played with French audio and French subtitles.
     // Track selection can't fix that one — a dub is a different release,
