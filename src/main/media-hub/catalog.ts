@@ -73,8 +73,9 @@ const catalogUrls: Record<'movie' | 'series', string> = {
 const SIMKL_TRENDING_SPANS = ['today', 'week', 'month'] as const
 
 /**
- * How many 100-entry pages of Cinemeta's top catalog to walk per kind,
- * beyond the first.
+ * How many pages of Cinemeta's top catalog to walk per kind, beyond the
+ * first. With CINEMETA_PAGE_SIZE below, 39 + 1 pages is 2,000 titles per
+ * kind.
  *
  * This is the source that actually makes the library big: Simkl's own
  * feeds are capped at the ~600 unique titles above no matter how they are
@@ -83,13 +84,52 @@ const SIMKL_TRENDING_SPANS = ['today', 'week', 'month'] as const
  * depended on — only more of what is already there, via the addon
  * protocol's `skip=` pagination.
  *
+ * Was 12, which — with the page-size bug below — was 649 unique series.
+ * The ceiling is not upstream: probed live, the movie catalog still
+ * returns full pages past `skip=20000` and series past `skip=10000`, so
+ * even at 40 pages this reads roughly the first tenth of what Cinemeta
+ * will serve. What bounds it is the shape of the cache, not the API. This
+ * catalog is ONE row and one IPC payload per kind, and series is the
+ * expensive kind: ~2.6KB of episode positions per entry against a movie's
+ * ~0.7KB.
+ *
+ * Measured end-to-end against the live catalog, walking exactly what this
+ * constant now generates: the series crawl goes from 649 titles / 4.04MB
+ * to 1,999 titles / 5.20MB — 3.1x the titles for 1.3x the bytes. That
+ * trade only exists because `lightweight` (see normalizeMeta) took the
+ * per-episode prose out first; without it the same crawl is 12.12MB.
+ * Going deeper again means paging the catalog rather than turning this
+ * number up.
+ *
+ * Request cost is not the constraint either — 40 per kind, six-hourly, at
+ * `maintenance`, through a cinemeta lane that allows 4 at a time with an
+ * 80ms gap.
+ *
  * Every page is fetched independently and a failed page contributes
  * nothing rather than failing the catalog (see cinemetaPages). That
  * matters beyond ordinary robustness: it means the worst case for this
  * whole expansion is the library staying exactly the size it is today.
  */
-const CINEMETA_EXTRA_PAGES = 12
-const CINEMETA_PAGE_SIZE = 100
+const CINEMETA_EXTRA_PAGES = 39
+
+/**
+ * The number of entries one Cinemeta catalog page actually returns, and so
+ * the stride between consecutive `skip=` offsets.
+ *
+ * This was 100, which was simply wrong about the upstream: Cinemeta serves
+ * 50. Verified against the live endpoint — `skip=0`, `skip=50` and
+ * `skip=100` each return 50 metas, and the 50 at `skip=50` appear in
+ * NEITHER of the other two. Striding by 100 therefore fetched half the
+ * catalog and silently skipped the other half, one 50-title block at a
+ * time, all the way down. Nothing surfaced it because a short page is
+ * indistinguishable from a deep one here: every page is a valid response
+ * of the expected shape, so there was no error to log and no gap to see.
+ *
+ * Consequence of the fix on its own: the same 13 requests that were
+ * returning 650 titles out of the first 1,300 slots now return 650
+ * contiguous ones. The depth above is what turns that into more titles.
+ */
+const CINEMETA_PAGE_SIZE = 50
 
 const CATALOG_TTL_MS = 6 * 60 * 60 * 1000
 
@@ -322,7 +362,12 @@ async function cinemetaPages(
           {},
           { priority, label: `${kind} catalog (page ${index + 1})` }
         )
-        return (result.metas || []).map((x) => normalizeMeta(x, kind))
+        // `lightweight`: a crawl path, so the per-episode prose Cinemeta
+        // ships with every series meta is dropped and only the episode
+        // POSITIONS are kept — see normalizeMeta. Nothing reads that prose
+        // from a catalog entry, and at this depth it was the single
+        // largest thing in the cache row.
+        return (result.metas || []).map((x) => normalizeMeta(x, kind, true))
       } catch {
         return []
       }

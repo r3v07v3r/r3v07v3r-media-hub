@@ -370,7 +370,7 @@ function numberOr(value: unknown, fallback: number): number {
 // showing "Episode 1" instead of "Genesis". `.overview`/`.description`,
 // `.released`/`.firstAired`, and `.episode`/`.number` are all genuinely
 // duplicated by Cinemeta itself, so those don't need remapping.
-function normalizeMetaVideo(v: RawApiPayload): Episode {
+function normalizeMetaVideo(v: RawApiPayload, lightweight = false): Episode {
   const season = numberOr(v.season, 1)
   const episode = numberOr(v.episode ?? v.number, 1)
   return {
@@ -378,10 +378,10 @@ function normalizeMetaVideo(v: RawApiPayload): Episode {
     season,
     episode,
     number: episode,
-    title: v.title || v.name || `Episode ${episode}`,
+    title: lightweight ? '' : v.title || v.name || `Episode ${episode}`,
     released: v.released || v.firstAired || '',
-    description: v.description || v.overview || '',
-    thumbnail: v.thumbnail || ''
+    description: lightweight ? '' : v.description || v.overview || '',
+    thumbnail: lightweight ? '' : v.thumbnail || ''
   }
 }
 
@@ -443,7 +443,36 @@ export function disambiguateVideos(videos: Episode[]): Episode[] {
   })
 }
 
-export function normalizeMeta(meta: RawApiPayload, fallbackType?: MediaKind): CatalogItem {
+/**
+ * `lightweight` blanks the three per-episode fields nothing on a crawl path
+ * ever reads — `title`, `description`, `thumbnail` — exactly as
+ * normalizeKitsuAnime's own flag does, and for the same reason: the browse
+ * catalog is stored as ONE cache row per kind and shipped to the renderer
+ * whole, so per-episode prose is paid for on every catalog:list by every
+ * series in the library. Cinemeta's series metas carry a full synopsis and a
+ * thumbnail URL per episode; measured against the live catalog, dropping
+ * them halves a series entry (5,960 -> 2,658 bytes).
+ *
+ * The array itself — one entry per episode, with real `season`/`episode`
+ * numbers — is NOT shortened. Those positions are what the browse grid's
+ * episode/season counts and its "Completed" badge are derived from
+ * (adapters.ts's seasonEpisodeCounts and isSeriesCompleted); emptying it
+ * would make every series read as "no episode data" and permanently hide a
+ * badge someone earned. That exact regression was shipped and caught once
+ * already on the anime side — see normalizeKitsuAnime.
+ *
+ * Safe to blank the prose specifically because no reader of a CATALOG
+ * entry's videos ever shows it: the detail page's episode list comes from
+ * metadata()'s own per-title fetch (full, unflagged, cached 24h), and
+ * metadata()'s catalog-entry fallback explicitly discards `videos` and
+ * refetches from Simkl rather than reusing them (`{ ...source, videos: [] }`
+ * in catalog.ts). Defaults to false so that per-title path is untouched.
+ */
+export function normalizeMeta(
+  meta: RawApiPayload,
+  fallbackType?: MediaKind,
+  lightweight = false
+): CatalogItem {
   return {
     id: meta.id || meta.imdb_id,
     title: meta.name || meta.title || 'Untitled',
@@ -457,7 +486,9 @@ export function normalizeMeta(meta: RawApiPayload, fallbackType?: MediaKind): Ca
     rating: String(meta.imdbRating || meta.rating || ''),
     runtime: String(meta.runtime || ''),
     genres: Array.isArray(meta.genres) ? meta.genres : Array.isArray(meta.genre) ? meta.genre : [],
-    videos: Array.isArray(meta.videos) ? meta.videos.map(normalizeMetaVideo) : [],
+    videos: Array.isArray(meta.videos)
+      ? meta.videos.map((v) => normalizeMetaVideo(v, lightweight))
+      : [],
     trailers: normalizeTrailers(meta.trailers || meta.trailerStreams)
   }
 }

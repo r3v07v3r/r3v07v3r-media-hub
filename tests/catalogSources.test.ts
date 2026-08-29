@@ -14,7 +14,7 @@
 
 import assert from 'node:assert'
 import type { CatalogItem } from '../src/shared/media-hub/types'
-import { mergeCatalogSources } from '../src/main/media-hub/core'
+import { mergeCatalogSources, normalizeMeta } from '../src/main/media-hub/core'
 
 let pass = 0
 
@@ -106,6 +106,92 @@ check('empty pages and entries without an id are dropped', () => {
 
 check('no sources at all is an empty list', () => {
   assert.deepEqual(mergeCatalogSources([]), [])
+})
+
+// --- normalizeMeta's crawl-path `lightweight` flag ---
+//
+// The browse catalog is one cache row and one IPC payload per kind, and
+// Cinemeta ships a full synopsis plus a thumbnail URL for EVERY episode of
+// every series in it. None of that is ever read from a catalog entry, so
+// the crawl drops it. What must survive is the episode POSITIONS: the
+// browse grid's season/episode counts and its "Completed" badge are
+// derived from them (adapters.ts), and emptying the array is a regression
+// that has already been shipped once on the anime side.
+
+const rawSeriesMeta = {
+  id: 'tt100',
+  name: 'Example',
+  type: 'series',
+  videos: [
+    {
+      id: 'tt100:1:1',
+      season: 1,
+      number: 1,
+      name: 'Pilot',
+      overview: 'A long synopsis nothing in the browse grid ever shows.',
+      thumbnail: 'https://episodes.metahub.space/tt100/1/1/w780.jpg',
+      released: '2024-01-01T00:00:00.000Z'
+    },
+    { id: 'tt100:2:3', season: 2, number: 3, name: 'Later', overview: 'More prose.' }
+  ]
+}
+
+check('lightweight keeps every episode position intact', () => {
+  const light = normalizeMeta(rawSeriesMeta, 'series', true)
+  assert.equal(light.videos.length, 2, 'the episode list was shortened')
+  assert.deepEqual(
+    light.videos.map((v) => [v.season, v.episode, v.number]),
+    [
+      [1, 1, 1],
+      [2, 3, 3]
+    ],
+    'season/episode positions must survive — the completed badge is derived from them'
+  )
+  assert.deepEqual(
+    light.videos.map((v) => v.id),
+    ['tt100:1:1', 'tt100:2:3'],
+    'episode ids are the badge/watch-history join key'
+  )
+  assert.equal(light.videos[0].released, '2024-01-01T00:00:00.000Z', 'aired-date filter needs this')
+})
+
+check('lightweight drops the per-episode prose', () => {
+  const light = normalizeMeta(rawSeriesMeta, 'series', true)
+  for (const v of light.videos) {
+    assert.equal(v.title, '', 'episode title should be blank on a crawl path')
+    assert.equal(v.description, '', 'episode synopsis should be blank on a crawl path')
+    assert.equal(v.thumbnail, '', 'episode thumbnail should be blank on a crawl path')
+  }
+})
+
+check('the per-title path is untouched by default', () => {
+  // metadata()'s own fetch calls normalizeMeta unflagged, and the detail
+  // page's episode list comes from THAT — so the full text has to survive
+  // there or every episode row goes blank.
+  const full = normalizeMeta(rawSeriesMeta, 'series')
+  assert.equal(full.videos[0].title, 'Pilot')
+  assert.equal(full.videos[0].description, 'A long synopsis nothing in the browse grid ever shows.')
+  assert.equal(full.videos[0].thumbnail, 'https://episodes.metahub.space/tt100/1/1/w780.jpg')
+  assert.equal(full.videos[1].title, 'Later')
+})
+
+check('lightweight leaves the title-level fields alone', () => {
+  // Only the per-episode fields are dropped. The entry's OWN description is
+  // what the browse grid and hero render.
+  const light = normalizeMeta(
+    { ...rawSeriesMeta, description: 'Show synopsis.', poster: 'p.jpg' },
+    'series',
+    true
+  )
+  assert.equal(light.description, 'Show synopsis.')
+  assert.equal(light.poster, 'p.jpg')
+  assert.equal(light.title, 'Example')
+})
+
+check('a movie with no videos is unaffected either way', () => {
+  const raw = { id: 'tt200', name: 'Film', type: 'movie' }
+  assert.deepEqual(normalizeMeta(raw, 'movie', true).videos, [])
+  assert.deepEqual(normalizeMeta(raw, 'movie').videos, [])
 })
 
 console.log(`\n${pass} passed`)
