@@ -200,7 +200,7 @@ export const PIPELINE: PipelineStage[] = [
       {
         id: 'jellyfin-library',
         label: 'Jellyfin',
-        detail: 'Library',
+        detail: 'Library, resume points',
         icon: 'grid',
         config: { kind: 'service', service: 'jellyfin' }
       }
@@ -212,19 +212,19 @@ export const PIPELINE: PipelineStage[] = [
     icon: 'play-outline',
     blurb: 'It plays',
     nodes: [
+      // The ONLY node in this stage, because this app has exactly one
+      // player. Jellyfin used to sit here too and that was simply wrong:
+      // its whole surface is testConnection and getResumeItems, and in the
+      // main process it is jellyfinCandidate — a stream SOURCE. Nothing ever
+      // hands it a title to play. It is a place a copy lives, which is what
+      // its node under Storage says, and having a second one here implied a
+      // choice of player that does not exist.
       {
         id: 'mpv',
         label: 'mpv',
         detail: 'Bundled player',
         icon: 'play',
         config: { kind: 'builtin' }
-      },
-      {
-        id: 'jellyfin-play',
-        label: 'Jellyfin',
-        detail: 'Media server',
-        icon: 'tv',
-        config: { kind: 'service', service: 'jellyfin' }
       }
     ]
   }
