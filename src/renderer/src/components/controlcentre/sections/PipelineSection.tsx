@@ -8,9 +8,10 @@
 // fetches it, subtitles are found, it is stored on the way past, it plays.
 //
 // DRAWN FROM WHAT IS CONFIGURED, not from a picture of an ideal setup. A
-// node that nothing backs is dimmed and says so; a stage with nothing in it
-// says what would go there. What it never does is draw a brand this app has
-// no integration with — see pipeline.ts for the list and why.
+// node that nothing backs is dimmed; a stage with no OUTSIDE service in it
+// says what adding one would buy. What it never does is draw a brand this
+// app has no integration with — see pipeline.ts for the list and why, and
+// for why R3's own function is drawn first in every stage that has one.
 //
 // Clicking a node selects it and brings up its settings underneath.
 // Selecting is separate from switching a service ON, deliberately: those
@@ -79,6 +80,11 @@ export function PipelineSection() {
         return Boolean(config?.enabled && config.baseUrl.trim())
       }
       if (node.config.kind === 'builtin') {
+        // mpv is the one built-in that can genuinely be absent — it is a
+        // binary fetched at install. The rest are the app itself: R3's own
+        // tracking and the player's reading of embedded subtitle tracks run
+        // whether or not anything else is set up, which is the whole reason
+        // they are drawn.
         return node.id === 'mpv' ? Boolean(mediaHubSettings?.playerAvailable) : true
       }
       if (node.id === 'torbox') return Boolean(mediaHubSettings?.torboxConnected)
@@ -152,7 +158,12 @@ export function PipelineSection() {
       <div className={own.flowScroll}>
         <ol className={own.flow}>
           {PIPELINE.map((stage, index) => {
-            const liveCount = stage.nodes.filter(isLive).length
+            // The hint is about OUTSIDE services only. R3's own function is
+            // live in several stages by definition, so counting it would
+            // hide the suggestion in exactly the stages that most want one.
+            const outsideLive = stage.nodes.some(
+              (node) => node.config.kind !== 'builtin' && isLive(node)
+            )
             return (
               <li key={stage.id} className={own.stage}>
                 <div className={own.stageHead}>
@@ -195,9 +206,7 @@ export function PipelineSection() {
                   })}
                 </div>
 
-                {liveCount === 0 && stage.empty && (
-                  <p className={own.stageEmpty}>{stage.empty}</p>
-                )}
+                {!outsideLive && stage.hint && <p className={own.stageHint}>{stage.hint}</p>}
 
                 {/* Between stages, not after the last one, so the row reads
                     as a path with an end rather than as one that trails off. */}
