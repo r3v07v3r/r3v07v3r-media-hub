@@ -263,7 +263,11 @@ function CacheSizeRow({
   presets: { value: string; label: string }[]
   onChange: (gb: number) => void
 }) {
-  const [draft, setDraft] = useState(String(valueGb))
+  /** 0 is "unlimited", and a field showing 0 next to a highlighted
+   *  "Unlimited" preset reads as a contradiction. Blank, with the word as
+   *  the placeholder, says the same thing once. */
+  const asDraft = (gb: number): string => (gb === 0 ? '' : String(gb))
+  const [draft, setDraft] = useState(asDraft(valueGb))
   // React's own "adjusting state when a prop changes" pattern — updated
   // DURING render (not in an effect, which would cost an extra render
   // pass) whenever valueGb genuinely changes from elsewhere (a preset
@@ -311,24 +315,35 @@ function CacheSizeRow({
             {option.label}
           </button>
         ))}
-        <span className={styles.field} style={{ flex: '0 0 88px' }}>
-          <input
-            className={styles.fieldInput}
-            style={{ padding: '5px 10px', fontSize: 12, textAlign: 'right' }}
-            type="number"
-            inputMode="numeric"
-            min={0}
-            step={1}
-            aria-label={`Custom ${title} in GB`}
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            onBlur={commitDraft}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
-            }}
-          />
-        </span>
       </div>
+      {/* OUT of the preset pill, and labelled.
+
+          It used to be an unlabelled number box inside the pill, which
+          wrapped onto a second line of its own and read as a stray "0"
+          sitting under the presets — worse still, that 0 IS unlimited, so it
+          appeared to contradict the highlighted Unlimited beside it.
+
+          Shown empty when unlimited, with the word as its placeholder, so
+          the field and the pill always say the same thing. */}
+      <label className={styles.cacheCustom}>
+        <span className={styles.cacheCustomLabel}>Or set your own</span>
+        <input
+          className={styles.fieldInput}
+          type="number"
+          inputMode="numeric"
+          min={0}
+          step={1}
+          placeholder="Unlimited"
+          aria-label={`Custom ${title} in GB`}
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onBlur={commitDraft}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
+          }}
+        />
+        <span className={styles.cacheCustomUnit}>GB</span>
+      </label>
     </div>
   )
 }
@@ -1196,45 +1211,53 @@ export default function SettingsPage({
 
   return (
     <div className={`${styles.wrap} ${embedded ? styles.embedded : ''}`}>
-      <div className={styles.pageHeader}>
-        {/* Hidden when hosted inside the control centre, which supplies its
-            own heading — two <h1>s describing the same content is a worse
-            document outline, not just visual duplication. The category nav
-            below stays either way: jumping between groups is more useful in
-            the panel than it ever was on the page. */}
-        {!embedded && (
-          <div>
-            <h1 className={styles.heading}>Settings</h1>
-            <p className={styles.headingDescription}>
-              Manage playback, services, and your R3 experience.
-            </p>
-          </div>
-        )}
-        {/* The strip is a way to jump between groups on one long page. With
-            each group on its own rail entry there is nothing to jump
-            between, and a second row of the same names would just be the
-            navigation twice. */}
-        {!category && (
-        <nav className={styles.categoryNav} aria-label="Settings categories">
-          {[
-            ['settings-general', 'General'],
-            ['settings-playback', 'Playback'],
-            ['settings-services', 'Services'],
-            ['settings-accounts', 'Accounts'],
-            ['settings-ai', 'AI'],
-            ['settings-community', 'Community']
-          ].map(([id, label]) => (
-            <button
-              key={id}
-              type="button"
-              onClick={() => document.getElementById(id)?.scrollIntoView({ behavior: 'smooth' })}
-            >
-              {label}
-            </button>
-          ))}
-        </nav>
-        )}
-      </div>
+      {/* Both of its children are conditional, and inside the control
+          centre with a category chosen BOTH are hidden — the heading
+          because the rail supplies one, the strip because each group
+          now has its own entry. What was left was an empty sticky bar
+          with a dark gradient and 10px of padding: the line above every
+          page title. Not rendered at all now rather than styled away. */}
+      {(!embedded || !category) && (
+        <div className={styles.pageHeader}>
+          {/* Hidden when hosted inside the control centre, which supplies its
+              own heading — two <h1>s describing the same content is a worse
+              document outline, not just visual duplication. The category nav
+              below stays either way: jumping between groups is more useful in
+              the panel than it ever was on the page. */}
+          {!embedded && (
+            <div>
+              <h1 className={styles.heading}>Settings</h1>
+              <p className={styles.headingDescription}>
+                Manage playback, services, and your R3 experience.
+              </p>
+            </div>
+          )}
+          {/* The strip is a way to jump between groups on one long page. With
+              each group on its own rail entry there is nothing to jump
+              between, and a second row of the same names would just be the
+              navigation twice. */}
+          {!category && (
+          <nav className={styles.categoryNav} aria-label="Settings categories">
+            {[
+              ['settings-general', 'General'],
+              ['settings-playback', 'Playback'],
+              ['settings-services', 'Services'],
+              ['settings-accounts', 'Accounts'],
+              ['settings-ai', 'AI'],
+              ['settings-community', 'Community']
+            ].map(([id, label]) => (
+              <button
+                key={id}
+                type="button"
+                onClick={() => document.getElementById(id)?.scrollIntoView({ behavior: 'smooth' })}
+              >
+                {label}
+              </button>
+            ))}
+          </nav>
+          )}
+        </div>
+      )}
 
       <div className={styles.tileArea} ref={tileAreaRef}>
         {shows('general') && (

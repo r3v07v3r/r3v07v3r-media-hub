@@ -359,6 +359,42 @@
   background: rgba(255, 255, 255, 0.06);
   border: 1px solid var(--border-subtle);
 }
+/* The custom cache size, on its own line under the presets rather than
+   crammed into the pill with them.
+
+   Same basis-plus-margin trick as .rowSegmented .segmentGroup above, and for
+   the same reason: the row is a wrapping flex container, so a child without
+   an explicit basis tries to sit BESIDE the presets and squeezes every other
+   row in the card down to one word per line. calc() bakes the 50px indent
+   into the basis so the total lands at exactly 100% and it wraps cleanly. */
+.rowSegmented .cacheCustom {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 calc(100% - 50px);
+  margin-left: 50px;
+  margin-top: 6px;
+}
+
+.cacheCustomLabel {
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.cacheCustom .fieldInput {
+  width: 96px;
+  padding: 5px 10px;
+  font-size: 12px;
+  text-align: right;
+}
+
+.cacheCustomUnit {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
 .segmentButton {
   padding: 5px 12px;
   border-radius: var(--radius-pill);
@@ -904,6 +940,15 @@
 
 .embedded .groupHeader {
   padding: 0 2px 12px;
+}
+
+/* The little gradient dash under each group's description. It read as an
+   underline that had come loose — a 44px bar starting under the text and
+   stopping in the middle of nothing. It belongs to the standalone page's
+   filmstrip, where it marked one card in a row of them; on a face showing a
+   single group there is nothing for it to distinguish. */
+.embedded .groupHeader::after {
+  content: none;
 }
 
 .embedded .pageHeader {
