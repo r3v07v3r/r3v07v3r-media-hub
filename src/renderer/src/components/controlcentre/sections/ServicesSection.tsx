@@ -41,6 +41,7 @@ import { testConnection as testBazarr } from '@renderer/lib/api/bazarr'
 import { SERVICE_LABELS, type ConnectionTestResult } from '@renderer/lib/api/types'
 import styles from './CachingSection.module.css'
 import own from './ServicesSection.module.css'
+import { BackgroundActivitySection } from '@renderer/components/downloads/BackgroundActivitySection'
 
 const TESTERS: Record<ServiceId, (config: ServiceConfig) => Promise<ConnectionTestResult>> = {
   jellyfin: testJellyfin,
@@ -292,6 +293,13 @@ export function ServicesSection() {
           </section>
         )
       })}
+
+      {/* The app's OWN background work, which used to sit on the
+          Downloads page. That page is gone and this is where the rest
+          of "what is this thing doing" already lives — deleting a
+          working diagnostic because its host went away would have been
+          the wrong kind of tidy. */}
+      <BackgroundActivitySection />
 
       <p className={styles.note}>
         <Icon name="info" size={13} /> Uptime is not shown because none of these APIs report it.

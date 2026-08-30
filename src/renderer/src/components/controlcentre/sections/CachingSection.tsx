@@ -23,6 +23,7 @@ import type {
   LanCacheStatusResponse
 } from '@shared/lancache/protocol'
 import styles from './CachingSection.module.css'
+import type { StreamCacheEntry, StreamCacheUsage } from '@shared/media-hub/types'
 
 interface DiscoveredDaemon {
   name: string
@@ -86,6 +87,13 @@ export function CachingSection() {
   const [openJoin, setOpenJoin] = useState(false)
   const [defaultPercent, setDefaultPercent] = useState(0)
   const [defaultQuotaBytes, setDefaultQuotaBytes] = useState<number | null>(null)
+  /** THIS device's own cache, which is a different store from the server's
+   *  and used to have a whole nav entry to itself. Kept here because both
+   *  answer the same question — where is my media and how much room is
+   *  left — and having them on separate pages meant checking two places to
+   *  find out why a disk was full. */
+  const [localItems, setLocalItems] = useState<StreamCacheEntry[]>([])
+  const [localUsage, setLocalUsage] = useState<StreamCacheUsage | null>(null)
   /**
    * Separate from `busy` because this one is SLOW — the server checks its
    * release feed and stages a bundle before answering — and the button
@@ -123,6 +131,33 @@ export function CachingSection() {
     // no error — the section already says the server predates this work.
     setMyItems(result.ok ? result.items : [])
   }, [api])
+
+  const refreshLocal = useCallback(async () => {
+    const media = window.api?.mediaHub
+    if (!media) return
+    const [entries, space] = await Promise.all([
+      media.streamCache.list().catch(() => [] as StreamCacheEntry[]),
+      media.streamCache.usage().catch(() => null)
+    ])
+    setLocalItems(entries ?? [])
+    setLocalUsage(space)
+  }, [])
+
+  // Independent of the cache server entirely: this device has a cache
+  // whether or not it has ever joined one, so this does not sit behind the
+  // pairing state the rest of this page does.
+  useEffect(() => {
+    void Promise.resolve().then(refreshLocal)
+    const timer = window.setInterval(() => void refreshLocal(), STATUS_POLL_MS)
+    return () => window.clearInterval(timer)
+  }, [refreshLocal])
+
+  const handleDeleteLocal = (token: string): void => {
+    setLocalItems((prev) => prev.filter((entry) => entry.token !== token))
+    window.api?.mediaHub?.streamCache.delete(token).catch(() => {
+      // Best-effort, and the poll above re-syncs from disk either way.
+    })
+  }
 
   const refreshDevices = useCallback(async () => {
     if (!api) return
@@ -367,6 +402,62 @@ export function CachingSection() {
   return (
     <div className={styles.wrap}>
       {header}
+
+      {/* ---------- THIS DEVICE ----------
+
+          What playing a title left on this machine. It had its own nav
+          entry — Downloads — which put half the answer to "where is my
+          media" on a different page from the other half. Storage is one
+          subject, so it is one page. */}
+      <section className={`${styles.card} glass-panel`}>
+        <h3 className={styles.cardTitle}>On this device</h3>
+        <p className={styles.note}>
+          Titles you play are kept here so you can rewind, resume and watch them again without a
+          connection.
+          {localUsage
+            ? ` ${bytes(localUsage.usedBytes)} used${
+                localUsage.freeBytes !== null
+                  ? `, ${bytes(localUsage.freeBytes)} free on that drive`
+                  : ''
+              }.`
+            : ''}
+        </p>
+        {localItems.length === 0 ? (
+          <p className={styles.note}>Nothing saved on this device yet.</p>
+        ) : (
+          <ul className={styles.itemList}>
+            {localItems.map((entry) => (
+              <li key={entry.token} className={styles.itemRow}>
+                <span className={styles.itemText}>
+                  <span className={styles.itemTitle}>
+                    {entry.title}
+                    {entry.isActive && <span className={styles.tag}>playing now</span>}
+                  </span>
+                  <span className={styles.itemMeta}>
+                    {entry.seasonNumber !== undefined && entry.episodeNumber !== undefined
+                      ? `${episodeLabel(entry.seasonNumber, entry.episodeNumber)} · `
+                      : ''}
+                    {bytes(entry.cachedBytes)}
+                    {entry.totalBytes ? ` of ${bytes(entry.totalBytes)}` : ''}
+                  </span>
+                </span>
+                {/* Not offered for whatever is playing: the daemon's own
+                    remove route refuses the same case, and deleting the
+                    file under the player is the one delete nobody means. */}
+                {!entry.isActive && (
+                  <button
+                    type="button"
+                    className={styles.ghostButton}
+                    onClick={() => handleDeleteLocal(entry.token)}
+                  >
+                    Delete
+                  </button>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
 
       {/* ---------- WAITING ---------- */}
       {pairState === 'pending' && (

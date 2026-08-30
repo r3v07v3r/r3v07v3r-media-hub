@@ -400,7 +400,7 @@ function LibraryDetails({ media, config }: { media: MediaItem | null; config: Ca
         </button>
         <button type="button" className={styles.action} onClick={() => toggleMyList(media)}>
           <Icon name={media.inMyList ? 'check' : 'plus'} size={15} />
-          {media.inMyList ? 'In My List' : 'Add to My List'}
+          {media.inMyList ? 'Planned' : 'Plan to Watch'}
         </button>
         <button
           type="button"
@@ -603,7 +603,7 @@ export function LibraryPage({ config }: { config: CategoryConfig }) {
                 <b>{completedCount}</b> Completed
               </span>
               <span>
-                <b>{inListCount}</b> My List
+                <b>{inListCount}</b> Planned
               </span>
             </div>
           </div>

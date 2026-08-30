@@ -11,7 +11,6 @@ import AnimePage from '@renderer/routes/AnimePage'
 import { MediaDetailPage } from '@renderer/routes/MediaDetailPage'
 import MyStuffPage from '@renderer/routes/MyStuffPage'
 import CalendarPage from '@renderer/routes/CalendarPage'
-import DownloadsPage from '@renderer/routes/DownloadsPage'
 import SettingsPage from '@renderer/routes/SettingsPage'
 import MoodExplorePage from '@renderer/routes/MoodExplorePage'
 import PersonPage from '@renderer/routes/PersonPage'
@@ -85,7 +84,13 @@ export default function App() {
                 <Route path="/tv-shows/:id" element={<LegacyTvShowDetailRedirect />} />
                 <Route path="/my-stuff" element={<MyStuffPage />} />
                 <Route path="/calendar" element={<CalendarPage />} />
-                <Route path="/downloads" element={<DownloadsPage />} />
+                {/* Downloads is gone. What it listed — what this device has
+                    cached — is on the control centre's Caching page beside
+                    the cache server's own list, because "where is my media"
+                    is one question and it had two pages. Redirected rather
+                    than 404ing: the path is in people's muscle memory and in
+                    any bookmark they made. */}
+                <Route path="/downloads" element={<Navigate to="/" replace />} />
                 <Route path="/settings" element={<SettingsPage />} />
                 <Route path="/moods" element={<MoodExplorePage />} />
                 {/* A drill-down from a title page, not a nav destination — see

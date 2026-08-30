@@ -370,7 +370,7 @@ function ListsView({
           className={`${styles.chip} ${effective === null ? styles.chipActive : ''}`}
           onClick={() => setSelected(null)}
         >
-          My List <span className={styles.chipCount}>{watchlist.length}</span>
+          Planned <span className={styles.chipCount}>{watchlist.length}</span>
         </button>
         {lists.map((list) => (
           <button
