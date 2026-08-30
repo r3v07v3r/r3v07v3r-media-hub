@@ -36,6 +36,15 @@
 // against TorBox — which is the whole reason the bound is on bytes rather
 // than on repositioning more eagerly.
 //
+// That bound only holds while "who is the playhead" cannot be answered by
+// the reader being served the detour. The adoption bar below
+// (PLAYHEAD_MIN_SERVED_BYTES, 8MB) is smaller than one excursion budget
+// (16MB), so a probe crosses it partway through its own excursion and, left
+// unguarded, becomes the playhead every later fill is classified against —
+// handing the connection straight back to itself, unbounded. See
+// shouldAdoptAsPlayhead: a reader cannot be both the detour and the
+// playhead.
+//
 // "Every position being read", not one global high-water mark. That
 // high-water mark was a real, reproduced bug: it only ever moved FORWARD
 // (Math.max), so the single incidental tail read every MKV demux does —
@@ -482,6 +491,40 @@ export function fillBudgetBytes({
   const windowEnd = playheadFillByte + toleranceBytes
   if (targetByte >= windowStart && targetByte <= windowEnd) return null
   return excursionBytes
+}
+
+/**
+ * Whether a local-server connection that has streamed `servedBytes` should
+ * be adopted as the fallback playhead (highWatermarkByte) — the retention
+ * centre used when nothing is actively reading, and the reference every
+ * fill is classified against.
+ *
+ * Two conditions, and the second is the one that has bitten twice:
+ *
+ * `servedBytes` alone is the original test (see PLAYHEAD_MIN_SERVED_BYTES):
+ * a container-metadata probe reads a few MB and disconnects, real playback
+ * streams continuously. But that bar (8MB) is smaller than one excursion
+ * budget (16MB), so a probe being served a detour crosses it partway
+ * through and becomes the playhead. Its next miss then resolves the
+ * playhead from the value it just corrupted, classifies itself as the
+ * playhead's own fill, and takes the single connection unbounded — exactly
+ * the starvation fillBudgetBytes exists to prevent.
+ *
+ * So a reader the fill is currently treating as a detour is never the
+ * playhead. It cannot be both. Raising the byte bar instead would only
+ * delay this: a long enough read crosses any fixed threshold.
+ */
+export function shouldAdoptAsPlayhead({
+  servedBytes,
+  servingExcursion,
+  minServedBytes = PLAYHEAD_MIN_SERVED_BYTES
+}: {
+  servedBytes: number
+  servingExcursion: boolean
+  minServedBytes?: number
+}): boolean {
+  if (servingExcursion) return false
+  return servedBytes >= minServedBytes
 }
 
 // Tokens minted by THIS module's own crypto.randomBytes calls, currently
@@ -1049,7 +1092,15 @@ export function createStreamCache({
     }
   }
 
-  /** Aborts whatever fetch is running, waits the TorBox teardown grace delay, then starts a fresh fill at targetByte. */
+  /**
+   * Aborts whatever fetch is running, waits the TorBox teardown grace
+   * delay, then starts a fresh fill at targetByte.
+   *
+   * Returns how that fill was classified — null for the playhead's own,
+   * a byte budget for an excursion — so the caller in serveRange can tell
+   * whether IT is the reader being served a detour. See the promotion
+   * guard at the bottom of serveRange for why that matters.
+   */
   async function reposition(
     targetByte: number,
     /** Supplied only by resumePlayheadFill, which already resolved the
@@ -1057,7 +1108,7 @@ export function createStreamCache({
      *  from a possibly-hijacked highWatermarkByte would classify the
      *  hand-back itself as another excursion and loop. */
     playheadOverride?: number
-  ): Promise<void> {
+  ): Promise<number | null> {
     // Decided here, not at the call sites: every one of them is a read that
     // missed, and whether that read is the playhead or an incidental probe
     // is the same question in each. seekHint moves the playhead before it
@@ -1076,8 +1127,9 @@ export function createStreamCache({
     currentAbort?.abort()
     currentAbort = null
     if (hadOpenFetch) await new Promise((resolve) => setTimeout(resolve, RECONNECT_GRACE_MS))
-    if (generation !== myGeneration) return
+    if (generation !== myGeneration) return budgetBytes
     void runFill(targetByte, myGeneration, budgetBytes, playheadByte)
+    return budgetBytes
   }
 
   /**
@@ -1178,8 +1230,23 @@ export function createStreamCache({
     const rangeMatch = /bytes=(\d+)-/.exec(rangeHeader)
     const startByte = rangeMatch ? Number(rangeMatch[1]) : 0
 
+    /**
+     * Whether this connection's most recent miss was served as an excursion
+     * — i.e. the fill it triggered was a detour, not the playhead's own.
+     *
+     * Reassigned on every miss rather than latched, so a connection that
+     * genuinely becomes the playhead (a seek: seekHint moves the playhead
+     * first, so its next miss classifies as the playhead's fill) clears
+     * itself and can be adopted normally.
+     *
+     * Declared up here, above the entry miss, because that one counts too:
+     * a probe whose very first request is served by an excursion can then
+     * read the whole 16MB it just cached without missing again, crossing
+     * the 8MB adoption bar with no later miss to mark it.
+     */
+    let servingExcursion = false
     if (!chunks.has(chunkIndexForByte(startByte)) && !isNearFillFrontier(startByte)) {
-      await reposition(chunkIndexForByte(startByte) * CHUNK_BYTES)
+      servingExcursion = (await reposition(chunkIndexForByte(startByte) * CHUNK_BYTES)) !== null
     }
 
     const totalLabel = totalBytes !== null ? String(totalBytes) : '*'
@@ -1217,7 +1284,9 @@ export function createStreamCache({
         }
         let status = chunks.get(index)
         if (status === undefined) {
-          if (!isNearFillFrontier(bytePos)) await reposition(index * CHUNK_BYTES)
+          if (!isNearFillFrontier(bytePos)) {
+            servingExcursion = (await reposition(index * CHUNK_BYTES)) !== null
+          }
           status = await waitForChunk(index)
         } else if (status === 'pending') {
           status = await waitForChunk(index)
@@ -1230,7 +1299,7 @@ export function createStreamCache({
           // the stream even though a retry would have succeeded. Clear the
           // mark and genuinely refetch once before giving up.
           chunks.delete(index)
-          await reposition(index * CHUNK_BYTES)
+          servingExcursion = (await reposition(index * CHUNK_BYTES)) !== null
           status = await waitForChunk(index)
         }
         if (aborted.flag) {
@@ -1260,7 +1329,7 @@ export function createStreamCache({
           if (retriedIndex !== index) {
             retriedIndex = index
             chunks.delete(index)
-            await reposition(index * CHUNK_BYTES)
+            servingExcursion = (await reposition(index * CHUNK_BYTES)) !== null
             continue
           }
           if (!res.headersSent) res.writeHead(502, { 'cache-control': 'no-store' })
@@ -1278,7 +1347,9 @@ export function createStreamCache({
         // probe — which reads a few MB near EOF and disconnects — can't
         // leave the retention centre stranded at the end of the file the
         // way the old forward-only high-water mark did.
-        if (servedBytes >= PLAYHEAD_MIN_SERVED_BYTES) highWatermarkByte = bytePos
+        if (shouldAdoptAsPlayhead({ servedBytes, servingExcursion })) {
+          highWatermarkByte = bytePos
+        }
         if (!canContinue) {
           await new Promise<void>((resolve) => res.once('drain', () => resolve()))
         }
