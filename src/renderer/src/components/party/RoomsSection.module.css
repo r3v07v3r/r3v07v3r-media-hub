@@ -1,5 +1,5 @@
-/* Friends group section inside the Watch Party panel. Intentionally reuses
-   the panel's existing spacing/typography language rather than inventing a
+/* Rooms section inside the Watch Party panel. Intentionally reuses the
+   panel's existing spacing/typography language rather than inventing a
    second look for the same surface. */
 
 .section {
@@ -237,4 +237,76 @@
 .awaiting:hover {
   color: var(--text-primary);
   text-decoration: underline;
+}
+
+/* --- per-room card, added when the single group became many rooms ------- */
+
+.roomCard {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border-radius: var(--radius-small);
+  border: 1px solid var(--border-subtle);
+  background: rgba(10, 18, 32, 0.45);
+}
+
+.roomHead {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.roomName {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* "Admin" beside the room name when this device created it — a statement
+   of role, styled as a quiet tag rather than a trophy. */
+.adminBadge {
+  flex: 0 0 auto;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  color: var(--accent-green);
+  border: 1px solid var(--accent-green);
+  border-radius: 999px;
+  padding: 1px 7px;
+  opacity: 0.85;
+}
+
+.roomActions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.iconButton {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 9px;
+  font-size: 11px;
+  border-radius: var(--radius-small);
+  border: 1px solid var(--border-subtle);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.iconButton:hover {
+  color: var(--text-primary);
+  border-color: var(--border-strong, var(--border-subtle));
+}
+
+.renameRow {
+  display: flex;
+  gap: 8px;
 }

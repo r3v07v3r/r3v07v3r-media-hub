@@ -300,15 +300,16 @@ export const MEDIA_HUB_CHANNELS = {
   partySetMemberControl: 'mediahub:party:set-member-control',
   partyRequestPlay: 'mediahub:party:request-play',
   partyChat: 'mediahub:party:chat',
-  friendsStatus: 'mediahub:friends:status',
-  friendsCreate: 'mediahub:friends:create',
-  friendsJoin: 'mediahub:friends:join',
-  friendsLeave: 'mediahub:friends:leave',
-  friendsSetSharing: 'mediahub:friends:set-sharing',
-  friendsSetActivity: 'mediahub:friends:set-activity',
-  friendsSend: 'mediahub:friends:send',
-  friendsEvent: 'mediahub:friends:event', // push event
-  friendsMessage: 'mediahub:friends:message', // push event — peer-to-peer requests
+  roomsStatus: 'mediahub:rooms:status',
+  roomsCreate: 'mediahub:rooms:create',
+  roomsJoin: 'mediahub:rooms:join',
+  roomsLeave: 'mediahub:rooms:leave',
+  roomsRename: 'mediahub:rooms:rename',
+  roomsSetSharing: 'mediahub:rooms:set-sharing',
+  roomsSetActivity: 'mediahub:rooms:set-activity',
+  roomsSend: 'mediahub:rooms:send',
+  roomsEvent: 'mediahub:rooms:event', // push event
+  roomsMessage: 'mediahub:rooms:message', // push event — peer-to-peer requests
   partySyncConnect: 'mediahub:party-sync:connect',
   partySyncDisconnect: 'mediahub:party-sync:disconnect',
   partyEvent: 'mediahub:party:event', // push event

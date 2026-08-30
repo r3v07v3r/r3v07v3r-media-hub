@@ -33,9 +33,10 @@ import type {
   CustomListItem,
   DislikedListResult,
   EpisodePlaybackPosition,
-  FriendActivity,
-  FriendMessage,
-  FriendsStatus,
+  RoomActivity,
+  RoomInboundMessage,
+  RoomMessage,
+  RoomsStatus,
   HomePersonalizedResult,
   ImportSummary,
   MalReconcileApplyResult,
@@ -849,23 +850,26 @@ const api = {
         subscribe<PartyEventPayload>(MEDIA_HUB_CHANNELS.partyEvent, onEvent)
     },
 
-    friends: {
-      status: (): Promise<FriendsStatus> => ipcRenderer.invoke(MEDIA_HUB_CHANNELS.friendsStatus),
-      create: (): Promise<{ ok: true; code: string }> =>
-        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.friendsCreate),
+    rooms: {
+      status: (): Promise<RoomsStatus> => ipcRenderer.invoke(MEDIA_HUB_CHANNELS.roomsStatus),
+      create: (name: string): Promise<{ ok: true; code: string }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.roomsCreate, { name }),
       join: (code: string): Promise<{ ok: true }> =>
-        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.friendsJoin, { code }),
-      leave: (): Promise<{ ok: true }> => ipcRenderer.invoke(MEDIA_HUB_CHANNELS.friendsLeave),
-      setSharing: (sharing: boolean): Promise<{ ok: true }> =>
-        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.friendsSetSharing, { sharing }),
-      setActivity: (activity: FriendActivity | null): Promise<{ ok: true }> =>
-        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.friendsSetActivity, { activity }),
-      send: (message: FriendMessage): Promise<{ ok: true }> =>
-        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.friendsSend, { message }),
-      onEvent: (onEvent: (payload: FriendsStatus) => void): (() => void) =>
-        subscribe<FriendsStatus>(MEDIA_HUB_CHANNELS.friendsEvent, onEvent),
-      onMessage: (onEvent: (payload: FriendMessage) => void): (() => void) =>
-        subscribe<FriendMessage>(MEDIA_HUB_CHANNELS.friendsMessage, onEvent)
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.roomsJoin, { code }),
+      leave: (roomId: string): Promise<{ ok: true }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.roomsLeave, { roomId }),
+      rename: (roomId: string, name: string): Promise<{ ok: true }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.roomsRename, { roomId, name }),
+      setSharing: (roomId: string, sharing: boolean): Promise<{ ok: true }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.roomsSetSharing, { roomId, sharing }),
+      setActivity: (activity: RoomActivity | null): Promise<{ ok: true }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.roomsSetActivity, { activity }),
+      send: (roomId: string, message: RoomMessage): Promise<{ ok: true }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.roomsSend, { roomId, message }),
+      onEvent: (onEvent: (payload: RoomsStatus) => void): (() => void) =>
+        subscribe<RoomsStatus>(MEDIA_HUB_CHANNELS.roomsEvent, onEvent),
+      onMessage: (onEvent: (payload: RoomInboundMessage) => void): (() => void) =>
+        subscribe<RoomInboundMessage>(MEDIA_HUB_CHANNELS.roomsMessage, onEvent)
     },
 
     window: {

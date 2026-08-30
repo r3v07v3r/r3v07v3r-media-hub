@@ -34,7 +34,7 @@ import { registerTorBoxIpc } from '../media-hub/torbox'
 import { registerTraktIpc } from '../media-hub/traktClient'
 import { registerTrackingIpc } from '../media-hub/tracking'
 import { registerWatchPartyIpc } from '../media-hub/watchParty'
-import { registerFriendsIpc, restoreFriendsGroup } from '../media-hub/friends'
+import { registerRoomsIpc, restoreRooms } from '../media-hub/rooms'
 
 export function registerMediaHubIpc(): void {
   registerAppIpc()
@@ -55,10 +55,10 @@ export function registerMediaHubIpc(): void {
   // is the sole directory add-subtitle-file is allowed to load from.
   registerPlayerIpc({ subtitleCacheDir })
   registerWatchPartyIpc()
-  registerFriendsIpc()
-  // A saved group reconnects on its own — a friends group is meant to be
-  // always-on, so it must not require anyone to open a panel first.
-  restoreFriendsGroup()
+  registerRoomsIpc()
+  // Saved rooms reconnect on their own — a room is meant to be always-on,
+  // so it must not require anyone to open a panel first.
+  restoreRooms()
   registerProfilesIpc()
   registerNetworkIpc()
   registerAniskipIpc()
