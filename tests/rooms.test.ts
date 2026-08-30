@@ -18,6 +18,7 @@ import {
   PRESENCE_TTL_MS,
   acceptRoomName,
   applyRekey,
+  parseBannedEnvelope,
   migrateLegacyRooms,
   reapPresence,
   recordPresence,
@@ -309,6 +310,38 @@ const SELF = 'self-friend-id'
     verifyCryptogram(forged, 'admit', 'relay.example.com', 'room-1').ok,
     false,
     "someone else's signature over the same data is a forgery, not a tap"
+  )
+}
+
+// --- the relay's ban announcement, as the kick barrier reads it ---------------
+//
+// The kick flow refuses to breathe a word of the new secret until it
+// OBSERVES the ban on its own room socket — this parser is what does
+// the observing, so it must accept exactly the relay's envelope and
+// nothing that merely resembles it.
+
+{
+  const ID = 'a'.repeat(64)
+  assert.deepEqual(
+    parseBannedEnvelope(JSON.stringify({ type: 'banned', hashes: [ID, 'not-an-id'] })),
+    [ID],
+    'the ban envelope parses, and non-id entries are dropped'
+  )
+  assert.equal(parseBannedEnvelope('ciphertext-not-json'), null, 'ciphertext is not a ban')
+  assert.equal(
+    parseBannedEnvelope(JSON.stringify({ type: 'relay', body: 'x' })),
+    null,
+    'other envelopes are not bans'
+  )
+  assert.equal(
+    parseBannedEnvelope(JSON.stringify({ type: 'relay', hashes: [ID] })),
+    null,
+    'a hashes field inside a NON-ban envelope is not a ban — the type is load-bearing'
+  )
+  assert.deepEqual(
+    parseBannedEnvelope(JSON.stringify({ type: 'banned', hashes: 'not-an-array' })),
+    null,
+    'a malformed ban is no ban'
   )
 }
 

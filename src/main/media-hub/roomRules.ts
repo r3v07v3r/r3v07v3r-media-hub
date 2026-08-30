@@ -91,6 +91,28 @@ export function reapPresence(presence: Map<string, PresenceRecord>, now: number)
 }
 
 /**
+ * The relay's ban announcement, parsed — `{type:'banned', hashes:[ids]}`
+ * — or null for anything else. Read by the kick flow's BARRIER: the
+ * admin must OBSERVE the ban on its own room socket before broadcasting
+ * the re-key, because the kick's HTTP response and the ban's WebSocket
+ * frame travel on different connections with no ordering between them.
+ * On a shared hop, observing the ban proves the daemon has already
+ * applied it (it applies before it fans), which is exactly what makes
+ * the local re-key echo safe.
+ */
+export function parseBannedEnvelope(text: string): string[] | null {
+  try {
+    const envelope = JSON.parse(text) as { type?: string; hashes?: unknown }
+    if (envelope.type !== 'banned' || !Array.isArray(envelope.hashes)) return null
+    return envelope.hashes.filter(
+      (hash): hash is string => typeof hash === 'string' && /^[0-9a-f]{64}$/.test(hash)
+    )
+  } catch {
+    return null
+  }
+}
+
+/**
  * Whether an announced room name is believed.
  *
  * The admin's identity is the one baked into the invite code everyone

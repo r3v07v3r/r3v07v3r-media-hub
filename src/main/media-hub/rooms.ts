@@ -45,6 +45,7 @@ import {
   acceptRoomName,
   applyRekey,
   PREV_SECRETS_KEPT,
+  parseBannedEnvelope,
   rememberKicked,
   migrateLegacyRooms,
   reapPresence,
@@ -113,6 +114,9 @@ interface RoomState {
   reconnectTimer: ReturnType<typeof setTimeout> | null
   reconnectDelay: number
   replyTimer: ReturnType<typeof setTimeout> | null
+  /** Resolvers waiting to OBSERVE a ban for a given id on this room's
+   *  socket — the kick flow's barrier before the re-key broadcast. */
+  banWaiters: Map<string, (() => void)[]>
   closing: boolean
 }
 
@@ -357,6 +361,16 @@ function onRoomMessage(room: RoomState, raw: unknown): void {
   } catch {
     // not an envelope — fall through and try to decrypt as-is
   }
+  // The relay announcing a kick's bans. Plaintext metadata; what reads
+  // it here is the kick flow's barrier — see the kick handler.
+  const bannedIds = parseBannedEnvelope(body)
+  if (bannedIds) {
+    for (const id of bannedIds) {
+      for (const resolve of room.banWaiters.get(id) ?? []) resolve()
+      room.banWaiters.delete(id)
+    }
+    return
+  }
   let msg = decryptMessage(room.secret, body) as Record<string, unknown> | null
   let matchedOldSecret: string | null = null
   // A message the current secret cannot read may be a member who was
@@ -508,6 +522,29 @@ function scheduleReconnect(room: RoomState): void {
   }, delay)
 }
 
+/** Whether the paired cache server advertises the rooms hop, cached
+ *  briefly per URL. A pre-hop daemon defines its answer by ABSENCE, and
+ *  dialling it anyway would cost every room a failed subscription (up
+ *  to the six-second timeout) on every reconnect. One two-second ping a
+ *  minute answers for all rooms at once. */
+const hopCapability = new Map<string, { ok: boolean; at: number }>()
+const HOP_CAPABILITY_TTL_MS = 60_000
+
+async function daemonAdvertisesHop(url: string): Promise<boolean> {
+  const cached = hopCapability.get(url)
+  if (cached && Date.now() - cached.at < HOP_CAPABILITY_TTL_MS) return cached.ok
+  let ok = false
+  try {
+    const response = await fetch(`${url}/api/ping`, { signal: AbortSignal.timeout(2000) })
+    const ping = (await response.json()) as { roomsHop?: boolean }
+    ok = ping.roomsHop === true
+  } catch {
+    ok = false
+  }
+  hopCapability.set(url, { ok, at: Date.now() })
+  return ok
+}
+
 async function openSocket(room: RoomState): Promise<void> {
   if (room.closing) return
   // THE TRANSPORT CHOICE, made fresh on every (re)connect. A paired
@@ -520,7 +557,7 @@ async function openSocket(room: RoomState): Promise<void> {
   let ws: RoomSocket | null = null
   const lan = getLanCacheConnection()
   const relayHost = new URL(room.relayUrl).host
-  if (lan && !lan.pending) {
+  if (lan && !lan.pending && (await daemonAdvertisesHop(lan.url))) {
     try {
       // The tap, handed to the terminal: a 'carry' cryptogram the
       // daemon forwards to the relay, which verifies it exactly like a
@@ -621,6 +658,7 @@ async function activateRoom(
     reconnectTimer: null,
     reconnectDelay: RECONNECT_MIN_MS,
     replyTimer: null,
+    banWaiters: new Map(),
     closing: false
   }
   rooms.set(room.roomId, room)
@@ -916,15 +954,43 @@ export function registerRoomsIpc(): void {
       // relay admits, and the identity a kick names are one thing. No
       // history to reconstruct, no install the room ever saw that this
       // misses — every device of theirs speaks as this id or not at all.
+      // The BARRIER is armed before the kick is sent, so the ban
+      // announcement cannot slip past between the response and the
+      // listener attaching.
+      const banObserved = new Promise<void>((resolve) => {
+        const waiters = room.banWaiters.get(target) ?? []
+        waiters.push(resolve)
+        room.banWaiters.set(target, waiters)
+      })
       const response = await fetch(`${room.relayUrl}/party/${room.roomId}/kick`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ roomToken: room.stored.roomToken, memberIds: [target] })
       })
-      if (!response.ok) throw new Error(`The relay refused the removal: ${response.status}`)
+      if (!response.ok) {
+        room.banWaiters.delete(target)
+        throw new Error(`The relay refused the removal: ${response.status}`)
+      }
       const { joinSecret } = (await response.json()) as { joinSecret: string }
 
-      // They are banned and disconnected. NOW rotate the room secret and
+      // WAIT TO SEE THE BAN before breathing a word of the new secret.
+      // The kick's HTTP response and the relay's banned broadcast travel
+      // on DIFFERENT connections, with no ordering between them — and if
+      // this admin shares a cache hop with the kicked member, the re-key
+      // below would be ECHOED LOCALLY by the daemon, off the relay path
+      // entirely. Observing the ban on this room's own socket is the
+      // proof that closes both: the daemon applies bans before it fans
+      // the announcement, so by the time it reaches us here, the kicked
+      // subscriber is already gone from the echo's audience. Every
+      // relay-transported path was already safe by per-socket FIFO. The
+      // timeout is a last resort for a broadcast lost in transit — the
+      // rotation still protects every path except the shared-hop echo,
+      // and waiting forever would wedge the kick.
+      await Promise.race([banObserved, new Promise((resolve) => setTimeout(resolve, 5000))])
+      room.banWaiters.delete(target)
+
+      // They are banned, disconnected, and the ban is VISIBLY applied on
+      // this member's own transport. NOW rotate the room secret and
       // hand the new code to everyone still here, under the old secret —
       // which the kicked member still knows but can no longer be present
       // to hear.
