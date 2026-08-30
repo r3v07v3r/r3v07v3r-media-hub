@@ -42,6 +42,9 @@ export const MEDIA_HUB_CHANNELS = {
   lanCacheDevices: 'mediahub:lancache:devices',
   lanCacheDeviceAction: 'mediahub:lancache:device-action',
   lanCacheAdminSettings: 'mediahub:lancache:admin-settings',
+  /** Admin only: check the update feed now and install as soon as nobody
+   *  is watching, instead of waiting for the server's own poll. */
+  lanCacheUpdateNow: 'mediahub:lancache:update-now',
   /** The caller's own cached titles, and the sharing control over them. */
   lanCacheMyItems: 'mediahub:lancache:my-items',
   lanCacheSetSharing: 'mediahub:lancache:set-sharing',

@@ -13,6 +13,7 @@ import type {
   LanCacheDevicesResponse,
   LanCacheOwnItem,
   LanCachePairResponse,
+  LanCacheUpdateNowResponse,
   LanCachePingResponse,
   LanCacheJobPayload,
   LanCacheStatusResponse
@@ -30,7 +31,14 @@ import {
 } from './settingsStore'
 import { discoverLanCaches } from './lanCacheDiscovery'
 
-function request<T>(pathname: string, init: RequestInit = {}): Promise<T> {
+/** The update route answers only once the server has checked its release
+ *  feed and staged the bundle, so it is not a sub-second call. Three
+ *  minutes is generous for a LAN and still bounded — long enough not to
+ *  call a working update a failure, short enough to stop waiting on a
+ *  server that has gone away mid-download. */
+const UPDATE_NOW_TIMEOUT_MS = 3 * 60 * 1000
+
+function request<T>(pathname: string, init: RequestInit = {}, timeoutMs?: number): Promise<T> {
   const connection = getLanCacheConnection()
   if (!connection) throw new Error('No cache server is paired.')
   return fetchJson<T>(
@@ -42,7 +50,7 @@ function request<T>(pathname: string, init: RequestInit = {}): Promise<T> {
         Authorization: `Bearer ${connection.token}`
       }
     },
-    { lane: 'lancache', label: 'cache server' }
+    { lane: 'lancache', label: 'cache server', timeoutMs }
   )
 }
 
@@ -456,6 +464,26 @@ export function registerLanCacheIpc(refreshTrustedHosts: () => void): void {
       }
     }
   )
+
+  handle(MEDIA_HUB_CHANNELS.lanCacheUpdateNow, async () => {
+    if (!isLanCacheConnected()) {
+      return { ok: false as const, message: 'Not connected to a cache server.' }
+    }
+    try {
+      // A long timeout on purpose: this checks the release feed and may
+      // download a bundle before it answers, which on a slow link is not a
+      // few hundred milliseconds. The default would give up and report a
+      // failure for an update that was in fact working.
+      const answer = await request<LanCacheUpdateNowResponse>(
+        '/api/admin/update',
+        { method: 'POST' },
+        UPDATE_NOW_TIMEOUT_MS
+      )
+      return { ok: true as const, ...answer }
+    } catch (error) {
+      return { ok: false as const, message: (error as Error).message }
+    }
+  })
 
   handle(MEDIA_HUB_CHANNELS.lanCacheMyItems, async () => {
     if (!isLanCacheConnected()) return { ok: false as const, items: [] }

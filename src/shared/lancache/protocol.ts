@@ -105,6 +105,19 @@ export interface LanCacheJobPayload {
   reason?: 'watching' | 'prefetch'
 }
 
+/**
+ * What an administrator's "update now" did on the cache server.
+ *
+ * 'restarting' — going down and coming back on the new build.
+ * 'waiting'    — staged, but somebody is watching; it installs when they stop.
+ * 'current'    — nothing newer to install.
+ * 'disabled'   — updates are switched off on that server.
+ */
+export interface LanCacheUpdateNowResponse {
+  outcome: 'restarting' | 'waiting' | 'current' | 'disabled'
+  message: string
+}
+
 export interface LanCacheStatusResponse {
   serverName: string
   version: string
