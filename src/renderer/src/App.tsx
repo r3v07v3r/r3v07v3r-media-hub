@@ -10,6 +10,7 @@ import SeriesPage from '@renderer/routes/SeriesPage'
 import AnimePage from '@renderer/routes/AnimePage'
 import { MediaDetailPage } from '@renderer/routes/MediaDetailPage'
 import MyStuffPage from '@renderer/routes/MyStuffPage'
+import CalendarPage from '@renderer/routes/CalendarPage'
 import DownloadsPage from '@renderer/routes/DownloadsPage'
 import SettingsPage from '@renderer/routes/SettingsPage'
 import MoodExplorePage from '@renderer/routes/MoodExplorePage'
@@ -83,6 +84,7 @@ export default function App() {
                 <Route path="/tv-shows" element={<Navigate to="/series" replace />} />
                 <Route path="/tv-shows/:id" element={<LegacyTvShowDetailRedirect />} />
                 <Route path="/my-stuff" element={<MyStuffPage />} />
+                <Route path="/calendar" element={<CalendarPage />} />
                 <Route path="/downloads" element={<DownloadsPage />} />
                 <Route path="/settings" element={<SettingsPage />} />
                 <Route path="/moods" element={<MoodExplorePage />} />
