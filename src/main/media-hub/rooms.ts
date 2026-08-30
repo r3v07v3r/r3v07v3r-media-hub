@@ -47,6 +47,7 @@ import {
   migrateLegacyRooms,
   reapPresence,
   recordPresence,
+  withRoomName,
   type PresenceRecord,
   type StoredRoom
 } from './roomRules'
@@ -216,9 +217,17 @@ function onRoomMessage(room: RoomState, raw: unknown): void {
     )
     const wasRenamed = renamed !== room.stored.name
     if (wasRenamed) {
+      // The display name AND this member's own copy of the invite code:
+      // the code is what gets copied for the next person, and one left
+      // carrying the old name would hand them a label no announcement
+      // could ever correct if the admin happened to be offline.
+      const oldCode = room.stored.code
+      const recoded = withRoomName(oldCode, renamed)
       room.stored.name = renamed
-      updateStoredRoom(room.stored.code, (stored) => {
+      if (recoded) room.stored.code = recoded
+      updateStoredRoom(oldCode, (stored) => {
         stored.name = renamed
+        if (recoded) stored.code = recoded
       })
     }
     if (changed || wasRenamed) pushStatus()
@@ -430,7 +439,11 @@ export function registerRoomsIpc(): void {
     if (rooms.has(parsed.relay.roomId)) return { ok: true }
     const stored: StoredRoom = {
       code,
-      name: (parsed.name || '').trim() || 'A room',
+      // A v2 code is the old friends-group kind and carries no name; the
+      // migration calls that room "Friends", so a member joining by its
+      // original code must land on the SAME label — a v2 room has no
+      // admin, so no announcement could ever reconcile a different one.
+      name: (parsed.name || '').trim() || (parsed.v === 2 ? 'Friends' : 'A room'),
       sharing: false,
       // A v2 code predates admins; the room it joins simply has none.
       adminFriendId: parsed.v === 3 ? parsed.adminFriendId : undefined
@@ -464,9 +477,13 @@ export function registerRoomsIpc(): void {
       if (room.stored.adminFriendId !== friendId) {
         throw new Error('Only the room admin can rename it.')
       }
+      const oldCode = room.stored.code
+      const recoded = withRoomName(oldCode, name)
       room.stored.name = name
-      updateStoredRoom(room.stored.code, (stored) => {
+      if (recoded) room.stored.code = recoded
+      updateStoredRoom(oldCode, (stored) => {
         stored.name = name
+        if (recoded) stored.code = recoded
       })
       // Straight away, not on the next interval — the person just typed it
       // and everyone in the room should see it before they look away.

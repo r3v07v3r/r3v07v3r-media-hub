@@ -122,6 +122,18 @@ export function RoomsSection() {
       <div className={styles.roomHead}>
         <span className={styles.roomName}>{room.name}</span>
         {room.isAdmin && <span className={styles.adminBadge}>Admin</span>}
+        {/* A migrated friends group, or one joined by an old code. Said
+            out loud, because the room genuinely works differently:
+            nobody can rename it for everyone, and nobody can remove a
+            member. Hiding that would leave the state undiscoverable. */}
+        {!room.hasAdmin && (
+          <span
+            className={styles.noAdminBadge}
+            title="This room predates admins — nobody can rename it or remove members. Make a new room to get those."
+          >
+            No admin
+          </span>
+        )}
         <span
           className={room.connected ? styles.dotOnline : styles.dotOffline}
           aria-hidden="true"

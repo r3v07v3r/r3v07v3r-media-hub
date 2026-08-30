@@ -282,6 +282,21 @@
   opacity: 0.85;
 }
 
+/* The admin badge's quiet sibling, for rooms that have none — same
+   shape so the header scans consistently, muted because it is a fact,
+   not a role. */
+.noAdminBadge {
+  flex: 0 0 auto;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  padding: 1px 7px;
+}
+
 .roomActions {
   display: flex;
   align-items: center;

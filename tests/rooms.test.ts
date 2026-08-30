@@ -20,6 +20,7 @@ import {
   migrateLegacyRooms,
   reapPresence,
   recordPresence,
+  withRoomName,
   type PresenceRecord
 } from '../src/main/media-hub/roomRules'
 
@@ -155,6 +156,44 @@ const SELF = 'self-friend-id'
     () => encodeRoomShareCode({ relay, secret: 'x', name: 'y', adminFriendId: '' }),
     'encoding refuses an anonymous admin'
   )
+}
+
+// --- recoding an invite after a rename --------------------------------------
+//
+// The name lives in two places — the display name renames update, and
+// the invite code that gets copied for the next member. Recoding must
+// change the name and NOTHING else, including fields this version of
+// the app has never heard of: a future code carries the room's door
+// key, and a recode that dropped it would hand out invites that cannot
+// open the door.
+
+{
+  const relay = { url: 'https://relay.example.workers.dev', roomId: crypto.randomUUID() }
+  const code = encodeRoomShareCode({
+    relay,
+    secret: 'room-secret',
+    name: 'Family',
+    adminFriendId: 'admin-id'
+  })
+  // Smuggle in a field from the future.
+  const raw = JSON.parse(Buffer.from(code, 'base64url').toString('utf8')) as Record<string, unknown>
+  raw.futureField = 'must-survive'
+  const futureCode = Buffer.from(JSON.stringify(raw), 'utf8').toString('base64url')
+
+  const renamed = withRoomName(futureCode, 'Movie night')
+  assert.ok(renamed, 'a valid room code recodes')
+  const decoded = JSON.parse(Buffer.from(String(renamed), 'base64url').toString('utf8')) as Record<
+    string,
+    unknown
+  >
+  assert.equal(decoded.name, 'Movie night', 'the name changes')
+  assert.equal(decoded.secret, 'room-secret', 'the secret does not')
+  assert.equal(decoded.adminFriendId, 'admin-id', 'nor the admin')
+  assert.equal(decoded.futureField, 'must-survive', 'nor fields this version has never heard of')
+  const reparsed = decodeShareCode(String(renamed))
+  assert.ok(reparsed && reparsed.v === 3, 'the recoded invite still decodes as a room code')
+
+  assert.equal(withRoomName('not-a-code', 'x'), null, 'garbage recodes to nothing, not to garbage')
 }
 
 console.log('ok  rooms rules')
