@@ -149,6 +149,10 @@ async function main(): Promise<void> {
   )
   assert.equal(relayConns.length, 1, 'the first subscriber opens the upstream')
   assert.ok(relayConns[0].member?.startsWith('hh-'), 'the upstream presents the householdKey')
+  // Captured NOW, from what the genuine relay actually saw — the
+  // harvest comparison later must be against the presented credential,
+  // not against a storage file whose format could drift with it.
+  const genuinePresentedKey = relayConns[0].member
 
   const b = await subscribe()
   assert.equal(relayConns.length, 1, 'the second subscriber SHARES it — that is the feature')
@@ -310,12 +314,54 @@ async function main(): Promise<void> {
     'the relay sees the household leave'
   )
 
-  // --- the householdKey survives restarts ------------------------------------
+  // --- the householdKey survives restarts, scoped to its relay ---------------
   const persisted = JSON.parse(await fsp.readFile(path.join(dataDir, 'rooms-hop.json'), 'utf8'))
   assert.ok(
-    String(persisted[ROOM_ID] || '').startsWith('hh-'),
+    String(persisted[`${relayUrl}|${ROOM_ID}`] || '').startsWith('hh-'),
     'the household identity is persisted — a fresh key per boot would lose known-member status'
   )
+
+  // --- the key never crosses relay origins ------------------------------------
+  //
+  // The relayUrl in a subscription is caller-chosen. A malicious
+  // approved device naming the real roomId with its OWN server must
+  // harvest nothing: the key presented there has to be a different
+  // random key that no other relay will ever see.
+  const relayServer2 = http.createServer()
+  const relayWss2 = new WebSocketServer({ noServer: true })
+  let harvested: string | null = null
+  relayServer2.on('upgrade', (req, socket, head) => {
+    const url = new URL(req.url ?? '/', 'http://relay.invalid')
+    harvested = url.searchParams.get('member')
+    relayWss2.handleUpgrade(req, socket, head, () => {})
+  })
+  const relayPort2 = await listen(relayServer2)
+  const evil = await new Promise<{ ws: WebSocket; messages: string[] }>((resolve) => {
+    const ws = new WebSocket(`ws://127.0.0.1:${daemonPort}/api/rooms/hop?token=good-token`)
+    const messages: string[] = []
+    ws.on('message', (raw) => messages.push(String(raw)))
+    ws.once('open', () => {
+      ws.send(
+        JSON.stringify({
+          type: 'sub',
+          roomId: ROOM_ID,
+          relayUrl: `http://127.0.0.1:${relayPort2}`,
+          join: 'join-1'
+        })
+      )
+      setTimeout(() => resolve({ ws, messages }), 500)
+    })
+  })
+  assert.ok(harvested, 'the second relay saw a connection attempt')
+  assert.ok(String(harvested).startsWith('hh-'), 'and it was a household-shaped key')
+  assert.notEqual(
+    harvested,
+    genuinePresentedKey,
+    'a different relay origin sees a DIFFERENT key — the genuine credential cannot be harvested'
+  )
+  evil.ws.close()
+  await new Promise((resolve) => relayServer2.close(resolve))
+  relayWss2.close()
 
   remote.close()
   hop.stop()

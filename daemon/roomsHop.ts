@@ -143,25 +143,37 @@ export function createRoomsHop(deps: HopDeps): RoomsHop {
   let stopped = false
 
   /**
-   * This daemon's own relay identity for one room — the householdKey.
+   * This daemon's own relay identity for one room ON ONE RELAY — the
+   * householdKey.
    *
    * Persisted, and that persistence is load-bearing: once the relay has
    * seen this key join with a valid joinSecret it is KNOWN, and known
    * keys survive joinSecret rotations. A fresh random key per boot would
    * mean every kick anywhere in the room locks the whole household out
    * until somebody hands the daemon a new invite.
+   *
+   * KEYED BY RELAY ORIGIN AND ROOM, never by room alone — review caught
+   * the harvest this closes: the relayUrl in a subscription is
+   * caller-chosen, so a malicious approved device could name the real
+   * roomId with its own https server and read the bearer key this
+   * daemon would otherwise have presented to the genuine relay, then
+   * use it there itself (a known key reconnects without the current
+   * joinSecret). Per-origin keys make that harvest worthless: the key
+   * an attacker's server sees is a fresh one that has never been — and
+   * will never be — presented anywhere else.
    */
-  function householdKey(roomId: string): string {
+  function householdKey(relayUrl: string, roomId: string): string {
+    const scope = `${relayUrl}|${roomId}`
     let stored: Record<string, string> = {}
     try {
       stored = JSON.parse(fs.readFileSync(keysPath, 'utf8')) as Record<string, string>
     } catch {
       // first use
     }
-    const existing = stored[roomId]
+    const existing = stored[scope]
     if (existing) return existing
     const fresh = `hh-${crypto.randomBytes(21).toString('base64url')}`
-    stored[roomId] = fresh
+    stored[scope] = fresh
     try {
       fs.writeFileSync(keysPath, JSON.stringify(stored))
     } catch (error) {
@@ -225,7 +237,9 @@ export function createRoomsHop(deps: HopDeps): RoomsHop {
     if (upstream.ws && upstream.ws.readyState === WebSocket.OPEN) return Promise.resolve()
     if (upstream.connecting) return upstream.connecting
     upstream.connecting = new Promise<void>((resolve, reject) => {
-      const params = new URLSearchParams({ member: householdKey(upstream.roomId) })
+      const params = new URLSearchParams({
+        member: householdKey(upstream.relayUrl, upstream.roomId)
+      })
       if (joinSecret) params.set('join', joinSecret)
       const ws = new WebSocket(
         `${upstream.relayUrl.replace(/^http/, 'ws')}/party/${upstream.roomId}?${params}`,
