@@ -305,6 +305,7 @@ export const MEDIA_HUB_CHANNELS = {
   roomsJoin: 'mediahub:rooms:join',
   roomsLeave: 'mediahub:rooms:leave',
   roomsRename: 'mediahub:rooms:rename',
+  roomsKick: 'mediahub:rooms:kick',
   roomsSetSharing: 'mediahub:rooms:set-sharing',
   roomsSetActivity: 'mediahub:rooms:set-activity',
   roomsSend: 'mediahub:rooms:send',

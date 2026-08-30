@@ -88,6 +88,15 @@ export interface MediaHubRawSettings {
   friendsShareActivity?: boolean
   /** Every room this install belongs to. See roomRules.ts's StoredRoom. */
   rooms?: import('./roomRules').StoredRoom[]
+  /** This install's Ed25519 room identity — the chip. PKCS8 DER,
+   *  base64, ENCRYPTED like every other credential here. The public
+   *  half is always derived from it, never stored, so the two cannot
+   *  drift apart. Losing it is losing the identity; ROOMS.md says so. */
+  roomIdentityKey?: string
+  /** The identity's monotonic cryptogram counter — EMV's ATC. One
+   *  global counter across rooms and relays: every server stores its
+   *  own floor, and a strictly-increasing value satisfies them all. */
+  roomIdentityCtr?: number
   theme?: string
   subtitleLanguage?: string
   audioLanguage?: string

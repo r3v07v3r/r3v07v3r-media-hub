@@ -39,6 +39,10 @@ export function RoomsSection() {
   const [choosing, setChoosing] = useState<string | null>(null)
   const [awaiting, setAwaiting] = useState<string | null>(null)
   const [renaming, setRenaming] = useState<string | null>(null)
+  // Two-step remove: the first click arms it, the second sends it. A
+  // kick rotates the room's keys for everyone — not a thing to do to a
+  // family member by misclick.
+  const [removing, setRemoving] = useState<string | null>(null)
   const [renameText, setRenameText] = useState('')
   const [newName, setNewName] = useState('')
   const [joinCode, setJoinCode] = useState('')
@@ -136,7 +140,13 @@ export function RoomsSection() {
         )}
         <span
           className={room.connected ? styles.dotOnline : styles.dotOffline}
-          aria-hidden="true"
+          title={
+            room.connected
+              ? room.transport === 'cache-hop'
+                ? 'Connected via your cache server — one connection for the whole network'
+                : 'Connected to the relay'
+              : 'Reconnecting…'
+          }
         />
       </div>
 
@@ -179,7 +189,34 @@ export function RoomsSection() {
                     <span className={styles.friendIdle}>Not watching anything</span>
                   )}
                 </span>
-                {member.activity ? (
+                {room.isAdmin && removing === key ? (
+                  <span className={styles.choiceRow}>
+                    <button
+                      type="button"
+                      className={styles.leaveButton}
+                      disabled={busy}
+                      onClick={() =>
+                        run(async () => {
+                          setRemoving(null)
+                          await window.api!.mediaHub!.rooms.kick(room.roomId, member.friendId)
+                          pushNotification({
+                            tone: 'success',
+                            message: `${member.name} removed — a fresh invite code is on your room.`
+                          })
+                        }, 'Could not remove them.')
+                      }
+                    >
+                      Really remove
+                    </button>
+                    <button
+                      type="button"
+                      className={styles.secondaryButton}
+                      onClick={() => setRemoving(null)}
+                    >
+                      Keep
+                    </button>
+                  </span>
+                ) : member.activity ? (
                   awaiting === key ? (
                     <button
                       type="button"
@@ -263,6 +300,17 @@ export function RoomsSection() {
                     </button>
                   )
                 ) : null}
+                {room.isAdmin && removing !== key && (
+                  <button
+                    type="button"
+                    className={styles.iconButton}
+                    disabled={busy}
+                    onClick={() => setRemoving(key)}
+                    title="Remove this member from the room"
+                  >
+                    Remove
+                  </button>
+                )}
               </li>
             )
           })}

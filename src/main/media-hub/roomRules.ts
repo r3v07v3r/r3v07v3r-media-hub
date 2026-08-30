@@ -1,8 +1,10 @@
 // The decisions in the rooms system that are worth pinning, with no
 // database, network or Electron in reach — the same split watchlistRules
 // has, for the same reason: rooms.ts is mostly sockets and timers, and
-// what actually decides who appears, who is believed, and what survives a
-// migration is the handful of functions here.
+// what actually decides who appears, who is believed, what a re-key may
+// change, and what survives a migration is the handful of functions
+// here. (party.ts is the one import with code in it, and it is pure
+// crypto and validation — nothing here touches a socket or a store.)
 //
 // WIRE COMPATIBILITY, stated once: the message types on the wire are
 // still 'friend-presence' and 'friend-join-*'. A member running the app
@@ -42,12 +44,18 @@ export interface PresenceRecord extends RoomMemberPresence {
  */
 export function recordPresence(
   presence: Map<string, PresenceRecord>,
+  /** The sender's identity, as the CALLER established it: the verified
+   *  signature's id in a signed room, the claimed friendId in the one
+   *  legacy room. What used to be a per-message claim is a parameter
+   *  precisely so this function cannot be handed an unverified one by
+   *  accident — there is no msg.friendId to fall back to. */
+  from: string,
   msg: Record<string, unknown>,
   selfFriendId: string,
   now: number,
   ageMs = 0
 ): { changed: boolean; isNewcomer: boolean } {
-  const friendId = String(msg.friendId || '')
+  const friendId = from
   if (!friendId || friendId === selfFriendId) return { changed: false, isNewcomer: false }
   const isNewcomer = !presence.has(friendId) && ageMs === 0
   const activity = (msg.activity as RoomActivity | undefined) || null
@@ -83,6 +91,28 @@ export function reapPresence(presence: Map<string, PresenceRecord>, now: number)
 }
 
 /**
+ * The relay's ban announcement, parsed — `{type:'banned', hashes:[ids]}`
+ * — or null for anything else. Read by the kick flow's BARRIER: the
+ * admin must OBSERVE the ban on its own room socket before broadcasting
+ * the re-key, because the kick's HTTP response and the ban's WebSocket
+ * frame travel on different connections with no ordering between them.
+ * On a shared hop, observing the ban proves the daemon has already
+ * applied it (it applies before it fans), which is exactly what makes
+ * the local re-key echo safe.
+ */
+export function parseBannedEnvelope(text: string): string[] | null {
+  try {
+    const envelope = JSON.parse(text) as { type?: string; hashes?: unknown }
+    if (envelope.type !== 'banned' || !Array.isArray(envelope.hashes)) return null
+    return envelope.hashes.filter(
+      (hash): hash is string => typeof hash === 'string' && /^[0-9a-f]{64}$/.test(hash)
+    )
+  } catch {
+    return null
+  }
+}
+
+/**
  * Whether an announced room name is believed.
  *
  * The admin's identity is the one baked into the invite code everyone
@@ -105,6 +135,67 @@ export function acceptRoomName(
   if (!adminFriendId || senderFriendId !== adminFriendId) return currentName
   const proposed = String(announcedName ?? '').slice(0, 40)
   return proposed.trim() ? proposed : currentName
+}
+
+/**
+ * Whether — and how — a room-rekey message is believed.
+ *
+ * A re-key replaces the room's secret and invite code, which makes it
+ * the most powerful message on the channel: accepted carelessly it could
+ * move members onto an attacker's secret or into a different room
+ * entirely. Three conditions, each closing a specific door:
+ *
+ *  1. Only the ADMIN's friendId is believed. (Within-room spoofing by
+ *     secret-holders remains possible and is a documented trust
+ *     boundary — see docs/ROOMS.md — but a random member's client must
+ *     still refuse to originate one.)
+ *  2. The new code must be for THE SAME ROOM — and a room's identity is
+ *     its relay URL AND its roomId. Same UUID on a different relay is
+ *     still a relocation: the id namespace belongs to the relay, and a
+ *     code pointing elsewhere would quietly move every copied invite
+ *     (and, after restart, this client) onto a server of the sender's
+ *     choosing.
+ *  3. The new code must name THE SAME ADMIN. There is no admin handoff
+ *     by message; a code that says otherwise is not this room's.
+ *
+ * Returns what to adopt, or null to ignore the message entirely.
+ */
+export function applyRekey(
+  room: { roomId: string; relayUrl: string; adminFriendId?: string },
+  msg: Record<string, unknown>,
+  /** The VERIFIED sender — in a signed room this came out of a
+   *  signature check, so "only the admin is believed" is cryptographic
+   *  here, not a claim about a claim. */
+  senderFriendId: string
+): { code: string; secret: string; joinSecret?: string; name: string } | null {
+  if (!room.adminFriendId || senderFriendId !== room.adminFriendId) return null
+  const code = typeof msg.code === 'string' ? msg.code : ''
+  const parsed = decodeShareCode(code)
+  if (!parsed || parsed.v !== 4) return null
+  if (parsed.relay.roomId !== room.roomId) return null
+  if (parsed.relay.url !== room.relayUrl) return null
+  if (parsed.admin.id !== room.adminFriendId) return null
+  return { code, secret: parsed.secret, joinSecret: parsed.join, name: parsed.name }
+}
+
+/** How many kicked identities a room remembers. Bounds a hostile admin
+ *  growing the settings file; a real room never approaches it. */
+export const KICKED_MEMBERS_KEPT = 64
+
+/**
+ * Records a removal the admin performed, bounded and idempotent.
+ *
+ * The list exists for one gate: a KICKED friendId speaking an OLD
+ * secret gets no presence row and, above all, no rescue. Without it the
+ * rescue would undo the kick for anyone whose transport the relay ban
+ * cannot reach (a member behind a household hop): they still hold the
+ * old secret, announce under it, and the admin would helpfully hand
+ * them the new code.
+ */
+export function rememberKicked(kicked: readonly string[] | undefined, friendId: string): string[] {
+  const list = [...(kicked ?? [])]
+  if (friendId && !list.includes(friendId)) list.push(friendId)
+  return list.slice(-KICKED_MEMBERS_KEPT)
 }
 
 /**
@@ -150,10 +241,35 @@ export interface StoredRoom {
   /** The creator's friendId, from the invite code. Absent for rooms that
    *  predate admins — which simply have none. */
   adminFriendId?: string
-  /** The relay's host token, held only by the creator. Kept because it is
-   *  the credential the worker-side kick will require; unused until then. */
+  /** The relay's host token, held only by the creator — the credential
+   *  the relay's kick endpoint requires. */
   roomToken?: string
+  /** The admin's raw public key (base64url), from the invite code — what
+   *  turns their renames and re-keys into verifiable statements. Absent
+   *  on the legacy room, which has no admin at all. */
+  adminPub?: string
+  /** The relay's admission ticket, from the invite code. Only strangers
+   *  need it — a known identity taps in without — but it is kept
+   *  current so re-shares of OUR copy of the code stay valid. */
+  joinSecret?: string
+  /** The secrets this room used before its re-keys, newest first and
+   *  bounded (see PREV_SECRETS_KEPT). Kept for one purpose: recognising
+   *  and rescuing a member who slept through rotations — possibly more
+   *  than one; a single slot left anyone offline through two kicks an
+   *  unreadable ghost forever. Never handed to anyone the relay would
+   *  refuse. */
+  prevSecrets?: string[]
+  /** friendIds this admin removed — the rescue and presence gate for
+   *  members whose transport a relay ban cannot reach. Admin-side only;
+   *  see rememberKicked. */
+  kickedFriendIds?: string[]
 }
+
+/** How many old room secrets a member keeps. Each kick pushes one; five
+ *  covers anyone offline through five consecutive kicks, and a room that
+ *  kicks more often than a straggler reconnects has bigger problems —
+ *  the admin can always hand them the fresh code by hand. */
+export const PREV_SECRETS_KEPT = 5
 
 /**
  * Migrates the single pre-rooms friends group into the rooms list.

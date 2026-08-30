@@ -196,7 +196,10 @@ export function createDaemonServer(deps: ServerDeps): http.Server {
         product: 'r3-cache',
         serverName,
         version,
-        unclaimed: admin.isUnclaimed()
+        unclaimed: admin.isUnclaimed(),
+        // The app checks this before routing room subscriptions through
+        // the LAN instead of straight to the relay.
+        roomsHop: true
       })
       return
     }
