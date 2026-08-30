@@ -91,7 +91,9 @@
   stroke-linecap: round;
   transform: rotate(-90deg);
   transform-origin: 50% 50%;
-  transition: stroke-dashoffset 0.3s linear, stroke 0.6s ease;
+  transition:
+    stroke-dashoffset 0.3s linear,
+    stroke 0.6s ease;
 }
 .gaugeLabel {
   position: absolute;
