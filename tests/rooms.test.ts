@@ -18,7 +18,8 @@ import {
   PRESENCE_TTL_MS,
   acceptRoomName,
   applyRekey,
-  memberKeysFor,
+  memberHashesFor,
+  rememberSeenMember,
   migrateLegacyRooms,
   reapPresence,
   recordPresence,
@@ -162,21 +163,70 @@ const SELF = 'self-friend-id'
 
 // --- who a kick can name ----------------------------------------------------
 //
-// A kick removes a PERSON, which at the relay means every memberKey the
-// room has seen their announcements carry — one person is several
+// A kick removes a PERSON, which at the relay means every identity HASH
+// the room has seen their announcements carry — one person is several
 // installs, and banning only the laptop leaves the TV in the room.
+// Hashes, never keys: a known key is a bearer credential at the relay,
+// and broadcasting it would hand every member (including one about to
+// be kicked) someone else's door pass.
+
+const LAPTOP = 'f'.repeat(64)
+const TV = 'e'.repeat(64)
 
 {
   const presence = new Map<string, PresenceRecord>()
-  recordPresence(presence, { friendId: 'a', name: 'Ana', memberKey: 'ana-laptop-key01' }, SELF, now)
-  recordPresence(presence, { friendId: 'a', name: 'Ana', memberKey: 'ana-tv-key000001' }, SELF, now)
-  recordPresence(presence, { friendId: 'a', name: 'Ana', memberKey: 'ana-tv-key000001' }, SELF, now)
+  recordPresence(presence, { friendId: 'a', name: 'Ana', memberKeyHash: LAPTOP }, SELF, now)
+  recordPresence(presence, { friendId: 'a', name: 'Ana', memberKeyHash: TV }, SELF, now)
+  recordPresence(presence, { friendId: 'a', name: 'Ana', memberKeyHash: TV }, SELF, now)
   assert.deepEqual(
-    memberKeysFor(presence, 'a'),
-    ['ana-laptop-key01', 'ana-tv-key000001'],
+    memberHashesFor(presence, undefined, 'a'),
+    [LAPTOP, TV],
     'every install announced is named, once each'
   )
-  assert.deepEqual(memberKeysFor(presence, 'ghost'), [], 'never seen means nothing to remove')
+  assert.deepEqual(
+    memberHashesFor(presence, undefined, 'ghost'),
+    [],
+    'never seen means nothing to remove'
+  )
+
+  // A raw-looking key in the announcement is ignored: only hashes are
+  // ever accepted from the wire, so a client cannot be tricked into
+  // spreading someone's credential even if a peer broadcasts one.
+  recordPresence(
+    presence,
+    { friendId: 'b', name: 'Ben', memberKeyHash: 'raw-key-not-hash' },
+    SELF,
+    now
+  )
+  assert.deepEqual(memberHashesFor(presence, undefined, 'b'), [], 'non-hashes are dropped')
+}
+
+// --- the identity history a kick actually reads ------------------------------
+//
+// Presence is soft state with a 70-second TTL. A kick has to name the
+// install the room saw last month — the review found the ephemeral
+// version's hole: let a record age out, kick when one install returns,
+// and the other install's key is never banned.
+
+{
+  let seen = rememberSeenMember(undefined, 'a', LAPTOP)
+  assert.ok(seen, 'a new identity is recorded')
+  assert.equal(
+    rememberSeenMember(seen ?? undefined, 'a', LAPTOP),
+    null,
+    'a known one changes nothing'
+  )
+  seen = rememberSeenMember(seen ?? undefined, 'a', TV) ?? seen
+
+  // The union: presence has aged out entirely, the history remembers.
+  const empty = new Map<string, PresenceRecord>()
+  assert.deepEqual(
+    memberHashesFor(empty, seen ?? undefined, 'a'),
+    [LAPTOP, TV],
+    'a kick reaches installs the room saw before presence aged them out'
+  )
+
+  assert.equal(rememberSeenMember(seen ?? undefined, 'a', 'not-a-hash'), null, 'garbage is refused')
 }
 
 // --- what a re-key may change -----------------------------------------------
@@ -188,7 +238,7 @@ const SELF = 'self-friend-id'
 {
   const ADMIN = 'admin-id'
   const relay = { url: 'https://relay.example.workers.dev', roomId: crypto.randomUUID() }
-  const room = { roomId: relay.roomId, adminFriendId: ADMIN }
+  const room = { roomId: relay.roomId, relayUrl: relay.url, adminFriendId: ADMIN }
   const freshCode = encodeRoomShareCode({
     relay,
     secret: 'rotated-secret',
@@ -209,9 +259,29 @@ const SELF = 'self-friend-id'
   )
 
   assert.equal(
-    applyRekey({ roomId: relay.roomId, adminFriendId: undefined }, { code: freshCode }, ADMIN),
+    applyRekey(
+      { roomId: relay.roomId, relayUrl: relay.url, adminFriendId: undefined },
+      { code: freshCode },
+      ADMIN
+    ),
     null,
     'a room with no admin cannot be re-keyed by message at all'
+  )
+
+  // Same UUID, different relay: still a relocation. The id namespace
+  // belongs to the relay, and accepting this would quietly move every
+  // copied invite — and, after restart, this client — onto a server of
+  // the sender's choosing.
+  const crossRelayCode = encodeRoomShareCode({
+    relay: { url: 'https://elsewhere.example.workers.dev', roomId: relay.roomId },
+    secret: 'rotated-secret',
+    name: 'Family',
+    adminFriendId: ADMIN
+  })
+  assert.equal(
+    applyRekey(room, { code: crossRelayCode }, ADMIN),
+    null,
+    'a re-key that switches relays is a relocation, not a rotation'
   )
 
   const otherRoomCode = encodeRoomShareCode({

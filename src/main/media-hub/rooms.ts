@@ -44,7 +44,9 @@ import {
   ANNOUNCE_INTERVAL_MS,
   acceptRoomName,
   applyRekey,
-  memberKeysFor,
+  memberHashesFor,
+  PREV_SECRETS_KEPT,
+  rememberSeenMember,
   migrateLegacyRooms,
   reapPresence,
   recordPresence,
@@ -153,8 +155,8 @@ function updateStoredRoomById(room: RoomState, change: (stored: StoredRoom) => v
 const rekeyOffers = new Map<string, number>()
 const REKEY_OFFER_INTERVAL_MS = 60_000
 
-function offerRekeyTo(room: RoomState, toFriendId: string): void {
-  if (!toFriendId || !room.ws || !room.stored.prevSecret) return
+function offerRekeyTo(room: RoomState, toFriendId: string, underSecret: string): void {
+  if (!toFriendId || !room.ws) return
   const key = `${room.roomId}:${toFriendId}`
   const last = rekeyOffers.get(key) ?? 0
   const now = Date.now()
@@ -162,8 +164,11 @@ function offerRekeyTo(room: RoomState, toFriendId: string): void {
   rekeyOffers.set(key, now)
   const { friendId } = selfIdentity()
   try {
+    // Under the secret the returner actually SPOKE — someone offline
+    // through two rotations is two dialects behind, and a hand-off in
+    // last week's dialect would be as unreadable to them as today's.
     room.ws.send(
-      encryptMessage(room.stored.prevSecret, {
+      encryptMessage(underSecret, {
         type: 'room-rekey',
         code: room.stored.code,
         toFriendId,
@@ -213,10 +218,14 @@ function announceRoom(room: RoomState): void {
     friendId,
     name
   }
-  // The relay identity rides along so other members can name this
-  // install in a kick — see memberKeysFor. Only membership rooms have
-  // one; legacy rooms have nothing to announce.
-  if (room.stored.memberKey) payload.memberKey = room.stored.memberKey
+  // A HASH of the relay identity rides along so other members can name
+  // this install in a kick — see memberHashesFor. Never the key itself:
+  // a known key is a bearer credential at the relay, and broadcasting
+  // it would hand every member (including one about to be kicked)
+  // someone else's door pass.
+  if (room.stored.memberKey) {
+    payload.memberKeyHash = crypto.createHash('sha256').update(room.stored.memberKey).digest('hex')
+  }
   if (room.stored.sharing && currentActivity) payload.activity = currentActivity
   // The room's name travels with its admin: renames reach members through
   // the same channel as everything else, and the rename rule on the
@@ -265,14 +274,20 @@ function onRoomMessage(room: RoomState, raw: unknown): void {
     // not an envelope — fall through and try to decrypt as-is
   }
   let msg = decryptMessage(room.secret, body) as Record<string, unknown> | null
-  let viaOldSecret = false
+  let matchedOldSecret: string | null = null
   // A message the current secret cannot read may be a member who was
-  // offline through a re-key, still speaking the old dialect. The old
-  // secret is kept for exactly this; anything IT cannot read either is
-  // noise and stays unread.
-  if (!msg && room.stored.prevSecret) {
-    msg = decryptMessage(room.stored.prevSecret, body) as Record<string, unknown> | null
-    viaOldSecret = msg !== null
+  // offline through re-keys — possibly several — still speaking an old
+  // dialect. The bounded chain of previous secrets exists for exactly
+  // this, newest first; anything NONE of them can read is noise and
+  // stays unread. Which one matched matters: the rescue answers in it.
+  if (!msg) {
+    for (const previous of room.stored.prevSecrets ?? []) {
+      msg = decryptMessage(previous, body) as Record<string, unknown> | null
+      if (msg) {
+        matchedOldSecret = previous
+        break
+      }
+    }
   }
   if (!msg) return
   const { friendId } = selfIdentity()
@@ -283,20 +298,20 @@ function onRoomMessage(room: RoomState, raw: unknown): void {
   // same admin in the new code.
   if (msg.type === 'room-rekey') {
     const adopted = applyRekey(
-      { roomId: room.roomId, adminFriendId: room.stored.adminFriendId },
+      { roomId: room.roomId, relayUrl: room.relayUrl, adminFriendId: room.stored.adminFriendId },
       msg,
       String(msg.fromFriendId || '')
     )
     if (!adopted || adopted.secret === room.secret) return
-    const previous = room.secret
+    const chain = [room.secret, ...(room.stored.prevSecrets ?? [])].slice(0, PREV_SECRETS_KEPT)
     room.secret = adopted.secret
     room.stored.code = adopted.code
     room.stored.joinSecret = adopted.joinSecret
-    room.stored.prevSecret = previous
+    room.stored.prevSecrets = chain
     updateStoredRoomById(room, (stored) => {
       stored.code = adopted.code
       stored.joinSecret = adopted.joinSecret
-      stored.prevSecret = previous
+      stored.prevSecrets = chain
     })
     pushStatus()
     return
@@ -308,8 +323,24 @@ function onRoomMessage(room: RoomState, raw: unknown): void {
     // read — safe, because the one party that must not hear it is banned
     // at the relay and cannot be connected to receive it. Admin only:
     // one rescuer is enough, and the admin's copy is always current.
-    if (viaOldSecret && room.stored.prevSecret && room.stored.adminFriendId === friendId) {
-      offerRekeyTo(room, String(msg.friendId || ''))
+    if (matchedOldSecret && room.stored.adminFriendId === friendId) {
+      offerRekeyTo(room, String(msg.friendId || ''), matchedOldSecret)
+    }
+    // The persisted identity history a kick reads. Presence is soft
+    // state with a 70-second TTL; this is not — a kick has to name the
+    // install the room saw last month, not just this minute.
+    if (typeof msg.memberKeyHash === 'string') {
+      const seen = rememberSeenMember(
+        room.stored.seenMembers,
+        String(msg.friendId || ''),
+        msg.memberKeyHash
+      )
+      if (seen) {
+        room.stored.seenMembers = seen
+        updateStoredRoomById(room, (stored) => {
+          stored.seenMembers = seen
+        })
+      }
     }
     const senderId = String(msg.friendId || '')
     const { changed, isNewcomer } = recordPresence(room.presence, msg, friendId, Date.now(), ageMs)
@@ -432,8 +463,18 @@ async function openSocket(room: RoomState): Promise<void> {
 }
 
 /** Brings one stored room to life. Idempotent by roomId — joining a code
- *  for a room already active is a no-op, not a second socket. */
-async function activateRoom(stored: StoredRoom): Promise<void> {
+ *  for a room already active is a no-op, not a second socket.
+ *
+ *  `firstConnectMustSucceed` is the difference between restoring a room
+ *  this install already belongs to (retry forever — the relay being
+ *  down is not a reason to lose a room) and JOINING one (the connect is
+ *  the proof the invite works, and a failure has to reach the person
+ *  holding a possibly-stale code rather than silently persisting a room
+ *  that can never connect). */
+async function activateRoom(
+  stored: StoredRoom,
+  { firstConnectMustSucceed = false } = {}
+): Promise<void> {
   const parsed = decodeShareCode(stored.code)
   if (!parsed || parsed.v === 1) throw new Error('That is not a valid room code.')
   if (rooms.has(parsed.relay.roomId)) return
@@ -452,6 +493,21 @@ async function activateRoom(stored: StoredRoom): Promise<void> {
   }
   rooms.set(room.roomId, room)
   ensureTimers()
+  if (firstConnectMustSucceed) {
+    try {
+      await openSocket(room)
+    } catch (error) {
+      deactivateRoom(room.roomId)
+      // 403 is the relay's admission gate: this install is a stranger to
+      // a membership room and the code's joinSecret is no longer
+      // current — rotated by a kick since the code was copied.
+      if (String(error).includes('403')) {
+        throw new Error('That invite has expired — ask for a fresh room code.')
+      }
+      throw error
+    }
+    return
+  }
   await openSocket(room).catch((error) => {
     logError('rooms:connect', String(error))
     scheduleReconnect(room)
@@ -608,7 +664,10 @@ export function registerRoomsIpc(): void {
       joinSecret: parsed.v === 3 ? parsed.join : undefined,
       memberKey: parsed.v === 3 && parsed.join ? newMemberKey() : undefined
     }
-    await activateRoom(stored)
+    // The connect IS the invite check: a stale code (joinSecret rotated
+    // by a kick since it was copied) fails loudly here instead of
+    // persisting a room that can never connect and calling it joined.
+    await activateRoom(stored, { firstConnectMustSucceed: true })
     persistRooms([...storedRooms(), stored])
     pushStatus()
     return { ok: true }
@@ -713,18 +772,22 @@ export function registerRoomsIpc(): void {
           'This room predates member removal. Make a new room to get it — or the relay server needs updating.'
         )
       }
-      // Every install their announcements ever named. Unseen means
-      // nothing to remove — a kick cannot reach a device the room has
-      // no name for, and pretending otherwise would report a removal
-      // that did not happen.
-      const memberKeys = memberKeysFor(room.presence, target)
-      if (!memberKeys.length) {
+      // Every install the room has EVER seen them announce — the union
+      // of live presence and the persisted history, because presence
+      // ages out in seconds and a kick has to reach the install from
+      // last month too. Hashes, never keys: what a kick names is the
+      // public form of an identity, not anyone's credential. Unseen
+      // still means nothing to remove — a kick cannot reach a device
+      // the room has no name for, and pretending otherwise would report
+      // a removal that did not happen.
+      const memberKeyHashes = memberHashesFor(room.presence, room.stored.seenMembers, target)
+      if (!memberKeyHashes.length) {
         throw new Error("They haven't been seen in this room yet — nothing to remove.")
       }
       const response = await fetch(`${room.relayUrl}/party/${room.roomId}/kick`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ roomToken: room.stored.roomToken, memberKeys })
+        body: JSON.stringify({ roomToken: room.stored.roomToken, memberKeyHashes })
       })
       if (!response.ok) throw new Error(`The relay refused the removal: ${response.status}`)
       const { joinSecret } = (await response.json()) as { joinSecret: string }
@@ -750,14 +813,15 @@ export function registerRoomsIpc(): void {
         // Members who miss this are rescued by the returning-member
         // hand-off the next time they announce under the old secret.
       }
+      const chain = [previous, ...(room.stored.prevSecrets ?? [])].slice(0, PREV_SECRETS_KEPT)
       room.secret = newSecret
       room.stored.code = newCode
       room.stored.joinSecret = joinSecret
-      room.stored.prevSecret = previous
+      room.stored.prevSecrets = chain
       updateStoredRoomById(room, (stored) => {
         stored.code = newCode
         stored.joinSecret = joinSecret
-        stored.prevSecret = previous
+        stored.prevSecrets = chain
       })
       room.presence.delete(target)
       pushStatus()

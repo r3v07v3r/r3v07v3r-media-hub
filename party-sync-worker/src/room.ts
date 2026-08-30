@@ -56,6 +56,9 @@ interface SocketAttachment {
   /** The member identity this connection presented, for rooms with a
    *  membership layer. Absent on legacy rooms and parties. */
   memberKey?: string
+  /** sha256 of that identity — what kicks name, so it is precomputed
+   *  here rather than derived per kick. */
+  memberKeyHash?: string
   /** Last raw (still encrypted) message this connection sent. */
   last?: string
   /** When that message arrived, by this object's clock. */
@@ -115,9 +118,22 @@ export const MAX_KNOWN_MEMBERS = 256
 export const MAX_BANNED_MEMBERS = 512
 
 const MEMBER_KEY_RE = /^[a-zA-Z0-9_-]{8,64}$/
+const MEMBER_KEY_HASH_RE = /^[0-9a-f]{64}$/
 
 export function isValidMemberKey(key: unknown): key is string {
   return typeof key === 'string' && MEMBER_KEY_RE.test(key)
+}
+
+export function isValidMemberKeyHash(hash: unknown): hash is string {
+  return typeof hash === 'string' && MEMBER_KEY_HASH_RE.test(hash)
+}
+
+/** sha256 hex of a memberKey — the only form of the key that ever
+ *  travels anywhere but the key's own connection. Must stay in lockstep
+ *  with the client's hashing (node:crypto sha256 hex of the utf8 key). */
+export async function memberKeyHashOf(memberKey: string): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(memberKey))
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('')
 }
 
 export type AdmissionVerdict = 'admit' | 'admit-and-register' | 'refuse'
@@ -139,17 +155,29 @@ export type AdmissionVerdict = 'admit' | 'admit-and-register' | 'refuse'
  *    own room. Rotation gates STRANGERS, not members.
  *  - A stranger with the current joinSecret is admitted and becomes
  *    known. A stranger without it is refused.
+ *
+ * BANS ARE ADDRESSED BY HASH, admission by the key itself. The raw
+ * memberKey is a bearer credential — a known one reconnects without the
+ * current joinSecret — so it is a secret between one install and this
+ * object, and never travels anywhere else. What members see of each
+ * other, and therefore what a kick can name, is the sha256 of the key:
+ * enough to ban by, useless to connect with. Review found the earlier
+ * version broadcasting raw keys in presence, which let a kicked member
+ * who had cached a KEPT member's key walk straight back in as them.
  */
 export function admissionVerdict(input: {
   currentJoinSecret: string | null
   memberKey: string | null
+  /** sha256 of memberKey, computed by the caller (hashing is async in
+   *  workers and this stays a pure function). */
+  memberKeyHash: string | null
   presentedJoinSecret: string | null
   known: ReadonlySet<string>
-  banned: ReadonlySet<string>
+  bannedHashes: ReadonlySet<string>
 }): AdmissionVerdict {
   if (!input.currentJoinSecret) return 'admit'
   if (!input.memberKey || !isValidMemberKey(input.memberKey)) return 'refuse'
-  if (input.banned.has(input.memberKey)) return 'refuse'
+  if (input.memberKeyHash && input.bannedHashes.has(input.memberKeyHash)) return 'refuse'
   if (input.known.has(input.memberKey)) return 'admit'
   if (input.presentedJoinSecret && input.presentedJoinSecret === input.currentJoinSecret) {
     return input.known.size >= MAX_KNOWN_MEMBERS ? 'refuse' : 'admit-and-register'
@@ -242,7 +270,7 @@ export class PartyRoom {
     // ever in this response — which is what forces the client's re-key
     // broadcast to happen after the ban, not before. See docs/ROOMS.md.
     if (request.method === 'POST' && url.pathname === '/kick') {
-      const body = (await request.json()) as { roomToken?: string; memberKeys?: unknown }
+      const body = (await request.json()) as { roomToken?: string; memberKeyHashes?: unknown }
       if (this.roomToken === null) {
         this.roomToken = (await this.state.storage.get<string>('roomToken')) ?? null
       }
@@ -253,28 +281,41 @@ export class PartyRoom {
       if (!this.joinSecret) {
         return new Response('This room has no membership layer.', { status: 409 })
       }
-      const keys = (Array.isArray(body.memberKeys) ? body.memberKeys : []).filter(isValidMemberKey)
-      if (!keys.length) return new Response('No members named.', { status: 400 })
-      for (const key of keys) {
-        this.banned!.add(key)
-        this.known!.delete(key)
+      // Kicks name HASHES — members only ever see each other's hashes,
+      // and the raw key stays a secret between its install and this
+      // object. See admissionVerdict's header.
+      const hashes = (Array.isArray(body.memberKeyHashes) ? body.memberKeyHashes : []).filter(
+        isValidMemberKeyHash
+      )
+      if (!hashes.length) return new Response('No members named.', { status: 400 })
+      const kicked = new Set(hashes)
+      for (const hash of hashes) this.banned!.add(hash)
+      // The known set stores raw keys; drop the ones whose hash was just
+      // banned so they stop counting toward the registration cap.
+      for (const key of [...this.known!]) {
+        if (kicked.has(await memberKeyHashOf(key))) this.known!.delete(key)
       }
       // Oldest banned entries fall off past the cap — safe, because an
-      // evicted key is merely unknown, and unknown needs the CURRENT
-      // joinSecret, which is about to rotate.
+      // evicted hash's key becomes merely unknown, and unknown needs the
+      // CURRENT joinSecret, which is about to rotate.
       const bannedList = [...this.banned!].slice(-MAX_BANNED_MEMBERS)
       this.banned = new Set(bannedList)
       const joinSecret = crypto.randomUUID()
       this.joinSecret = joinSecret
-      await this.state.storage.put('joinSecret', joinSecret)
-      await this.state.storage.put('known', [...this.known!])
-      await this.state.storage.put('banned', bannedList)
+      // One atomic write for all three, not three writes: a crash between
+      // them would strand storage with the rotated joinSecret but the
+      // target still known and unbanned — a kick that silently undoes
+      // itself on the object's next wake. Multi-key put is transactional.
+      await this.state.storage.put({
+        joinSecret,
+        known: [...this.known!],
+        banned: bannedList
+      })
       // Disconnect AFTER the ban is persisted: a kicked client that
       // races a reconnect must hit the ban, not the old state.
-      const kicked = new Set(keys)
       for (const socket of this.state.getWebSockets()) {
         const attachment = this.attachmentOf(socket)
-        if (attachment?.memberKey && kicked.has(attachment.memberKey)) {
+        if (attachment?.memberKeyHash && kicked.has(attachment.memberKeyHash)) {
           try {
             socket.close(4001, 'Removed from this room.')
           } catch {
@@ -303,12 +344,15 @@ export class PartyRoom {
       // with nothing checked — so nothing about parties changed.
       await this.loadMembership()
       const memberKey = url.searchParams.get('member')
+      const memberKeyHash =
+        memberKey && isValidMemberKey(memberKey) ? await memberKeyHashOf(memberKey) : null
       const verdict = admissionVerdict({
         currentJoinSecret: this.joinSecret || null,
         memberKey,
+        memberKeyHash,
         presentedJoinSecret: url.searchParams.get('join'),
         known: this.known!,
-        banned: this.banned!
+        bannedHashes: this.banned!
       })
       if (verdict === 'refuse') {
         return new Response('Not a member of this room.', { status: 403 })
@@ -335,7 +379,7 @@ export class PartyRoom {
       server.serializeAttachment({
         connId,
         isHost,
-        ...(memberKey && this.joinSecret ? { memberKey } : {})
+        ...(memberKey && this.joinSecret ? { memberKey, memberKeyHash: memberKeyHash! } : {})
       } satisfies SocketAttachment)
       server.send(JSON.stringify({ type: 'assigned', connId }))
 
