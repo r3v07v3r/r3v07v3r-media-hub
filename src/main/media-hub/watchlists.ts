@@ -55,25 +55,66 @@ export interface PlannedEntry {
 /** Map of media id -> the services that have it planned. */
 export type PlannedSources = Record<string, PlannedSource[]>
 
+/**
+ * What one service's pull actually did.
+ *
+ * Reported per service rather than as one total, because the failure that
+ * matters most is the quiet one: two lists arriving and a third erroring
+ * looks exactly like a short list unless somebody is told. `unmapped`
+ * carries the other silent case — anime entries dropped for want of a
+ * Kitsu id, which used to vanish with nobody counting them.
+ */
+export interface PlannedServiceReport {
+  service: PlannedSource
+  connected: boolean
+  pulled: number
+  unmapped: number
+  error?: string
+}
+
+export interface PlannedSyncReport {
+  at: number
+  services: PlannedServiceReport[]
+  /** Titles newly added to the local list by this pull. */
+  added: number
+}
+
+const REPORT_CACHE_KEY = 'planned:last-sync'
+
+interface SimklIds {
+  imdb?: string
+  mal?: number | string
+  anidb?: number | string
+}
+
 interface SimklPlannedPayload {
-  movies?: { movie?: { title?: string; year?: number; ids?: { imdb?: string } } }[]
-  shows?: { show?: { title?: string; year?: number; ids?: { imdb?: string } } }[]
+  movies?: { movie?: { title?: string; year?: number; ids?: SimklIds } }[]
+  shows?: { show?: { title?: string; year?: number; ids?: SimklIds } }[]
+  anime?: { show?: { title?: string; year?: number; ids?: SimklIds } }[]
 }
 
 /**
  * Simkl's plan-to-watch, which it calls `plantowatch`.
  *
- * Anime is deliberately not requested. Simkl returns it under its own
- * ids, and this app identifies anime by Kitsu id — mapping between them
- * is the job animeSeasons.ts does with real care, and doing it badly here
- * would file somebody's anime as an unmatched stranger.
+ * ANIME COMES THROUGH ITS FOREIGN IDS. Simkl files anime under its own
+ * id, which means nothing here — but it also carries `mal` and `anidb`
+ * on the same record, and both are keys the id bridge can already turn
+ * into the Kitsu id this app files anime under. So the mapping is the
+ * bridge's existing job rather than a second, worse one written here.
+ * An entry that resolves to nothing is counted and dropped, never
+ * invented: a row that cannot be opened is worse than a row that is not
+ * there, and now the count says how often that happens.
  */
-async function fetchSimklPlanned(priority: TaskPriority): Promise<PlannedEntry[]> {
-  if (!simklCredentials().accessToken) return []
-  const [movies, shows] = await Promise.all([
+async function fetchSimklPlanned(
+  priority: TaskPriority
+): Promise<{ entries: PlannedEntry[]; unmapped: number }> {
+  if (!simklCredentials().accessToken) return { entries: [], unmapped: 0 }
+  const [movies, shows, anime] = await Promise.all([
     simklRequest<SimklPlannedPayload>('/sync/all-items/movies/plantowatch', {}, priority),
-    simklRequest<SimklPlannedPayload>('/sync/all-items/shows/plantowatch', {}, priority)
+    simklRequest<SimklPlannedPayload>('/sync/all-items/shows/plantowatch', {}, priority),
+    simklRequest<SimklPlannedPayload>('/sync/all-items/anime/plantowatch', {}, priority)
   ])
+  let unmapped = 0
   const out: PlannedEntry[] = []
   for (const entry of movies.movies || []) {
     const imdb = entry.movie?.ids?.imdb
@@ -97,7 +138,26 @@ async function fetchSimklPlanned(priority: TaskPriority): Promise<PlannedEntry[]
       source: 'simkl'
     })
   }
-  return out
+  for (const entry of anime.anime || []) {
+    const ids = entry.show?.ids
+    // MAL first, AniDB second — both are supported by the bridge, and MAL
+    // is the one Simkl fills in most reliably for anime.
+    const kitsuId =
+      (ids?.mal !== undefined ? await kitsuIdForExternal('mal', ids.mal, priority) : null) ??
+      (ids?.anidb !== undefined ? await kitsuIdForExternal('anidb', ids.anidb, priority) : null)
+    if (!kitsuId) {
+      unmapped += 1
+      continue
+    }
+    out.push({
+      id: `kitsu:${kitsuId}`,
+      type: 'anime',
+      title: entry.show?.title ?? '',
+      year: entry.show?.year ? String(entry.show.year) : undefined,
+      source: 'simkl'
+    })
+  }
+  return { entries: out, unmapped }
 }
 
 interface TraktWatchlistRow {
@@ -106,8 +166,10 @@ interface TraktWatchlistRow {
 }
 
 /** Trakt's watchlist, which is its plan-to-watch by another name. */
-async function fetchTraktPlanned(priority: TaskPriority): Promise<PlannedEntry[]> {
-  if (!traktCredentials().accessToken) return []
+async function fetchTraktPlanned(
+  priority: TaskPriority
+): Promise<{ entries: PlannedEntry[]; unmapped: number }> {
+  if (!traktCredentials().accessToken) return { entries: [], unmapped: 0 }
   const [movies, shows] = await Promise.all([
     traktRequest<TraktWatchlistRow[]>('/sync/watchlist/movies', {}, priority),
     traktRequest<TraktWatchlistRow[]>('/sync/watchlist/shows', {}, priority)
@@ -135,7 +197,7 @@ async function fetchTraktPlanned(priority: TaskPriority): Promise<PlannedEntry[]
       source: 'trakt'
     })
   }
-  return out
+  return { entries: out, unmapped: 0 }
 }
 
 interface MalListRow {
@@ -157,8 +219,8 @@ interface MalListResponse {
  * nothing else in the app would ever match — a row that cannot be opened
  * is worse than a row that is not there.
  */
-async function fetchMalPlanned(): Promise<PlannedEntry[]> {
-  if (!malCredentials().accessToken) return []
+async function fetchMalPlanned(): Promise<{ entries: PlannedEntry[]; unmapped: number }> {
+  if (!malCredentials().accessToken) return { entries: [], unmapped: 0 }
   const rows: MalListRow[] = []
   let pathname: string | null =
     '/users/@me/animelist?fields=list_status&limit=1000&status=plan_to_watch'
@@ -170,6 +232,7 @@ async function fetchMalPlanned(): Promise<PlannedEntry[]> {
       : null
   }
   const out: PlannedEntry[] = []
+  let unmapped = 0
   for (const row of rows) {
     if (row.list_status?.status !== 'plan_to_watch') continue
     const malId = row.node?.id
@@ -177,7 +240,10 @@ async function fetchMalPlanned(): Promise<PlannedEntry[]> {
     // The same resolver malSync uses for its own pushes, so a title
     // lands under exactly the id the rest of the app files it by.
     const kitsuId = await kitsuIdForExternal('mal', malId, 'background')
-    if (!kitsuId) continue
+    if (!kitsuId) {
+      unmapped += 1
+      continue
+    }
     out.push({
       id: `kitsu:${kitsuId}`,
       type: 'anime',
@@ -186,7 +252,7 @@ async function fetchMalPlanned(): Promise<PlannedEntry[]> {
       source: 'mal'
     })
   }
-  return out
+  return { entries: out, unmapped }
 }
 
 /**
@@ -207,18 +273,56 @@ async function fetchMalPlanned(): Promise<PlannedEntry[]> {
  */
 export async function syncPlannedFromServices(
   priority: TaskPriority = 'background'
-): Promise<{ added: number; sources: PlannedSources }> {
+): Promise<PlannedSyncReport> {
+  const connected = {
+    simkl: Boolean(simklCredentials().accessToken),
+    trakt: Boolean(traktCredentials().accessToken),
+    mal: Boolean(malCredentials().accessToken)
+  }
   const settled = await Promise.allSettled([
     fetchSimklPlanned(priority),
     fetchTraktPlanned(priority),
     fetchMalPlanned()
   ])
+  const order: PlannedSource[] = ['simkl', 'trakt', 'mal']
   const entries: PlannedEntry[] = []
-  for (const result of settled) {
-    if (result.status === 'fulfilled') entries.push(...result.value)
-    else logError('watchlists:pull', result.reason)
+  const services: PlannedServiceReport[] = []
+  settled.forEach((result, index) => {
+    const service = order[index]
+    if (result.status === 'fulfilled') {
+      entries.push(...result.value.entries)
+      services.push({
+        service,
+        connected: connected[service],
+        pulled: result.value.entries.length,
+        unmapped: result.value.unmapped
+      })
+      return
+    }
+    logError('watchlists:pull', result.reason)
+    services.push({
+      service,
+      connected: connected[service],
+      pulled: 0,
+      unmapped: 0,
+      // The real message, not a category. "Something went wrong" is what
+      // sent somebody to the logs; the service's own words are usually
+      // enough to say whether it is a token, a rate limit or a typo here.
+      error: (result.reason as Error)?.message || String(result.reason)
+    })
+  })
+
+  const report = (added: number): PlannedSyncReport => {
+    const full = { at: Date.now(), services, added }
+    getDatabase().putCache(REPORT_CACHE_KEY, full, SOURCES_TTL_MS, { durable: true })
+    return full
   }
-  if (!entries.length) return { added: 0, sources: {} }
+
+  // Nothing came back at all. The sources map is deliberately NOT cleared:
+  // every service being unreachable is not evidence that anybody's list is
+  // empty, and wiping the tags on that basis would make an outage look
+  // like somebody had deleted their watchlists.
+  if (!entries.length) return report(0)
 
   const sources: PlannedSources = {}
   for (const entry of entries) {
@@ -246,7 +350,13 @@ export async function syncPlannedFromServices(
   }
 
   db.putCache(PLANNED_SOURCES_CACHE_KEY, sources, SOURCES_TTL_MS, { durable: true })
-  return { added, sources }
+  return report(added)
+}
+
+/** What the last pull did, for the Settings panel that shows it. Null
+ *  before one has ever run. */
+export function lastPlannedSyncReport(): PlannedSyncReport | null {
+  return getDatabase().getCache<PlannedSyncReport>(REPORT_CACHE_KEY, { allowExpired: true })
 }
 
 /** Whatever the last pull recorded. Expired is still worth showing: a

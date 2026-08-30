@@ -63,7 +63,12 @@ import {
 import { airingStatus, continueWatchingList } from './core'
 import { catalogData, metadata } from './catalog'
 import { getDatabase } from './dbState'
-import { plannedSources, syncPlannedFromServices } from './watchlists'
+import {
+  lastPlannedSyncReport,
+  plannedSources,
+  syncPlannedFromServices,
+  type PlannedSyncReport
+} from './watchlists'
 import { fetchJson } from './httpClient'
 import { mapWithLimit, type TaskPriority } from './taskScheduler'
 import { handle } from './ipcGuard'
@@ -1124,10 +1129,15 @@ export function registerTrackingIpc(): void {
    * added a pile of titles on the web and does not want to wait for the
    * next pass to see them.
    */
-  handle<undefined, { added: number }>(MEDIA_HUB_CHANNELS.trackingPlannedSync, async () => {
-    const result = await syncPlannedFromServices('interactive')
-    return { added: result.added }
-  })
+  handle<undefined, PlannedSyncReport>(MEDIA_HUB_CHANNELS.trackingPlannedSync, async () =>
+    syncPlannedFromServices('interactive')
+  )
+
+  /** The last pull's result, so the panel has something to show before
+   *  anybody presses the button. */
+  handle<undefined, PlannedSyncReport | null>(MEDIA_HUB_CHANNELS.trackingPlannedReport, async () =>
+    lastPlannedSyncReport()
+  )
 
   handle<TrackableItem, { tracked: boolean }>(MEDIA_HUB_CHANNELS.trackingToggle, (_e, item) => {
     const db = getDatabase()

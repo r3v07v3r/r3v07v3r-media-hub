@@ -80,6 +80,7 @@ import type {
   SkipTimes,
   SourcePreference,
   StreamCacheEntry,
+  PlannedSyncReport,
   StreamCacheUsage,
   StreamCandidate,
   StreamResolveResult,
@@ -503,8 +504,12 @@ const api = {
       list: (): Promise<TrackingListResult> => ipcRenderer.invoke(MEDIA_HUB_CHANNELS.trackingList),
       /** Pull plan-to-watch from every connected tracking service now,
        *  rather than waiting for the background pass. */
-      syncPlanned: (): Promise<{ added: number }> =>
+      syncPlanned: (): Promise<PlannedSyncReport> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.trackingPlannedSync),
+      /** The last pull's result, so a panel has something to show
+       *  before anybody presses the button. */
+      plannedReport: (): Promise<PlannedSyncReport | null> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.trackingPlannedReport),
       toggle: (item: TrackableItem): Promise<{ tracked: boolean }> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.trackingToggle, item),
       markWatched: (payload: MarkWatchedPayload): Promise<MarkWatchedResult> =>
