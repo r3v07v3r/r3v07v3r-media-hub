@@ -311,6 +311,26 @@ export class PartyRoom {
         known: [...this.known!],
         banned: bannedList
       })
+      // Tell the survivors who was banned — by hash, which is all anyone
+      // but the key's owner ever knows. A household hop NEEDS this: its
+      // shared upstream is authenticated as the household, so the ban
+      // cannot close a kicked member's transport there, and the hop is
+      // the enforcement point. Sent before this request returns, which
+      // is what guarantees it precedes the admin's re-key on every
+      // surviving socket — the re-key only leaves the admin after the
+      // response arrives. Plaintext metadata, like the envelopes
+      // themselves: it names an identity hash, never a key and never
+      // content.
+      const bannedEnvelope = JSON.stringify({ type: 'banned', hashes })
+      for (const socket of this.state.getWebSockets()) {
+        const attachment = this.attachmentOf(socket)
+        if (attachment?.memberKeyHash && kicked.has(attachment.memberKeyHash)) continue
+        try {
+          socket.send(bannedEnvelope)
+        } catch {
+          // a dead socket is already gone
+        }
+      }
       // Disconnect AFTER the ban is persisted: a kicked client that
       // races a reconnect must hit the ban, not the old state.
       for (const socket of this.state.getWebSockets()) {

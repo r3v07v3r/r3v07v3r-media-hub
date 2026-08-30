@@ -20,13 +20,36 @@ import WebSocket from 'ws'
 /** What rooms.ts needs from a socket — satisfied by both the relay
  *  WebSocket and the hop adapter, which is the whole point. */
 export interface RoomSocket {
-  send(data: string): void
+  /** `transient` marks a send the hop must never retain — re-keys,
+   *  which must not be replayed to whoever subscribes next. The relay
+   *  WebSocket ignores the option; retention there is guarded by the
+   *  relay's own transport bans. */
+  send(data: string, opts?: { transient?: boolean }): void
   close(): void
   on(event: 'message', listener: (raw: unknown) => void): unknown
   on(event: 'close' | 'error', listener: () => void): unknown
 }
 
 const SUBSCRIBE_TIMEOUT_MS = 6000
+
+/** Adapts the relay's raw WebSocket to the RoomSocket shape. The only
+ *  translation is dropping the hop-only `transient` option — the relay
+ *  path needs no equivalent, because retention THERE is guarded by the
+ *  relay's own transport bans. */
+export function asRoomSocket(ws: WebSocket): RoomSocket {
+  return {
+    send: (data: string) => ws.send(data),
+    close: () => {
+      try {
+        ws.close()
+      } catch {
+        // already down
+      }
+    },
+    on: (event: 'message' | 'close' | 'error', listener: (...args: unknown[]) => void) =>
+      ws.on(event, listener)
+  }
+}
 
 class HopSocket extends EventEmitter implements RoomSocket {
   constructor(
@@ -46,10 +69,13 @@ class HopSocket extends EventEmitter implements RoomSocket {
         // The relay's own envelope, untouched — rooms.ts parses it the
         // same way whichever path it took.
         this.emit('message', msg.raw)
-      } else if (msg.type === 'room-down') {
-        // The daemon lost the relay. To rooms.ts this is a closed
-        // socket: its ordinary backoff re-subscribes, and the first
-        // subscriber back recreates the upstream.
+      } else if (msg.type === 'room-down' || msg.type === 'room-kicked') {
+        // room-down: the daemon lost the relay — a closed socket to
+        // rooms.ts, whose backoff re-subscribes. room-kicked: the relay
+        // banned this identity and the daemon dropped it; the same
+        // close leads to a re-subscription the daemon refuses and a
+        // direct connect the relay refuses, which is a removal doing
+        // exactly what it says.
         this.emit('close')
         try {
           ws.close()
@@ -62,8 +88,15 @@ class HopSocket extends EventEmitter implements RoomSocket {
     ws.on('error', () => this.emit('error'))
   }
 
-  send(data: string): void {
-    this.ws.send(JSON.stringify({ type: 'send', roomId: this.roomId, body: data }))
+  send(data: string, opts?: { transient?: boolean }): void {
+    this.ws.send(
+      JSON.stringify({
+        type: 'send',
+        roomId: this.roomId,
+        body: data,
+        ...(opts?.transient ? { transient: true } : {})
+      })
+    )
   }
 
   close(): void {
@@ -87,7 +120,7 @@ class HopSocket extends EventEmitter implements RoomSocket {
 export function connectHopWs(
   daemonUrl: string,
   daemonToken: string,
-  sub: { roomId: string; relayUrl: string; join?: string }
+  sub: { roomId: string; relayUrl: string; join?: string; memberKeyHash?: string }
 ): Promise<RoomSocket> {
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(
@@ -98,12 +131,16 @@ export function connectHopWs(
       reject(new Error('The cache server did not answer the room subscription.'))
     }, SUBSCRIBE_TIMEOUT_MS)
     ws.once('open', () => {
+      // The identity HASH rides along — the same public form presence
+      // announcements carry — so the daemon can honour a relay ban
+      // against this subscriber. The raw key never crosses the LAN.
       ws.send(
         JSON.stringify({
           type: 'sub',
           roomId: sub.roomId,
           relayUrl: sub.relayUrl,
-          ...(sub.join ? { join: sub.join } : {})
+          ...(sub.join ? { join: sub.join } : {}),
+          ...(sub.memberKeyHash ? { memberKeyHash: sub.memberKeyHash } : {})
         })
       )
     })

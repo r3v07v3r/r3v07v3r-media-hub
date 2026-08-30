@@ -80,7 +80,11 @@ async function main(): Promise<void> {
   const hop = createRoomsHop({
     isAuthorized: (token) => token === 'good-token',
     dataDir,
-    log: () => {}
+    log: () => {},
+    // Shrunk so the pacing test finishes in milliseconds; production
+    // uses the defaults that sit just under the relay's own ceiling.
+    rateWindowMs: 300,
+    maxSendsPerWindow: 5
   })
   const daemonServer = http.createServer()
   daemonServer.on('upgrade', (req, socket, head) => {
@@ -89,7 +93,8 @@ async function main(): Promise<void> {
   const daemonPort = await listen(daemonServer)
 
   const subscribe = (
-    token = 'good-token'
+    token = 'good-token',
+    memberKeyHash?: string
   ): Promise<{ ws: WebSocket; messages: string[]; status?: number }> =>
     new Promise((resolve) => {
       const ws = new WebSocket(`ws://127.0.0.1:${daemonPort}/api/rooms/hop?token=${token}`)
@@ -99,7 +104,15 @@ async function main(): Promise<void> {
         resolve({ ws, messages, status: res.statusCode })
       )
       ws.once('open', () => {
-        ws.send(JSON.stringify({ type: 'sub', roomId: ROOM_ID, relayUrl, join: 'join-1' }))
+        ws.send(
+          JSON.stringify({
+            type: 'sub',
+            roomId: ROOM_ID,
+            relayUrl,
+            join: 'join-1',
+            ...(memberKeyHash ? { memberKeyHash } : {})
+          })
+        )
         const wait = (): void => {
           if (messages.some((m) => m.includes('sub-ok') || m.includes('sub-error'))) {
             resolve({ ws, messages })
@@ -189,6 +202,99 @@ async function main(): Promise<void> {
       `${name} hears the wider room through the shared upstream`
     )
   }
+
+  // --- a kick reaches through the hop ----------------------------------------
+  //
+  // The relay bans a kicked member's PERSONAL key, but the shared
+  // upstream is the household's — the ban cannot close their transport
+  // here. The relay's banned broadcast plus the daemon acting on it IS
+  // the removal for hop members: dropped before anything else fans to
+  // them, and refused on re-subscription.
+  const KICKED_HASH = 'd'.repeat(64)
+  const kicked = await subscribe('good-token', KICKED_HASH)
+  assert.ok(
+    kicked.messages.some((m) => m.includes('sub-ok')),
+    'the doomed member subscribes'
+  )
+  const kickedNotice = new Promise<boolean>((resolve) => {
+    const timer = setTimeout(() => resolve(false), 2000)
+    kicked.ws.on('message', (raw) => {
+      if (String(raw).includes('room-kicked')) {
+        clearTimeout(timer)
+        resolve(true)
+      }
+    })
+  })
+  b.messages.length = 0
+  // The relay announces the ban to the household connection...
+  for (const conn of relayConns) {
+    if (conn.member?.startsWith('hh-')) {
+      conn.ws.send(JSON.stringify({ type: 'banned', hashes: [KICKED_HASH] }))
+    }
+  }
+  assert.equal(await kickedNotice, true, 'the kicked subscriber is told and dropped')
+  await settle()
+  // ...and what follows on that socket (the admin's re-key) must not
+  // reach them. B, unkicked, still hears the room.
+  const kickedCount = kicked.messages.length
+  remote.send('post-kick-ciphertext')
+  await settle()
+  assert.ok(
+    b.messages.some((m) => m.includes('post-kick-ciphertext')),
+    'survivors keep hearing the room'
+  )
+  assert.equal(
+    kicked.messages.length,
+    kickedCount,
+    'NOTHING that follows the ban reaches the kicked subscriber'
+  )
+  const again = await subscribe('good-token', KICKED_HASH)
+  assert.ok(
+    again.messages.some((m) => m.includes('Removed from this room')),
+    'a banned hash cannot re-subscribe while this daemon runs'
+  )
+  again.ws.close()
+  kicked.ws.close()
+
+  // --- transient sends are never retained ------------------------------------
+  //
+  // The flag exists for re-keys: retained, one would be replayed to the
+  // NEXT local subscriber — exactly who a re-key must never reach.
+  a.ws.send(
+    JSON.stringify({ type: 'send', roomId: ROOM_ID, body: 'rekey-ciphertext', transient: true })
+  )
+  await settle()
+  const late = await subscribe()
+  assert.ok(
+    !late.messages.some((m) => m.includes('rekey-ciphertext')),
+    'a transient send is not replayed to later subscribers'
+  )
+  assert.ok(
+    b.messages.some((m) => {
+      const envelope = envelopeOf(m)
+      return envelope?.type === 'relay' && envelope.body === 'rekey-ciphertext'
+    }),
+    'but current siblings still hear it — the echo is not retention'
+  )
+  late.ws.close()
+  await settle()
+
+  // --- sends are paced under the relay's rate ceiling ------------------------
+  //
+  // The household's whole traffic rides ONE relay socket; a burst past
+  // the relay's per-socket limit would get the room closed for everyone.
+  // Excess queues and flushes, so everything arrives — just paced.
+  relayReceived.length = 0
+  for (let i = 0; i < 12; i++) {
+    a.ws.send(JSON.stringify({ type: 'send', roomId: ROOM_ID, body: `burst-${i}` }))
+  }
+  await settle(100)
+  assert.ok(
+    relayReceived.length <= 5,
+    `within one window at most the ceiling goes upstream (got ${relayReceived.length})`
+  )
+  await settle(900)
+  assert.equal(relayReceived.length, 12, 'the queue drains — paced, never dropped')
 
   // --- teardown --------------------------------------------------------------
   a.ws.close()
