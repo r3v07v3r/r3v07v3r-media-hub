@@ -25,12 +25,16 @@ import type {
   CatalogQuery,
   CatalogQueryResult,
   ConnectResult,
+  DeepScanEvent,
+  DeepScanReport,
   Episode,
   MediaKind,
   PersonCreditsResult,
   TitleCollectionResult
 } from '../../shared/media-hub/types'
 import { MEDIA_HUB_CHANNELS } from '../../shared/media-hub/ipc-channels'
+import { sendToRenderer } from './rendererBridge'
+import { planDeepScanBatch } from './deepScanRules'
 import { fetchJson } from './httpClient'
 import { logError } from './logger'
 import { getDatabase } from './dbState'
@@ -141,6 +145,41 @@ const CINEMETA_EXTRA_PAGES = 39
 const CINEMETA_PAGE_SIZE = 50
 
 const CATALOG_TTL_MS = 6 * 60 * 60 * 1000
+
+/**
+ * STAGE 4: how many titles per kind cross the IPC boundary to the
+ * renderer. Applied at the catalog:list HANDLER, not inside
+ * catalogListing — main-side consumers (home:personalized's ranking,
+ * the crawl, index seeding) keep the full blob in-process.
+ *
+ * The blob is popularity/trending-ordered by construction (Simkl
+ * trending first, then Cinemeta's top pages in order; Kitsu by
+ * popularity rank), so the head IS the candidate pool: the rails, the
+ * mood browser and the hero fallback only ever rank a top slice, and a
+ * thousand is deeper than any of them reach. Everything that needs a
+ * title REGARDLESS of popularity — the browse grid, My Stuff's tabs,
+ * the Planned row — reads the index (catalog:query / catalog:byIds)
+ * since stage 3/4 and never sees this bound.
+ */
+const CANDIDATE_POOL_LIMIT = 1000
+
+/**
+ * STAGE 5: the user-triggered deep scan, one chunk per press.
+ *
+ * The standing crawl's depth is bounded by the shape of the cache blob
+ * (CINEMETA_EXTRA_PAGES' own comment: roughly a tenth of what Cinemeta
+ * serves). The deep scan escapes that bound the only honest way: it
+ * writes THE INDEX ONLY. The blob, the cache row, the pool and the
+ * renderer's memory never grow — the browse grid, search, filters and
+ * the exact totals (all index-backed since stage 3) are what get
+ * deeper.
+ */
+const DEEP_SCAN_CINEMETA_PAGES = 40
+const DEEP_SCAN_KITSU_PAGES = 50
+const KITSU_PAGE_SIZE = 20
+const DEEP_SCAN_OFFSET_KEY = 'deepscan:v1'
+/** Effectively forever — the offset is a bookmark, not a cache. */
+const DEEP_SCAN_STATE_TTL_MS = 10 * 365 * 24 * 60 * 60 * 1000
 
 /**
  * How deep into Kitsu's popularity ranking the anime crawl walks, in
@@ -1114,6 +1153,138 @@ async function similarTitles(kind: MediaKind, id: string): Promise<CatalogItem[]
   }
 }
 
+/** One Cinemeta top-catalog page at an absolute skip offset — the deep
+ *  scan's stride into territory the standing crawl never reaches. Same
+ *  lightweight normalisation, same fail-to-empty contract: a bad page
+ *  costs its fifty titles and nothing else. */
+async function cinemetaPageAt(
+  kind: Exclude<MediaKind, 'anime'>,
+  skip: number,
+  priority: TaskPriority
+): Promise<CatalogItem[]> {
+  try {
+    const result = await fetchJson<{ metas?: RawApiPayload[] }>(
+      `https://v3-cinemeta.strem.io/catalog/${kind}/top/skip=${skip}.json`,
+      {},
+      { priority, label: `${kind} deep scan (skip ${skip})` }
+    )
+    return (result.metas || []).map((x) => normalizeMeta(x, kind, true))
+  } catch {
+    return []
+  }
+}
+
+/** In-flight deep scans, single-flight per kind: a second press while
+ *  one chunk is running joins it rather than doubling the walk. */
+const deepScansInFlight = new Map<MediaKind, Promise<DeepScanReport>>()
+
+interface DeepScanState {
+  offset: number
+  lastAt?: number
+  lastAdded?: number
+  exhausted?: boolean
+}
+
+function deepScanState(kind: MediaKind): DeepScanState {
+  return (
+    getDatabase().getCache<DeepScanState>(`${DEEP_SCAN_OFFSET_KEY}:${kind}`, {
+      allowExpired: true
+    }) ?? { offset: 0 }
+  )
+}
+
+/**
+ * One chunk of the deep scan: walk the next stretch of the upstream
+ * catalog, add what the index has never seen, advance the bookmark.
+ *
+ * The offset starts where the STANDING crawl's coverage ends, so the
+ * first press begins in new territory rather than re-reading what the
+ * six-hourly refresh already maintains. `exhausted` is the honest end:
+ * a stretch that comes back entirely empty means the upstream has no
+ * more to give, and the button should say so instead of inviting
+ * another press at the void.
+ */
+async function runDeepScan(kind: MediaKind): Promise<DeepScanReport> {
+  const db = getDatabase()
+  const state = deepScanState(kind)
+  const crawlDepth =
+    kind === 'anime' ? ANIME_CATALOG_DEPTH : (CINEMETA_EXTRA_PAGES + 1) * CINEMETA_PAGE_SIZE
+  const startOffset = Math.max(state.offset, crawlDepth)
+  const pageSize = kind === 'anime' ? KITSU_PAGE_SIZE : CINEMETA_PAGE_SIZE
+  const pagesTotal = kind === 'anime' ? DEEP_SCAN_KITSU_PAGES : DEEP_SCAN_CINEMETA_PAGES
+
+  const progress = (pagesDone: number, added: number): void => {
+    sendToRenderer(MEDIA_HUB_CHANNELS.catalogDeepScanEvent, {
+      kind,
+      pagesDone,
+      pagesTotal,
+      added
+    } satisfies DeepScanEvent)
+  }
+
+  let scanned = 0
+  let added = 0
+  let sawAnyRows = false
+  progress(0, 0)
+  // Pages run through the same lanes as everything else, a few at a
+  // time — this is a background dig, not a race. Groups of five keep
+  // the progress line moving without hammering the lane.
+  for (let group = 0; group * 5 < pagesTotal; group++) {
+    const pageIndexes = Array.from(
+      { length: Math.min(5, pagesTotal - group * 5) },
+      (_, i) => group * 5 + i
+    )
+    const pages = await Promise.all(
+      pageIndexes.map((page) => {
+        const skip = startOffset + page * pageSize
+        return kind === 'anime'
+          ? kitsuPage(skip, 'background')
+          : cinemetaPageAt(kind, skip, 'background')
+      })
+    )
+    const items = pages.flat()
+    scanned += items.length
+    if (items.length > 0) sawAnyRows = true
+    const { add } = planDeepScanBatch(
+      items,
+      db.indexExistingIds(
+        kind,
+        items.map((item) => item.id)
+      )
+    )
+    if (add.length) {
+      // Rank the deep rows BELOW everything the crawl placed: rankBase
+      // pushes them past the curated ordering so 'trending' keeps
+      // meaning what it says and depth arrives underneath, not on top.
+      db.indexUpsert(kind, add, {
+        source: 'deep-scan',
+        rankBase: startOffset + group * 5 * pageSize
+      })
+      added += add.length
+    }
+    progress(Math.min((group + 1) * 5, pagesTotal), added)
+  }
+
+  const exhausted = !sawAnyRows
+  const nextState: DeepScanState = {
+    offset: startOffset + pagesTotal * pageSize,
+    lastAt: Date.now(),
+    lastAdded: added,
+    exhausted
+  }
+  db.putCache(`${DEEP_SCAN_OFFSET_KEY}:${kind}`, nextState, DEEP_SCAN_STATE_TTL_MS, {
+    durable: true
+  })
+  return {
+    kind,
+    scanned,
+    added,
+    indexTotal: db.indexCount(kind),
+    offset: nextState.offset,
+    exhausted
+  }
+}
+
 interface CatalogListPayload {
   kind?: unknown
   force?: unknown
@@ -1146,7 +1317,39 @@ export function registerCatalogIpc(): void {
       const kind = payload?.kind
       const force = payload?.force === true
       if (!isValidCatalogKind(kind)) throw new Error('Unsupported catalog.')
-      return catalogListing(kind, force)
+      const listing = await catalogListing(kind, force)
+      // STAGE 4: the renderer gets the candidate POOL, not the blob —
+      // see CANDIDATE_POOL_LIMIT. Everything needing titles beyond the
+      // pool reads the index (catalog:query / catalog:byIds).
+      return { ...listing, items: listing.items.slice(0, CANDIDATE_POOL_LIMIT) }
+    }
+  )
+
+  // Id-matching without an array to scan: rows for exactly these ids,
+  // straight from the index, all kinds (a tt id can be both a movie and
+  // a series row — the caller dedupes by its own rules). What lets My
+  // Stuff and the Planned row keep every tracked title visible however
+  // small the pool and however deep the index.
+  handle<{ ids?: unknown }, CatalogItem[]>(MEDIA_HUB_CHANNELS.catalogByIds, async (_e, payload) => {
+    const ids = Array.isArray(payload?.ids)
+      ? payload.ids.filter((id): id is string => typeof id === 'string').slice(0, 5000)
+      : []
+    if (!ids.length) return []
+    return getDatabase().indexByIds(ids)
+  })
+
+  // STAGE 5: dig one chunk deeper, on purpose, from the library page.
+  // Single-flight per kind — a second press joins the running chunk.
+  handle<{ kind?: unknown }, DeepScanReport>(
+    MEDIA_HUB_CHANNELS.catalogDeepScan,
+    async (_e, payload) => {
+      const kind = payload?.kind
+      if (!isValidCatalogKind(kind)) throw new Error('Unsupported catalog.')
+      const running = deepScansInFlight.get(kind)
+      if (running) return running
+      const scan = runDeepScan(kind).finally(() => deepScansInFlight.delete(kind))
+      deepScansInFlight.set(kind, scan)
+      return scan
     }
   )
 

@@ -223,7 +223,10 @@ export function useCatalogBrowse(
  */
 export function useCatalogKindTotals(
   kind: MediaKind,
-  kindState: CatalogKindState
+  kindState: CatalogKindState,
+  /** Bump to refetch on demand — the deep scan's completion is the one
+   *  caller: it just grew the index, and the number should show it. */
+  refreshToken = 0
 ): { total: number; completed: number } {
   const [totals, setTotals] = useState({ total: 0, completed: 0 })
   useEffect(() => {
@@ -248,6 +251,6 @@ export function useCatalogKindTotals(
     return () => {
       cancelled = true
     }
-  }, [kind, kindState])
+  }, [kind, kindState, refreshToken])
   return totals
 }

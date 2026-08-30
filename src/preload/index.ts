@@ -23,6 +23,8 @@ import type {
   CacheSessionMeta,
   CalendarEntry,
   CatalogFacets,
+  DeepScanEvent,
+  DeepScanReport,
   CatalogItem,
   CatalogListing,
   CatalogQuery,
@@ -468,6 +470,16 @@ const api = {
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.catalogQuery, query),
       facets: (kind: MediaKind): Promise<CatalogFacets> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.catalogFacets, { kind }),
+      /** Rows for exactly these ids from the index, every kind a shared
+       *  id exists under — the id-matching path that replaced scanning
+       *  the loaded array (stage 4). */
+      byIds: (ids: string[]): Promise<CatalogItem[]> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.catalogByIds, { ids }),
+      /** One chunk of the user-triggered deep scan (stage 5). */
+      deepScan: (kind: MediaKind): Promise<DeepScanReport> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.catalogDeepScan, { kind }),
+      onDeepScanEvent: (onEvent: (payload: DeepScanEvent) => void): (() => void) =>
+        subscribe<DeepScanEvent>(MEDIA_HUB_CHANNELS.catalogDeepScanEvent, onEvent),
       meta: (type: MediaKind, id: string): Promise<CatalogItem> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.catalogMeta, { type, id }),
       search: (kind: MediaKind, query: string): Promise<CatalogItem[]> =>

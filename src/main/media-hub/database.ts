@@ -699,6 +699,18 @@ export interface MediaHubDatabase {
    *  filter bar's dropdown contents, over the whole library rather than
    *  over whatever slice happens to be loaded. */
   indexFacets(kind: MediaKind): CatalogFacets
+  /** Rows for exactly these ids, all kinds. A `tt` id can exist as BOTH
+   *  a movie and a series row (the two Cinemeta catalogs overlap), so a
+   *  caller matching a mixed collection gets every kind-row and dedupes
+   *  by its own rules. Exists for stage 4: id-matching surfaces (My
+   *  Stuff, the Planned row) read the index instead of scanning a
+   *  loaded array, so a tracked title stays visible however small the
+   *  candidate pool becomes and however deep the index grows. */
+  indexByIds(ids: readonly string[]): CatalogItem[]
+  /** Which of these ids the index already holds for one kind — the
+   *  deep-scan skip set. A cheap id-only projection rather than
+   *  indexByIds because the caller wants membership, not rows. */
+  indexExistingIds(kind: MediaKind, ids: readonly string[]): Set<string>
   trackedUpdates(details: CatalogItem[], now?: Date): TrackedUpdate[]
   close(): void
   filename: string
@@ -2088,6 +2100,62 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
       } catch {
         return []
       }
+    },
+
+    indexByIds(ids) {
+      // Chunked: SQLite's bound-parameter ceiling is generous but a
+      // watched-history id list is unbounded in principle, and 400 per
+      // statement keeps every statement comfortably small.
+      const out: CatalogItem[] = []
+      try {
+        for (let start = 0; start < ids.length; start += 400) {
+          const chunk = ids.slice(start, start + 400).filter((id) => typeof id === 'string')
+          if (!chunk.length) continue
+          const marks = chunk.map(() => '?').join(',')
+          const rows = sql
+            .prepare(
+              `SELECT id,kind,title,year,rating,runtime_min,status,poster,background,logo,description,
+                      total_seasons,total_episodes,simkl_id,grouped_ids,
+                      (SELECT group_concat(genre, char(31)) FROM catalog_index_genre g
+                        WHERE g.id = catalog_index.id AND g.kind = catalog_index.kind) AS genres
+               FROM catalog_index WHERE id IN (${marks})`
+            )
+            .all(...chunk) as Row[]
+          for (const row of rows) {
+            out.push(indexRowToItem(row, String(row.kind) as MediaKind, splitGenres(row.genres)))
+          }
+        }
+        return out
+      } catch (error) {
+        // Same reasoning as indexQuery: an empty answer here renders as
+        // "you have nothing tracked", which is a claim — log it.
+        logError('catalog:index:by-ids', error)
+        return out
+      }
+    },
+
+    indexExistingIds(kind, ids) {
+      const found = new Set<string>()
+      try {
+        for (let start = 0; start < ids.length; start += 400) {
+          const chunk = ids.slice(start, start + 400).filter((id) => typeof id === 'string')
+          if (!chunk.length) continue
+          const marks = chunk.map(() => '?').join(',')
+          const rows = sql
+            .prepare(`SELECT id FROM catalog_index WHERE kind = ? AND id IN (${marks})`)
+            .all(kind, ...chunk) as Row[]
+          for (const row of rows) found.add(String(row.id))
+        }
+      } catch (error) {
+        // Fail CLOSED: claim everything exists. The one caller is the
+        // deep scan's skip set, and the two failure directions are not
+        // symmetric — skipping everything costs one chunk of progress,
+        // while treating everything as new would re-upsert rows the
+        // grouping pass curated and quietly undo that work.
+        logError('catalog:index:existing', error)
+        return new Set(ids)
+      }
+      return found
     },
 
     indexQuery(query) {

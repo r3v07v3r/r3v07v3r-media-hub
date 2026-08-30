@@ -56,6 +56,7 @@ import {
   type SortKey
 } from '../src/renderer/src/lib/mediaHub/categoryFilters'
 import { catalogItemToMediaItem } from '../src/renderer/src/lib/mediaHub/adapters'
+import { planDeepScanBatch } from '../src/main/media-hub/deepScanRules'
 
 const TEST_PROFILE = 'profile-under-test'
 
@@ -821,6 +822,78 @@ check('exclusions page correctly rather than thinning each page', () => {
   assert.equal(first.items.length, 10, 'a full page is a full page')
   assert.equal(second.items.length, 5, 'and the last one is short, not thinned')
   assert.equal(new Set([...first.items, ...second.items].map((x) => x.id)).size, 15)
+  db.close()
+})
+
+// ---------------------------------------------------------------------
+// Stage 4/5: id-matching and the deep scan's skip set.
+// ---------------------------------------------------------------------
+
+check('indexByIds returns every kind-row a shared id exists under', () => {
+  const db = tempDb()
+  db.indexUpsert('movie', [item('tt0001', { title: 'as film' })])
+  db.indexUpsert('series', [item('tt0001', { title: 'as show', type: 'series' })])
+  db.indexUpsert('movie', [item('tt0002')])
+  const rows = db.indexByIds(['tt0001', 'tt0002', 'tt-missing'])
+  assert.strictEqual(rows.length, 3, 'both kind-rows for the shared id, one for the plain id')
+  const shared = rows.filter((row) => row.id === 'tt0001')
+  assert.deepStrictEqual(
+    shared.map((row) => row.type).sort(),
+    ['movie', 'series'],
+    'the shared id comes back once per kind — the CALLER dedupes by its own rules'
+  )
+  assert.ok(!rows.some((row) => row.id === 'tt-missing'), 'a missing id is simply absent')
+  db.close()
+})
+
+check('indexExistingIds answers membership exactly, per kind', () => {
+  const db = tempDb()
+  db.indexUpsert('anime', [item('kitsu:1', { type: 'anime' }), item('kitsu:2', { type: 'anime' })])
+  const existing = db.indexExistingIds('anime', ['kitsu:1', 'kitsu:2', 'kitsu:9'])
+  assert.deepStrictEqual([...existing].sort(), ['kitsu:1', 'kitsu:2'])
+  assert.strictEqual(
+    db.indexExistingIds('movie', ['kitsu:1']).size,
+    0,
+    'membership is per kind — an anime row is not a movie row'
+  )
+  db.close()
+})
+
+check('a deep-scan batch never overwrites what the crawl curated', () => {
+  // The scenario the skip rule exists for: the grouping pass merged a
+  // franchise into one curated row (groupedIds set); a later deep scan
+  // meets the same id as a bare, UNGROUPED record. Writing it would
+  // silently undo the grouping — the single largest piece of background
+  // work this app does.
+  const db = tempDb()
+  db.indexUpsert('anime', [
+    item('kitsu:100', { type: 'anime', title: 'Curated', groupedIds: ['kitsu:101', 'kitsu:102'] })
+  ])
+  const scanned = [
+    item('kitsu:100', { type: 'anime', title: 'Bare rescan' }),
+    item('kitsu:900', { type: 'anime', title: 'Genuinely new' })
+  ]
+  const { add, skipped } = planDeepScanBatch(
+    scanned,
+    db.indexExistingIds(
+      'anime',
+      scanned.map((entry) => entry.id)
+    )
+  )
+  db.indexUpsert('anime', add, { source: 'deep-scan' })
+  assert.strictEqual(skipped, 1)
+  const after = db.indexByIds(['kitsu:100', 'kitsu:900'])
+  const curated = after.find((row) => row.id === 'kitsu:100')
+  assert.strictEqual(curated?.title, 'Curated', 'the grouped row is untouched')
+  assert.deepStrictEqual(
+    curated?.groupedIds ?? [],
+    ['kitsu:101', 'kitsu:102'],
+    'its grouping survives — the property the skip rule protects'
+  )
+  assert.ok(
+    after.some((row) => row.id === 'kitsu:900'),
+    'the genuinely new row is added'
+  )
   db.close()
 })
 
