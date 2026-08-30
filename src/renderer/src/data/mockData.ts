@@ -981,7 +981,10 @@ export const NAV_ITEMS: NavItem[] = [
   { id: 'tv', label: 'Series', icon: 'tv', href: '/series' },
   { id: 'anime', label: 'Anime', icon: 'anime', href: '/anime' },
   { id: 'mystuff', label: 'My Stuff', icon: 'mystuff', href: '/my-stuff' },
-  { id: 'downloads', label: 'Downloads', icon: 'downloads', href: '/downloads' },
+  // Its own entry rather than a tab inside My Stuff. "Is there anything
+  // on tonight" is a different question from "what have I collected",
+  // and it was sitting two clicks deep beside Stats and Not for me.
+  { id: 'calendar', label: 'Calendar', icon: 'calendar', href: '/calendar' },
   { id: 'settings', label: 'Settings', icon: 'settings', href: '/settings' }
 ]
 
