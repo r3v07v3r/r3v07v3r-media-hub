@@ -1,19 +1,7 @@
-import { useCallback, useEffect, useState } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
-import { DEFAULT_SERVICE_SETTINGS, ServiceConfig, ServiceSettings } from '@shared/ipc-types'
-import type { StreamCacheEntry } from '@shared/media-hub/types'
-import {
-  deleteTorrent,
-  getTorrents,
-  isPaused,
-  pauseTorrent,
-  QbTorrent,
-  resumeTorrent
-} from '@renderer/lib/api/qbittorrent'
+import { useEffect, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
+import type { StreamCacheEntry, StreamCacheUsage } from '@shared/media-hub/types'
 import { useAppState } from '@renderer/context/AppStateContext'
-import { sonarrClient, radarrClient, ServarrQueueItem } from '@renderer/lib/api/servarr'
-import { getIndexerStatus, type FailingIndexer } from '@renderer/lib/api/prowlarr'
-import { isConfigured } from '@renderer/lib/api/types'
 import { BackgroundActivitySection } from '@renderer/components/downloads/BackgroundActivitySection'
 import { ComingSoonSection } from '@renderer/components/placeholder/ComingSoonSection'
 import { Icon } from '@renderer/components/icons/Icon'
@@ -107,115 +95,6 @@ function CacheStreamRow({
   )
 }
 
-function TorrentRow({
-  t,
-  config,
-  onChanged
-}: {
-  t: QbTorrent
-  config: ServiceConfig
-  onChanged: () => void
-}) {
-  const { pushNotification } = useAppState()
-  const [busy, setBusy] = useState(false)
-  const paused = isPaused(t)
-
-  async function run(
-    action: () => Promise<{ ok: boolean; error?: string }>,
-    failure: string
-  ): Promise<void> {
-    setBusy(true)
-    try {
-      const result = await action()
-      if (!result.ok) {
-        pushNotification({ tone: 'error', message: result.error ?? failure })
-        return
-      }
-      // Re-read rather than patching the row locally: qBittorrent decides what
-      // state a torrent lands in (a finished one resumes into seeding, not
-      // downloading), and guessing at that here is how a row ends up claiming
-      // something the server disagrees with.
-      onChanged()
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  return (
-    <div className={styles.item}>
-      <div className={styles.itemHead}>
-        <span>{t.name}</span>
-        <span>{Math.round(t.progress * 100)}%</span>
-      </div>
-      <div className={styles.progressTrack}>
-        <div
-          className={styles.progressFill}
-          style={{ width: `${Math.round(t.progress * 100)}%` }}
-        />
-      </div>
-      <div className={styles.itemFooter}>
-        <span className={styles.itemMeta}>
-          {t.state} · {formatBytes(t.size)} · ↓ {formatBytes(t.dlspeed)}/s
-        </span>
-        <div className={styles.itemActions}>
-          <button
-            type="button"
-            className={styles.rowButton}
-            disabled={busy}
-            onClick={() =>
-              void run(
-                () => (paused ? resumeTorrent(config, t.hash) : pauseTorrent(config, t.hash)),
-                paused ? 'Could not resume that torrent.' : 'Could not pause that torrent.'
-              )
-            }
-          >
-            {paused ? 'Resume' : 'Pause'}
-          </button>
-          <button
-            type="button"
-            className={styles.rowButton}
-            disabled={busy}
-            onClick={() => {
-              // Two questions rather than one, because they have very
-              // different consequences: removing the torrent is undoable by
-              // adding it again, and deleting the files is not. Defaulting the
-              // second to "keep" is the only safe default.
-              if (!window.confirm(`Remove "${t.name}" from qBittorrent?`)) return
-              const alsoFiles = window.confirm(
-                'Also delete the downloaded files? Cancel keeps them on disk.'
-              )
-              void run(
-                () => deleteTorrent(config, t.hash, alsoFiles),
-                'Could not remove that torrent.'
-              )
-            }}
-          >
-            Remove
-          </button>
-        </div>
-      </div>
-    </div>
-  )
-}
-
-function QueueRow({ q }: { q: ServarrQueueItem }) {
-  const title = q.title ?? q.series?.title ?? q.movie?.title ?? 'Unknown'
-  const pct =
-    q.size && q.sizeleft !== undefined ? Math.round(((q.size - q.sizeleft) / q.size) * 100) : 0
-  return (
-    <div className={styles.item}>
-      <div className={styles.itemHead}>
-        <span>{title}</span>
-        <span>{q.status ?? q.trackedDownloadStatus ?? ''}</span>
-      </div>
-      <div className={styles.progressTrack}>
-        <div className={styles.progressFill} style={{ width: `${pct}%` }} />
-      </div>
-      {q.timeleft && <span className={styles.itemMeta}>{q.timeleft} remaining</span>}
-    </div>
-  )
-}
-
 /**
  * Real downloads dashboard — queries qBittorrent for active torrents and
  * Sonarr/Radarr for their download queues via the IPC-proxied clients in
@@ -224,79 +103,60 @@ function QueueRow({ q }: { q: ServarrQueueItem }) {
  * panels with no explanation.
  */
 export default function DownloadsPage() {
-  const [settings, setSettings] = useState<ServiceSettings>(DEFAULT_SERVICE_SETTINGS)
-  const [torrents, setTorrents] = useState<QbTorrent[]>([])
-  const [torrentsLive, setTorrentsLive] = useState(false)
-  const [sonarrQueue, setSonarrQueue] = useState<ServarrQueueItem[]>([])
-  const [radarrQueue, setRadarrQueue] = useState<ServarrQueueItem[]>([])
-  const [failingIndexers, setFailingIndexers] = useState<FailingIndexer[]>([])
+  const { setControlCentreOpen } = useAppState()
   const [cacheEntries, setCacheEntries] = useState<StreamCacheEntry[]>([])
+  const [usage, setUsage] = useState<StreamCacheUsage | null>(null)
   const [loaded, setLoaded] = useState(false)
+  const openServices = (): void => setControlCentreOpen(true)
 
+  // Two local reads and nothing else. This page used to open the mount by
+  // querying qBittorrent, Sonarr, Radarr and Prowlarr over the network
+  // before it could show anything — four services a viewer is not asking
+  // about, any of which being slow or down delayed the shelf they were.
   useEffect(() => {
     let cancelled = false
-    async function load() {
-      if (!window.api?.settings) {
+    async function load(): Promise<void> {
+      const api = window.api?.mediaHub
+      if (!api) {
         setLoaded(true)
         return
       }
-      const s = await window.api.settings.get()
-      if (cancelled) return
-      setSettings(s)
-
-      const [qb, sonarr, radarr, prowlarr, cache] = await Promise.all([
-        getTorrents(s.qbittorrent),
-        sonarrClient.getQueue(s.sonarr),
-        radarrClient.getQueue(s.radarr),
-        getIndexerStatus(s.prowlarr),
-        window.api.mediaHub.streamCache.list().catch(() => [] as StreamCacheEntry[])
+      const [cache, space] = await Promise.all([
+        api.streamCache.list().catch(() => [] as StreamCacheEntry[]),
+        api.streamCache.usage().catch(() => null)
       ])
       if (cancelled) return
-      if (qb.ok) {
-        setTorrents(qb.data ?? [])
-        setTorrentsLive(qb.live)
-      }
-      if (sonarr.ok) setSonarrQueue(sonarr.data ?? [])
-      if (radarr.ok) setRadarrQueue(radarr.data ?? [])
-      if (prowlarr.ok) setFailingIndexers(prowlarr.data ?? [])
       setCacheEntries(cache ?? [])
+      setUsage(space)
       setLoaded(true)
     }
-    load()
+    void load()
     return () => {
       cancelled = true
     }
   }, [])
 
-  // Re-reads just the torrent list, after an action changed it. Scoped to
-  // qBittorrent on purpose: pausing a torrent has nothing to say about the
-  // Servarr queues or the stream cache, and re-querying three services
-  // because one of them changed is exactly the kind of cost that makes a page
-  // feel heavy.
-  const refreshTorrents = useCallback(async () => {
-    const api = window.api?.settings
-    if (!api) return
-    const next = await api.get()
-    const qb = await getTorrents(next.qbittorrent)
-    if (qb.ok) {
-      setTorrents(qb.data ?? [])
-      setTorrentsLive(qb.live)
-    }
-  }, [])
-
   // Keeps cachedBytes/isActive fresh while this page stays open — see
   // CACHE_POLL_INTERVAL_MS's own comment on why a one-time snapshot isn't
-  // enough. Separate from the mount-time load effect above (which also
-  // covers the external qBittorrent/Sonarr/Radarr queries — no reason to
-  // re-poll those on this same interval).
+  // enough. The space figure comes with it: a title finishing its download
+  // moves both numbers, and showing one without the other invites the
+  // question of which is stale.
   useEffect(() => {
     if (!window.api?.mediaHub) return
     const id = setInterval(() => {
-      window.api?.mediaHub.streamCache
+      const api = window.api?.mediaHub
+      if (!api) return
+      void api.streamCache
         .list()
         .then(setCacheEntries)
         .catch(() => {
           // Best-effort — leaves the list exactly as it was until the next tick.
+        })
+      void api.streamCache
+        .usage()
+        .then(setUsage)
+        .catch(() => {
+          // Same: last known figure beats a blank.
         })
     }, CACHE_POLL_INTERVAL_MS)
     return () => clearInterval(id)
@@ -312,19 +172,17 @@ export default function DownloadsPage() {
 
   if (!loaded) return null
 
-  const anyConfigured =
-    isConfigured(settings.qbittorrent) ||
-    isConfigured(settings.sonarr) ||
-    isConfigured(settings.radarr)
-
-  if (!anyConfigured && cacheEntries.length === 0) {
+  // Empty means empty, and says the useful thing rather than sending
+  // somebody off to connect a download client. Nothing here needs one:
+  // what this page lists is what playing a title left on the disk.
+  if (cacheEntries.length === 0) {
     return (
       <div className={styles.wrap}>
         <BackgroundActivitySection />
         <ComingSoonSection
           icon="downloads"
-          title="Downloads"
-          description="Connect qBittorrent, Sonarr, or Radarr in Settings to see active downloads and queues here."
+          title="Nothing saved yet"
+          description="Titles you play are kept on this device so you can rewind, resume, and watch them again without a connection. They will appear here."
         />
       </div>
     )
@@ -333,6 +191,17 @@ export default function DownloadsPage() {
   return (
     <div className={styles.wrap}>
       <h1 className={styles.heading}>Downloads</h1>
+      {/* ONE figure, not a breakdown. What is on this device and what is
+          left on the drive holding it answers "can I keep another film?",
+          which is the only storage question this page needs to answer.
+          Everything finer — per-session bytes, the budget, eviction — is
+          in the control centre. */}
+      {usage && (
+        <p className={styles.spaceLine}>
+          {formatBytes(usage.usedBytes)} saved on this device
+          {usage.freeBytes !== null ? ` · ${formatBytes(usage.freeBytes)} free` : ''}
+        </p>
+      )}
 
       <BackgroundActivitySection />
 
@@ -350,91 +219,14 @@ export default function DownloadsPage() {
         )}
       </section>
 
-      {isConfigured(settings.qbittorrent) && (
-        <section className={`${styles.section} glass-panel`}>
-          <h2 className={styles.sectionTitle}>
-            <span className={torrentsLive ? styles.liveDot : styles.mockDot} />
-            qBittorrent
-          </h2>
-          {torrents.length === 0 ? (
-            <p className={styles.empty}>No active torrents.</p>
-          ) : (
-            torrents.map((t) => (
-              <TorrentRow
-                key={t.hash}
-                t={t}
-                config={settings.qbittorrent}
-                onChanged={refreshTorrents}
-              />
-            ))
-          )}
-        </section>
-      )}
-
-      {/* Diagnostic, not a queue of its own — this is why the two below might
-          be quieter than expected. Silent when Prowlarr is not connected or
-          every indexer is healthy, which is the ordinary case; a generic
-          "no results" from Sonarr/Radarr otherwise gives no way to tell "the
-          release does not exist yet" apart from "half the indexers are
-          locked out on a bad key" — only Prowlarr, which tracks each
-          indexer's own failure state, can say which. */}
-      {isConfigured(settings.prowlarr) && failingIndexers.length > 0 && (
-        <section className={`${styles.section} glass-panel`}>
-          <h2 className={styles.sectionTitle}>
-            <span className={styles.liveDot} style={{ background: '#e0a030' }} />
-            Indexers
-          </h2>
-          <p className={styles.empty}>
-            {failingIndexers.length === 1
-              ? '1 indexer is currently failing in Prowlarr — searches through it will come up short until it recovers.'
-              : `${failingIndexers.length} indexers are currently failing in Prowlarr — searches through them will come up short until they recover.`}
-          </p>
-          {failingIndexers.map((indexer) => (
-            <div key={indexer.id} className={styles.item}>
-              <div className={styles.itemHead}>
-                <span>{indexer.name}</span>
-              </div>
-              {indexer.mostRecentFailure && (
-                <span className={styles.itemMeta}>
-                  Last failed {new Date(indexer.mostRecentFailure).toLocaleString()}
-                </span>
-              )}
-            </div>
-          ))}
-        </section>
-      )}
-
-      {isConfigured(settings.sonarr) && (
-        <section className={`${styles.section} glass-panel`}>
-          <h2 className={styles.sectionTitle}>
-            <span className={styles.liveDot} />
-            Sonarr Queue
-          </h2>
-          {sonarrQueue.length === 0 ? (
-            <p className={styles.empty}>Queue is empty.</p>
-          ) : (
-            sonarrQueue.map((q) => <QueueRow key={q.id} q={q} />)
-          )}
-        </section>
-      )}
-
-      {isConfigured(settings.radarr) && (
-        <section className={`${styles.section} glass-panel`}>
-          <h2 className={styles.sectionTitle}>
-            <span className={styles.liveDot} />
-            Radarr Queue
-          </h2>
-          {radarrQueue.length === 0 ? (
-            <p className={styles.empty}>Queue is empty.</p>
-          ) : (
-            radarrQueue.map((q) => <QueueRow key={q.id} q={q} />)
-          )}
-        </section>
-      )}
-
-      <Link to="/settings" className={styles.configureLink}>
-        Manage connections in Settings →
-      </Link>
+      {/* The download clients, indexers and the Sonarr/Radarr queues used
+          to be listed below this. They are the machinery, not the shelf —
+          somebody looking at Downloads wants to know what they can watch
+          on a train, and every one of those sections is already in the
+          control centre's Services view with its own controls. */}
+      <button type="button" className={styles.configureLink} onClick={openServices}>
+        Download clients and queues are in the control centre →
+      </button>
     </div>
   )
 }

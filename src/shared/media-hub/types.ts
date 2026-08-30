@@ -388,6 +388,20 @@ export interface StreamCacheEntry extends CacheSessionMeta {
   isActive: boolean
 }
 
+/**
+ * What the local cache holds, and what is left where it lives.
+ *
+ * freeBytes is null where the platform will not say (statfs is not
+ * universal) — rendered as an absence rather than as a zero, because
+ * "0 bytes free" is alarming and wrong.
+ */
+export interface StreamCacheUsage {
+  usedBytes: number
+  freeBytes: number | null
+  /** Where it is, for the one line that says so. */
+  directory: string
+}
+
 export interface PlaybackResult {
   ok: true
   player: 'embedded'

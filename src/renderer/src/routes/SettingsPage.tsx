@@ -585,7 +585,16 @@ function ProfileForm({
  *  the actual bytes freed) — the "quick, meaningful" More Options picked
  *  over hardware-accel/video-quality, which have no real mechanism in this
  *  app's TorBox-sourced (not locally re-encoded per quality) pipeline. */
-function MoreOptionsSection() {
+function MoreOptionsSection({
+  quick = false,
+  heading = 'More Options'
+}: {
+  /** On the viewer's short page: the browsing and motion toggles, without
+   *  the subtitle-cache maintenance row, which is a housekeeping action
+   *  rather than something you set while watching. */
+  quick?: boolean
+  heading?: string
+} = {}) {
   const { mediaHubSettings, refreshMediaHubSettings } = useAppState()
   const [clearStatus, setClearStatus] = useState<{
     kind: 'idle' | 'busy' | 'ok' | 'error'
@@ -652,7 +661,7 @@ function MoreOptionsSection() {
   return (
     <section className={`${styles.section} glass-panel`} aria-labelledby="settings-more">
       <h2 id="settings-more" className={styles.sectionTitle}>
-        More Options
+        {heading}
       </h2>
       <ToggleRow
         icon="sparkle"
@@ -682,31 +691,35 @@ function MoreOptionsSection() {
         checked={mediaHubSettings?.hideDislikedDefault ?? false}
         onChange={handleToggleHideDisliked}
       />
-      <div className={styles.row}>
-        <div className={styles.rowIcon} aria-hidden="true">
-          <Icon name="trash" size={17} />
-        </div>
-        <div className={styles.rowText}>
-          <span className={styles.rowTitle}>Subtitle cache</span>
-          <span className={styles.rowDescription}>
-            Downloaded subtitle files kept on disk for compatibility-mode playback.
-          </span>
-        </div>
-        <button
-          type="button"
-          className={styles.testButton}
-          onClick={handleClearSubtitleCache}
-          disabled={clearStatus.kind === 'busy'}
-        >
-          {clearStatus.kind === 'busy' ? 'Clearing…' : 'Clear cache'}
-        </button>
-      </div>
-      {clearStatus.kind !== 'idle' && clearStatus.kind !== 'busy' && (
-        <span
-          className={`${styles.statusMessage} ${clearStatus.kind === 'ok' ? styles.statusOk : styles.statusError}`}
-        >
-          {clearStatus.message}
-        </span>
+      {!quick && (
+        <>
+          <div className={styles.row}>
+            <div className={styles.rowIcon} aria-hidden="true">
+              <Icon name="trash" size={17} />
+            </div>
+            <div className={styles.rowText}>
+              <span className={styles.rowTitle}>Subtitle cache</span>
+              <span className={styles.rowDescription}>
+                Downloaded subtitle files kept on disk for compatibility-mode playback.
+              </span>
+            </div>
+            <button
+              type="button"
+              className={styles.testButton}
+              onClick={handleClearSubtitleCache}
+              disabled={clearStatus.kind === 'busy'}
+            >
+              {clearStatus.kind === 'busy' ? 'Clearing…' : 'Clear cache'}
+            </button>
+          </div>
+          {clearStatus.kind !== 'idle' && clearStatus.kind !== 'busy' && (
+            <span
+              className={`${styles.statusMessage} ${clearStatus.kind === 'ok' ? styles.statusOk : styles.statusError}`}
+            >
+              {clearStatus.message}
+            </span>
+          )}
+        </>
       )}
     </section>
   )
@@ -839,6 +852,7 @@ export default function SettingsPage({
   const [communityGridBinding, communityGroupBinding] = useColumnPackGrid<HTMLElement>(!embedded)
   const [aiGridBinding, aiGroupBinding] = useColumnPackGrid<HTMLElement>(!embedded)
   const {
+    setControlCentreOpen,
     profiles,
     activeProfileId,
     switchProfile,
@@ -1204,6 +1218,83 @@ export default function SettingsPage({
     scroller.addEventListener('wheel', handleWheel, { passive: false })
     return () => scroller.removeEventListener('wheel', handleWheel)
   }, [])
+
+  // THE VIEWER'S PAGE IS SHORT NOW.
+  //
+  // Everything below used to render here as well as in the control centre:
+  // services, accounts, allocation, AI, backups, community. Two places for
+  // one setting is two places to look and two places for them to disagree,
+  // and none of it is what somebody reaches for mid-film. The control
+  // centre is where the system is configured; this is the handful you
+  // change while watching, and a way through to the rest.
+  if (!embedded && !category) {
+    return (
+      <div className={styles.wrap}>
+        <div className={styles.pageHeader}>
+          <div>
+            <h1 className={styles.heading}>Settings</h1>
+            <p className={styles.headingDescription}>
+              The things you change while watching. Everything else lives in the control centre.
+            </p>
+          </div>
+        </div>
+
+        <section className={`${styles.section} glass-panel`} aria-labelledby="quick-playback">
+          <h2 id="quick-playback" className={styles.sectionTitle}>
+            Playback
+          </h2>
+          <ToggleRow
+            icon="play"
+            title="Play the next episode"
+            description="When an episode ends, offer the next one and start it after a short countdown. Movies and last episodes are unaffected."
+            checked={mediaHubSettings?.autoplayNextEnabled ?? true}
+            onChange={handleSetAutoplayNext}
+          />
+          <ToggleRow
+            icon="eye"
+            title="Show subtitles automatically"
+            description="Fetch and apply a matching subtitle as soon as a title starts playing."
+            checked={mediaHubSettings?.autoSubtitlesEnabled ?? true}
+            onChange={handleSetAutoSubtitles}
+          />
+          <SegmentedRow
+            icon="planet"
+            title="Subtitle language"
+            description="Language to search for, both automatically and in the Subtitles menu."
+            value={mediaHubSettings?.subtitleLanguage ?? 'en'}
+            options={SUBTITLE_LANGUAGE_OPTIONS}
+            onChange={handleSetSubtitleLanguage}
+          />
+          <SegmentedRow
+            icon="waveform"
+            title="Audio language"
+            description="Preferred spoken language. Used to pick the audio track when a release has several, and to avoid dubbed releases when an original-language one exists."
+            value={mediaHubSettings?.audioLanguage ?? 'en'}
+            options={SUBTITLE_LANGUAGE_OPTIONS}
+            onChange={handleSetAudioLanguage}
+          />
+        </section>
+
+        <MoreOptionsSection quick heading="Browsing" />
+
+        {/* Not a list of what is through there — that would be this page
+            again, in miniature, and would go stale the first time the
+            control centre gained a section. */}
+        <button
+          type="button"
+          className={styles.openControlCentre}
+          onClick={() => setControlCentreOpen(true)}
+        >
+          <Icon name="settings" size={17} />
+          <span>
+            <b>Open the control centre</b>
+            Services, accounts, storage, the cache server and the rest of the pipeline.
+          </span>
+          <Icon name="chevron" size={16} />
+        </button>
+      </div>
+    )
+  }
 
   return (
     <div className={`${styles.wrap} ${embedded ? styles.embedded : ''}`}>

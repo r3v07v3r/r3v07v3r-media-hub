@@ -1151,3 +1151,40 @@
   color: var(--accent-cyan);
   font-weight: 700;
 }
+
+/* The way through to everything this short page deliberately leaves out.
+   A row rather than a link, because it is the biggest thing on the page
+   after the two sections and should look like a destination. */
+.openControlCentre {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  padding: 16px 18px;
+  border-radius: var(--radius-large);
+  border: 1px solid var(--border-subtle);
+  background: rgba(255, 255, 255, 0.02);
+  color: var(--text-secondary);
+  text-align: left;
+  cursor: pointer;
+}
+
+.openControlCentre:hover {
+  border-color: var(--border-active);
+  color: var(--text-primary);
+}
+
+.openControlCentre span {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  flex: 1;
+  font-size: 0.85rem;
+  line-height: 1.5;
+}
+
+.openControlCentre b {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}

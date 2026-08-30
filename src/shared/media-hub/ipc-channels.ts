@@ -214,6 +214,9 @@ export const MEDIA_HUB_CHANNELS = {
    *  it started the film with the bar already faded out. */
   playerControlsShown: 'mediahub:player:controls-shown', // push event
   streamCacheList: 'mediahub:stream-cache:list',
+  /** One line of arithmetic for the Downloads page: what the cache holds
+   *  and what is left on the drive it sits on. */
+  streamCacheUsage: 'mediahub:stream-cache:usage',
   streamCacheDelete: 'mediahub:stream-cache:delete',
 
   // What the central work manager is doing right now — see
