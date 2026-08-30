@@ -25,6 +25,17 @@
 // front-only design would regress these), plus a rolling window around
 // every position currently being READ.
 //
+// One connection also means the readers have to take turns on it, and a
+// turn has to END. An out-of-window read repositions the fetch to serve
+// itself; left unbounded, it then keeps streaming sequentially from there
+// until something else drags it back — a tail probe on a 4K episode pulled
+// 340MB to EOF while the playhead sat at 33 seconds with an empty buffer,
+// and playback starved to a stop. So a fill that is nobody's playhead is a
+// bounded excursion: it gets EXCURSION_MAX_BYTES and then hands the
+// connection back (see fillBudgetBytes). Reconnects are not free — 4-12s
+// against TorBox — which is the whole reason the bound is on bytes rather
+// than on repositioning more eagerly.
+//
 // "Every position being read", not one global high-water mark. That
 // high-water mark was a real, reproduced bug: it only ever moved FORWARD
 // (Math.max), so the single incidental tail read every MKV demux does —
@@ -84,6 +95,15 @@ const CHUNK_WAIT_TIMEOUT_MS = 20_000
 const PLAYHEAD_MIN_SERVED_BYTES = CHUNK_BYTES * 2
 /** Same TorBox-connection-teardown grace delay as playbackSession.ts's closeDirectProxyBeforeTranscode — the local proxy/fetch closing doesn't guarantee the upstream fetch has actually torn down on TorBox's end yet. */
 const RECONNECT_GRACE_MS = 500
+/**
+ * How much one out-of-window excursion may fetch before the single upstream
+ * connection is handed back to the playhead. Sized to cover what the reads
+ * that cause an excursion actually want — an MKV Cues/SeekHead block, a
+ * non-faststart MP4's moov — which is the same order as HEAD_BYTES (16MB),
+ * not the hundreds of megabytes an unbounded sequential fill will happily
+ * keep pulling once it is already connected there.
+ */
+const EXCURSION_MAX_BYTES = CHUNK_BYTES * 4
 
 /**
  * Where the whole chunk cache lives on disk. Defaults to
@@ -390,6 +410,51 @@ export function computeRetainedChunkIndices(params: RetentionParams): Set<number
   return out
 }
 
+/**
+ * How many bytes a fill starting at `targetByte` may pull before the single
+ * upstream connection has to go back to the playhead. `null` means
+ * unbounded — this fill IS the playhead's own.
+ *
+ * That one connection (a second is the bug this module exists to prevent —
+ * see the module header) is shared by the playhead and by every incidental
+ * reader: ffmpeg jumping to Matroska Cues near EOF for its own seek index,
+ * a moov at the end of a non-faststart MP4, an embedded-subtitle pass.
+ * reposition() hands the connection to whichever read missed most recently,
+ * and before this bound existed the excursion then ran sequentially until
+ * something else dragged it back. Captured from a real stall: serving a
+ * tail probe on a 4K episode pulled 340MB straight to EOF while the
+ * playhead sat at 33 seconds with nothing queued, which starved playback to
+ * a stop. Four such excursions took 114 chunks of a 79-second window that
+ * only ever delivered 26 chunks to the playhead.
+ *
+ * A target at (or ahead of, within the same ahead-window the retention math
+ * already keeps resident) the playhead is the playhead's own fill and stays
+ * unbounded. `seekHint` moves the playhead synchronously before it
+ * repositions, so a deliberate seek is unbounded too — only reads that are
+ * nobody's playhead get bounded.
+ *
+ * One chunk of slack behind the playhead: a reader mid-chunk asks for the
+ * chunk it is already inside, which floors to just below highWatermarkByte.
+ */
+export function fillBudgetBytes({
+  targetByte,
+  playheadByte,
+  aheadBytes,
+  excursionBytes = EXCURSION_MAX_BYTES,
+  chunkBytes = CHUNK_BYTES
+}: {
+  targetByte: number
+  playheadByte: number
+  aheadBytes: number
+  excursionBytes?: number
+  chunkBytes?: number
+}): number | null {
+  const windowStart = playheadByte - chunkBytes
+  const windowEnd = playheadByte + aheadBytes
+  if (targetByte >= windowStart && targetByte <= windowEnd) return null
+  return excursionBytes
+}
+
 // Tokens minted by THIS module's own crypto.randomBytes calls, currently
 // backing a live session — the registry buildFfmpegArguments's guard checks
 // against. Deliberately never satisfied by a bare shape/regex match alone:
@@ -579,6 +644,35 @@ export function createStreamCache({
   // middle chunks are still missing.
   function hasFullCoverage(): boolean {
     return totalBytes !== null && firstMissingChunkIndex() === null
+  }
+
+  /** The ahead-window in bytes, by the same rule (and same no-duration
+   *  fallback) computeRetainedChunkIndices uses — what's retained ahead of
+   *  the playhead is exactly what counts as still being the playhead's own
+   *  fill rather than an excursion. */
+  function aheadWindowBytes(): number {
+    const rate = bytesPerSecond()
+    return rate !== undefined ? Math.floor(rate * aheadSeconds) : CHUNK_BYTES * 32
+  }
+
+  /**
+   * Where the connection should go when a bounded excursion is done: the
+   * first byte at or after the playhead that isn't cached yet.
+   *
+   * Falls back to the first gap anywhere in the file when the playhead is
+   * already covered through to EOF — otherwise an excursion that finished
+   * while the playhead was fully buffered would park the connection, and in
+   * fullRetention mode nothing would ever close the earlier gaps that
+   * downloadComplete waits on. Null means genuinely nothing left to fetch.
+   */
+  function nextPlayheadFillByte(): number | null {
+    if (totalBytes === null) return highWatermarkByte
+    const lastIndex = chunkIndexForByte(totalBytes - 1)
+    for (let i = chunkIndexForByte(highWatermarkByte); i <= lastIndex; i++) {
+      if (chunks.get(i) !== 'ready') return i * CHUNK_BYTES
+    }
+    const gap = firstMissingChunkIndex()
+    return gap === null ? null : gap * CHUNK_BYTES
   }
 
   function notifyFullRetentionReady(): void {
@@ -771,10 +865,21 @@ export function createStreamCache({
     await store.write(root, tok, index, data)
   }
 
-  /** Sequentially downloads from startByte onward, one connection, until aborted (reposition/stop) or EOF. */
-  async function runFill(startByte: number, myGeneration: number): Promise<void> {
+  /**
+   * Sequentially downloads from startByte onward, one connection, until
+   * aborted (reposition/stop), EOF, or — for an excursion serving a read
+   * that is nobody's playhead — `budgetBytes` written, at which point the
+   * connection goes back to the playhead. Null budget is unbounded; see
+   * fillBudgetBytes for which fills get which.
+   */
+  async function runFill(
+    startByte: number,
+    myGeneration: number,
+    budgetBytes: number | null
+  ): Promise<void> {
     const controller = new AbortController()
     currentAbort = controller
+    let fetchedBytes = 0
     fillFrontierByte = startByte
     let index = chunkIndexForByte(startByte)
     // A mid-chunk start (a reposition landing inside an already-partially-
@@ -824,6 +929,16 @@ export function createStreamCache({
             notifyFullRetentionReady()
             return
           }
+          // An excursion that ran into EOF (a tail probe is already near
+          // it) is still an excursion — the playhead gets the connection
+          // back. The gap-chase below is completeness work for
+          // fullRetention, and the playhead's own unbounded fill reaches
+          // this same branch when it finishes, so nothing is lost by not
+          // starting it from here.
+          if (budgetBytes !== null) {
+            resumePlayheadFill(myGeneration)
+            return
+          }
           // Reached EOF without full coverage — a seek aborted the
           // original front-to-back fill before it got here, so an earlier
           // range is still missing (that's exactly what hasFullCoverage
@@ -843,7 +958,7 @@ export function createStreamCache({
           if (fullRetention) {
             const gapIndex = firstMissingChunkIndex()
             if (gapIndex !== null) {
-              void runFill(gapIndex * CHUNK_BYTES, myGeneration)
+              void runFill(gapIndex * CHUNK_BYTES, myGeneration, null)
             }
           }
           return
@@ -861,6 +976,14 @@ export function createStreamCache({
           await evictOutsideRetained()
           await squeezeForPressure()
           index += 1
+          fetchedBytes += CHUNK_BYTES
+          // The excursion has what it came for. Hand the one connection
+          // back rather than letting a metadata probe keep streaming (it
+          // would happily run to EOF) while the playhead waits on it.
+          if (budgetBytes !== null && fetchedBytes >= budgetBytes) {
+            resumePlayheadFill(myGeneration)
+            return
+          }
         }
       }
     } catch (error) {
@@ -873,13 +996,34 @@ export function createStreamCache({
 
   /** Aborts whatever fetch is running, waits the TorBox teardown grace delay, then starts a fresh fill at targetByte. */
   async function reposition(targetByte: number): Promise<void> {
+    // Decided here, not at the call sites: every one of them is a read that
+    // missed, and whether that read is the playhead or an incidental probe
+    // is the same question in each. seekHint moves the playhead before it
+    // calls this, so a deliberate seek reads as the playhead's own fill.
+    const budgetBytes = fillBudgetBytes({
+      targetByte,
+      playheadByte: highWatermarkByte,
+      aheadBytes: aheadWindowBytes()
+    })
     const myGeneration = ++generation
     const hadOpenFetch = Boolean(currentAbort)
     currentAbort?.abort()
     currentAbort = null
     if (hadOpenFetch) await new Promise((resolve) => setTimeout(resolve, RECONNECT_GRACE_MS))
     if (generation !== myGeneration) return
-    void runFill(targetByte, myGeneration)
+    void runFill(targetByte, myGeneration, budgetBytes)
+  }
+
+  /**
+   * Ends a bounded excursion by pointing the one upstream connection back at
+   * the playhead. Goes through reposition() so the TorBox teardown grace
+   * delay is honoured exactly as it is for any other connection switch.
+   */
+  function resumePlayheadFill(myGeneration: number): void {
+    if (generation !== myGeneration) return
+    const target = nextPlayheadFillByte()
+    if (target === null) return
+    void reposition(chunkIndexForByte(target) * CHUNK_BYTES)
   }
 
   function isNearFillFrontier(byte: number): boolean {
@@ -1231,7 +1375,9 @@ export function createStreamCache({
     // picks up anything further along, so a resumed title downloads only what
     // it is missing.
     const firstGap = firstMissingChunkIndex()
-    void runFill(firstGap === null ? 0 : firstGap * CHUNK_BYTES, myGeneration)
+    // Unbounded, explicitly: this is the fill the playhead is about to read
+    // from, whatever highWatermarkByte happens to say on a resumed session.
+    void runFill(firstGap === null ? 0 : firstGap * CHUNK_BYTES, myGeneration, null)
     // Wait for at least the first chunk so the very first read from ffmpeg/
     // the <video> element doesn't land on nothing — mirrors the readiness
     // gate createFfmpegTranscoder already uses before its own start()

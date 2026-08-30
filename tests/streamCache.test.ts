@@ -16,6 +16,7 @@ import {
   chunkIndexForByte,
   computeRetainedChunkIndices,
   createMemoryChunkStore,
+  fillBudgetBytes,
   findReusableSession
 } from '../src/main/media-hub/streamCache'
 
@@ -244,6 +245,85 @@ check('each centre gets its own window rather than one spanning window between t
   })
   assert.ok(retained.has(100) && retained.has(800), 'both centres are retained')
   assert.ok(!retained.has(450), 'the gap between them is not retained')
+})
+
+// --- Which fills may keep the one connection -----------------------------
+// Retention decides what survives on disk; this decides who the single
+// upstream connection is currently working FOR. Same distinction (playhead
+// vs incidental probe), different consequence — and the consequence here is
+// the one that stalls playback: a captured failure had a tail probe pull
+// 340MB to EOF while the playhead sat at 33 seconds with nothing queued.
+
+console.log('fillBudgetBytes')
+
+const AHEAD = CHUNK * 224 // ~300s at a 4K episode's ~3.1MB/s
+
+check('the playhead position itself is unbounded', () => {
+  assert.equal(
+    fillBudgetBytes({ targetByte: CHUNK * 21, playheadByte: CHUNK * 21, aheadBytes: AHEAD }),
+    null
+  )
+})
+
+check('a target inside the ahead-window is still the playhead fill', () => {
+  assert.equal(
+    fillBudgetBytes({ targetByte: CHUNK * 200, playheadByte: CHUNK * 21, aheadBytes: AHEAD }),
+    null
+  )
+})
+
+check('one chunk of slack behind the playhead, for a mid-chunk read', () => {
+  // A reader partway through chunk 21 asks for the chunk it is inside,
+  // which floors to just below highWatermarkByte — not an excursion.
+  assert.equal(
+    fillBudgetBytes({ targetByte: CHUNK * 21, playheadByte: CHUNK * 21 + 1000, aheadBytes: AHEAD }),
+    null
+  )
+})
+
+check('a tail probe far past the ahead-window is a bounded excursion', () => {
+  // The exact shape of the captured stall: playhead at chunk 21, ffmpeg
+  // reading Cues at chunk 2416 of a 2496-chunk file.
+  assert.equal(
+    fillBudgetBytes({ targetByte: CHUNK * 2416, playheadByte: CHUNK * 21, aheadBytes: AHEAD }),
+    CHUNK * 4
+  )
+})
+
+check('a probe behind the playhead is bounded too', () => {
+  assert.equal(
+    fillBudgetBytes({ targetByte: 0, playheadByte: CHUNK * 800, aheadBytes: AHEAD }),
+    CHUNK * 4
+  )
+})
+
+check('the window edge is inclusive, one byte past it is not', () => {
+  const playheadByte = CHUNK * 10
+  assert.equal(
+    fillBudgetBytes({ targetByte: playheadByte + AHEAD, playheadByte, aheadBytes: AHEAD }),
+    null
+  )
+  assert.equal(
+    fillBudgetBytes({ targetByte: playheadByte + AHEAD + 1, playheadByte, aheadBytes: AHEAD }),
+    CHUNK * 4
+  )
+})
+
+check('a fresh session (playhead still at 0) fills from the start unbounded', () => {
+  assert.equal(fillBudgetBytes({ targetByte: 0, playheadByte: 0, aheadBytes: AHEAD }), null)
+})
+
+check('the no-duration fallback window still keeps the playhead unbounded', () => {
+  // Before mpv reports a duration, aheadWindowBytes falls back to 32 chunks.
+  const fallback = CHUNK * 32
+  assert.equal(
+    fillBudgetBytes({ targetByte: CHUNK * 30, playheadByte: 0, aheadBytes: fallback }),
+    null
+  )
+  assert.equal(
+    fillBudgetBytes({ targetByte: CHUNK * 33, playheadByte: 0, aheadBytes: fallback }),
+    CHUNK * 4
+  )
 })
 
 console.log(`\n${pass} passed`)
