@@ -17,6 +17,8 @@ import {
 import {
   PRESENCE_TTL_MS,
   acceptRoomName,
+  applyRekey,
+  memberKeysFor,
   migrateLegacyRooms,
   reapPresence,
   recordPresence,
@@ -154,6 +156,85 @@ const SELF = 'self-friend-id'
   assert.throws(
     () => encodeRoomShareCode({ relay, secret: 'x', name: 'y', adminFriendId: '' }),
     'encoding refuses an anonymous admin'
+  )
+}
+
+// --- who a kick can name ----------------------------------------------------
+//
+// A kick removes a PERSON, which at the relay means every memberKey the
+// room has seen their announcements carry — one person is several
+// installs, and banning only the laptop leaves the TV in the room.
+
+{
+  const presence = new Map<string, PresenceRecord>()
+  recordPresence(presence, { friendId: 'a', name: 'Ana', memberKey: 'ana-laptop-key01' }, SELF, now)
+  recordPresence(presence, { friendId: 'a', name: 'Ana', memberKey: 'ana-tv-key000001' }, SELF, now)
+  recordPresence(presence, { friendId: 'a', name: 'Ana', memberKey: 'ana-tv-key000001' }, SELF, now)
+  assert.deepEqual(
+    memberKeysFor(presence, 'a'),
+    ['ana-laptop-key01', 'ana-tv-key000001'],
+    'every install announced is named, once each'
+  )
+  assert.deepEqual(memberKeysFor(presence, 'ghost'), [], 'never seen means nothing to remove')
+}
+
+// --- what a re-key may change -----------------------------------------------
+//
+// The most powerful message on the channel: accepted carelessly it could
+// move members onto an attacker's secret or into a different room. Each
+// refusal here closes one of those doors.
+
+{
+  const ADMIN = 'admin-id'
+  const relay = { url: 'https://relay.example.workers.dev', roomId: crypto.randomUUID() }
+  const room = { roomId: relay.roomId, adminFriendId: ADMIN }
+  const freshCode = encodeRoomShareCode({
+    relay,
+    secret: 'rotated-secret',
+    name: 'Family',
+    adminFriendId: ADMIN,
+    join: 'rotated-join'
+  })
+
+  const adopted = applyRekey(room, { code: freshCode }, ADMIN)
+  assert.ok(adopted, 'the admin re-keys the room')
+  assert.equal(adopted?.secret, 'rotated-secret')
+  assert.equal(adopted?.joinSecret, 'rotated-join')
+
+  assert.equal(
+    applyRekey(room, { code: freshCode }, 'someone-else'),
+    null,
+    'nobody but the admin is believed'
+  )
+
+  assert.equal(
+    applyRekey({ roomId: relay.roomId, adminFriendId: undefined }, { code: freshCode }, ADMIN),
+    null,
+    'a room with no admin cannot be re-keyed by message at all'
+  )
+
+  const otherRoomCode = encodeRoomShareCode({
+    relay: { url: relay.url, roomId: crypto.randomUUID() },
+    secret: 'rotated-secret',
+    name: 'Family',
+    adminFriendId: ADMIN
+  })
+  assert.equal(
+    applyRekey(room, { code: otherRoomCode }, ADMIN),
+    null,
+    'a re-key that changes the roomId is a relocation, not a rotation'
+  )
+
+  const handoffCode = encodeRoomShareCode({
+    relay,
+    secret: 'rotated-secret',
+    name: 'Family',
+    adminFriendId: 'new-admin'
+  })
+  assert.equal(
+    applyRekey(room, { code: handoffCode }, ADMIN),
+    null,
+    'there is no admin handoff by message'
   )
 }
 

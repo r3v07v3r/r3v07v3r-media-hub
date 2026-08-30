@@ -47,6 +47,12 @@ export interface ShareCodePayloadV3 {
   secret: string
   name: string
   adminFriendId: string
+  /** The relay's admission ticket for rooms with a membership layer —
+   *  what a stranger must present to connect at all. Absent on rooms
+   *  created before kick existed; those admit anyone at the relay, as
+   *  they always did. A RELAY credential, not content: holding it lets
+   *  a device connect, not read. */
+  join?: string
 }
 
 export type ShareCodePayload = ShareCodePayloadV1 | ShareCodePayloadV2 | ShareCodePayloadV3
@@ -125,8 +131,9 @@ export function encodeRoomShareCode(input: {
   secret: string
   name: string
   adminFriendId: string
+  join?: string
 }): string {
-  const { relay, secret, name, adminFriendId } = input
+  const { relay, secret, name, adminFriendId, join } = input
   if (!isValidRelayEndpoint(relay) || typeof secret !== 'string' || !secret) {
     throw new Error('Invalid room endpoint.')
   }
@@ -138,7 +145,8 @@ export function encodeRoomShareCode(input: {
     relay,
     secret,
     name: String(name || '').slice(0, 40),
-    adminFriendId: adminFriendId.slice(0, 64)
+    adminFriendId: adminFriendId.slice(0, 64),
+    ...(join ? { join: String(join).slice(0, 64) } : {})
   }
   return Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url')
 }

@@ -1,8 +1,10 @@
 // The decisions in the rooms system that are worth pinning, with no
 // database, network or Electron in reach — the same split watchlistRules
 // has, for the same reason: rooms.ts is mostly sockets and timers, and
-// what actually decides who appears, who is believed, and what survives a
-// migration is the handful of functions here.
+// what actually decides who appears, who is believed, what a re-key may
+// change, and what survives a migration is the handful of functions
+// here. (party.ts is the one import with code in it, and it is pure
+// crypto and validation — nothing here touches a socket or a store.)
 //
 // WIRE COMPATIBILITY, stated once: the message types on the wire are
 // still 'friend-presence' and 'friend-join-*'. A member running the app
@@ -10,6 +12,7 @@
 // dialect, and renaming the wire would silently split the room into two
 // populations that cannot see each other. Only the TypeScript names moved.
 
+import { decodeShareCode } from './party'
 import type { RoomActivity, RoomMemberPresence } from '../../shared/media-hub/types'
 
 /** A member not heard from within this window is dropped from the local
@@ -24,6 +27,10 @@ export const ANNOUNCE_INTERVAL_MS = 20_000
 
 export interface PresenceRecord extends RoomMemberPresence {
   lastSeen: number
+  /** Every relay memberKey this person's announcements have carried —
+   *  accumulated, not replaced, because one person is several installs
+   *  and kicking them means kicking all of the ones the room has seen. */
+  memberKeys: string[]
 }
 
 /**
@@ -50,8 +57,12 @@ export function recordPresence(
   if (!friendId || friendId === selfFriendId) return { changed: false, isNewcomer: false }
   const isNewcomer = !presence.has(friendId) && ageMs === 0
   const activity = (msg.activity as RoomActivity | undefined) || null
+  const memberKeys = [...(presence.get(friendId)?.memberKeys ?? [])]
+  const announcedKey = typeof msg.memberKey === 'string' ? msg.memberKey.slice(0, 64) : ''
+  if (announcedKey && !memberKeys.includes(announcedKey)) memberKeys.push(announcedKey)
   presence.set(friendId, {
     friendId,
+    memberKeys,
     name: String(msg.name || 'Someone').slice(0, 40),
     activity: activity
       ? {
@@ -106,6 +117,49 @@ export function acceptRoomName(
   return proposed.trim() ? proposed : currentName
 }
 
+/**
+ * Whether — and how — a room-rekey message is believed.
+ *
+ * A re-key replaces the room's secret and invite code, which makes it
+ * the most powerful message on the channel: accepted carelessly it could
+ * move members onto an attacker's secret or into a different room
+ * entirely. Three conditions, each closing a specific door:
+ *
+ *  1. Only the ADMIN's friendId is believed. (Within-room spoofing by
+ *     secret-holders remains possible and is a documented trust
+ *     boundary — see docs/ROOMS.md — but a random member's client must
+ *     still refuse to originate one.)
+ *  2. The new code must be for THE SAME ROOM. A re-key that changes the
+ *     roomId is a relocation, not a rotation, and is refused.
+ *  3. The new code must name THE SAME ADMIN. There is no admin handoff
+ *     by message; a code that says otherwise is not this room's.
+ *
+ * Returns what to adopt, or null to ignore the message entirely.
+ */
+export function applyRekey(
+  room: { roomId: string; adminFriendId?: string },
+  msg: Record<string, unknown>,
+  senderFriendId: string
+): { code: string; secret: string; joinSecret?: string; name: string } | null {
+  if (!room.adminFriendId || senderFriendId !== room.adminFriendId) return null
+  const code = typeof msg.code === 'string' ? msg.code : ''
+  const parsed = decodeShareCode(code)
+  if (!parsed || parsed.v !== 3) return null
+  if (parsed.relay.roomId !== room.roomId) return null
+  if (parsed.adminFriendId !== room.adminFriendId) return null
+  return { code, secret: parsed.secret, joinSecret: parsed.join, name: parsed.name }
+}
+
+/** Every memberKey the room has seen for one person — what a kick names.
+ *  Empty means the room has never seen them announce, and there is
+ *  nothing to remove. */
+export function memberKeysFor(
+  presence: ReadonlyMap<string, PresenceRecord>,
+  friendId: string
+): string[] {
+  return presence.get(friendId)?.memberKeys ?? []
+}
+
 /** The persisted shape of one room membership. */
 export interface StoredRoom {
   /** The invite code — carries relay endpoint, secret, name, admin. */
@@ -117,9 +171,22 @@ export interface StoredRoom {
   /** The creator's friendId, from the invite code. Absent for rooms that
    *  predate admins — which simply have none. */
   adminFriendId?: string
-  /** The relay's host token, held only by the creator. Kept because it is
-   *  the credential the worker-side kick will require; unused until then. */
+  /** The relay's host token, held only by the creator — the credential
+   *  the relay's kick endpoint requires. */
   roomToken?: string
+  /** This install's relay identity in the room. Generated on create or
+   *  join of a membership room; announced so others can name it in a
+   *  kick. */
+  memberKey?: string
+  /** The relay's admission ticket, from the invite code. Only strangers
+   *  need it — a known memberKey is admitted without — but it is kept
+   *  current so re-shares of OUR copy of the code stay valid. */
+  joinSecret?: string
+  /** The secret this room used before its last re-key. Kept for one
+   *  purpose: recognising and rescuing a member who was offline during
+   *  the rotation and comes back speaking the old dialect. Replaced on
+   *  the next re-key, never handed to anyone the relay would refuse. */
+  prevSecret?: string
 }
 
 /**

@@ -363,19 +363,36 @@ interface ConnectRelayOptions {
   token?: string
   secret?: string
   helloName?: string
+  /** Extra query params — the membership credentials rooms present. */
+  query?: Record<string, string>
   WebSocketImpl?: typeof WebSocket
 }
 
-/** Shared with friends.ts, which opens a long-lived connection to a group
- *  room using exactly the same relay protocol. */
+/** Shared with rooms.ts, which opens long-lived connections to room
+ *  channels using exactly the same relay protocol. */
 export function connectRelayWs(
   relayUrl: string,
   roomId: string,
-  { token = '', secret = '', helloName = '', WebSocketImpl = WebSocket }: ConnectRelayOptions = {}
+  {
+    token = '',
+    secret = '',
+    helloName = '',
+    query = {},
+    WebSocketImpl = WebSocket
+  }: ConnectRelayOptions = {}
 ): Promise<WebSocket> {
   return new Promise((resolve, reject) => {
+    // Membership rooms present their relay credentials here — memberKey
+    // and joinSecret ride as query params exactly like the host token
+    // always has, because a WebSocket upgrade has nowhere better.
+    const params = new URLSearchParams()
+    if (token) params.set('token', token)
+    for (const [key, value] of Object.entries(query)) {
+      if (value) params.set(key, value)
+    }
+    const search = params.toString()
     const wsUrl = `${relayUrl.replace(/^http/, 'ws')}/party/${encodeURIComponent(roomId)}${
-      token ? `?token=${encodeURIComponent(token)}` : ''
+      search ? `?${search}` : ''
     }`
     const ws = new WebSocketImpl(wsUrl, undefined, { maxPayload: MAX_PARTY_MESSAGE_BYTES })
     const timer = setTimeout(() => {
