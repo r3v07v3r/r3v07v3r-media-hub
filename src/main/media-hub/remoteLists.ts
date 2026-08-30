@@ -13,7 +13,12 @@
 
 import { logError } from './logger'
 import { simklRequest } from './simklClient'
-import { simklCredentials, traktCredentials } from './settingsStore'
+import {
+  simklAccountMark,
+  simklCredentials,
+  traktAccountMark,
+  traktCredentials
+} from './settingsStore'
 import { traktRequest } from './traktClient'
 import { getDatabase } from './dbState'
 import type { RemoteList, RemoteListEntry } from '../../shared/media-hub/types'
@@ -25,6 +30,41 @@ const CACHE_KEY = 'lists:remote'
 const TTL_MS = 12 * 60 * 60 * 1000
 
 export type RemoteListService = 'simkl' | 'trakt'
+
+/**
+ * WHOSE LISTS THESE ARE.
+ *
+ * A named list is somebody's private writing — its title, its
+ * description, what they put in it. This cache outlives a sign-out, so
+ * without a stamp saying which account each list was read from, signing
+ * into a different Trakt would show the previous person's lists until the
+ * background refresh happened to land. Stamped, a list whose account is
+ * no longer connected is simply not returned.
+ *
+ * The marks come from settingsStore, which explains why they are stamps
+ * rather than a clear-on-disconnect: state that outlives its account has
+ * to be inert on its own, not rely on a cleanup that may never run.
+ */
+interface StampedLists {
+  marks: { trakt: string; simkl: string }
+  lists: RemoteList[]
+}
+
+function currentMarks(): { trakt: string; simkl: string } {
+  return { trakt: traktAccountMark(), simkl: simklAccountMark() }
+}
+
+/** The cached lists that still belong to a connected account, per
+ *  service — so disconnecting Trakt drops Trakt's and leaves Simkl's. */
+function trustedCached(allowExpired = true): RemoteList[] {
+  const stored = getDatabase().getCache<StampedLists>(CACHE_KEY, { allowExpired })
+  if (!stored?.lists) return []
+  const now = currentMarks()
+  return stored.lists.filter((list) => {
+    const stamp = stored.marks?.[list.service]
+    return Boolean(stamp) && stamp === now[list.service]
+  })
+}
 
 interface TraktListRow {
   ids?: { trakt?: number | string }
@@ -173,14 +213,14 @@ export async function fetchRemoteLists(
   }
   // Everything failed — keep whatever was last known rather than
   // reporting that somebody's lists have disappeared.
-  if (anyFailed && out.length === 0) {
-    return db.getCache<RemoteList[]>(CACHE_KEY, { allowExpired: true }) ?? []
-  }
-  db.putCache(CACHE_KEY, out, TTL_MS, { durable: true })
+  if (anyFailed && out.length === 0) return trustedCached()
+  const payload: StampedLists = { marks: currentMarks(), lists: out }
+  db.putCache(CACHE_KEY, payload, TTL_MS, { durable: true })
   return out
 }
 
-/** The last successful read, for painting the view before a fetch lands. */
+/** The last successful read, for painting the view before a fetch lands.
+ *  Only the lists belonging to accounts connected right now. */
 export function cachedRemoteLists(): RemoteList[] {
-  return getDatabase().getCache<RemoteList[]>(CACHE_KEY, { allowExpired: true }) ?? []
+  return trustedCached()
 }
