@@ -17,6 +17,7 @@ import {
   computeRetainedChunkIndices,
   createMemoryChunkStore,
   fillBudgetBytes,
+  shouldAdoptAsPlayhead,
   findReusableSession
 } from '../src/main/media-hub/streamCache'
 
@@ -312,6 +313,40 @@ check('a fully-buffered playhead makes every fill an excursion', () => {
   // null = the playhead needs nothing right now, so nobody's playhead is
   // waiting on this fetch and it must not get to run to EOF.
   assert.equal(fillBudgetBytes({ targetByte: CHUNK * 500, playheadFillByte: null }), CHUNK * 4)
+})
+
+// --- Who is allowed to become the playhead ---------------------------------
+// The invariant that has broken twice: a reader being served a detour must
+// never be adopted as the retention centre every fill is then classified
+// against. The 8MB adoption bar sits inside a 16MB excursion budget, so
+// byte count alone cannot carry this.
+
+console.log('shouldAdoptAsPlayhead')
+
+const MIN_SERVED = CHUNK * 2
+
+check('a connection that streamed enough becomes the playhead', () => {
+  assert.equal(shouldAdoptAsPlayhead({ servedBytes: MIN_SERVED, servingExcursion: false }), true)
+})
+
+check('a short metadata probe does not', () => {
+  assert.equal(
+    shouldAdoptAsPlayhead({ servedBytes: MIN_SERVED - 1, servingExcursion: false }),
+    false
+  )
+})
+
+check('a reader being served an excursion never does, however much it reads', () => {
+  // A full 16MB excursion budget is twice the 8MB bar — without this the
+  // probe becomes the playhead and its next miss retakes the connection.
+  assert.equal(shouldAdoptAsPlayhead({ servedBytes: CHUNK * 4, servingExcursion: true }), false)
+  assert.equal(shouldAdoptAsPlayhead({ servedBytes: CHUNK * 500, servingExcursion: true }), false)
+})
+
+check('clearing the excursion flag lets a genuine playhead be adopted again', () => {
+  // A seek moves the playhead first, so that reader's next miss classifies
+  // as the playhead's own fill and the flag goes back to false.
+  assert.equal(shouldAdoptAsPlayhead({ servedBytes: CHUNK * 4, servingExcursion: false }), true)
 })
 
 console.log(`\n${pass} passed`)
