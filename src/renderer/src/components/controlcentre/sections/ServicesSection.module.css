@@ -1,0 +1,59 @@
+/* Services adds only what Caching's shared card vocabulary does not
+   already cover: the connection lamp and the one figure a service reports.
+   Everything else — cards, rows, buttons, notes — comes from
+   CachingSection.module.css deliberately, so the two sections cannot
+   drift into looking like different products. */
+
+.identity {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  min-width: 0;
+}
+
+/* Never the ONLY signal that a service is down: the line beside it says so
+   in words too. A dot that means "broken" only if you can tell green from
+   red is a status nobody colour-blind can read. */
+.lamp {
+  flex: none;
+  width: 9px;
+  height: 9px;
+  margin-top: 6px;
+  border-radius: 50%;
+  border: 1px solid var(--border-subtle);
+  background: transparent;
+}
+
+.lampOk {
+  border-color: var(--accent-blue);
+  background: var(--accent-blue);
+  box-shadow: 0 0 10px rgba(39, 230, 154, 0.55);
+}
+
+.lampBad {
+  border-color: #ff9b9b;
+  background: #ff9b9b;
+}
+
+.metric {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+}
+
+.metricValue {
+  font-size: 1.4rem;
+  font-weight: 620;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+.metricLabel {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+  white-space: nowrap;
+}

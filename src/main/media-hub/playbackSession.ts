@@ -24,6 +24,7 @@
 import { app } from 'electron'
 import crypto from 'node:crypto'
 import fs from 'node:fs'
+import fsp from 'node:fs/promises'
 import path from 'node:path'
 
 import { MEDIA_HUB_CHANNELS } from '../../shared/media-hub/ipc-channels'
@@ -32,6 +33,7 @@ import type {
   MediaTracks,
   PlaybackResult,
   StreamCacheEntry,
+  StreamCacheUsage,
   SubtitleSelection,
   SubtitlesApplyResult
 } from '../../shared/media-hub/types'
@@ -57,10 +59,12 @@ import {
 import { readSettings } from './settingsStore'
 import { setPressure } from './taskScheduler'
 import {
+  cacheRootDir,
   clearAllSessions,
   createStreamCache,
   deleteCacheSession,
   listCacheSessions,
+  memoryModeEnabled,
   MIN_CACHE_BYTES
 } from './streamCache'
 import { downloadSubtitleText } from './subtitlesService'
@@ -133,6 +137,28 @@ export function subtitleCacheDir(): string {
  *  capture reads from, for the same reason: no second connection to the
  *  remote link. Used by movieHash.ts to hash the exact release somebody is
  *  actually watching for a frame-accurate subtitle search. */
+/**
+ * Re-applies the storage answer to whatever is playing right now.
+ *
+ * Called when the setting changes rather than only when a session starts,
+ * because the change that matters most is the one made mid-film: without
+ * this, "do not keep media on this device" took effect on the NEXT title
+ * and the current one carried on filling the disk.
+ */
+export async function applyStoragePolicyToPlayback(): Promise<void> {
+  await streamCache.applyStoragePolicy()
+  // THE SESSIONS THAT ARE NOT PLAYING MATTER JUST AS MUCH. Somebody who
+  // has watched three films and then says "keep nothing on this device"
+  // has three session directories on their disk, and at most one of them
+  // is the live one the call above deals with. Leaving the rest to the 24h
+  // prune makes the setting true of the next film and not of the ones
+  // already sitting there, which is not what it says.
+  //
+  // clearAllSessions skips whatever is in activeCacheTokens, so the live
+  // session is not pulled out from under the player mid-frame.
+  if (memoryModeEnabled()) await clearAllSessions()
+}
+
 export function activeStreamUrl(): string {
   return activeCacheUrl
 }
@@ -490,6 +516,24 @@ export function registerPlaybackIpc(): void {
   handle<undefined, StreamCacheEntry[]>(MEDIA_HUB_CHANNELS.streamCacheList, async () =>
     listCacheSessions(streamCache.getActiveToken())
   )
+
+  handle<undefined, StreamCacheUsage>(MEDIA_HUB_CHANNELS.streamCacheUsage, async () => {
+    const sessions = await listCacheSessions(streamCache.getActiveToken())
+    const directory = cacheRootDir()
+    let freeBytes: number | null = null
+    try {
+      const stat = await fsp.statfs(directory)
+      freeBytes = stat.bavail * stat.bsize
+    } catch {
+      // statfs is not universal. Null rather than 0: an absence is honest,
+      // and "0 bytes free" would be both alarming and untrue.
+    }
+    return {
+      usedBytes: sessions.reduce((sum, entry) => sum + entry.cachedBytes, 0),
+      freeBytes,
+      directory
+    }
+  })
 
   handle<{ token?: unknown } | undefined, { ok: true }>(
     MEDIA_HUB_CHANNELS.streamCacheDelete,

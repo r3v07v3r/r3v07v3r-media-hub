@@ -198,55 +198,30 @@ export interface AnimeStoryResult {
   checked: boolean
 }
 
-// TorBox `mylist` items matched against the cached catalogs by parsed
-// release-name (see enrichTorBoxItem in core.ts).
-export interface LibraryItem {
-  id: string
-  title: string
-  type: 'library'
-  mediaType: 'movie' | 'series'
-  year: string
-  season: number | null
-  episode: number | null
-  poster: string
-  background: string
-  description: string
-  rating: string
-  runtime: string
-  genres: string[]
-  metadataId: string
-  raw: Record<string, unknown>
-}
-
-/** Where a candidate can be played from. Absent means 'torbox', so every
- *  candidate already persisted in the stream cache stays valid without a
- *  migration — the field was introduced when the media server was. */
 /**
- * Where a playable copy lives, in preference order. The ordering is the
- * product rule ("nearest source that meets the quality target wins"), so it
- * is declared once here and read by resolve rather than re-stated per call
- * site.
+ * Where a playable copy lives. Absent means 'torbox', so every candidate
+ * already persisted in the stream cache stays valid without a migration —
+ * the field was introduced when the media server was.
  *
  *  localcache  - already on this machine's disk; needs no network at all
- *  lancache    - the on-site pre-fetch daemon (not yet implemented)
+ *  lancache    - the on-site pre-fetch daemon (main/media-hub/lanCache.ts)
  *  mediaserver - a configured Jellyfin library
  *  torbox      - the debrid service, over the internet
+ *
+ * PREFERENCE IS NOT A PROPERTY OF THIS TYPE. There was once a
+ * STREAM_SOURCE_RANK here declaring a strict 0..3 ordering, described as
+ * "read by resolve" — it never was, by resolve or anything else, and the
+ * only thing that referenced it was a test asserting 0 < 1 < 2 < 3 against
+ * the constant itself. What actually decides the source is split in two and
+ * lives with the code that does it: torbox.ts's streamResolve short-circuits
+ * on localcache and then lancache (each quality-gated), and core.ts's
+ * rankStreams then SCORES mediaserver against torbox, weighted by the user's
+ * SourcePreference — which on 'prefer-quality' deliberately stops caring
+ * where a copy lives at all. A single numeric rank cannot express that, and
+ * having one here invited exactly the wrong summary of it (see the README's
+ * old "local → server → download" section).
  */
 export type StreamSource = 'localcache' | 'lancache' | 'mediaserver' | 'torbox'
-
-/** Lowest number wins. Absent `source` is 'torbox', which must therefore
- *  keep torbox's rank so pre-existing persisted candidates still sort
- *  correctly. */
-export const STREAM_SOURCE_RANK: Record<StreamSource, number> = {
-  localcache: 0,
-  lancache: 1,
-  mediaserver: 2,
-  torbox: 3
-}
-
-export function streamSourceRank(source: StreamSource | undefined): number {
-  return STREAM_SOURCE_RANK[source ?? 'torbox']
-}
 
 // A discovered stream candidate (from a scraper add-on or a configured
 // media server), after availability checking and ranking merge in
@@ -411,6 +386,20 @@ export interface StreamCacheEntry extends CacheSessionMeta {
   cachedBytes: number
   totalBytes: number | null
   isActive: boolean
+}
+
+/**
+ * What the local cache holds, and what is left where it lives.
+ *
+ * freeBytes is null where the platform will not say (statfs is not
+ * universal) — rendered as an absence rather than as a zero, because
+ * "0 bytes free" is alarming and wrong.
+ */
+export interface StreamCacheUsage {
+  usedBytes: number
+  freeBytes: number | null
+  /** Where it is, for the one line that says so. */
+  directory: string
 }
 
 export interface PlaybackResult {
@@ -609,6 +598,26 @@ export interface ViewingStats {
  * "Rewatch with Dad", "Halloween", "Started and gave up" — and belong to
  * nobody but the person who made them.
  */
+/** A named list somebody built in Trakt or Simkl. Read-only here: a
+ *  named list has an author, and the first version of this feature
+ *  should not be able to reorder or empty one. */
+export interface RemoteList {
+  /** Service-qualified — two services can both have a list called
+   *  "Watchlist" and they are not the same list. */
+  id: string
+  service: 'simkl' | 'trakt'
+  name: string
+  description?: string
+  items: RemoteListEntry[]
+}
+
+export interface RemoteListEntry {
+  id: string
+  type: MediaKind
+  title: string
+  year?: string
+}
+
 export interface CustomList {
   id: string
   name: string
@@ -637,6 +646,44 @@ export interface ContinueWatchingEntry extends CatalogItem {
 export interface TrackingListResult {
   tracked: TrackedItemEnriched[]
   history: HistoryEntry[]
+  /**
+   * Which tracking services have each planned title on their own list,
+   * keyed by media id.
+   *
+   * Sent with the list rather than fetched separately because every
+   * surface that draws a planned title wants to tag it, and a second
+   * round trip per card is not a thing to build. Absent ids are simply
+   * local-only, which is the ordinary case for anything marked here.
+   */
+  plannedSources: Record<string, PlannedServiceId[]>
+}
+
+/** Services with both a login in this app and a personal list to read.
+ *  Kitsu is deliberately absent: it is a public catalog here, with no
+ *  account, so there is no list of yours to fetch. */
+export type PlannedServiceId = 'simkl' | 'trakt' | 'mal'
+
+/** What one service's watchlist pull did. Reported per service because
+ *  the failure that matters is the quiet one: two lists arriving and a
+ *  third erroring looks exactly like a short list unless somebody says. */
+export interface PlannedServiceReport {
+  service: PlannedServiceId
+  connected: boolean
+  pulled: number
+  /** Entries dropped for want of an id this app could file them under —
+   *  anime, in practice. Counted so the gap is visible. */
+  unmapped: number
+  error?: string
+}
+
+export interface PlannedSyncReport {
+  at: number
+  services: PlannedServiceReport[]
+  added: number
+  /** Titles removed locally because they left every service that had
+   *  them — only ever titles this app pulled in itself. See
+   *  docs/WATCHLIST-SYNC.md rule 2. */
+  removed: number
 }
 
 export interface DislikedListResult {
@@ -659,6 +706,15 @@ export interface HomePersonalizedResult {
    */
   recommendationReasons: Record<string, RecommendationReason>
   preferredGenres: string[]
+  /**
+   * Which tracking services have each planned title on their own list.
+   *
+   * Carried on the home feed because that is the payload the app already
+   * derives its planned set from, so a card can be tagged without a
+   * second round trip per title. Sparse: an id with no entry is planned
+   * here and nowhere else, which is the ordinary case.
+   */
+  plannedSources: Record<string, PlannedServiceId[]>
 }
 
 /**
@@ -951,6 +1007,19 @@ export interface MediaHubPublicSettings {
   cacheMode: CacheMode
   /** Bound on the in-memory buffer, in MB. Only meaningful in memory mode. */
   memoryCacheMaxMb: number
+  /**
+   * Whether this install may keep MEDIA on the disk at all.
+   *
+   * false is a promise, not a preference: cacheMode is forced to memory
+   * behind it (see preferences.ts effectiveCacheMode), so the disk stays
+   * clean whatever the saved mode says. The app's own library, history and
+   * settings are unaffected — this is about video, not about forgetting
+   * what you watched.
+   */
+  storeMedia: boolean
+  /** Whether watchlist changes travel both ways — see
+   *  docs/WATCHLIST-SYNC.md. */
+  watchlistTwoWay: boolean
 }
 
 export type CacheMode = 'disk' | 'memory'
@@ -981,6 +1050,10 @@ export interface MediaHubSettingsSnapshot extends MediaHubPublicSettings {
    *  of inventing an answer, and "Recommend Next ..." falls back to its own
    *  catalog pick rather than pretending a model chose it. */
   ollamaConnected: boolean
+  /** Whether the storage question has ever been answered. False on a fresh
+   *  install and nowhere else — this is what the first-run prompt keys on,
+   *  which is why it is distinct from storeMedia being true or false. */
+  storagePolicyChosen: boolean
 }
 
 /** What a probe of an Ollama instance found — see main/media-hub/ollamaService.ts. */
@@ -1116,16 +1189,27 @@ export interface MalReconcileToMal {
   watchedEpisodes: number
 }
 
+/** A MAL rating to pull in locally — targetId is the canonical grouped show
+ *  id (see catalog.ts's resolveAnimeGroupTarget), not the raw kitsuId MAL's
+ *  entry matched to, since a rating belongs to the whole show. */
+export interface MalReconcileRatingToLocal {
+  targetId: string
+  title: string
+  score: number
+}
+
 export interface MalReconcilePreview {
   toMal: MalReconcileToMal[]
   toLocal: MalReconcileToLocal[]
+  ratingsToLocal: MalReconcileRatingToLocal[]
   unmatched: unknown[]
 }
 
 export interface MalReconcileApplyResult {
   toLocal: string[]
   toMal: number[]
-  errors: { kitsuId?: string; malId?: number; error: string }[]
+  ratings: string[]
+  errors: { kitsuId?: string; malId?: number; targetId?: string; error: string }[]
 }
 
 /** Which online subtitle service a SubtitleResult came from. The two are
@@ -1341,6 +1425,18 @@ export interface UpdateStatusPayload {
   version?: string
   percent?: number
   message?: string
+  /** What the OFFERED version changes, from the release body electron-updater
+   *  already carries — so an update can be read about before it is installed.
+   *  Absent on states that describe no particular version. */
+  releaseNotes?: string
+}
+
+/** What the About card shows under the version. */
+export interface ReleaseNotesResult {
+  /** The running build's own note, or '' when it shipped without one (any
+   *  build made outside the release workflow). */
+  current: string
+  version: string
 }
 
 export interface UpdateCheckResult {
@@ -1446,4 +1542,87 @@ export interface ActivitySnapshot {
 export interface CatalogListing {
   items: CatalogItem[]
   stale: boolean
+}
+
+/** The browse grid's sort orders. Mirrors the renderer's own SortKey — the
+ *  same six the sort dropdown offers — because the sort is now applied by
+ *  SQL over catalog_index rather than in memory over a loaded array. */
+export type CatalogSortKey =
+  'trending' | 'title-asc' | 'year-desc' | 'rating-desc' | 'runtime-asc' | 'runtime-desc'
+
+/**
+ * One page of the browse grid, as a question for the database.
+ *
+ * Every field is the URL-facing value the category page already carries in
+ * its query string (see the renderer's CategoryFilterState), so a filter
+ * bar's state maps to one of these directly rather than through a
+ * translation layer that could reinterpret it.
+ *
+ * Absent and null both mean "not filtering on this". A bucket value that no
+ * longer exists means "matches nothing", NOT "no filter" — a stale bookmark
+ * should show an empty grid rather than silently show everything.
+ */
+export interface CatalogQuery {
+  kind: MediaKind
+  genre?: string | null
+  /** As a string, matching the URL. Compared against the stored year. */
+  year?: string | null
+  minRating?: number | null
+  /** Bucket `value`s from shared/media-hub/catalogFilters. */
+  runtimeBucket?: string | null
+  seasonsBucket?: string | null
+  episodeLengthBucket?: string | null
+  episodesBucket?: string | null
+  status?: string | null
+  /**
+   * The three watch-state exclusions, applied by the SAME query rather than
+   * by the caller afterwards.
+   *
+   * This is not an optimisation. Filtering a returned page client-side makes
+   * pages shrink unpredictably — ask for 30, render 22 — and makes `total` a
+   * number that does not describe what the person is looking at. Both are
+   * invisible while the whole catalog is in memory and immediately wrong
+   * once it is paged.
+   */
+  hideWatched?: boolean
+  hideCompleted?: boolean
+  hideDisliked?: boolean
+  sort?: CatalogSortKey
+  offset?: number
+  limit?: number
+}
+
+export interface CatalogQueryResult {
+  items: CatalogItem[]
+  /** How many titles match the filters in total, ignoring offset/limit.
+   *  This is what the category hero should quote — the size of the result,
+   *  not the size of the page that came back. */
+  total: number
+  /**
+   * Which of `items` count as finished, resolved against watch history.
+   *
+   * Returned separately rather than set on the CatalogItems because a
+   * CatalogItem describes a title and this describes one profile's
+   * relationship to it — the same row is complete for one person and not for
+   * another. `watched` and `disliked` are deliberately NOT here: the
+   * renderer already holds those id sets globally, and only `completed`
+   * needs a denominator (aired episodes) that lives in the database.
+   */
+  completedIds: string[]
+}
+
+/**
+ * The values that actually occur in the library for one kind, for the filter
+ * bar's dropdowns.
+ *
+ * Replaces deriving the option lists from whatever happened to be loaded.
+ * That was the only thing available while the whole catalog lived in one
+ * array, but it meant the genre list described the loaded slice rather than
+ * the library — and the deeper the catalog got, the more the two diverged.
+ */
+export interface CatalogFacets {
+  genres: string[]
+  /** Newest first, matching the dropdown's own order. */
+  years: number[]
+  statuses: string[]
 }

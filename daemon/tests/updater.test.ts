@@ -533,6 +533,7 @@ async function main(): Promise<void> {
       const activityStub = {
         streamOpened: noop,
         streamClosed: noop,
+        isStreaming: () => false,
         snapshot: () => ({ activeStreams: 0, lastStreamAt: 0, hourCounts: [] as number[] }),
         load: async () => undefined
       }

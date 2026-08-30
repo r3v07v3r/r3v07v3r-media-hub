@@ -5,12 +5,18 @@ import styles from './Settings.module.css'
 // The Cache Server card: pairing with an r3-cache daemon (tier 2 of the
 // playback source order) and its live status.
 //
-// The pairing flow is the zero-config story made visible: Discover lists
-// daemons announcing themselves on the LAN; picking one (or typing a URL,
-// for networks that filter multicast) plus the code off the daemon's
-// console is the whole setup. The TorBox checkbox is the one real trust
-// decision — an explicit copy of the account credential to another machine
-// — so it is a checkbox at pairing time, never a silent default.
+// The zero-config story made visible: Discover lists daemons announcing
+// themselves on the LAN, and picking one (or typing a URL, for networks
+// that filter multicast) asks to join. There is no code to read off a
+// console any more — the server's administrator approves the request from
+// their own app, which is the same authority without the walk to the
+// machine. The full picture, including that administration, lives in the
+// control centre's Caching section; this card is the standalone settings
+// route's short version.
+//
+// The TorBox checkbox is the one real trust decision — an explicit copy of
+// the account credential to another machine — so it is a checkbox at
+// joining time, never a silent default.
 
 interface DiscoveredDaemon {
   name: string
@@ -39,12 +45,16 @@ function gb(bytes: number): string {
 
 export function LanCacheSection() {
   const [paired, setPaired] = useState<string | null>(null)
+  /** Whether the connection this card is showing is still waiting to be let
+   *  in. Without it the card called a pending connection 'Paired' and then
+   *  reported it as unreachable, which is two wrong answers rather than the
+   *  one true one. */
+  const [awaitingApproval, setAwaitingApproval] = useState(false)
   const [status, setStatus] = useState<DaemonStatus | null>(null)
   const [statusError, setStatusError] = useState('')
   const [daemons, setDaemons] = useState<DiscoveredDaemon[]>([])
   const [discovering, setDiscovering] = useState(false)
   const [url, setUrl] = useState('')
-  const [code, setCode] = useState('')
   const [shareTorbox, setShareTorbox] = useState(true)
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null)
@@ -72,6 +82,12 @@ export function LanCacheSection() {
     // through a microtask so no setState lands synchronously in the
     // effect body (react-hooks/set-state-in-effect).
     void Promise.resolve().then(async () => {
+      // The WAIT itself belongs to the main process, which polls whether or
+      // not this card is open — so this only has to read the answer, and a
+      // device approved while nobody was looking is already connected by the
+      // time anyone gets here.
+      const pair = await api.pairStatus()
+      setAwaitingApproval(pair.state === 'pending')
       const found = await api.discover()
       setPaired(found.paired)
       setDaemons(found.daemons)
@@ -100,11 +116,11 @@ export function LanCacheSection() {
     if (!api) return
     setBusy(true)
     setMessage(null)
-    const result = await api.pair({ url: targetUrl, code, shareTorboxToken: shareTorbox })
+    const result = await api.pair({ url: targetUrl, shareTorboxToken: shareTorbox })
     setMessage({ ok: result.ok, text: result.message })
     setBusy(false)
     if (result.ok) {
-      setCode('')
+      setAwaitingApproval(Boolean(result.pending))
       const found = await api.discover()
       setPaired(found.paired)
       void refresh()
@@ -117,7 +133,8 @@ export function LanCacheSection() {
     await api.unpair()
     setPaired(null)
     setStatus(null)
-    setMessage({ ok: true, text: 'Unpaired. The server keeps its files until they expire.' })
+    setAwaitingApproval(false)
+    setMessage({ ok: true, text: 'Left. The server keeps its files until they expire.' })
     setBusy(false)
   }
 
@@ -131,11 +148,31 @@ export function LanCacheSection() {
       <p className={styles.serviceNote}>
         A small server on your own network that downloads what you plan to watch ahead of time, so
         playback starts from one LAN hop instead of a slow internet link. Run r3-cache on any
-        Windows or Linux box and pair it here with the code from its console. Everything it stores
-        expires on its own — nothing stays forever.
+        Windows or Linux box and ask to join it here. Everything it stores expires on its own —
+        nothing stays forever.
       </p>
 
-      {paired && (
+      {paired && awaitingApproval && (
+        <div className={styles.row}>
+          <div className={styles.rowText}>
+            <span className={styles.rowTitle}>Waiting to be let in</span>
+            <span className={styles.rowDescription}>
+              {paired} — the administrator of that server approves this device there. Nothing else
+              is needed here.
+            </span>
+          </div>
+          <button
+            type="button"
+            className={styles.testButton}
+            onClick={handleUnpair}
+            disabled={busy}
+          >
+            Cancel
+          </button>
+        </div>
+      )}
+
+      {paired && !awaitingApproval && (
         <>
           <div className={styles.row}>
             <div className={styles.rowIcon} aria-hidden="true">
@@ -177,9 +214,9 @@ export function LanCacheSection() {
                     type="button"
                     className={styles.testButton}
                     onClick={() => handlePair(daemon.url)}
-                    disabled={busy || code.length !== 6}
+                    disabled={busy}
                   >
-                    Pair
+                    Ask to join
                   </button>
                 </div>
               ))}
@@ -194,18 +231,6 @@ export function LanCacheSection() {
                 placeholder="http://192.168.1.20:8945"
                 value={url}
                 onChange={(event) => setUrl(event.target.value)}
-              />
-            </label>
-            <label className={styles.field}>
-              <span className={styles.fieldLabel}>Pairing code (on the server&apos;s console)</span>
-              <input
-                className={styles.fieldInput}
-                type="text"
-                inputMode="numeric"
-                maxLength={6}
-                placeholder="000000"
-                value={code}
-                onChange={(event) => setCode(event.target.value.replace(/\D/g, ''))}
               />
             </label>
           </div>
@@ -233,9 +258,9 @@ export function LanCacheSection() {
               type="button"
               className={styles.testButton}
               onClick={() => handlePair(url)}
-              disabled={busy || !url.trim() || code.length !== 6}
+              disabled={busy || !url.trim()}
             >
-              {busy ? 'Pairing…' : 'Pair'}
+              {busy ? 'Asking…' : 'Ask to join'}
             </button>
           </div>
         </>

@@ -1,0 +1,68 @@
+/* How far the field extends above the face, behind the top bar. A little
+   more than the bar's own height, so a column has already fallen a short way
+   before it clears the chrome — but not so much that most of the canvas is
+   being drawn above the window and thrown away. */
+:root {
+  --rain-overhang: 120px;
+}
+
+.rain {
+  position: absolute;
+  /* Starts well ABOVE this face and runs past its bottom edge.
+
+     The point is where a column is when you first see it. Sized to the
+     panel, every stream began exactly at the top of the panel, so the whole
+     field appeared to switch on along one line. Started above the bar, a
+     column is already falling by the time it clears the bar's lower edge —
+     so the rain reads as coming out from behind the chrome, which is what it
+     is meant to look like.
+
+     The bar covers the overhang: it is z-index 30 over this face and paints
+     an opaque surface of its own while the control centre is open. */
+  top: calc(-1 * var(--rain-overhang));
+  left: 0;
+  width: 100%;
+  height: calc(100% + var(--rain-overhang));
+  /* Behind every control on the face. The panel's own background sits at the
+     bottom of the stack, this sits on top of it, and all the content sits on
+     top of this. */
+  z-index: 0;
+  /* Decoration cannot be allowed to make a button harder to hit, so it
+     cannot be hit at all. */
+  pointer-events: none;
+  /* Kept low enough that the surface reads identically with the canvas
+     removed — the text contrast on top of it is the contrast that was
+     designed, not something this is allowed to erode. */
+  opacity: 0.5;
+  /* Fades in at the top and out at the bottom, both in PIXELS keyed off the
+     overhang rather than in percentages.
+
+     The top matters most. The overhang puts the first --rain-overhang of
+     canvas behind the bar, so the rain appeared at full strength the instant
+     it cleared the chrome — a hard horizontal edge across the face. The ramp
+     starts exactly where the bar ends and runs 80px, so columns emerge
+     instead of switching on. Percentages could not do this: the fade would
+     move with the panel's height and land in the wrong place on every
+     section.
+
+     The bottom fade is what keeps the rain reading as depth behind the
+     content rather than as a texture laid over it. */
+  mask-image: linear-gradient(
+    180deg,
+    transparent 0,
+    transparent var(--rain-overhang),
+    rgba(0, 0, 0, 1) calc(var(--rain-overhang) + 80px),
+    rgba(0, 0, 0, 1) 62%,
+    rgba(0, 0, 0, 0.16) 86%,
+    transparent 100%
+  );
+  -webkit-mask-image: linear-gradient(
+    180deg,
+    transparent 0,
+    transparent var(--rain-overhang),
+    rgba(0, 0, 0, 1) calc(var(--rain-overhang) + 80px),
+    rgba(0, 0, 0, 1) 62%,
+    rgba(0, 0, 0, 0.16) 86%,
+    transparent 100%
+  );
+}

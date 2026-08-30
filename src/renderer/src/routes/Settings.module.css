@@ -359,7 +359,53 @@
   background: rgba(255, 255, 255, 0.06);
   border: 1px solid var(--border-subtle);
 }
+/* The custom cache size, on its own line under the presets rather than
+   crammed into the pill with them.
+
+   Same basis-plus-margin trick as .rowSegmented .segmentGroup above, and for
+   the same reason: the row is a wrapping flex container, so a child without
+   an explicit basis tries to sit BESIDE the presets and squeezes every other
+   row in the card down to one word per line. calc() bakes the 50px indent
+   into the basis so the total lands at exactly 100% and it wraps cleanly. */
+.rowSegmented .cacheCustom {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 calc(100% - 50px);
+  margin-left: 50px;
+  margin-top: 6px;
+}
+
+.cacheCustomLabel {
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.cacheCustom .fieldInput {
+  width: 96px;
+  padding: 5px 10px;
+  font-size: 12px;
+  text-align: right;
+}
+
+.cacheCustomUnit {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
 .segmentButton {
+  /* Fill the pill rather than bunching at its left end. The group is already
+     the full width of the row, so left-aligned buttons left a stretch of
+     empty track that read as a control which had failed to load.
+
+     `1 1 auto`, not `1 1 0`: growing from each label's OWN width keeps the
+     proportions sane, so "Unlimited" stays wider than "2 GB" instead of every
+     cell being forced equal and cramping the longest one. Wrapping still
+     works — the group wraps first by base size, then each line fills. */
+  flex: 1 1 auto;
+  text-align: center;
   padding: 5px 12px;
   border-radius: var(--radius-pill);
   font-size: 12px;
@@ -572,6 +618,18 @@
   flex-wrap: wrap;
 }
 
+.serviceFieldsStacked {
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* .field's 200px flex basis sizes width in the usual horizontal service
+   forms. In a column it becomes height, so stacked credentials need their
+   natural content height instead. */
+.serviceFieldsStacked > .field {
+  flex: 0 0 auto;
+}
+
 .field {
   display: flex;
   flex-direction: column;
@@ -750,4 +808,459 @@
   display: flex;
   align-items: center;
   gap: 6px;
+}
+
+/* Release notes under the version, in the About card. Capped in height as
+   well as in characters: the 500-char limit is enforced where the note is
+   read, and this is the visual backstop so a long one scrolls inside its own
+   box rather than pushing the Settings page around. */
+.notes {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-subtle);
+}
+.notesLabel {
+  display: block;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+}
+.notesBody {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  max-height: 8.5em;
+  overflow-y: auto;
+}
+
+/* ===================================================================
+   EMBEDDED: the control centre's settings face.
+
+   The layout above is built for a PAGE you scroll sideways through —
+   .tileArea is a horizontal scroller of 780px-min groups, each wrapping
+   380px fixed-width cards into columns. That works on its own page, and
+   fights a wide, short surface: dropped into the control centre it gave two
+   ragged columns with a dead gap down the middle, cards running off the
+   right edge, and controls stranded far from their labels.
+
+   So the face gets its own layout. Same markup, same components, same
+   ~4,900 lines of settings — only the container changes. Groups stack
+   vertically and each lays its own sections out in a responsive grid of
+   equal-width panels, so every card gets the same treatment and the width
+   is actually used.
+
+   Scoped to .embedded rather than replacing the rules above, because the
+   /settings page still uses them until it is retired.
+   =================================================================== */
+
+.embedded .tileArea {
+  display: block;
+  /* Vertical scrolling, not horizontal. The category nav still works —
+     it scrollIntoViews the group ids, which is more useful down a column
+     than across a filmstrip. */
+  overflow-x: hidden;
+  overflow-y: auto;
+  scroll-snap-type: none;
+  padding: 4px 2px 32px;
+}
+
+.embedded .settingsGroup {
+  /* The 780px floor and the horizontal flex sizing are what forced the
+     ragged columns; neither means anything once groups stack. */
+  display: block;
+  min-width: 0;
+  max-width: none;
+  overflow: visible;
+  padding-right: 0;
+  margin-bottom: 34px;
+}
+
+.embedded .settingsGroup:last-child {
+  margin-bottom: 0;
+}
+
+/* COLUMNS, NOT A GRID, so the cards pack into each other instead of sitting
+   in rows.
+
+   A grid puts every card in a row as tall as the tallest card in it. One
+   long panel — Media services' Jellyfin, Playback's Network — therefore set
+   the height of everything beside it, left a band of dead space under each
+   of its neighbours, and pushed the next row far enough down that a tall
+   card ran off the bottom of the face.
+
+   Multi-column flows each card immediately under the one before it and wraps
+   to a new column when it runs out of height. A tall card takes more of ITS
+   OWN column now instead of inflating a whole row.
+
+   THE COLUMN COUNT FOLLOWS THE CARD COUNT, so a small group does not sit in
+   a thin strip with the rest of the face empty — the AI group is a single
+   panel, and a single panel should use the room it has.
+   `columns: <width> <count>` does both halves in one declaration: at most N
+   columns, each at least 340px, and fewer than N when the window cannot fit
+   them. The columns then stretch to fill what is left, so the cards grow.
+
+   The counts are deliberately BELOW one-column-per-card. Multi-column
+   balances heights, so three cards in three columns where one is much taller
+   than the others — Playback, whose Network panel dwarfs the other two —
+   leaves a column empty and makes the rest needlessly narrow. Fewer, wider
+   columns pack the same cards with no gap.
+
+   The trade, stated because it is real: reading order becomes down a column
+   and then across rather than left to right. For a set of independent
+   settings panels that is fine — none continues into the next — and it is
+   how every masonry layout reads. */
+.embedded .groupGrid {
+  display: block;
+  columns: 340px 4;
+  column-gap: 14px;
+}
+
+.embedded .groupGrid:not(:has(> :nth-child(6))) {
+  columns: 340px 3;
+}
+
+.embedded .groupGrid:not(:has(> :nth-child(4))) {
+  columns: 340px 2;
+}
+
+.embedded .groupGrid:not(:has(> :nth-child(2))) {
+  columns: 340px 1;
+}
+
+/* The fixed 380/400px card widths belong to the filmstrip. Here the column
+   owns the width. */
+.embedded .groupGrid > *,
+.embedded .groupGridWide > * {
+  width: auto;
+  min-width: 0;
+  /* Never split a panel across a column boundary — half a card at the foot
+     of one column and the rest at the head of the next is worse than any
+     amount of ragged bottom edge. */
+  break-inside: avoid;
+  -webkit-column-break-inside: avoid;
+  /* column-gap only spaces the columns themselves; inside one, margin is
+     what separates stacked cards. */
+  margin-bottom: 14px;
+}
+
+.embedded .groupHeader {
+  padding: 0 2px 12px;
+}
+
+/* The little gradient dash under each group's description. It read as an
+   underline that had come loose — a 44px bar starting under the text and
+   stopping in the middle of nothing. It belongs to the standalone page's
+   filmstrip, where it marked one card in a row of them; on a face showing a
+   single group there is nothing for it to distinguish. */
+.embedded .groupHeader::after {
+  content: none;
+}
+
+.embedded .pageHeader {
+  /* The category nav stays reachable while scrolling the face — it is the
+     only navigation this surface has now that it is one long column. */
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  padding: 10px 2px;
+  margin: 0 0 6px;
+  backdrop-filter: blur(18px);
+  background: linear-gradient(180deg, rgba(3, 16, 11, 0.92), rgba(3, 16, 11, 0.55));
+}
+
+/* .wrap's left padding compensates for .main being widened leftward by 80%
+   of the nav rail (MoodBrowser's under-nav bleed, see AppShell). The control
+   centre face has no rail and no bleed, so that compensation is just ~230px
+   of dead space here. */
+.embedded {
+  padding: 18px 24px 0;
+  min-width: 0;
+}
+
+/* Measured overflow: the group was laying out 1458px wide inside a 1160px
+   parent, so the grid sized its tracks against the wrong width and
+   auto-fill generated eight 366px columns for a 1280px window. The group
+   inherits the base rule's flex sizing, which means nothing once the parent
+   is a block — but the intrinsic width it implies still leaks. Pinning both
+   to the container removes the ambiguity rather than relying on the
+   override order. */
+.embedded .settingsGroup,
+.embedded .groupGrid {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+}
+
+/* A lone card takes the room, but not ALL of it — a settings panel stretched
+   across a 2560px face is a line length nobody can read. Placed AFTER the pin
+   above, which sets max-width: 100% on every group and would otherwise win. */
+.embedded .groupGrid:not(:has(> :nth-child(2))) {
+  max-width: 640px;
+}
+
+/* ---------- Slider rows ----------
+   See SliderRow in SettingsPage.tsx for why the ordered settings stopped
+   being rows of pills. */
+
+.rowSlider {
+  align-items: flex-start;
+  padding: 10px 0;
+}
+
+.rowSlider .rowIcon {
+  margin-top: 2px;
+}
+
+.sliderHead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+/* The current value, beside the title. Reads as the answer to "what is this
+   set to" — deliberately not attached to the thumb, where it would move
+   while you drag and be hardest to read exactly when you are changing it. */
+.sliderValue {
+  font-family: var(--font-display);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--accent-cyan);
+  white-space: nowrap;
+}
+
+.slider {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 22px;
+  margin: 8px 0 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+/* The track is drawn twice — once for WebKit, once for Firefox — because
+   there is no shared pseudo-element for it. --fill is set inline from the
+   current index so the filled portion needs no second element. */
+.slider::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: var(--radius-pill);
+  background: linear-gradient(
+    90deg,
+    var(--accent-blue) 0%,
+    var(--accent-blue) var(--fill, 0%),
+    rgba(140, 170, 210, 0.18) var(--fill, 0%),
+    rgba(140, 170, 210, 0.18) 100%
+  );
+}
+
+.slider::-moz-range-track {
+  height: 4px;
+  border-radius: var(--radius-pill);
+  background: rgba(140, 170, 210, 0.18);
+}
+
+.slider::-moz-range-progress {
+  height: 4px;
+  border-radius: var(--radius-pill);
+  background: var(--accent-blue);
+}
+
+.slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  margin-top: -5px;
+  border-radius: 50%;
+  background: var(--accent-cyan);
+  border: 2px solid rgba(2, 12, 8, 0.9);
+  box-shadow: 0 0 10px rgba(39, 230, 154, 0.5);
+  transition:
+    transform var(--transition-fast),
+    box-shadow var(--transition-fast);
+}
+
+.slider::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--accent-cyan);
+  border: 2px solid rgba(2, 12, 8, 0.9);
+  box-shadow: 0 0 10px rgba(39, 230, 154, 0.5);
+}
+
+.slider:hover::-webkit-slider-thumb,
+.slider:focus-visible::-webkit-slider-thumb {
+  transform: scale(1.18);
+  box-shadow: 0 0 16px rgba(39, 230, 154, 0.7);
+}
+
+.slider:focus-visible {
+  outline: 2px solid var(--accent-cyan);
+  outline-offset: 4px;
+  border-radius: var(--radius-pill);
+}
+
+/* Ends only. Labelling every stop would reintroduce the width problem the
+   pills had, and the current value is already named above the track — these
+   two exist to say which way is "more". */
+/* One label per stop, spread so each sits over its own notch rather than
+   over the gap beside it: equal-width cells, text centred, and the two ends
+   pulled back to the track's edges so the first and last line up with the
+   thumb's own travel. */
+.sliderScale {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+  gap: 2px;
+  margin-top: 2px;
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.sliderStop,
+.sliderStopActive {
+  text-align: center;
+  /* Long labels (UNLIMITED, MEDIA SERVER) must not widen their cell and
+     push every other label off its notch. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sliderScale > :first-child {
+  text-align: left;
+}
+
+.sliderScale > :last-child {
+  text-align: right;
+}
+
+/* The selected stop. Marked by weight and colour together — colour alone
+   at 10px uppercase is not a difference everyone can see. */
+.sliderStopActive {
+  color: var(--accent-cyan);
+  font-weight: 700;
+}
+
+/* The way through to everything this short page deliberately leaves out.
+   A row rather than a link, because it is the biggest thing on the page
+   after the two sections and should look like a destination. */
+.openControlCentre {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  padding: 16px 18px;
+  border-radius: var(--radius-large);
+  border: 1px solid var(--border-subtle);
+  background: rgba(255, 255, 255, 0.02);
+  color: var(--text-secondary);
+  text-align: left;
+  cursor: pointer;
+}
+
+.openControlCentre:hover {
+  border-color: var(--border-active);
+  color: var(--text-primary);
+}
+
+.openControlCentre span {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  flex: 1;
+  font-size: 0.85rem;
+  line-height: 1.5;
+}
+
+.openControlCentre b {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+/* One line per service, so a pull can be read at a glance rather than
+   summed into a single number that hides which one failed. */
+.watchlistReport {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 4px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.watchlistReport li {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+}
+
+.watchlistReport li span:first-child {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+/* The service's own error text, which is usually specific enough to
+   act on. Wrapped rather than truncated for that reason. */
+.reportError span:last-child {
+  color: var(--accent-red, #ff6b6b);
+  text-align: right;
+  white-space: normal;
+}
+
+/* A labelled band inside a settings group.
+   The Accounts group held seven credential cards in one flat grid, in
+   the order they were written — nothing said which of them tracked
+   what you watched, which fetched artwork and which found subtitles.
+   These bands say it once, above each set. */
+.subGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-bottom: 26px;
+}
+
+.subGroup:last-child {
+  margin-bottom: 0;
+}
+
+.subGroupHead {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding-bottom: 8px;
+  /* A hairline rather than a box: these are divisions within one
+     group, and another border would read as another panel. */
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.subGroupHead h3 {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 1.4px;
+  text-transform: uppercase;
+  color: var(--text-primary);
+}
+
+.subGroupHead p {
+  margin: 0;
+  max-width: 70ch;
+  font-size: 0.84rem;
+  line-height: 1.55;
+  color: var(--text-muted);
 }

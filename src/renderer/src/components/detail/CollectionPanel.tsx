@@ -69,7 +69,12 @@ export function CollectionPanel({ media }: { media: MediaItem }) {
               <button
                 type="button"
                 className={styles.entry}
-                onClick={() => openDetail(item)}
+                // The film currently on screen, as the label for the back
+                // button on the one about to open. Without it openDetail
+                // derives the label from the current route — which is a
+                // detail route, whose id it cannot turn into a title — and
+                // every sequel opened from here read "Back to Browse".
+                onClick={() => openDetail(item, media.title)}
                 aria-label={`Open ${item.title}`}
               >
                 <span className={styles.art}>

@@ -60,6 +60,7 @@ import { assertPublicMediaUrl, defaultResolveHost, fetchMediaWithRetry } from '.
 import { logError } from './logger'
 import { formatMegabytes, reportPreparation } from './playbackProgress'
 import { readSettings } from './settingsStore'
+import { effectiveCacheMode } from './preferences'
 import type {
   CacheSessionMeta,
   CacheSourceRef,
@@ -126,7 +127,9 @@ function electron(): typeof import('electron') {
   return require('electron')
 }
 
-function cacheRootDir(): string {
+/** Where sessions live: the configured folder, or userData. Exported so
+ *  the Downloads page can say which drive its space figure is about. */
+export function cacheRootDir(): string {
   const configured = readSettings().streamCacheDir
   const base =
     typeof configured === 'string' && configured.trim()
@@ -238,7 +241,12 @@ export function createMemoryChunkStore(): ChunkStore {
  *  anything else (including an unset value) is the disk default. */
 export function memoryModeEnabled(): boolean {
   try {
-    return readSettings().cacheMode === 'memory'
+    // Through effectiveCacheMode, not the raw field: this is the function
+    // that decides whether a byte reaches the disk, so it has to honour a
+    // stream-only answer even though that answer lives in a different
+    // setting. Reading cacheMode directly here was the gap that would have
+    // made "stream only" a label on a checkbox.
+    return effectiveCacheMode(readSettings()) === 'memory'
   } catch {
     return false
   }
@@ -541,6 +549,11 @@ export interface StreamCache {
     durationSeconds: number | undefined,
     meta?: CacheSessionMeta
   ): Promise<StreamCacheStartResult>
+  /** Re-reads the storage answer and applies it to the session already
+   *  playing — see the implementation for why that cannot wait for the
+   *  next start(). A no-op unless a disk session is running and the
+   *  answer is now "stream only". */
+  applyStoragePolicy(): Promise<void>
 }
 
 export interface CreateStreamCacheOptions {
@@ -1024,6 +1037,47 @@ export function createStreamCache({
     const target = nextPlayheadFillByte()
     if (target === null) return
     void reposition(chunkIndexForByte(target) * CHUNK_BYTES)
+  }
+
+  /**
+   * Applies the storage answer to the session ALREADY playing.
+   *
+   * The store is chosen once, in start(), which meant somebody who turned
+   * storage off halfway through a film had the REST of that film written to
+   * their disk anyway. The promise was broken at the exact moment it was
+   * being made, and the setting is most likely to be changed precisely when
+   * somebody has noticed what is happening and wants it to stop.
+   *
+   * So the live session is swapped onto a memory store and what it has
+   * already written is deleted. Playback continues: reads for those chunks
+   * now miss, which is a case serveRange already recovers from by
+   * refetching, the same as a chunk evicted under disk pressure.
+   *
+   * reposition() first, and that ordering matters — it bumps the generation
+   * and aborts the open fetch, so a disk write already in flight cannot
+   * land after the delete and quietly recreate the files just removed.
+   */
+  async function applyStoragePolicy(): Promise<void> {
+    if (!token || !store.persistent || !memoryModeEnabled()) return
+    const root = cacheRoot
+    const previous = token
+    store = createMemoryChunkStore()
+    // THE LIMITS COME WITH THE STORE. maxBytes and fullRetention were set
+    // for a session on a disk: a 10 GB cap is reasonable there and is not a
+    // resident set anybody wants, and fullRetention makes
+    // evictOutsideRetained a deliberate no-op — so a film smaller than the
+    // disk cap would have been held whole, in RAM, with nothing allowed to
+    // evict it. start() derives both from the store for exactly this
+    // reason, and swapping the store without re-deriving them turned a
+    // privacy setting into an out-of-memory bug.
+    maxBytes = memoryCacheMaxBytes()
+    fullRetention = false
+    // Whole-file coverage is now provably impossible for this session, so
+    // anyone waiting on it hears that at once instead of sitting out their
+    // own timeout -- the same courtesy the disk-pressure downgrade pays.
+    settleFullRetentionWaiters(false)
+    await reposition(fillFrontierByte)
+    await fsp.rm(sessionDir(root, previous), { recursive: true, force: true })
   }
 
   function isNearFillFrontier(byte: number): boolean {
@@ -1540,7 +1594,8 @@ export function createStreamCache({
     waitForFullRetentionReady,
     stop,
     deleteSession,
-    startLocal
+    startLocal,
+    applyStoragePolicy
   }
 }
 

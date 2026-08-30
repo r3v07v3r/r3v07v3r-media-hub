@@ -67,8 +67,12 @@ export function canRestartNow(input: RestartDecisionInput): boolean {
 }
 
 export interface ActivityTracker {
-  streamOpened(): void
-  streamClosed(): void
+  streamOpened(infoHash?: string): void
+  streamClosed(infoHash?: string): void
+  /** Whether this item has a /stream response open against it right now.
+   *  Eviction consults it: deleting the file somebody is watching ends
+   *  their evening, and no amount of freed space is worth that. */
+  isStreaming(infoHash: string): boolean
   snapshot(): ActivitySnapshot
   load(): Promise<void>
 }
@@ -80,6 +84,11 @@ export interface ActivityTracker {
  */
 export function createActivityTracker(dataDir: string): ActivityTracker {
   const usagePath = path.join(dataDir, 'usage.json')
+  // Per-hash open COUNTS, not a set: one player commonly has two responses
+  // against the same file at once (a seek opens the next range before the
+  // previous one closes), and a set would be cleared by the first close
+  // while the second was still reading.
+  const openByHash = new Map<string, number>()
   let activeStreams = 0
   let lastStreamAt = 0
   let hourCounts: number[] = Array.from({ length: 24 }, () => 0)
@@ -103,7 +112,8 @@ export function createActivityTracker(dataDir: string): ActivityTracker {
   }
 
   return {
-    streamOpened() {
+    streamOpened(infoHash) {
+      if (infoHash) openByHash.set(infoHash, (openByHash.get(infoHash) ?? 0) + 1)
       activeStreams += 1
       lastStreamAt = Date.now()
       hourCounts[new Date().getHours()] += 1
@@ -115,10 +125,18 @@ export function createActivityTracker(dataDir: string): ActivityTracker {
       }
       schedulePersist()
     },
-    streamClosed() {
+    streamClosed(infoHash) {
+      if (infoHash) {
+        const left = (openByHash.get(infoHash) ?? 0) - 1
+        if (left > 0) openByHash.set(infoHash, left)
+        else openByHash.delete(infoHash)
+      }
       activeStreams = Math.max(0, activeStreams - 1)
       lastStreamAt = Date.now()
       schedulePersist()
+    },
+    isStreaming(infoHash) {
+      return (openByHash.get(infoHash) ?? 0) > 0
     },
     snapshot() {
       return { activeStreams, lastStreamAt, hourCounts: [...hourCounts] }

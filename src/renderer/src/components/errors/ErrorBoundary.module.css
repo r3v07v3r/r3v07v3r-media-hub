@@ -1,0 +1,48 @@
+.fallback {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 60px 32px;
+  text-align: center;
+  color: var(--text-secondary);
+}
+
+.heading {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 22px;
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.detail {
+  margin: 0;
+  max-width: 60ch;
+  font-size: 14px;
+  /* Backend/IPC error strings are not prose and can be long and unbroken. */
+  overflow-wrap: anywhere;
+}
+
+.hint {
+  margin: 0;
+  font-size: 13px;
+  opacity: 0.75;
+}
+
+.retry {
+  margin-top: 8px;
+  padding: 8px 18px;
+  border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.16));
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.retry:hover {
+  background: rgba(255, 255, 255, 0.08);
+}

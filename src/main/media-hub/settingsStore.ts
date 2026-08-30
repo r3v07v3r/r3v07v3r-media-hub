@@ -27,7 +27,21 @@ import { sendToRenderer } from './rendererBridge'
 import type { ProfileRecord } from './profiles'
 
 export interface MediaHubRawSettings {
+  /**
+   * Whether plan-to-watch changes here reach the tracking services, and
+   * whether their removals reach this app.
+   *
+   * Absent means ON — every install that had the one-way pull gets the
+   * two-way behaviour, which is what somebody who connected an account
+   * was asking for. Off leaves the pull running and stops every write:
+   * see docs/WATCHLIST-SYNC.md, which is the agreement this implements.
+   */
+  watchlistTwoWay?: boolean
   onboardingVersion?: number
+  /** Which version of the one-time anime watch-history id repair this
+   *  install has had — see animeSyncRepair.ts. Absent on installs that
+   *  predate it, which is exactly who the repair is for. */
+  animeIdRepairVersion?: number
   torboxToken?: string
   simklClientId?: string
   simklAccessToken?: string
@@ -270,6 +284,28 @@ export interface LanCacheConnection {
   url: string
   name: string
   token: string
+  /**
+   * A token issued but not yet approved by the server's administrator.
+   *
+   * The token is real and authorises nothing, so the connection has to be
+   * REMEMBERED (the app must be able to ask 'am I in yet' after a restart)
+   * without being USED (every source lookup and stream would 401). Hence a
+   * flag on the stored connection rather than a second slot: there is only
+   * ever one cache server, and a pending one is that server in an earlier
+   * state, not a different thing.
+   */
+  pending?: boolean
+  /**
+   * The TorBox opt-in made when this device asked to join, held until
+   * approval can act on it.
+   *
+   * The choice is made at the moment of asking and cannot be honoured then:
+   * a pending token authorises nothing, so posting the credential would be
+   * refused. Without somewhere to keep the answer it was simply discarded,
+   * and the person who ticked the box stayed unlinked with no control
+   * anywhere to try again.
+   */
+  shareTorbox?: boolean
 }
 
 /** The paired cache daemon, or undefined. Unlike the TorBox token this is
@@ -279,7 +315,13 @@ export function getLanCacheConnection(): LanCacheConnection | undefined {
   const url = String(settings.lanCacheUrl || '').trim()
   const token = decrypt(settings.lanCacheToken)
   if (!url || !token) return undefined
-  return { url: url.replace(/\/+$/, ''), name: String(settings.lanCacheName || ''), token }
+  return {
+    url: url.replace(/\/+$/, ''),
+    name: String(settings.lanCacheName || ''),
+    token,
+    ...(settings.lanCachePending === true ? { pending: true } : {}),
+    ...(settings.lanCacheShareTorbox === true ? { shareTorbox: true } : {})
+  }
 }
 
 export function setLanCacheConnection(connection: LanCacheConnection): void {
@@ -287,6 +329,12 @@ export function setLanCacheConnection(connection: LanCacheConnection): void {
   settings.lanCacheUrl = connection.url.trim().replace(/\/+$/, '')
   settings.lanCacheName = connection.name
   settings.lanCacheToken = encrypt(connection.token)
+  // Written only when true, and deleted otherwise, so approval leaves no
+  // stale flag behind to hold a working connection shut.
+  if (connection.pending) settings.lanCachePending = true
+  else delete settings.lanCachePending
+  if (connection.shareTorbox) settings.lanCacheShareTorbox = true
+  else delete settings.lanCacheShareTorbox
   writeSettings(settings)
 }
 
@@ -295,6 +343,8 @@ export function clearLanCacheConnection(): void {
   delete settings.lanCacheUrl
   delete settings.lanCacheName
   delete settings.lanCacheToken
+  delete settings.lanCachePending
+  delete settings.lanCacheShareTorbox
   writeSettings(settings)
 }
 
@@ -406,6 +456,47 @@ export function malCredentials(): MalCredentials {
     refreshToken: decrypt(settings.malRefreshToken),
     expiresAt: Number(settings.malTokenExpiresAt) || 0
   }
+}
+
+/**
+ * The same mark, for Trakt and MyAnimeList.
+ *
+ * Written when two-way watchlist sync gained a memory of its own. That
+ * memory says "this app pulled this title in from Trakt", and the reason
+ * it exists is to justify DELETING the title later — so it has to be
+ * about one Trakt account rather than about Trakt. Nothing stops somebody
+ * authorizing a different account, and an unstamped record would let
+ * account B's snapshot be read as evidence that account A's title had
+ * been removed.
+ *
+ * Each salt is distinct so that the same token, were it ever accepted by
+ * two services, could not produce one mark that matched in both places.
+ * They are load-bearing in the same way simklAccountMark's is: changing
+ * one orphans every stamp already on disk, which reads as "somebody
+ * else's account" and quietly discards state — the safe direction, but
+ * not a free one.
+ */
+export function traktAccountMark(): string {
+  const { accessToken } = traktCredentials()
+  if (!accessToken) return ''
+  return crypto
+    .createHash('sha256')
+    .update(`trakt-account:${accessToken}`)
+    .digest('hex')
+    .slice(0, 16)
+}
+
+export function malAccountMark(): string {
+  const { accessToken } = malCredentials()
+  if (!accessToken) return ''
+  return crypto.createHash('sha256').update(`mal-account:${accessToken}`).digest('hex').slice(0, 16)
+}
+
+/** Every tracking service's mark at once, for the callers that stamp a
+ *  record touching more than one. Empty string means "not connected",
+ *  which must never compare equal to a stored stamp. */
+export function trackingAccountMarks(): { simkl: string; trakt: string; mal: string } {
+  return { simkl: simklAccountMark(), trakt: traktAccountMark(), mal: malAccountMark() }
 }
 
 export interface TmdbCredentials {

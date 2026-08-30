@@ -3,22 +3,16 @@ import fsp from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { cacheContentKey } from '../src/main/media-hub/streamCache'
-import { streamSourceRank } from '../src/shared/media-hub/types'
-import type { CacheSessionMeta, StreamSource } from '../src/shared/media-hub/types'
+import type { CacheSessionMeta } from '../src/shared/media-hub/types'
 
-// --- the tier order is the product rule, so pin it -------------------------
-const order: StreamSource[] = ['localcache', 'lancache', 'mediaserver', 'torbox']
-for (let i = 1; i < order.length; i++) {
-  assert.ok(
-    streamSourceRank(order[i - 1]) < streamSourceRank(order[i]),
-    `${order[i - 1]} must outrank ${order[i]}`
-  )
-}
-assert.equal(
-  streamSourceRank(undefined),
-  streamSourceRank('torbox'),
-  'a candidate with no source is a TorBox one — persisted candidates predate the field'
-)
+// This file once opened by asserting a strict localcache < lancache <
+// mediaserver < torbox order through streamSourceRank. That helper has been
+// deleted: nothing in the app ever called it, so the assertion compared a
+// constant to itself and passed no matter what resolve did. The real
+// ordering is two mechanisms — streamResolve's short-circuits and
+// rankStreams' SourcePreference weighting — and is covered where each one
+// lives (streamSelection.test.ts pins the scoring). See StreamSource's own
+// comment in types.ts.
 
 // --- the identity a session is found by ------------------------------------
 // resolve computes this from the payload and play writes it on the session.

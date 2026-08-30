@@ -1,0 +1,71 @@
+/* One row that wraps, rather than a panel. These are refinements to a
+   list that is already on screen — a bordered box around them would make
+   them look like a form to fill in before anything appears. */
+.bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.segments {
+  display: inline-flex;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border-subtle);
+  overflow: hidden;
+}
+
+.segment {
+  padding: 6px 13px;
+  border: 0;
+  background: transparent;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.segment:hover {
+  color: var(--text-primary);
+}
+
+.segmentOn {
+  background: rgba(56, 193, 255, 0.16);
+  color: var(--text-primary);
+}
+
+.field select {
+  padding: 6px 10px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border-subtle);
+  background: rgba(255, 255, 255, 0.03);
+  font-size: 0.8rem;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.field select:hover {
+  border-color: var(--border-active);
+}
+
+.count {
+  /* Pushed to the far end: it is the ANSWER to the controls, not another
+     control, and reads better at the end of the row than among them. */
+  margin-left: auto;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.clear {
+  padding: 0;
+  border: 0;
+  background: none;
+  font-size: 0.8rem;
+  color: var(--accent-cyan);
+  cursor: pointer;
+}
+
+.clear:hover {
+  text-decoration: underline;
+}

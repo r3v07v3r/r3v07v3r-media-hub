@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   DEFAULT_SERVICE_SETTINGS,
   ServiceConfig,
@@ -9,6 +9,7 @@ import { testConnection as testJellyfin } from '@renderer/lib/api/jellyfin'
 import { sonarrClient, radarrClient } from '@renderer/lib/api/servarr'
 import { testConnection as testQbittorrent } from '@renderer/lib/api/qbittorrent'
 import { testConnection as testProwlarr } from '@renderer/lib/api/prowlarr'
+import { testConnection as testBazarr } from '@renderer/lib/api/bazarr'
 import { SERVICE_LABELS, ConnectionTestResult } from '@renderer/lib/api/types'
 import styles from './Settings.module.css'
 
@@ -17,7 +18,8 @@ const TESTERS: Record<ServiceId, (config: ServiceConfig) => Promise<ConnectionTe
   sonarr: sonarrClient.testConnection,
   radarr: radarrClient.testConnection,
   qbittorrent: testQbittorrent,
-  prowlarr: testProwlarr
+  prowlarr: testProwlarr,
+  bazarr: testBazarr
 }
 
 const SECRET_LABEL: Record<ServiceId, string> = {
@@ -25,7 +27,8 @@ const SECRET_LABEL: Record<ServiceId, string> = {
   sonarr: 'API Key',
   radarr: 'API Key',
   qbittorrent: 'Username:Password',
-  prowlarr: 'API Key'
+  prowlarr: 'API Key',
+  bazarr: 'API Key'
 }
 
 type TestState = { status: 'idle' | 'testing' | 'ok' | 'error'; message?: string }
@@ -134,6 +137,8 @@ export function MediaServicesSection() {
   const [settings, setSettings] = useState<ServiceSettings>(DEFAULT_SERVICE_SETTINGS)
   const [loaded, setLoaded] = useState(false)
   const [dirty, setDirty] = useState(false)
+  /** Which services this panel changed — see handleSave. */
+  const edited = useRef<Set<ServiceId>>(new Set())
   const [saving, setSaving] = useState(false)
 
   useEffect(() => {
@@ -152,6 +157,7 @@ export function MediaServicesSection() {
   }, [])
 
   function updateService(id: ServiceId, next: ServiceConfig) {
+    edited.current.add(id)
     setSettings((prev) => ({ ...prev, [id]: next }))
     setDirty(true)
   }
@@ -159,8 +165,15 @@ export function MediaServicesSection() {
   async function handleSave() {
     if (!window.api?.settings) return
     setSaving(true)
-    const saved = await window.api.settings.set(settings)
+    // Merged onto the latest, for the same reason the Pipeline panel does
+    // it: both edit the same settings object, both are mounted at once,
+    // and whichever saved last would otherwise revert the other.
+    const latest = await window.api.settings.get()
+    const merged = { ...latest }
+    for (const id of edited.current) merged[id] = settings[id]
+    const saved = await window.api.settings.set(merged)
     setSettings(saved)
+    edited.current.clear()
     setSaving(false)
     setDirty(false)
   }
@@ -186,8 +199,16 @@ export function MediaServicesSection() {
       ))}
       <div className={`${styles.serviceSaveCard} glass-panel`}>
         <div>
-          <strong>Service changes</strong>
-          <span>{dirty ? 'Changes are ready to save.' : 'Everything is up to date.'}</span>
+          {/* It used to say "Service changes", which named itself and
+              explained nothing — it reads as a card ABOUT something rather
+              than as the Save control for the cards beside it. It says what
+              it acts on and what saving does now. */}
+          <strong>Server details</strong>
+          <span>
+            {dirty
+              ? 'Unsaved edits to the servers above. Saving stores them and starts using them.'
+              : 'Every address and key above is saved.'}
+          </span>
         </div>
         <button
           type="button"

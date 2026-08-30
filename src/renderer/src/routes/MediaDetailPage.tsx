@@ -36,7 +36,6 @@ import type { EpisodeResume } from '@renderer/components/detail/EpisodesSection'
 import { RatingsPanel } from '@renderer/components/detail/RatingsPanel'
 import { RequestPanel } from '@renderer/components/detail/RequestPanel'
 import { CollectionPanel } from '@renderer/components/detail/CollectionPanel'
-import { WhereToWatchPanel } from '@renderer/components/detail/WhereToWatchPanel'
 import { ProgressPanel } from '@renderer/components/detail/ProgressPanel'
 import { GenresPanel } from '@renderer/components/detail/GenresPanel'
 import { SimilarPanel } from '@renderer/components/detail/SimilarPanel'
@@ -55,16 +54,10 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
   const config = DETAIL_CONFIGS[kind]
   const {
     browsingOrigin,
-    activeProfileId,
-    profiles,
+    popBrowsingOrigin,
     myList,
     toggleMyList,
     continueWatching,
-    partyStatus,
-    mediaHubSettings,
-    hostParty,
-    suggestToParty,
-    setPartyPanelOpen,
     startPartyPlayback,
     playbackMedia,
     catalog,
@@ -115,6 +108,15 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
     setMetaStatus('loading')
     setCatalogItem(null)
     setShowTrailer(false)
+    // MediaDetailPage is reused across titles (App.tsx's route has no
+    // `key={id}`, so navigating from one detail page to another re-renders
+    // this same instance rather than remounting it) — without this, a
+    // season explicitly picked on the PREVIOUS title survives into this
+    // one. If that stale season number doesn't exist here (e.g. leaving a
+    // title with a season-0 "Specials" entry for one that starts at season
+    // 1, such as BLEACH: Sennen Kessen-hen), the episode grid renders empty
+    // and no season pill shows active until the person clicks one by hand.
+    setSelectedSeasonOverride(null)
     const api = window.api?.mediaHub
     if (!api) {
       setMetaStatus('error')
@@ -408,8 +410,14 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
   }, [browsingOrigin, config.path])
 
   function handleBack(): void {
-    if (browsingOrigin) navigate(browsingOrigin.route)
-    else navigate(`/${config.path}`)
+    // Pops as it goes, so a chain opened through the Rest of the series /
+    // Similar panels unwinds one step per press all the way back to the
+    // grid it started from. Reading the top without popping left the
+    // button pointed at the page it had just returned to — /movies/:id
+    // does not remount when only the id changes, so nothing downstream
+    // ever consumed the entry.
+    const origin = popBrowsingOrigin()
+    navigate(origin ? origin.route : `/${config.path}`)
   }
 
   function handlePlay(season?: number, episode?: number): void {
@@ -425,43 +433,10 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
     )
   }
 
-  async function handleWatchTogether(): Promise<void> {
-    if (!media) return
-    const target = config.isEpisodic
-      ? {
-          ...media,
-          seasonNumber: nextEpisode?.season ?? 1,
-          episodeNumber: nextEpisode?.episode ?? 1
-        }
-      : media
-    const item = {
-      id: target.id,
-      type: target.mediaKind ?? config.kind,
-      title: target.title,
-      poster: target.posterUrl ?? '',
-      year: target.releaseYear ? String(target.releaseYear) : ''
-    }
-
-    if (partyStatus?.inParty) {
-      if (partyStatus.role === 'host') {
-        setPartyPanelOpen(false)
-        await startPartyPlayback(target)
-      } else {
-        await suggestToParty(item)
-        pushNotification({ tone: 'success', message: `Suggested ${target.title} to the room.` })
-      }
-      return
-    }
-
-    const activeProfile = profiles.find((profile) => profile.id === activeProfileId)
-    const name = mediaHubSettings?.partyDisplayName?.trim() || activeProfile?.name || 'Host'
-    await hostParty(name)
-    // hostParty opens the hub so the invite is immediately available. Close it
-    // as playback begins; the player has its own room rail and the hub remains
-    // one click away in navigation.
-    setPartyPanelOpen(false)
-    await startPartyPlayback(target)
-  }
+  // handleWatchTogether lived here. The button that called it is gone
+  // while rooms are reworked, and a room-joining code path with no way
+  // to reach it is worse than none: it still compiles, still looks
+  // maintained, and quietly rots against whatever rooms become.
 
   function handleGenreSelect(genre: string): void {
     navigate(`/${config.path}?genre=${encodeURIComponent(genre)}`)
@@ -622,12 +597,9 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
         trailer={catalogItem?.trailers?.[0]}
         showTrailer={showTrailer}
         onToggleTrailer={() => setShowTrailer((v) => !v)}
-        inMyList={inMyList}
-        onToggleMyList={() => toggleMyList(media)}
         onPlay={() =>
           handlePlay(continueEntry?.media.seasonNumber, continueEntry?.media.episodeNumber)
         }
-        onWatchTogether={handleWatchTogether}
       />
 
       <div className={styles.main}>
@@ -669,7 +641,10 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
 
       <div className={styles.sidebar}>
         <CollectionPanel media={media} />
-        <WhereToWatchPanel media={media} />
+        {/* Where to watch is gone. It was a TMDB round trip per title
+            for a JustWatch panel of rent-and-buy links — a request and
+            a render on every detail page, for the one thing somebody
+            using this app is least likely to want. */}
         <RequestPanel media={media} />
         <RatingsPanel media={media} />
         <ProgressPanel

@@ -1,7 +1,7 @@
 'use client'
 
-import { useCallback, useMemo, useRef, useState } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useLocation, useSearchParams } from 'react-router-dom'
 import { useAppState } from '@renderer/context/AppStateContext'
 import { Icon } from '@renderer/components/icons/Icon'
 import { ArtworkImage } from '@renderer/components/media/ArtworkImage'
@@ -18,8 +18,15 @@ import {
 } from '@renderer/lib/mediaHub/categoryFilters'
 import { ANIME_CONFIG, type CategoryConfig } from '@renderer/lib/mediaHub/categoryConfig'
 import { useRestoreBrowsingOrigin } from '@renderer/lib/mediaHub/useRestoreBrowsingOrigin'
+import { useBatchReveal } from '@renderer/lib/mediaHub/useBatchReveal'
 import { CategoryFilterBar } from './CategoryFilterBar'
 import styles from './AnimeLibraryPage.module.css'
+import { RatingBadge } from '@renderer/components/detail/RatingBadge'
+import { ratingSourceFor } from '@renderer/components/detail/ratingSource'
+
+/** EverythingSection's reveal batch size — how many more tiles mount each
+ *  time the scroll sentinel comes into view. */
+const EVERYTHING_BATCH = 24
 
 function formatLibraryMeta(media: MediaItem): string {
   if (media.mediaKind === 'movie' || media.mediaType === 'movie') {
@@ -203,8 +210,41 @@ function LibraryTile({
  * first batch mounts initially, then the sentinel grows it as the person
  * scrolls the app's main pane. This keeps a large catalog from fetching every
  * piece of art merely because one category page opened. */
-function EverythingSection({ items, selectedId, onSelect, onOpen, emptyMessage }: ShelfProps) {
-  const [visibleCount, setVisibleCount] = useState(24)
+function EverythingSection({
+  items,
+  selectedId,
+  onSelect,
+  onOpen,
+  emptyMessage,
+  initialVisibleCount,
+  viewKey
+}: ShelfProps & {
+  /** Seeds the initial reveal batch above EVERYTHING_BATCH — used when
+   *  restoring a browsing position (see useRestoreBrowsingOrigin) whose
+   *  focused tile was further down the list than one batch would
+   *  normally render, so it's actually present in the DOM for the
+   *  restore step to find and scroll to. Only matters on this
+   *  component's first mount (a plain useState initializer). */
+  initialVisibleCount?: number
+  /** Identifies the current browse view (filters + sort + search state —
+   *  see LibraryPage's own `viewKey`) — the reveal count resets to
+   *  EVERYTHING_BATCH only when THIS changes, not on every `items`
+   *  reference change. See useBatchReveal's own doc comment for why a
+   *  content-only diff can't be trusted to tell a genuine filter/sort/
+   *  search change apart from a catalog-side edit (mark one watched,
+   *  hide-watched dropping a title) within the same view. */
+  viewKey: string
+}) {
+  const [visibleCount, setVisibleCount] = useBatchReveal(
+    items,
+    viewKey,
+    EVERYTHING_BATCH,
+    initialVisibleCount
+  )
+  const itemsLengthRef = useRef(items.length)
+  useEffect(() => {
+    itemsLengthRef.current = items.length
+  }, [items.length])
   const observerRef = useRef<IntersectionObserver | null>(null)
   const sentinelRef = useCallback(
     (node: HTMLLIElement | null) => {
@@ -214,7 +254,7 @@ function EverythingSection({ items, selectedId, onSelect, onOpen, emptyMessage }
       const observer = new IntersectionObserver(
         (entries) => {
           if (entries[0]?.isIntersecting) {
-            setVisibleCount((count) => Math.min(count + 24, items.length))
+            setVisibleCount((count) => Math.min(count + EVERYTHING_BATCH, itemsLengthRef.current))
           }
         },
         { rootMargin: '900px' }
@@ -222,7 +262,7 @@ function EverythingSection({ items, selectedId, onSelect, onOpen, emptyMessage }
       observer.observe(node)
       observerRef.current = observer
     },
-    [items.length]
+    [setVisibleCount]
   )
   const visibleItems = items.slice(0, visibleCount)
   const hasMore = visibleCount < items.length
@@ -269,8 +309,9 @@ function LibraryDetails({ media, config }: { media: MediaItem | null; config: Ca
   }
 
   const artwork = resolveArtwork(media)
-  const communityRating = score(media)
-  const imdbRating = media.imdbRating?.toFixed(1)
+  // The two fields carry the same number; prefer the one named for what it
+  // is, and fall back so a future item with only the other still shows.
+  const crowdRating = media.imdbRating?.toFixed(1) ?? score(media) ?? undefined
   const rottenTomatoesRating = media.rottenTomatoesRating
   const isResolving = resolvingMedia?.id === media.id
 
@@ -299,27 +340,22 @@ function LibraryDetails({ media, config }: { media: MediaItem | null; config: Ca
         </div>
       </div>
 
+      {/* ONE crowd figure, not the same one twice. communityRating and
+          imdbRating are both filled from CatalogItem.rating (adapters.ts),
+          so "Community 7.8" beside "IMDb 7.8" was a single number wearing
+          two hats — which reads as two sources agreeing when there is only
+          ever one. Labelled by where it actually came from: IMDb for films
+          and series, whose ids ARE IMDb ids, and Kitsu for anime, which has
+          no IMDb id at all. Rotten Tomatoes joins it when OMDb is connected
+          and has an entry; that one is genuinely independent. */}
       <div className={styles.detailScores}>
-        {communityRating && (
-          <span>
-            <Icon name="star" size={15} />
-            <b>{communityRating}</b>
-            Community
-          </span>
-        )}
-        {imdbRating && (
-          <span>
-            <b>{imdbRating}</b>
-            IMDb
-          </span>
+        {crowdRating && (
+          <RatingBadge source={ratingSourceFor(media.mediaKind)} value={crowdRating} />
         )}
         {rottenTomatoesRating !== undefined && (
-          <span>
-            <b>{rottenTomatoesRating}%</b>
-            Rotten Tomatoes
-          </span>
+          <RatingBadge source="rottenTomatoes" value={`${rottenTomatoesRating}%`} />
         )}
-        {!communityRating && !imdbRating && rottenTomatoesRating === undefined && (
+        {!crowdRating && rottenTomatoesRating === undefined && (
           <span>
             <b>—</b>
             Ratings unavailable
@@ -364,7 +400,7 @@ function LibraryDetails({ media, config }: { media: MediaItem | null; config: Ca
         </button>
         <button type="button" className={styles.action} onClick={() => toggleMyList(media)}>
           <Icon name={media.inMyList ? 'check' : 'plus'} size={15} />
-          {media.inMyList ? 'In My List' : 'Add to My List'}
+          {media.inMyList ? 'Planned' : 'Plan to Watch'}
         </button>
         <button
           type="button"
@@ -389,9 +425,11 @@ export function LibraryPage({ config }: { config: CategoryConfig }) {
     categorySearch,
     clearCategorySearch,
     mediaHubSettings,
-    openDetail
+    openDetail,
+    pendingRestore
   } = useAppState()
   const [searchParams, setSearchParams] = useSearchParams()
+  const location = useLocation()
   const [heroIndex, setHeroIndex] = useState(0)
   const [selectedId, setSelectedId] = useState<string | null>(null)
 
@@ -426,6 +464,14 @@ export function LibraryPage({ config }: { config: CategoryConfig }) {
     [categorySearch.results, filters]
   )
   const browseItems = searchActive ? searchResults : filtered
+  // Identifies the current browse view for EverythingSection's
+  // reveal-depth reset (see useBatchReveal's own doc comment) — anything
+  // that changes this is a genuine filter/sort/search/kind change the
+  // person navigated to, not a catalog-side edit within the view they're
+  // already looking at.
+  const viewKey = searchActive
+    ? `${config.kind}:search:${categorySearch.query}`
+    : `${config.kind}:filters:${paramsString}`
   const heroItems = useMemo(() => {
     const ranking = [...(filtered.length ? filtered : library)]
     ranking.sort((a, b) => (b.communityRating ?? 0) - (a.communityRating ?? 0))
@@ -464,7 +510,32 @@ export function LibraryPage({ config }: { config: CategoryConfig }) {
       ).slice(0, 18),
     [recommendations, config.kind]
   )
-  const everythingKey = useMemo(() => browseItems.map((item) => item.id).join('|'), [browseItems])
+  // Seeds EverythingSection's reveal batch past wherever the previously-
+  // focused tile falls, rounded up to a clean batch boundary, so a
+  // contextual back navigation (see useRestoreBrowsingOrigin below) finds
+  // that tile already mounted instead of it sitting past the default
+  // first-24 cutoff.
+  //
+  // Reads `pendingRestore` — what a Back press just stepped out of — not
+  // the trail's top, which is where the NEXT Back would go. Since Back now
+  // pops as it navigates (the back trail is a stack, so a chain of titles
+  // opened from one another unwinds a step per press), the entry being
+  // restored is no longer on the trail by the time this page mounts.
+  //
+  // Gated on the origin's own route matching where we actually are, same
+  // as useRestoreBrowsingOrigin's own check below — without it, a title
+  // opened from Home/Search and then left via a DIFFERENT navigation
+  // (the sidebar, not contextual Back) leaves a stale BrowsingOrigin
+  // whose focusedItemId can still coincidentally match a catalog id here
+  // (Home's items and this library's are the same underlying catalog),
+  // seeding an arbitrarily deep reveal batch for a restore that
+  // useRestoreBrowsingOrigin correctly never runs.
+  const restoreVisibleCount = useMemo(() => {
+    if (!pendingRestore?.focusedItemId) return undefined
+    if (`${location.pathname}${location.search}` !== pendingRestore.route) return undefined
+    const idx = browseItems.findIndex((item) => item.id === pendingRestore.focusedItemId)
+    return idx >= 0 ? Math.ceil((idx + 1) / EVERYTHING_BATCH) * EVERYTHING_BATCH : undefined
+  }, [pendingRestore, browseItems, location.pathname, location.search])
   const selected = useMemo(
     () =>
       [...browseItems, ...continuing, ...recommended, ...heroItems].find(
@@ -532,7 +603,7 @@ export function LibraryPage({ config }: { config: CategoryConfig }) {
                 <b>{completedCount}</b> Completed
               </span>
               <span>
-                <b>{inListCount}</b> My List
+                <b>{inListCount}</b> Planned
               </span>
             </div>
           </div>
@@ -577,10 +648,12 @@ export function LibraryPage({ config }: { config: CategoryConfig }) {
             onChange={setFilters}
             resultCount={filtered.length}
           />
-          {kindState === 'failed' && library.length > 0 && (
+          {kindState === 'failed' && (
             <div className={styles.offlineBanner} role="status">
               <Icon name="wifi-off" size={15} />
-              Showing the last {config.label} library snapshot.
+              {library.length > 0
+                ? `Showing the last ${config.label} library snapshot.`
+                : `Couldn't reach the media hub backend.`}
               <button type="button" onClick={refreshCatalog}>
                 Retry
               </button>
@@ -644,13 +717,14 @@ export function LibraryPage({ config }: { config: CategoryConfig }) {
         )}
 
         <EverythingSection
-          key={everythingKey}
           title="Everything"
           icon="grid"
           items={browseItems}
           selectedId={selected?.id ?? null}
           onSelect={(media) => setSelectedId(media.id)}
           onOpen={openDetail}
+          initialVisibleCount={restoreVisibleCount}
+          viewKey={viewKey}
           emptyMessage={
             searchActive
               ? `No ${config.pluralLabel} matched that search.`

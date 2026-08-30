@@ -515,7 +515,11 @@ export function MoodBrowser() {
           aria-hidden="true"
         />
 
-        <h2 className={styles.heading}>Browse By Mood</h2>
+        {/* The heading is gone: a row of mood chips does not need a
+            label telling you it is a row of mood chips. The section
+            keeps its aria-label, so the name survives for anyone
+            navigating by landmark — it just is not taking up space
+            on screen saying what is already obvious. */}
         <div className={styles.row}>
           {MOOD_CATEGORIES.map((mood, i) => {
             const isActive = activeMoods.includes(mood.id)

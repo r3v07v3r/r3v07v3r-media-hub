@@ -43,6 +43,11 @@ const MAX_BUNDLE_BYTES = 20 * 1024 * 1024
 const MAX_FEED_BYTES = 4 * 1024 * 1024
 const MAX_REDIRECTS = 5
 
+/** Long enough for the JSON reply to leave the socket before the process
+ *  goes down. The alternative is the caller seeing a dropped connection
+ *  and having to guess whether the update started. */
+const RESTART_REPLY_GRACE_MS = 300
+
 export interface UpdaterStatus {
   channel: UpdateChannel
   enabled: boolean
@@ -69,12 +74,36 @@ export interface UpdaterDeps {
   applyPollMs?: number
 }
 
+/** What an administrator's "update now" actually did. */
+export interface ApplyNowResult {
+  /** 'restarting' — the daemon is going down and coming back on the new
+   *  build. 'waiting' — staged and armed, but somebody is watching, so it
+   *  goes in as soon as they stop. 'current' — nothing newer to install.
+   *  'disabled' — updates are switched off on this server. */
+  outcome: 'restarting' | 'waiting' | 'current' | 'disabled'
+  message: string
+  status: UpdaterStatus
+}
+
 export interface Updater {
   start(): void
   stop(): void
   status(): UpdaterStatus
   /** One immediate check — also the test entrypoint. */
   checkOnce(): Promise<void>
+  /**
+   * The administrator asking for it NOW.
+   *
+   * Checks the feed straight away rather than waiting out the poll, then
+   * applies as soon as it can. "As soon as it can" still means not while
+   * somebody is watching: never interrupting playback is the rule the
+   * whole updater is built around, and a button on a page is not a reason
+   * to take a film away from somebody in another room. What the request
+   * DOES override is the politeness — the half-hour idle grace and the
+   * quiet-hours preference — because those exist to pick a good moment on
+   * nobody's behalf, and here somebody has picked one.
+   */
+  applyNow(): Promise<ApplyNowResult>
 }
 
 export function createUpdater(deps: UpdaterDeps): Updater {
@@ -90,6 +119,10 @@ export function createUpdater(deps: UpdaterDeps): Updater {
   let checkTimer: NodeJS.Timeout | null = null
   let applyTimer: NodeJS.Timeout | null = null
   let stopped = false
+  /** Set once an administrator has asked for the update by hand. It is not
+   *  cleared: having asked once, they should not have to ask again because
+   *  somebody started a film in the meantime. */
+  let requested = false
   const status: UpdaterStatus = {
     channel: deps.channel,
     enabled: deps.enabled,
@@ -251,13 +284,18 @@ export function createUpdater(deps: UpdaterDeps): Updater {
     if (applyTimer || stopped || !status.staged) return
     applyTimer = setInterval(() => {
       const snapshot = deps.activity.snapshot()
-      const ok = canRestartNow({
-        activeStreams: snapshot.activeStreams,
-        lastStreamAt: snapshot.lastStreamAt,
-        hourCounts: snapshot.hourCounts,
-        stagedAt: status.stagedAt,
-        now: Date.now()
-      })
+      // Asked for explicitly, the only remaining bar is an open stream.
+      // The idle grace and the quiet hour are there to choose a moment
+      // when nobody has chosen one; somebody has.
+      const ok = requested
+        ? snapshot.activeStreams === 0
+        : canRestartNow({
+            activeStreams: snapshot.activeStreams,
+            lastStreamAt: snapshot.lastStreamAt,
+            hourCounts: snapshot.hourCounts,
+            stagedAt: status.stagedAt,
+            now: Date.now()
+          })
       if (!ok) return
       deps.log(`applying ${status.staged} — nobody is watching`)
       stop()
@@ -293,6 +331,53 @@ export function createUpdater(deps: UpdaterDeps): Updater {
     },
     stop,
     status: () => ({ ...status }),
-    checkOnce
+    checkOnce,
+    async applyNow() {
+      if (!deps.enabled) {
+        return {
+          outcome: 'disabled' as const,
+          message: 'Updates are switched off on this server.',
+          status: { ...status }
+        }
+      }
+      requested = true
+      // Straight to the feed. Without this the button would only be able
+      // to install what an earlier poll happened to have found, which for
+      // a release cut minutes ago is nothing at all — and "update now"
+      // answering "already current" about a version published this
+      // afternoon is the kind of wrong that erodes trust in the button.
+      await checkOnce()
+      if (!status.staged) {
+        return {
+          outcome: 'current' as const,
+          message: status.lastError
+            ? `Could not check for updates: ${status.lastError}`
+            : 'Already running the newest build.',
+          status: { ...status }
+        }
+      }
+      armApplyPoll()
+      if (deps.activity.snapshot().activeStreams > 0) {
+        return {
+          outcome: 'waiting' as const,
+          message: `${status.staged} is ready and will install as soon as nobody is watching.`,
+          status: { ...status }
+        }
+      }
+      deps.log(`applying ${status.staged} — asked for by the administrator`)
+      // The reply goes out BEFORE the restart is requested, or the caller
+      // is left holding a socket that dies mid-response and cannot tell a
+      // successful update from a crash.
+      const result = {
+        outcome: 'restarting' as const,
+        message: `Installing ${status.staged}. The server will be back in a moment.`,
+        status: { ...status }
+      }
+      setTimeout(() => {
+        stop()
+        deps.requestRestart()
+      }, RESTART_REPLY_GRACE_MS).unref?.()
+      return result
+    }
   }
 }

@@ -1,46 +1,58 @@
 import { useEffect, useRef } from 'react'
 import { useLocation } from 'react-router-dom'
 import { useAppState } from '@renderer/context/AppStateContext'
-import { restoreBrowsingOrigin } from './browsingContext'
+import { restoreBrowsingOrigin, type BrowsingOrigin } from './browsingContext'
 
 /**
  * Applies a captured BrowsingOrigin's scroll/rail/focus restoration once,
- * when this page's route matches the origin the person came FROM before
- * opening a detail page (see AppStateContext's openDetail/browsingOrigin).
- * A no-op if there's no pending origin, or if one exists but is for a
- * different route (e.g. the person opened a title from Search, went back,
- * then separately navigated here some other way).
+ * when this page's route matches the origin a Back press just stepped out
+ * of (see AppStateContext's popBrowsingOrigin/pendingRestore). A no-op if
+ * nothing is pending, or if what is pending is for a different route (e.g.
+ * the person opened a title from Search, went back, then separately
+ * navigated here some other way).
  *
  * Call from any page a detail page can be opened from (category pages,
- * Home, My Stuff). `ready` should reflect whether this page's own content
- * is actually present yet — restoring before that would scroll/focus into
- * an empty page.
+ * Home, My Stuff) and from the detail page itself, which is a place a
+ * title can be opened from too. `ready` should reflect whether this page's
+ * own content is actually present yet — restoring before that would
+ * scroll/focus into an empty page.
  */
 export function useRestoreBrowsingOrigin(ready: boolean): void {
-  const { browsingOrigin, clearBrowsingOrigin } = useAppState()
+  const { pendingRestore, clearPendingRestore } = useAppState()
   const location = useLocation()
-  const appliedRef = useRef(false)
-  // Snapshotted once, at this component instance's first render — NOT a
-  // live subscription to browsingOrigin. The page a title gets opened
-  // FROM is, by construction, the same route openDetail just captured an
-  // origin FOR (that's the whole point — you capture where you currently
-  // are). A live dependency on browsingOrigin meant that the instant
-  // openDetail set it, THIS SAME still-mounted page's route trivially
-  // matched its own freshly-captured origin.route, so it self-consumed
-  // and cleared the origin via the rAFs below before ever navigating back
-  // to it — confirmed live via a debug trace (browsingOrigin went
-  // null -> {captured origin} -> null, all before the detail page ever
-  // read it). Freezing the value at mount sidesteps this: a fresh mount
-  // only happens when this route is actually navigated TO (initial visit,
-  // or the contextual back button's navigate(origin.route)), never while
-  // continuing to sit on the page that just captured it.
-  const originAtMountRef = useRef(browsingOrigin)
+  // WHICH origin this instance has already applied, by object identity —
+  // not a boolean, and not a value frozen at mount.
+  //
+  // Both of those were wrong for the case that matters most on a detail
+  // page. React Router reuses the SAME MediaDetailPage instance when only
+  // the :id changes, so title A -> title B -> Back is one continuous
+  // instance: a value snapshotted at first mount predates the Back press
+  // that wrote A into pendingRestore, so the restore for A never ran and
+  // the entry was never cleared — it sat there until some later openDetail
+  // happened to clear it. A plain boolean has the same shape of problem
+  // from the other end: once an instance has restored once, it would
+  // refuse to restore the next distinct origin that arrives for it.
+  //
+  // Keying the guard on the origin object itself makes this "apply each
+  // pending origin exactly once, whenever it shows up", which is what was
+  // meant all along and works whether the page is freshly mounted or
+  // reused.
+  //
+  // Reading pendingRestore live is safe in a way that reading the trail
+  // live was not. That earlier shape self-consumed: openDetail wrote an
+  // origin captured FOR the page still on screen, so that page trivially
+  // matched its own freshly-captured route and cleared it via the rAFs
+  // below before the detail page ever read it (confirmed at the time via a
+  // debug trace — the value went null -> {captured origin} -> null without
+  // ever being used). pendingRestore cannot do that: openDetail only ever
+  // sets it to null, and popBrowsingOrigin sets it to an entry whose route
+  // is where we are navigating TO, never where we already are.
+  const appliedRef = useRef<BrowsingOrigin | null>(null)
 
   useEffect(() => {
-    const origin = originAtMountRef.current
-    if (!ready || !origin || appliedRef.current) return
+    if (!ready || !pendingRestore || appliedRef.current === pendingRestore) return
     const current = `${location.pathname}${location.search}`
-    if (current !== origin.route) return
+    if (current !== pendingRestore.route) return
     // appliedRef is only set INSIDE the rAF callback that actually runs
     // the restore, not preemptively here — verified live that dev-mode
     // StrictMode's effect -> cleanup -> effect double-invoke otherwise
@@ -56,15 +68,19 @@ export function useRestoreBrowsingOrigin(ready: boolean): void {
       // settle — scrollIntoView landing correctly on a freshly-mounted
       // grid needs both, one frame was occasionally still too early.
       raf2 = requestAnimationFrame(() => {
-        if (appliedRef.current) return
-        appliedRef.current = true
-        restoreBrowsingOrigin(origin)
-        clearBrowsingOrigin()
+        if (appliedRef.current === pendingRestore) return
+        appliedRef.current = pendingRestore
+        restoreBrowsingOrigin(pendingRestore)
+        clearPendingRestore()
       })
     })
     return () => {
       cancelAnimationFrame(raf1)
       cancelAnimationFrame(raf2)
     }
-  }, [ready, location.pathname, location.search, clearBrowsingOrigin])
+    // pendingRestore is a dependency now: an entry that arrives AFTER this
+    // instance mounted (the reused-detail-page case above) has to re-arm
+    // this effect, not be missed by it. A back-to-back Back press replaces
+    // it mid-flight, and the cleanup cancels the superseded frames.
+  }, [ready, pendingRestore, location.pathname, location.search, clearPendingRestore])
 }
