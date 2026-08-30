@@ -98,7 +98,12 @@ async function malEnsureToken(): Promise<string> {
 }
 
 /** Authenticated MAL v2 API request. Refreshes the access token first if needed (see malEnsureToken). */
-async function malRequest<T = unknown>(pathname: string, options: RequestInit = {}): Promise<T> {
+/** Exported so watchlists.ts can read the plan-to-watch list through the
+ *  same token refresh and error handling as every other MAL call. */
+export async function malRequest<T = unknown>(
+  pathname: string,
+  options: RequestInit = {}
+): Promise<T> {
   const accessToken = await malEnsureToken()
   return fetchJson<T>(`https://api.myanimelist.net/v2${pathname}`, {
     ...options,

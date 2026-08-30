@@ -626,7 +626,22 @@ export interface ContinueWatchingEntry extends CatalogItem {
 export interface TrackingListResult {
   tracked: TrackedItemEnriched[]
   history: HistoryEntry[]
+  /**
+   * Which tracking services have each planned title on their own list,
+   * keyed by media id.
+   *
+   * Sent with the list rather than fetched separately because every
+   * surface that draws a planned title wants to tag it, and a second
+   * round trip per card is not a thing to build. Absent ids are simply
+   * local-only, which is the ordinary case for anything marked here.
+   */
+  plannedSources: Record<string, PlannedServiceId[]>
 }
+
+/** Services with both a login in this app and a personal list to read.
+ *  Kitsu is deliberately absent: it is a public catalog here, with no
+ *  account, so there is no list of yours to fetch. */
+export type PlannedServiceId = 'simkl' | 'trakt' | 'mal'
 
 export interface DislikedListResult {
   disliked: TrackedItem[]
@@ -648,6 +663,15 @@ export interface HomePersonalizedResult {
    */
   recommendationReasons: Record<string, RecommendationReason>
   preferredGenres: string[]
+  /**
+   * Which tracking services have each planned title on their own list.
+   *
+   * Carried on the home feed because that is the payload the app already
+   * derives its planned set from, so a card can be tagged without a
+   * second round trip per title. Sparse: an id with no entry is planned
+   * here and nowhere else, which is the ordinary case.
+   */
+  plannedSources: Record<string, PlannedServiceId[]>
 }
 
 /**

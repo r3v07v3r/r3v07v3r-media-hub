@@ -63,6 +63,7 @@ import {
 import { airingStatus, continueWatchingList } from './core'
 import { catalogData, metadata } from './catalog'
 import { getDatabase } from './dbState'
+import { plannedSources, syncPlannedFromServices } from './watchlists'
 import { fetchJson } from './httpClient'
 import { mapWithLimit, type TaskPriority } from './taskScheduler'
 import { handle } from './ipcGuard'
@@ -892,6 +893,15 @@ async function pushPendingToServices(priority: TaskPriority): Promise<Set<string
  * interrupts anyone with a panel they did not ask for.
  */
 export async function runBackgroundWatchSync(): Promise<void> {
+  // Watchlists come in on the same schedule as history goes out. They are
+  // both "make the local picture match the services", and giving them
+  // separate timers would mean two independent things to reason about for
+  // no benefit. Failures are swallowed inside the pull, per service.
+  try {
+    await syncPlannedFromServices('background')
+  } catch (error) {
+    logError('job:planned-sync', error)
+  }
   if (!simklCredentials().accessToken) return
   // Background: this is a recurring job nobody asked for, so its pushes
   // must not jump ahead of the screen someone is looking at, and must
@@ -1103,7 +1113,20 @@ export function registerTrackingIpc(): void {
       newEpisodeCount: newEpisodesById.get(String(item.id)) || 0,
       airing: airingById.get(String(item.id)) || ''
     }))
-    return { tracked, history }
+    return { tracked, history, plannedSources: plannedSources() }
+  })
+
+  /**
+   * Pull plan-to-watch from every connected service, on demand.
+   *
+   * Also runs with the background watch sync, so an untouched app catches
+   * up on its own — this exists for the case where somebody has just
+   * added a pile of titles on the web and does not want to wait for the
+   * next pass to see them.
+   */
+  handle<undefined, { added: number }>(MEDIA_HUB_CHANNELS.trackingPlannedSync, async () => {
+    const result = await syncPlannedFromServices('interactive')
+    return { added: result.added }
   })
 
   handle<TrackableItem, { tracked: boolean }>(MEDIA_HUB_CHANNELS.trackingToggle, (_e, item) => {
@@ -1535,7 +1558,10 @@ export function registerTrackingIpc(): void {
       continueWatching: continueWatchingList(details, history).slice(0, 18),
       recommendations,
       recommendationReasons,
-      preferredGenres
+      preferredGenres,
+      // Read here rather than fetched: it is whatever the last pull
+      // recorded, so tagging a card costs nothing on this path.
+      plannedSources: plannedSources()
     }
   })
 

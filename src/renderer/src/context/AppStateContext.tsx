@@ -82,6 +82,7 @@ import {
   type BrowsingOrigin
 } from '@renderer/lib/mediaHub/browsingContext'
 import { useOverlayActions } from '@renderer/context/OverlayContext'
+import type { PlannedServiceId } from '@shared/media-hub/types'
 
 /** How many steps back the contextual trail remembers. A drill-down chain
  *  this long is already pathological (each step is a title opened from
@@ -182,6 +183,15 @@ interface AppStateValue {
   // round trip.
   myList: Set<string>
   toggleMyList: (media: MediaItem) => void
+  /**
+   * Which tracking services have each planned title on their own list.
+   *
+   * Read straight off the home feed rather than kept as state: nothing in
+   * the app edits it, so a copy here would only be somewhere for it to go
+   * stale. Sparse — an id with no entry is planned here and nowhere else,
+   * which is what everything marked in this app looks like.
+   */
+  plannedSources: Record<string, PlannedServiceId[]>
 
   // "Not interested" — mirrors myList's shape/optimistic-update pattern
   // exactly, backed by the media-hub backend's local disliked store
@@ -2326,6 +2336,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       removeFromQueue,
       sendPartyChat,
       myList,
+      plannedSources: homeFeed.plannedSources,
       toggleMyList,
       dislikedIds,
       toggleDisliked,
@@ -2427,6 +2438,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       removeFromQueue,
       sendPartyChat,
       myList,
+      homeFeed.plannedSources,
       toggleMyList,
       dislikedIds,
       toggleDisliked,
