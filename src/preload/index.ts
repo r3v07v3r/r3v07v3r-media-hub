@@ -11,6 +11,7 @@ import { MEDIA_HUB_CHANNELS } from '../shared/media-hub/ipc-channels'
 import type {
   LanCacheDevicesResponse,
   LanCacheOwnItem,
+  LanCacheUpdateNowResponse,
   LanCacheStatusResponse
 } from '../shared/lancache/protocol'
 import type {
@@ -79,6 +80,8 @@ import type {
   SkipTimes,
   SourcePreference,
   StreamCacheEntry,
+  PlannedSyncReport,
+  StreamCacheUsage,
   StreamCandidate,
   StreamResolveResult,
   SubtitleResult,
@@ -94,7 +97,6 @@ import type {
   UpdateCheckResult,
   UpdateStatusPayload,
   ViewingStats,
-  WatchProvidersResult,
   WatchStatusDiscrepancy
 } from '../shared/media-hub/types'
 import type { OllamaTitleRef } from '../shared/media-hub/ollama'
@@ -253,7 +255,9 @@ const api = {
        *  the one saved — saying "disk" back to somebody who just chose
        *  stream only would be the contradiction this setting exists to
        *  prevent. */
-      setStoreMedia: (storeMedia: boolean): Promise<{ storeMedia: boolean; cacheMode: CacheMode }> =>
+      setStoreMedia: (
+        storeMedia: boolean
+      ): Promise<{ storeMedia: boolean; cacheMode: CacheMode }> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.settingsSetStoreMedia, { storeMedia }),
       setCacheMode: (
         cacheMode: CacheMode,
@@ -337,6 +341,12 @@ const api = {
         defaultQuotaPercent?: number
       }): Promise<{ ok: boolean; message?: string }> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.lanCacheAdminSettings, payload),
+      /** Admin only. Checks the feed now and installs as soon as nobody is
+       *  watching — see the daemon's /api/admin/update for why an open
+       *  stream still stops it. */
+      updateNow: (): Promise<
+        ({ ok: true } & LanCacheUpdateNowResponse) | { ok: false; message: string }
+      > => ipcRenderer.invoke(MEDIA_HUB_CHANNELS.lanCacheUpdateNow),
       /** The caller's OWN cached titles. Never anyone else's — see the
        *  daemon's /api/items/mine. */
       myItems: (): Promise<{ ok: boolean; items: LanCacheOwnItem[] }> =>
@@ -349,7 +359,7 @@ const api = {
       removeItem: (payload: { infoHash: string }): Promise<{ ok: boolean; message?: string }> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.lanCacheRemoveItem, payload),
       cancelJob: (payload: { contentKey: string }): Promise<{ ok: boolean; message?: string }> =>
-        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.lanCacheCancelJob, payload),
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.lanCacheCancelJob, payload)
     },
 
     torbox: {
@@ -466,8 +476,6 @@ const api = {
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.catalogStory, { type, id }),
       person: (person: string): Promise<PersonCreditsResult> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.catalogPerson, { person }),
-      providers: (type: MediaKind, id: string): Promise<WatchProvidersResult> =>
-        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.catalogProviders, { type, id }),
       collection: (id: string): Promise<TitleCollectionResult> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.catalogCollection, { id }),
       rating: (type: MediaKind, id: string): Promise<{ rating: string; region: string }> =>
@@ -491,6 +499,14 @@ const api = {
 
     tracking: {
       list: (): Promise<TrackingListResult> => ipcRenderer.invoke(MEDIA_HUB_CHANNELS.trackingList),
+      /** Pull plan-to-watch from every connected tracking service now,
+       *  rather than waiting for the background pass. */
+      syncPlanned: (): Promise<PlannedSyncReport> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.trackingPlannedSync),
+      /** The last pull's result, so a panel has something to show
+       *  before anybody presses the button. */
+      plannedReport: (): Promise<PlannedSyncReport | null> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.trackingPlannedReport),
       toggle: (item: TrackableItem): Promise<{ tracked: boolean }> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.trackingToggle, item),
       markWatched: (payload: MarkWatchedPayload): Promise<MarkWatchedResult> =>
@@ -618,7 +634,11 @@ const api = {
       list: (): Promise<StreamCacheEntry[]> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.streamCacheList),
       delete: (token: string): Promise<{ ok: true }> =>
-        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.streamCacheDelete, { token })
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.streamCacheDelete, { token }),
+      /** What is held and what is left, for the Downloads page's one
+       *  space line. */
+      usage: (): Promise<StreamCacheUsage> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.streamCacheUsage)
     },
 
     playback: {

@@ -42,6 +42,14 @@ export const MEDIA_HUB_CHANNELS = {
   lanCacheDevices: 'mediahub:lancache:devices',
   lanCacheDeviceAction: 'mediahub:lancache:device-action',
   lanCacheAdminSettings: 'mediahub:lancache:admin-settings',
+  /** Admin only: check the update feed now and install as soon as nobody
+   *  is watching, instead of waiting for the server's own poll. */
+  lanCacheUpdateNow: 'mediahub:lancache:update-now',
+  /** Pull plan-to-watch from every connected tracking service and fold it
+   *  into the local list. */
+  trackingPlannedSync: 'mediahub:tracking:planned-sync',
+  /** What the last watchlist pull did, per service. */
+  trackingPlannedReport: 'mediahub:tracking:planned-report',
   /** The caller's own cached titles, and the sharing control over them. */
   lanCacheMyItems: 'mediahub:lancache:my-items',
   lanCacheSetSharing: 'mediahub:lancache:set-sharing',
@@ -211,6 +219,9 @@ export const MEDIA_HUB_CHANNELS = {
    *  it started the film with the bar already faded out. */
   playerControlsShown: 'mediahub:player:controls-shown', // push event
   streamCacheList: 'mediahub:stream-cache:list',
+  /** One line of arithmetic for the Downloads page: what the cache holds
+   *  and what is left on the drive it sits on. */
+  streamCacheUsage: 'mediahub:stream-cache:usage',
   streamCacheDelete: 'mediahub:stream-cache:delete',
 
   // What the central work manager is doing right now — see

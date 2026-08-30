@@ -107,7 +107,9 @@ function electron(): typeof import('electron') {
   return require('electron')
 }
 
-function cacheRootDir(): string {
+/** Where sessions live: the configured folder, or userData. Exported so
+ *  the Downloads page can say which drive its space figure is about. */
+export function cacheRootDir(): string {
   const configured = readSettings().streamCacheDir
   const base =
     typeof configured === 'string' && configured.trim()

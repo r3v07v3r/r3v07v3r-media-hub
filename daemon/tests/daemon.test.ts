@@ -2282,6 +2282,16 @@ async function myItemsTest(): Promise<void> {
   await seed('d'.repeat(40), 'k-orphan', undefined)
 
   const jobs = createJobStore(root)
+  let updateCalls = 0
+  const updaterStatusStub = {
+    channel: 'preview' as const,
+    enabled: true,
+    checkedAt: 0,
+    latestSeen: '',
+    staged: '',
+    stagedAt: 0,
+    lastError: ''
+  }
   const server = createDaemonServer({
     storage: store,
     jobs,
@@ -2289,15 +2299,19 @@ async function myItemsTest(): Promise<void> {
     admin,
     credentials: createCredentials(root),
     activity: createActivityTracker(root),
-    updaterStatus: () => ({
-      channel: 'preview',
-      enabled: true,
-      checkedAt: 0,
-      latestSeen: '',
-      staged: '',
-      stagedAt: 0,
-      lastError: ''
-    }),
+    updaterStatus: () => updaterStatusStub,
+    // Stands in for the real updater, which needs a release feed and a
+    // launcher to restart into. What is under test here is the ROUTE: who
+    // may reach it, and that it hands back what the updater decided rather
+    // than deciding anything itself.
+    applyUpdateNow: async () => {
+      updateCalls += 1
+      return {
+        outcome: 'waiting' as const,
+        message: 'Somebody is watching.',
+        status: updaterStatusStub
+      }
+    },
     serverName: 'test',
     version: '0.0.0',
     diskBudgetBytes: 10 ** 9
@@ -2476,6 +2490,30 @@ async function myItemsTest(): Promise<void> {
       false,
       'and it really leaves the queue'
     )
+
+    // UPDATE NOW, and the one thing it still will not do.
+    //
+    // The route is the administrator's; nobody else may reach it. What it
+    // cannot do, for anybody, is restart the server out from under a
+    // stream — the rule the whole updater is built around. So the reply
+    // for an open stream is 'waiting', not 'restarting', and the caller is
+    // told which.
+    const updateAs = async (
+      token: string
+    ): Promise<{ status: number; body: Record<string, unknown> }> => {
+      const response = await fetch(`${base}/api/admin/update`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` }
+      })
+      return { status: response.status, body: (await response.json()) as Record<string, unknown> }
+    }
+    assert.equal((await updateAs(otherToken)).status, 403, 'a member cannot update the server')
+    assert.equal(updateCalls, 0, 'and the refusal happens before the updater is asked anything')
+
+    const asAdmin = await updateAs(mineToken)
+    assert.equal(asAdmin.status, 200)
+    assert.equal(asAdmin.body.outcome, 'waiting')
+    assert.equal(updateCalls, 1, 'the administrator reaches the updater')
 
     // REMOVING A PARTIAL STOPS ITS FETCH FIRST. An incomplete item is
     // listed and removable while its job is still downloading into the very

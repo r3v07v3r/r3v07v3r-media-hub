@@ -946,7 +946,16 @@ export function selectVideoFile(
  */
 function fillMissing(into: CatalogItem, from: CatalogItem): CatalogItem {
   const merged: CatalogItem = { ...into }
-  for (const key of ['poster', 'background', 'logo', 'description', 'status', 'rating', 'runtime', 'year'] as const) {
+  for (const key of [
+    'poster',
+    'background',
+    'logo',
+    'description',
+    'status',
+    'rating',
+    'runtime',
+    'year'
+  ] as const) {
     if (!merged[key] && from[key]) merged[key] = from[key]
   }
   if (!merged.genres?.length && from.genres?.length) merged.genres = from.genres

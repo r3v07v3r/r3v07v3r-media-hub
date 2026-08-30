@@ -225,9 +225,7 @@ const GENRE_DELIMITER = '\u001f'
  */
 function splitGenres(value: SQLOutputValue | undefined): string[] {
   if (value == null) return []
-  return String(value)
-    .split(GENRE_DELIMITER)
-    .filter(Boolean)
+  return String(value).split(GENRE_DELIMITER).filter(Boolean)
 }
 
 /**
@@ -2122,7 +2120,9 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
         return {
           items: rows.map((row) => indexRowToItem(row, query.kind, splitGenres(row.genres))),
           total,
-          completedIds: rows.filter((row) => Number(row.completed) === 1).map((row) => String(row.id))
+          completedIds: rows
+            .filter((row) => Number(row.completed) === 1)
+            .map((row) => String(row.id))
         }
       } catch (error) {
         // LOGGED, unlike every other catch in this file, and deliberately so.
@@ -2149,9 +2149,7 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
       // collation — and it is affordable here because a facet list is
       // dozens of values, not tens of thousands of rows.
       try {
-        const genres = (
-          q.facetGenres.all(kind) as Row[]
-        ).map((row) => String(row.genre))
+        const genres = (q.facetGenres.all(kind) as Row[]).map((row) => String(row.genre))
         const years = (q.facetYears.all(kind) as Row[]).map((row) => Number(row.year))
         const statuses = (q.facetStatuses.all(kind) as Row[]).map((row) => String(row.status))
         return {

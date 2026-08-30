@@ -180,10 +180,7 @@ function PlayerControls() {
               ...chapter,
               index,
               start: Math.max(0, Math.min(duration, chapter.time)),
-              end: Math.max(
-                0,
-                Math.min(duration, chapters[index + 1]?.time ?? duration)
-              )
+              end: Math.max(0, Math.min(duration, chapters[index + 1]?.time ?? duration))
             }))
             .filter((chapter) => chapter.end > chapter.start)
         : [],
@@ -905,8 +902,7 @@ function PlayerControls() {
         time,
         url: cached ?? null,
         chapterTitle:
-          hoveredChapter?.title ||
-          (hoveredChapter ? `Chapter ${hoveredChapter.index + 1}` : null)
+          hoveredChapter?.title || (hoveredChapter ? `Chapter ${hoveredChapter.index + 1}` : null)
       })
       if (cached !== undefined) return
       if (scrubDebounce.current) clearTimeout(scrubDebounce.current)

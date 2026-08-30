@@ -21,6 +21,8 @@ import { useRestoreBrowsingOrigin } from '@renderer/lib/mediaHub/useRestoreBrows
 import { useBatchReveal } from '@renderer/lib/mediaHub/useBatchReveal'
 import { CategoryFilterBar } from './CategoryFilterBar'
 import styles from './AnimeLibraryPage.module.css'
+import { RatingBadge } from '@renderer/components/detail/RatingBadge'
+import { ratingSourceFor } from '@renderer/components/detail/ratingSource'
 
 /** EverythingSection's reveal batch size — how many more tiles mount each
  *  time the scroll sentinel comes into view. */
@@ -244,21 +246,24 @@ function EverythingSection({
     itemsLengthRef.current = items.length
   }, [items.length])
   const observerRef = useRef<IntersectionObserver | null>(null)
-  const sentinelRef = useCallback((node: HTMLLIElement | null) => {
-    observerRef.current?.disconnect()
-    observerRef.current = null
-    if (!node) return
-    const observer = new IntersectionObserver(
-      (entries) => {
-        if (entries[0]?.isIntersecting) {
-          setVisibleCount((count) => Math.min(count + EVERYTHING_BATCH, itemsLengthRef.current))
-        }
-      },
-      { rootMargin: '900px' }
-    )
-    observer.observe(node)
-    observerRef.current = observer
-  }, [setVisibleCount])
+  const sentinelRef = useCallback(
+    (node: HTMLLIElement | null) => {
+      observerRef.current?.disconnect()
+      observerRef.current = null
+      if (!node) return
+      const observer = new IntersectionObserver(
+        (entries) => {
+          if (entries[0]?.isIntersecting) {
+            setVisibleCount((count) => Math.min(count + EVERYTHING_BATCH, itemsLengthRef.current))
+          }
+        },
+        { rootMargin: '900px' }
+      )
+      observer.observe(node)
+      observerRef.current = observer
+    },
+    [setVisibleCount]
+  )
   const visibleItems = items.slice(0, visibleCount)
   const hasMore = visibleCount < items.length
 
@@ -304,8 +309,9 @@ function LibraryDetails({ media, config }: { media: MediaItem | null; config: Ca
   }
 
   const artwork = resolveArtwork(media)
-  const communityRating = score(media)
-  const imdbRating = media.imdbRating?.toFixed(1)
+  // The two fields carry the same number; prefer the one named for what it
+  // is, and fall back so a future item with only the other still shows.
+  const crowdRating = media.imdbRating?.toFixed(1) ?? score(media) ?? undefined
   const rottenTomatoesRating = media.rottenTomatoesRating
   const isResolving = resolvingMedia?.id === media.id
 
@@ -334,27 +340,22 @@ function LibraryDetails({ media, config }: { media: MediaItem | null; config: Ca
         </div>
       </div>
 
+      {/* ONE crowd figure, not the same one twice. communityRating and
+          imdbRating are both filled from CatalogItem.rating (adapters.ts),
+          so "Community 7.8" beside "IMDb 7.8" was a single number wearing
+          two hats — which reads as two sources agreeing when there is only
+          ever one. Labelled by where it actually came from: IMDb for films
+          and series, whose ids ARE IMDb ids, and Kitsu for anime, which has
+          no IMDb id at all. Rotten Tomatoes joins it when OMDb is connected
+          and has an entry; that one is genuinely independent. */}
       <div className={styles.detailScores}>
-        {communityRating && (
-          <span>
-            <Icon name="star" size={15} />
-            <b>{communityRating}</b>
-            Community
-          </span>
-        )}
-        {imdbRating && (
-          <span>
-            <b>{imdbRating}</b>
-            IMDb
-          </span>
+        {crowdRating && (
+          <RatingBadge source={ratingSourceFor(media.mediaKind)} value={crowdRating} />
         )}
         {rottenTomatoesRating !== undefined && (
-          <span>
-            <b>{rottenTomatoesRating}%</b>
-            Rotten Tomatoes
-          </span>
+          <RatingBadge source="rottenTomatoes" value={`${rottenTomatoesRating}%`} />
         )}
-        {!communityRating && !imdbRating && rottenTomatoesRating === undefined && (
+        {!crowdRating && rottenTomatoesRating === undefined && (
           <span>
             <b>—</b>
             Ratings unavailable
@@ -399,7 +400,7 @@ function LibraryDetails({ media, config }: { media: MediaItem | null; config: Ca
         </button>
         <button type="button" className={styles.action} onClick={() => toggleMyList(media)}>
           <Icon name={media.inMyList ? 'check' : 'plus'} size={15} />
-          {media.inMyList ? 'In My List' : 'Add to My List'}
+          {media.inMyList ? 'Planned' : 'Plan to Watch'}
         </button>
         <button
           type="button"
@@ -602,7 +603,7 @@ export function LibraryPage({ config }: { config: CategoryConfig }) {
                 <b>{completedCount}</b> Completed
               </span>
               <span>
-                <b>{inListCount}</b> My List
+                <b>{inListCount}</b> Planned
               </span>
             </div>
           </div>

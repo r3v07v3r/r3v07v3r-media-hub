@@ -20,7 +20,7 @@ import http, { type IncomingMessage, type ServerResponse } from 'node:http'
 
 import type { ActivityTracker } from './activity'
 import type { Credentials } from './credentials'
-import type { UpdaterStatus } from './updater'
+import type { ApplyNowResult, UpdaterStatus } from './updater'
 import type { JobStore, JobRecord } from './jobs'
 import { deviceIdForToken, isApproved, type Pairing } from './pairing'
 import type { Admin } from './admin'
@@ -46,6 +46,10 @@ export interface ServerDeps {
   credentials: Credentials
   activity: ActivityTracker
   updaterStatus: () => UpdaterStatus
+  /** The administrator asking for the update by hand. Optional so a server
+   *  built without an updater (the tests) still constructs; the route says
+   *  so plainly rather than pretending to have done something. */
+  applyUpdateNow?: () => Promise<ApplyNowResult>
   serverName: string
   version: string
   diskBudgetBytes: number
@@ -472,6 +476,30 @@ export function createDaemonServer(deps: ServerDeps): http.Server {
         return
       }
       json(res, 200, { ok: true })
+      return
+    }
+
+    // UPDATE NOW. The daemon updates itself on its own schedule, which is
+    // the right default and a poor answer to "I have just cut a release and
+    // I want it on the box". This checks the feed immediately and installs
+    // as soon as it can.
+    //
+    // It does NOT override the one hard rule: nothing restarts while
+    // somebody is watching. An administrator can decide the household's
+    // update policy; they should not be able to end someone else's film
+    // from a settings page by accident. When a stream is open the answer
+    // says so, and the update goes in the moment it closes.
+    if (route === 'POST /api/admin/update') {
+      if (!isAdminCaller) {
+        json(res, 403, { error: 'Only the administrator of this server can do that.' })
+        return
+      }
+      if (!deps.applyUpdateNow) {
+        json(res, 501, { error: 'This server has no updater.' })
+        return
+      }
+      const result = await deps.applyUpdateNow()
+      json(res, 200, result)
       return
     }
 

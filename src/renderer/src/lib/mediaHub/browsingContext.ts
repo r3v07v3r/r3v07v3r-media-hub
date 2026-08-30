@@ -49,7 +49,8 @@ export function captureBrowsingOrigin(route: string, label: string): BrowsingOri
   // Back had nothing to scroll/focus back to. `.closest` still matches
   // the element itself first when it already carries the attribute
   // directly, so every previously-working case is unchanged.
-  const focusedItemId = focused?.closest('[data-media-id]')?.getAttribute('data-media-id') ?? undefined
+  const focusedItemId =
+    focused?.closest('[data-media-id]')?.getAttribute('data-media-id') ?? undefined
 
   const railScroll: Record<string, number> = {}
   document.querySelectorAll<HTMLElement>('[data-rail-id]').forEach((el) => {

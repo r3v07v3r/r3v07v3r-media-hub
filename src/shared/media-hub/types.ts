@@ -388,6 +388,20 @@ export interface StreamCacheEntry extends CacheSessionMeta {
   isActive: boolean
 }
 
+/**
+ * What the local cache holds, and what is left where it lives.
+ *
+ * freeBytes is null where the platform will not say (statfs is not
+ * universal) — rendered as an absence rather than as a zero, because
+ * "0 bytes free" is alarming and wrong.
+ */
+export interface StreamCacheUsage {
+  usedBytes: number
+  freeBytes: number | null
+  /** Where it is, for the one line that says so. */
+  directory: string
+}
+
 export interface PlaybackResult {
   ok: true
   player: 'embedded'
@@ -612,6 +626,40 @@ export interface ContinueWatchingEntry extends CatalogItem {
 export interface TrackingListResult {
   tracked: TrackedItemEnriched[]
   history: HistoryEntry[]
+  /**
+   * Which tracking services have each planned title on their own list,
+   * keyed by media id.
+   *
+   * Sent with the list rather than fetched separately because every
+   * surface that draws a planned title wants to tag it, and a second
+   * round trip per card is not a thing to build. Absent ids are simply
+   * local-only, which is the ordinary case for anything marked here.
+   */
+  plannedSources: Record<string, PlannedServiceId[]>
+}
+
+/** Services with both a login in this app and a personal list to read.
+ *  Kitsu is deliberately absent: it is a public catalog here, with no
+ *  account, so there is no list of yours to fetch. */
+export type PlannedServiceId = 'simkl' | 'trakt' | 'mal'
+
+/** What one service's watchlist pull did. Reported per service because
+ *  the failure that matters is the quiet one: two lists arriving and a
+ *  third erroring looks exactly like a short list unless somebody says. */
+export interface PlannedServiceReport {
+  service: PlannedServiceId
+  connected: boolean
+  pulled: number
+  /** Entries dropped for want of an id this app could file them under —
+   *  anime, in practice. Counted so the gap is visible. */
+  unmapped: number
+  error?: string
+}
+
+export interface PlannedSyncReport {
+  at: number
+  services: PlannedServiceReport[]
+  added: number
 }
 
 export interface DislikedListResult {
@@ -634,6 +682,15 @@ export interface HomePersonalizedResult {
    */
   recommendationReasons: Record<string, RecommendationReason>
   preferredGenres: string[]
+  /**
+   * Which tracking services have each planned title on their own list.
+   *
+   * Carried on the home feed because that is the payload the app already
+   * derives its planned set from, so a card can be tagged without a
+   * second round trip per title. Sparse: an id with no entry is planned
+   * here and nowhere else, which is the ordinary case.
+   */
+  plannedSources: Record<string, PlannedServiceId[]>
 }
 
 /**
@@ -1464,12 +1521,7 @@ export interface CatalogListing {
  *  same six the sort dropdown offers — because the sort is now applied by
  *  SQL over catalog_index rather than in memory over a loaded array. */
 export type CatalogSortKey =
-  | 'trending'
-  | 'title-asc'
-  | 'year-desc'
-  | 'rating-desc'
-  | 'runtime-asc'
-  | 'runtime-desc'
+  'trending' | 'title-asc' | 'year-desc' | 'rating-desc' | 'runtime-asc' | 'runtime-desc'
 
 /**
  * One page of the browse grid, as a question for the database.

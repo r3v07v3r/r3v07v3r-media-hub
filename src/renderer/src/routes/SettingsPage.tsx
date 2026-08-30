@@ -24,6 +24,7 @@ import type {
   SourcePreference
 } from '@shared/media-hub/types'
 import styles from './Settings.module.css'
+import { WatchlistSyncSection } from '@renderer/components/settings/WatchlistSyncSection'
 
 function formatBytes(bytes: number): string {
   if (bytes <= 0) return '0 MB'
@@ -585,7 +586,16 @@ function ProfileForm({
  *  the actual bytes freed) — the "quick, meaningful" More Options picked
  *  over hardware-accel/video-quality, which have no real mechanism in this
  *  app's TorBox-sourced (not locally re-encoded per quality) pipeline. */
-function MoreOptionsSection() {
+function MoreOptionsSection({
+  quick = false,
+  heading = 'More Options'
+}: {
+  /** On the viewer's short page: the browsing and motion toggles, without
+   *  the subtitle-cache maintenance row, which is a housekeeping action
+   *  rather than something you set while watching. */
+  quick?: boolean
+  heading?: string
+} = {}) {
   const { mediaHubSettings, refreshMediaHubSettings } = useAppState()
   const [clearStatus, setClearStatus] = useState<{
     kind: 'idle' | 'busy' | 'ok' | 'error'
@@ -652,7 +662,7 @@ function MoreOptionsSection() {
   return (
     <section className={`${styles.section} glass-panel`} aria-labelledby="settings-more">
       <h2 id="settings-more" className={styles.sectionTitle}>
-        More Options
+        {heading}
       </h2>
       <ToggleRow
         icon="sparkle"
@@ -682,31 +692,35 @@ function MoreOptionsSection() {
         checked={mediaHubSettings?.hideDislikedDefault ?? false}
         onChange={handleToggleHideDisliked}
       />
-      <div className={styles.row}>
-        <div className={styles.rowIcon} aria-hidden="true">
-          <Icon name="trash" size={17} />
-        </div>
-        <div className={styles.rowText}>
-          <span className={styles.rowTitle}>Subtitle cache</span>
-          <span className={styles.rowDescription}>
-            Downloaded subtitle files kept on disk for compatibility-mode playback.
-          </span>
-        </div>
-        <button
-          type="button"
-          className={styles.testButton}
-          onClick={handleClearSubtitleCache}
-          disabled={clearStatus.kind === 'busy'}
-        >
-          {clearStatus.kind === 'busy' ? 'Clearing…' : 'Clear cache'}
-        </button>
-      </div>
-      {clearStatus.kind !== 'idle' && clearStatus.kind !== 'busy' && (
-        <span
-          className={`${styles.statusMessage} ${clearStatus.kind === 'ok' ? styles.statusOk : styles.statusError}`}
-        >
-          {clearStatus.message}
-        </span>
+      {!quick && (
+        <>
+          <div className={styles.row}>
+            <div className={styles.rowIcon} aria-hidden="true">
+              <Icon name="trash" size={17} />
+            </div>
+            <div className={styles.rowText}>
+              <span className={styles.rowTitle}>Subtitle cache</span>
+              <span className={styles.rowDescription}>
+                Downloaded subtitle files kept on disk for compatibility-mode playback.
+              </span>
+            </div>
+            <button
+              type="button"
+              className={styles.testButton}
+              onClick={handleClearSubtitleCache}
+              disabled={clearStatus.kind === 'busy'}
+            >
+              {clearStatus.kind === 'busy' ? 'Clearing…' : 'Clear cache'}
+            </button>
+          </div>
+          {clearStatus.kind !== 'idle' && clearStatus.kind !== 'busy' && (
+            <span
+              className={`${styles.statusMessage} ${clearStatus.kind === 'ok' ? styles.statusOk : styles.statusError}`}
+            >
+              {clearStatus.message}
+            </span>
+          )}
+        </>
       )}
     </section>
   )
@@ -835,10 +849,14 @@ export default function SettingsPage({
   const [generalGridBinding, generalGroupBinding] = useColumnPackGrid<HTMLElement>(!embedded)
   const [playbackGridBinding, playbackGroupBinding] = useColumnPackGrid<HTMLElement>(!embedded)
   const [servicesGridBinding, servicesGroupBinding] = useColumnPackGrid<HTMLElement>(!embedded)
-  const [accountsGridBinding, accountsGroupBinding] = useColumnPackGrid<HTMLElement>(!embedded)
+  // No grid binding for Accounts: it is three smaller grids now, not one,
+  // and the packer sizes a single grid against its group. The group
+  // binding stays, since the group is still one scroll container.
+  const [, accountsGroupBinding] = useColumnPackGrid<HTMLElement>(!embedded)
   const [communityGridBinding, communityGroupBinding] = useColumnPackGrid<HTMLElement>(!embedded)
   const [aiGridBinding, aiGroupBinding] = useColumnPackGrid<HTMLElement>(!embedded)
   const {
+    setControlCentreOpen,
     profiles,
     activeProfileId,
     switchProfile,
@@ -1204,6 +1222,83 @@ export default function SettingsPage({
     scroller.addEventListener('wheel', handleWheel, { passive: false })
     return () => scroller.removeEventListener('wheel', handleWheel)
   }, [])
+
+  // THE VIEWER'S PAGE IS SHORT NOW.
+  //
+  // Everything below used to render here as well as in the control centre:
+  // services, accounts, allocation, AI, backups, community. Two places for
+  // one setting is two places to look and two places for them to disagree,
+  // and none of it is what somebody reaches for mid-film. The control
+  // centre is where the system is configured; this is the handful you
+  // change while watching, and a way through to the rest.
+  if (!embedded && !category) {
+    return (
+      <div className={styles.wrap}>
+        <div className={styles.pageHeader}>
+          <div>
+            <h1 className={styles.heading}>Settings</h1>
+            <p className={styles.headingDescription}>
+              The things you change while watching. Everything else lives in the control centre.
+            </p>
+          </div>
+        </div>
+
+        <section className={`${styles.section} glass-panel`} aria-labelledby="quick-playback">
+          <h2 id="quick-playback" className={styles.sectionTitle}>
+            Playback
+          </h2>
+          <ToggleRow
+            icon="play"
+            title="Play the next episode"
+            description="When an episode ends, offer the next one and start it after a short countdown. Movies and last episodes are unaffected."
+            checked={mediaHubSettings?.autoplayNextEnabled ?? true}
+            onChange={handleSetAutoplayNext}
+          />
+          <ToggleRow
+            icon="eye"
+            title="Show subtitles automatically"
+            description="Fetch and apply a matching subtitle as soon as a title starts playing."
+            checked={mediaHubSettings?.autoSubtitlesEnabled ?? true}
+            onChange={handleSetAutoSubtitles}
+          />
+          <SegmentedRow
+            icon="planet"
+            title="Subtitle language"
+            description="Language to search for, both automatically and in the Subtitles menu."
+            value={mediaHubSettings?.subtitleLanguage ?? 'en'}
+            options={SUBTITLE_LANGUAGE_OPTIONS}
+            onChange={handleSetSubtitleLanguage}
+          />
+          <SegmentedRow
+            icon="waveform"
+            title="Audio language"
+            description="Preferred spoken language. Used to pick the audio track when a release has several, and to avoid dubbed releases when an original-language one exists."
+            value={mediaHubSettings?.audioLanguage ?? 'en'}
+            options={SUBTITLE_LANGUAGE_OPTIONS}
+            onChange={handleSetAudioLanguage}
+          />
+        </section>
+
+        <MoreOptionsSection quick heading="Browsing" />
+
+        {/* Not a list of what is through there — that would be this page
+            again, in miniature, and would go stale the first time the
+            control centre gained a section. */}
+        <button
+          type="button"
+          className={styles.openControlCentre}
+          onClick={() => setControlCentreOpen(true)}
+        >
+          <Icon name="settings" size={17} />
+          <span>
+            <b>Open the control centre</b>
+            Services, accounts, storage, the cache server and the rest of the pipeline.
+          </span>
+          <Icon name="chevron" size={16} />
+        </button>
+      </div>
+    )
+  }
 
   return (
     <div className={`${styles.wrap} ${embedded ? styles.embedded : ''}`}>
@@ -1717,17 +1812,66 @@ export default function SettingsPage({
           >
             <header className={styles.groupHeader}>
               <span className={styles.groupEyebrow}>Connections</span>
-              <h2 id="settings-accounts-title">Accounts &amp; metadata</h2>
-              <p>Link discovery, tracking, artwork, and subtitle providers.</p>
+              <h2 id="settings-accounts-title">Accounts</h2>
+              <p>
+                Three kinds of connection, doing three different jobs. Nothing here is required —
+                the app works without any of them, and each one adds what it says it adds.
+              </p>
             </header>
-            <div ref={accountsGridBinding} className={styles.groupGrid}>
-              <TmdbSection />
-              <OmdbSection />
-              <SimklSection />
-              <TraktSection />
-              <MalSection />
-              <SubDLSection />
-              <OpenSubtitlesSection />
+
+            {/* THREE SUBGROUPS, NOT SEVEN EQUAL TILES.
+                These cards were one flat grid in the order they happened to
+                be written: TMDB, OMDb, Simkl, Trakt, MAL, SubDL,
+                OpenSubtitles. Nothing said which of them tracked what you
+                watched, which fetched artwork, and which found subtitles,
+                so a person looking for one had to read all seven. They do
+                genuinely different jobs and now say so.
+
+                It also gives the watchlist panel somewhere to belong.
+                Dropped into that flat grid it was an eighth tile of a
+                different kind — an action and a report among a row of
+                credential forms. Under Tracking, spanning the row it
+                reports on, it reads as the summary of that group, which is
+                what it is. */}
+            <div className={styles.subGroup}>
+              <div className={styles.subGroupHead}>
+                <h3>Tracking</h3>
+                <p>
+                  What you watch and what you plan to. History goes out to all of these; watchlists
+                  come back from all of these.
+                </p>
+              </div>
+              <div className={styles.groupGrid}>
+                <SimklSection />
+                <TraktSection />
+                <MalSection />
+              </div>
+              <WatchlistSyncSection />
+            </div>
+
+            <div className={styles.subGroup}>
+              <div className={styles.subGroupHead}>
+                <h3>Artwork &amp; metadata</h3>
+                <p>
+                  Posters, backdrops, cast and ratings. Without them titles still play — they just
+                  look plainer and carry less to browse by.
+                </p>
+              </div>
+              <div className={styles.groupGrid}>
+                <TmdbSection />
+                <OmdbSection />
+              </div>
+            </div>
+
+            <div className={styles.subGroup}>
+              <div className={styles.subGroupHead}>
+                <h3>Subtitles</h3>
+                <p>Where subtitles are searched for, in the order you have them connected.</p>
+              </div>
+              <div className={styles.groupGrid}>
+                <SubDLSection />
+                <OpenSubtitlesSection />
+              </div>
             </div>
           </section>
         )}

@@ -67,7 +67,7 @@ export function ContextMenu() {
     { icon: 'play', label: 'Play', onSelect: () => startPartyPlayback(media) },
     {
       icon: saved ? 'check' : 'plus',
-      label: saved ? 'Remove from My List' : 'Add to My List',
+      label: saved ? 'Remove from Planned' : 'Plan to Watch',
       onSelect: () => toggleMyList(media)
     },
     ...(canToggleWatched

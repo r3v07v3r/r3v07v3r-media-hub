@@ -941,5 +941,4 @@ export function registerTorBoxIpc(): void {
       return finish(url)
     }
   )
-
 }

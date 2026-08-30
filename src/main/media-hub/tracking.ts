@@ -63,6 +63,12 @@ import {
 import { airingStatus, continueWatchingList } from './core'
 import { catalogData, metadata } from './catalog'
 import { getDatabase } from './dbState'
+import {
+  lastPlannedSyncReport,
+  plannedSources,
+  syncPlannedFromServices,
+  type PlannedSyncReport
+} from './watchlists'
 import { fetchJson } from './httpClient'
 import { mapWithLimit, type TaskPriority } from './taskScheduler'
 import { handle } from './ipcGuard'
@@ -755,6 +761,28 @@ async function pushPendingToServices(priority: TaskPriority): Promise<Set<string
     failed.add(entry.id)
   }
 
+  // TRAKT TOO, and it was the gap. This queue reached Simkl and MAL, so a
+  // "Use Local" decision left Trakt holding the value the person had just
+  // ruled against — and the next check against Trakt would raise it all
+  // over again. "The tracking services that are connected" has to mean all
+  // of them, or resolving a disagreement in one place creates one in
+  // another.
+  //
+  // Failures here do NOT un-confirm the entry, unlike MAL above. Simkl is
+  // the service this queue's verdict is computed against and MAL's
+  // progress is part of the same reconciliation; Trakt is a third party to
+  // it. Dropping a decision Simkl accepted because Trakt was unreachable
+  // would re-raise a disagreement that no longer exists. pushTraktHistory
+  // already logs and swallows its own errors for the same reason.
+  for (const entry of queue) {
+    if (!confirmed.has(entry.id)) continue
+    await pushTraktHistory(
+      { id: entry.id, type: entry.type, title: entry.title, year: entry.year },
+      {},
+      locallyWatched.has(entry.id) ? 'add' : 'remove'
+    )
+  }
+
   // The pushes above bypass simklWatchedSnapshot()'s own request path, so
   // its 20-minute cache never learns about them; left alone, the next
   // check compares against the stale pre-push snapshot and re-reports
@@ -870,6 +898,15 @@ async function pushPendingToServices(priority: TaskPriority): Promise<Set<string
  * interrupts anyone with a panel they did not ask for.
  */
 export async function runBackgroundWatchSync(): Promise<void> {
+  // Watchlists come in on the same schedule as history goes out. They are
+  // both "make the local picture match the services", and giving them
+  // separate timers would mean two independent things to reason about for
+  // no benefit. Failures are swallowed inside the pull, per service.
+  try {
+    await syncPlannedFromServices('background')
+  } catch (error) {
+    logError('job:planned-sync', error)
+  }
   if (!simklCredentials().accessToken) return
   // Background: this is a recurring job nobody asked for, so its pushes
   // must not jump ahead of the screen someone is looking at, and must
@@ -1081,8 +1118,26 @@ export function registerTrackingIpc(): void {
       newEpisodeCount: newEpisodesById.get(String(item.id)) || 0,
       airing: airingById.get(String(item.id)) || ''
     }))
-    return { tracked, history }
+    return { tracked, history, plannedSources: plannedSources() }
   })
+
+  /**
+   * Pull plan-to-watch from every connected service, on demand.
+   *
+   * Also runs with the background watch sync, so an untouched app catches
+   * up on its own — this exists for the case where somebody has just
+   * added a pile of titles on the web and does not want to wait for the
+   * next pass to see them.
+   */
+  handle<undefined, PlannedSyncReport>(MEDIA_HUB_CHANNELS.trackingPlannedSync, async () =>
+    syncPlannedFromServices('interactive')
+  )
+
+  /** The last pull's result, so the panel has something to show before
+   *  anybody presses the button. */
+  handle<undefined, PlannedSyncReport | null>(MEDIA_HUB_CHANNELS.trackingPlannedReport, async () =>
+    lastPlannedSyncReport()
+  )
 
   handle<TrackableItem, { tracked: boolean }>(MEDIA_HUB_CHANNELS.trackingToggle, (_e, item) => {
     const db = getDatabase()
@@ -1513,7 +1568,10 @@ export function registerTrackingIpc(): void {
       continueWatching: continueWatchingList(details, history).slice(0, 18),
       recommendations,
       recommendationReasons,
-      preferredGenres
+      preferredGenres,
+      // Read here rather than fetched: it is whatever the last pull
+      // recorded, so tagging a card costs nothing on this path.
+      plannedSources: plannedSources()
     }
   })
 

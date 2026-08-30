@@ -65,7 +65,20 @@ function JobRow({ job, now }: { job: ActivityJob; now: number }) {
   )
 }
 
-export function BackgroundActivitySection() {
+export function BackgroundActivitySection({
+  onlyWhenBusy = false
+}: {
+  /**
+   * Render nothing while the app is idle.
+   *
+   * On the viewer's Downloads page this panel was permanent furniture: a
+   * pressure line, "Nothing running right now", and the whole scheduled-job
+   * table, above the two things somebody opened the page for. Lanes,
+   * priorities and next-run countdowns are worth showing WHILE something
+   * is happening and are noise the rest of the time.
+   */
+  onlyWhenBusy?: boolean
+} = {}) {
   const [snapshot, setSnapshot] = useState<ActivitySnapshot | null>(null)
   const [now, setNow] = useState(() => Date.now())
 
@@ -97,6 +110,7 @@ export function BackgroundActivitySection() {
   }, [])
 
   if (!snapshot) return null
+  if (onlyWhenBusy && snapshot.running.length === 0 && snapshot.queued === 0) return null
 
   const queuedTiers = PRIORITY_ORDER.filter((tier) => snapshot.queuedByPriority[tier] > 0)
 

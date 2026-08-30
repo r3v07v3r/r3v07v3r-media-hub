@@ -153,6 +153,7 @@ export async function run(api: PayloadApi): Promise<'restart' | 'exit'> {
     credentials,
     activity,
     updaterStatus: () => updater.status(),
+    applyUpdateNow: () => updater.applyNow(),
     serverName: config.serverName,
     version: runningVersion,
     diskBudgetBytes: config.diskBudgetBytes

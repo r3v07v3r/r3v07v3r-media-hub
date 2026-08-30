@@ -41,6 +41,15 @@ export interface MediaGridProps {
    *  computes it once from whatever's in the currently-pending
    *  BrowsingOrigin, which is exactly the mount this needs to affect. */
   initialVisibleCount?: number
+  /**
+   * Label each card with what it is.
+   *
+   * Off by default and on for MIXED lists only. The library pages hold one
+   * kind each, where a "Film" chip on every card of a page called Movies
+   * says nothing; Planned holds all three at once, where telling them
+   * apart is the first thing somebody wants.
+   */
+  showKind?: boolean
 }
 
 export function MediaGrid({
@@ -51,7 +60,8 @@ export function MediaGrid({
   emptyTitle = 'No titles match these filters',
   emptyMessage = 'Try widening a filter or clearing them all.',
   errorTitle = "Couldn't reach the search backend",
-  initialVisibleCount
+  initialVisibleCount,
+  showKind = false
 }: MediaGridProps) {
   const [visibleCount, setVisibleCount] = useState(initialVisibleCount ?? BATCH)
   // Read inside the observer callback below instead of closing over
@@ -175,7 +185,7 @@ export function MediaGrid({
   return (
     <ul className={styles.grid}>
       {visibleItems.map((media) => (
-        <MediaCard key={media.id} media={media} />
+        <MediaCard key={media.id} media={media} showKind={showKind} />
       ))}
       {/* Zero-size marker, not another skeleton card — its only job is
           to give the IntersectionObserver above something to watch near

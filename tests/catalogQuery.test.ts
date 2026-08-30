@@ -476,9 +476,9 @@ check('filters combine as AND', () => {
     item('yearOnly', { genres: ['Comedy'], year: '1999', rating: '9' })
   ])
   assert.deepEqual(
-    db.indexQuery({ kind: 'movie', genre: 'Drama', year: '1999', minRating: 8 }).items.map(
-      (x) => x.id
-    ),
+    db
+      .indexQuery({ kind: 'movie', genre: 'Drama', year: '1999', minRating: 8 })
+      .items.map((x) => x.id),
     ['both']
   )
   db.close()
@@ -507,13 +507,37 @@ check('an empty index answers rather than throwing', () => {
 // ---------------------------------------------------------------------
 
 const CORPUS: CatalogItem[] = [
-  item('tt1', { title: 'Alpha', year: '1999', rating: '8.5', runtime: '95 min', genres: ['Drama'] }),
-  item('tt2', { title: 'Bravo', year: '2020', rating: '6.0', runtime: '140 min', genres: ['Drama', 'Horror'] }),
-  item('tt3', { title: 'charlie', year: '1999', rating: '9.2', runtime: '80 min', genres: ['Comedy'] }),
+  item('tt1', {
+    title: 'Alpha',
+    year: '1999',
+    rating: '8.5',
+    runtime: '95 min',
+    genres: ['Drama']
+  }),
+  item('tt2', {
+    title: 'Bravo',
+    year: '2020',
+    rating: '6.0',
+    runtime: '140 min',
+    genres: ['Drama', 'Horror']
+  }),
+  item('tt3', {
+    title: 'charlie',
+    year: '1999',
+    rating: '9.2',
+    runtime: '80 min',
+    genres: ['Comedy']
+  }),
   item('tt4', { title: 'Delta', year: '2005', runtime: '120 min', genres: ['Horror'] }),
   item('tt5', { title: 'Echo', year: '2020', rating: '7.1', genres: [] }),
   item('tt6', { title: 'Foxtrot', rating: '5.0', runtime: '200 min', genres: ['Drama'] }),
-  item('tt7', { title: 'Golf', year: '1980', rating: '9.2', runtime: '95 min', genres: ['Comedy', 'Drama'] }),
+  item('tt7', {
+    title: 'Golf',
+    year: '1980',
+    rating: '9.2',
+    runtime: '95 min',
+    genres: ['Comedy', 'Drama']
+  }),
   item('tt8', { title: 'hotel', year: '2005', rating: '6.0', runtime: '30 min', genres: ['Drama'] })
 ]
 
@@ -557,7 +581,10 @@ check('SQL and the in-memory engine agree on every filter x sort', () => {
         .items.map((x) => x.id)
 
       const memIds = sortMediaItems(
-        applyCategoryFilters(asMedia, { ...DEFAULT_FILTER_STATE, ...filter } as CategoryFilterState),
+        applyCategoryFilters(asMedia, {
+          ...DEFAULT_FILTER_STATE,
+          ...filter
+        } as CategoryFilterState),
         (sort ?? 'trending') as SortKey
       ).map((x) => x.id)
 

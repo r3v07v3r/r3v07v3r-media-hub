@@ -131,10 +131,10 @@ export function MatrixRain({ active }: Props) {
       // 0.78a, true exponential decay to genuinely transparent. Ten or so
       // frames to invisibility, one row per frame, so the tail is about ten
       // glyphs — the length that reads as rain.
-      context.globalCompositeOperation = "destination-out"
-      context.fillStyle = "rgba(0, 0, 0, 0.22)"
+      context.globalCompositeOperation = 'destination-out'
+      context.fillStyle = 'rgba(0, 0, 0, 0.22)'
       context.fillRect(0, 0, width, height)
-      context.globalCompositeOperation = "source-over"
+      context.globalCompositeOperation = 'source-over'
 
       for (let i = 0; i < columns.length; i++) {
         const x = i * FONT_SIZE

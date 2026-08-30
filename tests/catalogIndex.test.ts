@@ -67,8 +67,7 @@ function raw(dbPath: string, id: string): Record<string, unknown> | undefined {
   const sql = new DatabaseSync(dbPath)
   try {
     return sql.prepare('SELECT * FROM catalog_index WHERE id=?').get(id) as
-      | Record<string, unknown>
-      | undefined
+      Record<string, unknown> | undefined
   } finally {
     sql.close()
   }
@@ -295,7 +294,11 @@ check('paging is stable and non-overlapping', () => {
   assert.equal(third.length, 5, 'the last page is short, not padded')
   const all = [...first, ...second, ...third]
   assert.equal(new Set(all).size, 25, 'every title appears exactly once across the pages')
-  assert.deepEqual(db.indexList('movie', 10, 0).map((x) => x.id), first, 'and the order is stable')
+  assert.deepEqual(
+    db.indexList('movie', 10, 0).map((x) => x.id),
+    first,
+    'and the order is stable'
+  )
   db.close()
 })
 
