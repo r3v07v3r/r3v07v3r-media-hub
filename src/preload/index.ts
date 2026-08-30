@@ -860,6 +860,8 @@ const api = {
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.roomsLeave, { roomId }),
       rename: (roomId: string, name: string): Promise<{ ok: true }> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.roomsRename, { roomId, name }),
+      kick: (roomId: string, friendId: string): Promise<{ ok: true }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.roomsKick, { roomId, friendId }),
       setSharing: (roomId: string, sharing: boolean): Promise<{ ok: true }> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.roomsSetSharing, { roomId, sharing }),
       setActivity: (activity: RoomActivity | null): Promise<{ ok: true }> =>
