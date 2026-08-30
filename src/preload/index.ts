@@ -507,6 +507,10 @@ const api = {
        *  before anybody presses the button. */
       plannedReport: (): Promise<PlannedSyncReport | null> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.trackingPlannedReport),
+      /** Turn two-way watchlist sync on or off — see
+       *  docs/WATCHLIST-SYNC.md for what each direction does. */
+      setWatchlistTwoWay: (enabled: boolean): Promise<{ watchlistTwoWay: boolean }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.trackingSetTwoWay, { enabled }),
       toggle: (item: TrackableItem): Promise<{ tracked: boolean }> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.trackingToggle, item),
       markWatched: (payload: MarkWatchedPayload): Promise<MarkWatchedResult> =>

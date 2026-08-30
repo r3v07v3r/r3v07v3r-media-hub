@@ -99,7 +99,11 @@ export function publicSettings(settings: Record<string, unknown> = {}): MediaHub
     // Absent means never asked, and the app has to behave as though the
     // answer were yes until somebody says otherwise — every existing
     // install predates the question and already stores.
-    storeMedia: settings.storeMedia !== false
+    storeMedia: settings.storeMedia !== false,
+    // Absent means on, for the same reason storeMedia's absence means
+    // yes: every install that had the one-way pull is somebody who
+    // connected an account to keep things in step.
+    watchlistTwoWay: settings.watchlistTwoWay !== false
   }
 }
 

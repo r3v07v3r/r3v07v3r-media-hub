@@ -16,6 +16,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { PlannedServiceReport, PlannedSyncReport } from '@shared/media-hub/types'
 import { Icon } from '@renderer/components/icons/Icon'
+import { useAppState } from '@renderer/context/AppStateContext'
 import styles from '@renderer/routes/Settings.module.css'
 
 const SERVICE_LABELS: Record<PlannedServiceReport['service'], string> = {
@@ -37,6 +38,16 @@ function when(at: number): string {
   return `${days} day${days === 1 ? '' : 's'} ago`
 }
 
+/** What the pull did, in one sentence. Removals are named separately
+ *  from additions because they are the half that took something away,
+ *  and folding both into a single 'synced' would hide that. */
+function summarise(report: PlannedSyncReport): string {
+  const parts: string[] = []
+  if (report.added > 0) parts.push(`${report.added} added`)
+  if (report.removed > 0) parts.push(`${report.removed} removed`)
+  return parts.length ? parts.join(', ') : 'Nothing changed'
+}
+
 function line(report: PlannedServiceReport): string {
   if (!report.connected) return 'Not connected'
   if (report.error) return report.error
@@ -48,8 +59,17 @@ function line(report: PlannedServiceReport): string {
 }
 
 export function WatchlistSyncSection() {
+  const { mediaHubSettings, refreshMediaHubSettings } = useAppState()
   const [report, setReport] = useState<PlannedSyncReport | null>(null)
   const [busy, setBusy] = useState(false)
+  const twoWay = mediaHubSettings?.watchlistTwoWay !== false
+
+  const setTwoWay = (enabled: boolean): void => {
+    void window.api?.mediaHub?.tracking
+      ?.setWatchlistTwoWay?.(enabled)
+      .then(() => refreshMediaHubSettings())
+      .catch(() => {})
+  }
 
   const load = useCallback(async () => {
     const api = window.api?.mediaHub?.tracking
@@ -97,6 +117,35 @@ export function WatchlistSyncSection() {
         </button>
       </div>
 
+      {/* THE ONE CONTROL THAT CAN DELETE SOMETHING, and it says so.
+          On, changes here reach the services and their removals reach
+          here — but only for titles this app pulled in itself, which is
+          the whole safety rule and the reason the description says which
+          direction is which rather than "keep in sync". */}
+      <div className={styles.row}>
+        <div className={styles.rowIcon} aria-hidden="true">
+          <Icon name="refresh" size={17} />
+        </div>
+        <div className={styles.rowText}>
+          <span className={styles.rowTitle}>Keep watchlists in sync</span>
+          <span className={styles.rowDescription}>
+            Planning something here adds it to every connected service, and un-planning removes it.
+            A title that leaves a service is removed here too — but only if this app pulled it in
+            from that service in the first place. Anything you added here is never removed by a
+            sync. Turn this off to keep pulling without writing anything back.
+          </span>
+        </div>
+        <button
+          type="button"
+          role="switch"
+          aria-checked={twoWay}
+          className={styles.testButton}
+          onClick={() => setTwoWay(!twoWay)}
+        >
+          {twoWay ? 'On' : 'Off'}
+        </button>
+      </div>
+
       {report && (
         <>
           <ul className={styles.watchlistReport}>
@@ -108,9 +157,7 @@ export function WatchlistSyncSection() {
             ))}
           </ul>
           <span className={styles.statusMessage}>
-            {report.added > 0
-              ? `${report.added} new title${report.added === 1 ? '' : 's'} added — ${when(report.at)}.`
-              : `Nothing new — ${when(report.at)}.`}
+            {summarise(report)} — {when(report.at)}.
           </span>
         </>
       )}

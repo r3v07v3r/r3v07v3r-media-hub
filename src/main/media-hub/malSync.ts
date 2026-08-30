@@ -125,7 +125,9 @@ async function resolveKitsuIdForMal(malId: number): Promise<string> {
 }
 
 /** Inverse of resolveKitsuIdForMal — resolves a `kitsu:<id>` (or bare numeric Kitsu id) to a MAL id, via idBridge. 0 on no match. */
-async function resolveMalIdForKitsu(kitsuId: string): Promise<number> {
+/** Exported so watchlistPush.ts can reach an anime's MAL entry through
+ *  the same mapping this module already maintains. */
+export async function resolveMalIdForKitsu(kitsuId: string): Promise<number> {
   const numericId = String(kitsuId)
     .replace(/^kitsu:/, '')
     .split(':')[0]

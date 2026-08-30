@@ -50,6 +50,8 @@ export const MEDIA_HUB_CHANNELS = {
   trackingPlannedSync: 'mediahub:tracking:planned-sync',
   /** What the last watchlist pull did, per service. */
   trackingPlannedReport: 'mediahub:tracking:planned-report',
+  /** Turn two-way watchlist sync on or off. */
+  trackingSetTwoWay: 'mediahub:tracking:set-two-way',
   /** The caller's own cached titles, and the sharing control over them. */
   lanCacheMyItems: 'mediahub:lancache:my-items',
   lanCacheSetSharing: 'mediahub:lancache:set-sharing',

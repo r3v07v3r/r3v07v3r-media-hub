@@ -12,21 +12,29 @@
 // season data) with no login at all, so there is no "your Kitsu list" to
 // fetch. Listing it as a source would be a promise nothing could keep.
 //
-// WHAT THIS DOES NOT DO is decide anything about removals. A title that
-// has left a remote list is not un-planned here, and a title planned here
-// is not pushed anywhere by this module. Pulling is safe and idempotent;
-// mirroring deletions in both directions needs a conflict policy that
-// nobody has designed yet, and guessing at one would delete somebody's
-// list. See the reconcile queue in tracking.ts for what that costs to do
-// properly.
+// IT SYNCS BOTH WAYS NOW, under the rules in docs/WATCHLIST-SYNC.md.
+// Read that before changing anything here — this is the first sync in the
+// app that can delete something somebody meant to keep, and the rules are
+// what stop it guessing.
+//
+// The one that matters most: A REMOVAL ONLY PROPAGATES INWARD IF THIS APP
+// SAW THE TITLE ARRIVE. Absent-from-a-service is an ambiguous state — it
+// means either "you added it here and the service has not heard" or "you
+// removed it there and this app has not heard", and a snapshot cannot
+// tell those apart. The origins record below is what makes it answerable:
+// a title this app pulled from Trakt, now gone from Trakt, was removed
+// there. A title with no recorded origin was added here and is pushed
+// out, never deleted.
 
 import { getDatabase } from './dbState'
 import { logError } from './logger'
 import { kitsuIdForExternal } from './idBridge'
 import { malRequest } from './malSync'
 import { simklRequest } from './simklClient'
-import { malCredentials, simklCredentials, traktCredentials } from './settingsStore'
+import { malCredentials, readSettings, simklCredentials, traktCredentials } from './settingsStore'
 import { traktRequest } from './traktClient'
+import { pushPlanEverywhere } from './watchlistPush'
+import { plannedRemovals, type PlannedOrigin } from './watchlistRules'
 import type { MediaKind } from '../../shared/media-hub/types'
 import type { TaskPriority } from './taskScheduler'
 
@@ -77,9 +85,44 @@ export interface PlannedSyncReport {
   services: PlannedServiceReport[]
   /** Titles newly added to the local list by this pull. */
   added: number
+  /** Titles removed locally because they left every service that had
+   *  them — only ever titles this app had pulled in itself. */
+  removed: number
 }
 
 const REPORT_CACHE_KEY = 'planned:last-sync'
+
+/**
+ * Where each pulled title came from, and when.
+ *
+ * The whole safety property of two-way sync rests on this. Written when a
+ * pull ADDS a title, never when somebody plans one here — so its presence
+ * is proof the app watched the title arrive from a service, and its
+ * absence is proof it did not. A first sync against an account nobody has
+ * pulled from before cannot delete anything, because nothing has an
+ * origin yet.
+ *
+ * Durable and long-lived on purpose: it is the app's memory of what came
+ * from where, and forgetting it turns a later removal into a guess.
+ */
+const ORIGINS_CACHE_KEY = 'planned:origins'
+const ORIGINS_TTL_MS = 365 * 24 * 60 * 60 * 1000
+
+type PlannedOrigins = Record<string, PlannedOrigin>
+
+function plannedOrigins(): PlannedOrigins {
+  return getDatabase().getCache<PlannedOrigins>(ORIGINS_CACHE_KEY, { allowExpired: true }) ?? {}
+}
+
+function writeOrigins(origins: PlannedOrigins): void {
+  getDatabase().putCache(ORIGINS_CACHE_KEY, origins, ORIGINS_TTL_MS, { durable: true })
+}
+
+/** Whether the person has asked for changes here to reach the services.
+ *  Off leaves the pull running and stops every write — see the doc. */
+export function twoWaySyncEnabled(): boolean {
+  return readSettings().watchlistTwoWay !== false
+}
 
 interface SimklIds {
   imdb?: string
@@ -312,8 +355,8 @@ export async function syncPlannedFromServices(
     })
   })
 
-  const report = (added: number): PlannedSyncReport => {
-    const full = { at: Date.now(), services, added }
+  const report = (added: number, removed = 0): PlannedSyncReport => {
+    const full = { at: Date.now(), services, added, removed }
     getDatabase().putCache(REPORT_CACHE_KEY, full, SOURCES_TTL_MS, { durable: true })
     return full
   }
@@ -343,6 +386,7 @@ export async function syncPlannedFromServices(
     if (alreadyTracked.has(entry.id)) continue
     try {
       db.track({ id: entry.id, type: entry.type, title: entry.title, year: entry.year })
+      rememberOrigin(entry.id, entry.source)
       added += 1
     } catch (error) {
       logError('watchlists:track', error)
@@ -350,7 +394,88 @@ export async function syncPlannedFromServices(
   }
 
   db.putCache(PLANNED_SOURCES_CACHE_KEY, sources, SOURCES_TTL_MS, { durable: true })
-  return report(added)
+
+  // --- the inward half of two-way: what has LEFT the services ----------
+  //
+  // Only over services that actually answered. A title is absent from a
+  // list this pass never successfully read in exactly the same way it is
+  // absent from an empty one, and treating those alike would let an
+  // outage read as "they emptied their watchlist" — see rule 5.
+  const answered = new Set(
+    services.filter((entry) => entry.connected && !entry.error).map((entry) => entry.service)
+  )
+  let removed = 0
+  if (twoWaySyncEnabled() && answered.size > 0) {
+    const origins = plannedOrigins()
+    // The decision lives in watchlistRules, which has no database or
+    // network in it and is tested directly. This half just carries it
+    // out — a second copy of the reasoning here is how the tested rule
+    // and the shipped behaviour drift apart.
+    const doomed = plannedRemovals({
+      tracked: db.tracked().map((item) => String(item.id)),
+      origins,
+      sources,
+      answered
+    })
+    for (const id of doomed) {
+      try {
+        db.untrack(id)
+        delete origins[id]
+        removed += 1
+      } catch (error) {
+        logError('watchlists:untrack', error)
+      }
+    }
+    // Origins for titles already gone locally are dropped too, so the
+    // record does not grow a tail of entries about things nobody has.
+    for (const id of Object.keys(origins)) {
+      if ((sources[id] ?? []).length === 0 && !db.isTracked(id)) delete origins[id]
+    }
+    writeOrigins(origins)
+  }
+
+  return report(added, removed)
+}
+
+/**
+ * Records that a pull put this title on the local list.
+ *
+ * Called only from the add loop above. Anything planned in this app has
+ * no entry here, which is precisely what protects it from ever being
+ * removed by a pull.
+ */
+function rememberOrigin(id: string, source: PlannedSource): void {
+  const origins = plannedOrigins()
+  if (origins[id]) return
+  origins[id] = { source, addedAt: Date.now() }
+  writeOrigins(origins)
+}
+
+/**
+ * Sends a local plan/un-plan out to every connected service.
+ *
+ * Fire-and-forget from the caller's point of view: the IPC that toggles a
+ * title answers immediately on the local write, because making somebody
+ * wait on three third-party APIs to see a button change state is the
+ * wrong trade. Failures are logged per service by the push itself.
+ */
+export function pushLocalPlanChange(
+  item: { id: string; type: MediaKind; title: string; year?: string },
+  planned: boolean
+): void {
+  if (!twoWaySyncEnabled()) return
+  void pushPlanEverywhere(item, planned).then((outcome) => {
+    // A local removal also ends this app's memory of where the title came
+    // from. Keeping it would let the next pull see an origin with no
+    // remote presence and "remove" something already gone — harmless, but
+    // it would also resurrect the entry if the person re-planned it here.
+    if (planned) return
+    const origins = plannedOrigins()
+    if (!origins[item.id]) return
+    delete origins[item.id]
+    writeOrigins(origins)
+    void outcome
+  })
 }
 
 /** What the last pull did, for the Settings panel that shows it. Null

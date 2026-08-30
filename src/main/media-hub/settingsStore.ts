@@ -27,6 +27,16 @@ import { sendToRenderer } from './rendererBridge'
 import type { ProfileRecord } from './profiles'
 
 export interface MediaHubRawSettings {
+  /**
+   * Whether plan-to-watch changes here reach the tracking services, and
+   * whether their removals reach this app.
+   *
+   * Absent means ON — every install that had the one-way pull gets the
+   * two-way behaviour, which is what somebody who connected an account
+   * was asking for. Off leaves the pull running and stops every write:
+   * see docs/WATCHLIST-SYNC.md, which is the agreement this implements.
+   */
+  watchlistTwoWay?: boolean
   onboardingVersion?: number
   /** Which version of the one-time anime watch-history id repair this
    *  install has had — see animeSyncRepair.ts. Absent on installs that

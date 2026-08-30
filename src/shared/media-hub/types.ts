@@ -660,6 +660,10 @@ export interface PlannedSyncReport {
   at: number
   services: PlannedServiceReport[]
   added: number
+  /** Titles removed locally because they left every service that had
+   *  them — only ever titles this app pulled in itself. See
+   *  docs/WATCHLIST-SYNC.md rule 2. */
+  removed: number
 }
 
 export interface DislikedListResult {
@@ -993,6 +997,9 @@ export interface MediaHubPublicSettings {
    * what you watched.
    */
   storeMedia: boolean
+  /** Whether watchlist changes travel both ways — see
+   *  docs/WATCHLIST-SYNC.md. */
+  watchlistTwoWay: boolean
 }
 
 export type CacheMode = 'disk' | 'memory'
