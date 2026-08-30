@@ -24,6 +24,7 @@
 import { app } from 'electron'
 import crypto from 'node:crypto'
 import fs from 'node:fs'
+import fsp from 'node:fs/promises'
 import path from 'node:path'
 
 import { MEDIA_HUB_CHANNELS } from '../../shared/media-hub/ipc-channels'
@@ -32,6 +33,7 @@ import type {
   MediaTracks,
   PlaybackResult,
   StreamCacheEntry,
+  StreamCacheUsage,
   SubtitleSelection,
   SubtitlesApplyResult
 } from '../../shared/media-hub/types'
@@ -57,6 +59,7 @@ import {
 import { readSettings } from './settingsStore'
 import { setPressure } from './taskScheduler'
 import {
+  cacheRootDir,
   clearAllSessions,
   createStreamCache,
   deleteCacheSession,
@@ -513,6 +516,24 @@ export function registerPlaybackIpc(): void {
   handle<undefined, StreamCacheEntry[]>(MEDIA_HUB_CHANNELS.streamCacheList, async () =>
     listCacheSessions(streamCache.getActiveToken())
   )
+
+  handle<undefined, StreamCacheUsage>(MEDIA_HUB_CHANNELS.streamCacheUsage, async () => {
+    const sessions = await listCacheSessions(streamCache.getActiveToken())
+    const directory = cacheRootDir()
+    let freeBytes: number | null = null
+    try {
+      const stat = await fsp.statfs(directory)
+      freeBytes = stat.bavail * stat.bsize
+    } catch {
+      // statfs is not universal. Null rather than 0: an absence is honest,
+      // and "0 bytes free" would be both alarming and untrue.
+    }
+    return {
+      usedBytes: sessions.reduce((sum, entry) => sum + entry.cachedBytes, 0),
+      freeBytes,
+      directory
+    }
+  })
 
   handle<{ token?: unknown } | undefined, { ok: true }>(
     MEDIA_HUB_CHANNELS.streamCacheDelete,

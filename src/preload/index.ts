@@ -80,6 +80,7 @@ import type {
   SkipTimes,
   SourcePreference,
   StreamCacheEntry,
+  StreamCacheUsage,
   StreamCandidate,
   StreamResolveResult,
   SubtitleResult,
@@ -627,7 +628,11 @@ const api = {
       list: (): Promise<StreamCacheEntry[]> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.streamCacheList),
       delete: (token: string): Promise<{ ok: true }> =>
-        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.streamCacheDelete, { token })
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.streamCacheDelete, { token }),
+      /** What is held and what is left, for the Downloads page's one
+       *  space line. */
+      usage: (): Promise<StreamCacheUsage> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.streamCacheUsage)
     },
 
     playback: {

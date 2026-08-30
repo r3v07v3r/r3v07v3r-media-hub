@@ -158,9 +158,28 @@
   height: 12px;
 }
 
+/* The one storage line, directly under the heading: what is here and
+   what is left. Quiet, because it is context rather than the content. */
+.spaceLine {
+  margin: -6px 0 4px;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
 .configureLink {
+  /* A button now, not a link — it opens the control centre rather than
+     navigating — so it has to be told not to look like one. */
+  align-self: flex-start;
+  padding: 0;
+  border: 0;
+  background: none;
   font-size: 12px;
   color: var(--accent-cyan);
+  cursor: pointer;
+}
+
+.configureLink:hover {
+  text-decoration: underline;
 }
 
 /* ---- Per-torrent actions ----------------------------------------------- */
