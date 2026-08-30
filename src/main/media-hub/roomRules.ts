@@ -12,7 +12,7 @@
 // dialect, and renaming the wire would silently split the room into two
 // populations that cannot see each other. Only the TypeScript names moved.
 
-import { decodeShareCode } from './party'
+import { decodeShareCode, encodeRoomShareCode } from './party'
 import type { RoomActivity, RoomMemberPresence } from '../../shared/media-hub/types'
 
 /** A member not heard from within this window is dropped from the local
@@ -199,9 +199,15 @@ export function rememberKicked(kicked: readonly string[] | undefined, friendId: 
 }
 
 /**
- * Re-encodes an invite code with a new display name, changing NOTHING
- * else — every other field, including ones this version of the app does
- * not know about, passes through verbatim.
+ * Re-encodes an invite code with a new display name, changing nothing
+ * else.
+ *
+ * It decodes and re-encodes through the typed codec rather than editing
+ * the code's bytes. The old JSON form let this pass unknown fields
+ * through verbatim; the packed form has no room for a field it cannot
+ * name, so a code is now rebuilt from exactly what the decoder
+ * understood — and a code that does not fully decode is not rewritten
+ * at all.
  *
  * Exists because the name lives in two places: the stored display name,
  * which renames update, and the invite code, which is what gets copied
@@ -217,14 +223,17 @@ export function rememberKicked(kicked: readonly string[] | undefined, friendId: 
  */
 export function withRoomName(code: string, name: string): string | null {
   const parsed = decodeShareCode(code)
-  if (!parsed || parsed.v === 1) return null
+  // Only a room code carries a name to change. A relay PARTY code has no
+  // name field at all, so there is nothing here to rename.
+  if (!parsed || parsed.v !== 4) return null
   try {
-    const raw = JSON.parse(Buffer.from(code, 'base64url').toString('utf8')) as Record<
-      string,
-      unknown
-    >
-    raw.name = String(name).slice(0, 40)
-    return Buffer.from(JSON.stringify(raw), 'utf8').toString('base64url')
+    return encodeRoomShareCode({
+      relay: parsed.relay,
+      secret: parsed.secret,
+      name: String(name).slice(0, 40),
+      admin: parsed.admin,
+      ...(parsed.join ? { join: parsed.join } : {})
+    })
   } catch {
     return null
   }
@@ -270,29 +279,3 @@ export interface StoredRoom {
  *  kicks more often than a straggler reconnects has bigger problems —
  *  the admin can always hand them the fresh code by hand. */
 export const PREV_SECRETS_KEPT = 5
-
-/**
- * Migrates the single pre-rooms friends group into the rooms list.
- *
- * The old group's creator token was deliberately discarded at creation
- * (a friends group was host-less by design), so the migrated room has NO
- * admin — that is the truth of it, not a defect to invent an admin for.
- * The old global sharing flag becomes this room's per-room setting, so
- * nobody's opt-in or opt-out changes meaning during the upgrade.
- */
-export function migrateLegacyRooms(settings: {
-  rooms?: StoredRoom[]
-  friendsGroupCode?: string
-  friendsShareActivity?: boolean
-}): { rooms: StoredRoom[]; changed: boolean } {
-  const rooms = Array.isArray(settings.rooms) ? [...settings.rooms] : []
-  const legacy = settings.friendsGroupCode
-  if (!legacy) return { rooms, changed: false }
-  if (rooms.some((room) => room.code === legacy)) return { rooms, changed: false }
-  rooms.push({
-    code: legacy,
-    name: 'Friends',
-    sharing: settings.friendsShareActivity === true
-  })
-  return { rooms, changed: true }
-}
