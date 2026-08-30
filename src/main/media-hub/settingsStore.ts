@@ -27,6 +27,16 @@ import { sendToRenderer } from './rendererBridge'
 import type { ProfileRecord } from './profiles'
 
 export interface MediaHubRawSettings {
+  /**
+   * Whether plan-to-watch changes here reach the tracking services, and
+   * whether their removals reach this app.
+   *
+   * Absent means ON — every install that had the one-way pull gets the
+   * two-way behaviour, which is what somebody who connected an account
+   * was asking for. Off leaves the pull running and stops every write:
+   * see docs/WATCHLIST-SYNC.md, which is the agreement this implements.
+   */
+  watchlistTwoWay?: boolean
   onboardingVersion?: number
   /** Which version of the one-time anime watch-history id repair this
    *  install has had — see animeSyncRepair.ts. Absent on installs that
@@ -446,6 +456,47 @@ export function malCredentials(): MalCredentials {
     refreshToken: decrypt(settings.malRefreshToken),
     expiresAt: Number(settings.malTokenExpiresAt) || 0
   }
+}
+
+/**
+ * The same mark, for Trakt and MyAnimeList.
+ *
+ * Written when two-way watchlist sync gained a memory of its own. That
+ * memory says "this app pulled this title in from Trakt", and the reason
+ * it exists is to justify DELETING the title later — so it has to be
+ * about one Trakt account rather than about Trakt. Nothing stops somebody
+ * authorizing a different account, and an unstamped record would let
+ * account B's snapshot be read as evidence that account A's title had
+ * been removed.
+ *
+ * Each salt is distinct so that the same token, were it ever accepted by
+ * two services, could not produce one mark that matched in both places.
+ * They are load-bearing in the same way simklAccountMark's is: changing
+ * one orphans every stamp already on disk, which reads as "somebody
+ * else's account" and quietly discards state — the safe direction, but
+ * not a free one.
+ */
+export function traktAccountMark(): string {
+  const { accessToken } = traktCredentials()
+  if (!accessToken) return ''
+  return crypto
+    .createHash('sha256')
+    .update(`trakt-account:${accessToken}`)
+    .digest('hex')
+    .slice(0, 16)
+}
+
+export function malAccountMark(): string {
+  const { accessToken } = malCredentials()
+  if (!accessToken) return ''
+  return crypto.createHash('sha256').update(`mal-account:${accessToken}`).digest('hex').slice(0, 16)
+}
+
+/** Every tracking service's mark at once, for the callers that stamp a
+ *  record touching more than one. Empty string means "not connected",
+ *  which must never compare equal to a stored stamp. */
+export function trackingAccountMarks(): { simkl: string; trakt: string; mal: string } {
+  return { simkl: simklAccountMark(), trakt: traktAccountMark(), mal: malAccountMark() }
 }
 
 export interface TmdbCredentials {

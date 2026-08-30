@@ -598,6 +598,26 @@ export interface ViewingStats {
  * "Rewatch with Dad", "Halloween", "Started and gave up" — and belong to
  * nobody but the person who made them.
  */
+/** A named list somebody built in Trakt or Simkl. Read-only here: a
+ *  named list has an author, and the first version of this feature
+ *  should not be able to reorder or empty one. */
+export interface RemoteList {
+  /** Service-qualified — two services can both have a list called
+   *  "Watchlist" and they are not the same list. */
+  id: string
+  service: 'simkl' | 'trakt'
+  name: string
+  description?: string
+  items: RemoteListEntry[]
+}
+
+export interface RemoteListEntry {
+  id: string
+  type: MediaKind
+  title: string
+  year?: string
+}
+
 export interface CustomList {
   id: string
   name: string
@@ -660,6 +680,10 @@ export interface PlannedSyncReport {
   at: number
   services: PlannedServiceReport[]
   added: number
+  /** Titles removed locally because they left every service that had
+   *  them — only ever titles this app pulled in itself. See
+   *  docs/WATCHLIST-SYNC.md rule 2. */
+  removed: number
 }
 
 export interface DislikedListResult {
@@ -993,6 +1017,9 @@ export interface MediaHubPublicSettings {
    * what you watched.
    */
   storeMedia: boolean
+  /** Whether watchlist changes travel both ways — see
+   *  docs/WATCHLIST-SYNC.md. */
+  watchlistTwoWay: boolean
 }
 
 export type CacheMode = 'disk' | 'memory'

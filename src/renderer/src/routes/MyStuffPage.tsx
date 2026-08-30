@@ -20,7 +20,7 @@ import type { MediaItem } from '@renderer/types'
 import type { CustomListItem, PlayRecord, ViewingStats } from '@shared/media-hub/types'
 import styles from './MyStuff.module.css'
 import { MediaGrid } from '@renderer/components/category/MediaGrid'
-import type { PlannedSyncReport } from '@shared/media-hub/types'
+import type { PlannedSyncReport, RemoteList } from '@shared/media-hub/types'
 import { PlannedFilters } from '@renderer/components/mystuff/PlannedFilters'
 import { UpcomingPlanned } from '@renderer/components/mystuff/UpcomingPlanned'
 import {
@@ -271,7 +271,7 @@ function syncWhen(at: number): string {
 }
 
 function ListsView({ watchlist }: { watchlist: MediaItem[] }) {
-  const { openDetail, libraryKey, plannedSources } = useAppState()
+  const { openDetail, libraryKey, plannedSources, catalog } = useAppState()
   const [filters, setFilters] = useState<PlannedFilterState>(EMPTY_PLANNED_FILTERS)
   const [report, setReport] = useState<PlannedSyncReport | null>(null)
   const [syncing, setSyncing] = useState(false)
@@ -306,6 +306,7 @@ function ListsView({ watchlist }: { watchlist: MediaItem[] }) {
     () => applyPlannedFilters(watchlist, filters, plannedSources),
     [watchlist, filters, plannedSources]
   )
+
   const { lists, loaded, create, rename, remove, removeItem } = useMediaHubLists(libraryKey)
   // null selects My List; a list id selects that one.
   const [selected, setSelected] = useState<string | null>(null)
@@ -323,6 +324,38 @@ function ListsView({ watchlist }: { watchlist: MediaItem[] }) {
   // than leaving the chips with nothing highlighted.
   const selectedList = lists.find((list) => list.id === selected) ?? null
   const effective = selectedList?.id ?? null
+
+  // THE LISTS SOMEBODY BUILT ELSEWHERE, read only.
+  //
+  // Named lists in Trakt and Simkl — "Halloween 2025", "Films Dad would
+  // like" — sit beside the ones made here rather than in a section of
+  // their own, because from where somebody is standing they are all just
+  // their lists. What tells them apart is the service badge on the chip
+  // and the fact that these cannot be edited: a named list has an author,
+  // and reading one is not permission to reorder it.
+  const [remoteLists, setRemoteLists] = useState<RemoteList[]>([])
+  useEffect(() => {
+    const api = window.api?.mediaHub?.lists
+    if (!api?.remoteLists) return
+    void api
+      .remoteLists()
+      .then((result) => setRemoteLists(result.lists))
+      .catch(() => {
+        // Nothing to show is the ordinary state for somebody who has made
+        // no lists; it is not worth an error.
+      })
+  }, [])
+  const selectedRemote = remoteLists.find((list) => list.id === selected) ?? null
+
+  // Matched against the catalog by id, so a remote list's rows carry this
+  // app's own artwork and ratings rather than the thin record the service
+  // returned. Anything the catalog has never seen is dropped: a card with
+  // no art and no detail page to open is not a row worth drawing.
+  const remoteListItems = useMemo(() => {
+    if (!selectedRemote) return []
+    const wanted = new Set(selectedRemote.items.map((entry) => entry.id))
+    return catalog.filter((media) => wanted.has(media.id))
+  }, [selectedRemote, catalog])
 
   useEffect(() => {
     if (!effective) return
@@ -373,6 +406,20 @@ function ListsView({ watchlist }: { watchlist: MediaItem[] }) {
             {list.name} <span className={styles.chipCount}>{list.count}</span>
           </button>
         ))}
+        {remoteLists.map((list) => (
+          <button
+            key={list.id}
+            type="button"
+            className={`${styles.chip} ${selected === list.id ? styles.chipActive : ''}`}
+            onClick={() => setSelected(list.id)}
+            title={list.description || `From ${list.service === 'trakt' ? 'Trakt' : 'Simkl'}`}
+          >
+            <span className={styles.chipService}>
+              {list.service === 'trakt' ? 'Trakt' : 'Simkl'}
+            </span>
+            {list.name} <span className={styles.chipCount}>{list.items.length}</span>
+          </button>
+        ))}
         {naming ? (
           <form
             className={styles.chipForm}
@@ -410,7 +457,29 @@ function ListsView({ watchlist }: { watchlist: MediaItem[] }) {
         )}
       </div>
 
-      {effective === null || !selectedList ? (
+      {selectedRemote ? (
+        <>
+          {/* Read only, and it says so rather than offering controls that
+              would fail. The titles open like any other; what is missing
+              is the rename, the delete and the per-row remove that a
+              local list carries. */}
+          <p className={styles.footnote}>
+            {selectedRemote.description
+              ? `${selectedRemote.description} — from ${
+                  selectedRemote.service === 'trakt' ? 'Trakt' : 'Simkl'
+                }, read only here.`
+              : `From ${
+                  selectedRemote.service === 'trakt' ? 'Trakt' : 'Simkl'
+                }. Read only here — edit it there.`}
+          </p>
+          <MediaGrid
+            showKind
+            items={remoteListItems}
+            emptyTitle="Nothing in this list"
+            emptyMessage="It is empty on the service, or holds only entries this app cannot open — people and episodes are skipped."
+          />
+        </>
+      ) : effective === null || !selectedList ? (
         <>
           {/* Where the list stands and how to refresh it, above the list
               itself. The time matters as much as the button: "planned"

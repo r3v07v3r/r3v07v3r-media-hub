@@ -12,21 +12,35 @@
 // season data) with no login at all, so there is no "your Kitsu list" to
 // fetch. Listing it as a source would be a promise nothing could keep.
 //
-// WHAT THIS DOES NOT DO is decide anything about removals. A title that
-// has left a remote list is not un-planned here, and a title planned here
-// is not pushed anywhere by this module. Pulling is safe and idempotent;
-// mirroring deletions in both directions needs a conflict policy that
-// nobody has designed yet, and guessing at one would delete somebody's
-// list. See the reconcile queue in tracking.ts for what that costs to do
-// properly.
+// IT SYNCS BOTH WAYS NOW, under the rules in docs/WATCHLIST-SYNC.md.
+// Read that before changing anything here — this is the first sync in the
+// app that can delete something somebody meant to keep, and the rules are
+// what stop it guessing.
+//
+// The one that matters most: A REMOVAL ONLY PROPAGATES INWARD IF THIS APP
+// SAW THE TITLE ARRIVE. Absent-from-a-service is an ambiguous state — it
+// means either "you added it here and the service has not heard" or "you
+// removed it there and this app has not heard", and a snapshot cannot
+// tell those apart. The origins record below is what makes it answerable:
+// a title this app pulled from Trakt, now gone from Trakt, was removed
+// there. A title with no recorded origin was added here and is pushed
+// out, never deleted.
 
 import { getDatabase } from './dbState'
 import { logError } from './logger'
 import { kitsuIdForExternal } from './idBridge'
 import { malRequest } from './malSync'
 import { simklRequest } from './simklClient'
-import { malCredentials, simklCredentials, traktCredentials } from './settingsStore'
+import {
+  malCredentials,
+  readSettings,
+  simklCredentials,
+  traktCredentials,
+  trackingAccountMarks
+} from './settingsStore'
 import { traktRequest } from './traktClient'
+import { failedServices, firstFailure, pushPlanEverywhere } from './watchlistPush'
+import { plannedRemovals, type PlannedOrigin } from './watchlistRules'
 import type { MediaKind } from '../../shared/media-hub/types'
 import type { TaskPriority } from './taskScheduler'
 
@@ -77,9 +91,170 @@ export interface PlannedSyncReport {
   services: PlannedServiceReport[]
   /** Titles newly added to the local list by this pull. */
   added: number
+  /** Titles removed locally because they left every service that had
+   *  them — only ever titles this app had pulled in itself. */
+  removed: number
 }
 
 const REPORT_CACHE_KEY = 'planned:last-sync'
+
+/**
+ * Where each pulled title came from, and when.
+ *
+ * The whole safety property of two-way sync rests on this. Written when a
+ * pull ADDS a title, never when somebody plans one here — so its presence
+ * is proof the app watched the title arrive from a service, and its
+ * absence is proof it did not. A first sync against an account nobody has
+ * pulled from before cannot delete anything, because nothing has an
+ * origin yet.
+ *
+ * Durable and long-lived on purpose: it is the app's memory of what came
+ * from where, and forgetting it turns a later removal into a guess.
+ */
+const ORIGINS_CACHE_KEY = 'planned:origins'
+const ORIGINS_TTL_MS = 365 * 24 * 60 * 60 * 1000
+
+type PlannedOrigins = Record<string, PlannedOrigin>
+
+function plannedOrigins(): PlannedOrigins {
+  return getDatabase().getCache<PlannedOrigins>(ORIGINS_CACHE_KEY, { allowExpired: true }) ?? {}
+}
+
+const ORDER: PlannedSource[] = ['simkl', 'trakt', 'mal']
+
+type AccountMarks = Partial<Record<PlannedSource, string>>
+
+/**
+ * Which of the stored account stamps still name the account connected
+ * now.
+ *
+ * Everything this file persists about a service is stamped with the
+ * connection it was made under — see settingsStore's simklAccountMark for
+ * why that is a stamp rather than a clear-on-sign-out. A service whose
+ * mark has changed is treated as one this app has never read: its tags
+ * are dropped and its origins can justify nothing.
+ */
+function trustedServices(stamped: AccountMarks | undefined): Set<PlannedSource> {
+  const now = trackingAccountMarks()
+  return new Set(ORDER.filter((service) => stamped?.[service] && stamped[service] === now[service]))
+}
+
+/** The tags map as stored: the map itself, plus who each service was when
+ *  it was written. */
+interface StoredSources {
+  marks: AccountMarks
+  sources: PlannedSources
+}
+
+function writeOrigins(origins: PlannedOrigins): void {
+  getDatabase().putCache(ORIGINS_CACHE_KEY, origins, ORIGINS_TTL_MS, { durable: true })
+}
+
+/** Whether the person has asked for changes here to reach the services.
+ *  Off leaves the pull running and stops every write — see the doc. */
+export function twoWaySyncEnabled(): boolean {
+  return readSettings().watchlistTwoWay !== false
+}
+
+/**
+ * Removals that were made here and have not reached a service yet.
+ *
+ * Without this, a failed remote removal quietly undoes itself: the title
+ * is gone locally, the next pull still finds it on the service, and the
+ * add loop puts it straight back — reversing something somebody did on
+ * purpose, with no sign that anything went wrong.
+ *
+ * So a removal that fails is kept, retried at the start of each sync, and
+ * suppresses the re-add in the meantime. Stamped per service like
+ * everything else here: a queued removal belongs to the account it was
+ * made against, and must never be delivered to a different one.
+ */
+const PENDING_CACHE_KEY = 'planned:pending-removals'
+const PENDING_TTL_MS = 30 * 24 * 60 * 60 * 1000
+/** Where "keep trying" stops being honest. After this the entry is
+ *  dropped and a later pull is allowed to add the title back — which is
+ *  the truth of the situation: it is still on their list at the service,
+ *  and pretending otherwise hides a failure rather than fixing it. */
+const PENDING_MAX_ATTEMPTS = 10
+
+interface PendingRemoval {
+  item: { id: string; type: MediaKind; title: string; year?: string }
+  /** The services still owed a removal. Shrinks as they succeed. */
+  services: PlannedSource[]
+  attempts: number
+  at: number
+  marks: AccountMarks
+  lastError?: string
+}
+
+type PendingRemovals = Record<string, PendingRemoval>
+
+/** Queued removals belonging to the accounts connected right now.
+ *  Anything stamped otherwise is dropped on sight. */
+function pendingRemovals(): PendingRemovals {
+  const stored = getDatabase().getCache<PendingRemovals>(PENDING_CACHE_KEY, { allowExpired: true })
+  if (!stored) return {}
+  const out: PendingRemovals = {}
+  for (const [id, entry] of Object.entries(stored)) {
+    const trusted = trustedServices(entry.marks)
+    const services = entry.services.filter((service) => trusted.has(service))
+    if (services.length) out[id] = { ...entry, services }
+  }
+  return out
+}
+
+function writePendingRemovals(pending: PendingRemovals): void {
+  getDatabase().putCache(PENDING_CACHE_KEY, pending, PENDING_TTL_MS, { durable: true })
+}
+
+/**
+ * Tries the queued removals again, before the pull that would otherwise
+ * undo them.
+ *
+ * Only the services that still owe one are asked — the ones that already
+ * succeeded are not re-sent, so the outcome keeps meaning what it says.
+ * `onServices` carries the original evidence through, which is what keeps
+ * Simkl's unscoped removal gated on the retry exactly as it was the first
+ * time.
+ */
+async function retryPendingRemovals(): Promise<void> {
+  const pending = pendingRemovals()
+  const ids = Object.keys(pending)
+  if (!ids.length) return
+  if (!twoWaySyncEnabled()) return
+  const origins = plannedOrigins()
+  let touchedOrigins = false
+  for (const id of ids) {
+    const entry = pending[id]
+    const outcome = await pushPlanEverywhere(entry.item, false, {
+      onServices: entry.services,
+      only: entry.services
+    })
+    const failed = failedServices(outcome)
+    if (!failed.length) {
+      delete pending[id]
+      if (origins[id]) {
+        delete origins[id]
+        touchedOrigins = true
+      }
+      continue
+    }
+    entry.services = failed
+    entry.attempts += 1
+    entry.lastError = firstFailure(outcome)
+    if (entry.attempts >= PENDING_MAX_ATTEMPTS) {
+      logError(
+        'watchlists:removal-abandoned',
+        new Error(
+          `gave up removing ${id} from ${failed.join(', ')}: ${entry.lastError ?? 'unknown'}`
+        )
+      )
+      delete pending[id]
+    }
+  }
+  writePendingRemovals(pending)
+  if (touchedOrigins) writeOrigins(origins)
+}
 
 interface SimklIds {
   imdb?: string
@@ -274,6 +449,14 @@ async function fetchMalPlanned(): Promise<{ entries: PlannedEntry[]; unmapped: n
 export async function syncPlannedFromServices(
   priority: TaskPriority = 'background'
 ): Promise<PlannedSyncReport> {
+  // First, because the pull is what would undo them: a removal still
+  // owed to a service is a title the service still lists, and the add
+  // loop below would put it back.
+  try {
+    await retryPendingRemovals()
+  } catch (error) {
+    logError('watchlists:retry-removals', error)
+  }
   const connected = {
     simkl: Boolean(simklCredentials().accessToken),
     trakt: Boolean(traktCredentials().accessToken),
@@ -284,11 +467,12 @@ export async function syncPlannedFromServices(
     fetchTraktPlanned(priority),
     fetchMalPlanned()
   ])
-  const order: PlannedSource[] = ['simkl', 'trakt', 'mal']
   const entries: PlannedEntry[] = []
   const services: PlannedServiceReport[] = []
   settled.forEach((result, index) => {
-    const service = order[index]
+    // Same order as the Promise.allSettled above, which is why ORDER is
+    // one shared constant rather than a literal in each place.
+    const service = ORDER[index]
     if (result.status === 'fulfilled') {
       entries.push(...result.value.entries)
       services.push({
@@ -312,17 +496,34 @@ export async function syncPlannedFromServices(
     })
   })
 
-  const report = (added: number): PlannedSyncReport => {
-    const full = { at: Date.now(), services, added }
+  const report = (added: number, removed = 0): PlannedSyncReport => {
+    const full = { at: Date.now(), services, added, removed }
     getDatabase().putCache(REPORT_CACHE_KEY, full, SOURCES_TTL_MS, { durable: true })
     return full
   }
 
-  // Nothing came back at all. The sources map is deliberately NOT cleared:
-  // every service being unreachable is not evidence that anybody's list is
-  // empty, and wiping the tags on that basis would make an outage look
-  // like somebody had deleted their watchlists.
-  if (!entries.length) return report(0)
+  // --- which services are actually evidence this pass -------------------
+  //
+  // Computed BEFORE anything short-circuits, because "answered and empty"
+  // and "did not answer" are the two states this whole feature turns on.
+  // A title is absent from a list that failed to load in exactly the same
+  // way it is absent from an empty one — see rule 5.
+  const answered = new Set(
+    services.filter((entry) => entry.connected && !entry.error).map((entry) => entry.service)
+  )
+
+  // Nothing answered — not "nothing is planned". The sources map is
+  // deliberately NOT touched: every service being unreachable is not
+  // evidence that anybody's list is empty, and wiping the tags on that
+  // basis would make an outage look like somebody had deleted their
+  // watchlists.
+  //
+  // An EMPTY answer is a different thing entirely and falls through:
+  // somebody whose last remotely-planned title has just been removed
+  // gets an empty list from every service, and that is the most ordinary
+  // removal there is. Stopping here would mean the one case the inward
+  // half exists for never ran.
+  if (answered.size === 0) return report(0)
 
   const sources: PlannedSources = {}
   for (const entry of entries) {
@@ -330,9 +531,25 @@ export async function syncPlannedFromServices(
     if (!list.includes(entry.source)) list.push(entry.source)
     sources[entry.id] = list
   }
+  // Tags belonging to a service that did NOT answer are carried over from
+  // the last pull rather than dropped, for the same reason as above — and
+  // it matters twice, because this map is also the "somebody still has
+  // it" evidence the removal rule reads. Carrying a stale tag can only
+  // ever hold a removal back.
+  for (const [id, list] of Object.entries(plannedSources())) {
+    const kept = list.filter((service) => !answered.has(service))
+    if (!kept.length) continue
+    const merged = sources[id] ?? []
+    for (const service of kept) if (!merged.includes(service)) merged.push(service)
+    sources[id] = merged
+  }
 
   const db = getDatabase()
   const alreadyTracked = new Set(db.tracked().map((item) => String(item.id)))
+  // A title whose removal has not reached its service yet is still on the
+  // service's list, so the pull finds it. Adding it back would undo, in
+  // silence, something somebody did on purpose.
+  const awaitingRemoval = new Set(Object.keys(pendingRemovals()))
   let added = 0
   // One row per id, not per entry: a film on all three lists is one title
   // planned three times over, not three titles.
@@ -341,16 +558,122 @@ export async function syncPlannedFromServices(
     if (seen.has(entry.id)) continue
     seen.add(entry.id)
     if (alreadyTracked.has(entry.id)) continue
+    if (awaitingRemoval.has(entry.id)) continue
     try {
       db.track({ id: entry.id, type: entry.type, title: entry.title, year: entry.year })
+      rememberOrigin(entry.id, entry.source)
       added += 1
     } catch (error) {
       logError('watchlists:track', error)
     }
   }
 
-  db.putCache(PLANNED_SOURCES_CACHE_KEY, sources, SOURCES_TTL_MS, { durable: true })
-  return report(added)
+  const stored: StoredSources = { marks: trackingAccountMarks(), sources }
+  db.putCache(PLANNED_SOURCES_CACHE_KEY, stored, SOURCES_TTL_MS, { durable: true })
+
+  // --- the inward half of two-way: what has LEFT the services ----------
+  let removed = 0
+  if (twoWaySyncEnabled()) {
+    const origins = plannedOrigins()
+    const marks = trackingAccountMarks()
+    // The decision lives in watchlistRules, which has no database or
+    // network in it and is tested directly. This half just carries it
+    // out — a second copy of the reasoning here is how the tested rule
+    // and the shipped behaviour drift apart.
+    const doomed = plannedRemovals({
+      tracked: db.tracked().map((item) => String(item.id)),
+      origins,
+      sources,
+      answered,
+      // Whose accounts these are right now. An origin stamped with a
+      // different login is not evidence about the list in front of us.
+      accounts: marks
+    })
+    for (const id of doomed) {
+      try {
+        db.untrack(id)
+        delete origins[id]
+        removed += 1
+      } catch (error) {
+        logError('watchlists:untrack', error)
+      }
+    }
+    // Origins for titles already gone locally are dropped too, so the
+    // record does not grow a tail of entries about things nobody has.
+    for (const id of Object.keys(origins)) {
+      if ((sources[id] ?? []).length === 0 && !db.isTracked(id)) delete origins[id]
+    }
+    writeOrigins(origins)
+  }
+
+  return report(added, removed)
+}
+
+/**
+ * Records that a pull put this title on the local list.
+ *
+ * Called only from the add loop above. Anything planned in this app has
+ * no entry here, which is precisely what protects it from ever being
+ * removed by a pull.
+ */
+function rememberOrigin(id: string, source: PlannedSource): void {
+  const origins = plannedOrigins()
+  if (origins[id]) return
+  // Stamped with the account it arrived from, not just the service. The
+  // record's whole job is to justify a deletion later, and "it came from
+  // Trakt" stops being a reason the moment somebody signs into a
+  // different Trakt.
+  origins[id] = { source, addedAt: Date.now(), account: trackingAccountMarks()[source] }
+  writeOrigins(origins)
+}
+
+/**
+ * Sends a local plan/un-plan out to every connected service.
+ *
+ * Fire-and-forget from the caller's point of view: the IPC that toggles a
+ * title answers immediately on the local write, because making somebody
+ * wait on three third-party APIs to see a button change state is the
+ * wrong trade. Failures are logged per service by the push itself.
+ */
+export function pushLocalPlanChange(
+  item: { id: string; type: MediaKind; title: string; year?: string },
+  planned: boolean
+): void {
+  if (!twoWaySyncEnabled()) return
+  // What the last pull found holding this title. A removal at a service
+  // whose delete is not scoped to the watchlist is only sent with that
+  // evidence in hand — see simklPlan, where sending it without evidence
+  // would erase watch history rather than a list row.
+  const onServices = planned ? [] : (plannedSources()[item.id] ?? [])
+  void pushPlanEverywhere(item, planned, { onServices }).then((outcome) => {
+    if (planned) return
+    const failed = failedServices(outcome)
+    if (failed.length) {
+      // Kept, retried at the next sync, and suppressing the re-add until
+      // then. The origin stays too: it is still true that this title came
+      // from that service, and it is what the retry's success will clear.
+      const pending = pendingRemovals()
+      pending[item.id] = {
+        item,
+        services: failed,
+        attempts: 1,
+        at: Date.now(),
+        marks: trackingAccountMarks(),
+        lastError: firstFailure(outcome)
+      }
+      writePendingRemovals(pending)
+      return
+    }
+    // Nothing left owed, so this app's memory of where the title came
+    // from ends here. Keeping it would let the next pull see an origin
+    // with no remote presence and "remove" something already gone —
+    // harmless, but it would also resurrect the entry if the person
+    // re-planned it here.
+    const origins = plannedOrigins()
+    if (!origins[item.id]) return
+    delete origins[item.id]
+    writeOrigins(origins)
+  })
 }
 
 /** What the last pull did, for the Settings panel that shows it. Null
@@ -362,7 +685,21 @@ export function lastPlannedSyncReport(): PlannedSyncReport | null {
 /** Whatever the last pull recorded. Expired is still worth showing: a
  *  stale tag is a better answer than none, and the next pull corrects it. */
 export function plannedSources(): PlannedSources {
-  return (
-    getDatabase().getCache<PlannedSources>(PLANNED_SOURCES_CACHE_KEY, { allowExpired: true }) ?? {}
-  )
+  const stored = getDatabase().getCache<StoredSources>(PLANNED_SOURCES_CACHE_KEY, {
+    allowExpired: true
+  })
+  // The unstamped shape written by earlier versions is discarded rather
+  // than read: it cannot say which account its tags belong to, and the
+  // next pull rewrites it within the minute.
+  if (!stored?.sources) return {}
+  const trusted = trustedServices(stored.marks)
+  const out: PlannedSources = {}
+  for (const [id, list] of Object.entries(stored.sources)) {
+    // A tag from an account nobody is signed into any more is not this
+    // person's tag. Dropping it costs a badge until the next pull;
+    // showing it tells somebody their list is on an account it is not.
+    const kept = list.filter((service) => trusted.has(service))
+    if (kept.length) out[id] = kept
+  }
+  return out
 }

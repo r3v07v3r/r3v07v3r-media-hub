@@ -81,6 +81,7 @@ import type {
   SourcePreference,
   StreamCacheEntry,
   PlannedSyncReport,
+  RemoteList,
   StreamCacheUsage,
   StreamCandidate,
   StreamResolveResult,
@@ -507,6 +508,10 @@ const api = {
        *  before anybody presses the button. */
       plannedReport: (): Promise<PlannedSyncReport | null> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.trackingPlannedReport),
+      /** Turn two-way watchlist sync on or off — see
+       *  docs/WATCHLIST-SYNC.md for what each direction does. */
+      setWatchlistTwoWay: (enabled: boolean): Promise<{ watchlistTwoWay: boolean }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.trackingSetTwoWay, { enabled }),
       toggle: (item: TrackableItem): Promise<{ tracked: boolean }> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.trackingToggle, item),
       markWatched: (payload: MarkWatchedPayload): Promise<MarkWatchedResult> =>
@@ -548,6 +553,9 @@ const api = {
     },
 
     lists: {
+      /** Named lists from Trakt and Simkl, read-only. */
+      remoteLists: (): Promise<{ lists: RemoteList[] }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.listsRemote),
       list: (): Promise<{ lists: CustomList[] }> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.listsList),
       create: (name: string): Promise<{ lists: CustomList[]; created: CustomList }> =>

@@ -65,6 +65,7 @@ import { catalogData, metadata } from './catalog'
 import { getDatabase } from './dbState'
 import {
   lastPlannedSyncReport,
+  pushLocalPlanChange,
   plannedSources,
   syncPlannedFromServices,
   type PlannedSyncReport
@@ -88,6 +89,8 @@ import {
   writeSettings
 } from './settingsStore'
 import { sendToRenderer } from './rendererBridge'
+import { cachedRemoteLists, fetchRemoteLists } from './remoteLists'
+import type { RemoteList } from '../../shared/media-hub/types'
 import {
   batchHistoryPayload,
   historyPayload,
@@ -1139,12 +1142,59 @@ export function registerTrackingIpc(): void {
     lastPlannedSyncReport()
   )
 
+  /**
+   * Named lists from the services, read only.
+   *
+   * Answers from cache first and refreshes behind it: reading these
+   * costs one request per list, and somebody opening My Stuff should
+   * not wait on thirty of them to see a name they saw this morning.
+   */
+  handle<undefined, { lists: RemoteList[] }>(MEDIA_HUB_CHANNELS.listsRemote, async () => {
+    const cached = cachedRemoteLists()
+    if (cached.length > 0) {
+      void fetchRemoteLists('background').catch(() => {
+        // Logged inside; the cached answer already went out.
+      })
+      return { lists: cached }
+    }
+    return { lists: await fetchRemoteLists('visible') }
+  })
+
+  handle<{ enabled?: boolean }, { watchlistTwoWay: boolean }>(
+    MEDIA_HUB_CHANNELS.trackingSetTwoWay,
+    (_e, payload) => {
+      const settings = readSettings()
+      const enabled = payload?.enabled !== false
+      settings.watchlistTwoWay = enabled
+      writeSettings(settings)
+      // The origins record is deliberately KEPT when this is turned
+      // off. It is the app's memory of what came from where, and
+      // discarding it would mean turning the setting back on later
+      // starts with no history — which is exactly the state in which
+      // a removal cannot be told apart from an addition.
+      return { watchlistTwoWay: enabled }
+    }
+  )
+
   handle<TrackableItem, { tracked: boolean }>(MEDIA_HUB_CHANNELS.trackingToggle, (_e, item) => {
     const db = getDatabase()
     const tracked = db.isTracked(item.id)
     if (tracked) db.untrack(item.id)
     else db.track(item)
     requestRecommendationsRebuild()
+    // Out to the services, without making anybody wait for it. Three
+    // third-party APIs between pressing Plan to Watch and the button
+    // changing state is the wrong trade; the local write is the answer,
+    // and the push reports its own failures.
+    pushLocalPlanChange(
+      {
+        id: String(item.id),
+        type: (item.type ?? 'movie') as MediaKind,
+        title: String(item.title ?? ''),
+        year: item.year ? String(item.year) : undefined
+      },
+      !tracked
+    )
     return { tracked: !tracked }
   })
 
