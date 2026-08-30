@@ -8,6 +8,8 @@ import { ArtworkImage } from '@renderer/components/media/ArtworkImage'
 import { WatchStatusBadge } from '@renderer/components/media/WatchStatusBadge'
 import { getWatchStatus } from '@renderer/lib/mediaHub/watchStatus'
 import styles from './RecommendationCarousel.module.css'
+import { RatingBadge } from '@renderer/components/detail/RatingBadge'
+import { ratingSourceFor } from '@renderer/components/detail/ratingSource'
 
 const MATCH_CLASS: Record<string, string> = {
   excellent: styles.matchExcellent,
@@ -107,25 +109,17 @@ export function MediaCard({ media, reason }: { media: MediaItem; reason?: string
             </span>
           )}
           <span className={styles.cardTitle}>{media.title}</span>
-          {/* 10-foot-interface pass: "★ 8.6   IMDb 8.6 / 93% Match" hierarchy
-              — star+rating is now the bright primary group, a vertical
-              divider visually separates it from the dimmer secondary IMDb
-              figure, rather than both reading as one flat, equal-weight
-              string. */}
+          {/* This used to read "★ 8.6 | IMDb 8.6" and was described as a
+              hierarchy of two figures. It was one figure: communityRating
+              and imdbRating come from the same field. Now it is shown once,
+              with the source that actually produced it. */}
           <div className={styles.cardRatings}>
-            {media.communityRating && (
-              <span className={styles.ratingStar}>
-                <Icon name="star" />
-                {media.communityRating.toFixed(1)}
-              </span>
-            )}
-            {media.imdbRating && (
-              <>
-                {media.communityRating && (
-                  <span className={styles.ratingDivider} aria-hidden="true" />
-                )}
-                <span className={styles.ratingImdb}>IMDb {media.imdbRating.toFixed(1)}</span>
-              </>
+            {(media.imdbRating ?? media.communityRating) && (
+              <RatingBadge
+                compact
+                source={ratingSourceFor(media.mediaKind)}
+                value={(media.imdbRating ?? media.communityRating ?? 0).toFixed(1)}
+              />
             )}
           </div>
           {media.matchPercentage !== undefined && (

@@ -21,6 +21,8 @@ import { useRestoreBrowsingOrigin } from '@renderer/lib/mediaHub/useRestoreBrows
 import { useBatchReveal } from '@renderer/lib/mediaHub/useBatchReveal'
 import { CategoryFilterBar } from './CategoryFilterBar'
 import styles from './AnimeLibraryPage.module.css'
+import { RatingBadge } from '@renderer/components/detail/RatingBadge'
+import { ratingSourceFor } from '@renderer/components/detail/ratingSource'
 
 /** EverythingSection's reveal batch size — how many more tiles mount each
  *  time the scroll sentinel comes into view. */
@@ -307,8 +309,9 @@ function LibraryDetails({ media, config }: { media: MediaItem | null; config: Ca
   }
 
   const artwork = resolveArtwork(media)
-  const communityRating = score(media)
-  const imdbRating = media.imdbRating?.toFixed(1)
+  // The two fields carry the same number; prefer the one named for what it
+  // is, and fall back so a future item with only the other still shows.
+  const crowdRating = media.imdbRating?.toFixed(1) ?? score(media) ?? undefined
   const rottenTomatoesRating = media.rottenTomatoesRating
   const isResolving = resolvingMedia?.id === media.id
 
@@ -337,27 +340,22 @@ function LibraryDetails({ media, config }: { media: MediaItem | null; config: Ca
         </div>
       </div>
 
+      {/* ONE crowd figure, not the same one twice. communityRating and
+          imdbRating are both filled from CatalogItem.rating (adapters.ts),
+          so "Community 7.8" beside "IMDb 7.8" was a single number wearing
+          two hats — which reads as two sources agreeing when there is only
+          ever one. Labelled by where it actually came from: IMDb for films
+          and series, whose ids ARE IMDb ids, and Kitsu for anime, which has
+          no IMDb id at all. Rotten Tomatoes joins it when OMDb is connected
+          and has an entry; that one is genuinely independent. */}
       <div className={styles.detailScores}>
-        {communityRating && (
-          <span>
-            <Icon name="star" size={15} />
-            <b>{communityRating}</b>
-            Community
-          </span>
-        )}
-        {imdbRating && (
-          <span>
-            <b>{imdbRating}</b>
-            IMDb
-          </span>
+        {crowdRating && (
+          <RatingBadge source={ratingSourceFor(media.mediaKind)} value={crowdRating} />
         )}
         {rottenTomatoesRating !== undefined && (
-          <span>
-            <b>{rottenTomatoesRating}%</b>
-            Rotten Tomatoes
-          </span>
+          <RatingBadge source="rottenTomatoes" value={`${rottenTomatoesRating}%`} />
         )}
-        {!communityRating && !imdbRating && rottenTomatoesRating === undefined && (
+        {!crowdRating && rottenTomatoesRating === undefined && (
           <span>
             <b>—</b>
             Ratings unavailable

@@ -7,6 +7,8 @@ import { Icon } from '@renderer/components/icons/Icon'
 import { resolveArtwork } from '@renderer/lib/artwork'
 import { ArtworkImage } from '@renderer/components/media/ArtworkImage'
 import styles from './ContinueWatchingPanel.module.css'
+import { RatingBadge } from '@renderer/components/detail/RatingBadge'
+import { ratingSourceFor } from '@renderer/components/detail/ratingSource'
 
 export interface ContinueWatchingPanelProps {
   /** Restricts the row to one kind — used by the Movies/Series/Anime
@@ -116,20 +118,16 @@ export function ContinueWatchingPanel({ kindFilter, className }: ContinueWatchin
                         </div>
                       </>
                     )}
+                    {/* One figure, named for its source. The star and the
+                        IMDb line were the same number twice — see
+                        RatingBadge. */}
                     <div className={styles.ratings}>
-                      {m.communityRating && (
-                        <span className={styles.ratingStar}>
-                          <Icon name="star" />
-                          {m.communityRating.toFixed(1)}
-                        </span>
-                      )}
-                      {m.imdbRating && (
-                        <>
-                          {m.communityRating && (
-                            <span className={styles.ratingDivider} aria-hidden="true" />
-                          )}
-                          <span className={styles.ratingImdb}>IMDb {m.imdbRating.toFixed(1)}</span>
-                        </>
+                      {(m.imdbRating ?? m.communityRating) && (
+                        <RatingBadge
+                          compact
+                          source={ratingSourceFor(m.mediaKind)}
+                          value={(m.imdbRating ?? m.communityRating ?? 0).toFixed(1)}
+                        />
                       )}
                     </div>
                   </div>
