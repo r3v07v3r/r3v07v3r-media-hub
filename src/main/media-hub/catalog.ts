@@ -28,8 +28,7 @@ import type {
   Episode,
   MediaKind,
   PersonCreditsResult,
-  TitleCollectionResult,
-  WatchProvidersResult
+  TitleCollectionResult
 } from '../../shared/media-hub/types'
 import { MEDIA_HUB_CHANNELS } from '../../shared/media-hub/ipc-channels'
 import { fetchJson } from './httpClient'
@@ -65,7 +64,7 @@ import { omdbRottenTomatoesRating } from './omdb'
 import { searchCredits, titleCredits, titlesFeaturing } from './credits'
 import { titleCollection } from './collection'
 import { contentRating } from './contentRating'
-import { watchProviders, watchRegion } from './watchProviders'
+import { watchRegion } from './watchProviders'
 
 const catalogUrls: Record<'movie' | 'series', string> = {
   movie: 'https://v3-cinemeta.strem.io/catalog/movie/top.json',
@@ -1240,15 +1239,11 @@ export function registerCatalogIpc(): void {
     }
   )
 
-  handle<{ type: MediaKind; id: string }, WatchProvidersResult>(
-    MEDIA_HUB_CHANNELS.catalogProviders,
-    async (_e, payload) => {
-      const type = payload?.type
-      if (!isValidCatalogKind(type))
-        return { region: watchRegion(), stream: [], rent: [], buy: [], link: '' }
-      return watchProviders(type, String(payload?.id ?? ''))
-    }
-  )
+  // catalog:providers is gone with the panel it fed. It was a TMDB
+  // round trip per detail page for JustWatch rent-and-buy links —
+  // a request and a parse for the one thing somebody using this app
+  // is least likely to want. watchRegion stays: contentRating and the
+  // settings snapshot both still need to know the region.
 
   handle<{ type: MediaKind; id: string }, { rating: string; region: string }>(
     MEDIA_HUB_CHANNELS.catalogRating,

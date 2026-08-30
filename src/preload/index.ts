@@ -97,7 +97,6 @@ import type {
   UpdateCheckResult,
   UpdateStatusPayload,
   ViewingStats,
-  WatchProvidersResult,
   WatchStatusDiscrepancy
 } from '../shared/media-hub/types'
 import type { OllamaTitleRef } from '../shared/media-hub/ollama'
@@ -477,8 +476,6 @@ const api = {
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.catalogStory, { type, id }),
       person: (person: string): Promise<PersonCreditsResult> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.catalogPerson, { person }),
-      providers: (type: MediaKind, id: string): Promise<WatchProvidersResult> =>
-        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.catalogProviders, { type, id }),
       collection: (id: string): Promise<TitleCollectionResult> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.catalogCollection, { id }),
       rating: (type: MediaKind, id: string): Promise<{ rating: string; region: string }> =>
