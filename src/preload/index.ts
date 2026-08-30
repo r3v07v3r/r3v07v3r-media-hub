@@ -501,6 +501,10 @@ const api = {
 
     tracking: {
       list: (): Promise<TrackingListResult> => ipcRenderer.invoke(MEDIA_HUB_CHANNELS.trackingList),
+      /** Pull plan-to-watch from every connected tracking service now,
+       *  rather than waiting for the background pass. */
+      syncPlanned: (): Promise<{ added: number }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.trackingPlannedSync),
       toggle: (item: TrackableItem): Promise<{ tracked: boolean }> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.trackingToggle, item),
       markWatched: (payload: MarkWatchedPayload): Promise<MarkWatchedResult> =>

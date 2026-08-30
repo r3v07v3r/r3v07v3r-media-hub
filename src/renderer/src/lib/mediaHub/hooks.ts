@@ -35,6 +35,7 @@ import {
   catalogItemToRecommendation,
   continueWatchingEntryToItem
 } from './adapters'
+import type { PlannedServiceId } from '@shared/media-hub/types'
 import {
   applyTrackingState,
   mergeRememberedCatalog,
@@ -61,7 +62,8 @@ const EMPTY_HOME_FEED = {
   recommendations: [] as Recommendation[],
   featured: [] as MediaItem[],
   preferredGenres: [] as string[],
-  trackedIds: new Set<string>()
+  trackedIds: new Set<string>(),
+  plannedSources: {} as Record<string, PlannedServiceId[]>
 }
 
 /** True in the real (Electron) app, false in the plain-browser preview build used for visual QA. */
@@ -119,7 +121,14 @@ function startupHomeFeedFallback(): typeof EMPTY_HOME_FEED {
       // backend's *toggle*, which removed a title the person had saved.
       // The last known truth, corrected the moment `live` lands, beats a
       // confident falsehood that loses data on click.
-      trackedIds: new Set(remembered.trackedIds)
+      trackedIds: new Set(remembered.trackedIds),
+      // Not remembered across launches. A tag claiming a title is on
+      // somebody's Trakt list is a statement about Trakt, and repeating
+      // it from a month-old snapshot before anything has asked Trakt is
+      // the kind of confident staleness the trackedIds note above is
+      // about — except here there is no data to lose by waiting, so it
+      // simply starts empty and fills in on the first feed.
+      plannedSources: EMPTY_HOME_FEED.plannedSources
     }
   }
   return homeFeedFallback
@@ -804,6 +813,9 @@ export interface HomeFeedResult {
   featured: MediaItem[]
   preferredGenres: string[]
   trackedIds: Set<string>
+  /** Which tracking services have each planned title, for the tag on a
+   *  card. Sparse — no entry means planned here and nowhere else. */
+  plannedSources: Record<string, PlannedServiceId[]>
   loading: boolean
   live: boolean
   /** The last home:personalized attempt threw.
@@ -875,7 +887,8 @@ export function useMediaHubHomeFeed(libraryKey: string): HomeFeedResult {
             .slice(0, 6)
             .map((item) => catalogItemToMediaItem(item, { trackedIds })),
           preferredGenres: result.preferredGenres,
-          trackedIds
+          trackedIds,
+          plannedSources: result.plannedSources ?? {}
         }
         setState(next)
         // This is the part of the snapshot that matters most: the hero,

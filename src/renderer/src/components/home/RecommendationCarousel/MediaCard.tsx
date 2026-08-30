@@ -10,6 +10,7 @@ import { getWatchStatus } from '@renderer/lib/mediaHub/watchStatus'
 import styles from './RecommendationCarousel.module.css'
 import { RatingBadge } from '@renderer/components/detail/RatingBadge'
 import { ratingSourceFor } from '@renderer/components/detail/ratingSource'
+import type { PlannedServiceId } from '@shared/media-hub/types'
 
 const MATCH_CLASS: Record<string, string> = {
   excellent: styles.matchExcellent,
@@ -18,12 +19,31 @@ const MATCH_CLASS: Record<string, string> = {
   low: styles.matchLow
 }
 
+/** Their own names, as those services write them. */
+const SOURCE_LABELS: Record<PlannedServiceId, string> = {
+  simkl: 'Simkl',
+  trakt: 'Trakt',
+  mal: 'MyAnimeList'
+}
+
 export function MediaCard({ media, reason }: { media: MediaItem; reason?: string }) {
+  const { plannedSources } = useAppState()
   const { openDetail, startPartyPlayback, openContextMenu, continueWatching, resolvingMedia } =
     useAppState()
   const artwork = resolveArtwork(media)
   const watchStatus = getWatchStatus(media, continueWatching)
   const isResolving = resolvingMedia?.id === media.id
+
+  // One label for however many services agree, because three chips in a
+  // row on a poster is noise and the useful fact is that it is on a list
+  // somewhere else at all. The tooltip carries the detail.
+  const sources = plannedSources[String(media.id)] ?? []
+  const plannedTag =
+    sources.length === 0
+      ? ''
+      : sources.length === 1
+        ? SOURCE_LABELS[sources[0]]
+        : `${sources.length} lists`
 
   function handleContextMenu(e: React.MouseEvent) {
     e.preventDefault()
@@ -109,6 +129,17 @@ export function MediaCard({ media, reason }: { media: MediaItem; reason?: string
             </span>
           )}
           <span className={styles.cardTitle}>{media.title}</span>
+          {/* WHERE THIS CAME FROM, when it came from somewhere.
+              A title on somebody's Trakt or Simkl watchlist is on this
+              list because of a decision they made months ago in another
+              app — and without saying so, a list pulled in from three
+              services looks like one this app invented. Absent for
+              anything planned here, which needs no explanation. */}
+          {plannedTag && (
+            <span className={styles.plannedChip} title={`On your ${plannedTag} watchlist`}>
+              {plannedTag}
+            </span>
+          )}
           {/* This used to read "★ 8.6 | IMDb 8.6" and was described as a
               hierarchy of two figures. It was one figure: communityRating
               and imdbRating come from the same field. Now it is shown once,
