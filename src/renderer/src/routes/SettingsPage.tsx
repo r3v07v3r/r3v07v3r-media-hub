@@ -849,7 +849,10 @@ export default function SettingsPage({
   const [generalGridBinding, generalGroupBinding] = useColumnPackGrid<HTMLElement>(!embedded)
   const [playbackGridBinding, playbackGroupBinding] = useColumnPackGrid<HTMLElement>(!embedded)
   const [servicesGridBinding, servicesGroupBinding] = useColumnPackGrid<HTMLElement>(!embedded)
-  const [accountsGridBinding, accountsGroupBinding] = useColumnPackGrid<HTMLElement>(!embedded)
+  // No grid binding for Accounts: it is three smaller grids now, not one,
+  // and the packer sizes a single grid against its group. The group
+  // binding stays, since the group is still one scroll container.
+  const [, accountsGroupBinding] = useColumnPackGrid<HTMLElement>(!embedded)
   const [communityGridBinding, communityGroupBinding] = useColumnPackGrid<HTMLElement>(!embedded)
   const [aiGridBinding, aiGroupBinding] = useColumnPackGrid<HTMLElement>(!embedded)
   const {
@@ -1809,21 +1812,66 @@ export default function SettingsPage({
           >
             <header className={styles.groupHeader}>
               <span className={styles.groupEyebrow}>Connections</span>
-              <h2 id="settings-accounts-title">Accounts &amp; metadata</h2>
-              <p>Link discovery, tracking, artwork, and subtitle providers.</p>
+              <h2 id="settings-accounts-title">Accounts</h2>
+              <p>
+                Three kinds of connection, doing three different jobs. Nothing here is required —
+                the app works without any of them, and each one adds what it says it adds.
+              </p>
             </header>
-            <div ref={accountsGridBinding} className={styles.groupGrid}>
-              <TmdbSection />
-              <OmdbSection />
-              <SimklSection />
-              <TraktSection />
-              <MalSection />
-              <SubDLSection />
-              <OpenSubtitlesSection />
-              {/* Beside the accounts it reports on, rather than in a
-                  group of its own: what it says is only meaningful
-                  next to which of them are connected. */}
+
+            {/* THREE SUBGROUPS, NOT SEVEN EQUAL TILES.
+                These cards were one flat grid in the order they happened to
+                be written: TMDB, OMDb, Simkl, Trakt, MAL, SubDL,
+                OpenSubtitles. Nothing said which of them tracked what you
+                watched, which fetched artwork, and which found subtitles,
+                so a person looking for one had to read all seven. They do
+                genuinely different jobs and now say so.
+
+                It also gives the watchlist panel somewhere to belong.
+                Dropped into that flat grid it was an eighth tile of a
+                different kind — an action and a report among a row of
+                credential forms. Under Tracking, spanning the row it
+                reports on, it reads as the summary of that group, which is
+                what it is. */}
+            <div className={styles.subGroup}>
+              <div className={styles.subGroupHead}>
+                <h3>Tracking</h3>
+                <p>
+                  What you watch and what you plan to. History goes out to all of these; watchlists
+                  come back from all of these.
+                </p>
+              </div>
+              <div className={styles.groupGrid}>
+                <SimklSection />
+                <TraktSection />
+                <MalSection />
+              </div>
               <WatchlistSyncSection />
+            </div>
+
+            <div className={styles.subGroup}>
+              <div className={styles.subGroupHead}>
+                <h3>Artwork &amp; metadata</h3>
+                <p>
+                  Posters, backdrops, cast and ratings. Without them titles still play — they just
+                  look plainer and carry less to browse by.
+                </p>
+              </div>
+              <div className={styles.groupGrid}>
+                <TmdbSection />
+                <OmdbSection />
+              </div>
+            </div>
+
+            <div className={styles.subGroup}>
+              <div className={styles.subGroupHead}>
+                <h3>Subtitles</h3>
+                <p>Where subtitles are searched for, in the order you have them connected.</p>
+              </div>
+              <div className={styles.groupGrid}>
+                <SubDLSection />
+                <OpenSubtitlesSection />
+              </div>
             </div>
           </section>
         )}

@@ -22,6 +22,7 @@ import styles from './MyStuff.module.css'
 import { MediaGrid } from '@renderer/components/category/MediaGrid'
 import type { PlannedSyncReport } from '@shared/media-hub/types'
 import { PlannedFilters } from '@renderer/components/mystuff/PlannedFilters'
+import { UpcomingPlanned } from '@renderer/components/mystuff/UpcomingPlanned'
 import {
   applyPlannedFilters,
   EMPTY_PLANNED_FILTERS,
@@ -433,6 +434,13 @@ function ListsView({ watchlist }: { watchlist: MediaItem[] }) {
                 : ''}
             </span>
           </div>
+
+          {/* Above the filters: what is on the list but not out yet.
+              It answers a different question from the rest of the
+              page — "what am I waiting for" rather than "what can I
+              watch" — and unfiltered, because filtering a list of
+              four announced films is not a thing anybody needs. */}
+          <UpcomingPlanned items={watchlist} />
 
           <PlannedFilters
             items={watchlist}

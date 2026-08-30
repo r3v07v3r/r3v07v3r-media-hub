@@ -1220,3 +1220,47 @@
   text-align: right;
   white-space: normal;
 }
+
+/* A labelled band inside a settings group.
+   The Accounts group held seven credential cards in one flat grid, in
+   the order they were written — nothing said which of them tracked
+   what you watched, which fetched artwork and which found subtitles.
+   These bands say it once, above each set. */
+.subGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-bottom: 26px;
+}
+
+.subGroup:last-child {
+  margin-bottom: 0;
+}
+
+.subGroupHead {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding-bottom: 8px;
+  /* A hairline rather than a box: these are divisions within one
+     group, and another border would read as another panel. */
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.subGroupHead h3 {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 1.4px;
+  text-transform: uppercase;
+  color: var(--text-primary);
+}
+
+.subGroupHead p {
+  margin: 0;
+  max-width: 70ch;
+  font-size: 0.84rem;
+  line-height: 1.55;
+  color: var(--text-muted);
+}
