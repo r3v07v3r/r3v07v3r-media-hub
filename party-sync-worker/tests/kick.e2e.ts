@@ -9,7 +9,11 @@
 // sequence the unit tests can only pin in pieces: admission, ban,
 // disconnect-on-kick, the rotated joinSecret refusing the kicked key,
 // and the known member's re-admission with the STALE joinSecret.
+import crypto from 'node:crypto'
 import WebSocket from 'ws'
+
+/** Kicks name hashes, never keys — the same digest the app computes. */
+const hashOf = (key: string): string => crypto.createHash('sha256').update(key).digest('hex')
 
 const BASE = 'http://127.0.0.1:8788'
 let pass = 0
@@ -100,14 +104,14 @@ async function main(): Promise<void> {
   const wrongToken = await fetch(`${BASE}/party/${roomId}/kick`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ roomToken: 'not-the-token', memberKeys: [KICKED] })
+    body: JSON.stringify({ roomToken: 'not-the-token', memberKeyHashes: [hashOf(KICKED)] })
   })
   check('a kick without the host token is refused', 403, wrongToken.status)
 
   const kickResponse = await fetch(`${BASE}/party/${roomId}/kick`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ roomToken, memberKeys: [KICKED] })
+    body: JSON.stringify({ roomToken, memberKeyHashes: [hashOf(KICKED)] })
   })
   check('the admin kick succeeds', 200, kickResponse.status)
   const { joinSecret: rotated } = (await kickResponse.json()) as { joinSecret: string }

@@ -68,15 +68,20 @@ check('resets a message rate after its window closes', () => {
 const KEY = 'member-key-000001'
 const OTHER = 'member-key-000002'
 const JOIN = 'join-secret-current'
+// The pure verdict takes the hash precomputed (hashing is async in
+// workers); any stable stand-in works — nothing derives it here.
+const KEY_HASH = 'a'.repeat(64)
+const OTHER_HASH = 'b'.repeat(64)
 
 check('a legacy room (no joinSecret) admits anyone, as it always has', () => {
   assert.strictEqual(
     admissionVerdict({
       currentJoinSecret: null,
       memberKey: null,
+      memberKeyHash: null,
       presentedJoinSecret: null,
       known: new Set(),
-      banned: new Set()
+      bannedHashes: new Set()
     }),
     'admit'
   )
@@ -87,9 +92,10 @@ check('a membership room refuses a connection with no identity', () => {
     admissionVerdict({
       currentJoinSecret: JOIN,
       memberKey: null,
+      memberKeyHash: null,
       presentedJoinSecret: JOIN,
       known: new Set(),
-      banned: new Set()
+      bannedHashes: new Set()
     }),
     'refuse'
   )
@@ -100,9 +106,10 @@ check('banned wins over everything — even the current joinSecret', () => {
     admissionVerdict({
       currentJoinSecret: JOIN,
       memberKey: KEY,
+      memberKeyHash: KEY_HASH,
       presentedJoinSecret: JOIN,
       known: new Set([KEY]),
-      banned: new Set([KEY])
+      bannedHashes: new Set([KEY_HASH])
     }),
     'refuse'
   )
@@ -115,9 +122,10 @@ check(
       admissionVerdict({
         currentJoinSecret: JOIN,
         memberKey: KEY,
+        memberKeyHash: KEY_HASH,
         presentedJoinSecret: 'stale-after-a-kick',
         known: new Set([KEY]),
-        banned: new Set()
+        bannedHashes: new Set()
       }),
       'admit'
     )
@@ -129,9 +137,10 @@ check('a stranger with the current joinSecret is admitted and registered', () =>
     admissionVerdict({
       currentJoinSecret: JOIN,
       memberKey: OTHER,
+      memberKeyHash: OTHER_HASH,
       presentedJoinSecret: JOIN,
       known: new Set([KEY]),
-      banned: new Set()
+      bannedHashes: new Set()
     }),
     'admit-and-register'
   )
@@ -142,9 +151,10 @@ check('a stranger without it is refused', () => {
     admissionVerdict({
       currentJoinSecret: JOIN,
       memberKey: OTHER,
+      memberKeyHash: OTHER_HASH,
       presentedJoinSecret: 'stale-or-guessed',
       known: new Set([KEY]),
-      banned: new Set()
+      bannedHashes: new Set()
     }),
     'refuse'
   )
@@ -157,9 +167,10 @@ check('registration stops at the cap — a room of 256 installs is not a househo
     admissionVerdict({
       currentJoinSecret: JOIN,
       memberKey: 'member-key-overflow1',
+      memberKeyHash: 'c'.repeat(64),
       presentedJoinSecret: JOIN,
       known,
-      banned: new Set()
+      bannedHashes: new Set()
     }),
     'refuse'
   )
