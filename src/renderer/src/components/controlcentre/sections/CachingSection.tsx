@@ -86,6 +86,12 @@ export function CachingSection() {
   const [openJoin, setOpenJoin] = useState(false)
   const [defaultPercent, setDefaultPercent] = useState(0)
   const [defaultQuotaBytes, setDefaultQuotaBytes] = useState<number | null>(null)
+  /**
+   * Separate from `busy` because this one is SLOW — the server checks its
+   * release feed and stages a bundle before answering — and the button
+   * needs to say so for as long as it runs rather than flicking back.
+   */
+  const [updating, setUpdating] = useState(false)
 
   /** Set while a request is in flight so the polls below cannot race a
    *  write and paint the pre-write answer over it. */
@@ -313,6 +319,30 @@ export function CachingSection() {
       if (!result.ok) setMessage({ ok: false, text: result.message ?? 'That did not work.' })
       await refreshMyItems()
     })
+
+  const handleUpdateNow = (): void => {
+    if (!api) return
+    setUpdating(true)
+    void (async () => {
+      try {
+        const result = await api.updateNow()
+        if (!result.ok) {
+          setMessage({ ok: false, text: result.message ?? 'That did not work.' })
+          return
+        }
+        // The daemon's own words. It knows whether it is restarting, waiting
+        // on a stream, or already current, and paraphrasing that here would
+        // be a second place for the four outcomes to drift apart.
+        setMessage({ ok: result.outcome !== 'disabled', text: result.message })
+        // Not after a restart: the server is going down, so asking it
+        // anything now just times out. The 15-second poll picks it up again
+        // when it comes back, which is the honest way to learn it is back.
+        if (result.outcome !== 'restarting') await refreshStatus()
+      } finally {
+        setUpdating(false)
+      }
+    })()
+  }
 
   const handleAdminSetting = (patch: { openJoin?: boolean; defaultQuotaPercent?: number }): void =>
     void guard(async () => {
@@ -829,6 +859,35 @@ export function CachingSection() {
                     Nothing staged. The server looks for a new build every four to six hours, so a
                     release published since its last check has not been seen yet.
                   </p>
+                )}
+
+                {/* UPDATE NOW, for the administrator only.
+
+                    The four-to-six hour poll is the right default and a poor
+                    answer to "I have just cut a release and I want it on the
+                    box". This checks the feed immediately and installs as soon
+                    as it can.
+
+                    It cannot cut somebody's film short: the daemon still
+                    refuses to restart while a stream is open, and answers that
+                    it will go in when the stream ends. Deciding the update
+                    policy is the administrator's; ending someone else's
+                    evening from a settings page is not. */}
+                {isAdmin && (
+                  <div className={styles.updateRow}>
+                    <button
+                      type="button"
+                      className={styles.primaryButton}
+                      disabled={busy || updating}
+                      onClick={handleUpdateNow}
+                    >
+                      {updating ? 'Checking…' : 'Update now'}
+                    </button>
+                    <span className={styles.note}>
+                      Checks for a new build straight away and installs it as soon as nobody is
+                      watching.
+                    </span>
+                  </div>
                 )}
 
                 {status.updater?.lastError && (

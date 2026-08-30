@@ -11,6 +11,7 @@ import { MEDIA_HUB_CHANNELS } from '../shared/media-hub/ipc-channels'
 import type {
   LanCacheDevicesResponse,
   LanCacheOwnItem,
+  LanCacheUpdateNowResponse,
   LanCacheStatusResponse
 } from '../shared/lancache/protocol'
 import type {
@@ -339,6 +340,12 @@ const api = {
         defaultQuotaPercent?: number
       }): Promise<{ ok: boolean; message?: string }> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.lanCacheAdminSettings, payload),
+      /** Admin only. Checks the feed now and installs as soon as nobody is
+       *  watching — see the daemon's /api/admin/update for why an open
+       *  stream still stops it. */
+      updateNow: (): Promise<
+        ({ ok: true } & LanCacheUpdateNowResponse) | { ok: false; message: string }
+      > => ipcRenderer.invoke(MEDIA_HUB_CHANNELS.lanCacheUpdateNow),
       /** The caller's OWN cached titles. Never anyone else's — see the
        *  daemon's /api/items/mine. */
       myItems: (): Promise<{ ok: boolean; items: LanCacheOwnItem[] }> =>
