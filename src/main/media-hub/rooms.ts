@@ -30,7 +30,6 @@
 // who is not watching anything.
 
 import crypto from 'node:crypto'
-import type WebSocket from 'ws'
 
 import { MEDIA_HUB_CHANNELS } from '../../shared/media-hub/ipc-channels'
 import type {
@@ -55,7 +54,13 @@ import {
 import { handle } from './ipcGuard'
 import { logError } from './logger'
 import { sendToRenderer } from './rendererBridge'
-import { partySyncCredentials, readSettings, writeSettings } from './settingsStore'
+import { connectHopWs, type RoomSocket } from './roomsHopClient'
+import {
+  getLanCacheConnection,
+  partySyncCredentials,
+  readSettings,
+  writeSettings
+} from './settingsStore'
 import { connectRelayWs } from './watchParty'
 
 /** Reconnect backoff bounds. A room is meant to be always-on, so a
@@ -70,7 +75,10 @@ interface RoomState {
   stored: StoredRoom
   relayUrl: string
   secret: string
-  ws: WebSocket | null
+  ws: RoomSocket | null
+  /** Which path this room's socket took — shown in the UI, pinned in
+   *  tests, and the honest answer to "is the hop actually in use". */
+  transport: 'relay' | 'cache-hop'
   presence: Map<string, PresenceRecord>
   reconnectTimer: ReturnType<typeof setTimeout> | null
   reconnectDelay: number
@@ -181,6 +189,7 @@ export function roomsStatus(): RoomsStatus {
     isAdmin: Boolean(room.stored.adminFriendId && room.stored.adminFriendId === friendId),
     hasAdmin: Boolean(room.stored.adminFriendId),
     sharing: room.stored.sharing,
+    transport: room.transport,
     members: [...room.presence.values()]
       .filter((record) => now - record.lastSeen <= 70_000)
       .map((record) => ({
@@ -353,17 +362,41 @@ function scheduleReconnect(room: RoomState): void {
 
 async function openSocket(room: RoomState): Promise<void> {
   if (room.closing) return
-  // Membership rooms present their relay credentials; the admin also
-  // presents the host token, which is what authorises a kick later. A
-  // known memberKey is admitted even with a stale joinSecret, so a
-  // rotation while this device slept does not lock it out.
-  const query: Record<string, string> = {}
-  if (room.stored.memberKey) query.member = room.stored.memberKey
-  if (room.stored.joinSecret) query.join = room.stored.joinSecret
-  const ws = await connectRelayWs(room.relayUrl, room.roomId, {
-    token: room.stored.roomToken ?? '',
-    query
-  })
+  // THE TRANSPORT CHOICE, made fresh on every (re)connect. A paired
+  // cache server carries the room as the network's single relay
+  // connection; anything short of that — no server, a pre-hop daemon,
+  // a refused subscription — falls through to connecting direct. The
+  // hop is an optimisation the household added, never a dependency:
+  // no setting, no error surfaced, just the better path when it
+  // exists and the ordinary one when it does not.
+  let ws: RoomSocket | null = null
+  const lan = getLanCacheConnection()
+  if (lan && !lan.pending) {
+    try {
+      ws = await connectHopWs(lan.url, lan.token, {
+        roomId: room.roomId,
+        relayUrl: room.relayUrl,
+        join: room.stored.joinSecret
+      })
+      room.transport = 'cache-hop'
+    } catch {
+      ws = null
+    }
+  }
+  if (!ws) {
+    // Membership rooms present their relay credentials; the admin also
+    // presents the host token. A known memberKey is admitted even with
+    // a stale joinSecret, so a rotation while this device slept does
+    // not lock it out.
+    const query: Record<string, string> = {}
+    if (room.stored.memberKey) query.member = room.stored.memberKey
+    if (room.stored.joinSecret) query.join = room.stored.joinSecret
+    ws = await connectRelayWs(room.relayUrl, room.roomId, {
+      token: room.stored.roomToken ?? '',
+      query
+    })
+    room.transport = 'relay'
+  }
   if (rooms.get(room.roomId) !== room || room.closing) {
     try {
       ws.close()
@@ -401,6 +434,7 @@ async function activateRoom(stored: StoredRoom): Promise<void> {
     relayUrl: parsed.relay.url,
     secret: parsed.secret,
     ws: null,
+    transport: 'relay',
     presence: new Map(),
     reconnectTimer: null,
     reconnectDelay: RECONNECT_MIN_MS,

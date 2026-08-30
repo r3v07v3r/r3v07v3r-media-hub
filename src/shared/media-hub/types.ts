@@ -1482,6 +1482,10 @@ export interface RoomView {
   hasAdmin: boolean
   /** Per-room: whether this device publishes what it's watching here. */
   sharing: boolean
+  /** Which path the room's socket took: straight to the relay, or
+   *  through the household's cache server as the network's single
+   *  connection for this room. */
+  transport: 'relay' | 'cache-hop'
   members: RoomMemberPresence[]
 }
 

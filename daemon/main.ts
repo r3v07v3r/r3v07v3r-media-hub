@@ -29,6 +29,7 @@ import { launch, type PayloadApi } from './launcher'
 import { createMdnsAnnouncer } from './mdns'
 import { createAdmin } from './admin'
 import { createPairing, deviceIdForToken, isApproved } from './pairing'
+import { createRoomsHop } from './roomsHop'
 import { createDaemonServer } from './server'
 import { createItemStore } from './storage'
 import { createUpdater } from './updater'
@@ -158,6 +159,20 @@ export async function run(api: PayloadApi): Promise<'restart' | 'exit'> {
     version: runningVersion,
     diskBudgetBytes: config.diskBudgetBytes
   })
+  // Rooms use this box as their LAN hop: one relay connection per room
+  // for the whole network, instead of one per device. Ciphertext only —
+  // see roomsHop.ts's header for what this box can and cannot see.
+  const roomsHop = createRoomsHop({
+    isAuthorized: (token) => pairing.isAuthorized(token),
+    dataDir: config.dataDir,
+    log
+  })
+  server.on('upgrade', (req, socket, head) => {
+    if (!roomsHop.handleUpgrade(req, socket, head)) {
+      socket.destroy()
+    }
+  })
+
   const mdns = createMdnsAnnouncer({
     serverName: config.serverName,
     port: config.port,
@@ -298,6 +313,7 @@ export async function run(api: PayloadApi): Promise<'restart' | 'exit'> {
     clearInterval(evictionTimer)
     updater.stop()
     mdns.stop()
+    roomsHop.stop()
 
     // The fetcher is stopped BEFORE the listening socket closes. It owns
     // no client connections, and closing the port first meant the daemon
