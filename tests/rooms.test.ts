@@ -19,7 +19,6 @@ import {
   acceptRoomName,
   applyRekey,
   parseBannedEnvelope,
-  migrateLegacyRooms,
   reapPresence,
   recordPresence,
   withRoomName,
@@ -35,6 +34,12 @@ import {
   verifyCryptogram,
   verifyRoomMessage
 } from '../src/main/media-hub/roomIdentity'
+
+// A room secret is 24 random bytes, base64url — the packed code has a
+// fixed-width field for it, so a placeholder string is not encodable.
+function secret24(): string {
+  return Buffer.from(crypto.getRandomValues(new Uint8Array(24))).toString('base64url')
+}
 
 const now = 1_800_000_000_000
 const SELF = 'self-friend-id'
@@ -96,40 +101,6 @@ const SELF = 'self-friend-id'
   )
 }
 
-// --- migration of the single pre-rooms friends group ------------------------
-
-{
-  const migrated = migrateLegacyRooms({
-    friendsGroupCode: 'legacy-code',
-    friendsShareActivity: true
-  })
-  assert.equal(migrated.changed, true)
-  assert.equal(migrated.rooms.length, 1)
-  assert.equal(migrated.rooms[0].code, 'legacy-code')
-  assert.equal(migrated.rooms[0].name, 'Friends')
-  assert.equal(migrated.rooms[0].sharing, true, 'the global opt-in becomes the room setting')
-  assert.equal(
-    migrated.rooms[0].adminFriendId,
-    undefined,
-    'the legacy group has no admin — its creator token was discarded by design'
-  )
-
-  // Running again against the already-migrated list adds nothing: the
-  // migration deletes the legacy field, but a crash between the two
-  // writes must not seed a duplicate room on the next boot.
-  const again = migrateLegacyRooms({
-    rooms: migrated.rooms,
-    friendsGroupCode: 'legacy-code',
-    friendsShareActivity: true
-  })
-  assert.equal(again.changed, false, 'migration is idempotent')
-  assert.equal(again.rooms.length, 1)
-
-  const fresh = migrateLegacyRooms({})
-  assert.equal(fresh.changed, false)
-  assert.deepEqual(fresh.rooms, [], 'nothing to migrate migrates nothing')
-}
-
 // --- room invite codes ------------------------------------------------------
 
 {
@@ -137,7 +108,7 @@ const SELF = 'self-friend-id'
   const admin = generateIdentity()
   const code = encodeRoomShareCode({
     relay,
-    secret: 'room-secret',
+    secret: secret24(),
     name: 'Family',
     admin: { id: admin.id, pub: admin.pub }
   })
@@ -154,24 +125,26 @@ const SELF = 'self-friend-id'
     assert.equal(decoded.relay.roomId, relay.roomId)
   }
 
-  // Old group codes keep decoding: members of the migrated room hand
-  // these around, and a v2 code joining a room simply has no admin.
-  const v2 = encodeRelayShareCode({ relay, secret: 'old-secret', name: '' })
-  const decodedV2 = decodeShareCode(v2)
-  assert.ok(decodedV2 && decodedV2.v === 2, 'a v2 code still decodes')
+  // A relay PARTY code still decodes, and joining a room by one simply
+  // gets a room with no admin.
+  const partyCode = encodeRelayShareCode({
+    relay,
+    secret: secret24()
+  })
+  const decodedParty = decodeShareCode(partyCode)
+  assert.ok(decodedParty && decodedParty.v === 2, 'a relay party code decodes as v2')
 
-  // A v4 payload without its admin is not a room code at all — accepting
-  // it would create rooms whose admin nobody can verify.
-  const stripped = JSON.parse(Buffer.from(code, 'base64url').toString('utf8')) as Record<
-    string,
-    unknown
-  >
-  delete stripped.admin
-  const tampered = Buffer.from(JSON.stringify(stripped), 'utf8').toString('base64url')
-  assert.equal(decodeShareCode(tampered), null, 'a v4 code must name its admin')
-
+  // A room code cannot exist without its admin: the admin's key is a
+  // fixed-width field of the encoding, so there is no anonymous room to
+  // encode and nothing for a tamperer to strip out.
   assert.throws(
-    () => encodeRoomShareCode({ relay, secret: 'x', name: 'y', admin: { id: '', pub: '' } }),
+    () =>
+      encodeRoomShareCode({
+        relay,
+        secret: secret24(),
+        name: 'y',
+        admin: { id: '', pub: '' }
+      }),
     'encoding refuses an anonymous admin'
   )
 }
@@ -357,18 +330,20 @@ const SELF = 'self-friend-id'
   const adminRef = { id: adminId.id, pub: adminId.pub }
   const relay = { url: 'https://relay.example.workers.dev', roomId: crypto.randomUUID() }
   const room = { roomId: relay.roomId, relayUrl: relay.url, adminFriendId: ADMIN }
+  const ROTATED = secret24()
+  const ROTATED_JOIN = crypto.randomUUID()
   const freshCode = encodeRoomShareCode({
     relay,
-    secret: 'rotated-secret',
+    secret: ROTATED,
     name: 'Family',
     admin: adminRef,
-    join: 'rotated-join'
+    join: ROTATED_JOIN
   })
 
   const adopted = applyRekey(room, { code: freshCode }, ADMIN)
   assert.ok(adopted, 'the admin re-keys the room')
-  assert.equal(adopted?.secret, 'rotated-secret')
-  assert.equal(adopted?.joinSecret, 'rotated-join')
+  assert.equal(adopted?.secret, ROTATED)
+  assert.equal(adopted?.joinSecret, ROTATED_JOIN)
 
   assert.equal(
     applyRekey(room, { code: freshCode }, 'someone-else'),
@@ -392,7 +367,7 @@ const SELF = 'self-friend-id'
   // the sender's choosing.
   const crossRelayCode = encodeRoomShareCode({
     relay: { url: 'https://elsewhere.example.workers.dev', roomId: relay.roomId },
-    secret: 'rotated-secret',
+    secret: ROTATED,
     name: 'Family',
     admin: adminRef
   })
@@ -404,7 +379,7 @@ const SELF = 'self-friend-id'
 
   const otherRoomCode = encodeRoomShareCode({
     relay: { url: relay.url, roomId: crypto.randomUUID() },
-    secret: 'rotated-secret',
+    secret: ROTATED,
     name: 'Family',
     admin: adminRef
   })
@@ -417,7 +392,7 @@ const SELF = 'self-friend-id'
   const usurper = generateIdentity()
   const handoffCode = encodeRoomShareCode({
     relay,
-    secret: 'rotated-secret',
+    secret: ROTATED,
     name: 'Family',
     admin: { id: usurper.id, pub: usurper.pub }
   })
@@ -432,37 +407,39 @@ const SELF = 'self-friend-id'
 //
 // The name lives in two places — the display name renames update, and
 // the invite code that gets copied for the next member. Recoding must
-// change the name and NOTHING else, including fields this version of
-// the app has never heard of: a future code carries the room's door
+// change the name and nothing else: the code carries the room's door
 // key, and a recode that dropped it would hand out invites that cannot
 // open the door.
+//
+// The packed format has no room for a field it cannot name, so the
+// old "unknown fields pass through verbatim" guarantee is gone with the
+// JSON form. What replaces it is stricter: a code that does not fully
+// decode is not rewritten at all.
 
 {
   const relay = { url: 'https://relay.example.workers.dev', roomId: crypto.randomUUID() }
   const recodeAdmin = generateIdentity()
+  const secret = secret24()
+  const join = crypto.randomUUID()
   const code = encodeRoomShareCode({
     relay,
-    secret: 'room-secret',
+    secret,
     name: 'Family',
-    admin: { id: recodeAdmin.id, pub: recodeAdmin.pub }
+    admin: { id: recodeAdmin.id, pub: recodeAdmin.pub },
+    join
   })
-  // Smuggle in a field from the future.
-  const raw = JSON.parse(Buffer.from(code, 'base64url').toString('utf8')) as Record<string, unknown>
-  raw.futureField = 'must-survive'
-  const futureCode = Buffer.from(JSON.stringify(raw), 'utf8').toString('base64url')
 
-  const renamed = withRoomName(futureCode, 'Movie night')
+  const renamed = withRoomName(code, 'Movie night')
   assert.ok(renamed, 'a valid room code recodes')
-  const decoded = JSON.parse(Buffer.from(String(renamed), 'base64url').toString('utf8')) as Record<
-    string,
-    unknown
-  >
-  assert.equal(decoded.name, 'Movie night', 'the name changes')
-  assert.equal(decoded.secret, 'room-secret', 'the secret does not')
-  assert.equal((decoded.admin as { id?: string })?.id, recodeAdmin.id, 'nor the admin')
-  assert.equal(decoded.futureField, 'must-survive', 'nor fields this version has never heard of')
-  const reparsed = decodeShareCode(String(renamed))
-  assert.ok(reparsed && reparsed.v === 4, 'the recoded invite still decodes as a room code')
+  const decoded = decodeShareCode(String(renamed))
+  assert.ok(decoded && decoded.v === 4, 'the recoded invite still decodes as a room code')
+  if (decoded && decoded.v === 4) {
+    assert.equal(decoded.name, 'Movie night', 'the name changes')
+    assert.equal(decoded.secret, secret, 'the secret does not')
+    assert.equal(decoded.admin.id, recodeAdmin.id, 'nor the admin')
+    assert.equal(decoded.join, join, "nor the room's door key")
+    assert.deepEqual(decoded.relay, relay, 'nor the relay it points at')
+  }
 
   assert.equal(withRoomName('not-a-code', 'x'), null, 'garbage recodes to nothing, not to garbage')
 }

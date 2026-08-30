@@ -79,13 +79,6 @@ export interface MediaHubRawSettings {
    *  to recognise the same person by. Not a secret and never leaves a
    *  room's encrypted channel. */
   friendId?: string
-  /** LEGACY — the single pre-rooms friends group, as a v2 share code.
-   *  Read once by the rooms migration and then deleted; only still
-   *  declared so the migration can read it. */
-  friendsGroupCode?: string
-  /** LEGACY — the pre-rooms global sharing opt-in. Becomes the migrated
-   *  room's per-room setting; see migrateLegacyRooms. */
-  friendsShareActivity?: boolean
   /** Every room this install belongs to. See roomRules.ts's StoredRoom. */
   rooms?: import('./roomRules').StoredRoom[]
   /** This install's Ed25519 room identity — the chip. PKCS8 DER,
