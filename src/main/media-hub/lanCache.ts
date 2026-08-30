@@ -399,7 +399,10 @@ export function registerLanCacheIpc(refreshTrustedHosts: () => void): void {
   handle(MEDIA_HUB_CHANNELS.lanCacheDevices, async () => {
     if (!isLanCacheConnected()) return { ok: false as const, message: 'No cache server is paired.' }
     try {
-      return { ok: true as const, ...(await request<LanCacheDevicesResponse>('/api/admin/devices')) }
+      return {
+        ok: true as const,
+        ...(await request<LanCacheDevicesResponse>('/api/admin/devices'))
+      }
     } catch (error) {
       return { ok: false as const, message: (error as Error).message }
     }
@@ -423,9 +426,7 @@ export function registerLanCacheIpc(refreshTrustedHosts: () => void): void {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             action,
-            ...(action === 'quota'
-              ? { quotaBytes: payload?.quotaBytes ?? null }
-              : {})
+            ...(action === 'quota' ? { quotaBytes: payload?.quotaBytes ?? null } : {})
           })
         })
         return { ok: true }

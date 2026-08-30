@@ -1464,12 +1464,7 @@ export interface CatalogListing {
  *  same six the sort dropdown offers — because the sort is now applied by
  *  SQL over catalog_index rather than in memory over a loaded array. */
 export type CatalogSortKey =
-  | 'trending'
-  | 'title-asc'
-  | 'year-desc'
-  | 'rating-desc'
-  | 'runtime-asc'
-  | 'runtime-desc'
+  'trending' | 'title-asc' | 'year-desc' | 'rating-desc' | 'runtime-asc' | 'runtime-desc'
 
 /**
  * One page of the browse grid, as a question for the database.

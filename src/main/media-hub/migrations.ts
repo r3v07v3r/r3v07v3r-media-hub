@@ -366,12 +366,7 @@ const airedEpisodes: Migration = {
 }
 
 /** Ordered, and the order IS the version. Append only. */
-const MIGRATIONS: readonly Migration[] = [
-  baseline,
-  profilesAndPlays,
-  catalogIndex,
-  airedEpisodes
-]
+const MIGRATIONS: readonly Migration[] = [baseline, profilesAndPlays, catalogIndex, airedEpisodes]
 
 /** How many migrations exist — a database at this version is fully current. */
 export const SCHEMA_VERSION = MIGRATIONS.length

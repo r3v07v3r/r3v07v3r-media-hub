@@ -244,21 +244,24 @@ function EverythingSection({
     itemsLengthRef.current = items.length
   }, [items.length])
   const observerRef = useRef<IntersectionObserver | null>(null)
-  const sentinelRef = useCallback((node: HTMLLIElement | null) => {
-    observerRef.current?.disconnect()
-    observerRef.current = null
-    if (!node) return
-    const observer = new IntersectionObserver(
-      (entries) => {
-        if (entries[0]?.isIntersecting) {
-          setVisibleCount((count) => Math.min(count + EVERYTHING_BATCH, itemsLengthRef.current))
-        }
-      },
-      { rootMargin: '900px' }
-    )
-    observer.observe(node)
-    observerRef.current = observer
-  }, [setVisibleCount])
+  const sentinelRef = useCallback(
+    (node: HTMLLIElement | null) => {
+      observerRef.current?.disconnect()
+      observerRef.current = null
+      if (!node) return
+      const observer = new IntersectionObserver(
+        (entries) => {
+          if (entries[0]?.isIntersecting) {
+            setVisibleCount((count) => Math.min(count + EVERYTHING_BATCH, itemsLengthRef.current))
+          }
+        },
+        { rootMargin: '900px' }
+      )
+      observer.observe(node)
+      observerRef.current = observer
+    },
+    [setVisibleCount]
+  )
   const visibleItems = items.slice(0, visibleCount)
   const hasMore = visibleCount < items.length
 

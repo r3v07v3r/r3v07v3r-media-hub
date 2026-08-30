@@ -582,7 +582,10 @@ function UpNextStrip({
       <h2 className={styles.statHeading}>What&rsquo;s airing</h2>
       <div className={styles.upNextRow}>
         {visible.map((entry, index) => (
-          <div key={`${entry.contentId}:${entry.season}:${entry.episode}`} className={styles.upNextItem}>
+          <div
+            key={`${entry.contentId}:${entry.season}:${entry.episode}`}
+            className={styles.upNextItem}
+          >
             {index === recentCount && recentCount > 0 && (
               <span className={styles.upNextDivider} aria-hidden="true" />
             )}
@@ -747,12 +750,20 @@ function CalendarGrid({
                     </ul>
                   )}
                   {hidden > 0 && (
-                    <button type="button" className={styles.calGridMore} onClick={() => toggleDay(day)}>
+                    <button
+                      type="button"
+                      className={styles.calGridMore}
+                      onClick={() => toggleDay(day)}
+                    >
                       +{hidden} more
                     </button>
                   )}
                   {expanded && dayEntries.length > CELL_LIMIT && (
-                    <button type="button" className={styles.calGridMore} onClick={() => toggleDay(day)}>
+                    <button
+                      type="button"
+                      className={styles.calGridMore}
+                      onClick={() => toggleDay(day)}
+                    >
                       Show fewer
                     </button>
                   )}

@@ -148,8 +148,8 @@ export function LanCacheSection() {
       <p className={styles.serviceNote}>
         A small server on your own network that downloads what you plan to watch ahead of time, so
         playback starts from one LAN hop instead of a slow internet link. Run r3-cache on any
-        Windows or Linux box and ask to join it here. Everything it stores
-        expires on its own — nothing stays forever.
+        Windows or Linux box and ask to join it here. Everything it stores expires on its own —
+        nothing stays forever.
       </p>
 
       {paired && awaitingApproval && (
@@ -157,8 +157,8 @@ export function LanCacheSection() {
           <div className={styles.rowText}>
             <span className={styles.rowTitle}>Waiting to be let in</span>
             <span className={styles.rowDescription}>
-              {paired} — the administrator of that server approves this device there. Nothing
-              else is needed here.
+              {paired} — the administrator of that server approves this device there. Nothing else
+              is needed here.
             </span>
           </div>
           <button
