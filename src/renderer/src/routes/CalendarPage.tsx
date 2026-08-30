@@ -10,17 +10,19 @@
 // The view itself is unchanged: the same waiting-for strip over the same
 // six-and-a-half-week grid, reading the same catalog.calendar() feed.
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { CalendarEntry } from '@shared/media-hub/types'
 import type { MediaItem } from '@renderer/types'
 import { useAppState } from '@renderer/context/AppStateContext'
 import { useRestoreBrowsingOrigin } from '@renderer/lib/mediaHub/useRestoreBrowsingOrigin'
 import styles from './MyStuff.module.css'
+import { ArtworkImage } from '@renderer/components/media/ArtworkImage'
+import { Icon } from '@renderer/components/icons/Icon'
 
 export default function CalendarPage() {
   useRestoreBrowsingOrigin(true)
   return (
-    <div className={styles.wrap}>
+    <div className={`${styles.wrap} ${styles.calendarPage}`}>
       <h1 className={styles.heading}>Calendar</h1>
       <p className={styles.headingDescription}>
         Episodes airing for the shows on your list, a week back and six weeks ahead.
@@ -185,6 +187,31 @@ const WEEKDAY_LABELS = Array.from({ length: 7 }, (_, index) =>
  * that in either direction — a "next month" arrow would mostly point at an
  * empty page.
  */
+/** Enough height for a date and a row of small posters. Below this a
+ *  cell stops being able to show anything, so the grid pages instead
+ *  of shrinking past it. */
+/** The placeholder gradient behind a poster that has not loaded. */
+const CALENDAR_TINT: [string, string] = ['#1b2b3d', '#0d1520']
+
+const MIN_WEEK_ROW_PX = 104
+/** The weekday header and the pager beneath it. */
+const GRID_CHROME_PX = 74
+
+/** "31 Aug – 27 Sep", so a page says which weeks it is showing
+ *  rather than only which number it is. */
+function rangeLabel(weeksShown: string[][]): string {
+  const first = weeksShown[0]?.[0]
+  const last = weeksShown.at(-1)?.at(-1)
+  if (!first || !last) return ''
+  const format = (day: string): string =>
+    new Date(`${day}T00:00:00Z`).toLocaleDateString(undefined, {
+      day: 'numeric',
+      month: 'short',
+      timeZone: 'UTC'
+    })
+  return `${format(first)} – ${format(last)}`
+}
+
 function CalendarGrid({
   grouped,
   today,
@@ -201,6 +228,46 @@ function CalendarGrid({
     return out
   }, [gridDays])
 
+  // HOW MANY WEEKS ACTUALLY FIT.
+  //
+  // The grid used to be as tall as it wanted and the page scrolled to
+  // reach the bottom of it — which on a calendar is the wrong trade: the
+  // whole point of a month view is seeing the month at once, and half a
+  // month with the rest below the fold is a list with extra steps.
+  //
+  // So the rows are measured against the space there is, and when they do
+  // not all fit the window is paged rather than squashed. Squashing was
+  // the other option and it is worse: cells too short for a poster make
+  // every day equally unreadable, where paging keeps four good weeks and
+  // a way to the rest.
+  const frameRef = useRef<HTMLDivElement>(null)
+  const [perPage, setPerPage] = useState(weeks.length)
+  const [page, setPage] = useState(0)
+
+  useEffect(() => {
+    const frame = frameRef.current
+    if (!frame) return
+    const measure = (): void => {
+      // The header row plus the pager, which are there whether or not
+      // anything pages — measuring without them would promise a row that
+      // has nowhere to go.
+      const available = frame.clientHeight - GRID_CHROME_PX
+      const fits = Math.floor(available / MIN_WEEK_ROW_PX)
+      // Never fewer than two: one week at a time is a strip, not a
+      // calendar, and at that point the airing list above serves better.
+      setPerPage(Math.max(2, Math.min(weeks.length, fits)))
+    }
+    measure()
+    const observer = new ResizeObserver(measure)
+    observer.observe(frame)
+    return () => observer.disconnect()
+  }, [weeks.length])
+
+  const pages = Math.max(1, Math.ceil(weeks.length / perPage))
+  // A window that grows can strand the viewer past the last page.
+  const safePage = Math.min(page, pages - 1)
+  const shownWeeks = weeks.slice(safePage * perPage, safePage * perPage + perPage)
+
   // Per-day, not global: opening one busy Friday shouldn't also blow out
   // every other Friday in the grid.
   const [expandedDays, setExpandedDays] = useState<Set<string>>(() => new Set())
@@ -214,7 +281,7 @@ function CalendarGrid({
   }
 
   return (
-    <div className={styles.calGridScroll}>
+    <div className={styles.calGridScroll} ref={frameRef}>
       <div className={styles.calGrid}>
         <div className={styles.calGridHeader}>
           {WEEKDAY_LABELS.map((label) => (
@@ -223,7 +290,7 @@ function CalendarGrid({
             </span>
           ))}
         </div>
-        {weeks.map((week) => (
+        {shownWeeks.map((week) => (
           <div key={week[0]} className={styles.calGridWeek}>
             {week.map((day) => {
               const dayEntries = grouped.get(day) ?? []
@@ -252,43 +319,69 @@ function CalendarGrid({
                     {monthLabel && <span className={styles.calGridMonth}>{monthLabel}</span>}
                     {dayNumber}
                   </span>
+                  {/* POSTERS, NOT TITLES. A month of truncated show names
+                      reads as a wall of text you have to parse; artwork is
+                      recognised at a glance and at a size text could not
+                      survive. The name is not lost — it is the tooltip and
+                      the accessible label, which is where a name belongs
+                      when the picture is doing the work. */}
                   {visibleEntries.length > 0 && (
                     <ul className={styles.calGridEntries}>
-                      {visibleEntries.map((entry) => (
-                        <li key={`${entry.contentId}:${entry.season}:${entry.episode}`}>
+                      {visibleEntries.map((entry) => {
+                        const label = `${entry.title} S${String(entry.season).padStart(
+                          2,
+                          '0'
+                        )}E${String(entry.episode).padStart(2, '0')}`
+                        return (
+                          <li key={`${entry.contentId}:${entry.season}:${entry.episode}`}>
+                            <button
+                              type="button"
+                              className={styles.calGridPoster}
+                              onClick={() =>
+                                onOpen({ id: entry.contentId, mediaKind: entry.type } as MediaItem)
+                              }
+                              title={label}
+                              aria-label={label}
+                            >
+                              <ArtworkImage
+                                src={entry.poster}
+                                alt=""
+                                fallbackTitle={entry.title}
+                                // No per-title tint on a calendar entry — the feed carries a
+                                // poster and nothing else. A fixed pair keeps the placeholder
+                                // from being a different colour on every cell.
+                                artTint={CALENDAR_TINT}
+                                sizes="44px"
+                              />
+                            </button>
+                          </li>
+                        )
+                      })}
+                      {hidden > 0 && (
+                        <li>
                           <button
                             type="button"
-                            className={styles.calGridEntry}
-                            onClick={() =>
-                              onOpen({ id: entry.contentId, mediaKind: entry.type } as MediaItem)
-                            }
-                            title={`${entry.title} S${String(entry.season).padStart(2, '0')}E${String(
-                              entry.episode
-                            ).padStart(2, '0')}`}
+                            className={styles.calGridMore}
+                            onClick={() => toggleDay(day)}
+                            title={`${hidden} more on this day`}
                           >
-                            {entry.title}
+                            +{hidden}
                           </button>
                         </li>
-                      ))}
+                      )}
+                      {expanded && dayEntries.length > CELL_LIMIT && (
+                        <li>
+                          <button
+                            type="button"
+                            className={styles.calGridMore}
+                            onClick={() => toggleDay(day)}
+                            title="Show fewer"
+                          >
+                            −
+                          </button>
+                        </li>
+                      )}
                     </ul>
-                  )}
-                  {hidden > 0 && (
-                    <button
-                      type="button"
-                      className={styles.calGridMore}
-                      onClick={() => toggleDay(day)}
-                    >
-                      +{hidden} more
-                    </button>
-                  )}
-                  {expanded && dayEntries.length > CELL_LIMIT && (
-                    <button
-                      type="button"
-                      className={styles.calGridMore}
-                      onClick={() => toggleDay(day)}
-                    >
-                      Show fewer
-                    </button>
                   )}
                 </div>
               )
@@ -296,6 +389,34 @@ function CalendarGrid({
           </div>
         ))}
       </div>
+      {/* Only when the whole window genuinely does not fit. On a screen
+          with room for all seven weeks there is nothing to page through
+          and no control to explain. */}
+      {pages > 1 && (
+        <div className={styles.calPager}>
+          <button
+            type="button"
+            className={styles.calPagerButton}
+            onClick={() => setPage(Math.max(0, safePage - 1))}
+            disabled={safePage === 0}
+          >
+            <Icon name="chevron" size={14} />
+            Earlier
+          </button>
+          <span className={styles.calPagerLabel}>
+            {rangeLabel(shownWeeks)} · page {safePage + 1} of {pages}
+          </span>
+          <button
+            type="button"
+            className={styles.calPagerButton}
+            onClick={() => setPage(Math.min(pages - 1, safePage + 1))}
+            disabled={safePage >= pages - 1}
+          >
+            Later
+            <Icon name="chevron" size={14} />
+          </button>
+        </div>
+      )}
     </div>
   )
 }
