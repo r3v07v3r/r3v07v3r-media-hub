@@ -111,6 +111,13 @@ interface Upstream {
    *  next local joiner — the daemon-side mirror of the relay's own
    *  retention, and just as unreadable to it. */
   retained: Map<string, { body: string; at: number }>
+  /** True when this upstream was admitted with a cryptogram — a
+   *  membership room. Once true, EVERY further subscriber must present
+   *  its own tap: a bare subscription riding an already-open membership
+   *  upstream would be an unverified, unbannable listener, and review
+   *  showed exactly who would use that — a kicked device that still
+   *  holds an approved daemon token, waiting for the re-key echo. */
+  membership: boolean
   /** Send pacing — see DEFAULT_MAX_SENDS_PER_WINDOW. */
   rateWindowStartedAt: number
   rateCount: number
@@ -171,6 +178,7 @@ export function createRoomsHop(deps: HopDeps): RoomsHop {
         connecting: null,
         subscribers: new Set(),
         retained: new Map(),
+        membership: false,
         rateWindowStartedAt: 0,
         rateCount: 0,
         sendQueue: [],
@@ -223,6 +231,7 @@ export function createRoomsHop(deps: HopDeps): RoomsHop {
       // as they always did.
       const params = new URLSearchParams()
       if (cryptogram) {
+        upstream.membership = true
         params.set('carrier', '1')
         params.set('pub', cryptogram.pub)
         params.set('ts', String(cryptogram.ts))
@@ -459,6 +468,15 @@ export function createRoomsHop(deps: HopDeps): RoomsHop {
     }
     const upstream = upstreamFor(relayUrl, roomId)
     const join = typeof msg.join === 'string' ? msg.join : undefined
+    // A membership upstream admits NOBODY without their own tap. The
+    // relay cannot see who rides an already-open connection, so this
+    // daemon is the gate — and a bare subscription here would be an
+    // unverified, unbannable listener sitting exactly where a kicked
+    // device would want to sit.
+    if (upstream.membership && !cryptogram) {
+      sendTo(sub, { type: 'sub-error', roomId, error: 'This room requires an identity.' })
+      return
+    }
     // Whoever finds the upstream down initiates it with their OWN tap;
     // everyone after hands theirs up as a carry for the relay to verify
     // on the same connection.

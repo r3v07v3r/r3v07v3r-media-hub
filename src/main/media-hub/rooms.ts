@@ -61,6 +61,7 @@ import {
   identityFromPrivateDer,
   exportPrivateDer,
   mintCryptogram,
+  nextSeq,
   signRoomMessage,
   verifyRoomMessage,
   type RoomIdentity,
@@ -189,8 +190,13 @@ function sendRoomPayload(
 ): void {
   if (!room.ws) return
   const secret = opts.underSecret ?? room.secret
+  // Time-anchored, not a plain counter: a restart resumes ABOVE every
+  // sequence the previous session sent, so peers who stayed online and
+  // hold the old high-water mark accept the first message immediately
+  // instead of rejecting hours of them as replays. See nextSeq.
+  if (room.signed) room.seq = nextSeq(room.seq)
   const payload = room.signed
-    ? (signRoomMessage(roomsIdentity(), room.roomId, body, ++room.seq) as unknown as Record<
+    ? (signRoomMessage(roomsIdentity(), room.roomId, body, room.seq) as unknown as Record<
         string,
         unknown
       >)

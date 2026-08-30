@@ -292,6 +292,20 @@ async function main(): Promise<void> {
   again.ws.close()
   kicked.ws.close()
 
+  // --- a membership upstream refuses bare riders ------------------------------
+  //
+  // The relay cannot see who rides an already-open connection; the
+  // daemon is the gate. A subscription with no cryptogram must not be
+  // registered as an unverified, unbannable listener — that seat is
+  // exactly where a kicked device holding a valid daemon token would
+  // wait for the re-key echo.
+  const bare = await subscribe(undefined)
+  assert.ok(
+    bare.messages.some((m) => m.includes('This room requires an identity')),
+    'a subscription without a tap is refused on a membership upstream'
+  )
+  bare.ws.close()
+
   // --- transient sends are never retained ------------------------------------
   a.ws.send(
     JSON.stringify({ type: 'send', roomId: ROOM_ID, body: 'rekey-ciphertext', transient: true })

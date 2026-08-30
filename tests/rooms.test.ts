@@ -29,6 +29,7 @@ import {
   generateIdentity,
   idOfRawPub,
   mintCryptogram,
+  nextSeq,
   signRoomMessage,
   verifyCryptogram,
   verifyRoomMessage
@@ -231,6 +232,33 @@ const SELF = 'self-friend-id'
     verifyRoomMessage('room-2', envelope, undefined).ok,
     false,
     'a signature binds the room it was made for'
+  )
+
+  // SEQUENCES SURVIVE RESTARTS by being anchored to the clock, not to
+  // a counter that starts over. Review caught the plain counter: a
+  // restarted member's first message would sit below the high-water
+  // mark every online peer still held, and be rejected as a replay —
+  // presence, re-keys and join requests suppressed for hours.
+  const restartNow = 1_800_000_000_000
+  let seq = nextSeq(0, restartNow) // first session begins
+  seq = nextSeq(seq, restartNow + 20_000)
+  seq = nextSeq(seq, restartNow + 40_000)
+  const beforeRestart = signRoomMessage(alice, 'room-1', { type: 'friend-presence' }, seq)
+  // ...the app restarts; the fresh session knows nothing of `seq`, only
+  // a later clock. The peer still holds the old high-water mark.
+  const afterRestart = signRoomMessage(
+    alice,
+    'room-1',
+    { type: 'friend-presence' },
+    nextSeq(0, restartNow + 60_000)
+  )
+  assert.ok(
+    verifyRoomMessage('room-1', afterRestart, beforeRestart.seq).ok,
+    'the first message after a restart is accepted by a peer that never restarted'
+  )
+  assert.ok(
+    nextSeq(seq, restartNow) > seq,
+    'within a session the sequence is strictly monotonic even if the clock stalls'
   )
 }
 

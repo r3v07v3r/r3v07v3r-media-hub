@@ -166,6 +166,25 @@ export function verifyCryptogram(
   return { ok: true, id: idOfRawPub(cryptogram.pub) }
 }
 
+/**
+ * The next outbound sequence number: strictly above the current one,
+ * and never below the clock.
+ *
+ * The clock is what makes this survive a restart WITHOUT persistence:
+ * a fresh session starts at Date.now(), which is above every sequence
+ * any previous session produced (each send adds 1 to a value that
+ * itself started at a past Date.now() — overtaking the clock would
+ * take a thousand messages per millisecond). Review caught the plain
+ * counter version: peers that stayed online held the old high-water
+ * mark and rejected a restarted member's every message as a replay,
+ * for hours. A clock rolled back further than the downtime could
+ * recreate that — and then the message freshness window is already
+ * refusing those sends for its own reasons.
+ */
+export function nextSeq(current: number, now = Date.now()): number {
+  return Math.max(current + 1, now)
+}
+
 // --- signed room messages ----------------------------------------------------
 //
 // Sign-then-encrypt: the signature goes over the plaintext, and the
