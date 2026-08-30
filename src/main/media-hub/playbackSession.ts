@@ -61,6 +61,7 @@ import {
   createStreamCache,
   deleteCacheSession,
   listCacheSessions,
+  memoryModeEnabled,
   MIN_CACHE_BYTES
 } from './streamCache'
 import { downloadSubtitleText } from './subtitlesService'
@@ -143,6 +144,16 @@ export function subtitleCacheDir(): string {
  */
 export async function applyStoragePolicyToPlayback(): Promise<void> {
   await streamCache.applyStoragePolicy()
+  // THE SESSIONS THAT ARE NOT PLAYING MATTER JUST AS MUCH. Somebody who
+  // has watched three films and then says "keep nothing on this device"
+  // has three session directories on their disk, and at most one of them
+  // is the live one the call above deals with. Leaving the rest to the 24h
+  // prune makes the setting true of the next film and not of the ones
+  // already sitting there, which is not what it says.
+  //
+  // clearAllSessions skips whatever is in activeCacheTokens, so the live
+  // session is not pulled out from under the player mid-frame.
+  if (memoryModeEnabled()) await clearAllSessions()
 }
 
 export function activeStreamUrl(): string {

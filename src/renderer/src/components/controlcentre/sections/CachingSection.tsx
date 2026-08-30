@@ -90,6 +90,10 @@ export function CachingSection() {
   /** Set while a request is in flight so the polls below cannot race a
    *  write and paint the pre-write answer over it. */
   const mutatingRef = useRef(false)
+  /** Whether this device administers the server, which decides whether the
+   *  poll below also refreshes the device list. Named once so the two
+   *  effects that care cannot drift apart. */
+  const isAdmin = status?.isAdmin === true
 
   const refreshStatus = useCallback(async () => {
     if (!api) return
@@ -173,15 +177,26 @@ export function CachingSection() {
     if (!api || pairState !== 'approved') return
     const timer = window.setInterval(() => {
       if (mutatingRef.current) return
-      void Promise.all([refreshStatus(), refreshMyItems()])
+      // The device list polls WITH the figures when this device
+      // administers the server. It used to load only when isAdmin
+      // CHANGED, which after the first load it never does — and these
+      // panels stay mounted across navigation, so a join request arriving
+      // afterwards sat unseen until the app was restarted or some
+      // unrelated admin action happened to refresh the list. Approving a
+      // device is the one thing on this page somebody else is waiting on.
+      void Promise.all([
+        refreshStatus(),
+        refreshMyItems(),
+        isAdmin ? refreshDevices() : Promise.resolve()
+      ])
     }, STATUS_POLL_MS)
     return () => window.clearInterval(timer)
-  }, [api, pairState, refreshStatus, refreshMyItems])
+  }, [api, pairState, isAdmin, refreshStatus, refreshMyItems, refreshDevices])
 
   useEffect(() => {
-    if (!api || !status?.isAdmin) return
+    if (!api || !isAdmin) return
     void Promise.resolve().then(refreshDevices)
-  }, [api, status?.isAdmin, refreshDevices])
+  }, [api, isAdmin, refreshDevices])
 
   const header = (
     <header className={styles.head}>

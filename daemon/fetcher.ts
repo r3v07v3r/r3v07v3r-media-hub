@@ -161,16 +161,30 @@ export function createFetcher({
       // amount of waiting makes a file smaller than it is. It says whose
       // allocation and by how much, because the fix is somebody raising it.
       const quota = job.ownerDeviceId ? quotaFor(job.ownerDeviceId) : null
-      if (quota !== null && resolved.sizeBytes > quota) {
-        jobs.update(job.contentKey, {
-          state: 'expired',
-          lastError:
-            `${(resolved.sizeBytes / 1024 ** 3).toFixed(1)} GB does not fit this device's ` +
-            `${(quota / 1024 ** 3).toFixed(1)} GB allocation.`
+      if (quota !== null && job.ownerDeviceId && resolved.sizeBytes > 0) {
+        // ROOM, not just permission. Comparing the file against the
+        // allocation on its own admits anybody already near their limit —
+        // 9 GB held under a 10 GB allocation plus an 8 GB film is 17 GB
+        // until the hourly sweep takes the older files back. This makes
+        // that room first, from their own oldest items, which is the same
+        // rule applied deliberately instead of an hour late.
+        const fits = await storage.makeRoomForOwner({
+          deviceId: job.ownerDeviceId,
+          bytes: resolved.sizeBytes,
+          quota,
+          keepInfoHash: job.infoHash
         })
-        nextAttemptAt.delete(job.contentKey)
-        log(`refused  ${job.title}: over the owner's allocation`)
-        return
+        if (!fits) {
+          jobs.update(job.contentKey, {
+            state: 'expired',
+            lastError:
+              `${(resolved.sizeBytes / 1024 ** 3).toFixed(1)} GB does not fit this device's ` +
+              `${(quota / 1024 ** 3).toFixed(1)} GB allocation.`
+          })
+          nextAttemptAt.delete(job.contentKey)
+          log(`refused  ${job.title}: over the owner's allocation`)
+          return
+        }
       }
 
       // The infoHash is passed so a resume is not charged for the bytes it

@@ -2054,6 +2054,116 @@ async function budgetRoomTest(): Promise<void> {
     'and the hourly pass leaves an open stream alone too'
   )
   assert.ok(await watchStore.get('a1'.repeat(20)), 'the file is still there')
+  // AND THE OVERAGE IS STILL RELIEVED. Skipping the item being watched
+  // must pick something ELSE for those bytes: if the protected item alone
+  // accounts for the excess, dropping it from a finished plan leaves the
+  // cache over budget for the whole film. The planner is told up front so
+  // it moves on to the next candidate; the protected bytes stay counted,
+  // because the file is still on the disk.
+  const overRoot = await fsp.mkdtemp(path.join(os.tmpdir(), 'r3-over-'))
+  const overStreaming = new Set<string>()
+  const overStore = createItemStore(
+    overRoot,
+    { idleTtlMs: 60 * DAY, hardMaxMs: 365 * DAY, budgetBytes: 1000, tombstoneMs: 60 * DAY },
+    { isStreaming: (infoHash) => overStreaming.has(infoHash) }
+  )
+  const bigWatched = 'b1'.repeat(20)
+  const smallIdle = 'b2'.repeat(20)
+  const seedOver = async (hash: string, key: string, bytes: number, age: number): Promise<void> => {
+    const dir = await overStore.beginItem({
+      contentKey: key,
+      title: key,
+      infoHash: hash,
+      fileName: 'f.mkv',
+      sizeBytes: bytes,
+      fetchedAt: now - age,
+      lastAccessAt: now - age
+    })
+    await fsp.writeFile(path.join(dir, 'f.mkv'), 'x'.repeat(bytes))
+  }
+  // 800 + 400 = 1200 against a budget of 1000. The oldest is the one being
+  // watched, and on its own it more than covers the 200 overage.
+  await seedOver(bigWatched, 'k-big-watched', 800, 9 * DAY)
+  await seedOver(smallIdle, 'k-small-idle', 400, 1 * DAY)
+  overStreaming.add(bigWatched)
+  const overPlan = await overStore.runEviction(now)
+  assert.equal(overPlan.has(bigWatched), false, 'the item being watched is not taken')
+  assert.equal(
+    overPlan.get(smallIdle),
+    'budget',
+    'and something else is chosen for the bytes it would have freed'
+  )
+  assert.ok(
+    (await overStore.usedBytes()) <= 1000,
+    'so the cache is actually brought back under its budget'
+  )
+  await fsp.rm(overRoot, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
+
+  // --- an allocation is about what is HELD, not just what is arriving ---
+  //
+  // Comparing one file against the allocation admits anybody already near
+  // their limit: 600 held under a 1000 allocation plus a 500 film is 1100
+  // until the hourly sweep takes the older files back. Room is made from
+  // their own oldest items first, which is that same sweep applied
+  // deliberately rather than an hour late.
+  const ownerRoot = await fsp.mkdtemp(path.join(os.tmpdir(), 'r3-owner-'))
+  const ownerStore = createItemStore(ownerRoot, {
+    idleTtlMs: 60 * DAY,
+    hardMaxMs: 365 * DAY,
+    budgetBytes: 10_000,
+    tombstoneMs: 60 * DAY
+  })
+  const seedOwned = async (
+    hash: string,
+    key: string,
+    bytes: number,
+    age: number,
+    owner: string
+  ): Promise<void> => {
+    const dir = await ownerStore.beginItem({
+      contentKey: key,
+      title: key,
+      infoHash: hash,
+      fileName: 'f.mkv',
+      sizeBytes: bytes,
+      fetchedAt: now - age,
+      lastAccessAt: now - age,
+      ownerDeviceId: owner,
+      visibility: 'private',
+      entitled: [owner]
+    })
+    await fsp.writeFile(path.join(dir, 'f.mkv'), 'x'.repeat(bytes))
+  }
+  await seedOwned('c1'.repeat(20), 'k-mine-old', 400, 9 * DAY, 'dev-a')
+  await seedOwned('c2'.repeat(20), 'k-mine-new', 200, 1 * DAY, 'dev-a')
+  await seedOwned('c3'.repeat(20), 'k-theirs', 900, 30 * DAY, 'dev-b')
+
+  assert.equal(
+    await ownerStore.makeRoomForOwner({ deviceId: 'dev-a', bytes: 500, quota: 1000 }),
+    true
+  )
+  assert.equal(
+    await ownerStore.get('c1'.repeat(20)),
+    null,
+    'their own oldest item goes to make room for what they are fetching'
+  )
+  assert.ok(await ownerStore.get('c2'.repeat(20)), 'and their newer one is kept')
+  assert.ok(
+    await ownerStore.get('c3'.repeat(20)),
+    "and nobody else's items are touched, however old"
+  )
+
+  // Bigger than the whole allocation: refused, and nothing evicted for it.
+  const ownedBefore = (await ownerStore.list()).length
+  assert.equal(
+    await ownerStore.makeRoomForOwner({ deviceId: 'dev-a', bytes: 5000, quota: 1000 }),
+    false,
+    'a file bigger than the whole allocation is refused outright'
+  )
+  assert.equal((await ownerStore.list()).length, ownedBefore, 'a hopeless request evicts nothing')
+
+  await fsp.rm(ownerRoot, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
+
   // Released, it goes on the next pass — deferred, not exempt.
   streaming.delete('a1'.repeat(20))
   assert.equal(
