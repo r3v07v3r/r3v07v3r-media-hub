@@ -982,9 +982,9 @@ function PlayerControls() {
     [subtitleDelay, command]
   )
 
-  // --- Friends activity -----------------------------------------------------
-  // Main decides whether this actually goes out (sharing is opt-in). Cleared on
-  // unmount so closing the player takes the activity down with it.
+  // --- Rooms activity -------------------------------------------------------
+  // Main decides where this actually goes out (sharing is opt-in per room).
+  // Cleared on unmount so closing the player takes the activity down with it.
   const activityRef = useRef({ timePos, paused })
   useEffect(() => {
     activityRef.current = { timePos, paused }
@@ -992,7 +992,7 @@ function PlayerControls() {
   useEffect(() => {
     if (!media) return
     const publish = (): void => {
-      window.api?.mediaHub?.friends
+      window.api?.mediaHub?.rooms
         ?.setActivity({
           mediaId: media.id,
           kind: media.kind,
@@ -1007,7 +1007,7 @@ function PlayerControls() {
     const timer = setInterval(publish, 20_000)
     return () => {
       clearInterval(timer)
-      window.api?.mediaHub?.friends?.setActivity(null).catch(() => {})
+      window.api?.mediaHub?.rooms?.setActivity(null).catch(() => {})
     }
   }, [media])
 

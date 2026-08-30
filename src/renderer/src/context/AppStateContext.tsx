@@ -1971,23 +1971,24 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     mediaHubSettingsRef.current = mediaHubSettings
   }, [playbackMedia, hostParty, mediaHubSettings])
 
-  // Answering "can I watch with you?" from a friend. Lives here rather
-  // than in the friends UI because it needs the things only this context
-  // has: whether we're actually playing something, and the ability to
-  // start hosting.
+  // Answering "can I watch with you?" from a room member. Lives here
+  // rather than in the rooms UI because it needs the things only this
+  // context has: whether we're actually playing something, and the
+  // ability to start hosting.
   //
   // This is what makes a SOLO watcher joinable at all. Someone watching
-  // alone has no party and therefore no code to publish, so a friend has
+  // alone has no party and therefore no code to publish, so a member has
   // nothing to click — the party is created on demand, only when somebody
   // actually asks, rather than forcing everyone to host speculatively.
+  // The reply goes back through the room the request arrived on.
   useEffect(() => {
-    const api = window.api?.mediaHub?.friends
+    const api = window.api?.mediaHub?.rooms
     if (!api) return
-    return api.onMessage((message) => {
+    return api.onMessage(({ roomId, message }) => {
       if (message.type !== 'friend-join-request') return
       const decline = (reason: string): void => {
         api
-          .send({
+          .send(roomId, {
             type: 'friend-join-declined',
             toFriendId: message.fromFriendId,
             fromFriendId: '',
@@ -2003,7 +2004,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       // tearing down a party other people may already be in.
       if (partyStatus?.inParty && partyStatus.role === 'host' && partyHostCode) {
         api
-          .send({
+          .send(roomId, {
             type: 'friend-join-offer',
             toFriendId: message.fromFriendId,
             fromFriendId: '',
@@ -2020,7 +2021,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         .current(mediaHubSettingsRef.current?.partyDisplayName || 'A friend', 'relay')
         .then((result) => {
           api
-            .send({
+            .send(roomId, {
               type: 'friend-join-offer',
               toFriendId: message.fromFriendId,
               fromFriendId: '',

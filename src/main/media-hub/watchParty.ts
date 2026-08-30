@@ -606,6 +606,13 @@ export function registerWatchPartyIpc(): void {
     const { code, name } = payload || {}
     const parsed = decodeShareCode(code)
     if (!parsed) throw new Error('That party code is invalid.')
+    // A v3 code is a ROOM invite, not a party. Connecting to it here
+    // would technically work — same relay, same crypto — and would leave
+    // the person sitting silently in a presence channel wondering why no
+    // film starts. Saying which kind of code it is beats pretending.
+    if (parsed.v === 3) {
+      throw new Error('That is a room code — join it from Rooms, then join a member from there.')
+    }
     const displayName =
       String(name || 'Guest')
         .trim()

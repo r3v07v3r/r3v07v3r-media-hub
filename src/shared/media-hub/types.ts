@@ -1445,7 +1445,7 @@ export interface UpdateCheckResult {
 }
 
 /** What a friend is watching, shared only when they've opted in. */
-export interface FriendActivity {
+export interface RoomActivity {
   mediaId: string
   kind: string
   title: string
@@ -1453,37 +1453,51 @@ export interface FriendActivity {
   /** Absolute position in seconds — lets the UI show "34 min in". */
   position: number
   paused: boolean
-  /** Present when this friend is joinable right now. Carried in the
+  /** Present when this member is joinable right now. Carried in the
    *  announcement so the UI can offer "join their party" without a round
    *  trip; absent means they're watching but not hosting anything. */
   partyCode?: string
 }
 
-/** One member of a friends group, as this device currently sees them.
- *  Soft state with a TTL — see friends.ts, presence is announced, never
- *  authoritative. */
-export interface FriendPresence {
+/** One member of a room, as this device currently sees them. Soft state
+ *  with a TTL — see rooms.ts, presence is announced, never authoritative. */
+export interface RoomMemberPresence {
   friendId: string
   name: string
-  activity: FriendActivity | null
+  activity: RoomActivity | null
 }
 
-export interface FriendsStatus {
-  inGroup: boolean
-  code?: string
-  selfId?: string
-  /** Whether the persistent relay socket is up right now. */
-  connected?: boolean
-  /** This device's own opt-in for publishing what it's watching. */
+/** One room as the renderer shows it. */
+export interface RoomView {
+  roomId: string
+  name: string
+  code: string
+  /** Whether this room's relay socket is up right now. */
+  connected: boolean
+  /** Whether THIS device created the room. */
+  isAdmin: boolean
+  /** False for rooms that predate admins — the migrated friends group,
+   *  and rooms joined by an old v2 code. Nothing hides that; the UI says
+   *  the room has no admin rather than inventing one. */
+  hasAdmin: boolean
+  /** Per-room: whether this device publishes what it's watching here. */
   sharing: boolean
-  friends: FriendPresence[]
+  members: RoomMemberPresence[]
 }
 
-/** Direct messages between friends, relayed through the group channel.
+export interface RoomsStatus {
+  /** This install's stable identity, same in every room. */
+  selfId: string
+  rooms: RoomView[]
+}
+
+/** Direct messages between members, relayed through a room's channel.
  *  Addressed by `toFriendId` — the relay fans out to everyone, so the
- *  recipient filters. There is nothing secret in them beyond what the
- *  group secret already protects. */
-export type FriendMessage =
+ *  recipient filters. The wire `type` strings still say "friend": members
+ *  on pre-rooms versions of the app are in the migrated room speaking
+ *  this dialect, and renaming the wire would split the room into two
+ *  populations that cannot see each other. */
+export type RoomMessage =
   // "Let me watch with you." Sent to someone who is watching but has no
   // party open, since a solo watcher has no code to hand out until asked.
   | { type: 'friend-join-request'; fromFriendId: string; toFriendId: string; fromName: string }
@@ -1491,6 +1505,13 @@ export type FriendMessage =
   | { type: 'friend-join-offer'; fromFriendId: string; toFriendId: string; partyCode: string }
   // Politely declining — they stopped watching, or hosting failed.
   | { type: 'friend-join-declined'; fromFriendId: string; toFriendId: string; reason: string }
+
+/** A peer message as delivered to the renderer: the room it arrived on
+ *  rides along so the reply goes back through the same room. */
+export interface RoomInboundMessage {
+  roomId: string
+  message: RoomMessage
+}
 
 /**
  * One piece of work the central scheduler is currently running — see

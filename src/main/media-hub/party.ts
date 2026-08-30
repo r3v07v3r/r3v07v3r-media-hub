@@ -35,7 +35,21 @@ export interface ShareCodePayloadV2 {
   name: string
 }
 
-export type ShareCodePayload = ShareCodePayloadV1 | ShareCodePayloadV2
+/**
+ * A room code. v2 plus the creator's stable friendId, which is what makes
+ * "admin" mean something offline: members trust the code they joined
+ * with, so the admin badge and the rename rule work with no relay
+ * round-trip and regardless of which transport carried the message.
+ */
+export interface ShareCodePayloadV3 {
+  v: 3
+  relay: PartyRelayEndpoint
+  secret: string
+  name: string
+  adminFriendId: string
+}
+
+export type ShareCodePayload = ShareCodePayloadV1 | ShareCodePayloadV2 | ShareCodePayloadV3
 
 export type PartyQueueEvent =
   | { type: 'suggest'; queueId: string; item: PartyQueueEntry['item']; suggestedBy?: string }
@@ -104,6 +118,31 @@ export function encodeRelayShareCode(input: {
   return Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url')
 }
 
+/** Encodes a room invite. Same validation discipline as the party codes
+ *  above; the only addition is the admin identity. */
+export function encodeRoomShareCode(input: {
+  relay: PartyRelayEndpoint
+  secret: string
+  name: string
+  adminFriendId: string
+}): string {
+  const { relay, secret, name, adminFriendId } = input
+  if (!isValidRelayEndpoint(relay) || typeof secret !== 'string' || !secret) {
+    throw new Error('Invalid room endpoint.')
+  }
+  if (typeof adminFriendId !== 'string' || !adminFriendId) {
+    throw new Error('A room code names its admin.')
+  }
+  const payload: ShareCodePayloadV3 = {
+    v: 3,
+    relay,
+    secret,
+    name: String(name || '').slice(0, 40),
+    adminFriendId: adminFriendId.slice(0, 64)
+  }
+  return Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url')
+}
+
 export function decodeShareCode(code: unknown): ShareCodePayload | null {
   try {
     const payload = JSON.parse(Buffer.from(String(code || ''), 'base64url').toString('utf8')) as {
@@ -113,6 +152,19 @@ export function decodeShareCode(code: unknown): ShareCodePayload | null {
       relay?: unknown
       secret?: unknown
       name?: unknown
+      adminFriendId?: unknown
+    }
+    if (payload.v === 3) {
+      if (
+        !isValidRelayEndpoint(payload.relay) ||
+        typeof payload.secret !== 'string' ||
+        !payload.secret ||
+        typeof payload.adminFriendId !== 'string' ||
+        !payload.adminFriendId
+      ) {
+        return null
+      }
+      return payload as unknown as ShareCodePayloadV3
     }
     if (payload.v === 2) {
       if (

@@ -3,7 +3,7 @@
 import { useState } from 'react'
 import { useAppState } from '@renderer/context/AppStateContext'
 import { Icon } from '@renderer/components/icons/Icon'
-import { FriendsSection } from './FriendsSection'
+import { RoomsSection } from './RoomsSection'
 import styles from './PartyPanel.module.css'
 
 export function PartyPanel() {
@@ -254,10 +254,10 @@ export function PartyPanel() {
           </button>
         </>
       )}
-      {/* Friends live alongside the party rather than in Settings: the two
-          are the same social surface, and joining a friend IS starting a
-          party. */}
-      <FriendsSection />
+      {/* Rooms live alongside the party rather than in Settings: the two
+          are the same social surface, and joining a room member IS
+          starting a party. */}
+      <RoomsSection />
     </div>
   )
 }

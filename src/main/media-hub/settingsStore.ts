@@ -74,17 +74,20 @@ export interface MediaHubRawSettings {
   partySyncUrl?: string
   partySyncInviteKey?: string
   partyDisplayName?: string
-  /** Stable per-install identity for friends groups. The relay's connId
-   *  changes every connection, so presence needs something durable to
-   *  recognise the same person by. Not a secret and never leaves the
-   *  group's encrypted channel. */
+  /** Stable per-install identity, the same in every room. The relay's
+   *  connId changes every connection, so presence needs something durable
+   *  to recognise the same person by. Not a secret and never leaves a
+   *  room's encrypted channel. */
   friendId?: string
-  /** The friends group this install belongs to, as a v2 relay share code. */
+  /** LEGACY — the single pre-rooms friends group, as a v2 share code.
+   *  Read once by the rooms migration and then deleted; only still
+   *  declared so the migration can read it. */
   friendsGroupCode?: string
-  /** Opt-in: publish what this device is watching to the group. Off means
-   *  the activity field is omitted entirely, so "not sharing" is
-   *  indistinguishable from "not watching". */
+  /** LEGACY — the pre-rooms global sharing opt-in. Becomes the migrated
+   *  room's per-room setting; see migrateLegacyRooms. */
   friendsShareActivity?: boolean
+  /** Every room this install belongs to. See roomRules.ts's StoredRoom. */
+  rooms?: import('./roomRules').StoredRoom[]
   theme?: string
   subtitleLanguage?: string
   audioLanguage?: string
