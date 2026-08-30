@@ -11,6 +11,7 @@
 // requirement.
 
 import type { MediaItem } from '@renderer/types'
+import type { CatalogQuery, MediaKind } from '@shared/media-hub/types'
 import {
   bucketTest,
   findBucket,
@@ -53,6 +54,42 @@ export interface CategoryFilterState {
   hideCompleted: boolean
   hideDisliked: boolean
   sort: SortKey
+}
+
+/**
+ * One page of the browse grid, as a question for the backend.
+ *
+ * Field-for-field, and deliberately boring: CatalogQuery was SHAPED so
+ * this state maps onto it directly (its own doc comment says so), and
+ * any cleverness here — defaulting a null, reinterpreting a bucket,
+ * dropping a hide-flag — would be exactly the translation-layer drift
+ * that shape exists to prevent. The hide-flags matter most: applied by
+ * the query they keep pages full-sized and `total` honest; re-applied
+ * client-side they make pages shrink unpredictably and the count
+ * describe something the person is not looking at.
+ */
+export function filterStateToCatalogQuery(
+  kind: MediaKind,
+  filters: CategoryFilterState,
+  page: { offset: number; limit: number }
+): CatalogQuery {
+  return {
+    kind,
+    genre: filters.genre,
+    year: filters.year,
+    minRating: filters.minRating,
+    runtimeBucket: filters.runtimeBucket,
+    seasonsBucket: filters.seasonsBucket,
+    episodeLengthBucket: filters.episodeLengthBucket,
+    episodesBucket: filters.episodesBucket,
+    status: filters.status,
+    hideWatched: filters.hideWatched,
+    hideCompleted: filters.hideCompleted,
+    hideDisliked: filters.hideDisliked,
+    sort: filters.sort,
+    offset: page.offset,
+    limit: page.limit
+  }
 }
 
 export const DEFAULT_FILTER_STATE: CategoryFilterState = {

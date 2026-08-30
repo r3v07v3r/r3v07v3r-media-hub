@@ -1,22 +1,20 @@
 'use client'
 
-// Filter/sort bar for the Movies/Series/Anime category pages. Every
-// dropdown here is driven by lib/mediaHub/categoryFilters.ts — the shared
-// client-side filter/sort engine — because the backend's catalog.list(kind)
-// has no server-side filter/sort/pagination at all (see that file's header
-// comment). Genre/Year/Rating/Status option lists are derived from
-// whatever values actually exist in the currently-loaded pool
-// (availableGenres/availableYears/availableStatuses) rather than a
-// hardcoded guess at the backend's vocabulary, so a dropdown option never
-// promises a result set that comes back empty.
+// Filter/sort bar for the Movies/Series/Anime category pages.
+//
+// Genre/Year/Status option lists come from catalog:facets — the values
+// that actually occur in the INDEX, which is the library, not the loaded
+// slice. That distinction was invisible while the whole catalog sat in
+// one array and is the point of stage 3: an option never promises a
+// result set that comes back empty, and never hides one the array just
+// had not loaded yet. Bucket/rating/sort options remain the static
+// vocabularies from categoryFilters.ts; the STATE and its URL
+// round-tripping are untouched.
 
-import { MediaItem } from '@renderer/types'
 import { Icon } from '@renderer/components/icons/Icon'
 import { CategoryConfig } from '@renderer/lib/mediaHub/categoryConfig'
+import type { CatalogFacets } from '@shared/media-hub/types'
 import {
-  availableGenres,
-  availableYears,
-  availableStatuses,
   CategoryFilterState,
   RUNTIME_BUCKETS,
   SEASONS_BUCKETS,
@@ -32,10 +30,10 @@ import styles from './CategoryFilterBar.module.css'
 
 export interface CategoryFilterBarProps {
   config: CategoryConfig
-  /** The kind's full, unfiltered pool — used only to compute each
-   *  dropdown's option list (available genres/years/statuses), never
-   *  filtered itself here. */
-  items: MediaItem[]
+  /** The index's own vocabulary for this kind (catalog:facets) — what
+   *  the Genre/Year/Status dropdowns list. Null while the first fetch is
+   *  out; the dropdowns render empty rather than guessing. */
+  facets: CatalogFacets | null
   filters: CategoryFilterState
   onChange: (next: CategoryFilterState) => void
   /** Applies a saved view by its serialised query — the page owns the URL, so
@@ -46,7 +44,7 @@ export interface CategoryFilterBarProps {
 
 export function CategoryFilterBar({
   config,
-  items,
+  facets,
   filters,
   onChange,
   onApplySaved,
@@ -74,9 +72,9 @@ export function CategoryFilterBar({
     refreshMediaHubSettings()
   }
 
-  const genres = availableGenres(items)
-  const years = availableYears(items)
-  const statuses = availableStatuses(items)
+  const genres = facets?.genres ?? []
+  const years = facets?.years ?? []
+  const statuses = facets?.statuses ?? []
   const hasActiveFilter =
     filters.genre ||
     filters.year ||

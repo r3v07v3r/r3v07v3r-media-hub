@@ -8,14 +8,14 @@ import { ArtworkImage } from '@renderer/components/media/ArtworkImage'
 import { resolveArtwork } from '@renderer/lib/artwork'
 import type { MediaItem } from '@renderer/types'
 import {
-  applyCategoryFilters,
   applyWatchStateFilters,
   filterStateFromSearchParams,
   filterStateToSearchParams,
   matchesCategoryKind,
-  sortMediaItems,
   type HideStateDefaults
 } from '@renderer/lib/mediaHub/categoryFilters'
+import { useCatalogBrowse, useCatalogKindTotals } from '@renderer/lib/mediaHub/useCatalogBrowse'
+import type { CatalogFacets } from '@shared/media-hub/types'
 import { ANIME_CONFIG, type CategoryConfig } from '@renderer/lib/mediaHub/categoryConfig'
 import { useRestoreBrowsingOrigin } from '@renderer/lib/mediaHub/useRestoreBrowsingOrigin'
 import { useBatchReveal } from '@renderer/lib/mediaHub/useBatchReveal'
@@ -217,8 +217,21 @@ function EverythingSection({
   onOpen,
   emptyMessage,
   initialVisibleCount,
-  viewKey
+  viewKey,
+  backend
 }: ShelfProps & {
+  /** Present when the grid pages from the INDEX (catalog:query) instead
+   *  of slicing a loaded array — the stage-3 mode, and the default
+   *  outside of search. The sentinel then asks the backend for the next
+   *  page rather than revealing more of what is already here, and the
+   *  count label quotes the exact filtered total instead of the length
+   *  of whatever happened to load. */
+  backend?: {
+    total: number
+    hasMore: boolean
+    loading: boolean
+    onLoadMore: () => void
+  }
   /** Seeds the initial reveal batch above EVERYTHING_BATCH — used when
    *  restoring a browsing position (see useRestoreBrowsingOrigin) whose
    *  focused tile was further down the list than one batch would
@@ -245,6 +258,10 @@ function EverythingSection({
   useEffect(() => {
     itemsLengthRef.current = items.length
   }, [items.length])
+  const backendRef = useRef(backend)
+  useEffect(() => {
+    backendRef.current = backend
+  }, [backend])
   const observerRef = useRef<IntersectionObserver | null>(null)
   const sentinelRef = useCallback(
     (node: HTMLLIElement | null) => {
@@ -253,7 +270,11 @@ function EverythingSection({
       if (!node) return
       const observer = new IntersectionObserver(
         (entries) => {
-          if (entries[0]?.isIntersecting) {
+          if (!entries[0]?.isIntersecting) return
+          // Backend mode fetches the next PAGE; reveal mode mounts more
+          // of an array already in memory. Same sentinel, two meanings.
+          if (backendRef.current) backendRef.current.onLoadMore()
+          else {
             setVisibleCount((count) => Math.min(count + EVERYTHING_BATCH, itemsLengthRef.current))
           }
         },
@@ -264,8 +285,13 @@ function EverythingSection({
     },
     [setVisibleCount]
   )
-  const visibleItems = items.slice(0, visibleCount)
-  const hasMore = visibleCount < items.length
+  // In backend mode every fetched row renders — arrival is already paged
+  // in sixties, so the DOM grows in batches without a second reveal
+  // layer on top.
+  const visibleItems = backend ? items : items.slice(0, visibleCount)
+  const hasMore = backend ? backend.hasMore : visibleCount < items.length
+  const countLabel = backend ? backend.total : items.length
+  const showLoading = Boolean(backend?.loading) && items.length === 0
 
   return (
     <section className={styles.everything} aria-label="Everything">
@@ -274,10 +300,15 @@ function EverythingSection({
           <Icon name="grid" size={17} />
           Everything
         </h2>
-        {items.length > 0 && <span className={styles.everythingCount}>{items.length} titles</span>}
+        {countLabel > 0 && (
+          <span className={styles.everythingCount}>{countLabel.toLocaleString()} titles</span>
+        )}
       </div>
       {items.length === 0 ? (
-        <EmptyShelf message={emptyMessage} />
+        <EmptyShelf
+          message={showLoading ? 'Loading the library…' : emptyMessage}
+          icon={showLoading ? 'clock' : 'grid'}
+        />
       ) : (
         <ul className={styles.everythingGrid}>
           {visibleItems.map((media) => (
@@ -419,6 +450,7 @@ export function LibraryPage({ config }: { config: CategoryConfig }) {
   const {
     catalog,
     catalogKindStates,
+    adaptCatalogItems,
     refreshCatalog,
     continueWatching,
     recommendations,
@@ -454,16 +486,36 @@ export function LibraryPage({ config }: { config: CategoryConfig }) {
     () => catalog.filter((item) => matchesCategoryKind(item, config.kind)),
     [catalog, config.kind]
   )
-  const filtered = useMemo(
-    () => sortMediaItems(applyCategoryFilters(library, filters), filters.sort),
-    [library, filters]
-  )
+  const kindState = catalogKindStates[config.kind]
   const searchActive = categorySearch.kind === config.kind && categorySearch.query.trim().length > 0
+  // STAGE 3: the browse grid pages from the index (catalog:query) — SQL
+  // filters, SQL sort, exact totals — instead of filtering the loaded
+  // array. The array (`library`) remains only for the curated rails and
+  // as the option pool nothing below needs it to be complete for.
+  const browse = useCatalogBrowse(config.kind, filters, kindState, adaptCatalogItems, !searchActive)
+  const kindTotals = useCatalogKindTotals(config.kind, kindState)
+  // Dropdown options come from the index too — the library's actual
+  // genres/years/statuses, not whatever slice happens to be loaded.
+  const [facets, setFacets] = useState<CatalogFacets | null>(null)
+  useEffect(() => {
+    let cancelled = false
+    window.api?.mediaHub?.catalog
+      .facets(config.kind)
+      .then((result) => {
+        if (!cancelled) setFacets(result)
+      })
+      .catch(() => {
+        // The bar renders with empty option lists until a later refresh.
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [config.kind, kindState])
   const searchResults = useMemo(
     () => applyWatchStateFilters(categorySearch.results, filters),
     [categorySearch.results, filters]
   )
-  const browseItems = searchActive ? searchResults : filtered
+  const browseItems = searchActive ? searchResults : browse.items
   // Identifies the current browse view for EverythingSection's
   // reveal-depth reset (see useBatchReveal's own doc comment) — anything
   // that changes this is a genuine filter/sort/search/kind change the
@@ -473,10 +525,10 @@ export function LibraryPage({ config }: { config: CategoryConfig }) {
     ? `${config.kind}:search:${categorySearch.query}`
     : `${config.kind}:filters:${paramsString}`
   const heroItems = useMemo(() => {
-    const ranking = [...(filtered.length ? filtered : library)]
+    const ranking = [...(browse.items.length ? browse.items : library)]
     ranking.sort((a, b) => (b.communityRating ?? 0) - (a.communityRating ?? 0))
     return ranking.slice(0, 5)
-  }, [filtered, library])
+  }, [browse.items, library])
   const activeHero = heroItems[Math.min(heroIndex, Math.max(heroItems.length - 1, 0))] ?? null
 
   const continuing = useMemo(
@@ -531,11 +583,23 @@ export function LibraryPage({ config }: { config: CategoryConfig }) {
   // seeding an arbitrarily deep reveal batch for a restore that
   // useRestoreBrowsingOrigin correctly never runs.
   const restoreVisibleCount = useMemo(() => {
+    if (searchActive === false) return undefined
     if (!pendingRestore?.focusedItemId) return undefined
     if (`${location.pathname}${location.search}` !== pendingRestore.route) return undefined
     const idx = browseItems.findIndex((item) => item.id === pendingRestore.focusedItemId)
     return idx >= 0 ? Math.ceil((idx + 1) / EVERYTHING_BATCH) * EVERYTHING_BATCH : undefined
-  }, [pendingRestore, browseItems, location.pathname, location.search])
+  }, [searchActive, pendingRestore, browseItems, location.pathname, location.search])
+  // Backend-mode counterpart of restoreVisibleCount: a Back-restored
+  // position may sit pages past the first sixty, so the hook pages
+  // forward (bounded) until the focused tile exists for
+  // useRestoreBrowsingOrigin to scroll to. Same route gate as above —
+  // a stale origin from another surface must not trigger a crawl here.
+  const ensureItem = browse.ensureItem
+  useEffect(() => {
+    if (searchActive || !pendingRestore?.focusedItemId) return
+    if (`${location.pathname}${location.search}` !== pendingRestore.route) return
+    void ensureItem(pendingRestore.focusedItemId)
+  }, [searchActive, pendingRestore, location.pathname, location.search, ensureItem])
   const selected = useMemo(
     () =>
       [...browseItems, ...continuing, ...recommended, ...heroItems].find(
@@ -543,10 +607,17 @@ export function LibraryPage({ config }: { config: CategoryConfig }) {
       ) ?? activeHero,
     [activeHero, browseItems, continuing, heroItems, recommended, selectedId]
   )
-  const kindState = catalogKindStates[config.kind]
   const heroArt = activeHero ? resolveArtwork(activeHero) : null
 
-  const completedCount = library.filter((item) => item.completed).length
+  // Exact figures from the index, however deep it grows — the loaded
+  // array only ever bounded these. Falls back to the array's own counts
+  // for the beat before the index has seeded on a first run. Planned
+  // stays array-derived: myList is an id-set with no kinds, and making
+  // that exact is a later, honest change rather than a quiet guess here.
+  const libraryTotal = kindTotals.total || library.length
+  const completedCount = kindTotals.total
+    ? kindTotals.completed
+    : library.filter((item) => item.completed).length
   const inListCount = library.filter((item) => item.inMyList).length
 
   useRestoreBrowsingOrigin(true)
@@ -593,7 +664,7 @@ export function LibraryPage({ config }: { config: CategoryConfig }) {
             </span>
             <h1>{config.label}</h1>
             <p className={styles.libraryCount}>
-              {library.length.toLocaleString()} {config.pluralLabel} in your library
+              {libraryTotal.toLocaleString()} {config.pluralLabel} in your library
             </p>
             <div className={styles.stats}>
               <span>
@@ -642,11 +713,11 @@ export function LibraryPage({ config }: { config: CategoryConfig }) {
         <div className={styles.filters}>
           <CategoryFilterBar
             config={config}
-            items={library}
+            facets={facets}
             filters={filters}
             onApplySaved={(query) => setSearchParams(new URLSearchParams(query), { replace: true })}
             onChange={setFilters}
-            resultCount={filtered.length}
+            resultCount={searchActive ? searchResults.length : browse.total}
           />
           {kindState === 'failed' && (
             <div className={styles.offlineBanner} role="status">
@@ -725,10 +796,22 @@ export function LibraryPage({ config }: { config: CategoryConfig }) {
           onOpen={openDetail}
           initialVisibleCount={restoreVisibleCount}
           viewKey={viewKey}
+          backend={
+            searchActive
+              ? undefined
+              : {
+                  total: browse.total,
+                  hasMore: browse.hasMore,
+                  loading: browse.loading,
+                  onLoadMore: browse.loadMore
+                }
+          }
           emptyMessage={
             searchActive
               ? `No ${config.pluralLabel} matched that search.`
-              : `Try widening a filter or clearing it to see more ${config.pluralLabel}.`
+              : browse.error
+                ? `The library index could not be read. Retry above.`
+                : `Try widening a filter or clearing it to see more ${config.pluralLabel}.`
           }
         />
 
