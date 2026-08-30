@@ -9,6 +9,7 @@
 
 import crypto from 'node:crypto'
 import type { PartyQueueEntry } from '../../shared/media-hub/types'
+import { idOfRawPub } from './roomIdentity'
 
 export interface PartyLanEndpoint {
   ip: string
@@ -162,8 +163,12 @@ export function encodeRelayShareCode(input: {
 
 const SHARE_COMPACT_DIRECT = 0x31
 const SHARE_COMPACT_RELAY = 0x32
+const SHARE_COMPACT_ROOM = 0x33
 const SHARE_COMPACT_SECRET_BYTES = 24
 const SHARE_COMPACT_IPV4_TAG = 0
+/** Raw Ed25519 public key — see roomIdentity's RAW_PUB_BYTES. */
+const SHARE_COMPACT_PUB_BYTES = 32
+const SHARE_COMPACT_JOIN_FLAG = 0x01
 
 /** The secret only fits the compact form if it is exactly the 24 random bytes
  *  the host mints, encoded canonically — anything else would not round-trip
@@ -265,7 +270,126 @@ export function encodeRelayShareCodeCompact(input: {
   ]).toString('base64url')
 }
 
+/** A UUID packs to its 16 raw bytes; anything else does not fit. */
+function uuidBytes(value: string): Buffer | null {
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)) return null
+  return Buffer.from(value.replace(/-/g, ''), 'hex')
+}
+
+function uuidFromBytes(buf: Buffer): string {
+  const hex = buf.toString('hex')
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
+}
+
+/** The relay URL travels without its scheme, which is always https (the
+ *  endpoint validators refuse anything else) and would otherwise cost eight
+ *  bytes in every code. */
+function relayHostBytes(url: string): Buffer | null {
+  if (!/^https:\/\//i.test(url)) return null
+  const host = Buffer.from(url.replace(/^https:\/\//i, '').replace(/\/+$/, ''), 'utf8')
+  return host.length >= 1 && host.length <= 255 ? host : null
+}
+
+/** Compact replacement for `encodeRoomShareCode`. Falls back to it verbatim
+ *  when the inputs do not fit the packed layout.
+ *
+ *  The admin's id is NOT carried: it is the sha256 of the public key that is
+ *  carried, so the decoder recomputes it. That is what the v4 payload's own
+ *  doc comment already promised — "the two fields cannot disagree without
+ *  failing verification" — made structural, and it saves 32 bytes. If a
+ *  caller ever hands us an id that does not match its key, the pair cannot
+ *  be reconstructed, so the JSON form (which can carry the disagreement)
+ *  is used instead of quietly rewriting the id. */
+export function encodeRoomShareCodeCompact(input: {
+  relay: PartyRelayEndpoint
+  secret: string
+  name: string
+  admin: { id: string; pub: string }
+  join?: string
+}): string {
+  const { relay, secret, name, admin, join } = input
+  if (!isValidRelayEndpoint(relay) || typeof secret !== 'string' || !secret) {
+    throw new Error('Invalid room endpoint.')
+  }
+  if (!admin?.id || !admin?.pub) {
+    throw new Error('A room code names its admin.')
+  }
+  const roomName = String(name || '').slice(0, 40)
+  const nameBytes = Buffer.from(roomName, 'utf8')
+  const secretBuf = shareSecretBytes(secret)
+  const roomId = uuidBytes(relay.roomId)
+  const host = relayHostBytes(relay.url)
+  const pub = Buffer.from(admin.pub, 'base64url')
+  const joinBuf = join ? uuidBytes(String(join)) : null
+  if (
+    !secretBuf ||
+    !roomId ||
+    !host ||
+    pub.length !== SHARE_COMPACT_PUB_BYTES ||
+    pub.toString('base64url') !== admin.pub ||
+    idOfRawPub(admin.pub) !== admin.id ||
+    nameBytes.length > 255 ||
+    (join ? !joinBuf : false)
+  ) {
+    return encodeRoomShareCode({ relay, secret, name, admin, join })
+  }
+  return Buffer.concat([
+    Buffer.from([SHARE_COMPACT_ROOM]),
+    roomId,
+    secretBuf,
+    pub,
+    Buffer.from([joinBuf ? SHARE_COMPACT_JOIN_FLAG : 0]),
+    joinBuf || Buffer.alloc(0),
+    Buffer.from([host.length]),
+    host,
+    Buffer.from([nameBytes.length]),
+    nameBytes
+  ]).toString('base64url')
+}
+
 function decodeCompactShareCode(buf: Buffer): ShareCodePayload | null {
+  if (buf[0] === SHARE_COMPACT_ROOM) {
+    const cursor = { at: 1 }
+    const need = 16 + SHARE_COMPACT_SECRET_BYTES + SHARE_COMPACT_PUB_BYTES + 1
+    if (buf.length < cursor.at + need) return null
+    const roomId = uuidFromBytes(buf.subarray(cursor.at, cursor.at + 16))
+    cursor.at += 16
+    const secret = buf.subarray(cursor.at, cursor.at + SHARE_COMPACT_SECRET_BYTES)
+    cursor.at += SHARE_COMPACT_SECRET_BYTES
+    const pub = buf.subarray(cursor.at, cursor.at + SHARE_COMPACT_PUB_BYTES)
+    cursor.at += SHARE_COMPACT_PUB_BYTES
+    const hasJoin = buf[cursor.at] === SHARE_COMPACT_JOIN_FLAG
+    cursor.at += 1
+    let join = ''
+    if (hasJoin) {
+      if (cursor.at + 16 > buf.length) return null
+      join = uuidFromBytes(buf.subarray(cursor.at, cursor.at + 16))
+      cursor.at += 16
+    }
+    if (cursor.at >= buf.length) return null
+    const hostLen = buf[cursor.at]
+    cursor.at += 1
+    if (cursor.at + hostLen + 1 > buf.length) return null
+    const relay: PartyRelayEndpoint = {
+      url: `https://${buf.subarray(cursor.at, cursor.at + hostLen).toString('utf8')}`,
+      roomId
+    }
+    cursor.at += hostLen
+    const nameLen = buf[cursor.at]
+    cursor.at += 1
+    if (buf.length !== cursor.at + nameLen) return null
+    if (!isValidRelayEndpoint(relay)) return null
+    const pubB64 = pub.toString('base64url')
+    return {
+      v: 4,
+      relay,
+      secret: secret.toString('base64url'),
+      name: buf.subarray(cursor.at).toString('utf8'),
+      // Recomputed, never carried — see encodeRoomShareCodeCompact.
+      admin: { id: idOfRawPub(pubB64), pub: pubB64 },
+      ...(hasJoin ? { join } : {})
+    }
+  }
   if (buf[0] === SHARE_COMPACT_RELAY) {
     const urlAt = 1 + 16
     if (buf.length < urlAt + 1) return null

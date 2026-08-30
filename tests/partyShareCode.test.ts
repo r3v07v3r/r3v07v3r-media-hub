@@ -3,8 +3,11 @@ import crypto from 'node:crypto'
 import {
   decodeShareCode,
   encodeRelayShareCodeCompact,
+  encodeRoomShareCode,
+  encodeRoomShareCodeCompact,
   encodeShareCodeCompact
 } from '../src/main/media-hub/party.ts'
+import { generateIdentity, idOfRawPub } from '../src/main/media-hub/roomIdentity.ts'
 
 let pass = 0
 
@@ -139,6 +142,69 @@ check('refuses to encode an invalid endpoint', () => {
       secret: SECRET
     })
   )
+})
+
+const IDENTITY = generateIdentity()
+const ADMIN = { id: IDENTITY.id, pub: IDENTITY.pub }
+const JOIN = crypto.randomUUID()
+const ROOM = { relay: RELAY, secret: SECRET, name: 'Movie night', admin: ADMIN, join: JOIN }
+
+check('round-trips a room code', () => {
+  const decoded = decodeShareCode(encodeRoomShareCodeCompact(ROOM))
+  assert.ok(decoded && decoded.v === 4)
+  assert.deepEqual(decoded.relay, RELAY)
+  assert.equal(decoded.secret, SECRET)
+  assert.equal(decoded.name, 'Movie night')
+  assert.deepEqual(decoded.admin, ADMIN)
+  assert.equal(decoded.join, JOIN)
+})
+
+check('round-trips a room code with no join secret', () => {
+  const decoded = decodeShareCode(encodeRoomShareCodeCompact({ ...ROOM, join: undefined }))
+  assert.ok(decoded && decoded.v === 4)
+  assert.deepEqual(decoded.admin, ADMIN)
+  assert.equal(decoded.join, undefined)
+})
+
+check('keeps a non-ASCII room name intact', () => {
+  const name = 'Filmabend 🎬 déjà vu'
+  const decoded = decodeShareCode(encodeRoomShareCodeCompact({ ...ROOM, name }))
+  assert.ok(decoded && decoded.v === 4)
+  assert.equal(decoded.name, name)
+})
+
+check('a room code is far shorter than the JSON it replaces', () => {
+  const compact = encodeRoomShareCodeCompact(ROOM)
+  const json = encodeRoomShareCode(ROOM)
+  assert.ok(compact.length < json.length / 1.7, `${compact.length} vs ${json.length}`)
+  assert.ok(compact.length < 200, `room code was ${compact.length} chars`)
+})
+
+check('the admin id is recomputed from the key, never carried', () => {
+  const decoded = decodeShareCode(encodeRoomShareCodeCompact(ROOM))
+  assert.ok(decoded && decoded.v === 4)
+  // The id is sha256 of the raw key, so a packed code cannot express a
+  // pair that disagrees — which is exactly the v4 payload's promise.
+  assert.equal(decoded.admin.id, idOfRawPub(decoded.admin.pub))
+})
+
+check('falls back to the legacy form when the admin id contradicts its key', () => {
+  const other = generateIdentity()
+  const mismatched = { ...ROOM, admin: { id: other.id, pub: IDENTITY.pub } }
+  const decoded = decodeShareCode(encodeRoomShareCodeCompact(mismatched))
+  assert.ok(decoded && decoded.v === 4)
+  // Preserved as given rather than quietly rewritten to agree.
+  assert.deepEqual(decoded.admin, mismatched.admin)
+})
+
+check('rejects truncated and over-long room codes', () => {
+  const code = encodeRoomShareCodeCompact(ROOM)
+  assert.equal(decodeShareCode(code.slice(0, code.length - 4)), null)
+  assert.equal(decodeShareCode(code + 'AAAA'), null)
+})
+
+check('refuses to encode a room code with no admin', () => {
+  assert.throws(() => encodeRoomShareCodeCompact({ ...ROOM, admin: { id: '', pub: '' } }))
 })
 
 console.log(`\n${pass} passed`)

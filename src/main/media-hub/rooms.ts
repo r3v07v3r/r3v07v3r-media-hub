@@ -39,7 +39,12 @@ import type {
   RoomsStatus,
   RoomView
 } from '../../shared/media-hub/types'
-import { decodeShareCode, decryptMessage, encodeRoomShareCode, encryptMessage } from './party'
+import {
+  decodeShareCode,
+  decryptMessage,
+  encodeRoomShareCodeCompact,
+  encryptMessage
+} from './party'
 import {
   ANNOUNCE_INTERVAL_MS,
   acceptRoomName,
@@ -791,7 +796,7 @@ export function registerRoomsIpc(): void {
       // code — it is the creator's credential, and the code is handed to
       // everyone. The joinSecret IS in the code: it is the room's door
       // key, and an invite that cannot open the door invites nobody.
-      const code = encodeRoomShareCode({
+      const code = encodeRoomShareCodeCompact({
         relay: { url: creds.url, roomId },
         secret,
         name,
@@ -997,7 +1002,7 @@ export function registerRoomsIpc(): void {
       const previous = room.secret
       const newSecret = crypto.randomBytes(24).toString('base64url')
       const identity = roomsIdentity()
-      const newCode = encodeRoomShareCode({
+      const newCode = encodeRoomShareCodeCompact({
         relay: { url: room.relayUrl, roomId: room.roomId },
         secret: newSecret,
         name: room.stored.name,
