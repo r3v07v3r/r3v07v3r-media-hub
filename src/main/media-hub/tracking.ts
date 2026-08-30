@@ -755,6 +755,28 @@ async function pushPendingToServices(priority: TaskPriority): Promise<Set<string
     failed.add(entry.id)
   }
 
+  // TRAKT TOO, and it was the gap. This queue reached Simkl and MAL, so a
+  // "Use Local" decision left Trakt holding the value the person had just
+  // ruled against — and the next check against Trakt would raise it all
+  // over again. "The tracking services that are connected" has to mean all
+  // of them, or resolving a disagreement in one place creates one in
+  // another.
+  //
+  // Failures here do NOT un-confirm the entry, unlike MAL above. Simkl is
+  // the service this queue's verdict is computed against and MAL's
+  // progress is part of the same reconciliation; Trakt is a third party to
+  // it. Dropping a decision Simkl accepted because Trakt was unreachable
+  // would re-raise a disagreement that no longer exists. pushTraktHistory
+  // already logs and swallows its own errors for the same reason.
+  for (const entry of queue) {
+    if (!confirmed.has(entry.id)) continue
+    await pushTraktHistory(
+      { id: entry.id, type: entry.type, title: entry.title, year: entry.year },
+      {},
+      locallyWatched.has(entry.id) ? 'add' : 'remove'
+    )
+  }
+
   // The pushes above bypass simklWatchedSnapshot()'s own request path, so
   // its 20-minute cache never learns about them; left alone, the next
   // check compares against the stale pre-push snapshot and re-reports
