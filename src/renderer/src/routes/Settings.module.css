@@ -1188,3 +1188,35 @@
   font-weight: 600;
   color: var(--text-primary);
 }
+
+/* One line per service, so a pull can be read at a glance rather than
+   summed into a single number that hides which one failed. */
+.watchlistReport {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 4px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.watchlistReport li {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+}
+
+.watchlistReport li span:first-child {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+/* The service's own error text, which is usually specific enough to
+   act on. Wrapped rather than truncated for that reason. */
+.reportError span:last-child {
+  color: var(--accent-red, #ff6b6b);
+  text-align: right;
+  white-space: normal;
+}

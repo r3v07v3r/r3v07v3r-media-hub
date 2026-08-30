@@ -24,6 +24,7 @@ import type {
   SourcePreference
 } from '@shared/media-hub/types'
 import styles from './Settings.module.css'
+import { WatchlistSyncSection } from '@renderer/components/settings/WatchlistSyncSection'
 
 function formatBytes(bytes: number): string {
   if (bytes <= 0) return '0 MB'
@@ -1819,6 +1820,10 @@ export default function SettingsPage({
               <MalSection />
               <SubDLSection />
               <OpenSubtitlesSection />
+              {/* Beside the accounts it reports on, rather than in a
+                  group of its own: what it says is only meaningful
+                  next to which of them are connected. */}
+              <WatchlistSyncSection />
             </div>
           </section>
         )}

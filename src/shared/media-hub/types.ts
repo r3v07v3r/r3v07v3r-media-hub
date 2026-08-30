@@ -643,6 +643,25 @@ export interface TrackingListResult {
  *  account, so there is no list of yours to fetch. */
 export type PlannedServiceId = 'simkl' | 'trakt' | 'mal'
 
+/** What one service's watchlist pull did. Reported per service because
+ *  the failure that matters is the quiet one: two lists arriving and a
+ *  third erroring looks exactly like a short list unless somebody says. */
+export interface PlannedServiceReport {
+  service: PlannedServiceId
+  connected: boolean
+  pulled: number
+  /** Entries dropped for want of an id this app could file them under —
+   *  anime, in practice. Counted so the gap is visible. */
+  unmapped: number
+  error?: string
+}
+
+export interface PlannedSyncReport {
+  at: number
+  services: PlannedServiceReport[]
+  added: number
+}
+
 export interface DislikedListResult {
   disliked: TrackedItem[]
 }
