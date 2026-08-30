@@ -15,14 +15,11 @@ import { useAppState } from '@renderer/context/AppStateContext'
 import { Icon } from '@renderer/components/icons/Icon'
 import { useRestoreBrowsingOrigin } from '@renderer/lib/mediaHub/useRestoreBrowsingOrigin'
 import { useMediaHubLists, useMediaHubPlays } from '@renderer/lib/mediaHub/hooks'
-import { resolveArtwork } from '@renderer/lib/artwork'
-import { ArtworkImage } from '@renderer/components/media/ArtworkImage'
-import { WatchStatusBadge } from '@renderer/components/media/WatchStatusBadge'
-import { getWatchStatus } from '@renderer/lib/mediaHub/watchStatus'
 import { applyWatchStateFilters } from '@renderer/lib/mediaHub/categoryFilters'
 import type { MediaItem } from '@renderer/types'
 import type { CustomListItem, PlayRecord, ViewingStats } from '@shared/media-hub/types'
 import styles from './MyStuff.module.css'
+import { MediaGrid } from '@renderer/components/category/MediaGrid'
 
 type TabId = 'list' | 'progress' | 'watched' | 'rated' | 'history' | 'stats' | 'dropped'
 
@@ -61,60 +58,6 @@ function playedWhen(iso: string): string {
   if (days === 1) return `Yesterday, ${when.toLocaleTimeString([], { timeStyle: 'short' })}`
   if (days < 7) return `${days} days ago`
   return when.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })
-}
-
-function TitleGrid({
-  items,
-  emptyMessage,
-  action
-}: {
-  items: MediaItem[]
-  emptyMessage: string
-  action?: { label: string; onClick: (media: MediaItem) => void }
-}) {
-  const { openDetail, continueWatching } = useAppState()
-  if (items.length === 0) return <p className={styles.empty}>{emptyMessage}</p>
-  return (
-    <div className={styles.grid}>
-      {items.map((media) => {
-        const artwork = resolveArtwork(media)
-        return (
-          <div key={media.id} className={styles.card}>
-            <button
-              type="button"
-              className={styles.art}
-              data-media-id={media.id}
-              onClick={() => openDetail(media)}
-            >
-              <ArtworkImage
-                src={artwork.posterUrl ?? artwork.backdropUrl}
-                alt=""
-                fallbackTitle={media.title}
-                artTint={media.artTint}
-                sizes="160px"
-                className={styles.artImage}
-              />
-              <WatchStatusBadge status={getWatchStatus(media, continueWatching)} />
-            </button>
-            <div className={styles.info}>
-              <span className={styles.title}>{media.title}</span>
-              {action && (
-                <button
-                  type="button"
-                  className={styles.remove}
-                  onClick={() => action.onClick(media)}
-                  aria-label={`${action.label} ${media.title}`}
-                >
-                  <Icon name="x" size={12} />
-                  {action.label}
-                </button>
-              )}
-            </div>
-          </div>
-        )
-      })}
-    </div>
-  )
 }
 
 /**
@@ -307,13 +250,7 @@ function StatsView() {
  * several. The custom lists beside it are arbitrary and belong to nobody but
  * the person who made them.
  */
-function ListsView({
-  watchlist,
-  onRemoveFromWatchlist
-}: {
-  watchlist: MediaItem[]
-  onRemoveFromWatchlist: (media: MediaItem) => void
-}) {
+function ListsView({ watchlist }: { watchlist: MediaItem[] }) {
   const { openDetail, libraryKey } = useAppState()
   const { lists, loaded, create, rename, remove, removeItem } = useMediaHubLists(libraryKey)
   // null selects My List; a list id selects that one.
@@ -420,11 +357,18 @@ function ListsView({
       </div>
 
       {effective === null || !selectedList ? (
-        <TitleGrid
-          items={watchlist}
-          emptyMessage="Nothing saved yet. Add a title with My List and it appears here."
-          action={{ label: 'Remove', onClick: onRemoveFromWatchlist }}
-        />
+        <>
+          <MediaGrid
+            items={watchlist}
+            emptyTitle="Nothing planned yet"
+            emptyMessage="Anything you mark Plan to Watch appears here, and syncs to the tracking services you have connected."
+          />
+          {watchlist.length > 0 && (
+            <p className={styles.footnote}>
+              Right-click a title to take it off the list, mark it watched, or set it aside.
+            </p>
+          )}
+        </>
       ) : (
         <>
           <div className={styles.listActions}>
@@ -500,16 +444,8 @@ function ListsView({
 }
 
 export default function MyStuffPage() {
-  const {
-    myList,
-    toggleMyList,
-    catalog,
-    continueWatching,
-    dislikedIds,
-    toggleDisliked,
-    ratings,
-    mediaHubSettings
-  } = useAppState()
+  const { myList, catalog, continueWatching, dislikedIds, ratings, mediaHubSettings } =
+    useAppState()
   const [tab, setTab] = useState<TabId>('list')
   useRestoreBrowsingOrigin(true)
 
@@ -581,22 +517,30 @@ export default function MyStuffPage() {
         ))}
       </div>
 
-      {tab === 'list' && <ListsView watchlist={listItems} onRemoveFromWatchlist={toggleMyList} />}
+      {tab === 'list' && <ListsView watchlist={listItems} />}
 
       {tab === 'progress' && (
-        <TitleGrid
+        <MediaGrid
           items={progressItems}
-          emptyMessage="Nothing started. Anything you leave part-way through waits here."
+          emptyTitle="Nothing started"
+          emptyMessage="Anything you leave part-way through waits here."
         />
       )}
 
-      {tab === 'watched' && <TitleGrid items={watchedItems} emptyMessage="Nothing finished yet." />}
+      {tab === 'watched' && (
+        <MediaGrid
+          items={watchedItems}
+          emptyTitle="Nothing finished yet"
+          emptyMessage="Titles you finish collect here, including anything brought in from a tracking service."
+        />
+      )}
 
       {tab === 'rated' && (
         <>
-          <TitleGrid
+          <MediaGrid
             items={ratedItems}
-            emptyMessage="Nothing rated yet. Give a title a score on its own page and it appears here, best first."
+            emptyTitle="Nothing rated yet"
+            emptyMessage="Give a title a score on its own page and it appears here, best first."
           />
           {ratedItems.length > 0 && (
             <p className={styles.footnote}>
@@ -612,11 +556,18 @@ export default function MyStuffPage() {
       {tab === 'stats' && <StatsView />}
 
       {tab === 'dropped' && (
-        <TitleGrid
-          items={droppedItems}
-          emptyMessage="Nothing set aside. Titles you mark “Not interested” collect here."
-          action={{ label: 'Restore', onClick: (media) => toggleDisliked(media) }}
-        />
+        <>
+          <MediaGrid
+            items={droppedItems}
+            emptyTitle="Nothing set aside"
+            emptyMessage="Titles you mark “Not interested” collect here."
+          />
+          {droppedItems.length > 0 && (
+            <p className={styles.footnote}>
+              Right-click a title and choose Remove dislike to start seeing it again.
+            </p>
+          )}
+        </>
       )}
     </div>
   )
