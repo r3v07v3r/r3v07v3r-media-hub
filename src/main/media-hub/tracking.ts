@@ -89,6 +89,8 @@ import {
   writeSettings
 } from './settingsStore'
 import { sendToRenderer } from './rendererBridge'
+import { cachedRemoteLists, fetchRemoteLists } from './remoteLists'
+import type { RemoteList } from '../../shared/media-hub/types'
 import {
   batchHistoryPayload,
   historyPayload,
@@ -1139,6 +1141,24 @@ export function registerTrackingIpc(): void {
   handle<undefined, PlannedSyncReport | null>(MEDIA_HUB_CHANNELS.trackingPlannedReport, async () =>
     lastPlannedSyncReport()
   )
+
+  /**
+   * Named lists from the services, read only.
+   *
+   * Answers from cache first and refreshes behind it: reading these
+   * costs one request per list, and somebody opening My Stuff should
+   * not wait on thirty of them to see a name they saw this morning.
+   */
+  handle<undefined, { lists: RemoteList[] }>(MEDIA_HUB_CHANNELS.listsRemote, async () => {
+    const cached = cachedRemoteLists()
+    if (cached.length > 0) {
+      void fetchRemoteLists('background').catch(() => {
+        // Logged inside; the cached answer already went out.
+      })
+      return { lists: cached }
+    }
+    return { lists: await fetchRemoteLists('visible') }
+  })
 
   handle<{ enabled?: boolean }, { watchlistTwoWay: boolean }>(
     MEDIA_HUB_CHANNELS.trackingSetTwoWay,

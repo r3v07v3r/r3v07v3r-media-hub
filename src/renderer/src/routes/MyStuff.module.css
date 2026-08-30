@@ -863,3 +863,18 @@
   min-height: 0;
   overflow: hidden;
 }
+
+/* Which service a chip's list came from. A badge rather than a suffix
+   in the name, because the name is the person's own words and this is
+   not — and because it is what says the list cannot be edited here. */
+.chipService {
+  margin-right: 6px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: rgba(141, 77, 255, 0.18);
+  font-size: 9.5px;
+  font-weight: 800;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}

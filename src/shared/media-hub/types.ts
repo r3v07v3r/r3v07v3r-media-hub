@@ -598,6 +598,26 @@ export interface ViewingStats {
  * "Rewatch with Dad", "Halloween", "Started and gave up" — and belong to
  * nobody but the person who made them.
  */
+/** A named list somebody built in Trakt or Simkl. Read-only here: a
+ *  named list has an author, and the first version of this feature
+ *  should not be able to reorder or empty one. */
+export interface RemoteList {
+  /** Service-qualified — two services can both have a list called
+   *  "Watchlist" and they are not the same list. */
+  id: string
+  service: 'simkl' | 'trakt'
+  name: string
+  description?: string
+  items: RemoteListEntry[]
+}
+
+export interface RemoteListEntry {
+  id: string
+  type: MediaKind
+  title: string
+  year?: string
+}
+
 export interface CustomList {
   id: string
   name: string

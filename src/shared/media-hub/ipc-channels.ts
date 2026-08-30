@@ -52,6 +52,8 @@ export const MEDIA_HUB_CHANNELS = {
   trackingPlannedReport: 'mediahub:tracking:planned-report',
   /** Turn two-way watchlist sync on or off. */
   trackingSetTwoWay: 'mediahub:tracking:set-two-way',
+  /** Named lists somebody built in Trakt or Simkl, read-only. */
+  listsRemote: 'mediahub:lists:remote',
   /** The caller's own cached titles, and the sharing control over them. */
   lanCacheMyItems: 'mediahub:lancache:my-items',
   lanCacheSetSharing: 'mediahub:lancache:set-sharing',

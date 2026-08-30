@@ -81,6 +81,7 @@ import type {
   SourcePreference,
   StreamCacheEntry,
   PlannedSyncReport,
+  RemoteList,
   StreamCacheUsage,
   StreamCandidate,
   StreamResolveResult,
@@ -552,6 +553,9 @@ const api = {
     },
 
     lists: {
+      /** Named lists from Trakt and Simkl, read-only. */
+      remoteLists: (): Promise<{ lists: RemoteList[] }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.listsRemote),
       list: (): Promise<{ lists: CustomList[] }> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.listsList),
       create: (name: string): Promise<{ lists: CustomList[]; created: CustomList }> =>
