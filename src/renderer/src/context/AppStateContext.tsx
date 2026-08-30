@@ -453,7 +453,6 @@ interface AppStateValue {
   combinedMoods: string[]
   toggleCombinedMood: (moodId: string) => void
 
-
   // Single global "what is the system doing" signal for the motion
   // system — derived from assistantState/playback rather than tracked
   // separately, so nothing can drift out of sync with the state it's

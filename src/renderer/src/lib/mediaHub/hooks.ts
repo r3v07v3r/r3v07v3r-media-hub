@@ -234,7 +234,6 @@ export function useMediaHubBrowseCatalog(
     // and error states clear while it runs rather than sitting there
     // asserting a failure that is currently being re-tested. The rows in
     // `groups` are deliberately NOT cleared alongside them.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     setOutcomes({})
     // Deliberately NOT a Promise.all over the three kinds any more. The
     // anime crawl (catalog.ts's kitsuCatalog walks Kitsu 1000 entries
@@ -856,7 +855,6 @@ export function useMediaHubHomeFeed(libraryKey: string): HomeFeedResult {
     setLoading(true)
     // A retry in progress is not a failure — see the same reasoning in
     // useMediaHubBrowseCatalog's setOutcomes({}).
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     setError(false)
     api.home
       .personalized()

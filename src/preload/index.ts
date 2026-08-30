@@ -253,7 +253,9 @@ const api = {
        *  the one saved — saying "disk" back to somebody who just chose
        *  stream only would be the contradiction this setting exists to
        *  prevent. */
-      setStoreMedia: (storeMedia: boolean): Promise<{ storeMedia: boolean; cacheMode: CacheMode }> =>
+      setStoreMedia: (
+        storeMedia: boolean
+      ): Promise<{ storeMedia: boolean; cacheMode: CacheMode }> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.settingsSetStoreMedia, { storeMedia }),
       setCacheMode: (
         cacheMode: CacheMode,
@@ -349,7 +351,7 @@ const api = {
       removeItem: (payload: { infoHash: string }): Promise<{ ok: boolean; message?: string }> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.lanCacheRemoveItem, payload),
       cancelJob: (payload: { contentKey: string }): Promise<{ ok: boolean; message?: string }> =>
-        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.lanCacheCancelJob, payload),
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.lanCacheCancelJob, payload)
     },
 
     torbox: {
