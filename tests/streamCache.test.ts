@@ -256,74 +256,62 @@ check('each centre gets its own window rather than one spanning window between t
 
 console.log('fillBudgetBytes')
 
-const AHEAD = CHUNK * 224 // ~300s at a 4K episode's ~3.1MB/s
+const TOLERANCE = CHUNK * 8
 
-check('the playhead position itself is unbounded', () => {
+check('the byte the playhead needs next is unbounded', () => {
+  assert.equal(fillBudgetBytes({ targetByte: CHUNK * 26, playheadFillByte: CHUNK * 26 }), null)
+})
+
+check('a demuxer reading a little in front of it is still the playhead fill', () => {
+  assert.equal(fillBudgetBytes({ targetByte: CHUNK * 30, playheadFillByte: CHUNK * 26 }), null)
+})
+
+check('one chunk of slack behind, for a mid-chunk read', () => {
   assert.equal(
-    fillBudgetBytes({ targetByte: CHUNK * 21, playheadByte: CHUNK * 21, aheadBytes: AHEAD }),
+    fillBudgetBytes({ targetByte: CHUNK * 26, playheadFillByte: CHUNK * 26 + 1000 }),
     null
   )
 })
 
-check('a target inside the ahead-window is still the playhead fill', () => {
+check('a tail probe far past the playhead is a bounded excursion', () => {
+  // The captured stall: playhead needs chunk 26, ffmpeg reads Cues at 2416.
   assert.equal(
-    fillBudgetBytes({ targetByte: CHUNK * 200, playheadByte: CHUNK * 21, aheadBytes: AHEAD }),
-    null
+    fillBudgetBytes({ targetByte: CHUNK * 2416, playheadFillByte: CHUNK * 26 }),
+    CHUNK * 4
   )
 })
 
-check('one chunk of slack behind the playhead, for a mid-chunk read', () => {
-  // A reader partway through chunk 21 asks for the chunk it is inside,
-  // which floors to just below highWatermarkByte — not an excursion.
+check('a probe inside the 300s ahead-window is still bounded', () => {
+  // Regression guard: classifying against the retention ahead-window (~224
+  // chunks at a 4K bitrate) let a probe this close read as the playhead's
+  // own fill and run to EOF while the playhead drained.
   assert.equal(
-    fillBudgetBytes({ targetByte: CHUNK * 21, playheadByte: CHUNK * 21 + 1000, aheadBytes: AHEAD }),
-    null
-  )
-})
-
-check('a tail probe far past the ahead-window is a bounded excursion', () => {
-  // The exact shape of the captured stall: playhead at chunk 21, ffmpeg
-  // reading Cues at chunk 2416 of a 2496-chunk file.
-  assert.equal(
-    fillBudgetBytes({ targetByte: CHUNK * 2416, playheadByte: CHUNK * 21, aheadBytes: AHEAD }),
+    fillBudgetBytes({ targetByte: CHUNK * 200, playheadFillByte: CHUNK * 26 }),
     CHUNK * 4
   )
 })
 
 check('a probe behind the playhead is bounded too', () => {
+  assert.equal(fillBudgetBytes({ targetByte: 0, playheadFillByte: CHUNK * 800 }), CHUNK * 4)
+})
+
+check('the tolerance edge is inclusive, one byte past it is not', () => {
+  const playheadFillByte = CHUNK * 10
+  assert.equal(fillBudgetBytes({ targetByte: playheadFillByte + TOLERANCE, playheadFillByte }), null)
   assert.equal(
-    fillBudgetBytes({ targetByte: 0, playheadByte: CHUNK * 800, aheadBytes: AHEAD }),
+    fillBudgetBytes({ targetByte: playheadFillByte + TOLERANCE + 1, playheadFillByte }),
     CHUNK * 4
   )
 })
 
-check('the window edge is inclusive, one byte past it is not', () => {
-  const playheadByte = CHUNK * 10
-  assert.equal(
-    fillBudgetBytes({ targetByte: playheadByte + AHEAD, playheadByte, aheadBytes: AHEAD }),
-    null
-  )
-  assert.equal(
-    fillBudgetBytes({ targetByte: playheadByte + AHEAD + 1, playheadByte, aheadBytes: AHEAD }),
-    CHUNK * 4
-  )
+check('a fresh session (playhead needs byte 0) fills from the start unbounded', () => {
+  assert.equal(fillBudgetBytes({ targetByte: 0, playheadFillByte: 0 }), null)
 })
 
-check('a fresh session (playhead still at 0) fills from the start unbounded', () => {
-  assert.equal(fillBudgetBytes({ targetByte: 0, playheadByte: 0, aheadBytes: AHEAD }), null)
-})
-
-check('the no-duration fallback window still keeps the playhead unbounded', () => {
-  // Before mpv reports a duration, aheadWindowBytes falls back to 32 chunks.
-  const fallback = CHUNK * 32
-  assert.equal(
-    fillBudgetBytes({ targetByte: CHUNK * 30, playheadByte: 0, aheadBytes: fallback }),
-    null
-  )
-  assert.equal(
-    fillBudgetBytes({ targetByte: CHUNK * 33, playheadByte: 0, aheadBytes: fallback }),
-    CHUNK * 4
-  )
+check('a fully-buffered playhead makes every fill an excursion', () => {
+  // null = the playhead needs nothing right now, so nobody's playhead is
+  // waiting on this fetch and it must not get to run to EOF.
+  assert.equal(fillBudgetBytes({ targetByte: CHUNK * 500, playheadFillByte: null }), CHUNK * 4)
 })
 
 console.log(`\n${pass} passed`)

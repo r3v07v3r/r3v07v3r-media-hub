@@ -105,6 +105,19 @@ const RECONNECT_GRACE_MS = 500
  * keep pulling once it is already connected there.
  */
 const EXCURSION_MAX_BYTES = CHUNK_BYTES * 4
+/**
+ * How far past the byte the playhead needs NEXT a fill may start and still
+ * count as the playhead's own rather than an excursion.
+ *
+ * Deliberately not the retention ahead-window (300s — hundreds of MB at a
+ * 4K bitrate): a probe landing anywhere inside that window would read as
+ * the playhead's fill and could still run to EOF while the buffer in front
+ * of the playhead drains, which is the whole failure this bound exists to
+ * stop. This only has to cover a demuxer reading a little in front of the
+ * render position; a real seek is identified by seekHint moving the
+ * playhead first, not by landing near it.
+ */
+const PLAYHEAD_FILL_TOLERANCE_BYTES = CHUNK_BYTES * 8
 
 /**
  * Where the whole chunk cache lives on disk. Defaults to
@@ -435,30 +448,38 @@ export function computeRetainedChunkIndices(params: RetentionParams): Set<number
  * a stop. Four such excursions took 114 chunks of a 79-second window that
  * only ever delivered 26 chunks to the playhead.
  *
- * A target at (or ahead of, within the same ahead-window the retention math
- * already keeps resident) the playhead is the playhead's own fill and stays
- * unbounded. `seekHint` moves the playhead synchronously before it
- * repositions, so a deliberate seek is unbounded too — only reads that are
- * nobody's playhead get bounded.
+ * The reference point is `playheadFillByte` — the first byte the playhead
+ * actually needs next (nextPlayheadFillByte), NOT the playhead's own
+ * position. Those differ whenever the buffer in front of the playhead is
+ * already partly cached, and using the position with a window wide enough
+ * to cover that gap would readmit exactly what this bounds: a probe landing
+ * anywhere in a 300-second ahead-window would read as the playhead's fill
+ * and could still run to EOF while the playhead starved.
  *
- * One chunk of slack behind the playhead: a reader mid-chunk asks for the
- * chunk it is already inside, which floors to just below highWatermarkByte.
+ * `seekHint` moves the playhead synchronously before it repositions, so a
+ * deliberate seek resolves to the byte it is about to need and stays
+ * unbounded. Null means the playhead needs nothing right now (its window is
+ * fully cached), so any fill is by definition somebody else's detour.
+ *
+ * One chunk of slack behind: a reader mid-chunk asks for the chunk it is
+ * already inside, which floors to just below the byte it needs next.
  */
 export function fillBudgetBytes({
   targetByte,
-  playheadByte,
-  aheadBytes,
+  playheadFillByte,
+  toleranceBytes = PLAYHEAD_FILL_TOLERANCE_BYTES,
   excursionBytes = EXCURSION_MAX_BYTES,
   chunkBytes = CHUNK_BYTES
 }: {
   targetByte: number
-  playheadByte: number
-  aheadBytes: number
+  playheadFillByte: number | null
+  toleranceBytes?: number
   excursionBytes?: number
   chunkBytes?: number
 }): number | null {
-  const windowStart = playheadByte - chunkBytes
-  const windowEnd = playheadByte + aheadBytes
+  if (playheadFillByte === null) return excursionBytes
+  const windowStart = playheadFillByte - chunkBytes
+  const windowEnd = playheadFillByte + toleranceBytes
   if (targetByte >= windowStart && targetByte <= windowEnd) return null
   return excursionBytes
 }
@@ -669,21 +690,38 @@ export function createStreamCache({
   }
 
   /**
-   * Where the connection should go when a bounded excursion is done: the
-   * first byte at or after the playhead that isn't cached yet.
+   * The first byte at or after `fromByte` that isn't cached yet — what the
+   * playhead needs next, and so both where a finished excursion hands the
+   * connection back to and what fillBudgetBytes classifies against.
    *
-   * Falls back to the first gap anywhere in the file when the playhead is
-   * already covered through to EOF — otherwise an excursion that finished
-   * while the playhead was fully buffered would park the connection, and in
-   * fullRetention mode nothing would ever close the earlier gaps that
-   * downloadComplete waits on. Null means genuinely nothing left to fetch.
+   * `fromByte` is passed explicitly by an excursion rather than read from
+   * highWatermarkByte, because an excursion's own reader can move that: a
+   * probe served more than PLAYHEAD_MIN_SERVED_BYTES (8MB) — well inside a
+   * 16MB excursion budget — is adopted by serveRange as the fallback
+   * playhead. Resuming from a re-read of it would hand the connection
+   * straight back to the probe and rebuild the starvation this bounds.
+   *
+   * The scan stops at the retention ahead-window unless the whole file is
+   * being kept: past that edge evictOutsideRetained deletes chunks as fast
+   * as the fill writes them, so aiming there spends a reconnect on bytes
+   * that cannot survive, and the same gap would be chosen again on the next
+   * resume. Null means the playhead's window is fully cached and there is
+   * genuinely nothing to fetch for it — the connection parks until playback
+   * advances far enough to miss, which is the correct idle state.
    */
-  function nextPlayheadFillByte(): number | null {
-    if (totalBytes === null) return highWatermarkByte
+  function nextPlayheadFillByte(fromByte: number = highWatermarkByte): number | null {
+    if (totalBytes === null) return fromByte
     const lastIndex = chunkIndexForByte(totalBytes - 1)
-    for (let i = chunkIndexForByte(highWatermarkByte); i <= lastIndex; i++) {
+    const windowEnd = fullRetention
+      ? lastIndex
+      : Math.min(lastIndex, chunkIndexForByte(fromByte + aheadWindowBytes()))
+    for (let i = chunkIndexForByte(fromByte); i <= windowEnd; i++) {
       if (chunks.get(i) !== 'ready') return i * CHUNK_BYTES
     }
+    // Only fullRetention has a stake in gaps outside the window — it is the
+    // mode whose downloadComplete waits on whole-file coverage. In windowed
+    // mode a gap out there is intentional (evicted), not work to chase.
+    if (!fullRetention) return null
     const gap = firstMissingChunkIndex()
     return gap === null ? null : gap * CHUNK_BYTES
   }
@@ -888,7 +926,11 @@ export function createStreamCache({
   async function runFill(
     startByte: number,
     myGeneration: number,
-    budgetBytes: number | null
+    budgetBytes: number | null,
+    /** Where the playhead was when this excursion was decided — see
+     *  nextPlayheadFillByte on why it is captured rather than re-read.
+     *  Unused by an unbounded fill, which never hands the connection on. */
+    resumeFromByte = 0
   ): Promise<void> {
     const controller = new AbortController()
     currentAbort = controller
@@ -949,7 +991,7 @@ export function createStreamCache({
           // this same branch when it finishes, so nothing is lost by not
           // starting it from here.
           if (budgetBytes !== null) {
-            resumePlayheadFill(myGeneration)
+            resumePlayheadFill(myGeneration, resumeFromByte)
             return
           }
           // Reached EOF without full coverage — a seek aborted the
@@ -994,7 +1036,7 @@ export function createStreamCache({
           // back rather than letting a metadata probe keep streaming (it
           // would happily run to EOF) while the playhead waits on it.
           if (budgetBytes !== null && fetchedBytes >= budgetBytes) {
-            resumePlayheadFill(myGeneration)
+            resumePlayheadFill(myGeneration, resumeFromByte)
             return
           }
         }
@@ -1008,15 +1050,26 @@ export function createStreamCache({
   }
 
   /** Aborts whatever fetch is running, waits the TorBox teardown grace delay, then starts a fresh fill at targetByte. */
-  async function reposition(targetByte: number): Promise<void> {
+  async function reposition(
+    targetByte: number,
+    /** Supplied only by resumePlayheadFill, which already resolved the
+     *  target against the pre-excursion playhead — re-deriving it here
+     *  from a possibly-hijacked highWatermarkByte would classify the
+     *  hand-back itself as another excursion and loop. */
+    playheadOverride?: number
+  ): Promise<void> {
     // Decided here, not at the call sites: every one of them is a read that
     // missed, and whether that read is the playhead or an incidental probe
     // is the same question in each. seekHint moves the playhead before it
     // calls this, so a deliberate seek reads as the playhead's own fill.
+    //
+    // Both reads of the playhead happen NOW, before any await and before
+    // the excursion's own reader can be adopted as the fallback playhead
+    // (serveRange does that at 8MB, inside a 16MB budget).
+    const playheadByte = playheadOverride ?? highWatermarkByte
     const budgetBytes = fillBudgetBytes({
       targetByte,
-      playheadByte: highWatermarkByte,
-      aheadBytes: aheadWindowBytes()
+      playheadFillByte: nextPlayheadFillByte(playheadByte)
     })
     const myGeneration = ++generation
     const hadOpenFetch = Boolean(currentAbort)
@@ -1024,19 +1077,23 @@ export function createStreamCache({
     currentAbort = null
     if (hadOpenFetch) await new Promise((resolve) => setTimeout(resolve, RECONNECT_GRACE_MS))
     if (generation !== myGeneration) return
-    void runFill(targetByte, myGeneration, budgetBytes)
+    void runFill(targetByte, myGeneration, budgetBytes, playheadByte)
   }
 
   /**
    * Ends a bounded excursion by pointing the one upstream connection back at
    * the playhead. Goes through reposition() so the TorBox teardown grace
    * delay is honoured exactly as it is for any other connection switch.
+   *
+   * Resolves the target from the playhead as it was when the excursion was
+   * decided, so a probe that served enough to be adopted as the fallback
+   * playhead mid-excursion cannot redirect the hand-back to itself.
    */
-  function resumePlayheadFill(myGeneration: number): void {
+  function resumePlayheadFill(myGeneration: number, fromByte: number): void {
     if (generation !== myGeneration) return
-    const target = nextPlayheadFillByte()
+    const target = nextPlayheadFillByte(fromByte)
     if (target === null) return
-    void reposition(chunkIndexForByte(target) * CHUNK_BYTES)
+    void reposition(chunkIndexForByte(target) * CHUNK_BYTES, fromByte)
   }
 
   /**
