@@ -574,3 +574,20 @@
 .seeAll:hover {
   text-decoration: underline;
 }
+
+/* What a title IS, for lists that hold films, series and anime at once.
+   Quieter than the planned chip beside it: the kind is context, not
+   news. */
+.kindChip {
+  align-self: flex-start;
+  width: fit-content;
+  padding: 1px 7px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border-subtle);
+  background: rgba(0, 0, 0, 0.45);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}

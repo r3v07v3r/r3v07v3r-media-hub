@@ -11,12 +11,20 @@ import styles from './RecommendationCarousel.module.css'
 import { RatingBadge } from '@renderer/components/detail/RatingBadge'
 import { ratingSourceFor } from '@renderer/components/detail/ratingSource'
 import type { PlannedServiceId } from '@shared/media-hub/types'
+import { kindOf } from '@renderer/components/mystuff/plannedFilterRules'
 
 const MATCH_CLASS: Record<string, string> = {
   excellent: styles.matchExcellent,
   good: styles.matchGood,
   fair: styles.matchFair,
   low: styles.matchLow
+}
+
+/** Films, series and anime as somebody would say them out loud. */
+const KIND_LABELS: Record<'movie' | 'series' | 'anime', string> = {
+  movie: 'Film',
+  series: 'Series',
+  anime: 'Anime'
 }
 
 /** Their own names, as those services write them. */
@@ -26,8 +34,17 @@ const SOURCE_LABELS: Record<PlannedServiceId, string> = {
   mal: 'MyAnimeList'
 }
 
-export function MediaCard({ media, reason }: { media: MediaItem; reason?: string }) {
-  const { plannedSources } = useAppState()
+export function MediaCard({
+  media,
+  reason,
+  showKind = false
+}: {
+  media: MediaItem
+  reason?: string
+  /** See MediaGrid's own prop — on for mixed lists, off everywhere else. */
+  showKind?: boolean
+}) {
+  const { plannedSources, myList } = useAppState()
   const { openDetail, startPartyPlayback, openContextMenu, continueWatching, resolvingMedia } =
     useAppState()
   const artwork = resolveArtwork(media)
@@ -37,10 +54,17 @@ export function MediaCard({ media, reason }: { media: MediaItem; reason?: string
   // One label for however many services agree, because three chips in a
   // row on a poster is noise and the useful fact is that it is on a list
   // somewhere else at all. The tooltip carries the detail.
+  // A PLANNED TITLE ALWAYS SAYS WHERE IT CAME FROM, including "here".
+  //
+  // Tagging only the ones pulled from a service left every other row
+  // unexplained: a list holding some Simkl chips and some bare cards
+  // reads as though the bare ones came from somewhere unnamed. They came
+  // from this app, which is worth one word.
   const sources = plannedSources[String(media.id)] ?? []
-  const plannedTag =
-    sources.length === 0
-      ? ''
+  const plannedTag = !myList.has(media.id)
+    ? ''
+    : sources.length === 0
+      ? 'Added here'
       : sources.length === 1
         ? SOURCE_LABELS[sources[0]]
         : `${sources.length} lists`
@@ -129,6 +153,8 @@ export function MediaCard({ media, reason }: { media: MediaItem; reason?: string
             </span>
           )}
           <span className={styles.cardTitle}>{media.title}</span>
+          {/* What it is, for a list that holds all three kinds. */}
+          {showKind && <span className={styles.kindChip}>{KIND_LABELS[kindOf(media)]}</span>}
           {/* WHERE THIS CAME FROM, when it came from somewhere.
               A title on somebody's Trakt or Simkl watchlist is on this
               list because of a decision they made months ago in another

@@ -20,6 +20,13 @@ import type { MediaItem } from '@renderer/types'
 import type { CustomListItem, PlayRecord, ViewingStats } from '@shared/media-hub/types'
 import styles from './MyStuff.module.css'
 import { MediaGrid } from '@renderer/components/category/MediaGrid'
+import type { PlannedSyncReport } from '@shared/media-hub/types'
+import { PlannedFilters } from '@renderer/components/mystuff/PlannedFilters'
+import {
+  applyPlannedFilters,
+  EMPTY_PLANNED_FILTERS,
+  type PlannedFilterState
+} from '@renderer/components/mystuff/plannedFilterRules'
 
 type TabId = 'list' | 'progress' | 'watched' | 'rated' | 'history' | 'stats' | 'dropped'
 
@@ -250,8 +257,54 @@ function StatsView() {
  * several. The custom lists beside it are arbitrary and belong to nobody but
  * the person who made them.
  */
+/** How long ago the lists were last pulled. Coarse on purpose — the
+ *  question is whether this is current, not the exact minute. */
+function syncWhen(at: number): string {
+  const minutes = Math.max(0, Math.round((Date.now() - at) / 60000))
+  if (minutes < 1) return 'just now'
+  if (minutes < 60) return `${minutes} minute${minutes === 1 ? '' : 's'} ago`
+  const hours = Math.round(minutes / 60)
+  if (hours < 24) return `${hours} hour${hours === 1 ? '' : 's'} ago`
+  const days = Math.round(hours / 24)
+  return `${days} day${days === 1 ? '' : 's'} ago`
+}
+
 function ListsView({ watchlist }: { watchlist: MediaItem[] }) {
-  const { openDetail, libraryKey } = useAppState()
+  const { openDetail, libraryKey, plannedSources } = useAppState()
+  const [filters, setFilters] = useState<PlannedFilterState>(EMPTY_PLANNED_FILTERS)
+  const [report, setReport] = useState<PlannedSyncReport | null>(null)
+  const [syncing, setSyncing] = useState(false)
+
+  // The same button and the same figure as the Settings panel, because
+  // this is where somebody is actually looking at the list and noticing
+  // it is out of date. Making them go to Settings to refresh what is on
+  // screen is the sort of errand a settings page should not be for.
+  useEffect(() => {
+    const api = window.api?.mediaHub?.tracking
+    if (!api?.plannedReport) return
+    void api
+      .plannedReport()
+      .then(setReport)
+      .catch(() => {
+        // No report yet is an ordinary state, not an error to announce.
+      })
+  }, [])
+
+  const runSync = (): void => {
+    const api = window.api?.mediaHub?.tracking
+    if (!api?.syncPlanned) return
+    setSyncing(true)
+    void api
+      .syncPlanned()
+      .then(setReport)
+      .catch(() => {})
+      .finally(() => setSyncing(false))
+  }
+
+  const filtered = useMemo(
+    () => applyPlannedFilters(watchlist, filters, plannedSources),
+    [watchlist, filters, plannedSources]
+  )
   const { lists, loaded, create, rename, remove, removeItem } = useMediaHubLists(libraryKey)
   // null selects My List; a list id selects that one.
   const [selected, setSelected] = useState<string | null>(null)
@@ -358,10 +411,47 @@ function ListsView({ watchlist }: { watchlist: MediaItem[] }) {
 
       {effective === null || !selectedList ? (
         <>
-          <MediaGrid
+          {/* Where the list stands and how to refresh it, above the list
+              itself. The time matters as much as the button: "planned"
+              pulled from three services is only as true as its last
+              pull, and a list with no timestamp invites the assumption
+              that it is live. */}
+          <div className={styles.syncRow}>
+            <button
+              type="button"
+              className={styles.syncButton}
+              onClick={runSync}
+              disabled={syncing}
+            >
+              <Icon name="refresh" size={13} />
+              {syncing ? 'Syncing…' : 'Sync lists'}
+            </button>
+            <span className={styles.syncMeta}>
+              {report ? `Last refreshed ${syncWhen(report.at)}` : 'Not synced yet'}
+              {report?.services.some((service) => service.error)
+                ? ' · a service reported a problem, see Settings'
+                : ''}
+            </span>
+          </div>
+
+          <PlannedFilters
             items={watchlist}
-            emptyTitle="Nothing planned yet"
-            emptyMessage="Anything you mark Plan to Watch appears here, and syncs to the tracking services you have connected."
+            filters={filters}
+            onChange={setFilters}
+            resultCount={filtered.length}
+          />
+
+          <MediaGrid
+            showKind
+            items={filtered}
+            emptyTitle={
+              watchlist.length > 0 ? 'Nothing matches those filters' : 'Nothing planned yet'
+            }
+            emptyMessage={
+              watchlist.length > 0
+                ? 'Try widening a filter or clearing them all.'
+                : 'Anything you mark Plan to Watch appears here, along with your Simkl, Trakt and MyAnimeList lists.'
+            }
           />
           {watchlist.length > 0 && (
             <p className={styles.footnote}>

@@ -722,3 +722,43 @@
   outline-offset: 2px;
   border-radius: var(--radius-small);
 }
+
+/* Refresh, and when it last happened. Above the filters because it is
+   about the whole list rather than which part of it you are looking
+   at. */
+.syncRow {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.syncButton {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 13px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border-subtle);
+  background: rgba(255, 255, 255, 0.03);
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.syncButton:hover:not(:disabled) {
+  border-color: var(--border-active);
+  color: var(--text-primary);
+}
+
+.syncButton:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.syncMeta {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
