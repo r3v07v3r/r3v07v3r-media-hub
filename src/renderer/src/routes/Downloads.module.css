@@ -227,3 +227,29 @@
   outline: 2px solid var(--accent-cyan);
   outline-offset: 2px;
 }
+
+/* The one section that grows, and therefore the one that scrolls. */
+.cacheSection {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1;
+  margin-bottom: 12px;
+}
+
+.cacheList {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  /* Room for the scrollbar so it does not sit on top of the delete
+     buttons at the right edge of each row. */
+  padding-right: 4px;
+}
+
+/* The empty state, as a sentence rather than a card. */
+.emptyLead {
+  max-width: 60ch;
+  font-size: 0.92rem;
+  line-height: 1.65;
+  color: var(--text-secondary);
+}

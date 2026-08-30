@@ -3,7 +3,6 @@ import { useNavigate } from 'react-router-dom'
 import type { StreamCacheEntry, StreamCacheUsage } from '@shared/media-hub/types'
 import { useAppState } from '@renderer/context/AppStateContext'
 import { BackgroundActivitySection } from '@renderer/components/downloads/BackgroundActivitySection'
-import { ComingSoonSection } from '@renderer/components/placeholder/ComingSoonSection'
 import { Icon } from '@renderer/components/icons/Icon'
 import styles from './Downloads.module.css'
 
@@ -172,18 +171,22 @@ export default function DownloadsPage() {
 
   if (!loaded) return null
 
-  // Empty means empty, and says the useful thing rather than sending
-  // somebody off to connect a download client. Nothing here needs one:
-  // what this page lists is what playing a title left on the disk.
+  // Empty means empty, and says so in a sentence.
+  //
+  // This used to be the shared ComingSoonSection: a 420px card with a
+  // 62px icon, a 26px uppercase heading and a "Coming soon" badge —
+  // announcing that a feature which has existed for months is on its way,
+  // in the largest type on the page, to somebody whose only problem is
+  // that they have not played anything yet.
   if (cacheEntries.length === 0) {
     return (
       <div className={styles.wrap}>
-        <BackgroundActivitySection />
-        <ComingSoonSection
-          icon="downloads"
-          title="Nothing saved yet"
-          description="Titles you play are kept on this device so you can rewind, resume, and watch them again without a connection. They will appear here."
-        />
+        <h1 className={styles.heading}>Downloads</h1>
+        <p className={styles.emptyLead}>
+          Nothing saved on this device yet. Titles you play are kept here so you can rewind, resume,
+          and watch them again without a connection.
+        </p>
+        <BackgroundActivitySection onlyWhenBusy />
       </div>
     )
   }
@@ -198,25 +201,30 @@ export default function DownloadsPage() {
           in the control centre. */}
       {usage && (
         <p className={styles.spaceLine}>
-          {formatBytes(usage.usedBytes)} saved on this device
-          {usage.freeBytes !== null ? ` · ${formatBytes(usage.freeBytes)} free` : ''}
+          {formatBytes(usage.usedBytes)} used
+          {usage.freeBytes !== null ? ` · ${formatBytes(usage.freeBytes)} free on this drive` : ''}
         </p>
       )}
 
-      <BackgroundActivitySection />
+      {/* Only while something is actually running. Idle, it was a pressure
+          line and an empty task list standing between the heading and the
+          shelf. */}
+      <BackgroundActivitySection onlyWhenBusy />
 
-      <section className={`${styles.section} glass-panel`}>
+      {/* The LIST scrolls, not the page. A long shelf used to push the
+          heading, the space figure and the way through to the control
+          centre off the top; they stay put now and the titles move under
+          them. */}
+      <section className={`${styles.section} ${styles.cacheSection} glass-panel`}>
         <h2 className={styles.sectionTitle}>
           <span className={styles.liveDot} />
-          Cached Streams
+          Saved on this device
         </h2>
-        {cacheEntries.length === 0 ? (
-          <p className={styles.empty}>Nothing cached locally right now.</p>
-        ) : (
-          cacheEntries.map((entry) => (
+        <div className={`${styles.cacheList} thin-scroll`}>
+          {cacheEntries.map((entry) => (
             <CacheStreamRow key={entry.token} entry={entry} onDelete={handleDeleteCacheEntry} />
-          ))
-        )}
+          ))}
+        </div>
       </section>
 
       {/* The download clients, indexers and the Sonarr/Radarr queues used
