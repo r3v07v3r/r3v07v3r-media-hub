@@ -150,10 +150,29 @@ r3-cache.json turns the whole mechanism off.
 
 ## Live verification
 
+Two harnesses, for two different questions.
+
+**Against a real daemon on a real LAN** - discovery over actual network
+hardware, joining, Range serving, and the app's own player gate:
+
 ```
-LANCACHE_URL=http://<host>:8945 LANCACHE_CODE=<console code> \
-  npx tsx scripts/verify-lancache.ts
+LANCACHE_URL=http://<host>:8945 npx tsx scripts/verify-lancache.ts
 ```
 
-Checks discovery, identity, the auth boundary, pairing, catalog, Range
-serving (206), and that the stream URL passes the app's own player gate.
+It asks to join under its own name and waits for you to approve
+"verify-lancache harness" in Control Centre > Caching; `LANCACHE_TOKEN`
+reuses an approved pairing and skips the wait. There is no pairing code
+any more. The byte-serving checks need one item in the cache that this
+device may read; the script prints how to place one, and skips them
+rather than failing when there is none.
+
+**The permission boundary, from an empty directory** - claiming,
+approval, per-device scoping, and the refusal that must not be
+distinguishable from absence:
+
+```
+npx tsx daemon/tests/permissions.e2e.ts
+```
+
+It boots its own daemon on port 8946 in a temporary directory and tears
+it down again. Not part of `npm test`, because it binds a port.
