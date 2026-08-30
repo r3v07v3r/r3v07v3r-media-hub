@@ -122,12 +122,50 @@ export interface LanCacheUpdateNowResponse {
   message: string
 }
 
+/** One row of the daemon's household title index, as served by
+ *  GET /api/titles. `item` is a CatalogItem produced by the app's OWN
+ *  normalizers running on the daemon — but the client still validates
+ *  every field on ingest (see shared/lancache/titleSync.ts), because a
+ *  paired daemon is trusted to serve media, not to inject rows into a
+ *  database the renderer reads unescaped ids and URLs from. */
+export interface LanCacheTitleRow {
+  /** Global change sequence — the sync watermark. */
+  seq: number
+  kind: 'movie' | 'series' | 'anime'
+  /** Absolute position in the daemon's catalog walk (popularity order). */
+  rank: number
+  item: unknown
+}
+
+export interface LanCacheTitlesResponse {
+  rows: LanCacheTitleRow[]
+  nextSince: number
+  more: boolean
+  total: number
+}
+
+export interface LanCacheTitlesRefreshResponse {
+  /** All three are normal answers, not errors: a refresh inside the
+   *  cooldown is 'throttled' with when to try again, and N devices asking
+   *  at once produce one 'started' and N-1 'joined'. */
+  state: 'started' | 'joined' | 'throttled'
+  lastRefreshAt: number | null
+  nextAllowedAt: number
+}
+
 export interface LanCacheStatusResponse {
   serverName: string
   version: string
   usedBytes: number
   budgetBytes: number
   itemCount: number
+  /** Household title index freshness — absent on a daemon built before
+   *  the title tier existed. */
+  titles?: {
+    counts: { movie: number; series: number; anime: number }
+    lastRefreshAt: { movie: number | null; series: number | null; anime: number | null }
+    crawling: boolean
+  }
   /** Whether the CALLING device's own TorBox account is linked. */
   torboxLinked: boolean
   /** How many paired devices have linked an account — household total. */

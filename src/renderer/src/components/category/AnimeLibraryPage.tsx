@@ -531,6 +531,51 @@ export function LibraryPage({ config }: { config: CategoryConfig }) {
       setScanProgress(null)
     }
   }, [config.kind])
+  // STAGE 8: the household tier. When a cache server is paired, its
+  // full-depth index syncs into this library on a background cadence; the
+  // button here only asks the SERVER to re-crawl upstream — the daemon
+  // answers started/joined/throttled honestly and the sync pass brings
+  // whatever changed on its next run.
+  const [householdPaired, setHouseholdPaired] = useState(false)
+  const [householdNote, setHouseholdNote] = useState<string | null>(null)
+  const [askingHousehold, setAskingHousehold] = useState(false)
+  useEffect(() => {
+    let cancelled = false
+    window.api?.mediaHub?.lanCache
+      ?.titlesState?.()
+      .then((state) => {
+        if (!cancelled) setHouseholdPaired(Boolean(state?.paired))
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [])
+  const askHouseholdRefresh = useCallback(async () => {
+    const api = window.api?.mediaHub?.lanCache
+    if (!api?.titlesRefresh) return
+    setAskingHousehold(true)
+    try {
+      const answer = await api.titlesRefresh(config.kind)
+      setHouseholdNote(
+        answer.state === 'started'
+          ? 'The cache server is re-crawling — new titles sync in the background.'
+          : answer.state === 'joined'
+            ? 'The cache server is already crawling — joined that run.'
+            : answer.state === 'throttled'
+              ? `Refreshed recently — next allowed ${
+                  answer.nextAllowedAt
+                    ? new Date(answer.nextAllowedAt).toLocaleTimeString()
+                    : 'soon'
+                }.`
+              : 'The cache server could not be reached.'
+      )
+    } catch {
+      setHouseholdNote('The cache server could not be reached.')
+    } finally {
+      setAskingHousehold(false)
+    }
+  }, [config.kind])
   const kindTotals = useCatalogKindTotals(config.kind, kindState, scanToken)
   // Dropdown options come from the index too — the library's actual
   // genres/years/statuses, not whatever slice happens to be loaded.
@@ -724,6 +769,23 @@ export function LibraryPage({ config }: { config: CategoryConfig }) {
                   : 'Scan deeper'}
               </button>
               {scanNote && !scanning && <span className={styles.deepScanNote}>{scanNote}</span>}
+              {householdPaired && (
+                <button
+                  type="button"
+                  className={styles.deepScanButton}
+                  disabled={askingHousehold}
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    void askHouseholdRefresh()
+                  }}
+                >
+                  <Icon name="refresh" size={12} />
+                  {askingHousehold ? 'Asking…' : 'Refresh household index'}
+                </button>
+              )}
+              {householdNote && !askingHousehold && (
+                <span className={styles.deepScanNote}>{householdNote}</span>
+              )}
             </div>
             <div className={styles.stats}>
               <span>

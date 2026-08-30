@@ -682,7 +682,16 @@ export interface MediaHubDatabase {
   indexUpsert(
     kind: MediaKind,
     items: readonly CatalogItem[],
-    opts?: { source?: string; rankBase?: number; now?: number }
+    opts?: {
+      source?: string
+      rankBase?: number
+      /** Explicit per-item ranks (aligned with `items`), for callers whose
+       *  rows carry an absolute catalog position of their own — the LAN
+       *  title sync, whose daemon ranks are the same scale as the crawl's.
+       *  When present it wins over rankBase+offset for that item. */
+      ranks?: readonly number[]
+      now?: number
+    }
   ): void
   /** How many titles of one kind the index holds. This is the real library
    *  size — the number the category hero should be quoting. */
@@ -2027,7 +2036,7 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
       }
     },
 
-    indexUpsert(kind, items, { source = '', rankBase = 0, now = Date.now() } = {}) {
+    indexUpsert(kind, items, { source = '', rankBase = 0, ranks, now = Date.now() } = {}) {
       if (!items.length) return
       try {
         sql.exec('BEGIN')
@@ -2062,7 +2071,7 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
               airedEpisodes: counts.airedEpisodes,
               simklId: item.simklId != null ? String(item.simklId) : null,
               groupedIds: item.groupedIds?.length ? JSON.stringify(item.groupedIds) : null,
-              rank: rankBase + offset,
+              rank: ranks?.[offset] ?? rankBase + offset,
               source,
               now
             })

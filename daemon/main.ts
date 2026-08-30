@@ -32,6 +32,8 @@ import { createPairing, deviceIdForToken, isApproved } from './pairing'
 import { createRoomsHop } from './roomsHop'
 import { createDaemonServer } from './server'
 import { createItemStore } from './storage'
+import { createTitleCrawler } from './titleCrawler'
+import { createTitleStore } from './titles'
 import { createUpdater } from './updater'
 
 // Stamped at build time by scripts/build-daemon (esbuild --define), so a
@@ -41,6 +43,12 @@ import { createUpdater } from './updater'
 // fallback marks a from-source dev run.
 const VERSION = process.env.R3_CACHE_VERSION || '0.0.0-dev'
 const EVICTION_INTERVAL_MS = 60 * 60 * 1000
+/** The household catalog re-crawl cadence. Six hours matches the app's own
+ *  standing crawl — the point is that only THIS box pays it. */
+const TITLE_CRAWL_INTERVAL_MS = 6 * 60 * 60 * 1000
+/** First crawl after boot waits this long, so a restart storm (updates,
+ *  crash loops) does not hammer the upstream catalogs. */
+const TITLE_CRAWL_BOOT_DELAY_MS = 30_000
 
 function log(message: string): void {
   console.log(`[r3-cache] ${new Date().toISOString()} ${message}`)
@@ -80,12 +88,14 @@ export async function run(api: PayloadApi): Promise<'restart' | 'exit'> {
   const admin = createAdmin(config.dataDir)
   const credentials = createCredentials(config.dataDir)
   const jobs = createJobStore(config.dataDir)
+  const titles = createTitleStore(config.dataDir)
   await Promise.all([
     pairing.load(),
     admin.load(),
     credentials.load(),
     jobs.load(),
-    activity.load()
+    activity.load(),
+    titles.load()
   ])
 
   // Stamp entitlement onto anything written before the fields existed.
@@ -146,6 +156,7 @@ export async function run(api: PayloadApi): Promise<'restart' | 'exit'> {
     requestRestart: () => resolveOutcome('restart'),
     log
   })
+  const titleCrawler = createTitleCrawler({ store: titles, log })
   const server = createDaemonServer({
     storage,
     jobs,
@@ -157,7 +168,9 @@ export async function run(api: PayloadApi): Promise<'restart' | 'exit'> {
     applyUpdateNow: () => updater.applyNow(),
     serverName: config.serverName,
     version: runningVersion,
-    diskBudgetBytes: config.diskBudgetBytes
+    diskBudgetBytes: config.diskBudgetBytes,
+    titles,
+    titleCrawler
   })
   // Rooms use this box as their LAN hop: one relay connection per room
   // for the whole network, instead of one per device. Ciphertext only —
@@ -225,6 +238,21 @@ export async function run(api: PayloadApi): Promise<'restart' | 'exit'> {
   await evict()
   const evictionTimer = setInterval(() => void evict(), EVICTION_INTERVAL_MS)
   evictionTimer.unref?.()
+
+  // The household title crawl: shortly after boot (immediately useful on a
+  // fresh install, gentle on a restart storm), then on the same six-hourly
+  // cadence the app itself used to pay per device. unref'd — a crawl must
+  // never hold the process open past a stop.
+  const titleBootTimer = setTimeout(
+    () => void titleCrawler.runScheduled(),
+    TITLE_CRAWL_BOOT_DELAY_MS
+  )
+  titleBootTimer.unref?.()
+  const titleCrawlTimer = setInterval(
+    () => void titleCrawler.runScheduled(),
+    TITLE_CRAWL_INTERVAL_MS
+  )
+  titleCrawlTimer.unref?.()
 
   // Every resource from here on is released by the finally below. Without
   // it, one throw after listen() left the port bound; the launcher then
@@ -310,6 +338,8 @@ export async function run(api: PayloadApi): Promise<'restart' | 'exit'> {
     // skipped.
     releaseSignals()
     clearInterval(evictionTimer)
+    clearTimeout(titleBootTimer)
+    clearInterval(titleCrawlTimer)
     updater.stop()
     mdns.stop()
     roomsHop.stop()

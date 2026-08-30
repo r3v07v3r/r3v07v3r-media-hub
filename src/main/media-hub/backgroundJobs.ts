@@ -36,6 +36,7 @@ import { logError } from './logger'
 import { runNewEpisodeCheck } from './notifications'
 import { pruneIdleSessions } from './streamCache'
 import { runLanCacheFeeder } from './lanCacheFeeder'
+import { runLanCacheTitleSync } from './lanCacheTitleSync'
 import { runBackgroundWatchSync } from './tracking'
 import {
   onRebuildRequested,
@@ -327,6 +328,21 @@ export function startBackgroundJobs(): void {
     // person watching is using.
     maxPressure: 'busy',
     run: runLanCacheFeeder
+  })
+
+  registerRecurringJob({
+    name: 'lancache-title-sync',
+    label: 'Syncing the household title index',
+    // Hourly: the daemon re-crawls six-hourly, so most passes are one page
+    // of nothing per kind. What this cadence bounds is how soon a freshly
+    // paired device inherits the household's depth.
+    everyMs: 60 * 60 * 1000,
+    firstRunAfterMs: 2 * 60 * 1000,
+    priority: 'background',
+    maxPressure: 'busy',
+    run: async () => {
+      await runLanCacheTitleSync()
+    }
   })
 
   registerRecurringJob({
