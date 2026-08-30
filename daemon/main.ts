@@ -231,7 +231,11 @@ export async function run(api: PayloadApi): Promise<'restart' | 'exit'> {
     })
     listening = true
     fetcher.start()
-    mdns.start()
+    // R3_CACHE_NO_MDNS is for harnesses and scratch instances. An
+    // unclaimed daemon that announces itself is claimable by whoever
+    // finds it, and running a test should not put a claimable cache
+    // server on somebody's home network. stop() is safe either way.
+    if (process.env.R3_CACHE_NO_MDNS !== '1') mdns.start()
     updater.start()
 
     // Genuinely up: listening, stores loaded, first eviction done. This
@@ -246,7 +250,7 @@ export async function run(api: PayloadApi): Promise<'restart' | 'exit'> {
     console.log('')
     console.log('  ┌──────────────────────────────────────────────┐')
     console.log(`  │  r3-cache ${runningVersion} — "${config.serverName}"`.padEnd(49) + '│')
-    console.log(`  │  port ${config.port} · data ${config.dataDir}`.slice(0, 49).padEnd(49) + '│')
+    console.log(`  │  port ${config.port}`.padEnd(49) + '│')
     console.log(
       `  │  budget ${(config.diskBudgetBytes / 1024 ** 3).toFixed(0)} GB · idle ${config.idleTtlDays}d · max ${config.hardMaxDays}d`.padEnd(
         49
@@ -256,6 +260,11 @@ export async function run(api: PayloadApi): Promise<'restart' | 'exit'> {
     console.log('  │  Devices ask to join from the app.           │')
     console.log('  │  The administrator approves them there.      │')
     console.log('  └──────────────────────────────────────────────┘')
+    // Below the box, not inside it: this is the path somebody needs to
+    // find r3-cache.json, and a box wide enough for every path on every
+    // platform does not exist. It used to be truncated mid-directory,
+    // which is the one way of printing it that helps nobody.
+    console.log(`     data ${config.dataDir}`)
     console.log('')
 
     // An unclaimed server says so, repeatedly and loudly.
