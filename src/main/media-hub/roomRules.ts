@@ -160,6 +160,38 @@ export function memberKeysFor(
   return presence.get(friendId)?.memberKeys ?? []
 }
 
+/**
+ * Re-encodes an invite code with a new display name, changing NOTHING
+ * else — every other field, including ones this version of the app does
+ * not know about, passes through verbatim.
+ *
+ * Exists because the name lives in two places: the stored display name,
+ * which renames update, and the invite code, which is what gets copied
+ * and handed to the next member. Left unrecoded, an invite copied after
+ * a rename carries the old name — and if the admin is offline when the
+ * newcomer joins, no announcement ever corrects it. Every member holds
+ * every field of the code they joined with, so every member can recode
+ * their own copy when a rename reaches them.
+ *
+ * Returns null for anything that does not decode as a room code; the
+ * caller keeps the code it has, which is always safer than writing one
+ * this function could not read.
+ */
+export function withRoomName(code: string, name: string): string | null {
+  const parsed = decodeShareCode(code)
+  if (!parsed || parsed.v === 1) return null
+  try {
+    const raw = JSON.parse(Buffer.from(code, 'base64url').toString('utf8')) as Record<
+      string,
+      unknown
+    >
+    raw.name = String(name).slice(0, 40)
+    return Buffer.from(JSON.stringify(raw), 'utf8').toString('base64url')
+  } catch {
+    return null
+  }
+}
+
 /** The persisted shape of one room membership. */
 export interface StoredRoom {
   /** The invite code — carries relay endpoint, secret, name, admin. */
