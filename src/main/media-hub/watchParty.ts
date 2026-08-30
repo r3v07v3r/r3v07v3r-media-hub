@@ -42,8 +42,8 @@ import {
   applyQueueEvent,
   createMemberId,
   decodeShareCode,
-  encodeRelayShareCodeCompact,
-  encodeShareCodeCompact,
+  encodeRelayShareCode,
+  encodeShareCode,
   encryptMessage,
   decryptMessage,
   type PartyLanEndpoint,
@@ -541,7 +541,7 @@ export function registerWatchPartyIpc(): void {
       })
       return {
         ok: true,
-        code: encodeRelayShareCodeCompact({ relay: { url: creds.url, roomId }, secret }),
+        code: encodeRelayShareCode({ relay: { url: creds.url, roomId }, secret }),
         wanAvailable: true
       }
     }
@@ -615,7 +615,7 @@ export function registerWatchPartyIpc(): void {
     if (mapping && party && party.role === 'host' && party.mode === 'direct') {
       party.upnpStop = mapping.stop
     }
-    const code = encodeShareCodeCompact({ lan, wan, secret })
+    const code = encodeShareCode({ lan, wan, secret })
     return { ok: true, code, port, wanAvailable: Boolean(wan) }
   })
 
@@ -624,11 +624,11 @@ export function registerWatchPartyIpc(): void {
     const { code, name } = payload || {}
     const parsed = decodeShareCode(code)
     if (!parsed) throw new Error('That party code is invalid.')
-    // A v3/v4 code is a ROOM invite, not a party. Connecting to it here
+    // A v4 code is a ROOM invite, not a party. Connecting to it here
     // would technically work — same relay, same crypto — and would leave
     // the person sitting silently in a presence channel wondering why no
     // film starts. Saying which kind of code it is beats pretending.
-    if (parsed.v === 3 || parsed.v === 4) {
+    if (parsed.v === 4) {
       throw new Error('That is a room code — join it from Rooms, then join a member from there.')
     }
     const displayName =

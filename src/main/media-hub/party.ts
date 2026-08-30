@@ -37,31 +37,11 @@ export interface ShareCodePayloadV2 {
 }
 
 /**
- * A room code. v2 plus the creator's stable friendId, which is what makes
- * "admin" mean something offline: members trust the code they joined
- * with, so the admin badge and the rename rule work with no relay
- * round-trip and regardless of which transport carried the message.
- */
-export interface ShareCodePayloadV3 {
-  v: 3
-  relay: PartyRelayEndpoint
-  secret: string
-  name: string
-  adminFriendId: string
-  /** The relay's admission ticket for rooms with a membership layer —
-   *  what a stranger must present to connect at all. Absent on rooms
-   *  created before kick existed; those admit anyone at the relay, as
-   *  they always did. A RELAY credential, not content: holding it lets
-   *  a device connect, not read. */
-  join?: string
-}
-
-/**
- * A room code with a chip-and-tap admin: v3 plus the admin's PUBLIC KEY,
- * which is what turns "the admin renamed the room" and "the admin
- * rotated the secret" from claims into verifiable statements. The
- * admin's id is sha256 of this key, so the two fields cannot disagree
- * without failing verification.
+ * A room code with a chip-and-tap admin: the relay endpoint, the room
+ * secret, and the admin's PUBLIC KEY, which is what turns "the admin
+ * renamed the room" and "the admin rotated the secret" from claims into
+ * verifiable statements. The admin's id is sha256 of this key — and the
+ * encoding does not carry the id at all, so the two cannot disagree.
  */
 export interface ShareCodePayloadV4 {
   v: 4
@@ -72,8 +52,7 @@ export interface ShareCodePayloadV4 {
   join?: string
 }
 
-export type ShareCodePayload =
-  ShareCodePayloadV1 | ShareCodePayloadV2 | ShareCodePayloadV3 | ShareCodePayloadV4
+export type ShareCodePayload = ShareCodePayloadV1 | ShareCodePayloadV2 | ShareCodePayloadV4
 
 export type PartyQueueEvent =
   | { type: 'suggest'; queueId: string; item: PartyQueueEntry['item']; suggestedBy?: string }
@@ -102,44 +81,6 @@ export function isValidRelayEndpoint(endpoint: unknown): endpoint is PartyRelayE
   } catch {
     return false
   }
-}
-
-export function encodeShareCode(input: {
-  lan: PartyLanEndpoint
-  wan?: PartyLanEndpoint | null
-  secret: string
-  name?: string
-}): string {
-  const { lan, wan, secret, name } = input
-  if (!isValidEndpoint(lan) || typeof secret !== 'string' || !secret) {
-    throw new Error('Invalid party endpoint.')
-  }
-  const payload: ShareCodePayloadV1 = {
-    v: 1,
-    lan,
-    wan: wan && isValidEndpoint(wan) ? wan : null,
-    secret,
-    name: String(name || '').slice(0, 40)
-  }
-  return Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url')
-}
-
-export function encodeRelayShareCode(input: {
-  relay: PartyRelayEndpoint
-  secret: string
-  name?: string
-}): string {
-  const { relay, secret, name } = input
-  if (!isValidRelayEndpoint(relay) || typeof secret !== 'string' || !secret) {
-    throw new Error('Invalid party endpoint.')
-  }
-  const payload: ShareCodePayloadV2 = {
-    v: 2,
-    relay,
-    secret,
-    name: String(name || '').slice(0, 40)
-  }
-  return Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url')
 }
 
 // --- Compact wire format ----------------------------------------------------
@@ -213,9 +154,12 @@ function readEndpointCompact(buf: Buffer, cursor: { at: number }): PartyLanEndpo
   return { ip, port }
 }
 
-/** Compact replacement for `encodeShareCode`. Falls back to it verbatim when
- *  the inputs do not fit the packed layout. */
-export function encodeShareCodeCompact(input: {
+/** A direct LAN/WAN party invite, packed. Every rejection below is an
+ *  invariant violation rather than an ordinary input: the secret is always
+ *  the 24 bytes the host just minted, and isValidEndpoint already caps an
+ *  ip at 64 characters. There is no longer a longer encoding to retreat to,
+ *  so a violation is raised rather than papered over. */
+export function encodeShareCode(input: {
   lan: PartyLanEndpoint
   wan?: PartyLanEndpoint | null
   secret: string
@@ -228,7 +172,8 @@ export function encodeShareCodeCompact(input: {
   const bytes = shareSecretBytes(secret)
   const lanPart = encodeEndpointCompact(lan)
   const wanPart = validWan ? encodeEndpointCompact(validWan) : Buffer.alloc(0)
-  if (!bytes || !lanPart || !wanPart) return encodeShareCode({ lan, wan: validWan, secret })
+  if (!bytes) throw new Error('A party secret must be 24 bytes, base64url.')
+  if (!lanPart || !wanPart) throw new Error('Invalid party endpoint.')
   return Buffer.concat([
     Buffer.from([SHARE_COMPACT_DIRECT]),
     lanPart,
@@ -238,33 +183,22 @@ export function encodeShareCodeCompact(input: {
   ]).toString('base64url')
 }
 
-/** Compact replacement for `encodeRelayShareCode`. Falls back to it verbatim
- *  when the inputs do not fit the packed layout. */
-export function encodeRelayShareCodeCompact(input: {
-  relay: PartyRelayEndpoint
-  secret: string
-}): string {
+/** A relay party invite, packed. As above, a rejection here is an invariant
+ *  violation, not a longer-code case. */
+export function encodeRelayShareCode(input: { relay: PartyRelayEndpoint; secret: string }): string {
   const { relay, secret } = input
   if (!isValidRelayEndpoint(relay) || typeof secret !== 'string' || !secret) {
     throw new Error('Invalid party endpoint.')
   }
   const bytes = shareSecretBytes(secret)
-  const host = relay.url.replace(/^https:\/\//i, '').replace(/\/+$/, '')
-  const hostBytes = Buffer.from(host, 'utf8')
-  const roomId = Buffer.from(relay.roomId.replace(/-/g, ''), 'hex')
-  if (
-    !bytes ||
-    hostBytes.length < 1 ||
-    hostBytes.length > 255 ||
-    roomId.length !== 16 ||
-    !/^https:\/\//i.test(relay.url)
-  ) {
-    return encodeRelayShareCode({ relay, secret })
-  }
+  const hostBytes = relayHostBytes(relay.url)
+  const roomId = uuidBytes(relay.roomId)
+  if (!bytes) throw new Error('A party secret must be 24 bytes, base64url.')
+  if (!hostBytes || !roomId) throw new Error('Invalid party endpoint.')
   return Buffer.concat([
     Buffer.from([SHARE_COMPACT_RELAY]),
     roomId,
-    Buffer.from([hostBytes.length]),
+    encodeRelayHostLength(hostBytes),
     hostBytes,
     bytes
   ]).toString('base64url')
@@ -283,24 +217,32 @@ function uuidFromBytes(buf: Buffer): string {
 
 /** The relay URL travels without its scheme, which is always https (the
  *  endpoint validators refuse anything else) and would otherwise cost eight
- *  bytes in every code. */
+ *  bytes in every code. The length is two bytes rather than one so the whole
+ *  domain isValidRelayEndpoint admits (up to 300 characters) packs — with a
+ *  one-byte length a legitimate long worker URL would have had nowhere to
+ *  go once the JSON encoders were removed. */
 function relayHostBytes(url: string): Buffer | null {
   if (!/^https:\/\//i.test(url)) return null
   const host = Buffer.from(url.replace(/^https:\/\//i, '').replace(/\/+$/, ''), 'utf8')
-  return host.length >= 1 && host.length <= 255 ? host : null
+  return host.length >= 1 && host.length <= 0xffff ? host : null
 }
 
-/** Compact replacement for `encodeRoomShareCode`. Falls back to it verbatim
- *  when the inputs do not fit the packed layout.
+function encodeRelayHostLength(host: Buffer): Buffer {
+  const out = Buffer.alloc(2)
+  out.writeUInt16BE(host.length)
+  return out
+}
+
+/** A room invite, packed.
  *
  *  The admin's id is NOT carried: it is the sha256 of the public key that is
- *  carried, so the decoder recomputes it. That is what the v4 payload's own
- *  doc comment already promised — "the two fields cannot disagree without
- *  failing verification" — made structural, and it saves 32 bytes. If a
- *  caller ever hands us an id that does not match its key, the pair cannot
- *  be reconstructed, so the JSON form (which can carry the disagreement)
- *  is used instead of quietly rewriting the id. */
-export function encodeRoomShareCodeCompact(input: {
+ *  carried, so the decoder recomputes it. The payload's own promise — the id
+ *  and the key cannot disagree — becomes structural rather than checked, and
+ *  it saves 32 bytes. An id that contradicts its key is therefore not an
+ *  encodable room: it is raised here rather than silently rewritten to
+ *  agree, because a caller holding a mismatched pair has a bug worth
+ *  hearing about. */
+export function encodeRoomShareCode(input: {
   relay: PartyRelayEndpoint
   secret: string
   name: string
@@ -321,18 +263,15 @@ export function encodeRoomShareCodeCompact(input: {
   const host = relayHostBytes(relay.url)
   const pub = Buffer.from(admin.pub, 'base64url')
   const joinBuf = join ? uuidBytes(String(join)) : null
-  if (
-    !secretBuf ||
-    !roomId ||
-    !host ||
-    pub.length !== SHARE_COMPACT_PUB_BYTES ||
-    pub.toString('base64url') !== admin.pub ||
-    idOfRawPub(admin.pub) !== admin.id ||
-    nameBytes.length > 255 ||
-    (join ? !joinBuf : false)
-  ) {
-    return encodeRoomShareCode({ relay, secret, name, admin, join })
+  if (!secretBuf) throw new Error('A room secret must be 24 bytes, base64url.')
+  if (!roomId || !host) throw new Error('Invalid room endpoint.')
+  if (pub.length !== SHARE_COMPACT_PUB_BYTES || pub.toString('base64url') !== admin.pub) {
+    throw new Error("A room admin's key must be a raw Ed25519 public key, base64url.")
   }
+  if (idOfRawPub(admin.pub) !== admin.id) {
+    throw new Error("A room admin's id must be the sha256 of its public key.")
+  }
+  if (join && !joinBuf) throw new Error('A room join secret must be a UUID.')
   return Buffer.concat([
     Buffer.from([SHARE_COMPACT_ROOM]),
     roomId,
@@ -340,11 +279,24 @@ export function encodeRoomShareCodeCompact(input: {
     pub,
     Buffer.from([joinBuf ? SHARE_COMPACT_JOIN_FLAG : 0]),
     joinBuf || Buffer.alloc(0),
-    Buffer.from([host.length]),
+    encodeRelayHostLength(host),
     host,
     Buffer.from([nameBytes.length]),
     nameBytes
   ]).toString('base64url')
+}
+
+/** Reads `[hostLen:2 BE][host]` and rebuilds the https URL the encoder
+ *  stripped. Returns null rather than a truncated read if the length runs
+ *  past the buffer — every caller treats null as "not a code". */
+function readRelayHost(buf: Buffer, cursor: { at: number }): string | null {
+  if (cursor.at + 2 > buf.length) return null
+  const len = buf.readUInt16BE(cursor.at)
+  cursor.at += 2
+  if (len < 1 || cursor.at + len > buf.length) return null
+  const host = buf.subarray(cursor.at, cursor.at + len).toString('utf8')
+  cursor.at += len
+  return `https://${host}`
 }
 
 function decodeCompactShareCode(buf: Buffer): ShareCodePayload | null {
@@ -366,15 +318,9 @@ function decodeCompactShareCode(buf: Buffer): ShareCodePayload | null {
       join = uuidFromBytes(buf.subarray(cursor.at, cursor.at + 16))
       cursor.at += 16
     }
-    if (cursor.at >= buf.length) return null
-    const hostLen = buf[cursor.at]
-    cursor.at += 1
-    if (cursor.at + hostLen + 1 > buf.length) return null
-    const relay: PartyRelayEndpoint = {
-      url: `https://${buf.subarray(cursor.at, cursor.at + hostLen).toString('utf8')}`,
-      roomId
-    }
-    cursor.at += hostLen
+    const url = readRelayHost(buf, cursor)
+    if (url === null || cursor.at >= buf.length) return null
+    const relay: PartyRelayEndpoint = { url, roomId }
     const nameLen = buf[cursor.at]
     cursor.at += 1
     if (buf.length !== cursor.at + nameLen) return null
@@ -385,28 +331,25 @@ function decodeCompactShareCode(buf: Buffer): ShareCodePayload | null {
       relay,
       secret: secret.toString('base64url'),
       name: buf.subarray(cursor.at).toString('utf8'),
-      // Recomputed, never carried — see encodeRoomShareCodeCompact.
+      // Recomputed, never carried — see encodeRoomShareCode.
       admin: { id: idOfRawPub(pubB64), pub: pubB64 },
       ...(hasJoin ? { join } : {})
     }
   }
   if (buf[0] === SHARE_COMPACT_RELAY) {
-    const urlAt = 1 + 16
-    if (buf.length < urlAt + 1) return null
-    const hex = buf.subarray(1, urlAt).toString('hex')
-    const roomId = `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
-    const urlLen = buf[urlAt]
-    const start = urlAt + 1
-    if (buf.length !== start + urlLen + SHARE_COMPACT_SECRET_BYTES) return null
-    const relay: PartyRelayEndpoint = {
-      url: `https://${buf.subarray(start, start + urlLen).toString('utf8')}`,
-      roomId
-    }
+    const cursor = { at: 1 }
+    if (buf.length < cursor.at + 16) return null
+    const roomId = uuidFromBytes(buf.subarray(cursor.at, cursor.at + 16))
+    cursor.at += 16
+    const url = readRelayHost(buf, cursor)
+    if (url === null) return null
+    const relay: PartyRelayEndpoint = { url, roomId }
+    if (buf.length !== cursor.at + SHARE_COMPACT_SECRET_BYTES) return null
     if (!isValidRelayEndpoint(relay)) return null
     return {
       v: 2,
       relay,
-      secret: buf.subarray(start + urlLen).toString('base64url'),
+      secret: buf.subarray(cursor.at).toString('base64url'),
       name: ''
     }
   }
@@ -433,93 +376,12 @@ function decodeCompactShareCode(buf: Buffer): ShareCodePayload | null {
  *  above. The admin travels as id AND public key — the key is what lets
  *  every member verify the admin's renames and re-keys rather than
  *  trust them. */
-export function encodeRoomShareCode(input: {
-  relay: PartyRelayEndpoint
-  secret: string
-  name: string
-  admin: { id: string; pub: string }
-  join?: string
-}): string {
-  const { relay, secret, name, admin, join } = input
-  if (!isValidRelayEndpoint(relay) || typeof secret !== 'string' || !secret) {
-    throw new Error('Invalid room endpoint.')
-  }
-  if (!admin?.id || !admin?.pub) {
-    throw new Error('A room code names its admin.')
-  }
-  const payload: ShareCodePayloadV4 = {
-    v: 4,
-    relay,
-    secret,
-    name: String(name || '').slice(0, 40),
-    admin: { id: admin.id.slice(0, 64), pub: admin.pub.slice(0, 64) },
-    ...(join ? { join: String(join).slice(0, 64) } : {})
-  }
-  return Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url')
-}
-
+/** The only entry point for a pasted or stored code. There is no JSON
+ *  path any more: an invite is packed bytes or it is nothing, so nothing
+ *  reachable from here parses attacker-supplied JSON. */
 export function decodeShareCode(code: unknown): ShareCodePayload | null {
   try {
-    const raw = Buffer.from(String(code || ''), 'base64url')
-    // Every JSON code (v1 through v4) starts with '{'. Anything else is a
-    // packed code, or garbage, which decodeCompactShareCode rejects.
-    if (raw.length > 0 && raw[0] !== 0x7b) return decodeCompactShareCode(raw)
-    const payload = JSON.parse(raw.toString('utf8')) as {
-      v?: unknown
-      lan?: unknown
-      wan?: unknown
-      relay?: unknown
-      secret?: unknown
-      name?: unknown
-      adminFriendId?: unknown
-      admin?: { id?: unknown; pub?: unknown }
-    }
-    if (payload.v === 4) {
-      if (
-        !isValidRelayEndpoint(payload.relay) ||
-        typeof payload.secret !== 'string' ||
-        !payload.secret ||
-        typeof payload.admin?.id !== 'string' ||
-        !payload.admin.id ||
-        typeof payload.admin?.pub !== 'string' ||
-        !payload.admin.pub
-      ) {
-        return null
-      }
-      return payload as unknown as ShareCodePayloadV4
-    }
-    if (payload.v === 3) {
-      if (
-        !isValidRelayEndpoint(payload.relay) ||
-        typeof payload.secret !== 'string' ||
-        !payload.secret ||
-        typeof payload.adminFriendId !== 'string' ||
-        !payload.adminFriendId
-      ) {
-        return null
-      }
-      return payload as unknown as ShareCodePayloadV3
-    }
-    if (payload.v === 2) {
-      if (
-        !isValidRelayEndpoint(payload.relay) ||
-        typeof payload.secret !== 'string' ||
-        !payload.secret
-      ) {
-        return null
-      }
-      return payload as unknown as ShareCodePayloadV2
-    }
-    if (
-      payload.v !== 1 ||
-      !isValidEndpoint(payload.lan) ||
-      typeof payload.secret !== 'string' ||
-      !payload.secret
-    ) {
-      return null
-    }
-    if (payload.wan && !isValidEndpoint(payload.wan)) return null
-    return payload as unknown as ShareCodePayloadV1
+    return decodeCompactShareCode(Buffer.from(String(code || ''), 'base64url'))
   } catch {
     return null
   }

@@ -2,10 +2,9 @@ import assert from 'node:assert'
 import crypto from 'node:crypto'
 import {
   decodeShareCode,
-  encodeRelayShareCodeCompact,
+  encodeRelayShareCode,
   encodeRoomShareCode,
-  encodeRoomShareCodeCompact,
-  encodeShareCodeCompact
+  encodeShareCode
 } from '../src/main/media-hub/party.ts'
 import { generateIdentity, idOfRawPub } from '../src/main/media-hub/roomIdentity.ts'
 
@@ -30,8 +29,9 @@ const RELAY = {
 const LAN = { ip: '192.168.1.50', port: 54321 }
 const WAN = { ip: '203.0.113.9', port: 41234 }
 
-// Real codes minted before the compact format existed. They are pasted as
-// literals rather than re-encoded so this stays a genuine compatibility test.
+// Real codes minted by the JSON codec that this format replaced. They are
+// pasted as literals because nothing can encode them any more — the point
+// is that they are now REJECTED rather than quietly understood.
 const LEGACY_V1 =
   'eyJ2IjoxLCJsYW4iOnsiaXAiOiIxOTIuMTY4LjEuNTAiLCJwb3J0Ijo1NDMyMX0sIndhbiI6eyJpcCI6IjIwMy4wLjExMy45IiwicG9ydCI6NDEyMzR9LCJzZWNyZXQiOiJBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBUSIsIm5hbWUiOiJHcmFoYW0ifQ'
 const LEGACY_V2 =
@@ -40,14 +40,14 @@ const LEGACY_V2 =
 console.log('party share codes')
 
 check('round-trips a relay code', () => {
-  const decoded = decodeShareCode(encodeRelayShareCodeCompact({ relay: RELAY, secret: SECRET }))
+  const decoded = decodeShareCode(encodeRelayShareCode({ relay: RELAY, secret: SECRET }))
   assert.ok(decoded && decoded.v === 2)
   assert.deepEqual(decoded.relay, RELAY)
   assert.equal(decoded.secret, SECRET)
 })
 
 check('round-trips a direct code with a WAN endpoint', () => {
-  const decoded = decodeShareCode(encodeShareCodeCompact({ lan: LAN, wan: WAN, secret: SECRET }))
+  const decoded = decodeShareCode(encodeShareCode({ lan: LAN, wan: WAN, secret: SECRET }))
   assert.ok(decoded && decoded.v === 1)
   assert.deepEqual(decoded.lan, LAN)
   assert.deepEqual(decoded.wan, WAN)
@@ -55,7 +55,7 @@ check('round-trips a direct code with a WAN endpoint', () => {
 })
 
 check('round-trips a direct code with no WAN endpoint', () => {
-  const decoded = decodeShareCode(encodeShareCodeCompact({ lan: LAN, wan: null, secret: SECRET }))
+  const decoded = decodeShareCode(encodeShareCode({ lan: LAN, wan: null, secret: SECRET }))
   assert.ok(decoded && decoded.v === 1)
   assert.deepEqual(decoded.lan, LAN)
   assert.equal(decoded.wan, null)
@@ -63,37 +63,36 @@ check('round-trips a direct code with no WAN endpoint', () => {
 
 check('keeps an IPv6 LAN address intact', () => {
   const lan = { ip: 'fe80::1c2d:3e4f:5a6b:7c8d', port: 8080 }
-  const decoded = decodeShareCode(encodeShareCodeCompact({ lan, secret: SECRET }))
+  const decoded = decodeShareCode(encodeShareCode({ lan, secret: SECRET }))
   assert.ok(decoded && decoded.v === 1)
   assert.deepEqual(decoded.lan, lan)
 })
 
 check('is far shorter than the codes it replaces', () => {
-  const relay = encodeRelayShareCodeCompact({ relay: RELAY, secret: SECRET })
-  const direct = encodeShareCodeCompact({ lan: LAN, wan: WAN, secret: SECRET })
+  const relay = encodeRelayShareCode({ relay: RELAY, secret: SECRET })
+  const direct = encodeShareCode({ lan: LAN, wan: WAN, secret: SECRET })
   assert.ok(relay.length < 110, `relay code was ${relay.length} chars`)
   assert.ok(direct.length < 70, `direct code was ${direct.length} chars`)
   assert.ok(relay.length < LEGACY_V2.length / 1.7)
   assert.ok(direct.length < LEGACY_V1.length / 1.7)
 })
 
-check('still decodes a legacy v1 code', () => {
-  const decoded = decodeShareCode(LEGACY_V1)
-  assert.ok(decoded && decoded.v === 1)
-  assert.deepEqual(decoded.lan, LAN)
-  assert.deepEqual(decoded.wan, WAN)
-  assert.equal(decoded.name, 'Graham')
+check('rejects the JSON codes this format replaced', () => {
+  // Deliberate: the JSON path is gone, so an old invite is not a code.
+  assert.equal(decodeShareCode(LEGACY_V1), null)
+  assert.equal(decodeShareCode(LEGACY_V2), null)
 })
 
-check('still decodes a legacy v2 code', () => {
-  const decoded = decodeShareCode(LEGACY_V2)
-  assert.ok(decoded && decoded.v === 2)
-  assert.deepEqual(decoded.relay, RELAY)
-  assert.equal(decoded.name, 'Graham')
+check('parses no JSON at all — a valid JSON payload is still not a code', () => {
+  const handCrafted = Buffer.from(
+    JSON.stringify({ v: 2, relay: RELAY, secret: SECRET, name: 'x' }),
+    'utf8'
+  ).toString('base64url')
+  assert.equal(decodeShareCode(handCrafted), null)
 })
 
 check('rejects empty, garbage, and truncated codes', () => {
-  const relay = encodeRelayShareCodeCompact({ relay: RELAY, secret: SECRET })
+  const relay = encodeRelayShareCode({ relay: RELAY, secret: SECRET })
   assert.equal(decodeShareCode(''), null)
   assert.equal(decodeShareCode(undefined), null)
   assert.equal(decodeShareCode('not a code at all!!'), null)
@@ -102,13 +101,13 @@ check('rejects empty, garbage, and truncated codes', () => {
 })
 
 check('rejects a code whose format tag is unknown', () => {
-  const buf = Buffer.from(encodeShareCodeCompact({ lan: LAN, secret: SECRET }), 'base64url')
+  const buf = Buffer.from(encodeShareCode({ lan: LAN, secret: SECRET }), 'base64url')
   buf[0] = 0x39
   assert.equal(decodeShareCode(buf.toString('base64url')), null)
 })
 
 check('a flipped bit changes the secret rather than forging an endpoint', () => {
-  const code = encodeRelayShareCodeCompact({ relay: RELAY, secret: SECRET })
+  const code = encodeRelayShareCode({ relay: RELAY, secret: SECRET })
   const buf = Buffer.from(code, 'base64url')
   buf[buf.length - 1] ^= 0x01
   const decoded = decodeShareCode(buf.toString('base64url'))
@@ -116,28 +115,26 @@ check('a flipped bit changes the secret rather than forging an endpoint', () => 
   assert.notEqual(decoded.secret, SECRET)
 })
 
-check('falls back to the legacy form when the URL is too long to pack', () => {
+check('packs a relay URL past 255 bytes, which a one-byte length could not', () => {
+  // isValidRelayEndpoint admits up to 300 characters, so the packed form
+  // has to cover all of them — there is no longer a longer encoding to
+  // retreat to. See relayHostBytes.
   const relay = { url: `https://${'a'.repeat(260)}.example.com`, roomId: RELAY.roomId }
-  const decoded = decodeShareCode(encodeRelayShareCodeCompact({ relay, secret: SECRET }))
+  const decoded = decodeShareCode(encodeRelayShareCode({ relay, secret: SECRET }))
   assert.ok(decoded && decoded.v === 2)
   assert.deepEqual(decoded.relay, relay)
   assert.equal(decoded.secret, SECRET)
 })
 
-check('falls back to the legacy form for a non-standard secret', () => {
-  const secret = 'a-short-secret'
-  const decoded = decodeShareCode(encodeShareCodeCompact({ lan: LAN, wan: WAN, secret }))
-  assert.ok(decoded && decoded.v === 1)
-  assert.equal(decoded.secret, secret)
-  assert.deepEqual(decoded.wan, WAN)
+check('refuses a secret that is not 24 canonical bytes', () => {
+  assert.throws(() => encodeShareCode({ lan: LAN, wan: WAN, secret: 'a-short-secret' }))
+  assert.throws(() => encodeRelayShareCode({ relay: RELAY, secret: 'a-short-secret' }))
 })
 
 check('refuses to encode an invalid endpoint', () => {
+  assert.throws(() => encodeShareCode({ lan: { ip: 'no spaces here', port: 1 }, secret: SECRET }))
   assert.throws(() =>
-    encodeShareCodeCompact({ lan: { ip: 'no spaces here', port: 1 }, secret: SECRET })
-  )
-  assert.throws(() =>
-    encodeRelayShareCodeCompact({
+    encodeRelayShareCode({
       relay: { url: 'http://insecure.example', roomId: RELAY.roomId },
       secret: SECRET
     })
@@ -150,7 +147,7 @@ const JOIN = crypto.randomUUID()
 const ROOM = { relay: RELAY, secret: SECRET, name: 'Movie night', admin: ADMIN, join: JOIN }
 
 check('round-trips a room code', () => {
-  const decoded = decodeShareCode(encodeRoomShareCodeCompact(ROOM))
+  const decoded = decodeShareCode(encodeRoomShareCode(ROOM))
   assert.ok(decoded && decoded.v === 4)
   assert.deepEqual(decoded.relay, RELAY)
   assert.equal(decoded.secret, SECRET)
@@ -160,7 +157,7 @@ check('round-trips a room code', () => {
 })
 
 check('round-trips a room code with no join secret', () => {
-  const decoded = decodeShareCode(encodeRoomShareCodeCompact({ ...ROOM, join: undefined }))
+  const decoded = decodeShareCode(encodeRoomShareCode({ ...ROOM, join: undefined }))
   assert.ok(decoded && decoded.v === 4)
   assert.deepEqual(decoded.admin, ADMIN)
   assert.equal(decoded.join, undefined)
@@ -168,43 +165,47 @@ check('round-trips a room code with no join secret', () => {
 
 check('keeps a non-ASCII room name intact', () => {
   const name = 'Filmabend 🎬 déjà vu'
-  const decoded = decodeShareCode(encodeRoomShareCodeCompact({ ...ROOM, name }))
+  const decoded = decodeShareCode(encodeRoomShareCode({ ...ROOM, name }))
   assert.ok(decoded && decoded.v === 4)
   assert.equal(decoded.name, name)
 })
 
 check('a room code is far shorter than the JSON it replaces', () => {
-  const compact = encodeRoomShareCodeCompact(ROOM)
-  const json = encodeRoomShareCode(ROOM)
-  assert.ok(compact.length < json.length / 1.7, `${compact.length} vs ${json.length}`)
+  const compact = encodeRoomShareCode(ROOM)
+  // What the deleted v4 JSON encoder would have produced for this exact
+  // room, reconstructed here so the saving is measured, not asserted.
+  const asJson = Buffer.from(JSON.stringify({ v: 4, ...ROOM }), 'utf8').toString('base64url')
+  assert.ok(compact.length < asJson.length / 2.5, `${compact.length} vs ${asJson.length}`)
   assert.ok(compact.length < 200, `room code was ${compact.length} chars`)
 })
 
 check('the admin id is recomputed from the key, never carried', () => {
-  const decoded = decodeShareCode(encodeRoomShareCodeCompact(ROOM))
+  const decoded = decodeShareCode(encodeRoomShareCode(ROOM))
   assert.ok(decoded && decoded.v === 4)
   // The id is sha256 of the raw key, so a packed code cannot express a
   // pair that disagrees — which is exactly the v4 payload's promise.
   assert.equal(decoded.admin.id, idOfRawPub(decoded.admin.pub))
 })
 
-check('falls back to the legacy form when the admin id contradicts its key', () => {
+check('refuses an admin id that contradicts its key', () => {
   const other = generateIdentity()
-  const mismatched = { ...ROOM, admin: { id: other.id, pub: IDENTITY.pub } }
-  const decoded = decodeShareCode(encodeRoomShareCodeCompact(mismatched))
-  assert.ok(decoded && decoded.v === 4)
-  // Preserved as given rather than quietly rewritten to agree.
-  assert.deepEqual(decoded.admin, mismatched.admin)
+  // Not encodable, and never silently rewritten to agree: a caller holding
+  // a mismatched pair has a bug, and the id is derived on decode anyway.
+  assert.throws(() => encodeRoomShareCode({ ...ROOM, admin: { id: other.id, pub: IDENTITY.pub } }))
+})
+
+check('refuses a join secret that is not a UUID', () => {
+  assert.throws(() => encodeRoomShareCode({ ...ROOM, join: 'not-a-uuid' }))
 })
 
 check('rejects truncated and over-long room codes', () => {
-  const code = encodeRoomShareCodeCompact(ROOM)
+  const code = encodeRoomShareCode(ROOM)
   assert.equal(decodeShareCode(code.slice(0, code.length - 4)), null)
   assert.equal(decodeShareCode(code + 'AAAA'), null)
 })
 
 check('refuses to encode a room code with no admin', () => {
-  assert.throws(() => encodeRoomShareCodeCompact({ ...ROOM, admin: { id: '', pub: '' } }))
+  assert.throws(() => encodeRoomShareCode({ ...ROOM, admin: { id: '', pub: '' } }))
 })
 
 console.log(`\n${pass} passed`)

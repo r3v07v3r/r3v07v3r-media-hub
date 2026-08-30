@@ -39,12 +39,7 @@ import type {
   RoomsStatus,
   RoomView
 } from '../../shared/media-hub/types'
-import {
-  decodeShareCode,
-  decryptMessage,
-  encodeRoomShareCodeCompact,
-  encryptMessage
-} from './party'
+import { decodeShareCode, decryptMessage, encodeRoomShareCode, encryptMessage } from './party'
 import {
   ANNOUNCE_INTERVAL_MS,
   acceptRoomName,
@@ -52,7 +47,6 @@ import {
   PREV_SECRETS_KEPT,
   parseBannedEnvelope,
   rememberKicked,
-  migrateLegacyRooms,
   reapPresence,
   recordPresence,
   withRoomName,
@@ -728,17 +722,14 @@ function stopTimers(): void {
   reapTimer = null
 }
 
-/** Called at startup so saved rooms reconnect without anyone acting. Also
- *  where the single pre-rooms friends group becomes a room — see
- *  migrateLegacyRooms for why it arrives with no admin. */
+/** Called at startup so saved rooms reconnect without anyone acting.
+ *
+ *  A room whose stored code predates the packed format no longer decodes,
+ *  so activateRoom rejects it and it is logged and skipped rather than
+ *  silently half-restored. Those rooms have to be created again — the
+ *  deliberate cost of dropping the JSON codec. */
 export function restoreRooms(): void {
-  const settings = readSettings()
-  const { rooms: list, changed } = migrateLegacyRooms(settings)
-  if (changed) {
-    settings.rooms = list
-    delete settings.friendsGroupCode
-    writeSettings(settings)
-  }
+  const list = readSettings().rooms ?? []
   for (const stored of list) {
     activateRoom(stored).catch((error) => logError('rooms:restore', String(error)))
   }
@@ -796,7 +787,7 @@ export function registerRoomsIpc(): void {
       // code — it is the creator's credential, and the code is handed to
       // everyone. The joinSecret IS in the code: it is the room's door
       // key, and an invite that cannot open the door invites nobody.
-      const code = encodeRoomShareCodeCompact({
+      const code = encodeRoomShareCode({
         relay: { url: creds.url, roomId },
         secret,
         name,
@@ -825,19 +816,13 @@ export function registerRoomsIpc(): void {
     const parsed = decodeShareCode(code)
     if (!parsed || parsed.v === 1) throw new Error('That is not a valid room code.')
     if (rooms.has(parsed.relay.roomId)) return { ok: true }
-    // v3 was the pre-release bearer-string draft of rooms; nothing
-    // shipped with it, and the relay no longer speaks it. Saying which
-    // kind of code it is beats a confusing 403.
-    if (parsed.v === 3) {
-      throw new Error('That invite is from a pre-release build — ask for a fresh room code.')
-    }
     const stored: StoredRoom = {
       code,
-      // A v2 code is the old friends-group kind and carries no name; the
-      // migration calls that room "Friends", so a member joining by its
-      // original code must land on the SAME label — a v2 room has no
-      // admin, so no announcement could ever reconcile a different one.
-      name: (parsed.name || '').trim() || (parsed.v === 2 ? 'Friends' : 'A room'),
+      // A v2 code is a relay PARTY invite, which carries no room name and
+      // no admin. Joining a room by one still works — same relay, same
+      // crypto — and lands on the generic label, because no announcement
+      // could ever reconcile a different one without an admin to sign it.
+      name: (parsed.name || '').trim() || 'A room',
       sharing: false,
       // A v2 code predates admins; the room it joins simply has none.
       adminFriendId: parsed.v === 4 ? parsed.admin.id : undefined,
@@ -1002,7 +987,7 @@ export function registerRoomsIpc(): void {
       const previous = room.secret
       const newSecret = crypto.randomBytes(24).toString('base64url')
       const identity = roomsIdentity()
-      const newCode = encodeRoomShareCodeCompact({
+      const newCode = encodeRoomShareCode({
         relay: { url: room.relayUrl, roomId: room.roomId },
         secret: newSecret,
         name: room.stored.name,
