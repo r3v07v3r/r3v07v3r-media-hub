@@ -37,38 +37,54 @@ joined by an old v2 code) simply has no admin. Nobody can rename it for
 everyone, and nobody can kick from it. That is the truth of its history,
 not a defect.
 
+## Identity: chip and tap
+
+Every install holds an **Ed25519 private key that never leaves the
+device** — the model is the one EMV bank cards use, and it was asked
+for by that name. A member's id is the sha256 of their public key, so
+**the identity is the key**: claiming an id without its private key is
+impossible, because nothing you say verifies. There is no registry, no
+first-use leap of faith, and no bearer string anywhere in the system —
+three earlier drafts each patched a symptom of bearer credentials
+(broadcast keys, harvestable household keys, self-declared hashes)
+before this replaced the class.
+
+**Every room message is signed by its sender, then encrypted.** The
+relay and the cache hop still see only ciphertext; members see proof of
+who spoke. The signature covers the room, a timestamp and a per-sender
+sequence number, so a captured message cannot be replayed and a
+signature made for one room means nothing in another. What used to be a
+trust statement — "within-room identity is honest, not enforced" — is
+now a property: **a member who leaks the room secret leaks words, never
+a voice.** Renames and re-keys are believed only from the admin's
+verified key, which travels in the invite code.
+
 ## Membership at the relay
 
-A room created since kick existed carries a relay-level membership
-layer. These are **relay credentials, not content** — the relay still
-decrypts nothing:
+Admission is a **cryptogram** — EMV's tap: a signature over this
+relay's host, this room, the moment, and a strictly increasing counter
+the relay remembers (the ATC). The relay verifies all four, so an
+intercepted cryptogram is a receipt, not a card — bound to one door,
+one moment, already spent. The relay still decrypts nothing.
 
-- **memberKey** — a random identity each install generates per room,
-  sent only on connect. It is a bearer credential — a known key is
-  admitted without the current joinSecret — so it is a secret between
-  one install and the relay, and never travels anywhere else. What
-  presence announcements carry, and what a kick names, is its **sha256
-  hash**: enough to ban by, useless to connect with. (An earlier draft
-  broadcast the raw key; a kicked member who had cached a kept member's
-  key could have walked straight back in as them.)
-- **joinSecret** — the room's admission ticket, carried in the invite
-  code. An install the relay has never seen must present the current
-  joinSecret to be admitted; its memberKey is then registered.
-- A **known, unbanned memberKey is always admitted**, even with a stale
-  joinSecret — a family member whose laptop slept through a rotation is
-  not locked out of their own room.
-- A **banned memberKey is refused outright**, whatever it presents.
+- The **joinSecret** (in the invite code) is the invite's proof,
+  required only of identities the room has never seen. It admits nobody
+  by itself — possession proof is not optional.
+- A **known, unbanned identity is always admitted on a fresh tap**,
+  even with a stale joinSecret — a family member whose laptop slept
+  through a rotation is not locked out of their own room.
+- A **banned identity is refused outright**, whatever it presents.
 
 Rooms and parties created before this (or by older clients) have no
 membership layer and behave exactly as before.
 
 ## What kicking a member actually does
 
-The admin kicks a person, not a device: every identity hash their
-announcements have EVER carried — the room keeps a bounded per-person
-history precisely because presence ages out in seconds, and a kick must
-reach the install the room saw last month, not just this minute. In
-order — and the order is the guarantee:
+The admin kicks an identity — and the identity everyone sees, the
+identity the relay admits, and the identity a kick names are now one
+thing, so there is no history to reconstruct and no install the room
+once saw that a kick could miss: every device of theirs speaks as that
+id or not at all. In order — and the order is the guarantee:
 
 1. The relay **bans** those memberKeys, **closes** their connections,
    and **rotates** the joinSecret — atomically, in one admin-authorised
@@ -82,7 +98,7 @@ order — and the order is the guarantee:
    joinSecret. The old code is dead for new joiners.
 
 A member who was **offline during the kick** comes back, is admitted
-(known memberKey), and announces under an old secret — possibly several
+(known identity, fresh tap), and announces under an old secret — possibly several
 rotations old, so each member keeps a short bounded chain of previous
 secrets rather than one. The admin answers in whichever old dialect the
 returner actually spoke, handing them the current code — safe, because
@@ -105,36 +121,38 @@ Stated here so a green test suite is never read as more than it proves:
   memberKey no announcement ever carried, it keeps its connection until
   it drops and cannot rejoin after. Kick by person reaches the devices
   the room could see.
-- **Within-room identity is honest, not enforced.** Anyone holding the
-  room secret can claim any friendId in an announcement, including the
-  admin's. Members are friends and family sharing a secret, and the
-  admin badge and re-key messages are trust among them, not a boundary
-  against them. The boundary against _outsiders_ is the secret itself;
-  the boundary against _kicked members_ is the relay ban plus the
-  rotation.
-- **The relay operator sees the membership layer** (memberKeys,
-  joinSecrets, who connects when) — it must, to enforce admission. It
-  still cannot read a byte of what anyone says or watches.
-- **The per-person identity history is bounded** (eight hashes per
-  person). An install cycling fresh identities can shed its oldest from
-  the history — but every shed identity was registered under a
-  joinSecret that has rotated at each kick since, so what escapes the
-  ban is a key that can no longer connect anyway.
+- **Within-room identity is now enforced, with one bound.** Nobody can
+  speak as anyone else — every message verifies against its sender's
+  key. What a member (or a leaked secret) still gets is READABILITY of
+  traffic under that secret; identity and readability part ways, and
+  the rotation after a kick ends even the readability.
+- **Key loss is identity loss.** There is no recovery scheme: a device
+  that loses its key is a stranger with a familiar name, and the admin
+  re-invites it. Stated plainly rather than promising an account-reset
+  flow this system deliberately does not have.
+- **No forward secrecy per message.** A kicked member's already-read
+  plaintext is theirs forever; ratcheting is out of scope for a
+  household product, on purpose.
+- **The relay operator sees the membership layer** (public keys,
+  cryptograms, joinSecrets, who connects when) — it must, to enforce
+  admission. It still cannot read a byte of what anyone says or
+  watches, and nothing it sees lets it mint a tap.
 - **The cache-server hop** carries a household's traffic on one relay
-  connection authenticated as the household — so a relay ban cannot
-  close a kicked member's transport there. Three mechanisms together are
-  the removal for hop members, and an earlier draft of this section
-  under-claimed the problem (it said "noise"; in truth an unfixed hop
-  would have delivered them the re-key): the relay broadcasts each
-  kick's banned hashes to the room and the daemon drops and refuses
-  those subscribers before the re-key can pass; re-keys are sent
-  transient, never retained by the daemon for later subscribers; and
-  the admin's client refuses presence and rescues to kicked friendIds
-  outright. What remains for a MODIFIED client behind a hop: it can
-  lie about its identity hash to the daemon and keep receiving
-  ciphertext it can no longer read, and it can announce under a fake
-  friendId to fish for a rescue — the same in-room spoofing bound
-  stated above, among people who share a household and a secret.
+  connection — admitted on the first member's own tap, with every
+  further member's tap handed up as a carry frame for the RELAY to
+  verify. The daemon holds no credential of anyone's: it forwards
+  cryptograms it cannot mint, exactly as a payment terminal forwards a
+  card's tap to the bank. A relay ban still cannot close a kicked
+  member's transport there, so three mechanisms together are the
+  removal for hop members: the relay broadcasts each kick's banned
+  identities and the daemon drops and refuses those subscribers —
+  matched against relay-verified taps, not self-declared claims —
+  before the re-key can pass; re-keys are sent transient, never
+  retained; and the admin's client refuses presence and rescues to
+  kicked ids outright. What remains for a MODIFIED client behind a hop:
+  it can subscribe under a second identity it minted while it held a
+  valid invite and keep receiving ciphertext it can no longer read —
+  noise in, nothing out.
 
 ## Room lifetime
 

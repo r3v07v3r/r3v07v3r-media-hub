@@ -164,7 +164,6 @@ export async function run(api: PayloadApi): Promise<'restart' | 'exit'> {
   // see roomsHop.ts's header for what this box can and cannot see.
   const roomsHop = createRoomsHop({
     isAuthorized: (token) => pairing.isAuthorized(token),
-    dataDir: config.dataDir,
     log
   })
   server.on('upgrade', (req, socket, head) => {

@@ -18,14 +18,21 @@ import {
   PRESENCE_TTL_MS,
   acceptRoomName,
   applyRekey,
-  memberHashesFor,
-  rememberSeenMember,
   migrateLegacyRooms,
   reapPresence,
   recordPresence,
   withRoomName,
   type PresenceRecord
 } from '../src/main/media-hub/roomRules'
+import {
+  CRYPTOGRAM_FRESHNESS_MS,
+  generateIdentity,
+  idOfRawPub,
+  mintCryptogram,
+  signRoomMessage,
+  verifyCryptogram,
+  verifyRoomMessage
+} from '../src/main/media-hub/roomIdentity'
 
 const now = 1_800_000_000_000
 const SELF = 'self-friend-id'
@@ -34,19 +41,19 @@ const SELF = 'self-friend-id'
 
 {
   const presence = new Map<string, PresenceRecord>()
-  const live = recordPresence(presence, { friendId: 'a', name: 'Ana' }, SELF, now)
+  const live = recordPresence(presence, 'a', { name: 'Ana' }, SELF, now)
   assert.equal(live.changed, true)
   assert.equal(live.isNewcomer, true, 'a live first announcement is a newcomer')
   assert.equal(presence.get('a')?.lastSeen, now)
 
   // Our own announcement echoing back must never appear as a member.
-  const self = recordPresence(presence, { friendId: SELF, name: 'Me' }, SELF, now)
+  const self = recordPresence(presence, SELF, { name: 'Me' }, SELF, now)
   assert.equal(self.changed, false, 'self is not a member of the view')
 
   // Retained replay: the relay held this for ageMs, so the member spoke
   // that long ago — and a replayed stranger is NOT a newcomer, or every
   // reconnect would trigger a chorus of replies to people who are not new.
-  const replay = recordPresence(presence, { friendId: 'b', name: 'Ben' }, SELF, now, 9 * 60_000)
+  const replay = recordPresence(presence, 'b', { name: 'Ben' }, SELF, now, 9 * 60_000)
   assert.equal(replay.isNewcomer, false, 'a replayed member is not a newcomer')
   assert.equal(presence.get('b')?.lastSeen, now - 9 * 60_000, 'replay is backdated by its age')
 
@@ -125,16 +132,22 @@ const SELF = 'self-friend-id'
 
 {
   const relay = { url: 'https://relay.example.workers.dev', roomId: crypto.randomUUID() }
+  const admin = generateIdentity()
   const code = encodeRoomShareCode({
     relay,
     secret: 'room-secret',
     name: 'Family',
-    adminFriendId: 'admin-id'
+    admin: { id: admin.id, pub: admin.pub }
   })
   const decoded = decodeShareCode(code)
-  assert.ok(decoded && decoded.v === 3, 'a room code decodes as v3')
-  if (decoded && decoded.v === 3) {
-    assert.equal(decoded.adminFriendId, 'admin-id', 'the code names its admin')
+  assert.ok(decoded && decoded.v === 4, 'a room code decodes as v4')
+  if (decoded && decoded.v === 4) {
+    assert.equal(decoded.admin.id, admin.id, 'the code names its admin')
+    assert.equal(
+      decoded.admin.pub,
+      admin.pub,
+      "and carries the admin's PUBLIC KEY to verify against"
+    )
     assert.equal(decoded.name, 'Family')
     assert.equal(decoded.relay.roomId, relay.roomId)
   }
@@ -145,88 +158,130 @@ const SELF = 'self-friend-id'
   const decodedV2 = decodeShareCode(v2)
   assert.ok(decodedV2 && decodedV2.v === 2, 'a v2 code still decodes')
 
-  // A v3 payload without its admin is not a room code at all — accepting
-  // it would create rooms whose admin nobody can name.
+  // A v4 payload without its admin is not a room code at all — accepting
+  // it would create rooms whose admin nobody can verify.
   const stripped = JSON.parse(Buffer.from(code, 'base64url').toString('utf8')) as Record<
     string,
     unknown
   >
-  delete stripped.adminFriendId
+  delete stripped.admin
   const tampered = Buffer.from(JSON.stringify(stripped), 'utf8').toString('base64url')
-  assert.equal(decodeShareCode(tampered), null, 'a v3 code must name its admin')
+  assert.equal(decodeShareCode(tampered), null, 'a v4 code must name its admin')
 
   assert.throws(
-    () => encodeRoomShareCode({ relay, secret: 'x', name: 'y', adminFriendId: '' }),
+    () => encodeRoomShareCode({ relay, secret: 'x', name: 'y', admin: { id: '', pub: '' } }),
     'encoding refuses an anonymous admin'
   )
 }
 
-// --- who a kick can name ----------------------------------------------------
+// --- the chip: identities, signatures, cryptograms ---------------------------
 //
-// A kick removes a PERSON, which at the relay means every identity HASH
-// the room has seen their announcements carry — one person is several
-// installs, and banning only the laptop leaves the TV in the room.
-// Hashes, never keys: a known key is a bearer credential at the relay,
-// and broadcasting it would hand every member (including one about to
-// be kicked) someone else's door pass.
-
-const LAPTOP = 'f'.repeat(64)
-const TV = 'e'.repeat(64)
+// The model the user asked for by name: EMV. The private key never
+// leaves the device; a tap signs the door, the moment, and a spent
+// counter; every room message is signed by its sender. Each assertion
+// here closes a door the bearer-string era left open.
 
 {
-  const presence = new Map<string, PresenceRecord>()
-  recordPresence(presence, { friendId: 'a', name: 'Ana', memberKeyHash: LAPTOP }, SELF, now)
-  recordPresence(presence, { friendId: 'a', name: 'Ana', memberKeyHash: TV }, SELF, now)
-  recordPresence(presence, { friendId: 'a', name: 'Ana', memberKeyHash: TV }, SELF, now)
-  assert.deepEqual(
-    memberHashesFor(presence, undefined, 'a'),
-    [LAPTOP, TV],
-    'every install announced is named, once each'
+  const alice = generateIdentity()
+  const mallory = generateIdentity()
+
+  assert.equal(alice.id, idOfRawPub(alice.pub), 'the identity IS the key — id = sha256(pub)')
+
+  // Signed messages: the truth of "who spoke".
+  const envelope = signRoomMessage(alice, 'room-1', { type: 'friend-presence', name: 'Alice' }, 1)
+  const verified = verifyRoomMessage('room-1', envelope, undefined)
+  assert.ok(verified.ok && verified.from === alice.id, 'a genuine message verifies to its sender')
+
+  // Wearing someone else's id over your own valid key. Two shapes:
+  // swapping `from` after signing breaks the signature itself, but the
+  // deeper one SIGNS the lie — mallory's key, alice's id, a signature
+  // genuinely made over that claim. Only the id-equals-hash-of-key rule
+  // refuses it, which is why the rule exists.
+  const spoofed = { ...signRoomMessage(mallory, 'room-1', { type: 'x' }, 1), from: alice.id }
+  assert.equal(
+    verifyRoomMessage('room-1', spoofed, undefined).ok,
+    false,
+    'a spoofed sender id is refused even over a valid signature'
   )
-  assert.deepEqual(
-    memberHashesFor(presence, undefined, 'ghost'),
-    [],
-    'never seen means nothing to remove'
+  const forgedClaim = signRoomMessage({ ...mallory, id: alice.id }, 'room-1', { type: 'x' }, 1)
+  assert.equal(forgedClaim.from, alice.id, 'the forgery claims to be alice, signed by mallory')
+  assert.equal(
+    verifyRoomMessage('room-1', forgedClaim, undefined).ok,
+    false,
+    'a SIGNED false claim of identity is refused — the id must be the hash of the signing key'
   )
 
-  // A raw-looking key in the announcement is ignored: only hashes are
-  // ever accepted from the wire, so a client cannot be tricked into
-  // spreading someone's credential even if a peer broadcasts one.
-  recordPresence(
-    presence,
-    { friendId: 'b', name: 'Ben', memberKeyHash: 'raw-key-not-hash' },
-    SELF,
-    now
+  // Tampering with the body after signing.
+  const tampered = { ...envelope, b: { type: 'friend-presence', name: 'Not Alice' } }
+  assert.equal(
+    verifyRoomMessage('room-1', tampered, undefined).ok,
+    false,
+    'a tampered body is refused'
   )
-  assert.deepEqual(memberHashesFor(presence, undefined, 'b'), [], 'non-hashes are dropped')
+
+  // Replay: yesterday's genuinely-signed message, played again.
+  assert.equal(
+    verifyRoomMessage('room-1', envelope, envelope.seq).ok,
+    false,
+    'a replayed message (seq not above the high-water mark) is refused'
+  )
+
+  // A message signed for one room does not verify in another.
+  assert.equal(
+    verifyRoomMessage('room-2', envelope, undefined).ok,
+    false,
+    'a signature binds the room it was made for'
+  )
 }
 
-// --- the identity history a kick actually reads ------------------------------
-//
-// Presence is soft state with a 70-second TTL. A kick has to name the
-// install the room saw last month — the review found the ephemeral
-// version's hole: let a record age out, kick when one install returns,
-// and the other install's key is never banned.
+// --- the tap: admission cryptograms ------------------------------------------
 
 {
-  let seen = rememberSeenMember(undefined, 'a', LAPTOP)
-  assert.ok(seen, 'a new identity is recorded')
+  const card = generateIdentity()
+  const tap = mintCryptogram(card, 'admit', 'relay.example.com', 'room-1', 7)
+
+  const accepted = verifyCryptogram(tap, 'admit', 'relay.example.com', 'room-1')
+  assert.ok(accepted.ok && accepted.id === card.id, 'a genuine tap verifies to its identity')
+
+  // The whole point of binding the door into the signature: a cryptogram
+  // harvested at (or minted for) one relay is worthless at another —
+  // this is what closed the credential-harvest class for good.
   assert.equal(
-    rememberSeenMember(seen ?? undefined, 'a', LAPTOP),
-    null,
-    'a known one changes nothing'
+    verifyCryptogram(tap, 'admit', 'evil.example.com', 'room-1').ok,
+    false,
+    'a tap minted for relay X is refused at relay Y'
   )
-  seen = rememberSeenMember(seen ?? undefined, 'a', TV) ?? seen
-
-  // The union: presence has aged out entirely, the history remembers.
-  const empty = new Map<string, PresenceRecord>()
-  assert.deepEqual(
-    memberHashesFor(empty, seen ?? undefined, 'a'),
-    [LAPTOP, TV],
-    'a kick reaches installs the room saw before presence aged them out'
+  assert.equal(
+    verifyCryptogram(tap, 'admit', 'relay.example.com', 'room-2').ok,
+    false,
+    'and refused for a different room'
+  )
+  assert.equal(
+    verifyCryptogram(tap, 'carry', 'relay.example.com', 'room-1').ok,
+    false,
+    'and refused for a different purpose — an admit tap cannot be replayed as a carry'
+  )
+  assert.equal(
+    verifyCryptogram(
+      tap,
+      'admit',
+      'relay.example.com',
+      'room-1',
+      tap.ts + CRYPTOGRAM_FRESHNESS_MS + 1
+    ).ok,
+    false,
+    'a stale tap is refused — freshness is half of replay protection; the counter is the other'
   )
 
-  assert.equal(rememberSeenMember(seen ?? undefined, 'a', 'not-a-hash'), null, 'garbage is refused')
+  const forged = {
+    ...tap,
+    sig: mintCryptogram(generateIdentity(), 'admit', 'relay.example.com', 'room-1', 7).sig
+  }
+  assert.equal(
+    verifyCryptogram(forged, 'admit', 'relay.example.com', 'room-1').ok,
+    false,
+    "someone else's signature over the same data is a forgery, not a tap"
+  )
 }
 
 // --- what a re-key may change -----------------------------------------------
@@ -236,14 +291,16 @@ const TV = 'e'.repeat(64)
 // refusal here closes one of those doors.
 
 {
-  const ADMIN = 'admin-id'
+  const adminId = generateIdentity()
+  const ADMIN = adminId.id
+  const adminRef = { id: adminId.id, pub: adminId.pub }
   const relay = { url: 'https://relay.example.workers.dev', roomId: crypto.randomUUID() }
   const room = { roomId: relay.roomId, relayUrl: relay.url, adminFriendId: ADMIN }
   const freshCode = encodeRoomShareCode({
     relay,
     secret: 'rotated-secret',
     name: 'Family',
-    adminFriendId: ADMIN,
+    admin: adminRef,
     join: 'rotated-join'
   })
 
@@ -276,7 +333,7 @@ const TV = 'e'.repeat(64)
     relay: { url: 'https://elsewhere.example.workers.dev', roomId: relay.roomId },
     secret: 'rotated-secret',
     name: 'Family',
-    adminFriendId: ADMIN
+    admin: adminRef
   })
   assert.equal(
     applyRekey(room, { code: crossRelayCode }, ADMIN),
@@ -288,7 +345,7 @@ const TV = 'e'.repeat(64)
     relay: { url: relay.url, roomId: crypto.randomUUID() },
     secret: 'rotated-secret',
     name: 'Family',
-    adminFriendId: ADMIN
+    admin: adminRef
   })
   assert.equal(
     applyRekey(room, { code: otherRoomCode }, ADMIN),
@@ -296,11 +353,12 @@ const TV = 'e'.repeat(64)
     'a re-key that changes the roomId is a relocation, not a rotation'
   )
 
+  const usurper = generateIdentity()
   const handoffCode = encodeRoomShareCode({
     relay,
     secret: 'rotated-secret',
     name: 'Family',
-    adminFriendId: 'new-admin'
+    admin: { id: usurper.id, pub: usurper.pub }
   })
   assert.equal(
     applyRekey(room, { code: handoffCode }, ADMIN),
@@ -320,11 +378,12 @@ const TV = 'e'.repeat(64)
 
 {
   const relay = { url: 'https://relay.example.workers.dev', roomId: crypto.randomUUID() }
+  const recodeAdmin = generateIdentity()
   const code = encodeRoomShareCode({
     relay,
     secret: 'room-secret',
     name: 'Family',
-    adminFriendId: 'admin-id'
+    admin: { id: recodeAdmin.id, pub: recodeAdmin.pub }
   })
   // Smuggle in a field from the future.
   const raw = JSON.parse(Buffer.from(code, 'base64url').toString('utf8')) as Record<string, unknown>
@@ -339,10 +398,10 @@ const TV = 'e'.repeat(64)
   >
   assert.equal(decoded.name, 'Movie night', 'the name changes')
   assert.equal(decoded.secret, 'room-secret', 'the secret does not')
-  assert.equal(decoded.adminFriendId, 'admin-id', 'nor the admin')
+  assert.equal((decoded.admin as { id?: string })?.id, recodeAdmin.id, 'nor the admin')
   assert.equal(decoded.futureField, 'must-survive', 'nor fields this version has never heard of')
   const reparsed = decodeShareCode(String(renamed))
-  assert.ok(reparsed && reparsed.v === 3, 'the recoded invite still decodes as a room code')
+  assert.ok(reparsed && reparsed.v === 4, 'the recoded invite still decodes as a room code')
 
   assert.equal(withRoomName('not-a-code', 'x'), null, 'garbage recodes to nothing, not to garbage')
 }

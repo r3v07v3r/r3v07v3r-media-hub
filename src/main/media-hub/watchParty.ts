@@ -382,9 +382,10 @@ export function connectRelayWs(
   }: ConnectRelayOptions = {}
 ): Promise<WebSocket> {
   return new Promise((resolve, reject) => {
-    // Membership rooms present their relay credentials here — memberKey
-    // and joinSecret ride as query params exactly like the host token
-    // always has, because a WebSocket upgrade has nowhere better.
+    // Membership rooms present their relay credentials here — the
+    // admission cryptogram and joinSecret ride as query params exactly
+    // like the host token always has, because a WebSocket upgrade has
+    // nowhere better.
     const params = new URLSearchParams()
     if (token) params.set('token', token)
     for (const [key, value] of Object.entries(query)) {
@@ -623,11 +624,11 @@ export function registerWatchPartyIpc(): void {
     const { code, name } = payload || {}
     const parsed = decodeShareCode(code)
     if (!parsed) throw new Error('That party code is invalid.')
-    // A v3 code is a ROOM invite, not a party. Connecting to it here
+    // A v3/v4 code is a ROOM invite, not a party. Connecting to it here
     // would technically work — same relay, same crypto — and would leave
     // the person sitting silently in a presence channel wondering why no
     // film starts. Saying which kind of code it is beats pretending.
-    if (parsed.v === 3) {
+    if (parsed.v === 3 || parsed.v === 4) {
       throw new Error('That is a room code — join it from Rooms, then join a member from there.')
     }
     const displayName =

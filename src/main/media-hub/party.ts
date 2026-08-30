@@ -55,7 +55,24 @@ export interface ShareCodePayloadV3 {
   join?: string
 }
 
-export type ShareCodePayload = ShareCodePayloadV1 | ShareCodePayloadV2 | ShareCodePayloadV3
+/**
+ * A room code with a chip-and-tap admin: v3 plus the admin's PUBLIC KEY,
+ * which is what turns "the admin renamed the room" and "the admin
+ * rotated the secret" from claims into verifiable statements. The
+ * admin's id is sha256 of this key, so the two fields cannot disagree
+ * without failing verification.
+ */
+export interface ShareCodePayloadV4 {
+  v: 4
+  relay: PartyRelayEndpoint
+  secret: string
+  name: string
+  admin: { id: string; pub: string }
+  join?: string
+}
+
+export type ShareCodePayload =
+  ShareCodePayloadV1 | ShareCodePayloadV2 | ShareCodePayloadV3 | ShareCodePayloadV4
 
 export type PartyQueueEvent =
   | { type: 'suggest'; queueId: string; item: PartyQueueEntry['item']; suggestedBy?: string }
@@ -125,27 +142,29 @@ export function encodeRelayShareCode(input: {
 }
 
 /** Encodes a room invite. Same validation discipline as the party codes
- *  above; the only addition is the admin identity. */
+ *  above. The admin travels as id AND public key — the key is what lets
+ *  every member verify the admin's renames and re-keys rather than
+ *  trust them. */
 export function encodeRoomShareCode(input: {
   relay: PartyRelayEndpoint
   secret: string
   name: string
-  adminFriendId: string
+  admin: { id: string; pub: string }
   join?: string
 }): string {
-  const { relay, secret, name, adminFriendId, join } = input
+  const { relay, secret, name, admin, join } = input
   if (!isValidRelayEndpoint(relay) || typeof secret !== 'string' || !secret) {
     throw new Error('Invalid room endpoint.')
   }
-  if (typeof adminFriendId !== 'string' || !adminFriendId) {
+  if (!admin?.id || !admin?.pub) {
     throw new Error('A room code names its admin.')
   }
-  const payload: ShareCodePayloadV3 = {
-    v: 3,
+  const payload: ShareCodePayloadV4 = {
+    v: 4,
     relay,
     secret,
     name: String(name || '').slice(0, 40),
-    adminFriendId: adminFriendId.slice(0, 64),
+    admin: { id: admin.id.slice(0, 64), pub: admin.pub.slice(0, 64) },
     ...(join ? { join: String(join).slice(0, 64) } : {})
   }
   return Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url')
@@ -161,6 +180,21 @@ export function decodeShareCode(code: unknown): ShareCodePayload | null {
       secret?: unknown
       name?: unknown
       adminFriendId?: unknown
+      admin?: { id?: unknown; pub?: unknown }
+    }
+    if (payload.v === 4) {
+      if (
+        !isValidRelayEndpoint(payload.relay) ||
+        typeof payload.secret !== 'string' ||
+        !payload.secret ||
+        typeof payload.admin?.id !== 'string' ||
+        !payload.admin.id ||
+        typeof payload.admin?.pub !== 'string' ||
+        !payload.admin.pub
+      ) {
+        return null
+      }
+      return payload as unknown as ShareCodePayloadV4
     }
     if (payload.v === 3) {
       if (

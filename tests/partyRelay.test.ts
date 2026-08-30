@@ -61,43 +61,40 @@ check('resets a message rate after its window closes', () => {
 
 // --- the membership gate ----------------------------------------------------
 //
-// The admission matrix is the whole point of relay-level membership: a
-// ban the relay does not enforce is theatre. Each row here closes a
-// specific door — docs/ROOMS.md in the main app names them.
+// The admission POLICY, given an identity the cryptogram layer has
+// already VERIFIED (signature, freshness, counter — pinned separately
+// in tests/rooms.test.ts against the client mirror, and end-to-end in
+// kick.e2e.ts against this worker's own verifier). Each row closes a
+// specific door — docs/ROOMS.md names them.
 
-const KEY = 'member-key-000001'
-const OTHER = 'member-key-000002'
+const ID = 'a'.repeat(64)
+const OTHER_ID = 'b'.repeat(64)
 const JOIN = 'join-secret-current'
-// The pure verdict takes the hash precomputed (hashing is async in
-// workers); any stable stand-in works — nothing derives it here.
-const KEY_HASH = 'a'.repeat(64)
-const OTHER_HASH = 'b'.repeat(64)
 
 check('a legacy room (no joinSecret) admits anyone, as it always has', () => {
   assert.strictEqual(
     admissionVerdict({
       currentJoinSecret: null,
-      memberKey: null,
-      memberKeyHash: null,
+      verifiedId: null,
       presentedJoinSecret: null,
       known: new Set(),
-      bannedHashes: new Set()
+      banned: new Set()
     }),
     'admit'
   )
 })
 
-check('a membership room refuses a connection with no identity', () => {
+check('a membership room refuses a connection with no verified identity', () => {
   assert.strictEqual(
     admissionVerdict({
       currentJoinSecret: JOIN,
-      memberKey: null,
-      memberKeyHash: null,
+      verifiedId: null,
       presentedJoinSecret: JOIN,
       known: new Set(),
-      bannedHashes: new Set()
+      banned: new Set()
     }),
-    'refuse'
+    'refuse',
+    'the joinSecret alone admits nobody — possession proof is not optional'
   )
 })
 
@@ -105,27 +102,25 @@ check('banned wins over everything — even the current joinSecret', () => {
   assert.strictEqual(
     admissionVerdict({
       currentJoinSecret: JOIN,
-      memberKey: KEY,
-      memberKeyHash: KEY_HASH,
+      verifiedId: ID,
       presentedJoinSecret: JOIN,
-      known: new Set([KEY]),
-      bannedHashes: new Set([KEY_HASH])
+      known: new Set([ID]),
+      banned: new Set([ID])
     }),
     'refuse'
   )
 })
 
 check(
-  'a known member is admitted with a STALE joinSecret — rotation gates strangers, not members',
+  'a known identity is admitted with a STALE joinSecret — rotation gates strangers, not members',
   () => {
     assert.strictEqual(
       admissionVerdict({
         currentJoinSecret: JOIN,
-        memberKey: KEY,
-        memberKeyHash: KEY_HASH,
+        verifiedId: ID,
         presentedJoinSecret: 'stale-after-a-kick',
-        known: new Set([KEY]),
-        bannedHashes: new Set()
+        known: new Set([ID]),
+        banned: new Set()
       }),
       'admit'
     )
@@ -136,11 +131,10 @@ check('a stranger with the current joinSecret is admitted and registered', () =>
   assert.strictEqual(
     admissionVerdict({
       currentJoinSecret: JOIN,
-      memberKey: OTHER,
-      memberKeyHash: OTHER_HASH,
+      verifiedId: OTHER_ID,
       presentedJoinSecret: JOIN,
-      known: new Set([KEY]),
-      bannedHashes: new Set()
+      known: new Set([ID]),
+      banned: new Set()
     }),
     'admit-and-register'
   )
@@ -150,11 +144,10 @@ check('a stranger without it is refused', () => {
   assert.strictEqual(
     admissionVerdict({
       currentJoinSecret: JOIN,
-      memberKey: OTHER,
-      memberKeyHash: OTHER_HASH,
+      verifiedId: OTHER_ID,
       presentedJoinSecret: 'stale-or-guessed',
-      known: new Set([KEY]),
-      bannedHashes: new Set()
+      known: new Set([ID]),
+      banned: new Set()
     }),
     'refuse'
   )
@@ -162,15 +155,14 @@ check('a stranger without it is refused', () => {
 
 check('registration stops at the cap — a room of 256 installs is not a household', () => {
   const known = new Set<string>()
-  for (let i = 0; i < MAX_KNOWN_MEMBERS; i++) known.add(`member-key-${String(i).padStart(6, '0')}`)
+  for (let i = 0; i < MAX_KNOWN_MEMBERS; i++) known.add(String(i).padStart(64, '0'))
   assert.strictEqual(
     admissionVerdict({
       currentJoinSecret: JOIN,
-      memberKey: 'member-key-overflow1',
-      memberKeyHash: 'c'.repeat(64),
+      verifiedId: 'c'.repeat(64),
       presentedJoinSecret: JOIN,
       known,
-      bannedHashes: new Set()
+      banned: new Set()
     }),
     'refuse'
   )

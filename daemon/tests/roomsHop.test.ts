@@ -1,27 +1,32 @@
 // The rooms hop, against a fake relay — everything but Cloudflare.
 //
 // The daemon under test is the real createRoomsHop on a real HTTP server
-// with real WebSockets on ephemeral ports; only the relay at the far end
-// is a stand-in that mimics room.ts's envelope behaviour (fan to every
-// connection but the sender). What this pins is the hop's whole reason
-// to exist and its two easy-to-lose obligations:
+// with real WebSockets on ephemeral ports; the relay at the far end is a
+// stand-in that mimics room.ts's contract: fan to every connection but
+// the sender, answer carry frames, announce bans. Subscribers present
+// REAL Ed25519 cryptograms minted with roomIdentity — the daemon derives
+// each identity from the tap it forwards, so the test proves the pins
+// with the same key material production uses.
 //
-//   - ONE upstream connection per room, however many local devices —
-//     that is the feature;
-//   - the LOCAL ECHO — the relay never fans a message back to its own
-//     connection, and a household shares one, so siblings only hear each
-//     other if the daemon says it;
-//   - teardown — the last local unsubscribe closes the upstream, or the
-//     daemon holds relay connections for rooms nobody is in.
+// What this pins is the hop's whole reason to exist plus its
+// obligations: ONE upstream per room however many devices; the LOCAL
+// ECHO; carry hand-offs for every subscriber after the first; bans
+// enforced on relay-verified identities; transient sends never retained;
+// sends paced under the relay's rate ceiling; teardown on last
+// unsubscribe.
 
 import assert from 'node:assert/strict'
 import http from 'node:http'
 import fsp from 'node:fs/promises'
-import os from 'node:os'
-import path from 'node:path'
 import WebSocket, { WebSocketServer } from 'ws'
 
 import { createRoomsHop } from '../roomsHop'
+import {
+  generateIdentity,
+  idOfRawPub,
+  mintCryptogram,
+  type RoomIdentity
+} from '../../src/main/media-hub/roomIdentity'
 
 const ROOM_ID = '11111111-2222-3333-4444-555555555555'
 
@@ -39,7 +44,9 @@ async function main(): Promise<void> {
   const relayWss = new WebSocketServer({ noServer: true })
   interface RelayConn {
     ws: WebSocket
-    member: string | null
+    /** pub presented at connect (the initiator's tap), if any. */
+    pub: string | null
+    carriedPubs: string[]
     id: number
   }
   const relayConns: RelayConn[] = []
@@ -48,10 +55,28 @@ async function main(): Promise<void> {
   relayServer.on('upgrade', (req, socket, head) => {
     const url = new URL(req.url ?? '/', 'http://relay.invalid')
     relayWss.handleUpgrade(req, socket, head, (ws) => {
-      const conn: RelayConn = { ws, member: url.searchParams.get('member'), id: nextConnId++ }
+      const conn: RelayConn = {
+        ws,
+        pub: url.searchParams.get('pub'),
+        carriedPubs: [],
+        id: nextConnId++
+      }
       relayConns.push(conn)
       ws.on('message', (raw) => {
         const body = String(raw)
+        // Carry frames get answered like the real worker answers them —
+        // ok for everything here; the real verification runs in
+        // kick.e2e.ts against the actual worker.
+        try {
+          const frame = JSON.parse(body) as { type?: string; pub?: string }
+          if (frame.type === 'carry' && typeof frame.pub === 'string') {
+            conn.carriedPubs.push(frame.pub)
+            ws.send(JSON.stringify({ type: 'carry-ok', id: idOfRawPub(frame.pub) }))
+            return
+          }
+        } catch {
+          // opaque — fall through
+        }
         relayReceived.push(body)
         // room.ts's contract: tag and fan to every OTHER connection.
         const envelope = JSON.stringify({
@@ -74,12 +99,11 @@ async function main(): Promise<void> {
   // http, which the hop permits ONLY for loopback — the carve-out that
   // exists for exactly this harness and local wrangler dev.
   const relayUrl = `http://127.0.0.1:${relayPort}`
+  const relayHost = `127.0.0.1:${relayPort}`
 
   // --- the daemon side -----------------------------------------------------
-  const dataDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'rooms-hop-'))
   const hop = createRoomsHop({
     isAuthorized: (token) => token === 'good-token',
-    dataDir,
     log: () => {},
     // Shrunk so the pacing test finishes in milliseconds; production
     // uses the defaults that sit just under the relay's own ceiling.
@@ -92,9 +116,10 @@ async function main(): Promise<void> {
   })
   const daemonPort = await listen(daemonServer)
 
+  let ctr = 0
   const subscribe = (
-    token = 'good-token',
-    memberKeyHash?: string
+    identity?: RoomIdentity,
+    token = 'good-token'
   ): Promise<{ ws: WebSocket; messages: string[]; status?: number }> =>
     new Promise((resolve) => {
       const ws = new WebSocket(`ws://127.0.0.1:${daemonPort}/api/rooms/hop?token=${token}`)
@@ -110,7 +135,9 @@ async function main(): Promise<void> {
             roomId: ROOM_ID,
             relayUrl,
             join: 'join-1',
-            ...(memberKeyHash ? { memberKeyHash } : {})
+            ...(identity
+              ? { cryptogram: mintCryptogram(identity, 'carry', relayHost, ROOM_ID, ++ctr) }
+              : {})
           })
         )
         const wait = (): void => {
@@ -137,26 +164,36 @@ async function main(): Promise<void> {
     }
   }
 
+  const idA = generateIdentity()
+  const idB = generateIdentity()
+  const idC = generateIdentity()
+  const idKicked = generateIdentity()
+
   // --- auth ----------------------------------------------------------------
-  const refused = await subscribe('bad-token')
+  const refused = await subscribe(idA, 'bad-token')
   assert.equal(refused.status, 401, 'an unapproved token is refused at the upgrade')
 
   // --- one upstream for the household --------------------------------------
-  const a = await subscribe()
+  const a = await subscribe(idA)
   assert.ok(
     a.messages.some((m) => m.includes('sub-ok')),
     'A subscribes'
   )
   assert.equal(relayConns.length, 1, 'the first subscriber opens the upstream')
-  assert.ok(relayConns[0].member?.startsWith('hh-'), 'the upstream presents the householdKey')
-  // Captured NOW, from what the genuine relay actually saw — the
-  // harvest comparison later must be against the presented credential,
-  // not against a storage file whose format could drift with it.
-  const genuinePresentedKey = relayConns[0].member
+  assert.equal(
+    relayConns[0].pub,
+    idA.pub,
+    "the upstream is admitted on the INITIATOR'S own tap — the daemon has no identity to present"
+  )
 
-  const b = await subscribe()
+  const b = await subscribe(idB)
   assert.equal(relayConns.length, 1, 'the second subscriber SHARES it — that is the feature')
   assert.equal(hop.upstreamCount(), 1)
+  assert.deepEqual(
+    relayConns[0].carriedPubs,
+    [idB.pub],
+    "the second subscriber's tap is handed up as a carry for the relay to verify"
+  )
 
   // --- send: upstream + local echo -----------------------------------------
   a.messages.length = 0
@@ -177,7 +214,7 @@ async function main(): Promise<void> {
   )
 
   // --- retention for the next local joiner ----------------------------------
-  const c = await subscribe()
+  const c = await subscribe(idC)
   assert.ok(
     c.messages.some((m) => {
       const envelope = envelopeOf(m)
@@ -209,13 +246,11 @@ async function main(): Promise<void> {
 
   // --- a kick reaches through the hop ----------------------------------------
   //
-  // The relay bans a kicked member's PERSONAL key, but the shared
-  // upstream is the household's — the ban cannot close their transport
-  // here. The relay's banned broadcast plus the daemon acting on it IS
-  // the removal for hop members: dropped before anything else fans to
-  // them, and refused on re-subscription.
-  const KICKED_HASH = 'd'.repeat(64)
-  const kicked = await subscribe('good-token', KICKED_HASH)
+  // The relay bans a kicked member's identity, but the shared upstream
+  // is admitted on someone else's tap — the ban cannot close their
+  // transport here. The relay's banned broadcast plus the daemon acting
+  // on RELAY-VERIFIED identities IS the removal for hop members.
+  const kicked = await subscribe(idKicked)
   assert.ok(
     kicked.messages.some((m) => m.includes('sub-ok')),
     'the doomed member subscribes'
@@ -230,16 +265,13 @@ async function main(): Promise<void> {
     })
   })
   b.messages.length = 0
-  // The relay announces the ban to the household connection...
   for (const conn of relayConns) {
-    if (conn.member?.startsWith('hh-')) {
-      conn.ws.send(JSON.stringify({ type: 'banned', hashes: [KICKED_HASH] }))
+    if (conn.pub === idA.pub) {
+      conn.ws.send(JSON.stringify({ type: 'banned', hashes: [idKicked.id] }))
     }
   }
   assert.equal(await kickedNotice, true, 'the kicked subscriber is told and dropped')
   await settle()
-  // ...and what follows on that socket (the admin's re-key) must not
-  // reach them. B, unkicked, still hears the room.
   const kickedCount = kicked.messages.length
   remote.send('post-kick-ciphertext')
   await settle()
@@ -252,23 +284,20 @@ async function main(): Promise<void> {
     kickedCount,
     'NOTHING that follows the ban reaches the kicked subscriber'
   )
-  const again = await subscribe('good-token', KICKED_HASH)
+  const again = await subscribe(idKicked)
   assert.ok(
     again.messages.some((m) => m.includes('Removed from this room')),
-    'a banned hash cannot re-subscribe while this daemon runs'
+    'a banned identity cannot re-subscribe while this daemon runs'
   )
   again.ws.close()
   kicked.ws.close()
 
   // --- transient sends are never retained ------------------------------------
-  //
-  // The flag exists for re-keys: retained, one would be replayed to the
-  // NEXT local subscriber — exactly who a re-key must never reach.
   a.ws.send(
     JSON.stringify({ type: 'send', roomId: ROOM_ID, body: 'rekey-ciphertext', transient: true })
   )
   await settle()
-  const late = await subscribe()
+  const late = await subscribe(generateIdentity())
   assert.ok(
     !late.messages.some((m) => m.includes('rekey-ciphertext')),
     'a transient send is not replayed to later subscribers'
@@ -284,10 +313,6 @@ async function main(): Promise<void> {
   await settle()
 
   // --- sends are paced under the relay's rate ceiling ------------------------
-  //
-  // The household's whole traffic rides ONE relay socket; a burst past
-  // the relay's per-socket limit would get the room closed for everyone.
-  // Excess queues and flushes, so everything arrives — just paced.
   relayReceived.length = 0
   for (let i = 0; i < 12; i++) {
     a.ws.send(JSON.stringify({ type: 'send', roomId: ROOM_ID, body: `burst-${i}` }))
@@ -309,66 +334,23 @@ async function main(): Promise<void> {
   await settle(300)
   assert.equal(hop.upstreamCount(), 0, 'the last local unsubscribe closes the upstream')
   assert.equal(
-    relayConns.filter((conn) => conn.member?.startsWith('hh-')).length,
+    relayConns.filter((conn) => conn.pub).length,
     0,
     'the relay sees the household leave'
   )
 
-  // --- the householdKey survives restarts, scoped to its relay ---------------
-  const persisted = JSON.parse(await fsp.readFile(path.join(dataDir, 'rooms-hop.json'), 'utf8'))
-  assert.ok(
-    String(persisted[`${relayUrl}|${ROOM_ID}`] || '').startsWith('hh-'),
-    'the household identity is persisted — a fresh key per boot would lose known-member status'
+  // The daemon persists NOTHING now — no household key, no credential of
+  // anyone's, nothing worth stealing off the box. Belt-and-braces.
+  await assert.rejects(
+    fsp.access('rooms-hop.json'),
+    'the hop keeps no identity file — it has no identity'
   )
-
-  // --- the key never crosses relay origins ------------------------------------
-  //
-  // The relayUrl in a subscription is caller-chosen. A malicious
-  // approved device naming the real roomId with its OWN server must
-  // harvest nothing: the key presented there has to be a different
-  // random key that no other relay will ever see.
-  const relayServer2 = http.createServer()
-  const relayWss2 = new WebSocketServer({ noServer: true })
-  let harvested: string | null = null
-  relayServer2.on('upgrade', (req, socket, head) => {
-    const url = new URL(req.url ?? '/', 'http://relay.invalid')
-    harvested = url.searchParams.get('member')
-    relayWss2.handleUpgrade(req, socket, head, () => {})
-  })
-  const relayPort2 = await listen(relayServer2)
-  const evil = await new Promise<{ ws: WebSocket; messages: string[] }>((resolve) => {
-    const ws = new WebSocket(`ws://127.0.0.1:${daemonPort}/api/rooms/hop?token=good-token`)
-    const messages: string[] = []
-    ws.on('message', (raw) => messages.push(String(raw)))
-    ws.once('open', () => {
-      ws.send(
-        JSON.stringify({
-          type: 'sub',
-          roomId: ROOM_ID,
-          relayUrl: `http://127.0.0.1:${relayPort2}`,
-          join: 'join-1'
-        })
-      )
-      setTimeout(() => resolve({ ws, messages }), 500)
-    })
-  })
-  assert.ok(harvested, 'the second relay saw a connection attempt')
-  assert.ok(String(harvested).startsWith('hh-'), 'and it was a household-shaped key')
-  assert.notEqual(
-    harvested,
-    genuinePresentedKey,
-    'a different relay origin sees a DIFFERENT key — the genuine credential cannot be harvested'
-  )
-  evil.ws.close()
-  await new Promise((resolve) => relayServer2.close(resolve))
-  relayWss2.close()
 
   remote.close()
   hop.stop()
   relayWss.close()
   await new Promise((resolve) => daemonServer.close(resolve))
   await new Promise((resolve) => relayServer.close(resolve))
-  await fsp.rm(dataDir, { recursive: true, force: true })
   console.log('ok  rooms hop')
 }
 

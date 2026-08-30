@@ -27,13 +27,6 @@ export const ANNOUNCE_INTERVAL_MS = 20_000
 
 export interface PresenceRecord extends RoomMemberPresence {
   lastSeen: number
-  /** sha256 of every relay memberKey this person's announcements have
-   *  carried — accumulated, not replaced, because one person is several
-   *  installs and kicking them means kicking all the room has seen.
-   *  HASHES on purpose: the raw key is a bearer credential between one
-   *  install and the relay, and broadcasting it would hand every member
-   *  (including one about to be kicked) someone else's door pass. */
-  memberKeyHashes: string[]
 }
 
 /**
@@ -51,24 +44,23 @@ export interface PresenceRecord extends RoomMemberPresence {
  */
 export function recordPresence(
   presence: Map<string, PresenceRecord>,
+  /** The sender's identity, as the CALLER established it: the verified
+   *  signature's id in a signed room, the claimed friendId in the one
+   *  legacy room. What used to be a per-message claim is a parameter
+   *  precisely so this function cannot be handed an unverified one by
+   *  accident — there is no msg.friendId to fall back to. */
+  from: string,
   msg: Record<string, unknown>,
   selfFriendId: string,
   now: number,
   ageMs = 0
 ): { changed: boolean; isNewcomer: boolean } {
-  const friendId = String(msg.friendId || '')
+  const friendId = from
   if (!friendId || friendId === selfFriendId) return { changed: false, isNewcomer: false }
   const isNewcomer = !presence.has(friendId) && ageMs === 0
   const activity = (msg.activity as RoomActivity | undefined) || null
-  const memberKeyHashes = [...(presence.get(friendId)?.memberKeyHashes ?? [])]
-  const announcedHash =
-    typeof msg.memberKeyHash === 'string' && /^[0-9a-f]{64}$/.test(msg.memberKeyHash)
-      ? msg.memberKeyHash
-      : ''
-  if (announcedHash && !memberKeyHashes.includes(announcedHash)) memberKeyHashes.push(announcedHash)
   presence.set(friendId, {
     friendId,
-    memberKeyHashes,
     name: String(msg.name || 'Someone').slice(0, 40),
     activity: activity
       ? {
@@ -149,51 +141,19 @@ export function acceptRoomName(
 export function applyRekey(
   room: { roomId: string; relayUrl: string; adminFriendId?: string },
   msg: Record<string, unknown>,
+  /** The VERIFIED sender — in a signed room this came out of a
+   *  signature check, so "only the admin is believed" is cryptographic
+   *  here, not a claim about a claim. */
   senderFriendId: string
 ): { code: string; secret: string; joinSecret?: string; name: string } | null {
   if (!room.adminFriendId || senderFriendId !== room.adminFriendId) return null
   const code = typeof msg.code === 'string' ? msg.code : ''
   const parsed = decodeShareCode(code)
-  if (!parsed || parsed.v !== 3) return null
+  if (!parsed || parsed.v !== 4) return null
   if (parsed.relay.roomId !== room.roomId) return null
   if (parsed.relay.url !== room.relayUrl) return null
-  if (parsed.adminFriendId !== room.adminFriendId) return null
+  if (parsed.admin.id !== room.adminFriendId) return null
   return { code, secret: parsed.secret, joinSecret: parsed.join, name: parsed.name }
-}
-
-/** Caps for the persisted per-room identity history. Generous for any
- *  real friends group, bounded so a hostile member cannot grow the
- *  settings file without limit. */
-export const SEEN_MEMBERS_MAX_PEOPLE = 64
-export const SEEN_HASHES_PER_PERSON = 8
-
-/**
- * Folds a newly announced identity hash into the room's persisted
- * history, or returns null when nothing changed.
- *
- * Persisted — not read from live presence — because presence is soft
- * state with a 70-second TTL, and a kick has to name every install the
- * room has EVER seen for a person. Review found the ephemeral version's
- * hole: let someone's record age out, kick them when one install
- * returns, and their other install's key is never banned — still known
- * to the relay, admitted despite the rotated joinSecret.
- */
-export function rememberSeenMember(
-  seen: Readonly<Record<string, string[]>> | undefined,
-  friendId: string,
-  hash: string
-): Record<string, string[]> | null {
-  if (!friendId || !/^[0-9a-f]{64}$/.test(hash)) return null
-  const existing = seen?.[friendId] ?? []
-  if (existing.includes(hash)) return null
-  const next: Record<string, string[]> = { ...(seen ?? {}) }
-  if (!next[friendId] && Object.keys(next).length >= SEEN_MEMBERS_MAX_PEOPLE) return null
-  // Oldest first out. A person cycling past the cap can shed history,
-  // but each shed key was registered at the relay under a joinSecret
-  // that has since rotated at every kick — the residual is bounded and
-  // named in docs/ROOMS.md rather than pretended away.
-  next[friendId] = [...existing, hash].slice(-SEEN_HASHES_PER_PERSON)
-  return next
 }
 
 /** How many kicked identities a room remembers. Bounds a hostile admin
@@ -214,20 +174,6 @@ export function rememberKicked(kicked: readonly string[] | undefined, friendId: 
   const list = [...(kicked ?? [])]
   if (friendId && !list.includes(friendId)) list.push(friendId)
   return list.slice(-KICKED_MEMBERS_KEPT)
-}
-
-/** Every identity hash the room has seen for one person — the union of
- *  live presence and the persisted history. What a kick names. */
-export function memberHashesFor(
-  presence: ReadonlyMap<string, PresenceRecord>,
-  seen: Readonly<Record<string, string[]>> | undefined,
-  friendId: string
-): string[] {
-  const out = [...(seen?.[friendId] ?? [])]
-  for (const hash of presence.get(friendId)?.memberKeyHashes ?? []) {
-    if (!out.includes(hash)) out.push(hash)
-  }
-  return out
 }
 
 /**
@@ -276,12 +222,12 @@ export interface StoredRoom {
   /** The relay's host token, held only by the creator — the credential
    *  the relay's kick endpoint requires. */
   roomToken?: string
-  /** This install's relay identity in the room. Generated on create or
-   *  join of a membership room; announced so others can name it in a
-   *  kick. */
-  memberKey?: string
+  /** The admin's raw public key (base64url), from the invite code — what
+   *  turns their renames and re-keys into verifiable statements. Absent
+   *  on the legacy room, which has no admin at all. */
+  adminPub?: string
   /** The relay's admission ticket, from the invite code. Only strangers
-   *  need it — a known memberKey is admitted without — but it is kept
+   *  need it — a known identity taps in without — but it is kept
    *  current so re-shares of OUR copy of the code stay valid. */
   joinSecret?: string
   /** The secrets this room used before its re-keys, newest first and
@@ -291,10 +237,6 @@ export interface StoredRoom {
    *  unreadable ghost forever. Never handed to anyone the relay would
    *  refuse. */
   prevSecrets?: string[]
-  /** friendId -> sha256 of every relay identity their announcements have
-   *  carried. Persisted so a kick can name installs the room saw last
-   *  month, not just in the last 70 seconds — see rememberSeenMember. */
-  seenMembers?: Record<string, string[]>
   /** friendIds this admin removed — the rescue and presence gate for
    *  members whose transport a relay ban cannot reach. Admin-side only;
    *  see rememberKicked. */

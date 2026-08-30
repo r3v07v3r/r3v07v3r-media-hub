@@ -53,12 +53,18 @@ export interface Env {
 interface SocketAttachment {
   connId: string
   isHost: boolean
-  /** The member identity this connection presented, for rooms with a
-   *  membership layer. Absent on legacy rooms and parties. */
-  memberKey?: string
-  /** sha256 of that identity — what kicks name, so it is precomputed
-   *  here rather than derived per kick. */
-  memberKeyHash?: string
+  /** The VERIFIED identity this connection admitted with (sha256 of
+   *  its public key), for rooms with a membership layer. Absent on
+   *  legacy rooms and parties. */
+  memberId?: string
+  /** The host this connection dialled, for verifying carry cryptograms
+   *  that arrive later on the same socket. */
+  host?: string
+  /** Identities this connection CARRIES on behalf of a household hop —
+   *  each one verified by its own cryptogram, exactly like a direct
+   *  admission. What lets one network connection answer for several
+   *  members without any of them trusting the box between. */
+  carried?: string[]
   /** Last raw (still encrypted) message this connection sent. */
   last?: string
   /** When that message arrived, by this object's clock. */
@@ -95,90 +101,158 @@ export function isRelayMessageWithinLimit(message: string): boolean {
   return new TextEncoder().encode(message).byteLength <= MAX_RELAY_MESSAGE_BYTES
 }
 
-// --- membership -------------------------------------------------------------
+// --- membership: chip-and-tap ------------------------------------------------
 //
 // Rooms created with {membership: true} gain a relay-level admission
-// layer: a joinSecret carried in the invite code, and a memberKey each
-// install generates. These are RELAY credentials, not content — the
-// object still never decrypts a byte. They exist so that removing a
-// member can be real: a ban the relay does not enforce is theatre, and
-// the client-side secret rotation alone cannot stop a kicked member
-// reconnecting to sit in the room as an unreadable ghost.
+// layer. It works the way EMV bank cards do, which is the design brief
+// it was built to: each install holds an Ed25519 private key that never
+// leaves the device, and admission presents a CRYPTOGRAM — a signature
+// over this relay's host, the room, a timestamp and a monotonic counter
+// (EMV's ATC). This object verifies the signature, the freshness and
+// the counter, so an intercepted cryptogram is a receipt, not a card:
+// bound to one door, one moment, already spent.
 //
-// docs/ROOMS.md in the main app is the policy this implements; read it
-// before changing the admission rules.
+// The member's identity IS the key — their id is sha256(publicKey) — so
+// there are no bearer strings left at this layer at all. The joinSecret
+// survives with one narrow job: it is the invite's proof, required only
+// of identities this room has never seen. This object still never
+// decrypts a byte of room content.
+//
+// docs/ROOMS.md in the main app is the policy; the client-side mirror
+// of the cryptogram format is src/main/media-hub/roomIdentity.ts, and
+// the two must stay in lockstep.
 
 /** Bounds the identity sets a room accumulates in Durable Object
  *  storage. Known is a hard cap — a room with 256 distinct installs is
  *  not a household. Banned drops its OLDEST entries past the cap, which
- *  is safe: an evicted banned key becomes merely unknown, and unknown
- *  keys need the CURRENT joinSecret — which rotated at the moment that
- *  key was banned. */
+ *  is safe: an evicted banned identity becomes merely unknown, and
+ *  unknown identities need the CURRENT joinSecret — which rotated at
+ *  the moment they were banned. */
 export const MAX_KNOWN_MEMBERS = 256
 export const MAX_BANNED_MEMBERS = 512
+export const CRYPTOGRAM_FRESHNESS_MS = 5 * 60 * 1000
 
-const MEMBER_KEY_RE = /^[a-zA-Z0-9_-]{8,64}$/
-const MEMBER_KEY_HASH_RE = /^[0-9a-f]{64}$/
+const MEMBER_ID_RE = /^[0-9a-f]{64}$/
 
-export function isValidMemberKey(key: unknown): key is string {
-  return typeof key === 'string' && MEMBER_KEY_RE.test(key)
+export function isValidMemberId(id: unknown): id is string {
+  return typeof id === 'string' && MEMBER_ID_RE.test(id)
 }
 
-export function isValidMemberKeyHash(hash: unknown): hash is string {
-  return typeof hash === 'string' && MEMBER_KEY_HASH_RE.test(hash)
+export interface CryptogramInput {
+  pub: string
+  ts: number
+  ctr: number
+  sig: string
 }
 
-/** sha256 hex of a memberKey — the only form of the key that ever
- *  travels anywhere but the key's own connection. Must stay in lockstep
- *  with the client's hashing (node:crypto sha256 hex of the utf8 key). */
-export async function memberKeyHashOf(memberKey: string): Promise<string> {
-  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(memberKey))
+function fromB64url(value: string): Uint8Array | null {
+  try {
+    const b64 = value.replace(/-/g, '+').replace(/_/g, '/')
+    const raw = atob(b64)
+    const out = new Uint8Array(raw.length)
+    for (let i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i)
+    return out
+  } catch {
+    return null
+  }
+}
+
+async function sha256Hex(bytes: Uint8Array): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', bytes as unknown as ArrayBuffer)
   return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('')
+}
+
+/**
+ * Verifies one cryptogram: signature, freshness, and shape. The COUNTER
+ * floor is the caller's (it lives in storage); everything stateless is
+ * here. Returns the verified identity id, or a refusal.
+ *
+ * Must mirror roomIdentity.ts's cryptogramData exactly — the signed
+ * bytes are `purpose|relayHost|roomId|ts|ctr`.
+ */
+export async function verifyCryptogram(
+  cryptogram: CryptogramInput,
+  purpose: 'admit' | 'carry',
+  relayHost: string,
+  roomId: string,
+  now = Date.now()
+): Promise<{ ok: true; id: string } | { ok: false; reason: string }> {
+  if (
+    typeof cryptogram.pub !== 'string' ||
+    typeof cryptogram.sig !== 'string' ||
+    !Number.isFinite(cryptogram.ts) ||
+    !Number.isInteger(cryptogram.ctr) ||
+    cryptogram.ctr < 0
+  ) {
+    return { ok: false, reason: 'malformed' }
+  }
+  if (Math.abs(now - cryptogram.ts) > CRYPTOGRAM_FRESHNESS_MS) {
+    return { ok: false, reason: 'stale' }
+  }
+  const pubBytes = fromB64url(cryptogram.pub)
+  const sigBytes = fromB64url(cryptogram.sig)
+  if (!pubBytes || pubBytes.length !== 32 || !sigBytes) return { ok: false, reason: 'bad key' }
+  let key: CryptoKey
+  try {
+    key = await crypto.subtle.importKey(
+      'raw',
+      pubBytes as unknown as ArrayBuffer,
+      { name: 'Ed25519' },
+      false,
+      ['verify']
+    )
+  } catch {
+    return { ok: false, reason: 'bad key' }
+  }
+  const data = new TextEncoder().encode(
+    `${purpose}|${relayHost}|${roomId.toLowerCase()}|${cryptogram.ts}|${cryptogram.ctr}`
+  )
+  let valid = false
+  try {
+    valid = await crypto.subtle.verify(
+      { name: 'Ed25519' },
+      key,
+      sigBytes as unknown as ArrayBuffer,
+      data as unknown as ArrayBuffer
+    )
+  } catch {
+    valid = false
+  }
+  if (!valid) return { ok: false, reason: 'bad signature' }
+  return { ok: true, id: await sha256Hex(pubBytes) }
 }
 
 export type AdmissionVerdict = 'admit' | 'admit-and-register' | 'refuse'
 
 /**
- * Whether a WebSocket connect is let into the room.
- *
- * The order of these checks is the design, not an implementation detail:
+ * Whether a VERIFIED identity is let into the room. Pure and sync: the
+ * cryptogram (signature, freshness, counter) is checked before this is
+ * consulted; this is only the membership policy.
  *
  *  - A legacy room (no joinSecret was ever minted) admits everyone, as
- *    it always has. Ephemeral watch parties and pre-kick rooms live
+ *    it always has. Ephemeral watch parties and pre-identity rooms live
  *    here, and nothing about them changed.
- *  - A membership room refuses a connection with no identity at all.
- *  - BANNED WINS OVER EVERYTHING — including a banned key that somehow
- *    presents the current joinSecret (the admin's own re-key message
+ *  - BANNED WINS OVER EVERYTHING — including a banned identity that
+ *    somehow presents the current joinSecret (the admin's own re-key
  *    could leak inside a household; the ban must hold anyway).
- *  - A KNOWN key is admitted even with a stale joinSecret: an offline
+ *  - A KNOWN identity is admitted with a stale joinSecret: an offline
  *    member returning after a rotation must not be locked out of their
  *    own room. Rotation gates STRANGERS, not members.
  *  - A stranger with the current joinSecret is admitted and becomes
  *    known. A stranger without it is refused.
- *
- * BANS ARE ADDRESSED BY HASH, admission by the key itself. The raw
- * memberKey is a bearer credential — a known one reconnects without the
- * current joinSecret — so it is a secret between one install and this
- * object, and never travels anywhere else. What members see of each
- * other, and therefore what a kick can name, is the sha256 of the key:
- * enough to ban by, useless to connect with. Review found the earlier
- * version broadcasting raw keys in presence, which let a kicked member
- * who had cached a KEPT member's key walk straight back in as them.
  */
 export function admissionVerdict(input: {
   currentJoinSecret: string | null
-  memberKey: string | null
-  /** sha256 of memberKey, computed by the caller (hashing is async in
-   *  workers and this stays a pure function). */
-  memberKeyHash: string | null
+  /** The identity the cryptogram VERIFIED, or null when none/invalid. */
+  verifiedId: string | null
   presentedJoinSecret: string | null
   known: ReadonlySet<string>
-  bannedHashes: ReadonlySet<string>
+  banned: ReadonlySet<string>
 }): AdmissionVerdict {
   if (!input.currentJoinSecret) return 'admit'
-  if (!input.memberKey || !isValidMemberKey(input.memberKey)) return 'refuse'
-  if (input.memberKeyHash && input.bannedHashes.has(input.memberKeyHash)) return 'refuse'
-  if (input.known.has(input.memberKey)) return 'admit'
+  if (!input.verifiedId) return 'refuse'
+  if (input.banned.has(input.verifiedId)) return 'refuse'
+  if (input.known.has(input.verifiedId)) return 'admit'
   if (input.presentedJoinSecret && input.presentedJoinSecret === input.currentJoinSecret) {
     return input.known.size >= MAX_KNOWN_MEMBERS ? 'refuse' : 'admit-and-register'
   }
@@ -209,6 +283,14 @@ export class PartyRoom {
   private joinSecret: string | null = null
   private known: Set<string> | null = null
   private banned: Set<string> | null = null
+  /** Per-identity counter floors — EMV's ATC. A cryptogram whose ctr is
+   *  not strictly above the floor is a replay, however perfect its
+   *  signature. */
+  private ctrs: Map<string, number> | null = null
+  /** This object's own room id, learned from the first connect's path
+   *  and persisted — carry frames arrive mid-connection with no URL to
+   *  parse it from. */
+  private roomId: string | null = null
 
   constructor(state: DurableObjectState) {
     this.state = state
@@ -226,6 +308,102 @@ export class PartyRoom {
     if (this.banned === null) {
       this.banned = new Set((await this.state.storage.get<string[]>('banned')) ?? [])
     }
+    if (this.ctrs === null) {
+      this.ctrs = new Map(
+        Object.entries((await this.state.storage.get<Record<string, number>>('ctrs')) ?? {})
+      )
+    }
+    if (this.roomId === null) {
+      this.roomId = (await this.state.storage.get<string>('roomId')) ?? null
+    }
+  }
+
+  private counterAccepts(id: string, ctr: number): boolean {
+    return ctr > (this.ctrs?.get(id) ?? -1)
+  }
+
+  /** Records a successful admission: the identity's new counter floor,
+   *  and its registration when the joinSecret admitted a stranger. One
+   *  storage write for both. */
+  private async commitAdmission(id: string, verdict: AdmissionVerdict, ctr: number): Promise<void> {
+    this.ctrs!.set(id, ctr)
+    // Bounded like the identity sets: a full counter table sheds its
+    // oldest entry, whose identity then merely needs a fresh cryptogram
+    // with any higher counter — safe, because freshness still gates it.
+    if (this.ctrs!.size > MAX_KNOWN_MEMBERS * 2) {
+      const oldest = this.ctrs!.keys().next().value
+      if (oldest) this.ctrs!.delete(oldest)
+    }
+    const writes: Record<string, unknown> = { ctrs: Object.fromEntries(this.ctrs!) }
+    if (verdict === 'admit-and-register') {
+      this.known!.add(id)
+      writes.known = [...this.known!]
+    }
+    await this.state.storage.put(writes)
+  }
+
+  /**
+   * A carry frame: a household hop vouching for one more member it
+   * transports, with that member's own cryptogram — which the hop can
+   * forward but never mint. Verified exactly like a direct admission,
+   * against the host THIS connection arrived on; the reply tells the
+   * hop whether the member is genuine, and the attachment records who
+   * this connection now answers for.
+   */
+  private async handleCarry(ws: WebSocket, frame: Record<string, unknown>): Promise<void> {
+    const attachment = this.attachmentOf(ws)
+    await this.loadMembership()
+    const refuse = (error: string): void => {
+      try {
+        ws.send(JSON.stringify({ type: 'carry-rejected', error }))
+      } catch {
+        // dead socket cleans itself up
+      }
+    }
+    if (!attachment || !this.joinSecret || !this.roomId || !attachment.host) {
+      refuse('This room has no membership layer.')
+      return
+    }
+    const cryptogram = {
+      pub: String(frame.pub ?? ''),
+      ts: Number(frame.ts),
+      ctr: Number(frame.ctr),
+      sig: String(frame.sig ?? '')
+    }
+    const verified = await verifyCryptogram(cryptogram, 'carry', attachment.host, this.roomId)
+    if (!verified.ok) {
+      refuse(verified.reason)
+      return
+    }
+    if (!this.counterAccepts(verified.id, cryptogram.ctr)) {
+      refuse('replayed')
+      return
+    }
+    const verdict = admissionVerdict({
+      currentJoinSecret: this.joinSecret,
+      verifiedId: verified.id,
+      presentedJoinSecret: typeof frame.join === 'string' ? frame.join : null,
+      known: this.known!,
+      banned: this.banned!
+    })
+    if (verdict === 'refuse') {
+      refuse('Not a member of this room.')
+      return
+    }
+    await this.commitAdmission(verified.id, verdict, cryptogram.ctr)
+    const carried = [...(attachment.carried ?? [])]
+    if (!carried.includes(verified.id)) carried.push(verified.id)
+    ws.serializeAttachment({ ...attachment, carried } satisfies SocketAttachment)
+    try {
+      ws.send(JSON.stringify({ type: 'carry-ok', id: verified.id }))
+    } catch {
+      // dead socket cleans itself up
+    }
+  }
+
+  private roomIdFor(url: URL): string | null {
+    const match = /^\/party\/([0-9a-f-]{36})/i.exec(url.pathname)
+    return match ? match[1].toLowerCase() : null
   }
 
   private attachmentOf(ws: WebSocket): SocketAttachment | null {
@@ -270,7 +448,7 @@ export class PartyRoom {
     // ever in this response — which is what forces the client's re-key
     // broadcast to happen after the ban, not before. See docs/ROOMS.md.
     if (request.method === 'POST' && url.pathname === '/kick') {
-      const body = (await request.json()) as { roomToken?: string; memberKeyHashes?: unknown }
+      const body = (await request.json()) as { roomToken?: string; memberIds?: unknown }
       if (this.roomToken === null) {
         this.roomToken = (await this.state.storage.get<string>('roomToken')) ?? null
       }
@@ -281,19 +459,16 @@ export class PartyRoom {
       if (!this.joinSecret) {
         return new Response('This room has no membership layer.', { status: 409 })
       }
-      // Kicks name HASHES — members only ever see each other's hashes,
-      // and the raw key stays a secret between its install and this
-      // object. See admissionVerdict's header.
-      const hashes = (Array.isArray(body.memberKeyHashes) ? body.memberKeyHashes : []).filter(
-        isValidMemberKeyHash
-      )
-      if (!hashes.length) return new Response('No members named.', { status: 400 })
-      const kicked = new Set(hashes)
-      for (const hash of hashes) this.banned!.add(hash)
-      // The known set stores raw keys; drop the ones whose hash was just
-      // banned so they stop counting toward the registration cap.
-      for (const key of [...this.known!]) {
-        if (kicked.has(await memberKeyHashOf(key))) this.known!.delete(key)
+      // Kicks name IDENTITIES — sha256 of a public key, which is also
+      // the friendId everyone already sees. One namespace, nothing
+      // secret in it: an id without its private key cannot connect.
+      const ids = (Array.isArray(body.memberIds) ? body.memberIds : []).filter(isValidMemberId)
+      if (!ids.length) return new Response('No members named.', { status: 400 })
+      const kicked = new Set(ids)
+      for (const id of ids) {
+        this.banned!.add(id)
+        this.known!.delete(id)
+        this.ctrs?.delete(id)
       }
       // Oldest banned entries fall off past the cap — safe, because an
       // evicted hash's key becomes merely unknown, and unknown needs the
@@ -321,10 +496,10 @@ export class PartyRoom {
       // response arrives. Plaintext metadata, like the envelopes
       // themselves: it names an identity hash, never a key and never
       // content.
-      const bannedEnvelope = JSON.stringify({ type: 'banned', hashes })
+      const bannedEnvelope = JSON.stringify({ type: 'banned', hashes: ids })
       for (const socket of this.state.getWebSockets()) {
         const attachment = this.attachmentOf(socket)
-        if (attachment?.memberKeyHash && kicked.has(attachment.memberKeyHash)) continue
+        if (attachment?.memberId && kicked.has(attachment.memberId)) continue
         try {
           socket.send(bannedEnvelope)
         } catch {
@@ -335,7 +510,7 @@ export class PartyRoom {
       // races a reconnect must hit the ban, not the old state.
       for (const socket of this.state.getWebSockets()) {
         const attachment = this.attachmentOf(socket)
-        if (attachment?.memberKeyHash && kicked.has(attachment.memberKeyHash)) {
+        if (attachment?.memberId && kicked.has(attachment.memberId)) {
           try {
             socket.close(4001, 'Removed from this room.')
           } catch {
@@ -363,24 +538,53 @@ export class PartyRoom {
       // The membership gate. Legacy rooms sail through — verdict 'admit'
       // with nothing checked — so nothing about parties changed.
       await this.loadMembership()
-      const memberKey = url.searchParams.get('member')
-      const memberKeyHash =
-        memberKey && isValidMemberKey(memberKey) ? await memberKeyHashOf(memberKey) : null
+      // The tap. A membership connect presents a cryptogram — pub, ts,
+      // ctr, sig — verified against THIS host and room, with the counter
+      // strictly above the identity's stored floor (EMV's ATC), so a
+      // captured cryptogram is dead on arrival anywhere, anytime else.
+      // Carrier connections (a household hop) present purpose 'carry'
+      // for the first member they carry; direct members present 'admit'.
+      let verifiedId: string | null = null
+      let admittedCtr = 0
+      const isCarrier = url.searchParams.get('carrier') === '1'
+      // Remember this object's own room id — carry frames arrive with no
+      // URL, and their cryptograms bind to it.
+      const pathRoomId = this.roomIdFor(url)
+      if (pathRoomId && this.roomId !== pathRoomId) {
+        this.roomId = pathRoomId
+        await this.state.storage.put('roomId', pathRoomId)
+      }
+      if (this.joinSecret) {
+        const cryptogram = {
+          pub: url.searchParams.get('pub') ?? '',
+          ts: Number(url.searchParams.get('ts')),
+          ctr: Number(url.searchParams.get('ctr')),
+          sig: url.searchParams.get('sig') ?? ''
+        }
+        const verified = await verifyCryptogram(
+          cryptogram,
+          isCarrier ? 'carry' : 'admit',
+          url.host,
+          pathRoomId ?? '',
+          Date.now()
+        )
+        if (verified.ok && this.counterAccepts(verified.id, cryptogram.ctr)) {
+          verifiedId = verified.id
+          admittedCtr = cryptogram.ctr
+        }
+      }
       const verdict = admissionVerdict({
         currentJoinSecret: this.joinSecret || null,
-        memberKey,
-        memberKeyHash,
+        verifiedId,
         presentedJoinSecret: url.searchParams.get('join'),
         known: this.known!,
-        bannedHashes: this.banned!
+        banned: this.banned!
       })
       if (verdict === 'refuse') {
         return new Response('Not a member of this room.', { status: 403 })
       }
-      if (verdict === 'admit-and-register') {
-        this.known!.add(memberKey!)
-        await this.state.storage.put('known', [...this.known!])
-      }
+      if (this.joinSecret && verifiedId)
+        await this.commitAdmission(verifiedId, verdict, admittedCtr)
 
       const token = url.searchParams.get('token')
       const isHost = token !== null && token === this.roomToken
@@ -399,7 +603,11 @@ export class PartyRoom {
       server.serializeAttachment({
         connId,
         isHost,
-        ...(memberKey && this.joinSecret ? { memberKey, memberKeyHash: memberKeyHash! } : {})
+        ...(verifiedId && this.joinSecret
+          ? isCarrier
+            ? { carried: [verifiedId], host: url.host }
+            : { memberId: verifiedId, host: url.host }
+          : {})
       } satisfies SocketAttachment)
       server.send(JSON.stringify({ type: 'assigned', connId }))
 
@@ -441,6 +649,22 @@ export class PartyRoom {
     if (!isRelayMessageWithinLimit(body)) {
       ws.close(1009, 'Message exceeds the party size limit.')
       return
+    }
+    // Carry frames are the one message CONTENT this object reads — a
+    // hop vouching for another member with a cryptogram. Everything
+    // else stays opaque and fans out below. Room ciphertext cannot
+    // collide with this: encrypted payloads are not JSON objects with a
+    // type field.
+    if (body.length < 2048 && body.includes('"carry"')) {
+      try {
+        const frame = JSON.parse(body) as Record<string, unknown>
+        if (frame && frame.type === 'carry') {
+          await this.handleCarry(ws, frame)
+          return
+        }
+      } catch {
+        // not a frame — fall through to the relay path
+      }
     }
     const attachment = this.attachmentOf(ws)
     if (!attachment) return

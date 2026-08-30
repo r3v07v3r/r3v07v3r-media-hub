@@ -120,7 +120,16 @@ class HopSocket extends EventEmitter implements RoomSocket {
 export function connectHopWs(
   daemonUrl: string,
   daemonToken: string,
-  sub: { roomId: string; relayUrl: string; join?: string; memberKeyHash?: string }
+  sub: {
+    roomId: string
+    relayUrl: string
+    join?: string
+    /** The member's carry cryptogram — the tap the daemon forwards to
+     *  the relay, which verifies it exactly like a direct admission.
+     *  The daemon can deliver it but never mint it. Absent only for the
+     *  legacy unsigned room, which has no membership at the relay. */
+    cryptogram?: { pub: string; ts: number; ctr: number; sig: string }
+  }
 ): Promise<RoomSocket> {
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(
@@ -131,16 +140,18 @@ export function connectHopWs(
       reject(new Error('The cache server did not answer the room subscription.'))
     }, SUBSCRIBE_TIMEOUT_MS)
     ws.once('open', () => {
-      // The identity HASH rides along — the same public form presence
-      // announcements carry — so the daemon can honour a relay ban
-      // against this subscriber. The raw key never crosses the LAN.
+      // The cryptogram rides along — signed by this install's key,
+      // bound to this relay and room and moment, verified by the RELAY
+      // (never merely trusted by the daemon). What the daemon learns is
+      // a public key and a spent signature; what it can do with them
+      // anywhere else is nothing.
       ws.send(
         JSON.stringify({
           type: 'sub',
           roomId: sub.roomId,
           relayUrl: sub.relayUrl,
           ...(sub.join ? { join: sub.join } : {}),
-          ...(sub.memberKeyHash ? { memberKeyHash: sub.memberKeyHash } : {})
+          ...(sub.cryptogram ? { cryptogram: sub.cryptogram } : {})
         })
       )
     })

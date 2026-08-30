@@ -13,11 +13,14 @@
 // WHAT THIS BOX CAN AND CANNOT SEE, stated plainly because it matters:
 // room traffic is encrypted end-to-end with a secret that NEVER reaches
 // this daemon — everything relayed here is ciphertext, exactly as it is
-// at Cloudflare. What the daemon does hold is the relay-level admission
-// ticket (joinSecret) its subscribers pass it, its own householdKey
-// identity per room, and each subscriber's declared identity HASH — the
-// public form of a member identity, never the key. docs/ROOMS.md names
-// those trades.
+// at Cloudflare. And since identities went chip-and-tap, the daemon
+// holds NO credential of anyone's at all: each subscriber hands it a
+// CRYPTOGRAM — a signature over this relay, this room, this moment and
+// a spent counter — which the daemon forwards for the RELAY to verify,
+// exactly the way a payment terminal forwards a card's tap to the bank.
+// The daemon can deliver a tap; it can never mint one, replay one, or
+// use one anywhere else. The joinSecret still passes through for
+// strangers' first admission; it admits nobody by itself.
 //
 // LOCAL ECHO is the subtle obligation. The relay fans a message to every
 // connection EXCEPT its sender — and a household shares one connection,
@@ -48,9 +51,7 @@
 // once and the rest of the room within ~20 seconds.
 
 import crypto from 'node:crypto'
-import fs from 'node:fs'
 import type http from 'node:http'
-import path from 'node:path'
 import type { Duplex } from 'node:stream'
 import WebSocket, { WebSocketServer } from 'ws'
 
@@ -76,7 +77,6 @@ const SEND_QUEUE_LIMIT = 64
 
 interface HopDeps {
   isAuthorized(token: string | undefined): boolean
-  dataDir: string
   log(message: string): void
   /** Test hooks — production always uses the defaults above. */
   rateWindowMs?: number
@@ -88,10 +88,12 @@ interface LocalSub {
   /** Stable per-connection tag for the synthesized relay envelopes. */
   id: string
   rooms: Set<string>
-  /** The member identity HASH this subscriber declared per room — what
-   *  a relay ban names, and therefore what lets this daemon honour one
-   *  locally. The raw key never comes anywhere near this box. */
-  declaredHash: Map<string, string>
+  /** The member identity this subscriber PROVED per room — computed by
+   *  this daemon from the public key inside a cryptogram the relay then
+   *  verified. Not a claim: a subscriber only reaches the subscribed
+   *  state once the relay has accepted its tap, so matching a relay ban
+   *  against this id is matching like against like. */
+  carriedId: Map<string, string>
 }
 
 interface Upstream {
@@ -114,6 +116,11 @@ interface Upstream {
   rateCount: number
   sendQueue: string[]
   flushTimer: ReturnType<typeof setTimeout> | null
+  /** Resolvers for carry hand-offs awaiting the relay's answer, FIFO —
+   *  the relay answers carries in the order they were sent on the
+   *  socket. Each resolver gets null on carry-ok, an error string on
+   *  rejection. */
+  pendingCarries: ((error: string | null) => void)[]
 }
 
 export interface RoomsHop {
@@ -130,6 +137,8 @@ export interface RoomsHop {
 export function createRoomsHop(deps: HopDeps): RoomsHop {
   const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_MESSAGE_BYTES + 4096 })
   const upstreams = new Map<string, Upstream>()
+  const sha256Hex = (b64url: string): string =>
+    crypto.createHash('sha256').update(Buffer.from(b64url, 'base64url')).digest('hex')
   /** Hashes the relay has announced as banned, per room — outlives the
    *  upstream that heard them, so a kicked member cannot shed the ban by
    *  letting the household connection lapse and re-subscribing. Session
@@ -139,48 +148,7 @@ export function createRoomsHop(deps: HopDeps): RoomsHop {
   const bannedByRoom = new Map<string, Set<string>>()
   const rateWindowMs = deps.rateWindowMs ?? DEFAULT_RATE_WINDOW_MS
   const maxSendsPerWindow = deps.maxSendsPerWindow ?? DEFAULT_MAX_SENDS_PER_WINDOW
-  const keysPath = path.join(deps.dataDir, 'rooms-hop.json')
   let stopped = false
-
-  /**
-   * This daemon's own relay identity for one room ON ONE RELAY — the
-   * householdKey.
-   *
-   * Persisted, and that persistence is load-bearing: once the relay has
-   * seen this key join with a valid joinSecret it is KNOWN, and known
-   * keys survive joinSecret rotations. A fresh random key per boot would
-   * mean every kick anywhere in the room locks the whole household out
-   * until somebody hands the daemon a new invite.
-   *
-   * KEYED BY RELAY ORIGIN AND ROOM, never by room alone — review caught
-   * the harvest this closes: the relayUrl in a subscription is
-   * caller-chosen, so a malicious approved device could name the real
-   * roomId with its own https server and read the bearer key this
-   * daemon would otherwise have presented to the genuine relay, then
-   * use it there itself (a known key reconnects without the current
-   * joinSecret). Per-origin keys make that harvest worthless: the key
-   * an attacker's server sees is a fresh one that has never been — and
-   * will never be — presented anywhere else.
-   */
-  function householdKey(relayUrl: string, roomId: string): string {
-    const scope = `${relayUrl}|${roomId}`
-    let stored: Record<string, string> = {}
-    try {
-      stored = JSON.parse(fs.readFileSync(keysPath, 'utf8')) as Record<string, string>
-    } catch {
-      // first use
-    }
-    const existing = stored[scope]
-    if (existing) return existing
-    const fresh = `hh-${crypto.randomBytes(21).toString('base64url')}`
-    stored[scope] = fresh
-    try {
-      fs.writeFileSync(keysPath, JSON.stringify(stored))
-    } catch (error) {
-      deps.log(`rooms-hop: could not persist household key: ${(error as Error).message}`)
-    }
-    return fresh
-  }
 
   function sendTo(sub: LocalSub, payload: Record<string, unknown>): void {
     try {
@@ -206,7 +174,8 @@ export function createRoomsHop(deps: HopDeps): RoomsHop {
         rateWindowStartedAt: 0,
         rateCount: 0,
         sendQueue: [],
-        flushTimer: null
+        flushTimer: null,
+        pendingCarries: []
       }
       upstreams.set(key, upstream)
     }
@@ -225,21 +194,41 @@ export function createRoomsHop(deps: HopDeps): RoomsHop {
     }
     bannedByRoom.set(upstream.key, banned)
     for (const sub of [...upstream.subscribers]) {
-      const declared = sub.declaredHash.get(upstream.key)
-      if (declared && banned.has(declared)) {
+      const carried = sub.carriedId.get(upstream.key)
+      if (carried && banned.has(carried)) {
         sendTo(sub, { type: 'room-kicked', roomId: upstream.roomId })
         dropSubscriber(upstream, sub)
       }
     }
   }
 
-  function connectUpstream(upstream: Upstream, joinSecret: string | undefined): Promise<void> {
+  interface SubCryptogram {
+    pub: string
+    ts: number
+    ctr: number
+    sig: string
+  }
+
+  function connectUpstream(
+    upstream: Upstream,
+    joinSecret: string | undefined,
+    cryptogram: SubCryptogram | undefined
+  ): Promise<void> {
     if (upstream.ws && upstream.ws.readyState === WebSocket.OPEN) return Promise.resolve()
     if (upstream.connecting) return upstream.connecting
     upstream.connecting = new Promise<void>((resolve, reject) => {
-      const params = new URLSearchParams({
-        member: householdKey(upstream.relayUrl, upstream.roomId)
-      })
+      // The connection is admitted on the strength of the INITIATING
+      // member's own tap — this daemon presents no identity of its own,
+      // because it has none. Legacy rooms (no cryptogram) connect bare,
+      // as they always did.
+      const params = new URLSearchParams()
+      if (cryptogram) {
+        params.set('carrier', '1')
+        params.set('pub', cryptogram.pub)
+        params.set('ts', String(cryptogram.ts))
+        params.set('ctr', String(cryptogram.ctr))
+        params.set('sig', cryptogram.sig)
+      }
       if (joinSecret) params.set('join', joinSecret)
       const ws = new WebSocket(
         `${upstream.relayUrl.replace(/^http/, 'ws')}/party/${upstream.roomId}?${params}`,
@@ -276,13 +265,19 @@ export function createRoomsHop(deps: HopDeps): RoomsHop {
       })
       ws.on('message', (raw) => {
         const text = String(raw)
-        // The one envelope this daemon READS rather than forwards
-        // blindly: the relay announcing a kick's banned hashes. Handled
-        // before the fan-out so the kicked subscriber is gone before
-        // anything else (the admin's re-key follows this on the same
-        // socket) can reach them.
+        // Two envelopes this daemon READS rather than forwards blindly:
+        // the relay answering a carry hand-off, and the relay announcing
+        // a kick's banned identities — the latter handled before the
+        // fan-out so the kicked subscriber is gone before anything else
+        // (the admin's re-key follows this on the same socket) can
+        // reach them.
         try {
-          const envelope = JSON.parse(text) as { type?: string; hashes?: unknown }
+          const envelope = JSON.parse(text) as { type?: string; hashes?: unknown; id?: unknown }
+          if (envelope.type === 'carry-ok' || envelope.type === 'carry-rejected') {
+            const pending = upstream.pendingCarries.shift()
+            pending?.(envelope.type === 'carry-ok' ? null : 'Not a member of this room.')
+            return
+          }
           if (envelope.type === 'banned' && Array.isArray(envelope.hashes)) {
             applyBans(
               upstream,
@@ -312,7 +307,7 @@ export function createRoomsHop(deps: HopDeps): RoomsHop {
         for (const sub of upstream.subscribers) {
           sendTo(sub, { type: 'room-down', roomId: upstream.roomId })
           sub.rooms.delete(upstream.key)
-          sub.declaredHash.delete(upstream.key)
+          sub.carriedId.delete(upstream.key)
         }
         upstream.subscribers.clear()
         teardownUpstream(upstream)
@@ -344,7 +339,7 @@ export function createRoomsHop(deps: HopDeps): RoomsHop {
     upstream.subscribers.delete(sub)
     upstream.retained.delete(sub.id)
     sub.rooms.delete(upstream.key)
-    sub.declaredHash.delete(upstream.key)
+    sub.carriedId.delete(upstream.key)
     // Last one out closes the upstream — holding a relay connection open
     // for a room nobody local is in would be the daemon costing what it
     // exists to save.
@@ -388,9 +383,38 @@ export function createRoomsHop(deps: HopDeps): RoomsHop {
     }
   }
 
+  /** Hands one more member's tap up the already-open connection and
+   *  waits for the relay's verdict. FIFO against pendingCarries — the
+   *  relay answers carries in socket order. */
+  function carryHandshake(
+    upstream: Upstream,
+    cryptogram: SubCryptogram,
+    joinSecret: string | undefined
+  ): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('The relay did not answer the carry.')), 8000)
+      upstream.pendingCarries.push((error) => {
+        clearTimeout(timer)
+        if (error) reject(new Error(error))
+        else resolve()
+      })
+      try {
+        upstream.ws?.send(
+          JSON.stringify({
+            type: 'carry',
+            ...cryptogram,
+            ...(joinSecret ? { join: joinSecret } : {})
+          })
+        )
+      } catch (error) {
+        reject(error as Error)
+      }
+    })
+  }
+
   async function handleSub(
     sub: LocalSub,
-    msg: { roomId?: unknown; relayUrl?: unknown; join?: unknown; memberKeyHash?: unknown }
+    msg: { roomId?: unknown; relayUrl?: unknown; join?: unknown; cryptogram?: unknown }
   ): Promise<void> {
     const roomId = String(msg.roomId || '')
     const relayUrl = String(msg.relayUrl || '').replace(/\/+$/, '')
@@ -414,12 +438,19 @@ export function createRoomsHop(deps: HopDeps): RoomsHop {
       sendTo(sub, { type: 'sub-error', roomId, error: 'Relays are https only.' })
       return
     }
-    const declaredHash =
-      typeof msg.memberKeyHash === 'string' && MEMBER_HASH_RE.test(msg.memberKeyHash)
-        ? msg.memberKeyHash
-        : null
+    // The subscriber's tap. This daemon derives the identity from the
+    // PUBLIC KEY inside it — and the id only means anything once the
+    // relay has verified the signature, so by the time this sub is
+    // active, matching a relay ban against it is matching like against
+    // like.
+    const raw = msg.cryptogram as Record<string, unknown> | undefined
+    const cryptogram: SubCryptogram | undefined =
+      raw && typeof raw.pub === 'string' && typeof raw.sig === 'string'
+        ? { pub: raw.pub, ts: Number(raw.ts), ctr: Number(raw.ctr), sig: raw.sig }
+        : undefined
+    const carriedId = cryptogram ? sha256Hex(cryptogram.pub) : null
     const key = `${relayUrl}|${roomId}`
-    if (declaredHash && bannedByRoom.get(key)?.has(declaredHash)) {
+    if (carriedId && bannedByRoom.get(key)?.has(carriedId)) {
       // The relay named this identity banned while this daemon was
       // watching. Refusing here is what makes a kick stick for hop
       // members whose transport the relay itself cannot reach.
@@ -427,8 +458,17 @@ export function createRoomsHop(deps: HopDeps): RoomsHop {
       return
     }
     const upstream = upstreamFor(relayUrl, roomId)
+    const join = typeof msg.join === 'string' ? msg.join : undefined
+    // Whoever finds the upstream down initiates it with their OWN tap;
+    // everyone after hands theirs up as a carry for the relay to verify
+    // on the same connection.
+    const mustCarry = Boolean(
+      cryptogram &&
+      (upstream.connecting || (upstream.ws && upstream.ws.readyState === WebSocket.OPEN))
+    )
     try {
-      await connectUpstream(upstream, typeof msg.join === 'string' ? msg.join : undefined)
+      await connectUpstream(upstream, join, cryptogram)
+      if (mustCarry && cryptogram) await carryHandshake(upstream, cryptogram, join)
     } catch (error) {
       if (upstream.subscribers.size === 0) teardownUpstream(upstream)
       sendTo(sub, { type: 'sub-error', roomId, error: (error as Error).message })
@@ -443,7 +483,7 @@ export function createRoomsHop(deps: HopDeps): RoomsHop {
     }
     upstream.subscribers.add(sub)
     sub.rooms.add(upstream.key)
-    if (declaredHash) sub.declaredHash.set(upstream.key, declaredHash)
+    if (carriedId) sub.carriedId.set(upstream.key, carriedId)
     sendTo(sub, { type: 'sub-ok', roomId })
     // The household's recent words, replayed the way the relay replays
     // its own retention — stamped with how long the daemon has held
@@ -509,7 +549,7 @@ export function createRoomsHop(deps: HopDeps): RoomsHop {
       ws,
       id: crypto.randomBytes(8).toString('hex'),
       rooms: new Set(),
-      declaredHash: new Map()
+      carriedId: new Map()
     }
     ws.on('message', (raw) => {
       let msg: Record<string, unknown>
