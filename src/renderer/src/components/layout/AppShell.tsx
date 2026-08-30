@@ -40,7 +40,19 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     document.documentElement.dataset.motionUserDisabled = motionUserDisabled ? 'true' : 'false'
   }, [motionUserDisabled])
 
-  const { controlCentreOpen } = useAppState()
+  const { controlCentreOpen, mediaHubSettings } = useAppState()
+  /**
+   * The storage question is unanswered and its dialog is up.
+   *
+   * Both faces go inert while it is: the scrim stops a mouse, but a
+   * keyboard or a screen reader would otherwise walk straight into the app
+   * behind it and could start playing something — and an unanswered policy
+   * still resolves to the disk default, so video would be written before
+   * the question governing it had been answered. Same condition
+   * StoragePolicyPrompt renders on; it holds focus, this makes everything
+   * else unreachable.
+   */
+  const storageUnanswered = Boolean(mediaHubSettings) && !mediaHubSettings?.storagePolicyChosen
   useEffect(() => {
     document.documentElement.dataset.controlCentre = controlCentreOpen ? 'true' : 'false'
   }, [controlCentreOpen])
@@ -134,8 +146,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               already applies to itself in the other direction. */}
           <div
             className={`${styles.face} ${styles.faceApp}`}
-            aria-hidden={controlCentreOpen}
-            inert={controlCentreOpen}
+            aria-hidden={controlCentreOpen || storageUnanswered}
+            inert={controlCentreOpen || storageUnanswered}
           >
             <div className={`${styles.sidebar} thin-scroll`}>
               <SidebarNavigation />
@@ -148,7 +160,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               bar sits on. */}
           <div
             className={`${styles.face} ${styles.faceSettings}`}
-            aria-hidden={!controlCentreOpen}
+            aria-hidden={!controlCentreOpen || storageUnanswered}
+            // Cascades to ControlCentreFace's own inert inside it, so the
+            // far face is unreachable whichever way the cube is turned.
+            inert={storageUnanswered}
           >
             {hasOpened && <ControlCentreFace />}
           </div>

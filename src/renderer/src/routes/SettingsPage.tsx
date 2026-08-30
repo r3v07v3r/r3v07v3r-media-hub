@@ -171,7 +171,7 @@ function SliderRow({
           value={index}
           aria-label={title}
           aria-valuetext={current.label}
-          style={{ ["--fill" as string]: `${percent}%` }}
+          style={{ ['--fill' as string]: `${percent}%` }}
           onChange={(event) => {
             const next = options[Number(event.target.value)]
             if (next && next.value !== value) onChange(next.value)
@@ -819,13 +819,7 @@ function useColumnPackGrid<TGroup extends HTMLElement = HTMLElement>(enabled = t
  */
 /** The category ids this page is divided into — the same list the control
  *  centre's rail uses to give each one its own entry. */
-export type SettingsCategory =
-  | 'general'
-  | 'playback'
-  | 'services'
-  | 'accounts'
-  | 'ai'
-  | 'community'
+export type SettingsCategory = 'general' | 'playback' | 'services' | 'accounts' | 'ai' | 'community'
 
 export default function SettingsPage({
   embedded = false,
@@ -1239,298 +1233,306 @@ export default function SettingsPage({
               between, and a second row of the same names would just be the
               navigation twice. */}
           {!category && (
-          <nav className={styles.categoryNav} aria-label="Settings categories">
-            {[
-              ['settings-general', 'General'],
-              ['settings-playback', 'Playback'],
-              ['settings-services', 'Services'],
-              ['settings-accounts', 'Accounts'],
-              ['settings-ai', 'AI'],
-              ['settings-community', 'Community']
-            ].map(([id, label]) => (
-              <button
-                key={id}
-                type="button"
-                onClick={() => document.getElementById(id)?.scrollIntoView({ behavior: 'smooth' })}
-              >
-                {label}
-              </button>
-            ))}
-          </nav>
+            <nav className={styles.categoryNav} aria-label="Settings categories">
+              {[
+                ['settings-general', 'General'],
+                ['settings-playback', 'Playback'],
+                ['settings-services', 'Services'],
+                ['settings-accounts', 'Accounts'],
+                ['settings-ai', 'AI'],
+                ['settings-community', 'Community']
+              ].map(([id, label]) => (
+                <button
+                  key={id}
+                  type="button"
+                  onClick={() =>
+                    document.getElementById(id)?.scrollIntoView({ behavior: 'smooth' })
+                  }
+                >
+                  {label}
+                </button>
+              ))}
+            </nav>
           )}
         </div>
       )}
 
       <div className={styles.tileArea} ref={tileAreaRef}>
         {shows('general') && (
-        <section
-          id="settings-general"
-          ref={generalGroupBinding}
-          className={styles.settingsGroup}
-          aria-labelledby="settings-general-title"
-        >
-          <header className={styles.groupHeader}>
-            <span className={styles.groupEyebrow}>Essentials</span>
-            <h2 id="settings-general-title">General</h2>
-            <p>App updates, display preferences, and everyday behavior.</p>
-          </header>
-          <div ref={generalGridBinding} className={styles.groupGrid}>
-            <AboutUpdateSection />
+          <section
+            id="settings-general"
+            ref={generalGroupBinding}
+            className={styles.settingsGroup}
+            aria-labelledby="settings-general-title"
+          >
+            <header className={styles.groupHeader}>
+              <span className={styles.groupEyebrow}>Essentials</span>
+              <h2 id="settings-general-title">General</h2>
+              <p>App updates, display preferences, and everyday behavior.</p>
+            </header>
+            <div ref={generalGridBinding} className={styles.groupGrid}>
+              <AboutUpdateSection />
 
-            <section className={`${styles.section} glass-panel`} aria-labelledby="settings-perf">
-              <h2 id="settings-perf" className={styles.sectionTitle}>
-                Performance &amp; Display
-              </h2>
-              <ToggleRow
-                icon="notification"
-                title="Notify me about new episodes"
-                description="A desktop notification when something in My List has a new episode out. Checked a few times a day, and never while you are watching something."
-                checked={mediaHubSettings?.notificationsEnabled ?? false}
-                onChange={handleSetNotifications}
-              />
-              <ToggleRow
-                icon="cpu"
-                title="System performance panel"
-                description="Show live CPU, GPU, RAM, and network gauges on the Home dashboard."
-                checked={mediaHubSettings?.performancePanelVisible ?? true}
-                onChange={handleTogglePerformancePanel}
-              />
-              <SliderRow
-                icon="clock"
-                title="Playback buffer"
-                description="How far ahead to keep loading while you watch. Higher settings ride out a slow or unstable connection and let you pause, let it fill, and resume without waiting — at the cost of more memory. Playback still starts straight away either way."
-                value={mediaHubSettings?.playbackBuffer ?? 'auto'}
-                options={PLAYBACK_BUFFER_OPTIONS}
-                onChange={handleSetPlaybackBuffer}
-              />
-              <SliderRow
-                icon="cpu"
-                title="Video scaling"
-                description="How video is resized to fit your screen, done on the GPU while playing. Sharp is crisper on older, lower-resolution titles; it can ring slightly on very noisy sources, which is why it isn't the default."
-                value={mediaHubSettings?.videoScaling ?? 'auto'}
-                options={VIDEO_SCALING_OPTIONS}
-                onChange={handleSetVideoScaling}
-              />
-            </section>
+              <section className={`${styles.section} glass-panel`} aria-labelledby="settings-perf">
+                <h2 id="settings-perf" className={styles.sectionTitle}>
+                  Performance &amp; Display
+                </h2>
+                <ToggleRow
+                  icon="notification"
+                  title="Notify me about new episodes"
+                  description="A desktop notification when something in My List has a new episode out. Checked a few times a day, and never while you are watching something."
+                  checked={mediaHubSettings?.notificationsEnabled ?? false}
+                  onChange={handleSetNotifications}
+                />
+                <ToggleRow
+                  icon="cpu"
+                  title="System performance panel"
+                  description="Show live CPU, GPU, RAM, and network gauges on the Home dashboard."
+                  checked={mediaHubSettings?.performancePanelVisible ?? true}
+                  onChange={handleTogglePerformancePanel}
+                />
+                <SliderRow
+                  icon="clock"
+                  title="Playback buffer"
+                  description="How far ahead to keep loading while you watch. Higher settings ride out a slow or unstable connection and let you pause, let it fill, and resume without waiting — at the cost of more memory. Playback still starts straight away either way."
+                  value={mediaHubSettings?.playbackBuffer ?? 'auto'}
+                  options={PLAYBACK_BUFFER_OPTIONS}
+                  onChange={handleSetPlaybackBuffer}
+                />
+                <SliderRow
+                  icon="cpu"
+                  title="Video scaling"
+                  description="How video is resized to fit your screen, done on the GPU while playing. Sharp is crisper on older, lower-resolution titles; it can ring slightly on very noisy sources, which is why it isn't the default."
+                  value={mediaHubSettings?.videoScaling ?? 'auto'}
+                  options={VIDEO_SCALING_OPTIONS}
+                  onChange={handleSetVideoScaling}
+                />
+              </section>
 
-            <section className={`${styles.section} glass-panel`} aria-labelledby="settings-backup">
-              <h2 id="settings-backup" className={styles.sectionTitle}>
-                Your library
-              </h2>
-              <ActionRow
-                icon="downloads"
-                title="Save a backup"
-                description="Writes every profile's list, history, ratings and resume points to one file. Service credentials are never included — they belong to this machine."
-                label="Save…"
-                busy={backupBusy === 'export'}
-                onClick={handleExportBackup}
-              />
-              <ActionRow
-                icon="refresh"
-                title="Restore a backup"
-                description="Puts your library back the way the backup file has it, and switches to the profile that was active when it was taken. Replaces what is here rather than merging, and nothing changes unless the whole restore succeeds."
-                label="Restore…"
-                busy={backupBusy === 'import'}
-                onClick={handleImportBackup}
-              />
-              <ActionRow
-                icon="star"
-                title="Import ratings from IMDb"
-                description="Reads the ratings.csv IMDb gives you from Your Ratings → Export. Matched by IMDb id, so nothing is guessed at — safe to run more than once, since a title already rated here keeps the score you gave it."
-                label="Import…"
-                busy={backupBusy === 'imdb'}
-                onClick={handleImportImdbRatings}
-              />
-              <ActionRow
-                icon="movies"
-                title="Import from Letterboxd"
-                description="Reads the diary and ratings from Letterboxd's Export Your Data (Settings → Data → Export). Needs TMDB connected above to match titles, and only imports one it can match exactly — this can take a few minutes for a large diary."
-                label="Import…"
-                busy={backupBusy === 'letterboxd'}
-                onClick={handleImportLetterboxd}
-              />
-            </section>
+              <section
+                className={`${styles.section} glass-panel`}
+                aria-labelledby="settings-backup"
+              >
+                <h2 id="settings-backup" className={styles.sectionTitle}>
+                  Your library
+                </h2>
+                <ActionRow
+                  icon="downloads"
+                  title="Save a backup"
+                  description="Writes every profile's list, history, ratings and resume points to one file. Service credentials are never included — they belong to this machine."
+                  label="Save…"
+                  busy={backupBusy === 'export'}
+                  onClick={handleExportBackup}
+                />
+                <ActionRow
+                  icon="refresh"
+                  title="Restore a backup"
+                  description="Puts your library back the way the backup file has it, and switches to the profile that was active when it was taken. Replaces what is here rather than merging, and nothing changes unless the whole restore succeeds."
+                  label="Restore…"
+                  busy={backupBusy === 'import'}
+                  onClick={handleImportBackup}
+                />
+                <ActionRow
+                  icon="star"
+                  title="Import ratings from IMDb"
+                  description="Reads the ratings.csv IMDb gives you from Your Ratings → Export. Matched by IMDb id, so nothing is guessed at — safe to run more than once, since a title already rated here keeps the score you gave it."
+                  label="Import…"
+                  busy={backupBusy === 'imdb'}
+                  onClick={handleImportImdbRatings}
+                />
+                <ActionRow
+                  icon="movies"
+                  title="Import from Letterboxd"
+                  description="Reads the diary and ratings from Letterboxd's Export Your Data (Settings → Data → Export). Needs TMDB connected above to match titles, and only imports one it can match exactly — this can take a few minutes for a large diary."
+                  label="Import…"
+                  busy={backupBusy === 'letterboxd'}
+                  onClick={handleImportLetterboxd}
+                />
+              </section>
 
-            <MoreOptionsSection />
-          </div>
-        </section>
+              <MoreOptionsSection />
+            </div>
+          </section>
         )}
 
         {shows('playback') && (
-        <section
-          id="settings-playback"
-          ref={playbackGroupBinding}
-          className={styles.settingsGroup}
-          aria-labelledby="settings-playback-title"
-        >
-          <header className={styles.groupHeader}>
-            <span className={styles.groupEyebrow}>Watching</span>
-            <h2 id="settings-playback-title">Playback</h2>
-            <p>Choose language, quality, and connection preferences.</p>
-          </header>
-          <div ref={playbackGridBinding} className={styles.groupGrid}>
-            <section
-              className={`${styles.section} glass-panel`}
-              aria-labelledby="settings-episodes"
-            >
-              <h2 id="settings-episodes" className={styles.sectionTitle}>
-                Episodes
-              </h2>
-              {/* Two letters, typed rather than picked from a list: TMDB
+          <section
+            id="settings-playback"
+            ref={playbackGroupBinding}
+            className={styles.settingsGroup}
+            aria-labelledby="settings-playback-title"
+          >
+            <header className={styles.groupHeader}>
+              <span className={styles.groupEyebrow}>Watching</span>
+              <h2 id="settings-playback-title">Playback</h2>
+              <p>Choose language, quality, and connection preferences.</p>
+            </header>
+            <div ref={playbackGridBinding} className={styles.groupGrid}>
+              <section
+                className={`${styles.section} glass-panel`}
+                aria-labelledby="settings-episodes"
+              >
+                <h2 id="settings-episodes" className={styles.sectionTitle}>
+                  Episodes
+                </h2>
+                {/* Two letters, typed rather than picked from a list: TMDB
                   answers for well over a hundred regions, and a dropdown of
                   all of them is a worse control than a field somebody fills in
                   once. An empty or malformed value clears the setting, which
                   puts it back on the machine's own locale. */}
-              <div className={`${styles.row} ${styles.rowSegmented}`}>
-                <div className={styles.rowIcon} aria-hidden="true">
-                  <Icon name="planet" size={17} />
-                </div>
-                <div className={styles.rowText}>
-                  <span className={styles.rowTitle}>Region for “Where to watch”</span>
-                  <span className={styles.rowDescription}>
-                    Two-letter country code. Streaming availability differs by country, so there is
-                    no global answer. Leave it blank to follow this computer&apos;s own region.
+                <div className={`${styles.row} ${styles.rowSegmented}`}>
+                  <div className={styles.rowIcon} aria-hidden="true">
+                    <Icon name="planet" size={17} />
+                  </div>
+                  <div className={styles.rowText}>
+                    <span className={styles.rowTitle}>Region for “Where to watch”</span>
+                    <span className={styles.rowDescription}>
+                      Two-letter country code. Streaming availability differs by country, so there
+                      is no global answer. Leave it blank to follow this computer&apos;s own region.
+                    </span>
+                  </div>
+                  <span className={styles.field} style={{ flex: '0 0 88px' }}>
+                    <input
+                      className={styles.fieldInput}
+                      style={{ padding: '5px 10px', fontSize: 12, textAlign: 'center' }}
+                      maxLength={2}
+                      defaultValue={mediaHubSettings?.watchRegion ?? ''}
+                      aria-label="Region for where to watch"
+                      onBlur={(event) => void handleSetWatchRegion(event.target.value)}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter') event.currentTarget.blur()
+                      }}
+                    />
                   </span>
                 </div>
-                <span className={styles.field} style={{ flex: '0 0 88px' }}>
-                  <input
-                    className={styles.fieldInput}
-                    style={{ padding: '5px 10px', fontSize: 12, textAlign: 'center' }}
-                    maxLength={2}
-                    defaultValue={mediaHubSettings?.watchRegion ?? ''}
-                    aria-label="Region for where to watch"
-                    onBlur={(event) => void handleSetWatchRegion(event.target.value)}
-                    onKeyDown={(event) => {
-                      if (event.key === 'Enter') event.currentTarget.blur()
-                    }}
-                  />
-                </span>
-              </div>
-              <ToggleRow
-                icon="play"
-                title="Play the next episode"
-                description="When an episode ends, offer the next one and start it after a short countdown. Movies and last episodes are unaffected."
-                checked={mediaHubSettings?.autoplayNextEnabled ?? true}
-                onChange={handleSetAutoplayNext}
-              />
-            </section>
+                <ToggleRow
+                  icon="play"
+                  title="Play the next episode"
+                  description="When an episode ends, offer the next one and start it after a short countdown. Movies and last episodes are unaffected."
+                  checked={mediaHubSettings?.autoplayNextEnabled ?? true}
+                  onChange={handleSetAutoplayNext}
+                />
+              </section>
 
-            <section
-              className={`${styles.section} glass-panel`}
-              aria-labelledby="settings-subtitles"
-            >
-              <h2 id="settings-subtitles" className={styles.sectionTitle}>
-                Subtitles
-              </h2>
-              <ToggleRow
-                icon="eye"
-                title="Show subtitles automatically"
-                description="Fetch and apply a matching subtitle as soon as a title starts playing."
-                checked={mediaHubSettings?.autoSubtitlesEnabled ?? true}
-                onChange={handleSetAutoSubtitles}
-              />
-              <SegmentedRow
-                icon="planet"
-                title="Subtitle language"
-                description="Language to search for, both automatically and in the Subtitles menu."
-                value={mediaHubSettings?.subtitleLanguage ?? 'en'}
-                options={SUBTITLE_LANGUAGE_OPTIONS}
-                onChange={handleSetSubtitleLanguage}
-              />
-              {/* Separate from the subtitle language directly above, because
+              <section
+                className={`${styles.section} glass-panel`}
+                aria-labelledby="settings-subtitles"
+              >
+                <h2 id="settings-subtitles" className={styles.sectionTitle}>
+                  Subtitles
+                </h2>
+                <ToggleRow
+                  icon="eye"
+                  title="Show subtitles automatically"
+                  description="Fetch and apply a matching subtitle as soon as a title starts playing."
+                  checked={mediaHubSettings?.autoSubtitlesEnabled ?? true}
+                  onChange={handleSetAutoSubtitles}
+                />
+                <SegmentedRow
+                  icon="planet"
+                  title="Subtitle language"
+                  description="Language to search for, both automatically and in the Subtitles menu."
+                  value={mediaHubSettings?.subtitleLanguage ?? 'en'}
+                  options={SUBTITLE_LANGUAGE_OPTIONS}
+                  onChange={handleSetSubtitleLanguage}
+                />
+                {/* Separate from the subtitle language directly above, because
                 they genuinely differ for a lot of viewing — Japanese audio
                 with English subtitles is the normal way to watch most of
                 what's in the Anime section. */}
-              <SegmentedRow
-                icon="waveform"
-                title="Audio language"
-                description="Preferred spoken language. Used to pick the audio track when a release has several, and to avoid dubbed releases when an original-language one exists."
-                value={mediaHubSettings?.audioLanguage ?? 'en'}
-                options={SUBTITLE_LANGUAGE_OPTIONS}
-                onChange={handleSetAudioLanguage}
-              />
-            </section>
+                <SegmentedRow
+                  icon="waveform"
+                  title="Audio language"
+                  description="Preferred spoken language. Used to pick the audio track when a release has several, and to avoid dubbed releases when an original-language one exists."
+                  value={mediaHubSettings?.audioLanguage ?? 'en'}
+                  options={SUBTITLE_LANGUAGE_OPTIONS}
+                  onChange={handleSetAudioLanguage}
+                />
+              </section>
 
-            <section className={`${styles.section} glass-panel`} aria-labelledby="settings-network">
-              <h2 id="settings-network" className={styles.sectionTitle}>
-                Network
-              </h2>
-              <SliderRow
-                icon="display"
-                title="Maximum video quality"
-                description={`Avoid releases sharper than this display needs.${speedTest.quality ? ` ${speedTest.quality}p recommended by the last test.` : ''}`}
-                value={String(mediaHubSettings?.maxStreamResolution ?? 0)}
-                options={QUALITY_OPTIONS}
-                onChange={(value) =>
-                  setStreamLimits(Number(value), mediaHubSettings?.maxStreamSizeGb ?? 0)
-                }
-              />
-              <SliderRow
-                icon="download"
-                title="Maximum download size"
-                description={`Prefer releases at or below this size.${speedTest.size ? ` ${speedTest.size} GB recommended by the last test.` : ''}`}
-                value={String(mediaHubSettings?.maxStreamSizeGb ?? 0)}
-                options={SIZE_OPTIONS}
-                onChange={(value) =>
-                  setStreamLimits(mediaHubSettings?.maxStreamResolution ?? 0, Number(value))
-                }
-              />
-              <SegmentedRow
-                icon="display"
-                title="Where to play from"
-                description="A media server on your own network starts instantly and costs no bandwidth. Balanced prefers it unless a noticeably better copy exists elsewhere; Media server prefers it whenever it has the title at all; Best quality ignores where a copy lives and picks the best one."
-                value={mediaHubSettings?.sourcePreference ?? 'balanced'}
-                options={SOURCE_PREFERENCE_OPTIONS}
-                onChange={(value) => setSourcePreference(value as SourcePreference)}
-              />
-              <div className={styles.row}>
-                <div className={styles.rowIcon} aria-hidden="true">
-                  <Icon name="gauge" size={17} />
+              <section
+                className={`${styles.section} glass-panel`}
+                aria-labelledby="settings-network"
+              >
+                <h2 id="settings-network" className={styles.sectionTitle}>
+                  Network
+                </h2>
+                <SliderRow
+                  icon="display"
+                  title="Maximum video quality"
+                  description={`Avoid releases sharper than this display needs.${speedTest.quality ? ` ${speedTest.quality}p recommended by the last test.` : ''}`}
+                  value={String(mediaHubSettings?.maxStreamResolution ?? 0)}
+                  options={QUALITY_OPTIONS}
+                  onChange={(value) =>
+                    setStreamLimits(Number(value), mediaHubSettings?.maxStreamSizeGb ?? 0)
+                  }
+                />
+                <SliderRow
+                  icon="download"
+                  title="Maximum download size"
+                  description={`Prefer releases at or below this size.${speedTest.size ? ` ${speedTest.size} GB recommended by the last test.` : ''}`}
+                  value={String(mediaHubSettings?.maxStreamSizeGb ?? 0)}
+                  options={SIZE_OPTIONS}
+                  onChange={(value) =>
+                    setStreamLimits(mediaHubSettings?.maxStreamResolution ?? 0, Number(value))
+                  }
+                />
+                <SegmentedRow
+                  icon="display"
+                  title="Where to play from"
+                  description="A media server on your own network starts instantly and costs no bandwidth. Balanced prefers it unless a noticeably better copy exists elsewhere; Media server prefers it whenever it has the title at all; Best quality ignores where a copy lives and picks the best one."
+                  value={mediaHubSettings?.sourcePreference ?? 'balanced'}
+                  options={SOURCE_PREFERENCE_OPTIONS}
+                  onChange={(value) => setSourcePreference(value as SourcePreference)}
+                />
+                <div className={styles.row}>
+                  <div className={styles.rowIcon} aria-hidden="true">
+                    <Icon name="gauge" size={17} />
+                  </div>
+                  <div className={styles.rowText}>
+                    <span className={styles.rowTitle}>Connection recommendation</span>
+                    <span className={styles.rowDescription}>
+                      Runs only when requested. Downloads 1 MB, and keeps going only if that
+                      finishes too fast to measure — a slow or metered connection is never asked for
+                      more than the 1 MB. It considers this screen and saves suggested limits
+                      without locking them.
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    className={styles.testButton}
+                    disabled={speedTest.kind === 'busy'}
+                    onClick={runSpeedTest}
+                  >
+                    {speedTest.kind === 'busy'
+                      ? 'Testing…'
+                      : mediaHubSettings?.connectionSpeedMbps
+                        ? 'Retest'
+                        : 'Run test'}
+                  </button>
                 </div>
-                <div className={styles.rowText}>
-                  <span className={styles.rowTitle}>Connection recommendation</span>
-                  <span className={styles.rowDescription}>
-                    Runs only when requested. Downloads 1 MB, and keeps going only if that finishes
-                    too fast to measure — a slow or metered connection is never asked for more than
-                    the 1 MB. It considers this screen and saves suggested limits without locking
-                    them.
+                {(speedTest.message || mediaHubSettings?.connectionSpeedMbps) && (
+                  <span
+                    className={`${styles.statusMessage} ${speedTest.kind === 'error' ? styles.statusError : styles.statusOk}`}
+                  >
+                    {speedTest.message ||
+                      `Last result: ${mediaHubSettings?.connectionSpeedMbps} Mbps.`}
                   </span>
+                )}
+                <div className={styles.row}>
+                  <div className={styles.rowIcon} aria-hidden="true">
+                    <Icon name="net" size={17} />
+                  </div>
+                  <div className={styles.rowText}>
+                    <span className={styles.rowTitle}>Local network address</span>
+                    <span className={styles.rowDescription}>
+                      What Watch Party shares on your LAN when hosting directly.
+                    </span>
+                  </div>
+                  <span className={styles.rowValue}>{networkInfo?.lanIp ?? '—'}</span>
                 </div>
-                <button
-                  type="button"
-                  className={styles.testButton}
-                  disabled={speedTest.kind === 'busy'}
-                  onClick={runSpeedTest}
-                >
-                  {speedTest.kind === 'busy'
-                    ? 'Testing…'
-                    : mediaHubSettings?.connectionSpeedMbps
-                      ? 'Retest'
-                      : 'Run test'}
-                </button>
-              </div>
-              {(speedTest.message || mediaHubSettings?.connectionSpeedMbps) && (
-                <span
-                  className={`${styles.statusMessage} ${speedTest.kind === 'error' ? styles.statusError : styles.statusOk}`}
-                >
-                  {speedTest.message ||
-                    `Last result: ${mediaHubSettings?.connectionSpeedMbps} Mbps.`}
-                </span>
-              )}
-              <div className={styles.row}>
-                <div className={styles.rowIcon} aria-hidden="true">
-                  <Icon name="net" size={17} />
-                </div>
-                <div className={styles.rowText}>
-                  <span className={styles.rowTitle}>Local network address</span>
-                  <span className={styles.rowDescription}>
-                    What Watch Party shares on your LAN when hosting directly.
-                  </span>
-                </div>
-                <span className={styles.rowValue}>{networkInfo?.lanIp ?? '—'}</span>
-              </div>
-            </section>
-            {/* ITS OWN CARD, lifted out of Network.
+              </section>
+              {/* ITS OWN CARD, lifted out of Network.
 
                 Network had grown to eight rows and was by far the tallest
                 panel on the face — the thing that made the column run off
@@ -1542,11 +1544,14 @@ export default function SettingsPage({
                 Somebody streaming straight from TorBox and keeping nothing
                 can ignore this whole card, and the rows that only mean
                 something on disk disappear the moment they say so. */}
-            <section className={`${styles.section} glass-panel`} aria-labelledby="settings-storage">
-              <h2 id="settings-storage" className={styles.sectionTitle}>
-                Storage while playing
-              </h2>
-              {/* THE QUESTION EVERYTHING ELSE IN THIS CARD DEPENDS ON.
+              <section
+                className={`${styles.section} glass-panel`}
+                aria-labelledby="settings-storage"
+              >
+                <h2 id="settings-storage" className={styles.sectionTitle}>
+                  Storage while playing
+                </h2>
+                {/* THE QUESTION EVERYTHING ELSE IN THIS CARD DEPENDS ON.
 
                   Asked once at first run and answerable again here. "No"
                   is a promise rather than a preference: the main process
@@ -1554,172 +1559,177 @@ export default function SettingsPage({
                   effectiveCacheMode), so the disk stays clean whatever the
                   saved mode says — hiding these controls is the cosmetic
                   half of it, not the mechanism. */}
-              <ToggleRow
-                icon="downloads"
-                title="Keep media on this device"
-                description="Off streams everything and writes no video to your disk — the buffer lives in memory and is gone when playback stops. Your library, history and settings are kept either way."
-                checked={mediaHubSettings?.storeMedia !== false}
-                onChange={(value) => setStoreMedia(value)}
-              />
-              {mediaHubSettings?.storeMedia !== false && (
-                <>
-              <SegmentedRow
-                icon="downloads"
-                title="Where the buffer lives"
-                description="Cache to disk buffers ahead on your drive, so you can rewind freely and resume later. Memory only keeps everything in RAM and writes nothing about what you watch to disk — it needs a faster connection and gives you a shorter buffer."
-                value={mediaHubSettings?.cacheMode ?? 'disk'}
-                options={CACHE_MODE_OPTIONS}
-                onChange={(value) => setCacheMode(value as CacheMode)}
-              />
-              {mediaHubSettings?.cacheMode === 'memory' ? (
-                <div className={styles.row}>
-                  <div className={styles.rowIcon} aria-hidden="true">
-                    <Icon name="downloads" size={17} />
-                  </div>
-                  <div className={styles.rowText}>
-                    <span className={styles.rowTitle}>Memory buffer</span>
-                    <span className={styles.rowDescription}>
-                      Using up to {mediaHubSettings?.memoryCacheMaxMb ?? 512} MB of RAM. Nothing is
-                      written to disk, so there is nothing left behind when playback stops — and
-                      nothing to resume from either.
-                    </span>
-                  </div>
-                </div>
-              ) : (
-                <CacheSizeRow
+                <ToggleRow
                   icon="downloads"
-                  title="Stream cache size"
-                  description="How much local disk playback can use to buffer ahead and rewind without reopening a connection to the source. Larger also enables extracting embedded subtitle tracks, which needs the whole file cached. Pick a preset or type your own value in GB."
-                  valueGb={mediaHubSettings?.streamCacheMaxGb ?? 10}
-                  presets={STREAM_CACHE_SIZE_OPTIONS}
-                  onChange={setStreamCacheSize}
+                  title="Keep media on this device"
+                  description="Off streams everything and writes no video to your disk — the buffer lives in memory and is gone when playback stops. Your library, history and settings are kept either way."
+                  checked={mediaHubSettings?.storeMedia !== false}
+                  onChange={(value) => setStoreMedia(value)}
                 />
-              )}
-              {/* DISK ONLY. Where the cache lives and a button to clear it
+                {mediaHubSettings?.storeMedia !== false && (
+                  <>
+                    <SegmentedRow
+                      icon="downloads"
+                      title="Where the buffer lives"
+                      description="Cache to disk buffers ahead on your drive, so you can rewind freely and resume later. Memory only keeps everything in RAM and writes nothing about what you watch to disk — it needs a faster connection and gives you a shorter buffer."
+                      value={mediaHubSettings?.cacheMode ?? 'disk'}
+                      options={CACHE_MODE_OPTIONS}
+                      onChange={(value) => setCacheMode(value as CacheMode)}
+                    />
+                    {mediaHubSettings?.cacheMode === 'memory' ? (
+                      <div className={styles.row}>
+                        <div className={styles.rowIcon} aria-hidden="true">
+                          <Icon name="downloads" size={17} />
+                        </div>
+                        <div className={styles.rowText}>
+                          <span className={styles.rowTitle}>Memory buffer</span>
+                          <span className={styles.rowDescription}>
+                            Using up to {mediaHubSettings?.memoryCacheMaxMb ?? 512} MB of RAM.
+                            Nothing is written to disk, so there is nothing left behind when
+                            playback stops — and nothing to resume from either.
+                          </span>
+                        </div>
+                      </div>
+                    ) : (
+                      <CacheSizeRow
+                        icon="downloads"
+                        title="Stream cache size"
+                        description="How much local disk playback can use to buffer ahead and rewind without reopening a connection to the source. Larger also enables extracting embedded subtitle tracks, which needs the whole file cached. Pick a preset or type your own value in GB."
+                        valueGb={mediaHubSettings?.streamCacheMaxGb ?? 10}
+                        presets={STREAM_CACHE_SIZE_OPTIONS}
+                        onChange={setStreamCacheSize}
+                      />
+                    )}
+                    {/* DISK ONLY. Where the cache lives and a button to clear it
                   mean nothing when nothing is being written to disk — in
                   memory-only they were two controls that could not do
                   anything, which is exactly the redundancy worth removing
                   rather than greying out. */}
-              {mediaHubSettings?.cacheMode !== 'memory' && (
-                <>
-              <div className={styles.row}>
-                <div className={styles.rowIcon} aria-hidden="true">
-                  <Icon name="downloads" size={17} />
-                </div>
-                <div className={styles.rowText}>
-                  <span className={styles.rowTitle}>Stream cache location</span>
-                  <span className={styles.rowDescription}>
-                    {mediaHubSettings?.streamCacheDir || 'Default (app data folder)'} — useful for
-                    pointing it at a secondary drive. Changing this does not move data already
-                    cached at the old location.
-                  </span>
-                </div>
-                <button
-                  type="button"
-                  className={styles.testButton}
-                  onClick={handleChooseStreamCacheDir}
-                  disabled={streamCacheDirStatus.kind === 'busy'}
-                >
-                  {streamCacheDirStatus.kind === 'busy' ? 'Choosing…' : 'Choose folder…'}
-                </button>
-                {mediaHubSettings?.streamCacheDir && (
-                  <button
-                    type="button"
-                    className={styles.testButton}
-                    onClick={handleResetStreamCacheDir}
-                  >
-                    Reset to default
-                  </button>
+                    {mediaHubSettings?.cacheMode !== 'memory' && (
+                      <>
+                        <div className={styles.row}>
+                          <div className={styles.rowIcon} aria-hidden="true">
+                            <Icon name="downloads" size={17} />
+                          </div>
+                          <div className={styles.rowText}>
+                            <span className={styles.rowTitle}>Stream cache location</span>
+                            <span className={styles.rowDescription}>
+                              {mediaHubSettings?.streamCacheDir || 'Default (app data folder)'} —
+                              useful for pointing it at a secondary drive. Anything cached at the
+                              old location is cleared when you change this, so nothing is left where
+                              the app can no longer reach it.
+                            </span>
+                          </div>
+                          <button
+                            type="button"
+                            className={styles.testButton}
+                            onClick={handleChooseStreamCacheDir}
+                            disabled={streamCacheDirStatus.kind === 'busy'}
+                          >
+                            {streamCacheDirStatus.kind === 'busy' ? 'Choosing…' : 'Choose folder…'}
+                          </button>
+                          {mediaHubSettings?.streamCacheDir && (
+                            <button
+                              type="button"
+                              className={styles.testButton}
+                              onClick={handleResetStreamCacheDir}
+                            >
+                              Reset to default
+                            </button>
+                          )}
+                        </div>
+                        {streamCacheDirStatus.kind === 'error' && (
+                          <span className={`${styles.statusMessage} ${styles.statusError}`}>
+                            {streamCacheDirStatus.message}
+                          </span>
+                        )}
+                        <div className={styles.row}>
+                          <div className={styles.rowIcon} aria-hidden="true">
+                            <Icon name="trash" size={17} />
+                          </div>
+                          <div className={styles.rowText}>
+                            <span className={styles.rowTitle}>Stream cache</span>
+                            <span className={styles.rowDescription}>
+                              Buffered video data kept on disk for smooth seeking. Whatever is
+                              actively playing right now is never cleared.
+                            </span>
+                          </div>
+                          <button
+                            type="button"
+                            className={styles.testButton}
+                            onClick={handleClearStreamCache}
+                            disabled={streamCacheClearStatus.kind === 'busy'}
+                          >
+                            {streamCacheClearStatus.kind === 'busy' ? 'Clearing…' : 'Clear cache'}
+                          </button>
+                        </div>
+                        {streamCacheClearStatus.kind !== 'idle' &&
+                          streamCacheClearStatus.kind !== 'busy' && (
+                            <span
+                              className={`${styles.statusMessage} ${streamCacheClearStatus.kind === 'ok' ? styles.statusOk : styles.statusError}`}
+                            >
+                              {streamCacheClearStatus.message}
+                            </span>
+                          )}
+                      </>
+                    )}
+                  </>
                 )}
-              </div>
-              {streamCacheDirStatus.kind === 'error' && (
-                <span className={`${styles.statusMessage} ${styles.statusError}`}>
-                  {streamCacheDirStatus.message}
-                </span>
-              )}
-              <div className={styles.row}>
-                <div className={styles.rowIcon} aria-hidden="true">
-                  <Icon name="trash" size={17} />
-                </div>
-                <div className={styles.rowText}>
-                  <span className={styles.rowTitle}>Stream cache</span>
-                  <span className={styles.rowDescription}>
-                    Buffered video data kept on disk for smooth seeking. Whatever is actively
-                    playing right now is never cleared.
-                  </span>
-                </div>
-                <button
-                  type="button"
-                  className={styles.testButton}
-                  onClick={handleClearStreamCache}
-                  disabled={streamCacheClearStatus.kind === 'busy'}
-                >
-                  {streamCacheClearStatus.kind === 'busy' ? 'Clearing…' : 'Clear cache'}
-                </button>
-              </div>
-              {streamCacheClearStatus.kind !== 'idle' && streamCacheClearStatus.kind !== 'busy' && (
-                <span
-                  className={`${styles.statusMessage} ${streamCacheClearStatus.kind === 'ok' ? styles.statusOk : styles.statusError}`}
-                >
-                  {streamCacheClearStatus.message}
-                </span>
-              )}
-                </>
-              )}
-                </>
-              )}
-            </section>
-          </div>
-        </section>
+              </section>
+            </div>
+          </section>
         )}
 
         {shows('services') && (
-        <section
-          id="settings-services"
-          ref={servicesGroupBinding}
-          className={styles.settingsGroup}
-          aria-labelledby="settings-services-title"
-        >
-          <header className={styles.groupHeader}>
-            <span className={styles.groupEyebrow}>Library</span>
-            <h2 id="settings-services-title">Media services</h2>
-            <p>Connect servers, download clients, and your streaming provider.</p>
-          </header>
-          <div ref={servicesGridBinding} className={`${styles.groupGrid} ${styles.groupGridWide}`}>
-            {/* Only on the standalone /settings route. Inside the control
+          <section
+            id="settings-services"
+            ref={servicesGroupBinding}
+            className={styles.settingsGroup}
+            aria-labelledby="settings-services-title"
+          >
+            <header className={styles.groupHeader}>
+              <span className={styles.groupEyebrow}>Library</span>
+              <h2 id="settings-services-title">Media services</h2>
+              <p>Connect servers, download clients, and your streaming provider.</p>
+            </header>
+            <div
+              ref={servicesGridBinding}
+              className={`${styles.groupGrid} ${styles.groupGridWide}`}
+            >
+              {/* Only on the standalone /settings route. Inside the control
                 centre the cache server has its own section in the rail,
                 with the administration this card cannot hold, and two
                 copies of the pairing flow on one surface is a way to have
                 them disagree. */}
-            {!embedded && <LanCacheSection />}
-            <MediaServicesSection />
-            <TorBoxSection />
-          </div>
-        </section>
+              {!embedded && <LanCacheSection />}
+              <MediaServicesSection />
+              <TorBoxSection />
+            </div>
+          </section>
         )}
 
         {shows('accounts') && (
-        <section
-          id="settings-accounts"
-          ref={accountsGroupBinding}
-          className={styles.settingsGroup}
-          aria-labelledby="settings-accounts-title"
-        >
-          <header className={styles.groupHeader}>
-            <span className={styles.groupEyebrow}>Connections</span>
-            <h2 id="settings-accounts-title">Accounts &amp; metadata</h2>
-            <p>Link discovery, tracking, artwork, and subtitle providers.</p>
-          </header>
-          <div ref={accountsGridBinding} className={styles.groupGrid}>
-            <TmdbSection />
-            <OmdbSection />
-            <SimklSection />
-            <TraktSection />
-            <MalSection />
-            <SubDLSection />
-            <OpenSubtitlesSection />
-          </div>
-        </section>
+          <section
+            id="settings-accounts"
+            ref={accountsGroupBinding}
+            className={styles.settingsGroup}
+            aria-labelledby="settings-accounts-title"
+          >
+            <header className={styles.groupHeader}>
+              <span className={styles.groupEyebrow}>Connections</span>
+              <h2 id="settings-accounts-title">Accounts &amp; metadata</h2>
+              <p>Link discovery, tracking, artwork, and subtitle providers.</p>
+            </header>
+            <div ref={accountsGridBinding} className={styles.groupGrid}>
+              <TmdbSection />
+              <OmdbSection />
+              <SimklSection />
+              <TraktSection />
+              <MalSection />
+              <SubDLSection />
+              <OpenSubtitlesSection />
+            </div>
+          </section>
         )}
 
         {/* Its own group rather than a tile inside General: this is the one
@@ -1727,130 +1737,130 @@ export default function SettingsPage({
             all, and it should be as findable as the account connections
             above it. */}
         {shows('ai') && (
-        <section
-          id="settings-ai"
-          ref={aiGroupBinding}
-          className={styles.settingsGroup}
-          aria-labelledby="settings-ai-title"
-        >
-          <header className={styles.groupHeader}>
-            <span className={styles.groupEyebrow}>Assistant</span>
-            <h2 id="settings-ai-title">AI</h2>
-            <p>Run the assistant and recommendations on a model of your own.</p>
-          </header>
-          <div ref={aiGridBinding} className={styles.groupGrid}>
-            <OllamaSection />
-          </div>
-        </section>
+          <section
+            id="settings-ai"
+            ref={aiGroupBinding}
+            className={styles.settingsGroup}
+            aria-labelledby="settings-ai-title"
+          >
+            <header className={styles.groupHeader}>
+              <span className={styles.groupEyebrow}>Assistant</span>
+              <h2 id="settings-ai-title">AI</h2>
+              <p>Run the assistant and recommendations on a model of your own.</p>
+            </header>
+            <div ref={aiGridBinding} className={styles.groupGrid}>
+              <OllamaSection />
+            </div>
+          </section>
         )}
 
         {shows('community') && (
-        <section
-          id="settings-community"
-          ref={communityGroupBinding}
-          className={styles.settingsGroup}
-          aria-labelledby="settings-community-title"
-        >
-          <header className={styles.groupHeader}>
-            <span className={styles.groupEyebrow}>People</span>
-            <h2 id="settings-community-title">Community &amp; profiles</h2>
-            <p>Set up shared viewing and choose who is watching.</p>
-          </header>
-          <div ref={communityGridBinding} className={styles.groupGrid}>
-            <R3PartySyncSection />
+          <section
+            id="settings-community"
+            ref={communityGroupBinding}
+            className={styles.settingsGroup}
+            aria-labelledby="settings-community-title"
+          >
+            <header className={styles.groupHeader}>
+              <span className={styles.groupEyebrow}>People</span>
+              <h2 id="settings-community-title">Community &amp; profiles</h2>
+              <p>Set up shared viewing and choose who is watching.</p>
+            </header>
+            <div ref={communityGridBinding} className={styles.groupGrid}>
+              <R3PartySyncSection />
 
-            <section
-              className={`${styles.section} glass-panel`}
-              aria-labelledby="settings-profiles"
-            >
-              <h2 id="settings-profiles" className={styles.sectionTitle}>
-                Profiles
-              </h2>
-              <div className={styles.profileGrid}>
-                {profiles.map((p) => {
-                  const active = p.id === activeProfileId
-                  return (
-                    <button
-                      key={p.id}
-                      type="button"
-                      className={`${styles.profileCard} ${active ? styles.profileCardActive : ''}`}
-                      onClick={() => switchProfile(p.id)}
-                      aria-pressed={active}
-                    >
-                      <span
-                        className={styles.profileAvatar}
-                        style={{
-                          background: `linear-gradient(135deg, ${p.avatarTint[0]}, ${p.avatarTint[1]})`
-                        }}
+              <section
+                className={`${styles.section} glass-panel`}
+                aria-labelledby="settings-profiles"
+              >
+                <h2 id="settings-profiles" className={styles.sectionTitle}>
+                  Profiles
+                </h2>
+                <div className={styles.profileGrid}>
+                  {profiles.map((p) => {
+                    const active = p.id === activeProfileId
+                    return (
+                      <button
+                        key={p.id}
+                        type="button"
+                        className={`${styles.profileCard} ${active ? styles.profileCardActive : ''}`}
+                        onClick={() => switchProfile(p.id)}
+                        aria-pressed={active}
                       >
-                        {p.avatarInitial}
-                      </span>
-                      <span className={styles.profileName}>{p.name}</span>
-                      {p.isKid && <span className={styles.profileBadge}>Kids</span>}
-                      {p.hasPin && (
-                        <span className={styles.profileBadge} aria-label="PIN-locked">
-                          <Icon name="lock" size={10} />
+                        <span
+                          className={styles.profileAvatar}
+                          style={{
+                            background: `linear-gradient(135deg, ${p.avatarTint[0]}, ${p.avatarTint[1]})`
+                          }}
+                        >
+                          {p.avatarInitial}
                         </span>
-                      )}
-                      {active && (
-                        <span className={styles.profileCheck} aria-hidden="true">
-                          <Icon name="check" size={12} />
-                        </span>
-                      )}
-                      <span
-                        role="button"
-                        tabIndex={0}
-                        aria-label={`Edit ${p.name}`}
-                        className={styles.profileEditButton}
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          setEditingProfile(p.id)
-                        }}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter' || e.key === ' ') {
-                            e.preventDefault()
+                        <span className={styles.profileName}>{p.name}</span>
+                        {p.isKid && <span className={styles.profileBadge}>Kids</span>}
+                        {p.hasPin && (
+                          <span className={styles.profileBadge} aria-label="PIN-locked">
+                            <Icon name="lock" size={10} />
+                          </span>
+                        )}
+                        {active && (
+                          <span className={styles.profileCheck} aria-hidden="true">
+                            <Icon name="check" size={12} />
+                          </span>
+                        )}
+                        <span
+                          role="button"
+                          tabIndex={0}
+                          aria-label={`Edit ${p.name}`}
+                          className={styles.profileEditButton}
+                          onClick={(e) => {
                             e.stopPropagation()
                             setEditingProfile(p.id)
-                          }
-                        }}
-                      >
-                        <Icon name="edit" size={11} />
-                      </span>
-                    </button>
-                  )
-                })}
-                <button
-                  type="button"
-                  className={styles.profileCardAdd}
-                  onClick={() => setEditingProfile('new')}
-                >
-                  <span className={styles.profileCardAddIcon}>
-                    <Icon name="plus" size={18} />
-                  </span>
-                  <span className={styles.profileName}>Add Profile</span>
-                </button>
-              </div>
+                          }}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' || e.key === ' ') {
+                              e.preventDefault()
+                              e.stopPropagation()
+                              setEditingProfile(p.id)
+                            }
+                          }}
+                        >
+                          <Icon name="edit" size={11} />
+                        </span>
+                      </button>
+                    )
+                  })}
+                  <button
+                    type="button"
+                    className={styles.profileCardAdd}
+                    onClick={() => setEditingProfile('new')}
+                  >
+                    <span className={styles.profileCardAddIcon}>
+                      <Icon name="plus" size={18} />
+                    </span>
+                    <span className={styles.profileName}>Add Profile</span>
+                  </button>
+                </div>
 
-              <p className={styles.profileNote}>
-                Watch history is currently shared across all profiles — per-profile history is not
-                built yet.
-              </p>
+                <p className={styles.profileNote}>
+                  Watch history is currently shared across all profiles — per-profile history is not
+                  built yet.
+                </p>
 
-              {editingProfile && (
-                <ProfileForm
-                  target={
-                    editingProfile === 'new'
-                      ? null
-                      : profiles.find((p) => p.id === editingProfile) || null
-                  }
-                  activeProfileId={activeProfileId}
-                  profileCount={profiles.length}
-                  onClose={() => setEditingProfile(null)}
-                />
-              )}
-            </section>
-          </div>
-        </section>
+                {editingProfile && (
+                  <ProfileForm
+                    target={
+                      editingProfile === 'new'
+                        ? null
+                        : profiles.find((p) => p.id === editingProfile) || null
+                    }
+                    activeProfileId={activeProfileId}
+                    profileCount={profiles.length}
+                    onClose={() => setEditingProfile(null)}
+                  />
+                )}
+              </section>
+            </div>
+          </section>
         )}
       </div>
     </div>
