@@ -140,7 +140,13 @@ export function RoomsSection() {
         )}
         <span
           className={room.connected ? styles.dotOnline : styles.dotOffline}
-          aria-hidden="true"
+          title={
+            room.connected
+              ? room.transport === 'cache-hop'
+                ? 'Connected via your cache server — one connection for the whole network'
+                : 'Connected to the relay'
+              : 'Reconnecting…'
+          }
         />
       </div>
 

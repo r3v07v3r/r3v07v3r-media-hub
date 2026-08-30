@@ -120,12 +120,21 @@ Stated here so a green test suite is never read as more than it proves:
   the history — but every shed identity was registered under a
   joinSecret that has rotated at each kick since, so what escapes the
   ban is a key that can no longer connect anyway.
-- **A future cache-server hop** carries a household's traffic on one
-  relay connection. Kicking one member of such a household bans their
-  key and rotates the secrets — they can no longer read or be read — but
-  their sends can still physically transit the household's shared
-  connection as undecryptable noise until the household's own daemon
-  drops them. Named here so it is a known trade, not a surprise.
+- **The cache-server hop** carries a household's traffic on one relay
+  connection authenticated as the household — so a relay ban cannot
+  close a kicked member's transport there. Three mechanisms together are
+  the removal for hop members, and an earlier draft of this section
+  under-claimed the problem (it said "noise"; in truth an unfixed hop
+  would have delivered them the re-key): the relay broadcasts each
+  kick's banned hashes to the room and the daemon drops and refuses
+  those subscribers before the re-key can pass; re-keys are sent
+  transient, never retained by the daemon for later subscribers; and
+  the admin's client refuses presence and rescues to kicked friendIds
+  outright. What remains for a MODIFIED client behind a hop: it can
+  lie about its identity hash to the daemon and keep receiving
+  ciphertext it can no longer read, and it can announce under a fake
+  friendId to fish for a rescue — the same in-room spoofing bound
+  stated above, among people who share a household and a secret.
 
 ## Room lifetime
 

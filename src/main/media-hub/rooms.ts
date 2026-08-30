@@ -30,7 +30,6 @@
 // who is not watching anything.
 
 import crypto from 'node:crypto'
-import type WebSocket from 'ws'
 
 import { MEDIA_HUB_CHANNELS } from '../../shared/media-hub/ipc-channels'
 import type {
@@ -47,6 +46,7 @@ import {
   applyRekey,
   memberHashesFor,
   PREV_SECRETS_KEPT,
+  rememberKicked,
   rememberSeenMember,
   migrateLegacyRooms,
   reapPresence,
@@ -58,7 +58,13 @@ import {
 import { handle } from './ipcGuard'
 import { logError } from './logger'
 import { sendToRenderer } from './rendererBridge'
-import { partySyncCredentials, readSettings, writeSettings } from './settingsStore'
+import { asRoomSocket, connectHopWs, type RoomSocket } from './roomsHopClient'
+import {
+  getLanCacheConnection,
+  partySyncCredentials,
+  readSettings,
+  writeSettings
+} from './settingsStore'
 import { connectRelayWs } from './watchParty'
 
 /** Reconnect backoff bounds. A room is meant to be always-on, so a
@@ -73,7 +79,10 @@ interface RoomState {
   stored: StoredRoom
   relayUrl: string
   secret: string
-  ws: WebSocket | null
+  ws: RoomSocket | null
+  /** Which path this room's socket took — shown in the UI, pinned in
+   *  tests, and the honest answer to "is the hop actually in use". */
+  transport: 'relay' | 'cache-hop'
   presence: Map<string, PresenceRecord>
   reconnectTimer: ReturnType<typeof setTimeout> | null
   reconnectDelay: number
@@ -165,7 +174,10 @@ function offerRekeyTo(room: RoomState, toFriendId: string, underSecret: string):
         code: room.stored.code,
         toFriendId,
         fromFriendId: friendId
-      })
+      }),
+      // Never retained by a hop: a re-key replayed to the NEXT local
+      // subscriber is a re-key delivered to exactly who must not get one.
+      { transient: true }
     )
   } catch {
     // the socket's own close/error path handles it
@@ -187,6 +199,7 @@ export function roomsStatus(): RoomsStatus {
     isAdmin: Boolean(room.stored.adminFriendId && room.stored.adminFriendId === friendId),
     hasAdmin: Boolean(room.stored.adminFriendId),
     sharing: room.stored.sharing,
+    transport: room.transport,
     members: [...room.presence.values()]
       .filter((record) => now - record.lastSeen <= 70_000)
       .map((record) => ({
@@ -309,11 +322,24 @@ function onRoomMessage(room: RoomState, raw: unknown): void {
   }
 
   if (msg.type === 'friend-presence') {
+    // A KICKED member speaking an old secret is not a member returning —
+    // it is the removal still being enforced. No presence row, and above
+    // all no rescue: behind a household hop their transport survives the
+    // relay ban, they still hold the old secret, and a rescue would hand
+    // them the new code. The relay ban plus this gate is the whole
+    // removal for hop members.
+    if (
+      matchedOldSecret &&
+      (room.stored.kickedFriendIds ?? []).includes(String(msg.friendId || ''))
+    ) {
+      return
+    }
     // Someone speaking the OLD secret after a re-key was offline when it
     // happened. Hand them the current code under the dialect they can
     // read — safe, because the one party that must not hear it is banned
-    // at the relay and cannot be connected to receive it. Admin only:
-    // one rescuer is enough, and the admin's copy is always current.
+    // at the relay (or gated above, where a ban cannot reach their
+    // transport). Admin only: one rescuer is enough, and the admin's
+    // copy is always current.
     if (matchedOldSecret && room.stored.adminFriendId === friendId) {
       offerRekeyTo(room, String(msg.friendId || ''), matchedOldSecret)
     }
@@ -393,17 +419,49 @@ function scheduleReconnect(room: RoomState): void {
 
 async function openSocket(room: RoomState): Promise<void> {
   if (room.closing) return
-  // Membership rooms present their relay credentials; the admin also
-  // presents the host token, which is what authorises a kick later. A
-  // known memberKey is admitted even with a stale joinSecret, so a
-  // rotation while this device slept does not lock it out.
-  const query: Record<string, string> = {}
-  if (room.stored.memberKey) query.member = room.stored.memberKey
-  if (room.stored.joinSecret) query.join = room.stored.joinSecret
-  const ws = await connectRelayWs(room.relayUrl, room.roomId, {
-    token: room.stored.roomToken ?? '',
-    query
-  })
+  // THE TRANSPORT CHOICE, made fresh on every (re)connect. A paired
+  // cache server carries the room as the network's single relay
+  // connection; anything short of that — no server, a pre-hop daemon,
+  // a refused subscription — falls through to connecting direct. The
+  // hop is an optimisation the household added, never a dependency:
+  // no setting, no error surfaced, just the better path when it
+  // exists and the ordinary one when it does not.
+  let ws: RoomSocket | null = null
+  const lan = getLanCacheConnection()
+  if (lan && !lan.pending) {
+    try {
+      ws = await connectHopWs(lan.url, lan.token, {
+        roomId: room.roomId,
+        relayUrl: room.relayUrl,
+        join: room.stored.joinSecret,
+        // The public form of this install's identity, so the daemon can
+        // honour a relay ban against this subscriber — the same hash
+        // presence announcements carry.
+        memberKeyHash: room.stored.memberKey
+          ? crypto.createHash('sha256').update(room.stored.memberKey).digest('hex')
+          : undefined
+      })
+      room.transport = 'cache-hop'
+    } catch {
+      ws = null
+    }
+  }
+  if (!ws) {
+    // Membership rooms present their relay credentials; the admin also
+    // presents the host token. A known memberKey is admitted even with
+    // a stale joinSecret, so a rotation while this device slept does
+    // not lock it out.
+    const query: Record<string, string> = {}
+    if (room.stored.memberKey) query.member = room.stored.memberKey
+    if (room.stored.joinSecret) query.join = room.stored.joinSecret
+    ws = asRoomSocket(
+      await connectRelayWs(room.relayUrl, room.roomId, {
+        token: room.stored.roomToken ?? '',
+        query
+      })
+    )
+    room.transport = 'relay'
+  }
   if (rooms.get(room.roomId) !== room || room.closing) {
     try {
       ws.close()
@@ -451,6 +509,7 @@ async function activateRoom(
     relayUrl: parsed.relay.url,
     secret: parsed.secret,
     ws: null,
+    transport: 'relay',
     presence: new Map(),
     reconnectTimer: null,
     reconnectDelay: RECONNECT_MIN_MS,
@@ -773,21 +832,28 @@ export function registerRoomsIpc(): void {
       })
       try {
         room.ws?.send(
-          encryptMessage(previous, { type: 'room-rekey', code: newCode, fromFriendId: friendId })
+          encryptMessage(previous, { type: 'room-rekey', code: newCode, fromFriendId: friendId }),
+          // Never retained by a hop — see offerRekeyTo.
+          { transient: true }
         )
       } catch {
         // Members who miss this are rescued by the returning-member
         // hand-off the next time they announce under the old secret.
       }
       const chain = [previous, ...(room.stored.prevSecrets ?? [])].slice(0, PREV_SECRETS_KEPT)
+      // The rescue/presence gate for members a relay ban cannot reach
+      // (a household hop's shared transport) — see rememberKicked.
+      const kickedList = rememberKicked(room.stored.kickedFriendIds, target)
       room.secret = newSecret
       room.stored.code = newCode
       room.stored.joinSecret = joinSecret
       room.stored.prevSecrets = chain
+      room.stored.kickedFriendIds = kickedList
       updateStoredRoomById(room, (stored) => {
         stored.code = newCode
         stored.joinSecret = joinSecret
         stored.prevSecrets = chain
+        stored.kickedFriendIds = kickedList
       })
       room.presence.delete(target)
       pushStatus()

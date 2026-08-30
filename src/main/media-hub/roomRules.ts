@@ -196,6 +196,26 @@ export function rememberSeenMember(
   return next
 }
 
+/** How many kicked identities a room remembers. Bounds a hostile admin
+ *  growing the settings file; a real room never approaches it. */
+export const KICKED_MEMBERS_KEPT = 64
+
+/**
+ * Records a removal the admin performed, bounded and idempotent.
+ *
+ * The list exists for one gate: a KICKED friendId speaking an OLD
+ * secret gets no presence row and, above all, no rescue. Without it the
+ * rescue would undo the kick for anyone whose transport the relay ban
+ * cannot reach (a member behind a household hop): they still hold the
+ * old secret, announce under it, and the admin would helpfully hand
+ * them the new code.
+ */
+export function rememberKicked(kicked: readonly string[] | undefined, friendId: string): string[] {
+  const list = [...(kicked ?? [])]
+  if (friendId && !list.includes(friendId)) list.push(friendId)
+  return list.slice(-KICKED_MEMBERS_KEPT)
+}
+
 /** Every identity hash the room has seen for one person — the union of
  *  live presence and the persisted history. What a kick names. */
 export function memberHashesFor(
@@ -275,6 +295,10 @@ export interface StoredRoom {
    *  carried. Persisted so a kick can name installs the room saw last
    *  month, not just in the last 70 seconds — see rememberSeenMember. */
   seenMembers?: Record<string, string[]>
+  /** friendIds this admin removed — the rescue and presence gate for
+   *  members whose transport a relay ban cannot reach. Admin-side only;
+   *  see rememberKicked. */
+  kickedFriendIds?: string[]
 }
 
 /** How many old room secrets a member keeps. Each kick pushes one; five

@@ -18,6 +18,10 @@ export interface LanCachePingResponse {
    *  decide whether to offer the claim button before it holds any
    *  credential. */
   unclaimed?: boolean
+  /** Whether this daemon can carry room subscriptions as the LAN's single
+   *  relay connection per room. Absent on daemons from before the hop
+   *  existed, which is exactly the signal to connect direct. */
+  roomsHop?: boolean
 }
 
 /** What POST /api/pair answers. The request carries a device name and
