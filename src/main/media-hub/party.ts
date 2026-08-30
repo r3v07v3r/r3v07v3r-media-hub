@@ -104,9 +104,175 @@ export function encodeRelayShareCode(input: {
   return Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url')
 }
 
+// --- Compact v3 wire format -------------------------------------------------
+// The v1/v2 codes above are base64url JSON, which made a relay invite roughly
+// 185 characters to copy by hand. v3 carries the same fields as packed bytes:
+// the roomId as its 16 raw UUID bytes instead of 36 hex characters, IPv4
+// addresses as 4 bytes, the relay URL without its (always https) scheme, and
+// no host display name — the joiner learns that from the first party-state
+// broadcast instead. Relay codes land around 90 characters, direct ones
+// around 55.
+//
+// The leading byte is a format tag that cannot collide with a legacy code,
+// because those always begin with '{' (0x7b). Decoding stays fail-closed:
+// every v3 payload is rebuilt into the v1/v2 shape and re-validated through
+// isValidEndpoint / isValidRelayEndpoint before it is returned, so callers
+// see exactly the payloads they saw before. The encoders fall back to the
+// JSON form whenever anything does not fit the compact layout — a short code
+// is never worth an unjoinable party.
+
+const SHARE_V3_DIRECT = 0x31
+const SHARE_V3_RELAY = 0x32
+const SHARE_V3_SECRET_BYTES = 24
+const SHARE_V3_IPV4_TAG = 0
+
+/** The secret only fits the compact form if it is exactly the 24 random bytes
+ *  the host mints, encoded canonically — anything else would not round-trip
+ *  byte for byte and the joiner would derive a different key. */
+function shareSecretBytes(secret: string): Buffer | null {
+  const buf = Buffer.from(String(secret || ''), 'base64url')
+  if (buf.length !== SHARE_V3_SECRET_BYTES) return null
+  if (buf.toString('base64url') !== secret) return null
+  return buf
+}
+
+/** `[hostLen:1][host][port:2 BE]`, where a length of 0 means the next four
+ *  bytes are a raw IPv4 address. Any other host (IPv6, a `%zone` suffix) is
+ *  kept as its UTF-8 text, which is longer but still correct. */
+function encodeEndpointV3(endpoint: PartyLanEndpoint): Buffer | null {
+  const octets = endpoint.ip.split('.')
+  const isIpv4 =
+    octets.length === 4 &&
+    octets.every((o) => /^\d{1,3}$/.test(o) && Number(o) >= 0 && Number(o) <= 255)
+  const host = isIpv4 ? Buffer.from(octets.map((o) => Number(o))) : Buffer.from(endpoint.ip, 'utf8')
+  if (host.length < 1 || host.length > 255) return null
+  const out = Buffer.alloc(1 + host.length + 2)
+  out[0] = isIpv4 ? SHARE_V3_IPV4_TAG : host.length
+  host.copy(out, 1)
+  out.writeUInt16BE(endpoint.port, 1 + host.length)
+  return out
+}
+
+function readEndpointV3(buf: Buffer, cursor: { at: number }): PartyLanEndpoint | null {
+  if (cursor.at >= buf.length) return null
+  const len = buf[cursor.at]
+  cursor.at += 1
+  const size = len === SHARE_V3_IPV4_TAG ? 4 : len
+  if (cursor.at + size + 2 > buf.length) return null
+  const ip =
+    len === SHARE_V3_IPV4_TAG
+      ? [...buf.subarray(cursor.at, cursor.at + 4)].join('.')
+      : buf.subarray(cursor.at, cursor.at + size).toString('utf8')
+  cursor.at += size
+  const port = buf.readUInt16BE(cursor.at)
+  cursor.at += 2
+  return { ip, port }
+}
+
+/** Compact replacement for `encodeShareCode`. Falls back to it verbatim when
+ *  the inputs do not fit the packed layout. */
+export function encodeShareCodeV3(input: {
+  lan: PartyLanEndpoint
+  wan?: PartyLanEndpoint | null
+  secret: string
+}): string {
+  const { lan, wan, secret } = input
+  if (!isValidEndpoint(lan) || typeof secret !== 'string' || !secret) {
+    throw new Error('Invalid party endpoint.')
+  }
+  const validWan = wan && isValidEndpoint(wan) ? wan : null
+  const bytes = shareSecretBytes(secret)
+  const lanPart = encodeEndpointV3(lan)
+  const wanPart = validWan ? encodeEndpointV3(validWan) : Buffer.alloc(0)
+  if (!bytes || !lanPart || !wanPart) return encodeShareCode({ lan, wan: validWan, secret })
+  return Buffer.concat([
+    Buffer.from([SHARE_V3_DIRECT]),
+    lanPart,
+    Buffer.from([validWan ? 1 : 0]),
+    wanPart,
+    bytes
+  ]).toString('base64url')
+}
+
+/** Compact replacement for `encodeRelayShareCode`. Falls back to it verbatim
+ *  when the inputs do not fit the packed layout. */
+export function encodeRelayShareCodeV3(input: {
+  relay: PartyRelayEndpoint
+  secret: string
+}): string {
+  const { relay, secret } = input
+  if (!isValidRelayEndpoint(relay) || typeof secret !== 'string' || !secret) {
+    throw new Error('Invalid party endpoint.')
+  }
+  const bytes = shareSecretBytes(secret)
+  const host = relay.url.replace(/^https:\/\//i, '').replace(/\/+$/, '')
+  const hostBytes = Buffer.from(host, 'utf8')
+  const roomId = Buffer.from(relay.roomId.replace(/-/g, ''), 'hex')
+  if (
+    !bytes ||
+    hostBytes.length < 1 ||
+    hostBytes.length > 255 ||
+    roomId.length !== 16 ||
+    !/^https:\/\//i.test(relay.url)
+  ) {
+    return encodeRelayShareCode({ relay, secret })
+  }
+  return Buffer.concat([
+    Buffer.from([SHARE_V3_RELAY]),
+    roomId,
+    Buffer.from([hostBytes.length]),
+    hostBytes,
+    bytes
+  ]).toString('base64url')
+}
+
+function decodeShareCodeV3(buf: Buffer): ShareCodePayload | null {
+  if (buf[0] === SHARE_V3_RELAY) {
+    const urlAt = 1 + 16
+    if (buf.length < urlAt + 1) return null
+    const hex = buf.subarray(1, urlAt).toString('hex')
+    const roomId = `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
+    const urlLen = buf[urlAt]
+    const start = urlAt + 1
+    if (buf.length !== start + urlLen + SHARE_V3_SECRET_BYTES) return null
+    const relay: PartyRelayEndpoint = {
+      url: `https://${buf.subarray(start, start + urlLen).toString('utf8')}`,
+      roomId
+    }
+    if (!isValidRelayEndpoint(relay)) return null
+    return {
+      v: 2,
+      relay,
+      secret: buf.subarray(start + urlLen).toString('base64url'),
+      name: ''
+    }
+  }
+  if (buf[0] !== SHARE_V3_DIRECT) return null
+  const cursor = { at: 1 }
+  const lan = readEndpointV3(buf, cursor)
+  if (!lan || cursor.at >= buf.length) return null
+  const hasWan = buf[cursor.at] === 1
+  cursor.at += 1
+  const wan = hasWan ? readEndpointV3(buf, cursor) : null
+  if (hasWan && !wan) return null
+  if (buf.length !== cursor.at + SHARE_V3_SECRET_BYTES) return null
+  if (!isValidEndpoint(lan) || (wan && !isValidEndpoint(wan))) return null
+  return {
+    v: 1,
+    lan,
+    wan,
+    secret: buf.subarray(cursor.at).toString('base64url'),
+    name: ''
+  }
+}
+
 export function decodeShareCode(code: unknown): ShareCodePayload | null {
   try {
-    const payload = JSON.parse(Buffer.from(String(code || ''), 'base64url').toString('utf8')) as {
+    const raw = Buffer.from(String(code || ''), 'base64url')
+    // Legacy v1/v2 codes are JSON, so they always start with '{'. Anything
+    // else is a packed v3 code (or garbage, which decodeShareCodeV3 rejects).
+    if (raw.length > 0 && raw[0] !== 0x7b) return decodeShareCodeV3(raw)
+    const payload = JSON.parse(raw.toString('utf8')) as {
       v?: unknown
       lan?: unknown
       wan?: unknown

@@ -32,7 +32,7 @@ import type {
   FriendsStatus,
   FriendActivity
 } from '../../shared/media-hub/types'
-import { decodeShareCode, encodeRelayShareCode, decryptMessage, encryptMessage } from './party'
+import { decodeShareCode, encodeRelayShareCodeV3, decryptMessage, encryptMessage } from './party'
 import { handle } from './ipcGuard'
 import { logError } from './logger'
 import { sendToRenderer } from './rendererBridge'
@@ -380,7 +380,7 @@ export function registerFriendsIpc(): void {
       if (!response.ok) throw new Error(`The party-sync worker refused: ${response.status}`)
       const { roomId } = (await response.json()) as { roomId: string }
       const secret = crypto.randomBytes(24).toString('base64url')
-      const code = encodeRelayShareCode({ relay: { url: creds.url, roomId }, secret, name: '' })
+      const code = encodeRelayShareCodeV3({ relay: { url: creds.url, roomId }, secret })
       const settings = readSettings()
       settings.friendsGroupCode = code
       writeSettings(settings)
