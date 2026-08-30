@@ -94,8 +94,12 @@ export function publicSettings(settings: Record<string, unknown> = {}): MediaHub
     ollamaModel: normalizeOllamaModel(settings.ollamaModel),
     ollamaAutoDetect: settings.ollamaAutoDetect !== false,
     sourcePreference: normalizeSourcePreference(settings.sourcePreference),
-    cacheMode: normalizeCacheMode(settings.cacheMode),
-    memoryCacheMaxMb: normalizeMemoryCacheMb(settings.memoryCacheMaxMb)
+    cacheMode: effectiveCacheMode(settings),
+    memoryCacheMaxMb: normalizeMemoryCacheMb(settings.memoryCacheMaxMb),
+    // Absent means never asked, and the app has to behave as though the
+    // answer were yes until somebody says otherwise — every existing
+    // install predates the question and already stores.
+    storeMedia: settings.storeMedia !== false
   }
 }
 
@@ -103,6 +107,27 @@ export function publicSettings(settings: Record<string, unknown> = {}): MediaHub
  *  the two to fall back to, since it is what every existing install does. */
 export function normalizeCacheMode(value: unknown): CacheMode {
   return value === 'memory' ? 'memory' : 'disk'
+}
+
+/**
+ * The cache mode actually in force, which is not always the one saved.
+ *
+ * A person who answered "stream only" is promised that nothing lands on
+ * their disk, and a promise the backend does not keep is theatre — hiding
+ * the disk controls would leave the saved value still reading 'disk' and
+ * streamCache still writing. So the policy WINS over the stored mode, here,
+ * in the one function everything else reads, rather than being re-enforced
+ * in each place that happens to care.
+ *
+ * The stored mode is deliberately left untouched underneath: turning storage
+ * back on should restore the choice made before it, not a default.
+ */
+export function effectiveCacheMode(settings: {
+  cacheMode?: unknown
+  storeMedia?: boolean
+}): CacheMode {
+  if (settings.storeMedia === false) return 'memory'
+  return normalizeCacheMode(settings.cacheMode)
 }
 
 /** Kept in step with streamCache.ts's own clamp so the Settings pane can
@@ -158,9 +183,7 @@ function normalizeSavedFilters(value: unknown): SavedFilter[] {
     }))
 }
 
-export function logoutSettings(
-  settings: Record<string, unknown> = {}
-): Pick<
+export function logoutSettings(settings: Record<string, unknown> = {}): Pick<
   MediaHubPublicSettings,
   | 'theme'
   | 'updateChannel'
@@ -187,7 +210,10 @@ export function logoutSettings(
   | 'sourcePreference'
   | 'cacheMode'
   | 'memoryCacheMaxMb'
-> {
+  // Optional, and it has to be: the answer is a THREE-state value on disk
+  // (yes / no / never asked) and only the first two may be written back.
+> &
+  Partial<Pick<MediaHubPublicSettings, 'storeMedia'>> {
   return {
     theme: normalizeTheme(settings.theme),
     updateChannel: normalizeUpdateChannel(settings.updateChannel),
@@ -237,7 +263,25 @@ export function logoutSettings(
     sourcePreference: normalizeSourcePreference(settings.sourcePreference),
     // Device preferences too: how fast this connection is and whether
     // media may touch this disk are facts about the machine.
+    //
+    // The RAW mode, not the effective one. Writing the effective mode back
+    // would resolve the policy into the stored value: a person who chose
+    // stream-only would have their saved 'disk' overwritten with 'memory'
+    // and could not get it back by turning storage on again, which is the
+    // one thing effectiveCacheMode's own comment promises not to do.
     cacheMode: normalizeCacheMode(settings.cacheMode),
-    memoryCacheMaxMb: normalizeMemoryCacheMb(settings.memoryCacheMaxMb)
+    memoryCacheMaxMb: normalizeMemoryCacheMb(settings.memoryCacheMaxMb),
+    // The ANSWER itself is kept, not just its consequence. Dropping it puts
+    // storeMedia back to undefined, which the snapshot reads as "never
+    // asked" — so signing out would raise the first-run storage dialog
+    // again at somebody who already answered it, and that dialog cannot be
+    // dismissed. Whether media may touch this disk is a fact about the
+    // machine, like the rest of this block, not about who was signed in.
+    //
+    // Carried only when it is genuinely an answer. Writing `!== false` here
+    // would turn "never asked" into "yes" and the question would never be
+    // put to a new install that happened to sign out first — the mirror of
+    // the bug above, and the reason this is spread rather than assigned.
+    ...(typeof settings.storeMedia === 'boolean' ? { storeMedia: settings.storeMedia } : {})
   }
 }

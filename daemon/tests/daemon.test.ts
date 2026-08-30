@@ -12,6 +12,8 @@ import { createActivityTracker } from '../activity'
 import { createAdmin } from '../admin'
 import { createCredentials } from '../credentials'
 import { createJobStore } from '../jobs'
+import type { JobRecord } from '../jobs'
+import { createFetcher, shouldRetryAfterFailure } from '../fetcher'
 import { createPairing, deviceIdForToken, isApproved, type Pairing } from '../pairing'
 import { createDaemonServer } from '../server'
 import { createItemStore, isEntitled, planEvictions, type StoredItem } from '../storage'
@@ -202,7 +204,7 @@ console.log('ok  eviction planner')
   assert.equal(
     plan.has('d'.repeat(40)),
     false,
-    "bob keeps the oldest file on the disk — it is not his overspend"
+    'bob keeps the oldest file on the disk — it is not his overspend'
   )
 }
 
@@ -298,7 +300,10 @@ console.log('ok  eviction planner')
   )
   assert.equal(
     planEvictions(
-      [orphan, item({ infoHash: 'b'.repeat(40), presentBytes: 900, fetchedAt: now, lastAccessAt: 2 * DAY })],
+      [
+        orphan,
+        item({ infoHash: 'b'.repeat(40), presentBytes: 900, fetchedAt: now, lastAccessAt: 2 * DAY })
+      ],
       { ...policy, quotas },
       now
     ).get('a'.repeat(40)),
@@ -571,6 +576,38 @@ async function main(): Promise<void> {
         body: JSON.stringify({ contentKey: '', infoHash: 'zz', title: '' })
       })
       assert.equal(bad.status, 400)
+
+      // The queue's reason survives the wire, and only the two real values
+      // do. It is rendered as a label on the caching page, so an arbitrary
+      // string reaching the record would be a caller writing UI text.
+      const queueWith = async (key: string, reason: unknown): Promise<string | undefined> => {
+        await fetch(`${base}/api/jobs`, {
+          method: 'POST',
+          headers: { ...auth, 'content-type': 'application/json' },
+          body: JSON.stringify({ contentKey: key, infoHash: 'e'.repeat(40), title: 'T', reason })
+        })
+        return jobs.list().find((job) => job.contentKey === key)?.reason
+      }
+      assert.equal(await queueWith('r-1', 'watching'), 'watching')
+      assert.equal(await queueWith('r-2', 'prefetch'), 'prefetch')
+      for (const rubbish of ['WATCHING', 'seeding', '', 1, true, null, {}]) {
+        assert.equal(
+          await queueWith(`r-junk-${JSON.stringify(rubbish)}`, rubbish),
+          undefined,
+          `an unknown reason is dropped, not stored: ${JSON.stringify(rubbish)}`
+        )
+      }
+
+      // A prefetch somebody has since started watching is upgraded, and the
+      // reverse is not: a watch is not demoted by a later watchlist add.
+      await queueWith('r-2', 'watching')
+      assert.equal(jobs.list().find((job) => job.contentKey === 'r-2')?.reason, 'watching')
+      await queueWith('r-2', 'prefetch')
+      assert.equal(
+        jobs.list().find((job) => job.contentKey === 'r-2')?.reason,
+        'watching',
+        'a queued watch stays a watch'
+      )
 
       // --- /stream: token gating and Range contract -----------------------
       assert.equal((await fetch(`${base}/stream/${hashC}`)).status, 403, 'no token, no bytes')
@@ -1181,11 +1218,7 @@ async function deviceRouteTests(): Promise<void> {
   const statusFor = async (token: string): Promise<number> =>
     (await fetch(`${base}/api/status`, { headers: { Authorization: `Bearer ${token}` } })).status
 
-  const act = async (
-    token: string,
-    id: string,
-    body: Record<string, unknown>
-  ): Promise<Response> =>
+  const act = async (token: string, id: string, body: Record<string, unknown>): Promise<Response> =>
     fetch(`${base}/api/admin/devices/${id}`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', Authorization: `Bearer ${token}` },
@@ -1219,7 +1252,8 @@ async function deviceRouteTests(): Promise<void> {
     assert.equal(asked.status, 200)
     assert.equal(((await asked.json()) as { status: string }).status, 'pending')
     assert.equal(
-      (await fetch(`${base}/api/pair/status`, { headers: { Authorization: 'Bearer nope' } })).status,
+      (await fetch(`${base}/api/pair/status`, { headers: { Authorization: 'Bearer nope' } }))
+        .status,
       401,
       'a token this server never issued is told nothing'
     )
@@ -1487,10 +1521,7 @@ async function quotaStoreTest(): Promise<void> {
   assert.equal(plan.size, 1, 'and nothing else is')
   assert.equal(await store.get('a'.repeat(40)), null, 'the file is really gone')
   assert.ok(await store.get('b'.repeat(40)), 'her newer one stays')
-  assert.ok(
-    await store.get('c'.repeat(40)),
-    "bob's older file stays — it is not his overspend"
-  )
+  assert.ok(await store.get('c'.repeat(40)), "bob's older file stays — it is not his overspend")
 
   const stones = await store.tombstones()
   assert.equal(
@@ -1553,8 +1584,18 @@ async function statusScopeTest(): Promise<void> {
   await seed('a'.repeat(40), 'k-a', ownerId, 'ABCDEFGH')
   await seed('b'.repeat(40), 'k-b', guestId, 'XY')
 
-  jobs.enqueue({ contentKey: 'k-mine', infoHash: 'c'.repeat(40), title: 'Owner Fetch', ownerDeviceId: ownerId })
-  jobs.enqueue({ contentKey: 'k-theirs', infoHash: 'd'.repeat(40), title: 'Guest Fetch', ownerDeviceId: guestId })
+  jobs.enqueue({
+    contentKey: 'k-mine',
+    infoHash: 'c'.repeat(40),
+    title: 'Owner Fetch',
+    ownerDeviceId: ownerId
+  })
+  jobs.enqueue({
+    contentKey: 'k-theirs',
+    infoHash: 'd'.repeat(40),
+    title: 'Guest Fetch',
+    ownerDeviceId: guestId
+  })
 
   const server = createDaemonServer({
     storage: store,
@@ -1599,17 +1640,36 @@ async function statusScopeTest(): Promise<void> {
     assert.equal(ownerStatus.itemCount, 2, 'the whole-server totals stay whole-server')
     assert.equal(ownerStatus.usedBytes, 10)
 
-    // Scoped queue: your own work in full, everyone else's as a number.
+    // Scoped queue, with ONE exception, and it is deliberate.
+    //
+    // The rule everywhere else in this feature is that admin is not a master
+    // key: the administrator decides who may join and how much room they
+    // get, and is not thereby entitled to their library. The queue is the
+    // one place that is relaxed, because somebody running the box has to be
+    // able to answer "why is this thing saturated" and "who is filling the
+    // disk", and a list of anonymous rows answers neither. It is the work
+    // the hardware is doing, attributed to the device that asked for it —
+    // not a record of what anyone has watched. Every other read stays shut:
+    // the catalogue, the streams and the items are all still owner-only.
     assert.deepEqual(
-      (ownerStatus.jobs as Array<{ title: string }>).map((job) => job.title),
-      ['Owner Fetch']
+      (ownerStatus.jobs as Array<{ title: string; ownerName?: string }>).map(
+        (job) => `${job.title}/${job.ownerName}`
+      ),
+      ['Owner Fetch/the owner', 'Guest Fetch/a guest'],
+      'the administrator sees the whole queue, each row attributed to a device'
     )
-    assert.equal(ownerStatus.othersJobCount, 1, 'and enough to explain why the server is busy')
     assert.equal(
-      JSON.stringify(ownerStatus).includes('Guest Fetch'),
-      false,
-      "the administrator is not shown another device's titles either"
+      ownerStatus.othersJobCount,
+      0,
+      'and nothing is withheld from them, so nothing is reported as withheld'
     )
+    // A member is unchanged: their own work in full, everyone else's as a
+    // number, and no titles.
+    assert.deepEqual(
+      (guestStatus.jobs as Array<{ title: string }>).map((job) => job.title),
+      ['Guest Fetch']
+    )
+    assert.equal(guestStatus.othersJobCount, 1, 'and enough to explain why the server is busy')
     assert.equal(
       JSON.stringify(guestStatus).includes('Owner Fetch'),
       false,
@@ -1712,11 +1772,7 @@ async function sharingRouteTest(): Promise<void> {
     const missing = await share(strangerToken, 'f'.repeat(40), { visibility: 'shared' })
     assert.equal(forbidden.status, missing.status)
     assert.equal(await forbidden.text(), await missing.text())
-    assert.equal(
-      (await store.get(hash))!.visibility,
-      'private',
-      'and the refusal actually refused'
-    )
+    assert.equal((await store.get(hash))!.visibility, 'private', 'and the refusal actually refused')
 
     // The owner opens it up.
     const opened = await share(ownerToken, hash, { visibility: 'shared' })
@@ -1754,9 +1810,15 @@ async function sharingRouteTest(): Promise<void> {
 
     // Garbage in the entitled list is dropped rather than stored.
     const cleaned = (await (
-      await share(ownerToken, hash, { visibility: 'private', entitled: ['../etc', 'ZZZ', strangerId] })
+      await share(ownerToken, hash, {
+        visibility: 'private',
+        entitled: ['../etc', 'ZZZ', strangerId]
+      })
     ).json()) as { entitled: string[] }
-    assert.deepEqual(cleaned.entitled.filter((id) => !/^[a-f0-9]{16}$/.test(id)), [])
+    assert.deepEqual(
+      cleaned.entitled.filter((id) => !/^[a-f0-9]{16}$/.test(id)),
+      []
+    )
 
     // The admin may change sharing — they can already delete the file — but
     // this route changes access, it does not grant it. Admin cannot add
@@ -1778,6 +1840,747 @@ async function sharingRouteTest(): Promise<void> {
   console.log('ok  sharing')
 }
 
+// ---------------------------------------------------------------------
+// The budget as a limit rather than a target.
+//
+// Eviction reclaims space AFTER it has been taken, so on its own the cache
+// sits over its cap between passes — observed on the live server at 24.8 GB
+// of a 22.6 GB budget. Room is made before a fetch starts instead.
+// ---------------------------------------------------------------------
+
+async function budgetRoomTest(): Promise<void> {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'r3-room-'))
+  const store = createItemStore(root, {
+    idleTtlMs: 60 * DAY,
+    hardMaxMs: 365 * DAY,
+    budgetBytes: 1000,
+    tombstoneMs: 60 * DAY
+  })
+
+  const now = Date.now()
+  const seed = async (hash: string, key: string, bytes: number, age: number): Promise<void> => {
+    const dir = await store.beginItem({
+      contentKey: key,
+      title: key,
+      infoHash: hash,
+      fileName: 'f.mkv',
+      sizeBytes: bytes,
+      fetchedAt: now - age,
+      lastAccessAt: now - age
+    })
+    await fsp.writeFile(path.join(dir, 'f.mkv'), 'x'.repeat(bytes))
+  }
+
+  await seed('a'.repeat(40), 'k-a', 400, 3 * DAY)
+  await seed('b'.repeat(40), 'k-b', 400, 1 * DAY)
+  assert.equal(await store.usedBytes(), 800)
+
+  // Fits without touching anything.
+  assert.equal(await store.makeRoomFor(200), true)
+  assert.equal(await store.usedBytes(), 800, 'nothing is evicted when it already fits')
+
+  // Does not fit: the oldest-accessed item goes, and only that one.
+  assert.equal(await store.makeRoomFor(500), true)
+  assert.equal(await store.get('a'.repeat(40)), null, 'the least recently used item is taken')
+  assert.ok(await store.get('b'.repeat(40)), 'and the newer one is kept')
+  assert.ok((await store.usedBytes()) + 500 <= 1000, 'room really was made')
+
+  // Bigger than the whole budget: refused, and refused WITHOUT emptying the
+  // cache on the way to failing.
+  const before = await store.usedBytes()
+  assert.equal(await store.makeRoomFor(5000), false)
+  assert.equal(await store.usedBytes(), before, 'a hopeless request evicts nothing')
+
+  // Pressure, not disinterest — so no tombstones, or the feeder would stop
+  // asking for exactly what it just displaced.
+  assert.deepEqual(await store.tombstones(), {}, 'making room leaves no tombstone')
+
+  // --- resuming a partial ---------------------------------------------
+  //
+  // A retried fetch is already partly on disk, and those bytes are already
+  // counted. Charging the full size again evicts for space that was never
+  // free — and since a partial is the least-recently-accessed thing in the
+  // cache almost by definition (nobody has watched it, it is not finished),
+  // plain LRU deletes the very partial the room was being made for. On a
+  // slow link that restarts a multi-gigabyte download on every attempt.
+  const resumeRoot = await fsp.mkdtemp(path.join(os.tmpdir(), 'r3-resume-'))
+  const resumeStore = createItemStore(resumeRoot, {
+    idleTtlMs: 60 * DAY,
+    hardMaxMs: 365 * DAY,
+    budgetBytes: 1000,
+    tombstoneMs: 60 * DAY
+  })
+  const partialHash = 'c'.repeat(40)
+  const neighbourHash = 'd'.repeat(40)
+  // The partial: 600 of an eventual 700, and the OLDEST thing here.
+  const partialDir = await resumeStore.beginItem({
+    contentKey: 'k-partial',
+    title: 'k-partial',
+    infoHash: partialHash,
+    fileName: 'f.mkv',
+    sizeBytes: 700,
+    fetchedAt: now - 5 * DAY,
+    lastAccessAt: now - 5 * DAY
+  })
+  await fsp.writeFile(path.join(partialDir, 'f.mkv'), 'x'.repeat(600))
+  const neighbourDir = await resumeStore.beginItem({
+    contentKey: 'k-neighbour',
+    title: 'k-neighbour',
+    infoHash: neighbourHash,
+    fileName: 'f.mkv',
+    sizeBytes: 300,
+    fetchedAt: now,
+    lastAccessAt: now
+  })
+  await fsp.writeFile(path.join(neighbourDir, 'f.mkv'), 'x'.repeat(300))
+  assert.equal(await resumeStore.usedBytes(), 900)
+
+  // 700 total, 600 already held: only 100 is new, and 900 + 100 fits 1000.
+  // Nothing needs to go.
+  assert.equal(await resumeStore.makeRoomFor(700, partialHash), true)
+  assert.ok(
+    await resumeStore.get(partialHash),
+    'the partial being resumed is not evicted to make room for itself'
+  )
+  assert.ok(
+    await resumeStore.get(neighbourHash),
+    'and nothing else is taken for bytes already held'
+  )
+  assert.equal(await resumeStore.usedBytes(), 900)
+
+  // And when room genuinely IS needed, it comes from somewhere else. 900
+  // total against 600 held is 300 new, which does not fit alongside the
+  // neighbour — so something has to go, and the oldest thing here is the
+  // partial itself. This is the case plain LRU gets wrong.
+  assert.equal(await resumeStore.makeRoomFor(900, partialHash), true)
+  assert.ok(
+    await resumeStore.get(partialHash),
+    'the partial survives an eviction pass it triggered, though it is the oldest'
+  )
+  assert.equal(
+    await resumeStore.get(neighbourHash),
+    null,
+    'the room comes from the next-oldest item instead'
+  )
+
+  // Without the hash it is a fresh 700 on top of 900 — which really does
+  // need room, and the partial is then fair game like anything else.
+  assert.equal(await resumeStore.makeRoomFor(700), true)
+  assert.equal(await resumeStore.get(partialHash), null, 'an unrelated fetch still evicts by age')
+
+  // A resume of something bigger than the whole budget is still refused:
+  // the ceiling is the file's full size, not what is left of it.
+  assert.equal(
+    await resumeStore.makeRoomFor(5000, partialHash),
+    false,
+    'a resume does not get past the budget ceiling'
+  )
+
+  await fsp.rm(resumeRoot, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
+
+  await fsp.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
+  // --- a cancel is not a network failure -------------------------------
+  //
+  // jobs.cancel marks a fetching job 'expired'; the read loop notices,
+  // keeps the partial and breaks, and the short file then raises the
+  // incomplete-download error. That arrives in the fetcher's catch looking
+  // exactly like a dropped connection, where the record used to be put
+  // straight back to 'queued' — so Cancel reported success and the
+  // download resumed after the backoff, still spending the owner's TorBox
+  // quota. Only a record still in the state this pass was working on is
+  // retried.
+  assert.equal(shouldRetryAfterFailure({ state: 'fetching' } as JobRecord), true)
+  assert.equal(
+    shouldRetryAfterFailure({ state: 'expired' } as JobRecord),
+    false,
+    'a cancelled fetch stays cancelled'
+  )
+  assert.equal(
+    shouldRetryAfterFailure(undefined),
+    false,
+    'and a job removed outright is not resurrected'
+  )
+  assert.equal(shouldRetryAfterFailure({ state: 'ready' } as JobRecord), false)
+
+  // --- what is being watched is not evicted ----------------------------
+  //
+  // The stream route opens a NEW file handle per Range request, so deleting
+  // an item with a reader on it does not merely inconvenience it: on Unix
+  // the request in flight finishes against the unlinked file and the next
+  // seek gets a 404 in the middle of the film, and on Windows the delete
+  // fails against the open handle and the pass churns against it. Both
+  // eviction paths therefore skip it.
+  const watchRoot = await fsp.mkdtemp(path.join(os.tmpdir(), 'r3-watch-'))
+  const streaming = new Set<string>()
+  const watchStore = createItemStore(
+    watchRoot,
+    { idleTtlMs: 60 * DAY, hardMaxMs: 365 * DAY, budgetBytes: 1000, tombstoneMs: 60 * DAY },
+    { isStreaming: (infoHash) => streaming.has(infoHash) }
+  )
+  const watchedHash = 'e'.repeat(40)
+  const idleHash = 'f'.repeat(40)
+  const seedInto = async (hash: string, key: string, bytes: number, age: number): Promise<void> => {
+    const dir = await watchStore.beginItem({
+      contentKey: key,
+      title: key,
+      infoHash: hash,
+      fileName: 'f.mkv',
+      sizeBytes: bytes,
+      fetchedAt: now - age,
+      lastAccessAt: now - age
+    })
+    await fsp.writeFile(path.join(dir, 'f.mkv'), 'x'.repeat(bytes))
+  }
+  // The one being watched is also the oldest, so LRU would take it first.
+  await seedInto(watchedHash, 'k-watched', 500, 9 * DAY)
+  await seedInto(idleHash, 'k-idle', 400, 1 * DAY)
+  streaming.add(watchedHash)
+
+  assert.equal(await watchStore.makeRoomFor(400), true)
+  assert.ok(
+    await watchStore.get(watchedHash),
+    'making room does not delete the film somebody is watching'
+  )
+  assert.equal(await watchStore.get(idleHash), null, 'it takes the next-oldest instead')
+
+  // The hourly pass has the same duty. Aged past the hard maximum, the one
+  // with a reader on it still stays.
+  await seedInto('a1'.repeat(20), 'k-old', 100, 400 * DAY)
+  streaming.add('a1'.repeat(20))
+  const plan = await watchStore.runEviction(now)
+  assert.equal(
+    plan.has('a1'.repeat(20)),
+    false,
+    'and the hourly pass leaves an open stream alone too'
+  )
+  assert.ok(await watchStore.get('a1'.repeat(20)), 'the file is still there')
+  // AND THE OVERAGE IS STILL RELIEVED. Skipping the item being watched
+  // must pick something ELSE for those bytes: if the protected item alone
+  // accounts for the excess, dropping it from a finished plan leaves the
+  // cache over budget for the whole film. The planner is told up front so
+  // it moves on to the next candidate; the protected bytes stay counted,
+  // because the file is still on the disk.
+  const overRoot = await fsp.mkdtemp(path.join(os.tmpdir(), 'r3-over-'))
+  const overStreaming = new Set<string>()
+  const overStore = createItemStore(
+    overRoot,
+    { idleTtlMs: 60 * DAY, hardMaxMs: 365 * DAY, budgetBytes: 1000, tombstoneMs: 60 * DAY },
+    { isStreaming: (infoHash) => overStreaming.has(infoHash) }
+  )
+  const bigWatched = 'b1'.repeat(20)
+  const smallIdle = 'b2'.repeat(20)
+  const seedOver = async (hash: string, key: string, bytes: number, age: number): Promise<void> => {
+    const dir = await overStore.beginItem({
+      contentKey: key,
+      title: key,
+      infoHash: hash,
+      fileName: 'f.mkv',
+      sizeBytes: bytes,
+      fetchedAt: now - age,
+      lastAccessAt: now - age
+    })
+    await fsp.writeFile(path.join(dir, 'f.mkv'), 'x'.repeat(bytes))
+  }
+  // 800 + 400 = 1200 against a budget of 1000. The oldest is the one being
+  // watched, and on its own it more than covers the 200 overage.
+  await seedOver(bigWatched, 'k-big-watched', 800, 9 * DAY)
+  await seedOver(smallIdle, 'k-small-idle', 400, 1 * DAY)
+  overStreaming.add(bigWatched)
+  const overPlan = await overStore.runEviction(now)
+  assert.equal(overPlan.has(bigWatched), false, 'the item being watched is not taken')
+  assert.equal(
+    overPlan.get(smallIdle),
+    'budget',
+    'and something else is chosen for the bytes it would have freed'
+  )
+  assert.ok(
+    (await overStore.usedBytes()) <= 1000,
+    'so the cache is actually brought back under its budget'
+  )
+  await fsp.rm(overRoot, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
+
+  // --- an allocation is about what is HELD, not just what is arriving ---
+  //
+  // Comparing one file against the allocation admits anybody already near
+  // their limit: 600 held under a 1000 allocation plus a 500 film is 1100
+  // until the hourly sweep takes the older files back. Room is made from
+  // their own oldest items first, which is that same sweep applied
+  // deliberately rather than an hour late.
+  const ownerRoot = await fsp.mkdtemp(path.join(os.tmpdir(), 'r3-owner-'))
+  const ownerStore = createItemStore(ownerRoot, {
+    idleTtlMs: 60 * DAY,
+    hardMaxMs: 365 * DAY,
+    budgetBytes: 10_000,
+    tombstoneMs: 60 * DAY
+  })
+  const seedOwned = async (
+    hash: string,
+    key: string,
+    bytes: number,
+    age: number,
+    owner: string
+  ): Promise<void> => {
+    const dir = await ownerStore.beginItem({
+      contentKey: key,
+      title: key,
+      infoHash: hash,
+      fileName: 'f.mkv',
+      sizeBytes: bytes,
+      fetchedAt: now - age,
+      lastAccessAt: now - age,
+      ownerDeviceId: owner,
+      visibility: 'private',
+      entitled: [owner]
+    })
+    await fsp.writeFile(path.join(dir, 'f.mkv'), 'x'.repeat(bytes))
+  }
+  await seedOwned('c1'.repeat(20), 'k-mine-old', 400, 9 * DAY, 'dev-a')
+  await seedOwned('c2'.repeat(20), 'k-mine-new', 200, 1 * DAY, 'dev-a')
+  await seedOwned('c3'.repeat(20), 'k-theirs', 900, 30 * DAY, 'dev-b')
+
+  assert.equal(
+    await ownerStore.makeRoomForOwner({ deviceId: 'dev-a', bytes: 500, quota: 1000 }),
+    true
+  )
+  assert.equal(
+    await ownerStore.get('c1'.repeat(20)),
+    null,
+    'their own oldest item goes to make room for what they are fetching'
+  )
+  assert.ok(await ownerStore.get('c2'.repeat(20)), 'and their newer one is kept')
+  assert.ok(
+    await ownerStore.get('c3'.repeat(20)),
+    "and nobody else's items are touched, however old"
+  )
+
+  // Bigger than the whole allocation: refused, and nothing evicted for it.
+  const ownedBefore = (await ownerStore.list()).length
+  assert.equal(
+    await ownerStore.makeRoomForOwner({ deviceId: 'dev-a', bytes: 5000, quota: 1000 }),
+    false,
+    'a file bigger than the whole allocation is refused outright'
+  )
+  assert.equal((await ownerStore.list()).length, ownedBefore, 'a hopeless request evicts nothing')
+
+  await fsp.rm(ownerRoot, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
+
+  // Released, it goes on the next pass — deferred, not exempt.
+  streaming.delete('a1'.repeat(20))
+  assert.equal(
+    (await watchStore.runEviction(now)).has('a1'.repeat(20)),
+    true,
+    'once nobody is watching it, it is evicted as normal'
+  )
+
+  await fsp.rm(watchRoot, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
+
+  // --- a file that cannot fit the owner's allocation is not fetched ----
+  //
+  // The whole-disk budget is not the only bound. An 8 GB film under a 2 GB
+  // device allocation passes the budget check cleanly, downloads in full,
+  // and is then deleted by the hourly quota pass — which leaves no
+  // tombstone, deliberately, because quota pressure is not disinterest. So
+  // the feeder asks again and the same gigabytes go down the same drain for
+  // as long as the title stays wanted. It is refused before the first byte
+  // instead, and expired rather than retried: waiting does not shrink it.
+  const quotaRoot = await fsp.mkdtemp(path.join(os.tmpdir(), 'r3-quota-'))
+  const quotaJobs = createJobStore(quotaRoot)
+  const quotaStore = createItemStore(quotaRoot, {
+    idleTtlMs: 60 * DAY,
+    hardMaxMs: 365 * DAY,
+    budgetBytes: 100 * 1024 ** 3,
+    tombstoneMs: 60 * DAY
+  })
+  const quotaCreds = createCredentials(quotaRoot)
+  await quotaCreds.load()
+  await quotaCreds.setTokenForDevice('device-1', 'torbox-token')
+  let resolves = 0
+  const quotaFetcher = createFetcher({
+    jobs: quotaJobs,
+    storage: quotaStore,
+    credentials: quotaCreds,
+    dataDir: quotaRoot,
+    log: () => {},
+    quotaFor: (deviceId) => (deviceId === 'device-1' ? 2 * 1024 ** 3 : null),
+    resolveDownloadImpl: async () => {
+      resolves += 1
+      return {
+        url: 'http://127.0.0.1:1/never-fetched.mkv',
+        fileName: 'never-fetched.mkv',
+        sizeBytes: 8 * 1024 ** 3
+      }
+    }
+  })
+  quotaJobs.enqueue({
+    contentKey: 'tt-big::1:1',
+    infoHash: 'c'.repeat(40),
+    title: 'Too Big',
+    ownerDeviceId: 'device-1'
+  })
+  quotaFetcher.start()
+  // Long enough for the loop to pick the job up and decide; the download
+  // itself would need a content host, and the point is that it never runs.
+  await new Promise((resolve) => setTimeout(resolve, 300))
+  await quotaFetcher.stop()
+  const refused = quotaJobs.list().find((job) => job.contentKey === 'tt-big::1:1')
+  assert.equal(refused?.state, 'expired', 'a file over the owner allocation is refused, not queued')
+  assert.match(
+    refused?.lastError ?? '',
+    /allocation/,
+    'and it says why, since the fix is somebody raising it'
+  )
+  assert.equal(resolves, 1, 'decided once, not retried in a loop')
+  assert.equal((await quotaStore.list()).length, 0, 'nothing was written')
+
+  await fsp.rm(quotaRoot, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
+
+  console.log('ok  budget room')
+}
+
+// ---------------------------------------------------------------------
+// Your own items, and only your own.
+//
+// This is the listing entitlement allows, and the one the sharing controls
+// need to exist at all. The unfiltered catalog was deleted for handing every
+// paired device the whole disk with titles; this must not quietly bring it
+// back by a different name.
+// ---------------------------------------------------------------------
+
+async function myItemsTest(): Promise<void> {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'r3-mine-'))
+  const store = createItemStore(root, {
+    idleTtlMs: 60_000,
+    hardMaxMs: 600_000,
+    budgetBytes: 10 ** 9,
+    tombstoneMs: 60_000
+  })
+  const pairing = createPairing(root)
+  await pairing.load()
+  const admin = createAdmin(root)
+  await admin.load()
+  const mineToken = await joinApproved(pairing, 'my device')
+  const otherToken = await joinApproved(pairing, 'their device')
+  const mineId = deviceIdForToken(mineToken)
+  const otherId = deviceIdForToken(otherToken)
+
+  const seed = async (hash: string, key: string, owner: string | undefined): Promise<void> => {
+    const dir = await store.beginItem({
+      contentKey: key,
+      title: key,
+      infoHash: hash,
+      fileName: 'f.mkv',
+      sizeBytes: 4,
+      fetchedAt: Date.now(),
+      lastAccessAt: Date.now(),
+      ...(owner ? { ownerDeviceId: owner, visibility: 'private', entitled: [owner] } : {})
+    })
+    await fsp.writeFile(path.join(dir, 'f.mkv'), 'ABCD')
+  }
+  await seed('a'.repeat(40), 'k-mine-1', mineId)
+  await seed('b'.repeat(40), 'k-mine-2', mineId)
+  await seed('c'.repeat(40), 'k-theirs', otherId)
+  await seed('d'.repeat(40), 'k-orphan', undefined)
+
+  const jobs = createJobStore(root)
+  const server = createDaemonServer({
+    storage: store,
+    jobs,
+    pairing,
+    admin,
+    credentials: createCredentials(root),
+    activity: createActivityTracker(root),
+    updaterStatus: () => ({
+      channel: 'preview',
+      enabled: true,
+      checkedAt: 0,
+      latestSeen: '',
+      staged: '',
+      stagedAt: 0,
+      lastError: ''
+    }),
+    serverName: 'test',
+    version: '0.0.0',
+    diskBudgetBytes: 10 ** 9
+  })
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+  const base = `http://127.0.0.1:${(server.address() as { port: number }).port}`
+
+  const mineFor = async (token: string): Promise<Array<Record<string, unknown>>> =>
+    (
+      (await (
+        await fetch(`${base}/api/items/mine`, { headers: { Authorization: `Bearer ${token}` } })
+      ).json()) as { items: Array<Record<string, unknown>> }
+    ).items
+
+  try {
+    const mine = await mineFor(mineToken)
+    assert.deepEqual(
+      mine.map((i) => i.contentKey).sort(),
+      ['k-mine-1', 'k-mine-2'],
+      'only the items this device paid for'
+    )
+    const theirs = await mineFor(otherToken)
+    assert.deepEqual(
+      theirs.map((i) => i.contentKey),
+      ['k-theirs']
+    )
+
+    // The two ways this could quietly become the deleted catalog again.
+    const body = JSON.stringify(mine)
+    assert.equal(body.includes('k-theirs'), false, "another device's title never appears")
+    assert.equal(
+      body.includes('k-orphan'),
+      false,
+      'and neither does an item with no identifiable owner'
+    )
+
+    // Sharing state comes back so the control can render, but the entitled
+    // list is a COUNT — naming ids would describe households the caller is
+    // not part of.
+    assert.equal(mine[0].visibility, 'private')
+    assert.equal(mine[0].sharedWith, 0)
+
+    // REMOVAL. Yours goes; somebody else's is indistinguishable from absent.
+    const removeAs = async (token: string, hash: string): Promise<number> =>
+      (
+        await fetch(`${base}/api/items/${hash}/remove`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}` }
+        })
+      ).status
+    assert.equal(
+      await removeAs(otherToken, 'a'.repeat(40)),
+      404,
+      'another device cannot delete an item it does not own'
+    )
+    assert.ok(await store.get('a'.repeat(40)), 'and the refusal actually refused')
+    assert.equal(
+      await removeAs(otherToken, 'f'.repeat(40)),
+      404,
+      'with the same answer as a hash that is not here'
+    )
+    assert.equal(await removeAs(mineToken, 'b'.repeat(40)), 200, 'the owner may delete their own')
+    assert.equal(await store.get('b'.repeat(40)), null, 'and the file is gone')
+    assert.equal(
+      'k-mine-2' in (await store.tombstones()),
+      false,
+      'a deliberate delete leaves no tombstone — it is not lost interest'
+    )
+
+    // CANCELLING A QUEUED FETCH, scoped the same way. The queue is per
+    // device everywhere else, so a route that cancelled by contentKey alone
+    // would let anyone stop a housemate's download without being able to
+    // see it — and the admin gets no exception, because revoking a device
+    // is the administrative lever over its work, not reaching in item by
+    // item.
+    jobs.enqueue({
+      contentKey: 'tt-mine::1:2',
+      infoHash: '1'.repeat(40),
+      title: 'Mine',
+      ownerDeviceId: mineId
+    })
+    jobs.enqueue({
+      contentKey: 'tt-theirs::1:2',
+      infoHash: '2'.repeat(40),
+      title: 'Theirs',
+      ownerDeviceId: otherId
+    })
+    const cancelAs = async (token: string, contentKey: string): Promise<number> =>
+      (
+        await fetch(`${base}/api/jobs/cancel`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', Authorization: `Bearer ${token}` },
+          body: JSON.stringify({ contentKey })
+        })
+      ).status
+    assert.equal(
+      await cancelAs(mineToken, 'tt-theirs::1:2'),
+      404,
+      "one device cannot cancel another's fetch"
+    )
+    assert.ok(
+      jobs.list().some((job) => job.contentKey === 'tt-theirs::1:2'),
+      'and the refusal actually refused'
+    )
+    assert.equal(await cancelAs(mineToken, 'tt-mine::1:2'), 200, 'the owner may cancel their own')
+    assert.equal(
+      jobs.list().some((job) => job.contentKey === 'tt-mine::1:2'),
+      false,
+      'and it leaves the queue'
+    )
+
+    // STOPPING A DOWNLOAD IN FLIGHT IS A CANCELLATION, and has to be
+    // reported as one. A fetching job is MARKED rather than removed — the
+    // fetch loop owns the download and checks state between chunks — so a
+    // cancel that compares queue lengths sees no change and calls the one
+    // case that most obviously worked a failure.
+    jobs.enqueue({
+      contentKey: 'k-inflight',
+      infoHash: 'a'.repeat(40),
+      title: 'In Flight',
+      ownerDeviceId: mineId
+    })
+    jobs.update('k-inflight', { state: 'fetching' })
+    assert.equal(
+      await cancelAs(mineToken, 'k-inflight'),
+      200,
+      'cancelling a download in progress reports success'
+    )
+    assert.equal(
+      jobs.list().find((job) => job.contentKey === 'k-inflight')?.state,
+      'expired',
+      'and the fetch loop is told to stop at its next chunk'
+    )
+
+    // NOTHING TO CANCEL IS NOT A SUCCESS. A ready record stays listed for
+    // an hour and a stopped one for a day; jobs.cancel touches neither, and
+    // the route used to report 200 regardless, so the button did nothing
+    // and said it had worked.
+    jobs.enqueue({
+      contentKey: 'k-finished',
+      infoHash: '9'.repeat(40),
+      title: 'Finished',
+      ownerDeviceId: mineId
+    })
+    jobs.update('k-finished', { state: 'ready' })
+    assert.equal(
+      await cancelAs(mineToken, 'k-finished'),
+      409,
+      'a fetch that has already finished cannot be cancelled, and says so'
+    )
+    assert.equal(
+      jobs.list().find((job) => job.contentKey === 'k-finished')?.state,
+      'ready',
+      'and the record is untouched'
+    )
+
+    // THE ADMINISTRATOR MAY STOP WORK, matching the remove route and
+    // following from the queue being visible to them at all: they are shown
+    // it to answer "why is this box saturated", and a view with no way to
+    // act on it does not answer that. It stays narrow — stopping a fetch is
+    // not reading what anyone has watched.
+    jobs.enqueue({
+      contentKey: 'tt-theirs::3:4',
+      infoHash: '7'.repeat(40),
+      title: 'Theirs Again',
+      ownerDeviceId: otherId
+    })
+    await admin.claim(mineId)
+    assert.equal(
+      await cancelAs(mineToken, 'tt-theirs::3:4'),
+      200,
+      "the administrator may cancel another device's fetch"
+    )
+    assert.equal(
+      jobs.list().some((job) => job.contentKey === 'tt-theirs::3:4'),
+      false,
+      'and it really leaves the queue'
+    )
+
+    // REMOVING A PARTIAL STOPS ITS FETCH FIRST. An incomplete item is
+    // listed and removable while its job is still downloading into the very
+    // directory about to be deleted: on Unix the write continues into an
+    // unlinked file and the job is re-queued when its final stat fails, and
+    // on Windows the recursive delete fails against the open handle. Either
+    // way the title comes back.
+    await seed('8'.repeat(40), 'k-partial', mineId)
+    jobs.enqueue({
+      contentKey: 'k-partial',
+      infoHash: '8'.repeat(40),
+      title: 'Still Fetching',
+      ownerDeviceId: mineId
+    })
+    assert.equal(
+      (
+        await fetch(`${base}/api/items/${'8'.repeat(40)}/remove`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${mineToken}` }
+        })
+      ).status,
+      200
+    )
+    assert.equal(
+      jobs.list().some((job) => job.contentKey === 'k-partial'),
+      false,
+      'the fetch is cancelled with the bytes, not left running against a deleted directory'
+    )
+
+    // WHAT MADE THE QUEUE LOOK FULL OF DUPLICATES. A job's title is the
+    // SERIES title, so two episodes of one show were two identical rows.
+    // The season and episode come from the contentKey, parsed from the end
+    // because a catalogId can contain colons of its own.
+    jobs.enqueue({
+      contentKey: 'tt99::2:7',
+      infoHash: '3'.repeat(40),
+      title: 'Same Show',
+      ownerDeviceId: mineId
+    })
+    jobs.enqueue({
+      contentKey: 'tt99::2:8',
+      infoHash: '4'.repeat(40),
+      title: 'Same Show',
+      ownerDeviceId: mineId
+    })
+    const queue = (
+      (await (
+        await fetch(`${base}/api/status`, { headers: { Authorization: `Bearer ${mineToken}` } })
+      ).json()) as { jobs: Array<{ title: string; season?: number; episode?: number }> }
+    ).jobs.filter((job) => job.title === 'Same Show')
+    assert.equal(queue.length, 2)
+    assert.deepEqual(
+      queue.map((job) => `${job.season}x${job.episode}`).sort(),
+      ['2x7', '2x8'],
+      'two rows with the same title are told apart by their episode'
+    )
+
+    // A FILM HAS NO EPISODE, and must not be given one. Its key is
+    // `id::` — both segments empty — and Number('') is 0, so converting
+    // before checking labelled every movie in the queue S00E00.
+    jobs.enqueue({
+      contentKey: 'tt-film::',
+      infoHash: '5'.repeat(40),
+      title: 'A Film',
+      ownerDeviceId: mineId
+    })
+    // Anime is often numbered straight through with no season, so this is
+    // a real key. It gets the episode alone rather than an invented S00.
+    jobs.enqueue({
+      contentKey: 'tt-anime::7',
+      infoHash: '6'.repeat(40),
+      title: 'An Anime',
+      ownerDeviceId: mineId
+    })
+    const labelled = (
+      (await (
+        await fetch(`${base}/api/status`, { headers: { Authorization: `Bearer ${mineToken}` } })
+      ).json()) as { jobs: Array<{ title: string; season?: number; episode?: number }> }
+    ).jobs
+    const film = labelled.find((job) => job.title === 'A Film')
+    assert.equal(film?.season, undefined, 'a film is not season zero')
+    assert.equal(film?.episode, undefined, 'nor episode zero')
+    const anime = labelled.find((job) => job.title === 'An Anime')
+    assert.equal(anime?.season, undefined, 'an unseasoned key does not invent a season')
+    assert.equal(anime?.episode, 7, 'but its episode is still shown')
+    assert.equal(body.includes(otherId), false, 'no other device id is disclosed')
+
+    await fetch(`${base}/api/items/${'a'.repeat(40)}/sharing`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', Authorization: `Bearer ${mineToken}` },
+      body: JSON.stringify({ visibility: 'shared' })
+    })
+    const after = await mineFor(mineToken)
+    assert.equal(
+      after.find((i) => i.contentKey === 'k-mine-1')?.visibility,
+      'shared',
+      'and the listing reflects a change made through the sharing route'
+    )
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()))
+    await fsp.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
+  }
+  console.log('ok  own items listing')
+}
+
 void main()
   .then(() => {
     console.log('ok  r3-cache daemon core')
@@ -1789,5 +2592,7 @@ void main()
   .then(approvalTests)
   .then(deviceRouteTests)
   .then(quotaStoreTest)
+  .then(budgetRoomTest)
   .then(statusScopeTest)
   .then(sharingRouteTest)
+  .then(myItemsTest)

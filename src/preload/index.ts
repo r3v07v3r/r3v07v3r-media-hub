@@ -10,6 +10,7 @@ import {
 import { MEDIA_HUB_CHANNELS } from '../shared/media-hub/ipc-channels'
 import type {
   LanCacheDevicesResponse,
+  LanCacheOwnItem,
   LanCacheStatusResponse
 } from '../shared/lancache/protocol'
 import type {
@@ -248,6 +249,12 @@ const api = {
         sourcePreference: SourcePreference
       ): Promise<{ sourcePreference: SourcePreference }> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.settingsSetSourcePreference, { sourcePreference }),
+      /** The storage question. Answers with the mode actually in force, not
+       *  the one saved — saying "disk" back to somebody who just chose
+       *  stream only would be the contradiction this setting exists to
+       *  prevent. */
+      setStoreMedia: (storeMedia: boolean): Promise<{ storeMedia: boolean; cacheMode: CacheMode }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.settingsSetStoreMedia, { storeMedia }),
       setCacheMode: (
         cacheMode: CacheMode,
         memoryCacheMaxMb?: number
@@ -329,7 +336,20 @@ const api = {
         openJoin?: boolean
         defaultQuotaPercent?: number
       }): Promise<{ ok: boolean; message?: string }> =>
-        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.lanCacheAdminSettings, payload)
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.lanCacheAdminSettings, payload),
+      /** The caller's OWN cached titles. Never anyone else's — see the
+       *  daemon's /api/items/mine. */
+      myItems: (): Promise<{ ok: boolean; items: LanCacheOwnItem[] }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.lanCacheMyItems),
+      setSharing: (payload: {
+        infoHash: string
+        visibility: 'private' | 'shared'
+      }): Promise<{ ok: boolean; message?: string }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.lanCacheSetSharing, payload),
+      removeItem: (payload: { infoHash: string }): Promise<{ ok: boolean; message?: string }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.lanCacheRemoveItem, payload),
+      cancelJob: (payload: { contentKey: string }): Promise<{ ok: boolean; message?: string }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.lanCacheCancelJob, payload),
     },
 
     torbox: {

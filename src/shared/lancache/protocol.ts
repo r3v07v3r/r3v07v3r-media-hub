@@ -43,6 +43,23 @@ export interface LanCacheDevice {
   isYou: boolean
 }
 
+/** One title this device fetched onto the cache server. Only ever the
+ *  CALLER's own — see the daemon's /api/items/mine and why the unfiltered
+ *  catalog was deleted. */
+export interface LanCacheOwnItem {
+  infoHash: string
+  contentKey: string
+  title: string
+  sizeBytes: number
+  complete: boolean
+  lastAccessAt: number
+  visibility: 'private' | 'shared'
+  /** How many OTHER devices are entitled to it. A count, not ids: the owner
+   *  needs to know whether anyone else can reach it, and naming who would
+   *  describe households the caller is not part of. */
+  sharedWith: number
+}
+
 export interface LanCacheDevicesResponse {
   devices: LanCacheDevice[]
   openJoin: boolean
@@ -83,6 +100,9 @@ export interface LanCacheJobPayload {
   resolution?: number
   sizeBytes?: number
   sources?: string[]
+  /** Why the feeder asked for it — see WantedTitle.reason. Absent on jobs
+   *  queued before this existed, and on anything queued by hand. */
+  reason?: 'watching' | 'prefetch'
 }
 
 export interface LanCacheStatusResponse {
@@ -97,20 +117,33 @@ export interface LanCacheStatusResponse {
   linkedDevices: number
   /** Streams being served right now — what update restarts wait on. */
   activeStreams: number
+  // EVERYTHING BELOW IS OPTIONAL, and that is not laziness. A daemon
+  // updates itself on its own schedule, so an app carrying these fields
+  // will routinely be talking to a server built before they existed —
+  // which answers /api/status without them. Typing them as required made
+  // the app render `undefined` as a blank figure and silently omit the
+  // controls that depend on them, with nothing to say why. Optional is the
+  // truth, and it forces every reader to decide what an older server looks
+  // like.
+
   /** What the CALLING device holds, charged the way the eviction planner
    *  charges it: to the fetcher, once, however many devices share it. */
-  usedByMeBytes: number
+  usedByMeBytes?: number
   /** The allocation this device is held to, or null when none is set and
    *  the whole-disk budget is the only bound. */
-  quotaBytes: number | null
+  quotaBytes?: number | null
   /** Whether the CALLER administers this server. Decided by the daemon
    *  from what it has on disk — never by anything the app sends. */
-  isAdmin: boolean
-  unclaimed: boolean
+  isAdmin?: boolean
+  /** True while nobody administers this server. ABSENT means the server
+   *  predates administration entirely, which is a different thing from
+   *  false and has to be shown differently: false means 'somebody already
+   *  has it', absent means 'this server cannot be claimed at all yet'. */
+  unclaimed?: boolean
   /** Jobs belonging to OTHER devices, as a count. Their titles are not
    *  sent: the queue would otherwise say what the household is watching to
    *  anyone paired, which is the hole entitlement closed on the catalog. */
-  othersJobCount: number
+  othersJobCount?: number
   updater: {
     channel: string
     enabled: boolean
@@ -122,11 +155,25 @@ export interface LanCacheStatusResponse {
   }
   jobs: Array<{
     contentKey: string
+    /** The SERIES title. Two episodes of one show carry the same one, which
+     *  is why season/episode below exist — without them a queue of episodes
+     *  reads as a list of duplicates. */
     title: string
     state: string
     attempts: number
     progressBytes: number
     sizeBytes?: number
+    resolution?: number
+    /** Absent for films, and for any key that is not catalogId:season:episode. */
+    season?: number
+    episode?: number
+    /** Why it is queued: 'watching' is the next episode of something
+     *  somebody is partway through, 'prefetch' is from a watchlist. Absent
+     *  on jobs queued before this existed. */
+    reason?: 'watching' | 'prefetch'
+    /** The device that queued it. Sent to the ADMIN only — every other
+     *  caller sees just its own jobs, so its own name would say nothing. */
+    ownerName?: string
     lastError?: string
   }>
 }

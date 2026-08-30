@@ -10,12 +10,23 @@
 // so a region that has never been set falls back to the machine's own locale
 // rather than to a hardcoded US.
 
-import { app } from 'electron'
-
 import type { MediaKind, WatchProvider, WatchProvidersResult } from '../../shared/media-hub/types'
 import { fetchJson } from './httpClient'
 import { getDatabase } from './dbState'
 import { readSettings, tmdbCredentials } from './settingsStore'
+
+/**
+ * Electron, resolved at CALL time rather than imported at load time — the
+ * same pattern settingsStore.ts and logger.ts carry, for the same reason.
+ * `require('electron')` throws when the binary is absent, which is exactly
+ * what CI's `npm ci --ignore-scripts` produces, and this module is reached
+ * from preferences.ts, whose pure resolution logic is unit tested outside
+ * Electron. The one use below runs only in the real app.
+ */
+function electron(): typeof import('electron') {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  return require('electron')
+}
 
 const EMPTY: Omit<WatchProvidersResult, 'region'> = { stream: [], rent: [], buy: [], link: '' }
 
@@ -36,7 +47,18 @@ export function watchRegion(): string {
     .trim()
     .toUpperCase()
   if (/^[A-Z]{2}$/.test(stored)) return stored
-  const locale = app.getLocale?.() ?? ''
+  // Guarded, not just deferred. readSettings() above already answers {}
+  // when there is no Electron to find a settings file with; this is the
+  // other half of the same tolerance. The locale is a GUESS at the region —
+  // one that is wrong often enough to be correctable in Settings — so a
+  // guess that throws is strictly worse than falling through to the default
+  // below.
+  let locale = ''
+  try {
+    locale = electron().app?.getLocale?.() ?? ''
+  } catch {
+    // Not running inside Electron. 'US' it is.
+  }
   const guess = locale.split(/[-_]/)[1]?.toUpperCase() ?? ''
   return /^[A-Z]{2}$/.test(guess) ? guess : 'US'
 }

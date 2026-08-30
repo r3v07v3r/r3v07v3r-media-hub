@@ -103,6 +103,19 @@ export interface EvictionPolicy {
    * cache does. An empty or absent map makes the quota pass a no-op.
    */
   quotas?: ReadonlyMap<string, number>
+  /**
+   * Items that must not be selected, whatever the reason would have been —
+   * in practice, the ones with a /stream response open against them.
+   *
+   * Handled INSIDE the planner rather than by dropping entries from the
+   * plan afterwards. A protected item still occupies its bytes, so
+   * removing it from the plan after the fact left the overage it was
+   * chosen to relieve unrelieved: one 8 GB film being watched could
+   * account for the whole excess, and nothing else was picked to cover it.
+   * Skipping it here moves on to the next candidate instead, and its bytes
+   * stay counted because it is still on the disk.
+   */
+  protected?: ReadonlySet<string>
 }
 
 export type EvictionReason = 'hard-max' | 'idle' | 'quota' | 'budget'
@@ -137,8 +150,14 @@ export function planEvictions(
   const out = new Map<string, EvictionReason>()
   const survivors: StoredItem[] = []
 
+  const isProtected = (infoHash: string): boolean => policy.protected?.has(infoHash) === true
+
   for (const item of items) {
-    if (now - item.fetchedAt >= policy.hardMaxMs) out.set(item.infoHash, 'hard-max')
+    // Age is not a reason to delete what somebody is watching either — a
+    // long film past the hard maximum is still a long film in progress.
+    // Deferred, not exempt: the next pass takes it once the reader goes.
+    if (isProtected(item.infoHash)) survivors.push(item)
+    else if (now - item.fetchedAt >= policy.hardMaxMs) out.set(item.infoHash, 'hard-max')
     else if (now - item.lastAccessAt >= policy.idleTtlMs) out.set(item.infoHash, 'idle')
     else survivors.push(item)
   }
@@ -176,6 +195,7 @@ export function planEvictions(
       )
       for (const item of byAge) {
         if (used <= quota) break
+        if (isProtected(item.infoHash)) continue
         out.set(item.infoHash, 'quota')
         used -= item.presentBytes
       }
@@ -193,6 +213,7 @@ export function planEvictions(
     )
     for (const item of byAge) {
       if (remaining <= policy.budgetBytes) break
+      if (isProtected(item.infoHash)) continue
       out.set(item.infoHash, 'budget')
       remaining -= item.presentBytes
     }
@@ -259,12 +280,57 @@ export interface ItemStore {
   tombstones(): Promise<Record<string, number>>
   clearTombstone(contentKey: string): Promise<void>
   usedBytes(): Promise<number>
+  /**
+   * Frees space until an incoming item of `bytes` would fit INSIDE the
+   * budget, evicting least-recently-accessed items to do it.
+   *
+   * Called before a fetch starts. Without it the budget was only ever
+   * reclaimed after the fact, on the eviction timer, so the cache genuinely
+   * sat over its cap between passes — 24.8 GB of a 22.6 GB budget, which is
+   * not a rounding error, it is the limit not being a limit.
+   *
+   * Returns false when no amount of evicting would help, which means the
+   * item is bigger than the whole budget. Refusing is the only honest answer
+   * there: fetching it would either blow the cap or evict the entire cache
+   * to hold one file.
+   */
+  makeRoomFor(bytes: number, keepInfoHash?: string): Promise<boolean>
+  /**
+   * The same thing, against ONE DEVICE'S allocation rather than the disk.
+   *
+   * The whole-cache budget is not the only bound a download has to fit.
+   * Checking the file's size against the allocation on its own admitted
+   * anybody already near their limit: 9 GB held under a 10 GB allocation
+   * plus an 8 GB film is 17 GB, until the hourly sweep takes the older
+   * files back. That sweep is the same rule applied later and less kindly,
+   * so it is applied here first, deliberately and against the owner's own
+   * items only.
+   *
+   * Returns false when no amount of evicting their own files would help —
+   * the file is simply bigger than their whole allocation.
+   */
+  makeRoomForOwner(options: {
+    deviceId: string
+    bytes: number
+    quota: number
+    keepInfoHash?: string
+  }): Promise<boolean>
 }
 
 export function createItemStore(
   dataDir: string,
-  policy: EvictionPolicy & { tombstoneMs: number }
+  policy: EvictionPolicy & { tombstoneMs: number },
+  /**
+   * Whether an item has a /stream response open against it right now.
+   *
+   * Injected rather than imported so the store stays testable without a
+   * running server, and defaults to "nothing is playing" — which is the
+   * old behaviour, so a caller that does not wire it up is no worse off
+   * than before.
+   */
+  options: { isStreaming?: (infoHash: string) => boolean } = {}
 ): ItemStore {
+  const isStreaming = options.isStreaming ?? ((): boolean => false)
   const itemsDir = path.join(dataDir, 'items')
   const tombstonePath = path.join(dataDir, 'tombstones.json')
 
@@ -441,7 +507,20 @@ export function createItemStore(
           Math.max(0, itemBytes + freeBytes - DISK_PRESSURE_MARGIN_BYTES)
         )
       }
-      const plan = planEvictions(items, { ...policy, budgetBytes, quotas: quotas ?? undefined }, now)
+      const plan = planEvictions(
+        items,
+        {
+          ...policy,
+          budgetBytes,
+          quotas: quotas ?? undefined,
+          // Given to the PLANNER, not applied to its answer. Dropping a
+          // protected item from a finished plan freed nothing in its
+          // place; refusing to pick it makes the planner choose something
+          // else for the same bytes.
+          protected: new Set(items.filter((i) => isStreaming(i.infoHash)).map((i) => i.infoHash))
+        },
+        now
+      )
       if (plan.size === 0) return plan
       const stones = await readTombstones()
       for (const [infoHash, reason] of plan) {
@@ -470,6 +549,85 @@ export function createItemStore(
     async usedBytes() {
       const items = await list()
       return items.reduce((sum, item) => sum + item.presentBytes, 0)
+    },
+
+    async makeRoomFor(bytes, keepInfoHash) {
+      if (bytes <= 0) return true
+      // Nothing on disk could make this fit, so evicting would be pure loss.
+      // Checked FIRST, or a too-big item would empty the cache on its way to
+      // failing anyway. Measured against the FULL size, not the remainder:
+      // a file bigger than the whole budget is refused whether or not half
+      // of it is already down.
+      if (bytes > policy.budgetBytes) return false
+
+      const items = await list()
+      let used = items.reduce((sum, item) => sum + item.presentBytes, 0)
+      // A RESUMED fetch is already partly on disk, and those bytes are
+      // already in `used`. Asking for the full size again counts them twice
+      // and evicts to make room for space that is not free to begin with.
+      // Only the remainder is new.
+      const held = keepInfoHash
+        ? (items.find((item) => item.infoHash === keepInfoHash)?.presentBytes ?? 0)
+        : 0
+      const need = Math.max(0, bytes - held)
+      if (used + need <= policy.budgetBytes) return true
+
+      // Oldest access first, matching the budget pass in planEvictions — the
+      // two answer the same question and should not answer it differently.
+      const byAge = [...items]
+        // Nor anything with a reader on it, for the same reason the
+        // hourly pass skips those: freeing space by deleting the film
+        // somebody is watching is not a trade worth making, and the fetch
+        // that wanted the room can wait or fail honestly.
+        .filter((item) => !isStreaming(item.infoHash))
+        // NEVER the item being fetched. A partial is the least-recently
+        // accessed thing in the cache almost by definition — nobody has
+        // watched it, it is not finished — so plain LRU picks it first,
+        // deletes the partial it was called to make room for, and the fetch
+        // starts from zero again on every retry. On the slow link this
+        // daemon exists for, that is the expensive failure.
+        .filter((item) => item.infoHash !== keepInfoHash)
+        .sort((a, b) => a.lastAccessAt - b.lastAccessAt || a.fetchedAt - b.fetchedAt)
+      for (const item of byAge) {
+        if (used + need <= policy.budgetBytes) break
+        await remove(item.infoHash)
+        used -= item.presentBytes
+      }
+      // No tombstones. This is pressure, not disinterest — the same reason
+      // the budget pass does not leave them, and tombstoning here would stop
+      // the feeder ever asking for what it just displaced.
+      return used + need <= policy.budgetBytes
+    },
+
+    async makeRoomForOwner({ deviceId, bytes, quota, keepInfoHash }) {
+      if (bytes <= 0) return true
+      // Nothing of theirs could make it fit, so evicting would be pure loss
+      // — the same first check makeRoomFor makes, for the same reason, and
+      // measured against the FULL size rather than a resume's remainder.
+      if (bytes > quota) return false
+
+      const owned = (await list()).filter((item) => item.ownerDeviceId === deviceId)
+      let used = owned.reduce((sum, item) => sum + item.presentBytes, 0)
+      // A resume's bytes are already inside `used`; only the rest is new.
+      const held = keepInfoHash
+        ? (owned.find((item) => item.infoHash === keepInfoHash)?.presentBytes ?? 0)
+        : 0
+      const need = Math.max(0, bytes - held)
+      if (used + need <= quota) return true
+
+      const byAge = [...owned]
+        // Never what is being fetched, and never what is being watched —
+        // the two exclusions makeRoomFor makes, for the same reasons.
+        .filter((item) => item.infoHash !== keepInfoHash && !isStreaming(item.infoHash))
+        .sort((a, b) => a.lastAccessAt - b.lastAccessAt || a.fetchedAt - b.fetchedAt)
+      for (const item of byAge) {
+        if (used + need <= quota) break
+        await remove(item.infoHash)
+        used -= item.presentBytes
+      }
+      // No tombstones, for the reason the budget pass gives: this is
+      // pressure, not the household losing interest.
+      return used + need <= quota
     }
   }
 }

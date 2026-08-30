@@ -27,6 +27,8 @@ export const MEDIA_HUB_CHANNELS = {
   settingsSetPerformancePanelVisible: 'mediahub:settings:set-performance-panel-visible',
   settingsSetSourcePreference: 'mediahub:settings:set-source-preference',
   settingsSetCacheMode: 'mediahub:settings:set-cache-mode',
+  /** The one-time storage question, answerable again from Settings. */
+  settingsSetStoreMedia: 'mediahub:settings:set-store-media',
   lanCacheDiscover: 'mediahub:lancache:discover',
   lanCachePair: 'mediahub:lancache:pair',
   lanCacheUnpair: 'mediahub:lancache:unpair',
@@ -40,6 +42,13 @@ export const MEDIA_HUB_CHANNELS = {
   lanCacheDevices: 'mediahub:lancache:devices',
   lanCacheDeviceAction: 'mediahub:lancache:device-action',
   lanCacheAdminSettings: 'mediahub:lancache:admin-settings',
+  /** The caller's own cached titles, and the sharing control over them. */
+  lanCacheMyItems: 'mediahub:lancache:my-items',
+  lanCacheSetSharing: 'mediahub:lancache:set-sharing',
+  /** Remove one of your own cached titles, or cancel one of your own
+   *  fetches. Both scoped to the caller by the daemon, not by the UI. */
+  lanCacheRemoveItem: 'mediahub:lancache:remove-item',
+  lanCacheCancelJob: 'mediahub:lancache:cancel-job',
   settingsSetStreamLimits: 'mediahub:settings:set-stream-limits',
   settingsSetStreamCacheSize: 'mediahub:settings:set-stream-cache-size',
   settingsChooseStreamCacheDir: 'mediahub:settings:choose-stream-cache-dir',

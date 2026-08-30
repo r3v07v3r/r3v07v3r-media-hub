@@ -49,6 +49,9 @@
     0 40px 120px rgba(0, 0, 0, 0.7),
     0 0 90px rgba(39, 230, 154, 0.09);
   color: var(--text-primary);
+  /* The rain canvas is absolutely positioned against this. */
+  position: relative;
+  isolation: isolate;
 }
 
 /* ---------- The rail and the panel beside it ----------
@@ -58,6 +61,9 @@
    rail that jumped across the screen when the cube turned would break the
    impression that anything solid was rotating. */
 .layout {
+  /* Above the rain canvas, which sits at z-index 0. */
+  position: relative;
+  z-index: 1;
   flex: 1 1 auto;
   min-height: 0;
   display: grid;
@@ -202,5 +208,194 @@ html[data-motion-user-disabled='true'] .railButton {
 
   .body {
     padding: 16px 16px 24px;
+  }
+}
+
+/* ---------- The glitch ----------
+
+   Cards flicker like a panel that dropped a frame rendering itself.
+
+   THE RULE THIS IS BUILT AROUND: it may never move anything, resize
+   anything, or make anything harder to read while it is happening. A card
+   that jumps under a cursor mid-click is not atmosphere, it is a bug that
+   somebody asked for. So the effect is opacity and a hairline colour shift
+   only — no transform, no layout property, and never on text the person
+   might be reading at that moment.
+
+   MOSTLY OFF. The animation is 9 seconds of nothing with roughly a tenth of
+   a second of disturbance in it. A flicker that reads as a glitch has to be
+   rare and short; at any higher rate it stops reading as a fault in the
+   render and starts reading as a fault in the app.
+
+   Each card is offset by its position so they never fire together — one
+   panel glitching is a machine under load, all of them at once is a strobe.
+*/
+@keyframes ccGlitch {
+  0%,
+  96.4%,
+  100% {
+    opacity: 1;
+    border-color: var(--border-subtle);
+  }
+  96.8% {
+    opacity: 0.55;
+    border-color: var(--border-active);
+  }
+  97.2% {
+    opacity: 1;
+  }
+  97.6% {
+    opacity: 0.78;
+    border-color: var(--accent-cyan);
+  }
+  98.1% {
+    opacity: 1;
+    border-color: var(--border-subtle);
+  }
+}
+
+/* Gated on the face actually being toward the viewer. The control centre is
+   the far side of a cube that exists all the time and is looked at rarely,
+   so the DEFAULT state of every effect here is off — an infinite animation
+   ticking on a surface nobody can see is pure cost. The rain does the same
+   thing in JS; this is the CSS half. */
+html[data-control-centre='true'] .panel :global(.glass-panel) {
+  animation: ccGlitch 7.3s steps(1, end) infinite;
+}
+
+/* DESYNCHRONISED BY DURATION, not just by delay.
+
+   The stagger used to be three nth-of-type rules with fixed offsets on one
+   shared 9s duration. That gave four distinct rhythms at most, every card
+   in a bucket fired together, and because the period was identical they
+   re-aligned on every cycle — so the whole field appeared to flash at once,
+   forever.
+
+   Twelve (duration, delay) pairs cycling by nth-child instead. The
+   durations share no small common multiple, which is the part that matters:
+   two cards that happen to flash together once will not do it again for a
+   very long time, because their periods drift apart rather than repeating.
+   The varying duration also varies the flash ITSELF — the disturbance is a
+   fixed percentage of the cycle, so a 14.3s card blinks for about twice as
+   long as a 7.3s one.
+
+   EVERY RULE CARRIES THE html[data-control-centre] PREFIX, and it has to.
+   The base rule above is gated on that attribute, which makes it one
+   specificity step stronger than a bare `.panel .glass-panel:nth-...`. The
+   original stagger was written without it and was therefore silently
+   overridden by the shared duration it was trying to vary — which is why
+   the whole field flashed in unison rather than being staggered at all. */
+html[data-control-centre='true'] .panel :global(.glass-panel):nth-child(12n + 1) {
+  animation-duration: 7.3s;
+  animation-delay: -0.4s;
+}
+
+html[data-control-centre='true'] .panel :global(.glass-panel):nth-child(12n + 2) {
+  animation-duration: 11.9s;
+  animation-delay: -5.2s;
+}
+
+html[data-control-centre='true'] .panel :global(.glass-panel):nth-child(12n + 3) {
+  animation-duration: 9.1s;
+  animation-delay: -2.7s;
+}
+
+html[data-control-centre='true'] .panel :global(.glass-panel):nth-child(12n + 4) {
+  animation-duration: 13.7s;
+  animation-delay: -8.9s;
+}
+
+html[data-control-centre='true'] .panel :global(.glass-panel):nth-child(12n + 5) {
+  animation-duration: 8.3s;
+  animation-delay: -6.1s;
+}
+
+html[data-control-centre='true'] .panel :global(.glass-panel):nth-child(12n + 6) {
+  animation-duration: 12.7s;
+  animation-delay: -1.3s;
+}
+
+html[data-control-centre='true'] .panel :global(.glass-panel):nth-child(12n + 7) {
+  animation-duration: 10.1s;
+  animation-delay: -7.7s;
+}
+
+html[data-control-centre='true'] .panel :global(.glass-panel):nth-child(12n + 8) {
+  animation-duration: 14.3s;
+  animation-delay: -3.5s;
+}
+
+html[data-control-centre='true'] .panel :global(.glass-panel):nth-child(12n + 9) {
+  animation-duration: 7.9s;
+  animation-delay: -9.4s;
+}
+
+html[data-control-centre='true'] .panel :global(.glass-panel):nth-child(12n + 10) {
+  animation-duration: 11.3s;
+  animation-delay: -4.8s;
+}
+
+html[data-control-centre='true'] .panel :global(.glass-panel):nth-child(12n + 11) {
+  animation-duration: 9.7s;
+  animation-delay: -11.2s;
+}
+
+html[data-control-centre='true'] .panel :global(.glass-panel):nth-child(12n + 12) {
+  animation-duration: 13.1s;
+  animation-delay: -2.1s;
+}
+
+/* A scanline crawling down the face — the other half of the look, and the
+   one that costs nothing: a single gradient moved by transform on its own
+   layer, compositor-only, no repaint. */
+.panel::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background: linear-gradient(
+    180deg,
+    transparent 0%,
+    rgba(107, 255, 192, 0.05) 45%,
+    rgba(107, 255, 192, 0.09) 50%,
+    rgba(107, 255, 192, 0.05) 55%,
+    transparent 100%
+  );
+}
+
+html[data-control-centre='true'] .panel::after {
+  animation: ccScan 7.5s linear infinite;
+}
+
+@keyframes ccScan {
+  from {
+    transform: translateY(-100%);
+  }
+  to {
+    transform: translateY(100%);
+  }
+}
+
+/* Every opt-out this app already honours. The glitch is the first thing
+   somebody sensitive to motion would want gone, and 'decorative' is exactly
+   what these flags mean. */
+html[data-motion-user-disabled='true'] .panel :global(.glass-panel),
+html[data-motion-suspended='true'] .panel :global(.glass-panel),
+html[data-motion-user-disabled='true'] .panel::after,
+html[data-motion-suspended='true'] .panel::after {
+  animation: none;
+}
+
+/* Matched to the ENABLING selector's shape on purpose. Gating the effects
+   behind html[data-control-centre='true'] raised their specificity, and a
+   bare `.panel .glass-panel` here would have quietly stopped winning — an
+   accessibility opt-out that silently stops applying is the worst kind of
+   regression, because nothing about it looks broken to whoever it still
+   works for. */
+@media (prefers-reduced-motion: reduce) {
+  html[data-control-centre='true'] .panel :global(.glass-panel),
+  html[data-control-centre='true'] .panel::after {
+    animation: none;
   }
 }

@@ -161,7 +161,7 @@ async function serveFile(
 }
 
 export function createDaemonServer(deps: ServerDeps): http.Server {
-  const { storage, jobs, pairing, credentials, activity, serverName, version, admin} = deps
+  const { storage, jobs, pairing, credentials, activity, serverName, version, admin } = deps
 
   return http.createServer((req, res) => {
     void handle(req, res).catch((error) => {
@@ -296,11 +296,11 @@ export function createDaemonServer(deps: ServerDeps): http.Server {
       const releaseStream = (): void => {
         if (!counted) return
         counted = false
-        activity.streamClosed()
+        activity.streamClosed(streamMatch[1])
       }
       if (req.method === 'GET') {
         counted = true
-        activity.streamOpened()
+        activity.streamOpened(streamMatch[1])
         res.once('close', releaseStream)
       }
 
@@ -492,6 +492,72 @@ export function createDaemonServer(deps: ServerDeps): http.Server {
       return
     }
 
+    // The caller's OWN items, which is the one listing entitlement allows.
+    //
+    // The unfiltered catalog was deleted in A1 because it handed every
+    // paired device the whole disk with titles. This is the opposite: it is
+    // scoped to ownerDeviceId, so it can only ever return what this device
+    // paid for. Without it there is no way for somebody to see their own
+    // cached titles in order to share them, which left the sharing route
+    // built and unreachable.
+    // Cancel a queued or in-flight fetch. YOUR OWN only: the queue is
+    // scoped to the caller everywhere else, and a route that cancelled by
+    // contentKey alone would let any paired device stop a housemate's
+    // download without ever being able to see it.
+    //
+    // The admin gets no exception. Revoking a device already cancels its
+    // jobs, which is the administrative lever over somebody else's work;
+    // reaching into a queue item by item is not.
+    if (route === 'POST /api/jobs/cancel') {
+      const body = await readBody(req)
+      const contentKey = String(body.contentKey ?? '')
+      const job = jobs.list().find((candidate) => candidate.contentKey === contentKey)
+      // Owner or admin, matching the remove route below and following from
+      // the queue being visible to the admin at all: the reason they are
+      // shown it is to answer "why is this box saturated", and a view with
+      // no way to act on it does not answer that. It stays narrow — the
+      // admin can stop work, not read what anyone has watched.
+      const mayCancel = Boolean(job) && (job?.ownerDeviceId === callerDeviceId || isAdminCaller)
+      if (!job || !mayCancel) {
+        // Same shape as everywhere else: a job that is not yours is
+        // indistinguishable from one that does not exist.
+        json(res, 404, { error: 'No such job.' })
+        return
+      }
+      // THERE HAS TO BE SOMETHING TO CANCEL. A ready record lingers for an
+      // hour and an expired one for a day, both still listed, and
+      // jobs.cancel does not touch either — it returned false and the route
+      // reported success anyway, so the button did nothing and said it had
+      // worked. Saying so plainly is better than a silent no-op, and the
+      // button is no longer offered on those rows either.
+      if (!jobs.cancel(contentKey)) {
+        json(res, 409, { error: 'That fetch has already finished or stopped.' })
+        return
+      }
+      json(res, 200, { ok: true })
+      return
+    }
+
+    if (route === 'GET /api/items/mine') {
+      const mine = (await storage.list()).filter((item) => item.ownerDeviceId === callerDeviceId)
+      json(res, 200, {
+        items: mine.map((item) => ({
+          infoHash: item.infoHash,
+          contentKey: item.contentKey,
+          title: item.title,
+          sizeBytes: item.presentBytes,
+          complete: item.complete,
+          lastAccessAt: item.lastAccessAt,
+          visibility: item.visibility === 'shared' ? 'shared' : 'private',
+          // A COUNT, not the ids. The owner needs to know whether anyone
+          // else can reach it; naming which devices would tell them about
+          // households they are not part of.
+          sharedWith: Math.max(0, (item.entitled ?? []).length - 1)
+        }))
+      })
+      return
+    }
+
     if (route === 'GET /api/catalog') {
       // ?keys=a,b,c is now REQUIRED, and the unfiltered branch is gone.
       //
@@ -522,8 +588,7 @@ export function createDaemonServer(deps: ServerDeps): http.Server {
         .list()
         .filter(
           (job) =>
-            (job.state === 'queued' || job.state === 'fetching') &&
-            wanted.has(job.contentKey)
+            (job.state === 'queued' || job.state === 'fetching') && wanted.has(job.contentKey)
         )
       const tombstones = await storage.tombstones()
       json(res, 200, {
@@ -582,6 +647,10 @@ export function createDaemonServer(deps: ServerDeps): http.Server {
         resolution: Number(body.resolution) || undefined,
         sizeBytes: Number(body.sizeBytes) || undefined,
         sources: Array.isArray(body.sources) ? body.sources.map(String).slice(0, 20) : undefined,
+        // Why the app wants it, for the queue to show. Matched against the
+        // two it may be rather than cast, so an unknown value is dropped
+        // instead of being stored and rendered as a label nobody wrote.
+        reason: body.reason === 'watching' || body.reason === 'prefetch' ? body.reason : undefined,
         ownerDeviceId: callerDeviceId
       })
       if (!record) {
@@ -627,6 +696,24 @@ export function createDaemonServer(deps: ServerDeps): http.Server {
       // without saying what anyone is fetching.
       const allJobs = jobs.list()
       const mine = allJobs.filter((job) => job.ownerDeviceId === callerDeviceId)
+
+      // WHO SEES WHOSE, and this is a deliberate change of position.
+      //
+      // Jobs were scoped to the caller with no exception for the admin, on
+      // the grounds that admin is not a master key. That still holds for
+      // items — nothing lists another device's files. But a cache list that
+      // cannot say who wants a title cannot answer the first question an
+      // administrator has about their own disk: whose is this, and why.
+      //
+      // So the ADMIN sees the whole queue with owner names; every other
+      // device still sees only its own. The narrow reading: on a server you
+      // administer, the queue is operational information about your
+      // hardware. It is still a real disclosure, and it is confined to the
+      // one person who already decides who may join at all.
+      const deviceNames = new Map(
+        pairing.listDevices().map((device) => [deviceIdForToken(device.token), device.deviceName])
+      )
+      const visibleJobs = isAdminCaller ? allJobs : mine
       json(res, 200, {
         serverName,
         version,
@@ -639,8 +726,13 @@ export function createDaemonServer(deps: ServerDeps): http.Server {
         quotaBytes: callerDevice?.quotaBytes ?? effectiveDefaultQuota(),
         isAdmin: admin.isAdmin(callerDeviceId),
         unclaimed: admin.isUnclaimed(),
-        jobs: mine.map(summarizeJob),
-        othersJobCount: allJobs.length - mine.length,
+        jobs: visibleJobs.map((job) => summarizeJob(job, deviceNames.get(job.ownerDeviceId ?? ''))),
+        // What is on this server that the caller is NOT being shown. For a
+        // member that is everyone else's work — enough to explain why the
+        // box is busy without saying what it is busy with. For the admin,
+        // who now sees the queue in full, nothing is withheld, so it is 0
+        // rather than a number that double-counts what is already listed.
+        othersJobCount: allJobs.length - visibleJobs.length,
         // The CALLER's own opt-in state — each member sees whether THEIR
         // account is linked, plus how many household members are.
         torboxLinked: Boolean(credentials.tokenForDevice(callerDeviceId)),
@@ -667,11 +759,40 @@ export function createDaemonServer(deps: ServerDeps): http.Server {
     // fetched. Admin is allowed too, because the admin can already delete
     // it — but note what admin does NOT get: this route changes access, it
     // does not grant it. An admin cannot add themselves.
+    // Delete a cached item. Owner or admin, matching the sharing route
+    // above and for the same stated reason: the admin can already remove the
+    // file from a shell, so refusing here would imply a boundary that does
+    // not exist. What the admin still cannot do is FIND somebody else's
+    // items — there is no route that lists them — so this is reclaiming
+    // space you can already point at, not a licence to browse.
+    const removeMatch = /^\/api\/items\/([a-f0-9]{40})\/remove$/.exec(url.pathname)
+    if (removeMatch && req.method === 'POST') {
+      const item = await storage.get(removeMatch[1])
+      const mayRemove = Boolean(item) && (item?.ownerDeviceId === callerDeviceId || isAdminCaller)
+      if (!item || !mayRemove) {
+        json(res, 404, { error: 'No such item.' })
+        return
+      }
+      // The FETCH GOES FIRST, and it has to. An incomplete item is listed
+      // and removable, and its job may still be downloading into the very
+      // directory about to be deleted: on Unix the write continues into an
+      // unlinked file and the job is re-queued when its final stat fails,
+      // and on Windows the recursive delete fails outright against the open
+      // handle. Either way the title comes back. Cancelling first stops the
+      // fetch loop between chunks, which is where it already checks.
+      jobs.cancel(item.contentKey)
+      await storage.remove(item.infoHash)
+      // No tombstone. A deliberate delete is not the feeder being told the
+      // household lost interest — if it is still on somebody's list it
+      // should be allowed to come back.
+      json(res, 200, { ok: true })
+      return
+    }
+
     const sharingMatch = /^\/api\/items\/([a-f0-9]{40})\/sharing$/.exec(url.pathname)
     if (sharingMatch && req.method === 'POST') {
       const item = await storage.get(sharingMatch[1])
-      const mayChange =
-        Boolean(item) && (item?.ownerDeviceId === callerDeviceId || isAdminCaller)
+      const mayChange = Boolean(item) && (item?.ownerDeviceId === callerDeviceId || isAdminCaller)
       // Same shape as the stream route: somebody who may not touch this
       // item learns nothing about whether it is here.
       if (!item || !mayChange) {
@@ -696,14 +817,48 @@ export function createDaemonServer(deps: ServerDeps): http.Server {
   }
 }
 
-function summarizeJob(job: JobRecord): Record<string, unknown> {
+/**
+ * A contentKey is catalogId:season:episode, and the title on a job is the
+ * SERIES title — so a queue holding four episodes of two shows listed "Star
+ * Trek: Strange New Worlds" twice and "Outer Banks" twice with nothing to
+ * tell the rows apart. They were never duplicates; they were different
+ * episodes, described identically.
+ *
+ * Parsed from the END, the same way fetcher.ts does it, because a catalogId
+ * can itself contain colons.
+ */
+function episodeOf(contentKey: string): { season?: number; episode?: number } {
+  const parts = contentKey.split(':')
+  if (parts.length < 3) return {}
+  // EMPTINESS IS CHECKED BEFORE CONVERSION, because Number('') is 0 and
+  // Number.isFinite(0) is true. A film's key is `id::` — both segments
+  // empty — so converting first labelled every movie in the queue S00E00.
+  const rawSeason = (parts.at(-2) ?? '').trim()
+  const rawEpisode = (parts.at(-1) ?? '').trim()
+  if (rawEpisode === '') return {}
+  const episode = Number(rawEpisode)
+  if (!Number.isInteger(episode) || episode < 0) return {}
+  // Anime is often numbered straight through with no season at all, so
+  // `id::7` is a real key and not a malformed one. It gets the episode
+  // alone rather than an invented season 0.
+  if (rawSeason === '') return { episode }
+  const season = Number(rawSeason)
+  if (!Number.isInteger(season) || season < 0) return { episode }
+  return { season, episode }
+}
+
+function summarizeJob(job: JobRecord, ownerName?: string): Record<string, unknown> {
   return {
     contentKey: job.contentKey,
+    reason: job.reason,
+    ownerName,
     title: job.title,
     state: job.state,
     attempts: job.attempts,
     progressBytes: job.progressBytes ?? 0,
     sizeBytes: job.sizeBytes,
+    resolution: job.resolution,
+    ...episodeOf(job.contentKey),
     lastError: job.lastError
   }
 }

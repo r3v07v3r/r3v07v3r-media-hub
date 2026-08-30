@@ -11,6 +11,7 @@ import os from 'node:os'
 import type {
   LanCacheCatalogResponse,
   LanCacheDevicesResponse,
+  LanCacheOwnItem,
   LanCachePairResponse,
   LanCachePingResponse,
   LanCacheJobPayload,
@@ -447,6 +448,75 @@ export function registerLanCacheIpc(refreshTrustedHosts: () => void): void {
               ? { defaultQuotaPercent: payload.defaultQuotaPercent }
               : {})
           })
+        })
+        return { ok: true }
+      } catch (error) {
+        return { ok: false, message: (error as Error).message }
+      }
+    }
+  )
+
+  handle(MEDIA_HUB_CHANNELS.lanCacheMyItems, async () => {
+    if (!isLanCacheConnected()) return { ok: false as const, items: [] }
+    try {
+      const answer = await request<{ items: LanCacheOwnItem[] }>('/api/items/mine')
+      return { ok: true as const, items: answer.items ?? [] }
+    } catch {
+      // An older daemon has no such route. Empty rather than an error: the
+      // section already tells people their server predates this work, and a
+      // second failure message about it would be noise.
+      return { ok: false as const, items: [] }
+    }
+  })
+
+  handle<{ infoHash?: string; visibility?: string }, { ok: boolean; message?: string }>(
+    MEDIA_HUB_CHANNELS.lanCacheSetSharing,
+    async (_event, payload) => {
+      // Validated here, not passed through: the hash goes straight into a
+      // URL and the renderer is the least trusted caller in this process.
+      const infoHash = String(payload?.infoHash ?? '')
+      if (!/^[a-f0-9]{40}$/.test(infoHash)) return { ok: false, message: 'Unknown item.' }
+      const visibility = payload?.visibility === 'shared' ? 'shared' : 'private'
+      try {
+        await request(`/api/items/${infoHash}/sharing`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ visibility })
+        })
+        return { ok: true }
+      } catch (error) {
+        return { ok: false, message: (error as Error).message }
+      }
+    }
+  )
+
+  handle<{ infoHash?: string }, { ok: boolean; message?: string }>(
+    MEDIA_HUB_CHANNELS.lanCacheRemoveItem,
+    async (_event, payload) => {
+      const infoHash = String(payload?.infoHash ?? '')
+      if (!/^[a-f0-9]{40}$/.test(infoHash)) return { ok: false, message: 'Unknown item.' }
+      try {
+        await request(`/api/items/${infoHash}/remove`, { method: 'POST' })
+        return { ok: true }
+      } catch (error) {
+        return { ok: false, message: (error as Error).message }
+      }
+    }
+  )
+
+  handle<{ contentKey?: string }, { ok: boolean; message?: string }>(
+    MEDIA_HUB_CHANNELS.lanCacheCancelJob,
+    async (_event, payload) => {
+      // The contentKey goes in the BODY, not the path: it contains colons
+      // and a catalogId can contain more of them, so a path segment would
+      // need escaping on both sides to survive the round trip.
+      const contentKey = String(payload?.contentKey ?? '')
+      if (!contentKey) return { ok: false, message: 'Unknown job.' }
+      try {
+        await request('/api/jobs/cancel', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ contentKey })
         })
         return { ok: true }
       } catch (error) {

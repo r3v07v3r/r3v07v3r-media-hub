@@ -17,7 +17,11 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Icon } from '@renderer/components/icons/Icon'
-import type { LanCacheDevice, LanCacheStatusResponse } from '@shared/lancache/protocol'
+import type {
+  LanCacheDevice,
+  LanCacheOwnItem,
+  LanCacheStatusResponse
+} from '@shared/lancache/protocol'
 import styles from './CachingSection.module.css'
 
 interface DiscoveredDaemon {
@@ -32,6 +36,30 @@ interface DiscoveredDaemon {
  *  a tight poll would just be noise on someone else's server. */
 const PAIR_POLL_MS = 4000
 const STATUS_POLL_MS = 15_000
+
+/** How long ago, in the coarsest unit that is still useful — the question
+ *  this answers is "has it looked recently", not "exactly when". */
+function ago(at: number | undefined): string {
+  if (!at) return 'never'
+  const minutes = Math.max(0, Math.round((Date.now() - at) / 60_000))
+  if (minutes < 1) return 'just now'
+  if (minutes < 60) return `${minutes} min ago`
+  const hours = Math.round(minutes / 60)
+  return hours < 48 ? `${hours} h ago` : `${Math.round(hours / 24)} d ago`
+}
+
+/** SxxEyy, zero padded. "S2 · E7" and "S12 · E7" do not line up in a list;
+ *  the padded form is the one people already read on release names. */
+function episodeLabel(season?: number, episode?: number): string {
+  if (episode === undefined) return ''
+  const pad = (value: number): string => String(value).padStart(2, '0')
+  // Anime is frequently numbered straight through with no season at all,
+  // so an episode on its own is a real key rather than a malformed one. It
+  // gets E07 instead of an invented S00, which would be a claim about the
+  // release that nobody made. A film has neither and gets no chip.
+  if (season === undefined) return `E${pad(episode)}`
+  return `S${pad(season)}E${pad(episode)}`
+}
 
 function bytes(value: number | null | undefined): string {
   if (value === null || value === undefined) return '—'
@@ -54,6 +82,7 @@ export function CachingSection() {
   const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null)
 
   const [devices, setDevices] = useState<LanCacheDevice[]>([])
+  const [myItems, setMyItems] = useState<LanCacheOwnItem[]>([])
   const [openJoin, setOpenJoin] = useState(false)
   const [defaultPercent, setDefaultPercent] = useState(0)
   const [defaultQuotaBytes, setDefaultQuotaBytes] = useState<number | null>(null)
@@ -61,6 +90,10 @@ export function CachingSection() {
   /** Set while a request is in flight so the polls below cannot race a
    *  write and paint the pre-write answer over it. */
   const mutatingRef = useRef(false)
+  /** Whether this device administers the server, which decides whether the
+   *  poll below also refreshes the device list. Named once so the two
+   *  effects that care cannot drift apart. */
+  const isAdmin = status?.isAdmin === true
 
   const refreshStatus = useCallback(async () => {
     if (!api) return
@@ -75,6 +108,14 @@ export function CachingSection() {
       setStatus(null)
       setStatusError('')
     }
+  }, [api])
+
+  const refreshMyItems = useCallback(async () => {
+    if (!api) return
+    const result = await api.myItems()
+    // An older daemon has no such route and answers ok:false. Empty list,
+    // no error — the section already says the server predates this work.
+    setMyItems(result.ok ? result.items : [])
   }, [api])
 
   const refreshDevices = useCallback(async () => {
@@ -99,9 +140,12 @@ export function CachingSection() {
       setDaemons(found.daemons)
       setPairedUrl(found.paired)
       setPairState(pair.state)
-      if (pair.state === 'approved') await refreshStatus()
+      if (pair.state === 'approved') {
+        await refreshStatus()
+        await refreshMyItems()
+      }
     })
-  }, [api, refreshStatus])
+  }, [api, refreshStatus, refreshMyItems])
 
   // Waiting for approval: ask, slowly, until the answer changes. The main
   // process is what flips the stored connection to approved, so this only
@@ -114,36 +158,53 @@ export function CachingSection() {
         setPairState(pair.state)
         if (pair.state === 'approved') {
           setMessage({ ok: true, text: 'Approved. This device may use the cache server.' })
-          await refreshStatus()
+          await Promise.all([refreshStatus(), refreshMyItems()])
         }
       })()
     }, PAIR_POLL_MS)
     return () => window.clearInterval(timer)
-  }, [api, pairState, refreshStatus])
+  }, [api, pairState, refreshStatus, refreshMyItems])
 
   // Joined: keep the figures live, and the device list with them when this
   // device administers the server.
+  //
+  // The owned-item list polls WITH the status, not just on the actions that
+  // change it. A fetch queued here finishes on the server minutes later, and
+  // without this the finished title never appears under what you have
+  // cached — so it cannot be shared or removed until the app is restarted,
+  // which is the point at which somebody assumes the fetch failed.
   useEffect(() => {
     if (!api || pairState !== 'approved') return
     const timer = window.setInterval(() => {
       if (mutatingRef.current) return
-      void refreshStatus()
+      // The device list polls WITH the figures when this device
+      // administers the server. It used to load only when isAdmin
+      // CHANGED, which after the first load it never does — and these
+      // panels stay mounted across navigation, so a join request arriving
+      // afterwards sat unseen until the app was restarted or some
+      // unrelated admin action happened to refresh the list. Approving a
+      // device is the one thing on this page somebody else is waiting on.
+      void Promise.all([
+        refreshStatus(),
+        refreshMyItems(),
+        isAdmin ? refreshDevices() : Promise.resolve()
+      ])
     }, STATUS_POLL_MS)
     return () => window.clearInterval(timer)
-  }, [api, pairState, refreshStatus])
+  }, [api, pairState, isAdmin, refreshStatus, refreshMyItems, refreshDevices])
 
   useEffect(() => {
-    if (!api || !status?.isAdmin) return
+    if (!api || !isAdmin) return
     void Promise.resolve().then(refreshDevices)
-  }, [api, status?.isAdmin, refreshDevices])
+  }, [api, isAdmin, refreshDevices])
 
   const header = (
     <header className={styles.head}>
       <h2 className={styles.title}>Caching</h2>
       <p className={styles.blurb}>
-        A machine on your own network that fetches what you plan to watch ahead of time, so
-        playback starts one LAN hop away instead of over a slow link. Everything it stores expires
-        on its own.
+        A machine on your own network that fetches what you plan to watch ahead of time, so playback
+        starts one LAN hop away instead of over a slow link. Everything it stores expires on its
+        own.
       </p>
     </header>
   )
@@ -157,14 +218,11 @@ export function CachingSection() {
       <div className={styles.wrap}>
         {header}
         <section className={`${styles.card} glass-panel`}>
-          <p className={styles.note}>
-            Cache servers are managed from the desktop app.
-          </p>
+          <p className={styles.note}>Cache servers are managed from the desktop app.</p>
         </section>
       </div>
     )
   }
-
 
   const guard = async (work: () => Promise<void>): Promise<void> => {
     mutatingRef.current = true
@@ -234,10 +292,29 @@ export function CachingSection() {
       await refreshStatus()
     })
 
-  const handleAdminSetting = (patch: {
-    openJoin?: boolean
-    defaultQuotaPercent?: number
-  }): void =>
+  const handleCancelJob = (contentKey: string): void =>
+    void guard(async () => {
+      const result = await api.cancelJob({ contentKey })
+      if (!result.ok) setMessage({ ok: false, text: result.message ?? 'That did not work.' })
+      await refreshStatus()
+    })
+
+  const handleRemoveItem = (infoHash: string): void =>
+    void guard(async () => {
+      const result = await api.removeItem({ infoHash })
+      if (!result.ok) setMessage({ ok: false, text: result.message ?? 'That did not work.' })
+      await refreshMyItems()
+      await refreshStatus()
+    })
+
+  const handleSharing = (infoHash: string, visibility: 'private' | 'shared'): void =>
+    void guard(async () => {
+      const result = await api.setSharing({ infoHash, visibility })
+      if (!result.ok) setMessage({ ok: false, text: result.message ?? 'That did not work.' })
+      await refreshMyItems()
+    })
+
+  const handleAdminSetting = (patch: { openJoin?: boolean; defaultQuotaPercent?: number }): void =>
     void guard(async () => {
       const result = await api.adminSettings(patch)
       if (!result.ok) setMessage({ ok: false, text: result.message ?? 'That did not work.' })
@@ -248,7 +325,14 @@ export function CachingSection() {
   const approved = devices.filter((device) => device.status === 'approved')
   const usedShare = status && status.budgetBytes > 0 ? status.usedBytes / status.budgetBytes : 0
   const myShare =
-    status && status.quotaBytes ? Math.min(1, status.usedByMeBytes / status.quotaBytes) : 0
+    status && status.quotaBytes && status.usedByMeBytes !== undefined
+      ? Math.min(1, status.usedByMeBytes / status.quotaBytes)
+      : 0
+  /** A server built before per-device figures and administration existed.
+   *  Detected by the fields being ABSENT rather than by a version string —
+   *  what the app can offer depends on what this server actually answers,
+   *  not on what its number implies. */
+  const olderServer = Boolean(status) && status?.unclaimed === undefined
 
   return (
     <div className={styles.wrap}>
@@ -262,11 +346,16 @@ export function CachingSection() {
             <h3 className={styles.cardTitle}>Waiting to be let in</h3>
             <p className={styles.note}>
               This device has asked to join {pairedUrl ?? 'the cache server'}. Whoever administers
-              that server approves it there — nothing else is needed here, and this will notice
-              when it happens.
+              that server approves it there — nothing else is needed here, and this will notice when
+              it happens.
             </p>
           </div>
-          <button type="button" className={styles.ghostButton} onClick={handleLeave} disabled={busy}>
+          <button
+            type="button"
+            className={styles.ghostButton}
+            onClick={handleLeave}
+            disabled={busy}
+          >
             Cancel
           </button>
         </section>
@@ -349,105 +438,30 @@ export function CachingSection() {
       {/* ---------- JOINED ---------- */}
       {pairState === 'approved' && (
         <>
-          <section className={`${styles.card} glass-panel`}>
-            <div className={styles.cardHead}>
+          {olderServer && (
+            <section className={`${styles.card} ${styles.claim} glass-panel`}>
+              <span className={styles.claimIcon} aria-hidden="true">
+                <Icon name="info" size={18} />
+              </span>
               <div>
-                <h3 className={styles.cardTitle}>{status?.serverName ?? 'Cache server'}</h3>
+                <h3 className={styles.cardTitle}>This server is running an older build</h3>
                 <p className={styles.note}>
-                  {statusError ? `${pairedUrl} — unreachable right now (${statusError})` : pairedUrl}
+                  It answers without the per-device figures, so &ldquo;Yours&rdquo; and the other
+                  devices&rsquo; queue are blank, and it has no notion of an administrator yet —
+                  which is why there is nothing here to take. It updates itself; this appears once
+                  it has.
                 </p>
               </div>
-              <button
-                type="button"
-                className={styles.ghostButton}
-                onClick={handleLeave}
-                disabled={busy}
-              >
-                Leave
-              </button>
-            </div>
+            </section>
+          )}
+          {/* ADMIN FIRST, above the status card.
 
-            {status && (
-              <>
-                <div className={styles.meters}>
-                  <div className={styles.meter}>
-                    <span className={styles.meterLabel}>The whole server</span>
-                    <span className={styles.meterTrack}>
-                      <span
-                        className={styles.meterFill}
-                        style={{ width: `${Math.min(100, usedShare * 100)}%` }}
-                      />
-                    </span>
-                    <span className={styles.meterValue}>
-                      {bytes(status.usedBytes)} of {bytes(status.budgetBytes)} ·{' '}
-                      {status.itemCount} title{status.itemCount === 1 ? '' : 's'}
-                    </span>
-                  </div>
-                  <div className={styles.meter}>
-                    <span className={styles.meterLabel}>Yours</span>
-                    <span className={styles.meterTrack}>
-                      <span
-                        className={styles.meterFill}
-                        style={{ width: `${Math.min(100, myShare * 100)}%` }}
-                      />
-                    </span>
-                    <span className={styles.meterValue}>
-                      {bytes(status.usedByMeBytes)}
-                      {status.quotaBytes === null
-                        ? ' · no allocation set'
-                        : ` of ${bytes(status.quotaBytes)}`}
-                    </span>
-                  </div>
-                </div>
-
-                <dl className={styles.facts}>
-                  <div>
-                    <dt>Streaming now</dt>
-                    <dd>{status.activeStreams}</dd>
-                  </div>
-                  <div>
-                    <dt>Your queue</dt>
-                    <dd>{status.jobs.length}</dd>
-                  </div>
-                  <div>
-                    <dt>Other devices&apos; queue</dt>
-                    <dd>{status.othersJobCount}</dd>
-                  </div>
-                  <div>
-                    <dt>Your TorBox account</dt>
-                    <dd>{status.torboxLinked ? 'Linked' : 'Not linked'}</dd>
-                  </div>
-                </dl>
-
-                {status.jobs.length > 0 && (
-                  <ul className={styles.jobs}>
-                    {status.jobs.map((job) => (
-                      <li key={job.contentKey} className={styles.job}>
-                        <span className={styles.jobTitle}>{job.title}</span>
-                        <span className={styles.jobState}>
-                          {job.state}
-                          {job.sizeBytes
-                            ? ` · ${Math.round((job.progressBytes / job.sizeBytes) * 100)}%`
-                            : ''}
-                        </span>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-
-                {status.updater?.staged && (
-                  <p className={styles.note}>
-                    Update {status.updater.staged} is ready and applies when the server is idle.
-                  </p>
-                )}
-              </>
-            )}
-          </section>
-
-          {/* Claiming is offered only while the server says nobody owns it.
-              It is on the unauthenticated ping for exactly this reason: an
-              app that has just found a daemon has to know whether to show
-              this before it holds any credential. */}
+              Claiming and the device list were underneath it, and the
+              status card is tall — meters, four figures, the queue and the
+              updater — so "Administer it" sat below the fold and was found
+              by accident. Status is reference and can wait; an unclaimed
+              server and a device waiting for approval are things to ACT on,
+              and they belong where they are seen. */}
           {status?.unclaimed && (
             <section className={`${styles.card} ${styles.claim} glass-panel`}>
               <span className={styles.claimIcon} aria-hidden="true">
@@ -471,15 +485,13 @@ export function CachingSection() {
               </button>
             </section>
           )}
-
           {status?.isAdmin && (
             <section className={`${styles.card} glass-panel`}>
               <div className={styles.cardHead}>
                 <div>
                   <h3 className={styles.cardTitle}>Devices</h3>
                   <p className={styles.note}>
-                    You administer this server. Devices ask to join and wait here until you say
-                    yes.
+                    You administer this server. Devices ask to join and wait here until you say yes.
                   </p>
                 </div>
               </div>
@@ -530,6 +542,51 @@ export function CachingSection() {
                           : bytes(device.quotaBytes)}
                       </span>
                     </span>
+                    {/* The per-device allocation, editable. The daemon has
+                        accepted this since quotas landed and there was no
+                        way to send it — the default slider set everyone the
+                        same share, which is not what per-device means.
+
+                        Blank clears it back to the default rather than
+                        meaning zero: an allocation of nothing would be a way
+                        to lock somebody out by the back door, and the daemon
+                        already treats null as "use the default". */}
+                    <label className={styles.deviceQuota}>
+                      <span className={styles.deviceQuotaLabel}>GB</span>
+                      <input
+                        className={styles.fieldInput}
+                        type="number"
+                        min={1}
+                        step={1}
+                        placeholder="default"
+                        aria-label={`Allocation for ${device.deviceName} in GB`}
+                        defaultValue={
+                          device.quotaBytes === null
+                            ? ''
+                            : String(Math.round(device.quotaBytes / 1024 ** 3))
+                        }
+                        disabled={busy}
+                        onBlur={(event) => {
+                          // ZERO IS BLANK, not an allocation of nothing.
+                          // This field's own help text calls an empty value
+                          // the default and warns that zero would be an
+                          // accidental lockout, but zero was being sent as a
+                          // real quota -- and the next hourly pass evicts
+                          // every item belonging to a device that is over
+                          // its allocation, which for an allocation of zero
+                          // is all of them. Clearing a box should not wipe a
+                          // member's cache.
+                          const raw = event.target.value.trim()
+                          const parsed = raw === '' ? null : Math.round(Number(raw))
+                          if (parsed !== null && !Number.isFinite(parsed)) return
+                          const gb = parsed === null || parsed <= 0 ? null : parsed
+                          handleDevice(device.id, 'quota', gb === null ? null : gb * 1024 ** 3)
+                        }}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter') (event.target as HTMLInputElement).blur()
+                        }}
+                      />
+                    </label>
                     {/* Revoking your own device would lock you out of a
                         server only its console can reopen. The daemon
                         refuses it outright; the button is not offered
@@ -554,8 +611,8 @@ export function CachingSection() {
                     Anyone on this network may join without asking
                   </span>
                   <span className={styles.note}>
-                    Convenient on a network only your household reaches. Off, every new device
-                    waits for you.
+                    Convenient on a network only your household reaches. Off, every new device waits
+                    for you.
                   </span>
                 </span>
                 {/* A switch rather than a checkbox: it is the same
@@ -599,6 +656,265 @@ export function CachingSection() {
                   disabled={busy}
                 />
               </label>
+            </section>
+          )}
+          <section className={`${styles.card} glass-panel`}>
+            <div className={styles.cardHead}>
+              <div>
+                <h3 className={styles.cardTitle}>{status?.serverName ?? 'Cache server'}</h3>
+                <p className={styles.note}>
+                  {statusError
+                    ? `${pairedUrl} — unreachable right now (${statusError})`
+                    : pairedUrl}
+                </p>
+              </div>
+              <button
+                type="button"
+                className={styles.ghostButton}
+                onClick={handleLeave}
+                disabled={busy}
+              >
+                Leave
+              </button>
+            </div>
+
+            {status && (
+              <>
+                <div className={styles.meters}>
+                  <div className={styles.meter}>
+                    <span className={styles.meterLabel}>The whole server</span>
+                    <span className={styles.meterTrack}>
+                      <span
+                        className={styles.meterFill}
+                        style={{ width: `${Math.min(100, usedShare * 100)}%` }}
+                      />
+                    </span>
+                    <span className={styles.meterValue}>
+                      {bytes(status.usedBytes)} of {bytes(status.budgetBytes)} · {status.itemCount}{' '}
+                      title{status.itemCount === 1 ? '' : 's'}
+                    </span>
+                  </div>
+                  <div className={styles.meter}>
+                    <span className={styles.meterLabel}>Yours</span>
+                    <span className={styles.meterTrack}>
+                      <span
+                        className={styles.meterFill}
+                        style={{ width: `${Math.min(100, myShare * 100)}%` }}
+                      />
+                    </span>
+                    <span className={styles.meterValue}>
+                      {bytes(status.usedByMeBytes)}
+                      {status.quotaBytes === null
+                        ? ' · no allocation set'
+                        : ` of ${bytes(status.quotaBytes)}`}
+                    </span>
+                  </div>
+                </div>
+
+                <dl className={styles.facts}>
+                  <div>
+                    <dt>Streaming now</dt>
+                    <dd>{status.activeStreams}</dd>
+                  </div>
+                  <div>
+                    {/* An administrator is shown the whole queue, so calling
+                        it "yours" would be wrong; everyone else is looking at
+                        a list that really is only their own. */}
+                    <dt>{status.isAdmin ? 'Queue' : 'Your queue'}</dt>
+                    <dd>{status.jobs.length}</dd>
+                  </div>
+                  {Boolean(status.othersJobCount) && (
+                    <div>
+                      <dt>Other devices&apos; queue</dt>
+                      <dd>{status.othersJobCount}</dd>
+                    </div>
+                  )}
+                  <div>
+                    <dt>Your TorBox account</dt>
+                    <dd>{status.torboxLinked ? 'Linked' : 'Not linked'}</dd>
+                  </div>
+                </dl>
+
+                {status.jobs.length > 0 && (
+                  <ul className={styles.jobs}>
+                    {status.jobs.map((job) => (
+                      <li key={job.contentKey} className={styles.job}>
+                        <span className={styles.jobTitle}>
+                          <span className={styles.jobTitleText}>{job.title}</span>
+                          {/* The title on a job is the SERIES title, so a
+                              queue holding several episodes of one show was
+                              several identical rows — the "duplicates".
+                              They were always different episodes. */}
+                          {job.episode !== undefined && (
+                            <span className={styles.jobEpisode}>
+                              {episodeLabel(job.season, job.episode)}
+                            </span>
+                          )}
+                          {/* What this entry is doing on the server. The reason comes from
+                                the wanted list, which already knew; the name is sent to the
+                                administrator only, since anyone else is looking at a list of
+                                their own jobs where it could only ever say "you". */}
+                          {job.reason && (
+                            <span className={styles.jobReason}>
+                              {job.reason === 'watching' ? 'Watching' : 'Prefetch'}
+                              {job.ownerName ? `: ${job.ownerName}` : ''}
+                            </span>
+                          )}
+                        </span>
+                        <span className={styles.jobState}>
+                          {job.state}
+                          {job.resolution ? ` · ${job.resolution}p` : ''}
+                          {job.sizeBytes
+                            ? ` · ${Math.round((job.progressBytes / job.sizeBytes) * 100)}%`
+                            : ''}
+                        </span>
+                        {/* Only where there is something to cancel. A
+                            finished fetch stays listed for an hour and a
+                            stopped one for a day, and the daemon cannot
+                            cancel either — the button did nothing on those
+                            rows and reported that it had worked. */}
+                        {(job.state === 'queued' || job.state === 'fetching') && (
+                          <button
+                            type="button"
+                            className={styles.ghostButton}
+                            disabled={busy}
+                            onClick={() => handleCancelJob(job.contentKey)}
+                          >
+                            Cancel
+                          </button>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+
+                {/* The whole updater state, not just the staged line.
+
+                    "Why has it not updated yet" has several correct answers —
+                    it has not looked yet (it checks every four to six hours),
+                    it looked and there was nothing newer, it staged one and is
+                    waiting for a quiet hour, or it tried and failed — and one
+                    line about a staged version could not tell them apart. All
+                    four are in what the daemon already reports; it was simply
+                    not being shown. */}
+                {status.updater && (
+                  <dl className={styles.facts}>
+                    <div>
+                      <dt>Update channel</dt>
+                      <dd className={styles.factSmall}>{status.updater.channel || '—'}</dd>
+                    </div>
+                    <div>
+                      <dt>Last checked</dt>
+                      <dd className={styles.factSmall}>{ago(status.updater.checkedAt)}</dd>
+                    </div>
+                    <div>
+                      <dt>Newest seen</dt>
+                      <dd className={styles.factSmall}>{status.updater.latestSeen || '—'}</dd>
+                    </div>
+                    <div>
+                      <dt>Staged</dt>
+                      <dd className={styles.factSmall}>{status.updater.staged || 'nothing'}</dd>
+                    </div>
+                  </dl>
+                )}
+
+                {status.updater?.staged ? (
+                  <p className={styles.note}>
+                    {status.updater.staged} is ready. It applies once no one has streamed for half
+                    an hour and the hour is a quiet one for this household — or after 24 hours
+                    staged, whichever comes first.
+                  </p>
+                ) : (
+                  <p className={styles.note}>
+                    Nothing staged. The server looks for a new build every four to six hours, so a
+                    release published since its last check has not been seen yet.
+                  </p>
+                )}
+
+                {status.updater?.lastError && (
+                  <p className={`${styles.message} ${styles.messageError}`}>
+                    Last update attempt failed: {status.updater.lastError}
+                  </p>
+                )}
+              </>
+            )}
+          </section>
+
+          {/* Claiming is offered only while the server says nobody owns it.
+              It is on the unauthenticated ping for exactly this reason: an
+              app that has just found a daemon has to know whether to show
+              this before it holds any credential. */}
+
+          {/* YOUR OWN TITLES, and who else can reach them.
+
+              The daemon has had the sharing route since entitlement landed
+              and nothing could call it: there was no way to see your own
+              items, because A1 deleted the listing that showed everybody
+              everything. /api/items/mine is the narrow replacement — scoped
+              to what this device paid for, which is the one listing
+              entitlement allows.
+
+              Not gated on being the administrator. These are your files;
+              deciding who else may watch them is the owner's call, and the
+              admin has no special claim on it. */}
+          {myItems.length > 0 && (
+            <section className={`${styles.card} glass-panel`}>
+              <div className={styles.cardHead}>
+                <div>
+                  <h3 className={styles.cardTitle}>What you have cached</h3>
+                  <p className={styles.note}>
+                    Titles you fetched onto this server. Shared ones can be streamed by anyone else
+                    who has joined it; private ones only by you.
+                  </p>
+                </div>
+              </div>
+              <ul className={styles.deviceList}>
+                {myItems.map((item) => (
+                  <li key={item.infoHash} className={styles.deviceRow}>
+                    <span className={styles.deviceText}>
+                      <span className={styles.deviceName}>{item.title}</span>
+                      <span className={styles.deviceMeta}>
+                        {bytes(item.sizeBytes)}
+                        {item.complete ? '' : ' · still fetching'}
+                        {item.visibility === 'shared'
+                          ? ' · shared with everyone here'
+                          : item.sharedWith > 0
+                            ? ` · shared with ${item.sharedWith} device${item.sharedWith === 1 ? '' : 's'}`
+                            : ' · only you'}
+                      </span>
+                    </span>
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={item.visibility === 'shared'}
+                      aria-label={`Share ${item.title} with everyone on this server`}
+                      className={`${styles.switch} ${item.visibility === 'shared' ? styles.switchOn : ''}`}
+                      disabled={busy}
+                      onClick={() =>
+                        handleSharing(
+                          item.infoHash,
+                          item.visibility === 'shared' ? 'private' : 'shared'
+                        )
+                      }
+                    >
+                      <span className={styles.switchThumb} />
+                    </button>
+                    {/* Deleting a title you fetched. Reclaims the space now
+                        rather than waiting for the idle TTL, and leaves no
+                        tombstone — a deliberate delete is not the feeder
+                        being told the household lost interest, so it may
+                        come back if it is still on somebody's list. */}
+                    <button
+                      type="button"
+                      className={styles.ghostButton}
+                      disabled={busy}
+                      onClick={() => handleRemoveItem(item.infoHash)}
+                    >
+                      Remove
+                    </button>
+                  </li>
+                ))}
+              </ul>
             </section>
           )}
         </>
