@@ -1,0 +1,401 @@
+/* The control centre — the settings/system surface that folds down from the
+   top bar. See ControlCentre.tsx for the transition itself; this file is the
+   surface it lands on, and the colour shift that tells you where you are. */
+
+.panel {
+  /* -------------------------------------------------------------------
+     THE COLOUR SHIFT.
+
+     Every one of these is a token global.css already defines on :root, and
+     every child of this panel reads them without knowing anything has
+     changed — a button styled `background: var(--accent-blue)` comes out
+     matrix green in here and stays exactly as it was everywhere else.
+
+     That inheritance is the entire reason this approach was chosen over
+     restyling components: there are ~4,900 lines of settings UI moving in
+     here, and none of it needs to be touched.
+
+     Known exception, documented so nobody hunts for it: PerformanceWidget's
+     gauge computes its colour ramp in JavaScript, so it cannot inherit
+     these. It takes the ramp as props instead — see SystemStatusStrip.
+     ------------------------------------------------------------------- */
+  --accent-blue: #27e69a;
+  --accent-cyan: #6bffc0;
+  --accent-violet: #16b378;
+  --accent-magenta: #27e69a;
+  --border-subtle: rgba(39, 230, 154, 0.22);
+  --border-active: rgba(39, 230, 154, 0.62);
+  --text-secondary: #8fdcb8;
+  --text-muted: #4f8f74;
+  --panel: rgba(4, 18, 12, 0.72);
+  --panel-strong: rgba(5, 22, 15, 0.92);
+  --background-elevated: rgba(3, 14, 9, 0.86);
+
+  /* The cube's FRONT face. Pushed out along Z by half the cube side so it
+     and the lid meet at a shared edge rather than intersecting through each
+     other's middle. */
+  width: 100%;
+  height: 100%;
+
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+
+  background:
+    linear-gradient(180deg, rgba(6, 26, 18, 0.96) 0%, rgba(2, 10, 7, 0.98) 100%);
+  border-bottom: 1px solid var(--border-active);
+  box-shadow:
+    0 40px 120px rgba(0, 0, 0, 0.7),
+    0 0 90px rgba(39, 230, 154, 0.09);
+  color: var(--text-primary);
+  /* The rain canvas is absolutely positioned against this. */
+  position: relative;
+  isolation: isolate;
+}
+
+/* ---------- The rail and the panel beside it ----------
+
+   The rail sits on the LEFT, in the same column the app face puts its own
+   nav rail. Not decoration: the two faces are sides of one object, and a
+   rail that jumped across the screen when the cube turned would break the
+   impression that anything solid was rotating. */
+.layout {
+  /* Above the rain canvas, which sits at z-index 0. */
+  position: relative;
+  z-index: 1;
+  flex: 1 1 auto;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+}
+
+.rail {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 22px 14px;
+  border-right: 1px solid var(--border-subtle);
+  /* Its own scroller. The panel beside it is long, and a rail that
+     scrolled away with the content would leave no way back without
+     scrolling to the top first. */
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.railButton {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 10px 14px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 0.88rem;
+  font-weight: 540;
+  text-align: left;
+  cursor: pointer;
+  white-space: nowrap;
+  transition:
+    background 180ms var(--ease-smooth),
+    border-color 180ms var(--ease-smooth),
+    color 180ms var(--ease-smooth);
+}
+
+.railButton:hover,
+.railButton:focus-visible {
+  color: var(--text-primary);
+  border-color: var(--border-subtle);
+}
+
+.railButtonActive {
+  background: rgba(39, 230, 154, 0.12);
+  border-color: var(--border-active);
+  color: var(--accent-cyan);
+}
+
+.railIcon {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+}
+
+html[data-motion-user-disabled='true'] .railButton {
+  transition: none;
+}
+
+@media (max-width: 767px) {
+  /* Too narrow for a rail and a panel side by side, so the rail becomes a
+     scrolling strip across the top and the labels carry it. */
+  .layout {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  .rail {
+    flex-direction: row;
+    padding: 12px;
+    border-right: none;
+    border-bottom: 1px solid var(--border-subtle);
+    overflow-x: auto;
+  }
+
+  .railButton {
+    flex: none;
+  }
+}
+
+/* The scrolling body. Deliberately the scroll container rather than the
+   panel itself: the panel is what carries the 3D transform, and animating a
+   transform on an element that is also scrolling is where Electron's
+   compositor gets expensive. */
+.body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 22px 28px 32px;
+}
+
+/* Everything below the fold's hinge fades in slightly after the panel has
+   started opening, so the content is not visibly skewed mid-rotation. */
+.content {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+/* The `hidden` attribute sets display:none through a UA rule, and ANY
+   author `display` beats it — so .content above silently un-hid every
+   inactive panel and the sections stacked on top of each other. Caught by
+   looking at it; the markup was already correct.
+
+   Restated here at higher specificity rather than by dropping the flex
+   layout: the panels genuinely are columns when they are shown. */
+.content[hidden] {
+  display: none;
+}
+
+/* ---------- The one thing the token override cannot reach ----------
+
+   `.glass-panel` (global.css) is what every settings card is built on, and
+   it hardcodes its colours rather than reading tokens:
+
+     background: linear-gradient(145deg, rgba(18, 26, 42, .78), rgba(5, 10, 19, .64));
+     border: 1px solid rgba(143, 183, 224, .2);
+
+   So the panel around them turned green and every card inside stayed navy —
+   caught by looking at it, not by the typecheck. Restyled here, scoped to
+   this panel, rather than changed in global.css: that class is used across
+   the whole app and this is the one place it should look different.
+
+   :global() because .glass-panel is a plain global class, not a CSS-module
+   local — without it the selector would be renamed and match nothing. */
+.panel :global(.glass-panel) {
+  background: linear-gradient(145deg, rgba(8, 32, 22, 0.78), rgba(2, 12, 8, 0.66));
+  border-color: rgba(39, 230, 154, 0.2);
+  box-shadow:
+    0 20px 50px rgba(0, 0, 0, 0.45),
+    inset 0 1px 0 rgba(107, 255, 192, 0.06);
+}
+
+@media (max-width: 767px) {
+  .header {
+    padding: 14px 16px 12px;
+  }
+
+  .body {
+    padding: 16px 16px 24px;
+  }
+}
+
+/* ---------- The glitch ----------
+
+   Cards flicker like a panel that dropped a frame rendering itself.
+
+   THE RULE THIS IS BUILT AROUND: it may never move anything, resize
+   anything, or make anything harder to read while it is happening. A card
+   that jumps under a cursor mid-click is not atmosphere, it is a bug that
+   somebody asked for. So the effect is opacity and a hairline colour shift
+   only — no transform, no layout property, and never on text the person
+   might be reading at that moment.
+
+   MOSTLY OFF. The animation is 9 seconds of nothing with roughly a tenth of
+   a second of disturbance in it. A flicker that reads as a glitch has to be
+   rare and short; at any higher rate it stops reading as a fault in the
+   render and starts reading as a fault in the app.
+
+   Each card is offset by its position so they never fire together — one
+   panel glitching is a machine under load, all of them at once is a strobe.
+*/
+@keyframes ccGlitch {
+  0%,
+  96.4%,
+  100% {
+    opacity: 1;
+    border-color: var(--border-subtle);
+  }
+  96.8% {
+    opacity: 0.55;
+    border-color: var(--border-active);
+  }
+  97.2% {
+    opacity: 1;
+  }
+  97.6% {
+    opacity: 0.78;
+    border-color: var(--accent-cyan);
+  }
+  98.1% {
+    opacity: 1;
+    border-color: var(--border-subtle);
+  }
+}
+
+/* Gated on the face actually being toward the viewer. The control centre is
+   the far side of a cube that exists all the time and is looked at rarely,
+   so the DEFAULT state of every effect here is off — an infinite animation
+   ticking on a surface nobody can see is pure cost. The rain does the same
+   thing in JS; this is the CSS half. */
+html[data-control-centre='true'] .panel :global(.glass-panel) {
+  animation: ccGlitch 7.3s steps(1, end) infinite;
+}
+
+/* DESYNCHRONISED BY DURATION, not just by delay.
+
+   The stagger used to be three nth-of-type rules with fixed offsets on one
+   shared 9s duration. That gave four distinct rhythms at most, every card
+   in a bucket fired together, and because the period was identical they
+   re-aligned on every cycle — so the whole field appeared to flash at once,
+   forever.
+
+   Twelve (duration, delay) pairs cycling by nth-child instead. The
+   durations share no small common multiple, which is the part that matters:
+   two cards that happen to flash together once will not do it again for a
+   very long time, because their periods drift apart rather than repeating.
+   The varying duration also varies the flash ITSELF — the disturbance is a
+   fixed percentage of the cycle, so a 14.3s card blinks for about twice as
+   long as a 7.3s one.
+
+   EVERY RULE CARRIES THE html[data-control-centre] PREFIX, and it has to.
+   The base rule above is gated on that attribute, which makes it one
+   specificity step stronger than a bare `.panel .glass-panel:nth-...`. The
+   original stagger was written without it and was therefore silently
+   overridden by the shared duration it was trying to vary — which is why
+   the whole field flashed in unison rather than being staggered at all. */
+html[data-control-centre='true'] .panel :global(.glass-panel):nth-child(12n + 1) {
+  animation-duration: 7.3s;
+  animation-delay: -0.4s;
+}
+
+html[data-control-centre='true'] .panel :global(.glass-panel):nth-child(12n + 2) {
+  animation-duration: 11.9s;
+  animation-delay: -5.2s;
+}
+
+html[data-control-centre='true'] .panel :global(.glass-panel):nth-child(12n + 3) {
+  animation-duration: 9.1s;
+  animation-delay: -2.7s;
+}
+
+html[data-control-centre='true'] .panel :global(.glass-panel):nth-child(12n + 4) {
+  animation-duration: 13.7s;
+  animation-delay: -8.9s;
+}
+
+html[data-control-centre='true'] .panel :global(.glass-panel):nth-child(12n + 5) {
+  animation-duration: 8.3s;
+  animation-delay: -6.1s;
+}
+
+html[data-control-centre='true'] .panel :global(.glass-panel):nth-child(12n + 6) {
+  animation-duration: 12.7s;
+  animation-delay: -1.3s;
+}
+
+html[data-control-centre='true'] .panel :global(.glass-panel):nth-child(12n + 7) {
+  animation-duration: 10.1s;
+  animation-delay: -7.7s;
+}
+
+html[data-control-centre='true'] .panel :global(.glass-panel):nth-child(12n + 8) {
+  animation-duration: 14.3s;
+  animation-delay: -3.5s;
+}
+
+html[data-control-centre='true'] .panel :global(.glass-panel):nth-child(12n + 9) {
+  animation-duration: 7.9s;
+  animation-delay: -9.4s;
+}
+
+html[data-control-centre='true'] .panel :global(.glass-panel):nth-child(12n + 10) {
+  animation-duration: 11.3s;
+  animation-delay: -4.8s;
+}
+
+html[data-control-centre='true'] .panel :global(.glass-panel):nth-child(12n + 11) {
+  animation-duration: 9.7s;
+  animation-delay: -11.2s;
+}
+
+html[data-control-centre='true'] .panel :global(.glass-panel):nth-child(12n + 12) {
+  animation-duration: 13.1s;
+  animation-delay: -2.1s;
+}
+
+/* A scanline crawling down the face — the other half of the look, and the
+   one that costs nothing: a single gradient moved by transform on its own
+   layer, compositor-only, no repaint. */
+.panel::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background: linear-gradient(
+    180deg,
+    transparent 0%,
+    rgba(107, 255, 192, 0.05) 45%,
+    rgba(107, 255, 192, 0.09) 50%,
+    rgba(107, 255, 192, 0.05) 55%,
+    transparent 100%
+  );
+}
+
+html[data-control-centre='true'] .panel::after {
+  animation: ccScan 7.5s linear infinite;
+}
+
+@keyframes ccScan {
+  from {
+    transform: translateY(-100%);
+  }
+  to {
+    transform: translateY(100%);
+  }
+}
+
+/* Every opt-out this app already honours. The glitch is the first thing
+   somebody sensitive to motion would want gone, and 'decorative' is exactly
+   what these flags mean. */
+html[data-motion-user-disabled='true'] .panel :global(.glass-panel),
+html[data-motion-suspended='true'] .panel :global(.glass-panel),
+html[data-motion-user-disabled='true'] .panel::after,
+html[data-motion-suspended='true'] .panel::after {
+  animation: none;
+}
+
+/* Matched to the ENABLING selector's shape on purpose. Gating the effects
+   behind html[data-control-centre='true'] raised their specificity, and a
+   bare `.panel .glass-panel` here would have quietly stopped winning — an
+   accessibility opt-out that silently stops applying is the worst kind of
+   regression, because nothing about it looks broken to whoever it still
+   works for. */
+@media (prefers-reduced-motion: reduce) {
+  html[data-control-centre='true'] .panel :global(.glass-panel),
+  html[data-control-centre='true'] .panel::after {
+    animation: none;
+  }
+}

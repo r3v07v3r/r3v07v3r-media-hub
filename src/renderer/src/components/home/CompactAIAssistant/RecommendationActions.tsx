@@ -11,8 +11,8 @@ import { Icon } from '@renderer/components/icons/Icon'
 import styles from './CompactAIAssistant.module.css'
 
 const ICON_BY_KIND: Record<CategoryKind, string> = {
-  movie: 'play-outline',
-  series: 'stack',
+  movie: 'movies',
+  series: 'tv',
   anime: 'anime'
 }
 const LABEL_BY_KIND: Record<CategoryKind, string> = {
@@ -20,10 +20,26 @@ const LABEL_BY_KIND: Record<CategoryKind, string> = {
   series: 'Recommend Next Series',
   anime: 'Recommend Next Anime'
 }
+const DESCRIPTION_BY_KIND: Record<CategoryKind, string> = {
+  movie: 'Get a movie picked for you based on your watch history.',
+  series: 'Find your next series to binge based on your taste.',
+  anime: 'Get an anime picked for you based on your watch history.'
+}
 const NOUN_BY_KIND: Record<CategoryKind, string> = {
   movie: 'movie',
   series: 'series',
   anime: 'anime'
+}
+/** One neon identity per kind — lifted straight from global.css's own
+ *  accent palette (--accent-magenta/--accent-cyan/--accent-violet), not
+ *  invented colors, so each card's glow still reads as "this app's
+ *  palette" rather than a one-off. Passed as CSS custom properties
+ *  (below) rather than a per-kind class so this stays a single button
+ *  style parameterized by kind, not three near-duplicate ones. */
+const ACCENT_BY_KIND: Record<CategoryKind, { color: string; glow: string }> = {
+  movie: { color: '#ff4fa7', glow: 'rgba(255, 79, 167, 0.4)' },
+  series: { color: '#38e5ff', glow: 'rgba(56, 229, 255, 0.38)' },
+  anime: { color: '#8d4dff', glow: 'rgba(141, 77, 255, 0.4)' }
 }
 
 /** Module scope, not a closure inside the component: react-hooks/purity
@@ -196,19 +212,34 @@ export function RecommendationActions({ kinds = ['movie', 'series'] }: Recommend
 
   return (
     <div className={styles.actions}>
-      {kinds.map((kind) => (
-        <button
-          key={kind}
-          type="button"
-          className={styles.actionButton}
-          onClick={() => recommend(kind)}
-          disabled={loading !== null}
-        >
-          <Icon name={ICON_BY_KIND[kind]} />
-          {LABEL_BY_KIND[kind]}
-          {loading === kind && <span className={styles.actionSpinner} aria-hidden="true" />}
-        </button>
-      ))}
+      {kinds.map((kind) => {
+        const accent = ACCENT_BY_KIND[kind]
+        return (
+          <button
+            key={kind}
+            type="button"
+            className={styles.actionButton}
+            style={{
+              ['--action-color' as string]: accent.color,
+              ['--action-glow' as string]: accent.glow
+            }}
+            onClick={() => recommend(kind)}
+            disabled={loading !== null}
+          >
+            <span className={styles.actionTop}>
+              <span className={styles.actionIcon} aria-hidden="true">
+                {loading === kind ? (
+                  <span className={styles.actionSpinner} />
+                ) : (
+                  <Icon name={ICON_BY_KIND[kind]} />
+                )}
+              </span>
+              <span className={styles.actionLabel}>{LABEL_BY_KIND[kind]}</span>
+            </span>
+            <span className={styles.actionDescription}>{DESCRIPTION_BY_KIND[kind]}</span>
+          </button>
+        )
+      })}
     </div>
   )
 }

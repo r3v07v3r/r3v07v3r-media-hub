@@ -20,9 +20,11 @@
 import { app, BrowserWindow } from 'electron'
 import { autoUpdater } from 'electron-updater'
 import { MEDIA_HUB_CHANNELS } from '../../shared/media-hub/ipc-channels'
+import { clampNotes, currentReleaseNotes } from './releaseNotes'
 import type {
   UpdateCheckResult,
   UpdateState,
+  ReleaseNotesResult,
   UpdateStatusPayload
 } from '../../shared/media-hub/types'
 import { handle } from './ipcGuard'
@@ -53,6 +55,28 @@ function updateStatus(
  * recurring check itself is registered in backgroundJobs.ts — see
  * checkForUpdates below.
  */
+/**
+ * electron-updater types releaseNotes as a string, a per-version array, or
+ * null depending on provider and config. Only the GitHub provider's plain
+ * string form is used here; an array is joined newest-first so a person who
+ * skipped versions still sees why. HTML is stripped because the release body
+ * is Markdown that some providers pre-render, and the card renders text.
+ */
+function offeredNotes(notes: unknown): string | undefined {
+  const raw = Array.isArray(notes)
+    ? notes
+        .map((entry) =>
+          entry && typeof entry === 'object' && 'note' in entry ? String(entry.note ?? '') : ''
+        )
+        .filter(Boolean)
+        .join('\n')
+    : typeof notes === 'string'
+      ? notes
+      : ''
+  const text = clampNotes(raw.replace(/<[^>]*>/g, ' ').replace(/[ \t]+/g, ' '))
+  return text || undefined
+}
+
 export function setupAutoUpdater(win: BrowserWindow): void {
   if (!app.isPackaged) return
 
@@ -62,7 +86,10 @@ export function setupAutoUpdater(win: BrowserWindow): void {
   autoUpdater.on('checking-for-update', () => updateStatus(win, 'checking'))
   autoUpdater.on('update-available', (info) => {
     updateReady = false
-    updateStatus(win, 'available', { version: info.version })
+    updateStatus(win, 'available', {
+      version: info.version,
+      releaseNotes: offeredNotes(info.releaseNotes)
+    })
   })
   autoUpdater.on('update-not-available', () =>
     updateStatus(win, 'current', { version: app.getVersion() })
@@ -72,7 +99,10 @@ export function setupAutoUpdater(win: BrowserWindow): void {
   )
   autoUpdater.on('update-downloaded', (info) => {
     updateReady = true
-    updateStatus(win, 'ready', { version: info.version })
+    updateStatus(win, 'ready', {
+      version: info.version,
+      releaseNotes: offeredNotes(info.releaseNotes)
+    })
   })
   autoUpdater.on('error', (error) => {
     logError('autoUpdater', error)
@@ -110,6 +140,11 @@ export function registerAutoUpdateIpc(): void {
     const version = result?.updateInfo?.version || app.getVersion()
     return { state: version === app.getVersion() ? 'current' : 'available', version }
   })
+
+  handle<undefined, ReleaseNotesResult>(MEDIA_HUB_CHANNELS.updateNotes, () => ({
+    current: currentReleaseNotes(),
+    version: app.getVersion()
+  }))
 
   handle<undefined, { ok: boolean }>(MEDIA_HUB_CHANNELS.updateInstall, () => {
     if (app.isPackaged && updateReady) autoUpdater.quitAndInstall(false, true)

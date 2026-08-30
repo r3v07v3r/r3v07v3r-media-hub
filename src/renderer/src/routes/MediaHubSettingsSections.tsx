@@ -8,8 +8,7 @@ import type {
   SimklStatus,
   TraktStartResult,
   TraktStatusResult,
-  MalStatus,
-  PartyMode
+  MalStatus
 } from '@shared/media-hub/types'
 import styles from './Settings.module.css'
 
@@ -596,11 +595,12 @@ export function MalSection() {
     try {
       const result = await api.mal.reconcileApply(preview)
       setPreview(null)
+      const applied = result.toLocal.length + result.toMal.length + result.ratings.length
       setReconcileStatus({
         kind: result.errors.length ? 'error' : 'ok',
-        message: `Applied ${result.toLocal.length + result.toMal.length} update${
-          result.toLocal.length + result.toMal.length === 1 ? '' : 's'
-        }${result.errors.length ? `, ${result.errors.length} failed` : ''}.`
+        message: `Applied ${applied} update${applied === 1 ? '' : 's'}${
+          result.errors.length ? `, ${result.errors.length} failed` : ''
+        }.`
       })
     } catch (error) {
       setReconcileStatus({
@@ -651,6 +651,9 @@ export function MalSection() {
             <p className={styles.rowDescription} style={{ marginTop: 8 }}>
               {preview.toMal.length} update{preview.toMal.length === 1 ? '' : 's'} to push to MAL,{' '}
               {preview.toLocal.length} to pull in locally
+              {preview.ratingsToLocal.length
+                ? `, ${preview.ratingsToLocal.length} rating${preview.ratingsToLocal.length === 1 ? '' : 's'} to pull in`
+                : ''}
               {preview.unmatched.length ? `, ${preview.unmatched.length} unmatched` : ''}.
             </p>
           )}
@@ -917,7 +920,7 @@ export function OpenSubtitlesSection() {
  * party-sync-worker/ in the repo) that Rooms can host through
  * instead of a direct LAN/WAN connection, for when a host's router won't
  * cooperate with UPnP/NAT-PMP. Configuring this here just unlocks the
- * "Relay" option in WatchPartySection below — it doesn't itself start or
+ * "Relay" option in the Rooms dialog — it does not itself start or
  * join a room.
  */
 export function R3PartySyncSection() {
@@ -1014,174 +1017,6 @@ export function R3PartySyncSection() {
               {status.kind === 'busy' ? 'Connecting…' : 'Connect'}
             </button>
             <StatusLine status={status} />
-          </div>
-        </>
-      )}
-    </section>
-  )
-}
-
-/**
- * Rooms — setup/connection controls only (host/join/leave, current
- * members). The live in-session queue/voting UI is a separate concern
- * from Settings and isn't part of this section; this just covers getting
- * into (or out of) a room, the same "configuration surface" scope as
- * every other section on this page.
- *
- * Reads/writes the same AppStateContext party slice the topbar's
- * PartyButton/SessionHub use — one source of truth, so hosting/joining
- * from here is immediately reflected in the topbar and vice versa.
- */
-export function WatchPartySection() {
-  const {
-    partyStatus,
-    partyHostCode,
-    mediaHubSettings,
-    refreshMediaHubSettings,
-    hostParty,
-    joinParty,
-    leaveParty
-  } = useAppState()
-  const [nameEdited, setNameEdited] = useState<string | null>(null)
-  const name = nameEdited ?? mediaHubSettings?.partyDisplayName ?? ''
-  const [joinCode, setJoinCode] = useState('')
-  const [mode, setMode] = useState<PartyMode>('direct')
-  const [actionStatus, setActionStatus] = useState<Status>({ kind: 'idle' })
-  const relayReady = mediaHubSettings?.partySyncConnected ?? false
-
-  function rememberName(value: string): void {
-    window.api?.mediaHub?.settings.setPartyDisplayName(value).then(() => refreshMediaHubSettings())
-  }
-
-  async function host() {
-    if (!name.trim()) return
-    setActionStatus({ kind: 'busy' })
-    try {
-      await hostParty(name.trim(), relayReady ? mode : 'direct')
-      rememberName(name.trim())
-      setActionStatus({ kind: 'idle' })
-    } catch (error) {
-      setActionStatus({
-        kind: 'error',
-        message: error instanceof Error ? error.message : 'Could not start a party.'
-      })
-    }
-  }
-
-  async function join() {
-    if (!joinCode.trim() || !name.trim()) return
-    setActionStatus({ kind: 'busy' })
-    try {
-      await joinParty(joinCode.trim(), name.trim())
-      rememberName(name.trim())
-      setActionStatus({ kind: 'idle' })
-    } catch (error) {
-      setActionStatus({
-        kind: 'error',
-        message: error instanceof Error ? error.message : 'Could not join that party.'
-      })
-    }
-  }
-
-  async function leave() {
-    setActionStatus({ kind: 'busy' })
-    await leaveParty().catch(() => {})
-    setActionStatus({ kind: 'idle' })
-  }
-
-  const inParty = partyStatus?.inParty ?? false
-
-  return (
-    <section className={`${styles.section} glass-panel`} aria-labelledby="settings-party">
-      <div className={styles.serviceHead}>
-        <h2 id="settings-party" className={styles.sectionTitle} style={{ marginBottom: 0 }}>
-          Rooms
-        </h2>
-        <ConnectionBadge connected={inParty} />
-      </div>
-      <p className={styles.rowDescription} style={{ marginBottom: 10 }}>
-        Your name and fallback connection controls. Use Rooms in the top navigation for the live
-        conversation, people, and shared queue.
-      </p>
-      {inParty ? (
-        <>
-          <p className={styles.rowDescription}>
-            {partyStatus?.role === 'host' ? 'Hosting' : 'Joined'} as {partyStatus?.selfName}
-            {partyHostCode && (
-              <>
-                {' '}
-                — code <strong>{partyHostCode}</strong>
-              </>
-            )}
-            {partyStatus?.members?.length ? ` · ${partyStatus.members.length} in the room` : ''}
-          </p>
-          <div className={styles.serviceActions}>
-            <button type="button" className={styles.testButton} onClick={leave}>
-              Leave room
-            </button>
-            <StatusLine status={actionStatus} />
-          </div>
-        </>
-      ) : (
-        <>
-          <div className={styles.serviceFields}>
-            <label className={styles.field}>
-              <span className={styles.fieldLabel}>Your name</span>
-              <input
-                className={styles.fieldInput}
-                type="text"
-                value={name}
-                onChange={(e) => setNameEdited(e.target.value)}
-              />
-            </label>
-            <label className={styles.field}>
-              <span className={styles.fieldLabel}>Room code (to join one)</span>
-              <input
-                className={styles.fieldInput}
-                type="text"
-                placeholder="Leave blank to host instead"
-                value={joinCode}
-                onChange={(e) => setJoinCode(e.target.value)}
-              />
-            </label>
-          </div>
-          {!joinCode.trim() && relayReady && (
-            <div className={styles.segmentGroup} role="radiogroup" aria-label="Room connection">
-              <button
-                type="button"
-                role="radio"
-                aria-checked={mode === 'direct'}
-                className={`${styles.segmentButton} ${mode === 'direct' ? styles.segmentButtonActive : ''}`}
-                onClick={() => setMode('direct')}
-              >
-                Direct
-              </button>
-              <button
-                type="button"
-                role="radio"
-                aria-checked={mode === 'relay'}
-                className={`${styles.segmentButton} ${mode === 'relay' ? styles.segmentButtonActive : ''}`}
-                onClick={() => setMode('relay')}
-              >
-                Relay
-              </button>
-            </div>
-          )}
-          <div className={styles.serviceActions} style={{ marginTop: 10 }}>
-            <button
-              type="button"
-              className={styles.testButton}
-              onClick={joinCode.trim() ? join : host}
-              disabled={!name.trim() || actionStatus.kind === 'busy'}
-            >
-              <Icon name="people" size={12} />{' '}
-              {actionStatus.kind === 'busy'
-                ? 'Working…'
-                : joinCode.trim()
-                  ? 'Join room'
-                  : 'Host a room'}
-            </button>
-            <StatusLine status={actionStatus} />
           </div>
         </>
       )}
@@ -1703,7 +1538,7 @@ export function TraktSection() {
       </p>
 
       {connected ? (
-        <div className={styles.serviceFields} style={{ flexDirection: 'column', gap: 8 }}>
+        <div className={`${styles.serviceFields} ${styles.serviceFieldsStacked}`}>
           <div className={styles.serviceActions}>
             <span className={styles.rowDescription}>
               Signed in{status?.username ? ` as ${status.username}` : ''}.
@@ -1729,7 +1564,7 @@ export function TraktSection() {
           <StatusLine status={importStatus} />
         </div>
       ) : pending ? (
-        <div className={styles.serviceFields} style={{ flexDirection: 'column', gap: 8 }}>
+        <div className={`${styles.serviceFields} ${styles.serviceFieldsStacked}`}>
           <span className={styles.rowDescription}>
             Enter this code at{' '}
             <button
@@ -1756,7 +1591,7 @@ export function TraktSection() {
           <StatusLine status={{ kind: 'busy' }} />
         </div>
       ) : (
-        <div className={styles.serviceFields} style={{ flexDirection: 'column', gap: 8 }}>
+        <div className={`${styles.serviceFields} ${styles.serviceFieldsStacked}`}>
           <label className={styles.field}>
             <span className={styles.fieldLabel}>Client ID</span>
             <input

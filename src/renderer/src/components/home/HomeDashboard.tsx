@@ -4,6 +4,7 @@ import { ContinueWatchingPanel } from './ContinueWatchingPanel'
 import { RecommendationCarousel } from './RecommendationCarousel'
 import { PerformanceWidget } from './PerformanceWidget'
 import { MoodBrowser } from './MoodBrowser'
+import { PlannedRow } from './PlannedRow'
 import { useRestoreBrowsingOrigin } from '@renderer/lib/mediaHub/useRestoreBrowsingOrigin'
 import styles from './HomeDashboard.module.css'
 
@@ -24,6 +25,9 @@ export function HomeDashboard() {
       <CompactAIAssistant />
       <FeaturedHero />
       <ContinueWatchingPanel />
+      {/* Above the guesses: what somebody has already decided they
+          want beats what this app thinks they might. */}
+      <PlannedRow />
       <RecommendationCarousel />
       <PerformanceWidget />
       <MoodBrowser />

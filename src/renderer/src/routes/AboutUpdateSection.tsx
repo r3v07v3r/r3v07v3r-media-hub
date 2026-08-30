@@ -26,12 +26,30 @@ export function AboutUpdateSection() {
   const { mediaHubSettings, refreshMediaHubSettings } = useAppState()
   const [status, setStatus] = useState<UpdateStatusPayload | null>(null)
   const [checking, setChecking] = useState(false)
+  const [notes, setNotes] = useState('')
   const runAction = useAsyncAction()
 
   useEffect(() => {
     const api = window.api?.mediaHub
     if (!api) return
     return api.update.onStatus(setStatus)
+  }, [])
+
+  // The running build's own note. Read once — it is baked into the build and
+  // cannot change while the app is open. A build made outside the release
+  // workflow has none, which is why an empty answer renders nothing at all
+  // rather than an empty heading.
+  useEffect(() => {
+    const api = window.api?.mediaHub
+    if (!api) return
+    void Promise.resolve().then(async () => {
+      try {
+        const result = await api.update.notes()
+        setNotes(result.current)
+      } catch {
+        // Nothing to say is the normal case, so a failure to read says nothing.
+      }
+    })
   }, [])
 
   async function handleCheck() {
@@ -86,7 +104,7 @@ export function AboutUpdateSection() {
       </h2>
 
       <div className={styles.versionRow}>
-        <span className={styles.versionLabel}>R3 Media Center</span>
+        <span className={styles.versionLabel}>R3 Media Hub</span>
         <span className={styles.versionNumber}>{version ? `v${version}` : '—'}</span>
       </div>
 
@@ -149,6 +167,31 @@ export function AboutUpdateSection() {
               {status.state === 'error' && status.message ? ` ${status.message}` : ''}
             </p>
           )}
+
+          {/* Two different notes, and only ever one of them. While an update
+              is being offered or is waiting to install, what matters is what
+              the NEW version changes — reading about it is the whole point of
+              being told an update exists. Otherwise the note describes the
+              build actually running. Labelled so the two can never be
+              mistaken for each other. */}
+          {(() => {
+            const offered =
+              (status?.state === 'available' || status?.state === 'ready') && status.releaseNotes
+                ? status.releaseNotes
+                : ''
+            const shown = offered || notes
+            if (!shown) return null
+            return (
+              <div className={styles.notes}>
+                <span className={styles.notesLabel}>
+                  {offered
+                    ? `What's new in v${status?.version ?? 'the update'}`
+                    : "What's new in this version"}
+                </span>
+                <p className={styles.notesBody}>{shown}</p>
+              </div>
+            )
+          })()}
         </>
       )}
     </section>

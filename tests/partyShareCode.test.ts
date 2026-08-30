@@ -2,8 +2,8 @@ import assert from 'node:assert'
 import crypto from 'node:crypto'
 import {
   decodeShareCode,
-  encodeRelayShareCodeV3,
-  encodeShareCodeV3
+  encodeRelayShareCodeCompact,
+  encodeShareCodeCompact
 } from '../src/main/media-hub/party.ts'
 
 let pass = 0
@@ -37,14 +37,14 @@ const LEGACY_V2 =
 console.log('party share codes')
 
 check('round-trips a relay code', () => {
-  const decoded = decodeShareCode(encodeRelayShareCodeV3({ relay: RELAY, secret: SECRET }))
+  const decoded = decodeShareCode(encodeRelayShareCodeCompact({ relay: RELAY, secret: SECRET }))
   assert.ok(decoded && decoded.v === 2)
   assert.deepEqual(decoded.relay, RELAY)
   assert.equal(decoded.secret, SECRET)
 })
 
 check('round-trips a direct code with a WAN endpoint', () => {
-  const decoded = decodeShareCode(encodeShareCodeV3({ lan: LAN, wan: WAN, secret: SECRET }))
+  const decoded = decodeShareCode(encodeShareCodeCompact({ lan: LAN, wan: WAN, secret: SECRET }))
   assert.ok(decoded && decoded.v === 1)
   assert.deepEqual(decoded.lan, LAN)
   assert.deepEqual(decoded.wan, WAN)
@@ -52,7 +52,7 @@ check('round-trips a direct code with a WAN endpoint', () => {
 })
 
 check('round-trips a direct code with no WAN endpoint', () => {
-  const decoded = decodeShareCode(encodeShareCodeV3({ lan: LAN, wan: null, secret: SECRET }))
+  const decoded = decodeShareCode(encodeShareCodeCompact({ lan: LAN, wan: null, secret: SECRET }))
   assert.ok(decoded && decoded.v === 1)
   assert.deepEqual(decoded.lan, LAN)
   assert.equal(decoded.wan, null)
@@ -60,14 +60,14 @@ check('round-trips a direct code with no WAN endpoint', () => {
 
 check('keeps an IPv6 LAN address intact', () => {
   const lan = { ip: 'fe80::1c2d:3e4f:5a6b:7c8d', port: 8080 }
-  const decoded = decodeShareCode(encodeShareCodeV3({ lan, secret: SECRET }))
+  const decoded = decodeShareCode(encodeShareCodeCompact({ lan, secret: SECRET }))
   assert.ok(decoded && decoded.v === 1)
   assert.deepEqual(decoded.lan, lan)
 })
 
 check('is far shorter than the codes it replaces', () => {
-  const relay = encodeRelayShareCodeV3({ relay: RELAY, secret: SECRET })
-  const direct = encodeShareCodeV3({ lan: LAN, wan: WAN, secret: SECRET })
+  const relay = encodeRelayShareCodeCompact({ relay: RELAY, secret: SECRET })
+  const direct = encodeShareCodeCompact({ lan: LAN, wan: WAN, secret: SECRET })
   assert.ok(relay.length < 110, `relay code was ${relay.length} chars`)
   assert.ok(direct.length < 70, `direct code was ${direct.length} chars`)
   assert.ok(relay.length < LEGACY_V2.length / 1.7)
@@ -90,7 +90,7 @@ check('still decodes a legacy v2 code', () => {
 })
 
 check('rejects empty, garbage, and truncated codes', () => {
-  const relay = encodeRelayShareCodeV3({ relay: RELAY, secret: SECRET })
+  const relay = encodeRelayShareCodeCompact({ relay: RELAY, secret: SECRET })
   assert.equal(decodeShareCode(''), null)
   assert.equal(decodeShareCode(undefined), null)
   assert.equal(decodeShareCode('not a code at all!!'), null)
@@ -99,13 +99,13 @@ check('rejects empty, garbage, and truncated codes', () => {
 })
 
 check('rejects a code whose format tag is unknown', () => {
-  const buf = Buffer.from(encodeShareCodeV3({ lan: LAN, secret: SECRET }), 'base64url')
+  const buf = Buffer.from(encodeShareCodeCompact({ lan: LAN, secret: SECRET }), 'base64url')
   buf[0] = 0x39
   assert.equal(decodeShareCode(buf.toString('base64url')), null)
 })
 
 check('a flipped bit changes the secret rather than forging an endpoint', () => {
-  const code = encodeRelayShareCodeV3({ relay: RELAY, secret: SECRET })
+  const code = encodeRelayShareCodeCompact({ relay: RELAY, secret: SECRET })
   const buf = Buffer.from(code, 'base64url')
   buf[buf.length - 1] ^= 0x01
   const decoded = decodeShareCode(buf.toString('base64url'))
@@ -115,7 +115,7 @@ check('a flipped bit changes the secret rather than forging an endpoint', () => 
 
 check('falls back to the legacy form when the URL is too long to pack', () => {
   const relay = { url: `https://${'a'.repeat(260)}.example.com`, roomId: RELAY.roomId }
-  const decoded = decodeShareCode(encodeRelayShareCodeV3({ relay, secret: SECRET }))
+  const decoded = decodeShareCode(encodeRelayShareCodeCompact({ relay, secret: SECRET }))
   assert.ok(decoded && decoded.v === 2)
   assert.deepEqual(decoded.relay, relay)
   assert.equal(decoded.secret, SECRET)
@@ -123,16 +123,18 @@ check('falls back to the legacy form when the URL is too long to pack', () => {
 
 check('falls back to the legacy form for a non-standard secret', () => {
   const secret = 'a-short-secret'
-  const decoded = decodeShareCode(encodeShareCodeV3({ lan: LAN, wan: WAN, secret }))
+  const decoded = decodeShareCode(encodeShareCodeCompact({ lan: LAN, wan: WAN, secret }))
   assert.ok(decoded && decoded.v === 1)
   assert.equal(decoded.secret, secret)
   assert.deepEqual(decoded.wan, WAN)
 })
 
 check('refuses to encode an invalid endpoint', () => {
-  assert.throws(() => encodeShareCodeV3({ lan: { ip: 'no spaces here', port: 1 }, secret: SECRET }))
   assert.throws(() =>
-    encodeRelayShareCodeV3({
+    encodeShareCodeCompact({ lan: { ip: 'no spaces here', port: 1 }, secret: SECRET })
+  )
+  assert.throws(() =>
+    encodeRelayShareCodeCompact({
       relay: { url: 'http://insecure.example', roomId: RELAY.roomId },
       secret: SECRET
     })

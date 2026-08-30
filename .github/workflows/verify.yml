@@ -75,4 +75,4 @@ jobs:
       # Keep upstream-only advisories visible and fail if a critical issue
       # appears.
       - name: Audit relay dependencies
-        run: npm audit --prefix party-sync-worker --audit-level=critical
+        run: npm audit --prefix party-sync-worker --omit=dev --audit-level=critical

@@ -56,6 +56,10 @@ esbuild.buildSync({
   target: 'node20',
   format: 'cjs',
   outfile: bundlePath,
+  // ws probes for these optional native accelerators inside try/catch;
+  // left unresolved they would fail the bundle, marked external they
+  // fail the probe at runtime and ws falls back to its JS paths.
+  external: ['bufferutil', 'utf-8-validate'],
   // JSON.stringify, not hand-written quotes: the value must reach esbuild
   // as a JSON expression, and nothing in between may reinterpret it.
   define: { 'process.env.R3_CACHE_VERSION': JSON.stringify(version) }

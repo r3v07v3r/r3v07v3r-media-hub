@@ -42,8 +42,8 @@ import {
   applyQueueEvent,
   createMemberId,
   decodeShareCode,
-  encodeRelayShareCodeV3,
-  encodeShareCodeV3,
+  encodeRelayShareCodeCompact,
+  encodeShareCodeCompact,
   encryptMessage,
   decryptMessage,
   type PartyLanEndpoint,
@@ -363,19 +363,37 @@ interface ConnectRelayOptions {
   token?: string
   secret?: string
   helloName?: string
+  /** Extra query params — the membership credentials rooms present. */
+  query?: Record<string, string>
   WebSocketImpl?: typeof WebSocket
 }
 
-/** Shared with friends.ts, which opens a long-lived connection to a group
- *  room using exactly the same relay protocol. */
+/** Shared with rooms.ts, which opens long-lived connections to room
+ *  channels using exactly the same relay protocol. */
 export function connectRelayWs(
   relayUrl: string,
   roomId: string,
-  { token = '', secret = '', helloName = '', WebSocketImpl = WebSocket }: ConnectRelayOptions = {}
+  {
+    token = '',
+    secret = '',
+    helloName = '',
+    query = {},
+    WebSocketImpl = WebSocket
+  }: ConnectRelayOptions = {}
 ): Promise<WebSocket> {
   return new Promise((resolve, reject) => {
+    // Membership rooms present their relay credentials here — the
+    // admission cryptogram and joinSecret ride as query params exactly
+    // like the host token always has, because a WebSocket upgrade has
+    // nowhere better.
+    const params = new URLSearchParams()
+    if (token) params.set('token', token)
+    for (const [key, value] of Object.entries(query)) {
+      if (value) params.set(key, value)
+    }
+    const search = params.toString()
     const wsUrl = `${relayUrl.replace(/^http/, 'ws')}/party/${encodeURIComponent(roomId)}${
-      token ? `?token=${encodeURIComponent(token)}` : ''
+      search ? `?${search}` : ''
     }`
     const ws = new WebSocketImpl(wsUrl, undefined, { maxPayload: MAX_PARTY_MESSAGE_BYTES })
     const timer = setTimeout(() => {
@@ -523,7 +541,7 @@ export function registerWatchPartyIpc(): void {
       })
       return {
         ok: true,
-        code: encodeRelayShareCodeV3({ relay: { url: creds.url, roomId }, secret }),
+        code: encodeRelayShareCodeCompact({ relay: { url: creds.url, roomId }, secret }),
         wanAvailable: true
       }
     }
@@ -597,7 +615,7 @@ export function registerWatchPartyIpc(): void {
     if (mapping && party && party.role === 'host' && party.mode === 'direct') {
       party.upnpStop = mapping.stop
     }
-    const code = encodeShareCodeV3({ lan, wan, secret })
+    const code = encodeShareCodeCompact({ lan, wan, secret })
     return { ok: true, code, port, wanAvailable: Boolean(wan) }
   })
 
@@ -606,6 +624,13 @@ export function registerWatchPartyIpc(): void {
     const { code, name } = payload || {}
     const parsed = decodeShareCode(code)
     if (!parsed) throw new Error('That party code is invalid.')
+    // A v3/v4 code is a ROOM invite, not a party. Connecting to it here
+    // would technically work — same relay, same crypto — and would leave
+    // the person sitting silently in a presence channel wondering why no
+    // film starts. Saying which kind of code it is beats pretending.
+    if (parsed.v === 3 || parsed.v === 4) {
+      throw new Error('That is a room code — join it from Rooms, then join a member from there.')
+    }
     const displayName =
       String(name || 'Guest')
         .trim()

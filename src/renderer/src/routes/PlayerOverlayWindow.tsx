@@ -74,7 +74,7 @@ const SCRUB_PREVIEW_WIDTH = 160
  *  live; there is no re-render of anything. */
 const SUBTITLE_DELAY_STEP = 0.25
 
-type Menu = 'audio' | 'subtitles' | 'fit' | 'picture' | 'playback' | 'chapters' | null
+type Menu = 'audio' | 'subtitles' | 'fit' | 'picture' | 'playback' | null
 
 /** What the speed control offers. 1 is listed with the rest rather than being
  *  a separate "reset", because it is the value people come back to and hunting
@@ -120,9 +120,12 @@ function PlayerControls() {
   const [subtitleSearchError, setSubtitleSearchError] = useState<string | null>(null)
   const [pendingSubtitleId, setPendingSubtitleId] = useState<string | null>(null)
   const [subtitleDelay, setSubtitleDelay] = useState(0)
-  const [preview, setPreview] = useState<{ x: number; time: number; url: string | null } | null>(
-    null
-  )
+  const [preview, setPreview] = useState<{
+    x: number
+    time: number
+    url: string | null
+    chapterTitle: string | null
+  } | null>(null)
   const [countdown, setCountdown] = useState(AUTOPLAY_NEXT_COUNTDOWN_SECONDS)
   const [countdownFor, setCountdownFor] = useState<string | null>(null)
   // Which card's countdown has been called off by a hover. Cancelled rather
@@ -169,6 +172,20 @@ function PlayerControls() {
   const speed = state.speed ?? 1
   const chapters = state.chapters ?? EMPTY_CHAPTERS
   const currentChapter = state.chapter ?? -1
+  const chapterRanges = useMemo(
+    () =>
+      duration > 0
+        ? chapters
+            .map((chapter, index) => ({
+              ...chapter,
+              index,
+              start: Math.max(0, Math.min(duration, chapter.time)),
+              end: Math.max(0, Math.min(duration, chapters[index + 1]?.time ?? duration))
+            }))
+            .filter((chapter) => chapter.end > chapter.start)
+        : [],
+    [chapters, duration]
+  )
   const audioDelay = state.audioDelay ?? 0
   const subtitleStyle = session?.settings.subtitleStyle ?? DEFAULT_SUBTITLE_STYLE
   const subtitleStyled = !isSubtitleStyleDefault(subtitleStyle)
@@ -877,7 +894,16 @@ function PlayerControls() {
       // frames for every bucket it happened to share.
       const cacheKey = `${mediaKey}:${bucket}`
       const cached = thumbnailCache.current.get(cacheKey)
-      setPreview({ x, time, url: cached ?? null })
+      const hoveredChapter = chapterRanges.find(
+        (chapter) => time >= chapter.start && time < chapter.end
+      )
+      setPreview({
+        x,
+        time,
+        url: cached ?? null,
+        chapterTitle:
+          hoveredChapter?.title || (hoveredChapter ? `Chapter ${hoveredChapter.index + 1}` : null)
+      })
       if (cached !== undefined) return
       if (scrubDebounce.current) clearTimeout(scrubDebounce.current)
       const requestId = ++scrubRequest.current
@@ -894,7 +920,7 @@ function PlayerControls() {
           .catch(() => {})
       }, 250)
     },
-    [duration, mediaKey]
+    [chapterRanges, duration, mediaKey]
   )
   useEffect(
     () => () => {
@@ -956,9 +982,9 @@ function PlayerControls() {
     [subtitleDelay, command]
   )
 
-  // --- Friends activity -----------------------------------------------------
-  // Main decides whether this actually goes out (sharing is opt-in). Cleared on
-  // unmount so closing the player takes the activity down with it.
+  // --- Rooms activity -------------------------------------------------------
+  // Main decides where this actually goes out (sharing is opt-in per room).
+  // Cleared on unmount so closing the player takes the activity down with it.
   const activityRef = useRef({ timePos, paused })
   useEffect(() => {
     activityRef.current = { timePos, paused }
@@ -966,7 +992,7 @@ function PlayerControls() {
   useEffect(() => {
     if (!media) return
     const publish = (): void => {
-      window.api?.mediaHub?.friends
+      window.api?.mediaHub?.rooms
         ?.setActivity({
           mediaId: media.id,
           kind: media.kind,
@@ -981,7 +1007,7 @@ function PlayerControls() {
     const timer = setInterval(publish, 20_000)
     return () => {
       clearInterval(timer)
-      window.api?.mediaHub?.friends?.setActivity(null).catch(() => {})
+      window.api?.mediaHub?.rooms?.setActivity(null).catch(() => {})
     }
   }, [media])
 
@@ -1094,10 +1120,38 @@ function PlayerControls() {
             seekTo(((event.clientX - rect.left) / rect.width) * duration)
           }}
         >
-          <div
-            className={styles.scrubberFill}
-            style={{ width: duration ? `${(timePos / duration) * 100}%` : '0%' }}
-          />
+          {chapterRanges.length > 0 ? (
+            <div className={styles.chapterSegments} aria-hidden="true">
+              {chapterRanges.map((chapter) => {
+                const chapterProgress = Math.max(
+                  0,
+                  Math.min(1, (timePos - chapter.start) / (chapter.end - chapter.start))
+                )
+                return (
+                  <div
+                    key={`${chapter.index}-${chapter.start}`}
+                    className={`${styles.chapterSegment} ${
+                      chapter.index === currentChapter ? styles.chapterSegmentCurrent : ''
+                    }`}
+                    style={{
+                      left: `${(chapter.start / duration) * 100}%`,
+                      width: `${((chapter.end - chapter.start) / duration) * 100}%`
+                    }}
+                  >
+                    <span
+                      className={styles.chapterSegmentFill}
+                      style={{ width: `${chapterProgress * 100}%` }}
+                    />
+                  </div>
+                )
+              })}
+            </div>
+          ) : (
+            <div
+              className={styles.scrubberFill}
+              style={{ width: duration ? `${(timePos / duration) * 100}%` : '0%' }}
+            />
+          )}
           {preview && (
             <div className={styles.preview} style={{ left: `${preview.x}px` }}>
               {preview.url ? (
@@ -1105,7 +1159,12 @@ function PlayerControls() {
               ) : (
                 <div className={styles.previewPlaceholder} />
               )}
-              <span>{formatTime(preview.time)}</span>
+              <span className={styles.previewMeta}>
+                {preview.chapterTitle && (
+                  <strong className={styles.previewChapter}>{preview.chapterTitle}</strong>
+                )}
+                <span>{formatTime(preview.time)}</span>
+              </span>
             </div>
           )}
         </div>
@@ -1124,6 +1183,12 @@ function PlayerControls() {
           <span className={styles.time}>
             {formatTime(timePos)} / {formatTime(duration)}
           </span>
+
+          {currentChapter >= 0 && chapterRanges.length > 0 && (
+            <span className={styles.currentChapter}>
+              {chapters[currentChapter]?.title || `Chapter ${currentChapter + 1}`}
+            </span>
+          )}
 
           <div className={styles.spacer} />
 
@@ -1531,42 +1596,6 @@ function PlayerControls() {
               </div>
             )}
           </div>
-
-          {/* Absent rather than disabled when a release carries no chapter
-              marks, which is most of them — a permanently greyed-out button is
-              a worse answer than no button. */}
-          {chapters.length > 0 && (
-            <div className={styles.menuWrap}>
-              <button
-                type="button"
-                className={styles.button}
-                onClick={() => setMenu(menu === 'chapters' ? null : 'chapters')}
-                aria-expanded={menu === 'chapters'}
-                disabled={locked}
-              >
-                Chapters
-              </button>
-              {menu === 'chapters' && (
-                <div className={`${styles.menu} ${styles.chapterMenu}`}>
-                  {chapters.map((chapter, index) => (
-                    <button
-                      key={`${index}-${chapter.time}`}
-                      type="button"
-                      className={styles.menuItem}
-                      onClick={() => {
-                        void command({ type: 'set-chapter', index })
-                        setMenu(null)
-                      }}
-                    >
-                      {chapter.title || `Chapter ${index + 1}`}
-                      {index === currentChapter ? ' ✓' : ''}
-                      <span className={styles.menuItemNote}>{formatTime(chapter.time)}</span>
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
 
           {/* Fit/fill. mpv applies both underlying properties to the frame
               already on screen, so every option here is instant — there is no

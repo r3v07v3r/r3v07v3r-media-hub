@@ -22,7 +22,7 @@ export function HeroActions({ item }: { item: MediaItem }) {
         aria-pressed={saved}
       >
         <Icon name={saved ? 'check' : 'plus'} />
-        {saved ? 'In My List' : 'My List'}
+        {saved ? 'Planned' : 'Plan to Watch'}
       </button>
     </div>
   )

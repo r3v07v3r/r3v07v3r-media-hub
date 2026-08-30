@@ -48,7 +48,7 @@ export function CategoryPage({ config }: { config: CategoryConfig }) {
     categorySearch,
     clearCategorySearch,
     runCategorySearch,
-    browsingOrigin,
+    pendingRestore,
     mediaHubSettings
   } = useAppState()
   // Filters live in the URL, not component state — this is what makes
@@ -124,11 +124,11 @@ export function CategoryPage({ config }: { config: CategoryConfig }) {
   // for free, since categorySearch is app-level state nothing here
   // clears — see isSearchActive above).
   const restoreVisibleCount = useMemo(() => {
-    if (!browsingOrigin?.focusedItemId) return undefined
+    if (!pendingRestore?.focusedItemId) return undefined
     const activeList = isSearchActive ? filteredSearchResults : filteredSorted
-    const idx = activeList.findIndex((item) => item.id === browsingOrigin.focusedItemId)
+    const idx = activeList.findIndex((item) => item.id === pendingRestore.focusedItemId)
     return idx >= 0 ? Math.ceil((idx + 1) / 30) * 30 : undefined
-  }, [browsingOrigin, isSearchActive, filteredSearchResults, filteredSorted])
+  }, [pendingRestore, isSearchActive, filteredSearchResults, filteredSorted])
 
   // Catalog data is fetched once, globally (AppStateContext), not
   // per-page — by the time this page remounts after a detail-page visit,

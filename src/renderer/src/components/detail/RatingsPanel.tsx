@@ -4,17 +4,23 @@ import { useAppState } from '@renderer/context/AppStateContext'
 import type { MediaItem } from '@renderer/types'
 import { MAX_RATING, ratingLabel } from '@shared/media-hub/rating'
 import styles from './RatingsPanel.module.css'
+import { RatingSourceMark } from './RatingBadge'
+import { ratingSourceFor, type RatingSource } from './ratingSource'
 
 function Gauge({
   value,
   max,
   label,
-  color
+  color,
+  source
 }: {
   value: number
   max: number
   label: string
   color: string
+  /** Present for a real service, absent for the app's own Match figure —
+   *  which has no logo to show because it is not somebody else's score. */
+  source?: RatingSource
 }) {
   const pct = Math.max(0, Math.min(1, value / max))
   const radius = 30
@@ -35,7 +41,9 @@ function Gauge({
       <span className={styles.gaugeValue}>
         {max === 100 ? Math.round(value) : value.toFixed(1)}
       </span>
-      <span className={styles.gaugeLabel}>{label}</span>
+      <span className={styles.gaugeLabel}>
+        {source ? <RatingSourceMark source={source} /> : label}
+      </span>
     </div>
   )
 }
@@ -44,25 +52,41 @@ function Gauge({
  * Only ever renders sources the item's own data actually has — no
  * invented ratings, and gauges adapt to however many are present rather
  * than leaving empty placeholder circles for a source with no value.
- * communityRating/imdbRating are still the same parsed number for real
- * backend data today (see adapters.ts's catalogItemToMediaItem) — not two
- * independent sources yet, though the type and this panel both support
- * them being distinct once/if the backend integration adds a second one.
- * rottenTomatoesRating IS a genuinely independent third source (OMDb) —
- * present only for movies/series with OMDb connected and a Rotten Tomatoes
- * entry on file; never present for anime (see catalog.ts's metadata()).
+ *
+ * ONE CROWD FIGURE, not two. communityRating and imdbRating are filled
+ * from the same CatalogItem.rating (adapters.ts), so showing both drew the
+ * same number twice under different names — two gauges agreeing perfectly,
+ * every time, because they were never independent. It is drawn once now,
+ * labelled with the service it actually came from: IMDb for films and
+ * series, whose ids ARE IMDb ids, and Kitsu for anime, which has no IMDb
+ * id at all and whose figure is Kitsu's averageRating.
+ *
+ * rottenTomatoesRating IS a genuinely independent source (OMDb) — present
+ * only for movies/series with OMDb connected and a Rotten Tomatoes entry
+ * on file; never present for anime (see catalog.ts's metadata()).
  */
 export function RatingsPanel({ media }: { media: MediaItem }) {
-  const gauges: { value: number; max: number; label: string; color: string }[] = []
-  if (media.communityRating) {
+  const source = ratingSourceFor(media.mediaKind)
+  const crowd = media.imdbRating ?? media.communityRating
+  const gauges: {
+    value: number
+    max: number
+    label: string
+    color: string
+    source?: RatingSource
+  }[] = []
+  if (crowd) {
     gauges.push({
-      value: media.communityRating,
+      value: crowd,
       max: 10,
-      label: 'R3 Score',
-      color: 'var(--accent-yellow)'
+      label: source === 'kitsu' ? 'Kitsu' : 'IMDb',
+      color: source === 'kitsu' ? 'var(--accent-orange)' : 'var(--accent-yellow)',
+      source
     })
   }
   if (media.matchPercentage !== undefined) {
+    // Not a crowd rating at all — this app's own guess at how well the
+    // title fits this person. It keeps a plain label for that reason.
     gauges.push({
       value: media.matchPercentage,
       max: 100,
@@ -70,15 +94,13 @@ export function RatingsPanel({ media }: { media: MediaItem }) {
       color: 'var(--accent-green)'
     })
   }
-  if (media.imdbRating) {
-    gauges.push({ value: media.imdbRating, max: 10, label: 'IMDb', color: 'var(--accent-cyan)' })
-  }
   if (media.rottenTomatoesRating !== undefined) {
     gauges.push({
       value: media.rottenTomatoesRating,
       max: 100,
       label: 'Rotten Tomatoes',
-      color: 'var(--accent-orange)'
+      color: 'var(--accent-orange)',
+      source: 'rottenTomatoes'
     })
   }
 
