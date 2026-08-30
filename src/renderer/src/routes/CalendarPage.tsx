@@ -352,9 +352,9 @@ function CalendarView() {
   if (entries.length === 0) {
     return (
       <p className={styles.empty}>
-        Nothing scheduled. Only shows in My List appear here, and their episode lists fill in over
-        several sessions in the background — so a show you added a moment ago may not be covered
-        yet.
+        Nothing scheduled. Only shows you have planned appear here, and their episode lists fill in
+        over several sessions in the background — so a show you added a moment ago may not be
+        covered yet.
       </p>
     )
   }
