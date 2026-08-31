@@ -653,6 +653,9 @@ export interface MediaHubDatabase {
    *  key-value store, not only a cache, so "it is in catalog_cache" does
    *  NOT imply "losing it costs a refetch". */
   putCache<T>(key: string, payload: T, ttlMs: number, opts?: { durable?: boolean }): void
+  /** Many cache rows in ONE transaction — for warms that would otherwise
+   *  loop putCache's per-row implicit commits on the main thread. */
+  putCacheBatch<T>(rows: Array<{ key: string; payload: T }>, ttlMs: number): void
   getCache<T>(key: string, opts?: { allowExpired?: boolean }): T | null
   /** Removes a cache row outright. Distinct from letting a row expire,
    *  which the `allowExpired: true` readers can still serve back as a
@@ -2021,6 +2024,31 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
         else write()
       } catch {
         // Cache writes are best-effort; a failure here must not surface to callers.
+      }
+    },
+
+    putCacheBatch<T>(rows: Array<{ key: string; payload: T }>, ttlMs: number): void {
+      // One transaction, not N implicit commits. DatabaseSync runs on the
+      // main thread, so a caller looping putCache over hundreds of rows
+      // (the TorBox library warm on the play click was the live case) is a
+      // single uninterruptible block whose length is dominated by per-row
+      // commit overhead; batched, the same warm is one commit. Same
+      // best-effort contract as putCache — a rollback loses a cache warm,
+      // never data.
+      try {
+        const now = Date.now()
+        sql.exec('BEGIN')
+        try {
+          for (const row of rows) {
+            q.putCache.run(row.key, JSON.stringify(row.payload), now + ttlMs, now)
+          }
+          sql.exec('COMMIT')
+        } catch (error) {
+          sql.exec('ROLLBACK')
+          throw error
+        }
+      } catch {
+        // Best-effort, same convention as putCache.
       }
     },
 

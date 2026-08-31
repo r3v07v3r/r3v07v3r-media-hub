@@ -124,12 +124,19 @@ async function torboxItemForHash(hash: string, force = false): Promise<RawApiPay
   const existing = await torbox<RawApiPayload>('/torrents/mylist', { limit: 1000 })
   const list: RawApiPayload[] = Array.isArray(existing.data) ? existing.data : []
   let match: RawApiPayload | null = null
+  const rows: Array<{ key: string; payload: RawApiPayload }> = []
   for (const entry of list) {
     const entryHash = String(entry?.hash || '').toLowerCase()
     if (!entryHash) continue
-    db.putCache(key(entryHash), entry, TORBOX_ITEM_TTL_MS)
+    rows.push({ key: key(entryHash), payload: entry })
     if (entryHash === hash) match = entry
   }
+  // One transaction for the whole warm. This sits on the play click, the
+  // database is synchronous on the main thread, and a large library was up
+  // to a thousand individually-committed multi-KB rows in a loop with no
+  // await — a solid main-thread block at the exact moment playback start
+  // needs the event loop responsive.
+  db.putCacheBatch(rows, TORBOX_ITEM_TTL_MS)
   return match
 }
 
