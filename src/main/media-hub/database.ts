@@ -722,7 +722,11 @@ export interface MediaHubDatabase {
   /** Which of these ids the index already holds for one kind — the
    *  deep-scan skip set. A cheap id-only projection rather than
    *  indexByIds because the caller wants membership, not rows. */
-  indexExistingIds(kind: MediaKind, ids: readonly string[]): Set<string>
+  /** Null when membership could not be established (the lookup itself
+   *  failed) — DISTINCT from an empty set. The deep scan advances a
+   *  durable bookmark on this answer: claiming everything exists would
+   *  make it add nothing AND move on, permanently skipping the chunk. */
+  indexExistingIds(kind: MediaKind, ids: readonly string[]): Set<string> | null
   /** The highest rank any row of this kind holds — the floor above which
    *  deep-scanned rows must land to stay UNDER the curated ordering. */
   indexMaxRank(kind: MediaKind): number
@@ -2216,13 +2220,14 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
           }
         }
       } catch (error) {
-        // Fail CLOSED: claim everything exists. The one caller is the
-        // deep scan's skip set, and the two failure directions are not
-        // symmetric — skipping everything costs one chunk of progress,
-        // while treating everything as new would re-upsert rows the
-        // grouping pass curated and quietly undo that work.
+        // NULL, not "everything exists". Fail-closed-as-full-set had the
+        // right instinct (never re-upsert what the grouping pass curated)
+        // but the wrong consequence: the deep scan would add nothing and
+        // still advance its durable bookmark past the whole chunk,
+        // permanently skipping those titles. Null says "I could not
+        // answer" — the caller halts, and the next pass retries.
         logError('catalog:index:existing', error)
-        return new Set(ids)
+        return null
       }
       return found
     },

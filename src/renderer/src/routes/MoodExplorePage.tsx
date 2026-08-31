@@ -1,15 +1,22 @@
 'use client'
 
-import { useMemo } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useAppState } from '@renderer/context/AppStateContext'
-import { MoodCategory } from '@renderer/types'
+import type { MediaItem, MoodCategory } from '@renderer/types'
+import type { CatalogItem, MediaKind } from '@shared/media-hub/types'
+import { genreMatchesMoods } from '@renderer/lib/mediaHub/adapters'
 import { MOOD_CATEGORIES, leadMoodFor, moodLabelsFor } from '@renderer/data/mockData'
 import { Icon } from '@renderer/components/icons/Icon'
 import { MediaGrid } from '@renderer/components/category/MediaGrid'
 import { rankMoodSpotlight } from '@renderer/lib/mediaHub/moodSpotlight'
 import { useRestoreBrowsingOrigin } from '@renderer/lib/mediaHub/useRestoreBrowsingOrigin'
 import styles from './MoodExplorePage.module.css'
+
+/** Rows fetched per (kind, genre) when asking the index for a mood's
+ *  collection — far past what the grid shows, small enough that a page
+ *  visit stays a handful of local SQL reads. */
+const MOOD_EXPLORE_GENRE_LIMIT = 500
 
 function selectedMoodIds(value: string | null, moods: MoodCategory[]): string[] {
   const validIds = new Set(moods.map((mood) => mood.id))
@@ -27,6 +34,7 @@ function selectedMoodIds(value: string | null, moods: MoodCategory[]): string[] 
 export default function MoodExplorePage() {
   const { catalog, catalogKindStates, refreshCatalog, recommendations, mediaHubSettings } =
     useAppState()
+  const { adaptCatalogItems } = useAppState()
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
   const moodParam = searchParams.get('mood')
@@ -51,15 +59,67 @@ export default function MoodExplorePage() {
             heading: `${/^[aeiou]/i.test(moodLabels[0]) ? 'An' : 'A'} ${collectionName} blend.`,
             description: 'A wider mix, selected from every mood you chose.'
           }
-  const results = useMemo(
-    () =>
-      rankMoodSpotlight(catalog, recommendations, moods, {
-        hideWatched: mediaHubSettings?.hideWatchedDefault ?? false,
-        hideCompleted: mediaHubSettings?.hideCompletedDefault ?? false,
-        hideDisliked: mediaHubSettings?.hideDislikedDefault ?? false
-      }),
-    [catalog, recommendations, moods, mediaHubSettings]
-  )
+  // THE FULL-CATALOG CLAIM IS KEPT HONEST AGAINST THE INDEX. The context
+  // catalog is a bounded candidate pool (stage 4), so a mood match past
+  // its first thousand rows — deep-scanned titles included — would
+  // silently vanish from a page that advertises the full collection.
+  // The index is asked directly: for each kind, the facet genres that
+  // map onto the selected moods, then the top rows per (kind, genre).
+  // Bounded at MOOD_EXPLORE_GENRE_LIMIT per query — stated, not silent:
+  // 500 titles per genre per kind is far past what a mood grid shows.
+  const [deepPool, setDeepPool] = useState<MediaItem[]>([])
+  useEffect(() => {
+    const api = window.api?.mediaHub?.catalog
+    if (!api?.query || !api.facets || moods.length === 0) return
+    let cancelled = false
+    const kinds: MediaKind[] = ['movie', 'series', 'anime']
+    void (async () => {
+      try {
+        const pool: CatalogItem[] = []
+        const seen = new Set<string>()
+        for (const kind of kinds) {
+          const facets = await api.facets(kind)
+          const genres = (facets?.genres ?? []).filter((genre) => genreMatchesMoods(genre, moods))
+          for (const genre of genres) {
+            const page = await api.query({
+              kind,
+              genre,
+              sort: 'rating-desc',
+              limit: MOOD_EXPLORE_GENRE_LIMIT,
+              offset: 0
+            })
+            for (const row of page.items) {
+              if (seen.has(row.id)) continue
+              seen.add(row.id)
+              pool.push(row)
+            }
+          }
+        }
+        if (!cancelled) setDeepPool(adaptCatalogItems(pool))
+      } catch {
+        // The pool below still ranks the loaded catalog — degraded to
+        // stage-3 behaviour, never to an empty page.
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [moods, adaptCatalogItems])
+  const results = useMemo(() => {
+    // Context catalog first so its (identical) rows win the dedupe, then
+    // everything the index knows beyond the pool.
+    const seen = new Set<string>()
+    const pool = [...catalog, ...deepPool].filter((item) => {
+      if (seen.has(item.id)) return false
+      seen.add(item.id)
+      return true
+    })
+    return rankMoodSpotlight(pool, recommendations, moods, {
+      hideWatched: mediaHubSettings?.hideWatchedDefault ?? false,
+      hideCompleted: mediaHubSettings?.hideCompletedDefault ?? false,
+      hideDisliked: mediaHubSettings?.hideDislikedDefault ?? false
+    })
+  }, [catalog, deepPool, recommendations, moods, mediaHubSettings])
 
   // Same three-way distinction the Mood Spotlight tray makes (see
   // MoodBrowser): an empty grid because nothing matched is the person's
