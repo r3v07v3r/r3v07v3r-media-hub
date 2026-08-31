@@ -207,15 +207,17 @@ export function useCatalogBrowse(
         let total = 0
         let end = false
         while (rows.length < wanted && !end) {
+          const asked = Math.min(BACKEND_QUERY_LIMIT, wanted - rows.length)
           const result = await api.query(
             filterStateToCatalogQuery(kind, filtersRef.current, {
               offset,
-              limit: Math.min(BACKEND_QUERY_LIMIT, wanted - rows.length)
+              limit: asked
             })
           )
           total = result.total
           offset += result.items.length
-          end = result.items.length === 0
+          // Short answer = the backend ran dry (see the page-zero note).
+          end = result.items.length < asked
           for (const row of result.items) {
             if (seen.has(row.id)) continue
             seen.add(row.id)
@@ -282,7 +284,14 @@ export function useCatalogBrowse(
           completedIds: result.completedIds,
           total: result.total,
           offset: result.items.length,
-          end: result.items.length === 0,
+          // A SHORT page is the end, not just an empty one. The backend
+          // fills every page it can; getting back fewer rows than asked
+          // for means it ran dry — and waiting for an empty confirming
+          // page would need the already-intersecting sentinel to fire
+          // again, which observers only do on transitions. When dedup
+          // ever leaves rows short of a shifted total, `end` is what
+          // stops the grid from mounting a loading sentinel forever.
+          end: result.items.length < BROWSE_PAGE_SIZE,
           loading: false,
           error: false
         })
@@ -325,7 +334,10 @@ export function useCatalogBrowse(
       const seen = new Set(snapshot.rows.map((row) => row.id))
       const fresh = result.items.filter((row) => !seen.has(row.id))
       const nextOffset = snapshot.offset + result.items.length
-      const end = result.items.length === 0
+      // Short page = the end (see the page-zero note): without this, an
+      // overlapping tail page deduped below a shifted total would leave
+      // hasMore true against a sentinel that never fires again.
+      const end = result.items.length < BROWSE_PAGE_SIZE
       setState((previous) =>
         previous.viewKey === viewKey
           ? {
@@ -403,8 +415,11 @@ export function useCatalogBrowse(
       if (stateRef.current.rows.some((row) => row.id === id)) return true
       for (let page = 0; page < ENSURE_ITEM_MAX_PAGES; page++) {
         const result = await appendPage()
-        if (!result) return false
+        // Found-check BEFORE the null-check: the final page of a view is
+        // short, and appendPage reports it as null-with-rows-merged — a
+        // target sitting on that very page must still count as found.
         if (stateRef.current.rows.some((row) => row.id === id)) return true
+        if (!result) return false
       }
       return false
     },
