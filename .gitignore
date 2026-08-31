@@ -30,3 +30,4 @@ preview-dist/
 # pinned tag + sha256 in that script is what makes this reproducible.
 resources/mpv-win/
 dist-daemon/
+.ai/spike/

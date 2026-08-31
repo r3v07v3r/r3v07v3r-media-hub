@@ -175,6 +175,13 @@ function watchFullscreenShortcut(window: BrowserWindow): void {
 // initialization and is ready to create browser windows.
 // Some APIs can only be used after this event occurs.
 app.whenReady().then(() => {
+  // Phase-0 embed spike (see media-hub/embedSpike.ts): runs INSTEAD of the app
+  // and exits with its verdict. Temporary — removed once the embed ships.
+  if (process.env.R3_EMBED_SPIKE === '1') {
+    void import('./media-hub/embedSpike').then(({ runEmbedSpike }) => runEmbedSpike())
+    return
+  }
+
   registerAppSchemeHandler()
 
   // Before any window exists, so there is no window-shaped gap at startup

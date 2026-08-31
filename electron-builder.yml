@@ -23,6 +23,10 @@ files:
   - '!resources/mpv-win/**'
 asarUnpack:
   - resources/**
+  # koffi loads its prebuilt .node from a real path inside its own package;
+  # electron-builder's smart unpack usually catches native binaries, but the
+  # explicit entry removes the gamble.
+  - node_modules/koffi/**
 win:
   target:
     - nsis
