@@ -31,6 +31,7 @@ import {
   getClientSize,
   hwndOf,
   listChildTree,
+  moveCursorTo,
   raiseToTopOfSiblings,
   removeWindowStyle,
   setChildRect,
@@ -293,6 +294,12 @@ export async function runEmbedSpike(): Promise<void> {
     if (!win32Available()) throw new Error('spike: not on Windows')
     fs.mkdirSync(OUT_DIR, { recursive: true })
 
+    // The cursor sprite darkens whatever pixel it sits on — a previous run's
+    // click test leaves it parked dead centre of where this run's window will
+    // be, which corrupted the centre sample of every later screenshot. Park it
+    // in the corner before anything is captured.
+    moveCursorTo(2, 2)
+
     // A plain window with a loud magenta page, parked on the primary display
     // (the capture->pixel coordinate mapping assumes it).
     const primary = screen.getPrimaryDisplay()
@@ -388,6 +395,9 @@ export async function runEmbedSpike(): Promise<void> {
     await sleep(250)
     clickAtScreenPoint(cx, cy)
     await sleep(500)
+    // Out of the way again before the next capture — see the parking note at
+    // the top of the run.
+    moveCursorTo(2, 2)
     try {
       const mousePos = await mpv.command(['get_property', 'mouse-pos'])
       log(`mpv mouse-pos: ${JSON.stringify(mousePos.data)}`)

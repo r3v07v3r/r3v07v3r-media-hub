@@ -236,6 +236,13 @@ export function setShown(hwnd: bigint, shown: boolean): void {
   api()?.ShowWindow(hwnd, shown ? SW_SHOWNA : SW_HIDE)
 }
 
+/** Moves the pointer to a physical screen point (spike only: the cursor
+ *  sprite darkens whatever pixel it sits on, so it must be parked away from
+ *  anything a screenshot will sample). */
+export function moveCursorTo(x: number, y: number): void {
+  api()?.SetCursorPos(Math.round(x), Math.round(y))
+}
+
 /** Synthesizes one left click at a physical screen point (spike only: proves
  *  input reaches an embedded child with nobody at the keyboard). */
 export function clickAtScreenPoint(x: number, y: number): void {
