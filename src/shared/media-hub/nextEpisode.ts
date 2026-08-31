@@ -12,6 +12,7 @@
 // different questions, two different rules; they are not a duplication to
 // be merged.
 
+import { hasAired } from './catalog-logic'
 import type { Episode } from './types'
 
 /** The minimum a caller needs to start the next episode and name it. */
@@ -80,19 +81,39 @@ export function episodeWatchKey(
   return `${season ?? ''}:${episode ?? ''}`
 }
 
-/** Playable episodes in (season, episode) order.
+/** Episodes somebody could actually start, in (season, episode) order.
  *
- *  `unplayable` entries are dropped for the reason given on the field itself
- *  (disambiguateVideos' synthetic Specials have no coordinate the
- *  scraper/TorBox pipeline can resolve a stream for), and a non-finite
- *  coordinate is dropped because it cannot be turned into a stream id either.
+ *  Three exclusions, each for its own reason:
+ *
+ *   - `unplayable`, for the reason given on the field itself:
+ *     disambiguateVideos' synthetic Specials have no coordinate the
+ *     scraper/TorBox pipeline can resolve a stream for.
+ *   - A non-finite coordinate, which cannot be turned into a stream id.
+ *   - ANYTHING THAT HAS NOT AIRED. Cinemeta and TMDB both ship future-dated
+ *     entries in `videos`, so for a show still airing, "the first unwatched
+ *     one" and "the first one you could watch" are different episodes. Caught
+ *     up on a currently-airing show, the first of those is next week's — no
+ *     source exists for it, so Play would search, find nothing and give up.
+ *     hasAired is the same rule airedEpisodes counts progress by, so the
+ *     episode Play starts and the episode the progress bar counts cannot come
+ *     from two different ideas of "aired".
+ *
  *  The sort is defensive: most callers hand this an already-sorted list, but
- *  "first in order" must not depend on that being true. */
-export function playableEpisodesInOrder(videos: readonly Episode[] | undefined | null): Episode[] {
+ *  "first in order" must not depend on that being true.
+ *
+ *  `now` is injectable for the same reason airedEpisodes' is — a test that
+ *  cannot pin the clock cannot test the boundary. */
+export function playableEpisodesInOrder(
+  videos: readonly Episode[] | undefined | null,
+  now: number = Date.now()
+): Episode[] {
   return (videos ?? [])
     .filter(
       (video) =>
-        !video?.unplayable && Number.isFinite(video?.season) && Number.isFinite(video?.episode)
+        !video?.unplayable &&
+        Number.isFinite(video?.season) &&
+        Number.isFinite(video?.episode) &&
+        hasAired(video, now)
     )
     .slice()
     .sort((a, b) => a.season - b.season || a.episode - b.episode)
@@ -120,9 +141,10 @@ export function playableEpisodesInOrder(videos: readonly Episode[] | undefined |
  */
 export function nextUnwatchedEpisode(
   videos: readonly Episode[] | undefined | null,
-  watchedKeys: ReadonlySet<string>
+  watchedKeys: ReadonlySet<string>,
+  now: number = Date.now()
 ): NextEpisodeRef | null {
-  const next = playableEpisodesInOrder(videos).find(
+  const next = playableEpisodesInOrder(videos, now).find(
     (video) => !watchedKeys.has(episodeWatchKey(video.season, video.episode))
   )
   return next
@@ -136,15 +158,20 @@ export function nextUnwatchedEpisode(
  * (pressing Play on a finished show starts it again rather than doing
  * nothing), and to S1E1 when the show has no usable episode list at all.
  *
+ * "Every one has been seen" means every one that has AIRED — somebody caught
+ * up on a show still in its season is offered the beginning again rather than
+ * next week's episode, which has no source to find.
+ *
  * S1E1 is the same coordinate buildMediaId already defaults to, so a title
  * whose metadata never arrived behaves exactly as it did before this
  * existed rather than failing in a new way.
  */
 export function episodeToStart(
   videos: readonly Episode[] | undefined | null,
-  watchedKeys: ReadonlySet<string>
+  watchedKeys: ReadonlySet<string>,
+  now: number = Date.now()
 ): { season: number; episode: number } {
-  const ordered = playableEpisodesInOrder(videos)
+  const ordered = playableEpisodesInOrder(videos, now)
   const next =
     ordered.find((video) => !watchedKeys.has(episodeWatchKey(video.season, video.episode))) ??
     ordered[0]

@@ -100,4 +100,55 @@ assert.deepEqual(nextUnwatchedEpisode(show, watched([1, 1])), {
   title: 'Episode 2'
 })
 
+// ---------------------------------------------------------------------
+// AIRED-ONLY. Cinemeta and TMDB both ship future-dated entries in `videos`,
+// so for a show still airing "the first unwatched one" and "the first one you
+// could watch" are different episodes. Play must never target the second.
+
+const NOW = Date.parse('2026-08-31T00:00:00Z')
+const past = '2026-08-01T00:00:00Z'
+const future = '2026-09-07T00:00:00Z'
+
+const airing = [
+  ep(1, 1, { released: past }),
+  ep(1, 2, { released: past }),
+  ep(1, 3, { released: past }),
+  ep(1, 4, { released: future }),
+  ep(1, 5, { released: future })
+]
+
+// THE CAUGHT-UP CASE. Every released episode watched, next week's not out:
+// starting it would search for a source that cannot exist, so Play starts the
+// show again instead.
+assert.deepEqual(episodeToStart(airing, watched([1, 1], [1, 2], [1, 3]), NOW), {
+  season: 1,
+  episode: 1
+})
+
+// Partway through the aired run, the aired one is still the answer.
+assert.deepEqual(episodeToStart(airing, watched([1, 1]), NOW), { season: 1, episode: 2 })
+
+// Nothing out yet: no aired episode to name, so the same S1E1 the old
+// buildMediaId fallback would have used.
+const unreleased = [ep(1, 1, { released: future }), ep(1, 2, { released: future })]
+assert.deepEqual(episodeToStart(unreleased, watched(), NOW), { season: 1, episode: 1 })
+
+// A missing or unparseable date is a gap in the metadata, not evidence the
+// episode is in the future — it stays playable, or real episodes would vanish.
+assert.deepEqual(
+  playableEpisodesInOrder(
+    [
+      ep(1, 1, { released: '' }),
+      ep(1, 2, { released: 'sometime' }),
+      ep(1, 3, { released: future })
+    ],
+    NOW
+  ).map((e) => e.episode),
+  [1, 2]
+)
+
+// nextUnwatchedEpisode agrees: caught up on an airing show reads as "nothing
+// to watch", not as next week's episode.
+assert.equal(nextUnwatchedEpisode(airing, watched([1, 1], [1, 2], [1, 3]), NOW), null)
+
 console.log('ok  episodeToStart')
