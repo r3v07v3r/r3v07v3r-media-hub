@@ -124,6 +124,16 @@
   border: 1px solid var(--border-subtle);
   white-space: nowrap;
 }
+/* Stands where "Use Local" would for a row that can't be pushed — same
+   footprint as the button so the row's actions stay aligned, but plainly
+   not pressable. */
+.unpushableNote {
+  padding: 7px 10px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  opacity: 0.75;
+  white-space: nowrap;
+}
 .actionButton:hover {
   color: var(--text-primary);
   background: rgba(255, 255, 255, 0.06);

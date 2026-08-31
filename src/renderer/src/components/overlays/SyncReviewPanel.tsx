@@ -80,13 +80,26 @@ export function SyncReviewPanel() {
                   </div>
                 </div>
                 <div className={styles.actions}>
-                  <button
-                    type="button"
-                    className={`${styles.actionButton} ${styles.actionButtonPrimary}`}
-                    onClick={() => resolveSyncDiscrepancy(d, 'use-local')}
-                  >
-                    Use Local
-                  </button>
+                  {/* No "Use Local" for a row whose id can't be pushed as a
+                      real id (a demo-id duplicate, typically): the push
+                      would be an unverifiable title/year guess and the row
+                      would come straight back — see
+                      WatchStatusDiscrepancy.pushable. "Use Simkl" is the
+                      one that genuinely resolves these, by rewriting the
+                      local record. */}
+                  {d.pushable !== false ? (
+                    <button
+                      type="button"
+                      className={`${styles.actionButton} ${styles.actionButtonPrimary}`}
+                      onClick={() => resolveSyncDiscrepancy(d, 'use-local')}
+                    >
+                      Use Local
+                    </button>
+                  ) : (
+                    <span className={styles.unpushableNote}>
+                      Local-only id — can’t be pushed
+                    </span>
+                  )}
                   <button
                     type="button"
                     className={styles.actionButton}
