@@ -123,7 +123,15 @@ export function useCatalogBrowse(
   if (state.viewKey !== viewKey) setState(freshBrowseState(viewKey))
   const current = state.viewKey === viewKey ? state : freshBrowseState(viewKey)
 
-  const inFlightRef = useRef(false)
+  // WHICH view has an append in flight — a string key, not a boolean.
+  // A boolean lock outlived its view: an append for the old filters kept
+  // the ref true after a view change, the new view's sentinel request
+  // was silently discarded, and completion only cleared the ref without
+  // anything re-triggering the still-intersecting sentinel (observers
+  // fire on transitions, not on standing state). Keyed by view, an
+  // obsolete request never blocks the current view — its own writes were
+  // always discarded by the viewKey guards anyway.
+  const inFlightRef = useRef<string | null>(null)
   // Refs written from an effect, not during render — the lint rule is
   // right that render-time ref writes misbehave under concurrent React.
   const filtersRef = useRef(filters)
@@ -159,6 +167,14 @@ export function useCatalogBrowse(
   // to several invalidations arriving back-to-back is one reload against
   // the final state, not a dropped one.
   const reloadQueueRef = useRef<Promise<void>>(Promise.resolve())
+  // True while a reload's chunk walk is running. Appends asked for in
+  // that window are refused AND remembered — the sentinel that asked
+  // will not re-fire on its own (it is still intersecting; observers
+  // report transitions), so the reload re-issues the append itself once
+  // it has applied.
+  const reloadingRef = useRef(false)
+  const retryAppendRef = useRef(false)
+  const appendPageRef = useRef<(() => Promise<CatalogQueryResult | null>) | null>(null)
 
   /** Queues a depth-preserving reload of the loaded window: same view,
    *  same depth, fresh SQL answer, fetched in BACKEND_QUERY_LIMIT chunks
@@ -173,6 +189,15 @@ export function useCatalogBrowse(
       if (snapshot.viewKey !== viewKey || snapshot.loading) return
       const api = window.api?.mediaHub?.catalog
       if (!api?.query) return
+      // Invalidate in-flight appends NOW, not at apply time. An append
+      // that finished mid-reload used to merge (its generation still
+      // matched), gain the user a page — and then the reload applied a
+      // window sized from its own earlier snapshot, throwing that page
+      // away and yanking the scroll backward. Bumping first means any
+      // append racing this reload is discarded at completion, and the
+      // depth the reload restores is exactly the depth it snapshotted.
+      reloadGenRef.current += 1
+      reloadingRef.current = true
       const wanted = Math.max(snapshot.rows.length, BROWSE_PAGE_SIZE)
       try {
         const rows: CatalogItem[] = []
@@ -199,7 +224,6 @@ export function useCatalogBrowse(
           completedIds.push(...result.completedIds)
         }
         if (superseded || stateRef.current.viewKey !== viewKey) return
-        reloadGenRef.current += 1
         const next: BrowseState = {
           viewKey,
           rows,
@@ -215,6 +239,14 @@ export function useCatalogBrowse(
       } catch {
         // Keep what is showing — badges already repainted through the
         // adapter, and the next invalidation retries.
+      } finally {
+        reloadingRef.current = false
+        if (retryAppendRef.current) {
+          retryAppendRef.current = false
+          // The sentinel that was refused during the reload is still
+          // intersecting and will not ask again — ask on its behalf.
+          void appendPageRef.current?.()
+        }
       }
     })
     return () => {
@@ -268,9 +300,17 @@ export function useCatalogBrowse(
 
   const appendPage = useCallback(async (): Promise<CatalogQueryResult | null> => {
     const snapshot = stateRef.current
-    if (inFlightRef.current || snapshot.viewKey !== viewKey || snapshot.loading) return null
+    if (snapshot.viewKey !== viewKey || snapshot.loading) return null
     if (snapshot.end || snapshot.rows.length >= snapshot.total) return null
-    inFlightRef.current = true
+    if (reloadingRef.current) {
+      // A reload owns the window right now. Refuse — but remember, so
+      // the reload re-issues this append when it finishes (the sentinel
+      // will not re-fire by itself).
+      retryAppendRef.current = true
+      return null
+    }
+    if (inFlightRef.current === viewKey) return null
+    inFlightRef.current = viewKey
     const generation = reloadGenRef.current
     try {
       // Paged by the BACKEND offset — what was requested, not what
@@ -314,9 +354,17 @@ export function useCatalogBrowse(
       )
       return null
     } finally {
-      inFlightRef.current = false
+      // Release only OUR view's lock — a newer view may already hold it.
+      if (inFlightRef.current === viewKey) inFlightRef.current = null
     }
   }, [fetchPage, viewKey])
+
+  // The reload's retry path calls appendPage through a ref (it is
+  // declared later than queueReload, and a direct dependency would just
+  // rebuild the queue callback on every append identity change).
+  useEffect(() => {
+    appendPageRef.current = appendPage
+  }, [appendPage])
 
   // WATCH-STATE AND PROFILE CHANGES reach the SQL through the adapter's
   // own identity: adaptCatalogItems is rebuilt whenever the watched/list/
