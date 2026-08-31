@@ -38,6 +38,19 @@ export const BROWSE_PAGE_SIZE = 60
  *  enough that a stale id cannot trigger an unbounded crawl. */
 const ENSURE_ITEM_MAX_PAGES = 5
 
+/** The backend clamps every query's limit to 500 (database.ts's
+ *  indexQuery) — mirrored here so the in-place reload knows to page in
+ *  chunks rather than asking for a 900-row window and getting 500. */
+const BACKEND_QUERY_LIMIT = 500
+
+/** Whether the Electron bridge exists at all. The supported non-Electron
+ *  browser preview has no `window.api`; there the catalog hook falls
+ *  back to mock data, and this hook's honest contribution is to report
+ *  settled-and-empty so the page can use its array mode — never an
+ *  eternal loading state no query will ever resolve. */
+export const CATALOG_BRIDGE_AVAILABLE =
+  typeof window !== 'undefined' && Boolean(window.api?.mediaHub?.catalog?.query)
+
 export interface CatalogBrowseResult {
   items: MediaItem[]
   /** Exact size of the filtered result — the number the count labels
@@ -77,7 +90,9 @@ function freshBrowseState(viewKey: string): BrowseState {
     total: 0,
     offset: 0,
     end: false,
-    loading: true,
+    // Without a bridge there is nothing to load and never will be —
+    // starting settled is what keeps the preview out of a forever-spinner.
+    loading: CATALOG_BRIDGE_AVAILABLE,
     error: false
   }
 }
@@ -127,7 +142,7 @@ export function useCatalogBrowse(
   // empty because nothing had seeded it yet" into a real answer without
   // anyone pressing anything.
   useEffect(() => {
-    if (!enabled) return
+    if (!enabled || !CATALOG_BRIDGE_AVAILABLE) return
     let cancelled = false
     fetchPage(0)
       .then((result) => {
@@ -159,17 +174,35 @@ export function useCatalogBrowse(
     stateRef.current = current
   }, [current])
 
+  // The in-place reload's generation counter. An append whose fetch
+  // STARTED before the latest reload applied is discarded at completion
+  // instead of merged — its snapshot base is gone, and the scroll
+  // sentinel simply asks again against the fresh window. This is what
+  // lets a reload run without waiting on appends, and appends without
+  // locking out reloads.
+  const reloadGenRef = useRef(0)
+  // Reloads themselves are SERIALIZED on a promise chain, and each new
+  // adapter identity supersedes any reload still waiting in the queue —
+  // the answer to two profile-scoped sets resolving back-to-back is one
+  // reload against the final state, not a dropped invalidation.
+  const reloadQueueRef = useRef<Promise<void>>(Promise.resolve())
+
   const appendPage = useCallback(async (): Promise<CatalogQueryResult | null> => {
     const snapshot = stateRef.current
     if (inFlightRef.current || snapshot.viewKey !== viewKey || snapshot.loading) return null
     if (snapshot.end || snapshot.rows.length >= snapshot.total) return null
     inFlightRef.current = true
+    const generation = reloadGenRef.current
     try {
       // Paged by the BACKEND offset — what was requested, not what
       // survived dedup — so an index shifting between requests skips the
       // overlap instead of re-reading it (see BrowseState.offset).
       const result = await fetchPage(snapshot.offset)
       if (!result || stateRef.current.viewKey !== viewKey) return null
+      // A reload replaced the window while this page was in flight: the
+      // snapshot this fetch was based on no longer exists. Discard —
+      // hasMore is still true, so the sentinel re-requests fresh.
+      if (reloadGenRef.current !== generation) return null
       const seen = new Set(snapshot.rows.map((row) => row.id))
       const fresh = result.items.filter((row) => !seen.has(row.id))
       const nextOffset = snapshot.offset + result.items.length
@@ -215,51 +248,75 @@ export function useCatalogBrowse(
   // So a changed adapter reloads the loaded window IN PLACE: same view,
   // same depth, fresh answer — stale-while-revalidate, never a collapse
   // back to page zero mid-scroll.
+  //
+  // Two discipline points, both learned from review:
+  //  - reloads QUEUE rather than early-return. Profile switches resolve
+  //    watch history, dislikes and My List independently, so the adapter
+  //    changes several times in quick succession; dropping any of those
+  //    invalidations leaves the previous profile's grid on show. Each
+  //    effect run supersedes queued-but-unstarted predecessors and the
+  //    last adapter always gets its reload.
+  //  - the window is refetched in CHUNKS of BACKEND_QUERY_LIMIT. The
+  //    backend clamps per-query limits, and a grid scrolled to 900 rows
+  //    must come back as 900 rows, not collapse to one clamped page.
   const adaptRef = useRef(adapt)
   useEffect(() => {
     if (adaptRef.current === adapt) return
     adaptRef.current = adapt
-    if (!enabled) return
-    const snapshot = stateRef.current
-    if (snapshot.viewKey !== viewKey || snapshot.loading || inFlightRef.current) return
-    let cancelled = false
-    inFlightRef.current = true
-    const api = window.api?.mediaHub?.catalog
-    if (!api?.query) {
-      inFlightRef.current = false
-      return
-    }
-    api
-      .query(
-        filterStateToCatalogQuery(kind, filtersRef.current, {
-          offset: 0,
-          limit: Math.max(snapshot.rows.length, BROWSE_PAGE_SIZE)
-        })
-      )
-      .then((result) => {
-        if (cancelled || stateRef.current.viewKey !== viewKey) return
+    if (!enabled || !CATALOG_BRIDGE_AVAILABLE) return
+    let superseded = false
+    reloadQueueRef.current = reloadQueueRef.current.then(async () => {
+      if (superseded) return
+      const snapshot = stateRef.current
+      if (snapshot.viewKey !== viewKey || snapshot.loading) return
+      const api = window.api?.mediaHub?.catalog
+      if (!api?.query) return
+      const wanted = Math.max(snapshot.rows.length, BROWSE_PAGE_SIZE)
+      try {
+        const rows: CatalogItem[] = []
+        const completedIds: string[] = []
+        const seen = new Set<string>()
+        let offset = 0
+        let total = 0
+        let end = false
+        while (rows.length < wanted && !end) {
+          const result = await api.query(
+            filterStateToCatalogQuery(kind, filtersRef.current, {
+              offset,
+              limit: Math.min(BACKEND_QUERY_LIMIT, wanted - rows.length)
+            })
+          )
+          total = result.total
+          offset += result.items.length
+          end = result.items.length === 0
+          for (const row of result.items) {
+            if (seen.has(row.id)) continue
+            seen.add(row.id)
+            rows.push(row)
+          }
+          completedIds.push(...result.completedIds)
+        }
+        if (superseded || stateRef.current.viewKey !== viewKey) return
+        reloadGenRef.current += 1
         const next: BrowseState = {
           viewKey,
-          rows: result.items,
-          completedIds: result.completedIds,
-          total: result.total,
-          offset: result.items.length,
-          end: result.items.length === 0,
+          rows,
+          completedIds,
+          total,
+          offset,
+          end,
           loading: false,
           error: false
         }
         setState(next)
         stateRef.current = next
-      })
-      .catch(() => {
+      } catch {
         // Keep what is showing — the adapter already repainted badges,
         // and the next change retries.
-      })
-      .finally(() => {
-        inFlightRef.current = false
-      })
+      }
+    })
     return () => {
-      cancelled = true
+      superseded = true
     }
   }, [adapt, enabled, viewKey, kind])
 
