@@ -371,6 +371,10 @@ export interface CacheSessionMeta {
   mediaKind?: 'movie' | 'series' | 'anime'
   seasonNumber?: number
   episodeNumber?: number
+  /** The episode's own name ("Ghosts"), alongside the coordinates above.
+   *  The player overlay's badge and title line render it; absent for
+   *  movies and for sessions written before it existed. */
+  episodeTitle?: string
   /** Which release these bytes are. Absent on sessions written before this
    *  existed — those stay partial-adoption-ineligible, which is the old
    *  behaviour and safe. */
