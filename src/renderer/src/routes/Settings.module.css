@@ -1246,10 +1246,17 @@ html[data-motion-user-disabled='true'] .quickJump {
    or three on a wide one, without a media query naming a breakpoint that
    would be wrong the moment the nav rail collapses. align-items:start so a
    short card stays short instead of being stretched to match the tallest
-   one in its row. */
+   one in its row.
+
+   min(420px, 100%), NOT a bare 420px: a bare minimum is still honoured when
+   the column is narrower than it, so a container under 420px got a 420px
+   track that overflowed it — and .quickBody hides horizontal overflow, so
+   the right-hand end of every card, which is where the switches are, was
+   cut off with no way to scroll to it. Capping the floor at the available
+   width lets the single column shrink instead. */
 .quickGrid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(420px, 100%), 1fr));
   align-items: start;
   gap: 18px;
 }

@@ -1,6 +1,11 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useSyncExternalStore } from 'react'
 import { useAppState } from '@renderer/context/AppStateContext'
 import { useAsyncAction } from '@renderer/hooks/useAsyncAction'
+import {
+  readUpdateStore,
+  setUpdateStoreState,
+  subscribeToUpdateStore
+} from '@renderer/hooks/updateStatusStore'
 import type { UpdateChannel, UpdateState, UpdateStatusPayload } from '@shared/media-hub/types'
 
 /** One sentence per state, written to be read by somebody who did not ask
@@ -59,50 +64,29 @@ export interface UpdateManager {
  */
 export function useUpdateManager(): UpdateManager {
   const { mediaHubSettings, refreshMediaHubSettings } = useAppState()
-  const [status, setStatus] = useState<UpdateStatusPayload | null>(null)
-  const [checking, setChecking] = useState(false)
-  const [notes, setNotes] = useState('')
+  const { status, checking, notes } = useSyncExternalStore(
+    subscribeToUpdateStore,
+    readUpdateStore,
+    readUpdateStore
+  )
   const runAction = useAsyncAction()
-
-  useEffect(() => {
-    const api = window.api?.mediaHub
-    if (!api) return
-    return api.update.onStatus(setStatus)
-  }, [])
-
-  // Read once — it is baked into the build and cannot change while the app
-  // is open.
-  useEffect(() => {
-    const api = window.api?.mediaHub
-    if (!api) return
-    let cancelled = false
-    void Promise.resolve().then(async () => {
-      try {
-        const result = await api.update.notes()
-        if (!cancelled) setNotes(result.current)
-      } catch {
-        // Nothing to say is the normal case, so a failure to read says nothing.
-      }
-    })
-    return () => {
-      cancelled = true
-    }
-  }, [])
 
   const check = useCallback(async () => {
     const api = window.api?.mediaHub
     if (!api) return
-    setChecking(true)
+    setUpdateStoreState({ checking: true })
     try {
       const result = await api.update.check()
-      setStatus({ state: result.state, version: result.version })
+      setUpdateStoreState({ status: { state: result.state, version: result.version } })
     } catch (error) {
-      setStatus({
-        state: 'error',
-        message: error instanceof Error ? error.message : 'Update check failed.'
+      setUpdateStoreState({
+        status: {
+          state: 'error',
+          message: error instanceof Error ? error.message : 'Update check failed.'
+        }
       })
     } finally {
-      setChecking(false)
+      setUpdateStoreState({ checking: false })
     }
   }, [])
 
