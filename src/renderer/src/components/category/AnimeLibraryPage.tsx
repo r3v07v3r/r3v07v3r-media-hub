@@ -8,6 +8,7 @@ import { ArtworkImage } from '@renderer/components/media/ArtworkImage'
 import { resolveArtwork } from '@renderer/lib/artwork'
 import type { MediaItem } from '@renderer/types'
 import {
+  applyCategoryFilters,
   applyWatchStateFilters,
   filterStateFromSearchParams,
   filterStateToSearchParams,
@@ -585,17 +586,25 @@ export function LibraryPage({ config }: { config: CategoryConfig }) {
   const viewKey = searchActive
     ? `${config.kind}:search:${categorySearch.query}`
     : `${config.kind}:filters:${paramsString}`
+  // The curated surfaces (hero, Popular shelf) rank the FULL loaded
+  // array WITH the active filters applied in memory — never one SQL
+  // page. browse.items is sixty rows in the current sort: ranking that
+  // sample meant a top-rated title past page one could never surface,
+  // and the shelf reshuffled as pages arrived. The unfiltered array is
+  // just as wrong the other way — Hide Disliked must not be undone by
+  // the hero featuring a disliked title. applyCategoryFilters is the
+  // same in-memory engine the SQL was equivalence-tested against, so
+  // membership agrees with the grid; only its bound (the loaded array
+  // vs the whole index) differs, and these are curated surfaces of that
+  // array by design.
+  const filteredLibrary = useMemo(() => applyCategoryFilters(library, filters), [library, filters])
   const heroItems = useMemo(() => {
-    // The hero ranks the FULL loaded array — the curated pool this page
-    // deliberately keeps — never one SQL page. browse.items is sixty
-    // rows in the current sort; ranking that sample would mean a
-    // top-rated title past page one could never be featured. The page
-    // fallback is only for a first run where the index answered before
-    // the catalog finished loading.
-    const ranking = [...(library.length ? library : browse.items)]
+    // First-run fallback only: the index can answer before the catalog
+    // array finishes loading.
+    const ranking = [...(filteredLibrary.length ? filteredLibrary : browse.items)]
     ranking.sort((a, b) => (b.communityRating ?? 0) - (a.communityRating ?? 0))
     return ranking.slice(0, 5)
-  }, [browse.items, library])
+  }, [browse.items, filteredLibrary])
   const activeHero = heroItems[Math.min(heroIndex, Math.max(heroItems.length - 1, 0))] ?? null
 
   const continuing = useMemo(
@@ -608,7 +617,10 @@ export function LibraryPage({ config }: { config: CategoryConfig }) {
     [continueWatching, config.kind]
   )
   const popular = useMemo(() => {
-    const pool = browseItems.length ? [...browseItems] : [...library]
+    // Same pool as the hero, same reason (see filteredLibrary above) —
+    // "Popular in your library" ranks the whole filtered array, not
+    // whichever page of it happens to be loaded.
+    const pool = filteredLibrary.length ? [...filteredLibrary] : [...browseItems]
     return pool
       .sort(
         (a, b) =>
@@ -616,7 +628,7 @@ export function LibraryPage({ config }: { config: CategoryConfig }) {
           (a.matchPercentage ?? a.communityRating ?? 0)
       )
       .slice(0, 18)
-  }, [browseItems, library])
+  }, [browseItems, filteredLibrary])
   // Recommendations are sourced from the personalised home feed, then
   // narrowed to the active library. Each category keeps its own relevant
   // rail: movies on Movies, series on Series, and anime on Anime.
