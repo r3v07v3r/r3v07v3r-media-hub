@@ -1654,6 +1654,14 @@ export interface CatalogFacets {
 
 /** What one press of the deep-scan button did — see catalog:deepScan.
  *  Depth goes to the INDEX only; the candidate pool never grows. */
+/** catalog:byIds' answer. completedIds rides along because index rows
+ *  carry no episode data — completion is only derivable in SQL, and
+ *  without it every id-fetched show would read as un-completed. */
+export interface CatalogByIdsResult {
+  items: CatalogItem[]
+  completedIds: string[]
+}
+
 export interface DeepScanReport {
   kind: MediaKind
   /** Titles the scanned stretch returned, before dedup and skips. */

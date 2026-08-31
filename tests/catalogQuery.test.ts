@@ -834,7 +834,7 @@ check('indexByIds returns every kind-row a shared id exists under', () => {
   db.indexUpsert('movie', [item('tt0001', { title: 'as film' })])
   db.indexUpsert('series', [item('tt0001', { title: 'as show', type: 'series' })])
   db.indexUpsert('movie', [item('tt0002')])
-  const rows = db.indexByIds(['tt0001', 'tt0002', 'tt-missing'])
+  const rows = db.indexByIds(['tt0001', 'tt0002', 'tt-missing']).items
   assert.strictEqual(rows.length, 3, 'both kind-rows for the shared id, one for the plain id')
   const shared = rows.filter((row) => row.id === 'tt0001')
   assert.deepStrictEqual(
@@ -857,6 +857,67 @@ check('indexExistingIds answers membership exactly, per kind', () => {
     'membership is per kind — an anime row is not a movie row'
   )
   db.close()
+})
+
+check('a grouped SIBLING counts as existing — it lives under its canonical row', () => {
+  // The grouping pass removes sibling rows and records their ids only in
+  // the canonical row's grouped_ids. If membership checked the id column
+  // alone, a franchise season drifting back into deep-scan range would
+  // read as "new" and be inserted as a separate ungrouped title beside
+  // its own franchise — permanently, since the skip rule then protects
+  // the duplicate.
+  const db = tempDb()
+  db.indexUpsert('anime', [
+    item('kitsu:100', { type: 'anime', title: 'Canonical', groupedIds: ['kitsu:101', 'kitsu:102'] })
+  ])
+  const existing = db.indexExistingIds('anime', ['kitsu:101', 'kitsu:102', 'kitsu:999'])
+  assert.ok(existing.has('kitsu:101'), 'first sibling recognised')
+  assert.ok(existing.has('kitsu:102'), 'second sibling recognised')
+  assert.ok(!existing.has('kitsu:999'), 'a genuinely unknown id is still new')
+  // And therefore the deep scan skips it rather than re-inserting it.
+  const { add, skipped } = planDeepScanBatch(
+    [item('kitsu:101', { type: 'anime', title: 'Season returning as its own row' })],
+    db.indexExistingIds('anime', ['kitsu:101'])
+  )
+  assert.strictEqual(add.length, 0)
+  assert.strictEqual(skipped, 1)
+  db.close()
+})
+
+check('indexByIds carries completion membership for its rows', () => {
+  // Index rows come back with no episode data, so `completed` is only
+  // derivable in SQL — without completedIds riding along, every
+  // id-fetched show would read un-completed and My Stuff's completed
+  // badges and hideCompleted preference would quietly break.
+  const db = tempDb()
+  db.indexUpsert('movie', [item('tt0001'), item('tt0002')])
+  db.indexUpsert('series', [airedSeries('tt0003', 2)])
+  db.markWatched({ id: 'tt0001', type: 'movie', title: 'tt0001' })
+  db.markWatched({ id: 'tt0003', type: 'series', title: 'tt0003' }, { season: 1, episode: 1 })
+  const partial = db.indexByIds(['tt0001', 'tt0002', 'tt0003'])
+  assert.deepStrictEqual(
+    partial.completedIds.sort(),
+    ['tt0001'],
+    'the watched movie is complete; the half-watched series is not'
+  )
+  db.markWatched({ id: 'tt0003', type: 'series', title: 'tt0003' }, { season: 1, episode: 2 })
+  const full = db.indexByIds(['tt0001', 'tt0002', 'tt0003'])
+  assert.deepStrictEqual(full.completedIds.sort(), ['tt0001', 'tt0003'])
+  db.close()
+})
+
+check('indexUpsert reports success so bookmarks can trust it', () => {
+  const db = tempDb()
+  assert.strictEqual(db.indexUpsert('movie', [item('tt0001')]), true, 'a committed batch is true')
+  assert.strictEqual(db.indexUpsert('movie', []), true, 'an empty batch wrote everything it had')
+  db.close()
+  // After close, the write CANNOT land — the report must say so, because
+  // the deep scan advances a durable bookmark on this answer.
+  assert.strictEqual(
+    db.indexUpsert('movie', [item('tt0002')]),
+    false,
+    'a failed batch is false, never silently "fine"'
+  )
 })
 
 check('a deep-scan batch never overwrites what the crawl curated', () => {
@@ -882,7 +943,7 @@ check('a deep-scan batch never overwrites what the crawl curated', () => {
   )
   db.indexUpsert('anime', add, { source: 'deep-scan' })
   assert.strictEqual(skipped, 1)
-  const after = db.indexByIds(['kitsu:100', 'kitsu:900'])
+  const after = db.indexByIds(['kitsu:100', 'kitsu:900']).items
   const curated = after.find((row) => row.id === 'kitsu:100')
   assert.strictEqual(curated?.title, 'Curated', 'the grouped row is untouched')
   assert.deepStrictEqual(
