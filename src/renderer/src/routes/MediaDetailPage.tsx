@@ -427,7 +427,10 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
         ? {
             ...media,
             seasonNumber: season ?? nextEpisode?.season ?? 1,
-            episodeNumber: episode ?? nextEpisode?.episode ?? 1
+            episodeNumber: episode ?? nextEpisode?.episode ?? 1,
+            // Coordinates chosen here override whatever the media object
+            // carried; a stale name must not ride along with them.
+            episodeTitle: undefined
           }
         : media
     )

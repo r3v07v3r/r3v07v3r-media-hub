@@ -1976,7 +1976,12 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         ? {
             ...media,
             seasonNumber: opts.season ?? media.seasonNumber,
-            episodeNumber: opts.episode ?? media.episodeNumber
+            episodeNumber: opts.episode ?? media.episodeNumber,
+            // The name belonged to the coordinates being REPLACED — the
+            // autoplay chain spreads the episode that just ended, and its
+            // title must not label the one about to start.
+            // resolvePlaybackTarget re-resolves it from cached metadata.
+            episodeTitle: undefined
           }
         : media
       const partyApi = window.api?.mediaHub?.party
@@ -2101,7 +2106,14 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
           setPartyPendingSeek(Number(msg.position) || 0)
           return startPlayback(
             msg.season !== undefined || msg.episode !== undefined
-              ? { ...media, seasonNumber: msg.season, episodeNumber: msg.episode }
+              ? {
+                  ...media,
+                  seasonNumber: msg.season,
+                  episodeNumber: msg.episode,
+                  // New coordinates, so the spread's old name is dropped —
+                  // resolvePlaybackTarget names the episode being joined.
+                  episodeTitle: undefined
+                }
               : media
           )
         })
