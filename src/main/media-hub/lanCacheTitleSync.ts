@@ -82,12 +82,18 @@ export async function runLanCacheTitleSync(): Promise<TitleSyncReport> {
         // the local crawl curated. Sorted by daemon rank so the verbatim
         // ranks land in catalog order within the batch.
         const ordered = [...sane].sort((a, b) => a.rank - b.rank)
+        const existing = db.indexExistingIds(
+          kind,
+          ordered.map((row) => row.item.id)
+        )
+        if (existing === null) {
+          // Membership unknowable — end this kind's pass with the
+          // watermark unmoved (same bookmark honesty as the deep scan).
+          break
+        }
         const { add } = planDeepScanBatch(
           ordered.map((row) => row.item),
-          db.indexExistingIds(
-            kind,
-            ordered.map((row) => row.item.id)
-          )
+          existing
         )
         if (add.length) {
           const rankOf = new Map(ordered.map((row) => [row.item.id, row.rank]))
