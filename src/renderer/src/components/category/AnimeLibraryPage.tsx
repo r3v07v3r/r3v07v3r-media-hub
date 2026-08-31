@@ -20,7 +20,7 @@ import {
   useCatalogBrowse,
   useCatalogKindTotals
 } from '@renderer/lib/mediaHub/useCatalogBrowse'
-import type { CatalogFacets } from '@shared/media-hub/types'
+import type { CatalogFacets, DeepScanEvent } from '@shared/media-hub/types'
 import { ANIME_CONFIG, type CategoryConfig } from '@renderer/lib/mediaHub/categoryConfig'
 import { useRestoreBrowsingOrigin } from '@renderer/lib/mediaHub/useRestoreBrowsingOrigin'
 import { useBatchReveal } from '@renderer/lib/mediaHub/useBatchReveal'
@@ -497,8 +497,56 @@ export function LibraryPage({ config }: { config: CategoryConfig }) {
   // filters, SQL sort, exact totals — instead of filtering the loaded
   // array. The array (`library`) remains only for the curated rails and
   // as the option pool nothing below needs it to be complete for.
-  const browse = useCatalogBrowse(config.kind, filters, kindState, adaptCatalogItems, !searchActive)
-  const kindTotals = useCatalogKindTotals(config.kind, kindState, adaptCatalogItems)
+  // Declared before the browse hook so the scan's completion can reach
+  // it: a deep scan grows the index, and a grid whose reader had hit
+  // the old end needs a fresh total before hasMore can revive.
+  const [scanToken, setScanToken] = useState(0)
+  const browse = useCatalogBrowse(
+    config.kind,
+    filters,
+    kindState,
+    adaptCatalogItems,
+    !searchActive,
+    scanToken
+  )
+  // STAGE 5: the deep scan. One chunk per press, written to the INDEX
+  // only — the pool, the blob and this page's memory never grow; what
+  // grows is the exact count below and everything the index serves
+  // (browse, search, filters). Progress is a page counter, not a
+  // spinner of faith.
+  const [scanning, setScanning] = useState(false)
+  const [scanProgress, setScanProgress] = useState<DeepScanEvent | null>(null)
+  const [scanNote, setScanNote] = useState<string | null>(null)
+  useEffect(() => {
+    const api = window.api?.mediaHub?.catalog
+    if (!api?.onDeepScanEvent) return
+    return api.onDeepScanEvent((event) => {
+      if (event.kind === config.kind) setScanProgress(event)
+    })
+  }, [config.kind])
+  const runDeepScan = useCallback(async () => {
+    const api = window.api?.mediaHub?.catalog
+    if (!api?.deepScan) return
+    setScanning(true)
+    setScanNote(null)
+    try {
+      const report = await api.deepScan(config.kind)
+      setScanNote(
+        report.exhausted
+          ? 'That is the whole catalog — nothing more upstream.'
+          : report.added > 0
+            ? `+${report.added.toLocaleString()} titles found`
+            : 'Nothing new in that stretch.'
+      )
+      setScanToken((token) => token + 1)
+    } catch {
+      setScanNote('The scan could not run. Try again.')
+    } finally {
+      setScanning(false)
+      setScanProgress(null)
+    }
+  }, [config.kind])
+  const kindTotals = useCatalogKindTotals(config.kind, kindState, scanToken, adaptCatalogItems)
   // Dropdown options come from the index too — the library's actual
   // genres/years/statuses, not whatever slice happens to be loaded.
   const [facets, setFacets] = useState<CatalogFacets | null>(null)
@@ -515,7 +563,10 @@ export function LibraryPage({ config }: { config: CategoryConfig }) {
     return () => {
       cancelled = true
     }
-  }, [config.kind, kindState])
+    // scanToken: a deep scan can introduce years/genres/statuses the
+    // standing crawl never carried — the dropdowns must be able to
+    // select what the index now demonstrably holds.
+  }, [config.kind, kindState, scanToken])
   const searchResults = useMemo(
     () => applyWatchStateFilters(categorySearch.results, filters),
     [categorySearch.results, filters]
@@ -730,6 +781,27 @@ export function LibraryPage({ config }: { config: CategoryConfig }) {
             <p className={styles.libraryCount}>
               {libraryTotal.toLocaleString()} {config.pluralLabel} in your library
             </p>
+            {/* Inside the clickable hero, so every control stops the
+                click from opening the featured title. */}
+            <div className={styles.deepScanRow}>
+              <button
+                type="button"
+                className={styles.deepScanButton}
+                disabled={scanning}
+                onClick={(event) => {
+                  event.stopPropagation()
+                  void runDeepScan()
+                }}
+              >
+                <Icon name="search" size={12} />
+                {scanning
+                  ? scanProgress
+                    ? `Scanning… ${scanProgress.pagesDone}/${scanProgress.pagesTotal}`
+                    : 'Scanning…'
+                  : 'Scan deeper'}
+              </button>
+              {scanNote && !scanning && <span className={styles.deepScanNote}>{scanNote}</span>}
+            </div>
             <div className={styles.stats}>
               <span>
                 <b>{continuing.length}</b> Watching

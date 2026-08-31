@@ -146,6 +146,18 @@ const GENRE_MOOD_KEYWORDS: Record<string, string[]> = {
 // guarantee of it, and a normalizer that omitted the array once already made
 // this throw and blank the entire window (see collection.ts). Tolerating the
 // absence here costs one guard; not tolerating it costs the app.
+/** The inverse direction of GENRE_MOOD_KEYWORDS, for callers that must ask
+ *  the INDEX for mood-relevant rows: does this concrete genre value map to
+ *  any of the selected moods? Kept beside the forward mapping so the two
+ *  directions cannot drift apart. */
+export function genreMatchesMoods(genre: string, moodIds: readonly string[]): boolean {
+  const key = genre.trim().toLowerCase()
+  for (const [needle, tags] of Object.entries(GENRE_MOOD_KEYWORDS)) {
+    if (key.includes(needle) && tags.some((tag) => moodIds.includes(tag))) return true
+  }
+  return false
+}
+
 function genresToMoods(genres: string[] | undefined): string[] {
   const moods = new Set<string>()
   for (const genre of genres ?? []) {

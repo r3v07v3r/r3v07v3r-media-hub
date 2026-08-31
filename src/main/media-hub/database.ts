@@ -683,7 +683,10 @@ export interface MediaHubDatabase {
     kind: MediaKind,
     items: readonly CatalogItem[],
     opts?: { source?: string; rankBase?: number; now?: number }
-  ): void
+    /** True when the batch COMMITTED. False means the transaction rolled
+     *  back (disk full, I/O error) and nothing was written — callers that
+     *  advance a bookmark past these rows must not. */
+  ): boolean
   /** How many titles of one kind the index holds. This is the real library
    *  size — the number the category hero should be quoting. */
   indexCount(kind: MediaKind): number
@@ -699,6 +702,25 @@ export interface MediaHubDatabase {
    *  filter bar's dropdown contents, over the whole library rather than
    *  over whatever slice happens to be loaded. */
   indexFacets(kind: MediaKind): CatalogFacets
+  /** Rows for exactly these ids, all kinds. A `tt` id can exist as BOTH
+   *  a movie and a series row (the two Cinemeta catalogs overlap), so a
+   *  caller matching a mixed collection gets every kind-row and dedupes
+   *  by its own rules. Exists for stage 4: id-matching surfaces (My
+   *  Stuff, the Planned row) read the index instead of scanning a
+   *  loaded array, so a tracked title stays visible however small the
+   *  candidate pool becomes and however deep the index grows. */
+  indexByIds(ids: readonly string[]): { items: CatalogItem[]; completedIds: string[] }
+  /** Which of these ids the index already holds for one kind — the
+   *  deep-scan skip set. A cheap id-only projection rather than
+   *  indexByIds because the caller wants membership, not rows. */
+  /** Null when membership could not be established (the lookup itself
+   *  failed) — DISTINCT from an empty set. The deep scan advances a
+   *  durable bookmark on this answer: claiming everything exists would
+   *  make it add nothing AND move on, permanently skipping the chunk. */
+  indexExistingIds(kind: MediaKind, ids: readonly string[]): Set<string> | null
+  /** The highest rank any row of this kind holds — the floor above which
+   *  deep-scanned rows must land to stay UNDER the curated ordering. */
+  indexMaxRank(kind: MediaKind): number
   trackedUpdates(details: CatalogItem[], now?: Date): TrackedUpdate[]
   close(): void
   filename: string
@@ -2016,7 +2038,7 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
     },
 
     indexUpsert(kind, items, { source = '', rankBase = 0, now = Date.now() } = {}) {
-      if (!items.length) return
+      if (!items.length) return true
       try {
         sql.exec('BEGIN')
         try {
@@ -2065,10 +2087,15 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
           sql.exec('ROLLBACK')
           throw error
         }
+        return true
       } catch {
         // Best-effort, like every other cache write here. A failed index
         // write costs this crawl's contribution and nothing else — the rows
         // already in the index are untouched, and the next crawl retries.
+        // The FALSE return is for the one caller that advances a durable
+        // bookmark: reporting rows as added while the transaction rolled
+        // back would skip them forever.
+        return false
       }
     },
 
@@ -2088,6 +2115,112 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
       } catch {
         return []
       }
+    },
+
+    indexByIds(ids) {
+      // Chunked: SQLite's bound-parameter ceiling is generous but a
+      // watched-history id list is unbounded in principle, and 400 per
+      // statement keeps every statement comfortably small.
+      //
+      // completedIds rides along for the same reason indexQuery carries
+      // it: these rows come back with no episode data (the index stores
+      // none), so `completed` is only derivable HERE, where the SQL can
+      // join watch history against aired counts. Without it, every
+      // id-fetched show read as un-completed and My Stuff's completed
+      // badges and hideCompleted preference quietly broke.
+      const out: CatalogItem[] = []
+      const completedIds: string[] = []
+      try {
+        for (let start = 0; start < ids.length; start += 400) {
+          const chunk = ids.slice(start, start + 400).filter((id) => typeof id === 'string')
+          if (!chunk.length) continue
+          // Named parameters throughout: COMPLETED_SQL binds @profile,
+          // and one statement cannot mix ?-positional with named.
+          const params: Record<string, string> = { profile: currentProfileId }
+          chunk.forEach((id, i) => {
+            params[`id${i}`] = id
+          })
+          const marks = chunk.map((_, i) => `@id${i}`).join(',')
+          const rows = sql
+            .prepare(
+              `SELECT id,kind,title,year,rating,runtime_min,status,poster,background,logo,description,
+                      total_seasons,total_episodes,simkl_id,grouped_ids,
+                      (SELECT group_concat(genre, char(31)) FROM catalog_index_genre g
+                        WHERE g.id = catalog_index.id AND g.kind = catalog_index.kind) AS genres,
+                      ${COMPLETED_SQL} AS completed
+               FROM catalog_index WHERE id IN (${marks})`
+            )
+            .all(params) as Row[]
+          for (const row of rows) {
+            out.push(indexRowToItem(row, String(row.kind) as MediaKind, splitGenres(row.genres)))
+            if (Number(row.completed) === 1) completedIds.push(String(row.id))
+          }
+        }
+        return { items: out, completedIds }
+      } catch (error) {
+        // Same reasoning as indexQuery: an empty answer here renders as
+        // "you have nothing tracked", which is a claim — log it.
+        logError('catalog:index:by-ids', error)
+        return { items: out, completedIds }
+      }
+    },
+
+    indexMaxRank(kind) {
+      try {
+        const row = sql
+          .prepare('SELECT MAX(rank) AS r FROM catalog_index WHERE kind = ?')
+          .get(kind) as Row | undefined
+        const value = Number(row?.r)
+        return Number.isFinite(value) ? value : 0
+      } catch {
+        // Zero makes the caller fall back to its own offset-derived
+        // floor — depth may interleave a little, nothing is lost.
+        return 0
+      }
+    },
+
+    indexExistingIds(kind, ids) {
+      const found = new Set<string>()
+      try {
+        for (let start = 0; start < ids.length; start += 400) {
+          const chunk = ids.slice(start, start + 400).filter((id) => typeof id === 'string')
+          if (!chunk.length) continue
+          const marks = chunk.map(() => '?').join(',')
+          const rows = sql
+            .prepare(`SELECT id FROM catalog_index WHERE kind = ? AND id IN (${marks})`)
+            .all(kind, ...chunk) as Row[]
+          for (const row of rows) found.add(String(row.id))
+        }
+        // A grouped SIBLING exists too, under its canonical row. The
+        // grouping pass removes sibling rows and records their ids only
+        // in grouped_ids, so an id-column check alone would call a
+        // returning franchise season "new" and insert it as a separate
+        // ungrouped title beside its own franchise — permanently, since
+        // the skip rule then protects the duplicate. One pass over the
+        // grouped rows closes that door.
+        const requested = new Set(ids)
+        const groupedRows = sql
+          .prepare(
+            `SELECT grouped_ids FROM catalog_index WHERE kind = ? AND grouped_ids IS NOT NULL`
+          )
+          .all(kind) as Row[]
+        for (const row of groupedRows) {
+          const members = parse<string[]>(String(row.grouped_ids), [])
+          for (const member of members) {
+            if (requested.has(String(member))) found.add(String(member))
+          }
+        }
+      } catch (error) {
+        // NULL, not "everything exists". Fail-closed-as-full-set had the
+        // right instinct (never re-upsert what the grouping pass curated)
+        // but the wrong consequence: the deep scan would add nothing and
+        // still advance its durable bookmark past the whole chunk,
+        // permanently skipping those titles. Null says "I could not
+        // answer" — the caller halts, and the next pass retries.
+        logError('catalog:index:existing', error)
+        return null
+      }
+      return found
     },
 
     indexQuery(query) {

@@ -108,6 +108,9 @@ export const MEDIA_HUB_CHANNELS = {
    *  filter bar's dropdowns. Over the whole library, not over the slice that
    *  happens to be loaded. */
   catalogFacets: 'mediahub:catalog:facets',
+  catalogByIds: 'mediahub:catalog:by-ids',
+  catalogDeepScan: 'mediahub:catalog:deep-scan',
+  catalogDeepScanEvent: 'mediahub:catalog:deep-scan-event', // push event
   catalogMeta: 'mediahub:catalog:meta',
   catalogSearch: 'mediahub:catalog:search',
   catalogRelated: 'mediahub:catalog:related',

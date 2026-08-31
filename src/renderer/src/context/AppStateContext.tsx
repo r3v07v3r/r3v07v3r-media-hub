@@ -284,6 +284,11 @@ interface AppStateValue {
    *  fetch their own rows (catalog:query) MUST use this rather than
    *  calling the adapter bare, or their badges drift from the app's. */
   adaptCatalogItems: (items: CatalogItem[], completedIds?: string[]) => MediaItem[]
+  /** Ids with any watched history — exposed for the id-matching
+   *  surfaces (My Stuff's Watched tab) that fetch rows from the index
+   *  by id since stage 4 instead of scanning a loaded array for its
+   *  baked-in flags. */
+  watchedIds: Set<string>
 
   // home:personalized's recommendations/featured pool (see
   // useMediaHubHomeFeed) — `homeFeedLive` tells a consumer whether these
@@ -2382,6 +2387,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       catalogKindStates: browseCatalog.kindStates,
       refreshCatalog: browseCatalog.refresh,
       adaptCatalogItems,
+      watchedIds: watchedIdsResult.watchedIds,
       recommendations: homeFeed.recommendations,
       featured: homeFeed.featured,
       homeFeedLive: homeFeed.live,
@@ -2485,6 +2491,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       browseCatalog.kindStates,
       browseCatalog.refresh,
       adaptCatalogItems,
+      watchedIdsResult.watchedIds,
       homeFeed.recommendations,
       homeFeed.featured,
       homeFeed.live,

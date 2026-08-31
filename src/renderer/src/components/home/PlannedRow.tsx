@@ -16,6 +16,7 @@
 
 import { Link } from 'react-router-dom'
 import { useAppState } from '@renderer/context/AppStateContext'
+import { useCatalogByIds } from '@renderer/lib/mediaHub/useCatalogByIds'
 import { Icon } from '@renderer/components/icons/Icon'
 import { MediaCard } from './RecommendationCarousel/MediaCard'
 import styles from './RecommendationCarousel/RecommendationCarousel.module.css'
@@ -25,11 +26,21 @@ import styles from './RecommendationCarousel/RecommendationCarousel.module.css'
 const ROW_LIMIT = 20
 
 export function PlannedRow() {
-  const { catalog, myList } = useAppState()
-  // Straight from the catalog by id, the same way My Stuff builds its own
-  // Planned tab — so a title pulled in from a service shows the artwork
+  const { myList, adaptCatalogItems, catalogKindStates } = useAppState()
+  // From the INDEX by id (stage 4): the loaded catalog is a bounded
+  // candidate pool now, and a planned title has every right to live
+  // outside it — a row that silently dropped those would look like the
+  // sync losing titles. Same source My Stuff uses, same
+  // adapter — so a title pulled in from a service shows the artwork
   // and ratings this app resolved for it, not the thinner remote record.
-  const planned = catalog.filter((media) => myList.has(media.id))
+  const { items: planned } = useCatalogByIds(
+    myList,
+    adaptCatalogItems,
+    // Refetch when a kind settles — on a fresh database this query can
+    // land before the index is seeded, and the early empty answer must
+    // not stand once titles exist.
+    `${catalogKindStates.movie}:${catalogKindStates.series}:${catalogKindStates.anime}`
+  )
 
   // Nothing planned is not a state worth a row. An empty shelf with an
   // explanation is still a shelf somebody has to scroll past every time
