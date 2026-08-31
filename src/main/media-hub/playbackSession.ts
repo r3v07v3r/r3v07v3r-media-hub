@@ -348,6 +348,7 @@ async function openPlayback(
         kind: cacheMeta.mediaKind ?? 'movie',
         seasonNumber: cacheMeta.seasonNumber,
         episodeNumber: cacheMeta.episodeNumber,
+        episodeTitle: cacheMeta.episodeTitle,
         posterUrl: cacheMeta.posterUrl
       }
     : null

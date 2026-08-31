@@ -1512,7 +1512,23 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   const resolvePlaybackTarget = useCallback(async (media: MediaItem): Promise<MediaItem> => {
     const kind = media.mediaKind ?? (media.mediaType === 'series' ? 'series' : 'movie')
     if (kind === 'movie') return media
-    if (media.seasonNumber != null && media.episodeNumber != null) return media
+    if (media.seasonNumber != null && media.episodeNumber != null) {
+      // The caller named its coordinates — respect them. But a coordinate
+      // without the episode's NAME leaves the player badge half-blank, so
+      // when the name is missing it is looked up from the (cached)
+      // metadata: a map lookup in the common case, and a failure returns
+      // the media untouched rather than delaying playback.
+      if (media.episodeTitle) return media
+      try {
+        const meta = await window.api?.mediaHub?.catalog.meta(kind, media.id)
+        const picked = meta?.videos?.find(
+          (video) => video.season === media.seasonNumber && video.episode === media.episodeNumber
+        )
+        return picked?.title ? { ...media, episodeTitle: picked.title } : media
+      } catch {
+        return media
+      }
+    }
 
     const api = window.api?.mediaHub
     if (api) {
@@ -1529,7 +1545,17 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         }
         if (meta?.videos?.length) {
           const target = episodeToStart(meta.videos, watchedKeys)
-          return { ...media, seasonNumber: target.season, episodeNumber: target.episode }
+          // The picked episode's own name rides along — it is what the
+          // player's badge shows under "S2 · E5".
+          const picked = meta.videos.find(
+            (video) => video.season === target.season && video.episode === target.episode
+          )
+          return {
+            ...media,
+            seasonNumber: target.season,
+            episodeNumber: target.episode,
+            episodeTitle: picked?.title
+          }
         }
       } catch {
         // Falls through to the Continue Watching row below.
@@ -1541,7 +1567,8 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       return {
         ...media,
         seasonNumber: entry.media.seasonNumber,
-        episodeNumber: entry.media.episodeNumber
+        episodeNumber: entry.media.episodeNumber,
+        episodeTitle: entry.media.episodeTitle
       }
     }
     return media
@@ -1689,7 +1716,8 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
           posterUrl: media.posterUrl,
           mediaKind: kind,
           seasonNumber: media.seasonNumber,
-          episodeNumber: media.episodeNumber
+          episodeNumber: media.episodeNumber,
+          episodeTitle: media.episodeTitle
         })
         // If cancellation/timeout wins the race, a late successful IPC result
         // must not leave its newly-created backend playback session running.
@@ -1948,7 +1976,12 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         ? {
             ...media,
             seasonNumber: opts.season ?? media.seasonNumber,
-            episodeNumber: opts.episode ?? media.episodeNumber
+            episodeNumber: opts.episode ?? media.episodeNumber,
+            // The name belonged to the coordinates being REPLACED — the
+            // autoplay chain spreads the episode that just ended, and its
+            // title must not label the one about to start.
+            // resolvePlaybackTarget re-resolves it from cached metadata.
+            episodeTitle: undefined
           }
         : media
       const partyApi = window.api?.mediaHub?.party
@@ -2073,7 +2106,14 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
           setPartyPendingSeek(Number(msg.position) || 0)
           return startPlayback(
             msg.season !== undefined || msg.episode !== undefined
-              ? { ...media, seasonNumber: msg.season, episodeNumber: msg.episode }
+              ? {
+                  ...media,
+                  seasonNumber: msg.season,
+                  episodeNumber: msg.episode,
+                  // New coordinates, so the spread's old name is dropped —
+                  // resolvePlaybackTarget names the episode being joined.
+                  episodeTitle: undefined
+                }
               : media
           )
         })
