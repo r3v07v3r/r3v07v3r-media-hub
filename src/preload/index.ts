@@ -652,7 +652,8 @@ const api = {
           title: meta?.title,
           posterUrl: meta?.posterUrl,
           season: meta?.seasonNumber,
-          episode: meta?.episodeNumber
+          episode: meta?.episodeNumber,
+          episodeTitle: meta?.episodeTitle
         })
     },
 

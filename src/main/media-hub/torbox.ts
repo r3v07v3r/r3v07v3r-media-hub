@@ -331,6 +331,9 @@ interface PlayStreamPayload {
   posterUrl?: string
   season?: number
   episode?: number
+  /** The episode's own name — carried through to the player session so
+   *  the overlay's badge and title line can show it. */
+  episodeTitle?: string
 }
 
 /** How long play:stream's "last stream that actually worked for this
@@ -741,7 +744,18 @@ export function registerTorBoxIpc(): void {
     MEDIA_HUB_CHANNELS.playStream,
     async (
       _e,
-      { stream, mediaId, type, resolveId, catalogId, title, posterUrl, season, episode }
+      {
+        stream,
+        mediaId,
+        type,
+        resolveId,
+        catalogId,
+        title,
+        posterUrl,
+        season,
+        episode,
+        episodeTitle
+      }
     ) => {
       // Both sources converge here: whatever produced the URL, playback
       // opens it the same way and the same stream gets remembered. Shared
@@ -769,6 +783,7 @@ export function registerTorBoxIpc(): void {
                 mediaKind: type as 'movie' | 'series' | 'anime' | undefined,
                 seasonNumber: season,
                 episodeNumber: episode,
+                episodeTitle,
                 sourceRef,
                 // streamResolution, not stream.resolution: the scrapers
                 // mostly leave that field unset and put the real quality in
@@ -801,7 +816,8 @@ export function registerTorBoxIpc(): void {
                 catalogId,
                 mediaKind: type as 'movie' | 'series' | 'anime' | undefined,
                 seasonNumber: season,
-                episodeNumber: episode
+                episodeNumber: episode,
+                episodeTitle
               }
             : undefined,
           cacheToken
