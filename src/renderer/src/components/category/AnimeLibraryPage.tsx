@@ -531,7 +531,7 @@ export function LibraryPage({ config }: { config: CategoryConfig }) {
       setScanProgress(null)
     }
   }, [config.kind])
-  const kindTotals = useCatalogKindTotals(config.kind, kindState, scanToken)
+  const kindTotals = useCatalogKindTotals(config.kind, kindState, scanToken, adaptCatalogItems)
   // Dropdown options come from the index too — the library's actual
   // genres/years/statuses, not whatever slice happens to be loaded.
   const [facets, setFacets] = useState<CatalogFacets | null>(null)
@@ -633,11 +633,34 @@ export function LibraryPage({ config }: { config: CategoryConfig }) {
   // useRestoreBrowsingOrigin to scroll to. Same route gate as above —
   // a stale origin from another surface must not trigger a crawl here.
   const ensureItem = browse.ensureItem
+  // `restoreEnsured` gates useRestoreBrowsingOrigin below: the restore
+  // must not consume its one-shot origin while the target tile is still
+  // pages away. On mount the browse hook is loading (its appendPage
+  // refuses to run), so this waits for page zero — browse.loading is a
+  // dependency — then pages forward, and only THEN reports ready. A
+  // target ensureItem cannot find (stale id, cap reached) still reports
+  // ready: a best-effort scroll beats an origin that is never consumed.
+  // Keyed by origin-object identity, the same guard shape the restore
+  // hook itself uses — state only records WHICH origin finished ensuring
+  // (written from the promise, never synchronously in the effect);
+  // readiness is derived.
+  const [ensuredFor, setEnsuredFor] = useState<unknown>(null)
+  const browseLoading = browse.loading
+  const restorePendingHere =
+    !searchActive &&
+    Boolean(pendingRestore?.focusedItemId) &&
+    `${location.pathname}${location.search}` === pendingRestore?.route
+  const restoreEnsured = !restorePendingHere || ensuredFor === pendingRestore
   useEffect(() => {
-    if (searchActive || !pendingRestore?.focusedItemId) return
-    if (`${location.pathname}${location.search}` !== pendingRestore.route) return
-    void ensureItem(pendingRestore.focusedItemId)
-  }, [searchActive, pendingRestore, location.pathname, location.search, ensureItem])
+    if (!restorePendingHere || browseLoading || !pendingRestore?.focusedItemId) return
+    let cancelled = false
+    void ensureItem(pendingRestore.focusedItemId).finally(() => {
+      if (!cancelled) setEnsuredFor(pendingRestore)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [restorePendingHere, browseLoading, pendingRestore, ensureItem])
   const selected = useMemo(
     () =>
       [...browseItems, ...continuing, ...recommended, ...heroItems].find(
@@ -658,7 +681,7 @@ export function LibraryPage({ config }: { config: CategoryConfig }) {
     : library.filter((item) => item.completed).length
   const inListCount = library.filter((item) => item.inMyList).length
 
-  useRestoreBrowsingOrigin(true)
+  useRestoreBrowsingOrigin(restoreEnsured)
 
   return (
     <div className={styles.page}>

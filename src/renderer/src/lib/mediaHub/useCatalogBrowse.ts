@@ -57,12 +57,29 @@ interface BrowseState {
   rows: CatalogItem[]
   completedIds: string[]
   total: number
+  /** The BACKEND offset: rows requested so far, not rows displayed.
+   *  Dedup can make the display shorter than what was fetched, and using
+   *  the display length as the next offset re-reads the overlap — near
+   *  the tail that can loop on a duplicate-only slice forever. */
+  offset: number
+  /** The backend returned an empty page — the honest end of this view,
+   *  even if a shifted index leaves `total` claiming more. */
+  end: boolean
   loading: boolean
   error: boolean
 }
 
 function freshBrowseState(viewKey: string): BrowseState {
-  return { viewKey, rows: [], completedIds: [], total: 0, loading: true, error: false }
+  return {
+    viewKey,
+    rows: [],
+    completedIds: [],
+    total: 0,
+    offset: 0,
+    end: false,
+    loading: true,
+    error: false
+  }
 }
 
 export function useCatalogBrowse(
@@ -120,6 +137,8 @@ export function useCatalogBrowse(
           rows: result.items,
           completedIds: result.completedIds,
           total: result.total,
+          offset: result.items.length,
+          end: result.items.length === 0,
           loading: false,
           error: false
         })
@@ -143,20 +162,27 @@ export function useCatalogBrowse(
   const appendPage = useCallback(async (): Promise<CatalogQueryResult | null> => {
     const snapshot = stateRef.current
     if (inFlightRef.current || snapshot.viewKey !== viewKey || snapshot.loading) return null
-    if (snapshot.rows.length >= snapshot.total) return null
+    if (snapshot.end || snapshot.rows.length >= snapshot.total) return null
     inFlightRef.current = true
     try {
-      const result = await fetchPage(snapshot.rows.length)
+      // Paged by the BACKEND offset — what was requested, not what
+      // survived dedup — so an index shifting between requests skips the
+      // overlap instead of re-reading it (see BrowseState.offset).
+      const result = await fetchPage(snapshot.offset)
       if (!result || stateRef.current.viewKey !== viewKey) return null
       const seen = new Set(snapshot.rows.map((row) => row.id))
       const fresh = result.items.filter((row) => !seen.has(row.id))
+      const nextOffset = snapshot.offset + result.items.length
+      const end = result.items.length === 0
       setState((previous) =>
         previous.viewKey === viewKey
           ? {
               ...previous,
               rows: [...previous.rows, ...fresh],
               completedIds: [...previous.completedIds, ...result.completedIds],
-              total: result.total
+              total: result.total,
+              offset: nextOffset,
+              end
             }
           : previous
       )
@@ -165,9 +191,11 @@ export function useCatalogBrowse(
       stateRef.current = {
         ...snapshot,
         rows: [...snapshot.rows, ...fresh],
-        total: result.total
+        total: result.total,
+        offset: nextOffset,
+        end
       }
-      return result
+      return end ? null : result
     } catch {
       setState((previous) =>
         previous.viewKey === viewKey ? { ...previous, error: true } : previous
@@ -177,6 +205,63 @@ export function useCatalogBrowse(
       inFlightRef.current = false
     }
   }, [fetchPage, viewKey])
+
+  // WATCH-STATE AND PROFILE CHANGES reach the SQL through the adapter's
+  // own identity: adaptCatalogItems is rebuilt whenever the watched/list/
+  // disliked/ratings sets change, and all of those reload on a profile
+  // switch. The rows and total on show, though, were computed by SQL
+  // against the OLD state — completedIds, the hide-filters' membership
+  // and the total would all stay stale until the view identity changed.
+  // So a changed adapter reloads the loaded window IN PLACE: same view,
+  // same depth, fresh answer — stale-while-revalidate, never a collapse
+  // back to page zero mid-scroll.
+  const adaptRef = useRef(adapt)
+  useEffect(() => {
+    if (adaptRef.current === adapt) return
+    adaptRef.current = adapt
+    if (!enabled) return
+    const snapshot = stateRef.current
+    if (snapshot.viewKey !== viewKey || snapshot.loading || inFlightRef.current) return
+    let cancelled = false
+    inFlightRef.current = true
+    const api = window.api?.mediaHub?.catalog
+    if (!api?.query) {
+      inFlightRef.current = false
+      return
+    }
+    api
+      .query(
+        filterStateToCatalogQuery(kind, filtersRef.current, {
+          offset: 0,
+          limit: Math.max(snapshot.rows.length, BROWSE_PAGE_SIZE)
+        })
+      )
+      .then((result) => {
+        if (cancelled || stateRef.current.viewKey !== viewKey) return
+        const next: BrowseState = {
+          viewKey,
+          rows: result.items,
+          completedIds: result.completedIds,
+          total: result.total,
+          offset: result.items.length,
+          end: result.items.length === 0,
+          loading: false,
+          error: false
+        }
+        setState(next)
+        stateRef.current = next
+      })
+      .catch(() => {
+        // Keep what is showing — the adapter already repainted badges,
+        // and the next change retries.
+      })
+      .finally(() => {
+        inFlightRef.current = false
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [adapt, enabled, viewKey, kind])
 
   const loadMore = useCallback(() => {
     void appendPage()
@@ -208,7 +293,7 @@ export function useCatalogBrowse(
     // above re-queries when the kind settles, so this resolves itself.
     loading: current.loading || (current.total === 0 && !current.error && kindState === 'loading'),
     error: current.error,
-    hasMore: current.rows.length < current.total,
+    hasMore: !current.end && current.rows.length < current.total,
     loadMore,
     ensureItem
   }
@@ -226,7 +311,12 @@ export function useCatalogKindTotals(
   kindState: CatalogKindState,
   /** Bump to refetch on demand — the deep scan's completion is the one
    *  caller: it just grew the index, and the number should show it. */
-  refreshToken = 0
+  refreshToken = 0,
+  /** Any value whose identity tracks watch-state/profile changes — the
+   *  page passes its adaptCatalogItems, for the same reason the browse
+   *  hook watches it: `completed` is profile-specific, and a hero
+   *  quoting the previous profile's count until remount is a lie. */
+  revision: unknown = null
 ): { total: number; completed: number } {
   const [totals, setTotals] = useState({ total: 0, completed: 0 })
   useEffect(() => {
@@ -251,6 +341,6 @@ export function useCatalogKindTotals(
     return () => {
       cancelled = true
     }
-  }, [kind, kindState, refreshToken])
+  }, [kind, kindState, refreshToken, revision])
   return totals
 }
