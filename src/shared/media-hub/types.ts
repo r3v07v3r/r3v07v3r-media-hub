@@ -790,6 +790,20 @@ export interface WatchStatusDiscrepancy {
    *  surfaced in the first place. */
   localWatched: boolean
   remoteWatched: boolean
+  /**
+   * False when this row's id cannot be expressed to Simkl as a real id
+   * (mockData's m-* demo ids, or anything else unmappable), which makes
+   * "Use Local" structurally unable to stick: the push would go out as a
+   * title/year guess whose outcome can neither be verified nor ever
+   * satisfy the id-joined diff, so the row would return after every
+   * resolution — seen live as three demo-id duplicates surviving five
+   * days of clicks. The row is still shown, because "Use Simkl" resolves
+   * it for real (it rewrites the LOCAL record — for a ghost duplicate,
+   * deleting it), and hiding it would leave that corrupt row in history
+   * forever with no way to clean it. Optional so older cached results
+   * read as pushable, which was the previous behaviour.
+   */
+  pushable?: boolean
 }
 
 export interface ReconcileCheckResult {

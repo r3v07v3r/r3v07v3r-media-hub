@@ -1054,15 +1054,6 @@ async function computeMovieDiscrepancies(
     const local = localMovies.has(id)
     const remote = remoteMovies.has(id)
     if (local === remote) continue
-    // A local id no service can express (mockData's m-* demo ids, or
-    // anything else unmappable) must not be surfaced at all. It can never
-    // read as watched on the remote side — the join above is by id — and
-    // its "Use Local" push would go out as a title/year guess whose
-    // outcome can neither be verified nor ever satisfy this diff, so the
-    // row returns after every resolution. Seen live: three demo-id
-    // duplicates of already-synced films surviving five days of "Use
-    // Local" clicks (and 404-ing their metadata enrichment on every pass).
-    if (local && !hasExpressibleSimklId(id)) continue
     const source = localMovies.get(id) || remoteMovies.get(id)
     out.push({
       id,
@@ -1071,7 +1062,19 @@ async function computeMovieDiscrepancies(
       poster: source?.poster || '',
       year: source?.year || '',
       localWatched: local,
-      remoteWatched: remote
+      remoteWatched: remote,
+      // An id no service can express (mockData's m-* demo ids, or anything
+      // else unmappable) makes "Use Local" structurally unable to stick:
+      // the push would go out as a title/year guess whose outcome can
+      // neither be verified nor ever satisfy this id-joined diff, so the
+      // row returned after every resolution — seen live as three demo-id
+      // duplicates of already-synced films surviving five days of clicks.
+      // The row is still SURFACED, deliberately: "Use Simkl" resolves it
+      // for real by rewriting the local record (for a ghost duplicate,
+      // deleting it), and dropping the row would leave that corruption in
+      // history forever with nothing offering to clean it. The panel just
+      // stops offering the one action that cannot work.
+      pushable: hasExpressibleSimklId(id)
     })
   }
   // Simkl's all-items response can contain only an IMDb id for a movie, so
@@ -1087,6 +1090,11 @@ async function computeMovieDiscrepancies(
   // fallback is only satisfying the type.
   return (
     await mapWithLimit(out, async (discrepancy) => {
+      // An unmappable id 404s every metadata provider on every single
+      // pass (three such lines per check, for weeks, in the live log).
+      // The local history row already carries title/poster/year, which is
+      // all the panel needs to offer "Use Simkl" on it.
+      if (!discrepancy.pushable) return discrepancy
       try {
         const detail = await metadata('movie', discrepancy.id, priority)
         return {
@@ -1382,6 +1390,12 @@ export function registerTrackingIpc(): void {
       // failure this queue was built to stop. Refusing it puts the row
       // back with a message instead.
       if (!simklCredentials().accessToken) return { ok: true, queued: false }
+      // An id the push could only ever express as a title/year guess is
+      // refused on the same terms as a missing token: queueing it promises
+      // an outcome this app cannot deliver or verify (see
+      // WatchStatusDiscrepancy.pushable — the panel does not offer "Use
+      // Local" for these; this is the backstop for a stale cached row).
+      if (!hasExpressibleSimklId(String(discrepancy.id))) return { ok: true, queued: false }
       const recorded = writePendingPushes(
         queuePendingPush(pendingPushes(), {
           id: discrepancy.id,
