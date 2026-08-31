@@ -557,19 +557,26 @@ export function LibraryPage({ config }: { config: CategoryConfig }) {
     () => applyWatchStateFilters(categorySearch.results, filters),
     [categorySearch.results, filters]
   )
-  // The non-Electron preview has no index to query; its grid slices the
-  // (mock-backed) loaded array the way search mode does. Genre/year/sort
-  // filters are index-side and do not apply there — a preview limit, not
-  // a product path.
-  const previewItems = useMemo(
-    () => (CATALOG_BRIDGE_AVAILABLE ? [] : applyWatchStateFilters(library, filters)),
-    [library, filters]
+  // Two cases slice the loaded array instead of querying the index, the
+  // way search mode already does:
+  //  - the non-Electron preview, which has no bridge at all;
+  //  - a bridge that is present but whose index has NO USABLE ANSWER —
+  //    this kind's seeding fetch failed (offline first launch after an
+  //    upgrade) and the index is empty, while the context still carries
+  //    the remembered snapshot the banner above claims to be showing.
+  //    Only the settled index-empty case qualifies: a healthy index
+  //    answering "zero titles match your filters" is a real answer and
+  //    must never be papered over with unfiltered remembered rows.
+  // Genre/year/sort filters are index-side and do not apply in either
+  // fallback — a degraded-mode limit, not a product path.
+  const arrayFallback =
+    !CATALOG_BRIDGE_AVAILABLE ||
+    (kindState === 'failed' && !browse.loading && !browse.error && browse.total === 0)
+  const fallbackItems = useMemo(
+    () => (arrayFallback ? applyWatchStateFilters(library, filters) : []),
+    [arrayFallback, library, filters]
   )
-  const browseItems = searchActive
-    ? searchResults
-    : CATALOG_BRIDGE_AVAILABLE
-      ? browse.items
-      : previewItems
+  const browseItems = searchActive ? searchResults : arrayFallback ? fallbackItems : browse.items
   // Identifies the current browse view for EverythingSection's
   // reveal-depth reset (see useBatchReveal's own doc comment) — anything
   // that changes this is a genuine filter/sort/search/kind change the
@@ -579,7 +586,13 @@ export function LibraryPage({ config }: { config: CategoryConfig }) {
     ? `${config.kind}:search:${categorySearch.query}`
     : `${config.kind}:filters:${paramsString}`
   const heroItems = useMemo(() => {
-    const ranking = [...(browse.items.length ? browse.items : library)]
+    // The hero ranks the FULL loaded array — the curated pool this page
+    // deliberately keeps — never one SQL page. browse.items is sixty
+    // rows in the current sort; ranking that sample would mean a
+    // top-rated title past page one could never be featured. The page
+    // fallback is only for a first run where the index answered before
+    // the catalog finished loading.
+    const ranking = [...(library.length ? library : browse.items)]
     ranking.sort((a, b) => (b.communityRating ?? 0) - (a.communityRating ?? 0))
     return ranking.slice(0, 5)
   }, [browse.items, library])
@@ -818,9 +831,9 @@ export function LibraryPage({ config }: { config: CategoryConfig }) {
             resultCount={
               searchActive
                 ? searchResults.length
-                : CATALOG_BRIDGE_AVAILABLE
-                  ? browse.total
-                  : browseItems.length
+                : arrayFallback
+                  ? browseItems.length
+                  : browse.total
             }
           />
           {kindState === 'failed' && (
@@ -901,7 +914,7 @@ export function LibraryPage({ config }: { config: CategoryConfig }) {
           initialVisibleCount={restoreVisibleCount}
           viewKey={viewKey}
           backend={
-            searchActive || !CATALOG_BRIDGE_AVAILABLE
+            searchActive || arrayFallback
               ? undefined
               : {
                   total: browse.total,
