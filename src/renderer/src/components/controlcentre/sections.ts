@@ -34,10 +34,19 @@ export const CONTROL_CENTRE_SECTIONS = [
   // a strip of tabs above one long scroll. Same content, reachable in one
   // click instead of two.
   {
+    id: 'updates',
+    label: 'Updates',
+    icon: 'refresh',
+    /** Its own entry rather than a tile inside General, where it used to
+     *  live: "which build am I on, and why has it not updated" is a
+     *  question people go looking for an answer to. */
+    blurb: 'The build you are running, the channel it follows, and what changed.'
+  },
+  {
     id: 'general',
     label: 'General',
     icon: 'settings',
-    blurb: 'App updates, display preferences, and everyday behaviour.'
+    blurb: 'Display preferences, your library and everyday behaviour.'
   },
   {
     id: 'playback',

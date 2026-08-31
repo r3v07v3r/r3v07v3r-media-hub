@@ -45,7 +45,8 @@ play something. Optional metadata, tracking, and subtitle services add to the ex
   rest of its collection; an anime's lists its prequels and sequels in order. Where a title can be
   streamed, rented or bought in your region is shown alongside, from JustWatch via TMDB.
 - **Play from local files, a media server, or TorBox** with automatic source selection,
-  audio-language preferences, playback buffering, subtitle selection, and resume progress.
+  audio-language preferences, playback buffering, subtitle selection, and resume progress. Play on
+  a series or anime card starts the next episode you have not watched, not the first one.
 - **Control playback properly** — speed from 0.5× to 2×, chapter navigation, audio and subtitle
   sync offsets, subtitle size, height, colour and backdrop, a night mode that evens out quiet
   dialogue against a loud score, seek-bar thumbnail previews, and a sleep timer that can stop at
@@ -90,9 +91,10 @@ play something. Optional metadata, tracking, and subtitle services add to the ex
   watching something.
 - **Use separate profiles**, including Kids and PIN-protected profiles. Each profile keeps its
   own list, watch history, ratings and resume points.
-- **Stay updated on your own terms.** **Settings → About & Updates** checks a few times a day and
-  offers a **Stable** or a **Preview** channel; an update downloads in the background and installs
-  when you restart.
+- **Stay updated on your own terms.** **Settings → About & Updates**, and the control centre's own
+  **Updates** section, check a few times a day and offer a **Stable** or a **Preview** channel; an
+  update downloads in the background and installs when you restart. The control centre's section
+  also shows the download as it runs and what the offered version changes.
 - **Back up your library** to a single file and restore it on another machine, from
   **Settings → General → Your library**. Service credentials stay on the machine that holds them.
 - **Bring an existing history in.** The same section imports IMDb's ratings export and a Letterboxd

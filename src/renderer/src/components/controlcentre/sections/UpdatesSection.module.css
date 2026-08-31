@@ -1,0 +1,183 @@
+/* Updates adds only what Caching's shared card vocabulary does not already
+   cover — the version identity, the download bar and the two channel
+   choices. Cards, headings, buttons and notes come from
+   CachingSection.module.css on purpose, so the control centre's sections
+   cannot drift into looking like different products.
+
+   Nothing here names a colour of its own: the tokens come from the palette
+   ControlCentre.module.css sets on .panel. */
+
+.identity {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.versionBlock {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.versionEyebrow {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  color: var(--text-muted);
+}
+
+.version {
+  font-family: var(--font-display);
+  font-size: 1.7rem;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: 0.01em;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-primary);
+}
+
+.channelTag {
+  flex: none;
+  padding: 5px 12px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border-subtle);
+  font-size: 0.74rem;
+  font-weight: 560;
+  letter-spacing: 0.04em;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+/* The state sentence. The lamp beside it is decoration on top of the words,
+   never instead of them. */
+.state {
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+  margin: 0;
+  font-size: 0.86rem;
+  line-height: 1.55;
+  color: var(--text-secondary);
+}
+
+.lamp {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  border: 1px solid var(--border-subtle);
+  background: transparent;
+  transform: translateY(-1px);
+}
+
+.lampOk {
+  border-color: var(--accent-blue);
+  background: var(--accent-blue);
+}
+
+.lampBusy {
+  border-color: var(--accent-cyan);
+  background: var(--accent-cyan);
+}
+
+.lampError {
+  border-color: #ff9b9b;
+  background: #ff9b9b;
+}
+
+.progressTrack {
+  height: 5px;
+  border-radius: var(--radius-pill);
+  background: rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+}
+
+.progressFill {
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--accent-blue), var(--accent-cyan));
+  transition: width 260ms var(--ease-smooth);
+}
+
+html[data-motion-user-disabled='true'] .progressFill {
+  transition: none;
+}
+
+/* Two real choices, each carrying the sentence that explains it — not a
+   pill pair you have to already know the meaning of. */
+.channels {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: 10px;
+}
+
+.channel {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 13px 15px;
+  border-radius: var(--radius-large);
+  border: 1px solid var(--border-subtle);
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    border-color 160ms var(--ease-smooth),
+    background 160ms var(--ease-smooth);
+}
+
+.channel:hover {
+  border-color: var(--border-active);
+}
+
+.channelActive {
+  border-color: var(--border-active);
+  background: rgba(39, 230, 154, 0.1);
+}
+
+html[data-motion-user-disabled='true'] .channel {
+  transition: none;
+}
+
+.channelName {
+  font-size: 0.92rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.channelBlurb {
+  font-size: 0.78rem;
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
+/* Capped in height as well as in characters — the 500-char limit is enforced
+   where the note is read, and this is the visual backstop so a long one
+   scrolls inside its own box rather than pushing the section around. */
+.notes {
+  padding-top: 13px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.notesLabel {
+  display: block;
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+}
+
+.notesBody {
+  margin: 0;
+  font-size: 0.84rem;
+  line-height: 1.6;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  max-height: 9em;
+  overflow-y: auto;
+}

@@ -62,6 +62,7 @@ import {
 } from '@renderer/lib/mediaHub/hooks'
 import type { CategoryKind } from '@renderer/lib/mediaHub/categoryFilters'
 import { MAX_PROMPT_TITLES } from '@shared/media-hub/ollama'
+import { episodeToStart, episodeWatchKey } from '@shared/media-hub/nextEpisode'
 import {
   isNoticeablyBelowCeiling,
   resolutionLabel,
@@ -1469,6 +1470,80 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     })
   }, [])
 
+  // Continue Watching, readable from a callback without making that callback
+  // change identity every time the home feed refreshes. resolvePlaybackTarget
+  // below is the only reader, and it wants the latest row, not the one that
+  // existed when it was last rebuilt.
+  const continueWatchingRef = useRef<ContinueWatchingItem[]>(continueWatching)
+  useEffect(() => {
+    continueWatchingRef.current = continueWatching
+  }, [continueWatching])
+
+  /**
+   * Which episode a bare "play this" actually means.
+   *
+   * A title card carries a SHOW, not an episode: nothing on it says where in
+   * the show you are. Everything downstream of here needs a coordinate, and
+   * the one it used to get was buildMediaId's `?? 1` fallback — so pressing
+   * Play on a series card you were four seasons into started season 1,
+   * episode 1. The detail page never had that problem because it computes
+   * first-unwatched itself; the cards, the hero and the context menu did.
+   *
+   * Two ways to answer it, cheapest first:
+   *
+   *  1. The Continue Watching row, which the backend already computed a
+   *     `continueSeason/continueEpisode` for (see core.ts's
+   *     continueWatchingList). Free — it is in memory — and it is the case
+   *     that matters most, a show in progress.
+   *  2. Otherwise ask for the show's episode list and the watch history and
+   *     take the first unwatched one. This covers what the row cannot: a
+   *     show finished (start it over) or one whose only watched episodes
+   *     were marked without ever being played, neither of which appears in
+   *     Continue Watching at all.
+   *
+   * An explicit coordinate from the caller always wins — the detail page,
+   * the episode grid and party follow-along all know exactly what they mean
+   * and must not be second-guessed. Movies are returned untouched.
+   *
+   * Failure is not fatal: if either call fails the media is returned as it
+   * came in, and the old `?? 1` fallback applies exactly as before.
+   */
+  const resolvePlaybackTarget = useCallback(async (media: MediaItem): Promise<MediaItem> => {
+    const kind = media.mediaKind ?? (media.mediaType === 'series' ? 'series' : 'movie')
+    if (kind === 'movie') return media
+    if (media.seasonNumber != null && media.episodeNumber != null) return media
+
+    const entry = continueWatchingRef.current.find((row) => row.media.id === media.id)
+    if (entry?.media.seasonNumber != null && entry.media.episodeNumber != null) {
+      return {
+        ...media,
+        seasonNumber: entry.media.seasonNumber,
+        episodeNumber: entry.media.episodeNumber
+      }
+    }
+
+    const api = window.api?.mediaHub
+    if (!api) return media
+    try {
+      const [meta, tracking] = await Promise.all([
+        api.catalog.meta(kind, media.id),
+        api.tracking.list()
+      ])
+      const watchedKeys = new Set<string>()
+      for (const row of tracking.history) {
+        if (String(row.id) !== String(media.id)) continue
+        if (row.season == null || row.episode == null) continue
+        watchedKeys.add(episodeWatchKey(row.season, row.episode))
+      }
+      const target = episodeToStart(meta?.videos, watchedKeys)
+      return { ...media, seasonNumber: target.season, episodeNumber: target.episode }
+    } catch {
+      // Metadata or history unavailable — the caller falls back to the same
+      // S1E1 it would have used before this function existed.
+      return media
+    }
+  }, [])
+
   const startPlaybackRef = useRef<(media: MediaItem) => Promise<boolean>>(async () => false)
   // Same forward-reference trick as startPlaybackRef above, for the same
   // reason: the player's ui-event listener is subscribed before
@@ -1478,7 +1553,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     (media: MediaItem, opts?: { season?: number; episode?: number }) => Promise<void>
   >(async () => {})
   const startPlayback = useCallback(
-    async (media: MediaItem): Promise<boolean> => {
+    async (requested: MediaItem): Promise<boolean> => {
       // Either source alone is a complete setup — TorBox, a media server,
       // or both. Only having neither blocks playback.
       if (
@@ -1507,6 +1582,15 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       playbackPreparationRef.current = { generation, controller }
       const isCurrent = (): boolean =>
         playbackPreparationRef.current?.generation === generation && !controller.signal.aborted
+      // Which episode "play this series" means, resolved before anything is
+      // built from the coordinate. Inside the spinner rather than before it:
+      // this can be a round trip for metadata and history, and a Play button
+      // that sits dead for it looks broken. Idempotent — a caller that
+      // already named an episode gets its own answer straight back, so the
+      // party path below can resolve first and reach here for free.
+      setResolvingMedia({ id: requested.id, title: requested.title, stage: 'resolving' })
+      const media = await resolvePlaybackTarget(requested)
+      if (!isCurrent()) return false
       const kind = media.mediaKind ?? (media.mediaType === 'series' ? 'series' : 'movie')
       const mediaId = buildMediaId(kind, media.id, media.seasonNumber, media.episodeNumber)
       // For series, the stream search itself needs to know which episode is
@@ -1523,7 +1607,6 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       // returned zero results even for a title with real, cached releases
       // under the correct kitsuId:episode form.
       const resolveId = kind === 'anime' ? `${media.id}:${media.episodeNumber ?? 1}` : mediaId
-      setResolvingMedia({ id: media.id, title: media.title, stage: 'resolving' })
       try {
         const resolved = await runPlaybackPreparationStage(
           api.stream.resolve(kind, resolveId, media.title, {
@@ -1658,7 +1741,13 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         }
       }
     },
-    [mediaHubSettings, pushNotification, closeContextMenu, cancelPlaybackPreparation]
+    [
+      mediaHubSettings,
+      pushNotification,
+      closeContextMenu,
+      cancelPlaybackPreparation,
+      resolvePlaybackTarget
+    ]
   )
   useEffect(() => {
     startPlaybackRef.current = startPlayback
@@ -1829,9 +1918,23 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   // than waiting on its own announcement.
   const startPartyPlayback = useCallback(
     async (media: MediaItem, opts?: { season?: number; episode?: number }) => {
-      const season = opts?.season ?? media.seasonNumber
-      const episode = opts?.episode ?? media.episodeNumber
-      const target = opts ? { ...media, seasonNumber: season, episodeNumber: episode } : media
+      // Resolved here as well as inside startPlayback, because the party
+      // announcement below names a season and episode of its own and it has
+      // to be the one that actually started — a follower told S1E1 while the
+      // host plays S4E07 resolves the wrong stream. The second call inside
+      // startPlayback then costs nothing: the coordinate is already set.
+      const resolved = await resolvePlaybackTarget(
+        opts
+          ? {
+              ...media,
+              seasonNumber: opts.season ?? media.seasonNumber,
+              episodeNumber: opts.episode ?? media.episodeNumber
+            }
+          : media
+      )
+      const season = resolved.seasonNumber
+      const episode = resolved.episodeNumber
+      const target = resolved
       const partyApi = window.api?.mediaHub?.party
       // Hosting from a title card can happen in the same click that creates a
       // room. Read main's live snapshot here instead of waiting for React's
@@ -1884,7 +1987,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         })
         .catch(() => {})
     },
-    [startPlayback, partyStatus]
+    [startPlayback, partyStatus, resolvePlaybackTarget]
   )
   useEffect(() => {
     startPartyPlaybackRef.current = startPartyPlayback
