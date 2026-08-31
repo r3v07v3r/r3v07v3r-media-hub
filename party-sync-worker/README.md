@@ -64,6 +64,25 @@ include Durable Objects at all.
 - Rooms self-expire 24 hours after creation (see `alarm()` in `src/room.ts`)
   so idle rooms don't accumulate forever.
 
+## Rooms membership (redeploy needed once)
+
+The app's Rooms feature asks `/host` for `{"membership": true}`, which
+adds a relay-level admission layer to that room: a `joinSecret` carried
+in the invite code, per-install `memberKey`s, and a
+`POST /party/{roomId}/kick` call the room's creator uses to remove
+members (ban + disconnect + joinSecret rotation, atomically). The relay
+still never decrypts anything — these are admission credentials, not
+content.
+
+Watch parties and rooms created before this behave exactly as before.
+**A worker deployed before this feature simply ignores `membership`** —
+rooms still work, but removing members does not until you redeploy:
+
+```
+cd party-sync-worker && npm run deploy
+```
+
+
 ## Local testing
 
 ```

@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useAppState } from '@renderer/context/AppStateContext'
 import { Icon } from '@renderer/components/icons/Icon'
-import { FriendsSection } from './FriendsSection'
+import { RoomsSection } from './RoomsSection'
 import styles from './SessionHub.module.css'
 
 type RoomTab = 'chat' | 'queue' | 'people'
@@ -418,7 +418,7 @@ export function SessionHub() {
             <Icon name={joinCode.trim() ? 'chevron' : 'people'} size={16} />
             {busy ? 'Connecting…' : joinCode.trim() ? 'Join room' : 'Start a room'}
           </button>
-          <FriendsSection />
+          <RoomsSection />
         </>
       )}
     </aside>

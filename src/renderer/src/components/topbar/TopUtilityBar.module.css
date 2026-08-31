@@ -219,3 +219,48 @@
     display: none;
   }
 }
+
+/* ---------- Control centre cog ---------- */
+/* Shares the notification button's geometry so the right-hand cluster stays
+   one visual row, but reads as green even in the normal (blue) theme: it is
+   the way into the green surface, and the colour is the affordance. */
+.controlCentreButton {
+  position: relative;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  cursor: pointer;
+  color: var(--accent-green);
+  border: 1px solid rgba(39, 230, 154, 0.32);
+  background: rgba(39, 230, 154, 0.08);
+  transition:
+    color var(--transition-fast),
+    background var(--transition-fast),
+    box-shadow var(--transition-fast),
+    transform var(--transition-standard);
+}
+
+.controlCentreButton:hover {
+  color: #fff;
+  background: rgba(39, 230, 154, 0.16);
+}
+
+.controlCentreButton:focus-visible {
+  outline: 2px solid var(--accent-green);
+  outline-offset: 2px;
+}
+
+/* The cog turns as the panel folds down, so the button reads as the hinge
+   rather than as a link to somewhere else. Suppressed with the rest of the
+   decorative motion when the person has turned UI animation off — that rule
+   lives in global.css and applies to every descendant, this included. */
+.controlCentreButton[aria-expanded='true'] {
+  color: #041a10;
+  background: var(--accent-green);
+  box-shadow: 0 0 0 3px rgba(39, 230, 154, 0.25);
+  transform: rotate(90deg);
+}

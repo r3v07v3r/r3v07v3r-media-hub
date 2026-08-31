@@ -66,6 +66,37 @@
   background: var(--accent, #4da3ff);
 }
 
+.chapterSegments {
+  position: absolute;
+  inset: 0;
+}
+
+.chapterSegment {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  overflow: hidden;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.22);
+  /* The dark cut is the chapter boundary. Inset keeps the first and last
+     segments aligned with the full width of the seek bar. */
+  box-shadow: inset 2px 0 0 rgba(6, 10, 18, 0.9);
+}
+
+.chapterSegment:first-child {
+  box-shadow: none;
+}
+
+.chapterSegmentFill {
+  display: block;
+  height: 100%;
+  background: var(--accent, #4da3ff);
+}
+
+.chapterSegmentCurrent {
+  background: rgba(255, 255, 255, 0.3);
+}
+
 .row {
   display: flex;
   align-items: center;
@@ -96,6 +127,15 @@
   font-variant-numeric: tabular-nums;
   font-size: 13px;
   opacity: 0.85;
+}
+
+.currentChapter {
+  max-width: 220px;
+  overflow: hidden;
+  color: rgba(255, 255, 255, 0.72);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .menuWrap {
@@ -288,6 +328,51 @@
   vertical-align: middle;
 }
 
+/* The season/episode badge, top-left. Same glass and the same 220ms
+   ease as .controls so the two surfaces read as one chrome layer; it
+   retreats UPWARD as the bar drops away below. pointer-events: none —
+   it is a label, and must never eat a click meant for the video. */
+.episodeBadge {
+  position: fixed;
+  top: 24px;
+  left: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 16px;
+  border-radius: 14px;
+  background: rgba(6, 10, 18, 0.72);
+  backdrop-filter: blur(14px);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.45);
+  max-width: min(40vw, 420px);
+  pointer-events: none;
+  transition:
+    opacity 220ms ease,
+    transform 220ms ease;
+}
+
+.episodeBadgeHidden {
+  opacity: 0;
+  transform: translateY(-12px);
+  visibility: hidden;
+}
+
+.episodeBadgeCode {
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.6);
+}
+
+.episodeBadgeName {
+  font-size: 12.5px;
+  opacity: 0.85;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.6);
+}
+
 .syncWait {
   position: absolute;
   top: 24px;
@@ -416,6 +501,22 @@
   background: rgba(255, 255, 255, 0.08);
 }
 
+.previewMeta {
+  display: flex;
+  width: 100%;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.previewChapter {
+  overflow: hidden;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* ---- Playback menu: speed, audio sync, sleep timer ---------------------- */
 
 .playbackMenu {
@@ -507,16 +608,6 @@
 .nudgeReset:disabled {
   cursor: default;
   opacity: 0.42;
-}
-
-/* ---- Chapters ---------------------------------------------------------- */
-
-/* A long film can carry forty marks, so the list scrolls rather than growing
-   past the top of the window. */
-.chapterMenu {
-  min-width: 240px;
-  max-height: 320px;
-  overflow-y: auto;
 }
 
 /* ---- Subtitle appearance ----------------------------------------------- */

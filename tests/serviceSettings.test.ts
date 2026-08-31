@@ -43,6 +43,22 @@ assert.deepEqual(merged.sonarr, legacy.sonarr)
 // save — the second half of the bug this fixes.
 assert.deepEqual(Object.keys(merged).sort(), Object.keys(DEFAULT_SERVICE_SETTINGS).sort())
 
+// The same again for the NEXT key added after Prowlarr. This is the case
+// that recurs on every release that adds a service, so it is pinned rather
+// than left to the generic key-set assertion above: an install carrying the
+// five keys that existed before Bazarr must gain it and keep everything.
+const preBazarr = {
+  jellyfin: { baseUrl: 'http://jellyfin.local', apiKey: 'jf-key', enabled: true },
+  sonarr: { baseUrl: 'http://sonarr.local', apiKey: 'sonarr-key', enabled: true },
+  radarr: { baseUrl: '', apiKey: '', enabled: false },
+  qbittorrent: { baseUrl: '', apiKey: '', enabled: false },
+  prowlarr: { baseUrl: 'http://prowlarr.local', apiKey: 'p-key', enabled: true }
+} as unknown as Partial<ServiceSettings>
+const withBazarr = withServiceDefaults(preBazarr)
+assert.deepEqual(withBazarr.bazarr, DEFAULT_SERVICE_SETTINGS.bazarr)
+assert.deepEqual(withBazarr.prowlarr, preBazarr.prowlarr)
+assert.deepEqual(withBazarr.jellyfin, preBazarr.jellyfin)
+
 // A real prowlarr entry already present is never overwritten by the
 // default just because OTHER keys are also being filled in.
 const partial = {

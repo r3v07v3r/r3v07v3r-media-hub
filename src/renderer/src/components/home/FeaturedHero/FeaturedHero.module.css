@@ -608,9 +608,10 @@
   }
   .content {
     gap: 7px;
-    /* The orb column is gone at this tier (see AssistantStrip.tsx), so
-       the hero spans the full width and the text block can afford to be
-       wider rather than taller. */
+    /* The assistant panel is a full-width strip at this tier (see
+       CompactAIAssistant.module.css), not a side column, so the hero
+       spans the full width and the text block can afford to be wider
+       rather than taller. */
     max-width: 560px;
   }
   .title {

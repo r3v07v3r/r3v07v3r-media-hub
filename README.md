@@ -36,19 +36,29 @@ play something. Optional metadata, tracking, and subtitle services add to the ex
 
 ### What it can do
 
-- **Browse movies, series, and anime** with search, genre and status filters, title details,
-  seasons, episodes, ratings, and recommendations. Cast and crew names are clickable — they open
-  what else of theirs is in your catalog. Where a title can be streamed, rented or bought in your
-  region is shown alongside, from JustWatch via TMDB.
+- **Browse movies, series, and anime** with search, a trailer on the title page, seasons,
+  episodes, ratings, the age certificate for your region, and recommendations. Filter by genre,
+  year, minimum rating, runtime, season or episode count, and status, hide what you have already
+  watched, and save any combination as a named view that comes back as a chip. Cast and crew names
+  are clickable — they open what else of theirs is in your catalog, and typing a director's name in
+  search finds their films rather than films with their name in the title. A film's page lists the
+  rest of its collection; an anime's lists its prequels and sequels in order. Where a title can be
+  streamed, rented or bought in your region is shown alongside, from JustWatch via TMDB.
 - **Play from local files, a media server, or TorBox** with automatic source selection,
-  audio-language preferences, playback buffering, subtitle selection, and resume progress.
+  audio-language preferences, playback buffering, subtitle selection, and resume progress. Play on
+  a series or anime card starts the next episode you have not watched, not the first one.
 - **Control playback properly** — speed from 0.5× to 2×, chapter navigation, audio and subtitle
   sync offsets, subtitle size, height, colour and backdrop, a night mode that evens out quiet
-  dialogue against a loud score, and a sleep timer that can stop at the end of the episode.
+  dialogue against a loud score, seek-bar thumbnail previews, and a sleep timer that can stop at
+  the end of the episode. Frame step, an A-B loop and a screenshot button round out the Playback
+  menu, on <kbd>.</kbd>, <kbd>,</kbd> and <kbd>s</kbd> to match mpv and VLC muscle memory.
+- **Skip the intro and the credits.** Anime uses Aniskip's community-submitted times; movies and
+  series read the release's own chapter marks, so a mislabeled chapter is never trusted.
 - **Keep watching a series** — when an episode ends, the next one is offered on a post-play card
   and starts after a short countdown. Turn it off under **Settings → Playback → Episodes**.
-- **Track what you watch** locally and, if desired, sync compatible activity with Simkl and
-  MyAnimeList.
+- **Track what you watch** locally and, if desired, sync compatible activity with Simkl, Trakt and
+  MyAnimeList. Where a service disagrees with what is stored here, the difference is shown for you
+  to settle rather than resolved silently.
 - **Rate what you have seen** out of 10 on a title's page. Scores are private to the profile that
   gave them, and they steer what gets suggested — a genre watched often but enjoyed little stops
   leading the recommendations.
@@ -58,21 +68,38 @@ play something. Optional metadata, tracking, and subtitle services add to the ex
   have set aside. Make as many named lists as you like alongside My List, and add titles to them
   from their own page.
   Any single viewing can be removed from the history without un-watching the episode.
-- **Manage downloads** and optionally connect Jellyfin, Sonarr, Radarr, and qBittorrent. Torrents
-  can be paused, resumed and removed from the Downloads page, with keeping or deleting the files
-  asked separately.
+- **Manage downloads** and optionally connect Jellyfin, Sonarr, Radarr, qBittorrent, and Prowlarr.
+  Torrents can be paused, resumed and removed from the Downloads page, with keeping or deleting the
+  files asked separately. With Prowlarr connected, the page names any indexer currently in a failure
+  backoff, so an empty Sonarr/Radarr search stops being unexplained.
+- **Pre-fetch over your LAN with a cache server.** Run [r3-cache](daemon/README.md) on any Windows
+  or Linux box on your network and it downloads what you plan to watch ahead of time, then serves it
+  over one LAN hop instead of a slow internet link. The app finds it by itself; pair it under
+  **Settings → Cache server** with the code from its console. Everything it stores expires on its
+  own.
 - **Ask Sonarr or Radarr for a title** straight from its page, picking the quality profile and
   folder, with a search starting as soon as it is added. Movies and series only — anime is
   catalogued by Kitsu id, which neither service can look up.
 - **Watch together in Rooms** over a direct LAN/WAN connection or an optional R3 Party Sync
   relay, with a shared queue, synchronized playback, and short-lived encrypted room chat.
+- **Keep a Friends group open in the background.** Share a group code and you can see what everyone
+  is watching, then either join their room or start the same title on your own — you are asked
+  which, each time. Nobody hosts the group, so it keeps working when any one person is offline, and
+  you decide what you share.
 - **Hear about new episodes** of anything in My List, as a desktop notification. Off until you
   turn it on in **Settings → General**, checked a few times a day, and never while you are
   watching something.
 - **Use separate profiles**, including Kids and PIN-protected profiles. Each profile keeps its
   own list, watch history, ratings and resume points.
+- **Stay updated on your own terms.** **Settings → About & Updates**, and the control centre's own
+  **Updates** section, check a few times a day and offer a **Stable** or a **Preview** channel; an
+  update downloads in the background and installs when you restart. The control centre's section
+  also shows the download as it runs and what the offered version changes.
 - **Back up your library** to a single file and restore it on another machine, from
   **Settings → General → Your library**. Service credentials stay on the machine that holds them.
+- **Bring an existing history in.** The same section imports IMDb's ratings export and a Letterboxd
+  "Export Your Data" zip; a connected Trakt account imports from **Settings → Accounts**. All three
+  keep the original dates, only fill in what is missing, and are safe to run twice.
 - **Search and ask in one field.** Typing in the top bar searches the movie, series and anime
   catalogs and shows what it finds — real titles you can open, with or without an AI model. With
   one connected, its answer appears underneath: what the top result is, whether it fits what
@@ -106,9 +133,10 @@ and qBittorrent).
 2. Connect at least one playback source:
    - **TorBox:** copy the API token from your TorBox account settings, paste it into the
      **TorBox** section, and choose **Connect**; or
-   - **Your own library/download stack:** configure Jellyfin and/or Sonarr, Radarr, and
-     qBittorrent under **Media Servers & Downloads**, then save and test the connections.
-3. Optional: under **Subtitles**, choose your preferred spoken-audio and subtitle languages.
+   - **Your own library/download stack:** configure Jellyfin and/or Sonarr, Radarr, qBittorrent,
+     and Prowlarr under **Settings → Media services**, then save and test the connections.
+3. Optional: under **Settings → Playback → Subtitles**, choose your preferred spoken-audio and
+   subtitle languages.
 4. Open **Movies**, **Series**, or **Anime**, select a title, and choose **Watch**.
 5. For a show, select its season and episode first. R3 Media Hub remembers playback progress so
    you can continue later from Home or My Stuff.
@@ -123,27 +151,40 @@ Movies / Series / Anime → Title details → Watch → Best available source
               My Stuff                  Continue Watching
 ```
 
-When more than one source is connected, R3 Media Hub resolves playback in this order:
+When more than one source is connected, R3 Media Hub picks a stream in two stages. Two tiers
+short-circuit — if either holds a playable copy that still meets your quality target, nothing else
+is contacted:
 
-1. **Local content** already available on the device.
-2. **Media-server content** available through your connected library services.
-3. **Download streams** supplied through the connected download/TorBox services.
+1. **This machine's own cache** — a stream already on disk from an earlier play. No network at all.
+   A partial download is resumed from the source it originally came from rather than restarted.
+2. **A paired r3-cache server** on your LAN, when it holds the title complete.
 
-This means connecting TorBox alongside your own services does not bypass a local copy: the app
-uses local content first, then checks the media server, and only then falls back to a download
-stream.
+Everything else — your **media server** and **TorBox** — is then scored together and the best
+candidate wins. The score weighs whether the copy can be played right now, its resolution, its
+audio language, and where it lives. How much that last part counts is yours to set under
+**Settings → Playback → Where to play from**:
+
+- **Media server** — the local copy wins essentially always. For a slow connection, where the file
+  was put on the server precisely so it would be used.
+- **Balanced** (the default) — the local copy wins ties and beats one resolution tier down. A local
+  1080p is preferred to a remote 2160p; a local 720p is not.
+- **Best quality** — where a copy lives stops mattering and the best release wins outright.
+
+So connecting TorBox alongside your own services does not normally bypass a local copy, but on
+**Best quality** it deliberately can. The maximum-resolution and maximum-size limits under
+**Settings → Playback → Network** apply to every tier, including the cached ones.
 
 ## Using the app
 
-| Destination   | What you will find there                                                                                         |
-| ------------- | ---------------------------------------------------------------------------------------------------------------- |
-| **Home**      | Featured picks, continue watching, recommendations, moods, and optional system-performance gauges.               |
-| **Movies**    | Movie discovery and filtering. Select a card to see its synopsis, ratings, related titles, and playback actions. |
-| **Series**    | TV discovery plus season and episode selection.                                                                  |
-| **Anime**     | Anime discovery, season groupings, episode progress, and anime-specific tracking.                                |
-| **My Stuff**  | Watchlist, liked/disliked titles, watched items, and viewing history.                                            |
-| **Downloads** | Active and completed TorBox downloads with relevant actions.                                                     |
-| **Settings**  | Playback, language, network, profiles, connected services, Rooms, and updates.                                   |
+| Destination   | What you will find there                                                                                                                                    |
+| ------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Home**      | Featured picks, continue watching, recommendations that say why they were picked, moods, and optional system-performance gauges.                            |
+| **Movies**    | Movie discovery and filtering. Select a card to see its synopsis, ratings, related titles, and playback actions.                                            |
+| **Series**    | TV discovery plus season and episode selection.                                                                                                             |
+| **Anime**     | Anime discovery, season groupings, episode progress, and anime-specific tracking.                                                                           |
+| **My Stuff**  | Eight tabs: lists, in progress, watched, rated, calendar, history, stats, and what you set aside.                                                           |
+| **Downloads** | Streams cached on this machine, qBittorrent torrents, the Sonarr and Radarr queues, failing Prowlarr indexers, and what the app is doing in the background. |
+| **Settings**  | Playback, language, network, profiles, connected services, Rooms, and updates.                                                                              |
 
 On desktop, press <kbd>Ctrl</kbd>+<kbd>B</kbd> (or <kbd>⌘</kbd>+<kbd>B</kbd> on macOS) to collapse
 or expand the sidebar. On narrow windows, primary navigation moves to the bottom; use **More**
@@ -160,12 +201,15 @@ above. Metadata, tracking, subtitle, and relay services remain optional:
 | **TMDB**            | Richer artwork and metadata.                                                                                                       |
 | **OMDb**            | Additional movie and series ratings, including Rotten Tomatoes data where available.                                               |
 | **Simkl**           | Account-based watch tracking and catalog enrichment.                                                                               |
+| **Trakt**           | Watch history, ratings and scrobbling in both directions, with a one-off import of an existing account.                            |
 | **MyAnimeList**     | Anime list and progress synchronization.                                                                                           |
 | **SubDL**           | Search for and automatically apply subtitles, with no daily download limit.                                                        |
 | **OpenSubtitles**   | The same, from a second catalogue (a free account allows 5 downloads per day).                                                     |
 | **Jellyfin**        | Play content from an existing personal media library.                                                                              |
 | **Sonarr / Radarr** | Connect series and movie management to the local download workflow.                                                                |
 | **qBittorrent**     | Supply and manage downloads for the local playback workflow.                                                                       |
+| **Prowlarr**        | Indexer health, so an empty Sonarr/Radarr search can be told apart from an indexer locked out on a bad key.                        |
+| **r3-cache**        | A pre-fetch server on your own LAN. Zero-config — see [daemon/README.md](daemon/README.md).                                        |
 | **R3 Party Sync**   | Relay Watch Party traffic when a direct connection is not suitable.                                                                |
 | **Ollama**          | Run the AI assistant and recommendations on a language model you host yourself. Detected automatically when it is on this machine. |
 
@@ -202,17 +246,18 @@ npm run dev
 
 Useful project commands:
 
-| Command               | Purpose                                                         |
-| --------------------- | --------------------------------------------------------------- |
-| `npm run dev`         | Start Electron with the Vite development server and hot reload. |
-| `npm start`           | Preview an already-built application.                           |
-| `npm test`            | Run the repository's focused test suite.                        |
-| `npm run lint`        | Check JavaScript and TypeScript with ESLint.                    |
-| `npm run typecheck`   | Type-check both Electron/Node and renderer projects.            |
-| `npm run build`       | Type-check and produce the Electron application bundles.        |
-| `npm run build:win`   | Create a Windows installer.                                     |
-| `npm run build:mac`   | Create a macOS package.                                         |
-| `npm run build:linux` | Create Linux AppImage, Snap, and Debian packages.               |
+| Command                | Purpose                                                                             |
+| ---------------------- | ----------------------------------------------------------------------------------- |
+| `npm run dev`          | Start Electron with the Vite development server and hot reload.                     |
+| `npm start`            | Preview an already-built application.                                               |
+| `npm test`             | Run the repository's focused test suite.                                            |
+| `npm run lint`         | Check JavaScript and TypeScript with ESLint.                                        |
+| `npm run typecheck`    | Type-check both Electron/Node and renderer projects.                                |
+| `npm run build`        | Type-check and produce the Electron application bundles.                            |
+| `npm run build:win`    | Create a Windows installer.                                                         |
+| `npm run build:mac`    | Create a macOS package.                                                             |
+| `npm run build:linux`  | Create Linux AppImage, Snap, and Debian packages.                                   |
+| `npm run build:daemon` | Build the r3-cache LAN pre-fetch daemon — see [daemon/README.md](daemon/README.md). |
 
 ### Architecture
 
@@ -234,6 +279,10 @@ The renderer does not receive direct Node.js access. Service calls, credential s
 playback proxying, and Watch Party networking are handled in the Electron main process and
 exposed through the preload bridge.
 
+Two optional companions ship from the same repository and are documented separately:
+[`daemon/`](daemon/README.md) is the r3-cache LAN pre-fetch server, and
+[`party-sync-worker/`](party-sync-worker/README.md) is the Watch Party relay you deploy yourself.
+
 ## Troubleshooting
 
 <details>
@@ -241,10 +290,13 @@ exposed through the preload bridge.
 
 Confirm that at least one playback path is connected. For TorBox, check that **Settings →
 TorBox** says **Connected** and reconnect if the token was revoked or expired. For your own
-stack, test the Jellyfin, Sonarr, Radarr, and qBittorrent connections under **Media Servers &
-Downloads** and confirm the requested title exists or can be obtained. If several sources are
-connected, remember that R3 Media Hub checks local content first, media-server content second,
-and download streams last.
+stack, test the Jellyfin, Sonarr, Radarr, and qBittorrent connections under **Settings → Media
+services** and confirm the requested title exists or can be obtained.
+
+If a title plays but not from where you expected, check **Settings → Playback → Where to play
+from** and the quality limits beside it — a release is only a candidate if it meets the maximum
+resolution and size you set, and those limits apply to a cached or media-server copy exactly as
+they do to a TorBox one.
 
 </details>
 

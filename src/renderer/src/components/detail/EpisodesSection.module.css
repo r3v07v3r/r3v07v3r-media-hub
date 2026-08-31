@@ -25,7 +25,9 @@
   height: 26px;
   border-radius: 50%;
   color: var(--text-secondary);
-  transition: color var(--transition-fast), background var(--transition-fast);
+  transition:
+    color var(--transition-fast),
+    background var(--transition-fast);
 }
 .seasonMenuTrigger:hover {
   color: var(--text-primary);

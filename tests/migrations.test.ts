@@ -198,4 +198,91 @@ function userVersion(sql: DatabaseSync): number {
   sql.close()
 }
 
+// ---------------------------------------------------------------------
+// Migration 2 — the accumulating title index.
+//
+// The point of the table is that it OUTLIVES a crawl, so what has to be
+// proven here is that it arrives on an install that has been in use without
+// disturbing anything already there, and that the columns queries will sort
+// and filter on actually exist with the types they need.
+// ---------------------------------------------------------------------
+{
+  const file = tempFile('catalog-index')
+  const sql = createLegacyDatabase(file)
+  migrate(sql, PROFILE)
+
+  const tables = new Set(
+    sql
+      .prepare("SELECT name FROM sqlite_master WHERE type='table'")
+      .all()
+      .map((row) => (row as Record<string, unknown>).name as string)
+  )
+  assert.ok(tables.has('catalog_index'), 'the index table exists')
+  assert.ok(tables.has('catalog_index_genre'), 'the genre facet table exists')
+
+  // It starts empty on an upgrade. The blob cache is NOT backfilled into it:
+  // the next crawl fills it, and a half-populated index that looked complete
+  // would be worse than an obviously empty one.
+  assert.equal(count(sql, 'catalog_index'), 0, 'the index starts empty')
+  assert.equal(count(sql, 'catalog_cache'), 1, 'the blob cache is left alone')
+
+  // Nothing the earlier migrations built was disturbed.
+  assert.equal(count(sql, 'tracked'), 2)
+  assert.equal(count(sql, 'watch_history'), 3)
+
+  // The columns every browse query depends on, with the types they need:
+  // year/rating/runtime must be numeric or a range filter becomes a string
+  // comparison, which is how "rating >= 9" starts matching "10".
+  const columns = new Map(
+    sql
+      .prepare('PRAGMA table_info(catalog_index)')
+      .all()
+      .map((r) => {
+        const row = r as Record<string, unknown>
+        return [String(row.name), String(row.type)] as const
+      })
+  )
+  assert.equal(columns.get('year'), 'INTEGER')
+  assert.equal(columns.get('rating'), 'REAL')
+  assert.equal(columns.get('runtime_min'), 'INTEGER')
+  assert.equal(columns.get('first_seen'), 'INTEGER')
+  assert.equal(columns.get('updated_at'), 'INTEGER')
+  assert.ok(columns.has('title_sort'), 'the A-Z sort has a column to use')
+  assert.ok(!columns.has('videos'), 'no per-episode data is stored here')
+
+  // Migration 3. The Completed badge counts AIRED episodes, not all of them,
+  // and the index stores the count rather than the episodes — so this column
+  // is the badge's whole denominator.
+  assert.equal(columns.get('aired_episodes'), 'INTEGER')
+  // Nullable and not backfilled on purpose: a row written by migration 2's
+  // crawl has no aired count, and "unknown" must read as not-complete. A
+  // DEFAULT 0 here would be worse than useless — it would be a denominator
+  // every series satisfies.
+  const airedNotNull = sql
+    .prepare('PRAGMA table_info(catalog_index)')
+    .all()
+    .filter((r) => String((r as Record<string, unknown>).name) === 'aired_episodes')
+    .map((r) => Number((r as Record<string, unknown>).notnull))
+  assert.deepEqual(airedNotNull, [0], 'aired_episodes must be nullable')
+
+  // A composite key on (id, kind), so the same imdb id can legitimately be
+  // both a movie and a series without one evicting the other.
+  const indexes = new Set(
+    sql
+      .prepare("SELECT name FROM sqlite_master WHERE type='index'")
+      .all()
+      .map((row) => (row as Record<string, unknown>).name as string)
+  )
+  for (const name of [
+    'idx_cindex_browse',
+    'idx_cindex_year',
+    'idx_cindex_rating',
+    'idx_cindex_title',
+    'idx_cindex_genre'
+  ]) {
+    assert.ok(indexes.has(name), `${name} exists — an unindexed browse query scans the library`)
+  }
+  sql.close()
+}
+
 console.log('migrations tests passed')

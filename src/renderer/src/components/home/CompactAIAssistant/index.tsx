@@ -1,12 +1,7 @@
 'use client'
 
 import type { CategoryKind } from '@renderer/lib/mediaHub/categoryFilters'
-import { useDashboardLayoutMode } from '@renderer/hooks/useDashboardLayoutMode'
-import { AIOrb } from './AIOrb'
-import { AssistantStatus } from './AssistantStatus'
-import { AssistantStrip } from './AssistantStrip'
 import { RecommendationActions } from './RecommendationActions'
-import { CompactStatusBar } from './CompactStatusBar'
 import styles from './CompactAIAssistant.module.css'
 
 export interface CompactAIAssistantProps {
@@ -16,32 +11,22 @@ export interface CompactAIAssistantProps {
   kinds?: CategoryKind[]
 }
 
+/**
+ * Two "quick pick" cards — no shared frame around them, no heading. Used
+ * to be a 302px animated orb narrating a local model's connection
+ * status; that panel took up an entire grid column to say very little
+ * (the actual useful part was always just these two buttons), so it's
+ * gone. What's left is pure CSS-responsive: the same markup renders as a
+ * slim side column on tall desktop windows and a full-width row wherever
+ * the dashboard grid collapses to one column (mobile width, or a short
+ * window — see CompactAIAssistant.module.css's own media queries, which
+ * mirror useDashboardLayoutMode's STACKED_QUERY/COMPACT_QUERY), so there
+ * is no JS layout-mode branching left to do here.
+ */
 export function CompactAIAssistant({ kinds }: CompactAIAssistantProps = {}) {
-  // Three different answers, one per layout mode — see
-  // useDashboardLayoutMode for the thresholds and why height is now one
-  // of them:
-  //
-  // 'stacked' (narrow): a single-line status bar. At phone width the
-  //   full panel would eat most of the fold before the hero appeared,
-  //   and there is no horizontal room to keep the buttons beside it.
-  // 'compact' (short): the orb goes, the buttons stay — the whole panel
-  //   becomes one ~40px strip across the top. A 302px sphere plus its
-  //   halo is the single largest thing on the dashboard, and on a
-  //   window under ~940px tall it is the difference between the mood
-  //   dock landing on top of the AI Picks row and everything fitting.
-  // 'short'/'full': unchanged, the orb panel as designed. (The orb
-  //   itself shrinks a little at 'short' — see the media query in
-  //   CompactAIAssistant.module.css.)
-  const mode = useDashboardLayoutMode()
-
-  if (mode === 'stacked') return <CompactStatusBar />
-  if (mode === 'compact') return <AssistantStrip kinds={kinds} />
-
   return (
-    <section className={styles.panel} aria-label="AI assistant">
-      <AIOrb />
-      <AssistantStatus />
+    <div className={styles.panel} aria-label="Discover something to watch">
       <RecommendationActions kinds={kinds} />
-    </section>
+    </div>
   )
 }

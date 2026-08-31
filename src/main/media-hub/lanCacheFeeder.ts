@@ -55,7 +55,8 @@ export async function runLanCacheFeeder(): Promise<void> {
         fileIdx: candidate.fileIdx,
         resolution: candidate.resolution,
         sizeBytes: Number(candidate.sizeBytes) || undefined,
-        sources: sanitizeTrackers(candidate.sources)
+        sources: sanitizeTrackers(candidate.sources),
+        reason: entry.reason
       })
       if (accepted) queued += 1
     } catch (error) {

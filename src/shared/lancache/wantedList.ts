@@ -15,6 +15,19 @@ export interface WantedTitle {
    *  agree on what "this title" means. */
   contentKey: string
   title: string
+  /**
+   * WHY this title is wanted, which the two loops below already distinguish
+   * and previously threw away.
+   *
+   * 'watching' — the next episode of something somebody is partway through.
+   * 'prefetch' — from a watchlist: wanted, but not being watched right now.
+   *
+   * It travels to the daemon on the job so the cache list can say what each
+   * entry is doing there. A queue with no reason attached cannot explain
+   * itself, and "why is this on my server" is the first question anybody
+   * asks of it.
+   */
+  reason: 'watching' | 'prefetch'
 }
 
 /** How many episodes ahead of the last watched one to warm. */
@@ -69,14 +82,16 @@ export function computeWantedList(
           type: entry.type,
           resolveId: `${entry.id}:${nextEpisode}`,
           contentKey: key(entry.id, '', nextEpisode),
-          title: entry.title ?? ''
+          title: entry.title ?? '',
+          reason: 'watching'
         })
       } else {
         push({
           type: entry.type,
           resolveId: `${entry.id}:${position.season}:${nextEpisode}`,
           contentKey: key(entry.id, position.season, nextEpisode),
-          title: entry.title ?? ''
+          title: entry.title ?? '',
+          reason: 'watching'
         })
       }
     }
@@ -90,7 +105,8 @@ export function computeWantedList(
         type: 'movie',
         resolveId: item.id,
         contentKey: key(item.id, '', ''),
-        title: item.title
+        title: item.title,
+        reason: 'prefetch'
       })
       continue
     }
@@ -103,7 +119,8 @@ export function computeWantedList(
           type: item.type,
           resolveId: `${item.id}:${episode}`,
           contentKey: key(item.id, '', episode),
-          title: item.title
+          title: item.title,
+          reason: 'prefetch'
         })
       } else {
         const season = position?.season ?? 1
@@ -111,7 +128,8 @@ export function computeWantedList(
           type: item.type,
           resolveId: `${item.id}:${season}:${episode}`,
           contentKey: key(item.id, season, episode),
-          title: item.title
+          title: item.title,
+          reason: 'prefetch'
         })
       }
     }

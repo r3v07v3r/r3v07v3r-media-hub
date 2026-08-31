@@ -8,87 +8,101 @@ import {
   SystemSnapshot
 } from '../shared/ipc-types'
 import { MEDIA_HUB_CHANNELS } from '../shared/media-hub/ipc-channels'
-import type { LanCacheStatusResponse } from '../shared/lancache/protocol'
 import type {
+  LanCacheDevicesResponse,
+  LanCacheOwnItem,
+  LanCacheUpdateNowResponse,
+  LanCacheStatusResponse
+} from '../shared/lancache/protocol'
+import type {
+  ActivitySnapshot,
   AnimeStoryResult,
   BlockedDownload,
   BootstrapResult,
+  CacheMode,
+  CacheSessionMeta,
+  CalendarEntry,
+  CatalogFacets,
+  DeepScanEvent,
+  DeepScanReport,
+  CatalogByIdsResult,
   CatalogItem,
   CatalogListing,
+  CatalogQuery,
+  CatalogQueryResult,
   ConnectResult,
   ConnectionTestResult,
+  CustomList,
+  CustomListItem,
   DislikedListResult,
   EpisodePlaybackPosition,
+  RoomActivity,
+  RoomInboundMessage,
+  RoomMessage,
+  RoomsStatus,
   HomePersonalizedResult,
-  LibraryItem,
+  ImportSummary,
   MalReconcileApplyResult,
   MalReconcilePreview,
   MalStartPayload,
   MalStatus,
   MarkWatchedResult,
-  CacheMode,
   MediaHubSettingsSnapshot,
-  SourcePreference,
   MediaKind,
   NetworkInfoResult,
   OllamaAskResult,
   OllamaRecommendResult,
   OllamaStatus,
+  PartyChatMessage,
   PartyEventPayload,
   PartyHostResult,
   PartyMode,
-  FriendActivity,
-  FriendMessage,
-  FriendsStatus,
   PartyNowPlayingPayload,
-  PartyPreparingPayload,
   PartyPlaybackAction,
-  PartyChatMessage,
+  PartyPreparingPayload,
   PartyQueueEntry,
   PartyStatusResult,
-  PlaybackPositionResult,
-  CustomList,
-  CustomListItem,
-  CalendarEntry,
   PersonCreditsResult,
-  TitleCollectionResult,
-  WatchProvidersResult,
   PlayRecord,
-  SavedFilter,
-  ImportSummary,
-  TraktPollResult,
-  TraktStartResult,
-  TraktStatusResult,
-  ViewingStats,
+  PlaybackPositionResult,
   PlaybackPrepareProgress,
   PlaybackResult,
   ProfilePublic,
-  ProfilesListResult,
   ProfileSetActiveResult,
   ProfileVerifyPinResult,
+  ProfilesListResult,
+  RecommendationsChanged,
   ReconcileCheckResult,
   ReconcileResolution,
   ReconcileResolveResult,
   ReconcileSyncReport,
+  ReleaseNotesResult,
+  SavedFilter,
   SimklPinStart,
   SimklPollResult,
   SimklStatus,
-  WatchStatusDiscrepancy,
   SkipTimes,
-  CacheSessionMeta,
-  ActivitySnapshot,
-  RecommendationsChanged,
+  SourcePreference,
   StreamCacheEntry,
+  PlannedSyncReport,
+  RemoteList,
+  StreamCacheUsage,
   StreamCandidate,
   StreamResolveResult,
   SubtitleResult,
   SubtitleSelection,
   SubtitlesApplyResult,
+  TitleCollectionResult,
   TorBoxConnectResult,
   TrackingListResult,
-  UpdateCheckResult,
+  TraktPollResult,
+  TraktStartResult,
+  TraktStatusResult,
   UpdateChannel,
-  UpdateStatusPayload
+  UpdateCheckResult,
+  UpdateStatusPayload,
+  ViewingStats,
+  WatchStatusDiscrepancy
 } from '../shared/media-hub/types'
 import type { OllamaTitleRef } from '../shared/media-hub/ollama'
 import type {
@@ -242,6 +256,14 @@ const api = {
         sourcePreference: SourcePreference
       ): Promise<{ sourcePreference: SourcePreference }> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.settingsSetSourcePreference, { sourcePreference }),
+      /** The storage question. Answers with the mode actually in force, not
+       *  the one saved — saying "disk" back to somebody who just chose
+       *  stream only would be the contradiction this setting exists to
+       *  prevent. */
+      setStoreMedia: (
+        storeMedia: boolean
+      ): Promise<{ storeMedia: boolean; cacheMode: CacheMode }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.settingsSetStoreMedia, { storeMedia }),
       setCacheMode: (
         cacheMode: CacheMode,
         memoryCacheMaxMb?: number
@@ -291,16 +313,69 @@ const api = {
       }> => ipcRenderer.invoke(MEDIA_HUB_CHANNELS.lanCacheDiscover),
       pair: (payload: {
         url: string
-        code: string
         shareTorboxToken?: boolean
-      }): Promise<{ ok: boolean; message: string }> =>
+      }): Promise<{ ok: boolean; message: string; pending?: boolean }> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.lanCachePair, payload),
       unpair: (): Promise<{ ok: true }> => ipcRenderer.invoke(MEDIA_HUB_CHANNELS.lanCacheUnpair),
+      /** Cheap paired? probe — reads the stored connection, no network. */
+      titlesState: (): Promise<{ paired: boolean }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.lanCacheTitlesState),
+      /** Ask the cache server to re-crawl the upstream catalogs. */
+      titlesRefresh: (
+        kind?: MediaKind
+      ): Promise<{
+        state: 'started' | 'joined' | 'throttled' | 'unavailable'
+        lastRefreshAt?: number | null
+        nextAllowedAt?: number
+      }> => ipcRenderer.invoke(MEDIA_HUB_CHANNELS.lanCacheTitlesRefresh, { kind }),
       status: (): Promise<{
         connected: boolean
         status?: LanCacheStatusResponse
         error?: string
-      }> => ipcRenderer.invoke(MEDIA_HUB_CHANNELS.lanCacheStatus)
+      }> => ipcRenderer.invoke(MEDIA_HUB_CHANNELS.lanCacheStatus),
+      /** Poll while a request waits for approval. Flips itself to
+       *  'approved' — and grants the player access — the moment the server
+       *  says yes, so the UI only has to ask. */
+      pairStatus: (): Promise<{
+        state: 'none' | 'pending' | 'approved'
+        name?: string
+        error?: string
+      }> => ipcRenderer.invoke(MEDIA_HUB_CHANNELS.lanCachePairStatus),
+      claim: (): Promise<{ ok: boolean; message: string }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.lanCacheClaim),
+      devices: (): Promise<
+        ({ ok: true } & LanCacheDevicesResponse) | { ok: false; message: string }
+      > => ipcRenderer.invoke(MEDIA_HUB_CHANNELS.lanCacheDevices),
+      deviceAction: (payload: {
+        id: string
+        action: 'approve' | 'deny' | 'revoke' | 'quota'
+        quotaBytes?: number | null
+      }): Promise<{ ok: boolean; message?: string }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.lanCacheDeviceAction, payload),
+      adminSettings: (payload: {
+        openJoin?: boolean
+        defaultQuotaPercent?: number
+      }): Promise<{ ok: boolean; message?: string }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.lanCacheAdminSettings, payload),
+      /** Admin only. Checks the feed now and installs as soon as nobody is
+       *  watching — see the daemon's /api/admin/update for why an open
+       *  stream still stops it. */
+      updateNow: (): Promise<
+        ({ ok: true } & LanCacheUpdateNowResponse) | { ok: false; message: string }
+      > => ipcRenderer.invoke(MEDIA_HUB_CHANNELS.lanCacheUpdateNow),
+      /** The caller's OWN cached titles. Never anyone else's — see the
+       *  daemon's /api/items/mine. */
+      myItems: (): Promise<{ ok: boolean; items: LanCacheOwnItem[] }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.lanCacheMyItems),
+      setSharing: (payload: {
+        infoHash: string
+        visibility: 'private' | 'shared'
+      }): Promise<{ ok: boolean; message?: string }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.lanCacheSetSharing, payload),
+      removeItem: (payload: { infoHash: string }): Promise<{ ok: boolean; message?: string }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.lanCacheRemoveItem, payload),
+      cancelJob: (payload: { contentKey: string }): Promise<{ ok: boolean; message?: string }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.lanCacheCancelJob, payload)
     },
 
     torbox: {
@@ -387,6 +462,9 @@ const api = {
 
     update: {
       check: (): Promise<UpdateCheckResult> => ipcRenderer.invoke(MEDIA_HUB_CHANNELS.updateCheck),
+      /** What the running build changed. Read once when the card mounts —
+       *  it cannot change while the app is running. */
+      notes: (): Promise<ReleaseNotesResult> => ipcRenderer.invoke(MEDIA_HUB_CHANNELS.updateNotes),
       install: (): Promise<{ ok: boolean }> => ipcRenderer.invoke(MEDIA_HUB_CHANNELS.updateInstall),
       setChannel: (channel: UpdateChannel): Promise<{ ok: true; channel: UpdateChannel }> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.updateSetChannel, channel),
@@ -397,6 +475,23 @@ const api = {
     catalog: {
       list: (kind: MediaKind, force: boolean = false): Promise<CatalogListing> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.catalogList, { kind, force }),
+      /** One filtered, sorted, paged slice of the library. Unlike `list`,
+       *  this never triggers a crawl — it reports what the index already
+       *  holds, so it is safe on a keystroke-driven path. */
+      query: (query: CatalogQuery): Promise<CatalogQueryResult> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.catalogQuery, query),
+      facets: (kind: MediaKind): Promise<CatalogFacets> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.catalogFacets, { kind }),
+      /** Rows for exactly these ids from the index, every kind a shared
+       *  id exists under — the id-matching path that replaced scanning
+       *  the loaded array (stage 4). */
+      byIds: (ids: string[]): Promise<CatalogByIdsResult> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.catalogByIds, { ids }),
+      /** One chunk of the user-triggered deep scan (stage 5). */
+      deepScan: (kind: MediaKind): Promise<DeepScanReport> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.catalogDeepScan, { kind }),
+      onDeepScanEvent: (onEvent: (payload: DeepScanEvent) => void): (() => void) =>
+        subscribe<DeepScanEvent>(MEDIA_HUB_CHANNELS.catalogDeepScanEvent, onEvent),
       meta: (type: MediaKind, id: string): Promise<CatalogItem> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.catalogMeta, { type, id }),
       search: (kind: MediaKind, query: string): Promise<CatalogItem[]> =>
@@ -407,8 +502,6 @@ const api = {
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.catalogStory, { type, id }),
       person: (person: string): Promise<PersonCreditsResult> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.catalogPerson, { person }),
-      providers: (type: MediaKind, id: string): Promise<WatchProvidersResult> =>
-        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.catalogProviders, { type, id }),
       collection: (id: string): Promise<TitleCollectionResult> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.catalogCollection, { id }),
       rating: (type: MediaKind, id: string): Promise<{ rating: string; region: string }> =>
@@ -432,6 +525,18 @@ const api = {
 
     tracking: {
       list: (): Promise<TrackingListResult> => ipcRenderer.invoke(MEDIA_HUB_CHANNELS.trackingList),
+      /** Pull plan-to-watch from every connected tracking service now,
+       *  rather than waiting for the background pass. */
+      syncPlanned: (): Promise<PlannedSyncReport> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.trackingPlannedSync),
+      /** The last pull's result, so a panel has something to show
+       *  before anybody presses the button. */
+      plannedReport: (): Promise<PlannedSyncReport | null> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.trackingPlannedReport),
+      /** Turn two-way watchlist sync on or off — see
+       *  docs/WATCHLIST-SYNC.md for what each direction does. */
+      setWatchlistTwoWay: (enabled: boolean): Promise<{ watchlistTwoWay: boolean }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.trackingSetTwoWay, { enabled }),
       toggle: (item: TrackableItem): Promise<{ tracked: boolean }> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.trackingToggle, item),
       markWatched: (payload: MarkWatchedPayload): Promise<MarkWatchedResult> =>
@@ -473,6 +578,9 @@ const api = {
     },
 
     lists: {
+      /** Named lists from Trakt and Simkl, read-only. */
+      remoteLists: (): Promise<{ lists: RemoteList[] }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.listsRemote),
       list: (): Promise<{ lists: CustomList[] }> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.listsList),
       create: (name: string): Promise<{ lists: CustomList[]; created: CustomList }> =>
@@ -544,7 +652,8 @@ const api = {
           title: meta?.title,
           posterUrl: meta?.posterUrl,
           season: meta?.seasonNumber,
-          episode: meta?.episodeNumber
+          episode: meta?.episodeNumber,
+          episodeTitle: meta?.episodeTitle
         })
     },
 
@@ -559,7 +668,11 @@ const api = {
       list: (): Promise<StreamCacheEntry[]> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.streamCacheList),
       delete: (token: string): Promise<{ ok: true }> =>
-        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.streamCacheDelete, { token })
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.streamCacheDelete, { token }),
+      /** What is held and what is left, for the Downloads page's one
+       *  space line. */
+      usage: (): Promise<StreamCacheUsage> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.streamCacheUsage)
     },
 
     playback: {
@@ -626,12 +739,6 @@ const api = {
        *  status, open the party panel). */
       onUiEvent: (onEvent: (event: PlayerUiEvent) => void): (() => void) =>
         subscribe<PlayerUiEvent>(MEDIA_HUB_CHANNELS.playerUiEvent, onEvent)
-    },
-
-    library: {
-      list: (): Promise<LibraryItem[]> => ipcRenderer.invoke(MEDIA_HUB_CHANNELS.libraryList),
-      play: (item: Record<string, unknown>): Promise<PlaybackResult> =>
-        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.libraryPlay, item)
     },
 
     simkl: {
@@ -768,23 +875,28 @@ const api = {
         subscribe<PartyEventPayload>(MEDIA_HUB_CHANNELS.partyEvent, onEvent)
     },
 
-    friends: {
-      status: (): Promise<FriendsStatus> => ipcRenderer.invoke(MEDIA_HUB_CHANNELS.friendsStatus),
-      create: (): Promise<{ ok: true; code: string }> =>
-        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.friendsCreate),
+    rooms: {
+      status: (): Promise<RoomsStatus> => ipcRenderer.invoke(MEDIA_HUB_CHANNELS.roomsStatus),
+      create: (name: string): Promise<{ ok: true; code: string }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.roomsCreate, { name }),
       join: (code: string): Promise<{ ok: true }> =>
-        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.friendsJoin, { code }),
-      leave: (): Promise<{ ok: true }> => ipcRenderer.invoke(MEDIA_HUB_CHANNELS.friendsLeave),
-      setSharing: (sharing: boolean): Promise<{ ok: true }> =>
-        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.friendsSetSharing, { sharing }),
-      setActivity: (activity: FriendActivity | null): Promise<{ ok: true }> =>
-        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.friendsSetActivity, { activity }),
-      send: (message: FriendMessage): Promise<{ ok: true }> =>
-        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.friendsSend, { message }),
-      onEvent: (onEvent: (payload: FriendsStatus) => void): (() => void) =>
-        subscribe<FriendsStatus>(MEDIA_HUB_CHANNELS.friendsEvent, onEvent),
-      onMessage: (onEvent: (payload: FriendMessage) => void): (() => void) =>
-        subscribe<FriendMessage>(MEDIA_HUB_CHANNELS.friendsMessage, onEvent)
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.roomsJoin, { code }),
+      leave: (roomId: string): Promise<{ ok: true }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.roomsLeave, { roomId }),
+      rename: (roomId: string, name: string): Promise<{ ok: true }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.roomsRename, { roomId, name }),
+      kick: (roomId: string, friendId: string): Promise<{ ok: true }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.roomsKick, { roomId, friendId }),
+      setSharing: (roomId: string, sharing: boolean): Promise<{ ok: true }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.roomsSetSharing, { roomId, sharing }),
+      setActivity: (activity: RoomActivity | null): Promise<{ ok: true }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.roomsSetActivity, { activity }),
+      send: (roomId: string, message: RoomMessage): Promise<{ ok: true }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.roomsSend, { roomId, message }),
+      onEvent: (onEvent: (payload: RoomsStatus) => void): (() => void) =>
+        subscribe<RoomsStatus>(MEDIA_HUB_CHANNELS.roomsEvent, onEvent),
+      onMessage: (onEvent: (payload: RoomInboundMessage) => void): (() => void) =>
+        subscribe<RoomInboundMessage>(MEDIA_HUB_CHANNELS.roomsMessage, onEvent)
     },
 
     window: {

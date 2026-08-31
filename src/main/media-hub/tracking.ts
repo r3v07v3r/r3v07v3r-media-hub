@@ -63,6 +63,13 @@ import {
 import { airingStatus, continueWatchingList } from './core'
 import { catalogData, metadata } from './catalog'
 import { getDatabase } from './dbState'
+import {
+  lastPlannedSyncReport,
+  pushLocalPlanChange,
+  plannedSources,
+  syncPlannedFromServices,
+  type PlannedSyncReport
+} from './watchlists'
 import { fetchJson } from './httpClient'
 import { mapWithLimit, type TaskPriority } from './taskScheduler'
 import { handle } from './ipcGuard'
@@ -82,6 +89,8 @@ import {
   writeSettings
 } from './settingsStore'
 import { sendToRenderer } from './rendererBridge'
+import { cachedRemoteLists, fetchRemoteLists } from './remoteLists'
+import type { RemoteList } from '../../shared/media-hub/types'
 import {
   batchHistoryPayload,
   historyPayload,
@@ -755,6 +764,28 @@ async function pushPendingToServices(priority: TaskPriority): Promise<Set<string
     failed.add(entry.id)
   }
 
+  // TRAKT TOO, and it was the gap. This queue reached Simkl and MAL, so a
+  // "Use Local" decision left Trakt holding the value the person had just
+  // ruled against — and the next check against Trakt would raise it all
+  // over again. "The tracking services that are connected" has to mean all
+  // of them, or resolving a disagreement in one place creates one in
+  // another.
+  //
+  // Failures here do NOT un-confirm the entry, unlike MAL above. Simkl is
+  // the service this queue's verdict is computed against and MAL's
+  // progress is part of the same reconciliation; Trakt is a third party to
+  // it. Dropping a decision Simkl accepted because Trakt was unreachable
+  // would re-raise a disagreement that no longer exists. pushTraktHistory
+  // already logs and swallows its own errors for the same reason.
+  for (const entry of queue) {
+    if (!confirmed.has(entry.id)) continue
+    await pushTraktHistory(
+      { id: entry.id, type: entry.type, title: entry.title, year: entry.year },
+      {},
+      locallyWatched.has(entry.id) ? 'add' : 'remove'
+    )
+  }
+
   // The pushes above bypass simklWatchedSnapshot()'s own request path, so
   // its 20-minute cache never learns about them; left alone, the next
   // check compares against the stale pre-push snapshot and re-reports
@@ -870,6 +901,15 @@ async function pushPendingToServices(priority: TaskPriority): Promise<Set<string
  * interrupts anyone with a panel they did not ask for.
  */
 export async function runBackgroundWatchSync(): Promise<void> {
+  // Watchlists come in on the same schedule as history goes out. They are
+  // both "make the local picture match the services", and giving them
+  // separate timers would mean two independent things to reason about for
+  // no benefit. Failures are swallowed inside the pull, per service.
+  try {
+    await syncPlannedFromServices('background')
+  } catch (error) {
+    logError('job:planned-sync', error)
+  }
   if (!simklCredentials().accessToken) return
   // Background: this is a recurring job nobody asked for, so its pushes
   // must not jump ahead of the screen someone is looking at, and must
@@ -1081,8 +1121,60 @@ export function registerTrackingIpc(): void {
       newEpisodeCount: newEpisodesById.get(String(item.id)) || 0,
       airing: airingById.get(String(item.id)) || ''
     }))
-    return { tracked, history }
+    return { tracked, history, plannedSources: plannedSources() }
   })
+
+  /**
+   * Pull plan-to-watch from every connected service, on demand.
+   *
+   * Also runs with the background watch sync, so an untouched app catches
+   * up on its own — this exists for the case where somebody has just
+   * added a pile of titles on the web and does not want to wait for the
+   * next pass to see them.
+   */
+  handle<undefined, PlannedSyncReport>(MEDIA_HUB_CHANNELS.trackingPlannedSync, async () =>
+    syncPlannedFromServices('interactive')
+  )
+
+  /** The last pull's result, so the panel has something to show before
+   *  anybody presses the button. */
+  handle<undefined, PlannedSyncReport | null>(MEDIA_HUB_CHANNELS.trackingPlannedReport, async () =>
+    lastPlannedSyncReport()
+  )
+
+  /**
+   * Named lists from the services, read only.
+   *
+   * Answers from cache first and refreshes behind it: reading these
+   * costs one request per list, and somebody opening My Stuff should
+   * not wait on thirty of them to see a name they saw this morning.
+   */
+  handle<undefined, { lists: RemoteList[] }>(MEDIA_HUB_CHANNELS.listsRemote, async () => {
+    const cached = cachedRemoteLists()
+    if (cached.length > 0) {
+      void fetchRemoteLists('background').catch(() => {
+        // Logged inside; the cached answer already went out.
+      })
+      return { lists: cached }
+    }
+    return { lists: await fetchRemoteLists('visible') }
+  })
+
+  handle<{ enabled?: boolean }, { watchlistTwoWay: boolean }>(
+    MEDIA_HUB_CHANNELS.trackingSetTwoWay,
+    (_e, payload) => {
+      const settings = readSettings()
+      const enabled = payload?.enabled !== false
+      settings.watchlistTwoWay = enabled
+      writeSettings(settings)
+      // The origins record is deliberately KEPT when this is turned
+      // off. It is the app's memory of what came from where, and
+      // discarding it would mean turning the setting back on later
+      // starts with no history — which is exactly the state in which
+      // a removal cannot be told apart from an addition.
+      return { watchlistTwoWay: enabled }
+    }
+  )
 
   handle<TrackableItem, { tracked: boolean }>(MEDIA_HUB_CHANNELS.trackingToggle, (_e, item) => {
     const db = getDatabase()
@@ -1090,6 +1182,19 @@ export function registerTrackingIpc(): void {
     if (tracked) db.untrack(item.id)
     else db.track(item)
     requestRecommendationsRebuild()
+    // Out to the services, without making anybody wait for it. Three
+    // third-party APIs between pressing Plan to Watch and the button
+    // changing state is the wrong trade; the local write is the answer,
+    // and the push reports its own failures.
+    pushLocalPlanChange(
+      {
+        id: String(item.id),
+        type: (item.type ?? 'movie') as MediaKind,
+        title: String(item.title ?? ''),
+        year: item.year ? String(item.year) : undefined
+      },
+      !tracked
+    )
     return { tracked: !tracked }
   })
 
@@ -1513,7 +1618,10 @@ export function registerTrackingIpc(): void {
       continueWatching: continueWatchingList(details, history).slice(0, 18),
       recommendations,
       recommendationReasons,
-      preferredGenres
+      preferredGenres,
+      // Read here rather than fetched: it is whatever the last pull
+      // recorded, so tagging a card costs nothing on this path.
+      plannedSources: plannedSources()
     }
   })
 

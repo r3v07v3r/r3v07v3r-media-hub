@@ -57,6 +57,14 @@ export interface FetchScheduling {
   key?: string
   /** What to call this in the activity view. Defaults to the host. */
   label?: string
+  /**
+   * Override the 30s default, for the rare call that legitimately takes
+   * longer — the cache server's "update now" answers only once it has
+   * checked the release feed and staged a bundle, which on a slow link is
+   * minutes rather than seconds, and timing that out would report a
+   * failure for an update that was in fact working.
+   */
+  timeoutMs?: number
 }
 
 const REQUEST_TIMEOUT_MS = 30000
@@ -77,7 +85,7 @@ export function fetchJson<T = unknown>(
   options: RequestInit = {},
   scheduling: FetchScheduling = {}
 ): Promise<T> {
-  return schedule(() => request<T>(url, options), {
+  return schedule(() => request<T>(url, options, scheduling.timeoutMs), {
     lane: scheduling.lane ?? laneForUrl(url),
     priority: scheduling.priority ?? 'interactive',
     key: scheduling.key,
@@ -93,9 +101,13 @@ function hostLabel(url: string | URL): string {
   }
 }
 
-async function request<T>(url: string | URL, options: RequestInit): Promise<T> {
+async function request<T>(
+  url: string | URL,
+  options: RequestInit,
+  timeoutMs = REQUEST_TIMEOUT_MS
+): Promise<T> {
   const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
 
   try {
     const response = await fetch(String(url), { ...options, signal: controller.signal })
