@@ -15,11 +15,16 @@ export function PartyButton() {
         type="button"
         className={`${styles.button} ${inParty ? styles.active : ''}`}
         aria-pressed={partyPanelOpen}
-        aria-label={inParty ? `Open room — ${memberCount} people` : 'Open Rooms'}
+        aria-label={
+          inParty ? `Open Watch Party — ${memberCount} people` : 'Open Watch Party and Rooms'
+        }
         onClick={() => setPartyPanelOpen((v) => !v)}
       >
         <Icon name="people" size={17} className={styles.icon} />
-        <span className={styles.label}>{inParty ? 'Room' : 'Rooms'}</span>
+        {/* "Party" while one is live; "Rooms" otherwise, because the closed
+            panel's most-used half is the standing rooms list below the
+            party lobby. */}
+        <span className={styles.label}>{inParty ? 'Party' : 'Rooms'}</span>
         {inParty && memberCount > 0 && <span className={styles.badge}>{memberCount}</span>}
       </button>
       <div className={styles.separator} aria-hidden="true" />

@@ -1334,11 +1334,26 @@ export interface PartyChatMessage {
 
 export type PartyMode = 'direct' | 'relay'
 
+/** What the watch party is currently watching, as carried on party-state
+ *  broadcasts — enough to offer "Join the film" and name it, nothing more.
+ *  The full replayable announcement (episode coordinates, position) stays
+ *  host-side and is delivered as a real nowPlaying message. */
+export interface PartyNowPlayingSummary {
+  id: string
+  type: string
+  title: string
+  poster?: string
+}
+
 export interface PartyHostResult {
   ok: true
   code: string
   port?: number
   wanAvailable?: boolean
+  /** Whether the R3-Party-Sync relay attached — hosting opens every
+   *  transport it can, so this reports what the single invite code covers
+   *  rather than reflecting a chosen mode. */
+  relayAttached?: boolean
 }
 
 export interface PartyStatusResult {
@@ -1351,10 +1366,17 @@ export interface PartyStatusResult {
   hostName?: string
   /** Host-controlled: when true, every member's own play/pause/seek controls apply and sync to the group, not just the host's. */
   allowMemberControl?: boolean
+  /** See PartyNowPlayingSummary; null when nothing is playing. */
+  nowPlaying?: PartyNowPlayingSummary | null
 }
 
 export type PartyEventPayload =
-  | { type: 'party-state'; members: PartyMemberSummary[]; allowMemberControl?: boolean }
+  | {
+      type: 'party-state'
+      members: PartyMemberSummary[]
+      allowMemberControl?: boolean
+      nowPlaying?: PartyNowPlayingSummary | null
+    }
   | { type: 'queue-sync'; queue: PartyQueueEntry[] }
   | { type: 'chat'; chat: PartyChatMessage }
   | { type: 'message'; from: string; message: unknown }
@@ -1418,6 +1440,11 @@ export type PartyPlaybackAction =
   // every peer, including the host, to give this message itself time to
   // actually arrive over the network before anyone starts playing).
   | { type: 'seek-go'; requestId: string }
+  // Member -> host: "catch me up" — the hub's Join-the-film button for
+  // someone who closed their player but stayed in the party. Answered with
+  // the stored nowPlaying (see watchParty's handlePartyMessage); every
+  // other member deduplicates the replay as already-playing.
+  | { type: 'resync-request' }
 
 export interface NetworkInfoResult {
   lanIp: string
@@ -1470,6 +1497,11 @@ export interface RoomActivity {
   poster?: string
   /** Absolute position in seconds — lets the UI show "34 min in". */
   position: number
+  /** The title's length in seconds, when the player knows it — what turns
+   *  position into a percentage ("62% in"). Optional: an older build's
+   *  announcements simply don't carry it, and the UI falls back to the
+   *  absolute reading. */
+  duration?: number
   paused: boolean
   /** Present when this member is joinable right now. Carried in the
    *  announcement so the UI can offer "join their party" without a round

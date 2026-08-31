@@ -985,10 +985,10 @@ function PlayerControls() {
   // --- Rooms activity -------------------------------------------------------
   // Main decides where this actually goes out (sharing is opt-in per room).
   // Cleared on unmount so closing the player takes the activity down with it.
-  const activityRef = useRef({ timePos, paused })
+  const activityRef = useRef({ timePos, paused, duration })
   useEffect(() => {
-    activityRef.current = { timePos, paused }
-  }, [timePos, paused])
+    activityRef.current = { timePos, paused, duration }
+  }, [timePos, paused, duration])
   useEffect(() => {
     if (!media) return
     const publish = (): void => {
@@ -999,6 +999,9 @@ function PlayerControls() {
           title: media.title,
           poster: media.posterUrl,
           position: activityRef.current.timePos,
+          // What lets a member's tooltip say "62% in" instead of only an
+          // absolute clock reading. Omitted until mpv reports a real one.
+          duration: activityRef.current.duration > 0 ? activityRef.current.duration : undefined,
           paused: activityRef.current.paused
         })
         .catch(() => {})
@@ -1705,9 +1708,9 @@ function PlayerControls() {
             className={styles.button}
             onClick={() => setRoomRailOpen((open) => !open)}
             aria-pressed={roomRailOpen}
-            aria-label="Open room rail"
+            aria-label="Open the Watch Party and Rooms rail"
           >
-            Room
+            Party
           </button>
 
           <button

@@ -29,7 +29,6 @@ import type {
   MediaTracks,
   PartyHostResult,
   PartyChatMessage,
-  PartyMode,
   PartyQueueEntry,
   PartyStatusResult,
   PlaybackResult,
@@ -161,7 +160,7 @@ interface AppStateValue {
   partyPanelOpen: boolean
   setPartyPanelOpen: Dispatch<SetStateAction<boolean>>
   refreshPartyStatus: () => void
-  hostParty: (name: string, mode?: PartyMode) => Promise<PartyHostResult>
+  hostParty: (name: string) => Promise<PartyHostResult>
   joinParty: (code: string, name: string) => Promise<void>
   leaveParty: () => Promise<void>
   suggestToParty: (item: {
@@ -873,7 +872,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         // party / Join a party" form with zero indication anything had
         // happened — the analogous 'preparing-cancelled' failure below
         // already does the right thing here.
-        pushNotification({ tone: 'warning', message: 'Lost connection to the party host.' })
+        pushNotification({ tone: 'warning', message: 'Lost connection to the watch party host.' })
       }
     })
   }, [refreshPartyStatus, pushNotification])
@@ -1245,10 +1244,12 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   )
 
   const hostParty = useCallback(
-    async (name: string, mode?: PartyMode) => {
+    async (name: string) => {
       const api = window.api?.mediaHub?.party
       if (!api) throw new Error("Watch Party isn't available outside the desktop app.")
-      const result = await api.host(name, mode)
+      // No transport choice: hosting opens the direct listener and, when
+      // R3-Party-Sync is configured, the relay too — one code, every door.
+      const result = await api.host(name)
       setPartyHostCode(result.code)
       setPartyWanAvailable(result.wanAvailable ?? false)
       setPartyHostPort(result.port ?? null)
@@ -1301,7 +1302,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
 
   const sendPartyChat = useCallback(async (text: string) => {
     const api = window.api?.mediaHub?.party
-    if (!api) throw new Error("Rooms aren't available outside the desktop app.")
+    if (!api) throw new Error("Watch Party isn't available outside the desktop app.")
     const trimmed = text.trim()
     if (!trimmed) return
     await api.chat({ id: crypto.randomUUID(), text: trimmed, sentAt: Date.now() })
@@ -2052,6 +2053,19 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     startPartyPlaybackRef.current = startPartyPlayback
   }, [startPartyPlayback])
 
+  // Read through refs inside the party handlers below, so those
+  // subscriptions don't tear down and re-establish every time playback
+  // position or settings change — they only care about the values at the
+  // moment a message actually arrives.
+  const playbackMediaRef = useRef(playbackMedia)
+  const hostPartyRef = useRef(hostParty)
+  const mediaHubSettingsRef = useRef(mediaHubSettings)
+  useEffect(() => {
+    playbackMediaRef.current = playbackMedia
+    hostPartyRef.current = hostParty
+    mediaHubSettingsRef.current = mediaHubSettings
+  }, [playbackMedia, hostParty, mediaHubSettings])
+
   // Follower side of the above: unwrap an incoming `nowPlaying` (see
   // watchParty.ts's handlePartyMessage — every message type other than
   // suggest/vote falls through to the generic `{type:'message', message}`
@@ -2091,6 +2105,20 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         return
       }
       if (msg?.type !== 'nowPlaying' || !msg.item?.id || !msg.item.type) return
+      // nowPlaying is no longer a one-shot: the host replays it to every
+      // late joiner and to anyone who asks to resync, and on the relay
+      // those replays necessarily reach EVERY member (the worker only fans
+      // out). Already playing the exact title it names means this copy is
+      // someone else's catch-up, not an instruction to restart the film.
+      const playing = playbackMediaRef.current
+      if (
+        playing &&
+        playing.id === msg.item.id &&
+        (playing.seasonNumber ?? undefined) === (msg.season ?? undefined) &&
+        (playing.episodeNumber ?? undefined) === (msg.episode ?? undefined)
+      ) {
+        return
+      }
       const catalogApi = window.api?.mediaHub?.catalog
       if (!catalogApi) return
       // Covers the case where a follower joins (or the message is missed)
@@ -2160,19 +2188,6 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     if (!inPartyNow && partyPreparing) setPartyPreparing(null)
   }
 
-  // Read through refs inside the join-request handler below, so that
-  // subscription doesn't tear down and re-establish every time playback
-  // position or settings change — it only cares about their values at the
-  // moment a request actually arrives.
-  const playbackMediaRef = useRef(playbackMedia)
-  const hostPartyRef = useRef(hostParty)
-  const mediaHubSettingsRef = useRef(mediaHubSettings)
-  useEffect(() => {
-    playbackMediaRef.current = playbackMedia
-    hostPartyRef.current = hostParty
-    mediaHubSettingsRef.current = mediaHubSettings
-  }, [playbackMedia, hostParty, mediaHubSettings])
-
   // Answering "can I watch with you?" from a room member. Lives here
   // rather than in the rooms UI because it needs the things only this
   // context has: whether we're actually playing something, and the
@@ -2216,12 +2231,46 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         return
       }
       if (partyStatus?.inParty) {
-        decline("They're already in someone else's party.")
+        decline("They're already in someone else's watch party.")
         return
       }
       hostPartyRef
-        .current(mediaHubSettingsRef.current?.partyDisplayName || 'A friend', 'relay')
+        .current(mediaHubSettingsRef.current?.partyDisplayName || 'A friend')
         .then((result) => {
+          // ANNOUNCE THE FILM ALREADY PLAYING before the offer goes out.
+          // This party was created on demand, minutes into a title — so the
+          // one broadcast that normally starts a follower's playback
+          // (startPartyPlayback's nowPlaying) fired long ago, into a party
+          // that didn't exist yet. Without this, the joiner landed in the
+          // chat with no picture and no way to ask for one — the exact
+          // live report this fixes. Announcing also stores the event
+          // host-side, so anyone who joins after this moment is caught up
+          // by the ordinary late-join replay.
+          const playing = playbackMediaRef.current
+          if (playing) {
+            const kind = playing.mediaKind ?? (playing.mediaType === 'series' ? 'series' : 'movie')
+            window.api?.mediaHub?.party
+              ?.nowPlaying({
+                infoHash: '',
+                sources: [],
+                mediaId: buildMediaId(
+                  kind,
+                  playing.id,
+                  playing.seasonNumber,
+                  playing.episodeNumber
+                ),
+                item: {
+                  id: playing.id,
+                  type: kind,
+                  title: playing.title,
+                  poster: playing.posterUrl ?? ''
+                },
+                season: playing.seasonNumber,
+                episode: playing.episodeNumber,
+                position: 0
+              })
+              .catch(() => {})
+          }
           api
             .send(roomId, {
               type: 'friend-join-offer',
@@ -2235,7 +2284,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
             message: `${message.fromName} is joining your watch party.`
           })
         })
-        .catch(() => decline('They could not start a party just now.'))
+        .catch(() => decline('They could not start a watch party just now.'))
     })
   }, [partyStatus, partyHostCode, pushNotification])
 

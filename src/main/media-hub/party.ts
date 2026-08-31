@@ -52,7 +52,24 @@ export interface ShareCodePayloadV4 {
   join?: string
 }
 
-export type ShareCodePayload = ShareCodePayloadV1 | ShareCodePayloadV2 | ShareCodePayloadV4
+/**
+ * A hybrid party invite: every way into the party in one code. The host
+ * always listens directly and (when configured) attaches to the relay too,
+ * so the joiner — not the host — decides the transport, by simply using the
+ * first one that connects: LAN, then WAN, then relay. This is what removed
+ * the Direct/Relay picker from hosting.
+ */
+export interface ShareCodePayloadV5 {
+  v: 5
+  lan: PartyLanEndpoint
+  wan: PartyLanEndpoint | null
+  relay: PartyRelayEndpoint
+  secret: string
+  name: string
+}
+
+export type ShareCodePayload =
+  ShareCodePayloadV1 | ShareCodePayloadV2 | ShareCodePayloadV4 | ShareCodePayloadV5
 
 export type PartyQueueEvent =
   | { type: 'suggest'; queueId: string; item: PartyQueueEntry['item']; suggestedBy?: string }
@@ -105,6 +122,7 @@ export function isValidRelayEndpoint(endpoint: unknown): endpoint is PartyRelayE
 const SHARE_COMPACT_DIRECT = 0x31
 const SHARE_COMPACT_RELAY = 0x32
 const SHARE_COMPACT_ROOM = 0x33
+const SHARE_COMPACT_HYBRID = 0x34
 const SHARE_COMPACT_SECRET_BYTES = 24
 const SHARE_COMPACT_IPV4_TAG = 0
 /** Raw Ed25519 public key — see roomIdentity's RAW_PUB_BYTES. */
@@ -197,6 +215,41 @@ export function encodeRelayShareCode(input: { relay: PartyRelayEndpoint; secret:
   if (!hostBytes || !roomId) throw new Error('Invalid party endpoint.')
   return Buffer.concat([
     Buffer.from([SHARE_COMPACT_RELAY]),
+    roomId,
+    encodeRelayHostLength(hostBytes),
+    hostBytes,
+    bytes
+  ]).toString('base64url')
+}
+
+/** A hybrid party invite, packed: `[0x34][lan][wanFlag][wan?][roomId:16]
+ *  [hostLen:2][host][secret:24]` — the direct code's endpoint layout
+ *  followed by the relay code's endpoint layout, one secret for both
+ *  (every transport carries the same AES-GCM payloads). Same invariant
+ *  discipline as the two codes it combines. */
+export function encodeHybridShareCode(input: {
+  lan: PartyLanEndpoint
+  wan?: PartyLanEndpoint | null
+  relay: PartyRelayEndpoint
+  secret: string
+}): string {
+  const { lan, wan, relay, secret } = input
+  if (!isValidEndpoint(lan) || !isValidRelayEndpoint(relay) || typeof secret !== 'string') {
+    throw new Error('Invalid party endpoint.')
+  }
+  const validWan = wan && isValidEndpoint(wan) ? wan : null
+  const bytes = shareSecretBytes(secret)
+  const lanPart = encodeEndpointCompact(lan)
+  const wanPart = validWan ? encodeEndpointCompact(validWan) : Buffer.alloc(0)
+  const roomId = uuidBytes(relay.roomId)
+  const hostBytes = relayHostBytes(relay.url)
+  if (!bytes) throw new Error('A party secret must be 24 bytes, base64url.')
+  if (!lanPart || !wanPart || !roomId || !hostBytes) throw new Error('Invalid party endpoint.')
+  return Buffer.concat([
+    Buffer.from([SHARE_COMPACT_HYBRID]),
+    lanPart,
+    Buffer.from([validWan ? 1 : 0]),
+    wanPart,
     roomId,
     encodeRelayHostLength(hostBytes),
     hostBytes,
@@ -348,6 +401,32 @@ function decodeCompactShareCode(buf: Buffer): ShareCodePayload | null {
     if (!isValidRelayEndpoint(relay)) return null
     return {
       v: 2,
+      relay,
+      secret: buf.subarray(cursor.at).toString('base64url'),
+      name: ''
+    }
+  }
+  if (buf[0] === SHARE_COMPACT_HYBRID) {
+    const cursor = { at: 1 }
+    const lan = readEndpointCompact(buf, cursor)
+    if (!lan || cursor.at >= buf.length) return null
+    const hasWan = buf[cursor.at] === 1
+    cursor.at += 1
+    const wan = hasWan ? readEndpointCompact(buf, cursor) : null
+    if (hasWan && !wan) return null
+    if (cursor.at + 16 > buf.length) return null
+    const roomId = uuidFromBytes(buf.subarray(cursor.at, cursor.at + 16))
+    cursor.at += 16
+    const url = readRelayHost(buf, cursor)
+    if (url === null) return null
+    const relay: PartyRelayEndpoint = { url, roomId }
+    if (buf.length !== cursor.at + SHARE_COMPACT_SECRET_BYTES) return null
+    if (!isValidEndpoint(lan) || (wan && !isValidEndpoint(wan))) return null
+    if (!isValidRelayEndpoint(relay)) return null
+    return {
+      v: 5,
+      lan,
+      wan,
       relay,
       secret: buf.subarray(cursor.at).toString('base64url'),
       name: ''

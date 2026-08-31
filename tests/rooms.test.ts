@@ -75,6 +75,57 @@ const SELF = 'self-friend-id'
   assert.equal(presence.size, 0, 'silence past the TTL ages everyone out')
 }
 
+// --- activity normalisation -------------------------------------------------
+
+{
+  const presence = new Map<string, PresenceRecord>()
+  recordPresence(
+    presence,
+    'c',
+    {
+      name: 'Cal',
+      activity: {
+        mediaId: 'tt1',
+        kind: 'movie',
+        title: 'Dune',
+        position: 3000,
+        duration: 9000,
+        paused: false,
+        partyCode: 'x'.repeat(700)
+      }
+    },
+    SELF,
+    now
+  )
+  const activity = presence.get('c')?.activity
+  assert.equal(activity?.duration, 9000, 'a real duration is kept for the percent readout')
+  assert.equal(
+    activity?.partyCode?.length,
+    600,
+    'the invite clamp fits a hybrid code (600, not the old single-transport 400)'
+  )
+
+  // A garbage or zero duration reads as absent, never as a divisor.
+  recordPresence(
+    presence,
+    'd',
+    {
+      name: 'Dee',
+      activity: {
+        mediaId: 'tt2',
+        kind: 'movie',
+        title: 'Heat',
+        position: 10,
+        duration: 0,
+        paused: true
+      }
+    },
+    SELF,
+    now
+  )
+  assert.equal(presence.get('d')?.activity?.duration, undefined, 'zero duration is absent')
+}
+
 // --- the rename rule --------------------------------------------------------
 
 {

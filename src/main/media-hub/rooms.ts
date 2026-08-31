@@ -76,7 +76,8 @@ import {
   readSettings,
   writeSettings
 } from './settingsStore'
-import { connectRelayWs } from './watchParty'
+import { connectRelayWs, currentPartyJoinCode } from './watchParty'
+import { sendToPlayerOverlay } from './playerWindow'
 
 /** Reconnect backoff bounds. A room is meant to be always-on, so a
  *  dropped socket retries indefinitely rather than giving up — but it
@@ -272,7 +273,12 @@ function offerRekeyTo(room: RoomState, toFriendId: string, underSecret: string):
 }
 
 function pushStatus(): void {
-  sendToRenderer(MEDIA_HUB_CHANNELS.roomsEvent, roomsStatus())
+  const status = roomsStatus()
+  sendToRenderer(MEDIA_HUB_CHANNELS.roomsEvent, status)
+  // The player's rail shows the same rooms — it is a separate renderer, so
+  // the main-window push never reaches it. Same precedent as
+  // watchParty.ts's sendPartyEvent.
+  sendToPlayerOverlay(MEDIA_HUB_CHANNELS.roomsEvent, status)
 }
 
 export function roomsStatus(): RoomsStatus {
@@ -316,7 +322,16 @@ function announceRoom(room: RoomState): void {
   // in the envelope, verified — a claimed field there would only be a
   // second, weaker copy of the truth.
   if (!room.signed) payload.friendId = friendId
-  if (room.stored.sharing && currentActivity) payload.activity = currentActivity
+  if (room.stored.sharing && currentActivity) {
+    // The live party invite rides the activity, folded in at announce time
+    // rather than stored: watchParty owns the code's lifetime, and reading
+    // it here means a party started or ended simply shows up on the next
+    // announce (at most ANNOUNCE_INTERVAL_MS late) with nothing to keep in
+    // sync. This is what makes a room member's "Watch → Join them" a
+    // one-click join instead of a knock-and-wait round trip.
+    const partyCode = currentPartyJoinCode()
+    payload.activity = partyCode ? { ...currentActivity, partyCode } : currentActivity
+  }
   // The room's name travels with its admin: renames reach members through
   // the same channel as everything else, and the rename rule on the
   // receiving side believes this field only from the admin — a VERIFIED
