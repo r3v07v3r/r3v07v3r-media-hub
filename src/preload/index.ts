@@ -317,6 +317,17 @@ const api = {
       }): Promise<{ ok: boolean; message: string; pending?: boolean }> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.lanCachePair, payload),
       unpair: (): Promise<{ ok: true }> => ipcRenderer.invoke(MEDIA_HUB_CHANNELS.lanCacheUnpair),
+      /** Cheap paired? probe — reads the stored connection, no network. */
+      titlesState: (): Promise<{ paired: boolean }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.lanCacheTitlesState),
+      /** Ask the cache server to re-crawl the upstream catalogs. */
+      titlesRefresh: (
+        kind?: MediaKind
+      ): Promise<{
+        state: 'started' | 'joined' | 'throttled' | 'unavailable'
+        lastRefreshAt?: number | null
+        nextAllowedAt?: number
+      }> => ipcRenderer.invoke(MEDIA_HUB_CHANNELS.lanCacheTitlesRefresh, { kind }),
       status: (): Promise<{
         connected: boolean
         status?: LanCacheStatusResponse
