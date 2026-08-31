@@ -1297,13 +1297,18 @@ async function runDeepScan(kind: MediaKind): Promise<DeepScanReport> {
     const items = usable.flat()
     scanned += items.length
     if (items.length > 0) sawAnyRows = true
-    const { add } = planDeepScanBatch(
-      items,
-      db.indexExistingIds(
-        kind,
-        items.map((item) => item.id)
-      )
+    const existing = db.indexExistingIds(
+      kind,
+      items.map((item) => item.id)
     )
+    if (existing === null) {
+      // Membership could not be established — halt with the bookmark
+      // still before this group, exactly like a failed fetch. Advancing
+      // here would skip the whole chunk while writing none of it.
+      halted = true
+      break
+    }
+    const { add } = planDeepScanBatch(items, existing)
     if (add.length) {
       // Rank the deep rows BELOW everything already indexed — see
       // rankFloor above.
