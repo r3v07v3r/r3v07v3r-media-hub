@@ -14,7 +14,11 @@ import {
   matchesCategoryKind,
   type HideStateDefaults
 } from '@renderer/lib/mediaHub/categoryFilters'
-import { useCatalogBrowse, useCatalogKindTotals } from '@renderer/lib/mediaHub/useCatalogBrowse'
+import {
+  CATALOG_BRIDGE_AVAILABLE,
+  useCatalogBrowse,
+  useCatalogKindTotals
+} from '@renderer/lib/mediaHub/useCatalogBrowse'
 import type { CatalogFacets, DeepScanEvent } from '@shared/media-hub/types'
 import { ANIME_CONFIG, type CategoryConfig } from '@renderer/lib/mediaHub/categoryConfig'
 import { useRestoreBrowsingOrigin } from '@renderer/lib/mediaHub/useRestoreBrowsingOrigin'
@@ -553,7 +557,19 @@ export function LibraryPage({ config }: { config: CategoryConfig }) {
     () => applyWatchStateFilters(categorySearch.results, filters),
     [categorySearch.results, filters]
   )
-  const browseItems = searchActive ? searchResults : browse.items
+  // The non-Electron preview has no index to query; its grid slices the
+  // (mock-backed) loaded array the way search mode does. Genre/year/sort
+  // filters are index-side and do not apply there — a preview limit, not
+  // a product path.
+  const previewItems = useMemo(
+    () => (CATALOG_BRIDGE_AVAILABLE ? [] : applyWatchStateFilters(library, filters)),
+    [library, filters]
+  )
+  const browseItems = searchActive
+    ? searchResults
+    : CATALOG_BRIDGE_AVAILABLE
+      ? browse.items
+      : previewItems
   // Identifies the current browse view for EverythingSection's
   // reveal-depth reset (see useBatchReveal's own doc comment) — anything
   // that changes this is a genuine filter/sort/search/kind change the
@@ -799,7 +815,13 @@ export function LibraryPage({ config }: { config: CategoryConfig }) {
             filters={filters}
             onApplySaved={(query) => setSearchParams(new URLSearchParams(query), { replace: true })}
             onChange={setFilters}
-            resultCount={searchActive ? searchResults.length : browse.total}
+            resultCount={
+              searchActive
+                ? searchResults.length
+                : CATALOG_BRIDGE_AVAILABLE
+                  ? browse.total
+                  : browseItems.length
+            }
           />
           {kindState === 'failed' && (
             <div className={styles.offlineBanner} role="status">
@@ -879,7 +901,7 @@ export function LibraryPage({ config }: { config: CategoryConfig }) {
           initialVisibleCount={restoreVisibleCount}
           viewKey={viewKey}
           backend={
-            searchActive
+            searchActive || !CATALOG_BRIDGE_AVAILABLE
               ? undefined
               : {
                   total: browse.total,
