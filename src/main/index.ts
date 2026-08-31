@@ -158,9 +158,9 @@ function createWindow(): void {
 // menu accelerator (and the page keydown) from firing at all.
 //
 // Always the MAIN window's fullscreen, whichever window took the key — see
-// windowFullscreen.ts. mpv's video window is not a BrowserWindow and never sees
-// this, so it carries its own F11 binding instead (mpv.ts's bindSafetyKeys),
-// which routes to the same toggle.
+// windowFullscreen.ts. The embedded video child never holds keyboard focus
+// (measured — see mpv.ts's bindSafetyKeys), so between this handler and the
+// overlay's own keys, every window that can take an F11 routes it here.
 function watchFullscreenShortcut(window: BrowserWindow): void {
   window.webContents.on('before-input-event', (event, input) => {
     if (input.type !== 'keyDown' || input.key !== 'F11') return
@@ -175,6 +175,13 @@ function watchFullscreenShortcut(window: BrowserWindow): void {
 // initialization and is ready to create browser windows.
 // Some APIs can only be used after this event occurs.
 app.whenReady().then(() => {
+  // Phase-0 embed spike (see media-hub/embedSpike.ts): runs INSTEAD of the app
+  // and exits with its verdict. Temporary — removed once the embed ships.
+  if (process.env.R3_EMBED_SPIKE === '1') {
+    void import('./media-hub/embedSpike').then(({ runEmbedSpike }) => runEmbedSpike())
+    return
+  }
+
   registerAppSchemeHandler()
 
   // Before any window exists, so there is no window-shaped gap at startup

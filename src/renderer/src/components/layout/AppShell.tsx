@@ -40,7 +40,25 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     document.documentElement.dataset.motionUserDisabled = motionUserDisabled ? 'true' : 'false'
   }, [motionUserDisabled])
 
-  const { controlCentreOpen, mediaHubSettings } = useAppState()
+  const { controlCentreOpen, mediaHubSettings, playbackMedia, partyPanelOpen } = useAppState()
+
+  // While a film plays, the video is an embedded native child window covering
+  // this whole document — every pixel of the page is invisible, but the page
+  // can still be HIT: the controls overlay is click-through while its controls
+  // are hidden, and mpv's embedded child processes no mouse input, so a click
+  // that slips through both would land on whatever invisible element happens
+  // to be underneath and quietly navigate the app under the film. Refuse
+  // pointer events for the duration instead (global.css's
+  // [data-playback-covered='true'] rule).
+  //
+  // The watch-party hub is the exception: it deliberately hides the video to
+  // show main-window UI, which must stay clickable — so the attribute follows
+  // "covered", not "playing".
+  const playbackCovered = Boolean(playbackMedia) && !partyPanelOpen
+  useEffect(() => {
+    document.documentElement.dataset.playbackCovered = playbackCovered ? 'true' : 'false'
+  }, [playbackCovered])
+
   /**
    * The storage question is unanswered and its dialog is up.
    *
