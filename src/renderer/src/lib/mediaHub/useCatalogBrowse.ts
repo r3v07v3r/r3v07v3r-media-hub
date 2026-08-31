@@ -32,11 +32,16 @@ import { filterStateToCatalogQuery, type CategoryFilterState } from './categoryF
 
 export const BROWSE_PAGE_SIZE = 60
 
-/** ensureItem's reach: how many pages beyond the current tail it will
- *  fetch hunting for a restore target before giving up. Five pages is
- *  three hundred titles — deeper than any real back-navigation, shallow
- *  enough that a stale id cannot trigger an unbounded crawl. */
-const ENSURE_ITEM_MAX_PAGES = 5
+/** ensureItem's RUNAWAY GUARD, not its reach. The loop's real
+ *  terminator is the honest end of the result set (appendPage returns
+ *  null once the backend runs dry) — a Back-restore target must be
+ *  reachable however deep the person actually scrolled, so no page
+ *  budget smaller than the grid's own depth is defensible. What this
+ *  bounds is the pathological case only: a STALE id hunting through an
+ *  enormous filtered set would otherwise crawl it to the end. Two
+ *  hundred pages is twelve thousand titles — past any real scroll
+ *  depth, a fraction of a deep index. */
+const ENSURE_ITEM_MAX_PAGES = 200
 
 /** The backend clamps every query's limit to 500 (database.ts's
  *  indexQuery) — mirrored here so the in-place reload knows to page in
@@ -137,12 +142,104 @@ export function useCatalogBrowse(
     [kind]
   )
 
+  const stateRef = useRef(current)
+  useEffect(() => {
+    stateRef.current = current
+  }, [current])
+
+  // The in-place reload's generation counter. An append whose fetch
+  // STARTED before the latest reload applied is discarded at completion
+  // instead of merged — its snapshot base is gone, and the scroll
+  // sentinel simply asks again against the fresh window. This is what
+  // lets a reload run without waiting on appends, and appends without
+  // locking out reloads.
+  const reloadGenRef = useRef(0)
+  // Reloads themselves are SERIALIZED on a promise chain, and each new
+  // caller supersedes any reload still waiting in the queue — the answer
+  // to several invalidations arriving back-to-back is one reload against
+  // the final state, not a dropped one.
+  const reloadQueueRef = useRef<Promise<void>>(Promise.resolve())
+
+  /** Queues a depth-preserving reload of the loaded window: same view,
+   *  same depth, fresh SQL answer, fetched in BACKEND_QUERY_LIMIT chunks
+   *  because the backend clamps per-query limits and a grid scrolled to
+   *  900 rows must come back as 900 rows. Returns a cancel function that
+   *  supersedes this reload if it has not started yet. */
+  const queueReload = useCallback((): (() => void) => {
+    let superseded = false
+    reloadQueueRef.current = reloadQueueRef.current.then(async () => {
+      if (superseded) return
+      const snapshot = stateRef.current
+      if (snapshot.viewKey !== viewKey || snapshot.loading) return
+      const api = window.api?.mediaHub?.catalog
+      if (!api?.query) return
+      const wanted = Math.max(snapshot.rows.length, BROWSE_PAGE_SIZE)
+      try {
+        const rows: CatalogItem[] = []
+        const completedIds: string[] = []
+        const seen = new Set<string>()
+        let offset = 0
+        let total = 0
+        let end = false
+        while (rows.length < wanted && !end) {
+          const result = await api.query(
+            filterStateToCatalogQuery(kind, filtersRef.current, {
+              offset,
+              limit: Math.min(BACKEND_QUERY_LIMIT, wanted - rows.length)
+            })
+          )
+          total = result.total
+          offset += result.items.length
+          end = result.items.length === 0
+          for (const row of result.items) {
+            if (seen.has(row.id)) continue
+            seen.add(row.id)
+            rows.push(row)
+          }
+          completedIds.push(...result.completedIds)
+        }
+        if (superseded || stateRef.current.viewKey !== viewKey) return
+        reloadGenRef.current += 1
+        const next: BrowseState = {
+          viewKey,
+          rows,
+          completedIds,
+          total,
+          offset,
+          end,
+          loading: false,
+          error: false
+        }
+        setState(next)
+        stateRef.current = next
+      } catch {
+        // Keep what is showing — badges already repainted through the
+        // adapter, and the next invalidation retries.
+      }
+    })
+    return () => {
+      superseded = true
+    }
+  }, [viewKey, kind])
+
   // Fetch page zero for the (possibly just-reset) view. Re-runs when the
   // kind's catalog state settles, which is what turns "the index was
   // empty because nothing had seeded it yet" into a real answer without
   // anyone pressing anything.
   useEffect(() => {
     if (!enabled || !CATALOG_BRIDGE_AVAILABLE) return
+    // The kind settling under an ALREADY-POPULATED window is not a
+    // reason to start over: a pre-existing index answers while a slow
+    // crawl runs (anime especially), and a person can be hundreds of
+    // rows deep by the time it finishes. Replace-with-page-zero is only
+    // for a window that never got an answer; a populated one refreshes
+    // at its current depth instead. (On a viewKey change the snapshot
+    // still carries the OLD key, so this branch cannot swallow the
+    // fresh view's page zero.)
+    const settled = stateRef.current
+    if (settled.viewKey === viewKey && !settled.loading && settled.rows.length > 0) {
+      return queueReload()
+    }
     let cancelled = false
     fetchPage(0)
       .then((result) => {
@@ -167,25 +264,7 @@ export function useCatalogBrowse(
     return () => {
       cancelled = true
     }
-  }, [viewKey, enabled, fetchPage, kindState])
-
-  const stateRef = useRef(current)
-  useEffect(() => {
-    stateRef.current = current
-  }, [current])
-
-  // The in-place reload's generation counter. An append whose fetch
-  // STARTED before the latest reload applied is discarded at completion
-  // instead of merged — its snapshot base is gone, and the scroll
-  // sentinel simply asks again against the fresh window. This is what
-  // lets a reload run without waiting on appends, and appends without
-  // locking out reloads.
-  const reloadGenRef = useRef(0)
-  // Reloads themselves are SERIALIZED on a promise chain, and each new
-  // adapter identity supersedes any reload still waiting in the queue —
-  // the answer to two profile-scoped sets resolving back-to-back is one
-  // reload against the final state, not a dropped invalidation.
-  const reloadQueueRef = useRef<Promise<void>>(Promise.resolve())
+  }, [viewKey, enabled, fetchPage, kindState, queueReload])
 
   const appendPage = useCallback(async (): Promise<CatalogQueryResult | null> => {
     const snapshot = stateRef.current
@@ -264,61 +343,8 @@ export function useCatalogBrowse(
     if (adaptRef.current === adapt) return
     adaptRef.current = adapt
     if (!enabled || !CATALOG_BRIDGE_AVAILABLE) return
-    let superseded = false
-    reloadQueueRef.current = reloadQueueRef.current.then(async () => {
-      if (superseded) return
-      const snapshot = stateRef.current
-      if (snapshot.viewKey !== viewKey || snapshot.loading) return
-      const api = window.api?.mediaHub?.catalog
-      if (!api?.query) return
-      const wanted = Math.max(snapshot.rows.length, BROWSE_PAGE_SIZE)
-      try {
-        const rows: CatalogItem[] = []
-        const completedIds: string[] = []
-        const seen = new Set<string>()
-        let offset = 0
-        let total = 0
-        let end = false
-        while (rows.length < wanted && !end) {
-          const result = await api.query(
-            filterStateToCatalogQuery(kind, filtersRef.current, {
-              offset,
-              limit: Math.min(BACKEND_QUERY_LIMIT, wanted - rows.length)
-            })
-          )
-          total = result.total
-          offset += result.items.length
-          end = result.items.length === 0
-          for (const row of result.items) {
-            if (seen.has(row.id)) continue
-            seen.add(row.id)
-            rows.push(row)
-          }
-          completedIds.push(...result.completedIds)
-        }
-        if (superseded || stateRef.current.viewKey !== viewKey) return
-        reloadGenRef.current += 1
-        const next: BrowseState = {
-          viewKey,
-          rows,
-          completedIds,
-          total,
-          offset,
-          end,
-          loading: false,
-          error: false
-        }
-        setState(next)
-        stateRef.current = next
-      } catch {
-        // Keep what is showing — the adapter already repainted badges,
-        // and the next change retries.
-      }
-    })
-    return () => {
-      superseded = true
-    }
-  }, [adapt, enabled, viewKey, kind])
+    return queueReload()
+  }, [adapt, enabled, queueReload])
 
   const loadMore = useCallback(() => {
     void appendPage()
