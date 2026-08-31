@@ -21,6 +21,7 @@ import {
   idsForCatalogId,
   unmatchedCatalogIds
 } from '../src/main/media-hub/simkl'
+import { assertLibraryWritableId, demoOnlyTitleMessage } from '../src/shared/media-hub/serviceIds'
 
 let pass = 0
 function check(name: string, fn: () => void): void {
@@ -229,6 +230,27 @@ check('idsForCatalogId matches what a push would actually send', () => {
   assert.deepEqual(idsForCatalogId('tt4877122'), { imdb: 'tt4877122' })
   assert.deepEqual(idsForCatalogId('kitsu:7'), { kitsu: 7 })
   assert.deepEqual(idsForCatalogId('m-13'), {})
+})
+
+// --- the IPC-boundary refusal of demo-id library writes --------------------
+
+check('a demo id is refused a library write, by name', () => {
+  // The message is what a person sees when a surface without its own guard
+  // hits the boundary, so it has to name the title, not the id scheme.
+  assert.throws(
+    () => assertLibraryWritableId('m-10', 'Interstellar'),
+    (error: Error) =>
+      error.message === demoOnlyTitleMessage('Interstellar') &&
+      error.message.includes('Interstellar')
+  )
+  // With no title in hand the id itself is still better than nothing.
+  assert.throws(() => assertLibraryWritableId('m-10'), /m-10/)
+})
+
+check('every real id space passes the library-write gate untouched', () => {
+  for (const id of ['tt4877122', 'kitsu:7', 'mal:6', 'anilist:30', 'anidb:17']) {
+    assert.doesNotThrow(() => assertLibraryWritableId(id, 'Anything'))
+  }
 })
 
 console.log(`\n${pass} passing`)

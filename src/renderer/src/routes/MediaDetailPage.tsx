@@ -26,6 +26,7 @@ import type {
   HistoryEntry,
   MediaKind
 } from '@shared/media-hub/types'
+import { demoOnlyTitleMessage, hasExpressibleSimklId } from '@shared/media-hub/serviceIds'
 import type { MediaItem } from '@renderer/types'
 import { ContextBackButton } from '@renderer/components/detail/ContextBackButton'
 import { DetailHero } from '@renderer/components/detail/DetailHero'
@@ -445,9 +446,28 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
     navigate(`/${config.path}?genre=${encodeURIComponent(genre)}`)
   }
 
+  /**
+   * Refuses to write a demo title into real watch history, and says why.
+   *
+   * This page can render for a mockData item (an AI-assistant fallback
+   * pick opened through openDetail, or the degraded-catalog fallback in
+   * `media` above), and its mark-watched controls used to write the mock
+   * id straight into watch_history — the exact path that created the
+   * m-10/m-11/m-13 ghost duplicates of Aug 24 (see
+   * shared/media-hub/serviceIds.ts). Only the WATCHED direction is
+   * guarded, here and in main's IPC backstop: un-marking is how a ghost
+   * that already leaked in gets cleaned out, and must keep working.
+   */
+  function refuseDemoWatchedWrite(watched: boolean): boolean {
+    if (!media || !watched || hasExpressibleSimklId(media.id)) return false
+    pushNotification({ tone: 'info', message: demoOnlyTitleMessage(media.title) })
+    return true
+  }
+
   async function handleMarkEpisodeWatched(episode: Episode, watched: boolean): Promise<void> {
     const api = window.api?.mediaHub
     if (!api || !media) return
+    if (refuseDemoWatchedWrite(watched)) return
     const item = {
       id: media.id,
       type: kind,
@@ -482,6 +502,7 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
   async function handleToggleMovieWatched(watched: boolean): Promise<void> {
     const api = window.api?.mediaHub
     if (!api || !media) return
+    if (refuseDemoWatchedWrite(watched)) return
     const item = {
       id: media.id,
       type: kind,
@@ -513,6 +534,7 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
   async function handleMarkSeasonWatched(season: number, watched: boolean): Promise<void> {
     const api = window.api?.mediaHub
     if (!api || !media) return
+    if (refuseDemoWatchedWrite(watched)) return
     // e.unplayable (see disambiguateVideos in core.ts) has no real
     // (season, episode) coordinate — sending it through markSeasonWatched/
     // unmarkWatched would push a fabricated (0, -N) pair into local
