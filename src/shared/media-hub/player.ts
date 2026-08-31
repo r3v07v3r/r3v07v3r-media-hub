@@ -338,9 +338,10 @@ export type PlayerCommand =
  * controls, forwarded so the overlay can apply it through exactly the handlers
  * its own clicks and keys use.
  *
- * mpv's window receives input whenever the controls are hidden, because the
- * overlay is click-through then and only mousemove is forwarded to it. Acting
- * on those directly in main is what this type exists to avoid: main has no
+ * Vestigial with the embedded player — mpv's child processes no mouse input
+ * and never holds keyboard focus, and the overlay takes every mouse event
+ * itself — but kept wired as the backstop's delivery path. Acting on such an
+ * input directly in main is what this type exists to avoid: main has no
  * access to the party rules (they live in the overlay's usePartySync), so a
  * pause applied there would pause one person and leave the rest of the watch
  * party playing.
@@ -420,11 +421,10 @@ export type PlayerUiEvent =
    *  outlived a renderer reload cannot be left holding a stale "open" — which
    *  would keep the video hidden indefinitely. */
   | { type: 'party-panel-closed' }
-  /** Whether the overlay currently wants mouse input. False makes the window
-   *  click-through (mousemove still arrives, which is what reveals the
-   *  controls); a click that passes through lands on the main window's page,
-   *  which refuses pointer events while covered — see playerWindow.ts's
-   *  setOverlayInteractive and AppShell's data-playback-covered. */
+  /** The controls' reveal edge. The overlay window takes mouse input for the
+   *  whole session either way (see playerWindow.ts's INPUT note); what main
+   *  decides from this is when the KEYBOARD should follow the controls
+   *  (playerBridge's set-interactive handling). */
   | { type: 'set-interactive'; interactive: boolean }
   /** Whether this window is actually listening for forwarded input yet.
    *

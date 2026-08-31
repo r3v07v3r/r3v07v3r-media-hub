@@ -67,7 +67,6 @@ import {
   revealPlayerOverlay,
   sendToPlayerOverlay,
   setOverlayInputReady,
-  setOverlayInteractive,
   showPlayerOverlayAfterMainUi
 } from './playerWindow'
 import {
@@ -942,18 +941,17 @@ function forwardUiEvent(event: PlayerUiEvent): void {
     return
   }
   if (event.type === 'set-interactive') {
-    setOverlayInteractive(Boolean(event.interactive))
-    // Showing the controls is the one moment it is definitely worth making sure
-    // they are actually on top — mpv can re-create its video window (a
-    // resolution change, for one) and silently win the z-order again.
+    // The window takes mouse input for the whole session (see playerWindow.ts's
+    // INPUT note), so all that is decided here is the KEYBOARD: the controls
+    // being revealed is the moment someone is reaching for the player, and the
+    // keys should follow.
     //
     // Only while the app is the window being used, though. The controls also
     // reveal on a mouse move across whatever part of the video another
-    // application is not currently covering, and raising a window that spans
-    // the whole content area over that application — never mind taking the
-    // keyboard off it — would be the topmost behaviour this change exists to
-    // remove. Left alone, the controls simply appear in the part of the picture
-    // that is actually visible, which is the part being pointed at.
+    // application is not currently covering, and taking the keyboard off that
+    // application would be exactly the focus theft this design got rid of.
+    // Left alone, the controls simply appear in the part of the picture that
+    // is actually visible, which is the part being pointed at.
     if (event.interactive && appHasFocus() && !mainWindowUiOpen) focusPlayerOverlay()
     return
   }

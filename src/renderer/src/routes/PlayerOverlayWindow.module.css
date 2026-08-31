@@ -20,6 +20,14 @@
   overflow: hidden;
 }
 
+/* The cursor fades with the controls. This window owns every mouse event for
+   the whole session, and the input-less embedded video below it will never
+   hide a cursor left parked over the film — so it is this side's job. */
+.surfaceIdle,
+.surfaceIdle * {
+  cursor: none;
+}
+
 .controls {
   margin: 0 24px 24px;
   padding: 14px 18px 12px;

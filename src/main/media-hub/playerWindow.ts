@@ -18,24 +18,29 @@
 // mpv's foreign top-level had to fit between owner and owned — see git
 // history around commit 59bbe14 for the measurements.)
 //
+// INPUT. This window takes EVERY mouse event for the whole session — it is
+// never click-through. The click-through dance (setIgnoreMouseEvents with
+// forward: true while the controls were hidden) existed to let clicks reach
+// mpv's own window, whose MBTN_LEFT bindings did click-to-pause; the embedded
+// child processes no mouse input at all (measured — see mpv.ts's
+// bindSafetyKeys), so there is nothing below that wants a click any more and
+// letting one fall through would only land it on the main window's invisible
+// DOM. The renderer's surface handlers do click-to-pause and
+// double-click-fullscreen whether or not the controls are showing, so a
+// stationary click on a faded-out player still pauses — the exact behaviour
+// the old mpv-side binding provided. (AppShell's data-playback-covered guard
+// stays as defence in depth for the moments this window does not exist yet.)
+//
 // The obvious worry with a transparent overlay is cost: Electron transparent
 // overlays on Windows have a reputation for flicker and for throttling
 // whatever renders beneath them. Measured before committing to this design,
 // against 4K60 at 40Mbps: 0 dropped and 0 delayed frames with the overlay
-// present versus absent. Two rules keep it that way, and both matter:
-//   1. The window is created once per playback session and never shown/hidden
-//      to reveal or conceal CONTROLS — toggling visibility on a transparent
-//      window is what actually produces the documented flicker. The controls
-//      fade via CSS inside a window that stays up. (Hiding for the length of
-//      the watch-party hub, or with the app minimised, is a different, rare
-//      event and fine.)
-//   2. While the controls are hidden it is click-through
-//      (setIgnoreMouseEvents with forward: true), so this window still
-//      receives the mousemove that reveals them without stealing clicks. What
-//      is UNDER a passed-through click changed with the embed: mpv's child
-//      processes no mouse input at all, so the click would land on the main
-//      window's invisible DOM — which is why the renderer refuses pointer
-//      events while covered (AppShell's data-playback-covered).
+// present versus absent. One rule keeps it that way: the window is created
+// once per playback session and never shown/hidden to reveal or conceal
+// CONTROLS — toggling visibility on a transparent window is what actually
+// produces the documented flicker. The controls fade via CSS inside a window
+// that stays up. (Hiding for the length of the watch-party hub, or with the
+// app minimised, is a different, rare event and fine.)
 
 import { BrowserWindow, screen, shell } from 'electron'
 import { is } from '@electron-toolkit/utils'
@@ -214,11 +219,6 @@ export function openPlayerOverlay(parent: BrowserWindow): BrowserWindow {
     callback(false)
   )
 
-  // Starts click-through: on open the controls are visible, but the renderer
-  // sets its real interactivity as soon as it mounts, and starting permissive
-  // would swallow the first click over the video.
-  win.setIgnoreMouseEvents(true, { forward: true })
-
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
     win.loadURL(`${process.env['ELECTRON_RENDERER_URL']}/${PLAYER_OVERLAY_ROUTE}`)
   } else {
@@ -389,19 +389,6 @@ export function focusPlayerOverlay(): void {
   const win = getPlayerOverlay()
   if (!win) return
   win.focus()
-}
-
-/**
- * Click-through control. `interactive: false` forwards mouse events to whatever
- * is underneath (mpv) while still delivering mousemove to this window, which is
- * what lets moving the mouse over the video reveal the controls without the
- * overlay stealing clicks meant for play/pause.
- */
-export function setOverlayInteractive(interactive: boolean): void {
-  const win = getPlayerOverlay()
-  if (!win) return
-  if (interactive) win.setIgnoreMouseEvents(false)
-  else win.setIgnoreMouseEvents(true, { forward: true })
 }
 
 export function closePlayerOverlay(): void {
