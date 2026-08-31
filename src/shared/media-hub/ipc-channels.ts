@@ -45,6 +45,8 @@ export const MEDIA_HUB_CHANNELS = {
   /** Admin only: check the update feed now and install as soon as nobody
    *  is watching, instead of waiting for the server's own poll. */
   lanCacheUpdateNow: 'mediahub:lancache:update-now',
+  lanCacheTitlesState: 'mediahub:lancache:titles-state',
+  lanCacheTitlesRefresh: 'mediahub:lancache:titles-refresh',
   /** Pull plan-to-watch from every connected tracking service and fold it
    *  into the local list. */
   trackingPlannedSync: 'mediahub:tracking:planned-sync',

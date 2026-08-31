@@ -10,6 +10,8 @@ import os from 'node:os'
 
 import type {
   LanCacheCatalogResponse,
+  LanCacheTitlesRefreshResponse,
+  LanCacheTitlesResponse,
   LanCacheDevicesResponse,
   LanCacheOwnItem,
   LanCachePairResponse,
@@ -126,6 +128,45 @@ export async function queueLanCacheJob(payload: LanCacheJobPayload): Promise<boo
   } catch (error) {
     logError('lancache:queue', error)
     return false
+  }
+}
+
+/**
+ * One page of the daemon's household title index, by watermark. Null on
+ * ANY failure — unreachable, unpaired, or a pre-title-tier daemon
+ * answering 404 — because to the sync pass those are all the same fact:
+ * no rows this time, try again next pass.
+ */
+export async function lanCacheTitles(
+  kind: string,
+  since: number,
+  limit: number
+): Promise<LanCacheTitlesResponse | null> {
+  if (!isLanCacheConnected()) return null
+  try {
+    return await request<LanCacheTitlesResponse>(
+      `/api/titles?kind=${encodeURIComponent(kind)}&since=${Math.max(0, Math.floor(since))}&limit=${limit}`
+    )
+  } catch {
+    return null
+  }
+}
+
+/** Ask the daemon to re-crawl upstream. The three wire states pass through
+ *  verbatim; 'unavailable' is this client's own word for a daemon that is
+ *  unpaired, unreachable, or too old to have a title index. */
+export async function lanCacheTitlesRefresh(
+  kind?: string
+): Promise<LanCacheTitlesRefreshResponse | { state: 'unavailable' }> {
+  if (!isLanCacheConnected()) return { state: 'unavailable' }
+  try {
+    return await request<LanCacheTitlesRefreshResponse>('/api/titles/refresh', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(kind ? { kind } : {})
+    })
+  } catch {
+    return { state: 'unavailable' }
   }
 }
 
@@ -462,6 +503,23 @@ export function registerLanCacheIpc(refreshTrustedHosts: () => void): void {
       } catch (error) {
         return { ok: false, message: (error as Error).message }
       }
+    }
+  )
+
+  // The library hero's household controls: a cheap paired? probe (no
+  // network — it reads the stored connection) and the refresh relay.
+  handle(MEDIA_HUB_CHANNELS.lanCacheTitlesState, async () => ({
+    paired: isLanCacheConnected()
+  }))
+
+  handle<{ kind?: unknown }, LanCacheTitlesRefreshResponse | { state: 'unavailable' }>(
+    MEDIA_HUB_CHANNELS.lanCacheTitlesRefresh,
+    async (_e, payload) => {
+      const kind = payload?.kind
+      if (kind !== undefined && kind !== 'movie' && kind !== 'series' && kind !== 'anime') {
+        return { state: 'unavailable' }
+      }
+      return lanCacheTitlesRefresh(kind)
     }
   )
 

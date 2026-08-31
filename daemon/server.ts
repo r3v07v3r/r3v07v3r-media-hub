@@ -25,6 +25,9 @@ import type { JobStore, JobRecord } from './jobs'
 import { deviceIdForToken, isApproved, type Pairing } from './pairing'
 import type { Admin } from './admin'
 import { isEntitled, type ItemStore } from './storage'
+import type { TitleStore } from './titles'
+import type { TitleCrawler } from './titleCrawler'
+import type { MediaKind } from '../src/shared/media-hub/types'
 
 const MAX_BODY_BYTES = 1024 * 1024
 
@@ -53,6 +56,11 @@ export interface ServerDeps {
   serverName: string
   version: string
   diskBudgetBytes: number
+  /** The household title index. Optional the same way applyUpdateNow is:
+   *  a server built without it (older tests) still constructs, and the
+   *  routes answer plainly that this server has no index. */
+  titles?: TitleStore
+  titleCrawler?: TitleCrawler
 }
 
 function json(res: ServerResponse, status: number, body: unknown): void {
@@ -589,6 +597,51 @@ export function createDaemonServer(deps: ServerDeps): http.Server {
       return
     }
 
+    if (route === 'GET /api/titles') {
+      // The household title index, paged by change-sequence watermark.
+      // /api/catalog was already taken by the cached-media inventory, so
+      // titles get their own namespace. Paging is REQUIRED, not courtesy:
+      // a full index is tens of megabytes and the app's proxy caps
+      // responses at 10 MiB — and the ?since= watermark is what makes the
+      // second sync cost only what changed.
+      //
+      // Deliberately NOT entitlement-scoped, unlike /api/catalog: catalog
+      // titles are public upstream data every device could fetch itself —
+      // there is nothing household-private in a Cinemeta row. What is
+      // private (who cached what) stays behind the entitlement checks.
+      if (!deps.titles) {
+        json(res, 404, { error: 'This server has no title index yet.' })
+        return
+      }
+      const kindParam = url.searchParams.get('kind')
+      if (kindParam !== 'movie' && kindParam !== 'series' && kindParam !== 'anime') {
+        json(res, 400, { error: 'kind must be movie, series or anime.' })
+        return
+      }
+      const since = Math.max(0, Number(url.searchParams.get('since')) || 0)
+      const limit = Math.min(500, Math.max(1, Number(url.searchParams.get('limit')) || 500))
+      json(res, 200, deps.titles.listSince(kindParam as MediaKind, since, limit))
+      return
+    }
+
+    if (route === 'POST /api/titles/refresh') {
+      if (!deps.titles || !deps.titleCrawler) {
+        json(res, 404, { error: 'This server has no title index yet.' })
+        return
+      }
+      const body = await readBody(req)
+      const kind = body.kind
+      if (kind !== undefined && kind !== 'movie' && kind !== 'series' && kind !== 'anime') {
+        json(res, 400, { error: 'kind must be movie, series or anime when given.' })
+        return
+      }
+      // started | joined | throttled — all three are 200s. A refresh
+      // inside the cooldown is a normal answer the UI reports, not an
+      // error, and N clients asking at once join one upstream cycle.
+      json(res, 200, deps.titleCrawler.refresh(kind as MediaKind | undefined))
+      return
+    }
+
     if (route === 'GET /api/catalog') {
       // ?keys=a,b,c is now REQUIRED, and the unfiltered branch is gone.
       //
@@ -769,6 +822,20 @@ export function createDaemonServer(deps: ServerDeps): http.Server {
         torboxLinked: Boolean(credentials.tokenForDevice(callerDeviceId)),
         linkedDevices: credentials.linkedDeviceCount(),
         activeStreams: activity.snapshot().activeStreams,
+        // Index freshness, so the app can show "the household index holds
+        // N titles, refreshed at T" without a separate probe. Absent on a
+        // daemon built without the title tier.
+        titles: deps.titles
+          ? {
+              counts: deps.titles.counts(),
+              lastRefreshAt: {
+                movie: deps.titles.lastRefreshAt('movie'),
+                series: deps.titles.lastRefreshAt('series'),
+                anime: deps.titles.lastRefreshAt('anime')
+              },
+              crawling: deps.titleCrawler?.isCrawling() ?? false
+            }
+          : undefined,
         updater: deps.updaterStatus()
       })
       return
