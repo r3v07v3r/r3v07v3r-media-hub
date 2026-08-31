@@ -12,7 +12,12 @@ import os from 'node:os'
 import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 
-import { migrate, SCHEMA_VERSION } from '../src/main/media-hub/migrations'
+import {
+  findDemoGhostHistoryRows,
+  migrate,
+  SCHEMA_VERSION,
+  type HistoryRowForCleanup
+} from '../src/main/media-hub/migrations'
 
 const PROFILE = 'profile-under-test'
 
@@ -283,6 +288,101 @@ function userVersion(sql: DatabaseSync): number {
     assert.ok(indexes.has(name), `${name} exists — an unindexed browse query scans the library`)
   }
   sql.close()
+}
+
+// ---------------------------------------------------------------------
+// Migration 4 — the demo-id ghost cleanup.
+//
+// The live incident this repairs: mockData demo ids (m-10/m-11/m-13) were
+// written into real watch history as duplicates of films already recorded
+// under their IMDb ids. What has to be proven is the SCOPE — a mock row is
+// deleted only when a real-id twin exists for the same title at the same
+// coordinate, everything else (the twin itself, a mock row with no twin)
+// survives, and the plays ledger loses exactly the ghosts' viewings.
+// ---------------------------------------------------------------------
+{
+  const file = tempFile('ghosts')
+  const sql = new DatabaseSync(file)
+  // The pre-versioning watch_history shape, same as createLegacyDatabase,
+  // holding the pollution: two movie ghosts (one differing from its twin
+  // only in title case), one episode ghost, and two mock rows that must
+  // SURVIVE — a movie with no twin and an episode whose twin covers a
+  // different episode.
+  sql.exec(`
+    CREATE TABLE watch_history(
+      watch_key TEXT PRIMARY KEY, content_id TEXT NOT NULL, type TEXT NOT NULL, title TEXT NOT NULL,
+      season INTEGER, episode INTEGER, watched_at TEXT NOT NULL, metadata_json TEXT NOT NULL);
+    INSERT INTO watch_history VALUES('tt0816692:movie:movie','tt0816692','movie','Interstellar',NULL,NULL,'2026-08-01T00:00:00Z','{}');
+    INSERT INTO watch_history VALUES('m-10:movie:movie','m-10','movie','Interstellar',NULL,NULL,'2026-08-24T00:00:00Z','{}');
+    INSERT INTO watch_history VALUES('tt3659388:movie:movie','tt3659388','movie','The Martian',NULL,NULL,'2026-08-02T00:00:00Z','{}');
+    INSERT INTO watch_history VALUES('m-11:movie:movie','m-11','movie','the martian',NULL,NULL,'2026-08-24T00:00:05Z','{}');
+    INSERT INTO watch_history VALUES('m-99:movie:movie','m-99','movie','Only In The Demo Pool',NULL,NULL,'2026-08-24T00:00:10Z','{}');
+    INSERT INTO watch_history VALUES('tt2:1:1','tt2','series','Severance',1,1,'2026-08-03T00:00:00Z','{}');
+    INSERT INTO watch_history VALUES('s-5:1:1','s-5','series','Severance',1,1,'2026-08-24T00:00:15Z','{}');
+    INSERT INTO watch_history VALUES('s-5:1:2','s-5','series','Severance',1,2,'2026-08-24T00:00:20Z','{}');
+  `)
+
+  migrate(sql, PROFILE)
+
+  const remaining = new Set(
+    sql
+      .prepare('SELECT watch_key FROM watch_history')
+      .all()
+      .map((row) => (row as Record<string, unknown>).watch_key as string)
+  )
+  // The ghosts are gone…
+  for (const key of ['m-10:movie:movie', 'm-11:movie:movie', 's-5:1:1']) {
+    assert.ok(!remaining.has(key), `${key} duplicates a real-id row and must be removed`)
+  }
+  // …their real twins are untouched…
+  for (const key of ['tt0816692:movie:movie', 'tt3659388:movie:movie', 'tt2:1:1']) {
+    assert.ok(remaining.has(key), `${key} is the real record and must survive`)
+  }
+  // …and a mock row with no twin keeps the only record of its watch. m-99
+  // has no real-id row at all; s-5 S1E2's twin only covers S1E1.
+  for (const key of ['m-99:movie:movie', 's-5:1:2']) {
+    assert.ok(remaining.has(key), `${key} has no real-id twin and must survive`)
+  }
+
+  // Migration 1 backfilled one play per history row (8); the cleanup takes
+  // the three ghosts' plays with it and nothing else — in particular the
+  // surviving s-5 S1E2 play, which shares the ghost's content_id but not
+  // its coordinate.
+  assert.equal(count(sql, 'plays'), 5, 'exactly the ghost plays are removed')
+  const survivingPlay = sql
+    .prepare('SELECT COUNT(*) AS n FROM plays WHERE content_id = ? AND episode = ?')
+    .get('s-5', 2) as Record<string, unknown>
+  assert.equal(Number(survivingPlay.n), 1, 'the kept mock row keeps its play')
+  sql.close()
+}
+
+// The cross-profile edge the integration path above cannot reach (every
+// legacy row is attributed to ONE profile): a real-id twin on a DIFFERENT
+// profile does not make a mock row a ghost — that profile's history says
+// nothing about this one's.
+{
+  const row = (over: Partial<HistoryRowForCleanup>): HistoryRowForCleanup => ({
+    profile_id: 'A',
+    watch_key: 'k',
+    content_id: 'm-10',
+    type: 'movie',
+    title: 'Interstellar',
+    season: null,
+    episode: null,
+    ...over
+  })
+  const crossProfile = findDemoGhostHistoryRows([
+    row({ profile_id: 'A', watch_key: 'm-10:movie:movie' }),
+    row({ profile_id: 'B', watch_key: 'tt0816692:movie:movie', content_id: 'tt0816692' })
+  ])
+  assert.deepEqual(crossProfile, [], "another profile's real row is not this profile's twin")
+
+  const sameProfile = findDemoGhostHistoryRows([
+    row({ watch_key: 'm-10:movie:movie' }),
+    row({ watch_key: 'tt0816692:movie:movie', content_id: 'tt0816692' })
+  ])
+  assert.equal(sameProfile.length, 1)
+  assert.equal(sameProfile[0].watch_key, 'm-10:movie:movie')
 }
 
 console.log('migrations tests passed')

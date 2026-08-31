@@ -22,6 +22,8 @@
 // ever encounter, precisely because the version is written transactionally.
 
 import type { DatabaseSync } from 'node:sqlite'
+import { hasExpressibleSimklId } from '../../shared/media-hub/serviceIds'
+import { logError } from './logger'
 
 interface Migration {
   /** Human label, for the log line — the version number is the index. */
@@ -365,8 +367,129 @@ const airedEpisodes: Migration = {
   }
 }
 
+/** The columns the ghost-row cleanup below reads for every history row. */
+export interface HistoryRowForCleanup {
+  profile_id: string
+  watch_key: string
+  content_id: string
+  type: string
+  title: string
+  season: number | null
+  episode: number | null
+}
+
+/** mockData.ts's id scheme, exactly: nextId('m'|'s'|'a') → "m-10". Anchored
+ *  on both ends so nothing merely id-shaped (a hypothetical "m-10x" from a
+ *  future source) is ever swept up with the demo pool. */
+const MOCK_ID = /^[msa]-\d+$/
+
+/**
+ * Which history rows are demo-id GHOSTS: rows whose content_id is a
+ * mockData demo id AND that duplicate a row the same profile already has
+ * for the same title at the same (season, episode) coordinate under a
+ * real, service-expressible id.
+ *
+ * Both halves of that condition are load-bearing. A demo-id row WITHOUT a
+ * real twin is still the only record that the person marked that title
+ * watched — deleting it would erase a watch rather than a duplicate, so it
+ * stays (the sync review's "Use Simkl" offers to remove it, with a human
+ * deciding — see PR #144). And a real-id row that happens to share a title
+ * is never touched at all: only the mock-id side of a duplicate pair is
+ * ever a candidate.
+ *
+ * Exported for the migration test — the migration itself is exercised
+ * through migrate(), but the cross-profile and coordinate edge cases are
+ * cheaper to pin down against this pure function directly.
+ */
+export function findDemoGhostHistoryRows(rows: HistoryRowForCleanup[]): HistoryRowForCleanup[] {
+  // Title-matching is case-insensitive and whitespace-trimmed: the mock
+  // row's title came from mockData.ts and the real row's from Cinemeta,
+  // and "the same film entered twice" must not survive on a stray space.
+  const coordKey = (row: HistoryRowForCleanup): string =>
+    [
+      row.profile_id,
+      row.type,
+      String(row.title).trim().toLowerCase(),
+      row.season ?? '',
+      row.episode ?? ''
+    ].join(' ')
+  const realKeys = new Set(
+    rows.filter((row) => hasExpressibleSimklId(String(row.content_id))).map(coordKey)
+  )
+  return rows.filter((row) => MOCK_ID.test(String(row.content_id)) && realKeys.has(coordKey(row)))
+}
+
+/**
+ * Migration 4 — remove the demo-id ghost duplicates from watch history.
+ *
+ * mockData's demo pool leaked into real user data: openDetail() on an AI
+ * assistant fallback pick led to a detail page whose "mark watched" wrote
+ * the mock id into watch_history. Diagnosed on the live install as three
+ * rows (m-10/m-11/m-13 — Interstellar, The Martian, Ex Machina, all
+ * stamped 2026-08-24 within ~15 seconds) duplicating films already tracked
+ * under their real IMDb ids; they then sat in the Simkl sync review as
+ * rows no resolution could ever clear (PR #144 has that post-mortem). The
+ * write path is now refused at the IPC boundary (tracking.ts's
+ * assertLibraryWritableId); this is the other half — the rows already
+ * written come out, once, on the same one-shot transactional terms as
+ * every other schema repair.
+ *
+ * Scope is deliberately findDemoGhostHistoryRows' (see its comment): only
+ * mock-id rows that DUPLICATE a real-id row go, because for those the real
+ * row still carries the watch and nothing is lost. Their `plays` rows go
+ * with them — migration 1's backfill (and every markWatched since) gave
+ * each ghost a play, and a viewing record for a mark-watched click on a
+ * demo card double-counts the film in viewing stats. Matched by the same
+ * (profile, content_id, season, episode) coordinate so a mock row that
+ * SURVIVES (no real twin) keeps its plays.
+ *
+ * The deletion is logged — ids only, per the log's own discipline (see
+ * PR #144's flush line) — rather than silently applied: a migration runs
+ * before any renderer exists to show a notice, and a log line naming the
+ * removed ids is what lets "where did that row go" be answered later.
+ * Nothing here is unrecoverable in the way the log line implies urgency:
+ * every deleted row's twin remains under its real id.
+ */
+const demoGhostHistoryCleanup: Migration = {
+  name: 'demo-ghost-history-cleanup',
+  apply(sql) {
+    const rows = sql
+      .prepare(
+        'SELECT profile_id, watch_key, content_id, type, title, season, episode FROM watch_history'
+      )
+      .all() as unknown as HistoryRowForCleanup[]
+    const ghosts = findDemoGhostHistoryRows(rows)
+    if (!ghosts.length) return
+    const deleteHistory = sql.prepare(
+      'DELETE FROM watch_history WHERE profile_id = ? AND watch_key = ?'
+    )
+    // COALESCE against a sentinel no real coordinate uses, because
+    // `season = NULL` matches nothing in SQL and a movie ghost's plays
+    // (season/episode both NULL) would otherwise all survive.
+    const deletePlays = sql.prepare(
+      `DELETE FROM plays WHERE profile_id = ? AND content_id = ?
+         AND COALESCE(season, -1) = COALESCE(?, -1) AND COALESCE(episode, -1) = COALESCE(?, -1)`
+    )
+    for (const ghost of ghosts) {
+      deleteHistory.run(ghost.profile_id, ghost.watch_key)
+      deletePlays.run(ghost.profile_id, ghost.content_id, ghost.season, ghost.episode)
+    }
+    logError(
+      'migration:demo-ghost-history-cleanup',
+      `removed ${ghosts.length} demo-id ghost row(s) duplicating real-id history: ` +
+        ghosts.map((ghost) => ghost.watch_key).join(',')
+    )
+  }
+}
+
 /** Ordered, and the order IS the version. Append only. */
-const MIGRATIONS: readonly Migration[] = [baseline, profilesAndPlays, catalogIndex, airedEpisodes]
+const MIGRATIONS: readonly Migration[] = [
+  baseline,
+  profilesAndPlays,
+  catalogIndex,
+  airedEpisodes,
+  demoGhostHistoryCleanup
+]
 
 /** How many migrations exist — a database at this version is fully current. */
 export const SCHEMA_VERSION = MIGRATIONS.length

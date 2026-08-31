@@ -62,6 +62,7 @@ import {
 } from '@renderer/lib/mediaHub/hooks'
 import type { CategoryKind } from '@renderer/lib/mediaHub/categoryFilters'
 import { MAX_PROMPT_TITLES } from '@shared/media-hub/ollama'
+import { demoOnlyTitleMessage, hasExpressibleSimklId } from '@shared/media-hub/serviceIds'
 import { episodeToStart, episodeWatchKey } from '@shared/media-hub/nextEpisode'
 import {
   isNoticeablyBelowCeiling,
@@ -880,6 +881,19 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
 
   const toggleMyList = useCallback(
     (media: MediaItem) => {
+      // Following a demo title is refused before the optimistic Set update,
+      // not after: mockData's pool (the AI assistant's fallback picks) has
+      // ids no tracking service can express, and letting the click through
+      // would flip the chip, write an m-* row into the tracked table, and
+      // push a title/year guess at every connected service — the same leak
+      // that put demo-id ghosts into watch_history on Aug 24 (see
+      // shared/media-hub/serviceIds.ts). UNfollowing stays allowed so a
+      // demo title that already leaked in can be removed; main enforces
+      // the same asymmetry at the IPC boundary as the backstop.
+      if (!myList.has(media.id) && !hasExpressibleSimklId(media.id)) {
+        pushNotification({ tone: 'info', message: demoOnlyTitleMessage(media.title) })
+        return
+      }
       setMyList((prev) => {
         const next = new Set(prev)
         if (next.has(media.id)) next.delete(media.id)
@@ -928,7 +942,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
           // refresh, not a broken UI in the moment.
         })
     },
-    [homeFeed]
+    [homeFeed, myList, pushNotification]
   )
 
   const toggleDisliked = useCallback(
