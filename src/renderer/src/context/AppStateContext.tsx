@@ -279,6 +279,11 @@ interface AppStateValue {
    *  kind behind a successful one. Ask about the kind you are showing. */
   catalogKindStates: Record<MediaKind, CatalogKindState>
   refreshCatalog: () => void
+  /** Adapts backend CatalogItems with this context's own watch/list/
+   *  dislike state — see the useCallback of the same name. Pages that
+   *  fetch their own rows (catalog:query) MUST use this rather than
+   *  calling the adapter bare, or their badges drift from the app's. */
+  adaptCatalogItems: (items: CatalogItem[], completedIds?: string[]) => MediaItem[]
 
   // home:personalized's recommendations/featured pool (see
   // useMediaHubHomeFeed) — `homeFeedLive` tells a consumer whether these
@@ -631,6 +636,29 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   const searchHistoryById = useMemo(
     () => indexHistoryById(watchedIdsResult.history),
     [watchedIdsResult.history]
+  )
+
+  // The one sanctioned way for a page to turn backend CatalogItems into
+  // MediaItems: the adapter plus THIS context's id-sets, so watched/list/
+  // disliked badges on a paged grid agree with every other surface. The
+  // optional completedIds are the catalog:query result's own — computed
+  // in SQL against the aired-episode counts only the database holds — and
+  // when present they OVERRIDE the adapter's history-derived guess, which
+  // is precisely why the backend returns them.
+  const adaptCatalogItems = useCallback(
+    (items: CatalogItem[], completedIds?: string[]): MediaItem[] => {
+      const completedSet = completedIds ? new Set(completedIds) : null
+      return items.map((item) => {
+        const adapted = catalogItemToMediaItem(item, {
+          trackedIds: myList,
+          watchedIds: watchedIdsResult.watchedIds,
+          historyById: searchHistoryById,
+          dislikedIds
+        })
+        return completedSet ? { ...adapted, completed: completedSet.has(item.id) } : adapted
+      })
+    },
+    [myList, watchedIdsResult.watchedIds, searchHistoryById, dislikedIds]
   )
 
   // Re-derived whenever the watch/dislike/My List state behind it moves, so
@@ -2353,6 +2381,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       catalogLoading: browseCatalog.loading,
       catalogKindStates: browseCatalog.kindStates,
       refreshCatalog: browseCatalog.refresh,
+      adaptCatalogItems,
       recommendations: homeFeed.recommendations,
       featured: homeFeed.featured,
       homeFeedLive: homeFeed.live,
@@ -2455,6 +2484,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       browseCatalog.loading,
       browseCatalog.kindStates,
       browseCatalog.refresh,
+      adaptCatalogItems,
       homeFeed.recommendations,
       homeFeed.featured,
       homeFeed.live,
