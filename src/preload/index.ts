@@ -25,6 +25,7 @@ import type {
   CatalogFacets,
   DeepScanEvent,
   DeepScanReport,
+  CatalogByIdsResult,
   CatalogItem,
   CatalogListing,
   CatalogQuery,
@@ -484,7 +485,7 @@ const api = {
       /** Rows for exactly these ids from the index, every kind a shared
        *  id exists under — the id-matching path that replaced scanning
        *  the loaded array (stage 4). */
-      byIds: (ids: string[]): Promise<CatalogItem[]> =>
+      byIds: (ids: string[]): Promise<CatalogByIdsResult> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.catalogByIds, { ids }),
       /** One chunk of the user-triggered deep scan (stage 5). */
       deepScan: (kind: MediaKind): Promise<DeepScanReport> =>

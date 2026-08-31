@@ -91,10 +91,17 @@ export async function runLanCacheTitleSync(): Promise<TitleSyncReport> {
         )
         if (add.length) {
           const rankOf = new Map(ordered.map((row) => [row.item.id, row.rank]))
-          db.indexUpsert(kind, add, {
+          const written = db.indexUpsert(kind, add, {
             source: 'lancache',
             ranks: add.map((item) => rankOf.get(item.id) ?? 0)
           })
+          if (!written) {
+            // The transaction rolled back — nothing landed, so the
+            // watermark must NOT move past these rows (same bookmark
+            // honesty as the deep scan). End this kind's pass; the next
+            // one re-reads the page for free.
+            break
+          }
           report.added += add.length
         }
       }

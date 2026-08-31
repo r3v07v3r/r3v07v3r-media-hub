@@ -272,7 +272,9 @@ function syncWhen(at: number): string {
 }
 
 function ListsView({ watchlist }: { watchlist: MediaItem[] }) {
-  const { openDetail, libraryKey, plannedSources, adaptCatalogItems } = useAppState()
+  const { openDetail, libraryKey, plannedSources, adaptCatalogItems, catalogKindStates } =
+    useAppState()
+  const indexRevision = `${catalogKindStates.movie}:${catalogKindStates.series}:${catalogKindStates.anime}`
   const [filters, setFilters] = useState<PlannedFilterState>(EMPTY_PLANNED_FILTERS)
   const [report, setReport] = useState<PlannedSyncReport | null>(null)
   const [syncing, setSyncing] = useState(false)
@@ -358,7 +360,7 @@ function ListsView({ watchlist }: { watchlist: MediaItem[] }) {
     () => new Set((selectedRemote?.items ?? []).map((entry) => entry.id)),
     [selectedRemote]
   )
-  const { items: remoteListItems } = useCatalogByIds(remoteIds, adaptCatalogItems)
+  const { items: remoteListItems } = useCatalogByIds(remoteIds, adaptCatalogItems, indexRevision)
 
   useEffect(() => {
     if (!effective) return
@@ -621,8 +623,13 @@ export default function MyStuffPage() {
     ratings,
     mediaHubSettings,
     watchedIds,
-    adaptCatalogItems
+    adaptCatalogItems,
+    catalogKindStates
   } = useAppState()
+  // The index-growth revision for every byIds fetch on this page: a kind
+  // settling (first seed on a fresh database included) is exactly when
+  // an early empty answer stops being true.
+  const indexRevision = `${catalogKindStates.movie}:${catalogKindStates.series}:${catalogKindStates.anime}`
   const [tab, setTab] = useState<TabId>('list')
   useRestoreBrowsingOrigin(true)
 
@@ -644,7 +651,7 @@ export default function MyStuffPage() {
   // candidate pool, and a tracked/rated/watched title has every right
   // to live outside it — these tabs are precisely the surfaces that
   // must not shrink when the pool does.
-  const { items: listRows } = useCatalogByIds(myList, adaptCatalogItems)
+  const { items: listRows } = useCatalogByIds(myList, adaptCatalogItems, indexRevision)
   const listItems = useMemo(
     () => applyWatchStateFilters(listRows, hideFilters),
     [listRows, hideFilters]
@@ -660,7 +667,7 @@ export default function MyStuffPage() {
 
   // The watched/completed flags are baked in at adaptation (adapters.ts);
   // the id set decides WHAT to fetch, the adapter decides what it means.
-  const { items: watchedRows } = useCatalogByIds(watchedIds, adaptCatalogItems)
+  const { items: watchedRows } = useCatalogByIds(watchedIds, adaptCatalogItems, indexRevision)
   const watchedItems = useMemo(
     () => watchedRows.filter((m) => m.completed || m.watched),
     [watchedRows]
@@ -669,13 +676,13 @@ export default function MyStuffPage() {
   // Highest score first, because a list of things you rated is a list you
   // scan for the best of them.
   const ratingIds = useMemo(() => new Set(ratings.keys()), [ratings])
-  const { items: ratedRows } = useCatalogByIds(ratingIds, adaptCatalogItems)
+  const { items: ratedRows } = useCatalogByIds(ratingIds, adaptCatalogItems, indexRevision)
   const ratedItems = useMemo(
     () => [...ratedRows].sort((a, b) => (ratings.get(b.id) ?? 0) - (ratings.get(a.id) ?? 0)),
     [ratedRows, ratings]
   )
 
-  const { items: droppedItems } = useCatalogByIds(dislikedIds, adaptCatalogItems)
+  const { items: droppedItems } = useCatalogByIds(dislikedIds, adaptCatalogItems, indexRevision)
 
   return (
     <div className={styles.wrap}>

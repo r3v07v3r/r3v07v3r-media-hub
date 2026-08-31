@@ -26,14 +26,21 @@ import styles from './RecommendationCarousel/RecommendationCarousel.module.css'
 const ROW_LIMIT = 20
 
 export function PlannedRow() {
-  const { myList, adaptCatalogItems } = useAppState()
+  const { myList, adaptCatalogItems, catalogKindStates } = useAppState()
   // From the INDEX by id (stage 4): the loaded catalog is a bounded
   // candidate pool now, and a planned title has every right to live
   // outside it — a row that silently dropped those would look like the
   // sync losing titles. Same source My Stuff uses, same
   // adapter — so a title pulled in from a service shows the artwork
   // and ratings this app resolved for it, not the thinner remote record.
-  const { items: planned } = useCatalogByIds(myList, adaptCatalogItems)
+  const { items: planned } = useCatalogByIds(
+    myList,
+    adaptCatalogItems,
+    // Refetch when a kind settles — on a fresh database this query can
+    // land before the index is seeded, and the early empty answer must
+    // not stand once titles exist.
+    `${catalogKindStates.movie}:${catalogKindStates.series}:${catalogKindStates.anime}`
+  )
 
   // Nothing planned is not a state worth a row. An empty shelf with an
   // explanation is still a shelf somebody has to scroll past every time

@@ -107,7 +107,12 @@ export function useCatalogBrowse(
   filters: CategoryFilterState,
   kindState: CatalogKindState,
   adapt: (items: CatalogItem[], completedIds?: string[]) => MediaItem[],
-  enabled = true
+  enabled = true,
+  /** Bump to re-query the loaded window in place — the deep scan's
+   *  completion is the caller: it just grew the index, and a grid whose
+   *  reader had reached the old end holds total/hasMore from BEFORE the
+   *  growth, so nothing would ever fetch the new rows. */
+  refreshToken: unknown = null
 ): CatalogBrowseResult {
   // One serialized identity for the view. filterStateToCatalogQuery is
   // the same mapping the fetch uses, so the key cannot disagree with
@@ -420,6 +425,17 @@ export function useCatalogBrowse(
     if (!enabled || !CATALOG_BRIDGE_AVAILABLE) return
     return queueReload()
   }, [adapt, enabled, queueReload])
+
+  // The refresh token rides the same queued reload: same depth, fresh
+  // total — which is what revives hasMore after a deep scan grows the
+  // index under a fully-scrolled grid.
+  const refreshRef = useRef(refreshToken)
+  useEffect(() => {
+    if (refreshRef.current === refreshToken) return
+    refreshRef.current = refreshToken
+    if (!enabled || !CATALOG_BRIDGE_AVAILABLE) return
+    return queueReload()
+  }, [refreshToken, enabled, queueReload])
 
   const loadMore = useCallback(() => {
     void appendPage()

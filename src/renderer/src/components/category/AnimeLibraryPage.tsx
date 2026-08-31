@@ -497,7 +497,18 @@ export function LibraryPage({ config }: { config: CategoryConfig }) {
   // filters, SQL sort, exact totals — instead of filtering the loaded
   // array. The array (`library`) remains only for the curated rails and
   // as the option pool nothing below needs it to be complete for.
-  const browse = useCatalogBrowse(config.kind, filters, kindState, adaptCatalogItems, !searchActive)
+  // Declared before the browse hook so the scan's completion can reach
+  // it: a deep scan grows the index, and a grid whose reader had hit
+  // the old end needs a fresh total before hasMore can revive.
+  const [scanToken, setScanToken] = useState(0)
+  const browse = useCatalogBrowse(
+    config.kind,
+    filters,
+    kindState,
+    adaptCatalogItems,
+    !searchActive,
+    scanToken
+  )
   // STAGE 5: the deep scan. One chunk per press, written to the INDEX
   // only — the pool, the blob and this page's memory never grow; what
   // grows is the exact count below and everything the index serves
@@ -506,7 +517,6 @@ export function LibraryPage({ config }: { config: CategoryConfig }) {
   const [scanning, setScanning] = useState(false)
   const [scanProgress, setScanProgress] = useState<DeepScanEvent | null>(null)
   const [scanNote, setScanNote] = useState<string | null>(null)
-  const [scanToken, setScanToken] = useState(0)
   useEffect(() => {
     const api = window.api?.mediaHub?.catalog
     if (!api?.onDeepScanEvent) return
@@ -598,7 +608,10 @@ export function LibraryPage({ config }: { config: CategoryConfig }) {
     return () => {
       cancelled = true
     }
-  }, [config.kind, kindState])
+    // scanToken: a deep scan can introduce years/genres/statuses the
+    // standing crawl never carried — the dropdowns must be able to
+    // select what the index now demonstrably holds.
+  }, [config.kind, kindState, scanToken])
   const searchResults = useMemo(
     () => applyWatchStateFilters(categorySearch.results, filters),
     [categorySearch.results, filters]
