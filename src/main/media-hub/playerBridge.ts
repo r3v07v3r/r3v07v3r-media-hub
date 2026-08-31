@@ -60,13 +60,15 @@ import {
 } from './mpv'
 import {
   closePlayerOverlay,
+  focusPlayerOverlay,
+  hidePlayerOverlayForMainUi,
   isOverlayInputReady,
   openPlayerOverlay,
-  raisePlayerOverlay,
   revealPlayerOverlay,
   sendToPlayerOverlay,
   setOverlayInputReady,
-  setOverlayInteractive
+  setOverlayInteractive,
+  showPlayerOverlayAfterMainUi
 } from './playerWindow'
 import {
   attachEmbedTarget,
@@ -357,12 +359,10 @@ async function attachObservers(): Promise<void> {
   // exactly the same actions the overlay's buttons do.
   player.on('client-message', (msg) => {
     const args = Array.isArray(msg.args) ? (msg.args as unknown[]) : []
-    // Reaching here at all means mpv's window took the input, which means it
-    // was activated and is now over the controls. Clicking the picture is how
-    // someone comes back to a film they left running behind another window, so
-    // this is exactly when the controls have to be pulled back over it —
-    // keyboard included, since from here on the keys are the player's.
-    if (!mainWindowUiOpen) raisePlayerOverlay()
+    // Reaching here at all means mpv's window somehow took an input (which the
+    // embedded child was measured never to do — see bindSafetyKeys). From here
+    // on the keys are the player's, so hand the keyboard to the controls.
+    if (!mainWindowUiOpen) focusPlayerOverlay()
     switch (String(args[0] ?? '')) {
       case 'r3-stop': {
         // Escape leaves fullscreen before it closes anything, so one press is
@@ -435,58 +435,25 @@ async function attachObservers(): Promise<void> {
   })
 }
 
-/**
- * Raises the controls above the video, several times over a short window.
- *
- * Deliberately repeated rather than done once. mpv creates, and can re-create,
- * its video window asynchronously — on load, and again on things like a
- * resolution change — and a window that has just been created arrives in front
- * of everything else. A single raise is a race this side loses often enough to
- * leave someone staring at a video with no controls and no obvious way out.
- * Re-raising a window that is already on top costs nothing.
- *
- * Each retry decides for itself whether to fire, at the moment it fires rather
- * than when it was scheduled — 1.8 seconds is long enough for someone to start
- * a title and switch to another application before the train has finished, and
- * a train that had made its mind up at t=0 would spend the rest of its run
- * pulling a window that spans the whole content area back over whatever they
- * moved on to, keyboard and all. Skipping costs nothing either: the stack is
- * re-established the moment the app or the video is next activated.
- */
-const RAISE_RETRIES_MS = [0, 150, 400, 900, 1800]
-let raiseTimers: NodeJS.Timeout[] = []
-
-function raiseOverlaySoon(): void {
-  clearRaiseTimers()
-  raiseTimers = RAISE_RETRIES_MS.map((delay) =>
-    setTimeout(() => {
-      if (!appHasFocus() || mainWindowUiOpen) return
-      raisePlayerOverlay()
-    }, delay)
-  )
-}
-
-function clearRaiseTimers(): void {
-  for (const timer of raiseTimers) clearTimeout(timer)
-  raiseTimers = []
-}
-
 // ---------------------------------------------------------------------------
-// Window stacking
+// Window arrangement
 // ---------------------------------------------------------------------------
 //
-// Two windows now, not three: the video is a child INSIDE the main window
-// (see mpvEmbed.ts), so the only ordering held here is controls-over-main —
-// two windows of this process, which Windows reorders on request without any
-// of the foreign-window ceremony the floating mpv window used to need. The
-// always-on-top band is gone with it: fullscreen is the main window's own
-// (Electron setFullScreen), and a fullscreen film behaves like any fullscreen
-// app — cover-able by another application, taskbar handled by the OS.
+// There is no z-order to manage any more. The video is a child INSIDE the
+// main window (mpvEmbed.ts), and the controls overlay is an OWNED window of
+// it (playerWindow.ts), which Win32 keeps above its owner unconditionally —
+// so main < video < controls is the resting state of the window system, not
+// something re-established after every event. What remains here is one
+// visibility decision: while main-window UI (the watch-party hub) is in use,
+// the video child and the overlay are hidden so the page under them can be
+// seen and clicked — DOM can never be composited over a child window, and an
+// owned window can never be dropped below its owner, so both "get out of the
+// way" moves are hides.
 
 /**
- * Whether main-window UI has deliberately been brought to the front over the
- * video (the watch-party panel). While it is, nothing here may put the video
- * back on top — that is the one state where the app is meant to win.
+ * Whether main-window UI is deliberately in use over the player (the
+ * watch-party panel). While it is, the video child and the overlay stay
+ * hidden — that is the one state where the app is meant to win.
  *
  * Mirrors what the main window reports and infers nothing. It used to be
  * cleared when playback stopped, on the grounds that a stop was main's last
@@ -503,45 +470,6 @@ let mainWindowUiOpen = false
  *  never takes focus — measured in the Phase-0 spike.) */
 function appHasFocus(): boolean {
   return BrowserWindow.getFocusedWindow() !== null
-}
-
-/**
- * Re-establishes controls-over-main after something reordered the two —
- * activating the main window raises it above the unowned overlay.
- *
- * Deliberately does not take focus. The main window is activated by clicking
- * its title bar as often as by anything else, and stealing the keyboard
- * mid-drag is a worse bug than the one this fixes; the controls take focus
- * when the person actually reaches for them (set-interactive, below).
- *
- * An open panel inverts the order this restores, so it gets the inverted one
- * applied rather than nothing at all — every route into here (app activated,
- * restore from minimised) is also a moment the panel could lose its front.
- */
-function restackPlayer(): void {
-  if (!player.running) return
-  if (mainWindowUiOpen) {
-    raiseMainWindowOverPlayer({ focus: false })
-    return
-  }
-  raisePlayerOverlay({ focus: false })
-}
-
-/**
- * The opposite of restackPlayer: hands the front to the main window, so
- * main-window UI reached from the player (the watch-party hub) can be seen
- * and clicked where the OVERLAY would otherwise sit — the video itself is
- * dealt with separately, by hiding the embedded child (setEmbeddedVideoHidden),
- * since no amount of raising puts DOM over a child window.
- *
- * The caller owns mainWindowUiOpen; this only moves windows.
- */
-function raiseMainWindowOverPlayer({ focus = true }: { focus?: boolean } = {}): void {
-  const mainWindow = getActiveWindow()
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.moveTop()
-    if (focus) mainWindow.focus()
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -608,7 +536,7 @@ export async function startPlayerSession(
   }
   trackWindow(mainWindow)
 
-  openPlayerOverlay(mainWindow, { onFocus: () => restackPlayer() })
+  openPlayerOverlay(mainWindow)
 
   // HAND THE RETAINED PLAYER OVER before touching it. Everything below runs
   // inside a gap the overlay cannot see: it identifies whichever title it was
@@ -702,12 +630,7 @@ export async function startPlayerSession(
   // party-panel-closed). The false branch matters equally: it clears a hide
   // left over from a previous session's panel.
   setEmbeddedVideoHidden(mainWindowUiOpen)
-  if (mainWindowUiOpen) raiseMainWindowOverPlayer()
-
-  // The overlay itself still has to end up over the main window; `file-loaded`
-  // has already resolved, but the app may have been activated (raised) at any
-  // point during the load.
-  raiseOverlaySoon()
+  if (mainWindowUiOpen) hidePlayerOverlayForMainUi()
 
   const tracks = await readTracks()
   queuePatch({ tracks }, true)
@@ -719,7 +642,6 @@ export async function startPlayerSession(
  *  is also what destroys mpv's embedded video window, which is what makes the
  *  app UI behind it visible again. */
 export async function stopPlayerSession(): Promise<void> {
-  clearRaiseTimers()
   untrackWindow?.()
   // mainWindowUiOpen is deliberately NOT cleared here: a stop is not a close.
   // See its own comment — the main window reports the panel itself now. The
@@ -794,18 +716,15 @@ function trackWindow(mainWindow: BrowserWindow): void {
   const syncSettled = (): void => {
     setTimeout(sync, 120)
   }
-  const restack = (): void => restackPlayer()
 
   mainWindow.on('resize', sync)
   mainWindow.on('enter-full-screen', syncSettled)
   mainWindow.on('leave-full-screen', syncSettled)
-  mainWindow.on('focus', restack)
 
   untrackWindow = () => {
     mainWindow.off('resize', sync)
     mainWindow.off('enter-full-screen', syncSettled)
     mainWindow.off('leave-full-screen', syncSettled)
-    mainWindow.off('focus', restack)
     untrackWindow = null
   }
 }
@@ -1035,7 +954,7 @@ function forwardUiEvent(event: PlayerUiEvent): void {
     // keyboard off it — would be the topmost behaviour this change exists to
     // remove. Left alone, the controls simply appear in the part of the picture
     // that is actually visible, which is the part being pointed at.
-    if (event.interactive && appHasFocus() && !mainWindowUiOpen) raisePlayerOverlay()
+    if (event.interactive && appHasFocus() && !mainWindowUiOpen) focusPlayerOverlay()
     return
   }
   // The party panel renders in the MAIN window, whose web content the embedded
@@ -1058,9 +977,11 @@ function forwardUiEvent(event: PlayerUiEvent): void {
   // and re-opens it under them.
   if (event.type === 'party-panel-open' || (event.type === 'set-party-panel-open' && event.open)) {
     mainWindowUiOpen = true
-    clearRaiseTimers()
     setEmbeddedVideoHidden(true)
-    raiseMainWindowOverPlayer()
+    hidePlayerOverlayForMainUi()
+    // The keyboard goes with the front: the person is about to use the panel.
+    const mainWindow = getActiveWindow()
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.focus()
     // The report stops here. The command falls through to the main window,
     // which still has to actually open the panel the overlay asked for.
     if (event.type === 'party-panel-open') return
@@ -1068,7 +989,7 @@ function forwardUiEvent(event: PlayerUiEvent): void {
   if (event.type === 'party-panel-closed') {
     mainWindowUiOpen = false
     setEmbeddedVideoHidden(false)
-    restackPlayer()
+    showPlayerOverlayAfterMainUi()
     return
   }
 
