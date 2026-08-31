@@ -158,9 +158,9 @@ function createWindow(): void {
 // menu accelerator (and the page keydown) from firing at all.
 //
 // Always the MAIN window's fullscreen, whichever window took the key — see
-// windowFullscreen.ts. mpv's video window is not a BrowserWindow and never sees
-// this, so it carries its own F11 binding instead (mpv.ts's bindSafetyKeys),
-// which routes to the same toggle.
+// windowFullscreen.ts. The embedded video child never holds keyboard focus
+// (measured — see mpv.ts's bindSafetyKeys), so between this handler and the
+// overlay's own keys, every window that can take an F11 routes it here.
 function watchFullscreenShortcut(window: BrowserWindow): void {
   window.webContents.on('before-input-event', (event, input) => {
     if (input.type !== 'keyDown' || input.key !== 'F11') return

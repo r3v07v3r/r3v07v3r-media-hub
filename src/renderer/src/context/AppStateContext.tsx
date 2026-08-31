@@ -1560,8 +1560,8 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   // before the reload from keeping the video down forever. Between them there
   // is no state main can be left holding that this window does not correct.
   //
-  // Outside playback both reports are no-ops on main's side — restackPlayer
-  // returns without a running player, and there is no overlay to raise.
+  // Outside playback both reports are no-ops on main's side — there is no
+  // video child to hide or reveal, and no overlay to go with it.
   const partyPanelReportedOpen = useRef<boolean | null>(null)
   useEffect(() => {
     const reported = partyPanelReportedOpen.current

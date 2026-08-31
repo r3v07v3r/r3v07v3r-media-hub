@@ -397,9 +397,12 @@ export type PlayerUiEvent =
    *  panel that is not open yet — the only one of these three that main passes
    *  on to the main window rather than acting on and stopping. */
   | { type: 'set-party-panel-open'; open: boolean }
-  /** Main window -> main: the party panel IS open, so the video has to give up
-   *  the front. A report, not a command, which is why it is a separate event
-   *  from set-party-panel-open rather than the same one sent the other way: a
+  /** Main window -> main: the party panel IS open, so the embedded video (and
+   *  the overlay with it) is hidden until it closes — the video child covers
+   *  the whole page and DOM can never composite over it, so showing
+   *  main-window UI means removing the picture, not reordering windows. A
+   *  report, not a command, which is why it is a separate event from
+   *  set-party-panel-open rather than the same one sent the other way: a
    *  report that main echoed back would reach this window as an instruction to
    *  open, and one still in flight when the person closes the panel would land
    *  after them and re-open it.
@@ -408,18 +411,20 @@ export type PlayerUiEvent =
    *  mainWindowUiOpen that has drifted false is repaired by the next thing
    *  played rather than staying wrong. */
   | { type: 'party-panel-open' }
-  /** Main window -> main: the party panel has gone, so the video can have the
-   *  front back. The other half of the report pair above. See playerBridge's
-   *  handling of party-panel-open for why the front was given up at all, and
+  /** Main window -> main: the party panel has gone, so the video and overlay
+   *  come back. The other half of the report pair above. See playerBridge's
+   *  handling of party-panel-open for why the picture was hidden at all, and
    *  mainWindowUiOpen for why main takes this window's word for the close
    *  rather than inferring it from playback ending. Sent on every open ->
    *  closed edge whatever is playing, and once on mount so a main process that
    *  outlived a renderer reload cannot be left holding a stale "open" — which
-   *  would keep the video under the app indefinitely. */
+   *  would keep the video hidden indefinitely. */
   | { type: 'party-panel-closed' }
   /** Whether the overlay currently wants mouse input. False makes the window
-   *  click-through so the video underneath receives the events instead — see
-   *  playerWindow.ts's setOverlayInteractive. */
+   *  click-through (mousemove still arrives, which is what reveals the
+   *  controls); a click that passes through lands on the main window's page,
+   *  which refuses pointer events while covered — see playerWindow.ts's
+   *  setOverlayInteractive and AppShell's data-playback-covered. */
   | { type: 'set-interactive'; interactive: boolean }
   /** Whether this window is actually listening for forwarded input yet.
    *
