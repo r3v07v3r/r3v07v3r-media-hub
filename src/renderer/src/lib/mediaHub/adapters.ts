@@ -17,7 +17,7 @@ import type {
   TrackedItem,
   TrackedItemEnriched
 } from '@shared/media-hub/types'
-import { episodeWatchState } from '@shared/media-hub/catalog-logic'
+import { episodeWatchState, hasAired } from '@shared/media-hub/catalog-logic'
 import { parseRating, parseRuntimeMinutes, parseYear } from '@shared/media-hub/catalogFields'
 import { recommendationReasonLabel } from '@shared/media-hub/recommendationReason'
 import type { OllamaTitleRef } from '@shared/media-hub/ollama'
@@ -233,9 +233,10 @@ export function airedEpisodes<T extends { unplayable?: boolean; released?: strin
   videos: readonly T[] | undefined,
   now: number = Date.now()
 ): T[] {
-  return (videos || []).filter(
-    (v) => !v.unplayable && (!v.released || new Date(v.released).getTime() <= now)
-  )
+  // hasAired, not an inline date comparison: the same rule decides which
+  // episode a Play button starts (see nextEpisode.ts), and two copies of it
+  // would eventually disagree about a show that is still airing.
+  return (videos || []).filter((v) => !v.unplayable && hasAired(v, now))
 }
 
 /** A series/anime counts as complete once every already-aired episode has

@@ -25,6 +25,7 @@ import styles from './ControlCentre.module.css'
 import { CachingSection } from './sections/CachingSection'
 import { PipelineSection } from './sections/PipelineSection'
 import { ServicesSection } from './sections/ServicesSection'
+import { UpdatesSection } from './sections/UpdatesSection'
 import { ControlCentreNav } from './ControlCentreNav'
 import { MatrixRain } from './MatrixRain'
 import {
@@ -157,6 +158,7 @@ export function ControlCentreFace() {
               {entry.id === 'caching' ? <CachingSection /> : null}
               {entry.id === 'pipeline' ? <PipelineSection onNavigate={setSection} /> : null}
               {entry.id === 'services' ? <ServicesSection /> : null}
+              {entry.id === 'updates' ? <UpdatesSection /> : null}
             </div>
           ))}
         </div>

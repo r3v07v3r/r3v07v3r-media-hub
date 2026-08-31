@@ -588,13 +588,18 @@ function ProfileForm({
  *  app's TorBox-sourced (not locally re-encoded per quality) pipeline. */
 function MoreOptionsSection({
   quick = false,
-  heading = 'More Options'
+  heading = 'More Options',
+  hint
 }: {
   /** On the viewer's short page: the browsing and motion toggles, without
    *  the subtitle-cache maintenance row, which is a housekeeping action
    *  rather than something you set while watching. */
   quick?: boolean
   heading?: string
+  /** One line under the heading saying what the card is FOR. Only the
+   *  viewer's page passes one; inside the control centre the rail entry and
+   *  the group header already say it. */
+  hint?: string
 } = {}) {
   const { mediaHubSettings, refreshMediaHubSettings } = useAppState()
   const [clearStatus, setClearStatus] = useState<{
@@ -660,10 +665,16 @@ function MoreOptionsSection({
   }
 
   return (
-    <section className={`${styles.section} glass-panel`} aria-labelledby="settings-more">
-      <h2 id="settings-more" className={styles.sectionTitle}>
-        {heading}
-      </h2>
+    <section
+      className={`${styles.section} ${quick ? styles.quickCard : ''} glass-panel`}
+      aria-labelledby="settings-more"
+    >
+      <header className={styles.quickCardHead}>
+        <h2 id="settings-more" className={styles.sectionTitle}>
+          {heading}
+        </h2>
+        {hint && <p className={styles.quickCardHint}>{hint}</p>}
+      </header>
       <ToggleRow
         icon="sparkle"
         title="UI animations"
@@ -1233,69 +1244,106 @@ export default function SettingsPage({
   // change while watching, and a way through to the rest.
   if (!embedded && !category) {
     return (
-      <div className={styles.wrap}>
-        <div className={styles.pageHeader}>
+      <div className={`${styles.wrap} ${styles.quickWrap}`}>
+        <div className={`${styles.pageHeader} ${styles.quickHeader}`}>
           <div>
+            <span className={styles.quickEyebrow}>Your player</span>
             <h1 className={styles.heading}>Settings</h1>
             <p className={styles.headingDescription}>
               The things you change while watching. Everything else lives in the control centre.
             </p>
           </div>
+          {/* The way through, in the header where a page's primary action
+              belongs, rather than only as a slab at the bottom of a scroll
+              nobody reaches. */}
+          <button
+            type="button"
+            className={styles.quickJump}
+            onClick={() => setControlCentreOpen(true)}
+          >
+            <Icon name="settings" size={15} />
+            Control centre
+          </button>
         </div>
 
-        <section className={`${styles.section} glass-panel`} aria-labelledby="quick-playback">
-          <h2 id="quick-playback" className={styles.sectionTitle}>
-            Playback
-          </h2>
-          <ToggleRow
-            icon="play"
-            title="Play the next episode"
-            description="When an episode ends, offer the next one and start it after a short countdown. Movies and last episodes are unaffected."
-            checked={mediaHubSettings?.autoplayNextEnabled ?? true}
-            onChange={handleSetAutoplayNext}
-          />
-          <ToggleRow
-            icon="eye"
-            title="Show subtitles automatically"
-            description="Fetch and apply a matching subtitle as soon as a title starts playing."
-            checked={mediaHubSettings?.autoSubtitlesEnabled ?? true}
-            onChange={handleSetAutoSubtitles}
-          />
-          <SegmentedRow
-            icon="planet"
-            title="Subtitle language"
-            description="Language to search for, both automatically and in the Subtitles menu."
-            value={mediaHubSettings?.subtitleLanguage ?? 'en'}
-            options={SUBTITLE_LANGUAGE_OPTIONS}
-            onChange={handleSetSubtitleLanguage}
-          />
-          <SegmentedRow
-            icon="waveform"
-            title="Audio language"
-            description="Preferred spoken language. Used to pick the audio track when a release has several, and to avoid dubbed releases when an original-language one exists."
-            value={mediaHubSettings?.audioLanguage ?? 'en'}
-            options={SUBTITLE_LANGUAGE_OPTIONS}
-            onChange={handleSetAudioLanguage}
-          />
-        </section>
+        {/* Scrolls on its own so the header stays put, and lays the cards out
+            in columns instead of stretching every row the width of the
+            window — a 1200px-wide switch row with its label at one end and
+            its control at the other is a line to track, not a setting. */}
+        <div className={styles.quickBody}>
+          <div className={styles.quickGrid}>
+            <section
+              className={`${styles.section} ${styles.quickCard} glass-panel`}
+              aria-labelledby="quick-playback"
+            >
+              <header className={styles.quickCardHead}>
+                <h2 id="quick-playback" className={styles.sectionTitle}>
+                  Playback
+                </h2>
+                <p className={styles.quickCardHint}>How a title starts, and in which languages.</p>
+              </header>
+              <ToggleRow
+                icon="play"
+                title="Play the next episode"
+                description="When an episode ends, offer the next one and start it after a short countdown. Movies and last episodes are unaffected."
+                checked={mediaHubSettings?.autoplayNextEnabled ?? true}
+                onChange={handleSetAutoplayNext}
+              />
+              <ToggleRow
+                icon="eye"
+                title="Show subtitles automatically"
+                description="Fetch and apply a matching subtitle as soon as a title starts playing."
+                checked={mediaHubSettings?.autoSubtitlesEnabled ?? true}
+                onChange={handleSetAutoSubtitles}
+              />
+              <SegmentedRow
+                icon="planet"
+                title="Subtitle language"
+                description="Language to search for, both automatically and in the Subtitles menu."
+                value={mediaHubSettings?.subtitleLanguage ?? 'en'}
+                options={SUBTITLE_LANGUAGE_OPTIONS}
+                onChange={handleSetSubtitleLanguage}
+              />
+              <SegmentedRow
+                icon="waveform"
+                title="Audio language"
+                description="Preferred spoken language. Used to pick the audio track when a release has several, and to avoid dubbed releases when an original-language one exists."
+                value={mediaHubSettings?.audioLanguage ?? 'en'}
+                options={SUBTITLE_LANGUAGE_OPTIONS}
+                onChange={handleSetAudioLanguage}
+              />
+            </section>
 
-        <MoreOptionsSection quick heading="Browsing" />
+            <MoreOptionsSection
+              quick
+              heading="Browsing"
+              hint="What the grids show you before you have filtered anything."
+            />
 
-        {/* Not a list of what is through there — that would be this page
-            again, in miniature, and would go stale the first time the
-            control centre gained a section. */}
-        <button
-          type="button"
-          className={styles.openControlCentre}
-          onClick={() => setControlCentreOpen(true)}
-        >
-          <Icon name="settings" size={17} />
-          <span>
-            <b>Open the control centre</b>
-            Services, accounts, storage, the cache server and the rest of the pipeline.
-          </span>
-          <Icon name="chevron" size={16} />
-        </button>
+            {/* Updates live here as well as in the control centre — the same
+                card, driven by the same useUpdateManager, so the two cannot
+                report different states. "Am I up to date, and what changed"
+                is asked from wherever somebody happens to be; it is not worth
+                crossing into the control centre for. */}
+            <AboutUpdateSection />
+          </div>
+
+          {/* Not a list of what is through there — that would be this page
+              again, in miniature, and would go stale the first time the
+              control centre gained a section. */}
+          <button
+            type="button"
+            className={styles.openControlCentre}
+            onClick={() => setControlCentreOpen(true)}
+          >
+            <Icon name="settings" size={17} />
+            <span>
+              <b>Open the control centre</b>
+              Services, accounts, storage, the cache server and the rest of the pipeline.
+            </span>
+            <Icon name="chevron" size={16} />
+          </button>
+        </div>
       </div>
     )
   }
@@ -1363,11 +1411,12 @@ export default function SettingsPage({
             <header className={styles.groupHeader}>
               <span className={styles.groupEyebrow}>Essentials</span>
               <h2 id="settings-general-title">General</h2>
-              <p>App updates, display preferences, and everyday behavior.</p>
+              {/* Not "app updates" any more — those have their own rail entry
+                  (see controlcentre/sections.ts) rather than being the first
+                  tile in here. */}
+              <p>Display preferences, your library, and everyday behavior.</p>
             </header>
             <div ref={generalGridBinding} className={styles.groupGrid}>
-              <AboutUpdateSection />
-
               <section className={`${styles.section} glass-panel`} aria-labelledby="settings-perf">
                 <h2 id="settings-perf" className={styles.sectionTitle}>
                   Performance &amp; Display

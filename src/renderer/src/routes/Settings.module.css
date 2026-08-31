@@ -1155,6 +1155,146 @@
 /* The way through to everything this short page deliberately leaves out.
    A row rather than a link, because it is the biggest thing on the page
    after the two sections and should look like a destination. */
+/* ===================================================================
+   THE VIEWER'S PAGE — the short one at /settings.
+
+   Everything above is built for the long, category-per-column page that
+   now only renders inside the control centre. This page is three cards and
+   a way through, and it was inheriting a layout meant for thirty.
+
+   Two things were wrong with it and both are fixed here. It did not
+   scroll — .wrap is overflow:hidden, so anything past the fold was simply
+   gone. And every row ran the full width of the window, which puts a
+   switch's label at one end of a 1200px line and its control at the other.
+   =================================================================== */
+
+.quickWrap {
+  /* The header is fixed; .quickBody below does the scrolling, so a long
+     page cannot push the title off the top. */
+  padding-bottom: 0;
+}
+
+/* Only while the header is still a row. Below 1250px .pageHeader stacks and
+   left-aligns its two children (see the media query above this file's
+   halfway mark), and a bare `align-items: center` here would win on source
+   order and centre the stacked title instead. */
+@media (min-width: 1251px) {
+  .quickHeader {
+    align-items: center;
+  }
+}
+
+.quickEyebrow {
+  display: block;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+}
+
+/* The page's primary action, in the header where a primary action belongs.
+   The slab at the bottom of the cards stays as well: this one is for
+   somebody who came here knowing they wanted the other face, that one is
+   for somebody who scrolled to the end without finding what they wanted. */
+.quickJump {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+  padding: 9px 16px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border-subtle);
+  background: rgba(255, 255, 255, 0.035);
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  transition:
+    border-color var(--transition-fast),
+    color var(--transition-fast),
+    background var(--transition-fast);
+}
+
+.quickJump:hover,
+.quickJump:focus-visible {
+  border-color: var(--border-active);
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-primary);
+}
+
+html[data-motion-user-disabled='true'] .quickJump {
+  transition: none;
+}
+
+.quickBody {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: 20px 4px 32px 0;
+}
+
+/* COLUMNS ONLY WHEN THERE IS ROOM FOR THEM.
+
+   auto-fit with a 420px floor means one column on a narrow window and two
+   or three on a wide one, without a media query naming a breakpoint that
+   would be wrong the moment the nav rail collapses. align-items:start so a
+   short card stays short instead of being stretched to match the tallest
+   one in its row.
+
+   min(420px, 100%), NOT a bare 420px: a bare minimum is still honoured when
+   the column is narrower than it, so a container under 420px got a 420px
+   track that overflowed it — and .quickBody hides horizontal overflow, so
+   the right-hand end of every card, which is where the switches are, was
+   cut off with no way to scroll to it. Capping the floor at the available
+   width lets the single column shrink instead. */
+.quickGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(420px, 100%), 1fr));
+  align-items: start;
+  gap: 18px;
+}
+
+.quickCard {
+  /* The long page sizes its cards to a fixed 380px column (see .groupGrid);
+     here they fill whatever column the grid gives them. */
+  width: auto;
+  max-width: none;
+  height: auto;
+}
+
+.quickCardHead {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin-bottom: 4px;
+}
+
+/* .sectionTitle carries its own bottom margin for the long page's stacked
+   cards; inside a head that already has gap it would double up. */
+.quickCardHead .sectionTitle {
+  margin-bottom: 0;
+}
+
+.quickCardHint {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
+/* Full width under the columns, not one more card in the grid: it is the
+   exit from this page, not another group of settings on it. */
+.quickBody > .openControlCentre {
+  flex: none;
+}
+
 .openControlCentre {
   display: flex;
   align-items: center;

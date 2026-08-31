@@ -139,6 +139,31 @@ function episodePositionKey(x: { season?: number; episode?: number; number?: num
   return `${numberOr(x.season, 1)}:${numberOr(x.episode ?? x.number, 1)}`
 }
 
+/**
+ * Has this episode actually come out yet?
+ *
+ * Cinemeta and TMDB both ship future-dated entries in `videos`, so "the next
+ * one in the list" and "the next one you could actually watch" are different
+ * questions for any show still airing. An episode with no date at all counts
+ * as aired — that is a gap in the metadata, not evidence it is in the future,
+ * and treating it as unaired would hide real episodes.
+ *
+ * THE ONE DEFINITION. adapters.ts's airedEpisodes (the denominator behind the
+ * "Completed" badge and the detail page's progress) and nextEpisode.ts's
+ * playableEpisodesInOrder (what a Play button starts) both apply it, so the
+ * episode a card plays and the episode the progress bar counts cannot come
+ * from two different ideas of "aired".
+ */
+export function hasAired(
+  video: { released?: string } | undefined | null,
+  now: number = Date.now()
+): boolean {
+  if (!video?.released) return true
+  const at = new Date(video.released).getTime()
+  // An unparseable date is a metadata gap, same as a missing one.
+  return !Number.isFinite(at) || at <= now
+}
+
 export function episodeWatchState(
   episodes: { season?: number; episode?: number; number?: number }[],
   history: HistoryEntry[],
