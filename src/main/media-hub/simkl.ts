@@ -76,7 +76,11 @@ export interface SimklScrobblePayload {
  * "match by title/year" fallback rather than an error.
  */
 export function mediaIds(item: SimklPushItem): SimklMediaIds {
-  const id = String(item.id || '')
+  return idsForCatalogId(String(item.id || ''))
+}
+
+/** The id-string half of mediaIds, for callers with no item in hand. */
+export function idsForCatalogId(id: string): SimklMediaIds {
   if (/^tt\d+$/i.test(id)) return { imdb: id }
   for (const key of ['kitsu', 'mal', 'anilist', 'anidb'] as const) {
     if (id.startsWith(`${key}:`)) {
@@ -85,6 +89,20 @@ export function mediaIds(item: SimklPushItem): SimklMediaIds {
     }
   }
   return {}
+}
+
+/**
+ * Whether a catalog id can be expressed to Simkl as a REAL id — the
+ * precondition for a push whose outcome can be verified, and for a diff
+ * that can ever see the result. An id that resolves to `{}` goes out as a
+ * title/year guess: Simkl either matches it against an entry the diff will
+ * never join back to this id, or rejects it in a not_found entry that
+ * carries no ids and so can't be attributed to anything (see
+ * unmatchedCatalogIds). Either way the local record stays where it was and
+ * the disagreement resurfaces on the next check, forever.
+ */
+export function hasExpressibleSimklId(id: string): boolean {
+  return Object.keys(idsForCatalogId(id)).length > 0
 }
 
 /** Builds the {title, year, ids} reference shared by all Simkl payload variants. */

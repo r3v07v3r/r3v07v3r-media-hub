@@ -93,6 +93,7 @@ import { cachedRemoteLists, fetchRemoteLists } from './remoteLists'
 import type { RemoteList } from '../../shared/media-hub/types'
 import {
   batchHistoryPayload,
+  hasExpressibleSimklId,
   historyPayload,
   scrobblePayload,
   seasonHistoryPayload,
@@ -786,6 +787,21 @@ async function pushPendingToServices(priority: TaskPriority): Promise<Set<string
     )
   }
 
+  // The one written record of what a flush actually did. Every failure
+  // mode this path has had — blind confirmations, unattributable
+  // not_found entries, decisions that vanished — was invisible precisely
+  // because success and no-op looked identical in the log (a "keep local"
+  // that changed nothing left no line anywhere). Catalog ids only; titles
+  // and tokens stay out.
+  if (sendable.length) {
+    logError(
+      'reconcile:flush',
+      `sent=${sendable.map((e) => e.id).join(',')} confirmed=${[...confirmed].join(',') || '-'} ` +
+        `failed=${[...failed].join(',') || '-'} settled=${[...settled].join(',') || '-'}` +
+        (error ? ` error="${error}"` : '')
+    )
+  }
+
   // The pushes above bypass simklWatchedSnapshot()'s own request path, so
   // its 20-minute cache never learns about them; left alone, the next
   // check compares against the stale pre-push snapshot and re-reports
@@ -1038,6 +1054,15 @@ async function computeMovieDiscrepancies(
     const local = localMovies.has(id)
     const remote = remoteMovies.has(id)
     if (local === remote) continue
+    // A local id no service can express (mockData's m-* demo ids, or
+    // anything else unmappable) must not be surfaced at all. It can never
+    // read as watched on the remote side — the join above is by id — and
+    // its "Use Local" push would go out as a title/year guess whose
+    // outcome can neither be verified nor ever satisfy this diff, so the
+    // row returns after every resolution. Seen live: three demo-id
+    // duplicates of already-synced films surviving five days of "Use
+    // Local" clicks (and 404-ing their metadata enrichment on every pass).
+    if (local && !hasExpressibleSimklId(id)) continue
     const source = localMovies.get(id) || remoteMovies.get(id)
     out.push({
       id,
