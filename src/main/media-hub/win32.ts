@@ -94,7 +94,9 @@ function api(): User32 | null {
     GetWindowLongPtrW: lib.func('int64_t GetWindowLongPtrW(int64_t, int)'),
     SetWindowLongPtrW: lib.func('int64_t SetWindowLongPtrW(int64_t, int, int64_t)'),
     SetParent: lib.func('int64_t SetParent(int64_t, int64_t)'),
-    GetWindowThreadProcessId: lib.func('uint32_t GetWindowThreadProcessId(int64_t, _Out_ uint32_t *)'),
+    GetWindowThreadProcessId: lib.func(
+      'uint32_t GetWindowThreadProcessId(int64_t, _Out_ uint32_t *)'
+    ),
     SetCursorPos: lib.func('bool SetCursorPos(int, int)'),
     mouse_event: lib.func('void mouse_event(uint32_t, uint32_t, uint32_t, uint32_t, uint64_t)')
   }

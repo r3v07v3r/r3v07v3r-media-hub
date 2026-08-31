@@ -199,14 +199,6 @@ function fakePlayer(replyError = 'success'): { player: MpvPlayer; sent: string[]
   return { player, sent }
 }
 
-/** Which properties were written, in the order they went on the wire. */
-function propertiesWritten(sent: string[]): string[] {
-  return sent
-    .map((line) => JSON.parse(line) as { command: unknown[] })
-    .filter((msg) => msg.command[0] === 'set_property')
-    .map((msg) => String(msg.command[1]))
-}
-
 function writesFor(sent: string[], property: string): unknown[] {
   return sent
     .map((line) => JSON.parse(line) as { command: unknown[] })
@@ -223,7 +215,7 @@ function writesFor(sent: string[], property: string): unknown[] {
  * rejection that follows is the point at which the arguments have already been
  * built, so it is swallowed.
  */
-async function launchArgs(bounds?: MpvSpawnOptions['bounds']): Promise<string[]> {
+async function launchArgs(wid?: MpvSpawnOptions['wid']): Promise<string[]> {
   let captured: string[] = []
   const spawnImpl = ((_command: string, args: string[]) => {
     captured = args
@@ -238,7 +230,7 @@ async function launchArgs(bounds?: MpvSpawnOptions['bounds']): Promise<string[]>
       }
     }
   }) as unknown as NonNullable<MpvSpawnOptions['spawnImpl']>
-  await new MpvPlayer().start('mpv.exe', { bounds, spawnImpl }).catch(() => {})
+  await new MpvPlayer().start('mpv.exe', { wid, spawnImpl }).catch(() => {})
   return captured
 }
 
@@ -311,79 +303,31 @@ async function main(): Promise<void> {
     )
   })
 
-  await checkAsync(
-    'the window is the rectangle it is given, not the shape of the film',
-    async () => {
-      const args = await launchArgs({ x: 0, y: 0, width: 3440, height: 1440 })
-      // Without this mpv defaults to keeping its WINDOW at the video's aspect
-      // ratio, so it shrinks the size the geometry below just asked for and the
-      // app shows through the strip left over — "fullscreen doesn't go quite
-      // fullscreen, there is a gap on the right", on an ultrawide display.
-      assert.ok(
-        args.includes('--no-keepaspect-window'),
-        `launch args do not disable window aspect locking: ${args.join(' ')}`
-      )
-      assert.ok(
-        args.includes('--geometry=3440x1440+0+0'),
-        `geometry was not the exact requested rectangle: ${args.join(' ')}`
+  await checkAsync('a window id embeds the player as a child of that window', async () => {
+    const args = await launchArgs('5901740')
+    assert.ok(
+      args.includes('--wid=5901740'),
+      `launch args do not embed into the supplied window: ${args.join(' ')}`
+    )
+    // The floating-window era's screen-placement args must stay gone: the
+    // child is placed by mpvEmbed's SetWindowPos in client coordinates, and a
+    // stray --geometry/--fs-screen would hand mpv screen-level opinions it no
+    // longer owns (mpv fullscreen and window geometry both belonged to the
+    // window mpv no longer has).
+    for (const stale of ['--geometry', '--fs-screen', '--no-keepaspect-window', '--no-border']) {
+      assert.deepEqual(
+        args.filter((arg) => arg.startsWith(stale)),
+        [],
+        `stale floating-window arg survived: ${stale}`
       )
     }
-  )
+  })
 
-  await checkAsync('geometry is omitted entirely when there are no bounds to honour', async () => {
+  await checkAsync('the window id is omitted when none is supplied', async () => {
     const args = await launchArgs()
     assert.deepEqual(
-      args.filter((arg) => arg.startsWith('--geometry')),
+      args.filter((arg) => arg.startsWith('--wid')),
       []
-    )
-  })
-
-  await checkAsync('a fullscreen film is mpv fullscreen, not a screen-sized window', async () => {
-    const { player, sent } = fakePlayer()
-    await player.setFullscreen(true)
-    assert.deepEqual(
-      writesFor(sent, 'fullscreen'),
-      [true],
-      // Asking for the screen's rectangle is not the same as asking for
-      // fullscreen: mpv fits a merely-requested rectangle against the WORK
-      // area, positions it relative to that area's origin, and shrinks what
-      // does not fit with the request's aspect ratio preserved. Fullscreen
-      // takes the monitor rect whole and skips all of it.
-      `fullscreen was not written to mpv: ${sent.join(' ')}`
-    )
-  })
-
-  await checkAsync('geometry is not written while mpv owns the rectangle', async () => {
-    const { player, sent } = fakePlayer()
-    await player.setFullscreen(true)
-    await player.setBounds({ x: 0, y: 0, width: 3440, height: 1440 })
-    assert.deepEqual(
-      writesFor(sent, 'geometry'),
-      [],
-      // A geometry write landing during a fullscreen transition is at best
-      // ignored and at worst becomes the rectangle mpv restores to on the way
-      // out — and the app's window tracking emits a burst of them on every
-      // transition.
-      `a geometry write escaped while fullscreen: ${sent.join(' ')}`
-    )
-
-    await player.setFullscreen(false)
-    await player.setBounds({ x: 0, y: 0, width: 1600, height: 900 })
-    assert.deepEqual(
-      writesFor(sent, 'geometry'),
-      ['1600x900+0+0'],
-      `tracking did not resume after leaving fullscreen: ${sent.join(' ')}`
-    )
-  })
-
-  await checkAsync('a fullscreen film covers the screen it is playing on', async () => {
-    const args = await launchArgs({ x: 0, y: 0, width: 3440, height: 1440 })
-    // Which screen is decided from where mpv's window already is, and mpv's
-    // window is positioned to the app's content area — so the film goes
-    // fullscreen on the monitor the app is on, not on the primary.
-    assert.ok(
-      args.includes('--fs-screen=current'),
-      `launch args do not pin the fullscreen screen: ${args.join(' ')}`
     )
   })
 
@@ -405,10 +349,10 @@ async function main(): Promise<void> {
       .map((line) => JSON.parse(line) as { command: unknown[] })
       .filter((msg) => msg.command[0] === 'keybind')
       .map((msg) => `${String(msg.command[1])} ${String(msg.command[2])}`)
-    // Without these, the volume keys would work only while the controls
-    // overlay holds focus — and clicking the picture hands focus to mpv, so
-    // the keys would stop working for the very reason someone reached for
-    // them. Seeking already has this pair; volume needs the same.
+    // The keyboard backstop keeps its full set even though the embedded child
+    // should never hold focus (see MpvPlayer.bindSafetyKeys) — if an event
+    // ever does land there, every key must still mean what it means in the
+    // overlay. Seeking already has its pair; volume needs the same.
     assert.ok(
       bindings.includes('UP script-message r3-volume-up'),
       `UP is not bound: ${bindings.join(', ')}`
@@ -418,32 +362,6 @@ async function main(): Promise<void> {
       `DOWN is not bound: ${bindings.join(', ')}`
     )
   })
-
-  await checkAsync(
-    'a retained player is put back in the window before it is given one',
-    async () => {
-      const { player, sent } = fakePlayer()
-      // What the last session left behind. The mpv PROCESS outlives a session and
-      // keeps its properties, and nothing tracks the app window between sessions
-      // — so leaving fullscreen while stopped goes unheard.
-      await player.setFullscreen(true)
-      sent.length = 0
-
-      // What starting a windowed title on that process has to do, in this order.
-      await player.setFullscreen(false)
-      await player.setBounds({ x: 0, y: 0, width: 1600, height: 900 })
-
-      assert.deepEqual(
-        propertiesWritten(sent),
-        ['fullscreen', 'geometry'],
-        // The other order loses the rectangle: geometry writes are dropped while
-        // mpv still believes it is fullscreen, so the next title's window would
-        // be created from the last session's bounds — screen-sized, over a
-        // windowed app, for as long as the load takes.
-        `stale fullscreen was not cleared before the rectangle: ${sent.join(' ')}`
-      )
-    }
-  )
 
   await checkAsync('a rejected command names which call failed', async () => {
     const { player } = fakePlayer('error accessing property')

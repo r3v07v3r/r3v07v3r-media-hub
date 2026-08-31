@@ -247,7 +247,10 @@ async function captureAndSample(win: BrowserWindow, name: string): Promise<Sampl
   }
   log(
     `${name}: ${samples
-      .map((s) => `(${s.x},${s.y})#${[s.r, s.g, s.b].map((v) => v.toString(16).padStart(2, '0')).join('')}`)
+      .map(
+        (s) =>
+          `(${s.x},${s.y})#${[s.r, s.g, s.b].map((v) => v.toString(16).padStart(2, '0')).join('')}`
+      )
       .join(' ')}`
   )
   return samples
@@ -391,7 +394,10 @@ export async function runEmbedSpike(): Promise<void> {
     } catch (error) {
       log(`mouse-pos query failed: ${error instanceof Error ? error.message : String(error)}`)
     }
-    verdict('click-reaches-mpv', clickMessages.some((m) => m.includes('r3-spike-click')))
+    verdict(
+      'click-reaches-mpv',
+      clickMessages.some((m) => m.includes('r3-spike-click'))
+    )
 
     // Stop must reveal the page again (--force-window=no destroys the child).
     await mpv.command(['stop'])
