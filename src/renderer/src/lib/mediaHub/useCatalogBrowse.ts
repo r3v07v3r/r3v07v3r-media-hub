@@ -216,8 +216,9 @@ export function useCatalogBrowse(
           )
           total = result.total
           offset += result.items.length
-          // Short answer = the backend ran dry (see the page-zero note).
-          end = result.items.length < asked
+          // Short answer = ran dry; offset at total = done (see the
+          // page-zero note).
+          end = result.items.length < asked || offset >= total
           for (const row of result.items) {
             if (seen.has(row.id)) continue
             seen.add(row.id)
@@ -284,14 +285,14 @@ export function useCatalogBrowse(
           completedIds: result.completedIds,
           total: result.total,
           offset: result.items.length,
-          // A SHORT page is the end, not just an empty one. The backend
-          // fills every page it can; getting back fewer rows than asked
-          // for means it ran dry — and waiting for an empty confirming
-          // page would need the already-intersecting sentinel to fire
-          // again, which observers only do on transitions. When dedup
-          // ever leaves rows short of a shifted total, `end` is what
-          // stops the grid from mounting a loading sentinel forever.
-          end: result.items.length < BROWSE_PAGE_SIZE,
+          // A SHORT page is the end, not just an empty one — the backend
+          // fills every page it can, so fewer rows than asked means it
+          // ran dry. So is the offset reaching the total. Waiting for an
+          // empty confirming page would need the already-intersecting
+          // sentinel to fire again, which observers only do on
+          // transitions; `end` is what stops the grid from mounting a
+          // loading sentinel forever.
+          end: result.items.length < BROWSE_PAGE_SIZE || result.items.length >= result.total,
           loading: false,
           error: false
         })
@@ -328,16 +329,30 @@ export function useCatalogBrowse(
       const result = await fetchPage(snapshot.offset)
       if (!result || stateRef.current.viewKey !== viewKey) return null
       // A reload replaced the window while this page was in flight: the
-      // snapshot this fetch was based on no longer exists. Discard —
-      // hasMore is still true, so the sentinel re-requests fresh.
-      if (reloadGenRef.current !== generation) return null
+      // snapshot this fetch was based on no longer exists. Discard — but
+      // the sentinel that asked is still intersecting and will NOT ask
+      // again, so the retry is scheduled here: remembered for the reload
+      // to re-issue if one is still running, or re-queued directly (as a
+      // microtask, so it runs after this call's finally releases the
+      // lock) when the reload already finished before this fetch landed.
+      if (reloadGenRef.current !== generation) {
+        if (reloadingRef.current) retryAppendRef.current = true
+        else
+          queueMicrotask(() => {
+            void appendPageRef.current?.()
+          })
+        return null
+      }
       const seen = new Set(snapshot.rows.map((row) => row.id))
       const fresh = result.items.filter((row) => !seen.has(row.id))
       const nextOffset = snapshot.offset + result.items.length
-      // Short page = the end (see the page-zero note): without this, an
-      // overlapping tail page deduped below a shifted total would leave
-      // hasMore true against a sentinel that never fires again.
-      const end = result.items.length < BROWSE_PAGE_SIZE
+      // Two ways a view ends, both learned from the same stalled
+      // sentinel: a SHORT page (the backend ran dry mid-page), and the
+      // backend OFFSET reaching the total (a full terminal page whose
+      // overlap deduped the display below the total — the confirming
+      // empty request would need an intersection transition that never
+      // comes). Either way, done is done.
+      const end = result.items.length < BROWSE_PAGE_SIZE || nextOffset >= result.total
       setState((previous) =>
         previous.viewKey === viewKey
           ? {
