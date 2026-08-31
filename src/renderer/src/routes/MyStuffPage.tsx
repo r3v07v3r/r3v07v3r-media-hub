@@ -12,6 +12,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { useAppState } from '@renderer/context/AppStateContext'
+import { useCatalogByIds } from '@renderer/lib/mediaHub/useCatalogByIds'
 import { Icon } from '@renderer/components/icons/Icon'
 import { useRestoreBrowsingOrigin } from '@renderer/lib/mediaHub/useRestoreBrowsingOrigin'
 import { useMediaHubLists, useMediaHubPlays } from '@renderer/lib/mediaHub/hooks'
@@ -271,7 +272,9 @@ function syncWhen(at: number): string {
 }
 
 function ListsView({ watchlist }: { watchlist: MediaItem[] }) {
-  const { openDetail, libraryKey, plannedSources, catalog } = useAppState()
+  const { openDetail, libraryKey, plannedSources, adaptCatalogItems, catalogKindStates } =
+    useAppState()
+  const indexRevision = `${catalogKindStates.movie}:${catalogKindStates.series}:${catalogKindStates.anime}`
   const [filters, setFilters] = useState<PlannedFilterState>(EMPTY_PLANNED_FILTERS)
   const [report, setReport] = useState<PlannedSyncReport | null>(null)
   const [syncing, setSyncing] = useState(false)
@@ -347,15 +350,17 @@ function ListsView({ watchlist }: { watchlist: MediaItem[] }) {
   }, [])
   const selectedRemote = remoteLists.find((list) => list.id === selected) ?? null
 
-  // Matched against the catalog by id, so a remote list's rows carry this
-  // app's own artwork and ratings rather than the thin record the service
-  // returned. Anything the catalog has never seen is dropped: a card with
-  // no art and no detail page to open is not a row worth drawing.
-  const remoteListItems = useMemo(() => {
-    if (!selectedRemote) return []
-    const wanted = new Set(selectedRemote.items.map((entry) => entry.id))
-    return catalog.filter((media) => wanted.has(media.id))
-  }, [selectedRemote, catalog])
+  // Matched against the INDEX by id (stage 4), so a remote list's rows
+  // carry this app's own artwork and ratings rather than the thin record
+  // the service returned — and a list is never truncated to whatever the
+  // bounded candidate pool happened to hold. Anything the index has
+  // never seen is still dropped: a card with no art and no detail page
+  // to open is not a row worth drawing.
+  const remoteIds = useMemo(
+    () => new Set((selectedRemote?.items ?? []).map((entry) => entry.id)),
+    [selectedRemote]
+  )
+  const { items: remoteListItems } = useCatalogByIds(remoteIds, adaptCatalogItems, indexRevision)
 
   useEffect(() => {
     if (!effective) return
@@ -611,8 +616,20 @@ function ListsView({ watchlist }: { watchlist: MediaItem[] }) {
 }
 
 export default function MyStuffPage() {
-  const { myList, catalog, continueWatching, dislikedIds, ratings, mediaHubSettings } =
-    useAppState()
+  const {
+    myList,
+    continueWatching,
+    dislikedIds,
+    ratings,
+    mediaHubSettings,
+    watchedIds,
+    adaptCatalogItems,
+    catalogKindStates
+  } = useAppState()
+  // The index-growth revision for every byIds fetch on this page: a kind
+  // settling (first seed on a fresh database included) is exactly when
+  // an early empty answer stops being true.
+  const indexRevision = `${catalogKindStates.movie}:${catalogKindStates.series}:${catalogKindStates.anime}`
   const [tab, setTab] = useState<TabId>('list')
   useRestoreBrowsingOrigin(true)
 
@@ -629,13 +646,15 @@ export default function MyStuffPage() {
     [mediaHubSettings]
   )
 
+  // STAGE 4: every tab that used to scan the loaded catalog now fetches
+  // its exact ids from the INDEX. The loaded catalog is a bounded
+  // candidate pool, and a tracked/rated/watched title has every right
+  // to live outside it — these tabs are precisely the surfaces that
+  // must not shrink when the pool does.
+  const { items: listRows } = useCatalogByIds(myList, adaptCatalogItems, indexRevision)
   const listItems = useMemo(
-    () =>
-      applyWatchStateFilters(
-        catalog.filter((m) => myList.has(m.id)),
-        hideFilters
-      ),
-    [catalog, myList, hideFilters]
+    () => applyWatchStateFilters(listRows, hideFilters),
+    [listRows, hideFilters]
   )
 
   // Straight off the Continue Watching row rather than re-derived from the
@@ -646,24 +665,24 @@ export default function MyStuffPage() {
     [continueWatching]
   )
 
-  // The watched/completed flags are baked into each MediaItem at conversion
-  // time (see adapters.ts), so this needs no second history fetch.
-  const watchedItems = useMemo(() => catalog.filter((m) => m.completed || m.watched), [catalog])
+  // The watched/completed flags are baked in at adaptation (adapters.ts);
+  // the id set decides WHAT to fetch, the adapter decides what it means.
+  const { items: watchedRows } = useCatalogByIds(watchedIds, adaptCatalogItems, indexRevision)
+  const watchedItems = useMemo(
+    () => watchedRows.filter((m) => m.completed || m.watched),
+    [watchedRows]
+  )
 
   // Highest score first, because a list of things you rated is a list you
   // scan for the best of them.
+  const ratingIds = useMemo(() => new Set(ratings.keys()), [ratings])
+  const { items: ratedRows } = useCatalogByIds(ratingIds, adaptCatalogItems, indexRevision)
   const ratedItems = useMemo(
-    () =>
-      catalog
-        .filter((m) => ratings.has(m.id))
-        .sort((a, b) => (ratings.get(b.id) ?? 0) - (ratings.get(a.id) ?? 0)),
-    [catalog, ratings]
+    () => [...ratedRows].sort((a, b) => (ratings.get(b.id) ?? 0) - (ratings.get(a.id) ?? 0)),
+    [ratedRows, ratings]
   )
 
-  const droppedItems = useMemo(
-    () => catalog.filter((m) => dislikedIds.has(m.id)),
-    [catalog, dislikedIds]
-  )
+  const { items: droppedItems } = useCatalogByIds(dislikedIds, adaptCatalogItems, indexRevision)
 
   return (
     <div className={styles.wrap}>

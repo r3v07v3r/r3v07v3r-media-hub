@@ -1651,3 +1651,37 @@ export interface CatalogFacets {
   years: number[]
   statuses: string[]
 }
+
+/** What one press of the deep-scan button did — see catalog:deepScan.
+ *  Depth goes to the INDEX only; the candidate pool never grows. */
+/** catalog:byIds' answer. completedIds rides along because index rows
+ *  carry no episode data — completion is only derivable in SQL, and
+ *  without it every id-fetched show would read as un-completed. */
+export interface CatalogByIdsResult {
+  items: CatalogItem[]
+  completedIds: string[]
+}
+
+export interface DeepScanReport {
+  kind: MediaKind
+  /** Titles the scanned stretch returned, before dedup and skips. */
+  scanned: number
+  /** Titles the index had never seen and now holds. */
+  added: number
+  /** The kind's whole index after the chunk — the library's new size. */
+  indexTotal: number
+  /** Where the NEXT press will start reading. */
+  offset: number
+  /** The stretch came back entirely empty: the upstream catalog has no
+   *  more to give, and the button should say so rather than invite
+   *  another press at the void. */
+  exhausted: boolean
+}
+
+/** Progress while a deep-scan chunk runs, pushed per page-group. */
+export interface DeepScanEvent {
+  kind: MediaKind
+  pagesDone: number
+  pagesTotal: number
+  added: number
+}
