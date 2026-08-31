@@ -1021,6 +1021,29 @@ function PlayerControls() {
       onDoubleClick={handleSurfaceDoubleClick}
     >
       <PlayerSessionRail open={roomRailOpen} onClose={() => setRoomRailOpen(false)} />
+
+      {/* Where am I in the show — season/episode and the episode's name,
+          floating top-left, appearing and fading exactly with the bottom
+          bar (same 220ms, same glass) so a mouse-wiggle answers the
+          question and playback stays chrome-free otherwise. Episodic
+          titles only: a film has no coordinates worth a badge. */}
+      {media && (media.seasonNumber != null || media.episodeNumber != null) && (
+        <div
+          className={`${styles.episodeBadge} ${
+            controlsVisible || pinned ? '' : styles.episodeBadgeHidden
+          }`}
+          aria-hidden={!(controlsVisible || pinned)}
+        >
+          <span className={styles.episodeBadgeCode}>
+            {media.seasonNumber != null ? `S${media.seasonNumber}` : ''}
+            {media.seasonNumber != null && media.episodeNumber != null ? ' · ' : ''}
+            {media.episodeNumber != null ? `E${media.episodeNumber}` : ''}
+          </span>
+          {media.episodeTitle && (
+            <span className={styles.episodeBadgeName}>{media.episodeTitle}</span>
+          )}
+        </div>
+      )}
       {buffering && (
         <div className={styles.buffering} aria-live="polite">
           <span className={styles.spinner} aria-hidden="true" />
