@@ -2261,40 +2261,11 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       hostPartyRef
         .current(mediaHubSettingsRef.current?.partyDisplayName || 'A friend')
         .then((result) => {
-          // ANNOUNCE THE FILM ALREADY PLAYING before the offer goes out.
-          // This party was created on demand, minutes into a title — so the
-          // one broadcast that normally starts a follower's playback
-          // (startPartyPlayback's nowPlaying) fired long ago, into a party
-          // that didn't exist yet. Without this, the joiner landed in the
-          // chat with no picture and no way to ask for one — the exact
-          // live report this fixes. Announcing also stores the event
-          // host-side, so anyone who joins after this moment is caught up
+          // No nowPlaying announcement here: the party:host handler seeds
+          // the new party with the film already playing — at the LIVE
+          // playhead — in main, where both the session identity and the
+          // observed position actually live. The joiner is then caught up
           // by the ordinary late-join replay.
-          const playing = playbackMediaRef.current
-          if (playing) {
-            const kind = playing.mediaKind ?? (playing.mediaType === 'series' ? 'series' : 'movie')
-            window.api?.mediaHub?.party
-              ?.nowPlaying({
-                infoHash: '',
-                sources: [],
-                mediaId: buildMediaId(
-                  kind,
-                  playing.id,
-                  playing.seasonNumber,
-                  playing.episodeNumber
-                ),
-                item: {
-                  id: playing.id,
-                  type: kind,
-                  title: playing.title,
-                  poster: playing.posterUrl ?? ''
-                },
-                season: playing.seasonNumber,
-                episode: playing.episodeNumber,
-                position: 0
-              })
-              .catch(() => {})
-          }
           api
             .send(roomId, {
               type: 'friend-join-offer',

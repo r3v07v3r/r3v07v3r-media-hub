@@ -87,6 +87,27 @@ import {
 
 const player = new MpvPlayer()
 let sessionSnapshot: PlayerSessionSnapshot | null = null
+// The live playhead, straight from the time-pos observer. Kept here (not
+// asked of the overlay) so main-process callers — the watch party seeding
+// its nowPlaying from a film already in progress — can name the real
+// position instead of 0. Reset with the session it describes.
+let lastTimePos = 0
+
+/**
+ * What this app is playing RIGHT NOW, for a watch party being created
+ * around it: the session's media identity plus the live playhead. Null
+ * when nothing is playing. See watchParty's host handler — a party started
+ * mid-film must be born already knowing its film, or every joiner lands in
+ * the chat with no picture.
+ */
+export function currentPlaybackForParty(): {
+  media: NonNullable<PlayerSessionSnapshot['media']>
+  positionSeconds: number
+} | null {
+  const media = sessionSnapshot?.media
+  if (!media) return null
+  return { media, positionSeconds: Math.max(0, lastTimePos) }
+}
 
 /**
  * Pushes one subtitle look at mpv.
@@ -266,7 +287,10 @@ function forwardInput(action: PlayerInputEvent['action']): boolean {
  *  title — observers survive `loadfile`. */
 async function attachObservers(): Promise<void> {
   await player.observe('time-pos', (value) => {
-    if (typeof value === 'number') queuePatch({ timePos: value })
+    if (typeof value === 'number') {
+      lastTimePos = value
+      queuePatch({ timePos: value })
+    }
   })
   await player.observe('duration', (value) => {
     if (typeof value === 'number') queuePatch({ duration: value })
@@ -595,6 +619,11 @@ export async function startPlayerSession(
   await player.set('ab-loop-a', 'no').catch(() => {})
   await player.set('ab-loop-b', 'no').catch(() => {})
 
+  // The playhead belongs to the title about to load, not the outgoing one —
+  // a party hosted in the gap must not seed the new film with the old
+  // film's position. The observer refreshes it within the first second.
+  lastTimePos = Number(options.startSeconds) || 0
+
   await player.loadFile(url, {
     startSeconds: options.startSeconds,
     audioLanguage: options.audioLanguage,
@@ -653,6 +682,7 @@ export async function stopPlayerSession(): Promise<void> {
     flushTimer = null
   }
   sessionSnapshot = null
+  lastTimePos = 0
   closePlayerOverlay()
   // `stop` destroys mpv's embedded child window (verified in the spike), which
   // is what reveals the app UI again — no window state to unwind on this side.

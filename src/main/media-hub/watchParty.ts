@@ -50,6 +50,7 @@ import {
   type PartyRelayEndpoint
 } from './party'
 import { encrypt, partySyncCredentials, readSettings, writeSettings } from './settingsStore'
+import { currentPlaybackForParty } from './playerBridge'
 import { sendToRenderer } from './rendererBridge'
 import { sendToPlayerOverlay } from './playerWindow'
 import { attemptPortMapping } from './upnp'
@@ -607,6 +608,40 @@ export function registerWatchPartyIpc(): void {
     }
     party = hostState
 
+    // A party created around a film ALREADY PLAYING — "Start a Watch Party"
+    // from an in-progress title, or a room member's join request — is born
+    // knowing its film, at the LIVE playhead. Both of the announcement's
+    // usual sources are absent here: startPartyPlayback fires only when a
+    // host starts a title (which happened before this party existed), and
+    // the position heartbeat can update a stored nowPlaying but never
+    // create one. Seeded in main because main owns both facts (the session
+    // identity and the observed time-pos); the renderer paths need no
+    // seeding of their own.
+    const playing = currentPlaybackForParty()
+    if (playing) {
+      const media = playing.media
+      hostState.nowPlaying = {
+        type: 'nowPlaying',
+        infoHash: '',
+        sources: [],
+        // Same coordinate format the renderer's buildMediaId produces —
+        // torbox.ts's play:stream parses it back out on the follower side.
+        mediaId:
+          media.kind === 'movie'
+            ? media.id
+            : `${media.id}:${media.seasonNumber ?? 1}:${media.episodeNumber ?? 1}`,
+        item: {
+          id: media.id,
+          type: media.kind,
+          title: media.title,
+          poster: media.posterUrl || ''
+        },
+        season: media.seasonNumber,
+        episode: media.episodeNumber,
+        position: playing.positionSeconds
+      }
+    }
+
     // Everything a newcomer must be told, whichever door they came in by.
     // The roster broadcast was always here; the nowPlaying replay is the
     // fix for the live report "joining put me in the chat but not the
@@ -897,11 +932,28 @@ export function registerWatchPartyIpc(): void {
         nowPlaying: null
       }
       party = clientDirectState
+      // The transport is only CHOSEN once the host has actually answered.
+      // A TCP+WebSocket `open` proves a socket accepted the upgrade, not
+      // that it is this party's host: a stale LAN/WAN endpoint can now be
+      // some other WebSocket service, which would 'succeed' here and leave
+      // the working relay in a hybrid code untried, followed shortly by
+      // host-disconnected. The encrypted `welcome` is the handshake only
+      // the real host can produce (it holds the code's secret), so joining
+      // waits for it — and a close or timeout before it arrives is a
+      // failed ATTEMPT (thrown, so v5 falls back to the relay), never a
+      // "host disconnected" event for a party this client was never in.
+      let welcomed = false
+      let settleWelcome: { resolve: () => void; reject: (error: Error) => void } | null = null
+      const welcomePromise = new Promise<void>((resolve, reject) => {
+        settleWelcome = { resolve, reject }
+      })
       connectedWs.on('message', (raw) => {
         const msg = decryptMessage(secret, raw.toString()) as PartyMessage | null
         if (!msg) return
         if (msg.type === 'welcome') {
           if (party?.role === 'client') party.selfId = String(msg.id || '')
+          welcomed = true
+          settleWelcome?.resolve()
           return
         }
         if (msg.type === 'party-state') {
@@ -918,11 +970,33 @@ export function registerWatchPartyIpc(): void {
         handlePartyMessage('host', msg)
       })
       connectedWs.on('close', () => {
+        if (!welcomed) {
+          settleWelcome?.reject(new Error('The host closed the connection before answering.'))
+          if (party === clientDirectState) party = null
+          return
+        }
         if (party?.role === 'client') {
           party = null
           sendPartyEvent({ type: 'host-disconnected' })
         }
       })
+      const timer = setTimeout(
+        () => settleWelcome?.reject(new Error('The host did not answer the handshake.')),
+        6000
+      )
+      try {
+        await welcomePromise
+      } catch (error) {
+        if (party === clientDirectState) party = null
+        try {
+          connectedWs.close()
+        } catch {
+          // best-effort
+        }
+        throw error
+      } finally {
+        clearTimeout(timer)
+      }
     }
 
     if (parsed.v === 2) {
