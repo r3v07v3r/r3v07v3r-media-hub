@@ -13,6 +13,8 @@ import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { MEDIA_HUB_CHANNELS } from '../../shared/media-hub/ipc-channels'
 import type {
+  CacheDiskDrive,
+  CacheDiskProbeResult,
   CacheMode,
   ImportSummary,
   MediaHubPublicSettings,
@@ -63,7 +65,7 @@ interface RestoreResult {
 import { normalizePlaybackBuffer } from '../../shared/media-hub/playbackBuffer'
 import { normalizeVideoScaling } from '../../shared/media-hub/videoScaling'
 import { isAllowedExternalUrl } from './security'
-import { clearAllSessions, MIN_CACHE_BYTES } from './streamCache'
+import { cacheRootDir, clearAllSessions, MIN_CACHE_BYTES } from './streamCache'
 import {
   getTorBoxToken,
   omdbCredentials,
@@ -83,8 +85,9 @@ export function registerAppIpc(): void {
     // detectOllama), and the Settings pane renders these two fields, so it
     // has to be told which server is actually being asked.
     const ollama = ollamaConfig()
+    const stored = readSettings()
     return {
-      ...publicSettings(readSettings()),
+      ...publicSettings(stored),
       ollamaBaseUrl: ollama.baseUrl,
       ollamaModel: ollama.model,
       appVersion: app.getVersion(),
@@ -101,8 +104,75 @@ export function registerAppIpc(): void {
       // Whether the question has been PUT, which the stored flag alone
       // cannot say: absent and false both read as false once it is a
       // boolean, and only one of them should raise the first-run prompt.
-      storagePolicyChosen: readSettings().storeMedia !== undefined
+      storagePolicyChosen: stored.storeMedia !== undefined,
+      // Only the explicit flag — index.ts decides it once at startup, in
+      // both directions, BEFORE the default profile is seeded (see
+      // settingsStore's ensureSetupCompleteDecided). Inferring anything
+      // here would break the flow: the wizard writes storeMedia,
+      // partyDisplayName, tokens and the seeded profile mid-flow.
+      setupComplete: stored.setupComplete === true
     }
+  })
+
+  handle<undefined, { setupComplete: boolean }>(MEDIA_HUB_CHANNELS.settingsCompleteSetup, () => {
+    const settings = readSettings()
+    settings.setupComplete = true
+    writeSettings(settings)
+    return { setupComplete: true }
+  })
+
+  // What the welcome flow's tuning step sizes the cache from. Reports free
+  // space rather than choosing anything: the recommendation logic lives in
+  // the renderer, and the cache LOCATION can still only change through the
+  // native picker (settingsChooseStreamCacheDir) — this hands back drive
+  // roots for display, never accepts one.
+  handle<undefined, CacheDiskProbeResult>(MEDIA_HUB_CHANNELS.settingsCacheDiskProbe, async () => {
+    const cacheDir = cacheRootDir()
+    const toGb = (bytes: number): number => Math.round((bytes / 1024 ** 3) * 10) / 10
+    const probeRoot = async (root: string, isCacheDrive: boolean): Promise<CacheDiskDrive> => {
+      // statfs can stall on a disconnected network drive; a probe that
+      // slow is not a drive worth recommending anyway.
+      const stats = await Promise.race([
+        fsp.statfs(root),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('probe timeout')), 1500)
+        )
+      ])
+      return {
+        root,
+        freeGb: toGb(Number(stats.bavail) * Number(stats.bsize)),
+        totalGb: toGb(Number(stats.blocks) * Number(stats.bsize)),
+        isCacheDrive
+      }
+    }
+    if (process.platform !== 'win32') {
+      // No drive-letter concept — the filesystem holding the cache dir is
+      // the only mount this can name without guessing at mount tables.
+      // On a fresh install the cache dir itself does not exist yet (it is
+      // only created when playback first writes to it), and statfs on a
+      // missing path rejects — so walk up to the nearest ancestor that
+      // does exist: it is on the same filesystem, which is all statfs is
+      // being asked about.
+      let probePath = cacheDir
+      let drive: CacheDiskDrive | null = null
+      for (;;) {
+        drive = await probeRoot(probePath, true).catch(() => null)
+        const parent = path.dirname(probePath)
+        if (drive || parent === probePath) break
+        probePath = parent
+      }
+      return { cacheDir, drives: drive ? [{ ...drive, root: '/' }] : [] }
+    }
+    const cacheRoot = path.parse(cacheDir).root.toUpperCase()
+    const letters = 'CDEFGHIJKLMNOPQRSTUVWXYZ'
+    const probes = await Promise.allSettled(
+      [...letters].map((letter) => probeRoot(`${letter}:\\`, `${letter}:\\` === cacheRoot))
+    )
+    const drives = probes
+      .filter((p): p is PromiseFulfilledResult<CacheDiskDrive> => p.status === 'fulfilled')
+      .map((p) => p.value)
+      .filter((d) => d.totalGb > 0)
+    return { cacheDir, drives }
   })
 
   handle<unknown, { theme: string }>(MEDIA_HUB_CHANNELS.settingsSetTheme, (_event, value) => {

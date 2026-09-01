@@ -38,6 +38,16 @@ export interface MediaHubRawSettings {
    */
   watchlistTwoWay?: boolean
   onboardingVersion?: number
+  /** Whether the first-run welcome flow (name, playback source, storage,
+   *  cache tuning) has been completed or skipped. Absent only before the
+   *  first launch of a version that has the flow: ensureSetupCompleteDecided
+   *  (below) then stamps it in both directions — true when durable
+   *  pre-flow markers (storage answer, profiles, TorBox, room identity,
+   *  party name) prove the install predates the flow, explicit false on a
+   *  genuinely fresh install. Never absent afterwards, which is what keeps
+   *  the wizard's own mid-flow writes from ever being mistaken for a
+   *  pre-existing install. */
+  setupComplete?: boolean
   /** Which version of the one-time anime watch-history id repair this
    *  install has had — see animeSyncRepair.ts. Absent on installs that
    *  predate it, which is exactly who the repair is for. */
@@ -244,6 +254,39 @@ export function writeSettings(value: MediaHubRawSettings): void {
       // best-effort cleanup only
     }
   }
+}
+
+/**
+ * The one-time setupComplete decision, made in BOTH directions the first
+ * time a version carrying the welcome flow launches: durable pre-flow
+ * markers grandfather the install as complete (nobody already using the
+ * app gets greeted like a stranger), and a genuinely fresh install is
+ * stamped an explicit false. Stamping false is load-bearing — the flag is
+ * never absent again, so nothing written later (by the wizard mid-flow,
+ * or by startup itself) can be mistaken for a pre-existing install.
+ *
+ * ORDERING IS THE WHOLE GAME: index.ts must call this BEFORE anything
+ * that seeds settings — in particular before activeProfileId(), whose
+ * ensureProfiles() writes the default "Profile 1" on a fresh launch.
+ * Decided after that seed, the profiles marker below would be true on
+ * every fresh install and the welcome flow would never show at all.
+ *
+ * The markers are a disjunction rather than the storage answer alone
+ * because auto-update can skip releases: an install upgrading straight
+ * from a version predating the storage question still has profiles, a
+ * TorBox connection (onboardingVersion), a room identity, or a party
+ * name — any one proves the app was in use before the flow existed.
+ */
+export function ensureSetupCompleteDecided(): void {
+  const settings = readSettings()
+  if (settings.setupComplete !== undefined) return
+  settings.setupComplete =
+    settings.storeMedia !== undefined ||
+    settings.onboardingVersion !== undefined ||
+    (settings.profiles?.length ?? 0) > 0 ||
+    Boolean(settings.friendId) ||
+    Boolean(settings.partyDisplayName)
+  writeSettings(settings)
 }
 
 const ENCRYPTION_UNAVAILABLE_PREFIX = 'plain:'
