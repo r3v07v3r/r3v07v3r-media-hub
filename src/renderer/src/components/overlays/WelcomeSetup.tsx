@@ -650,8 +650,19 @@ export function WelcomeSetup() {
               <button
                 type="button"
                 className={styles.primary}
+                // Both probes must have SETTLED (success or failure) before
+                // Apply unlocks: a speed test that finishes first would
+                // otherwise offer a button whose click silently skips the
+                // still-pending cache-size recommendation. diskProbe is
+                // non-null once settled (a failed probe stores an empty
+                // result), and speed/speedError together cover the test.
+                // With both settled but nothing measured, there is nothing
+                // to apply — only "Keep defaults" remains.
                 disabled={
-                  busy || (!speed && !speedError) || (!speed && recommendedCacheGb === null)
+                  busy ||
+                  !diskProbe ||
+                  (!speed && !speedError) ||
+                  (!speed && recommendedCacheGb === null)
                 }
                 onClick={() => void applyTuning()}
               >
