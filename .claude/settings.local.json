@@ -1,8 +1,5 @@
 {
   "permissions": {
-    "allow": [
-      "Bash(git clone *)",
-      "Bash(ls -la /tmp/mediahub_clone 2>&1)"
-    ]
+    "allow": ["Bash(git clone *)", "Bash(ls -la /tmp/mediahub_clone 2>&1)"]
   }
 }

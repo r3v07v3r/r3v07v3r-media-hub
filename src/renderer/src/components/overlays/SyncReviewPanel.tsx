@@ -96,9 +96,7 @@ export function SyncReviewPanel() {
                       Use Local
                     </button>
                   ) : (
-                    <span className={styles.unpushableNote}>
-                      Local-only id — can’t be pushed
-                    </span>
+                    <span className={styles.unpushableNote}>Local-only id — can’t be pushed</span>
                   )}
                   <button
                     type="button"

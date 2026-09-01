@@ -298,7 +298,10 @@ check('a probe behind the playhead is bounded too', () => {
 
 check('the tolerance edge is inclusive, one byte past it is not', () => {
   const playheadFillByte = CHUNK * 10
-  assert.equal(fillBudgetBytes({ targetByte: playheadFillByte + TOLERANCE, playheadFillByte }), null)
+  assert.equal(
+    fillBudgetBytes({ targetByte: playheadFillByte + TOLERANCE, playheadFillByte }),
+    null
+  )
   assert.equal(
     fillBudgetBytes({ targetByte: playheadFillByte + TOLERANCE + 1, playheadFillByte }),
     CHUNK * 4

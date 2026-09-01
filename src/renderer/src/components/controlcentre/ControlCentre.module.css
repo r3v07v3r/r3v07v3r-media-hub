@@ -42,8 +42,7 @@
   min-height: 0;
   height: 100%;
 
-  background:
-    linear-gradient(180deg, rgba(6, 26, 18, 0.96) 0%, rgba(2, 10, 7, 0.98) 100%);
+  background: linear-gradient(180deg, rgba(6, 26, 18, 0.96) 0%, rgba(2, 10, 7, 0.98) 100%);
   border-bottom: 1px solid var(--border-active);
   box-shadow:
     0 40px 120px rgba(0, 0, 0, 0.7),

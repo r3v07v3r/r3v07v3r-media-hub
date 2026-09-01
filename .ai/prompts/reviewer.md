@@ -37,6 +37,7 @@ Compare the implementation strictly against `REQUIREMENTS.md` (provided below) a
 ## Priorities
 
 Classify every issue:
+
 - **P0** — broken / critical regression (app crashes, build fails, core flow unusable)
 - **P1** — an explicit requirement from REQUIREMENTS.md is not met
 - **P2** — significant visual/UX/functional problem, not explicitly spec'd but clearly wrong
