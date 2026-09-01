@@ -1251,7 +1251,11 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       // R3-Party-Sync is configured, the relay too — one code, every door.
       const result = await api.host(name)
       setPartyHostCode(result.code)
-      setPartyWanAvailable(result.wanAvailable ?? false)
+      // "Reachable beyond the LAN", not literally "WAN port mapped": the
+      // relay attaching makes the hybrid invite work across the internet
+      // even when UPnP failed, and the reachability banner must not tell a
+      // host to configure the relay they are already attached to.
+      setPartyWanAvailable((result.wanAvailable ?? false) || (result.relayAttached ?? false))
       setPartyHostPort(result.port ?? null)
       setPartyChat([])
       setPartyPanelOpen(true)
@@ -2065,6 +2069,10 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     hostPartyRef.current = hostParty
     mediaHubSettingsRef.current = mediaHubSettings
   }, [playbackMedia, hostParty, mediaHubSettings])
+  // The nowPlaying replay currently being resolved (type:id:season:episode),
+  // for the whole gap where playbackMedia is still null — see the follower
+  // unwrap's dedupe below.
+  const nowPlayingInFlightRef = useRef<string | null>(null)
 
   // Follower side of the above: unwrap an incoming `nowPlaying` (see
   // watchParty.ts's handlePartyMessage — every message type other than
@@ -2108,8 +2116,15 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       // nowPlaying is no longer a one-shot: the host replays it to every
       // late joiner and to anyone who asks to resync, and on the relay
       // those replays necessarily reach EVERY member (the worker only fans
-      // out). Already playing the exact title it names means this copy is
-      // someone else's catch-up, not an instruction to restart the film.
+      // out). Two duplicate shapes to refuse:
+      //  - already PLAYING the exact title it names — this copy is someone
+      //    else's catch-up, not an instruction to restart the film;
+      //  - already RESOLVING it — another member being admitted while this
+      //    one's stream search is still running re-broadcasts the same
+      //    event, and playbackMedia is still null for the whole resolve,
+      //    so only the in-flight key below can catch it. Without it, two
+      //    concurrent catalog lookups + startPlayback races.
+      const replayKey = `${msg.item.type}:${msg.item.id}:${msg.season ?? ''}:${msg.episode ?? ''}`
       const playing = playbackMediaRef.current
       if (
         playing &&
@@ -2119,8 +2134,10 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       ) {
         return
       }
+      if (nowPlayingInFlightRef.current === replayKey) return
       const catalogApi = window.api?.mediaHub?.catalog
       if (!catalogApi) return
+      nowPlayingInFlightRef.current = replayKey
       // Covers the case where a follower joins (or the message is missed)
       // after the host already sent `preparing` — nowPlaying implies a
       // load is in progress regardless of what came before it.
@@ -2151,7 +2168,14 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         // Cleared on EVERY outcome, not just success: startPlayback
         // resolves false for a no-source or TorBox-not-connected result
         // without throwing, and that path has to release the card too.
-        .finally(() => setPartyPreparing(null))
+        // The in-flight key clears the same way — only if it is still this
+        // resolve's, so a newer title's key is never wiped by an older
+        // resolve finishing late. A finished SUCCESS is covered from then
+        // on by the already-playing check above.
+        .finally(() => {
+          setPartyPreparing(null)
+          if (nowPlayingInFlightRef.current === replayKey) nowPlayingInFlightRef.current = null
+        })
     })
   }, [partyStatus, startPlayback, pushNotification])
 
