@@ -1072,6 +1072,11 @@ export interface MediaHubSettingsSnapshot extends MediaHubPublicSettings {
    *  install and nowhere else — this is what the first-run prompt keys on,
    *  which is why it is distinct from storeMedia being true or false. */
   storagePolicyChosen: boolean
+  /** Whether the welcome flow (pick a name, connect a playback source) has
+   *  been finished or skipped. False only on a fresh install: installs that
+   *  predate the flow are grandfathered in via the storage answer, which
+   *  every active install has necessarily given. Gates WelcomeSetup. */
+  setupComplete: boolean
 }
 
 /** What a probe of an Ollama instance found — see main/media-hub/ollamaService.ts. */

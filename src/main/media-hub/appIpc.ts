@@ -83,8 +83,9 @@ export function registerAppIpc(): void {
     // detectOllama), and the Settings pane renders these two fields, so it
     // has to be told which server is actually being asked.
     const ollama = ollamaConfig()
+    const stored = readSettings()
     return {
-      ...publicSettings(readSettings()),
+      ...publicSettings(stored),
       ollamaBaseUrl: ollama.baseUrl,
       ollamaModel: ollama.model,
       appVersion: app.getVersion(),
@@ -101,8 +102,19 @@ export function registerAppIpc(): void {
       // Whether the question has been PUT, which the stored flag alone
       // cannot say: absent and false both read as false once it is a
       // boolean, and only one of them should raise the first-run prompt.
-      storagePolicyChosen: readSettings().storeMedia !== undefined
+      storagePolicyChosen: stored.storeMedia !== undefined,
+      // An answered storage question also counts as complete: that prompt
+      // blocks the whole app, so any install that has a storeMedia value
+      // was in use before the welcome flow existed and must not see it.
+      setupComplete: stored.setupComplete === true || stored.storeMedia !== undefined
     }
+  })
+
+  handle<undefined, { setupComplete: boolean }>(MEDIA_HUB_CHANNELS.settingsCompleteSetup, () => {
+    const settings = readSettings()
+    settings.setupComplete = true
+    writeSettings(settings)
+    return { setupComplete: true }
   })
 
   handle<unknown, { theme: string }>(MEDIA_HUB_CHANNELS.settingsSetTheme, (_event, value) => {

@@ -38,6 +38,11 @@ export interface MediaHubRawSettings {
    */
   watchlistTwoWay?: boolean
   onboardingVersion?: number
+  /** Whether the first-run welcome flow (name + playback source) has been
+   *  completed or skipped. Absent on fresh installs — but the snapshot also
+   *  treats any install that has answered the storage question as complete,
+   *  so nobody who was already using the app gets greeted like a stranger. */
+  setupComplete?: boolean
   /** Which version of the one-time anime watch-history id repair this
    *  install has had — see animeSyncRepair.ts. Absent on installs that
    *  predate it, which is exactly who the repair is for. */

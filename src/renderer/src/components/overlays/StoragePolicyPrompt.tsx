@@ -30,8 +30,14 @@ export function StoragePolicyPrompt() {
 
   // Absent settings means the snapshot has not arrived yet, which is not the
   // same as an unanswered question — asking during the gap would flash a
-  // dialog at somebody who answered it months ago.
-  const visible = Boolean(mediaHubSettings) && !mediaHubSettings?.storagePolicyChosen
+  // dialog at somebody who answered it months ago. And on a genuinely fresh
+  // install this waits its turn behind the welcome flow (WelcomeSetup):
+  // first who you are and where video comes from, then whether it may
+  // touch the disk.
+  const visible =
+    Boolean(mediaHubSettings) &&
+    mediaHubSettings?.setupComplete === true &&
+    !mediaHubSettings?.storagePolicyChosen
 
   // FOCUS GOES IN, AND STAYS IN.
   //

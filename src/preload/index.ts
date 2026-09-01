@@ -288,6 +288,8 @@ const api = {
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.settingsResetStreamCacheDir),
       setPartyDisplayName: (name: string): Promise<{ partyDisplayName: string }> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.settingsSetPartyDisplayName, name),
+      completeSetup: (): Promise<{ setupComplete: boolean }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.settingsCompleteSetup),
       setHideDefaults: (
         partial: Partial<{
           hideWatchedDefault: boolean
