@@ -82,7 +82,6 @@ rooms still work, but removing members does not until you redeploy:
 cd party-sync-worker && npm run deploy
 ```
 
-
 ## Local testing
 
 ```
