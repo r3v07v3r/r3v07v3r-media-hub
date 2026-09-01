@@ -735,43 +735,50 @@ export function registerWatchPartyIpc(): void {
       // outage. The members' own sockets to the worker never dropped (the
       // blip was on this side), so they will not say hello again — they
       // are simply still there, which is why the close handler below keeps
-      // them. What proves who is still there is the worker's retained
-      // replay: it holds one frame per LIVE connection (every client's
-      // first message was its non-transient hello, so every live client
-      // has one) and replays them all on connect. Any envelope seen in the
-      // first seconds marks its connId alive; whoever is not heard from
-      // left during the outage and is pruned.
-      const seen = reconcile ? new Set<string>() : null
-      if (seen) {
-        const prune = setTimeout(() => {
-          if (party !== hostState || hostState.relay?.ws !== relayWs) return
-          for (const [id, member] of members) {
-            if (member.via === 'relay' && !seen.has(id)) members.delete(id)
-          }
-          // Broadcast regardless: it also delivers the roster to anyone
-          // re-admitted from a retained hello during the window.
-          broadcastPartyState()
-        }, 3000)
-        relayWs.on('close', () => clearTimeout(prune))
-      }
+      // them. The authority on who is still there is the WORKER's `peers`
+      // envelope (sent on connect, listing every live connection): the
+      // retained replay cannot be it, because the worker omits frames older
+      // than ten minutes, and a quiet member's only frame is often the
+      // hello it sent long ago — live on the socket, invisible in the
+      // replay. Against an older worker that sends no `peers`, nothing is
+      // pruned at all: a lingering ghost is recoverable, an evicted live
+      // member is not.
+      let pendingReconcile = reconcile
       relayWs.on('message', (raw) => {
-        let envelope: { type?: string; connId?: string; body?: string; isHost?: boolean }
+        let envelope: {
+          type?: string
+          connId?: string
+          body?: string
+          isHost?: boolean
+          connIds?: unknown
+        }
         try {
           envelope = JSON.parse(raw.toString())
         } catch {
           return
         }
         const fromId = String(envelope.connId || '')
+        if (envelope.type === 'peers') {
+          if (!pendingReconcile) return
+          pendingReconcile = false
+          const alive = new Set(
+            (Array.isArray(envelope.connIds) ? envelope.connIds : []).map(String)
+          )
+          for (const [id, member] of members) {
+            if (member.via === 'relay' && !alive.has(id)) members.delete(id)
+          }
+          // Broadcast regardless of whether anything was pruned: it also
+          // delivers the roster to members re-admitted from retained
+          // hellos below.
+          broadcastPartyState()
+          return
+        }
         if (envelope.type === 'retained') {
-          // Only meaningful while reconciling a reconnect — a fresh party's
-          // relay room is brand-new and has nothing retained.
-          if (!seen || !fromId) return
-          seen.add(fromId)
           // A retained hello is a member who joined (and stayed quiet)
-          // while this host was away: admit them, but with NO nowPlaying
-          // replay — ageMs on a retained frame means they have been in the
-          // party for a while, and the roster broadcast at prune time
-          // covers them.
+          // while this host was away: admit them by name, with NO
+          // nowPlaying replay — ageMs on a retained frame means they have
+          // been in the party for a while.
+          if (!fromId) return
           const msg = decryptMessage(secret, envelope.body || '') as PartyMessage | null
           if (msg?.type === 'hello' && !members.has(fromId) && members.size < MAX_PARTY_MEMBERS) {
             members.set(fromId, {
@@ -783,8 +790,7 @@ export function registerWatchPartyIpc(): void {
           }
           return
         }
-        if (envelope.type !== 'relay') return
-        if (seen && fromId) seen.add(fromId)
+        if (envelope.type !== 'relay' || !fromId) return
         const msg = decryptMessage(secret, envelope.body || '') as PartyMessage | null
         if (!msg) return
         if (msg.type === 'hello') {
@@ -803,7 +809,18 @@ export function registerWatchPartyIpc(): void {
           if (members.delete(fromId)) broadcastPartyState()
           return
         }
-        if (!members.has(fromId)) return
+        if (!members.has(fromId)) {
+          // A valid decrypt IS the membership credential — AES-GCM under
+          // the party secret authenticates, so only someone holding the
+          // invite can produce this frame. Reaching here unknown means the
+          // roster lost them (a reconnect against an older worker with no
+          // `peers` support, a hello this host never saw): re-admit rather
+          // than silently discarding everything they say. The name arrives
+          // with nothing but their hello, so it degrades to Guest.
+          if (members.size >= MAX_PARTY_MEMBERS) return
+          members.set(fromId, { id: fromId, name: 'Guest', isHost: false, via: 'relay' })
+          broadcastPartyState()
+        }
         handlePartyMessage(fromId, msg)
       })
       relayWs.on('close', () => {
@@ -1008,26 +1025,35 @@ export function registerWatchPartyIpc(): void {
       })
     }
 
+    // The WHOLE attempt — connect AND the encrypted welcome — is made per
+    // endpoint. A socket `open` alone proves nothing about who answered
+    // (a joiner's own LAN can have an unrelated WebSocket service on the
+    // exact private address a stale invite names), and treating it as
+    // success used to end the endpoint loop — so a dud LAN endpoint cost
+    // the perfectly good WAN one its turn, and the relay after that.
     const joinDirectParty = async (
       endpoints: PartyLanEndpoint[],
       secret: string
     ): Promise<void> => {
-      let ws: WebSocket | null = null
       let lastError: unknown = null
       for (const endpoint of endpoints) {
         try {
-          ws = await connectPartyWs(endpoint, secret, displayName)
-          break
+          await joinDirectEndpoint(endpoint, secret)
+          return
         } catch (error) {
           lastError = error
         }
       }
-      if (!ws) {
-        throw new Error(
-          lastError instanceof Error ? lastError.message : 'Could not reach the watch party host.'
-        )
-      }
-      const connectedWs = ws
+      throw new Error(
+        lastError instanceof Error ? lastError.message : 'Could not reach the watch party host.'
+      )
+    }
+
+    const joinDirectEndpoint = async (
+      endpoint: PartyLanEndpoint,
+      secret: string
+    ): Promise<void> => {
+      const connectedWs = await connectPartyWs(endpoint, secret, displayName)
       const clientDirectState: PartyStateClient = {
         role: 'client',
         mode: 'direct',
