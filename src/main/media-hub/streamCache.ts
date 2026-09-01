@@ -1010,15 +1010,49 @@ export function createStreamCache({
       if (generation !== myGeneration) return
       if (!response.body) return
       const reader = response.body.getReader()
-      let buffered = Buffer.alloc(0)
+      // Socket reads accumulate as a LIST of pieces and each 4MB chunk is
+      // assembled with one concat. The single-Buffer accumulator this
+      // replaces (`buffered = Buffer.concat([buffered, value])` per read)
+      // re-allocated and copied everything already held on EVERY ~64KB
+      // read — O(n²) per chunk, which at a debrid link's initial burst
+      // speed is multiple GB/s of memcpy demand on the main thread, for
+      // exactly the seconds the playback start is doing everything else
+      // too. Measured symptom of that busy window: system-wide cursor
+      // hitching while the overlay's low-level mouse hook waited on this
+      // very thread.
+      const pieces: Buffer[] = []
+      let bufferedLength = 0
       let bytePos = alignedStart
+      /** Removes exactly CHUNK_BYTES from the front of `pieces`, copying
+       *  once. Callers guarantee bufferedLength >= CHUNK_BYTES. */
+      const takeChunk = (): Buffer => {
+        const parts: Buffer[] = []
+        let need = CHUNK_BYTES
+        while (need > 0) {
+          const head = pieces[0]
+          if (head.length <= need) {
+            parts.push(head)
+            pieces.shift()
+            need -= head.length
+          } else {
+            parts.push(head.subarray(0, need))
+            pieces[0] = head.subarray(need)
+            need = 0
+          }
+        }
+        bufferedLength -= CHUNK_BYTES
+        return Buffer.concat(parts, CHUNK_BYTES)
+      }
       for (;;) {
         if (generation !== myGeneration) return
         const { done, value } = await reader.read()
         if (generation !== myGeneration) return
         if (done) {
-          if (buffered.length > 0) {
-            await writeChunk(myCacheRoot, myToken, index, buffered)
+          if (bufferedLength > 0) {
+            const tail = Buffer.concat(pieces, bufferedLength)
+            pieces.length = 0
+            bufferedLength = 0
+            await writeChunk(myCacheRoot, myToken, index, tail)
             if (generation !== myGeneration) return
             markChunk(index, 'ready')
           }
@@ -1061,13 +1095,15 @@ export function createStreamCache({
           }
           return
         }
-        buffered = Buffer.concat([buffered, Buffer.from(value)])
+        // A view, not a copy: the fetch stream allocates a fresh buffer per
+        // read and never touches it again once handed over.
+        pieces.push(Buffer.from(value.buffer, value.byteOffset, value.byteLength))
+        bufferedLength += value.byteLength
         bytePos += value.byteLength
         fillFrontierByte = bytePos
-        while (buffered.length >= CHUNK_BYTES) {
+        while (bufferedLength >= CHUNK_BYTES) {
           if (generation !== myGeneration) return
-          const chunkData = buffered.subarray(0, CHUNK_BYTES)
-          buffered = Buffer.from(buffered.subarray(CHUNK_BYTES))
+          const chunkData = takeChunk()
           await writeChunk(myCacheRoot, myToken, index, chunkData)
           if (generation !== myGeneration) return
           markChunk(index, 'ready')
@@ -1749,12 +1785,14 @@ export async function pruneIdleSessions(maxAgeMs = 24 * 60 * 60 * 1000): Promise
     if (activeCacheTokens.has(entry.name)) continue
     const dir = path.join(root, entry.name)
     try {
-      const files = await fsp.readdir(dir)
-      let newestMtime = 0
-      for (const file of files) {
-        const stat = await fsp.stat(path.join(dir, file))
-        newestMtime = Math.max(newestMtime, stat.mtimeMs)
-      }
+      // The directory's own mtime, not a stat of every chunk inside it:
+      // chunk writes land by rename-into-directory and evictions remove
+      // entries, both of which bump the directory timestamp — the same
+      // signal the newest-file scan derived at a stat per chunk file,
+      // thousands of calls per pass on a cache holding a few films.
+      // (Reads bump neither, exactly as before; the active session is
+      // already exempted above.)
+      const newestMtime = (await fsp.stat(dir)).mtimeMs
       if (newestMtime === 0 || newestMtime < cutoff) {
         await fsp.rm(dir, { recursive: true, force: true })
       }
@@ -1801,6 +1839,28 @@ export interface LocalCacheCandidate {
  * Returns the best match: a complete session beats a partial one, and
  * among partials the one holding the most bytes wins.
  */
+/**
+ * Bytes held by a session, from one readdir listing — NO per-file stat.
+ *
+ * Chunks are fixed CHUNK_BYTES; the only partial file a fill ever writes is
+ * the final one at EOF, so `count * CHUNK_BYTES` is exact for every session
+ * except an at-most-4MB overcount on the tail — capped by totalBytes when
+ * known, which also makes the completeness comparison exact (all chunks
+ * present ⇔ count * CHUNK_BYTES >= totalBytes). The stat-per-chunk loop this
+ * replaces ran on the PLAY CLICK across every session directory: a few
+ * cached films is tens of thousands of sequential stat round trips (each
+ * one a threadpool hop plus the AV filter driver), a multi-second metadata
+ * storm in the exact window the playback start needs the main thread.
+ */
+function estimatedCachedBytes(files: string[], totalBytes: number | null): number {
+  let chunkCount = 0
+  for (const file of files) {
+    if (file.startsWith('chunk-') && file.endsWith('.bin')) chunkCount += 1
+  }
+  const estimate = chunkCount * CHUNK_BYTES
+  return totalBytes !== null ? Math.min(estimate, totalBytes) : estimate
+}
+
 export async function findLocalCacheCandidate(
   meta: CacheSessionMeta | undefined
 ): Promise<LocalCacheCandidate | null> {
@@ -1833,11 +1893,10 @@ export async function findLocalCacheCandidate(
       ) as StoredMeta
       if (cacheContentKey(stored) !== key) continue
 
-      let cachedBytes = 0
-      for (const file of await fsp.readdir(path.join(root, entry.name))) {
-        if (!file.startsWith('chunk-') || !file.endsWith('.bin')) continue
-        cachedBytes += (await fsp.stat(path.join(root, entry.name, file))).size
-      }
+      const cachedBytes = estimatedCachedBytes(
+        await fsp.readdir(path.join(root, entry.name)),
+        stored.totalBytes
+      )
       if (cachedBytes <= 0) continue
 
       const candidate: LocalCacheCandidate = {
@@ -1882,13 +1941,8 @@ export async function listCacheSessions(activeToken: string): Promise<StreamCach
     try {
       const raw = await fsp.readFile(metaFilePath(root, entry.name), 'utf8')
       const meta = JSON.parse(raw) as StoredMeta
-      const files = await fsp.readdir(dir)
-      let cachedBytes = 0
-      for (const file of files) {
-        if (!file.startsWith('chunk-') || !file.endsWith('.bin')) continue
-        const stat = await fsp.stat(path.join(dir, file))
-        cachedBytes += stat.size
-      }
+      // See estimatedCachedBytes — one listing, no stat-per-chunk.
+      const cachedBytes = estimatedCachedBytes(await fsp.readdir(dir), meta.totalBytes)
       result.push({
         token: entry.name,
         title: meta.title,

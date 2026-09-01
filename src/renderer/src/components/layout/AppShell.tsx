@@ -44,9 +44,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   // While a film plays, the video is an embedded native child window covering
   // this whole document — every pixel of the page is invisible, but the page
-  // can still be HIT: the controls overlay is click-through while its controls
-  // are hidden, and mpv's embedded child processes no mouse input, so a click
-  // that slips through both would land on whatever invisible element happens
+  // can still be HIT: mpv's embedded child processes no mouse input, so in
+  // the moments the controls overlay is not there to take a click (it is
+  // created and revealed asynchronously around the load, and hidden with the
+  // party hub), the click would land on whatever invisible element happens
   // to be underneath and quietly navigate the app under the film. Refuse
   // pointer events for the duration instead (global.css's
   // [data-playback-covered='true'] rule).

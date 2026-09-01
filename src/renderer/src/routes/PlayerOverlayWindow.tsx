@@ -8,11 +8,15 @@
 // Two structural behaviours live here rather than in the controls themselves,
 // because they are about the window and not about any one control:
 //
-//  1. CLICK-THROUGH. While the controls are hidden the whole window is
-//     click-through (main calls setIgnoreMouseEvents with forward: true), so
-//     clicks land on mpv while mousemove still reaches this side to reveal the
-//     controls. Without it, an invisible full-screen window would swallow every
-//     click aimed at the picture.
+//  1. ALL POINTER INPUT IS OURS, controls showing or not. The embedded video
+//     child underneath processes no mouse input at all (see mpv.ts's
+//     bindSafetyKeys), so this window is never click-through: the surface
+//     handlers below do click-to-pause and double-click-fullscreen even while
+//     the controls are faded out, which is what keeps a stationary click on
+//     an idle player meaning "pause" — the job mpv's own MBTN_LEFT binding
+//     did when the video was a real window. That also makes the cursor ours
+//     to manage: it hides with the controls (styles.surfaceIdle), since
+//     nothing below this window will ever hide it for us.
 //  2. NO SHOW/HIDE. The window stays up for the whole session and the controls
 //     fade with CSS. Toggling a transparent window's visibility is what
 //     produces the flicker Electron transparent overlays are known for on
@@ -283,9 +287,8 @@ function PlayerControls() {
 
   // A menu or an in-flight sync has to pin the controls open — otherwise the
   // idle timer closes the surface out from under someone mid-selection.
-  // The post-play card pins too. The window is click-through whenever the
-  // controls are hidden, so a card whose buttons appeared without this would
-  // pass every click straight through to mpv — visible, and unpressable.
+  // The post-play card pins too: its buttons must not fade (or lose the
+  // cursor — see surfaceIdle) while someone is deciding.
   const pinned = menu !== null || party.syncing || roomRailOpen || autoplay !== null
 
   const revealControls = useCallback(() => {
@@ -321,7 +324,9 @@ function PlayerControls() {
     }
   }, [revealControls])
 
-  // The window only takes mouse input while there is something to click.
+  // The window takes mouse input for the whole session; what this reports is
+  // the reveal edge, which main uses to decide when the KEYBOARD should
+  // follow the controls (playerBridge's set-interactive handling).
   useEffect(() => {
     setInteractive(controlsVisible || pinned)
   }, [controlsVisible, pinned, setInteractive])
@@ -660,9 +665,10 @@ function PlayerControls() {
   // stays coherent for a watch party: both toggles broadcast, so everyone ends
   // up in the same state rather than the host alone.
   //
-  // All of this covers clicks while the controls are up. When they are hidden
-  // the window is click-through and the click reaches mpv instead, which is
-  // what its MBTN_LEFT binding is for (see mpv.ts's bindSafetyKeys).
+  // Controls up or faded, this is THE click path: the window takes every
+  // mouse event for the whole session (see this file's header), so a
+  // stationary click on an idle player lands here and pauses — the embedded
+  // video below processes no mouse input, and nothing else could act on it.
   const pausedBeforeClick = useRef(paused)
   const handleSurfaceClick = useCallback(
     (event: React.MouseEvent<HTMLDivElement>) => {
@@ -700,26 +706,17 @@ function PlayerControls() {
     [party, toggleFullscreen]
   )
 
-  // Input that reached mpv's window instead of this one, because the controls
-  // were hidden and the overlay was click-through (see mpv.ts's bindSafetyKeys
-  // for which inputs, and why they cannot be applied in main). Routed through
-  // the same handlers as a click here, so the two can never drift apart on who
-  // is allowed to pause or on what the party is told.
+  // Input that reached mpv's window instead of this one. Vestigial with the
+  // embedded player — the video child processes no input and never holds
+  // focus (see mpv.ts's bindSafetyKeys), and this window now takes every
+  // mouse event itself — but the route stays wired: if some mpv build ever
+  // does take an event, it lands in exactly the handlers a click here uses,
+  // so the two can never drift apart on who is allowed to pause or on what
+  // the party is told.
   //
   // The handlers are read from a ref rather than listed as dependencies:
   // usePartySync returns a fresh object every render, and re-subscribing an IPC
   // channel that often for a callback that changes nothing would be waste.
-  // Deliberately NOT revealing the controls here, tempting as it is.
-  //
-  // Revealing them makes this window interactive, and that hands mouse
-  // ownership back from mpv within a few milliseconds — long before the second
-  // click of a double-click arrives. That click would then land on this window
-  // instead, where it is the *first* click as far as Chromium's click counting
-  // is concerned, so mpv never reports MBTN_LEFT_DBL and React never sees a
-  // pair: the double-click-to-fullscreen gesture disappears exactly in the
-  // state these bindings exist to serve. Both clicks have to stay with the
-  // window that saw the first one, so the controls stay put and any mouse
-  // movement brings them back as it always has.
   const forwardedInput = useRef({ party, toggleFullscreen })
   useEffect(() => {
     forwardedInput.current = { party, toggleFullscreen }
@@ -1015,7 +1012,10 @@ function PlayerControls() {
 
   return (
     <div
-      className={styles.surface}
+      // surfaceIdle hides the cursor along with the controls. Ours to do now:
+      // this window owns every mouse event, and the input-less video child
+      // beneath it will never hide a cursor parked over the film.
+      className={`${styles.surface} ${controlsVisible || pinned ? '' : styles.surfaceIdle}`}
       onMouseMove={revealControls}
       onClick={handleSurfaceClick}
       onDoubleClick={handleSurfaceDoubleClick}
