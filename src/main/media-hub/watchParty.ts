@@ -119,6 +119,13 @@ interface PartyStateHost {
   port: number
   upnpStop?: () => void
   relay: { ws: WebSocket; url: string; roomId: string } | null
+  /** The relay room's host credentials, kept for RECONNECTING: the hybrid
+   *  invite names this exact roomId, so a dropped relay socket must come
+   *  back to the SAME room or the code's relay door leads to a party with
+   *  no host in it. Null when no relay was ever attached. */
+  relayCreds: { url: string; roomId: string; roomToken: string } | null
+  relayReattempts: number
+  relayReattachTimer?: NodeJS.Timeout
   /** The invite code minted at host time — republished to rooms so a
    *  member's "Watch" button can join without the request round trip. */
   code: string
@@ -136,6 +143,14 @@ interface PartyStateHost {
    *  live report that prompted it. Cleared when the host's own player
    *  closes (the 'watching: false' self-report). */
   nowPlaying: PartyNowPlayingEvent | null
+  /** True between `preparing` (the host picked the NEXT title) and its
+   *  nowPlaying (or preparing-cancelled). The stored nowPlaying still
+   *  names the OUTGOING title for that whole window, so late-join replay
+   *  and resync answers are suppressed — a member admitted mid-switch
+   *  would otherwise be sent title A, start resolving it, and race B's
+   *  announcement that is seconds away. They get B's broadcast like
+   *  everyone else. */
+  preparing: boolean
 }
 
 interface PartyStateClient {
@@ -325,7 +340,10 @@ function handlePartyMessage(fromId: string, msg: PartyMessage): void {
   // side's broadcast-only addressing safe here.
   if (current?.role === 'host' && msg?.type === 'resync-request') {
     const member = current.members.get(fromId)
-    if (member && current.nowPlaying) {
+    // Same preparing guard as admit: mid-title-change the stored event
+    // names the outgoing title, and the asker will get the new one's
+    // broadcast within seconds anyway.
+    if (member && current.nowPlaying && !current.preparing) {
       sendToMember(member, encryptMessage(current.secret, current.nowPlaying))
     }
     return
@@ -384,6 +402,12 @@ export function closeParty(): void {
   const current = party
   if (!current) return
   if (current.role === 'host') {
+    // The reattach loop must die with the party, or it would reconnect a
+    // host socket to a room nobody is hosting any more.
+    if (current.relayReattachTimer) {
+      clearTimeout(current.relayReattachTimer)
+      current.relayReattachTimer = undefined
+    }
     for (const m of current.members.values()) {
       try {
         m.ws?.close()
@@ -596,6 +620,8 @@ export function registerWatchPartyIpc(): void {
       wss,
       port,
       relay: null,
+      relayCreds: null,
+      relayReattempts: 0,
       code: '',
       secret,
       members,
@@ -604,7 +630,8 @@ export function registerWatchPartyIpc(): void {
       hostName: name,
       queue: [],
       allowMemberControl: false,
-      nowPlaying: null
+      nowPlaying: null,
+      preparing: false
     }
     party = hostState
 
@@ -649,7 +676,9 @@ export function registerWatchPartyIpc(): void {
     // announced to them, and nothing else ever would.
     const admit = (member: PartyHostMember): void => {
       broadcastPartyState()
-      if (hostState.nowPlaying) {
+      // Not while a title change is in flight: the stored event still names
+      // the OUTGOING title — see PartyStateHost.preparing.
+      if (hostState.nowPlaying && !hostState.preparing) {
         sendToMember(member, encryptMessage(secret, hostState.nowPlaying))
       }
     }
@@ -701,6 +730,92 @@ export function registerWatchPartyIpc(): void {
     // misconfigured costs the party its across-the-internet door, not its
     // existence. Attached after the direct listener so a failure here can
     // never take down what already works.
+    const wireRelayWs = (relayWs: WebSocket): void => {
+      relayWs.on('message', (raw) => {
+        let envelope: { type?: string; connId?: string; body?: string; isHost?: boolean }
+        try {
+          envelope = JSON.parse(raw.toString())
+        } catch {
+          return
+        }
+        if (envelope.type !== 'relay') return
+        const msg = decryptMessage(secret, envelope.body || '') as PartyMessage | null
+        if (!msg) return
+        const fromId = String(envelope.connId || '')
+        if (msg.type === 'hello') {
+          if (!members.has(fromId) && members.size >= MAX_PARTY_MEMBERS) return
+          const member: PartyHostMember = {
+            id: fromId,
+            name: String(msg.name || 'Guest').slice(0, 40) || 'Guest',
+            isHost: false,
+            via: 'relay'
+          }
+          members.set(fromId, member)
+          admit(member)
+          return
+        }
+        if (msg.type === 'leave') {
+          if (members.delete(fromId)) broadcastPartyState()
+          return
+        }
+        if (!members.has(fromId)) return
+        handlePartyMessage(fromId, msg)
+      })
+      relayWs.on('close', () => {
+        // Losing the relay is losing ONE door, not the party: direct
+        // members are untouched, so only the relay-side roster goes — and
+        // the door is REOPENED, because the hybrid invite names this exact
+        // relay room. The worker keeps admitting joiners to the room while
+        // it exists, so without a reconnect a transient drop would leave
+        // every later relay joiner connected to a party with no host in it,
+        // holding a code this host still advertises.
+        if (party !== hostState || hostState.relay?.ws !== relayWs) return
+        hostState.relay = null
+        let dropped = false
+        for (const [id, member] of members) {
+          if (member.via === 'relay') {
+            members.delete(id)
+            dropped = true
+          }
+        }
+        if (dropped) broadcastPartyState()
+        scheduleRelayReattach()
+      })
+    }
+
+    const scheduleRelayReattach = (): void => {
+      if (party !== hostState || !hostState.relayCreds || hostState.relayReattachTimer) return
+      hostState.relayReattempts += 1
+      // Quick first retries for a blip, then a steady 30s cadence for as
+      // long as the party lives — the host regaining its network minutes
+      // later should still restore the invite's relay door.
+      const delay = [2000, 5000, 15000][hostState.relayReattempts - 1] ?? 30000
+      hostState.relayReattachTimer = setTimeout(() => {
+        hostState.relayReattachTimer = undefined
+        void (async () => {
+          const creds = hostState.relayCreds
+          if (party !== hostState || hostState.relay || !creds) return
+          try {
+            // The SAME room, not a fresh POST /host: the invite already in
+            // people's hands names this roomId.
+            const relayWs = await connectRelayWs(creds.url, creds.roomId, {
+              token: creds.roomToken
+            })
+            if (party !== hostState || hostState.relay) {
+              relayWs.close()
+              return
+            }
+            hostState.relay = { ws: relayWs, url: creds.url, roomId: creds.roomId }
+            hostState.relayReattempts = 0
+            wireRelayWs(relayWs)
+          } catch (error) {
+            logError('party:relay-reattach', error)
+            scheduleRelayReattach()
+          }
+        })()
+      }, delay)
+    }
+
     const creds = partySyncCredentials()
     if (creds.url && creds.inviteKey && party === hostState) {
       try {
@@ -718,50 +833,8 @@ export function registerWatchPartyIpc(): void {
           relayWs.close()
         } else {
           hostState.relay = { ws: relayWs, url: creds.url, roomId }
-          relayWs.on('message', (raw) => {
-            let envelope: { type?: string; connId?: string; body?: string; isHost?: boolean }
-            try {
-              envelope = JSON.parse(raw.toString())
-            } catch {
-              return
-            }
-            if (envelope.type !== 'relay') return
-            const msg = decryptMessage(secret, envelope.body || '') as PartyMessage | null
-            if (!msg) return
-            const fromId = String(envelope.connId || '')
-            if (msg.type === 'hello') {
-              if (!members.has(fromId) && members.size >= MAX_PARTY_MEMBERS) return
-              const member: PartyHostMember = {
-                id: fromId,
-                name: String(msg.name || 'Guest').slice(0, 40) || 'Guest',
-                isHost: false,
-                via: 'relay'
-              }
-              members.set(fromId, member)
-              admit(member)
-              return
-            }
-            if (msg.type === 'leave') {
-              if (members.delete(fromId)) broadcastPartyState()
-              return
-            }
-            if (!members.has(fromId)) return
-            handlePartyMessage(fromId, msg)
-          })
-          relayWs.on('close', () => {
-            // Losing the relay is losing ONE door, not the party: direct
-            // members are untouched, so only the relay-side roster goes.
-            if (party !== hostState || hostState.relay?.ws !== relayWs) return
-            hostState.relay = null
-            let dropped = false
-            for (const [id, member] of members) {
-              if (member.via === 'relay') {
-                members.delete(id)
-                dropped = true
-              }
-            }
-            if (dropped) broadcastPartyState()
-          })
+          hostState.relayCreds = { url: creds.url, roomId, roomToken }
+          wireRelayWs(relayWs)
         }
       } catch (error) {
         logError('party:relay-attach', error)
@@ -1191,6 +1264,11 @@ export function registerWatchPartyIpc(): void {
           }
         }
       : { type: 'preparing-cancelled' as const }
+    // While the NEXT title resolves, the stored nowPlaying still names the
+    // outgoing one — late-join replay stands down until the new
+    // announcement (or the cancellation, which leaves the old title as the
+    // honest answer again). See PartyStateHost.preparing.
+    current.preparing = Boolean(item)
     partyBroadcast(encryptMessage(current.secret, event))
     return { ok: true }
   })
@@ -1218,8 +1296,10 @@ export function registerWatchPartyIpc(): void {
     partyBroadcast(encryptMessage(current.secret, event))
     // Kept for whoever arrives NEXT: the admit path replays this to late
     // joiners, and the roster broadcast below tells everyone already here
-    // (the hub's "Join the film" button included) what is on.
+    // (the hub's "Join the film" button included) what is on. The
+    // announcement is also what ends the preparing window it opened.
     current.nowPlaying = event as PartyNowPlayingEvent
+    current.preparing = false
     broadcastPartyState()
     return { ok: true }
   })
