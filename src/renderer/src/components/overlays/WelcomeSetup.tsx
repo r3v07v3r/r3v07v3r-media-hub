@@ -84,6 +84,8 @@ export function WelcomeSetup() {
   const [diskProbe, setDiskProbe] = useState<CacheDiskProbeResult | null>(null)
   const [speed, setSpeed] = useState<SpeedTestResult | null>(null)
   const [speedError, setSpeedError] = useState<string | null>(null)
+  // Supersession stamp for disk probes — see runDiskProbe.
+  const diskProbeGen = useRef(0)
   const panelRef = useRef<HTMLDivElement | null>(null)
 
   const visible = Boolean(mediaHubSettings) && !mediaHubSettings?.setupComplete
@@ -138,12 +140,15 @@ export function WelcomeSetup() {
     try {
       // One name, two homes: the party display name (what Rooms and Watch
       // Parties call this install) and the auto-seeded profile, which is
-      // otherwise stuck introducing its owner as "Profile 1".
+      // otherwise stuck introducing its owner as "Profile 1". A failure in
+      // either half surfaces and holds this step — advancing with the
+      // profile still unrenamed would defeat the step's whole point, and
+      // every call here is idempotent, so retrying is safe even after the
+      // display name already landed.
       await api.settings.setPartyDisplayName(trimmed)
-      const listed = await api.profiles.list().catch(() => null)
-      const activeId = listed?.activeProfileId
-      if (activeId) {
-        await api.profiles.update({ id: activeId, name: trimmed }).catch(() => {})
+      const listed = await api.profiles.list()
+      if (listed.activeProfileId) {
+        await api.profiles.update({ id: listed.activeProfileId, name: trimmed })
       }
       refreshProfiles()
       refreshMediaHubSettings()
@@ -222,17 +227,35 @@ export function WelcomeSetup() {
     }
   }
 
+  // Every disk probe goes back to "checking" first and carries a
+  // generation stamp: choosing a new cache folder re-probes, and without
+  // the stamp a still-in-flight earlier probe could land afterwards and
+  // quietly report the OLD drive — Apply would then size the cache from a
+  // location the cache no longer lives on. Only the newest probe's answer
+  // (or failure) is allowed to settle the state.
+  const runDiskProbe = (): void => {
+    const api = window.api?.mediaHub
+    if (!api) return
+    const gen = ++diskProbeGen.current
+    setDiskProbe(null)
+    api.settings
+      .cacheDiskProbe()
+      .then((result) => {
+        if (diskProbeGen.current === gen) setDiskProbe(result)
+      })
+      // An empty result rather than null: null means "still checking", and
+      // a failed probe must let the step degrade instead of pending forever.
+      .catch(() => {
+        if (diskProbeGen.current === gen) setDiskProbe({ cacheDir: '', drives: [] })
+      })
+  }
+
   const startTuningProbes = (): void => {
     const api = window.api?.mediaHub
     if (!api) return
     setSpeed(null)
     setSpeedError(null)
-    api.settings
-      .cacheDiskProbe()
-      .then(setDiskProbe)
-      // An empty result rather than null: null means "still checking", and
-      // a failed probe must let the step degrade instead of pending forever.
-      .catch(() => setDiskProbe({ cacheDir: '', drives: [] }))
+    runDiskProbe()
     // Same call and same screen-derived cap as the Settings page's test.
     api.network
       .speedTest(window.screen.height * window.devicePixelRatio)
@@ -317,12 +340,11 @@ export function WelcomeSetup() {
       setStatus({ kind: 'idle' })
       if (result.streamCacheDir && !result.cancelled) {
         refreshMediaHubSettings()
-        // Re-probe so the size recommendation follows the cache to its
-        // new drive.
-        api.settings
-          .cacheDiskProbe()
-          .then(setDiskProbe)
-          .catch(() => {})
+        // Re-probe so the size recommendation follows the cache to its new
+        // drive. runDiskProbe resets the row to "checking" (disabling
+        // Apply until the NEW drive's numbers are in) and supersedes any
+        // probe still in flight.
+        runDiskProbe()
       }
     } catch (error) {
       setStatus({

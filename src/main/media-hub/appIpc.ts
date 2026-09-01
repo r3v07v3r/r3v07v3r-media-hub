@@ -79,23 +79,33 @@ import {
 
 /** Registers the miscellaneous settings/account/system IPC handlers. */
 export function registerAppIpc(): void {
-  // One-time grandfathering for installs that predate the welcome flow: an
-  // answered storage question proves the install was in use (that prompt
-  // blocked the whole app), so it is marked set-up once, here at startup.
-  // A live computed clause instead of this write would break the flow
-  // itself — the wizard now asks the storage question mid-flow, and the
-  // moment storeMedia landed the wizard would count as "complete" and
-  // vanish before its tuning step.
+  // The one-time setupComplete decision, made here at startup BEFORE any
+  // handler can run, and made in BOTH directions: an install with durable
+  // pre-flow markers is grandfathered as complete (nobody who was already
+  // using the app gets greeted like a stranger), and a genuinely fresh
+  // install is stamped an explicit false. Stamping false is load-bearing —
+  // it means the flag is never absent again after first launch, so nothing
+  // the wizard writes mid-flow (partyDisplayName at step 1, torboxToken/
+  // onboardingVersion at step 2, storeMedia at step 3, the seeded profile
+  // from step 1's list call) can later be mistaken for a pre-existing
+  // install: a quit at ANY step restarts as false, a flow to reopen.
   //
-  // The `=== undefined` guard is load-bearing: the wizard's own storage
-  // step stamps setupComplete=false alongside storeMedia (see the
-  // setStoreMedia handler), so a quit during the tuning step restarts as
-  // false — a flow to reopen — rather than as absent, which this would
-  // mistake for a pre-flow install and silently mark complete.
+  // The markers are a disjunction rather than storeMedia alone because
+  // auto-update can skip releases: an install upgrading from a version
+  // that predates the storage question still has profiles, a TorBox
+  // connection (onboardingVersion), a room identity, or a party name —
+  // any one of which proves the app was in use before the flow existed.
+  // A live computed clause instead of this write would break the flow
+  // itself — the wizard writes several of these mid-flow.
   {
     const settings = readSettings()
-    if (settings.storeMedia !== undefined && settings.setupComplete === undefined) {
-      settings.setupComplete = true
+    if (settings.setupComplete === undefined) {
+      settings.setupComplete =
+        settings.storeMedia !== undefined ||
+        settings.onboardingVersion !== undefined ||
+        (settings.profiles?.length ?? 0) > 0 ||
+        Boolean(settings.friendId) ||
+        Boolean(settings.partyDisplayName)
       writeSettings(settings)
     }
   }
@@ -500,16 +510,6 @@ export function registerAppIpc(): void {
       const settings = readSettings()
       const storeMedia = value?.storeMedia !== false
       settings.storeMedia = storeMedia
-      // Stamp the welcome flow as explicitly IN PROGRESS the moment the
-      // storage answer lands mid-flow. After the startup migration below
-      // (registerAppIpc's top), every pre-flow install already has
-      // setupComplete=true before any handler runs, and the standalone
-      // StoragePolicyPrompt only shows once it is true — so an absent flag
-      // here can only mean the wizard's own storage step. Without this
-      // write, quitting during the tuning step left storeMedia set and
-      // setupComplete absent, which the migration would then mistake for a
-      // pre-flow install and silently mark complete.
-      if (settings.setupComplete === undefined) settings.setupComplete = false
       writeSettings(settings)
       // The session already playing is switched over too, not just the next
       // one. Persisting the answer alone left the active stream cache

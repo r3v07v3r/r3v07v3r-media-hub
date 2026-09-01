@@ -39,12 +39,14 @@ export interface MediaHubRawSettings {
   watchlistTwoWay?: boolean
   onboardingVersion?: number
   /** Whether the first-run welcome flow (name, playback source, storage,
-   *  cache tuning) has been completed or skipped. THREE states: absent on
-   *  fresh installs and installs that predate the flow (the latter get
-   *  true written once at startup from their storage answer — see
-   *  registerAppIpc's migration); explicit false while the wizard is mid-
-   *  flow (stamped by the setStoreMedia handler so a quit during tuning
-   *  reopens the flow instead of being grandfathered); true when done. */
+   *  cache tuning) has been completed or skipped. Absent only before the
+   *  first launch of a version that has the flow: registerAppIpc's startup
+   *  migration then stamps it in both directions — true when durable
+   *  pre-flow markers (storage answer, profiles, TorBox, room identity,
+   *  party name) prove the install predates the flow, explicit false on a
+   *  genuinely fresh install. Never absent afterwards, which is what keeps
+   *  the wizard's own mid-flow writes from ever being mistaken for a
+   *  pre-existing install. */
   setupComplete?: boolean
   /** Which version of the one-time anime watch-history id repair this
    *  install has had — see animeSyncRepair.ts. Absent on installs that
