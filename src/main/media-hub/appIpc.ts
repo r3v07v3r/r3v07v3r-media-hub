@@ -86,6 +86,12 @@ export function registerAppIpc(): void {
   // itself — the wizard now asks the storage question mid-flow, and the
   // moment storeMedia landed the wizard would count as "complete" and
   // vanish before its tuning step.
+  //
+  // The `=== undefined` guard is load-bearing: the wizard's own storage
+  // step stamps setupComplete=false alongside storeMedia (see the
+  // setStoreMedia handler), so a quit during the tuning step restarts as
+  // false — a flow to reopen — rather than as absent, which this would
+  // mistake for a pre-flow install and silently mark complete.
   {
     const settings = readSettings()
     if (settings.storeMedia !== undefined && settings.setupComplete === undefined) {
@@ -482,6 +488,16 @@ export function registerAppIpc(): void {
       const settings = readSettings()
       const storeMedia = value?.storeMedia !== false
       settings.storeMedia = storeMedia
+      // Stamp the welcome flow as explicitly IN PROGRESS the moment the
+      // storage answer lands mid-flow. After the startup migration below
+      // (registerAppIpc's top), every pre-flow install already has
+      // setupComplete=true before any handler runs, and the standalone
+      // StoragePolicyPrompt only shows once it is true — so an absent flag
+      // here can only mean the wizard's own storage step. Without this
+      // write, quitting during the tuning step left storeMedia set and
+      // setupComplete absent, which the migration would then mistake for a
+      // pre-flow install and silently mark complete.
+      if (settings.setupComplete === undefined) settings.setupComplete = false
       writeSettings(settings)
       // The session already playing is switched over too, not just the next
       // one. Persisting the answer alone left the active stream cache

@@ -157,14 +157,20 @@ export function WelcomeSetup() {
     }
   }
 
+  // Handles its own failure rather than throwing: every caller sits on a
+  // step that renders the status error, and a rejection here must never
+  // leave the flow wedged behind the scrim with `busy` pinned on — the
+  // buttons have to come back so finishing can be retried.
   const finish = async (): Promise<void> => {
     setStatus({ kind: 'busy' })
     try {
       await window.api?.mediaHub?.settings.completeSetup()
-    } finally {
-      // Refresh regardless: if the write somehow failed the flow simply
-      // shows again, which beats being wedged behind a scrim.
       refreshMediaHubSettings()
+    } catch (error) {
+      setStatus({
+        kind: 'error',
+        message: error instanceof Error ? error.message : 'Could not finish setup — try again.'
+      })
     }
   }
 
