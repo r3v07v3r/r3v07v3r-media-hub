@@ -636,6 +636,26 @@ export class PartyRoom {
         }
       }
 
+      // The LIVE roster, which the retained replay above cannot be: it
+      // omits anything older than RETENTION_MAX_AGE_MS, so a quiet member
+      // whose only message was its hello ten minutes ago is invisible in
+      // the replay while very much still connected. A reconnecting party
+      // host reconciles its kept roster against THIS list rather than the
+      // time-limited retained set (see watchParty.ts's wireRelayWs).
+      // Additive and unencrypted-metadata-only, like `assigned`; clients
+      // that predate it ignore unknown envelope types.
+      try {
+        const connIds: string[] = []
+        for (const other of this.state.getWebSockets()) {
+          if (other === server) continue
+          const attachment = this.attachmentOf(other)
+          if (attachment?.connId) connIds.push(attachment.connId)
+        }
+        server.send(JSON.stringify({ type: 'peers', connIds }))
+      } catch {
+        // best-effort, same as the replay above
+      }
+
       await this.touch()
       return new Response(null, { status: 101, webSocket: client })
     }

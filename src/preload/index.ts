@@ -56,7 +56,6 @@ import type {
   PartyChatMessage,
   PartyEventPayload,
   PartyHostResult,
-  PartyMode,
   PartyNowPlayingPayload,
   PartyPlaybackAction,
   PartyPreparingPayload,
@@ -827,8 +826,11 @@ const api = {
     },
 
     party: {
-      host: (name: string, mode?: PartyMode): Promise<PartyHostResult> =>
-        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.partyHost, { name, mode }),
+      /** Hosting opens every transport it can (direct always, relay when
+       *  configured) — the invite code carries them all, so there is no
+       *  mode to pass. */
+      host: (name: string): Promise<PartyHostResult> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.partyHost, { name }),
       join: (code: string, name: string): Promise<{ ok: true }> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.partyJoin, { code, name }),
       leave: (): Promise<{ ok: true }> => ipcRenderer.invoke(MEDIA_HUB_CHANNELS.partyLeave),

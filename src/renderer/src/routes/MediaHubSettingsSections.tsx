@@ -965,13 +965,16 @@ export function R3PartySyncSection() {
     <section className={`${styles.section} glass-panel`} aria-labelledby="settings-party-sync">
       <div className={styles.serviceHead}>
         <h2 id="settings-party-sync" className={styles.sectionTitle} style={{ marginBottom: 0 }}>
-          Room relay
+          Watch Party relay
         </h2>
         <ConnectionBadge connected={connected} />
       </div>
       <p className={styles.rowDescription} style={{ marginBottom: 10 }}>
-        A relay worker you deploy yourself (see party-sync-worker/ in the repo) so Rooms can connect
-        over the internet even when a router won&apos;t forward a port automatically.
+        A relay worker you deploy yourself (see party-sync-worker/ in the repo) so Watch Parties and
+        Rooms can connect over the internet even when a router won&apos;t forward a port
+        automatically. With it connected, every Watch Party you host is joinable from anywhere — the
+        invite code carries both the direct and the relay route, and each joiner uses whichever
+        reaches you first.
       </p>
       {connected ? (
         <>

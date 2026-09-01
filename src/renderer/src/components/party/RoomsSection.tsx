@@ -92,7 +92,7 @@ export function RoomsSection() {
         clearAwaitingTimeout()
         setAwaiting(null)
         joinParty(message.partyCode, mediaHubSettings?.partyDisplayName || 'A friend').catch(() => {
-          pushNotification({ tone: 'error', message: 'Could not join that party.' })
+          pushNotification({ tone: 'error', message: 'Could not join that watch party.' })
         })
       } else if (message.type === 'friend-join-declined') {
         clearAwaitingTimeout()

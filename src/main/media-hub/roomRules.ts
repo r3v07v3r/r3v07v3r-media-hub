@@ -69,8 +69,18 @@ export function recordPresence(
           title: String(activity.title || '').slice(0, 120),
           poster: String(activity.poster || '').slice(0, 500),
           position: Number(activity.position) || 0,
+          // Optional on the wire (older builds don't send it); a non-finite
+          // or non-positive claim reads as absent rather than as a zero
+          // that would make every percentage division blow up downstream.
+          duration:
+            Number.isFinite(Number(activity.duration)) && Number(activity.duration) > 0
+              ? Number(activity.duration)
+              : undefined,
           paused: activity.paused === true,
-          partyCode: activity.partyCode ? String(activity.partyCode).slice(0, 400) : undefined
+          // 600, not 400: a hybrid invite (direct + relay endpoints in one
+          // code — see party.ts's encodeHybridShareCode) runs longer than
+          // the single-transport codes this clamp was sized for.
+          partyCode: activity.partyCode ? String(activity.partyCode).slice(0, 600) : undefined
         }
       : null,
     lastSeen: now - Math.max(0, ageMs)

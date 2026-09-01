@@ -76,7 +76,8 @@ import {
   readSettings,
   writeSettings
 } from './settingsStore'
-import { connectRelayWs } from './watchParty'
+import { connectRelayWs, currentPartyJoinCode } from './watchParty'
+import { sendToPlayerOverlay } from './playerWindow'
 
 /** Reconnect backoff bounds. A room is meant to be always-on, so a
  *  dropped socket retries indefinitely rather than giving up — but it
@@ -237,7 +238,7 @@ function updateStoredRoomById(room: RoomState, change: (stored: StoredRoom) => v
   const list = storedRooms()
   for (const entry of list) {
     const parsed = decodeShareCode(entry.code)
-    if (parsed && parsed.v !== 1 && parsed.relay.roomId === room.roomId) {
+    if (parsed && (parsed.v === 2 || parsed.v === 4) && parsed.relay.roomId === room.roomId) {
       change(entry)
       persistRooms(list)
       return
@@ -272,7 +273,12 @@ function offerRekeyTo(room: RoomState, toFriendId: string, underSecret: string):
 }
 
 function pushStatus(): void {
-  sendToRenderer(MEDIA_HUB_CHANNELS.roomsEvent, roomsStatus())
+  const status = roomsStatus()
+  sendToRenderer(MEDIA_HUB_CHANNELS.roomsEvent, status)
+  // The player's rail shows the same rooms — it is a separate renderer, so
+  // the main-window push never reaches it. Same precedent as
+  // watchParty.ts's sendPartyEvent.
+  sendToPlayerOverlay(MEDIA_HUB_CHANNELS.roomsEvent, status)
 }
 
 export function roomsStatus(): RoomsStatus {
@@ -316,7 +322,16 @@ function announceRoom(room: RoomState): void {
   // in the envelope, verified — a claimed field there would only be a
   // second, weaker copy of the truth.
   if (!room.signed) payload.friendId = friendId
-  if (room.stored.sharing && currentActivity) payload.activity = currentActivity
+  if (room.stored.sharing && currentActivity) {
+    // The live party invite rides the activity, folded in at announce time
+    // rather than stored: watchParty owns the code's lifetime, and reading
+    // it here means a party started or ended simply shows up on the next
+    // announce (at most ANNOUNCE_INTERVAL_MS late) with nothing to keep in
+    // sync. This is what makes a room member's "Watch → Join them" a
+    // one-click join instead of a knock-and-wait round trip.
+    const partyCode = currentPartyJoinCode()
+    payload.activity = partyCode ? { ...currentActivity, partyCode } : currentActivity
+  }
   // The room's name travels with its admin: renames reach members through
   // the same channel as everything else, and the rename rule on the
   // receiving side believes this field only from the admin — a VERIFIED
@@ -638,7 +653,13 @@ async function activateRoom(
   { firstConnectMustSucceed = false } = {}
 ): Promise<void> {
   const parsed = decodeShareCode(stored.code)
-  if (!parsed || parsed.v === 1) throw new Error('That is not a valid room code.')
+  // v1 and v5 are PARTY invites (direct and hybrid). A v5 code carries a
+  // relay endpoint, so without this it would pass the checks below and
+  // persist a "room" whose other side is a watch party that ignores
+  // presence announcements — connected-looking, permanently empty.
+  if (!parsed || parsed.v === 1 || parsed.v === 5) {
+    throw new Error('That is not a valid room code.')
+  }
   if (rooms.has(parsed.relay.roomId)) return
   const room: RoomState = {
     roomId: parsed.relay.roomId,
@@ -814,7 +835,15 @@ export function registerRoomsIpc(): void {
     const code = String(payload?.code || '').trim()
     if (!code) throw new Error('Enter a room code.')
     const parsed = decodeShareCode(code)
-    if (!parsed || parsed.v === 1) throw new Error('That is not a valid room code.')
+    if (!parsed || parsed.v === 1 || parsed.v === 5) {
+      // Mirror of watchParty's "that is a room code" guard, pointing the
+      // other way: both party formats name where to actually use them.
+      throw new Error(
+        parsed
+          ? 'That is a Watch Party code — join it from the Watch Party panel.'
+          : 'That is not a valid room code.'
+      )
+    }
     if (rooms.has(parsed.relay.roomId)) return { ok: true }
     const stored: StoredRoom = {
       code,

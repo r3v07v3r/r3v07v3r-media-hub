@@ -1,27 +1,24 @@
 // Ported from r3v07v3r-media-hub's src/main.cjs (the Watch Party section:
 // getLocalLanIp, partyMemberSummaries, partyBroadcast, broadcastPartyState,
 // broadcastQueue, handlePartyMessage, closeParty, connectPartyWs,
-// connectRelayWs, and every `party:*`/`party-sync:*` handler). The original
-// kept a single module-level `party` object whose shape silently varied by
-// `role`/`mode` (host-direct had `wss`/`port`/`upnpStop`, host-relay had
-// `ws`/`relayUrl`/`roomId`, client had `selfId` and an array `members`
-// instead of a host's `Map`, etc.) — untyped in JS, so nothing caught a
-// handler reaching for a field that only exists on a different variant.
-// Here that's modeled as an explicit `PartyState` discriminated union on
-// `role`/`mode` so the compiler enforces exactly which fields exist in each
-// of the four combinations. This is a legitimate typing improvement over
-// the original; every runtime behavior, message shape, and error string
-// below is preserved exactly.
+// connectRelayWs, and every `party:*`/`party-sync:*` handler), since
+// reshaped around ONE hosting posture instead of a chosen mode: a host
+// always listens directly and additionally attaches to the R3-Party-Sync
+// relay when one is configured, minting a single invite code that carries
+// every way in (see PartyStateHost). `PartyState` is a discriminated union
+// on `role` so the compiler enforces exactly which fields exist for a host
+// versus a client.
 //
-// Direct/LAN/WAN hosting speaks a small custom WebSocket protocol
+// Direct/LAN/WAN connections speak a small custom WebSocket protocol
 // (hello/welcome/leave/party-state/queue-sync, all AES-256-GCM encrypted
 // via party.ts's encryptMessage/decryptMessage with a per-party shared
-// secret) directly to peers. Relay hosting/joining speaks the same
-// encrypted payloads, but wrapped in an unencrypted `{type:'relay',
-// connId, isHost, body}` envelope produced by the external R3-Party-Sync
-// worker. Do not change either wire format — it must keep interoperating
-// with the original CommonJS app's install base and with the relay
-// worker's existing protocol.
+// secret) directly to peers. Relay connections speak the same encrypted
+// payloads, but wrapped in an unencrypted `{type:'relay', connId, isHost,
+// body}` envelope produced by the external R3-Party-Sync worker. Do not
+// change either wire format — it must keep interoperating with the
+// original CommonJS app's install base and with the relay worker's
+// existing protocol; the hybrid host BRIDGES the two (forwardFromMember)
+// rather than altering either.
 
 import crypto from 'node:crypto'
 import { WebSocket, WebSocketServer } from 'ws'
@@ -33,23 +30,27 @@ import type {
   PartyChatMessage,
   PartyMemberSummary,
   PartyMode,
+  PartyNowPlayingSummary,
   PartyQueueEntry,
   PartyStatusResult
 } from '../../shared/media-hub/types'
 import { fetchJson } from './httpClient'
 import { handle } from './ipcGuard'
+import { logError } from './logger'
 import {
   applyQueueEvent,
   createMemberId,
   decodeShareCode,
-  encodeRelayShareCode,
+  encodeHybridShareCode,
   encodeShareCode,
   encryptMessage,
   decryptMessage,
   type PartyLanEndpoint,
-  type PartyQueueEvent
+  type PartyQueueEvent,
+  type PartyRelayEndpoint
 } from './party'
 import { encrypt, partySyncCredentials, readSettings, writeSettings } from './settingsStore'
+import { currentPlaybackForParty } from './playerBridge'
 import { sendToRenderer } from './rendererBridge'
 import { sendToPlayerOverlay } from './playerWindow'
 import { attemptPortMapping } from './upnp'
@@ -86,33 +87,48 @@ interface PartyHostMember {
   isHost: boolean
   /** See PartyMemberSummary.watching. Undefined until the member reports. */
   watching?: boolean
-  // Only ever set for direct-mode host members (each has its own inbound
-  // ws); relay-mode host members are reached through the single relay ws
-  // instead, so this stays undefined/null for them — see partyBroadcast.
+  /** Which transport this member arrived over. Direct members each have
+   *  their own inbound ws below; relay members are all reached through the
+   *  single relay attachment, whose worker fans a send out to every relay
+   *  connection — so forwarding a relay member's message back to the relay
+   *  would duplicate it for its whole side. See forwardFromMember. */
+  via: 'direct' | 'relay'
   ws?: WebSocket | null
 }
 
-interface PartyStateHostDirect {
+/** The full nowPlaying event as broadcast — kept verbatim so a late joiner
+ *  can be handed exactly what everyone else was. */
+type PartyNowPlayingEvent = Record<string, unknown> & {
+  type: 'nowPlaying'
+  item: { id?: string; type?: string; title?: string; poster?: string }
+  position: number
+}
+
+/**
+ * A HOST always listens directly, and additionally attaches to the
+ * R3-Party-Sync relay when one is configured — there is no mode choice any
+ * more. One invite code carries every way in (see encodeHybridShareCode),
+ * and each joiner simply uses the first transport that reaches the host:
+ * direct when the network allows it, relay otherwise. The host bridges the
+ * two sides (see forwardFromMember), so a LAN member and a remote member
+ * are in the same party without either knowing the difference.
+ */
+interface PartyStateHost {
   role: 'host'
-  mode: 'direct'
   wss: WebSocketServer
   port: number
-  secret: string
-  members: Map<string, PartyHostMember>
-  hostId: string
-  selfName: string
-  hostName: string
-  queue: PartyQueueEntry[]
   upnpStop?: () => void
-  allowMemberControl: boolean
-}
-
-interface PartyStateHostRelay {
-  role: 'host'
-  mode: 'relay'
-  ws: WebSocket
-  relayUrl: string
-  roomId: string
+  relay: { ws: WebSocket; url: string; roomId: string } | null
+  /** The relay room's host credentials, kept for RECONNECTING: the hybrid
+   *  invite names this exact roomId, so a dropped relay socket must come
+   *  back to the SAME room or the code's relay door leads to a party with
+   *  no host in it. Null when no relay was ever attached. */
+  relayCreds: { url: string; roomId: string; roomToken: string } | null
+  relayReattempts: number
+  relayReattachTimer?: NodeJS.Timeout
+  /** The invite code minted at host time — republished to rooms so a
+   *  member's "Watch" button can join without the request round trip. */
+  code: string
   secret: string
   members: Map<string, PartyHostMember>
   hostId: string
@@ -120,11 +136,27 @@ interface PartyStateHostRelay {
   hostName: string
   queue: PartyQueueEntry[]
   allowMemberControl: boolean
+  /** What the party is currently watching, for LATE JOINERS: stored when
+   *  the host announces it and replayed to every member that arrives
+   *  after. Without this, joining a film already in progress put someone
+   *  in the chat with no picture and no way to ask for one — the exact
+   *  live report that prompted it. Cleared when the host's own player
+   *  closes (the 'watching: false' self-report). */
+  nowPlaying: PartyNowPlayingEvent | null
+  /** True between `preparing` (the host picked the NEXT title) and its
+   *  nowPlaying (or preparing-cancelled). The stored nowPlaying still
+   *  names the OUTGOING title for that whole window, so late-join replay
+   *  and resync answers are suppressed — a member admitted mid-switch
+   *  would otherwise be sent title A, start resolving it, and race B's
+   *  announcement that is seconds away. They get B's broadcast like
+   *  everyone else. */
+  preparing: boolean
 }
 
-interface PartyStateClientDirect {
+interface PartyStateClient {
   role: 'client'
-  mode: 'direct'
+  /** Which transport this client's single connection uses. */
+  mode: PartyMode
   ws: WebSocket
   secret: string
   members: PartyMemberSummary[]
@@ -133,25 +165,34 @@ interface PartyStateClientDirect {
   selfId: string
   queue: PartyQueueEntry[]
   allowMemberControl: boolean
+  /** Mirror of the host's nowPlaying summary, from party-state broadcasts —
+   *  what lets the hub offer "Join the film" to someone who closed their
+   *  player but stayed in the party. */
+  nowPlaying: PartyNowPlayingSummary | null
 }
 
-interface PartyStateClientRelay {
-  role: 'client'
-  mode: 'relay'
-  ws: WebSocket
-  secret: string
-  members: PartyMemberSummary[]
-  selfName: string
-  hostName: string
-  selfId: string
-  queue: PartyQueueEntry[]
-  allowMemberControl: boolean
-}
-
-type PartyState =
-  PartyStateHostDirect | PartyStateHostRelay | PartyStateClientDirect | PartyStateClientRelay
+type PartyState = PartyStateHost | PartyStateClient
 
 let party: PartyState | null = null
+
+/** The invite code of the party this app is currently hosting, or null.
+ *  rooms.ts folds this into the activity announcement so room members can
+ *  join the film in one click — see announceRoom. */
+export function currentPartyJoinCode(): string | null {
+  return party?.role === 'host' ? party.code : null
+}
+
+function nowPlayingSummary(current: PartyState): PartyNowPlayingSummary | null {
+  if (current.role !== 'host') return current.nowPlaying
+  const item = current.nowPlaying?.item
+  if (!item?.id || !item.type) return null
+  return {
+    id: String(item.id),
+    type: String(item.type),
+    title: String(item.title || ''),
+    poster: String(item.poster || '')
+  }
+}
 
 function partyMemberSummaries(): PartyMemberSummary[] {
   const current = party
@@ -170,13 +211,56 @@ function partyMemberSummaries(): PartyMemberSummary[] {
 function partyBroadcast(payload: string): void {
   const current = party
   if (!current) return
-  if (current.role === 'host' && current.mode !== 'relay') {
+  if (current.role === 'host') {
+    // Both transports, every time: each direct member has its own socket,
+    // and one send to the relay reaches every relay member (the worker
+    // fans it out, and never echoes to this sender).
     for (const m of current.members.values()) {
       if (m.ws && m.ws.readyState === WebSocket.OPEN) m.ws.send(payload)
+    }
+    if (current.relay && current.relay.ws.readyState === WebSocket.OPEN) {
+      current.relay.ws.send(payload)
     }
     return
   }
   if (current.ws && current.ws.readyState === WebSocket.OPEN) current.ws.send(payload)
+}
+
+/**
+ * Re-forwards one member's message to every OTHER member, across both
+ * transports. The asymmetry is the whole function: a relay member's message
+ * was already fanned out to the rest of the relay side by the worker, so it
+ * only needs bridging to the direct side — sending it back to the relay
+ * would deliver it twice over there. A direct member's message reached only
+ * this host, so it goes to every other direct socket AND once to the relay.
+ */
+function forwardFromMember(fromId: string, payload: string): void {
+  const current = party
+  if (!current || current.role !== 'host') return
+  const senderVia = current.members.get(fromId)?.via
+  for (const [id, m] of current.members) {
+    if (id !== fromId && m.ws && m.ws.readyState === WebSocket.OPEN) m.ws.send(payload)
+  }
+  if (senderVia !== 'relay' && current.relay && current.relay.ws.readyState === WebSocket.OPEN) {
+    current.relay.ws.send(payload)
+  }
+}
+
+/** Hands a payload to ONE member, whichever side they joined from. A relay
+ *  member can't be addressed individually — the worker fans out — so their
+ *  copy goes out as a broadcast, which every other member must therefore
+ *  treat idempotently (the nowPlaying replay is deduped follower-side by
+ *  "am I already playing this"). */
+function sendToMember(member: PartyHostMember, payload: string): void {
+  const current = party
+  if (!current || current.role !== 'host') return
+  if (member.via === 'direct') {
+    if (member.ws && member.ws.readyState === WebSocket.OPEN) member.ws.send(payload)
+    return
+  }
+  if (current.relay && current.relay.ws.readyState === WebSocket.OPEN) {
+    current.relay.ws.send(payload)
+  }
 }
 
 /** The application window and the native player controls are separate
@@ -192,16 +276,23 @@ function broadcastPartyState(): void {
   const current = party
   if (!current || current.role !== 'host') return
   const members = partyMemberSummaries()
+  // The nowPlaying SUMMARY rides on every roster broadcast, so a member who
+  // closed their player (or joined into silence) always knows whether there
+  // is a film to come back to — that is what the hub's "Join the film"
+  // button renders from. The full replayable event stays host-side.
+  const nowPlaying = nowPlayingSummary(current)
   const payload = encryptMessage(current.secret, {
     type: 'party-state',
     members,
-    allowMemberControl: current.allowMemberControl
+    allowMemberControl: current.allowMemberControl,
+    nowPlaying
   })
   partyBroadcast(payload)
   sendPartyEvent({
     type: 'party-state',
     members,
-    allowMemberControl: current.allowMemberControl
+    allowMemberControl: current.allowMemberControl,
+    nowPlaying
   })
 }
 
@@ -234,17 +325,27 @@ function handlePartyMessage(fromId: string, msg: PartyMessage): void {
           ? incoming.sentAt
           : Date.now()
     }
-    // Direct parties need the host to forward a member's message. Relay
-    // rooms already fan it out, so forwarding there would duplicate it.
-    if (current?.role === 'host' && current.mode === 'direct') {
-      const payload = encryptMessage(current.secret, { type: 'chat', chat })
-      for (const [id, member] of current.members) {
-        if (id !== fromId && member.ws && member.ws.readyState === WebSocket.OPEN) {
-          member.ws.send(payload)
-        }
-      }
+    // The host bridges a member's message to whichever members its own
+    // transport didn't already reach — see forwardFromMember.
+    if (current?.role === 'host') {
+      forwardFromMember(fromId, encryptMessage(current.secret, { type: 'chat', chat }))
     }
     sendPartyEvent({ type: 'chat', chat })
+    return
+  }
+  // A member asking to be caught up — the hub's "Join the film" button.
+  // Answered with the same stored event a fresh joiner is handed; every
+  // OTHER member deduplicates it as "already playing this" (see the
+  // follower unwrap in AppStateContext), which is what makes the relay
+  // side's broadcast-only addressing safe here.
+  if (current?.role === 'host' && msg?.type === 'resync-request') {
+    const member = current.members.get(fromId)
+    // Same preparing guard as admit: mid-title-change the stored event
+    // names the outgoing title, and the asker will get the new one's
+    // broadcast within seconds anyway.
+    if (member && current.nowPlaying && !current.preparing) {
+      sendToMember(member, encryptMessage(current.secret, current.nowPlaying))
+    }
     return
   }
   // Presence. Host-side only bookkeeping: record whether this member has a
@@ -290,11 +391,8 @@ function handlePartyMessage(fromId: string, msg: PartyMessage): void {
     return
   }
   if (current?.role === 'host' && msg?.type === 'seek' && !current.allowMemberControl) return
-  if (current?.role === 'host' && current.mode !== 'relay') {
-    const payload = encryptMessage(current.secret, { ...msg, from: fromId })
-    for (const [id, m] of current.members) {
-      if (id !== fromId && m.ws && m.ws.readyState === WebSocket.OPEN) m.ws.send(payload)
-    }
+  if (current?.role === 'host') {
+    forwardFromMember(fromId, encryptMessage(current.secret, { ...msg, from: fromId }))
   }
   sendPartyEvent({ type: 'message', from: fromId, message: msg })
 }
@@ -303,7 +401,13 @@ function handlePartyMessage(fromId: string, msg: PartyMessage): void {
 export function closeParty(): void {
   const current = party
   if (!current) return
-  if (current.role === 'host' && current.mode !== 'relay') {
+  if (current.role === 'host') {
+    // The reattach loop must die with the party, or it would reconnect a
+    // host socket to a room nobody is hosting any more.
+    if (current.relayReattachTimer) {
+      clearTimeout(current.relayReattachTimer)
+      current.relayReattachTimer = undefined
+    }
     for (const m of current.members.values()) {
       try {
         m.ws?.close()
@@ -315,6 +419,18 @@ export function closeParty(): void {
       current.wss.close()
     } catch {
       // best-effort
+    }
+    if (current.relay) {
+      try {
+        current.relay.ws.send(encryptMessage(current.secret, { type: 'leave' }))
+      } catch {
+        // best-effort
+      }
+      try {
+        current.relay.ws.close()
+      } catch {
+        // best-effort
+      }
     }
     current.upnpStop?.()
   } else {
@@ -414,6 +530,8 @@ export function connectRelayWs(
 
 interface PartyHostArgs {
   name?: string
+  /** Accepted and ignored: hosting always opens every transport now. Kept
+   *  so an older renderer bundle calling with a mode cannot fail. */
   mode?: PartyMode
 }
 
@@ -466,86 +584,22 @@ interface PartySyncConnectArgs {
 /** Registers every `party:*` and `party-sync:*` IPC handler (hosting — direct LAN/WAN with optional UPnP, and relay via R3-Party-Sync —, joining, leaving, status, queue suggest/remove/vote, now-playing/playback-action broadcast, and R3-Party-Sync connect/disconnect). */
 export function registerWatchPartyIpc(): void {
   handle<PartyHostArgs, PartyHostResult>(MEDIA_HUB_CHANNELS.partyHost, async (_e, payload) => {
-    if (party) throw new Error('You are already in a party. Leave it first.')
-    const { name: rawName, mode } = payload || {}
+    if (party) throw new Error('You are already in a watch party. Leave it first.')
+    const { name: rawName } = payload || {}
     const name =
       String(rawName || 'Host')
         .trim()
         .slice(0, 40) || 'Host'
 
-    if (mode === 'relay') {
-      const creds = partySyncCredentials()
-      if (!creds.url || !creds.inviteKey)
-        throw new Error('Configure R3-Party-Sync in Settings first.')
-      const { roomId, roomToken } = await fetchJson<{ roomId: string; roomToken: string }>(
-        `${creds.url}/host`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ inviteKey: creds.inviteKey })
-        }
-      )
-      const secret = crypto.randomBytes(24).toString('base64url')
-      const members = new Map<string, PartyHostMember>()
-      const hostId = createMemberId()
-      members.set(hostId, { id: hostId, name, isHost: true })
-      const ws = await connectRelayWs(creds.url, roomId, { token: roomToken })
-      const hostRelayState: PartyStateHostRelay = {
-        role: 'host',
-        mode: 'relay',
-        ws,
-        relayUrl: creds.url,
-        roomId,
-        secret,
-        members,
-        hostId,
-        selfName: name,
-        hostName: name,
-        queue: [],
-        allowMemberControl: false
-      }
-      party = hostRelayState
-      ws.on('message', (raw) => {
-        let envelope: { type?: string; connId?: string; body?: string; isHost?: boolean }
-        try {
-          envelope = JSON.parse(raw.toString())
-        } catch {
-          return
-        }
-        if (envelope.type !== 'relay') return
-        const msg = decryptMessage(secret, envelope.body || '') as PartyMessage | null
-        if (!msg) return
-        const fromId = String(envelope.connId || '')
-        if (msg.type === 'hello') {
-          if (!members.has(fromId) && members.size >= MAX_PARTY_MEMBERS) return
-          members.set(fromId, {
-            id: fromId,
-            name: String(msg.name || 'Guest').slice(0, 40) || 'Guest',
-            isHost: false
-          })
-          broadcastPartyState()
-          return
-        }
-        if (msg.type === 'leave') {
-          if (members.delete(fromId)) broadcastPartyState()
-          return
-        }
-        if (!members.has(fromId)) return
-        handlePartyMessage(fromId, msg)
-      })
-      ws.on('close', () => {
-        if (party?.role === 'host' && party.mode === 'relay') {
-          party = null
-          sendPartyEvent({ type: 'host-disconnected' })
-        }
-      })
-      return {
-        ok: true,
-        code: encodeRelayShareCode({ relay: { url: creds.url, roomId }, secret }),
-        wanAvailable: true
-      }
-    }
-
+    // No transport choice any more: the direct listener always opens, the
+    // relay attaches whenever R3-Party-Sync is configured, and ONE invite
+    // code carries every way in. Each joiner uses the first transport that
+    // reaches this host — a client on the same network never pays for a
+    // round trip through the worker, and one across the internet still
+    // gets in. The picker this replaces made the person answer a question
+    // ("Direct or Relay?") whose right answer depends on where each FUTURE
+    // joiner happens to be, which is exactly the thing nobody can know at
+    // hosting time.
     const secret = crypto.randomBytes(24).toString('base64url')
     const wss = await new Promise<WebSocketServer>((resolve, reject) => {
       const server = new WebSocketServer({
@@ -560,21 +614,75 @@ export function registerWatchPartyIpc(): void {
     const port = typeof address === 'string' || address === null ? 0 : address.port
     const members = new Map<string, PartyHostMember>()
     const hostId = createMemberId()
-    members.set(hostId, { id: hostId, name, isHost: true, ws: null })
-    const hostDirectState: PartyStateHostDirect = {
+    members.set(hostId, { id: hostId, name, isHost: true, via: 'direct', ws: null })
+    const hostState: PartyStateHost = {
       role: 'host',
-      mode: 'direct',
       wss,
       port,
+      relay: null,
+      relayCreds: null,
+      relayReattempts: 0,
+      code: '',
       secret,
       members,
       hostId,
       selfName: name,
       hostName: name,
       queue: [],
-      allowMemberControl: false
+      allowMemberControl: false,
+      nowPlaying: null,
+      preparing: false
     }
-    party = hostDirectState
+    party = hostState
+
+    // A party created around a film ALREADY PLAYING — "Start a Watch Party"
+    // from an in-progress title, or a room member's join request — is born
+    // knowing its film, at the LIVE playhead. Both of the announcement's
+    // usual sources are absent here: startPartyPlayback fires only when a
+    // host starts a title (which happened before this party existed), and
+    // the position heartbeat can update a stored nowPlaying but never
+    // create one. Seeded in main because main owns both facts (the session
+    // identity and the observed time-pos); the renderer paths need no
+    // seeding of their own.
+    const playing = currentPlaybackForParty()
+    if (playing) {
+      const media = playing.media
+      hostState.nowPlaying = {
+        type: 'nowPlaying',
+        infoHash: '',
+        sources: [],
+        // Same coordinate format the renderer's buildMediaId produces —
+        // torbox.ts's play:stream parses it back out on the follower side.
+        mediaId:
+          media.kind === 'movie'
+            ? media.id
+            : `${media.id}:${media.seasonNumber ?? 1}:${media.episodeNumber ?? 1}`,
+        item: {
+          id: media.id,
+          type: media.kind,
+          title: media.title,
+          poster: media.posterUrl || ''
+        },
+        season: media.seasonNumber,
+        episode: media.episodeNumber,
+        position: playing.positionSeconds
+      }
+    }
+
+    // Everything a newcomer must be told, whichever door they came in by.
+    // The roster broadcast was always here; the nowPlaying replay is the
+    // fix for the live report "joining put me in the chat but not the
+    // film" — a title that started before this member existed was never
+    // announced to them, and nothing else ever would.
+    const admit = (member: PartyHostMember): void => {
+      broadcastPartyState()
+      // Not while a title change is in flight: the stored event still names
+      // the OUTGOING title — see PartyStateHost.preparing.
+      if (hostState.nowPlaying && !hostState.preparing) {
+        sendToMember(member, encryptMessage(secret, hostState.nowPlaying))
+      }
+    }
+
     wss.on('connection', (ws) => {
       let memberId: string | null = null
       ws.on('message', (raw) => {
@@ -589,14 +697,16 @@ export function registerWatchPartyIpc(): void {
             return
           }
           memberId = createMemberId()
-          members.set(memberId, {
+          const member: PartyHostMember = {
             id: memberId,
             name: String(msg.name || 'Guest').slice(0, 40) || 'Guest',
             isHost: false,
+            via: 'direct',
             ws
-          })
+          }
+          members.set(memberId, member)
           ws.send(encryptMessage(secret, { type: 'welcome', id: memberId }))
-          broadcastPartyState()
+          admit(member)
           return
         }
         if (!memberId) return
@@ -612,19 +722,204 @@ export function registerWatchPartyIpc(): void {
     const mapping = await attemptPortMapping(port, getLocalLanIp()).catch(() => null)
     const lan: PartyLanEndpoint = { ip: getLocalLanIp(), port }
     const wan: PartyLanEndpoint | null = mapping ? { ip: mapping.ip, port: mapping.port } : null
-    if (mapping && party && party.role === 'host' && party.mode === 'direct') {
-      party.upnpStop = mapping.stop
+    if (mapping && party === hostState) {
+      hostState.upnpStop = mapping.stop
     }
-    const code = encodeShareCode({ lan, wan, secret })
-    return { ok: true, code, port, wanAvailable: Boolean(wan) }
+
+    // The relay attachment is BEST-EFFORT: a worker that is down or
+    // misconfigured costs the party its across-the-internet door, not its
+    // existence. Attached after the direct listener so a failure here can
+    // never take down what already works.
+    const wireRelayWs = (relayWs: WebSocket, { reconcile = false } = {}): void => {
+      // A RECONNECT has to reconcile the relay roster it kept through the
+      // outage. The members' own sockets to the worker never dropped (the
+      // blip was on this side), so they will not say hello again — they
+      // are simply still there, which is why the close handler below keeps
+      // them. The authority on who is still there is the WORKER's `peers`
+      // envelope (sent on connect, listing every live connection): the
+      // retained replay cannot be it, because the worker omits frames older
+      // than ten minutes, and a quiet member's only frame is often the
+      // hello it sent long ago — live on the socket, invisible in the
+      // replay. Against an older worker that sends no `peers`, nothing is
+      // pruned at all: a lingering ghost is recoverable, an evicted live
+      // member is not.
+      let pendingReconcile = reconcile
+      relayWs.on('message', (raw) => {
+        let envelope: {
+          type?: string
+          connId?: string
+          body?: string
+          isHost?: boolean
+          connIds?: unknown
+        }
+        try {
+          envelope = JSON.parse(raw.toString())
+        } catch {
+          return
+        }
+        const fromId = String(envelope.connId || '')
+        if (envelope.type === 'peers') {
+          if (!pendingReconcile) return
+          pendingReconcile = false
+          const alive = new Set(
+            (Array.isArray(envelope.connIds) ? envelope.connIds : []).map(String)
+          )
+          for (const [id, member] of members) {
+            if (member.via === 'relay' && !alive.has(id)) members.delete(id)
+          }
+          // Broadcast regardless of whether anything was pruned: it also
+          // delivers the roster to members re-admitted from retained
+          // hellos below.
+          broadcastPartyState()
+          return
+        }
+        if (envelope.type === 'retained') {
+          // A retained hello is a member who joined (and stayed quiet)
+          // while this host was away: admit them by name, with NO
+          // nowPlaying replay — ageMs on a retained frame means they have
+          // been in the party for a while.
+          if (!fromId) return
+          const msg = decryptMessage(secret, envelope.body || '') as PartyMessage | null
+          if (msg?.type === 'hello' && !members.has(fromId) && members.size < MAX_PARTY_MEMBERS) {
+            members.set(fromId, {
+              id: fromId,
+              name: String(msg.name || 'Guest').slice(0, 40) || 'Guest',
+              isHost: false,
+              via: 'relay'
+            })
+          }
+          return
+        }
+        if (envelope.type !== 'relay' || !fromId) return
+        const msg = decryptMessage(secret, envelope.body || '') as PartyMessage | null
+        if (!msg) return
+        if (msg.type === 'hello') {
+          if (!members.has(fromId) && members.size >= MAX_PARTY_MEMBERS) return
+          const member: PartyHostMember = {
+            id: fromId,
+            name: String(msg.name || 'Guest').slice(0, 40) || 'Guest',
+            isHost: false,
+            via: 'relay'
+          }
+          members.set(fromId, member)
+          admit(member)
+          return
+        }
+        if (msg.type === 'leave') {
+          if (members.delete(fromId)) broadcastPartyState()
+          return
+        }
+        if (!members.has(fromId)) {
+          // A valid decrypt IS the membership credential — AES-GCM under
+          // the party secret authenticates, so only someone holding the
+          // invite can produce this frame. Reaching here unknown means the
+          // roster lost them (a reconnect against an older worker with no
+          // `peers` support, a hello this host never saw): re-admit rather
+          // than silently discarding everything they say. The name arrives
+          // with nothing but their hello, so it degrades to Guest.
+          if (members.size >= MAX_PARTY_MEMBERS) return
+          members.set(fromId, { id: fromId, name: 'Guest', isHost: false, via: 'relay' })
+          broadcastPartyState()
+        }
+        handlePartyMessage(fromId, msg)
+      })
+      relayWs.on('close', () => {
+        // Losing the relay is losing ONE door, not the party — and only
+        // the HOST's side of it: the members' own worker connections are
+        // typically still up, so the roster is KEPT (dropping it stranded
+        // them — apparently connected, but with a host that had forgotten
+        // them and discarded their every message). The reconnect below
+        // comes back to this exact room and reconciles who is really
+        // still there; members who left during the outage are pruned then.
+        if (party !== hostState || hostState.relay?.ws !== relayWs) return
+        hostState.relay = null
+        scheduleRelayReattach()
+      })
+    }
+
+    const scheduleRelayReattach = (): void => {
+      if (party !== hostState || !hostState.relayCreds || hostState.relayReattachTimer) return
+      hostState.relayReattempts += 1
+      // Quick first retries for a blip, then a steady 30s cadence for as
+      // long as the party lives — the host regaining its network minutes
+      // later should still restore the invite's relay door.
+      const delay = [2000, 5000, 15000][hostState.relayReattempts - 1] ?? 30000
+      hostState.relayReattachTimer = setTimeout(() => {
+        hostState.relayReattachTimer = undefined
+        void (async () => {
+          const creds = hostState.relayCreds
+          if (party !== hostState || hostState.relay || !creds) return
+          try {
+            // The SAME room, not a fresh POST /host: the invite already in
+            // people's hands names this roomId.
+            const relayWs = await connectRelayWs(creds.url, creds.roomId, {
+              token: creds.roomToken
+            })
+            if (party !== hostState || hostState.relay) {
+              relayWs.close()
+              return
+            }
+            hostState.relay = { ws: relayWs, url: creds.url, roomId: creds.roomId }
+            hostState.relayReattempts = 0
+            wireRelayWs(relayWs, { reconcile: true })
+          } catch (error) {
+            logError('party:relay-reattach', error)
+            scheduleRelayReattach()
+          }
+        })()
+      }, delay)
+    }
+
+    const creds = partySyncCredentials()
+    if (creds.url && creds.inviteKey && party === hostState) {
+      try {
+        const { roomId, roomToken } = await fetchJson<{ roomId: string; roomToken: string }>(
+          `${creds.url}/host`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ inviteKey: creds.inviteKey })
+          }
+        )
+        const relayWs = await connectRelayWs(creds.url, roomId, { token: roomToken })
+        // The party can have been left during the awaits above.
+        if (party !== hostState) {
+          relayWs.close()
+        } else {
+          hostState.relay = { ws: relayWs, url: creds.url, roomId }
+          hostState.relayCreds = { url: creds.url, roomId, roomToken }
+          wireRelayWs(relayWs)
+        }
+      } catch (error) {
+        logError('party:relay-attach', error)
+      }
+    }
+
+    const code =
+      party === hostState && hostState.relay
+        ? encodeHybridShareCode({
+            lan,
+            wan,
+            relay: { url: hostState.relay.url, roomId: hostState.relay.roomId },
+            secret
+          })
+        : encodeShareCode({ lan, wan, secret })
+    hostState.code = code
+    return {
+      ok: true,
+      code,
+      port,
+      wanAvailable: Boolean(wan),
+      relayAttached: Boolean(hostState.relay)
+    }
   })
 
   handle<PartyJoinArgs, { ok: true }>(MEDIA_HUB_CHANNELS.partyJoin, async (_e, payload) => {
-    if (party) throw new Error('You are already in a party. Leave it first.')
+    if (party) throw new Error('You are already in a watch party. Leave it first.')
     const { code, name } = payload || {}
     const parsed = decodeShareCode(code)
-    if (!parsed) throw new Error('That party code is invalid.')
-    // A v4 code is a ROOM invite, not a party. Connecting to it here
+    if (!parsed) throw new Error('That watch party code is invalid.')
+    // A v4 code is a ROOM invite, not a watch party. Connecting to it here
     // would technically work — same relay, same crypto — and would leave
     // the person sitting silently in a presence channel wondering why no
     // film starts. Saying which kind of code it is beats pretending.
@@ -636,22 +931,41 @@ export function registerWatchPartyIpc(): void {
         .trim()
         .slice(0, 40) || 'Guest'
 
-    if (parsed.v === 2) {
-      const ws = await connectRelayWs(parsed.relay.url, parsed.relay.roomId, {
-        secret: parsed.secret,
+    // Both handlers store the client's party-state exactly the same way;
+    // only the framing differs (raw messages direct, worker envelopes over
+    // the relay).
+    const applyPartyState = (msg: PartyMessage): void => {
+      const members = (msg.members as PartyMemberSummary[]) || []
+      const allowMemberControl = Boolean(msg.allowMemberControl)
+      const nowPlaying = (msg.nowPlaying as PartyNowPlayingSummary | null | undefined) ?? null
+      if (party?.role === 'client') {
+        party.members = members
+        party.allowMemberControl = allowMemberControl
+        party.nowPlaying = nowPlaying
+        // The share code no longer carries the host's name, so this
+        // broadcast is where a joiner learns it.
+        party.hostName = members.find((m) => m.isHost)?.name || party.hostName
+      }
+      sendPartyEvent({ type: 'party-state', members, allowMemberControl, nowPlaying })
+    }
+
+    const joinRelayParty = async (relay: PartyRelayEndpoint, secret: string): Promise<void> => {
+      const ws = await connectRelayWs(relay.url, relay.roomId, {
+        secret,
         helloName: displayName
       })
-      const clientRelayState: PartyStateClientRelay = {
+      const clientRelayState: PartyStateClient = {
         role: 'client',
         mode: 'relay',
         ws,
-        secret: parsed.secret,
+        secret,
         members: [],
         selfName: displayName,
         hostName: parsed.name || '',
         selfId: '',
         queue: [],
-        allowMemberControl: false
+        allowMemberControl: false,
+        nowPlaying: null
       }
       party = clientRelayState
       ws.on('message', (raw) => {
@@ -667,28 +981,16 @@ export function registerWatchPartyIpc(): void {
         }
         // `retained` (the relay replaying a member's last message on
         // connect — see the worker's room.ts) is deliberately IGNORED for
-        // parties. It exists for friends-group presence, where stale state
-        // is still useful; replaying a minutes-old nowPlaying or position
-        // into live playback would be actively wrong. A party's own
-        // late-join path (nowPlaying + partyPendingSeek) already covers it.
+        // parties. It exists for room presence, where stale state is still
+        // useful; replaying a minutes-old message into live playback would
+        // be actively wrong. Late joiners are caught up by the HOST
+        // instead: it stores its nowPlaying and replays it to every member
+        // that arrives after (see admit in the host handler).
         if (envelope.type !== 'relay') return
-        const msg = decryptMessage(parsed.secret, envelope.body || '') as PartyMessage | null
+        const msg = decryptMessage(secret, envelope.body || '') as PartyMessage | null
         if (!msg) return
         if (msg.type === 'party-state') {
-          const members = (msg.members as PartyMemberSummary[]) || []
-          const allowMemberControl = Boolean(msg.allowMemberControl)
-          if (party?.role === 'client') {
-            party.members = members
-            party.allowMemberControl = allowMemberControl
-            // The share code no longer carries the host's name, so this
-            // broadcast is where a joiner learns it.
-            party.hostName = members.find((m) => m.isHost)?.name || party.hostName
-          }
-          sendPartyEvent({
-            type: 'party-state',
-            members,
-            allowMemberControl
-          })
+          applyPartyState(msg)
           return
         }
         if (msg.type === 'queue-sync') {
@@ -721,79 +1023,141 @@ export function registerWatchPartyIpc(): void {
           sendPartyEvent({ type: 'host-disconnected' })
         }
       })
-      return { ok: true }
     }
 
-    const endpoints: PartyLanEndpoint[] = [parsed.lan, parsed.wan].filter(
-      (endpoint): endpoint is PartyLanEndpoint => Boolean(endpoint)
-    )
-    let ws: WebSocket | null = null
-    let lastError: unknown = null
-    for (const endpoint of endpoints) {
-      try {
-        ws = await connectPartyWs(endpoint, parsed.secret, displayName)
-        break
-      } catch (error) {
-        lastError = error
+    // The WHOLE attempt — connect AND the encrypted welcome — is made per
+    // endpoint. A socket `open` alone proves nothing about who answered
+    // (a joiner's own LAN can have an unrelated WebSocket service on the
+    // exact private address a stale invite names), and treating it as
+    // success used to end the endpoint loop — so a dud LAN endpoint cost
+    // the perfectly good WAN one its turn, and the relay after that.
+    const joinDirectParty = async (
+      endpoints: PartyLanEndpoint[],
+      secret: string
+    ): Promise<void> => {
+      let lastError: unknown = null
+      for (const endpoint of endpoints) {
+        try {
+          await joinDirectEndpoint(endpoint, secret)
+          return
+        } catch (error) {
+          lastError = error
+        }
       }
-    }
-    if (!ws) {
       throw new Error(
-        lastError instanceof Error ? lastError.message : 'Could not reach the party host.'
+        lastError instanceof Error ? lastError.message : 'Could not reach the watch party host.'
       )
     }
-    const connectedWs = ws
-    const clientDirectState: PartyStateClientDirect = {
-      role: 'client',
-      mode: 'direct',
-      ws: connectedWs,
-      secret: parsed.secret,
-      members: [],
-      selfName: displayName,
-      hostName: parsed.name || '',
-      selfId: '',
-      queue: [],
-      allowMemberControl: false
+
+    const joinDirectEndpoint = async (
+      endpoint: PartyLanEndpoint,
+      secret: string
+    ): Promise<void> => {
+      const connectedWs = await connectPartyWs(endpoint, secret, displayName)
+      const clientDirectState: PartyStateClient = {
+        role: 'client',
+        mode: 'direct',
+        ws: connectedWs,
+        secret,
+        members: [],
+        selfName: displayName,
+        hostName: parsed.name || '',
+        selfId: '',
+        queue: [],
+        allowMemberControl: false,
+        nowPlaying: null
+      }
+      party = clientDirectState
+      // The transport is only CHOSEN once the host has actually answered.
+      // A TCP+WebSocket `open` proves a socket accepted the upgrade, not
+      // that it is this party's host: a stale LAN/WAN endpoint can now be
+      // some other WebSocket service, which would 'succeed' here and leave
+      // the working relay in a hybrid code untried, followed shortly by
+      // host-disconnected. The encrypted `welcome` is the handshake only
+      // the real host can produce (it holds the code's secret), so joining
+      // waits for it — and a close or timeout before it arrives is a
+      // failed ATTEMPT (thrown, so v5 falls back to the relay), never a
+      // "host disconnected" event for a party this client was never in.
+      let welcomed = false
+      let settleWelcome: { resolve: () => void; reject: (error: Error) => void } | null = null
+      const welcomePromise = new Promise<void>((resolve, reject) => {
+        settleWelcome = { resolve, reject }
+      })
+      connectedWs.on('message', (raw) => {
+        const msg = decryptMessage(secret, raw.toString()) as PartyMessage | null
+        if (!msg) return
+        if (msg.type === 'welcome') {
+          if (party?.role === 'client') party.selfId = String(msg.id || '')
+          welcomed = true
+          settleWelcome?.resolve()
+          return
+        }
+        if (msg.type === 'party-state') {
+          applyPartyState(msg)
+          return
+        }
+        if (msg.type === 'queue-sync') {
+          if (party?.role === 'client') {
+            party.queue = applyQueueEvent(party.queue, msg as unknown as PartyQueueEvent)
+            sendPartyEvent({ type: 'queue-sync', queue: party.queue })
+          }
+          return
+        }
+        handlePartyMessage('host', msg)
+      })
+      connectedWs.on('close', () => {
+        if (!welcomed) {
+          settleWelcome?.reject(new Error('The host closed the connection before answering.'))
+          if (party === clientDirectState) party = null
+          return
+        }
+        if (party?.role === 'client') {
+          party = null
+          sendPartyEvent({ type: 'host-disconnected' })
+        }
+      })
+      const timer = setTimeout(
+        () => settleWelcome?.reject(new Error('The host did not answer the handshake.')),
+        6000
+      )
+      try {
+        await welcomePromise
+      } catch (error) {
+        if (party === clientDirectState) party = null
+        try {
+          connectedWs.close()
+        } catch {
+          // best-effort
+        }
+        throw error
+      } finally {
+        clearTimeout(timer)
+      }
     }
-    party = clientDirectState
-    connectedWs.on('message', (raw) => {
-      const msg = decryptMessage(parsed.secret, raw.toString()) as PartyMessage | null
-      if (!msg) return
-      if (msg.type === 'welcome') {
-        if (party?.role === 'client') party.selfId = String(msg.id || '')
-        return
+
+    if (parsed.v === 2) {
+      await joinRelayParty(parsed.relay, parsed.secret)
+      return { ok: true }
+    }
+    if (parsed.v === 5) {
+      // Direct first — a socket on the same network beats a round trip
+      // through the worker for every message of the whole session, and the
+      // attempts are cheap (5s per endpoint). The relay is the fallback
+      // that makes the same code work from across the internet.
+      const endpoints = [parsed.lan, parsed.wan].filter((endpoint): endpoint is PartyLanEndpoint =>
+        Boolean(endpoint)
+      )
+      try {
+        await joinDirectParty(endpoints, parsed.secret)
+      } catch {
+        await joinRelayParty(parsed.relay, parsed.secret)
       }
-      if (msg.type === 'party-state') {
-        const members = (msg.members as PartyMemberSummary[]) || []
-        const allowMemberControl = Boolean(msg.allowMemberControl)
-        if (party?.role === 'client') {
-          party.members = members
-          party.allowMemberControl = allowMemberControl
-          // See the relay client above: the host name arrives here now.
-          party.hostName = members.find((m) => m.isHost)?.name || party.hostName
-        }
-        sendPartyEvent({
-          type: 'party-state',
-          members,
-          allowMemberControl
-        })
-        return
-      }
-      if (msg.type === 'queue-sync') {
-        if (party?.role === 'client') {
-          party.queue = applyQueueEvent(party.queue, msg as unknown as PartyQueueEvent)
-          sendPartyEvent({ type: 'queue-sync', queue: party.queue })
-        }
-        return
-      }
-      handlePartyMessage('host', msg)
-    })
-    connectedWs.on('close', () => {
-      if (party?.role === 'client') {
-        party = null
-        sendPartyEvent({ type: 'host-disconnected' })
-      }
-    })
+      return { ok: true }
+    }
+    const endpoints = [parsed.lan, parsed.wan].filter((endpoint): endpoint is PartyLanEndpoint =>
+      Boolean(endpoint)
+    )
+    await joinDirectParty(endpoints, parsed.secret)
     return { ok: true }
   })
 
@@ -808,12 +1172,15 @@ export function registerWatchPartyIpc(): void {
     return {
       inParty: true,
       role: current.role,
-      mode: current.mode || 'direct',
+      // A host always listens directly (the relay, when attached, is an
+      // additional door rather than a mode) — see the host handler.
+      mode: current.role === 'host' ? 'direct' : current.mode,
       members: partyMemberSummaries(),
       selfId: current.role === 'host' ? current.hostId : current.selfId || '',
       selfName: current.selfName || '',
       hostName: current.hostName || '',
-      allowMemberControl: Boolean(current.allowMemberControl)
+      allowMemberControl: Boolean(current.allowMemberControl),
+      nowPlaying: nowPlayingSummary(current)
     }
   })
 
@@ -832,7 +1199,7 @@ export function registerWatchPartyIpc(): void {
     MEDIA_HUB_CHANNELS.partyRequestPlay,
     (_e, payload) => {
       const current = party
-      if (!current) throw new Error('You are not in a party.')
+      if (!current) throw new Error('You are not in a watch party.')
       const item = payload?.item
       if (!item?.id || !item.type) throw new Error('Nothing to play.')
       const event = {
@@ -850,7 +1217,7 @@ export function registerWatchPartyIpc(): void {
 
   handle<PartySuggestArgs, { ok: true }>(MEDIA_HUB_CHANNELS.partySuggest, (_e, item) => {
     const current = party
-    if (!current) throw new Error('You are not in a party.')
+    if (!current) throw new Error('You are not in a watch party.')
     if (!item || item.id === undefined || item.id === null) throw new Error('Nothing to suggest.')
     const cleanItem: PartyQueueEntry['item'] = {
       id: item.id as string,
@@ -878,13 +1245,13 @@ export function registerWatchPartyIpc(): void {
     MEDIA_HUB_CHANNELS.partyChat,
     (_e, payload) => {
       const current = party
-      if (!current) throw new Error('Join a room before sending a message.')
+      if (!current) throw new Error('Join a watch party before sending a message.')
       const text = String(payload?.text || '')
         .trim()
         .slice(0, 1000)
       if (!text) throw new Error('Write a message before sending it.')
       const senderId = current.role === 'host' ? current.hostId : current.selfId
-      if (!senderId) throw new Error('Your room connection is still starting.')
+      if (!senderId) throw new Error('Your watch party connection is still starting.')
       const chat: PartyChatMessage = {
         id: String(payload?.id || createMemberId()).slice(0, 80),
         senderId,
@@ -905,7 +1272,7 @@ export function registerWatchPartyIpc(): void {
 
   handle<string, { ok: true }>(MEDIA_HUB_CHANNELS.partyRemove, (_e, queueId) => {
     const current = party
-    if (!current) throw new Error('You are not in a party.')
+    if (!current) throw new Error('You are not in a watch party.')
     if (current.role !== 'host') throw new Error('Only the host can remove suggestions.')
     const event: PartyQueueEvent = { type: 'remove', queueId: String(queueId || '') }
     current.queue = applyQueueEvent(current.queue, event)
@@ -915,12 +1282,12 @@ export function registerWatchPartyIpc(): void {
 
   handle<PartyVoteArgs, { ok: true }>(MEDIA_HUB_CHANNELS.partyVote, (_e, payload) => {
     const current = party
-    if (!current) throw new Error('You are not in a party.')
+    if (!current) throw new Error('You are not in a watch party.')
     const { queueId, direction } = payload || {}
     const dir = Number(direction)
     if (dir !== 1 && dir !== -1) throw new Error('Invalid vote.')
     const voterId = current.role === 'host' ? current.hostId : current.selfId
-    if (!voterId) throw new Error('Still connecting to the party — try again in a moment.')
+    if (!voterId) throw new Error('Still connecting to the watch party — try again in a moment.')
     const event: PartyQueueEvent = {
       type: 'vote',
       queueId: String(queueId || ''),
@@ -947,7 +1314,7 @@ export function registerWatchPartyIpc(): void {
   handle<PartyPreparingArgs, { ok: true }>(MEDIA_HUB_CHANNELS.partyPreparing, (_e, payload) => {
     const current = party
     if (!current || current.role !== 'host')
-      throw new Error('Only the host can start party playback.')
+      throw new Error('Only the host can start watch party playback.')
     const item = payload?.item
     const event = item
       ? {
@@ -960,6 +1327,11 @@ export function registerWatchPartyIpc(): void {
           }
         }
       : { type: 'preparing-cancelled' as const }
+    // While the NEXT title resolves, the stored nowPlaying still names the
+    // outgoing one — late-join replay stands down until the new
+    // announcement (or the cancellation, which leaves the old title as the
+    // honest answer again). See PartyStateHost.preparing.
+    current.preparing = Boolean(item)
     partyBroadcast(encryptMessage(current.secret, event))
     return { ok: true }
   })
@@ -967,7 +1339,7 @@ export function registerWatchPartyIpc(): void {
   handle<PartyNowPlayingArgs, { ok: true }>(MEDIA_HUB_CHANNELS.partyNowPlaying, (_e, payload) => {
     const current = party
     if (!current || current.role !== 'host')
-      throw new Error('Only the host can start party playback.')
+      throw new Error('Only the host can start watch party playback.')
     const p = payload || {}
     const event = {
       type: 'nowPlaying' as const,
@@ -985,6 +1357,13 @@ export function registerWatchPartyIpc(): void {
       position: Number(p.position) || 0
     }
     partyBroadcast(encryptMessage(current.secret, event))
+    // Kept for whoever arrives NEXT: the admit path replays this to late
+    // joiners, and the roster broadcast below tells everyone already here
+    // (the hub's "Join the film" button included) what is on. The
+    // announcement is also what ends the preparing window it opened.
+    current.nowPlaying = event as PartyNowPlayingEvent
+    current.preparing = false
+    broadcastPartyState()
     return { ok: true }
   })
 
@@ -1012,8 +1391,24 @@ export function registerWatchPartyIpc(): void {
       if (action.type === 'watching' && current.role === 'host') {
         const self = current.members.get(current.hostId)
         if (self) self.watching = action.watching === true
+        // The host's player closing is the end of "what this party is
+        // watching" as far as late joiners are concerned: replaying a
+        // title whose host has walked away would drag a newcomer into a
+        // film nobody is steering.
+        if (action.watching !== true) current.nowPlaying = null
         broadcastPartyState()
         return { ok: true }
+      }
+      // The host's own position heartbeat keeps the stored nowPlaying
+      // honest, so a late joiner is dropped near the live playhead instead
+      // of at where the film STARTED however long ago.
+      if (
+        current.role === 'host' &&
+        current.nowPlaying &&
+        action.type === 'position' &&
+        Number.isFinite(action.position)
+      ) {
+        current.nowPlaying.position = Number(action.position)
       }
       if (
         (action.type === 'seek-sync' ||
@@ -1021,7 +1416,7 @@ export function registerWatchPartyIpc(): void {
           action.type === 'seek-go') &&
         current.role !== 'host'
       ) {
-        throw new Error('Only the host can control party seeking.')
+        throw new Error('Only the host can control watch party seeking.')
       }
       // Explicit per-field pass-through (not a blind spread of `action`)
       // — this gets re-serialized straight onto the network to every

@@ -2,6 +2,7 @@ import assert from 'node:assert'
 import crypto from 'node:crypto'
 import {
   decodeShareCode,
+  encodeHybridShareCode,
   encodeRelayShareCode,
   encodeRoomShareCode,
   encodeShareCode
@@ -75,6 +76,42 @@ check('is far shorter than the codes it replaces', () => {
   assert.ok(direct.length < 70, `direct code was ${direct.length} chars`)
   assert.ok(relay.length < LEGACY_V2.length / 1.7)
   assert.ok(direct.length < LEGACY_V1.length / 1.7)
+})
+
+check('round-trips a hybrid code — every transport in one invite', () => {
+  const decoded = decodeShareCode(
+    encodeHybridShareCode({ lan: LAN, wan: WAN, relay: RELAY, secret: SECRET })
+  )
+  assert.ok(decoded && decoded.v === 5)
+  assert.deepEqual(decoded.lan, LAN)
+  assert.deepEqual(decoded.wan, WAN)
+  assert.deepEqual(decoded.relay, RELAY)
+  assert.equal(decoded.secret, SECRET)
+})
+
+check('round-trips a hybrid code with no WAN endpoint', () => {
+  const decoded = decodeShareCode(
+    encodeHybridShareCode({ lan: LAN, wan: null, relay: RELAY, secret: SECRET })
+  )
+  assert.ok(decoded && decoded.v === 5)
+  assert.deepEqual(decoded.lan, LAN)
+  assert.equal(decoded.wan, null)
+  assert.deepEqual(decoded.relay, RELAY)
+})
+
+check('rejects truncated and over-long hybrid codes', () => {
+  const code = encodeHybridShareCode({ lan: LAN, wan: WAN, relay: RELAY, secret: SECRET })
+  assert.equal(decodeShareCode(code.slice(0, code.length - 4)), null)
+  assert.equal(decodeShareCode(code + 'AAAA'), null)
+})
+
+check('a hybrid code fits the activity partyCode clamp', () => {
+  // roomRules caps a presence-carried invite at 600 characters; a hybrid
+  // code with a long-but-legal worker host must stay under it or "Watch →
+  // Join them" silently truncates the invite into garbage.
+  const longRelay = { ...RELAY, url: `https://${'x'.repeat(240)}.workers.dev` }
+  const code = encodeHybridShareCode({ lan: LAN, wan: WAN, relay: longRelay, secret: SECRET })
+  assert.ok(code.length <= 600, `hybrid code was ${code.length} chars`)
 })
 
 check('rejects the JSON codes this format replaced', () => {
