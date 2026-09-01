@@ -230,7 +230,9 @@ export function WelcomeSetup() {
     api.settings
       .cacheDiskProbe()
       .then(setDiskProbe)
-      .catch(() => setDiskProbe(null))
+      // An empty result rather than null: null means "still checking", and
+      // a failed probe must let the step degrade instead of pending forever.
+      .catch(() => setDiskProbe({ cacheDir: '', drives: [] }))
     // Same call and same screen-derived cap as the Settings page's test.
     api.network
       .speedTest(window.screen.height * window.devicePixelRatio)
@@ -609,6 +611,10 @@ export function WelcomeSetup() {
                     {recommendedCacheGb} GB on {cacheDrive.root} ({Math.round(cacheDrive.freeGb)} GB
                     free).
                   </span>
+                ) : diskProbe ? (
+                  <span className={styles.tunePending}>
+                    Free space couldn&apos;t be measured — the default 10 GB cap stays.
+                  </span>
                 ) : (
                   <span className={styles.tunePending}>Checking your drives…</span>
                 )}
@@ -616,7 +622,7 @@ export function WelcomeSetup() {
               <li>
                 <strong>Location</strong>
                 <span>
-                  {diskProbe?.cacheDir ?? 'The default app folder.'}
+                  {diskProbe?.cacheDir || 'The default app folder.'}
                   {roomierDrive
                     ? ` ${roomierDrive.root} has ${Math.round(roomierDrive.freeGb)} GB free — worth considering.`
                     : ''}

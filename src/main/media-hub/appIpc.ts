@@ -167,7 +167,19 @@ export function registerAppIpc(): void {
     if (process.platform !== 'win32') {
       // No drive-letter concept — the filesystem holding the cache dir is
       // the only mount this can name without guessing at mount tables.
-      const drive = await probeRoot(cacheDir, true).catch(() => null)
+      // On a fresh install the cache dir itself does not exist yet (it is
+      // only created when playback first writes to it), and statfs on a
+      // missing path rejects — so walk up to the nearest ancestor that
+      // does exist: it is on the same filesystem, which is all statfs is
+      // being asked about.
+      let probePath = cacheDir
+      let drive: CacheDiskDrive | null = null
+      for (;;) {
+        drive = await probeRoot(probePath, true).catch(() => null)
+        const parent = path.dirname(probePath)
+        if (drive || parent === probePath) break
+        probePath = parent
+      }
       return { cacheDir, drives: drive ? [{ ...drive, root: '/' }] : [] }
     }
     const cacheRoot = path.parse(cacheDir).root.toUpperCase()
