@@ -217,7 +217,10 @@ export function logoutSettings(settings: Record<string, unknown> = {}): Pick<
   // Optional, and it has to be: the answer is a THREE-state value on disk
   // (yes / no / never asked) and only the first two may be written back.
 > &
-  Partial<Pick<MediaHubPublicSettings, 'storeMedia'>> {
+  Partial<Pick<MediaHubPublicSettings, 'storeMedia'>> &
+  // Raw-settings field, not a public one — same three-state contract as
+  // storeMedia, carried for the same reason (see the spread below).
+  Partial<{ setupComplete: boolean }> {
   return {
     theme: normalizeTheme(settings.theme),
     updateChannel: normalizeUpdateChannel(settings.updateChannel),
@@ -286,6 +289,16 @@ export function logoutSettings(settings: Record<string, unknown> = {}): Pick<
     // would turn "never asked" into "yes" and the question would never be
     // put to a new install that happened to sign out first — the mirror of
     // the bug above, and the reason this is spread rather than assigned.
-    ...(typeof settings.storeMedia === 'boolean' ? { storeMedia: settings.storeMedia } : {})
+    ...(typeof settings.storeMedia === 'boolean' ? { storeMedia: settings.storeMedia } : {}),
+    // Device-level like storeMedia: whether THIS install has been walked
+    // through first-run setup has nothing to do with which account was
+    // signed in. Dropping it here reopened the blocking welcome wizard the
+    // moment somebody logged out, until a restart re-ran the startup
+    // migration. Spread, not assigned, for the same three-state reason as
+    // storeMedia: absent must stay absent so ensureSetupCompleteDecided
+    // still gets to make the call exactly once.
+    ...(typeof settings.setupComplete === 'boolean'
+      ? { setupComplete: settings.setupComplete }
+      : {})
   }
 }
