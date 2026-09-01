@@ -9,6 +9,7 @@ import { registerMediaHubIpc } from './ipc/mediaHub'
 import { APP_SCHEME, registerAppSchemeAsPrivileged, registerAppSchemeHandler } from './appProtocol'
 import { createDatabase } from './media-hub/database'
 import { activeProfileId } from './media-hub/profiles'
+import { ensureSetupCompleteDecided } from './media-hub/settingsStore'
 import { getDatabase, setDatabase } from './media-hub/dbState'
 import { setActiveWindow, sendToRenderer } from './media-hub/rendererBridge'
 import { isAllowedExternalUrl } from './media-hub/security'
@@ -214,6 +215,11 @@ app.whenReady().then(() => {
   // and the profile-scoping migration attributes every row that predates
   // profiles to whichever one is active now — which, on any install that has
   // never switched, is the only one there has ever been.
+  // BEFORE activeProfileId(): that call seeds the default "Profile 1" on a
+  // fresh launch, and the setupComplete decision uses existing profiles as
+  // evidence of a pre-existing install — decided any later, every fresh
+  // install would look pre-existing and the welcome flow would never show.
+  ensureSetupCompleteDecided()
   setDatabase(createDatabase(join(app.getPath('userData'), 'media-hub.sqlite'), activeProfileId()))
   registerMediaHubIpc()
 

@@ -79,36 +79,6 @@ import {
 
 /** Registers the miscellaneous settings/account/system IPC handlers. */
 export function registerAppIpc(): void {
-  // The one-time setupComplete decision, made here at startup BEFORE any
-  // handler can run, and made in BOTH directions: an install with durable
-  // pre-flow markers is grandfathered as complete (nobody who was already
-  // using the app gets greeted like a stranger), and a genuinely fresh
-  // install is stamped an explicit false. Stamping false is load-bearing —
-  // it means the flag is never absent again after first launch, so nothing
-  // the wizard writes mid-flow (partyDisplayName at step 1, torboxToken/
-  // onboardingVersion at step 2, storeMedia at step 3, the seeded profile
-  // from step 1's list call) can later be mistaken for a pre-existing
-  // install: a quit at ANY step restarts as false, a flow to reopen.
-  //
-  // The markers are a disjunction rather than storeMedia alone because
-  // auto-update can skip releases: an install upgrading from a version
-  // that predates the storage question still has profiles, a TorBox
-  // connection (onboardingVersion), a room identity, or a party name —
-  // any one of which proves the app was in use before the flow existed.
-  // A live computed clause instead of this write would break the flow
-  // itself — the wizard writes several of these mid-flow.
-  {
-    const settings = readSettings()
-    if (settings.setupComplete === undefined) {
-      settings.setupComplete =
-        settings.storeMedia !== undefined ||
-        settings.onboardingVersion !== undefined ||
-        (settings.profiles?.length ?? 0) > 0 ||
-        Boolean(settings.friendId) ||
-        Boolean(settings.partyDisplayName)
-      writeSettings(settings)
-    }
-  }
   handle<undefined, MediaHubSettingsSnapshot>(MEDIA_HUB_CHANNELS.settingsGet, () => {
     // Not what publicSettings read off disk: an Ollama running at the
     // default address is used without ever being saved (see ollamaService's
@@ -135,10 +105,11 @@ export function registerAppIpc(): void {
       // cannot say: absent and false both read as false once it is a
       // boolean, and only one of them should raise the first-run prompt.
       storagePolicyChosen: stored.storeMedia !== undefined,
-      // Only the explicit flag — pre-flow installs get it written once at
-      // startup (see the migration at the top of registerAppIpc), so this
-      // must NOT infer completeness from storeMedia: the wizard writes
-      // storeMedia mid-flow, before its tuning step.
+      // Only the explicit flag — index.ts decides it once at startup, in
+      // both directions, BEFORE the default profile is seeded (see
+      // settingsStore's ensureSetupCompleteDecided). Inferring anything
+      // here would break the flow: the wizard writes storeMedia,
+      // partyDisplayName, tokens and the seeded profile mid-flow.
       setupComplete: stored.setupComplete === true
     }
   })
