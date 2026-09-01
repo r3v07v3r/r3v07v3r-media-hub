@@ -13,6 +13,8 @@ import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { MEDIA_HUB_CHANNELS } from '../../shared/media-hub/ipc-channels'
 import type {
+  CacheDiskDrive,
+  CacheDiskProbeResult,
   CacheMode,
   ImportSummary,
   MediaHubPublicSettings,
@@ -63,7 +65,7 @@ interface RestoreResult {
 import { normalizePlaybackBuffer } from '../../shared/media-hub/playbackBuffer'
 import { normalizeVideoScaling } from '../../shared/media-hub/videoScaling'
 import { isAllowedExternalUrl } from './security'
-import { clearAllSessions, MIN_CACHE_BYTES } from './streamCache'
+import { cacheRootDir, clearAllSessions, MIN_CACHE_BYTES } from './streamCache'
 import {
   getTorBoxToken,
   omdbCredentials,
@@ -77,6 +79,20 @@ import {
 
 /** Registers the miscellaneous settings/account/system IPC handlers. */
 export function registerAppIpc(): void {
+  // One-time grandfathering for installs that predate the welcome flow: an
+  // answered storage question proves the install was in use (that prompt
+  // blocked the whole app), so it is marked set-up once, here at startup.
+  // A live computed clause instead of this write would break the flow
+  // itself — the wizard now asks the storage question mid-flow, and the
+  // moment storeMedia landed the wizard would count as "complete" and
+  // vanish before its tuning step.
+  {
+    const settings = readSettings()
+    if (settings.storeMedia !== undefined && settings.setupComplete === undefined) {
+      settings.setupComplete = true
+      writeSettings(settings)
+    }
+  }
   handle<undefined, MediaHubSettingsSnapshot>(MEDIA_HUB_CHANNELS.settingsGet, () => {
     // Not what publicSettings read off disk: an Ollama running at the
     // default address is used without ever being saved (see ollamaService's
@@ -103,10 +119,11 @@ export function registerAppIpc(): void {
       // cannot say: absent and false both read as false once it is a
       // boolean, and only one of them should raise the first-run prompt.
       storagePolicyChosen: stored.storeMedia !== undefined,
-      // An answered storage question also counts as complete: that prompt
-      // blocks the whole app, so any install that has a storeMedia value
-      // was in use before the welcome flow existed and must not see it.
-      setupComplete: stored.setupComplete === true || stored.storeMedia !== undefined
+      // Only the explicit flag — pre-flow installs get it written once at
+      // startup (see the migration at the top of registerAppIpc), so this
+      // must NOT infer completeness from storeMedia: the wizard writes
+      // storeMedia mid-flow, before its tuning step.
+      setupComplete: stored.setupComplete === true
     }
   })
 
@@ -115,6 +132,48 @@ export function registerAppIpc(): void {
     settings.setupComplete = true
     writeSettings(settings)
     return { setupComplete: true }
+  })
+
+  // What the welcome flow's tuning step sizes the cache from. Reports free
+  // space rather than choosing anything: the recommendation logic lives in
+  // the renderer, and the cache LOCATION can still only change through the
+  // native picker (settingsChooseStreamCacheDir) — this hands back drive
+  // roots for display, never accepts one.
+  handle<undefined, CacheDiskProbeResult>(MEDIA_HUB_CHANNELS.settingsCacheDiskProbe, async () => {
+    const cacheDir = cacheRootDir()
+    const toGb = (bytes: number): number => Math.round((bytes / 1024 ** 3) * 10) / 10
+    const probeRoot = async (root: string, isCacheDrive: boolean): Promise<CacheDiskDrive> => {
+      // statfs can stall on a disconnected network drive; a probe that
+      // slow is not a drive worth recommending anyway.
+      const stats = await Promise.race([
+        fsp.statfs(root),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('probe timeout')), 1500)
+        )
+      ])
+      return {
+        root,
+        freeGb: toGb(Number(stats.bavail) * Number(stats.bsize)),
+        totalGb: toGb(Number(stats.blocks) * Number(stats.bsize)),
+        isCacheDrive
+      }
+    }
+    if (process.platform !== 'win32') {
+      // No drive-letter concept — the filesystem holding the cache dir is
+      // the only mount this can name without guessing at mount tables.
+      const drive = await probeRoot(cacheDir, true).catch(() => null)
+      return { cacheDir, drives: drive ? [{ ...drive, root: '/' }] : [] }
+    }
+    const cacheRoot = path.parse(cacheDir).root.toUpperCase()
+    const letters = 'CDEFGHIJKLMNOPQRSTUVWXYZ'
+    const probes = await Promise.allSettled(
+      [...letters].map((letter) => probeRoot(`${letter}:\\`, `${letter}:\\` === cacheRoot))
+    )
+    const drives = probes
+      .filter((p): p is PromiseFulfilledResult<CacheDiskDrive> => p.status === 'fulfilled')
+      .map((p) => p.value)
+      .filter((d) => d.totalGb > 0)
+    return { cacheDir, drives }
   })
 
   handle<unknown, { theme: string }>(MEDIA_HUB_CHANNELS.settingsSetTheme, (_event, value) => {

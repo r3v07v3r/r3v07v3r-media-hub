@@ -31,6 +31,7 @@ import type {
   CatalogQuery,
   CatalogQueryResult,
   ConnectResult,
+  CacheDiskProbeResult,
   ConnectionTestResult,
   CustomList,
   CustomListItem,
@@ -290,6 +291,8 @@ const api = {
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.settingsSetPartyDisplayName, name),
       completeSetup: (): Promise<{ setupComplete: boolean }> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.settingsCompleteSetup),
+      cacheDiskProbe: (): Promise<CacheDiskProbeResult> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.settingsCacheDiskProbe),
       setHideDefaults: (
         partial: Partial<{
           hideWatchedDefault: boolean

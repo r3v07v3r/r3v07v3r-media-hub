@@ -126,6 +126,67 @@
   color: var(--accent-magenta);
 }
 
+.tuneRows {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.tuneRows li {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 14px;
+  border-radius: var(--radius-medium, 12px);
+  border: 1px solid var(--border-subtle);
+  background: rgba(255, 255, 255, 0.03);
+  font-size: 0.86rem;
+  line-height: 1.55;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.tuneRows strong {
+  color: var(--text-primary);
+  font-size: 0.78rem;
+  font-weight: 560;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.tunePending {
+  color: var(--text-muted);
+}
+
+.tuneError {
+  color: var(--accent-magenta);
+}
+
+.inlineButton {
+  align-self: flex-start;
+  margin-top: 4px;
+  padding: 6px 12px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border-subtle);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+.inlineButton:hover:not(:disabled) {
+  border-color: var(--border-active);
+  color: var(--text-primary);
+}
+
+.inlineButton:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 .actions {
   display: flex;
   flex-wrap: wrap;

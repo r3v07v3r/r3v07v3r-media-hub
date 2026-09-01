@@ -61,8 +61,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   }, [playbackCovered])
 
   /**
-   * A first-run dialog is up — the welcome flow (WelcomeSetup) or the
-   * storage question (StoragePolicyPrompt), which run in that order.
+   * A first-run dialog is up — the welcome flow (WelcomeSetup, which asks
+   * the storage question as one of its steps) or the standalone
+   * StoragePolicyPrompt safety net for a somehow-still-unanswered policy.
    *
    * Both faces go inert while one is: the scrim stops a mouse, but a
    * keyboard or a screen reader would otherwise walk straight into the app

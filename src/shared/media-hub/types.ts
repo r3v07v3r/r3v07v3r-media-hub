@@ -1463,6 +1463,25 @@ export interface ConnectionTestResult {
   recommendedSizeGb: number
 }
 
+/** One mounted drive as the cache-disk probe saw it. */
+export interface CacheDiskDrive {
+  /** Filesystem root, e.g. 'C:\\' on Windows or '/' elsewhere. */
+  root: string
+  freeGb: number
+  totalGb: number
+  /** Whether the current stream-cache directory lives on this drive. */
+  isCacheDrive: boolean
+}
+
+/** What the welcome flow's tuning step sizes the cache from — where the
+ *  cache currently lives and how much room each drive actually has. */
+export interface CacheDiskProbeResult {
+  /** The effective cache root right now (the default app-data location
+   *  when streamCacheDir is unset). */
+  cacheDir: string
+  drives: CacheDiskDrive[]
+}
+
 // ---------------------------------------------------------------------
 // Auto-update
 // ---------------------------------------------------------------------

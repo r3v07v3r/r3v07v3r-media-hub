@@ -2,7 +2,7 @@
 
 // The welcome flow a fresh install walks through before anything else.
 //
-// Two questions, in order of how personal they are:
+// Four steps, in order of how personal they are:
 //
 //  1. A name. It becomes the profile's name AND the party display name in
 //     one stroke — Rooms and Watch Parties introduce this install to other
@@ -17,21 +17,57 @@
 //     runPlayback) — so the choice is offered here, with "not right now"
 //     as an honest option that says exactly what it costs.
 //
-// Gated on setupComplete, which installs that predate the flow earn
-// automatically from having answered the storage question (see appIpc's
-// snapshot) — only genuinely fresh installs land here. The storage policy
-// prompt keys itself to AFTER this flow, so first run reads as one
-// sequence: who are you → where does video come from → may it touch disk.
+//  3. The storage question — the same StoragePolicyChoice the standalone
+//     prompt renders, asked here so first run is one sequence instead of
+//     a second dialog appearing after the wizard closes. "Stream only"
+//     ends the flow: memory mode has no cache to tune.
+//
+//  4. Cache tuning, disk mode only. Runs the existing self-limiting speed
+//     test (network.speedTest — the same one Settings uses) and a disk
+//     probe, then recommends a quality cap, a release-size cap, a cache
+//     size sized to the drive's free space, and points out a roomier
+//     drive when one exists. All applied through the same settings IPC
+//     the Settings page uses; all skippable.
+//
+// Gated on setupComplete, which installs that predate the flow earn once
+// at startup from having answered the storage question (see appIpc's
+// migration) — only genuinely fresh installs land here.
 
 import { useEffect, useRef, useState } from 'react'
+import type {
+  CacheDiskProbeResult,
+  ConnectionTestResult as SpeedTestResult
+} from '@shared/media-hub/types'
 import { Icon } from '@renderer/components/icons/Icon'
 import { useAppState } from '@renderer/context/AppStateContext'
 import { testConnection as testJellyfin } from '@renderer/lib/api/jellyfin'
+import { StoragePolicyChoice } from './StoragePolicyPrompt'
 import styles from './WelcomeSetup.module.css'
 
-type Step = 'name' | 'source'
+type Step = 'name' | 'source' | 'storage' | 'tuning'
 type SourceMode = 'pick' | 'torbox' | 'server'
 type Status = { kind: 'idle' | 'busy' | 'error'; message?: string }
+
+const RESOLUTION_LABELS: Record<number, string> = {
+  480: '480p',
+  720: '720p',
+  1080: '1080p',
+  1440: '1440p',
+  2160: '4K'
+}
+
+/** How much disk the rolling cache should claim, from how much is free on
+ *  the drive that holds it. Deliberately conservative fractions — the cache
+ *  is a convenience, not a tenant; the floor matches streamCache.ts's
+ *  MIN_CACHE_BYTES (1.5 GB) rounded up. */
+function recommendCacheGb(freeGb: number): number {
+  if (freeGb >= 1000) return 100
+  if (freeGb >= 500) return 75
+  if (freeGb >= 250) return 50
+  if (freeGb >= 100) return 25
+  if (freeGb >= 40) return 10
+  return Math.max(2, Math.floor(freeGb / 4))
+}
 
 export function WelcomeSetup() {
   const { mediaHubSettings, refreshMediaHubSettings, refreshProfiles } = useAppState()
@@ -42,6 +78,12 @@ export function WelcomeSetup() {
   const [serverUrl, setServerUrl] = useState('')
   const [serverKey, setServerKey] = useState('')
   const [status, setStatus] = useState<Status>({ kind: 'idle' })
+  // Tuning-step probe results. null = still running (or never run);
+  // speedError distinguishes "failed" from "pending" so the step can offer
+  // what it does have instead of spinning forever on a dead connection.
+  const [diskProbe, setDiskProbe] = useState<CacheDiskProbeResult | null>(null)
+  const [speed, setSpeed] = useState<SpeedTestResult | null>(null)
+  const [speedError, setSpeedError] = useState<string | null>(null)
   const panelRef = useRef<HTMLDivElement | null>(null)
 
   const visible = Boolean(mediaHubSettings) && !mediaHubSettings?.setupComplete
@@ -58,7 +100,10 @@ export function WelcomeSetup() {
     const panel = panelRef.current
     if (!visible || !panel) return
     const previous = document.activeElement as HTMLElement | null
-    panel.focus()
+    // Re-run on step/mode changes to rebind the trap — but only take focus
+    // when it is not already inside the panel, so a step's autoFocus input
+    // keeps it.
+    if (!panel.contains(document.activeElement)) panel.focus()
     const onKeyDown = (event: KeyboardEvent): void => {
       if (event.key !== 'Tab') return
       const focusable = [
@@ -130,7 +175,9 @@ export function WelcomeSetup() {
     try {
       const result = await api.torbox.connect(torboxToken.trim())
       if (result.ok) {
-        await finish()
+        refreshMediaHubSettings()
+        setStatus({ kind: 'idle' })
+        setStep('storage')
       } else {
         setStatus({ kind: 'error', message: result.message || 'Could not connect.' })
       }
@@ -158,11 +205,121 @@ export function WelcomeSetup() {
       // Merged onto the latest stored settings, matching MediaServicesSection.
       const latest = await settingsApi.get()
       await settingsApi.set({ ...latest, jellyfin: config })
-      await finish()
+      refreshMediaHubSettings()
+      setStatus({ kind: 'idle' })
+      setStep('storage')
     } catch (error) {
       setStatus({
         kind: 'error',
         message: error instanceof Error ? error.message : 'Connect failed.'
+      })
+    }
+  }
+
+  const startTuningProbes = (): void => {
+    const api = window.api?.mediaHub
+    if (!api) return
+    setSpeed(null)
+    setSpeedError(null)
+    api.settings
+      .cacheDiskProbe()
+      .then(setDiskProbe)
+      .catch(() => setDiskProbe(null))
+    // Same call and same screen-derived cap as the Settings page's test.
+    api.network
+      .speedTest(window.screen.height * window.devicePixelRatio)
+      .then(setSpeed)
+      .catch((error: unknown) =>
+        setSpeedError(error instanceof Error ? error.message : 'Could not test this connection.')
+      )
+  }
+
+  const chooseStorage = async (storeMedia: boolean): Promise<void> => {
+    const api = window.api?.mediaHub
+    if (!api) return
+    setStatus({ kind: 'busy' })
+    try {
+      await api.settings.setStoreMedia(storeMedia)
+      refreshMediaHubSettings()
+      if (!storeMedia) {
+        // Memory mode has no cache to size or place — the tuning step
+        // would have nothing to recommend.
+        await finish()
+        return
+      }
+      setStatus({ kind: 'idle' })
+      startTuningProbes()
+      setStep('tuning')
+    } catch (error) {
+      setStatus({
+        kind: 'error',
+        message: error instanceof Error ? error.message : 'Could not save that.'
+      })
+    }
+  }
+
+  const cacheDrive = diskProbe?.drives.find((d) => d.isCacheDrive) ?? null
+  const recommendedCacheGb = cacheDrive ? recommendCacheGb(cacheDrive.freeGb) : null
+  // A drive worth mentioning: dramatically more room than where the cache
+  // sits today, and enough of it to matter in absolute terms.
+  const roomierDrive =
+    diskProbe && cacheDrive
+      ? (diskProbe.drives.find(
+          (d) =>
+            !d.isCacheDrive &&
+            d.freeGb > cacheDrive.freeGb * 2 &&
+            d.freeGb - cacheDrive.freeGb > 100
+        ) ?? null)
+      : null
+
+  const applyTuning = async (): Promise<void> => {
+    const api = window.api?.mediaHub
+    if (!api) return
+    setStatus({ kind: 'busy' })
+    try {
+      if (speed) {
+        await api.settings.setStreamLimits({
+          maxStreamResolution: speed.recommendedResolution,
+          maxStreamSizeGb: speed.recommendedSizeGb,
+          connectionSpeedMbps: speed.speedMbps
+        })
+      }
+      if (recommendedCacheGb !== null) {
+        await api.settings.setStreamCacheSize(recommendedCacheGb)
+      }
+      await finish()
+    } catch (error) {
+      setStatus({
+        kind: 'error',
+        message: error instanceof Error ? error.message : 'Could not apply the recommendations.'
+      })
+    }
+  }
+
+  const pickCacheDir = async (): Promise<void> => {
+    const api = window.api?.mediaHub
+    if (!api) return
+    setStatus({ kind: 'busy' })
+    try {
+      const result = await api.settings.chooseStreamCacheDir()
+      if (result.error) {
+        setStatus({ kind: 'error', message: result.error })
+        return
+      }
+      setStatus({ kind: 'idle' })
+      if (result.streamCacheDir && !result.cancelled) {
+        refreshMediaHubSettings()
+        // Re-probe so the size recommendation follows the cache to its
+        // new drive.
+        api.settings
+          .cacheDiskProbe()
+          .then(setDiskProbe)
+          .catch(() => {})
+      }
+    } catch (error) {
+      setStatus({
+        kind: 'error',
+        message: error instanceof Error ? error.message : 'Could not change the folder.'
       })
     }
   }
@@ -179,7 +336,7 @@ export function WelcomeSetup() {
         aria-labelledby="welcome-setup-title"
         tabIndex={-1}
       >
-        {step === 'name' ? (
+        {step === 'name' && (
           <>
             <span className={styles.mark} aria-hidden="true">
               <Icon name="smiley" size={22} />
@@ -219,7 +376,9 @@ export function WelcomeSetup() {
             </form>
             <p className={styles.note}>You can change it any time in Settings.</p>
           </>
-        ) : (
+        )}
+
+        {step === 'source' && (
           <>
             <span className={styles.mark} aria-hidden="true">
               <Icon name="play" size={22} />
@@ -366,7 +525,10 @@ export function WelcomeSetup() {
                   type="button"
                   className={styles.skipButton}
                   disabled={busy}
-                  onClick={() => void finish()}
+                  onClick={() => {
+                    setStatus({ kind: 'idle' })
+                    setStep('storage')
+                  }}
                 >
                   Not right now
                 </button>
@@ -375,6 +537,115 @@ export function WelcomeSetup() {
                 </span>
               </div>
             )}
+          </>
+        )}
+
+        {step === 'storage' && (
+          <>
+            <span className={styles.mark} aria-hidden="true">
+              <Icon name="downloads" size={22} />
+            </span>
+            <h1 id="welcome-setup-title" className={styles.title}>
+              Keep media on this device?
+            </h1>
+            <StoragePolicyChoice
+              busy={busy}
+              onChoose={(storeMedia) => void chooseStorage(storeMedia)}
+            />
+            {status.kind === 'error' && <p className={styles.error}>{status.message}</p>}
+          </>
+        )}
+
+        {step === 'tuning' && (
+          <>
+            <span className={styles.mark} aria-hidden="true">
+              <Icon name="pulse" size={22} />
+            </span>
+            <h1 id="welcome-setup-title" className={styles.title}>
+              Let&apos;s size your cache
+            </h1>
+            <p className={styles.body}>
+              A quick download test measures your connection, and your drives tell us how much room
+              the cache can take. Everything here can be changed later in Settings.
+            </p>
+            <ul className={styles.tuneRows}>
+              <li>
+                <strong>Connection</strong>
+                {speed ? (
+                  <span>
+                    {speed.speedMbps} Mbps — good for{' '}
+                    {RESOLUTION_LABELS[speed.recommendedResolution] ??
+                      `${speed.recommendedResolution}p`}{' '}
+                    streams.
+                  </span>
+                ) : speedError ? (
+                  <span className={styles.tuneError}>{speedError}</span>
+                ) : (
+                  <span className={styles.tunePending}>Measuring… this takes a few seconds.</span>
+                )}
+              </li>
+              {speed && (
+                <li>
+                  <strong>Quality</strong>
+                  <span>
+                    Cap releases at{' '}
+                    {RESOLUTION_LABELS[speed.recommendedResolution] ??
+                      `${speed.recommendedResolution}p`}{' '}
+                    and about {speed.recommendedSizeGb} GB per title, so streams start fast and
+                    never outrun the line.
+                  </span>
+                </li>
+              )}
+              <li>
+                <strong>Cache size</strong>
+                {cacheDrive && recommendedCacheGb !== null ? (
+                  <span>
+                    {recommendedCacheGb} GB on {cacheDrive.root} ({Math.round(cacheDrive.freeGb)} GB
+                    free).
+                  </span>
+                ) : (
+                  <span className={styles.tunePending}>Checking your drives…</span>
+                )}
+              </li>
+              <li>
+                <strong>Location</strong>
+                <span>
+                  {diskProbe?.cacheDir ?? 'The default app folder.'}
+                  {roomierDrive
+                    ? ` ${roomierDrive.root} has ${Math.round(roomierDrive.freeGb)} GB free — worth considering.`
+                    : ''}
+                </span>
+                <button
+                  type="button"
+                  className={styles.inlineButton}
+                  disabled={busy}
+                  onClick={() => void pickCacheDir()}
+                >
+                  Choose a different folder…
+                </button>
+              </li>
+            </ul>
+            {status.kind === 'error' && <p className={styles.error}>{status.message}</p>}
+            <div className={styles.actions}>
+              <button
+                type="button"
+                className={styles.secondary}
+                disabled={busy}
+                onClick={() => void finish()}
+              >
+                Keep defaults
+              </button>
+              <button
+                type="button"
+                className={styles.primary}
+                disabled={
+                  busy || (!speed && !speedError) || (!speed && recommendedCacheGb === null)
+                }
+                onClick={() => void applyTuning()}
+              >
+                {busy ? 'Applying…' : 'Apply recommendations'}
+              </button>
+            </div>
           </>
         )}
       </div>
