@@ -730,7 +730,30 @@ export function registerWatchPartyIpc(): void {
     // misconfigured costs the party its across-the-internet door, not its
     // existence. Attached after the direct listener so a failure here can
     // never take down what already works.
-    const wireRelayWs = (relayWs: WebSocket): void => {
+    const wireRelayWs = (relayWs: WebSocket, { reconcile = false } = {}): void => {
+      // A RECONNECT has to reconcile the relay roster it kept through the
+      // outage. The members' own sockets to the worker never dropped (the
+      // blip was on this side), so they will not say hello again — they
+      // are simply still there, which is why the close handler below keeps
+      // them. What proves who is still there is the worker's retained
+      // replay: it holds one frame per LIVE connection (every client's
+      // first message was its non-transient hello, so every live client
+      // has one) and replays them all on connect. Any envelope seen in the
+      // first seconds marks its connId alive; whoever is not heard from
+      // left during the outage and is pruned.
+      const seen = reconcile ? new Set<string>() : null
+      if (seen) {
+        const prune = setTimeout(() => {
+          if (party !== hostState || hostState.relay?.ws !== relayWs) return
+          for (const [id, member] of members) {
+            if (member.via === 'relay' && !seen.has(id)) members.delete(id)
+          }
+          // Broadcast regardless: it also delivers the roster to anyone
+          // re-admitted from a retained hello during the window.
+          broadcastPartyState()
+        }, 3000)
+        relayWs.on('close', () => clearTimeout(prune))
+      }
       relayWs.on('message', (raw) => {
         let envelope: { type?: string; connId?: string; body?: string; isHost?: boolean }
         try {
@@ -738,10 +761,32 @@ export function registerWatchPartyIpc(): void {
         } catch {
           return
         }
+        const fromId = String(envelope.connId || '')
+        if (envelope.type === 'retained') {
+          // Only meaningful while reconciling a reconnect — a fresh party's
+          // relay room is brand-new and has nothing retained.
+          if (!seen || !fromId) return
+          seen.add(fromId)
+          // A retained hello is a member who joined (and stayed quiet)
+          // while this host was away: admit them, but with NO nowPlaying
+          // replay — ageMs on a retained frame means they have been in the
+          // party for a while, and the roster broadcast at prune time
+          // covers them.
+          const msg = decryptMessage(secret, envelope.body || '') as PartyMessage | null
+          if (msg?.type === 'hello' && !members.has(fromId) && members.size < MAX_PARTY_MEMBERS) {
+            members.set(fromId, {
+              id: fromId,
+              name: String(msg.name || 'Guest').slice(0, 40) || 'Guest',
+              isHost: false,
+              via: 'relay'
+            })
+          }
+          return
+        }
         if (envelope.type !== 'relay') return
+        if (seen && fromId) seen.add(fromId)
         const msg = decryptMessage(secret, envelope.body || '') as PartyMessage | null
         if (!msg) return
-        const fromId = String(envelope.connId || '')
         if (msg.type === 'hello') {
           if (!members.has(fromId) && members.size >= MAX_PARTY_MEMBERS) return
           const member: PartyHostMember = {
@@ -762,23 +807,15 @@ export function registerWatchPartyIpc(): void {
         handlePartyMessage(fromId, msg)
       })
       relayWs.on('close', () => {
-        // Losing the relay is losing ONE door, not the party: direct
-        // members are untouched, so only the relay-side roster goes — and
-        // the door is REOPENED, because the hybrid invite names this exact
-        // relay room. The worker keeps admitting joiners to the room while
-        // it exists, so without a reconnect a transient drop would leave
-        // every later relay joiner connected to a party with no host in it,
-        // holding a code this host still advertises.
+        // Losing the relay is losing ONE door, not the party — and only
+        // the HOST's side of it: the members' own worker connections are
+        // typically still up, so the roster is KEPT (dropping it stranded
+        // them — apparently connected, but with a host that had forgotten
+        // them and discarded their every message). The reconnect below
+        // comes back to this exact room and reconciles who is really
+        // still there; members who left during the outage are pruned then.
         if (party !== hostState || hostState.relay?.ws !== relayWs) return
         hostState.relay = null
-        let dropped = false
-        for (const [id, member] of members) {
-          if (member.via === 'relay') {
-            members.delete(id)
-            dropped = true
-          }
-        }
-        if (dropped) broadcastPartyState()
         scheduleRelayReattach()
       })
     }
@@ -807,7 +844,7 @@ export function registerWatchPartyIpc(): void {
             }
             hostState.relay = { ws: relayWs, url: creds.url, roomId: creds.roomId }
             hostState.relayReattempts = 0
-            wireRelayWs(relayWs)
+            wireRelayWs(relayWs, { reconcile: true })
           } catch (error) {
             logError('party:relay-reattach', error)
             scheduleRelayReattach()

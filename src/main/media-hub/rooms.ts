@@ -238,7 +238,7 @@ function updateStoredRoomById(room: RoomState, change: (stored: StoredRoom) => v
   const list = storedRooms()
   for (const entry of list) {
     const parsed = decodeShareCode(entry.code)
-    if (parsed && parsed.v !== 1 && parsed.relay.roomId === room.roomId) {
+    if (parsed && (parsed.v === 2 || parsed.v === 4) && parsed.relay.roomId === room.roomId) {
       change(entry)
       persistRooms(list)
       return
@@ -653,7 +653,13 @@ async function activateRoom(
   { firstConnectMustSucceed = false } = {}
 ): Promise<void> {
   const parsed = decodeShareCode(stored.code)
-  if (!parsed || parsed.v === 1) throw new Error('That is not a valid room code.')
+  // v1 and v5 are PARTY invites (direct and hybrid). A v5 code carries a
+  // relay endpoint, so without this it would pass the checks below and
+  // persist a "room" whose other side is a watch party that ignores
+  // presence announcements — connected-looking, permanently empty.
+  if (!parsed || parsed.v === 1 || parsed.v === 5) {
+    throw new Error('That is not a valid room code.')
+  }
   if (rooms.has(parsed.relay.roomId)) return
   const room: RoomState = {
     roomId: parsed.relay.roomId,
@@ -829,7 +835,15 @@ export function registerRoomsIpc(): void {
     const code = String(payload?.code || '').trim()
     if (!code) throw new Error('Enter a room code.')
     const parsed = decodeShareCode(code)
-    if (!parsed || parsed.v === 1) throw new Error('That is not a valid room code.')
+    if (!parsed || parsed.v === 1 || parsed.v === 5) {
+      // Mirror of watchParty's "that is a room code" guard, pointing the
+      // other way: both party formats name where to actually use them.
+      throw new Error(
+        parsed
+          ? 'That is a Watch Party code — join it from the Watch Party panel.'
+          : 'That is not a valid room code.'
+      )
+    }
     if (rooms.has(parsed.relay.roomId)) return { ok: true }
     const stored: StoredRoom = {
       code,
