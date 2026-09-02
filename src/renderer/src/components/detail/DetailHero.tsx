@@ -73,8 +73,16 @@ export function DetailHero({
   // up, since that is exactly when someone is about to press something.
   // The countdown is armed on the play transition itself too, not only on
   // mouse movement, so autoplay fades the bar without the mouse ever moving.
+  //
+  // Keyboard users get the same two paths the movie player gives them: any
+  // key press while the trailer is open reveals the bar (a hidden bar is
+  // `visibility: hidden`, so it cannot be tabbed into — the key press has
+  // to come first, exactly as a key press wakes the movie player's bar),
+  // and the bar never fades while focus is inside it, so once reached by
+  // Tab it stays put until focus moves on.
   const [trailerIdle, setTrailerIdle] = useState(false)
   const [trailerRevealTick, setTrailerRevealTick] = useState(0)
+  const [trailerBarFocused, setTrailerBarFocused] = useState(false)
   const revealTrailerControls = useCallback(() => {
     setTrailerIdle(false)
     setTrailerRevealTick((tick) => tick + 1)
@@ -84,7 +92,12 @@ export function DetailHero({
     const timer = setTimeout(() => setTrailerIdle(true), TRAILER_CONTROLS_IDLE_MS)
     return () => clearTimeout(timer)
   }, [contentFaded, trailerRevealTick])
-  const trailerControlsHidden = contentFaded && trailerIdle
+  useEffect(() => {
+    if (!trailerActive) return
+    window.addEventListener('keydown', revealTrailerControls)
+    return () => window.removeEventListener('keydown', revealTrailerControls)
+  }, [trailerActive, revealTrailerControls])
+  const trailerControlsHidden = contentFaded && trailerIdle && !trailerBarFocused
 
   const playLabel = useMemo(() => {
     if (isResolving) {
@@ -156,6 +169,12 @@ export function DetailHero({
           className={`${styles.trailerControls} ${
             trailerControlsHidden ? styles.trailerControlsHidden : ''
           }`}
+          onFocus={() => setTrailerBarFocused(true)}
+          onBlur={(event) => {
+            // Focus hopping between this bar's own buttons is not leaving.
+            if (event.currentTarget.contains(event.relatedTarget as Node | null)) return
+            setTrailerBarFocused(false)
+          }}
         >
           <button
             type="button"
