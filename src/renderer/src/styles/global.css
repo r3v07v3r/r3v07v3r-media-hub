@@ -393,6 +393,16 @@ ul {
 [data-motion-suspended='true'] *::after {
   animation-play-state: paused !important;
 }
+/* While the embedded video child covers this document (see AppShell.tsx),
+   nothing here is visible but everything is still hit-testable — and in the
+   gaps where the controls overlay is not up to take a click (around session
+   start, or hidden with the party hub), mpv's input-less child lets it fall
+   through to an invisible element. Refuse the click rather than act on UI
+   nobody can see. Cleared while the watch-party hub deliberately reveals the
+   page. */
+[data-playback-covered='true'] body {
+  pointer-events: none !important;
+}
 /* Settings > More Options' "UI animations" toggle — a standing user
    preference, layered alongside (not replacing) the automatic suspend
    above: both can be true independently, and either one pausing is

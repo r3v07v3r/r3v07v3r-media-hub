@@ -18,6 +18,7 @@ Then:
 ## Priority handling
 
 Issues arrive labeled P0–P4:
+
 - **P0** (broken/critical regression) and **P1** (explicit requirement not met) — always implement.
 - **P2** (significant visual/UX/functional problem) — always implement.
 - **P3** (polish/minor improvement) — implement only if it is low-risk and clearly improves compliance with REQUIREMENTS.md. If it's ambiguous or risky, leave it and say why in your report.

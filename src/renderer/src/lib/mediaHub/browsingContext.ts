@@ -23,11 +23,34 @@ export interface BrowsingOrigin {
   railScroll: Record<string, number>
 }
 
+/** The detail routes — the ones a title page lives at, as opposed to a
+ *  browse page a drill-down chain starts from. App.tsx registers exactly
+ *  these three patterns (`/movies/:id`, `/series/:id`, `/anime/:id`); a
+ *  bare `/movies` is a browse page, `/movies/tt0111161` is a title.
+ *
+ *  Used to tell "opening a title from a grid" (the start of a new trail)
+ *  apart from "opening a title from another title" (a step deeper into
+ *  the one already in progress) — see AppStateContext's openDetail.  */
+export function isDetailRoute(pathname: string): boolean {
+  return /^\/(movies|series|anime)\/[^/]+$/.test(pathname)
+}
+
 /** Snapshots the current page once, at the moment a detail page is opened from it. */
 export function captureBrowsingOrigin(route: string, label: string): BrowsingOrigin {
   const main = document.getElementById('main-content')
   const focused = document.activeElement as HTMLElement | null
-  const focusedItemId = focused?.getAttribute('data-media-id') ?? undefined
+  // `.closest`, not a direct attribute read: a card's own interactive
+  // sub-controls (AnimeLibraryPage's LibraryTile has a nested "open"
+  // button, distinct from the tile article that actually carries
+  // data-media-id) can be the thing that was actually focused/clicked
+  // when a title was opened. Reading the attribute directly off
+  // `document.activeElement` missed that case entirely — a title opened
+  // via such a control captured no focusedItemId at all, so a contextual
+  // Back had nothing to scroll/focus back to. `.closest` still matches
+  // the element itself first when it already carries the attribute
+  // directly, so every previously-working case is unchanged.
+  const focusedItemId =
+    focused?.closest('[data-media-id]')?.getAttribute('data-media-id') ?? undefined
 
   const railScroll: Record<string, number> = {}
   document.querySelectorAll<HTMLElement>('[data-rail-id]').forEach((el) => {

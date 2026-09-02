@@ -9,9 +9,9 @@ import styles from './SyncReviewPanel.module.css'
  *  syncDiscrepancies/syncReviewOpen — see tracking.ts's own header comment
  *  for how these disagreements are found and why nothing here is ever
  *  applied automatically. Each row is resolved independently: picking
- *  "Keep local"/"Use Simkl" pushes that value to the losing side, and
+ *  "Use Local"/"Use Simkl" pushes that value to the losing side, and
  *  "Ignore" just drops the item from future checks without changing
- *  either side. "Keep local" is recorded before it is sent, and a burst
+ *  either side. "Use Local" is recorded before it is sent, and a burst
  *  of them goes out as one batched request per service a few seconds
  *  after the last click — so working down this list is one push, and a
  *  row that leaves stays gone even if that push has to be retried on a
@@ -80,13 +80,24 @@ export function SyncReviewPanel() {
                   </div>
                 </div>
                 <div className={styles.actions}>
-                  <button
-                    type="button"
-                    className={`${styles.actionButton} ${styles.actionButtonPrimary}`}
-                    onClick={() => resolveSyncDiscrepancy(d, 'use-local')}
-                  >
-                    Keep local
-                  </button>
+                  {/* No "Use Local" for a row whose id can't be pushed as a
+                      real id (a demo-id duplicate, typically): the push
+                      would be an unverifiable title/year guess and the row
+                      would come straight back — see
+                      WatchStatusDiscrepancy.pushable. "Use Simkl" is the
+                      one that genuinely resolves these, by rewriting the
+                      local record. */}
+                  {d.pushable !== false ? (
+                    <button
+                      type="button"
+                      className={`${styles.actionButton} ${styles.actionButtonPrimary}`}
+                      onClick={() => resolveSyncDiscrepancy(d, 'use-local')}
+                    >
+                      Use Local
+                    </button>
+                  ) : (
+                    <span className={styles.unpushableNote}>Local-only id — can’t be pushed</span>
+                  )}
                   <button
                     type="button"
                     className={styles.actionButton}

@@ -9,6 +9,7 @@ import { registerMediaHubIpc } from './ipc/mediaHub'
 import { APP_SCHEME, registerAppSchemeAsPrivileged, registerAppSchemeHandler } from './appProtocol'
 import { createDatabase } from './media-hub/database'
 import { activeProfileId } from './media-hub/profiles'
+import { ensureSetupCompleteDecided } from './media-hub/settingsStore'
 import { getDatabase, setDatabase } from './media-hub/dbState'
 import { setActiveWindow, sendToRenderer } from './media-hub/rendererBridge'
 import { isAllowedExternalUrl } from './media-hub/security'
@@ -158,9 +159,9 @@ function createWindow(): void {
 // menu accelerator (and the page keydown) from firing at all.
 //
 // Always the MAIN window's fullscreen, whichever window took the key — see
-// windowFullscreen.ts. mpv's video window is not a BrowserWindow and never sees
-// this, so it carries its own F11 binding instead (mpv.ts's bindSafetyKeys),
-// which routes to the same toggle.
+// windowFullscreen.ts. The embedded video child never holds keyboard focus
+// (measured — see mpv.ts's bindSafetyKeys), so between this handler and the
+// overlay's own keys, every window that can take an F11 routes it here.
 function watchFullscreenShortcut(window: BrowserWindow): void {
   window.webContents.on('before-input-event', (event, input) => {
     if (input.type !== 'keyDown' || input.key !== 'F11') return
@@ -175,6 +176,13 @@ function watchFullscreenShortcut(window: BrowserWindow): void {
 // initialization and is ready to create browser windows.
 // Some APIs can only be used after this event occurs.
 app.whenReady().then(() => {
+  // Phase-0 embed spike (see media-hub/embedSpike.ts): runs INSTEAD of the app
+  // and exits with its verdict. Temporary — removed once the embed ships.
+  if (process.env.R3_EMBED_SPIKE === '1') {
+    void import('./media-hub/embedSpike').then(({ runEmbedSpike }) => runEmbedSpike())
+    return
+  }
+
   registerAppSchemeHandler()
 
   // Before any window exists, so there is no window-shaped gap at startup
@@ -207,6 +215,11 @@ app.whenReady().then(() => {
   // and the profile-scoping migration attributes every row that predates
   // profiles to whichever one is active now — which, on any install that has
   // never switched, is the only one there has ever been.
+  // BEFORE activeProfileId(): that call seeds the default "Profile 1" on a
+  // fresh launch, and the setupComplete decision uses existing profiles as
+  // evidence of a pre-existing install — decided any later, every fresh
+  // install would look pre-existing and the welcome flow would never show.
+  ensureSetupCompleteDecided()
   setDatabase(createDatabase(join(app.getPath('userData'), 'media-hub.sqlite'), activeProfileId()))
   registerMediaHubIpc()
 

@@ -7,6 +7,11 @@ import os from 'node:os'
 import { MEDIA_HUB_CHANNELS } from '../../shared/media-hub/ipc-channels'
 import type { ConnectionTestResult, NetworkInfoResult } from '../../shared/media-hub/types'
 import { handle } from './ipcGuard'
+import {
+  downloadSample,
+  measureDownstream,
+  OVERALL_BUDGET_MS
+} from '../../shared/media-hub/speedTest'
 
 export function getLocalLanIp(): string {
   const interfaces = os.networkInterfaces()
@@ -26,20 +31,13 @@ export function registerNetworkIpc(): void {
   handle<{ screenHeight: number }, ConnectionTestResult>(
     MEDIA_HUB_CHANNELS.networkSpeedTest,
     async (_event, value) => {
-      // One MiB is enough for a useful estimate without punishing metered connections.
-      const testedBytes = 1024 * 1024
       const controller = new AbortController()
-      const timeout = setTimeout(() => controller.abort(), 12000)
-      const started = performance.now()
+      const timeout = setTimeout(() => controller.abort(), OVERALL_BUDGET_MS)
       try {
-        const response = await fetch(`https://speed.cloudflare.com/__down?bytes=${testedBytes}`, {
-          cache: 'no-store',
-          signal: controller.signal
-        })
-        if (!response.ok) throw new Error(`Speed test failed (${response.status}).`)
-        const bytes = (await response.arrayBuffer()).byteLength
-        const seconds = Math.max((performance.now() - started) / 1000, 0.001)
-        const speedMbps = Math.round(((bytes * 8) / seconds / 1_000_000) * 10) / 10
+        const { speedMbps, totalBytes } = await measureDownstream((bytes) =>
+          downloadSample(bytes, controller.signal)
+        )
+        const bytes = totalBytes
         const screen = Math.max(480, Number(value?.screenHeight) || 1080)
         const speedLimit = speedMbps < 4 ? 480 : speedMbps < 8 ? 720 : speedMbps < 20 ? 1080 : 2160
         const screenLimit =

@@ -17,17 +17,16 @@ import { useEffect, useState } from 'react'
  * landed at y=868 against an 853px viewport and the mood dock covered
  * the cards from y=655 up.
  *
- *   'full'    — the composition as designed. Orb, telemetry gauges, the
+ *   'full'    — the composition as designed. Telemetry gauges, the
  *               520px+ hero.
  *   'short'   — same composition, trimmed to fit: tighter rows, smaller
  *               cards, a shorter dock. Nothing is removed.
- *   'compact' — too short for the orb column to earn its 300px. The
- *               assistant collapses to a single strip (status + the
- *               recommend buttons, which are NOT dropped) and the
- *               telemetry gauges stop rendering — which also stops the
- *               main-process WMI worker feeding them, since it is
- *               reference-counted on renderer subscribers (see
- *               src/main/ipc/telemetry.ts).
+ *   'compact' — too short to keep three columns. The assistant panel
+ *               collapses to a full-width strip (see
+ *               CompactAIAssistant.module.css) and the telemetry gauges
+ *               stop rendering — which also stops the main-process WMI
+ *               worker feeding them, since it is reference-counted on
+ *               renderer subscribers (see src/main/ipc/telemetry.ts).
  *   'stacked' — the pre-existing narrow-width layout (single column,
  *               icon rail / bottom nav). Unchanged by any of the above.
  *

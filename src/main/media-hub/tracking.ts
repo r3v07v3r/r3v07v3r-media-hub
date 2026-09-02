@@ -63,6 +63,13 @@ import {
 import { airingStatus, continueWatchingList } from './core'
 import { catalogData, metadata } from './catalog'
 import { getDatabase } from './dbState'
+import {
+  lastPlannedSyncReport,
+  pushLocalPlanChange,
+  plannedSources,
+  syncPlannedFromServices,
+  type PlannedSyncReport
+} from './watchlists'
 import { fetchJson } from './httpClient'
 import { mapWithLimit, type TaskPriority } from './taskScheduler'
 import { handle } from './ipcGuard'
@@ -82,8 +89,12 @@ import {
   writeSettings
 } from './settingsStore'
 import { sendToRenderer } from './rendererBridge'
+import { cachedRemoteLists, fetchRemoteLists } from './remoteLists'
+import type { RemoteList } from '../../shared/media-hub/types'
+import { assertLibraryWritableId } from '../../shared/media-hub/serviceIds'
 import {
   batchHistoryPayload,
+  hasExpressibleSimklId,
   historyPayload,
   scrobblePayload,
   seasonHistoryPayload,
@@ -755,6 +766,43 @@ async function pushPendingToServices(priority: TaskPriority): Promise<Set<string
     failed.add(entry.id)
   }
 
+  // TRAKT TOO, and it was the gap. This queue reached Simkl and MAL, so a
+  // "Use Local" decision left Trakt holding the value the person had just
+  // ruled against — and the next check against Trakt would raise it all
+  // over again. "The tracking services that are connected" has to mean all
+  // of them, or resolving a disagreement in one place creates one in
+  // another.
+  //
+  // Failures here do NOT un-confirm the entry, unlike MAL above. Simkl is
+  // the service this queue's verdict is computed against and MAL's
+  // progress is part of the same reconciliation; Trakt is a third party to
+  // it. Dropping a decision Simkl accepted because Trakt was unreachable
+  // would re-raise a disagreement that no longer exists. pushTraktHistory
+  // already logs and swallows its own errors for the same reason.
+  for (const entry of queue) {
+    if (!confirmed.has(entry.id)) continue
+    await pushTraktHistory(
+      { id: entry.id, type: entry.type, title: entry.title, year: entry.year },
+      {},
+      locallyWatched.has(entry.id) ? 'add' : 'remove'
+    )
+  }
+
+  // The one written record of what a flush actually did. Every failure
+  // mode this path has had — blind confirmations, unattributable
+  // not_found entries, decisions that vanished — was invisible precisely
+  // because success and no-op looked identical in the log (a "keep local"
+  // that changed nothing left no line anywhere). Catalog ids only; titles
+  // and tokens stay out.
+  if (sendable.length) {
+    logError(
+      'reconcile:flush',
+      `sent=${sendable.map((e) => e.id).join(',')} confirmed=${[...confirmed].join(',') || '-'} ` +
+        `failed=${[...failed].join(',') || '-'} settled=${[...settled].join(',') || '-'}` +
+        (error ? ` error="${error}"` : '')
+    )
+  }
+
   // The pushes above bypass simklWatchedSnapshot()'s own request path, so
   // its 20-minute cache never learns about them; left alone, the next
   // check compares against the stale pre-push snapshot and re-reports
@@ -870,6 +918,15 @@ async function pushPendingToServices(priority: TaskPriority): Promise<Set<string
  * interrupts anyone with a panel they did not ask for.
  */
 export async function runBackgroundWatchSync(): Promise<void> {
+  // Watchlists come in on the same schedule as history goes out. They are
+  // both "make the local picture match the services", and giving them
+  // separate timers would mean two independent things to reason about for
+  // no benefit. Failures are swallowed inside the pull, per service.
+  try {
+    await syncPlannedFromServices('background')
+  } catch (error) {
+    logError('job:planned-sync', error)
+  }
   if (!simklCredentials().accessToken) return
   // Background: this is a recurring job nobody asked for, so its pushes
   // must not jump ahead of the screen someone is looking at, and must
@@ -1006,7 +1063,19 @@ async function computeMovieDiscrepancies(
       poster: source?.poster || '',
       year: source?.year || '',
       localWatched: local,
-      remoteWatched: remote
+      remoteWatched: remote,
+      // An id no service can express (mockData's m-* demo ids, or anything
+      // else unmappable) makes "Use Local" structurally unable to stick:
+      // the push would go out as a title/year guess whose outcome can
+      // neither be verified nor ever satisfy this id-joined diff, so the
+      // row returned after every resolution — seen live as three demo-id
+      // duplicates of already-synced films surviving five days of clicks.
+      // The row is still SURFACED, deliberately: "Use Simkl" resolves it
+      // for real by rewriting the local record (for a ghost duplicate,
+      // deleting it), and dropping the row would leave that corruption in
+      // history forever with nothing offering to clean it. The panel just
+      // stops offering the one action that cannot work.
+      pushable: hasExpressibleSimklId(id)
     })
   }
   // Simkl's all-items response can contain only an IMDb id for a movie, so
@@ -1022,6 +1091,11 @@ async function computeMovieDiscrepancies(
   // fallback is only satisfying the type.
   return (
     await mapWithLimit(out, async (discrepancy) => {
+      // An unmappable id 404s every metadata provider on every single
+      // pass (three such lines per check, for weeks, in the live log).
+      // The local history row already carries title/poster/year, which is
+      // all the panel needs to offer "Use Simkl" on it.
+      if (!discrepancy.pushable) return discrepancy
       try {
         const detail = await metadata('movie', discrepancy.id, priority)
         return {
@@ -1081,21 +1155,101 @@ export function registerTrackingIpc(): void {
       newEpisodeCount: newEpisodesById.get(String(item.id)) || 0,
       airing: airingById.get(String(item.id)) || ''
     }))
-    return { tracked, history }
+    return { tracked, history, plannedSources: plannedSources() }
   })
+
+  /**
+   * Pull plan-to-watch from every connected service, on demand.
+   *
+   * Also runs with the background watch sync, so an untouched app catches
+   * up on its own — this exists for the case where somebody has just
+   * added a pile of titles on the web and does not want to wait for the
+   * next pass to see them.
+   */
+  handle<undefined, PlannedSyncReport>(MEDIA_HUB_CHANNELS.trackingPlannedSync, async () =>
+    syncPlannedFromServices('interactive')
+  )
+
+  /** The last pull's result, so the panel has something to show before
+   *  anybody presses the button. */
+  handle<undefined, PlannedSyncReport | null>(MEDIA_HUB_CHANNELS.trackingPlannedReport, async () =>
+    lastPlannedSyncReport()
+  )
+
+  /**
+   * Named lists from the services, read only.
+   *
+   * Answers from cache first and refreshes behind it: reading these
+   * costs one request per list, and somebody opening My Stuff should
+   * not wait on thirty of them to see a name they saw this morning.
+   */
+  handle<undefined, { lists: RemoteList[] }>(MEDIA_HUB_CHANNELS.listsRemote, async () => {
+    const cached = cachedRemoteLists()
+    if (cached.length > 0) {
+      void fetchRemoteLists('background').catch(() => {
+        // Logged inside; the cached answer already went out.
+      })
+      return { lists: cached }
+    }
+    return { lists: await fetchRemoteLists('visible') }
+  })
+
+  handle<{ enabled?: boolean }, { watchlistTwoWay: boolean }>(
+    MEDIA_HUB_CHANNELS.trackingSetTwoWay,
+    (_e, payload) => {
+      const settings = readSettings()
+      const enabled = payload?.enabled !== false
+      settings.watchlistTwoWay = enabled
+      writeSettings(settings)
+      // The origins record is deliberately KEPT when this is turned
+      // off. It is the app's memory of what came from where, and
+      // discarding it would mean turning the setting back on later
+      // starts with no history — which is exactly the state in which
+      // a removal cannot be told apart from an addition.
+      return { watchlistTwoWay: enabled }
+    }
+  )
 
   handle<TrackableItem, { tracked: boolean }>(MEDIA_HUB_CHANNELS.trackingToggle, (_e, item) => {
     const db = getDatabase()
     const tracked = db.isTracked(item.id)
+    // Only the TRACK direction is refused for an inexpressible id — a
+    // toggle that untracks is how a demo title that already leaked into
+    // the tracked table gets removed, and the guard must not lock it in.
+    // See the mark-watched handler above for the full reasoning.
+    if (!tracked) assertLibraryWritableId(item?.id, item?.title)
     if (tracked) db.untrack(item.id)
     else db.track(item)
     requestRecommendationsRebuild()
+    // Out to the services, without making anybody wait for it. Three
+    // third-party APIs between pressing Plan to Watch and the button
+    // changing state is the wrong trade; the local write is the answer,
+    // and the push reports its own failures.
+    pushLocalPlanChange(
+      {
+        id: String(item.id),
+        type: (item.type ?? 'movie') as MediaKind,
+        title: String(item.title ?? ''),
+        year: item.year ? String(item.year) : undefined
+      },
+      !tracked
+    )
     return { tracked: !tracked }
   })
 
   handle<MarkWatchedPayload, MarkWatchedResult>(
     MEDIA_HUB_CHANNELS.trackingMarkWatched,
     async (_e, { item, playback }) => {
+      // No library ADD for an id no service can express (mockData's m-*
+      // demo pool, reachable through the AI assistant's last-resort
+      // fallback). This exact write is how three demo-id duplicates of
+      // already-tracked films got into real watch_history on Aug 24 and
+      // then sat in the sync review as unresolvable rows for five days
+      // (PR #144 has the post-mortem). The renderer refuses the click
+      // with the same message before it gets here; this is the boundary
+      // that holds when some surface forgets to. Unmark below is
+      // deliberately NOT guarded — removing a ghost is the cleanup.
+      assertLibraryWritableId(item?.id, item?.title)
       getDatabase().markWatched(item, playback || {})
       requestRecommendationsRebuild()
       const simklResult = await syncSimklHistory(
@@ -1127,6 +1281,10 @@ export function registerTrackingIpc(): void {
   handle<MarkSeasonWatchedPayload, MarkWatchedResult>(
     MEDIA_HUB_CHANNELS.trackingMarkSeasonWatched,
     async (_e, { item, season, episodes }) => {
+      // Same refusal as the single-episode handler above, for the same
+      // reason — a season of demo-id history rows is the same corruption,
+      // multiplied by the episode count.
+      assertLibraryWritableId(item?.id, item?.title)
       const list = Array.isArray(episodes) ? episodes : []
       const episodeNumbers = list.map((p) => p.episode)
       const db = getDatabase()
@@ -1252,6 +1410,12 @@ export function registerTrackingIpc(): void {
       // failure this queue was built to stop. Refusing it puts the row
       // back with a message instead.
       if (!simklCredentials().accessToken) return { ok: true, queued: false }
+      // An id the push could only ever express as a title/year guess is
+      // refused on the same terms as a missing token: queueing it promises
+      // an outcome this app cannot deliver or verify (see
+      // WatchStatusDiscrepancy.pushable — the panel does not offer "Use
+      // Local" for these; this is the backstop for a stale cached row).
+      if (!hasExpressibleSimklId(String(discrepancy.id))) return { ok: true, queued: false }
       const recorded = writePendingPushes(
         queuePendingPush(pendingPushes(), {
           id: discrepancy.id,
@@ -1327,6 +1491,9 @@ export function registerTrackingIpc(): void {
   handle<{ listId: string; item: TrackableItem }, { lists: CustomList[] }>(
     MEDIA_HUB_CHANNELS.listsAdd,
     (_e, payload) => {
+      // Adds only — listsRemove stays open so a demo title already in a
+      // list can be taken out. See the mark-watched handler above.
+      assertLibraryWritableId(payload?.item?.id, payload?.item?.title)
       const db = getDatabase()
       db.addToList(String(payload?.listId ?? ''), payload?.item ?? { id: '' })
       return { lists: db.lists() }
@@ -1372,6 +1539,10 @@ export function registerTrackingIpc(): void {
     { id: string; score: number; type?: MediaKind; title?: string },
     { ratings: Record<string, number> }
   >(MEDIA_HUB_CHANNELS.ratingSet, (_e, payload) => {
+    // A real score is a library ADD (and a Trakt push); 0 is this app's
+    // "cleared" signal and stays allowed so a rating that already leaked
+    // onto a demo id can be removed. See the mark-watched handler above.
+    if (Number(payload?.score) > 0) assertLibraryWritableId(payload?.id, payload?.title)
     const db = getDatabase()
     db.rate(String(payload?.id ?? ''), Number(payload?.score))
     // Trakt keeps ratings too, and a score given here should not have to be
@@ -1513,7 +1684,10 @@ export function registerTrackingIpc(): void {
       continueWatching: continueWatchingList(details, history).slice(0, 18),
       recommendations,
       recommendationReasons,
-      preferredGenres
+      preferredGenres,
+      // Read here rather than fetched: it is whatever the last pull
+      // recorded, so tagging a card costs nothing on this path.
+      plannedSources: plannedSources()
     }
   })
 

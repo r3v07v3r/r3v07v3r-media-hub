@@ -15,7 +15,13 @@ import {
   queuePendingPush,
   withPushedRemoteState
 } from '../src/shared/media-hub/reconcileQueue'
-import { batchHistoryPayload, unmatchedCatalogIds } from '../src/main/media-hub/simkl'
+import {
+  batchHistoryPayload,
+  hasExpressibleSimklId,
+  idsForCatalogId,
+  unmatchedCatalogIds
+} from '../src/main/media-hub/simkl'
+import { assertLibraryWritableId, demoOnlyTitleMessage } from '../src/shared/media-hub/serviceIds'
 
 let pass = 0
 function check(name: string, fn: () => void): void {
@@ -200,6 +206,51 @@ check('attributes anime by its non-IMDb id space too', () => {
     { id: 'kitsu:7', type: 'anime', title: 'Trigun', year: '1998' }
   ])
   assert.deepEqual(unmatched, ['kitsu:7'])
+})
+
+// --- which ids the review is allowed to offer at all -----------------------
+
+check('every real id space is expressible to Simkl', () => {
+  for (const id of ['tt4877122', 'TT0470752', 'kitsu:7', 'mal:6', 'anilist:30', 'anidb:17']) {
+    assert.equal(hasExpressibleSimklId(id), true, `${id} should be expressible`)
+  }
+})
+
+check('demo and unmappable ids are not, so the review never offers them', () => {
+  // mockData's m-* ids are the live case: a local history row carrying one
+  // can never be joined to any Simkl entry, and its "Use Local" push would
+  // go out as an unverifiable title/year guess — the review row returned
+  // after every resolution, forever, until these were excluded.
+  for (const id of ['m-13', 'tmdb:157336', 'simkl:250822', '', 'not-an-id']) {
+    assert.equal(hasExpressibleSimklId(id), false, `${id} should not be expressible`)
+  }
+})
+
+check('idsForCatalogId matches what a push would actually send', () => {
+  assert.deepEqual(idsForCatalogId('tt4877122'), { imdb: 'tt4877122' })
+  assert.deepEqual(idsForCatalogId('kitsu:7'), { kitsu: 7 })
+  assert.deepEqual(idsForCatalogId('m-13'), {})
+})
+
+// --- the IPC-boundary refusal of demo-id library writes --------------------
+
+check('a demo id is refused a library write, by name', () => {
+  // The message is what a person sees when a surface without its own guard
+  // hits the boundary, so it has to name the title, not the id scheme.
+  assert.throws(
+    () => assertLibraryWritableId('m-10', 'Interstellar'),
+    (error: Error) =>
+      error.message === demoOnlyTitleMessage('Interstellar') &&
+      error.message.includes('Interstellar')
+  )
+  // With no title in hand the id itself is still better than nothing.
+  assert.throws(() => assertLibraryWritableId('m-10'), /m-10/)
+})
+
+check('every real id space passes the library-write gate untouched', () => {
+  for (const id of ['tt4877122', 'kitsu:7', 'mal:6', 'anilist:30', 'anidb:17']) {
+    assert.doesNotThrow(() => assertLibraryWritableId(id, 'Anything'))
+  }
 })
 
 console.log(`\n${pass} passing`)

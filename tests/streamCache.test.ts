@@ -16,6 +16,8 @@ import {
   chunkIndexForByte,
   computeRetainedChunkIndices,
   createMemoryChunkStore,
+  fillBudgetBytes,
+  shouldAdoptAsPlayhead,
   findReusableSession
 } from '../src/main/media-hub/streamCache'
 
@@ -244,6 +246,110 @@ check('each centre gets its own window rather than one spanning window between t
   })
   assert.ok(retained.has(100) && retained.has(800), 'both centres are retained')
   assert.ok(!retained.has(450), 'the gap between them is not retained')
+})
+
+// --- Which fills may keep the one connection -----------------------------
+// Retention decides what survives on disk; this decides who the single
+// upstream connection is currently working FOR. Same distinction (playhead
+// vs incidental probe), different consequence — and the consequence here is
+// the one that stalls playback: a captured failure had a tail probe pull
+// 340MB to EOF while the playhead sat at 33 seconds with nothing queued.
+
+console.log('fillBudgetBytes')
+
+const TOLERANCE = CHUNK * 8
+
+check('the byte the playhead needs next is unbounded', () => {
+  assert.equal(fillBudgetBytes({ targetByte: CHUNK * 26, playheadFillByte: CHUNK * 26 }), null)
+})
+
+check('a demuxer reading a little in front of it is still the playhead fill', () => {
+  assert.equal(fillBudgetBytes({ targetByte: CHUNK * 30, playheadFillByte: CHUNK * 26 }), null)
+})
+
+check('one chunk of slack behind, for a mid-chunk read', () => {
+  assert.equal(
+    fillBudgetBytes({ targetByte: CHUNK * 26, playheadFillByte: CHUNK * 26 + 1000 }),
+    null
+  )
+})
+
+check('a tail probe far past the playhead is a bounded excursion', () => {
+  // The captured stall: playhead needs chunk 26, ffmpeg reads Cues at 2416.
+  assert.equal(
+    fillBudgetBytes({ targetByte: CHUNK * 2416, playheadFillByte: CHUNK * 26 }),
+    CHUNK * 4
+  )
+})
+
+check('a probe inside the 300s ahead-window is still bounded', () => {
+  // Regression guard: classifying against the retention ahead-window (~224
+  // chunks at a 4K bitrate) let a probe this close read as the playhead's
+  // own fill and run to EOF while the playhead drained.
+  assert.equal(
+    fillBudgetBytes({ targetByte: CHUNK * 200, playheadFillByte: CHUNK * 26 }),
+    CHUNK * 4
+  )
+})
+
+check('a probe behind the playhead is bounded too', () => {
+  assert.equal(fillBudgetBytes({ targetByte: 0, playheadFillByte: CHUNK * 800 }), CHUNK * 4)
+})
+
+check('the tolerance edge is inclusive, one byte past it is not', () => {
+  const playheadFillByte = CHUNK * 10
+  assert.equal(
+    fillBudgetBytes({ targetByte: playheadFillByte + TOLERANCE, playheadFillByte }),
+    null
+  )
+  assert.equal(
+    fillBudgetBytes({ targetByte: playheadFillByte + TOLERANCE + 1, playheadFillByte }),
+    CHUNK * 4
+  )
+})
+
+check('a fresh session (playhead needs byte 0) fills from the start unbounded', () => {
+  assert.equal(fillBudgetBytes({ targetByte: 0, playheadFillByte: 0 }), null)
+})
+
+check('a fully-buffered playhead makes every fill an excursion', () => {
+  // null = the playhead needs nothing right now, so nobody's playhead is
+  // waiting on this fetch and it must not get to run to EOF.
+  assert.equal(fillBudgetBytes({ targetByte: CHUNK * 500, playheadFillByte: null }), CHUNK * 4)
+})
+
+// --- Who is allowed to become the playhead ---------------------------------
+// The invariant that has broken twice: a reader being served a detour must
+// never be adopted as the retention centre every fill is then classified
+// against. The 8MB adoption bar sits inside a 16MB excursion budget, so
+// byte count alone cannot carry this.
+
+console.log('shouldAdoptAsPlayhead')
+
+const MIN_SERVED = CHUNK * 2
+
+check('a connection that streamed enough becomes the playhead', () => {
+  assert.equal(shouldAdoptAsPlayhead({ servedBytes: MIN_SERVED, servingExcursion: false }), true)
+})
+
+check('a short metadata probe does not', () => {
+  assert.equal(
+    shouldAdoptAsPlayhead({ servedBytes: MIN_SERVED - 1, servingExcursion: false }),
+    false
+  )
+})
+
+check('a reader being served an excursion never does, however much it reads', () => {
+  // A full 16MB excursion budget is twice the 8MB bar — without this the
+  // probe becomes the playhead and its next miss retakes the connection.
+  assert.equal(shouldAdoptAsPlayhead({ servedBytes: CHUNK * 4, servingExcursion: true }), false)
+  assert.equal(shouldAdoptAsPlayhead({ servedBytes: CHUNK * 500, servingExcursion: true }), false)
+})
+
+check('clearing the excursion flag lets a genuine playhead be adopted again', () => {
+  // A seek moves the playhead first, so that reader's next miss classifies
+  // as the playhead's own fill and the flag goes back to false.
+  assert.equal(shouldAdoptAsPlayhead({ servedBytes: CHUNK * 4, servingExcursion: false }), true)
 })
 
 console.log(`\n${pass} passed`)

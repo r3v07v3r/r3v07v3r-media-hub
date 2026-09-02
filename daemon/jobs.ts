@@ -30,6 +30,10 @@ export interface JobRecord {
   /** Which paired device queued this — and therefore WHOSE TorBox account
    *  the fetch bills. A job is only ever fetched with its owner's token. */
   ownerDeviceId?: string
+  /** Why this was asked for: 'watching' is the next episode of something
+   *  somebody is partway through, 'prefetch' is from a watchlist. Absent on
+   *  jobs queued before it existed. */
+  reason?: 'watching' | 'prefetch'
   state: JobState
   queuedAt: number
   attempts: number
@@ -107,6 +111,18 @@ export function createJobStore(dataDir: string): JobStore {
             existing.ownerDeviceId = input.ownerDeviceId
             schedulePersist()
           }
+          // A prefetch that somebody has since started watching is a watch.
+          // Only ever upgraded, never the other way: once a person is
+          // partway through the series, a second device adding it to a
+          // watchlist does not make the queue less urgent than it was.
+          if (
+            existing.state === 'queued' &&
+            input.reason === 'watching' &&
+            existing.reason !== 'watching'
+          ) {
+            existing.reason = 'watching'
+            schedulePersist()
+          }
           return existing
         }
         jobs = jobs.filter((job) => job !== existing)
@@ -126,14 +142,22 @@ export function createJobStore(dataDir: string): JobStore {
       // A fetching job is marked rather than removed — the fetch loop owns
       // the in-flight download and checks state between chunks.
       jobs = jobs.filter((job) => !(job.contentKey === contentKey && job.state === 'queued'))
+      // TWO WAYS TO CANCEL SOMETHING, and the count only sees one of them.
+      // Comparing lengths reported false for the case that had most
+      // obviously worked — stopping a download in flight — because that
+      // path marks the record instead of dropping it. The route reads this
+      // to decide between "stopped" and "there was nothing to stop", so it
+      // has to mean "did anything change".
+      let changed = jobs.length !== before
       for (const job of jobs) {
         if (job.contentKey === contentKey && job.state === 'fetching') {
           job.state = 'expired'
           job.lastError = 'Cancelled.'
+          changed = true
         }
       }
       schedulePersist()
-      return jobs.length !== before
+      return changed
     },
     nextQueued() {
       const queued = jobs

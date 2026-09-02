@@ -40,9 +40,9 @@ export default {
     const url = new URL(request.url)
 
     if (request.method === 'POST' && url.pathname === '/host') {
-      let body: { inviteKey?: string }
+      let body: { inviteKey?: string; membership?: boolean }
       try {
-        body = (await request.json()) as { inviteKey?: string }
+        body = (await request.json()) as { inviteKey?: string; membership?: boolean }
       } catch {
         return json({ error: 'Invalid request body.' }, 400)
       }
@@ -54,13 +54,31 @@ export default {
       const roomToken = crypto.randomUUID()
       const id = env.ROOMS.idFromName(roomId)
       const stub = env.ROOMS.get(id)
+      // membership: true asks the room for a relay-level admission layer
+      // (used by the app's Rooms; parties never send it) — the minted
+      // joinSecret comes back so the creator can put it in the invite.
       const initResponse = await stub.fetch('https://internal/init', {
         method: 'POST',
-        body: JSON.stringify({ roomToken })
+        body: JSON.stringify({ roomToken, membership: body.membership === true })
       })
       if (!initResponse.ok) return json({ error: 'Could not create party room.' }, 500)
+      const init = (await initResponse.json()) as { joinSecret?: string }
 
-      return json({ roomId, roomToken })
+      return json({ roomId, roomToken, joinSecret: init.joinSecret })
+    }
+
+    // The admin removing members — forwarded to the room's own object,
+    // which owns the ban list and the joinSecret it must rotate.
+    const kickMatch = url.pathname.match(
+      /^\/party\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/kick$/i
+    )
+    if (kickMatch && request.method === 'POST') {
+      const id = env.ROOMS.idFromName(kickMatch[1])
+      const stub = env.ROOMS.get(id)
+      return stub.fetch('https://internal/kick', {
+        method: 'POST',
+        body: await request.text()
+      })
     }
 
     const match = url.pathname.match(ROOM_ID_PATTERN)

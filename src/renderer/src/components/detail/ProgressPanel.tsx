@@ -6,6 +6,7 @@ import { useEffect, useState } from 'react'
 import { Icon } from '@renderer/components/icons/Icon'
 import { useAppState } from '@renderer/context/AppStateContext'
 import { useMediaHubLists } from '@renderer/lib/mediaHub/hooks'
+import { demoOnlyTitleMessage, hasExpressibleSimklId } from '@shared/media-hub/serviceIds'
 import styles from './ProgressPanel.module.css'
 
 export interface ProgressPanelProps {
@@ -203,7 +204,7 @@ export function ProgressPanel({
  * every title page would be noise.
  */
 function AddToListButton({ media }: { media: MediaItem }) {
-  const { libraryKey } = useAppState()
+  const { libraryKey, pushNotification } = useAppState()
   const { lists, add, removeItem } = useMediaHubLists(libraryKey)
   const [open, setOpen] = useState(false)
   // Carries the title it describes.
@@ -246,6 +247,15 @@ function AddToListButton({ media }: { media: MediaItem }) {
           ? { key: previous.key, ids: new Set([...previous.ids].filter((id) => id !== listId)) }
           : previous
       )
+      return
+    }
+    // Adding a demo title (mockData's pool — an id no service can express)
+    // is refused with the why; removal above stays open so one that
+    // already leaked into a list can be taken out. Main's listsAdd handler
+    // enforces the same refusal as the backstop — see
+    // shared/media-hub/serviceIds.ts for the incident this guards against.
+    if (!hasExpressibleSimklId(media.id)) {
+      pushNotification({ tone: 'info', message: demoOnlyTitleMessage(media.title) })
       return
     }
     void add(listId, {

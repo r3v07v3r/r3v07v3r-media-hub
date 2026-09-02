@@ -17,7 +17,8 @@ import type {
   TrackedItem,
   TrackedItemEnriched
 } from '@shared/media-hub/types'
-import { episodeWatchState } from '@shared/media-hub/catalog-logic'
+import { episodeWatchState, hasAired } from '@shared/media-hub/catalog-logic'
+import { parseRating, parseRuntimeMinutes, parseYear } from '@shared/media-hub/catalogFields'
 import { recommendationReasonLabel } from '@shared/media-hub/recommendationReason'
 import type { OllamaTitleRef } from '@shared/media-hub/ollama'
 import type { MediaItem, MediaType, Recommendation } from '@renderer/types'
@@ -104,20 +105,11 @@ export function mediaItemToTrackablePayload(media: MediaItem): {
   }
 }
 
-function parseRuntimeMinutes(runtime: string): number | undefined {
-  const n = parseInt(runtime, 10)
-  return Number.isFinite(n) && n > 0 ? n : undefined
-}
-
-function parseYear(year: string): number | undefined {
-  const n = parseInt(year, 10)
-  return Number.isFinite(n) && n > 0 ? n : undefined
-}
-
-function parseRating(rating: string): number | undefined {
-  const n = Number(rating)
-  return Number.isFinite(n) && n > 0 ? n : undefined
-}
+// parseRuntimeMinutes/parseYear/parseRating used to be defined right here.
+// They moved to @shared/media-hub/catalogFields because main now derives the
+// same three values when it writes catalog_index, and SQL filters/sorts on
+// the result — two copies would be free to drift into meaning different
+// things on the two sides of the same filter. See that module's own comment.
 
 // The backend has no mood taxonomy at all (CatalogItem carries genres, not
 // moods) — MoodBrowser's mood pills only mean something for MediaItems that
@@ -149,9 +141,26 @@ const GENRE_MOOD_KEYWORDS: Record<string, string[]> = {
   documentary: ['mind-bending']
 }
 
-function genresToMoods(genres: string[]): string[] {
+// `genres` is declared non-optional on CatalogItem, but this runs on the far
+// side of an IPC boundary — the type is a promise about the payload, not a
+// guarantee of it, and a normalizer that omitted the array once already made
+// this throw and blank the entire window (see collection.ts). Tolerating the
+// absence here costs one guard; not tolerating it costs the app.
+/** The inverse direction of GENRE_MOOD_KEYWORDS, for callers that must ask
+ *  the INDEX for mood-relevant rows: does this concrete genre value map to
+ *  any of the selected moods? Kept beside the forward mapping so the two
+ *  directions cannot drift apart. */
+export function genreMatchesMoods(genre: string, moodIds: readonly string[]): boolean {
+  const key = genre.trim().toLowerCase()
+  for (const [needle, tags] of Object.entries(GENRE_MOOD_KEYWORDS)) {
+    if (key.includes(needle) && tags.some((tag) => moodIds.includes(tag))) return true
+  }
+  return false
+}
+
+function genresToMoods(genres: string[] | undefined): string[] {
   const moods = new Set<string>()
-  for (const genre of genres) {
+  for (const genre of genres ?? []) {
     const key = genre.trim().toLowerCase()
     for (const [needle, tags] of Object.entries(GENRE_MOOD_KEYWORDS)) {
       if (key.includes(needle)) tags.forEach((tag) => moods.add(tag))
@@ -224,9 +233,10 @@ export function airedEpisodes<T extends { unplayable?: boolean; released?: strin
   videos: readonly T[] | undefined,
   now: number = Date.now()
 ): T[] {
-  return (videos || []).filter(
-    (v) => !v.unplayable && (!v.released || new Date(v.released).getTime() <= now)
-  )
+  // hasAired, not an inline date comparison: the same rule decides which
+  // episode a Play button starts (see nextEpisode.ts), and two copies of it
+  // would eventually disagree about a show that is still airing.
+  return (videos || []).filter((v) => !v.unplayable && hasAired(v, now))
 }
 
 /** A series/anime counts as complete once every already-aired episode has
@@ -301,7 +311,7 @@ export function catalogItemToMediaItem(
     logoUrl: item.logo || undefined,
     releaseYear: parseYear(item.year),
     runtimeMinutes: parseRuntimeMinutes(item.runtime),
-    genres: item.genres,
+    genres: item.genres ?? [],
     moods: genresToMoods(item.genres),
     // Present only on a resolved detail-page item — the catalog list
     // carries none of these (see credits.ts on why they are not on the

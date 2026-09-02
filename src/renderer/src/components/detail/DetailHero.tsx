@@ -36,10 +36,7 @@ export interface DetailHeroProps {
   trailer: Trailer | undefined
   showTrailer: boolean
   onToggleTrailer: () => void
-  inMyList: boolean
-  onToggleMyList: () => void
   onPlay: () => void
-  onWatchTogether: () => Promise<void>
 }
 
 export function DetailHero({
@@ -50,16 +47,12 @@ export function DetailHero({
   trailer,
   showTrailer,
   onToggleTrailer,
-  inMyList,
-  onToggleMyList,
-  onPlay,
-  onWatchTogether
+  onPlay
 }: DetailHeroProps) {
-  const { resolvingMedia, pushNotification, partyStatus } = useAppState()
+  const { resolvingMedia } = useAppState()
   const artwork = resolveArtwork(media)
   const hasProgress = !!continueEntry && !continueEntry.media.completed
   const isResolving = resolvingMedia?.id === media.id
-  const [startingRoomWatch, setStartingRoomWatch] = useState(false)
 
   const trailerFrameRef = useRef<HTMLIFrameElement>(null)
   const trailerActive = showTrailer && !!trailer
@@ -114,20 +107,6 @@ export function DetailHero({
     continueEntry,
     nextEpisode
   ])
-
-  async function handleWatchTogether(): Promise<void> {
-    setStartingRoomWatch(true)
-    try {
-      await onWatchTogether()
-    } catch (error) {
-      pushNotification({
-        tone: 'error',
-        message: error instanceof Error ? error.message : 'Could not start a room watch.'
-      })
-    } finally {
-      setStartingRoomWatch(false)
-    }
-  }
 
   return (
     <section
@@ -275,30 +254,14 @@ export function DetailHero({
               {showTrailer ? 'Close Trailer' : 'Trailer'}
             </button>
           )}
-          <button
-            type="button"
-            className={styles.secondaryButton}
-            aria-pressed={inMyList}
-            onClick={onToggleMyList}
-          >
-            <Icon name={inMyList ? 'check' : 'plus'} size={15} />
-            {inMyList ? config.trackedLabel : config.trackLabel}
-          </button>
-          <button
-            type="button"
-            className={styles.secondaryButton}
-            onClick={() => void handleWatchTogether()}
-            disabled={startingRoomWatch}
-          >
-            <Icon name="people" size={15} />
-            {startingRoomWatch
-              ? 'Opening room…'
-              : partyStatus?.inParty
-                ? partyStatus.role === 'host'
-                  ? 'Play in room'
-                  : 'Suggest to room'
-                : 'Watch together'}
-          </button>
+          {/* The list toggle and Watch together used to sit here.
+              The first is the same control the right-hand rail already
+              carries, and two buttons doing one thing on one screen is a
+              question about which is which rather than a convenience.
+              The second goes because rooms are being reworked, and an
+              entry point into a thing that is changing shape is worse
+              than no entry point. Play and Trailer are what this row is
+              for. */}
         </div>
       </div>
     </section>

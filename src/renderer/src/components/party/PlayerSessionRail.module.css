@@ -83,6 +83,98 @@
   font-size: 11px;
   font-style: normal;
 }
+/* The standing Rooms, one compact row per room. Hard-coded dark styling
+   like the rest of this file: this window floats over the film, not over
+   the themed app. */
+.roomsBlock {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 9px;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 11px;
+  background: rgba(255, 255, 255, 0.03);
+}
+.roomsHeading {
+  color: rgba(255, 255, 255, 0.5);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+.roomRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 9px;
+}
+.roomName {
+  color: rgba(255, 255, 255, 0.78);
+  font-size: 11.5px;
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.roomAvatars {
+  display: flex;
+  align-items: center;
+}
+.roomAvatars em {
+  margin-left: 8px;
+  color: rgba(255, 255, 255, 0.54);
+  font-size: 10.5px;
+  font-style: normal;
+}
+/* Each avatar owns its tooltip, positioned below so the top row of the rail
+   never clips it against the window edge. */
+.roomAvatarWrap {
+  position: relative;
+  display: inline-flex;
+}
+.roomAvatar {
+  position: relative;
+  width: 24px;
+  height: 24px;
+  margin-right: -4px;
+  display: grid;
+  place-items: center;
+  border: 2px solid rgba(6, 11, 20, 0.96);
+  border-radius: 50%;
+  color: #07141e;
+  font-size: 9.5px;
+  font-weight: 800;
+}
+.watchingDot {
+  position: absolute;
+  right: -1px;
+  bottom: -1px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  border: 1.5px solid rgba(6, 11, 20, 0.96);
+  background: #61dfaa;
+}
+.roomTooltip {
+  position: absolute;
+  top: calc(100% + 7px);
+  right: 0;
+  padding: 6px 9px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(9, 14, 24, 0.97);
+  color: rgba(255, 255, 255, 0.88);
+  font-size: 11px;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease;
+  z-index: 5;
+}
+.roomAvatarWrap:hover .roomTooltip,
+.roomAvatarWrap:focus-within .roomTooltip {
+  opacity: 1;
+}
 .messages {
   min-height: 164px;
   max-height: min(46vh, 360px);

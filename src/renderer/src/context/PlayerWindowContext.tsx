@@ -50,8 +50,9 @@ export interface PlayerWindowValue {
   command: (command: PlayerCommand) => Promise<PlayerCommandResult | undefined>
   /** Raises an action handled by the main window (close, toast, mark watched). */
   ui: (event: PlayerUiEvent) => void
-  /** Whether the overlay should receive mouse input. False makes the window
-   *  click-through so the video underneath gets the events instead. */
+  /** Reports the controls' reveal edge. The window takes mouse input for the
+   *  whole session regardless; main uses this to decide when the keyboard
+   *  should follow the controls. */
   setInteractive: (interactive: boolean) => void
 }
 

@@ -58,15 +58,15 @@ npm run ai:screenshot        just the screenshot capture
 
 ## Configuration (`.ai/config.json`)
 
-| Field | Meaning |
-|---|---|
-| `maxIterations` | Hard ceiling on `ai:loop` iterations (default 5). The loop always stops here if it hasn't reached `approved`. |
-| `approvalScore` | Minimum GPT score (0-100) to be eligible for automatic approval (default 90). Score alone is never sufficient — see below. |
-| `autoFixPriorities` | Which issue priorities get handed to Claude automatically (default `P0, P1, P2`). |
-| `requireBuildSuccess` / `requireTestsSuccess` | If true, a failing build/test run blocks approval regardless of score. |
-| `review.model` | `"${OPENAI_MODEL}"` by default — resolved from the env var at runtime so upgrading models doesn't require a code change. Falls back to `gpt-4o` if `OPENAI_MODEL` is unset. |
-| `screenshots.*` | `enabled`, `viewport`, `routes` (`{name, url, captureOffsetsMs?}`), `serveDir` (auto-detected if omitted), `settleMs` (wait before capture). |
-| `claude.command` / `claude.args` | How `ai-loop.ts` invokes Claude non-interactively (default `claude -p`). |
+| Field                                         | Meaning                                                                                                                                                                     |
+| --------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `maxIterations`                               | Hard ceiling on `ai:loop` iterations (default 5). The loop always stops here if it hasn't reached `approved`.                                                               |
+| `approvalScore`                               | Minimum GPT score (0-100) to be eligible for automatic approval (default 90). Score alone is never sufficient — see below.                                                  |
+| `autoFixPriorities`                           | Which issue priorities get handed to Claude automatically (default `P0, P1, P2`).                                                                                           |
+| `requireBuildSuccess` / `requireTestsSuccess` | If true, a failing build/test run blocks approval regardless of score.                                                                                                      |
+| `review.model`                                | `"${OPENAI_MODEL}"` by default — resolved from the env var at runtime so upgrading models doesn't require a code change. Falls back to `gpt-4o` if `OPENAI_MODEL` is unset. |
+| `screenshots.*`                               | `enabled`, `viewport`, `routes` (`{name, url, captureOffsetsMs?}`), `serveDir` (auto-detected if omitted), `settleMs` (wait before capture).                                |
+| `claude.command` / `claude.args`              | How `ai-loop.ts` invokes Claude non-interactively (default `claude -p`).                                                                                                    |
 
 **Approval is never based on score alone.** `ai-review.ts` enforces, in code, on top of whatever GPT itself says: `status = approved` only if `score >= approvalScore` AND `P0 == 0` AND `P1 == 0` AND `P2 == 0` AND (build/test pass, per the require* flags above). GPT can be overly generous or overly harsh; this floor is a fixed backstop either way.
 

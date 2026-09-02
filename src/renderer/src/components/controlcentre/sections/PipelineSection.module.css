@@ -1,0 +1,387 @@
+/* The flow.
+
+   Colours come from the control centre's tokens — nothing here names a
+   green, so this file reads as layout and the palette stays in one place. */
+
+/* The diagram wants the whole window, unlike the reading-width sections. */
+.wide {
+  max-width: none;
+}
+
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.legendItem {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+/* Sideways rather than wrapping. Seven stages folded onto two rows stop
+   reading as a left-to-right path, which is the only thing this is for. */
+.flowScroll {
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  padding-bottom: 6px;
+}
+
+.flow {
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  min-width: min-content;
+}
+
+.stage {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  /* Sized so all seven stages fit a normal window without scrolling — the
+     path is much easier to read whole — while still being wide enough for
+     the longest node label. Narrower windows scroll instead of wrapping. */
+  flex: 0 0 166px;
+  padding: 14px 13px 16px;
+  /* The gap between columns is the connector's room. */
+  margin-right: 26px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-large);
+  /* Frosted, not opaque. The rain still moves behind the column — that is
+     the look — but the nodes sit on a settled surface instead of directly
+     on moving glyphs, which is what makes a selection easy to pick out.
+
+     Seven of these is the whole cost, and only while this section is open.
+     A backdrop-filter per NODE would be forty-odd and was not worth it: the
+     column carries the effect and the nodes read fine against it. */
+  background: rgba(6, 26, 18, 0.42);
+  backdrop-filter: blur(14px) saturate(1.15);
+  -webkit-backdrop-filter: blur(14px) saturate(1.15);
+}
+
+.stage:last-child {
+  margin-right: 0;
+}
+
+.stageHead {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Top right of the block, where an 'add' belongs. Pushed there by the label
+   taking the slack rather than by positioning, so it cannot overlap a long
+   stage name. */
+.stageLabel {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.addButton {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition:
+    border-color 160ms var(--ease-smooth),
+    color 160ms var(--ease-smooth),
+    background 160ms var(--ease-smooth);
+}
+
+.addButton:hover,
+.addButton:focus-visible {
+  border-color: var(--border-active);
+  background: rgba(39, 230, 154, 0.12);
+  color: var(--accent-cyan);
+}
+
+.stageIcon {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 7px;
+  border: 1px solid var(--border-subtle);
+  color: var(--accent-cyan);
+}
+
+.stageLabel {
+  font-size: 0.72rem;
+  font-weight: 620;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+.stageBlurb {
+  margin: 0;
+  font-size: 0.74rem;
+  line-height: 1.4;
+  color: var(--text-muted);
+}
+
+.nodes {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 2px;
+}
+
+.node {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 9px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-medium, 12px);
+  background: rgba(0, 0, 0, 0.34);
+  color: var(--text-secondary);
+  text-align: left;
+  cursor: pointer;
+  transition:
+    border-color 160ms var(--ease-smooth),
+    background 160ms var(--ease-smooth),
+    color 160ms var(--ease-smooth);
+}
+
+.node:hover,
+.node:focus-visible {
+  border-color: var(--border-active);
+  color: var(--text-primary);
+}
+
+/* Live means something is actually doing this job. Never signalled by the
+   dot alone — the node brightens, and the panel below says so in words. */
+.nodeLive {
+  background: rgba(39, 230, 154, 0.08);
+  color: var(--text-primary);
+}
+
+.nodeSelected {
+  border-color: var(--accent-cyan);
+  box-shadow: 0 0 0 1px var(--accent-cyan) inset;
+}
+
+.nodeIcon {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+  border: 1px solid var(--border-subtle);
+  color: var(--accent-blue);
+}
+
+.nodeText {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.nodeLabel {
+  font-size: 0.83rem;
+  font-weight: 560;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nodeDetail {
+  font-size: 0.68rem;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  border: 1px solid var(--border-subtle);
+  background: transparent;
+}
+
+.dotLive {
+  border-color: var(--accent-blue);
+  background: var(--accent-blue);
+  box-shadow: 0 0 8px rgba(39, 230, 154, 0.6);
+}
+
+/* Sits in the margin between two columns, centred on the stage's own
+   height, so the row reads as one path rather than as separate boxes. */
+.connector {
+  position: absolute;
+  top: 50%;
+  right: -21px;
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  transform: translateY(-50%);
+  color: var(--border-active);
+}
+
+/* ---------- the selected step's settings ---------- */
+
+.tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.tab {
+  padding: 7px 14px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 0.82rem;
+  font-weight: 540;
+  cursor: pointer;
+  transition:
+    border-color 160ms var(--ease-smooth),
+    background 160ms var(--ease-smooth),
+    color 160ms var(--ease-smooth);
+}
+
+.tab:hover,
+.tab:focus-visible {
+  color: var(--text-primary);
+  border-color: var(--border-subtle);
+}
+
+.tabActive {
+  background: rgba(39, 230, 154, 0.12);
+  border-color: var(--border-active);
+  color: var(--accent-cyan);
+}
+
+.panelBody {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  /* The settings are a form, and a form stretched the width of the diagram
+     above it is unreadable. */
+  max-width: 560px;
+}
+
+.enableRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+html[data-motion-user-disabled='true'] .node,
+html[data-motion-user-disabled='true'] .tab {
+  transition: none;
+}
+
+@media (max-width: 767px) {
+  .stage {
+    flex-basis: 168px;
+  }
+}
+
+/* ---------- the add list ---------- */
+
+.addScrim {
+  /* FIXED, and it lands on the cube face rather than the viewport — the
+     cube carries a transform, and a transformed ancestor becomes the
+     containing block for its fixed descendants. That is normally the trap
+     this shell warns about; here it is exactly what is wanted, because it
+     covers the whole face, does not scroll with the section, and cannot be
+     clipped by the body's scroller the way an absolute one would be. */
+  position: fixed;
+  inset: 0;
+  z-index: 5;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(2, 10, 7, 0.62);
+  backdrop-filter: blur(3px);
+  -webkit-backdrop-filter: blur(3px);
+}
+
+.addPanel {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  width: min(460px, 100%);
+  max-height: 100%;
+  overflow-y: auto;
+  padding: 20px;
+  border-radius: var(--radius-large);
+}
+
+.addHead {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.addList {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.addOption {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  width: 100%;
+  padding: 11px 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-medium, 12px);
+  background: rgba(0, 0, 0, 0.26);
+  color: var(--text-secondary);
+  text-align: left;
+  cursor: pointer;
+  transition:
+    border-color 160ms var(--ease-smooth),
+    background 160ms var(--ease-smooth),
+    color 160ms var(--ease-smooth);
+}
+
+.addOption:hover,
+.addOption:focus-visible {
+  border-color: var(--border-active);
+  background: rgba(39, 230, 154, 0.08);
+  color: var(--text-primary);
+}
+
+.addGo {
+  flex: none;
+  color: var(--text-muted);
+}
+
+html[data-motion-user-disabled='true'] .addButton,
+html[data-motion-user-disabled='true'] .addOption {
+  transition: none;
+}

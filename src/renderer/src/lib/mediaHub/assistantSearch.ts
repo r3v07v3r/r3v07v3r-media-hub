@@ -95,9 +95,7 @@ export async function searchAppCatalog(query: string): Promise<CatalogItem[]> {
 
   return dedupeById(
     perKind
-      .flatMap((items, kindIndex) =>
-        items.map((item, position) => ({ item, kindIndex, position }))
-      )
+      .flatMap((items, kindIndex) => items.map((item, position) => ({ item, kindIndex, position })))
       .sort((a, b) => {
         const rank = matchRank(a.item.title, q) - matchRank(b.item.title, q)
         if (rank !== 0) return rank
