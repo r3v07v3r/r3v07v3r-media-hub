@@ -88,7 +88,9 @@ import {
   readSettings,
   simklAccountMark,
   simklCredentials,
-  writeSettings
+  writeSettings,
+  traktCredentials,
+  malCredentials
 } from './settingsStore'
 import { sendToRenderer, notifyLibraryChanged } from './rendererBridge'
 import { cachedRemoteLists, fetchRemoteLists } from './remoteLists'
@@ -146,7 +148,27 @@ function queueRemotePushes(
   item: { id: string; type?: string },
   pushes: () => Array<Promise<unknown>>
 ): void {
-  void remotePushQueue.run(remotePushKey(item), () => Promise.allSettled(pushes()))
+  // Bound to the accounts connected when it was asked for. A push that
+  // waits behind a slow one reads the credentials only when it runs, so
+  // disconnecting Simkl and connecting another account in between would
+  // post the first account's history to the second. A stamp that no
+  // longer matches means the task is dropped, not run.
+  const stamp = connectedAccountsStamp()
+  void remotePushQueue.run(remotePushKey(item), () =>
+    connectedAccountsStamp() === stamp ? Promise.allSettled(pushes()) : Promise.resolve([])
+  )
+}
+
+/** Which accounts are connected right now — the tail of each token is
+ *  enough to tell one from another, and nothing here is logged. */
+function connectedAccountsStamp(): string {
+  return [
+    simklCredentials().accessToken,
+    traktCredentials().accessToken,
+    malCredentials().accessToken
+  ]
+    .map((token) => String(token ?? '').slice(-12))
+    .join('|')
 }
 
 async function syncSimklHistory(

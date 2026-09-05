@@ -779,6 +779,13 @@ export async function startPlayerSession(
     },
     retried: false
   }
+  // The picture facts start empty for every title, not only after a full
+  // stop: mpv is kept across consecutive titles, and a property the next
+  // file lacks (no container-fps for variable-frame-rate media) arrives
+  // as null, which the observers ignore — so the previous title's value
+  // would have stood in the Info panel.
+  videoFacts = {}
+  queuePatch({ video: videoFacts }, true)
   await player.loadFile(url, {
     startSeconds: options.startSeconds,
     ...lastLoad.options

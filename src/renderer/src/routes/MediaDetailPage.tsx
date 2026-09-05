@@ -644,7 +644,10 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
               <NextToPlayPanel
                 media={media}
                 nextEpisode={nextEpisode}
-                allWatched={episodes.length > 0 && !nextEpisode}
+                // Judged against the episodes that have AIRED and count:
+                // a show whose every episode is still to come has nothing
+                // to play next, but nobody has watched it either.
+                allWatched={playableInOrder.length > 0 && !nextEpisode}
                 onPlay={(ep) => ep && handlePlay(ep.season, ep.episode)}
               />
             </div>
