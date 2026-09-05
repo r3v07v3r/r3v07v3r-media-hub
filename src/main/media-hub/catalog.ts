@@ -889,6 +889,12 @@ async function resolveMetadata(
   item.videos = disambiguateVideos(item.videos)
 
   db.putCache(cacheKey, item, degraded ? DEGRADED_META_TTL_MS : META_TTL_MS)
+  // Under the id the caller used as well, when the Simkl lookup mapped it
+  // to another: rows tracked under "simkl:<n>" read this cache by that id
+  // (titleNames.ts's cachedMetadata) and cannot resolve it without a trip.
+  if (resolvedId !== String(id)) {
+    db.putCache(metaCacheKey(type, String(id)), item, degraded ? DEGRADED_META_TTL_MS : META_TTL_MS)
+  }
   // The index row for this title was written from a catalog preview with no
   // episodes, so its counts — the denominator the Completed badge and the
   // browse grid's "N episodes" read — are empty until a crawl happens to

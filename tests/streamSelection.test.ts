@@ -1,5 +1,11 @@
 import assert from 'node:assert/strict'
-import { rankStreams, releaseGroup, streamSeeders } from '../src/main/media-hub/core'
+import {
+  guardedForPrefetch,
+  rankStreams,
+  releaseGroup,
+  streamSeeders,
+  titleMatchesRelease
+} from '../src/main/media-hub/core'
 import { streamReleaseName } from '../src/shared/media-hub/streamQuality'
 import type { StreamCandidate } from '../src/shared/media-hub/types'
 
@@ -483,3 +489,88 @@ assert.equal(
 )
 assert.equal(releaseGroup('Show - 06 [1080p]'), null, 'an episode number is not a group')
 console.log('ok  spaced scene groups')
+
+// Only a release name carries a group; titles, quality suffixes and codec
+// tokens must not become one — a wrong memo pays a resolution tier's worth
+// of bonus to every unrelated release that happens to share it.
+assert.equal(releaseGroup('The Amazing Spider-Man'), null, 'a hyphenated title is not a release')
+assert.equal(releaseGroup('X-Men'), null)
+assert.equal(releaseGroup('The Show 1990-1995'), null)
+assert.equal(
+  releaseGroup('Attack on Titan - S01E01 - To You, in 2000 Years WEBDL-1080p.mkv'),
+  null,
+  "Sonarr's quality suffix is not a group"
+)
+assert.equal(releaseGroup('The Matrix (1999) Bluray-1080p.mkv'), null)
+assert.equal(releaseGroup('Attack on Titan S01E06 1080p BluRay x265-10bit'), null)
+assert.equal(releaseGroup('Movie 2160p WEB-DL DDP5.1-Atmos'), null)
+assert.equal(releaseGroup('Show S02E01 1080p Multi-Sub'), null)
+assert.equal(releaseGroup('Show S02E01 1080p Dual-Audio'), null)
+assert.equal(releaseGroup('Spider-Man 2002 1080p BluRay x264-GROUP'), 'group')
+assert.equal(
+  releaseGroup('Some.Movie.2019.1080p.BluRay.x264-GROUP [eztv]'),
+  'group',
+  'a dotted name with a suffix after a space still yields its group'
+)
+assert.equal(releaseGroup('Show.S01E06.1080p.WEB-DL.x264-SPARKS.mkv 2.1 GB'), 'sparks')
+
+// The prefetch guard: names to check and none matching means nothing to
+// fetch, never the unguarded set.
+{
+  const right = {
+    infoHash: 'r',
+    name: '[Group] Shingeki no Kyojin - 06 [1080p]'
+  } as StreamCandidate
+  const wrong = {
+    infoHash: 'w',
+    name: '[Group] Shingeki no Kyojin Junior High - 06 [1080p]'
+  } as StreamCandidate
+  const unrelated = { infoHash: 'u', name: 'Some Other Show - 06 [1080p]' } as StreamCandidate
+  assert.deepEqual(
+    guardedForPrefetch([right, wrong, unrelated], ['Attack on Titan', 'Shingeki no Kyojin']).map(
+      (s) => s.infoHash
+    ),
+    ['r'],
+    'the romaji name lets the right release through and keeps the spin-off out'
+  )
+  assert.deepEqual(
+    guardedForPrefetch([unrelated], ['Attack on Titan']),
+    [],
+    'nothing matching means nothing to prefetch'
+  )
+  assert.equal(
+    guardedForPrefetch([unrelated], []).length,
+    1,
+    'with no names the guard has nothing to say'
+  )
+}
+console.log('ok  release-name guards')
+
+// The title guard reads fansub names too — most anime is released that
+// way, and every such name used to fail the guard outright.
+assert.equal(
+  titleMatchesRelease('[SubsPlease] Shingeki no Kyojin S4 - 28 (1080p) [ABCD1234].mkv', [
+    'Attack on Titan',
+    'Shingeki no Kyojin'
+  ]),
+  true
+)
+assert.equal(titleMatchesRelease('[Group] Show - 06v2 [Dual-Audio][1080p]', 'Show'), true)
+assert.equal(
+  titleMatchesRelease('Re:Zero - Starting Life in Another World - 05 [1080p]', [
+    'Re:Zero Starting Life in Another World'
+  ]),
+  true,
+  'a title with its own dash keeps it; only the episode marker comes off'
+)
+assert.equal(
+  titleMatchesRelease('[Group] Shingeki no Kyojin Junior High - 06 [1080p]', 'Shingeki no Kyojin'),
+  false,
+  'a spin-off is still not the show'
+)
+assert.equal(
+  titleMatchesRelease('Shingeki.no.Kyojin.S01E06.1080p.WEB-DL-GROUP', 'Shingeki no Kyojin'),
+  true,
+  'the scene form still matches'
+)
+console.log('ok  fansub title guard')

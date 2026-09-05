@@ -47,7 +47,8 @@ import {
   validateTorBoxToken,
   type RawApiPayload,
   type SourcePreference,
-  type TorBoxFile
+  type TorBoxFile,
+  guardedForPrefetch
 } from './core'
 import { sanitizeTrackers } from './security'
 import { isAllowedRemoteMediaUrl } from './playback'
@@ -279,10 +280,13 @@ export async function discoverBestPrefetchCandidate(
   // nothing fell back to the whole unguarded result set, and an add-on's
   // wrong "exact" match could have the daemon fetch a related title.
   const titles = knownTitles(type, showKey(type, id), [title])
-  const titleFiltered = titles.length
-    ? discoveredRaw.filter((s) => titleMatchesRelease(streamReleaseText(s), titles))
-    : discoveredRaw
-  const discovered = titleFiltered.length ? titleFiltered : discoveredRaw
+  // No fallback to the unguarded set here, unlike live resolution: a
+  // person at the stream picker can see a wrong match and choose again,
+  // but nobody is watching the daemon fetch tonight's file. A name that
+  // matches none of the title's known names is a title this app cannot
+  // vouch for, and "no prefetch" is the right answer for it.
+  const discovered = guardedForPrefetch(discoveredRaw, titles)
+  if (!discovered.length) return null
   return (
     rankSafeStreams(
       discovered,
@@ -386,10 +390,13 @@ const LAST_STREAM_TTL_MS = 14 * 24 * 60 * 60 * 1000
  * one is `<imdb>:<season>:<episode>` (three); a movie's is itself.
  */
 function showKey(type: string, id: string): string {
+  if (type === 'movie') return String(id)
   const parts = String(id).split(':')
-  if (type === 'anime' && parts.length >= 2) return parts.slice(0, -1).join(':')
-  if (type === 'series' && parts.length >= 3) return parts.slice(0, -2).join(':')
-  return String(id)
+  // A show id is one segment ("tt123", a bare Kitsu number) or a prefixed
+  // pair ("simkl:123", "kitsu:555"); whatever follows is coordinates —
+  // however many, since a series position with no season is "id:episode".
+  const prefixed = parts.length > 1 && /^[a-z]+$/i.test(parts[0]) && /^\d+$/.test(parts[1])
+  return prefixed ? parts.slice(0, 2).join(':') : parts[0]
 }
 
 /** Which release group last played an episode of this show — read back by

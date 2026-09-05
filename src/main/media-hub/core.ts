@@ -240,6 +240,23 @@ export function isUnsafeStream(stream: StreamCandidate): boolean {
 
 /** Drops releases advertising executables, then ranks what's left with the
  *  person's audio-language preference applied. */
+/**
+ * The candidates a PREFETCH may choose from: those whose release name
+ * matches one of the title's known names. With names to check and none
+ * matching, nothing — never the unguarded set. Live resolution falls back
+ * to it because a person is there to see a wrong match; the LAN feeder
+ * fetches unattended, and a wrong file it stores is served later as the
+ * exact title. With no names at all the guard has nothing to say and
+ * every candidate stands. Pure; see tests/streamSelection.test.ts.
+ */
+export function guardedForPrefetch(
+  streams: StreamCandidate[],
+  titles: readonly string[]
+): StreamCandidate[] {
+  if (!titles.length) return streams
+  return streams.filter((stream) => titleMatchesRelease(streamReleaseName(stream), titles))
+}
+
 export function rankSafeStreams(
   streams: StreamCandidate[],
   preferredLanguage = 'en',
@@ -307,18 +324,60 @@ export function releaseGroup(text: string): string | null {
   if (!raw) return null
   const leading = /^\[([^\]]{1,40})\]/.exec(raw)
   if (leading) return leading[1].toLowerCase().replace(/[^a-z0-9]/g, '') || null
-  const base = raw.replace(/\.(mkv|mp4|avi|mov|webm|m4v|ts)$/i, '')
-  // The whole name, not its first word: scene names come with dots OR
-  // spaces ("Show S01E06 1080p WEB-DL x264-SPARKS"), and the group is the
-  // suffix of the name either way.
-  const trailing = /-([a-z0-9]{2,20})$/i.exec(base)
-  if (!trailing) return null
-  const group = trailing[1].toLowerCase()
-  // "WEB-DL", "BluRay-RIP": a hyphenated format token is not a group.
-  return NOT_A_GROUP.has(group) ? null : group
+  // Only a RELEASE name carries a group. A plain title — "The Amazing
+  // Spider-Man", "X-Men", "The Show 1990-1995" — is what a media server or
+  // an older cache daemon hands over, and its hyphens are not groups.
+  if (!RELEASE_TOKEN.test(raw)) return null
+  // Scene names come with dots OR spaces ("Show S01E06 1080p WEB-DL
+  // x264-SPARKS"), so the whole name is read; the first word is read too,
+  // for a dotted name with something after a space ("...x264-GROUP [eztv]",
+  // "....mkv 2.1 GB"). The extension comes off each candidate, not the
+  // line, since it is the first word's suffix in the second case.
+  for (const candidate of [raw, raw.split(/\s/)[0]]) {
+    const trailing = /-([a-z0-9]{2,20})$/i.exec(
+      candidate.replace(/\.(mkv|mp4|avi|mov|webm|m4v|ts)$/i, '')
+    )
+    if (!trailing) continue
+    const group = trailing[1].toLowerCase()
+    // "WEB-DL", "x265-10bit", "DDP5.1-Atmos", Sonarr's "WEBDL-1080p": a
+    // hyphenated format, codec or quality token is not a group.
+    if (NOT_A_GROUP.has(group) || NOT_A_GROUP_RE.test(group)) return null
+    return group
+  }
+  return null
 }
 
-const NOT_A_GROUP = new Set(['dl', 'rip', 'hd', 'hdr', 'x264', 'x265', 'hevc', 'aac', 'ac3', 'dts'])
+/** What makes a name a release name rather than a title. */
+const RELEASE_TOKEN =
+  /(?:^|[\s.\-_[(])(?:\d{3,4}p|4k|uhd|web|webrip|webdl|web-dl|bluray|blu-ray|bdrip|brrip|hdtv|dvdrip|remux|x264|x265|h\.?264|h\.?265|hevc|avc|s\d{1,2}e\d{1,3})(?=$|[\s.\-_\])])/i
+const NOT_A_GROUP = new Set([
+  'dl',
+  'rip',
+  'hd',
+  'hdr',
+  'x264',
+  'x265',
+  'hevc',
+  'avc',
+  'aac',
+  'ac3',
+  'dts',
+  'atmos',
+  'bit',
+  'sub',
+  'subs',
+  'audio',
+  'dub',
+  'multi',
+  'dual',
+  'remux',
+  'web',
+  'webrip',
+  'bluray',
+  'hdtv'
+])
+/** Resolutions ("1080p"), bit depths ("10bit"), years, and channel layouts ("5.1"). */
+const NOT_A_GROUP_RE = /^(?:\d{3,4}p|\d{1,2}bits?|\d{4}|\d\.\d|[0-9]+)$/
 
 /** Whether a candidate carries the wanted audio: the server's own track
  *  languages when it can say (a media server), else what the release name
@@ -1017,8 +1076,32 @@ export function titleMatchesRelease(
     .map((t) => String(t ?? '').trim())
     .filter(Boolean)
   if (!wanted.length) return true
-  const parsed = mediaKey(parseReleaseName(releaseText).title)
-  return wanted.some((t) => mediaKey(t) === parsed)
+  // Two readings of the name: the scene form parseReleaseName knows
+  // ("Show.S01E06.1080p.WEB-DL-GROUP") and the fansub form most anime is
+  // released in ("[SubsPlease] Show S4 - 28 (1080p) [ABCD1234]"), which
+  // that parser reads as a title with the group and the number still in
+  // it — so every such release used to fail this guard and fall through
+  // to the unguarded set.
+  const parsed = new Set([
+    mediaKey(parseReleaseName(releaseText).title),
+    mediaKey(fansubTitle(releaseText))
+  ])
+  return wanted.some((t) => parsed.has(mediaKey(t)))
+}
+
+/**
+ * The title in a fansub-style release name: leading "[Group]" tags off,
+ * everything from the episode marker (" - 06", " S4 - 28", " - 06v2") or
+ * the first trailing "(1080p)" / "[hash]" on. Empty when the name has no
+ * such shape, which mediaKey turns into a key nothing matches.
+ */
+function fansubTitle(text: string): string {
+  return String(text || '')
+    .split('\n')[0]
+    .replace(/^\s*(?:\[[^\]]*\]\s*)+/, '')
+    .replace(/\s+(?:S\d{1,2}\s*)?[-–]\s*\d{1,4}(?:v\d)?\b.*$/i, '')
+    .replace(/\s*[[(].*$/, '')
+    .trim()
 }
 
 export interface TorBoxFile {
