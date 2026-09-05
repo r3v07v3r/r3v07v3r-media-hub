@@ -1,17 +1,15 @@
 /* Shared movie/series/anime detail page shell. Two-column grid below the
-   back button (main content column + a narrower right sidebar), matching
-   the reference composition: Next-to-Play/episodes/about sit in the wide
-   left column while ratings/progress/genres/similar stack as ONE
-   continuous column on the right, spanning both the hero row and the
-   main row — NOT ratings-beside-hero then a separate progress/genres/
-   similar-beside-main split. That split used to leave a large gap in the
-   middle of the right column: ratings sat in the hero row (520px, fixed
-   to match the hero's own height) while progress/genres/similar sat in
-   a wholly separate row below it — once ratings' own height was
-   shrunk to fit its actual content (a few gauges, not 520px), the
-   leftover space in that row became a visible dead gap before the next
-   row's panels started, instead of those panels simply flowing directly
-   beneath ratings the way a single column would. */
+   back button (main content column + a narrower right sidebar). The wide
+   left column carries Next-to-Play/episodes/about plus genres and the
+   similar-titles carousel underneath; the right column is ONE continuous
+   sidebar (progress/ratings/collection/where-to-watch/request/story),
+   spanning both the hero row and the main row — NOT a hero-row/main-row
+   split. That split used to leave a large gap in the middle of the right
+   column: whatever sat in the hero row was fixed to match the hero's own
+   height, and once its content turned out shorter than that, the leftover
+   space became a visible dead gap before the next row's panels started,
+   instead of those panels simply flowing directly beneath it the way a
+   single column would. */
 .page {
   min-height: 100%;
   display: grid;
