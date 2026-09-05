@@ -26,7 +26,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { PlayerWindowProvider, usePlayerWindow } from '@renderer/context/PlayerWindowContext'
 import { usePartySync } from '@renderer/hooks/usePartySync'
-import { usePlayerTracking } from '@renderer/hooks/usePlayerTracking'
+import { usePlayerTracking, WATCHED_FRACTION } from '@renderer/hooks/usePlayerTracking'
 import { PlayerSessionRail } from '@renderer/components/party/PlayerSessionRail'
 import {
   AUTOPLAY_NEXT_COUNTDOWN_SECONDS,
@@ -421,6 +421,17 @@ function PlayerControls() {
     wasPausedRef.current = paused
   }, [paused, tracking])
 
+  // How far through, kept somewhere a callback can read it WITHOUT depending
+  // on it. closePlayer needs the figure at the arbitrary moment somebody
+  // presses the button; closing over `timePos` instead would give it a new
+  // identity roughly eight times a second, and the sleep timer that depends on
+  // it would clear its own timeout before it could ever fire. Declared above
+  // the end-of-file effect, which reads it for the same reason.
+  const progressRef = useRef(0)
+  useEffect(() => {
+    progressRef.current = duration > 0 ? Math.round((timePos / duration) * 100) : 0
+  }, [timePos, duration])
+
   // Natural end of file. mpv reports it as a property rather than an element
   // event, but the consequence is the same as the old onEnded.
   //
@@ -435,10 +446,20 @@ function PlayerControls() {
   // The guard is on the flag rather than on the event, so the case it exists
   // for still works: a title short enough or seeked past such that 80% never
   // fired is still marked at the end.
+  //
+  // "The end" has to mean the end of the FILM, though, not merely the end of
+  // the bytes. A stream that stops short — the cache starved, a debrid link
+  // that went cold — also arrives here as eof-reached, and marking that
+  // watched recorded a film as finished at the point it broke, pushed that
+  // to every tracking service, and told the close that followed it could
+  // delete the very cache a resume would have played from. So the position
+  // is asked as well: an end of file with the playhead nowhere near the end
+  // is a broken stream, and is left exactly as it was found.
   useEffect(() => {
     if (state.eofReached !== true) return
     tracking.savePositionNow()
     if (tracking.markedWatched()) return
+    if (progressRef.current < WATCHED_FRACTION * 100) return
     ui({ type: 'mark-watched' })
   }, [state.eofReached, tracking, ui])
 
@@ -452,16 +473,6 @@ function PlayerControls() {
   // partway through an episode leaves a tile that reflects it. Teardown's own
   // save stays as the backstop for the paths that never come through here
   // (the window being destroyed outright).
-  // How far through, kept somewhere a callback can read it WITHOUT depending
-  // on it. closePlayer needs the figure at the arbitrary moment somebody
-  // presses the button; closing over `timePos` instead would give it a new
-  // identity roughly eight times a second, and the sleep timer that depends on
-  // it would clear its own timeout before it could ever fire.
-  const progressRef = useRef(0)
-  useEffect(() => {
-    progressRef.current = duration > 0 ? Math.round((timePos / duration) * 100) : 0
-  }, [timePos, duration])
-
   const closePlayer = useCallback(() => {
     tracking.savePositionNow()
     // The one transition the scrobble effect above cannot observe: the window

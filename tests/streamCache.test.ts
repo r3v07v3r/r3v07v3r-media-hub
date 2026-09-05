@@ -17,6 +17,7 @@ import {
   computeRetainedChunkIndices,
   createMemoryChunkStore,
   fillBudgetBytes,
+  inspectRangeReply,
   shouldAdoptAsPlayhead,
   findReusableSession
 } from '../src/main/media-hub/streamCache'
@@ -43,6 +44,47 @@ check('floors to the chunk boundary', () => {
   assert.equal(chunkIndexForByte(CHUNK - 1, CHUNK), 0)
   assert.equal(chunkIndexForByte(CHUNK, CHUNK), 1)
   assert.equal(chunkIndexForByte(CHUNK * 3 + 100, CHUNK), 3)
+})
+
+// What a range fetch's reply has to look like before its body is allowed
+// to become chunk files — the check whose absence let a debrid link's
+// error page, or a whole-file reply to a mid-file request, be written to
+// disk as if it were the requested bytes and decoded as corrupt picture.
+console.log('inspectRangeReply')
+check('a 206 covering the requested start is the bytes asked for', () => {
+  const verdict = inspectRangeReply(206, 'bytes 8388608-99999999/100000000', 8388608, null)
+  assert.equal(verdict.problem, null)
+  assert.equal(verdict.total, 100000000, 'learns the file length from the reply')
+})
+check('a 206 for a different start is refused', () => {
+  const verdict = inspectRangeReply(206, 'bytes 0-99999999/100000000', 8388608, null)
+  assert.ok(verdict.problem, 'must be refused')
+  assert.match(verdict.problem ?? '', /from 0 when 8388608/)
+})
+check('a 206 whose total disagrees with the known length is refused', () => {
+  const verdict = inspectRangeReply(206, 'bytes 8388608-999/1000', 8388608, 100000000)
+  assert.ok(verdict.problem, 'a different-length file is a different file')
+})
+check('a 206 without a usable content-range is refused', () => {
+  assert.ok(inspectRangeReply(206, null, 4096, null).problem)
+  assert.ok(inspectRangeReply(206, 'bytes */100', 4096, null).problem)
+})
+check('an unknown total in the content-range is tolerated', () => {
+  const verdict = inspectRangeReply(206, 'bytes 4096-8191/*', 4096, null)
+  assert.equal(verdict.problem, null)
+  assert.equal(verdict.total, null)
+})
+check('a whole-file 200 is only the right bytes from byte zero', () => {
+  assert.equal(inspectRangeReply(200, null, 0, null).problem, null)
+  assert.ok(
+    inspectRangeReply(200, null, CHUNK, null).problem,
+    'from mid-file a 200 is the wrong bytes'
+  )
+})
+check('an error status is never written as data', () => {
+  for (const status of [403, 404, 410, 416, 500, 502, 503]) {
+    assert.ok(inspectRangeReply(status, null, 0, null).problem, `HTTP ${status} must be refused`)
+  }
 })
 
 console.log('computeRetainedChunkIndices')

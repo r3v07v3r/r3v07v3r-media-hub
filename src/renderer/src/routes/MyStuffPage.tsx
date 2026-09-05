@@ -79,8 +79,12 @@ function playedWhen(iso: string): string {
  * is a different action, and it lives on the title's own page.
  */
 function HistoryList() {
-  const { libraryKey } = useAppState()
-  const { plays, loaded, remove } = useMediaHubPlays(libraryKey)
+  // Re-keyed by watchStatusVersion as well: marking something watched
+  // appends a play, and the 80% mark during playback does so while this
+  // tab can be sitting open behind the film. The key is the hook's one
+  // argument, so the version rides in it rather than as a second one.
+  const { libraryKey, watchStatusVersion } = useAppState()
+  const { plays, loaded, remove } = useMediaHubPlays(`${libraryKey}:w${watchStatusVersion}`)
   if (!loaded) return <p className={styles.empty}>Reading your history…</p>
   if (plays.length === 0) {
     return (
@@ -140,7 +144,9 @@ function StatsView() {
   // Library-keyed like the hooks in lib/mediaHub/hooks.ts, and for the same
   // reasons: this reads IPC directly, and both a profile switch and a restore
   // change what is underneath it while this tab stays mounted.
-  const { libraryKey } = useAppState()
+  // ...and watch-status-keyed for the same reason HistoryList is: the stats
+  // are a sum over the plays, and a play can land while this tab is open.
+  const { libraryKey, watchStatusVersion } = useAppState()
   const [stats, setStats] = useState<ViewingStats | null>(null)
   const [loaded, setLoaded] = useState(() => !window.api?.mediaHub)
 
@@ -161,7 +167,7 @@ function StatsView() {
     return () => {
       cancelled = true
     }
-  }, [libraryKey])
+  }, [libraryKey, watchStatusVersion])
 
   if (!loaded) return <p className={styles.empty}>Working it out…</p>
   if (!stats || stats.totalPlays === 0) {

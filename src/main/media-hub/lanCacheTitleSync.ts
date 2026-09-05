@@ -30,6 +30,7 @@ import {
   TITLE_SYNC_PAGE_LIMIT
 } from '../../shared/lancache/titleSync'
 import { getDatabase } from './dbState'
+import { notifyLibraryChanged } from './rendererBridge'
 import { planDeepScanBatch } from './deepScanRules'
 import { isLanCacheConnected, lanCacheTitles } from './lanCache'
 
@@ -123,5 +124,9 @@ export async function runLanCacheTitleSync(): Promise<TitleSyncReport> {
       if (!result.more) break
     }
   }
+  // The browse grids page through the index this just grew, and re-query it
+  // only when told to — the deep scan button tells them itself; this job
+  // has no button, so it says so here.
+  if (report.added > 0) notifyLibraryChanged('lancache-title-sync', 'index')
   return report
 }

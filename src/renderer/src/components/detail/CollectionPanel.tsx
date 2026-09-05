@@ -23,7 +23,7 @@ import type { TitleCollectionResult } from '@shared/media-hub/types'
 import styles from './CollectionPanel.module.css'
 
 export function CollectionPanel({ media }: { media: MediaItem }) {
-  const { openDetail, myList, dislikedIds, continueWatching } = useAppState()
+  const { openDetail, myList, dislikedIds, watchedIds, continueWatching } = useAppState()
   // Carries the title it belongs to, like every other keyed fetch on this
   // page: navigating between films reuses this component, and a series listed
   // under the wrong film is a confident, wrong answer.
@@ -62,7 +62,10 @@ export function CollectionPanel({ media }: { media: MediaItem }) {
         {parts.map((part) => {
           // Converted with the tracking sets so each card shows whether it is
           // saved or set aside — the same flags every other grid carries.
-          const item = catalogItemToMediaItem(part, { trackedIds: myList, dislikedIds })
+          // watchedIds too, or every other film in the series reads as
+          // unwatched: a movie is never in Continue Watching, so its badge
+          // has nothing else to come from.
+          const item = catalogItemToMediaItem(part, { trackedIds: myList, dislikedIds, watchedIds })
           const artwork = resolveArtwork(item)
           return (
             <li key={part.id}>

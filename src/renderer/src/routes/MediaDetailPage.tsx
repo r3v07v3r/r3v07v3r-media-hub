@@ -481,6 +481,10 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
       await call({ item, playback: { season: episode.season, episode: episode.episode } })
       const refreshed = await api.tracking.list()
       setHistory(refreshed.history.filter((h) => h.id === media.id))
+      // The same write the movie toggle below makes, so the same refresh:
+      // the home feed's Continue Watching row and the grids' badges read
+      // this history too, and this page's own `history` copy is not theirs.
+      refreshWatchStatus()
     } catch {
       pushNotification({ tone: 'error', message: 'Could not update watched status.' })
     }
@@ -491,8 +495,8 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
    * movies have no per-episode granularity, so `playback` is omitted
    * entirely rather than sent as {season: undefined, episode: undefined}.
    *
-   * Also calls refreshWatchStatus() (handleMarkEpisodeWatched/
-   * handleMarkSeasonWatched above don't) — this page's own `history`
+   * Also calls refreshWatchStatus(), as handleMarkEpisodeWatched and
+   * handleMarkSeasonWatched above do — this page's own `history`
    * state is enough to keep ProgressPanel's toggle itself correct, but
    * the catalog grids (watchedIdsResult) and personalized rails
    * (homeFeed) this toggle also affects have no other way to learn about
@@ -565,6 +569,7 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
       }
       const refreshed = await api.tracking.list()
       setHistory(refreshed.history.filter((h) => h.id === media.id))
+      refreshWatchStatus()
     } catch {
       pushNotification({ tone: 'error', message: 'Could not update the season’s watched status.' })
     }

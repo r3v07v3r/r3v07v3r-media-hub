@@ -121,15 +121,28 @@ async function torboxItemForHash(hash: string, force = false): Promise<RawApiPay
     const cached = db.getCache<RawApiPayload>(key(hash))
     if (cached) return cached
   }
-  const existing = await torbox<RawApiPayload>('/torrents/mylist', { limit: 1000 })
+  // A forced lookup exists to recover from a stale answer, and TorBox keeps
+  // one of its own: without bypass_cache the retry re-asked a question the
+  // server could answer from the same cached body the first attempt got —
+  // one click, two identical failures two seconds apart, which is what a
+  // person's log showed for a torrent whose file list had not landed yet.
+  const existing = await torbox<RawApiPayload>('/torrents/mylist', {
+    limit: 1000,
+    ...(force ? { bypass_cache: true } : {})
+  })
   const list: RawApiPayload[] = Array.isArray(existing.data) ? existing.data : []
   let match: RawApiPayload | null = null
   const rows: Array<{ key: string; payload: RawApiPayload }> = []
   for (const entry of list) {
     const entryHash = String(entry?.hash || '').toLowerCase()
     if (!entryHash) continue
-    rows.push({ key: key(entryHash), payload: entry })
     if (entryHash === hash) match = entry
+    // Only an entry that already carries its file list is worth keeping for
+    // six hours. A torrent still being added arrives in the listing before
+    // its files do, and warming that shell as if it were final turned every
+    // play of it for the rest of the TTL into "no matching video file".
+    if (!Array.isArray(entry?.files) || entry.files.length === 0) continue
+    rows.push({ key: key(entryHash), payload: entry })
   }
   // One transaction for the whole warm. This sits on the play click, the
   // database is synchronous on the main thread, and a large library was up
@@ -776,7 +789,15 @@ export function registerTorBoxIpc(): void {
         source: stream?.source ?? 'torbox',
         infoHash: stream?.infoHash,
         itemId: stream?.itemId,
-        mediaSourceId: stream?.mediaSourceId
+        mediaSourceId: stream?.mediaSourceId,
+        // The two things a resume needs that the hash alone does not carry:
+        // WHICH file of a multi-file torrent these bytes are (the add-on's
+        // index, preferred over filename guessing — see resolveDownloadUrl),
+        // and the trackers to re-add the torrent with if TorBox has since
+        // let it go. Without them a resumed season pack could pick a
+        // different episode's file, or fail to find any.
+        fileIdx: stream?.fileIdx,
+        sources: stream?.sources
       }
 
       const finish = async (url: string): Promise<PlaybackResult> => {

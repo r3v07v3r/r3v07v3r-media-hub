@@ -50,6 +50,7 @@ import { APP_SCHEME } from '../appProtocol'
 import { MEDIA_HUB_CHANNELS } from '../../shared/media-hub/ipc-channels'
 import { PLAYER_OVERLAY_ROUTE } from '../../shared/media-hub/playerRoute'
 import { isAllowedExternalUrl } from './security'
+import { logError } from './logger'
 
 let overlayWindow: BrowserWindow | null = null
 let parentWindow: BrowserWindow | null = null
@@ -290,8 +291,25 @@ export function openPlayerOverlay(parent: BrowserWindow): BrowserWindow {
   // that has to come from outside it. Without it the flag would stay true after
   // a crash and forwarded input would go on being swallowed by a window that
   // can no longer act on anything.
-  win.webContents.on('render-process-gone', () => {
+  //
+  // And then brought back. mpv is a separate process embedded in the MAIN
+  // window, so it keeps playing through the controls dying — which left a
+  // film running with no controls, no way to stop it short of quitting, and
+  // nothing telling the main window anything had happened. The overlay's
+  // own mount already pulls the live session (player:snapshot) precisely
+  // because it can come up after the session exists, so a reload reattaches
+  // to the running title as if nothing had happened. Bounded, so a renderer
+  // that dies on arrival cannot reload itself in a loop.
+  let revivals = 0
+  win.webContents.on('render-process-gone', (_event, details) => {
     inputReady = false
+    logError(
+      'media-hub:player-window',
+      new Error(`The controls renderer went away (${details.reason}, exit ${details.exitCode})`)
+    )
+    if (revivals >= 2 || win.isDestroyed()) return
+    revivals += 1
+    win.webContents.reload()
   })
 
   win.on('closed', () => {

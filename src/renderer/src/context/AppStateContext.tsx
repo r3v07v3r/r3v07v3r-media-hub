@@ -48,7 +48,11 @@ import {
   runPlaybackPreparationStage,
   type PlaybackPreparationStage
 } from '@renderer/lib/mediaHub/playbackPreparation'
-import { forgetContinueWatching, rememberTrackedId } from '@renderer/lib/mediaHub/startupSnapshot'
+import {
+  clearStartupSnapshot,
+  forgetContinueWatching,
+  rememberTrackedId
+} from '@renderer/lib/mediaHub/startupSnapshot'
 import {
   startupContinueWatchingFallback,
   startupTrackedIdsFallback,
@@ -57,7 +61,8 @@ import {
   useMediaHubRatings,
   useMediaHubHomeFeed,
   useMediaHubWatchedIds,
-  type CatalogKindState
+  type CatalogKindState,
+  forgetStartupFallbacks
 } from '@renderer/lib/mediaHub/hooks'
 import type { CategoryKind } from '@renderer/lib/mediaHub/categoryFilters'
 import { MAX_PROMPT_TITLES } from '@shared/media-hub/ollama'
@@ -543,7 +548,13 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   const homeFeed = useMediaHubHomeFeed(libraryKey)
   const watchedIdsResult = useMediaHubWatchedIds(libraryKey)
   const dislikedIdsResult = useMediaHubDislikedIds(libraryKey)
-  const ratingsResult = useMediaHubRatings(libraryKey)
+  // Ratings have no refresh() of their own (the hook adopts what the backend
+  // reports per rate call), so a write main makes to them — a MAL reconcile
+  // pulling scores down — is answered by re-keying the hook. Folded into its
+  // key rather than added as a second argument so the hook keeps the one
+  // contract every library hook has: "is this still the same library".
+  const [ratingsEpoch, setRatingsEpoch] = useState(0)
+  const ratingsResult = useMediaHubRatings(`${libraryKey}:r${ratingsEpoch}`)
   const browseCatalog = useMediaHubBrowseCatalog(
     myList,
     watchedIdsResult.watchedIds,
@@ -1214,6 +1225,15 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       api
         .setActive(id, pin)
         .then(({ activeProfileId: active }) => {
+          // The startup snapshot is one file for the whole app, written by
+          // whichever profile was active. Left in place across a switch it
+          // seeds the NEXT launch — and the fallbacks already resolved from
+          // it seed this session's loading states — with the previous
+          // person's rows under this person's name. Cleared before the
+          // library is re-keyed, so nothing remembered outlives its owner;
+          // this profile's own live data rewrites it within the session.
+          clearStartupSnapshot()
+          forgetStartupFallbacks()
           setActiveProfileIdState(active)
           setProfilePinPrompt(null)
         })
@@ -1901,6 +1921,30 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     stopPlaybackRef.current = stopPlayback
     refreshWatchStatusRef.current = refreshWatchStatus
   }, [playbackMedia, stopPlayback, refreshWatchStatus])
+
+  // Main wrote library rows on its own — a background watchlist pull, a MAL
+  // reconcile, the anime id repair, a restore. Every renderer-initiated
+  // write refetches from its own call site; these had no call site here,
+  // and the rows they wrote stayed off the screen until something else
+  // happened to refetch. One listener answers all of them, by scope:
+  // history and planned both come back through the home feed and the
+  // watched ids (the feed's trackedIds reseed My List), ratings has no
+  // refresh of its own so it is re-keyed, and a wholesale change re-keys
+  // everything the way a profile switch does. The index scope is the browse
+  // pages' business — they subscribe to it themselves.
+  useEffect(() => {
+    const api = window.api?.mediaHub?.library
+    if (!api?.onChanged) return
+    return api.onChanged((event) => {
+      const scopes = new Set(event.scopes)
+      if (scopes.has('all')) {
+        reloadLibrary()
+        return
+      }
+      if (scopes.has('ratings')) setRatingsEpoch((n) => n + 1)
+      if (scopes.has('history') || scopes.has('planned')) refreshWatchStatusRef.current()
+    })
+  }, [reloadLibrary])
   useEffect(() => {
     const api = window.api?.mediaHub?.player
     if (!api) return

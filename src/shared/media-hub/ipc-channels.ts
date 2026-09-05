@@ -149,6 +149,14 @@ export const MEDIA_HUB_CHANNELS = {
   trackingReconcileCheck: 'mediahub:tracking:reconcile-check',
   trackingReconcileResolve: 'mediahub:tracking:reconcile-resolve',
   trackingReconcileSync: 'mediahub:tracking:reconcile-sync', // push event — a queued "keep local" batch went out (or didn't)
+  /** Pushed when MAIN wrote library rows of its own accord — a background
+   *  watchlist pull, a MAL reconcile, an id repair, the household title
+   *  sync. Every renderer-initiated write already refetches from its own
+   *  call site; these are the writes no call site could know about, and
+   *  before this channel they reached the screen only by luck. See
+   *  rendererBridge.ts's notifyLibraryChanged and AppStateContext's
+   *  listener for what each scope refreshes. */
+  libraryChanged: 'mediahub:library:changed', // push event
   /** A personal 1-10 score. Sending 0 clears it — see database.ts's `rate`
    *  and shared/media-hub/rating.ts on why "no opinion" is an absence rather
    *  than a zero. */

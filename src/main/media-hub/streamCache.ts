@@ -210,6 +210,11 @@ const diskChunkStore: ChunkStore = {
     await fsp.rename(tmpPath, finalPath)
   },
   read(root, token, index) {
+    // An empty token is never a legitimate read — it is what a session
+    // becomes after stop(). Resolving it to a path would point at the
+    // cache ROOT (root/chunk-N.bin), which is the ENOENT a stopped session's
+    // still-draining reader used to log. Refuse it as such instead.
+    if (!token) return Promise.reject(new Error('No cache session is open.'))
     return fsp.readFile(chunkFilePath(root, token, index))
   },
   async remove(root, token, index) {
@@ -357,6 +362,69 @@ export async function findReusableSession(
 
 export function chunkIndexForByte(byte: number, chunkBytes = CHUNK_BYTES): number {
   return Math.floor(byte / chunkBytes)
+}
+
+export interface RangeReplyVerdict {
+  /** Why the reply must NOT be written as chunk data, or null when it may. */
+  problem: string | null
+  /** The file length the reply declared, when it declared one. */
+  total: number | null
+}
+
+/**
+ * Whether a range fetch's reply is actually the bytes that were asked for.
+ *
+ * The fill used to check exactly one thing about a reply — that it had a
+ * body — and then cut whatever arrived into 4MB chunks and marked each
+ * one ready at the requested offset. Nothing forced those bytes to BE the
+ * requested offset: a server that ignores the Range header and streams
+ * from byte 0, a debrid link answering with a 200 error page after it
+ * expired, or a 206 for a different file after a link refresh, all went to
+ * disk as if they were the film. What the player then decoded was real
+ * video data at the wrong position — frames referencing pictures that were
+ * never sent, which is exactly the "blurry image jumping across the frame"
+ * a person reported, with a clean-looking picture either side of it.
+ *
+ * A 200 is accepted only for a request from byte 0, where a whole-file
+ * reply happens to be the same bytes. Pure, so the rules are testable
+ * without a server: tests/streamCache.test.ts.
+ */
+export function inspectRangeReply(
+  status: number,
+  contentRange: string | null | undefined,
+  requestedStart: number,
+  knownTotal: number | null
+): RangeReplyVerdict {
+  if (status === 200) {
+    return requestedStart === 0
+      ? { problem: null, total: null }
+      : {
+          problem: `answered a request for bytes ${requestedStart}- with a whole-file 200`,
+          total: null
+        }
+  }
+  if (status !== 206) {
+    return { problem: `answered with HTTP ${status} instead of partial content`, total: null }
+  }
+  const match = /^bytes\s+(\d+)-(\d+)\/(\d+|\*)$/i.exec(String(contentRange ?? '').trim())
+  if (!match) {
+    return {
+      problem: `sent a 206 without a usable content-range (${contentRange || 'none'})`,
+      total: null
+    }
+  }
+  const start = Number(match[1])
+  const total = match[3] === '*' ? null : Number(match[3])
+  if (start !== requestedStart) {
+    return { problem: `sent bytes from ${start} when ${requestedStart} was asked for`, total }
+  }
+  if (knownTotal !== null && total !== null && total !== knownTotal) {
+    return {
+      problem: `reported a ${total}-byte file where ${knownTotal} bytes were expected`,
+      total
+    }
+  }
+  return { problem: null, total }
 }
 
 export interface RetentionParams {
@@ -1008,6 +1076,31 @@ export function createStreamCache({
         resolveHost
       )
       if (generation !== myGeneration) return
+      // Refused BEFORE a byte of it is kept — see inspectRangeReply for what
+      // used to happen to a reply that was not the bytes asked for. A
+      // refused reply marks its first chunk failed, which is the same
+      // outcome as a dropped connection: serveRange clears the mark and
+      // refetches once, and only gives up if that fails too.
+      const verdict = inspectRangeReply(
+        response.status,
+        response.headers.get('content-range'),
+        alignedStart,
+        totalBytes
+      )
+      if (verdict.problem) {
+        logError(
+          'streamCache:rangeReply',
+          new Error(`Upstream ${verdict.problem} (asked for bytes=${alignedStart}-)`)
+        )
+        await response.body?.cancel().catch(() => {})
+        if (generation !== myGeneration) return
+        markChunk(index, 'failed')
+        return
+      }
+      // A ranged reply declares the file's length. Learning it here covers
+      // the session whose HEAD probe failed: without a total, serveRange
+      // has no end-of-file condition at all (see its zero-byte guard).
+      if (totalBytes === null && verdict.total !== null) totalBytes = verdict.total
       if (!response.body) return
       const reader = response.body.getReader()
       // Socket reads accumulate as a LIST of pieces and each 4MB chunk is
@@ -1049,12 +1142,32 @@ export function createStreamCache({
         if (generation !== myGeneration) return
         if (done) {
           if (bufferedLength > 0) {
-            const tail = Buffer.concat(pieces, bufferedLength)
-            pieces.length = 0
-            bufferedLength = 0
-            await writeChunk(myCacheRoot, myToken, index, tail)
-            if (generation !== myGeneration) return
-            markChunk(index, 'ready')
+            const tailEnd = index * CHUNK_BYTES + bufferedLength
+            if (totalBytes !== null && tailEnd < totalBytes) {
+              // The body ended before the file did. Writing what arrived
+              // as a ready chunk would hand serveRange a short chunk in the
+              // middle of the file — which it can neither serve past nor
+              // recognise as an error — so this is a failed chunk, exactly
+              // as a dropped connection would have been.
+              logError(
+                'streamCache:fill',
+                new Error(`Upstream closed the body at byte ${tailEnd} of ${totalBytes}`)
+              )
+              pieces.length = 0
+              bufferedLength = 0
+              markChunk(index, 'failed')
+            } else {
+              // A short final chunk is what the END of a file looks like.
+              // When nothing had told this session how long the file is,
+              // this is the moment it finds out.
+              if (totalBytes === null) totalBytes = tailEnd
+              const tail = Buffer.concat(pieces, bufferedLength)
+              pieces.length = 0
+              bufferedLength = 0
+              await writeChunk(myCacheRoot, myToken, index, tail)
+              if (generation !== myGeneration) return
+              markChunk(index, 'ready')
+            }
           }
           if (hasFullCoverage()) {
             downloadComplete = true
@@ -1265,6 +1378,14 @@ export function createStreamCache({
     const rangeHeader = String(req.headers.range || '')
     const rangeMatch = /bytes=(\d+)-/.exec(rangeHeader)
     const startByte = rangeMatch ? Number(rangeMatch[1]) : 0
+    // Captured once, the same way runFill captures its own — every read
+    // below goes through THESE, never the live closure vars. stopInternal
+    // clears `token` while a reader can still be draining, and a read
+    // taken against the live value then resolved to the cache root with no
+    // session directory at all: the 'stream-cache\chunk-N.bin' ENOENT in a
+    // person's log, with no 64-hex token segment, is exactly that.
+    const myToken = token
+    const myCacheRoot = cacheRoot
 
     /**
      * Whether this connection's most recent miss was served as an excursion
@@ -1290,10 +1411,35 @@ export function createStreamCache({
       'content-type': 'application/octet-stream',
       'accept-ranges': 'bytes',
       'cache-control': 'no-store',
-      'content-range': `bytes ${startByte}-${totalBytes !== null ? totalBytes - 1 : ''}/${totalLabel}`
+      'content-range': `bytes ${startByte}-${totalBytes !== null ? totalBytes - 1 : ''}/${totalLabel}`,
+      // Declared so that a body which stops short is DETECTABLE. Without
+      // it the reply is chunked, and an early end is a syntactically
+      // complete body — mpv reads it as the end of the film and parks on
+      // the last frame with nothing to say, which is how a title "stopped
+      // at 80%" for someone with no line in the log to explain it.
+      ...(totalBytes !== null ? { 'content-length': String(totalBytes - startByte) } : {})
     })
 
     let bytePos = startByte
+    /**
+     * Gives up on this response in the only way that is honest once the
+     * header is out. A status code can no longer say anything (every
+     * `writeHead(502)` that used to sit here was unreachable for that
+     * reason — headers are sent on the first line of the body above), and
+     * ending the body cleanly tells the player the film is over. Breaking
+     * the connection instead is what ffmpeg's HTTP layer can act on: mpv
+     * reconnects at its current byte offset and this server gets another
+     * chance to have the bytes ready, and only a region that stays
+     * unfillable ends playback, as an error rather than as a credits roll.
+     */
+    const abandon = (why: string): void => {
+      logError(
+        'streamCache:starved',
+        new Error(`${why} at byte ${bytePos} (chunk ${chunkIndexForByte(bytePos)})`)
+      )
+      res.destroy()
+    }
+
     let servedBytes = 0
     /** Which chunk index this connection has already re-fetched once after a
      *  failed read — see the readFile catch below. */
@@ -1345,15 +1491,22 @@ export function createStreamCache({
         if (status !== 'ready') {
           // Genuinely stuck (fetch failing repeatedly for this region) —
           // surface as a real error rather than hanging the client forever.
-          if (!res.headersSent) res.writeHead(502, { 'cache-control': 'no-store' })
-          res.end()
+          abandon('No bytes could be fetched for the region being played')
+          return
+        }
+        // The session this reader belongs to has been stopped (or replaced
+        // by start()'s own stopInternal) while it was parked in a wait
+        // above. Nothing it could serve now would be this session's bytes.
+        // Quiet, because it is the ordinary wake of a stop, not a fault.
+        if (token !== myToken) {
+          res.destroy()
           return
         }
         const chunkStartByte = index * CHUNK_BYTES
         const offsetInChunk = bytePos - chunkStartByte
         let data: Buffer
         try {
-          data = await store.read(cacheRoot, token, index)
+          data = await store.read(myCacheRoot, myToken, index)
         } catch (error) {
           logError('streamCache:readChunk', error)
           // This chunk was 'ready' a moment ago, so the file went away
@@ -1368,11 +1521,24 @@ export function createStreamCache({
             servingExcursion = (await reposition(index * CHUNK_BYTES)) !== null
             continue
           }
-          if (!res.headersSent) res.writeHead(502, { 'cache-control': 'no-store' })
-          res.end()
+          abandon('A cached chunk could not be read back, twice')
           return
         }
         const slice = offsetInChunk > 0 ? data.subarray(offsetInChunk) : data
+        if (slice.length === 0) {
+          // A ready chunk with nothing at this offset is a chunk shorter
+          // than the position being read. With the file's length known that
+          // is a truncated chunk, and serving it would loop here forever,
+          // writing nothing and never advancing. Without a known length it
+          // is simply the end of the file — the only end-of-file this loop
+          // has when no HEAD or ranged reply ever declared a total.
+          if (totalBytes !== null && bytePos < totalBytes) {
+            abandon('A cached chunk is shorter than the file needs it to be')
+            return
+          }
+          res.end()
+          return
+        }
         const canContinue = res.write(slice)
         bytePos = chunkStartByte + data.length
         servedBytes += slice.length
@@ -1417,7 +1583,13 @@ export function createStreamCache({
       }
       serveRange(req, res).catch((error) => {
         logError('streamCache:serve', error)
-        if (!res.headersSent) res.writeHead(502, { 'cache-control': 'no-store' })
+        // Before the header: a status the client can act on. After it: the
+        // only honest signal left is a broken transfer — see abandon().
+        if (res.headersSent) {
+          res.destroy()
+          return
+        }
+        res.writeHead(502, { 'cache-control': 'no-store' })
         res.end()
       })
     })

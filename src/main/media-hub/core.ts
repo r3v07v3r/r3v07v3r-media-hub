@@ -25,7 +25,8 @@ import {
   episodeWatchState,
   filterCatalog,
   isItemWatched,
-  subtitlesInadequate
+  subtitlesInadequate,
+  hasAired
 } from '../../shared/media-hub/catalog-logic'
 import { releaseTextMentionsExecutable } from '../../shared/media-hub/unsafeFiles'
 import { releaseLacksPreferredLanguage } from '../../shared/media-hub/language'
@@ -346,7 +347,15 @@ export function resumeCandidateFor(
   }
   if (ref.source === 'torbox' && ref.infoHash) {
     if (!torboxConnected) return null
-    return { ...base, source: 'torbox', infoHash: ref.infoHash }
+    return {
+      ...base,
+      source: 'torbox',
+      infoHash: ref.infoHash,
+      // Carried back so the resume picks the SAME file the first play did
+      // (and can re-add the torrent with its trackers if TorBox dropped it).
+      ...(ref.fileIdx != null ? { fileIdx: ref.fileIdx } : {}),
+      ...(ref.sources?.length ? { sources: ref.sources } : {})
+    }
   }
   return null
 }
@@ -657,7 +666,11 @@ export function normalizeSimklCatalog(item: RawApiPayload, type: MediaKind): Cat
 export function normalizeSimklSearchResult(item: RawApiPayload, type: MediaKind): CatalogItem {
   const poster = item.poster ? `https://simkl.in/posters/${item.poster}_m.jpg` : ''
   return {
-    id: `simkl:${item.ids?.simkl_id}`,
+    // The IMDb id where Simkl has one, as the catalog normaliser above
+    // already does. A `simkl:` id exists nowhere in watch state, so a search
+    // result minted with one could never show as watched, planned or rated
+    // however many times the person had seen it.
+    id: item.ids?.imdb || `simkl:${item.ids?.simkl_id}`,
     title: item.title || 'Untitled',
     type,
     poster,
@@ -1045,8 +1058,14 @@ export function continueWatchingList(
 ): ContinueWatchingEntry[] {
   const rows: ContinueWatchingEntry[] = []
   for (const detail of details || []) {
+    // Aired and playable episodes only — the same set adapters.ts's
+    // airedEpisodes gives the catalog's Completed badge and the detail
+    // page's progress count. With future episodes left in, a still-airing
+    // show somebody is caught up on read 100% on the card and "8 of 10" in
+    // this row, and the row's suggested next episode was one that did not
+    // exist yet.
     const episodes = (detail.videos || [])
-      .filter((v) => (v.season ?? 1) > 0)
+      .filter((v) => (v.season ?? 1) > 0 && !v.unplayable && hasAired(v))
       .sort(
         (a, b) =>
           (a.season || 1) - (b.season || 1) ||
