@@ -63,7 +63,8 @@ import {
   groupAnimeCatalog,
   groupedIdsFor,
   invalidateAnimeGroupIndex,
-  kitsuRealEpisodes
+  kitsuRealEpisodes,
+  groupedVideosAreComplete
 } from './animeSeasons'
 import { omdbRottenTomatoesRating } from './omdb'
 import { searchCredits, titleCredits, titlesFeaturing } from './credits'
@@ -700,6 +701,20 @@ async function withCredits(
   }
 }
 
+/** A fully resolved title is good for a day. */
+const META_TTL_MS = 24 * 60 * 60 * 1000
+/**
+ * A DEGRADED one — the primary source failed and a catalog or index row
+ * stood in with no episodes, or a grouped anime came back missing whole
+ * seasons — is good for ten minutes. It used to be written for the full
+ * day: one failed Cinemeta call, or a TMDB rate limit on one season, and
+ * the detail page said "No episode data is available for this title yet"
+ * until tomorrow, indistinguishable from a title that genuinely has none.
+ * Ten minutes is long enough that a page left open does not hammer the
+ * source, short enough that the next visit tries again.
+ */
+const DEGRADED_META_TTL_MS = 10 * 60 * 1000
+
 async function resolveMetadata(
   type: MediaKind,
   id: string,
@@ -711,6 +726,8 @@ async function resolveMetadata(
   const cacheKey = `meta:v3:${type}:${resolvedId}`
   const db = getDatabase()
   const cached = db.getCache<CatalogItem>(cacheKey)
+  // Whether what is about to be cached is a stand-in — see DEGRADED_META_TTL_MS.
+  let degraded = false
   // Re-running disambiguateVideos here (not just on the fresh-fetch path
   // below) matters for anyone upgrading into this fix: their existing 24h
   // cache entries were written by the old code and would otherwise keep
@@ -775,6 +792,8 @@ async function resolveMetadata(
       item = normalizeMeta(result.meta || {}, type)
     }
   } catch (primaryError) {
+    // Whatever stands in below is a stand-in — see DEGRADED_META_TTL_MS.
+    degraded = true
     const source = (
       db.getCache<CatalogItem[]>(`catalog:v2:${type}`, { allowExpired: true }) || []
     ).find((x) => String(x.id) === String(resolvedId))
@@ -791,12 +810,21 @@ async function resolveMetadata(
       item = { ...source, videos: [] }
     }
     if (type === 'series' && source?.simklId) {
-      const episodes = await fetchJson<RawApiPayload[]>(
-        `https://api.simkl.com/tv/episodes/${encodeURIComponent(String(source.simklId))}`,
-        {},
-        { priority, label: 'episode list' }
-      )
-      item.videos = (episodes || []).map((x) => simklEpisode(x, resolvedId))
+      // Its own try: this runs INSIDE the primary source's failure path, and
+      // a second failure here used to escape as a rejection of the whole
+      // catalog:meta call — the page then had no item at all, when the
+      // stand-in above (a title with everything but its episodes) was
+      // already in hand and is the better answer.
+      try {
+        const episodes = await fetchJson<RawApiPayload[]>(
+          `https://api.simkl.com/tv/episodes/${encodeURIComponent(String(source.simklId))}`,
+          {},
+          { priority, label: 'episode list' }
+        )
+        item.videos = (episodes || []).map((x) => simklEpisode(x, resolvedId))
+      } catch (error) {
+        logError('meta:simkl-episodes', error)
+      }
     }
   }
 
@@ -811,10 +839,21 @@ async function resolveMetadata(
     if (groupedIds?.length) item.groupedIds = groupedIds
   }
   if (type === 'anime' && item.groupedIds?.length) {
+    // buildGroupedAnimeVideos swallows every network error of its own and
+    // answers with a shorter list instead of throwing, so the try below is a
+    // backstop, not the failure path. The failure path is the QUIET one: a
+    // season whose TMDB and Kitsu reads both rate-limited contributes no
+    // episodes and nothing says so. Hence two rules here — an empty build
+    // never replaces the placeholder list the normaliser already produced,
+    // and a build missing whole seasons is cached as degraded (short TTL)
+    // rather than as the truth for a day.
     try {
-      item.videos = await buildGroupedAnimeVideos(item, tmdbCredentials().apiKey, priority)
+      const built = await buildGroupedAnimeVideos(item, tmdbCredentials().apiKey, priority)
+      if (built.length) item.videos = built
+      if (!groupedVideosAreComplete(item.groupedIds.length, built)) degraded = true
     } catch (error) {
       logError('anime:grouped-videos', error)
+      degraded = true
     }
   } else if (type === 'anime' && item.videos.length) {
     // Ungrouped (single-season) anime: item.videos above is still
@@ -848,7 +887,14 @@ async function resolveMetadata(
   // own doc comment for why this is needed and what it does.
   item.videos = disambiguateVideos(item.videos)
 
-  db.putCache(cacheKey, item, 24 * 60 * 60 * 1000)
+  db.putCache(cacheKey, item, degraded ? DEGRADED_META_TTL_MS : META_TTL_MS)
+  // The index row for this title was written from a catalog preview with no
+  // episodes, so its counts — the denominator the Completed badge and the
+  // browse grid's "N episodes" read — are empty until a crawl happens to
+  // re-list it. A full resolve is exactly the moment those counts are
+  // known: every title somebody opens heals its own row. Counts only —
+  // never the rank or the source a crawl assigned.
+  if (!degraded && item.videos.length) db.indexRefreshEpisodeCounts(type, item)
   return withCredits(item, type, resolvedId, priority)
 }
 

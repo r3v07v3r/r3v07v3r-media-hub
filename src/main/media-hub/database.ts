@@ -688,6 +688,15 @@ export interface MediaHubDatabase {
    * thousands of rows, and a statement-at-a-time loop outside a transaction
    * is one fsync per row.
    */
+  /**
+   * Refreshes ONLY the episode counts of one index row from a fully
+   * resolved item — the denominator behind the Completed badge — without
+   * touching the rank, source or artwork a crawl assigned. indexUpsert
+   * cannot be used for this: it writes rank and source unconditionally,
+   * so a detail-page resolve would demote every title it touched to rank 0.
+   * A no-op for a title the index does not hold; nulls never erase.
+   */
+  indexRefreshEpisodeCounts(kind: MediaKind, item: CatalogItem, now?: number): void
   indexUpsert(
     kind: MediaKind,
     items: readonly CatalogItem[],
@@ -2080,6 +2089,33 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
       }
     },
 
+    indexRefreshEpisodeCounts(kind, item, now = Date.now()) {
+      const id = String(item?.id || '')
+      if (!id) return
+      const counts = indexEpisodeCounts(item, now)
+      if (counts.totalEpisodes === null && counts.airedEpisodes === null) return
+      try {
+        sql
+          .prepare(
+            `UPDATE catalog_index SET
+               total_seasons=COALESCE(@totalSeasons,total_seasons),
+               total_episodes=COALESCE(@totalEpisodes,total_episodes),
+               aired_episodes=COALESCE(@airedEpisodes,aired_episodes),
+               updated_at=@now
+             WHERE id=@id AND kind=@kind`
+          )
+          .run({
+            id,
+            kind,
+            totalSeasons: counts.totalSeasons,
+            totalEpisodes: counts.totalEpisodes,
+            airedEpisodes: counts.airedEpisodes,
+            now
+          })
+      } catch (error) {
+        logError('index:refresh-counts', error)
+      }
+    },
     indexUpsert(kind, items, { source = '', rankBase = 0, ranks, now = Date.now() } = {}) {
       if (!items.length) return true
       try {

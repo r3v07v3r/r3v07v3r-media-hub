@@ -10,7 +10,10 @@
 import assert from 'node:assert'
 import type { CatalogItem, Episode } from '../src/shared/media-hub/types'
 import { animeStoryLinks, normalizeKitsuAnime } from '../src/main/media-hub/core'
-import { combineGroupEpisodeCounts } from '../src/main/media-hub/animeSeasons'
+import {
+  combineGroupEpisodeCounts,
+  groupedVideosAreComplete
+} from '../src/main/media-hub/animeSeasons'
 
 let pass = 0
 function check(name: string, fn: () => void): void {
@@ -193,6 +196,27 @@ check('matches the real shape a franchise crawl produces (season counts vary per
     anime('s5', episodes(25))
   ])
   assert.deepEqual(result, { totalSeasons: 5, totalEpisodes: 113 })
+})
+
+// The completeness check a grouped build is cached by (see catalog.ts's
+// DEGRADED_META_TTL_MS): every season position 1..N+1 must have episodes;
+// the Specials block is optional; an empty build is never complete.
+check('groupedVideosAreComplete: an empty build with siblings is incomplete', () => {
+  assert.equal(groupedVideosAreComplete(2, []), false)
+})
+check('groupedVideosAreComplete: every position present is complete, specials optional', () => {
+  const ep = (season: number, episode: number): Episode => ({
+    id: `${season}:${episode}`,
+    season,
+    episode,
+    number: episode,
+    title: '',
+    released: ''
+  })
+  assert.equal(groupedVideosAreComplete(2, [ep(1, 1), ep(2, 1), ep(3, 1)]), true)
+  assert.equal(groupedVideosAreComplete(2, [ep(0, 1), ep(1, 1), ep(2, 1), ep(3, 1)]), true)
+  assert.equal(groupedVideosAreComplete(2, [ep(1, 1), ep(3, 1)]), false, 'season 2 missing')
+  assert.equal(groupedVideosAreComplete(0, [ep(1, 1)]), true, 'an ungrouped title is one season')
 })
 
 console.log(`\n${pass} passed`)
