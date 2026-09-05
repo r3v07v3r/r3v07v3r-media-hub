@@ -57,6 +57,7 @@ import {
   mpvTrackIdForOrdinal,
   ordinalForMpvTrackId,
   tracksFromMpvTrackList,
+  type LoadFileOptions,
   type MpvTrackListEntry
 } from './mpv'
 import {
@@ -95,6 +96,13 @@ let lastTimePos = 0
 // The title's length, from the duration observer, for the one write main
 // makes to the bookmark table itself — see flushPlaybackPosition.
 let lastDuration = 0
+// What the current title was loaded with, so an mpv error can be answered
+// with one reload at the playhead before it closes the player.
+let lastLoad: {
+  url: string
+  options: Pick<LoadFileOptions, 'audioLanguage' | 'subtitleLanguage' | 'videoScaling'>
+  retried: boolean
+} | null = null
 
 /** A dropped-frame burst is logged once it has grown by this many frames... */
 const FRAME_DROP_REPORT_MIN = 10
@@ -533,6 +541,28 @@ async function attachObservers(): Promise<void> {
     if (reason !== 'error') return
     const detail = String(msg.file_error ?? 'playback failed')
     logError('media-hub:player', new Error(`mpv end-file: ${detail}`))
+    // One more go before the film is declared over. The failure this now
+    // sees most is the local stream server breaking a connection whose
+    // region it could not fill in time (streamCache's abandon) after mpv's
+    // own reconnects ran out — a condition the cache is usually past by the
+    // time a fresh load asks again. Reloading at the last known position is
+    // what a person would do themselves; it is done once, so a title that
+    // is genuinely unplayable still ends in the error the overlay reports.
+    const load = lastLoad
+    if (load && !load.retried && lastTimePos > 0) {
+      load.retried = true
+      logError(
+        'media-hub:player',
+        new Error(`Reloading the title once at ${lastTimePos.toFixed(1)}s after that error`)
+      )
+      void player
+        .loadFile(load.url, { ...load.options, startSeconds: lastTimePos })
+        .catch((error) => {
+          logError('media-hub:player', error)
+          queuePatch({ error: detail }, true)
+        })
+      return
+    }
     queuePatch({ error: detail }, true)
   })
 }
@@ -702,11 +732,19 @@ export async function startPlayerSession(
   // film's position. The observer refreshes it within the first second.
   lastTimePos = Number(options.startSeconds) || 0
 
+  // Kept for the one reload the end-file handler is allowed — see there.
+  lastLoad = {
+    url,
+    options: {
+      audioLanguage: options.audioLanguage,
+      subtitleLanguage: options.subtitleLanguage,
+      videoScaling: options.videoScaling
+    },
+    retried: false
+  }
   await player.loadFile(url, {
     startSeconds: options.startSeconds,
-    audioLanguage: options.audioLanguage,
-    subtitleLanguage: options.subtitleLanguage,
-    videoScaling: options.videoScaling
+    ...lastLoad.options
   })
 
   // Only now do the controls go on screen. The overlay was created before the
@@ -762,6 +800,7 @@ export async function stopPlayerSession(): Promise<void> {
   sessionSnapshot = null
   lastTimePos = 0
   lastDuration = 0
+  lastLoad = null
   closePlayerOverlay()
   // `stop` destroys mpv's embedded child window (verified in the spike), which
   // is what reveals the app UI again — no window state to unwind on this side.
