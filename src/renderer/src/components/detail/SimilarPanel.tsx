@@ -74,6 +74,7 @@ export function SimilarPanel({ status, items, config, onSelect }: SimilarPanelPr
                 type="button"
                 className={styles.card}
                 data-media-id={item.id}
+                aria-label={item.title}
                 onClick={() => onSelect(item)}
               >
                 <ArtworkImage
