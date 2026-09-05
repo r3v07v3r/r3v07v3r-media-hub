@@ -75,6 +75,7 @@ import type {
   ReconcileCheckResult,
   ReconcileResolution,
   ReconcileResolveResult,
+  LibraryChangedEvent,
   ReconcileSyncReport,
   ReleaseNotesResult,
   SavedFilter,
@@ -568,6 +569,15 @@ const api = {
        *  where the actual outcome arrives. */
       onReconcileSync: (onEvent: (report: ReconcileSyncReport) => void): (() => void) =>
         subscribe<ReconcileSyncReport>(MEDIA_HUB_CHANNELS.trackingReconcileSync, onEvent)
+    },
+
+    library: {
+      /** Fires when main wrote library rows of its own accord (a background
+       *  watchlist pull, a MAL reconcile, the anime id repair, the household
+       *  title sync) — the writes no renderer call site could refetch after.
+       *  See rendererBridge.ts's notifyLibraryChanged for the scopes. */
+      onChanged: (onEvent: (event: LibraryChangedEvent) => void): (() => void) =>
+        subscribe<LibraryChangedEvent>(MEDIA_HUB_CHANNELS.libraryChanged, onEvent)
     },
 
     plays: {

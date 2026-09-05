@@ -32,6 +32,7 @@ import type { ContentIdRemap } from './database'
 import { animeGroupingReady, resolveAnimeGroupTarget } from './animeSeasons'
 import { getDatabase } from './dbState'
 import { logError } from './logger'
+import { notifyLibraryChanged } from './rendererBridge'
 import { readSettings, writeSettings } from './settingsStore'
 
 /**
@@ -88,6 +89,10 @@ export function repairAnimeSyncIds(): { repaired: number; ran: boolean } {
     const settings = readSettings()
     settings.animeIdRepairVersion = REPAIR_VERSION
     writeSettings(settings)
+    // History, plays and ratings just moved to different ids. Nothing on
+    // screen keyed by the old ones is right any more, so every hook starts
+    // over — the same reset a profile switch does.
+    if (repaired > 0) notifyLibraryChanged('anime-sync-repair', 'all')
     return { repaired, ran: true }
   } catch (error) {
     logError('anime:sync-repair', error)

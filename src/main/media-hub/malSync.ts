@@ -32,6 +32,7 @@ import { fetchJson } from './httpClient'
 import { crossIdsForKitsu, kitsuIdForExternal } from './idBridge'
 import { handle } from './ipcGuard'
 import { logError } from './logger'
+import { notifyLibraryChanged } from './rendererBridge'
 import {
   buildAuthorizeUrl,
   computeReconciliation,
@@ -458,6 +459,11 @@ export function registerMalIpc(): void {
         }
       }
 
+      // The Settings panel that asked for this only shows the report; the
+      // rows just written are shown by the home feed, the grids and the
+      // ratings, none of which it knows about. Said once here instead.
+      if (results.toLocal.length) notifyLibraryChanged('mal-reconcile', 'history')
+      if (results.ratings.length) notifyLibraryChanged('mal-reconcile', 'ratings')
       return results
     }
   )

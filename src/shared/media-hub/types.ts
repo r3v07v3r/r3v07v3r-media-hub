@@ -355,6 +355,26 @@ export interface BlockedDownload {
  * encodes of the same film together — the failure the totalBytes check
  * used to prevent by refusing adoption outright.
  */
+/**
+ * Which part of the library a main-initiated write touched — see
+ * rendererBridge.ts's notifyLibraryChanged.
+ *
+ *  - history: watched rows, positions, plays (Continue Watching, badges,
+ *    history and stats all derive from these)
+ *  - planned: the tracked / plan-to-watch list
+ *  - ratings: personal scores
+ *  - index: the catalog_index rows the browse grids page through
+ *  - all: something re-keyed the library wholesale (ids remapped, a
+ *    restore) — every hook should start over
+ */
+export type LibraryChangeScope = 'history' | 'planned' | 'ratings' | 'index' | 'all'
+
+export interface LibraryChangedEvent {
+  scopes: LibraryChangeScope[]
+  /** Which job or handler wrote — for the log, not for deciding anything. */
+  sources: string[]
+}
+
 export interface CacheSourceRef {
   source: StreamSource
   /** torbox */

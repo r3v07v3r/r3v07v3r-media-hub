@@ -524,6 +524,20 @@ export function LibraryPage({ config }: { config: CategoryConfig }) {
       if (event.kind === config.kind) setScanProgress(event)
     })
   }, [config.kind])
+  // The household title sync writes the same index rows the deep scan
+  // button does, hourly and without a button — and scanToken is the only
+  // thing that makes this page re-query the index. Bumping it on the push
+  // is what the button's own completion already does at the end of
+  // runDeepScan below.
+  useEffect(() => {
+    const api = window.api?.mediaHub?.library
+    if (!api?.onChanged) return
+    return api.onChanged((event) => {
+      if (event.scopes.includes('index') || event.scopes.includes('all')) {
+        setScanToken((token) => token + 1)
+      }
+    })
+  }, [])
   const runDeepScan = useCallback(async () => {
     const api = window.api?.mediaHub?.catalog
     if (!api?.deepScan) return
