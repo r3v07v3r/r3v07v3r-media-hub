@@ -84,7 +84,7 @@ export function UpcomingPlanned({ items }: { items: MediaItem[] }) {
                   alt=""
                   fallbackTitle={media.title}
                   artTint={media.artTint}
-                  sizes="92px"
+                  className={styles.cardArt}
                 />
                 <span className={styles.when}>
                   {media.releaseYear ?? (media.status || 'Announced')}
