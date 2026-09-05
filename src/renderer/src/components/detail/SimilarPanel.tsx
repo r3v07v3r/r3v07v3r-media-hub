@@ -16,7 +16,9 @@ export interface SimilarPanelProps {
 
 /**
  * Titles in the same vein as this one — genre and style, not the same
- * franchise (see catalog.ts's similarTitles).
+ * franchise (see catalog.ts's similarTitles). Lives in the main content
+ * column (below About) rather than the sidebar, so it renders as a wide
+ * poster carousel instead of a cramped vertical list.
  *
  * There used to be a fourth "unsupported" state here explaining that
  * series had no backend support for this. Every kind is supported now, so
@@ -32,9 +34,9 @@ export function SimilarPanel({ status, items, config, onSelect, onViewAll }: Sim
         aria-label="Loading similar titles"
       >
         <h2 className={styles.heading}>Similar {config.pluralLabel}</h2>
-        <ul className={styles.list}>
-          {[0, 1, 2].map((i) => (
-            <li key={i} className={styles.skeletonRow} />
+        <ul className={`${styles.scroller} thin-scroll`}>
+          {[0, 1, 2, 3, 4, 5].map((i) => (
+            <li key={i} className={styles.skeletonCard} aria-hidden="true" />
           ))}
         </ul>
       </section>
@@ -67,32 +69,30 @@ export function SimilarPanel({ status, items, config, onSelect, onViewAll }: Sim
           View All
         </button>
       </div>
-      <ul className={styles.list}>
-        {items.slice(0, 6).map((item) => {
+      <ul className={`${styles.scroller} thin-scroll`}>
+        {items.map((item) => {
           const artwork = resolveArtwork(item)
           return (
-            <li key={item.id}>
+            <li key={item.id} className={styles.cardItem}>
               <button
                 type="button"
-                className={styles.row}
+                className={styles.card}
                 data-media-id={item.id}
                 onClick={() => onSelect(item)}
               >
                 <ArtworkImage
-                  src={artwork.thumbnailUrl ?? artwork.posterUrl}
+                  src={artwork.posterUrl ?? artwork.thumbnailUrl}
                   alt=""
                   fallbackTitle={item.title}
                   artTint={item.artTint}
-                  className={styles.thumb}
+                  className={styles.poster}
                 />
-                <div className={styles.info}>
-                  <span className={styles.title}>{item.title}</span>
-                  <span className={styles.meta}>
-                    {item.releaseYear}
-                    {item.communityRating ? ` · ★ ${item.communityRating.toFixed(1)}` : ''}
-                  </span>
-                </div>
               </button>
+              <span className={styles.title}>{item.title}</span>
+              <span className={styles.meta}>
+                {item.releaseYear}
+                {item.communityRating ? ` · ★ ${item.communityRating.toFixed(1)}` : ''}
+              </span>
             </li>
           )
         })}

@@ -665,13 +665,17 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
             was just a second Play button duplicating the hero's own, per
             the user's own request. */}
         {!config.isEpisodic && <AboutPanel media={media} config={config} />}
+        <GenresPanel genres={media.genres} onSelectGenre={handleGenreSelect} />
+        <SimilarPanel
+          status={relatedStatus}
+          items={related}
+          config={config}
+          onSelect={(item) => openDetail(item, media.title)}
+          onViewAll={() => navigate(`/${config.path}`)}
+        />
       </div>
 
       <div className={styles.sidebar}>
-        <CollectionPanel media={media} />
-        <WhereToWatchPanel media={media} />
-        <RequestPanel media={media} />
-        <RatingsPanel media={media} />
         <ProgressPanel
           config={config}
           media={media}
@@ -685,6 +689,10 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
           movieWatched={movieWatched}
           onToggleMovieWatched={handleToggleMovieWatched}
         />
+        <RatingsPanel media={media} />
+        <CollectionPanel media={media} />
+        <WhereToWatchPanel media={media} />
+        <RequestPanel media={media} />
         {kind === 'anime' && (
           <AnimeStoryPanel
             status={storyStatus}
@@ -695,14 +703,6 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
             onSelect={(item) => openDetail(item, media.title)}
           />
         )}
-        <GenresPanel genres={media.genres} onSelectGenre={handleGenreSelect} />
-        <SimilarPanel
-          status={relatedStatus}
-          items={related}
-          config={config}
-          onSelect={(item) => openDetail(item, media.title)}
-          onViewAll={() => navigate(`/${config.path}`)}
-        />
       </div>
     </div>
   )
