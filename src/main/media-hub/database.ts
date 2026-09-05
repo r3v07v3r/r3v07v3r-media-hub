@@ -689,14 +689,17 @@ export interface MediaHubDatabase {
    * is one fsync per row.
    */
   /**
-   * Refreshes ONLY the episode counts of one index row from a fully
-   * resolved item — the denominator behind the Completed badge — without
-   * touching the rank, source or artwork a crawl assigned. indexUpsert
-   * cannot be used for this: it writes rank and source unconditionally,
-   * so a detail-page resolve would demote every title it touched to rank 0.
-   * A no-op for a title the index does not hold; nulls never erase.
+   * Refreshes one index row's TITLE and episode counts from a fully
+   * resolved item — the name the grid shows and the denominator behind the
+   * Completed badge — without touching the rank, source or artwork a crawl
+   * assigned. indexUpsert cannot be used for this: it writes rank and source
+   * unconditionally, so a detail-page resolve would demote every title it
+   * touched to rank 0. Also how deep-scanned and household-synced rows,
+   * which are add-only, pick up an anime's English name once it is opened.
+   * A no-op for a title the index does not hold; empties and nulls never
+   * erase.
    */
-  indexRefreshEpisodeCounts(kind: MediaKind, item: CatalogItem, now?: number): void
+  indexRefreshFromMetadata(kind: MediaKind, item: CatalogItem, now?: number): void
   indexUpsert(
     kind: MediaKind,
     items: readonly CatalogItem[],
@@ -2089,15 +2092,17 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
       }
     },
 
-    indexRefreshEpisodeCounts(kind, item, now = Date.now()) {
+    indexRefreshFromMetadata(kind, item, now = Date.now()) {
       const id = String(item?.id || '')
       if (!id) return
       const counts = indexEpisodeCounts(item, now)
-      if (counts.totalEpisodes === null && counts.airedEpisodes === null) return
+      const title = String(item.title || '').trim()
       try {
         sql
           .prepare(
             `UPDATE catalog_index SET
+               title=COALESCE(NULLIF(@title,''),title),
+               title_sort=COALESCE(NULLIF(@titleSort,''),title_sort),
                total_seasons=COALESCE(@totalSeasons,total_seasons),
                total_episodes=COALESCE(@totalEpisodes,total_episodes),
                aired_episodes=COALESCE(@airedEpisodes,aired_episodes),
@@ -2107,13 +2112,15 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
           .run({
             id,
             kind,
+            title,
+            titleSort: title ? titleSortKey(title) : '',
             totalSeasons: counts.totalSeasons,
             totalEpisodes: counts.totalEpisodes,
             airedEpisodes: counts.airedEpisodes,
             now
           })
       } catch (error) {
-        logError('index:refresh-counts', error)
+        logError('index:refresh-metadata', error)
       }
     },
     indexUpsert(kind, items, { source = '', rankBase = 0, ranks, now = Date.now() } = {}) {

@@ -723,7 +723,10 @@ async function resolveMetadata(
   const resolvedId = String(id).startsWith('simkl:')
     ? await resolveSimklId(type, String(id).slice(6), priority)
     : id
-  const cacheKey = `meta:v3:${type}:${resolvedId}`
+  // v4: anime titles became English (originalTitle carries the romaji), so
+  // every cached anime entry had to re-resolve rather than read the old
+  // name back for a day.
+  const cacheKey = `meta:v4:${type}:${resolvedId}`
   const db = getDatabase()
   const cached = db.getCache<CatalogItem>(cacheKey)
   // Whether what is about to be cached is a stand-in — see DEGRADED_META_TTL_MS.
@@ -894,7 +897,7 @@ async function resolveMetadata(
   // re-list it. A full resolve is exactly the moment those counts are
   // known: every title somebody opens heals its own row. Counts only —
   // never the rank or the source a crawl assigned.
-  if (!degraded && item.videos.length) db.indexRefreshEpisodeCounts(type, item)
+  if (!degraded) db.indexRefreshFromMetadata(type, item)
   return withCredits(item, type, resolvedId, priority)
 }
 

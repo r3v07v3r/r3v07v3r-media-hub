@@ -92,7 +92,8 @@ export function filterCatalog(
     const rating = Number.parseFloat(item.rating) || 0
     const year = Number.parseInt(item.year) || 0
     const watched = isItemWatched(item, options.history || [])
-    const matchesQuery = !q || `${item.title} ${item.year}`.toLowerCase().includes(q)
+    const matchesQuery =
+      !q || `${item.title} ${item.originalTitle ?? ''} ${item.year}`.toLowerCase().includes(q)
     if (!matchesQuery) return false
     const inSection = section === 'home' || section === 'tracked' || item.type === section
     const watchOk = watchMode === 'both' || (watchMode === 'watched' ? watched : !watched)

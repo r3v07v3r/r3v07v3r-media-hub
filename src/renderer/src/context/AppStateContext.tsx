@@ -1704,11 +1704,18 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       const resolveId = kind === 'anime' ? `${media.id}:${media.episodeNumber ?? 1}` : mediaId
       try {
         const resolved = await runPlaybackPreparationStage(
-          api.stream.resolve(kind, resolveId, media.title, {
-            catalogId: media.id,
-            seasonNumber: media.seasonNumber,
-            episodeNumber: media.episodeNumber
-          }),
+          api.stream.resolve(
+            kind,
+            resolveId,
+            media.title,
+            {
+              catalogId: media.id,
+              seasonNumber: media.seasonNumber,
+              episodeNumber: media.episodeNumber
+            },
+            // Releases are named in romaji; the title is not, any more.
+            media.originalTitle ? [media.originalTitle] : undefined
+          ),
           'resolving',
           30_000,
           controller.signal

@@ -321,6 +321,10 @@ interface StreamResolvePayload {
    *  See titleMatchesRelease's own doc comment for what this guards
    *  against. */
   title?: string
+  /** Other names the same title is released under — an anime's romaji
+   *  name beside its English one. Every one of them is accepted by the
+   *  title guard; see titleMatchesRelease. */
+  altTitles?: string[]
   /** The identity play:stream will store on the cache session. Supplied so
    *  the local-cache tier compares like with like instead of guessing it
    *  from `id` — see the preload comment on resolve(). Optional: without
@@ -413,7 +417,12 @@ export function registerTorBoxIpc(): void {
   handle<StreamResolvePayload, StreamResolveResult>(
     MEDIA_HUB_CHANNELS.streamResolve,
     async (_e, payload) => {
-      const { type, id, title } = payload
+      const { type, id, title, altTitles } = payload
+      // Every name the title goes by, for the guards below. Empty means no
+      // title guard at all, exactly as an absent `title` always has.
+      const titles = [title, ...(Array.isArray(altTitles) ? altTitles : [])]
+        .map((t) => String(t ?? '').trim())
+        .filter(Boolean)
       const auth = getTorBoxToken()
       const mediaServer = mediaServerConfig()
       // Either source alone is a complete configuration. Only having
@@ -541,7 +550,7 @@ export function registerTorBoxIpc(): void {
       // so giving it first refusal costs nothing when it does not have the
       // title, and the remembered TorBox stream is still right there
       // underneath when it does not.
-      const localLookup = findMediaServerCandidate(id, title)
+      const localLookup = findMediaServerCandidate(id, titles)
 
       // A local copy that already satisfies the person's quality ceiling
       // ends the search here — no checkcached round-trip, no add-on calls,
@@ -669,8 +678,8 @@ export function registerTorBoxIpc(): void {
         // nothing: a release-name shape this heuristic can't parse
         // cleanly falls back to the full unfiltered list rather than
         // turning a real, working result into a dead end.
-        const titleFiltered = title
-          ? discoveredRaw.filter((s) => titleMatchesRelease(streamReleaseText(s), title))
+        const titleFiltered = titles.length
+          ? discoveredRaw.filter((s) => titleMatchesRelease(streamReleaseText(s), titles))
           : discoveredRaw
         const discovered = titleFiltered.length ? titleFiltered : discoveredRaw
         const hashes = [...new Set(discovered.map(torrentHash))].slice(0, 100)

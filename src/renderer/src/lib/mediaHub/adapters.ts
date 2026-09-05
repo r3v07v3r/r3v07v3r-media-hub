@@ -308,6 +308,12 @@ export function catalogItemToMediaItem(
     mediaType: toMediaType(item.type),
     mediaKind: item.type,
     title: item.title,
+    // The romaji under an anime's English name — DetailHero draws
+    // `subtitle` beside the title, and stream resolution reads
+    // originalTitle as the name releases actually carry.
+    ...(item.originalTitle
+      ? { subtitle: item.originalTitle, originalTitle: item.originalTitle }
+      : {}),
     description: item.description || undefined,
     posterUrl: item.poster || undefined,
     backdropUrl: item.background || undefined,

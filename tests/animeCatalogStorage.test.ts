@@ -219,4 +219,35 @@ check('groupedVideosAreComplete: every position present is complete, specials op
   assert.equal(groupedVideosAreComplete(0, [ep(1, 1)]), true, 'an ungrouped title is one season')
 })
 
+// English first, romaji kept: the name most people know a show by is the
+// title, and the source's own name survives as originalTitle for search and
+// for matching release names (which are romaji).
+check('normalizeKitsuAnime prefers the English title and keeps the romaji as originalTitle', () => {
+  const item = normalizeKitsuAnime({
+    id: '7442',
+    attributes: {
+      canonicalTitle: 'Shingeki no Kyojin',
+      titles: { en: 'Attack on Titan', en_jp: 'Shingeki no Kyojin' },
+      episodeCount: 25
+    }
+  })
+  assert.equal(item.title, 'Attack on Titan')
+  assert.equal(item.originalTitle, 'Shingeki no Kyojin')
+})
+check(
+  'normalizeKitsuAnime falls back to the romaji, with no originalTitle, when Kitsu has no English name',
+  () => {
+    const item = normalizeKitsuAnime({
+      id: '1',
+      attributes: {
+        canonicalTitle: 'Cowboy Bebop',
+        titles: { en_jp: 'Cowboy Bebop' },
+        episodeCount: 26
+      }
+    })
+    assert.equal(item.title, 'Cowboy Bebop')
+    assert.equal(item.originalTitle, undefined)
+  }
+)
+
 console.log(`\n${pass} passed`)

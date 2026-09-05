@@ -643,9 +643,17 @@ const api = {
         type: string,
         id: string,
         title?: string,
-        cacheKey?: { catalogId?: string; seasonNumber?: number; episodeNumber?: number }
+        cacheKey?: { catalogId?: string; seasonNumber?: number; episodeNumber?: number },
+        /** Other names the title is released under (an anime's romaji name). */
+        altTitles?: string[]
       ): Promise<StreamResolveResult> =>
-        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.streamResolve, { type, id, title, cacheKey }),
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.streamResolve, {
+          type,
+          id,
+          title,
+          cacheKey,
+          altTitles
+        }),
       // `type`/`resolveId` are optional and only used so the main process
       // can remember "the stream that actually worked" under the exact key
       // stream:resolve looked it up by (see torbox.ts's lastStreamKey) —
