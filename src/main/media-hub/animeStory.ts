@@ -22,7 +22,9 @@ interface CatalogStoryPayload {
 /** A failed live request can use a stale known answer; otherwise it says it
  * was not checked rather than silently reporting "no sequel exists." */
 async function storyForAnime(id: string): Promise<AnimeStoryResult> {
-  const key = `story:v1:anime:${id}`
+  // v2: side stories, spin-offs, recaps and full stories are part of the
+  // answer now; a v1 row would read back with only sequels and prequels.
+  const key = `story:v2:anime:${id}`
   const db = getDatabase()
   const cached = db.getCache<AnimeStoryResult>(key)
   if (cached) return cached

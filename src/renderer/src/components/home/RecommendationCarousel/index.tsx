@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { useAppState } from '@renderer/context/AppStateContext'
 import { Icon } from '@renderer/components/icons/Icon'
 import { MediaCard } from './MediaCard'
@@ -111,6 +112,13 @@ export function RecommendationCarousel() {
       <h2 className={styles.heading}>
         <Icon name="sparkle" />
         Recommended For You
+        {/* Home cannot scroll (see HomeDashboard.module.css), so the rest
+            of the ranking — shelved by reason — lives on its own page. */}
+        {picks.length > 0 && (
+          <Link to="/for-you" className={styles.seeAll}>
+            See all
+          </Link>
+        )}
       </h2>
       {/* A populated row can be a failure too, and used to say nothing
           about it: a cold start whose home:personalized threw still has

@@ -10,7 +10,10 @@
 import assert from 'node:assert'
 import type { CatalogItem, Episode } from '../src/shared/media-hub/types'
 import { animeStoryLinks, normalizeKitsuAnime } from '../src/main/media-hub/core'
-import { combineGroupEpisodeCounts } from '../src/main/media-hub/animeSeasons'
+import {
+  combineGroupEpisodeCounts,
+  groupedVideosAreComplete
+} from '../src/main/media-hub/animeSeasons'
 
 let pass = 0
 function check(name: string, fn: () => void): void {
@@ -108,32 +111,40 @@ check('a zero-episode title produces an empty array either way', () => {
 
 console.log('\nanimeStoryLinks')
 
-check('keeps only direct sequel/prequel links and preserves availability status', () => {
-  const links = animeStoryLinks({
-    data: [
-      { attributes: { role: 'sequel' }, relationships: { destination: { data: { id: '2' } } } },
-      { attributes: { role: 'prequel' }, relationships: { destination: { data: { id: '3' } } } },
-      { attributes: { role: 'spin_off' }, relationships: { destination: { data: { id: '4' } } } },
-      { attributes: { role: 'sequel' }, relationships: { destination: { data: { id: '2' } } } }
-    ],
-    included: [
-      { id: '2', type: 'anime', attributes: { canonicalTitle: 'Story After', status: 'upcoming' } },
-      {
-        id: '3',
-        type: 'anime',
-        attributes: { canonicalTitle: 'Story Before', status: 'finished' }
-      },
-      { id: '4', type: 'anime', attributes: { canonicalTitle: 'Spin-off', status: 'finished' } }
-    ]
-  })
-  assert.deepEqual(
-    links.map((link) => [link.relation, link.item.title, link.item.status]),
-    [
-      ['sequel', 'Story After', 'upcoming'],
-      ['prequel', 'Story Before', 'finished']
-    ]
-  )
-})
+check(
+  'keeps every franchise relation, ordered before / alongside / after, and preserves availability status',
+  () => {
+    const links = animeStoryLinks({
+      data: [
+        { attributes: { role: 'sequel' }, relationships: { destination: { data: { id: '2' } } } },
+        { attributes: { role: 'prequel' }, relationships: { destination: { data: { id: '3' } } } },
+        { attributes: { role: 'spin_off' }, relationships: { destination: { data: { id: '4' } } } },
+        { attributes: { role: 'sequel' }, relationships: { destination: { data: { id: '2' } } } }
+      ],
+      included: [
+        {
+          id: '2',
+          type: 'anime',
+          attributes: { canonicalTitle: 'Story After', status: 'upcoming' }
+        },
+        {
+          id: '3',
+          type: 'anime',
+          attributes: { canonicalTitle: 'Story Before', status: 'finished' }
+        },
+        { id: '4', type: 'anime', attributes: { canonicalTitle: 'Spin-off', status: 'finished' } }
+      ]
+    })
+    assert.deepEqual(
+      links.map((link) => [link.relation, link.item.title, link.item.status]),
+      [
+        ['prequel', 'Story Before', 'finished'],
+        ['spin_off', 'Spin-off', 'finished'],
+        ['sequel', 'Story After', 'upcoming']
+      ]
+    )
+  }
+)
 
 check(
   'lightweight still preserves real season/episode positions — the exact thing a "Completed" badge is computed from',
@@ -194,5 +205,57 @@ check('matches the real shape a franchise crawl produces (season counts vary per
   ])
   assert.deepEqual(result, { totalSeasons: 5, totalEpisodes: 113 })
 })
+
+// The completeness check a grouped build is cached by (see catalog.ts's
+// DEGRADED_META_TTL_MS): every season position 1..N+1 must have episodes;
+// the Specials block is optional; an empty build is never complete.
+check('groupedVideosAreComplete: an empty build with siblings is incomplete', () => {
+  assert.equal(groupedVideosAreComplete(2, []), false)
+})
+check('groupedVideosAreComplete: every position present is complete, specials optional', () => {
+  const ep = (season: number, episode: number): Episode => ({
+    id: `${season}:${episode}`,
+    season,
+    episode,
+    number: episode,
+    title: '',
+    released: ''
+  })
+  assert.equal(groupedVideosAreComplete(2, [ep(1, 1), ep(2, 1), ep(3, 1)]), true)
+  assert.equal(groupedVideosAreComplete(2, [ep(0, 1), ep(1, 1), ep(2, 1), ep(3, 1)]), true)
+  assert.equal(groupedVideosAreComplete(2, [ep(1, 1), ep(3, 1)]), false, 'season 2 missing')
+  assert.equal(groupedVideosAreComplete(0, [ep(1, 1)]), true, 'an ungrouped title is one season')
+})
+
+// English first, romaji kept: the name most people know a show by is the
+// title, and the source's own name survives as originalTitle for search and
+// for matching release names (which are romaji).
+check('normalizeKitsuAnime prefers the English title and keeps the romaji as originalTitle', () => {
+  const item = normalizeKitsuAnime({
+    id: '7442',
+    attributes: {
+      canonicalTitle: 'Shingeki no Kyojin',
+      titles: { en: 'Attack on Titan', en_jp: 'Shingeki no Kyojin' },
+      episodeCount: 25
+    }
+  })
+  assert.equal(item.title, 'Attack on Titan')
+  assert.equal(item.originalTitle, 'Shingeki no Kyojin')
+})
+check(
+  'normalizeKitsuAnime falls back to the romaji, with no originalTitle, when Kitsu has no English name',
+  () => {
+    const item = normalizeKitsuAnime({
+      id: '1',
+      attributes: {
+        canonicalTitle: 'Cowboy Bebop',
+        titles: { en_jp: 'Cowboy Bebop' },
+        episodeCount: 26
+      }
+    })
+    assert.equal(item.title, 'Cowboy Bebop')
+    assert.equal(item.originalTitle, undefined)
+  }
+)
 
 console.log(`\n${pass} passed`)

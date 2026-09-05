@@ -77,6 +77,20 @@ const withSpecial = [ep(0, 1, { unplayable: true }), ep(1, 1), ep(1, 2)]
 assert.deepEqual(episodeToStart(withSpecial, watched()), { season: 1, episode: 1 })
 assert.deepEqual(episodeToStart(withSpecial, watched([1, 1])), { season: 1, episode: 2 })
 
+// A GENUINE special — season 0, perfectly playable — is just as much not a
+// Play target. It is listed under Specials and can be started from there on
+// purpose, but a bare Play on the show means the numbered episodes, and
+// progress through them ignores it: watching every real episode is
+// "all watched", OVAs or not.
+const withRealSpecial = [ep(0, 1), ep(1, 1), ep(1, 2)]
+assert.deepEqual(episodeToStart(withRealSpecial, watched()), { season: 1, episode: 1 })
+assert.deepEqual(episodeToStart(withRealSpecial, watched([1, 1])), { season: 1, episode: 2 })
+assert.equal(nextUnwatchedEpisode(withRealSpecial, watched([1, 1], [1, 2])), null)
+assert.deepEqual(
+  playableEpisodesInOrder(withRealSpecial).map((e) => `${e.season}:${e.episode}`),
+  ['1:1', '1:2']
+)
+
 // An unsorted list gets the same answer as a sorted one: "first in order"
 // must not depend on the caller having sorted it.
 const shuffled = [ep(2, 2), ep(1, 2), ep(2, 1), ep(1, 1), ep(1, 3)]

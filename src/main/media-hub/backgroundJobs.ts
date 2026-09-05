@@ -28,8 +28,8 @@
 import type { ActivitySnapshot } from '../../shared/media-hub/types'
 import { MEDIA_HUB_CHANNELS } from '../../shared/media-hub/ipc-channels'
 import { handle } from './ipcGuard'
-import { sendToRenderer } from './rendererBridge'
-import { catalogData } from './catalog'
+import { sendToRenderer, notifyLibraryChanged } from './rendererBridge'
+import { catalogData, deepScanChunk } from './catalog'
 import { enrichCredits } from './credits'
 import { getDatabase } from './dbState'
 import { logError } from './logger'
@@ -53,6 +53,7 @@ import {
   type SchedulerPressure,
   type TaskPriority
 } from './taskScheduler'
+import { isLanCacheConnected } from './lanCache'
 
 /** How often the registry looks at what is due. One timer for every
  *  recurring job in the app. Coarse on purpose — nothing here is
@@ -259,6 +260,37 @@ export function startBackgroundJobs(): void {
     priority: 'background',
     maxPressure: 'busy',
     run: runBackgroundWatchSync
+  })
+
+  // The whole library, without a button. The deep scan was a press on the
+  // library page — one chunk of the upstream catalog per press, a resumable
+  // bookmark, an honest 'exhausted' at the end — which meant most people
+  // never got past the standing crawl's depth. The same chunk now runs on
+  // its own, one kind at a time, only when nothing else is going on, until
+  // upstream has no more to give; a press still works and simply joins it.
+  // Skipped while a household cache server is paired: its own crawl feeds
+  // this index for every device in the house (lanCacheTitleSync), and a
+  // second walk of the same pages from each device would be waste.
+  registerRecurringJob({
+    name: 'catalog-deep-scan',
+    label: 'Reading more of the catalog',
+    everyMs: 60 * 60 * 1000,
+    firstRunAfterMs: 15 * 60 * 1000,
+    priority: 'maintenance',
+    maxPressure: 'idle',
+    run: async () => {
+      if (isLanCacheConnected()) return
+      let grew = false
+      for (const kind of ['movie', 'series', 'anime'] as const) {
+        try {
+          const report = await deepScanChunk(kind)
+          if (report.added > 0) grew = true
+        } catch (error) {
+          logError('job:deep-scan', error)
+        }
+      }
+      if (grew) notifyLibraryChanged('deep-scan', 'index')
+    }
   })
 
   registerRecurringJob({

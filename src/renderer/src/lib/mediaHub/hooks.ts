@@ -27,7 +27,8 @@ import type {
   MediaKind,
   PlayRecord
 } from '@shared/media-hub/types'
-import type { ContinueWatchingItem, MediaItem, Recommendation } from '@renderer/types'
+import type { ContinueWatchingItem, HomeRail, MediaItem, Recommendation } from '@renderer/types'
+import { recommendationReasonLabel } from '@shared/media-hub/recommendationReason'
 import { AI_PICKS, CATALOG, CONTINUE_WATCHING, FEATURED_ITEMS } from '@renderer/data/mockData'
 import {
   catalogItemToMediaItem,
@@ -60,6 +61,7 @@ const NO_ITEMS: MediaItem[] = []
 const EMPTY_HOME_FEED = {
   continueWatching: [] as ContinueWatchingItem[],
   recommendations: [] as Recommendation[],
+  rails: [] as HomeRail[],
   featured: [] as MediaItem[],
   preferredGenres: [] as string[],
   trackedIds: new Set<string>(),
@@ -825,6 +827,9 @@ export interface HomeFeedResult {
   // longer be defined as "whatever that one adapter happens to return".
   continueWatching: ContinueWatchingItem[]
   recommendations: Recommendation[]
+  /** The same ranking shelved by reason, for the For You page. Not
+   *  remembered across launches: it follows the live feed. */
+  rails: HomeRail[]
   featured: MediaItem[]
   preferredGenres: string[]
   trackedIds: Set<string>
@@ -898,6 +903,13 @@ export function useMediaHubHomeFeed(libraryKey: string): HomeFeedResult {
               reason: result.recommendationReasons?.[String(item.id)]
             })
           ),
+          rails: (result.recommendationRails ?? [])
+            .map((rail) => ({
+              id: rail.id,
+              title: recommendationReasonLabel(rail.reason),
+              items: rail.items.map((item) => catalogItemToMediaItem(item, { trackedIds }))
+            }))
+            .filter((rail) => rail.title && rail.items.length),
           featured: result.recommendations
             .slice(0, 6)
             .map((item) => catalogItemToMediaItem(item, { trackedIds })),

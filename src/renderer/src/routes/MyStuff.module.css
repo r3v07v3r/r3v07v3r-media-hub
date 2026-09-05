@@ -705,6 +705,13 @@
   cursor: pointer;
 }
 
+/* The box ArtworkImage fills — see the component's className contract. */
+.calGridPosterArt {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
 .calGridPoster:hover {
   border-color: var(--accent-cyan);
   transform: translateY(-1px);

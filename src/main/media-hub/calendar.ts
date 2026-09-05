@@ -19,6 +19,7 @@ import { metadata } from './catalog'
 import { getDatabase } from './dbState'
 import { handle } from './ipcGuard'
 import { mapWithLimit } from './taskScheduler'
+import { isRegularEpisode } from '../../shared/media-hub/catalog-logic'
 
 /** How far back the window reaches. A week covers "did I miss one" without
  *  turning the view into a second history. */
@@ -51,7 +52,8 @@ function withinWindow(
 ): CalendarEntry[] {
   const out: CalendarEntry[] = []
   for (const video of videos ?? []) {
-    if (video.unplayable) continue
+    // Specials are not scheduled episodes of the show — see isRegularEpisode.
+    if (!isRegularEpisode(video)) continue
     const released = String(video.released || '').trim()
     if (!released) continue
     const at = new Date(released).getTime()

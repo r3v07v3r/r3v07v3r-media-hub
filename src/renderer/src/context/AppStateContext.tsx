@@ -18,7 +18,8 @@ import {
   ContinueWatchingItem,
   MediaItem,
   Recommendation,
-  UIActivityState
+  UIActivityState,
+  HomeRail
 } from '@renderer/types'
 import { USER_PROFILES } from '@renderer/data/mockData'
 import type {
@@ -301,6 +302,8 @@ interface AppStateValue {
   // are real or should fall back to its own mock data, since (unlike
   // `catalog` above) there's no mock blended in here.
   recommendations: Recommendation[]
+  /** The ranking shelved by reason — the For You page's rows. */
+  recommendationRails: HomeRail[]
   featured: MediaItem[]
   homeFeedLive: boolean
   /** The home:personalized fetch is still out. Distinct from
@@ -543,6 +546,11 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   // wrong — see the note above useMediaHubWatchedIds.
   const [libraryEpoch, setLibraryEpoch] = useState(0)
   const libraryKey = `${activeProfileId}:${libraryEpoch}`
+  // Bumped by every watch-state write the renderer makes (see
+  // refreshWatchStatus further down, and markContinueWatching) — declared
+  // up here so the mutation actions between can bump it too. MediaDetailPage
+  // and My Stuff key their own history reads on it.
+  const [watchStatusVersion, setWatchStatusVersion] = useState(0)
   const reloadLibrary = useCallback(() => setLibraryEpoch((n) => n + 1), [])
 
   const homeFeed = useMediaHubHomeFeed(libraryKey)
@@ -1046,6 +1054,11 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
           // into browseCatalog above) don't go stale until some unrelated
           // catalog refetch happens to pick it up.
           watchedIdsResult.refresh()
+          // And the version the detail page and My Stuff key their own
+          // history reads on — the one thing refreshWatchStatus does that
+          // the two refreshes above do not. Left out, a mark made from a
+          // card's context menu never reached the open detail page.
+          setWatchStatusVersion((v) => v + 1)
         })
         .catch(() => {})
     },
@@ -1701,11 +1714,18 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       const resolveId = kind === 'anime' ? `${media.id}:${media.episodeNumber ?? 1}` : mediaId
       try {
         const resolved = await runPlaybackPreparationStage(
-          api.stream.resolve(kind, resolveId, media.title, {
-            catalogId: media.id,
-            seasonNumber: media.seasonNumber,
-            episodeNumber: media.episodeNumber
-          }),
+          api.stream.resolve(
+            kind,
+            resolveId,
+            media.title,
+            {
+              catalogId: media.id,
+              seasonNumber: media.seasonNumber,
+              episodeNumber: media.episodeNumber
+            },
+            // Releases are named in romaji; the title is not, any more.
+            media.originalTitle ? [media.originalTitle] : undefined
+          ),
           'resolving',
           30_000,
           controller.signal
@@ -1867,7 +1887,6 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     setPlaybackTracks(null)
   }, [])
 
-  const [watchStatusVersion, setWatchStatusVersion] = useState(0)
   const refreshWatchStatus = useCallback(() => {
     homeFeed.refresh()
     watchedIdsResult.refresh()
@@ -2693,6 +2712,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       adaptCatalogItems,
       watchedIds: watchedIdsResult.watchedIds,
       recommendations: homeFeed.recommendations,
+      recommendationRails: homeFeed.rails,
       featured: homeFeed.featured,
       homeFeedLive: homeFeed.live,
       homeFeedLoading: homeFeed.loading,
@@ -2797,6 +2817,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       adaptCatalogItems,
       watchedIdsResult.watchedIds,
       homeFeed.recommendations,
+      homeFeed.rails,
       homeFeed.featured,
       homeFeed.live,
       homeFeed.loading,

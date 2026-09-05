@@ -42,6 +42,8 @@ import { GenresPanel } from '@renderer/components/detail/GenresPanel'
 import { SimilarPanel } from '@renderer/components/detail/SimilarPanel'
 import { AnimeStoryPanel } from '@renderer/components/detail/AnimeStoryPanel'
 import styles from './MediaDetailPage.module.css'
+import { playableEpisodesInOrder } from '@shared/media-hub/nextEpisode'
+import { resolveArtwork } from '@renderer/lib/artwork'
 
 type FetchStatus = 'loading' | 'ready' | 'error'
 
@@ -278,6 +280,14 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
     return catalog.find((m) => m.id === id) ?? null
   }, [catalogItem, catalog, id, myList])
 
+  // The show art every episode tile falls back to when its episode has no
+  // still of its own — see EpisodesSection.showArtwork.
+  const showArtwork = useMemo(() => {
+    if (!media) return undefined
+    const art = resolveArtwork(media)
+    return art.backdropUrl ?? art.posterUrl
+  }, [media])
+
   const storyItems = useMemo(
     () =>
       storyLinks.map((link) => ({
@@ -380,23 +390,22 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
   // source of truth for a movie's watched state instead.
   const movieWatched = history.length > 0
 
-  const nextEpisode = useMemo(() => {
-    if (!episodes.length) return null
-    // e.unplayable excludes disambiguateVideos' synthetic Specials entries
-    // (see its own doc comment in core.ts) — they have no real (season,
-    // episode) coordinate the scraper/TorBox pipeline can resolve a
-    // stream for, so they must never become the auto-selected "next
-    // episode" / play target even though they're first in sort order.
-    const firstUnwatched = episodes.find(
-      (e) => !e.unplayable && !watchedKeys.has(episodeKey(e.season, e.episode))
-    )
-    return firstUnwatched ?? null
-  }, [episodes, watchedKeys])
+  // The same rule every card's Play uses (playableEpisodesInOrder: no
+  // synthetic entries, no season-0 specials, nothing unaired), so this
+  // page's Play and Next badge can never name an episode a card would not.
+  // It used to re-derive the rule inline and missed two of those three.
+  const playableInOrder = useMemo(() => playableEpisodesInOrder(episodes), [episodes])
+  const nextEpisode = useMemo(
+    () => playableInOrder.find((e) => !watchedKeys.has(episodeKey(e.season, e.episode))) ?? null,
+    [playableInOrder, watchedKeys]
+  )
 
+  // The first REAL season, so a show that opens with a Specials block lands
+  // on season 1 rather than on the OVAs.
   const selectedSeason =
     selectedSeasonOverride ??
     (seasons.length
-      ? ((nextEpisode ?? episodes.find((e) => !e.unplayable) ?? episodes[0])?.season ?? seasons[0])
+      ? ((nextEpisode ?? playableInOrder[0] ?? episodes[0])?.season ?? seasons[0])
       : null)
 
   useRestoreBrowsingOrigin(metaStatus !== 'loading')
@@ -479,11 +488,10 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
     const call = watched ? api.tracking.markWatched : api.tracking.unmarkWatched
     try {
       await call({ item, playback: { season: episode.season, episode: episode.episode } })
-      const refreshed = await api.tracking.list()
-      setHistory(refreshed.history.filter((h) => h.id === media.id))
-      // The same write the movie toggle below makes, so the same refresh:
-      // the home feed's Continue Watching row and the grids' badges read
-      // this history too, and this page's own `history` copy is not theirs.
+      // One refetch, not two: refreshWatchStatus bumps watchStatusVersion,
+      // which re-runs this page's own history effect, so the manual
+      // tracking.list() that used to sit here was a second identical read
+      // (and, with Simkl awaited in the handler, a second wait).
       refreshWatchStatus()
     } catch {
       pushNotification({ tone: 'error', message: 'Could not update watched status.' })
@@ -518,8 +526,6 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
     const call = watched ? api.tracking.markWatched : api.tracking.unmarkWatched
     try {
       await call({ item })
-      const refreshed = await api.tracking.list()
-      setHistory(refreshed.history.filter((h) => h.id === media.id))
       refreshWatchStatus()
     } catch {
       pushNotification({ tone: 'error', message: 'Could not update watched status.' })
@@ -567,8 +573,6 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
           )
         )
       }
-      const refreshed = await api.tracking.list()
-      setHistory(refreshed.history.filter((h) => h.id === media.id))
       refreshWatchStatus()
     } catch {
       pushNotification({ tone: 'error', message: 'Could not update the season’s watched status.' })
@@ -647,6 +651,7 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
             <EpisodesSection
               mediaId={media.id}
               showTitle={media.title}
+              showArtwork={showArtwork}
               episodes={episodes}
               seasons={seasons}
               selectedSeason={selectedSeason}
@@ -706,7 +711,6 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
           items={related}
           config={config}
           onSelect={(item) => openDetail(item, media.title)}
-          onViewAll={() => navigate(`/${config.path}`)}
         />
       </div>
     </div>

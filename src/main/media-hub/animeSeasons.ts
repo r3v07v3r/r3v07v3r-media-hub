@@ -513,6 +513,33 @@ export function combineGroupEpisodeCounts(members: CatalogItem[]): {
 }
 
 /**
+ * Whether a grouped build covered every season it was asked for.
+ *
+ * A grouped anime with N siblings is seasons 1..N+1 — season numbers are
+ * positions in the group, assigned by buildGroupedAnimeVideos. A season that
+ * TMDB rate-limited and Kitsu had no episodes for contributes NOTHING, and
+ * the builder never throws over it, so "did it throw" cannot detect the
+ * gap; "is every expected season represented" can. Season 0 is ignored —
+ * the Specials block is added only when TMDB has one and is legitimately
+ * optional. Deliberately NOT compared against episodeCounts.totalEpisodes:
+ * a freshly resolved item never carries it (only groupedIds is copied in),
+ * and a final season that has not aired would read as incomplete forever.
+ * Pure, so tests/animeCatalogStorage.test.ts can pin it.
+ */
+export function groupedVideosAreComplete(
+  groupedIdCount: number,
+  videos: readonly Episode[]
+): boolean {
+  const expected = groupedIdCount + 1
+  if (expected <= 0) return true
+  const present = new Set<number>()
+  for (const v of videos)
+    if (Number.isFinite(v.season) && (v.season as number) > 0) present.add(v.season as number)
+  for (let season = 1; season <= expected; season++) if (!present.has(season)) return false
+  return true
+}
+
+/**
  * Which franchise siblings each crawled anime has, by catalog id, and the
  * inverse: for ANY raw anime catalog id (the canonical id of a group, one
  * of its merged siblings, or an ungrouped item), where it actually lives —

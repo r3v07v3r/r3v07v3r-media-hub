@@ -10,7 +10,7 @@
 //
 // Everything here is structurally cloneable: it travels over Electron IPC.
 
-import type { MediaTracks } from './types'
+import type { MediaTracks, PlaybackRelease } from './types'
 import type { NextEpisodeRef } from './nextEpisode'
 import type { SubtitleStyle } from './subtitleStyle'
 import type { VideoFitMode } from './videoFit'
@@ -152,6 +152,20 @@ export interface PlayerSessionMedia {
   episodeNumber?: number
   episodeTitle?: string
   posterUrl?: string
+  /** The release playing, for the Info panel. */
+  release?: PlaybackRelease
+}
+
+/** What mpv reports about the picture it is decoding — the other half of
+ *  the Info panel, alongside the release. Pushed as one object each time
+ *  any of it changes, because state patches merge shallowly. */
+export interface PlayerVideoFacts {
+  codec?: string
+  width?: number
+  height?: number
+  fps?: number
+  /** mpv's hwdec-current: the decoder in use, or 'no' for software. */
+  hwdec?: string
 }
 
 /** Pushed to the overlay on `playerSession` whenever any of it changes. A whole
@@ -228,6 +242,8 @@ export interface PlayerStatePatch {
   eofReached?: boolean
   /** Track list changed — e.g. an external subtitle was added. */
   tracks?: MediaTracks
+  /** Codec, size, frame rate and decoder of the picture — see PlayerVideoFacts. */
+  video?: PlayerVideoFacts
   /** The file's chapter marks, in order. Empty for the many releases that
    *  carry none, which is why the chapters button is absent rather than
    *  disabled when this is empty. */

@@ -26,10 +26,15 @@ import {
   filterCatalog,
   isItemWatched,
   subtitlesInadequate,
-  hasAired
+  hasAired,
+  isRegularEpisode
 } from '../../shared/media-hub/catalog-logic'
 import { releaseTextMentionsExecutable } from '../../shared/media-hub/unsafeFiles'
-import { releaseLacksPreferredLanguage } from '../../shared/media-hub/language'
+import {
+  languageMatches,
+  releaseDeclaresLanguage,
+  releaseLacksPreferredLanguage
+} from '../../shared/media-hub/language'
 import { streamResolution, streamText } from '../../shared/media-hub/streamQuality'
 
 export { airingStatus, episodeWatchState, filterCatalog, isItemWatched, subtitlesInadequate }
@@ -65,7 +70,7 @@ export function createRoomCode(random: () => number = Math.random): string {
 // warning about a title that played perfectly well.
 export { streamResolution, streamText }
 
-function streamSizeGb(stream: StreamCandidate): number | null {
+export function streamSizeGb(stream: StreamCandidate): number | null {
   const text = streamText(stream)
   const match = text.match(/([\d.]+)\s*(tb|gb|mb)\b/)
   if (match) {
@@ -235,13 +240,15 @@ export function rankSafeStreams(
   streams: StreamCandidate[],
   preferredLanguage = 'en',
   limits: StreamLimits = {},
-  sourcePreference: SourcePreference = 'balanced'
+  sourcePreference: SourcePreference = 'balanced',
+  options: RankOptions = {}
 ): StreamCandidate[] {
   return rankStreams(
     streams.filter((s) => !isUnsafeStream(s)),
     preferredLanguage,
     limits,
-    sourcePreference
+    sourcePreference,
+    options
   )
 }
 
@@ -255,6 +262,72 @@ export function rankSafeStreams(
  * has to lose to anything English.
  */
 const WRONG_LANGUAGE_PENALTY = 40000
+
+/**
+ * What a release that SAYS it carries the wanted audio is worth.
+ *
+ * The penalty above only ever separates a foreign dub from everything else;
+ * it cannot tell a Japanese-only raw from a dual-audio release of the same
+ * episode, which is why a series played one episode in English and the
+ * next in Japanese. Sized to sit above the whole resolution term (max 2160,
+ * so audio language outranks a picture tier), below LOCAL_SOURCE_BONUS's
+ * balanced 5000 (a local copy still wins under 'balanced'), below
+ * REMUX_PENALTY (a dual-audio remux still loses to a normal encode), and far
+ * below the `cached` gate — an uncached correct-language release never
+ * beats one that can be played right now.
+ */
+const PREFERRED_LANGUAGE_BONUS = 3000
+
+/**
+ * What the same release group as the previous episode is worth. Anime
+ * groups keep their audio, subtitles and encode settings consistent across
+ * a season, so staying with the group that played episode 5 is the surest
+ * way episode 6 sounds and looks the same. Below the language bonus (a
+ * group that turns Japanese-only for one episode still loses to one that
+ * declares English) and above one resolution tier (a 1080p from the same
+ * group beats a 2160p from another).
+ */
+const SAME_RELEASE_GROUP_BONUS = 2500
+
+/**
+ * The release group a name carries — the leading fansub tag ("[SubsPlease]")
+ * or the trailing scene suffix ("...x264-SPARKS") — lowercased and stripped
+ * to letters and digits, or null when the name has neither. Its own
+ * function rather than part of parseReleaseName, whose readableTitle
+ * deliberately deletes the brackets this reads.
+ */
+export function releaseGroup(text: string): string | null {
+  const raw = String(text || '')
+    .split('\n')[0]
+    .trim()
+  if (!raw) return null
+  const leading = /^\[([^\]]{1,40})\]/.exec(raw)
+  if (leading) return leading[1].toLowerCase().replace(/[^a-z0-9]/g, '') || null
+  const base = raw.replace(/\.(mkv|mp4|avi|mov|webm|m4v|ts)$/i, '')
+  const trailing = /-([a-z0-9]{2,20})$/i.exec(base.split(/\s/)[0])
+  if (!trailing) return null
+  const group = trailing[1].toLowerCase()
+  // "WEB-DL", "BluRay-RIP": a hyphenated format token is not a group.
+  return NOT_A_GROUP.has(group) ? null : group
+}
+
+const NOT_A_GROUP = new Set(['dl', 'rip', 'hd', 'hdr', 'x264', 'x265', 'hevc', 'aac', 'ac3', 'dts'])
+
+/** Whether a candidate carries the wanted audio: the server's own track
+ *  languages when it can say (a media server), else what the release name
+ *  declares. Silence is neither. */
+function declaresPreferredLanguage(stream: StreamCandidate, preferred: string): boolean {
+  if (stream.audioLanguages?.length) {
+    return stream.audioLanguages.some((language) => languageMatches(language, preferred))
+  }
+  return releaseDeclaresLanguage(streamText(stream), preferred)
+}
+
+export interface RankOptions {
+  /** The release group the previous episode of this show played from —
+   *  see SAME_RELEASE_GROUP_BONUS. */
+  preferredGroup?: string | null
+}
 
 /**
  * What a media-server copy is worth, relative to a TorBox one.
@@ -285,13 +358,23 @@ export function rankStreams(
   streams: StreamCandidate[],
   preferredLanguage = 'en',
   limits: StreamLimits = {},
-  sourcePreference: SourcePreference = 'balanced'
+  sourcePreference: SourcePreference = 'balanced',
+  options: RankOptions = {}
 ): StreamCandidate[] {
+  const preferredGroup = options.preferredGroup ? String(options.preferredGroup) : null
   const score = (s: StreamCandidate): number =>
     (s.exact === false ? 0 : 100000) +
     (s.cached === false ? 0 : 20000) +
     (s.compatible === false ? -50000 : 10000) +
     (s.source === 'mediaserver' ? LOCAL_SOURCE_BONUS[sourcePreference] : 0) +
+    // A release that says it carries the wanted audio — dual audio, an
+    // English dub, a server that reports the tracks — outranks one that
+    // says nothing, which is how the same show stops alternating between
+    // dubbed and subbed episodes.
+    (declaresPreferredLanguage(s, preferredLanguage) ? PREFERRED_LANGUAGE_BONUS : 0) +
+    (preferredGroup && releaseGroup(streamText(s)) === preferredGroup
+      ? SAME_RELEASE_GROUP_BONUS
+      : 0) +
     streamResolution(s) +
     // Only ever separates uncached candidates, and only within a resolution
     // tier — see seederBonus for both bounds and why absence is not zero.
@@ -577,7 +660,7 @@ export function normalizeKitsuEpisode(record: RawApiPayload, parentId: string): 
     season,
     episode,
     number: episode,
-    title: a.canonicalTitle || a.titles?.en_us || a.titles?.en || `Episode ${episode}`,
+    title: a.titles?.en || a.titles?.en_us || a.canonicalTitle || `Episode ${episode}`,
     released: a.airdate || '',
     description: a.synopsis || a.description || '',
     thumbnail: a.thumbnail?.original || ''
@@ -613,9 +696,19 @@ export function normalizeKitsuAnime(record: RawApiPayload, lightweight = false):
   const a = record.attributes || {}
   const id = `kitsu:${record.id}`
   const count = Number(a.episodeCount) || 0
+  // English first. Kitsu's canonical title is the romaji one, which is
+  // what every anime in the library used to be listed and searched under;
+  // the English name is what most people know a show by. The romaji is
+  // kept as originalTitle: it is shown as a secondary line, matched in
+  // search, and — the part that is not optional — matched against release
+  // names, which are romaji. See titleMatchesRelease.
+  const english = String(a.titles?.en || a.titles?.en_us || '').trim()
+  const canonical = String(a.canonicalTitle || '').trim()
+  const original = english && canonical && canonical !== english ? canonical : ''
   return {
     id,
-    title: a.canonicalTitle || a.titles?.en_us || a.titles?.en || 'Untitled',
+    title: english || canonical || 'Untitled',
+    ...(original ? { originalTitle: original } : {}),
     type: 'anime',
     poster: a.posterImage?.large || a.posterImage?.original || '',
     background: a.coverImage?.large || a.coverImage?.original || '',
@@ -698,11 +791,24 @@ const FRANCHISE_ANIME_ROLES = new Set([
   'summary'
 ])
 
-const STORY_ANIME_ROLES = new Set<AnimeStoryLink['relation']>(['sequel', 'prequel'])
+/** The relations the story panel shows, in the order it shows them: what
+ *  comes before, what sits alongside, what comes after. */
+export const ANIME_STORY_ORDER: readonly AnimeStoryLink['relation'][] = [
+  'prequel',
+  'parent_story',
+  'full_story',
+  'side_story',
+  'spin_off',
+  'summary',
+  'sequel'
+]
+const STORY_ANIME_ROLES = new Set<AnimeStoryLink['relation']>(ANIME_STORY_ORDER)
 
-/** Direct before/after entries from Kitsu. Side stories and recaps are not
- * useful answers to "what should I watch next?"; an absent sequel is never
- * treated as proof that a future season will not happen. */
+/** The franchise around a title, from Kitsu, ordered before / alongside /
+ * after. Side stories, spin-offs, recaps and the films between seasons used
+ * to be dropped as "not useful answers to what next" — they are exactly the
+ * bridges somebody following a story in order needs pointed out. An absent
+ * sequel is never treated as proof that a future season will not happen. */
 export function animeStoryLinks(payload: RawApiPayload = {}): AnimeStoryLink[] {
   const included = new Map(
     (payload.included || [])
@@ -722,7 +828,12 @@ export function animeStoryLinks(payload: RawApiPayload = {}): AnimeStoryLink[] {
     seen.add(key)
     links.push({ relation, item: normalizeKitsuAnime(dest as RawApiPayload) })
   }
+  // Before, alongside, after — and within a group, the order Kitsu gave.
+  const rank = (relation: AnimeStoryLink['relation']): number => ANIME_STORY_ORDER.indexOf(relation)
   return links
+    .map((link, index) => ({ link, index }))
+    .sort((a, b) => rank(a.link.relation) - rank(b.link.relation) || a.index - b.index)
+    .map(({ link }) => link)
 }
 
 export function filterAnimeRelationships(payload: RawApiPayload = {}): CatalogItem[] {
@@ -870,10 +981,19 @@ function mediaKey(value: string): string {
  * inclusion is exactly what fails here, since "dragonball" is a substring
  * of "dragonballz" too.
  */
-export function titleMatchesRelease(releaseText: string, requestedTitle: string): boolean {
-  if (!requestedTitle.trim()) return true
-  const parsed = parseReleaseName(releaseText)
-  return mediaKey(parsed.title) === mediaKey(requestedTitle)
+export function titleMatchesRelease(
+  releaseText: string,
+  requestedTitle: string | readonly string[]
+): boolean {
+  // Any of the names the title is known by. An anime is listed under its
+  // English name but released under its romaji one, so a match against a
+  // single title would find nothing for it — see CatalogItem.originalTitle.
+  const wanted = (Array.isArray(requestedTitle) ? requestedTitle : [requestedTitle])
+    .map((t) => String(t ?? '').trim())
+    .filter(Boolean)
+  if (!wanted.length) return true
+  const parsed = mediaKey(parseReleaseName(releaseText).title)
+  return wanted.some((t) => mediaKey(t) === parsed)
 }
 
 export interface TorBoxFile {
@@ -1065,7 +1185,7 @@ export function continueWatchingList(
     // this row, and the row's suggested next episode was one that did not
     // exist yet.
     const episodes = (detail.videos || [])
-      .filter((v) => (v.season ?? 1) > 0 && !v.unplayable && hasAired(v))
+      .filter((v) => isRegularEpisode(v) && hasAired(v))
       .sort(
         (a, b) =>
           (a.season || 1) - (b.season || 1) ||

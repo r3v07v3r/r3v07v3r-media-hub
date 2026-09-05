@@ -52,14 +52,18 @@ export function CollectionPanel({ media }: { media: MediaItem }) {
   }, [supported, media.id])
 
   if (result?.key !== media.id) return null
-  const { name, parts } = result.value
-  if (parts.length === 0) return null
+  const { name, parts, currentId } = result.value
+  // The film on screen is in the list now (marked), so a series is only
+  // worth a panel when there is something else in it.
+  if (parts.filter((part) => part.id !== currentId).length === 0) return null
 
   return (
     <section className={`${styles.panel} glass-panel`} aria-label="Rest of the series">
       <h2 className={styles.heading}>{name || 'Rest of the series'}</h2>
+      <p className={styles.order}>In release order</p>
       <ul className={styles.list}>
-        {parts.map((part) => {
+        {parts.map((part, index) => {
+          const current = part.id === currentId
           // Converted with the tracking sets so each card shows whether it is
           // saved or set aside — the same flags every other grid carries.
           // watchedIds too, or every other film in the series reads as
@@ -71,7 +75,9 @@ export function CollectionPanel({ media }: { media: MediaItem }) {
             <li key={part.id}>
               <button
                 type="button"
-                className={styles.entry}
+                className={`${styles.entry} ${current ? styles.current : ''}`}
+                aria-current={current ? 'true' : undefined}
+                disabled={current}
                 // The film currently on screen, as the label for the back
                 // button on the one about to open. Without it openDetail
                 // derives the label from the current route — which is a
@@ -91,9 +97,15 @@ export function CollectionPanel({ media }: { media: MediaItem }) {
                   />
                   <WatchStatusBadge status={getWatchStatus(item, continueWatching)} />
                 </span>
+                <span className={styles.ordinal} aria-hidden="true">
+                  {index + 1}
+                </span>
                 <span className={styles.text}>
                   <span className={styles.title}>{item.title}</span>
-                  {part.year ? <span className={styles.year}>{part.year}</span> : null}
+                  <span className={styles.year}>
+                    {part.year || ''}
+                    {current ? (part.year ? ' · ' : '') + 'You are here' : ''}
+                  </span>
                 </span>
               </button>
             </li>
