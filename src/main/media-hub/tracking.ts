@@ -138,11 +138,15 @@ interface SimklSyncResult {
  * sync review is for.
  */
 const remotePushQueue = createKeyedSerialQueue()
+/** One chain per title: the kind and id, which every handler's item carries. */
+function remotePushKey(item: { id: string; type?: string }): string {
+  return `${item.type ?? ''}:${item.id}`
+}
 function queueRemotePushes(
   item: { id: string; type?: string },
   pushes: () => Array<Promise<unknown>>
 ): void {
-  void remotePushQueue.run(`${item.type ?? ''}:${item.id}`, () => Promise.allSettled(pushes()))
+  void remotePushQueue.run(remotePushKey(item), () => Promise.allSettled(pushes()))
 }
 
 async function syncSimklHistory(
@@ -1837,25 +1841,41 @@ export function registerTrackingIpc(): void {
       // scrobble despite the setting promising otherwise — Trakt's own
       // scrobble endpoints are the same start/pause/stop state machine and
       // owe Simkl's connection state nothing.
-      void pushTraktScrobble(payload.item, payload.playback || {}, action, progress)
+      //
+      // On the title's own push chain (see queueRemotePushes): a stop at
+      // high progress IS a watched write on both services, and it fires
+      // from the player at the same moment the auto mark-watched does — so
+      // it must take its turn behind, and ahead of, that title's marks like
+      // any other. That also puts start, pause and stop in the order they
+      // happened, which parallel requests never guaranteed. Awaited, as the
+      // Simkl request always was, so the error below still reaches the
+      // main window.
+      let simklError: string | undefined
+      await remotePushQueue.run(remotePushKey(payload.item), async () => {
+        const trakt = pushTraktScrobble(payload.item, payload.playback || {}, action, progress)
+        if (simklConnected) {
+          try {
+            await simklRequest(`/scrobble/${action}`, {
+              method: 'POST',
+              body: JSON.stringify(scrobblePayload(payload.item, payload.playback || {}, progress))
+            })
+          } catch (error) {
+            // Never thrown. A scrobble is a courtesy to a third-party
+            // service: it must not interrupt playback, and an account whose
+            // token expired mid-film should not produce an error over the
+            // video every time somebody pauses. The local history is the
+            // record either way. The reason IS reported back, though — the
+            // main window says it once per session, so a token that expired
+            // or an id Simkl will not take is something a person hears
+            // about rather than a line nobody reads.
+            logError('simkl:scrobble', error)
+            simklError = (error as Error)?.message || String(error)
+          }
+        }
+        await trakt
+      })
       if (!simklConnected) return { connected: false }
-      try {
-        await simklRequest(`/scrobble/${action}`, {
-          method: 'POST',
-          body: JSON.stringify(scrobblePayload(payload.item, payload.playback || {}, progress))
-        })
-      } catch (error) {
-        // Never thrown. A scrobble is a courtesy to a third-party service:
-        // it must not interrupt playback, and an account whose token expired
-        // mid-film should not produce an error over the video every time
-        // somebody pauses. The local history is the record either way. The
-        // reason IS reported back, though — the main window says it once per
-        // session, so a token that expired or an id Simkl will not take is
-        // something a person hears about rather than a line nobody reads.
-        logError('simkl:scrobble', error)
-        return { connected: true, error: (error as Error)?.message || String(error) }
-      }
-      return { connected: true }
+      return simklError ? { connected: true, error: simklError } : { connected: true }
     }
   )
 }

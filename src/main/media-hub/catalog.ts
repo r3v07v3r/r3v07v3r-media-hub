@@ -56,7 +56,7 @@ import {
   type RawApiPayload
 } from './core'
 import { isLikelyFranchiseSibling, rankSimilarTitles } from '../../shared/media-hub/catalog-logic'
-import { coalesce, coalesceScope, type TaskPriority } from './taskScheduler'
+import { coalesce, coalesceScope, PRIORITY_RANK, type TaskPriority } from './taskScheduler'
 import {
   ANIME_GROUPED_KEY,
   buildGroupedAnimeVideos,
@@ -1244,7 +1244,22 @@ async function cinemetaPageAt(
 
 /** In-flight deep scans, single-flight per kind: a second press while
  *  one chunk is running joins it rather than doubling the walk. */
-const deepScansInFlight = new Map<MediaKind, Promise<DeepScanReport>>()
+/** One walk of a kind's deep scan — see deepScanChunk for how a second
+ *  caller joins or supersedes it. */
+interface DeepScanRun {
+  promise: Promise<DeepScanReport>
+  priority: TaskPriority
+  /** Asks the walk to stop at its last safe group. Idempotent. */
+  cancel: () => void
+}
+
+/** What a walk polls between groups, and races its fetches against. */
+interface DeepScanCancel {
+  readonly cancelled: boolean
+  readonly signal: Promise<'cancelled'>
+}
+
+const deepScansInFlight = new Map<MediaKind, DeepScanRun>()
 
 interface DeepScanState {
   offset: number
@@ -1283,18 +1298,55 @@ export function deepScanChunk(
    *  'background' (a person is waiting on it); the hourly job passes
    *  'maintenance', which critical pressure suspends outright — a scan
    *  that started while idle must not keep 120 requests going once
-   *  playback begins. A press that joins a running job's scan inherits
-   *  the job's lane; the next press starts its own. */
+   *  playback begins.
+   *
+   *  Two walks of one kind never run together, but joining is not
+   *  symmetric. The job arriving during a press's walk joins it: that walk
+   *  is the person's, and its lane is right. A press arriving during the
+   *  job's walk must NOT join it — under playback pressure the job's lane
+   *  never dispatches, so the press would wait out the film with the
+   *  button frozen. The job's walk is stopped at its last safe group (the
+   *  bookmark stays honest; its in-flight fetches finish on their own and
+   *  are discarded) and the press walks on from there in its own lane. */
   priority: TaskPriority = 'background'
 ): Promise<DeepScanReport> {
   const running = deepScansInFlight.get(kind)
-  if (running) return running
-  const scan = runDeepScan(kind, priority).finally(() => deepScansInFlight.delete(kind))
-  deepScansInFlight.set(kind, scan)
-  return scan
+  if (running) {
+    if (PRIORITY_RANK[priority] >= PRIORITY_RANK[running.priority]) return running.promise
+    running.cancel()
+    const walkOn = (): Promise<DeepScanReport> => deepScanChunk(kind, priority)
+    return running.promise.then(walkOn, walkOn)
+  }
+  let cancelled = false
+  let onCancel: (() => void) | null = null
+  const signal = new Promise<'cancelled'>((resolve) => {
+    onCancel = () => resolve('cancelled')
+  })
+  const cancel: DeepScanCancel = {
+    get cancelled() {
+      return cancelled
+    },
+    signal
+  }
+  const run: DeepScanRun = {
+    priority,
+    cancel: () => {
+      cancelled = true
+      onCancel?.()
+    },
+    promise: runDeepScan(kind, priority, cancel).finally(() => {
+      if (deepScansInFlight.get(kind) === run) deepScansInFlight.delete(kind)
+    })
+  }
+  deepScansInFlight.set(kind, run)
+  return run.promise
 }
 
-async function runDeepScan(kind: MediaKind, priority: TaskPriority): Promise<DeepScanReport> {
+async function runDeepScan(
+  kind: MediaKind,
+  priority: TaskPriority,
+  cancel: DeepScanCancel
+): Promise<DeepScanReport> {
   const db = getDatabase()
   const state = deepScanState(kind)
   // A persisted `exhausted` is honoured: the last chunk walked the whole
@@ -1351,7 +1403,15 @@ async function runDeepScan(kind: MediaKind, priority: TaskPriority): Promise<Dee
       { length: Math.min(5, pagesTotal - group * 5) },
       (_, i) => group * 5 + i
     )
-    const pages = await Promise.all(
+    // Superseded (see deepScanChunk): stop with the bookmark at the last
+    // group that was fetched AND written. Checked before each group, and
+    // raced against the group's own fetches, which under playback pressure
+    // may never dispatch in this lane at all.
+    if (cancel.cancelled) {
+      halted = true
+      break
+    }
+    const fetched = Promise.all(
       pageIndexes.map((page) => {
         const skip = startOffset + page * pageSize
         return kind === 'anime'
@@ -1359,6 +1419,12 @@ async function runDeepScan(kind: MediaKind, priority: TaskPriority): Promise<Dee
           : cinemetaPageAt(kind, skip, priority)
       })
     )
+    const outcome = await Promise.race([fetched, cancel.signal])
+    if (outcome === 'cancelled') {
+      halted = true
+      break
+    }
+    const pages = outcome
     // Everything before the first FAILED page is usable; nothing after
     // it may count, or the bookmark would skip the failed page's titles
     // forever (rows past the gap will be re-fetched next press — the

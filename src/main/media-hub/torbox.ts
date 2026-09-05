@@ -560,20 +560,24 @@ export function registerTorBoxIpc(): void {
         }
       }
 
-      const recent = db.getCache<StreamResolveResult>(key)
-      if (recent) {
-        // The group memo is not part of the key, on purpose: it changes
-        // whenever another episode of the show plays from a different
-        // group, and keying on it would throw away a search that is still
-        // right. The cached answer was RANKED without it, though, so a
-        // replay or a previously resolved episode never saw the same-group
-        // bonus. Re-ranking is a sort, not a search — do that instead.
-        if (!preferredGroup || recent.streams.length < 2) return recent
-        const reranked = rankSafeStreams(recent.streams, audioLanguage, limits, sourcePreference, {
+      // The group memo is not part of the key, on purpose: it changes
+      // whenever another episode of the show plays from a different group,
+      // and keying on it would throw away a search that is still right. A
+      // cached answer was RANKED without it, though, so a replay or a
+      // previously resolved episode never saw the same-group bonus.
+      // Re-ranking is a sort, not a search — every cached answer served
+      // from here (the hour-fresh one below, and the expired one the catch
+      // at the end falls back to) goes through this instead.
+      const withGroupMemo = (result: StreamResolveResult): StreamResolveResult => {
+        if (!preferredGroup || result.streams.length < 2) return result
+        const reranked = rankSafeStreams(result.streams, audioLanguage, limits, sourcePreference, {
           preferredGroup
         })
-        return reranked.length ? { ...recent, streams: reranked, best: reranked[0] } : recent
+        return reranked.length ? { ...result, streams: reranked, best: reranked[0] } : result
       }
+
+      const recent = db.getCache<StreamResolveResult>(key)
+      if (recent) return withGroupMemo(recent)
 
       // TIER 2 — the on-site cache daemon. Same footing as the media
       // server below: one LAN round-trip, quality-gated, best-effort. Only
@@ -825,7 +829,7 @@ export function registerTorBoxIpc(): void {
         return result
       } catch (error) {
         const stale = db.getCache<StreamResolveResult>(key, { allowExpired: true })
-        if (stale) return stale
+        if (stale) return withGroupMemo(stale)
         throw error
       }
     }
