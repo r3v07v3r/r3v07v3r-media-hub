@@ -695,6 +695,17 @@ async function applyPlanChange(
   // whose delete is not scoped to the watchlist is only sent with that
   // evidence in hand — see simklPlan, where sending it without evidence
   // would erase watch history rather than a list row.
+  // A new intent replaces whatever the previous one still owed. An add
+  // queued during an outage, followed by an un-plan that got through, must
+  // not be retried at the next sync — that would put the title back on the
+  // service and reverse the person's latest decision. Dropped before the
+  // push rather than after, so nothing is owed in either direction while
+  // this change is in flight; a failure below queues the new direction.
+  const queued = pendingRemovals()
+  if (queued[item.id]) {
+    delete queued[item.id]
+    writePendingRemovals(queued)
+  }
   const onServices = planned ? [] : (plannedSources()[item.id] ?? [])
   const outcome = await pushPlanEverywhere(item, planned, { onServices })
   if (planned) {

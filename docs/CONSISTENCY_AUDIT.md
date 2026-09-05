@@ -179,8 +179,10 @@ Left as they are:
 
 Taken on the follow-up branch:
 
-- `useMediaHubLists` refetches on a new `lists` scope of `library:changed`,
-  which the remote-list read announces.
+- My Stuff's remote lists (the ones built in Trakt or Simkl) re-read on a
+  new `lists` scope of `library:changed`, which the remote-list read
+  announces; the lists made here adopt each write's own answer and need
+  no push.
 - `toggleDisliked` re-reads the disliked hook once the write lands.
 - A failed watchlist *add* push is queued and retried like a removal, and
   counts as evidence of presence once it lands (docs/WATCHLIST-SYNC.md,

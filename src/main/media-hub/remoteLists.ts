@@ -217,8 +217,8 @@ export async function fetchRemoteLists(
   if (anyFailed && out.length === 0) return trustedCached()
   const payload: StampedLists = { marks: currentMarks(), lists: out }
   db.putCache(CACHE_KEY, payload, TTL_MS, { durable: true })
-  // My Stuff's lists view reads these through the same hook as the lists
-  // made here, and that hook refetches on this — not on its own schedule.
+  // My Stuff's lists view answers its first read from this cache and
+  // re-reads on this announcement — not on a schedule of its own.
   notifyLibraryChanged('remote-lists', 'lists')
   return out
 }

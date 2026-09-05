@@ -501,9 +501,13 @@ export function registerPlaybackIpc(): void {
       // Never from bytes that are not on disk yet. A read of an uncached
       // region is served by pulling the upstream connection away from the
       // playhead (streamCache's excursions), and a preview is worth nothing
-      // if it costs the film a stall.
+      // if it costs the film a stall. Two layers: an estimate here spares
+      // spawning an mpv that would fail, and the `?cached=1` mark on the
+      // URL makes the server itself refuse the capture the moment it reads
+      // anything not on disk — which is exact, where the estimate (a
+      // timestamp against the file's average rate) cannot be.
       if (!streamCache.isPositionCached(at)) return null
-      const capture = captureThumbnail(mpvPath, activeCacheUrl, at)
+      const capture = captureThumbnail(mpvPath, `${activeCacheUrl}?cached=1`, at)
       thumbnailInFlight = capture.then(
         () => undefined,
         () => undefined
