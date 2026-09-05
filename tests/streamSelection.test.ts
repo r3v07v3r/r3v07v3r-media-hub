@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { rankStreams, streamSeeders } from '../src/main/media-hub/core'
+import { rankStreams, releaseGroup, streamSeeders } from '../src/main/media-hub/core'
 import type { StreamCandidate } from '../src/shared/media-hub/types'
 
 const streams: StreamCandidate[] = [
@@ -257,3 +257,105 @@ console.log('ok  stream selection resolution and size limits')
   )
 }
 console.log('ok  seeder ranking')
+
+// --- the wanted audio, and the group that played last time -----------------
+//
+// The same show used to play one episode dubbed and the next subbed: a raw
+// and a dual-audio release of an episode scored the same. A release that
+// DECLARES the wanted audio now outranks one that says nothing (by more than
+// a resolution tier), and the group that played the previous episode is
+// preferred so audio and look stay consistent across a season.
+{
+  const raw2160 = {
+    infoHash: 'raw',
+    name: '[Raws] Show - 06 [2160p]',
+    cached: true,
+    compatible: true,
+    exact: true
+  } as StreamCandidate
+  const dual1080 = {
+    infoHash: 'dual',
+    name: '[Group] Show - 06 [Dual-Audio][1080p]',
+    cached: true,
+    compatible: true,
+    exact: true
+  } as StreamCandidate
+  const dub1080 = {
+    infoHash: 'dub',
+    name: 'Show S01E06 1080p ENG DUB WEB-DL',
+    cached: true,
+    compatible: true,
+    exact: true
+  } as StreamCandidate
+  assert.equal(
+    rankStreams([raw2160, dual1080], 'en', {}, 'balanced')[0].infoHash,
+    'dual',
+    'a dual-audio 1080p beats a raw 2160p when English is wanted'
+  )
+  assert.equal(
+    rankStreams([raw2160, dual1080], 'ja', {}, 'balanced')[0].infoHash,
+    'dual',
+    'multi counts as carrying the wanted audio for any preference'
+  )
+  assert.equal(
+    rankStreams([raw2160, dub1080], 'en', {}, 'balanced')[0].infoHash,
+    'dub',
+    'an English dub beats a raw of higher resolution'
+  )
+  // A media server that REPORTS its tracks is believed over the name.
+  const serverJa = {
+    source: 'mediaserver',
+    itemId: 'jf',
+    mediaSourceId: 'ms',
+    name: 'Show S01E06 Dual Audio 1080p.mkv',
+    audioLanguages: ['jpn'],
+    resolution: 1080,
+    cached: true,
+    compatible: true,
+    exact: true
+  } as StreamCandidate
+  assert.equal(
+    rankStreams([serverJa, dual1080], 'en', {}, 'prefer-quality')[0].infoHash,
+    'dual',
+    'reported tracks override a misleading name'
+  )
+  // Uncached never wins on language alone: the gate stays above the bonus.
+  const uncachedDual = { ...dual1080, infoHash: 'udual', cached: false } as StreamCandidate
+  assert.equal(
+    rankStreams([raw2160, uncachedDual], 'en', {}, 'balanced')[0].infoHash,
+    'raw',
+    'a playable raw still beats an uncached dual-audio release'
+  )
+
+  // Release group memory.
+  assert.equal(releaseGroup('[SubsPlease] Show - 06 (1080p) [ABCD1234].mkv'), 'subsplease')
+  assert.equal(releaseGroup('Show.S01E06.1080p.WEB-DL.x264-SPARKS.mkv'), 'sparks')
+  assert.equal(releaseGroup('Show S01E06 1080p'), null)
+  assert.equal(releaseGroup('Show.S01E06.1080p.WEB-DL'), null, 'a format token is not a group')
+  assert.equal(releaseGroup('Show.S01E06.1080p.WEB-DL'), null, 'a format token is not a group')
+  const other2160 = {
+    infoHash: 'other',
+    name: '[Other] Show - 06 [Dual-Audio][2160p]',
+    cached: true,
+    compatible: true,
+    exact: true
+  } as StreamCandidate
+  assert.equal(
+    rankStreams([other2160, dual1080], 'en', {}, 'prefer-quality')[0].infoHash,
+    'other',
+    'without a memory the higher resolution wins'
+  )
+  assert.equal(
+    rankStreams([other2160, dual1080], 'en', {}, 'prefer-quality', { preferredGroup: 'group' })[0]
+      .infoHash,
+    'dual',
+    'the group that played the previous episode wins over one resolution tier'
+  )
+  assert.equal(
+    rankStreams([raw2160, other2160], 'en', {}, 'prefer-quality', { preferredGroup: 'raws' })[0]
+      .infoHash,
+    'other',
+    'but not over the wanted audio'
+  )
+}
+console.log('ok  audio language and release group')

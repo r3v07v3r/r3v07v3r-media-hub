@@ -533,6 +533,22 @@
   gap: 8px;
 }
 
+/* The Info panel: release names run long, so it is wider than the track
+   menus and lets the name wrap rather than clip. */
+.infoMenu {
+  min-width: 340px;
+  max-width: min(520px, 80vw);
+  max-height: 420px;
+}
+
+.infoRelease {
+  padding: 4px 10px 2px;
+  font-size: 12px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
 /* Wraps rather than scrolls: seven speeds fit on two rows at this width, and
    a horizontally scrolling strip inside a popover is a control people miss
    half of. */

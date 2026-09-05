@@ -38,6 +38,8 @@ import type {
   SubtitlesApplyResult
 } from '../../shared/media-hub/types'
 import { handle } from './ipcGuard'
+import { languageName, tracksLackLanguage } from '../../shared/media-hub/language'
+import { sendToRenderer } from './rendererBridge'
 import { getPlaybackBufferSeconds } from '../../shared/media-hub/playbackBuffer'
 import { normalizeVideoScaling } from '../../shared/media-hub/videoScaling'
 import type { PlayerSessionMedia } from '../../shared/media-hub/player'
@@ -329,6 +331,19 @@ async function openPlayback(
     videoScaling: normalizeVideoScaling(settings.videoScaling)
   })
   activeMediaTracks = tracks
+  // The ranking preferred a release that declared the wanted audio, and mpv
+  // asked the container for it (--alang); this is the one place that knows
+  // whether either worked. Said once, as a toast, so "why is this episode
+  // in Japanese" has an answer — and the Audio menu is right there.
+  const wantedAudio = settings.audioLanguage ?? ''
+  if (tracksLackLanguage(tracks, wantedAudio)) {
+    const playing = tracks.audio[0]?.label || tracks.audio[0]?.language || 'another language'
+    sendToRenderer(MEDIA_HUB_CHANNELS.playerUiEvent, {
+      type: 'notify',
+      tone: 'info',
+      message: `No ${languageName(wantedAudio)} audio in this release — playing ${playing}.`
+    })
+  }
   // Now that mpv has opened the file, hand its duration to the cache so the
   // retention window can size itself in bytes rather than chunk counts.
   streamCache.setDuration(tracks.durationSeconds)
@@ -353,7 +368,8 @@ async function openPlayback(
         seasonNumber: cacheMeta.seasonNumber,
         episodeNumber: cacheMeta.episodeNumber,
         episodeTitle: cacheMeta.episodeTitle,
-        posterUrl: cacheMeta.posterUrl
+        posterUrl: cacheMeta.posterUrl,
+        release: cacheMeta.release
       }
     : null
   pushSessionSnapshot({

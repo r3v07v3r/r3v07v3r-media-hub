@@ -237,6 +237,10 @@ export interface StreamCandidate {
   name?: string
   title?: string
   sources?: string[]
+  /** The audio languages the file actually carries, when the source can
+   *  say — only a media server can (jellyfin.ts). Strictly better than
+   *  inferring them from the release name, and consulted first. */
+  audioLanguages?: string[]
   resolution?: number
   cached?: boolean
   compatible?: boolean
@@ -385,9 +389,24 @@ export interface CacheSourceRef {
   mediaSourceId?: string
 }
 
+/**
+ * What is actually playing, for the player's Info panel: the release as the
+ * scraper named it, its quality and size as read from that name, and which
+ * tier the bytes come from.
+ */
+export interface PlaybackRelease {
+  name: string
+  resolution?: number
+  sizeGb?: number
+  source: StreamSource
+  infoHash?: string
+}
+
 export interface CacheSessionMeta {
   title: string
   posterUrl?: string
+  /** The release these bytes are, for the Info panel. */
+  release?: PlaybackRelease
   catalogId?: string
   mediaKind?: 'movie' | 'series' | 'anime'
   seasonNumber?: number

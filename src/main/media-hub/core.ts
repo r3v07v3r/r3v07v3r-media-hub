@@ -30,7 +30,11 @@ import {
   isRegularEpisode
 } from '../../shared/media-hub/catalog-logic'
 import { releaseTextMentionsExecutable } from '../../shared/media-hub/unsafeFiles'
-import { releaseLacksPreferredLanguage } from '../../shared/media-hub/language'
+import {
+  languageMatches,
+  releaseDeclaresLanguage,
+  releaseLacksPreferredLanguage
+} from '../../shared/media-hub/language'
 import { streamResolution, streamText } from '../../shared/media-hub/streamQuality'
 
 export { airingStatus, episodeWatchState, filterCatalog, isItemWatched, subtitlesInadequate }
@@ -66,7 +70,7 @@ export function createRoomCode(random: () => number = Math.random): string {
 // warning about a title that played perfectly well.
 export { streamResolution, streamText }
 
-function streamSizeGb(stream: StreamCandidate): number | null {
+export function streamSizeGb(stream: StreamCandidate): number | null {
   const text = streamText(stream)
   const match = text.match(/([\d.]+)\s*(tb|gb|mb)\b/)
   if (match) {
@@ -236,13 +240,15 @@ export function rankSafeStreams(
   streams: StreamCandidate[],
   preferredLanguage = 'en',
   limits: StreamLimits = {},
-  sourcePreference: SourcePreference = 'balanced'
+  sourcePreference: SourcePreference = 'balanced',
+  options: RankOptions = {}
 ): StreamCandidate[] {
   return rankStreams(
     streams.filter((s) => !isUnsafeStream(s)),
     preferredLanguage,
     limits,
-    sourcePreference
+    sourcePreference,
+    options
   )
 }
 
@@ -256,6 +262,72 @@ export function rankSafeStreams(
  * has to lose to anything English.
  */
 const WRONG_LANGUAGE_PENALTY = 40000
+
+/**
+ * What a release that SAYS it carries the wanted audio is worth.
+ *
+ * The penalty above only ever separates a foreign dub from everything else;
+ * it cannot tell a Japanese-only raw from a dual-audio release of the same
+ * episode, which is why a series played one episode in English and the
+ * next in Japanese. Sized to sit above the whole resolution term (max 2160,
+ * so audio language outranks a picture tier), below LOCAL_SOURCE_BONUS's
+ * balanced 5000 (a local copy still wins under 'balanced'), below
+ * REMUX_PENALTY (a dual-audio remux still loses to a normal encode), and far
+ * below the `cached` gate — an uncached correct-language release never
+ * beats one that can be played right now.
+ */
+const PREFERRED_LANGUAGE_BONUS = 3000
+
+/**
+ * What the same release group as the previous episode is worth. Anime
+ * groups keep their audio, subtitles and encode settings consistent across
+ * a season, so staying with the group that played episode 5 is the surest
+ * way episode 6 sounds and looks the same. Below the language bonus (a
+ * group that turns Japanese-only for one episode still loses to one that
+ * declares English) and above one resolution tier (a 1080p from the same
+ * group beats a 2160p from another).
+ */
+const SAME_RELEASE_GROUP_BONUS = 2500
+
+/**
+ * The release group a name carries — the leading fansub tag ("[SubsPlease]")
+ * or the trailing scene suffix ("...x264-SPARKS") — lowercased and stripped
+ * to letters and digits, or null when the name has neither. Its own
+ * function rather than part of parseReleaseName, whose readableTitle
+ * deliberately deletes the brackets this reads.
+ */
+export function releaseGroup(text: string): string | null {
+  const raw = String(text || '')
+    .split('\n')[0]
+    .trim()
+  if (!raw) return null
+  const leading = /^\[([^\]]{1,40})\]/.exec(raw)
+  if (leading) return leading[1].toLowerCase().replace(/[^a-z0-9]/g, '') || null
+  const base = raw.replace(/\.(mkv|mp4|avi|mov|webm|m4v|ts)$/i, '')
+  const trailing = /-([a-z0-9]{2,20})$/i.exec(base.split(/\s/)[0])
+  if (!trailing) return null
+  const group = trailing[1].toLowerCase()
+  // "WEB-DL", "BluRay-RIP": a hyphenated format token is not a group.
+  return NOT_A_GROUP.has(group) ? null : group
+}
+
+const NOT_A_GROUP = new Set(['dl', 'rip', 'hd', 'hdr', 'x264', 'x265', 'hevc', 'aac', 'ac3', 'dts'])
+
+/** Whether a candidate carries the wanted audio: the server's own track
+ *  languages when it can say (a media server), else what the release name
+ *  declares. Silence is neither. */
+function declaresPreferredLanguage(stream: StreamCandidate, preferred: string): boolean {
+  if (stream.audioLanguages?.length) {
+    return stream.audioLanguages.some((language) => languageMatches(language, preferred))
+  }
+  return releaseDeclaresLanguage(streamText(stream), preferred)
+}
+
+export interface RankOptions {
+  /** The release group the previous episode of this show played from —
+   *  see SAME_RELEASE_GROUP_BONUS. */
+  preferredGroup?: string | null
+}
 
 /**
  * What a media-server copy is worth, relative to a TorBox one.
@@ -286,13 +358,23 @@ export function rankStreams(
   streams: StreamCandidate[],
   preferredLanguage = 'en',
   limits: StreamLimits = {},
-  sourcePreference: SourcePreference = 'balanced'
+  sourcePreference: SourcePreference = 'balanced',
+  options: RankOptions = {}
 ): StreamCandidate[] {
+  const preferredGroup = options.preferredGroup ? String(options.preferredGroup) : null
   const score = (s: StreamCandidate): number =>
     (s.exact === false ? 0 : 100000) +
     (s.cached === false ? 0 : 20000) +
     (s.compatible === false ? -50000 : 10000) +
     (s.source === 'mediaserver' ? LOCAL_SOURCE_BONUS[sourcePreference] : 0) +
+    // A release that says it carries the wanted audio — dual audio, an
+    // English dub, a server that reports the tracks — outranks one that
+    // says nothing, which is how the same show stops alternating between
+    // dubbed and subbed episodes.
+    (declaresPreferredLanguage(s, preferredLanguage) ? PREFERRED_LANGUAGE_BONUS : 0) +
+    (preferredGroup && releaseGroup(streamText(s)) === preferredGroup
+      ? SAME_RELEASE_GROUP_BONUS
+      : 0) +
     streamResolution(s) +
     // Only ever separates uncached candidates, and only within a resolution
     // tier — see seederBonus for both bounds and why absence is not zero.
