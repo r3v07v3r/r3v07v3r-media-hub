@@ -25,6 +25,26 @@
 // front-only design would regress these), plus a rolling window around
 // every position currently being READ.
 //
+// One connection also means the readers have to take turns on it, and a
+// turn has to END. An out-of-window read repositions the fetch to serve
+// itself; left unbounded, it then keeps streaming sequentially from there
+// until something else drags it back — a tail probe on a 4K episode pulled
+// 340MB to EOF while the playhead sat at 33 seconds with an empty buffer,
+// and playback starved to a stop. So a fill that is nobody's playhead is a
+// bounded excursion: it gets EXCURSION_MAX_BYTES and then hands the
+// connection back (see fillBudgetBytes). Reconnects are not free — 4-12s
+// against TorBox — which is the whole reason the bound is on bytes rather
+// than on repositioning more eagerly.
+//
+// That bound only holds while "who is the playhead" cannot be answered by
+// the reader being served the detour. The adoption bar below
+// (PLAYHEAD_MIN_SERVED_BYTES, 8MB) is smaller than one excursion budget
+// (16MB), so a probe crosses it partway through its own excursion and, left
+// unguarded, becomes the playhead every later fill is classified against —
+// handing the connection straight back to itself, unbounded. See
+// shouldAdoptAsPlayhead: a reader cannot be both the detour and the
+// playhead.
+//
 // "Every position being read", not one global high-water mark. That
 // high-water mark was a real, reproduced bug: it only ever moved FORWARD
 // (Math.max), so the single incidental tail read every MKV demux does —
@@ -49,6 +69,7 @@ import { assertPublicMediaUrl, defaultResolveHost, fetchMediaWithRetry } from '.
 import { logError } from './logger'
 import { formatMegabytes, reportPreparation } from './playbackProgress'
 import { readSettings } from './settingsStore'
+import { effectiveCacheMode } from './preferences'
 import type {
   CacheSessionMeta,
   CacheSourceRef,
@@ -84,6 +105,28 @@ const CHUNK_WAIT_TIMEOUT_MS = 20_000
 const PLAYHEAD_MIN_SERVED_BYTES = CHUNK_BYTES * 2
 /** Same TorBox-connection-teardown grace delay as playbackSession.ts's closeDirectProxyBeforeTranscode — the local proxy/fetch closing doesn't guarantee the upstream fetch has actually torn down on TorBox's end yet. */
 const RECONNECT_GRACE_MS = 500
+/**
+ * How much one out-of-window excursion may fetch before the single upstream
+ * connection is handed back to the playhead. Sized to cover what the reads
+ * that cause an excursion actually want — an MKV Cues/SeekHead block, a
+ * non-faststart MP4's moov — which is the same order as HEAD_BYTES (16MB),
+ * not the hundreds of megabytes an unbounded sequential fill will happily
+ * keep pulling once it is already connected there.
+ */
+const EXCURSION_MAX_BYTES = CHUNK_BYTES * 4
+/**
+ * How far past the byte the playhead needs NEXT a fill may start and still
+ * count as the playhead's own rather than an excursion.
+ *
+ * Deliberately not the retention ahead-window (300s — hundreds of MB at a
+ * 4K bitrate): a probe landing anywhere inside that window would read as
+ * the playhead's fill and could still run to EOF while the buffer in front
+ * of the playhead drains, which is the whole failure this bound exists to
+ * stop. This only has to cover a demuxer reading a little in front of the
+ * render position; a real seek is identified by seekHint moving the
+ * playhead first, not by landing near it.
+ */
+const PLAYHEAD_FILL_TOLERANCE_BYTES = CHUNK_BYTES * 8
 
 /**
  * Where the whole chunk cache lives on disk. Defaults to
@@ -106,7 +149,9 @@ function electron(): typeof import('electron') {
   return require('electron')
 }
 
-function cacheRootDir(): string {
+/** Where sessions live: the configured folder, or userData. Exported so
+ *  the Downloads page can say which drive its space figure is about. */
+export function cacheRootDir(): string {
   const configured = readSettings().streamCacheDir
   const base =
     typeof configured === 'string' && configured.trim()
@@ -165,6 +210,11 @@ const diskChunkStore: ChunkStore = {
     await fsp.rename(tmpPath, finalPath)
   },
   read(root, token, index) {
+    // An empty token is never a legitimate read — it is what a session
+    // becomes after stop(). Resolving it to a path would point at the
+    // cache ROOT (root/chunk-N.bin), which is the ENOENT a stopped session's
+    // still-draining reader used to log. Refuse it as such instead.
+    if (!token) return Promise.reject(new Error('No cache session is open.'))
     return fsp.readFile(chunkFilePath(root, token, index))
   },
   async remove(root, token, index) {
@@ -218,7 +268,12 @@ export function createMemoryChunkStore(): ChunkStore {
  *  anything else (including an unset value) is the disk default. */
 export function memoryModeEnabled(): boolean {
   try {
-    return readSettings().cacheMode === 'memory'
+    // Through effectiveCacheMode, not the raw field: this is the function
+    // that decides whether a byte reaches the disk, so it has to honour a
+    // stream-only answer even though that answer lives in a different
+    // setting. Reading cacheMode directly here was the gap that would have
+    // made "stream only" a label on a checkbox.
+    return effectiveCacheMode(readSettings()) === 'memory'
   } catch {
     return false
   }
@@ -309,6 +364,69 @@ export function chunkIndexForByte(byte: number, chunkBytes = CHUNK_BYTES): numbe
   return Math.floor(byte / chunkBytes)
 }
 
+export interface RangeReplyVerdict {
+  /** Why the reply must NOT be written as chunk data, or null when it may. */
+  problem: string | null
+  /** The file length the reply declared, when it declared one. */
+  total: number | null
+}
+
+/**
+ * Whether a range fetch's reply is actually the bytes that were asked for.
+ *
+ * The fill used to check exactly one thing about a reply — that it had a
+ * body — and then cut whatever arrived into 4MB chunks and marked each
+ * one ready at the requested offset. Nothing forced those bytes to BE the
+ * requested offset: a server that ignores the Range header and streams
+ * from byte 0, a debrid link answering with a 200 error page after it
+ * expired, or a 206 for a different file after a link refresh, all went to
+ * disk as if they were the film. What the player then decoded was real
+ * video data at the wrong position — frames referencing pictures that were
+ * never sent, which is exactly the "blurry image jumping across the frame"
+ * a person reported, with a clean-looking picture either side of it.
+ *
+ * A 200 is accepted only for a request from byte 0, where a whole-file
+ * reply happens to be the same bytes. Pure, so the rules are testable
+ * without a server: tests/streamCache.test.ts.
+ */
+export function inspectRangeReply(
+  status: number,
+  contentRange: string | null | undefined,
+  requestedStart: number,
+  knownTotal: number | null
+): RangeReplyVerdict {
+  if (status === 200) {
+    return requestedStart === 0
+      ? { problem: null, total: null }
+      : {
+          problem: `answered a request for bytes ${requestedStart}- with a whole-file 200`,
+          total: null
+        }
+  }
+  if (status !== 206) {
+    return { problem: `answered with HTTP ${status} instead of partial content`, total: null }
+  }
+  const match = /^bytes\s+(\d+)-(\d+)\/(\d+|\*)$/i.exec(String(contentRange ?? '').trim())
+  if (!match) {
+    return {
+      problem: `sent a 206 without a usable content-range (${contentRange || 'none'})`,
+      total: null
+    }
+  }
+  const start = Number(match[1])
+  const total = match[3] === '*' ? null : Number(match[3])
+  if (start !== requestedStart) {
+    return { problem: `sent bytes from ${start} when ${requestedStart} was asked for`, total }
+  }
+  if (knownTotal !== null && total !== null && total !== knownTotal) {
+    return {
+      problem: `reported a ${total}-byte file where ${knownTotal} bytes were expected`,
+      total
+    }
+  }
+  return { problem: null, total }
+}
+
 export interface RetentionParams {
   /** Every chunk index currently on disk — in fullRetention mode nothing is ever evicted, so the retained set is just this, verbatim. */
   presentChunkIndices: Iterable<number>
@@ -390,6 +508,93 @@ export function computeRetainedChunkIndices(params: RetentionParams): Set<number
   return out
 }
 
+/**
+ * How many bytes a fill starting at `targetByte` may pull before the single
+ * upstream connection has to go back to the playhead. `null` means
+ * unbounded — this fill IS the playhead's own.
+ *
+ * That one connection (a second is the bug this module exists to prevent —
+ * see the module header) is shared by the playhead and by every incidental
+ * reader: ffmpeg jumping to Matroska Cues near EOF for its own seek index,
+ * a moov at the end of a non-faststart MP4, an embedded-subtitle pass.
+ * reposition() hands the connection to whichever read missed most recently,
+ * and before this bound existed the excursion then ran sequentially until
+ * something else dragged it back. Captured from a real stall: serving a
+ * tail probe on a 4K episode pulled 340MB straight to EOF while the
+ * playhead sat at 33 seconds with nothing queued, which starved playback to
+ * a stop. Four such excursions took 114 chunks of a 79-second window that
+ * only ever delivered 26 chunks to the playhead.
+ *
+ * The reference point is `playheadFillByte` — the first byte the playhead
+ * actually needs next (nextPlayheadFillByte), NOT the playhead's own
+ * position. Those differ whenever the buffer in front of the playhead is
+ * already partly cached, and using the position with a window wide enough
+ * to cover that gap would readmit exactly what this bounds: a probe landing
+ * anywhere in a 300-second ahead-window would read as the playhead's fill
+ * and could still run to EOF while the playhead starved.
+ *
+ * `seekHint` moves the playhead synchronously before it repositions, so a
+ * deliberate seek resolves to the byte it is about to need and stays
+ * unbounded. Null means the playhead needs nothing right now (its window is
+ * fully cached), so any fill is by definition somebody else's detour.
+ *
+ * One chunk of slack behind: a reader mid-chunk asks for the chunk it is
+ * already inside, which floors to just below the byte it needs next.
+ */
+export function fillBudgetBytes({
+  targetByte,
+  playheadFillByte,
+  toleranceBytes = PLAYHEAD_FILL_TOLERANCE_BYTES,
+  excursionBytes = EXCURSION_MAX_BYTES,
+  chunkBytes = CHUNK_BYTES
+}: {
+  targetByte: number
+  playheadFillByte: number | null
+  toleranceBytes?: number
+  excursionBytes?: number
+  chunkBytes?: number
+}): number | null {
+  if (playheadFillByte === null) return excursionBytes
+  const windowStart = playheadFillByte - chunkBytes
+  const windowEnd = playheadFillByte + toleranceBytes
+  if (targetByte >= windowStart && targetByte <= windowEnd) return null
+  return excursionBytes
+}
+
+/**
+ * Whether a local-server connection that has streamed `servedBytes` should
+ * be adopted as the fallback playhead (highWatermarkByte) — the retention
+ * centre used when nothing is actively reading, and the reference every
+ * fill is classified against.
+ *
+ * Two conditions, and the second is the one that has bitten twice:
+ *
+ * `servedBytes` alone is the original test (see PLAYHEAD_MIN_SERVED_BYTES):
+ * a container-metadata probe reads a few MB and disconnects, real playback
+ * streams continuously. But that bar (8MB) is smaller than one excursion
+ * budget (16MB), so a probe being served a detour crosses it partway
+ * through and becomes the playhead. Its next miss then resolves the
+ * playhead from the value it just corrupted, classifies itself as the
+ * playhead's own fill, and takes the single connection unbounded — exactly
+ * the starvation fillBudgetBytes exists to prevent.
+ *
+ * So a reader the fill is currently treating as a detour is never the
+ * playhead. It cannot be both. Raising the byte bar instead would only
+ * delay this: a long enough read crosses any fixed threshold.
+ */
+export function shouldAdoptAsPlayhead({
+  servedBytes,
+  servingExcursion,
+  minServedBytes = PLAYHEAD_MIN_SERVED_BYTES
+}: {
+  servedBytes: number
+  servingExcursion: boolean
+  minServedBytes?: number
+}): boolean {
+  if (servingExcursion) return false
+  return servedBytes >= minServedBytes
+}
+
 // Tokens minted by THIS module's own crypto.randomBytes calls, currently
 // backing a live session — the registry buildFfmpegArguments's guard checks
 // against. Deliberately never satisfied by a bare shape/regex match alone:
@@ -401,7 +606,8 @@ export function computeRetainedChunkIndices(params: RetentionParams): Set<number
 // but the check still has to be for real, not just "looks like our URL."
 const activeCacheTokens = new Set<string>()
 
-const OWN_CACHE_URL_RE = /^http:\/\/127\.0\.0\.1:\d+\/stream\/([a-f0-9]{64})$/
+// `?cached=1` is the thumbnail reader's mark — see serveRange's cachedOnly.
+const OWN_CACHE_URL_RE = /^http:\/\/127\.0\.0\.1:\d+\/stream\/([a-f0-9]{64})(?:\?cached=1)?$/
 
 // Same shape as the tokens minted above (crypto.randomBytes(32).toString
 // ('hex')) — pruneIdleSessions/clearAllSessions both walk whatever
@@ -431,6 +637,12 @@ export interface StreamCacheStartResult {
    *  the "Embedded" subtitle menu upfront rather than only discovering it
    *  can't extract after the person has already clicked. */
   fullRetention: boolean
+  /** Tier 1 only: the session's own manifest, as written when the bytes
+   *  were first fetched. It knows things the caller replaying the session
+   *  does not — which release these bytes ARE, for the Info panel — so the
+   *  player snapshot reads from it rather than from the thinner metadata
+   *  a local-cache candidate carries. */
+  meta?: CacheSessionMeta
 }
 
 export interface StreamCache {
@@ -442,6 +654,14 @@ export interface StreamCache {
   ): Promise<StreamCacheStartResult>
   /** Bare hex token of whatever session is currently loaded ('' when none) — lets the Downloads page's list/delete IPC handlers tell the live session apart from idle ones on disk (see listCacheSessions/deleteCacheSession below). */
   getActiveToken(): string
+  /** Whether the bytes AROUND this playback position are probably on disk,
+   *  by the file's average rate — an estimate, since a timestamp does not
+   *  say which byte a seek lands on in a variable-bitrate file. Cheap
+   *  enough to spare spawning a thumbnail mpv that would fail anyway; the
+   *  guarantee that a thumbnail read never costs the film anything is
+   *  serveRange's cachedOnly mode, not this. False whenever the answer
+   *  cannot be estimated at all (no duration or length yet). */
+  isPositionCached(seconds: number): boolean
   /**
    * Supplies the media duration after start(), which is what the retention
    * window needs to convert its behind/ahead *seconds* into bytes.
@@ -476,6 +696,11 @@ export interface StreamCache {
     durationSeconds: number | undefined,
     meta?: CacheSessionMeta
   ): Promise<StreamCacheStartResult>
+  /** Re-reads the storage answer and applies it to the session already
+   *  playing — see the implementation for why that cannot wait for the
+   *  next start(). A no-op unless a disk session is running and the
+   *  answer is now "stream only". */
+  applyStoragePolicy(): Promise<void>
 }
 
 export interface CreateStreamCacheOptions {
@@ -579,6 +804,52 @@ export function createStreamCache({
   // middle chunks are still missing.
   function hasFullCoverage(): boolean {
     return totalBytes !== null && firstMissingChunkIndex() === null
+  }
+
+  /** The ahead-window in bytes, by the same rule (and same no-duration
+   *  fallback) computeRetainedChunkIndices uses — what's retained ahead of
+   *  the playhead is exactly what counts as still being the playhead's own
+   *  fill rather than an excursion. */
+  function aheadWindowBytes(): number {
+    const rate = bytesPerSecond()
+    return rate !== undefined ? Math.floor(rate * aheadSeconds) : CHUNK_BYTES * 32
+  }
+
+  /**
+   * The first byte at or after `fromByte` that isn't cached yet — what the
+   * playhead needs next, and so both where a finished excursion hands the
+   * connection back to and what fillBudgetBytes classifies against.
+   *
+   * `fromByte` is passed explicitly by an excursion rather than read from
+   * highWatermarkByte, because an excursion's own reader can move that: a
+   * probe served more than PLAYHEAD_MIN_SERVED_BYTES (8MB) — well inside a
+   * 16MB excursion budget — is adopted by serveRange as the fallback
+   * playhead. Resuming from a re-read of it would hand the connection
+   * straight back to the probe and rebuild the starvation this bounds.
+   *
+   * The scan stops at the retention ahead-window unless the whole file is
+   * being kept: past that edge evictOutsideRetained deletes chunks as fast
+   * as the fill writes them, so aiming there spends a reconnect on bytes
+   * that cannot survive, and the same gap would be chosen again on the next
+   * resume. Null means the playhead's window is fully cached and there is
+   * genuinely nothing to fetch for it — the connection parks until playback
+   * advances far enough to miss, which is the correct idle state.
+   */
+  function nextPlayheadFillByte(fromByte: number = highWatermarkByte): number | null {
+    if (totalBytes === null) return fromByte
+    const lastIndex = chunkIndexForByte(totalBytes - 1)
+    const windowEnd = fullRetention
+      ? lastIndex
+      : Math.min(lastIndex, chunkIndexForByte(fromByte + aheadWindowBytes()))
+    for (let i = chunkIndexForByte(fromByte); i <= windowEnd; i++) {
+      if (chunks.get(i) !== 'ready') return i * CHUNK_BYTES
+    }
+    // Only fullRetention has a stake in gaps outside the window — it is the
+    // mode whose downloadComplete waits on whole-file coverage. In windowed
+    // mode a gap out there is intentional (evicted), not work to chase.
+    if (!fullRetention) return null
+    const gap = firstMissingChunkIndex()
+    return gap === null ? null : gap * CHUNK_BYTES
   }
 
   function notifyFullRetentionReady(): void {
@@ -771,10 +1042,25 @@ export function createStreamCache({
     await store.write(root, tok, index, data)
   }
 
-  /** Sequentially downloads from startByte onward, one connection, until aborted (reposition/stop) or EOF. */
-  async function runFill(startByte: number, myGeneration: number): Promise<void> {
+  /**
+   * Sequentially downloads from startByte onward, one connection, until
+   * aborted (reposition/stop), EOF, or — for an excursion serving a read
+   * that is nobody's playhead — `budgetBytes` written, at which point the
+   * connection goes back to the playhead. Null budget is unbounded; see
+   * fillBudgetBytes for which fills get which.
+   */
+  async function runFill(
+    startByte: number,
+    myGeneration: number,
+    budgetBytes: number | null,
+    /** Where the playhead was when this excursion was decided — see
+     *  nextPlayheadFillByte on why it is captured rather than re-read.
+     *  Unused by an unbounded fill, which never hands the connection on. */
+    resumeFromByte = 0
+  ): Promise<void> {
     const controller = new AbortController()
     currentAbort = controller
+    let fetchedBytes = 0
     fillFrontierByte = startByte
     let index = chunkIndexForByte(startByte)
     // A mid-chunk start (a reposition landing inside an already-partially-
@@ -805,23 +1091,112 @@ export function createStreamCache({
         resolveHost
       )
       if (generation !== myGeneration) return
+      // Refused BEFORE a byte of it is kept — see inspectRangeReply for what
+      // used to happen to a reply that was not the bytes asked for. A
+      // refused reply marks its first chunk failed, which is the same
+      // outcome as a dropped connection: serveRange clears the mark and
+      // refetches once, and only gives up if that fails too.
+      const verdict = inspectRangeReply(
+        response.status,
+        response.headers.get('content-range'),
+        alignedStart,
+        totalBytes
+      )
+      if (verdict.problem) {
+        logError(
+          'streamCache:rangeReply',
+          new Error(`Upstream ${verdict.problem} (asked for bytes=${alignedStart}-)`)
+        )
+        await response.body?.cancel().catch(() => {})
+        if (generation !== myGeneration) return
+        markChunk(index, 'failed')
+        return
+      }
+      // A ranged reply declares the file's length. Learning it here covers
+      // the session whose HEAD probe failed: without a total, serveRange
+      // has no end-of-file condition at all (see its zero-byte guard).
+      if (totalBytes === null && verdict.total !== null) totalBytes = verdict.total
       if (!response.body) return
       const reader = response.body.getReader()
-      let buffered = Buffer.alloc(0)
+      // Socket reads accumulate as a LIST of pieces and each 4MB chunk is
+      // assembled with one concat. The single-Buffer accumulator this
+      // replaces (`buffered = Buffer.concat([buffered, value])` per read)
+      // re-allocated and copied everything already held on EVERY ~64KB
+      // read — O(n²) per chunk, which at a debrid link's initial burst
+      // speed is multiple GB/s of memcpy demand on the main thread, for
+      // exactly the seconds the playback start is doing everything else
+      // too. Measured symptom of that busy window: system-wide cursor
+      // hitching while the overlay's low-level mouse hook waited on this
+      // very thread.
+      const pieces: Buffer[] = []
+      let bufferedLength = 0
       let bytePos = alignedStart
+      /** Removes exactly CHUNK_BYTES from the front of `pieces`, copying
+       *  once. Callers guarantee bufferedLength >= CHUNK_BYTES. */
+      const takeChunk = (): Buffer => {
+        const parts: Buffer[] = []
+        let need = CHUNK_BYTES
+        while (need > 0) {
+          const head = pieces[0]
+          if (head.length <= need) {
+            parts.push(head)
+            pieces.shift()
+            need -= head.length
+          } else {
+            parts.push(head.subarray(0, need))
+            pieces[0] = head.subarray(need)
+            need = 0
+          }
+        }
+        bufferedLength -= CHUNK_BYTES
+        return Buffer.concat(parts, CHUNK_BYTES)
+      }
       for (;;) {
         if (generation !== myGeneration) return
         const { done, value } = await reader.read()
         if (generation !== myGeneration) return
         if (done) {
-          if (buffered.length > 0) {
-            await writeChunk(myCacheRoot, myToken, index, buffered)
-            if (generation !== myGeneration) return
-            markChunk(index, 'ready')
+          if (bufferedLength > 0) {
+            const tailEnd = index * CHUNK_BYTES + bufferedLength
+            if (totalBytes !== null && tailEnd < totalBytes) {
+              // The body ended before the file did. Writing what arrived
+              // as a ready chunk would hand serveRange a short chunk in the
+              // middle of the file — which it can neither serve past nor
+              // recognise as an error — so this is a failed chunk, exactly
+              // as a dropped connection would have been.
+              logError(
+                'streamCache:fill',
+                new Error(`Upstream closed the body at byte ${tailEnd} of ${totalBytes}`)
+              )
+              pieces.length = 0
+              bufferedLength = 0
+              markChunk(index, 'failed')
+            } else {
+              // A short final chunk is what the END of a file looks like.
+              // When nothing had told this session how long the file is,
+              // this is the moment it finds out.
+              if (totalBytes === null) totalBytes = tailEnd
+              const tail = Buffer.concat(pieces, bufferedLength)
+              pieces.length = 0
+              bufferedLength = 0
+              await writeChunk(myCacheRoot, myToken, index, tail)
+              if (generation !== myGeneration) return
+              markChunk(index, 'ready')
+            }
           }
           if (hasFullCoverage()) {
             downloadComplete = true
             notifyFullRetentionReady()
+            return
+          }
+          // An excursion that ran into EOF (a tail probe is already near
+          // it) is still an excursion — the playhead gets the connection
+          // back. The gap-chase below is completeness work for
+          // fullRetention, and the playhead's own unbounded fill reaches
+          // this same branch when it finishes, so nothing is lost by not
+          // starting it from here.
+          if (budgetBytes !== null) {
+            resumePlayheadFill(myGeneration, resumeFromByte)
             return
           }
           // Reached EOF without full coverage — a seek aborted the
@@ -843,24 +1218,34 @@ export function createStreamCache({
           if (fullRetention) {
             const gapIndex = firstMissingChunkIndex()
             if (gapIndex !== null) {
-              void runFill(gapIndex * CHUNK_BYTES, myGeneration)
+              void runFill(gapIndex * CHUNK_BYTES, myGeneration, null)
             }
           }
           return
         }
-        buffered = Buffer.concat([buffered, Buffer.from(value)])
+        // A view, not a copy: the fetch stream allocates a fresh buffer per
+        // read and never touches it again once handed over.
+        pieces.push(Buffer.from(value.buffer, value.byteOffset, value.byteLength))
+        bufferedLength += value.byteLength
         bytePos += value.byteLength
         fillFrontierByte = bytePos
-        while (buffered.length >= CHUNK_BYTES) {
+        while (bufferedLength >= CHUNK_BYTES) {
           if (generation !== myGeneration) return
-          const chunkData = buffered.subarray(0, CHUNK_BYTES)
-          buffered = Buffer.from(buffered.subarray(CHUNK_BYTES))
+          const chunkData = takeChunk()
           await writeChunk(myCacheRoot, myToken, index, chunkData)
           if (generation !== myGeneration) return
           markChunk(index, 'ready')
           await evictOutsideRetained()
           await squeezeForPressure()
           index += 1
+          fetchedBytes += CHUNK_BYTES
+          // The excursion has what it came for. Hand the one connection
+          // back rather than letting a metadata probe keep streaming (it
+          // would happily run to EOF) while the playhead waits on it.
+          if (budgetBytes !== null && fetchedBytes >= budgetBytes) {
+            resumePlayheadFill(myGeneration, resumeFromByte)
+            return
+          }
         }
       }
     } catch (error) {
@@ -871,15 +1256,101 @@ export function createStreamCache({
     }
   }
 
-  /** Aborts whatever fetch is running, waits the TorBox teardown grace delay, then starts a fresh fill at targetByte. */
-  async function reposition(targetByte: number): Promise<void> {
+  /**
+   * Aborts whatever fetch is running, waits the TorBox teardown grace
+   * delay, then starts a fresh fill at targetByte.
+   *
+   * Returns how that fill was classified — null for the playhead's own,
+   * a byte budget for an excursion — so the caller in serveRange can tell
+   * whether IT is the reader being served a detour. See the promotion
+   * guard at the bottom of serveRange for why that matters.
+   */
+  async function reposition(
+    targetByte: number,
+    /** Supplied only by resumePlayheadFill, which already resolved the
+     *  target against the pre-excursion playhead — re-deriving it here
+     *  from a possibly-hijacked highWatermarkByte would classify the
+     *  hand-back itself as another excursion and loop. */
+    playheadOverride?: number
+  ): Promise<number | null> {
+    // Decided here, not at the call sites: every one of them is a read that
+    // missed, and whether that read is the playhead or an incidental probe
+    // is the same question in each. seekHint moves the playhead before it
+    // calls this, so a deliberate seek reads as the playhead's own fill.
+    //
+    // Both reads of the playhead happen NOW, before any await and before
+    // the excursion's own reader can be adopted as the fallback playhead
+    // (serveRange does that at 8MB, inside a 16MB budget).
+    const playheadByte = playheadOverride ?? highWatermarkByte
+    const budgetBytes = fillBudgetBytes({
+      targetByte,
+      playheadFillByte: nextPlayheadFillByte(playheadByte)
+    })
     const myGeneration = ++generation
     const hadOpenFetch = Boolean(currentAbort)
     currentAbort?.abort()
     currentAbort = null
     if (hadOpenFetch) await new Promise((resolve) => setTimeout(resolve, RECONNECT_GRACE_MS))
+    if (generation !== myGeneration) return budgetBytes
+    void runFill(targetByte, myGeneration, budgetBytes, playheadByte)
+    return budgetBytes
+  }
+
+  /**
+   * Ends a bounded excursion by pointing the one upstream connection back at
+   * the playhead. Goes through reposition() so the TorBox teardown grace
+   * delay is honoured exactly as it is for any other connection switch.
+   *
+   * Resolves the target from the playhead as it was when the excursion was
+   * decided, so a probe that served enough to be adopted as the fallback
+   * playhead mid-excursion cannot redirect the hand-back to itself.
+   */
+  function resumePlayheadFill(myGeneration: number, fromByte: number): void {
     if (generation !== myGeneration) return
-    void runFill(targetByte, myGeneration)
+    const target = nextPlayheadFillByte(fromByte)
+    if (target === null) return
+    void reposition(chunkIndexForByte(target) * CHUNK_BYTES, fromByte)
+  }
+
+  /**
+   * Applies the storage answer to the session ALREADY playing.
+   *
+   * The store is chosen once, in start(), which meant somebody who turned
+   * storage off halfway through a film had the REST of that film written to
+   * their disk anyway. The promise was broken at the exact moment it was
+   * being made, and the setting is most likely to be changed precisely when
+   * somebody has noticed what is happening and wants it to stop.
+   *
+   * So the live session is swapped onto a memory store and what it has
+   * already written is deleted. Playback continues: reads for those chunks
+   * now miss, which is a case serveRange already recovers from by
+   * refetching, the same as a chunk evicted under disk pressure.
+   *
+   * reposition() first, and that ordering matters — it bumps the generation
+   * and aborts the open fetch, so a disk write already in flight cannot
+   * land after the delete and quietly recreate the files just removed.
+   */
+  async function applyStoragePolicy(): Promise<void> {
+    if (!token || !store.persistent || !memoryModeEnabled()) return
+    const root = cacheRoot
+    const previous = token
+    store = createMemoryChunkStore()
+    // THE LIMITS COME WITH THE STORE. maxBytes and fullRetention were set
+    // for a session on a disk: a 10 GB cap is reasonable there and is not a
+    // resident set anybody wants, and fullRetention makes
+    // evictOutsideRetained a deliberate no-op — so a film smaller than the
+    // disk cap would have been held whole, in RAM, with nothing allowed to
+    // evict it. start() derives both from the store for exactly this
+    // reason, and swapping the store without re-deriving them turned a
+    // privacy setting into an out-of-memory bug.
+    maxBytes = memoryCacheMaxBytes()
+    fullRetention = false
+    // Whole-file coverage is now provably impossible for this session, so
+    // anyone waiting on it hears that at once instead of sitting out their
+    // own timeout -- the same courtesy the disk-pressure downgrade pays.
+    settleFullRetentionWaiters(false)
+    await reposition(fillFrontierByte)
+    await fsp.rm(sessionDir(root, previous), { recursive: true, force: true })
   }
 
   function isNearFillFrontier(byte: number): boolean {
@@ -918,13 +1389,55 @@ export function createStreamCache({
   // superseded — only the client actually disconnecting (aborted.flag,
   // e.g. ffmpeg getting killed as part of a restart, or the <video>
   // element aborting its own pending request on a seek) ends this loop.
-  async function serveRange(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  /**
+   * `cachedOnly` is the scrub-bar thumbnail's mode: serve what is on disk
+   * and nothing else. A read it makes of bytes that are not there — and
+   * which bytes an mpv seek touches (header, cues, the keyframe before the
+   * target) cannot be predicted from a timestamp — ends the response
+   * instead of repositioning the one upstream connection away from the
+   * film. The capture fails fast and quietly; the playhead never notices.
+   * Such a reader is also never adopted as the playhead.
+   */
+  async function serveRange(
+    req: IncomingMessage,
+    res: ServerResponse,
+    cachedOnly = false
+  ): Promise<void> {
     const rangeHeader = String(req.headers.range || '')
     const rangeMatch = /bytes=(\d+)-/.exec(rangeHeader)
     const startByte = rangeMatch ? Number(rangeMatch[1]) : 0
+    // Captured once, the same way runFill captures its own — every read
+    // below goes through THESE, never the live closure vars. stopInternal
+    // clears `token` while a reader can still be draining, and a read
+    // taken against the live value then resolved to the cache root with no
+    // session directory at all: the 'stream-cache\chunk-N.bin' ENOENT in a
+    // person's log, with no 64-hex token segment, is exactly that.
+    const myToken = token
+    const myCacheRoot = cacheRoot
 
+    /**
+     * Whether this connection's most recent miss was served as an excursion
+     * — i.e. the fill it triggered was a detour, not the playhead's own.
+     *
+     * Reassigned on every miss rather than latched, so a connection that
+     * genuinely becomes the playhead (a seek: seekHint moves the playhead
+     * first, so its next miss classifies as the playhead's fill) clears
+     * itself and can be adopted normally.
+     *
+     * Declared up here, above the entry miss, because that one counts too:
+     * a probe whose very first request is served by an excursion can then
+     * read the whole 16MB it just cached without missing again, crossing
+     * the 8MB adoption bar with no later miss to mark it.
+     */
+    let servingExcursion = false
+    if (cachedOnly && chunks.get(chunkIndexForByte(startByte)) !== 'ready') {
+      // Before the header, so a status can still say it: not now.
+      res.writeHead(503, { 'cache-control': 'no-store' })
+      res.end()
+      return
+    }
     if (!chunks.has(chunkIndexForByte(startByte)) && !isNearFillFrontier(startByte)) {
-      await reposition(chunkIndexForByte(startByte) * CHUNK_BYTES)
+      servingExcursion = (await reposition(chunkIndexForByte(startByte) * CHUNK_BYTES)) !== null
     }
 
     const totalLabel = totalBytes !== null ? String(totalBytes) : '*'
@@ -932,10 +1445,35 @@ export function createStreamCache({
       'content-type': 'application/octet-stream',
       'accept-ranges': 'bytes',
       'cache-control': 'no-store',
-      'content-range': `bytes ${startByte}-${totalBytes !== null ? totalBytes - 1 : ''}/${totalLabel}`
+      'content-range': `bytes ${startByte}-${totalBytes !== null ? totalBytes - 1 : ''}/${totalLabel}`,
+      // Declared so that a body which stops short is DETECTABLE. Without
+      // it the reply is chunked, and an early end is a syntactically
+      // complete body — mpv reads it as the end of the film and parks on
+      // the last frame with nothing to say, which is how a title "stopped
+      // at 80%" for someone with no line in the log to explain it.
+      ...(totalBytes !== null ? { 'content-length': String(totalBytes - startByte) } : {})
     })
 
     let bytePos = startByte
+    /**
+     * Gives up on this response in the only way that is honest once the
+     * header is out. A status code can no longer say anything (every
+     * `writeHead(502)` that used to sit here was unreachable for that
+     * reason — headers are sent on the first line of the body above), and
+     * ending the body cleanly tells the player the film is over. Breaking
+     * the connection instead is what ffmpeg's HTTP layer can act on: mpv
+     * reconnects at its current byte offset and this server gets another
+     * chance to have the bytes ready, and only a region that stays
+     * unfillable ends playback, as an error rather than as a credits roll.
+     */
+    const abandon = (why: string): void => {
+      logError(
+        'streamCache:starved',
+        new Error(`${why} at byte ${bytePos} (chunk ${chunkIndexForByte(bytePos)})`)
+      )
+      res.destroy()
+    }
+
     let servedBytes = 0
     /** Which chunk index this connection has already re-fetched once after a
      *  failed read — see the readFile catch below. */
@@ -961,8 +1499,16 @@ export function createStreamCache({
           return
         }
         let status = chunks.get(index)
+        if (cachedOnly && status !== 'ready') {
+          // The thumbnail reader ran off the end of what is on disk. Quiet:
+          // it is the expected outcome of hovering ahead of the download.
+          res.destroy()
+          return
+        }
         if (status === undefined) {
-          if (!isNearFillFrontier(bytePos)) await reposition(index * CHUNK_BYTES)
+          if (!isNearFillFrontier(bytePos)) {
+            servingExcursion = (await reposition(index * CHUNK_BYTES)) !== null
+          }
           status = await waitForChunk(index)
         } else if (status === 'pending') {
           status = await waitForChunk(index)
@@ -975,7 +1521,7 @@ export function createStreamCache({
           // the stream even though a retry would have succeeded. Clear the
           // mark and genuinely refetch once before giving up.
           chunks.delete(index)
-          await reposition(index * CHUNK_BYTES)
+          servingExcursion = (await reposition(index * CHUNK_BYTES)) !== null
           status = await waitForChunk(index)
         }
         if (aborted.flag) {
@@ -985,15 +1531,22 @@ export function createStreamCache({
         if (status !== 'ready') {
           // Genuinely stuck (fetch failing repeatedly for this region) —
           // surface as a real error rather than hanging the client forever.
-          if (!res.headersSent) res.writeHead(502, { 'cache-control': 'no-store' })
-          res.end()
+          abandon('No bytes could be fetched for the region being played')
+          return
+        }
+        // The session this reader belongs to has been stopped (or replaced
+        // by start()'s own stopInternal) while it was parked in a wait
+        // above. Nothing it could serve now would be this session's bytes.
+        // Quiet, because it is the ordinary wake of a stop, not a fault.
+        if (token !== myToken) {
+          res.destroy()
           return
         }
         const chunkStartByte = index * CHUNK_BYTES
         const offsetInChunk = bytePos - chunkStartByte
         let data: Buffer
         try {
-          data = await store.read(cacheRoot, token, index)
+          data = await store.read(myCacheRoot, myToken, index)
         } catch (error) {
           logError('streamCache:readChunk', error)
           // This chunk was 'ready' a moment ago, so the file went away
@@ -1005,14 +1558,27 @@ export function createStreamCache({
           if (retriedIndex !== index) {
             retriedIndex = index
             chunks.delete(index)
-            await reposition(index * CHUNK_BYTES)
+            servingExcursion = (await reposition(index * CHUNK_BYTES)) !== null
             continue
           }
-          if (!res.headersSent) res.writeHead(502, { 'cache-control': 'no-store' })
-          res.end()
+          abandon('A cached chunk could not be read back, twice')
           return
         }
         const slice = offsetInChunk > 0 ? data.subarray(offsetInChunk) : data
+        if (slice.length === 0) {
+          // A ready chunk with nothing at this offset is a chunk shorter
+          // than the position being read. With the file's length known that
+          // is a truncated chunk, and serving it would loop here forever,
+          // writing nothing and never advancing. Without a known length it
+          // is simply the end of the file — the only end-of-file this loop
+          // has when no HEAD or ranged reply ever declared a total.
+          if (totalBytes !== null && bytePos < totalBytes) {
+            abandon('A cached chunk is shorter than the file needs it to be')
+            return
+          }
+          res.end()
+          return
+        }
         const canContinue = res.write(slice)
         bytePos = chunkStartByte + data.length
         servedBytes += slice.length
@@ -1023,7 +1589,9 @@ export function createStreamCache({
         // probe — which reads a few MB near EOF and disconnects — can't
         // leave the retention centre stranded at the end of the file the
         // way the old forward-only high-water mark did.
-        if (servedBytes >= PLAYHEAD_MIN_SERVED_BYTES) highWatermarkByte = bytePos
+        if (!cachedOnly && shouldAdoptAsPlayhead({ servedBytes, servingExcursion })) {
+          highWatermarkByte = bytePos
+        }
         if (!canContinue) {
           await new Promise<void>((resolve) => res.once('drain', () => resolve()))
         }
@@ -1053,9 +1621,17 @@ export function createStreamCache({
         res.end()
         return
       }
-      serveRange(req, res).catch((error) => {
+      const cachedOnly =
+        new URL(req.url ?? '', 'http://127.0.0.1').searchParams.get('cached') === '1'
+      serveRange(req, res, cachedOnly).catch((error) => {
         logError('streamCache:serve', error)
-        if (!res.headersSent) res.writeHead(502, { 'cache-control': 'no-store' })
+        // Before the header: a status the client can act on. After it: the
+        // only honest signal left is a broken transfer — see abandon().
+        if (res.headersSent) {
+          res.destroy()
+          return
+        }
+        res.writeHead(502, { 'cache-control': 'no-store' })
         res.end()
       })
     })
@@ -1146,7 +1722,7 @@ export function createStreamCache({
     void writeMeta({ ...stored, ...meta }, cacheRoot, token)
 
     reportPreparation('buffer', 'Playing from this computer — already downloaded')
-    return { url: `${origin}/stream/${token}`, totalBytes, fullRetention: true }
+    return { url: `${origin}/stream/${token}`, totalBytes, fullRetention: true, meta: stored }
   }
 
   async function start(
@@ -1231,7 +1807,9 @@ export function createStreamCache({
     // picks up anything further along, so a resumed title downloads only what
     // it is missing.
     const firstGap = firstMissingChunkIndex()
-    void runFill(firstGap === null ? 0 : firstGap * CHUNK_BYTES, myGeneration)
+    // Unbounded, explicitly: this is the fill the playhead is about to read
+    // from, whatever highWatermarkByte happens to say on a resumed session.
+    void runFill(firstGap === null ? 0 : firstGap * CHUNK_BYTES, myGeneration, null)
     // Wait for at least the first chunk so the very first read from ffmpeg/
     // the <video> element doesn't land on nothing — mirrors the readiness
     // gate createFfmpegTranscoder already uses before its own start()
@@ -1384,6 +1962,11 @@ export function createStreamCache({
   return {
     start,
     getActiveToken: () => token,
+    isPositionCached: (seconds) => {
+      const rate = bytesPerSecond()
+      if (!token || !rate || !Number.isFinite(seconds) || seconds < 0) return false
+      return chunks.get(chunkIndexForByte(Math.floor(seconds * rate))) === 'ready'
+    },
     setDuration: (value: number | undefined) => {
       const seconds = Number(value)
       if (Number.isFinite(seconds) && seconds > 0) durationSeconds = seconds
@@ -1394,7 +1977,8 @@ export function createStreamCache({
     waitForFullRetentionReady,
     stop,
     deleteSession,
-    startLocal
+    startLocal,
+    applyStoragePolicy
   }
 }
 
@@ -1420,12 +2004,14 @@ export async function pruneIdleSessions(maxAgeMs = 24 * 60 * 60 * 1000): Promise
     if (activeCacheTokens.has(entry.name)) continue
     const dir = path.join(root, entry.name)
     try {
-      const files = await fsp.readdir(dir)
-      let newestMtime = 0
-      for (const file of files) {
-        const stat = await fsp.stat(path.join(dir, file))
-        newestMtime = Math.max(newestMtime, stat.mtimeMs)
-      }
+      // The directory's own mtime, not a stat of every chunk inside it:
+      // chunk writes land by rename-into-directory and evictions remove
+      // entries, both of which bump the directory timestamp — the same
+      // signal the newest-file scan derived at a stat per chunk file,
+      // thousands of calls per pass on a cache holding a few films.
+      // (Reads bump neither, exactly as before; the active session is
+      // already exempted above.)
+      const newestMtime = (await fsp.stat(dir)).mtimeMs
       if (newestMtime === 0 || newestMtime < cutoff) {
         await fsp.rm(dir, { recursive: true, force: true })
       }
@@ -1472,6 +2058,28 @@ export interface LocalCacheCandidate {
  * Returns the best match: a complete session beats a partial one, and
  * among partials the one holding the most bytes wins.
  */
+/**
+ * Bytes held by a session, from one readdir listing — NO per-file stat.
+ *
+ * Chunks are fixed CHUNK_BYTES; the only partial file a fill ever writes is
+ * the final one at EOF, so `count * CHUNK_BYTES` is exact for every session
+ * except an at-most-4MB overcount on the tail — capped by totalBytes when
+ * known, which also makes the completeness comparison exact (all chunks
+ * present ⇔ count * CHUNK_BYTES >= totalBytes). The stat-per-chunk loop this
+ * replaces ran on the PLAY CLICK across every session directory: a few
+ * cached films is tens of thousands of sequential stat round trips (each
+ * one a threadpool hop plus the AV filter driver), a multi-second metadata
+ * storm in the exact window the playback start needs the main thread.
+ */
+function estimatedCachedBytes(files: string[], totalBytes: number | null): number {
+  let chunkCount = 0
+  for (const file of files) {
+    if (file.startsWith('chunk-') && file.endsWith('.bin')) chunkCount += 1
+  }
+  const estimate = chunkCount * CHUNK_BYTES
+  return totalBytes !== null ? Math.min(estimate, totalBytes) : estimate
+}
+
 export async function findLocalCacheCandidate(
   meta: CacheSessionMeta | undefined
 ): Promise<LocalCacheCandidate | null> {
@@ -1504,11 +2112,10 @@ export async function findLocalCacheCandidate(
       ) as StoredMeta
       if (cacheContentKey(stored) !== key) continue
 
-      let cachedBytes = 0
-      for (const file of await fsp.readdir(path.join(root, entry.name))) {
-        if (!file.startsWith('chunk-') || !file.endsWith('.bin')) continue
-        cachedBytes += (await fsp.stat(path.join(root, entry.name, file))).size
-      }
+      const cachedBytes = estimatedCachedBytes(
+        await fsp.readdir(path.join(root, entry.name)),
+        stored.totalBytes
+      )
       if (cachedBytes <= 0) continue
 
       const candidate: LocalCacheCandidate = {
@@ -1553,13 +2160,8 @@ export async function listCacheSessions(activeToken: string): Promise<StreamCach
     try {
       const raw = await fsp.readFile(metaFilePath(root, entry.name), 'utf8')
       const meta = JSON.parse(raw) as StoredMeta
-      const files = await fsp.readdir(dir)
-      let cachedBytes = 0
-      for (const file of files) {
-        if (!file.startsWith('chunk-') || !file.endsWith('.bin')) continue
-        const stat = await fsp.stat(path.join(dir, file))
-        cachedBytes += stat.size
-      }
+      // See estimatedCachedBytes — one listing, no stat-per-chunk.
+      const cachedBytes = estimatedCachedBytes(await fsp.readdir(dir), meta.totalBytes)
       result.push({
         token: entry.name,
         title: meta.title,

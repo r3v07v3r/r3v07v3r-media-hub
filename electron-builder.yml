@@ -23,6 +23,12 @@ files:
   - '!resources/mpv-win/**'
 asarUnpack:
   - resources/**
+  # koffi's loader resolves a real on-disk path, and the actual prebuilt
+  # koffi.node ships in the separate @koromix/koffi-win32-x64 package.
+  # electron-builder's smart unpack catches the .node on its own, but the
+  # explicit entries remove the gamble.
+  - node_modules/koffi/**
+  - node_modules/@koromix/**
 win:
   target:
     - nsis

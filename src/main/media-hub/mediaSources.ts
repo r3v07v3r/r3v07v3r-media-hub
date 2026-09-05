@@ -50,7 +50,8 @@ export function isMediaServerConnected(): boolean {
  */
 export async function findMediaServerCandidate(
   id: string,
-  title: string | undefined
+  /** The title's names — see titleMatchesRelease; the first is the search term. */
+  title: string | readonly string[] | undefined
 ): Promise<StreamCandidate | null> {
   const config = mediaServerConfig()
   if (!config) return null

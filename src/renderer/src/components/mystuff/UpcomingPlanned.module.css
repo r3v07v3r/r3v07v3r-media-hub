@@ -1,0 +1,92 @@
+/* A band above the list rather than a section of it. These titles are on
+   the same list as everything else — they are simply the part you cannot
+   act on yet, which is worth knowing before you scroll looking for
+   something to watch tonight. */
+.band {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 18px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.head h3 {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 1.4px;
+  text-transform: uppercase;
+  color: var(--text-primary);
+}
+
+.count {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.row {
+  display: flex;
+  gap: 10px;
+  margin: 0;
+  padding: 0 0 4px;
+  list-style: none;
+  overflow-x: auto;
+}
+
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  width: 92px;
+  padding: 0;
+  border: 0;
+  background: none;
+  text-align: left;
+  cursor: pointer;
+}
+
+/* The sized box ArtworkImage fills. It used to be styled as `.card img`,
+   which never matched: the image is absolutely positioned inside a wrapper
+   that had no size of its own, so the card drew nothing. */
+.cardArt {
+  width: 92px;
+  aspect-ratio: 2 / 3;
+  overflow: hidden;
+  border-radius: var(--radius-medium, 10px);
+  border: 1px solid var(--border-subtle);
+  /* Dimmed, because it is not available. The eye should pass over these on
+     the way to something watchable unless it is looking for them. */
+  opacity: 0.78;
+}
+
+.card:hover .cardArt {
+  opacity: 1;
+  border-color: var(--border-active);
+}
+
+/* The date first and brightest: on this row the WHEN is the news, not the
+   title. */
+.when {
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--accent-cyan);
+}
+
+.name {
+  font-size: 0.78rem;
+  line-height: 1.35;
+  color: var(--text-secondary);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}

@@ -16,7 +16,6 @@ import {
   ContinueWatchingEntry,
   Episode,
   HistoryEntry,
-  LibraryItem,
   MediaKind,
   StreamCandidate,
   Trailer
@@ -26,10 +25,21 @@ import {
   episodeWatchState,
   filterCatalog,
   isItemWatched,
-  subtitlesInadequate
+  subtitlesInadequate,
+  hasAired,
+  isRegularEpisode
 } from '../../shared/media-hub/catalog-logic'
 import { releaseTextMentionsExecutable } from '../../shared/media-hub/unsafeFiles'
-import { releaseLacksPreferredLanguage } from '../../shared/media-hub/language'
+import {
+  languageMatches,
+  releaseDeclaresLanguage,
+  releaseLacksPreferredLanguage
+} from '../../shared/media-hub/language'
+import {
+  streamResolution,
+  streamText,
+  streamReleaseName
+} from '../../shared/media-hub/streamQuality'
 
 export { airingStatus, episodeWatchState, filterCatalog, isItemWatched, subtitlesInadequate }
 
@@ -57,23 +67,14 @@ export function createRoomCode(random: () => number = Math.random): string {
  *  in `description` — e.g. "Interstellar.2014.2160p.PROPER.IMAX.REMUX.DV.
  *  HDR10+.TrueHD.7.1.Atmos-...mkv ... 💾 63.0 GB". Scoring on name alone
  *  meant every candidate looked identical apart from the resolution. */
-function streamText(stream: StreamCandidate): string {
-  return `${stream.name || ''} ${stream.title || ''} ${stream.description || ''}`.toLowerCase()
-}
+// Both moved to shared/media-hub/streamQuality.ts, and re-exported here so
+// this module's own callers are unchanged: the renderer needs the identical
+// answer to decide whether to warn before playing, and two implementations of
+// "is this 1080p" would eventually disagree in the one way that matters —
+// warning about a title that played perfectly well.
+export { streamResolution, streamText }
 
-/** Exported so a cache session can record the resolution it actually
- *  holds. Without it a cached copy stores `undefined`, and the quality
- *  target then accepts it unconditionally — a cached 720p copy would
- *  satisfy a 1080p request forever. */
-export function streamResolution(stream: StreamCandidate): number {
-  const text = streamText(stream)
-  if (/2160|4k/.test(text)) return 2160
-  if (/1080/.test(text)) return 1080
-  if (/720/.test(text)) return 720
-  return stream.resolution || 0
-}
-
-function streamSizeGb(stream: StreamCandidate): number | null {
+export function streamSizeGb(stream: StreamCandidate): number | null {
   const text = streamText(stream)
   const match = text.match(/([\d.]+)\s*(tb|gb|mb)\b/)
   if (match) {
@@ -150,6 +151,78 @@ const REMUX_PENALTY = 8000
 const OVERSIZED_GB = 25
 
 /**
+ * How well seeded an UNCACHED release is — the one thing the scrapers have
+ * always reported and the ranking has never read.
+ *
+ * Both add-ons put it in the same place, confirmed live against
+ * `torrentio.strem.fun` and the Comet instance on 2026-08-29: a `👤 N` run
+ * in the text streamText already builds. Torrentio carried one on all 66
+ * results for a test title (5 to 2081, median 13); Comet on 807 of 1628.
+ *
+ * WHY IT MATTERS MORE THAN IT LOOKS. When nothing is cached, resolve does not
+ * merely rank — it SUBMITS the winner to TorBox to start caching (see the
+ * `queued` path). That choice was previously blind to whether a release had
+ * two seeders or two thousand, so the app could commit somebody's account, and
+ * their evening, to a torrent that was never going to arrive.
+ *
+ * ABSENCE IS NEUTRAL, WHICH IS NOT THE SAME AS ZERO — OR AS NOTHING. Half of
+ * Comet's results carry no count at all, so scoring a missing count as "0
+ * seeders" would systematically demote one whole add-on for saying nothing.
+ * Awarding no bonus is just as wrong for the same reason: it would put an
+ * unknown release below one advertising a single seeder, which is precisely
+ * backwards. An unknown therefore scores the MIDPOINT of this term's own
+ * range, so it loses to a well-seeded release, beats a barely-seeded one, and
+ * a set where nothing reports a count is shifted by a constant and so ordered
+ * exactly as it was before. The break-even is around nine seeders.
+ *
+ * UNCACHED ONLY. A cached candidate is already on TorBox's disk and needs no
+ * peers whatsoever — and Comet's `👤 0` entries are largely debrid-account
+ * results, which are exactly the most playable ones. Scoring them on seeders
+ * would punish them for a number that does not apply to them.
+ *
+ * SATURATING, because the risk is not linear: 0 to 30 seeders is the whole
+ * question and 500 to 5000 is noise. Above SEEDER_SATURATION the term stops
+ * growing.
+ */
+const SEEDER_SATURATION = 100
+
+/**
+ * Below the SMALLEST gap between adjacent resolution steps, so this orders
+ * candidates WITHIN a quality tier and can never quietly hand somebody a
+ * lower tier than they asked for. Choosing between tiers on availability is
+ * a bigger claim than this evidence supports.
+ *
+ * The bound was 900, checked against the 2160-to-1080 gap of 1080 — the
+ * LARGEST step, and the only one the test covered. Every other step is much
+ * smaller (RESOLUTION_STEPS is 480, 720, 1080, 1440, 2160, so the tightest
+ * gap is 240), and 900 cleared three of them: a 720p release with 5000
+ * seeders beat a 1080p one with none, which is exactly the swap the comment
+ * said could not happen. Bounded by the smallest gap now, not the biggest.
+ *
+ * The break-even against an unknown count is unchanged at roughly nine
+ * seeders — it is a ratio within this term, so it does not move with the
+ * term's size.
+ */
+const SEEDER_WEIGHT = 200
+
+/** The seeder count a release advertises, or null when it does not.
+ *  Exported for the ranking test. */
+export function streamSeeders(stream: StreamCandidate): number | null {
+  const match = streamText(stream).match(/\u{1F464}\s*([\d,]+)/u)
+  if (!match) return null
+  const value = Number(match[1].replace(/,/g, ''))
+  return Number.isFinite(value) && value >= 0 ? value : null
+}
+
+function seederBonus(stream: StreamCandidate): number {
+  if (stream.cached !== false) return 0
+  const seeders = streamSeeders(stream)
+  if (seeders === null) return SEEDER_WEIGHT / 2
+  const ratio = Math.log10(seeders + 1) / Math.log10(SEEDER_SATURATION + 1)
+  return Math.round(SEEDER_WEIGHT * Math.min(1, ratio))
+}
+
+/**
  * Whether a release advertises executable content — its own name, or the
  * file listing some scraper add-ons put in `description` (see streamText).
  *
@@ -167,17 +240,36 @@ export function isUnsafeStream(stream: StreamCandidate): boolean {
 
 /** Drops releases advertising executables, then ranks what's left with the
  *  person's audio-language preference applied. */
+/**
+ * The candidates a PREFETCH may choose from: those whose release name
+ * matches one of the title's known names. With names to check and none
+ * matching, nothing — never the unguarded set. Live resolution falls back
+ * to it because a person is there to see a wrong match; the LAN feeder
+ * fetches unattended, and a wrong file it stores is served later as the
+ * exact title. With no names at all the guard has nothing to say and
+ * every candidate stands. Pure; see tests/streamSelection.test.ts.
+ */
+export function guardedForPrefetch(
+  streams: StreamCandidate[],
+  titles: readonly string[]
+): StreamCandidate[] {
+  if (!titles.length) return streams
+  return streams.filter((stream) => titleMatchesRelease(streamReleaseName(stream), titles))
+}
+
 export function rankSafeStreams(
   streams: StreamCandidate[],
   preferredLanguage = 'en',
   limits: StreamLimits = {},
-  sourcePreference: SourcePreference = 'balanced'
+  sourcePreference: SourcePreference = 'balanced',
+  options: RankOptions = {}
 ): StreamCandidate[] {
   return rankStreams(
     streams.filter((s) => !isUnsafeStream(s)),
     preferredLanguage,
     limits,
-    sourcePreference
+    sourcePreference,
+    options
   )
 }
 
@@ -191,6 +283,133 @@ export function rankSafeStreams(
  * has to lose to anything English.
  */
 const WRONG_LANGUAGE_PENALTY = 40000
+
+/**
+ * What a release that SAYS it carries the wanted audio is worth.
+ *
+ * The penalty above only ever separates a foreign dub from everything else;
+ * it cannot tell a Japanese-only raw from a dual-audio release of the same
+ * episode, which is why a series played one episode in English and the
+ * next in Japanese. Sized to sit above the whole resolution term (max 2160,
+ * so audio language outranks a picture tier), below LOCAL_SOURCE_BONUS's
+ * balanced 5000 (a local copy still wins under 'balanced'), below
+ * REMUX_PENALTY (a dual-audio remux still loses to a normal encode), and far
+ * below the `cached` gate — an uncached correct-language release never
+ * beats one that can be played right now.
+ */
+const PREFERRED_LANGUAGE_BONUS = 3000
+
+/**
+ * What the same release group as the previous episode is worth. Anime
+ * groups keep their audio, subtitles and encode settings consistent across
+ * a season, so staying with the group that played episode 5 is the surest
+ * way episode 6 sounds and looks the same. Below the language bonus (a
+ * group that turns Japanese-only for one episode still loses to one that
+ * declares English) and above one resolution tier (a 1080p from the same
+ * group beats a 2160p from another).
+ */
+const SAME_RELEASE_GROUP_BONUS = 2500
+
+/**
+ * The release group a name carries — the leading fansub tag ("[SubsPlease]")
+ * or the trailing scene suffix ("...x264-SPARKS") — lowercased and stripped
+ * to letters and digits, or null when the name has neither. Its own
+ * function rather than part of parseReleaseName, whose readableTitle
+ * deliberately deletes the brackets this reads.
+ */
+export function releaseGroup(text: string): string | null {
+  const raw = String(text || '')
+    .split('\n')[0]
+    .trim()
+  if (!raw) return null
+  const leading = /^\[([^\]]{1,40})\]/.exec(raw)
+  if (leading) return leading[1].toLowerCase().replace(/[^a-z0-9]/g, '') || null
+  // Only a RELEASE name carries a group. A plain title — "The Amazing
+  // Spider-Man", "X-Men", "The Show 1990-1995" — is what a media server or
+  // an older cache daemon hands over, and its hyphens are not groups.
+  if (!RELEASE_TOKEN.test(raw)) return null
+  // Scene names come with dots OR spaces ("Show S01E06 1080p WEB-DL
+  // x264-SPARKS"), so the whole name is read; the first word is read too,
+  // for a dotted name with something after a space ("...x264-GROUP [eztv]",
+  // "....mkv 2.1 GB"). The extension comes off each candidate, not the
+  // line, since it is the first word's suffix in the second case.
+  for (const candidate of [raw, raw.split(/\s/)[0]]) {
+    const trailing = /-([a-z0-9]{2,20})$/i.exec(
+      candidate.replace(/\.(mkv|mp4|avi|mov|webm|m4v|ts)$/i, '')
+    )
+    if (!trailing) continue
+    const group = trailing[1].toLowerCase()
+    // "WEB-DL", "x265-10bit", "DDP5.1-Atmos", Sonarr's "WEBDL-1080p": a
+    // hyphenated format, codec or quality token is not a group.
+    if (NOT_A_GROUP.has(group) || NOT_A_GROUP_RE.test(group)) return null
+    return group
+  }
+  return null
+}
+
+/** What makes a name a release name rather than a title. */
+const RELEASE_TOKEN =
+  /(?:^|[\s.\-_[(])(?:\d{3,4}p|4k|uhd|web|webrip|webdl|web-dl|bluray|blu-ray|bdrip|brrip|hdtv|dvdrip|remux|x264|x265|h\.?264|h\.?265|hevc|avc|s\d{1,2}e\d{1,3})(?=$|[\s.\-_\])])/i
+const NOT_A_GROUP = new Set([
+  'dl',
+  'rip',
+  'hd',
+  'hdr',
+  'x264',
+  'x265',
+  'hevc',
+  'avc',
+  'aac',
+  'ac3',
+  'dts',
+  'atmos',
+  'bit',
+  'sub',
+  'subs',
+  'audio',
+  'dub',
+  'multi',
+  'dual',
+  'remux',
+  'web',
+  'webrip',
+  'bluray',
+  'hdtv'
+])
+/** Resolutions ("1080p"), bit depths ("10bit"), years, and channel layouts ("5.1"). */
+const NOT_A_GROUP_RE = /^(?:\d{3,4}p|\d{1,2}bits?|\d{4}|\d\.\d|[0-9]+)$/
+
+/** Whether a candidate carries the wanted audio: the server's own track
+ *  languages when it can say (a media server), else what the release name
+ *  declares. Silence is neither. */
+function declaresPreferredLanguage(stream: StreamCandidate, preferred: string): boolean {
+  if (stream.audioLanguages?.length) {
+    return stream.audioLanguages.some((language) => languageMatches(language, preferred))
+  }
+  return releaseDeclaresLanguage(streamText(stream), preferred)
+}
+
+/**
+ * Whether a candidate is a dub into some OTHER language — the
+ * WRONG_LANGUAGE_PENALTY test. Reported tracks that include the wanted
+ * language settle it: a file a media server says has English audio is not
+ * penalised for a "TRUEFRENCH" in its name, whatever the name says. When
+ * nothing is reported, or what is reported lacks the language, the name
+ * is still read the way it always was — reported tracks suppress a
+ * penalty the name would invent, they never invent one themselves.
+ */
+function lacksPreferredLanguage(stream: StreamCandidate, preferred: string): boolean {
+  if (stream.audioLanguages?.some((language) => languageMatches(language, preferred))) {
+    return false
+  }
+  return releaseLacksPreferredLanguage(streamText(stream), preferred)
+}
+
+export interface RankOptions {
+  /** The release group the previous episode of this show played from —
+   *  see SAME_RELEASE_GROUP_BONUS. */
+  preferredGroup?: string | null
+}
 
 /**
  * What a media-server copy is worth, relative to a TorBox one.
@@ -221,20 +440,35 @@ export function rankStreams(
   streams: StreamCandidate[],
   preferredLanguage = 'en',
   limits: StreamLimits = {},
-  sourcePreference: SourcePreference = 'balanced'
+  sourcePreference: SourcePreference = 'balanced',
+  options: RankOptions = {}
 ): StreamCandidate[] {
+  const preferredGroup = options.preferredGroup ? String(options.preferredGroup) : null
   const score = (s: StreamCandidate): number =>
     (s.exact === false ? 0 : 100000) +
     (s.cached === false ? 0 : 20000) +
     (s.compatible === false ? -50000 : 10000) +
     (s.source === 'mediaserver' ? LOCAL_SOURCE_BONUS[sourcePreference] : 0) +
-    streamResolution(s) -
+    // A release that says it carries the wanted audio — dual audio, an
+    // English dub, a server that reports the tracks — outranks one that
+    // says nothing, which is how the same show stops alternating between
+    // dubbed and subbed episodes.
+    (declaresPreferredLanguage(s, preferredLanguage) ? PREFERRED_LANGUAGE_BONUS : 0) +
+    // Read off the release NAME, exactly as the memo that remembered the
+    // previous episode's group was — see streamReleaseName.
+    (preferredGroup && releaseGroup(streamReleaseName(s)) === preferredGroup
+      ? SAME_RELEASE_GROUP_BONUS
+      : 0) +
+    streamResolution(s) +
+    // Only ever separates uncached candidates, and only within a resolution
+    // tier — see seederBonus for both bounds and why absence is not zero.
+    seederBonus(s) -
     streamingPenalty(s) -
     // Reported live: a film played with French audio and French subtitles.
     // Track selection can't fix that one — a dub is a different release,
     // and there was no English in the file to select. It has to be settled
     // here, when the release is chosen.
-    (releaseLacksPreferredLanguage(streamText(s), preferredLanguage) ? WRONG_LANGUAGE_PENALTY : 0)
+    (lacksPreferredLanguage(s, preferredLanguage) ? WRONG_LANGUAGE_PENALTY : 0)
   const withinLimits = streams.filter((stream) => {
     const resolution = streamResolution(stream)
     const size = streamSizeGb(stream)
@@ -280,7 +514,15 @@ export function resumeCandidateFor(
   }
   if (ref.source === 'torbox' && ref.infoHash) {
     if (!torboxConnected) return null
-    return { ...base, source: 'torbox', infoHash: ref.infoHash }
+    return {
+      ...base,
+      source: 'torbox',
+      infoHash: ref.infoHash,
+      // Carried back so the resume picks the SAME file the first play did
+      // (and can re-add the torrent with its trackers if TorBox dropped it).
+      ...(ref.fileIdx != null ? { fileIdx: ref.fileIdx } : {}),
+      ...(ref.sources?.length ? { sources: ref.sources } : {})
+    }
   }
   return null
 }
@@ -370,7 +612,7 @@ function numberOr(value: unknown, fallback: number): number {
 // showing "Episode 1" instead of "Genesis". `.overview`/`.description`,
 // `.released`/`.firstAired`, and `.episode`/`.number` are all genuinely
 // duplicated by Cinemeta itself, so those don't need remapping.
-function normalizeMetaVideo(v: RawApiPayload): Episode {
+function normalizeMetaVideo(v: RawApiPayload, lightweight = false): Episode {
   const season = numberOr(v.season, 1)
   const episode = numberOr(v.episode ?? v.number, 1)
   return {
@@ -378,10 +620,10 @@ function normalizeMetaVideo(v: RawApiPayload): Episode {
     season,
     episode,
     number: episode,
-    title: v.title || v.name || `Episode ${episode}`,
+    title: lightweight ? '' : v.title || v.name || `Episode ${episode}`,
     released: v.released || v.firstAired || '',
-    description: v.description || v.overview || '',
-    thumbnail: v.thumbnail || ''
+    description: lightweight ? '' : v.description || v.overview || '',
+    thumbnail: lightweight ? '' : v.thumbnail || ''
   }
 }
 
@@ -443,7 +685,36 @@ export function disambiguateVideos(videos: Episode[]): Episode[] {
   })
 }
 
-export function normalizeMeta(meta: RawApiPayload, fallbackType?: MediaKind): CatalogItem {
+/**
+ * `lightweight` blanks the three per-episode fields nothing on a crawl path
+ * ever reads — `title`, `description`, `thumbnail` — exactly as
+ * normalizeKitsuAnime's own flag does, and for the same reason: the browse
+ * catalog is stored as ONE cache row per kind and shipped to the renderer
+ * whole, so per-episode prose is paid for on every catalog:list by every
+ * series in the library. Cinemeta's series metas carry a full synopsis and a
+ * thumbnail URL per episode; measured against the live catalog, dropping
+ * them halves a series entry (5,960 -> 2,658 bytes).
+ *
+ * The array itself — one entry per episode, with real `season`/`episode`
+ * numbers — is NOT shortened. Those positions are what the browse grid's
+ * episode/season counts and its "Completed" badge are derived from
+ * (adapters.ts's seasonEpisodeCounts and isSeriesCompleted); emptying it
+ * would make every series read as "no episode data" and permanently hide a
+ * badge someone earned. That exact regression was shipped and caught once
+ * already on the anime side — see normalizeKitsuAnime.
+ *
+ * Safe to blank the prose specifically because no reader of a CATALOG
+ * entry's videos ever shows it: the detail page's episode list comes from
+ * metadata()'s own per-title fetch (full, unflagged, cached 24h), and
+ * metadata()'s catalog-entry fallback explicitly discards `videos` and
+ * refetches from Simkl rather than reusing them (`{ ...source, videos: [] }`
+ * in catalog.ts). Defaults to false so that per-title path is untouched.
+ */
+export function normalizeMeta(
+  meta: RawApiPayload,
+  fallbackType?: MediaKind,
+  lightweight = false
+): CatalogItem {
   return {
     id: meta.id || meta.imdb_id,
     title: meta.name || meta.title || 'Untitled',
@@ -457,7 +728,9 @@ export function normalizeMeta(meta: RawApiPayload, fallbackType?: MediaKind): Ca
     rating: String(meta.imdbRating || meta.rating || ''),
     runtime: String(meta.runtime || ''),
     genres: Array.isArray(meta.genres) ? meta.genres : Array.isArray(meta.genre) ? meta.genre : [],
-    videos: Array.isArray(meta.videos) ? meta.videos.map(normalizeMetaVideo) : [],
+    videos: Array.isArray(meta.videos)
+      ? meta.videos.map((v) => normalizeMetaVideo(v, lightweight))
+      : [],
     trailers: normalizeTrailers(meta.trailers || meta.trailerStreams)
   }
 }
@@ -471,7 +744,7 @@ export function normalizeKitsuEpisode(record: RawApiPayload, parentId: string): 
     season,
     episode,
     number: episode,
-    title: a.canonicalTitle || a.titles?.en_us || a.titles?.en || `Episode ${episode}`,
+    title: a.titles?.en || a.titles?.en_us || a.canonicalTitle || `Episode ${episode}`,
     released: a.airdate || '',
     description: a.synopsis || a.description || '',
     thumbnail: a.thumbnail?.original || ''
@@ -507,9 +780,19 @@ export function normalizeKitsuAnime(record: RawApiPayload, lightweight = false):
   const a = record.attributes || {}
   const id = `kitsu:${record.id}`
   const count = Number(a.episodeCount) || 0
+  // English first. Kitsu's canonical title is the romaji one, which is
+  // what every anime in the library used to be listed and searched under;
+  // the English name is what most people know a show by. The romaji is
+  // kept as originalTitle: it is shown as a secondary line, matched in
+  // search, and — the part that is not optional — matched against release
+  // names, which are romaji. See titleMatchesRelease.
+  const english = String(a.titles?.en || a.titles?.en_us || '').trim()
+  const canonical = String(a.canonicalTitle || '').trim()
+  const original = english && canonical && canonical !== english ? canonical : ''
   return {
     id,
-    title: a.canonicalTitle || a.titles?.en_us || a.titles?.en || 'Untitled',
+    title: english || canonical || 'Untitled',
+    ...(original ? { originalTitle: original } : {}),
     type: 'anime',
     poster: a.posterImage?.large || a.posterImage?.original || '',
     background: a.coverImage?.large || a.coverImage?.original || '',
@@ -560,7 +843,11 @@ export function normalizeSimklCatalog(item: RawApiPayload, type: MediaKind): Cat
 export function normalizeSimklSearchResult(item: RawApiPayload, type: MediaKind): CatalogItem {
   const poster = item.poster ? `https://simkl.in/posters/${item.poster}_m.jpg` : ''
   return {
-    id: `simkl:${item.ids?.simkl_id}`,
+    // The IMDb id where Simkl has one, as the catalog normaliser above
+    // already does. A `simkl:` id exists nowhere in watch state, so a search
+    // result minted with one could never show as watched, planned or rated
+    // however many times the person had seen it.
+    id: item.ids?.imdb || `simkl:${item.ids?.simkl_id}`,
     title: item.title || 'Untitled',
     type,
     poster,
@@ -588,11 +875,24 @@ const FRANCHISE_ANIME_ROLES = new Set([
   'summary'
 ])
 
-const STORY_ANIME_ROLES = new Set<AnimeStoryLink['relation']>(['sequel', 'prequel'])
+/** The relations the story panel shows, in the order it shows them: what
+ *  comes before, what sits alongside, what comes after. */
+export const ANIME_STORY_ORDER: readonly AnimeStoryLink['relation'][] = [
+  'prequel',
+  'parent_story',
+  'full_story',
+  'side_story',
+  'spin_off',
+  'summary',
+  'sequel'
+]
+const STORY_ANIME_ROLES = new Set<AnimeStoryLink['relation']>(ANIME_STORY_ORDER)
 
-/** Direct before/after entries from Kitsu. Side stories and recaps are not
- * useful answers to "what should I watch next?"; an absent sequel is never
- * treated as proof that a future season will not happen. */
+/** The franchise around a title, from Kitsu, ordered before / alongside /
+ * after. Side stories, spin-offs, recaps and the films between seasons used
+ * to be dropped as "not useful answers to what next" — they are exactly the
+ * bridges somebody following a story in order needs pointed out. An absent
+ * sequel is never treated as proof that a future season will not happen. */
 export function animeStoryLinks(payload: RawApiPayload = {}): AnimeStoryLink[] {
   const included = new Map(
     (payload.included || [])
@@ -612,7 +912,12 @@ export function animeStoryLinks(payload: RawApiPayload = {}): AnimeStoryLink[] {
     seen.add(key)
     links.push({ relation, item: normalizeKitsuAnime(dest as RawApiPayload) })
   }
+  // Before, alongside, after — and within a group, the order Kitsu gave.
+  const rank = (relation: AnimeStoryLink['relation']): number => ANIME_STORY_ORDER.indexOf(relation)
   return links
+    .map((link, index) => ({ link, index }))
+    .sort((a, b) => rank(a.link.relation) - rank(b.link.relation) || a.index - b.index)
+    .map(({ link }) => link)
 }
 
 export function filterAnimeRelationships(payload: RawApiPayload = {}): CatalogItem[] {
@@ -740,17 +1045,6 @@ export function parseReleaseName(value: string): ParsedReleaseName {
   return { title: readableTitle(name) || 'Untitled', year, season, episode }
 }
 
-function librarySourceName(raw: RawApiPayload): string {
-  const files: RawApiPayload[] = raw.files || raw.file_list || []
-  return (
-    raw.name ||
-    raw.filename ||
-    files.find((f) => /\.(mkv|mp4|avi|mov|webm|m4v|ts)$/i.test(f.name || f.short_name || ''))
-      ?.name ||
-    'Untitled'
-  )
-}
-
 function mediaKey(value: string): string {
   return String(value || '')
     .normalize('NFKD')
@@ -771,48 +1065,43 @@ function mediaKey(value: string): string {
  * inclusion is exactly what fails here, since "dragonball" is a substring
  * of "dragonballz" too.
  */
-export function titleMatchesRelease(releaseText: string, requestedTitle: string): boolean {
-  if (!requestedTitle.trim()) return true
-  const parsed = parseReleaseName(releaseText)
-  return mediaKey(parsed.title) === mediaKey(requestedTitle)
+export function titleMatchesRelease(
+  releaseText: string,
+  requestedTitle: string | readonly string[]
+): boolean {
+  // Any of the names the title is known by. An anime is listed under its
+  // English name but released under its romaji one, so a match against a
+  // single title would find nothing for it — see CatalogItem.originalTitle.
+  const wanted = (Array.isArray(requestedTitle) ? requestedTitle : [requestedTitle])
+    .map((t) => String(t ?? '').trim())
+    .filter(Boolean)
+  if (!wanted.length) return true
+  // Two readings of the name: the scene form parseReleaseName knows
+  // ("Show.S01E06.1080p.WEB-DL-GROUP") and the fansub form most anime is
+  // released in ("[SubsPlease] Show S4 - 28 (1080p) [ABCD1234]"), which
+  // that parser reads as a title with the group and the number still in
+  // it — so every such release used to fail this guard and fall through
+  // to the unguarded set.
+  const parsed = new Set([
+    mediaKey(parseReleaseName(releaseText).title),
+    mediaKey(fansubTitle(releaseText))
+  ])
+  return wanted.some((t) => parsed.has(mediaKey(t)))
 }
 
-export function enrichTorBoxItem(raw: RawApiPayload, catalog: CatalogItem[] = []): LibraryItem {
-  const parsed = parseReleaseName(librarySourceName(raw))
-  const key = mediaKey(parsed.title)
-  const matches = catalog.filter((x) => mediaKey(x.title) === key)
-  const match = matches.find((x) => !parsed.year || String(x.year) === parsed.year) || matches[0]
-  // Original JS: `match?.type||(parsed.season?'series':'movie')` — match.type
-  // comes from the shared CatalogItem catalog and can be 'anime', but
-  // LibraryItem.mediaType only models 'movie'|'series' (library entries
-  // don't carry an anime distinction). The original had no runtime guard
-  // against this either, so the value is preserved as-is via a cast rather
-  // than redesigning the fallback behavior.
-  const mediaType = (match?.type || (parsed.season ? 'series' : 'movie')) as 'movie' | 'series'
-  return {
-    id: String(raw.id || raw.torrent_id || raw.hash || librarySourceName(raw)),
-    title: match?.title || parsed.title,
-    type: 'library',
-    mediaType,
-    year: match?.year || parsed.year || raw.download_state || raw.state || '',
-    season: parsed.season,
-    episode: parsed.episode,
-    poster: match?.poster || raw.poster || '',
-    background: match?.background || raw.background || '',
-    description: match?.description || '',
-    rating: match?.rating || '',
-    runtime: match?.runtime || '',
-    genres: match?.genres || [],
-    metadataId: match?.id || '',
-    raw
-  }
-}
-
-export function selectPlayableStream(streams?: StreamCandidate[]): StreamCandidate | null {
-  const playable = (streams || []).filter(
-    (s) => typeof s.url === 'string' && /^https?:\/\//.test(s.url)
-  )
-  return rankStreams(playable)[0] || null
+/**
+ * The title in a fansub-style release name: leading "[Group]" tags off,
+ * everything from the episode marker (" - 06", " S4 - 28", " - 06v2") or
+ * the first trailing "(1080p)" / "[hash]" on. Empty when the name has no
+ * such shape, which mediaKey turns into a key nothing matches.
+ */
+function fansubTitle(text: string): string {
+  return String(text || '')
+    .split('\n')[0]
+    .replace(/^\s*(?:\[[^\]]*\]\s*)+/, '')
+    .replace(/\s+(?:S\d{1,2}\s*)?[-–]\s*\d{1,4}(?:v\d)?\b.*$/i, '')
+    .replace(/\s*[[(].*$/, '')
+    .trim()
 }
 
 export interface TorBoxFile {
@@ -882,12 +1171,62 @@ export function selectVideoFile(
 }
 
 /**
- * Merges the settled results of several catalog sources into one deduped
- * list, in the order the sources were given, ignoring any that failed.
+ * Fills the gaps in `into` from `from`, without ever overwriting something
+ * already there.
  *
- * Source order is the ranking: dedupeCatalog keeps the first occurrence of
- * an id, so a title present in both a trending feed and a top-rated list
- * keeps its trending position.
+ * The two sources describe the same title but do not carry the same fields:
+ * a Simkl trending entry has a simklId and no episode list at all, a
+ * Cinemeta entry has the full episode list and no simklId. Whichever is
+ * seen first should keep its position and its own values, and gain what it
+ * was missing — which is exactly what the index's own upsert does with
+ * COALESCE(NULLIF(...)), applied here so the two agree.
+ *
+ * Empty counts as missing, deliberately: `videos: []` and `poster: ''` are
+ * how these normalizers say "this source has none", not "this source says
+ * there are none".
+ */
+function fillMissing(into: CatalogItem, from: CatalogItem): CatalogItem {
+  const merged: CatalogItem = { ...into }
+  for (const key of [
+    'poster',
+    'background',
+    'logo',
+    'description',
+    'status',
+    'rating',
+    'runtime',
+    'year'
+  ] as const) {
+    if (!merged[key] && from[key]) merged[key] = from[key]
+  }
+  if (!merged.genres?.length && from.genres?.length) merged.genres = from.genres
+  if (!merged.videos?.length && from.videos?.length) merged.videos = from.videos
+  if (!merged.trailers?.length && from.trailers?.length) merged.trailers = from.trailers
+  if (merged.simklId == null && from.simklId != null) merged.simklId = from.simklId
+  if (!merged.episodeCounts && from.episodeCounts) merged.episodeCounts = from.episodeCounts
+  if (!merged.groupedIds?.length && from.groupedIds?.length) merged.groupedIds = from.groupedIds
+  return merged
+}
+
+/**
+ * Merges the settled results of several catalog sources into one list, in
+ * the order the sources were given, ignoring any that failed.
+ *
+ * Source order is the ranking: the first occurrence of an id keeps its
+ * position, so a title present in both a trending feed and a top-rated
+ * list keeps its trending position.
+ *
+ * A duplicate is COALESCED into the first occurrence rather than dropped,
+ * which is a fix rather than a refinement. Measured live against the real
+ * catalogs: 546 of Cinemeta's 1,999 series also appear in Simkl's trending
+ * feeds, Simkl is read first for its ranking, and a Simkl entry carries
+ * `videos: []`. Dropping the Cinemeta duplicate therefore threw away the
+ * episode list for 546 titles — and not a random 546, but the most popular
+ * ones, the top of the grid. Those titles showed no season or episode
+ * counts, and could never earn a "Completed" badge, because the data that
+ * answers both had been discarded on the way in.
+ *
+ * Position still comes from the first occurrence; only the gaps are filled.
  *
  * Separated out and given its own tests because the property that matters
  * here is a negative one: a source that fails must cost its own
@@ -900,9 +1239,24 @@ export function selectVideoFile(
 export function mergeCatalogSources(
   results: readonly PromiseSettledResult<CatalogItem[][]>[]
 ): CatalogItem[] {
-  return dedupeCatalog(
-    results.flatMap((result) => (result.status === 'fulfilled' ? result.value : []))
-  )
+  const order: string[] = []
+  const byId = new Map<string, CatalogItem>()
+  for (const result of results) {
+    if (result.status !== 'fulfilled') continue
+    for (const item of result.value.flat()) {
+      const id = String(item?.id || '')
+      // An idless entry is what a malformed source record normalizes to; it
+      // can never be opened or played, so it takes no slot.
+      if (!id) continue
+      const existing = byId.get(id)
+      if (existing) byId.set(id, fillMissing(existing, item))
+      else {
+        order.push(id)
+        byId.set(id, item)
+      }
+    }
+  }
+  return order.map((id) => byId.get(id) as CatalogItem)
 }
 
 export function dedupeCatalog(groups: CatalogItem[][]): CatalogItem[] {
@@ -932,8 +1286,14 @@ export function continueWatchingList(
 ): ContinueWatchingEntry[] {
   const rows: ContinueWatchingEntry[] = []
   for (const detail of details || []) {
+    // Aired and playable episodes only — the same set adapters.ts's
+    // airedEpisodes gives the catalog's Completed badge and the detail
+    // page's progress count. With future episodes left in, a still-airing
+    // show somebody is caught up on read 100% on the card and "8 of 10" in
+    // this row, and the row's suggested next episode was one that did not
+    // exist yet.
     const episodes = (detail.videos || [])
-      .filter((v) => (v.season ?? 1) > 0)
+      .filter((v) => isRegularEpisode(v) && hasAired(v))
       .sort(
         (a, b) =>
           (a.season || 1) - (b.season || 1) ||

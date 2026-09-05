@@ -28,16 +28,22 @@
 import type { ActivitySnapshot } from '../../shared/media-hub/types'
 import { MEDIA_HUB_CHANNELS } from '../../shared/media-hub/ipc-channels'
 import { handle } from './ipcGuard'
-import { sendToRenderer } from './rendererBridge'
-import { catalogData } from './catalog'
+import { sendToRenderer, notifyLibraryChanged } from './rendererBridge'
+import { catalogData, deepScanChunk } from './catalog'
 import { enrichCredits } from './credits'
 import { getDatabase } from './dbState'
 import { logError } from './logger'
 import { runNewEpisodeCheck } from './notifications'
 import { pruneIdleSessions } from './streamCache'
 import { runLanCacheFeeder } from './lanCacheFeeder'
+import { runLanCacheTitleSync } from './lanCacheTitleSync'
 import { runBackgroundWatchSync } from './tracking'
-import { onRebuildRequested, rebuildRecommendations } from './recommendations'
+import {
+  onRebuildRequested,
+  rebuildRecommendations,
+  requestRecommendationsRebuild
+} from './recommendations'
+import { repairAnimeSyncIds } from './animeSyncRepair'
 import { checkForUpdates } from './autoUpdate'
 import {
   coalesce,
@@ -47,6 +53,7 @@ import {
   type SchedulerPressure,
   type TaskPriority
 } from './taskScheduler'
+import { isLanCacheConnected } from './lanCache'
 
 /** How often the registry looks at what is due. One timer for every
  *  recurring job in the app. Coarse on purpose — nothing here is
@@ -255,6 +262,79 @@ export function startBackgroundJobs(): void {
     run: runBackgroundWatchSync
   })
 
+  // The whole library, without a button. The deep scan was a press on the
+  // library page — one chunk of the upstream catalog per press, a resumable
+  // bookmark, an honest 'exhausted' at the end — which meant most people
+  // never got past the standing crawl's depth. The same chunk now runs on
+  // its own, one kind at a time, only when nothing else is going on, until
+  // upstream has no more to give. A press still works: it stops this job's
+  // walk at its last safe group and walks on in its own lane (see
+  // deepScanChunk), so the report awaited below may be a halted, partial
+  // one — `grew` and the notify are about what THIS walk added.
+  // Skipped while a household cache server is paired: its own crawl feeds
+  // this index for every device in the house (lanCacheTitleSync), and a
+  // second walk of the same pages from each device would be waste.
+  registerRecurringJob({
+    name: 'catalog-deep-scan',
+    label: 'Reading more of the catalog',
+    everyMs: 60 * 60 * 1000,
+    firstRunAfterMs: 15 * 60 * 1000,
+    priority: 'maintenance',
+    maxPressure: 'idle',
+    run: async () => {
+      if (isLanCacheConnected()) return
+      let grew = false
+      for (const kind of ['movie', 'series', 'anime'] as const) {
+        try {
+          // The job's own lane, not the button's: 'maintenance' is what
+          // critical pressure suspends, so playback starting mid-scan
+          // pauses the remaining pages instead of sharing the process
+          // with them — see deepScanChunk.
+          const report = await deepScanChunk(kind, 'maintenance')
+          if (report.added > 0) grew = true
+        } catch (error) {
+          logError('job:deep-scan', error)
+        }
+      }
+      if (grew) notifyLibraryChanged('deep-scan', 'index')
+    }
+  })
+
+  registerRecurringJob({
+    name: 'anime-sync-repair',
+    label: 'Repairing anime watch history',
+    // A recurring job for work that happens at most once, because what it
+    // is really waiting for is the anime-grouping pass, and there is no
+    // event to hang that on — see animeSyncRepair.ts. Every run after the
+    // repair lands is one settings read that returns immediately.
+    //
+    // Hourly rather than tighter for the same reason: on the one launch
+    // where it has something to do, grouping takes minutes, so the cost of
+    // arriving late is that the repair happens on the NEXT launch instead
+    // — invisible either way, since the rows have already been wrong for
+    // however long the person has had the old build.
+    everyMs: 60 * 60 * 1000,
+    // After catalog-refresh's own first run, so on an install whose
+    // catalog is cold the grouping pass it kicks off has already had a
+    // chance to finish.
+    firstRunAfterMs: 7 * 60 * 1000,
+    priority: 'maintenance',
+    // It rewrites rows the detail page and every badge read, so it waits
+    // for a quiet moment rather than doing that underneath somebody.
+    maxPressure: 'idle',
+    run: async () => {
+      const result = repairAnimeSyncIds()
+      // The ranking is derived from watch history, and rows have just
+      // moved. The renderer has no equivalent hook — there is no
+      // main-to-renderer "history changed" broadcast (the Trakt import
+      // gets away without one because the renderer refreshes when its own
+      // call returns) — so the grids pick this up the next time they
+      // fetch, which for a pass that runs once, at idle, minutes into a
+      // session is the next navigation or the next launch.
+      if (result.repaired) requestRecommendationsRebuild()
+    }
+  })
+
   registerRecurringJob({
     name: 'update-check',
     label: 'Checking for updates',
@@ -287,6 +367,21 @@ export function startBackgroundJobs(): void {
     // person watching is using.
     maxPressure: 'busy',
     run: runLanCacheFeeder
+  })
+
+  registerRecurringJob({
+    name: 'lancache-title-sync',
+    label: 'Syncing the household title index',
+    // Hourly: the daemon re-crawls six-hourly, so most passes are one page
+    // of nothing per kind. What this cadence bounds is how soon a freshly
+    // paired device inherits the household's depth.
+    everyMs: 60 * 60 * 1000,
+    firstRunAfterMs: 2 * 60 * 1000,
+    priority: 'background',
+    maxPressure: 'busy',
+    run: async () => {
+      await runLanCacheTitleSync()
+    }
   })
 
   registerRecurringJob({

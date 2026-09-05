@@ -4,19 +4,12 @@
     {
       "name": "r3-media-hub",
       "runtimeExecutable": "npm",
-      "runtimeArgs": [
-        "start"
-      ]
+      "runtimeArgs": ["start"]
     },
     {
       "name": "r3-party-sync",
       "runtimeExecutable": "npm",
-      "runtimeArgs": [
-        "--prefix",
-        "../r3v07v3r-party-sync",
-        "run",
-        "dev"
-      ],
+      "runtimeArgs": ["--prefix", "../r3v07v3r-party-sync", "run", "dev"],
       "port": 8787
     },
     {

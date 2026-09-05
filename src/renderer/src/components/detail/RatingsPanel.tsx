@@ -3,18 +3,25 @@
 import { useAppState } from '@renderer/context/AppStateContext'
 import type { MediaItem } from '@renderer/types'
 import { MAX_RATING, ratingLabel } from '@shared/media-hub/rating'
+import { demoOnlyTitleMessage, hasExpressibleSimklId } from '@shared/media-hub/serviceIds'
 import styles from './RatingsPanel.module.css'
+import { RatingSourceMark } from './RatingBadge'
+import { ratingSourceFor, type RatingSource } from './ratingSource'
 
 function Gauge({
   value,
   max,
   label,
-  color
+  color,
+  source
 }: {
   value: number
   max: number
   label: string
   color: string
+  /** Present for a real service, absent for the app's own Match figure —
+   *  which has no logo to show because it is not somebody else's score. */
+  source?: RatingSource
 }) {
   const pct = Math.max(0, Math.min(1, value / max))
   const radius = 30
@@ -35,7 +42,9 @@ function Gauge({
       <span className={styles.gaugeValue}>
         {max === 100 ? Math.round(value) : value.toFixed(1)}
       </span>
-      <span className={styles.gaugeLabel}>{label}</span>
+      <span className={styles.gaugeLabel}>
+        {source ? <RatingSourceMark source={source} /> : label}
+      </span>
     </div>
   )
 }
@@ -44,25 +53,41 @@ function Gauge({
  * Only ever renders sources the item's own data actually has — no
  * invented ratings, and gauges adapt to however many are present rather
  * than leaving empty placeholder circles for a source with no value.
- * communityRating/imdbRating are still the same parsed number for real
- * backend data today (see adapters.ts's catalogItemToMediaItem) — not two
- * independent sources yet, though the type and this panel both support
- * them being distinct once/if the backend integration adds a second one.
- * rottenTomatoesRating IS a genuinely independent third source (OMDb) —
- * present only for movies/series with OMDb connected and a Rotten Tomatoes
- * entry on file; never present for anime (see catalog.ts's metadata()).
+ *
+ * ONE CROWD FIGURE, not two. communityRating and imdbRating are filled
+ * from the same CatalogItem.rating (adapters.ts), so showing both drew the
+ * same number twice under different names — two gauges agreeing perfectly,
+ * every time, because they were never independent. It is drawn once now,
+ * labelled with the service it actually came from: IMDb for films and
+ * series, whose ids ARE IMDb ids, and Kitsu for anime, which has no IMDb
+ * id at all and whose figure is Kitsu's averageRating.
+ *
+ * rottenTomatoesRating IS a genuinely independent source (OMDb) — present
+ * only for movies/series with OMDb connected and a Rotten Tomatoes entry
+ * on file; never present for anime (see catalog.ts's metadata()).
  */
 export function RatingsPanel({ media }: { media: MediaItem }) {
-  const gauges: { value: number; max: number; label: string; color: string }[] = []
-  if (media.communityRating) {
+  const source = ratingSourceFor(media.mediaKind)
+  const crowd = media.imdbRating ?? media.communityRating
+  const gauges: {
+    value: number
+    max: number
+    label: string
+    color: string
+    source?: RatingSource
+  }[] = []
+  if (crowd) {
     gauges.push({
-      value: media.communityRating,
+      value: crowd,
       max: 10,
-      label: 'R3 Score',
-      color: 'var(--accent-yellow)'
+      label: source === 'kitsu' ? 'Kitsu' : 'IMDb',
+      color: source === 'kitsu' ? 'var(--accent-orange)' : 'var(--accent-yellow)',
+      source
     })
   }
   if (media.matchPercentage !== undefined) {
+    // Not a crowd rating at all — this app's own guess at how well the
+    // title fits this person. It keeps a plain label for that reason.
     gauges.push({
       value: media.matchPercentage,
       max: 100,
@@ -70,15 +95,13 @@ export function RatingsPanel({ media }: { media: MediaItem }) {
       color: 'var(--accent-green)'
     })
   }
-  if (media.imdbRating) {
-    gauges.push({ value: media.imdbRating, max: 10, label: 'IMDb', color: 'var(--accent-cyan)' })
-  }
   if (media.rottenTomatoesRating !== undefined) {
     gauges.push({
       value: media.rottenTomatoesRating,
       max: 100,
       label: 'Rotten Tomatoes',
-      color: 'var(--accent-orange)'
+      color: 'var(--accent-orange)',
+      source: 'rottenTomatoes'
     })
   }
 
@@ -113,8 +136,27 @@ export function RatingsPanel({ media }: { media: MediaItem }) {
  * control.
  */
 function YourRating({ media }: { media: MediaItem }) {
-  const { ratings, rateMedia } = useAppState()
+  const { ratings, rateMedia, pushNotification } = useAppState()
   const score = ratings.get(media.id) ?? 0
+
+  function handleScore(value: number): void {
+    const next = score === value ? 0 : value
+    // A demo title (mockData's m-*/s-*/a-* pool, reachable via the AI
+    // assistant's fallback picks) never takes a NEW score: the id can't be
+    // expressed to any tracking service, and the write would pollute the
+    // real ratings table the way the Aug 24 watch-history ghosts did — see
+    // shared/media-hub/serviceIds.ts. Refused here with the why, and again
+    // at the IPC boundary for any surface without this check. Clearing
+    // (next === 0) stays allowed so an already-leaked score can be undone.
+    if (next > 0 && !hasExpressibleSimklId(media.id)) {
+      pushNotification({ tone: 'info', message: demoOnlyTitleMessage(media.title) })
+      return
+    }
+    void rateMedia(media.id, next, {
+      type: media.mediaKind ?? (media.mediaType === 'series' ? 'series' : 'movie'),
+      title: media.title
+    })
+  }
 
   return (
     <div className={styles.yours}>
@@ -133,12 +175,7 @@ function YourRating({ media }: { media: MediaItem }) {
             aria-checked={score === value}
             aria-label={`${value} out of 10 — ${ratingLabel(value)}`}
             className={`${styles.scaleButton} ${value <= score ? styles.scaleButtonOn : ''}`}
-            onClick={() =>
-              void rateMedia(media.id, score === value ? 0 : value, {
-                type: media.mediaKind ?? (media.mediaType === 'series' ? 'series' : 'movie'),
-                title: media.title
-              })
-            }
+            onClick={() => handleScore(value)}
           >
             {value}
           </button>

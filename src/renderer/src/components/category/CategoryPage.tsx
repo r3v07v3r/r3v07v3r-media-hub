@@ -17,10 +17,11 @@
 // deliberately NOT reused here — that panel is Home-specific, not a
 // standing app-wide fixture.
 
-import { useMemo } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { useAppState } from '@renderer/context/AppStateContext'
 import { CategoryConfig } from '@renderer/lib/mediaHub/categoryConfig'
+import type { CatalogFacets } from '@shared/media-hub/types'
 import {
   matchesCategoryKind,
   applyCategoryFilters,
@@ -48,7 +49,7 @@ export function CategoryPage({ config }: { config: CategoryConfig }) {
     categorySearch,
     clearCategorySearch,
     runCategorySearch,
-    browsingOrigin,
+    pendingRestore,
     mediaHubSettings
   } = useAppState()
   // Filters live in the URL, not component state — this is what makes
@@ -83,6 +84,21 @@ export function CategoryPage({ config }: { config: CategoryConfig }) {
     setSearchParams(filterStateToSearchParams(next), { replace: true })
   }
 
+  // Same source as the routed library page: the filter bar's dropdowns
+  // list the index's vocabulary (catalog:facets), not the loaded slice.
+  const [facets, setFacets] = useState<CatalogFacets | null>(null)
+  useEffect(() => {
+    let cancelled = false
+    window.api?.mediaHub?.catalog
+      .facets(config.kind)
+      .then((result) => {
+        if (!cancelled) setFacets(result)
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [config.kind])
   const kindItems = useMemo(
     () => catalog.filter((item) => matchesCategoryKind(item, config.kind)),
     [catalog, config.kind]
@@ -124,11 +140,11 @@ export function CategoryPage({ config }: { config: CategoryConfig }) {
   // for free, since categorySearch is app-level state nothing here
   // clears — see isSearchActive above).
   const restoreVisibleCount = useMemo(() => {
-    if (!browsingOrigin?.focusedItemId) return undefined
+    if (!pendingRestore?.focusedItemId) return undefined
     const activeList = isSearchActive ? filteredSearchResults : filteredSorted
-    const idx = activeList.findIndex((item) => item.id === browsingOrigin.focusedItemId)
+    const idx = activeList.findIndex((item) => item.id === pendingRestore.focusedItemId)
     return idx >= 0 ? Math.ceil((idx + 1) / 30) * 30 : undefined
-  }, [browsingOrigin, isSearchActive, filteredSearchResults, filteredSorted])
+  }, [pendingRestore, isSearchActive, filteredSearchResults, filteredSorted])
 
   // Catalog data is fetched once, globally (AppStateContext), not
   // per-page — by the time this page remounts after a detail-page visit,
@@ -156,7 +172,7 @@ export function CategoryPage({ config }: { config: CategoryConfig }) {
       <div className={styles.filterbarArea}>
         <CategoryFilterBar
           config={config}
-          items={kindItems}
+          facets={facets}
           filters={filters}
           onApplySaved={(query) => setSearchParams(new URLSearchParams(query), { replace: true })}
           onChange={setFilters}

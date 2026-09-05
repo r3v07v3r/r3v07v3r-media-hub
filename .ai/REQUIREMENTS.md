@@ -21,13 +21,16 @@ There is no active task queued right now — this is the template. A worked exam
 ## Example (for reference — delete before writing a real requirement)
 
 ### Functional requirements
+
 - Clicking a Continue Watching thumbnail resumes playback from the saved progress position.
 - The mood selector row must remain keyboard-navigable (arrow keys move focus between pills).
 
 ### Visual requirements
+
 - Hero artwork should occupy the right 55–60% of the hero area, fading to black toward the left edge. Match `.ai/screenshots/reference/dashboard.png`.
 - Recommendation cards keep their current width; only the image aspect ratio changes.
 
 ### Constraints
+
 - Do not touch responsive breakpoints, navigation logic, or card count.
 - Do not redesign the page — match the reference visually, nothing more.

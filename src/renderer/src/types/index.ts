@@ -14,6 +14,10 @@ export interface MediaItem {
   mediaKind?: 'movie' | 'series' | 'anime'
   title: string
   subtitle?: string
+  /** The source-language name when `title` is a translation (an anime's
+   *  romaji title) — see CatalogItem.originalTitle. Also drawn as the
+   *  subtitle, and handed to stream resolution as an alternate name. */
+  originalTitle?: string
   description?: string
   posterUrl?: string
   backdropUrl?: string
@@ -93,6 +97,14 @@ export interface Recommendation {
   confidence: number
   reasons: string[]
   generatedAt: string
+}
+
+/** One shelf of the For You page — a RecommendationRail with its reason
+ *  already worded ("Because you watched Dune") and its titles adapted. */
+export interface HomeRail {
+  id: string
+  title: string
+  items: MediaItem[]
 }
 
 export interface MoodCategory {

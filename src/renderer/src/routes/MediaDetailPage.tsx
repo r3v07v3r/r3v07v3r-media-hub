@@ -26,6 +26,7 @@ import type {
   HistoryEntry,
   MediaKind
 } from '@shared/media-hub/types'
+import { demoOnlyTitleMessage, hasExpressibleSimklId } from '@shared/media-hub/serviceIds'
 import type { MediaItem } from '@renderer/types'
 import { ContextBackButton } from '@renderer/components/detail/ContextBackButton'
 import { DetailHero } from '@renderer/components/detail/DetailHero'
@@ -36,12 +37,13 @@ import type { EpisodeResume } from '@renderer/components/detail/EpisodesSection'
 import { RatingsPanel } from '@renderer/components/detail/RatingsPanel'
 import { RequestPanel } from '@renderer/components/detail/RequestPanel'
 import { CollectionPanel } from '@renderer/components/detail/CollectionPanel'
-import { WhereToWatchPanel } from '@renderer/components/detail/WhereToWatchPanel'
 import { ProgressPanel } from '@renderer/components/detail/ProgressPanel'
 import { GenresPanel } from '@renderer/components/detail/GenresPanel'
 import { SimilarPanel } from '@renderer/components/detail/SimilarPanel'
 import { AnimeStoryPanel } from '@renderer/components/detail/AnimeStoryPanel'
 import styles from './MediaDetailPage.module.css'
+import { playableEpisodesInOrder } from '@shared/media-hub/nextEpisode'
+import { resolveArtwork } from '@renderer/lib/artwork'
 
 type FetchStatus = 'loading' | 'ready' | 'error'
 
@@ -55,16 +57,10 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
   const config = DETAIL_CONFIGS[kind]
   const {
     browsingOrigin,
-    activeProfileId,
-    profiles,
+    popBrowsingOrigin,
     myList,
     toggleMyList,
     continueWatching,
-    partyStatus,
-    mediaHubSettings,
-    hostParty,
-    suggestToParty,
-    setPartyPanelOpen,
     startPartyPlayback,
     playbackMedia,
     catalog,
@@ -115,6 +111,15 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
     setMetaStatus('loading')
     setCatalogItem(null)
     setShowTrailer(false)
+    // MediaDetailPage is reused across titles (App.tsx's route has no
+    // `key={id}`, so navigating from one detail page to another re-renders
+    // this same instance rather than remounting it) — without this, a
+    // season explicitly picked on the PREVIOUS title survives into this
+    // one. If that stale season number doesn't exist here (e.g. leaving a
+    // title with a season-0 "Specials" entry for one that starts at season
+    // 1, such as BLEACH: Sennen Kessen-hen), the episode grid renders empty
+    // and no season pill shows active until the person clicks one by hand.
+    setSelectedSeasonOverride(null)
     const api = window.api?.mediaHub
     if (!api) {
       setMetaStatus('error')
@@ -275,6 +280,14 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
     return catalog.find((m) => m.id === id) ?? null
   }, [catalogItem, catalog, id, myList])
 
+  // The show art every episode tile falls back to when its episode has no
+  // still of its own — see EpisodesSection.showArtwork.
+  const showArtwork = useMemo(() => {
+    if (!media) return undefined
+    const art = resolveArtwork(media)
+    return art.backdropUrl ?? art.posterUrl
+  }, [media])
+
   const storyItems = useMemo(
     () =>
       storyLinks.map((link) => ({
@@ -377,23 +390,22 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
   // source of truth for a movie's watched state instead.
   const movieWatched = history.length > 0
 
-  const nextEpisode = useMemo(() => {
-    if (!episodes.length) return null
-    // e.unplayable excludes disambiguateVideos' synthetic Specials entries
-    // (see its own doc comment in core.ts) — they have no real (season,
-    // episode) coordinate the scraper/TorBox pipeline can resolve a
-    // stream for, so they must never become the auto-selected "next
-    // episode" / play target even though they're first in sort order.
-    const firstUnwatched = episodes.find(
-      (e) => !e.unplayable && !watchedKeys.has(episodeKey(e.season, e.episode))
-    )
-    return firstUnwatched ?? null
-  }, [episodes, watchedKeys])
+  // The same rule every card's Play uses (playableEpisodesInOrder: no
+  // synthetic entries, no season-0 specials, nothing unaired), so this
+  // page's Play and Next badge can never name an episode a card would not.
+  // It used to re-derive the rule inline and missed two of those three.
+  const playableInOrder = useMemo(() => playableEpisodesInOrder(episodes), [episodes])
+  const nextEpisode = useMemo(
+    () => playableInOrder.find((e) => !watchedKeys.has(episodeKey(e.season, e.episode))) ?? null,
+    [playableInOrder, watchedKeys]
+  )
 
+  // The first REAL season, so a show that opens with a Specials block lands
+  // on season 1 rather than on the OVAs.
   const selectedSeason =
     selectedSeasonOverride ??
     (seasons.length
-      ? ((nextEpisode ?? episodes.find((e) => !e.unplayable) ?? episodes[0])?.season ?? seasons[0])
+      ? ((nextEpisode ?? playableInOrder[0] ?? episodes[0])?.season ?? seasons[0])
       : null)
 
   useRestoreBrowsingOrigin(metaStatus !== 'loading')
@@ -408,8 +420,14 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
   }, [browsingOrigin, config.path])
 
   function handleBack(): void {
-    if (browsingOrigin) navigate(browsingOrigin.route)
-    else navigate(`/${config.path}`)
+    // Pops as it goes, so a chain opened through the Rest of the series /
+    // Similar panels unwinds one step per press all the way back to the
+    // grid it started from. Reading the top without popping left the
+    // button pointed at the page it had just returned to — /movies/:id
+    // does not remount when only the id changes, so nothing downstream
+    // ever consumed the entry.
+    const origin = popBrowsingOrigin()
+    navigate(origin ? origin.route : `/${config.path}`)
   }
 
   function handlePlay(season?: number, episode?: number): void {
@@ -419,57 +437,46 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
         ? {
             ...media,
             seasonNumber: season ?? nextEpisode?.season ?? 1,
-            episodeNumber: episode ?? nextEpisode?.episode ?? 1
+            episodeNumber: episode ?? nextEpisode?.episode ?? 1,
+            // Coordinates chosen here override whatever the media object
+            // carried; a stale name must not ride along with them.
+            episodeTitle: undefined
           }
         : media
     )
   }
 
-  async function handleWatchTogether(): Promise<void> {
-    if (!media) return
-    const target = config.isEpisodic
-      ? {
-          ...media,
-          seasonNumber: nextEpisode?.season ?? 1,
-          episodeNumber: nextEpisode?.episode ?? 1
-        }
-      : media
-    const item = {
-      id: target.id,
-      type: target.mediaKind ?? config.kind,
-      title: target.title,
-      poster: target.posterUrl ?? '',
-      year: target.releaseYear ? String(target.releaseYear) : ''
-    }
-
-    if (partyStatus?.inParty) {
-      if (partyStatus.role === 'host') {
-        setPartyPanelOpen(false)
-        await startPartyPlayback(target)
-      } else {
-        await suggestToParty(item)
-        pushNotification({ tone: 'success', message: `Suggested ${target.title} to the room.` })
-      }
-      return
-    }
-
-    const activeProfile = profiles.find((profile) => profile.id === activeProfileId)
-    const name = mediaHubSettings?.partyDisplayName?.trim() || activeProfile?.name || 'Host'
-    await hostParty(name)
-    // hostParty opens the hub so the invite is immediately available. Close it
-    // as playback begins; the player has its own room rail and the hub remains
-    // one click away in navigation.
-    setPartyPanelOpen(false)
-    await startPartyPlayback(target)
-  }
+  // handleWatchTogether lived here. The button that called it is gone
+  // while rooms are reworked, and a room-joining code path with no way
+  // to reach it is worse than none: it still compiles, still looks
+  // maintained, and quietly rots against whatever rooms become.
 
   function handleGenreSelect(genre: string): void {
     navigate(`/${config.path}?genre=${encodeURIComponent(genre)}`)
   }
 
+  /**
+   * Refuses to write a demo title into real watch history, and says why.
+   *
+   * This page can render for a mockData item (an AI-assistant fallback
+   * pick opened through openDetail, or the degraded-catalog fallback in
+   * `media` above), and its mark-watched controls used to write the mock
+   * id straight into watch_history — the exact path that created the
+   * m-10/m-11/m-13 ghost duplicates of Aug 24 (see
+   * shared/media-hub/serviceIds.ts). Only the WATCHED direction is
+   * guarded, here and in main's IPC backstop: un-marking is how a ghost
+   * that already leaked in gets cleaned out, and must keep working.
+   */
+  function refuseDemoWatchedWrite(watched: boolean): boolean {
+    if (!media || !watched || hasExpressibleSimklId(media.id)) return false
+    pushNotification({ tone: 'info', message: demoOnlyTitleMessage(media.title) })
+    return true
+  }
+
   async function handleMarkEpisodeWatched(episode: Episode, watched: boolean): Promise<void> {
     const api = window.api?.mediaHub
     if (!api || !media) return
+    if (refuseDemoWatchedWrite(watched)) return
     const item = {
       id: media.id,
       type: kind,
@@ -481,8 +488,11 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
     const call = watched ? api.tracking.markWatched : api.tracking.unmarkWatched
     try {
       await call({ item, playback: { season: episode.season, episode: episode.episode } })
-      const refreshed = await api.tracking.list()
-      setHistory(refreshed.history.filter((h) => h.id === media.id))
+      // One refetch, not two: refreshWatchStatus bumps watchStatusVersion,
+      // which re-runs this page's own history effect, so the manual
+      // tracking.list() that used to sit here was a second identical read
+      // (and, with Simkl awaited in the handler, a second wait).
+      refreshWatchStatus()
     } catch {
       pushNotification({ tone: 'error', message: 'Could not update watched status.' })
     }
@@ -493,8 +503,8 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
    * movies have no per-episode granularity, so `playback` is omitted
    * entirely rather than sent as {season: undefined, episode: undefined}.
    *
-   * Also calls refreshWatchStatus() (handleMarkEpisodeWatched/
-   * handleMarkSeasonWatched above don't) — this page's own `history`
+   * Also calls refreshWatchStatus(), as handleMarkEpisodeWatched and
+   * handleMarkSeasonWatched above do — this page's own `history`
    * state is enough to keep ProgressPanel's toggle itself correct, but
    * the catalog grids (watchedIdsResult) and personalized rails
    * (homeFeed) this toggle also affects have no other way to learn about
@@ -504,6 +514,7 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
   async function handleToggleMovieWatched(watched: boolean): Promise<void> {
     const api = window.api?.mediaHub
     if (!api || !media) return
+    if (refuseDemoWatchedWrite(watched)) return
     const item = {
       id: media.id,
       type: kind,
@@ -515,8 +526,6 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
     const call = watched ? api.tracking.markWatched : api.tracking.unmarkWatched
     try {
       await call({ item })
-      const refreshed = await api.tracking.list()
-      setHistory(refreshed.history.filter((h) => h.id === media.id))
       refreshWatchStatus()
     } catch {
       pushNotification({ tone: 'error', message: 'Could not update watched status.' })
@@ -535,6 +544,7 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
   async function handleMarkSeasonWatched(season: number, watched: boolean): Promise<void> {
     const api = window.api?.mediaHub
     if (!api || !media) return
+    if (refuseDemoWatchedWrite(watched)) return
     // e.unplayable (see disambiguateVideos in core.ts) has no real
     // (season, episode) coordinate — sending it through markSeasonWatched/
     // unmarkWatched would push a fabricated (0, -N) pair into local
@@ -563,8 +573,7 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
           )
         )
       }
-      const refreshed = await api.tracking.list()
-      setHistory(refreshed.history.filter((h) => h.id === media.id))
+      refreshWatchStatus()
     } catch {
       pushNotification({ tone: 'error', message: 'Could not update the season’s watched status.' })
     }
@@ -622,12 +631,9 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
         trailer={catalogItem?.trailers?.[0]}
         showTrailer={showTrailer}
         onToggleTrailer={() => setShowTrailer((v) => !v)}
-        inMyList={inMyList}
-        onToggleMyList={() => toggleMyList(media)}
         onPlay={() =>
           handlePlay(continueEntry?.media.seasonNumber, continueEntry?.media.episodeNumber)
         }
-        onWatchTogether={handleWatchTogether}
       />
 
       <div className={styles.main}>
@@ -638,13 +644,17 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
               <NextToPlayPanel
                 media={media}
                 nextEpisode={nextEpisode}
-                allWatched={episodes.length > 0 && !nextEpisode}
+                // Judged against the episodes that have AIRED and count:
+                // a show whose every episode is still to come has nothing
+                // to play next, but nobody has watched it either.
+                allWatched={playableInOrder.length > 0 && !nextEpisode}
                 onPlay={(ep) => ep && handlePlay(ep.season, ep.episode)}
               />
             </div>
             <EpisodesSection
               mediaId={media.id}
               showTitle={media.title}
+              showArtwork={showArtwork}
               episodes={episodes}
               seasons={seasons}
               selectedSeason={selectedSeason}
@@ -671,7 +681,6 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
           items={related}
           config={config}
           onSelect={(item) => openDetail(item, media.title)}
-          onViewAll={() => navigate(`/${config.path}`)}
         />
       </div>
 
@@ -691,7 +700,10 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
         />
         <RatingsPanel media={media} />
         <CollectionPanel media={media} />
-        <WhereToWatchPanel media={media} />
+        {/* Where to watch is gone. It was a TMDB round trip per title
+            for a JustWatch panel of rent-and-buy links — a request and
+            a render on every detail page, for the one thing somebody
+            using this app is least likely to want. */}
         <RequestPanel media={media} />
         {kind === 'anime' && (
           <AnimeStoryPanel

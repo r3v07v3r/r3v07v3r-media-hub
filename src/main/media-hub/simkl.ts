@@ -7,6 +7,19 @@
 // bodies for a third-party API.
 
 import type { CatalogItem, HistoryEntry, MediaKind } from '../../shared/media-hub/types'
+import { idsForCatalogId, type SimklMediaIds } from '../../shared/media-hub/serviceIds'
+
+// The id-expressibility half of this module moved to shared/media-hub/
+// serviceIds.ts (the renderer's demo-title guards and the ghost-row
+// migration both need it, and neither can import main-process code).
+// Re-exported here so every existing main-side import — and the tests that
+// exercise the predicate — keep reading it from the module whose payloads
+// it exists to serve.
+export {
+  idsForCatalogId,
+  hasExpressibleSimklId,
+  type SimklMediaIds
+} from '../../shared/media-hub/serviceIds'
 
 /** Season/episode the player is currently at (or was at, for a scrobble). */
 export interface PlaybackPosition {
@@ -22,15 +35,6 @@ export interface PlaybackPosition {
  */
 export type SimklPushItem = Pick<CatalogItem, 'id' | 'type' | 'title' | 'year'> &
   Partial<CatalogItem> & { name?: string }
-
-/** At most one id is ever populated, keyed by which service the catalog id encodes. */
-export interface SimklMediaIds {
-  imdb?: string
-  kitsu?: number
-  mal?: number
-  anilist?: number
-  anidb?: number
-}
 
 /** Simkl's generic "media reference" shape, embedded in movies/shows/anime/episode payloads. */
 export interface SimklMediaRef {
@@ -69,22 +73,12 @@ export interface SimklScrobblePayload {
 }
 
 /**
- * Derives Simkl's `ids` object from our internal catalog id string.
- * `tt1234567` (Cinemeta/IMDb) maps straight to `{imdb}`; everything else
- * uses this app's `${provider}:${id}` convention (kitsu/mal/anilist/anidb).
- * Unrecognized ids resolve to `{}` — Simkl treats an empty ids object as
- * "match by title/year" fallback rather than an error.
+ * Derives Simkl's `ids` object from our internal catalog id string — see
+ * idsForCatalogId in shared/media-hub/serviceIds.ts, which is the actual
+ * implementation (and the doc for the id conventions).
  */
 export function mediaIds(item: SimklPushItem): SimklMediaIds {
-  const id = String(item.id || '')
-  if (/^tt\d+$/i.test(id)) return { imdb: id }
-  for (const key of ['kitsu', 'mal', 'anilist', 'anidb'] as const) {
-    if (id.startsWith(`${key}:`)) {
-      const value = Number(id.split(':')[1])
-      if (Number.isFinite(value)) return { [key]: value } as SimklMediaIds
-    }
-  }
-  return {}
+  return idsForCatalogId(String(item.id || ''))
 }
 
 /** Builds the {title, year, ids} reference shared by all Simkl payload variants. */

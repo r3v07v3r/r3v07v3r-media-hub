@@ -27,7 +27,31 @@ import { sendToRenderer } from './rendererBridge'
 import type { ProfileRecord } from './profiles'
 
 export interface MediaHubRawSettings {
+  /**
+   * Whether plan-to-watch changes here reach the tracking services, and
+   * whether their removals reach this app.
+   *
+   * Absent means ON — every install that had the one-way pull gets the
+   * two-way behaviour, which is what somebody who connected an account
+   * was asking for. Off leaves the pull running and stops every write:
+   * see docs/WATCHLIST-SYNC.md, which is the agreement this implements.
+   */
+  watchlistTwoWay?: boolean
   onboardingVersion?: number
+  /** Whether the first-run welcome flow (name, playback source, storage,
+   *  cache tuning) has been completed or skipped. Absent only before the
+   *  first launch of a version that has the flow: ensureSetupCompleteDecided
+   *  (below) then stamps it in both directions — true when durable
+   *  pre-flow markers (storage answer, profiles, TorBox, room identity,
+   *  party name) prove the install predates the flow, explicit false on a
+   *  genuinely fresh install. Never absent afterwards, which is what keeps
+   *  the wizard's own mid-flow writes from ever being mistaken for a
+   *  pre-existing install. */
+  setupComplete?: boolean
+  /** Which version of the one-time anime watch-history id repair this
+   *  install has had — see animeSyncRepair.ts. Absent on installs that
+   *  predate it, which is exactly who the repair is for. */
+  animeIdRepairVersion?: number
   torboxToken?: string
   simklClientId?: string
   simklAccessToken?: string
@@ -60,17 +84,22 @@ export interface MediaHubRawSettings {
   partySyncUrl?: string
   partySyncInviteKey?: string
   partyDisplayName?: string
-  /** Stable per-install identity for friends groups. The relay's connId
-   *  changes every connection, so presence needs something durable to
-   *  recognise the same person by. Not a secret and never leaves the
-   *  group's encrypted channel. */
+  /** Stable per-install identity, the same in every room. The relay's
+   *  connId changes every connection, so presence needs something durable
+   *  to recognise the same person by. Not a secret and never leaves a
+   *  room's encrypted channel. */
   friendId?: string
-  /** The friends group this install belongs to, as a v2 relay share code. */
-  friendsGroupCode?: string
-  /** Opt-in: publish what this device is watching to the group. Off means
-   *  the activity field is omitted entirely, so "not sharing" is
-   *  indistinguishable from "not watching". */
-  friendsShareActivity?: boolean
+  /** Every room this install belongs to. See roomRules.ts's StoredRoom. */
+  rooms?: import('./roomRules').StoredRoom[]
+  /** This install's Ed25519 room identity — the chip. PKCS8 DER,
+   *  base64, ENCRYPTED like every other credential here. The public
+   *  half is always derived from it, never stored, so the two cannot
+   *  drift apart. Losing it is losing the identity; ROOMS.md says so. */
+  roomIdentityKey?: string
+  /** The identity's monotonic cryptogram counter — EMV's ATC. One
+   *  global counter across rooms and relays: every server stores its
+   *  own floor, and a strictly-increasing value satisfies them all. */
+  roomIdentityCtr?: number
   theme?: string
   subtitleLanguage?: string
   audioLanguage?: string
@@ -227,6 +256,39 @@ export function writeSettings(value: MediaHubRawSettings): void {
   }
 }
 
+/**
+ * The one-time setupComplete decision, made in BOTH directions the first
+ * time a version carrying the welcome flow launches: durable pre-flow
+ * markers grandfather the install as complete (nobody already using the
+ * app gets greeted like a stranger), and a genuinely fresh install is
+ * stamped an explicit false. Stamping false is load-bearing — the flag is
+ * never absent again, so nothing written later (by the wizard mid-flow,
+ * or by startup itself) can be mistaken for a pre-existing install.
+ *
+ * ORDERING IS THE WHOLE GAME: index.ts must call this BEFORE anything
+ * that seeds settings — in particular before activeProfileId(), whose
+ * ensureProfiles() writes the default "Profile 1" on a fresh launch.
+ * Decided after that seed, the profiles marker below would be true on
+ * every fresh install and the welcome flow would never show at all.
+ *
+ * The markers are a disjunction rather than the storage answer alone
+ * because auto-update can skip releases: an install upgrading straight
+ * from a version predating the storage question still has profiles, a
+ * TorBox connection (onboardingVersion), a room identity, or a party
+ * name — any one proves the app was in use before the flow existed.
+ */
+export function ensureSetupCompleteDecided(): void {
+  const settings = readSettings()
+  if (settings.setupComplete !== undefined) return
+  settings.setupComplete =
+    settings.storeMedia !== undefined ||
+    settings.onboardingVersion !== undefined ||
+    (settings.profiles?.length ?? 0) > 0 ||
+    Boolean(settings.friendId) ||
+    Boolean(settings.partyDisplayName)
+  writeSettings(settings)
+}
+
 const ENCRYPTION_UNAVAILABLE_PREFIX = 'plain:'
 let warnedNoEncryption = false
 
@@ -270,6 +332,28 @@ export interface LanCacheConnection {
   url: string
   name: string
   token: string
+  /**
+   * A token issued but not yet approved by the server's administrator.
+   *
+   * The token is real and authorises nothing, so the connection has to be
+   * REMEMBERED (the app must be able to ask 'am I in yet' after a restart)
+   * without being USED (every source lookup and stream would 401). Hence a
+   * flag on the stored connection rather than a second slot: there is only
+   * ever one cache server, and a pending one is that server in an earlier
+   * state, not a different thing.
+   */
+  pending?: boolean
+  /**
+   * The TorBox opt-in made when this device asked to join, held until
+   * approval can act on it.
+   *
+   * The choice is made at the moment of asking and cannot be honoured then:
+   * a pending token authorises nothing, so posting the credential would be
+   * refused. Without somewhere to keep the answer it was simply discarded,
+   * and the person who ticked the box stayed unlinked with no control
+   * anywhere to try again.
+   */
+  shareTorbox?: boolean
 }
 
 /** The paired cache daemon, or undefined. Unlike the TorBox token this is
@@ -279,7 +363,13 @@ export function getLanCacheConnection(): LanCacheConnection | undefined {
   const url = String(settings.lanCacheUrl || '').trim()
   const token = decrypt(settings.lanCacheToken)
   if (!url || !token) return undefined
-  return { url: url.replace(/\/+$/, ''), name: String(settings.lanCacheName || ''), token }
+  return {
+    url: url.replace(/\/+$/, ''),
+    name: String(settings.lanCacheName || ''),
+    token,
+    ...(settings.lanCachePending === true ? { pending: true } : {}),
+    ...(settings.lanCacheShareTorbox === true ? { shareTorbox: true } : {})
+  }
 }
 
 export function setLanCacheConnection(connection: LanCacheConnection): void {
@@ -287,6 +377,12 @@ export function setLanCacheConnection(connection: LanCacheConnection): void {
   settings.lanCacheUrl = connection.url.trim().replace(/\/+$/, '')
   settings.lanCacheName = connection.name
   settings.lanCacheToken = encrypt(connection.token)
+  // Written only when true, and deleted otherwise, so approval leaves no
+  // stale flag behind to hold a working connection shut.
+  if (connection.pending) settings.lanCachePending = true
+  else delete settings.lanCachePending
+  if (connection.shareTorbox) settings.lanCacheShareTorbox = true
+  else delete settings.lanCacheShareTorbox
   writeSettings(settings)
 }
 
@@ -295,6 +391,8 @@ export function clearLanCacheConnection(): void {
   delete settings.lanCacheUrl
   delete settings.lanCacheName
   delete settings.lanCacheToken
+  delete settings.lanCachePending
+  delete settings.lanCacheShareTorbox
   writeSettings(settings)
 }
 
@@ -406,6 +504,47 @@ export function malCredentials(): MalCredentials {
     refreshToken: decrypt(settings.malRefreshToken),
     expiresAt: Number(settings.malTokenExpiresAt) || 0
   }
+}
+
+/**
+ * The same mark, for Trakt and MyAnimeList.
+ *
+ * Written when two-way watchlist sync gained a memory of its own. That
+ * memory says "this app pulled this title in from Trakt", and the reason
+ * it exists is to justify DELETING the title later — so it has to be
+ * about one Trakt account rather than about Trakt. Nothing stops somebody
+ * authorizing a different account, and an unstamped record would let
+ * account B's snapshot be read as evidence that account A's title had
+ * been removed.
+ *
+ * Each salt is distinct so that the same token, were it ever accepted by
+ * two services, could not produce one mark that matched in both places.
+ * They are load-bearing in the same way simklAccountMark's is: changing
+ * one orphans every stamp already on disk, which reads as "somebody
+ * else's account" and quietly discards state — the safe direction, but
+ * not a free one.
+ */
+export function traktAccountMark(): string {
+  const { accessToken } = traktCredentials()
+  if (!accessToken) return ''
+  return crypto
+    .createHash('sha256')
+    .update(`trakt-account:${accessToken}`)
+    .digest('hex')
+    .slice(0, 16)
+}
+
+export function malAccountMark(): string {
+  const { accessToken } = malCredentials()
+  if (!accessToken) return ''
+  return crypto.createHash('sha256').update(`mal-account:${accessToken}`).digest('hex').slice(0, 16)
+}
+
+/** Every tracking service's mark at once, for the callers that stamp a
+ *  record touching more than one. Empty string means "not connected",
+ *  which must never compare equal to a stored stamp. */
+export function trackingAccountMarks(): { simkl: string; trakt: string; mal: string } {
+  return { simkl: simklAccountMark(), trakt: traktAccountMark(), mal: malAccountMark() }
 }
 
 export interface TmdbCredentials {

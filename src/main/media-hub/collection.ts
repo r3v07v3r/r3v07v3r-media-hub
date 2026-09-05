@@ -48,7 +48,14 @@ export async function titleCollection(imdbId: string): Promise<TitleCollectionRe
   if (!apiKey) return EMPTY
 
   const db = getDatabase()
-  const cacheKey = `collection:v1:${imdbId}`
+  // v2, not v1: entries written before the parts below carried a complete
+  // CatalogItem are the malformed shape that crashed the detail page, and
+  // they live for a month. Bumping the key retires them on first read
+  // rather than leaving anyone who already opened a franchise film with a
+  // black window until the TTL runs out.
+  // v3: the film itself is part of the answer now (marked as current), and
+  // parts are ordered by their full release date rather than the year.
+  const cacheKey = `collection:v3:${imdbId}`
   const cached = db.getCache<TitleCollectionResult>(cacheKey)
   if (cached) return cached
 
@@ -80,26 +87,54 @@ export async function titleCollection(imdbId: string): Promise<TitleCollectionRe
       `https://api.themoviedb.org/3/collection/${collectionId}?${auth}`
     )
 
+    // Full release dates, for the sort below. Kept beside the parts rather
+    // than on them: CatalogItem carries a year, and two films from one year
+    // sorted by year alone kept TMDB's own arbitrary order.
+    const releasedById = new Map<string, string>()
     const parts = (
       await Promise.all(
         (collection.parts ?? []).map(async (part): Promise<CatalogItem | null> => {
           const partId = Number(part?.id)
-          if (!Number.isFinite(partId) || partId === sourceId) return null
+          if (!Number.isFinite(partId)) return null
           try {
-            const external = await fetchJson<{ imdb_id?: unknown }>(
-              `https://api.themoviedb.org/3/movie/${partId}/external_ids?${auth}`
-            )
-            const partImdb = String(external.imdb_id ?? '')
+            // The film on screen stays in the list, marked as current below
+            // — a series with one entry missing from the middle does not
+            // read as an order. Its IMDb id is already known.
+            let partImdb = imdbId
+            if (partId !== sourceId) {
+              const external = await fetchJson<{ imdb_id?: unknown }>(
+                `https://api.themoviedb.org/3/movie/${partId}/external_ids?${auth}`
+              )
+              partImdb = String(external.imdb_id ?? '')
+            }
             if (!/^tt\d+$/.test(partImdb)) return null
             const poster = String(part?.poster_path ?? '')
             const released = String(part?.release_date ?? '')
+            releasedById.set(partImdb, released)
+            // Every field CatalogItem declares, not just the five this
+            // panel happens to draw. A part built with a cast over a partial
+            // object crossed the IPC boundary as a CatalogItem-shaped lie,
+            // and the renderer's catalogItemToMediaItem — which reads
+            // `genres` unguarded — threw on the missing array, taking the
+            // whole React tree down with it: opening any film that belongs
+            // to a TMDB collection blanked the window. The empty strings
+            // and arrays are what "TMDB's collection endpoint does not
+            // carry this" honestly looks like.
             return {
               id: partImdb,
               type: 'movie',
               title: String(part?.title ?? 'Untitled'),
               poster: poster ? `https://image.tmdb.org/t/p/w342${poster}` : '',
-              year: released.slice(0, 4)
-            } as CatalogItem
+              background: '',
+              logo: '',
+              year: released.slice(0, 4),
+              description: '',
+              rating: '',
+              runtime: '',
+              genres: [],
+              videos: [],
+              trailers: []
+            }
           } catch {
             return null
           }
@@ -110,11 +145,14 @@ export async function titleCollection(imdbId: string): Promise<TitleCollectionRe
     // Release order, which is the order people mean by "what comes next" —
     // TMDB returns parts in its own order and a film with no date sorts last
     // rather than pretending to be the earliest.
-    parts.sort((a, b) => (a.year || '9999').localeCompare(b.year || '9999'))
+    parts.sort((a, b) =>
+      (releasedById.get(a.id) || '9999').localeCompare(releasedById.get(b.id) || '9999')
+    )
 
     const result: TitleCollectionResult = {
       name: String(collection.name ?? ''),
-      parts
+      parts,
+      currentId: imdbId
     }
     db.putCache(cacheKey, result, TTL_MS)
     return result

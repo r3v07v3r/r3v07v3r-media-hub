@@ -10,7 +10,7 @@
 //
 // Everything here is structurally cloneable: it travels over Electron IPC.
 
-import type { MediaTracks } from './types'
+import type { MediaTracks, PlaybackRelease } from './types'
 import type { NextEpisodeRef } from './nextEpisode'
 import type { SubtitleStyle } from './subtitleStyle'
 import type { VideoFitMode } from './videoFit'
@@ -152,6 +152,20 @@ export interface PlayerSessionMedia {
   episodeNumber?: number
   episodeTitle?: string
   posterUrl?: string
+  /** The release playing, for the Info panel. */
+  release?: PlaybackRelease
+}
+
+/** What mpv reports about the picture it is decoding — the other half of
+ *  the Info panel, alongside the release. Pushed as one object each time
+ *  any of it changes, because state patches merge shallowly. */
+export interface PlayerVideoFacts {
+  codec?: string
+  width?: number
+  height?: number
+  fps?: number
+  /** mpv's hwdec-current: the decoder in use, or 'no' for software. */
+  hwdec?: string
 }
 
 /** Pushed to the overlay on `playerSession` whenever any of it changes. A whole
@@ -228,6 +242,8 @@ export interface PlayerStatePatch {
   eofReached?: boolean
   /** Track list changed — e.g. an external subtitle was added. */
   tracks?: MediaTracks
+  /** Codec, size, frame rate and decoder of the picture — see PlayerVideoFacts. */
+  video?: PlayerVideoFacts
   /** The file's chapter marks, in order. Empty for the many releases that
    *  carry none, which is why the chapters button is absent rather than
    *  disabled when this is empty. */
@@ -338,9 +354,10 @@ export type PlayerCommand =
  * controls, forwarded so the overlay can apply it through exactly the handlers
  * its own clicks and keys use.
  *
- * mpv's window receives input whenever the controls are hidden, because the
- * overlay is click-through then and only mousemove is forwarded to it. Acting
- * on those directly in main is what this type exists to avoid: main has no
+ * Vestigial with the embedded player — mpv's child processes no mouse input
+ * and never holds keyboard focus, and the overlay takes every mouse event
+ * itself — but kept wired as the backstop's delivery path. Acting on such an
+ * input directly in main is what this type exists to avoid: main has no
  * access to the party rules (they live in the overlay's usePartySync), so a
  * pause applied there would pause one person and leave the rest of the watch
  * party playing.
@@ -361,6 +378,11 @@ export type PlayerUiEvent =
   | { type: 'stop-playback'; watched: boolean }
   | { type: 'mark-watched' }
   | { type: 'refresh-watch-status' }
+  /** Re-open the title that is playing, at its saved position — raised by the
+   *  overlay's "ended early" card when a stream reached its end well short of
+   *  the runtime. The main window owns the MediaItem and the resolve, so it is
+   *  asked rather than told; it starts the same title the way a click would. */
+  | { type: 'resume-title' }
   /** Start the next episode — raised by the post-play card, either because its
    *  countdown ran out or because somebody pressed Play now.
    *
@@ -397,9 +419,12 @@ export type PlayerUiEvent =
    *  panel that is not open yet — the only one of these three that main passes
    *  on to the main window rather than acting on and stopping. */
   | { type: 'set-party-panel-open'; open: boolean }
-  /** Main window -> main: the party panel IS open, so the video has to give up
-   *  the front. A report, not a command, which is why it is a separate event
-   *  from set-party-panel-open rather than the same one sent the other way: a
+  /** Main window -> main: the party panel IS open, so the embedded video (and
+   *  the overlay with it) is hidden until it closes — the video child covers
+   *  the whole page and DOM can never composite over it, so showing
+   *  main-window UI means removing the picture, not reordering windows. A
+   *  report, not a command, which is why it is a separate event from
+   *  set-party-panel-open rather than the same one sent the other way: a
    *  report that main echoed back would reach this window as an instruction to
    *  open, and one still in flight when the person closes the panel would land
    *  after them and re-open it.
@@ -408,18 +433,19 @@ export type PlayerUiEvent =
    *  mainWindowUiOpen that has drifted false is repaired by the next thing
    *  played rather than staying wrong. */
   | { type: 'party-panel-open' }
-  /** Main window -> main: the party panel has gone, so the video can have the
-   *  front back. The other half of the report pair above. See playerBridge's
-   *  handling of party-panel-open for why the front was given up at all, and
+  /** Main window -> main: the party panel has gone, so the video and overlay
+   *  come back. The other half of the report pair above. See playerBridge's
+   *  handling of party-panel-open for why the picture was hidden at all, and
    *  mainWindowUiOpen for why main takes this window's word for the close
    *  rather than inferring it from playback ending. Sent on every open ->
    *  closed edge whatever is playing, and once on mount so a main process that
    *  outlived a renderer reload cannot be left holding a stale "open" — which
-   *  would keep the video under the app indefinitely. */
+   *  would keep the video hidden indefinitely. */
   | { type: 'party-panel-closed' }
-  /** Whether the overlay currently wants mouse input. False makes the window
-   *  click-through so the video underneath receives the events instead — see
-   *  playerWindow.ts's setOverlayInteractive. */
+  /** The controls' reveal edge. The overlay window takes mouse input for the
+   *  whole session either way (see playerWindow.ts's INPUT note); what main
+   *  decides from this is when the KEYBOARD should follow the controls
+   *  (playerBridge's set-interactive handling). */
   | { type: 'set-interactive'; interactive: boolean }
   /** Whether this window is actually listening for forwarded input yet.
    *

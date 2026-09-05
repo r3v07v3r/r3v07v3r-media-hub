@@ -1,15 +1,18 @@
 // The one place that decides what "fullscreen" means for this app.
 //
-// Fullscreen is always the MAIN window's, never the calling window's: mpv's
-// video window and the player-controls overlay are both sized to the main
-// window's content area (see playerWindow.ts), so it is the only window whose
-// fullscreen state changes anything on screen. The overlay is even created
+// Fullscreen is always the MAIN window's, never the calling window's: the
+// video is a child embedded inside it (mpvEmbed.ts) and the player-controls
+// overlay mirrors its content area (playerWindow.ts), so it is the only
+// window whose fullscreen state changes anything on screen — a fullscreen
+// film is nothing more than the main window fullscreen with the video child
+// refilled to the client rect. The overlay is even created
 // `fullscreenable: false`, so a call aimed at it is dropped outright.
 //
-// Pulled out of appIpc.ts because there are now three ways in — the overlay's
-// button (window:toggle-fullscreen), F11 from any app window (src/main/index.ts)
-// and mpv's own window forwarding a double-click or F11 (playerBridge) — and
-// they must not each keep their own idea of the current state.
+// Pulled out of appIpc.ts because there is more than one way in — the
+// overlay's button (window:toggle-fullscreen) and F11 from any app window
+// (src/main/index.ts), plus mpv's vestigial keyboard backstop (playerBridge's
+// client-message path) — and they must not each keep their own idea of the
+// current state.
 
 import type { BrowserWindow } from 'electron'
 import { getActiveWindow } from './rendererBridge'

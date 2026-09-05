@@ -15,49 +15,10 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { MediaItem } from '@renderer/types'
 import { Icon } from '@renderer/components/icons/Icon'
 import { MediaCard } from '@renderer/components/home/RecommendationCarousel/MediaCard'
+import { listChange } from '@renderer/lib/mediaHub/listChange'
 import styles from './MediaGrid.module.css'
 
 const BATCH = 30
-
-/** Above this much overlap, a new list counts as the same browse set with
- *  an edit applied rather than a different list entirely. */
-const SAME_LIST_OVERLAP = 0.8
-
-/**
- * How a newly-arrived `items` array relates to the one it replaced.
- *
- * - `same`: identical titles in identical order — the array is merely a
- *   fresh derivation upstream, and nothing about the view should move.
- * - `edited`: mostly the same titles, a few added or removed (someone
- *   marked one watched while a hide filter is on). The person is still
- *   looking at the same list and should keep their place.
- * - `different`: a new filter, sort, or search. Genuinely a fresh result
- *   list, and starting at the top with one batch is right.
- *
- * Ids are unique within a list (see hooks.ts's dedupeById), so the
- * position-wise comparison is exact. Costs one pass, and only when the
- * array identity already differed.
- */
-function listChange(prev: MediaItem[], next: MediaItem[]): 'same' | 'edited' | 'different' {
-  if (prev === next) return 'same'
-  if (prev.length === next.length) {
-    let identical = true
-    for (let i = 0; i < prev.length; i++) {
-      if (prev[i].id !== next[i].id) {
-        identical = false
-        break
-      }
-    }
-    if (identical) return 'same'
-  }
-  if (!prev.length || !next.length) return 'different'
-  const prevIds = new Set(prev.map((item) => item.id))
-  let shared = 0
-  for (const item of next) {
-    if (prevIds.has(item.id)) shared++
-  }
-  return shared / Math.min(prev.length, next.length) >= SAME_LIST_OVERLAP ? 'edited' : 'different'
-}
 
 export interface MediaGridProps {
   items: MediaItem[]
@@ -80,6 +41,15 @@ export interface MediaGridProps {
    *  computes it once from whatever's in the currently-pending
    *  BrowsingOrigin, which is exactly the mount this needs to affect. */
   initialVisibleCount?: number
+  /**
+   * Label each card with what it is.
+   *
+   * Off by default and on for MIXED lists only. The library pages hold one
+   * kind each, where a "Film" chip on every card of a page called Movies
+   * says nothing; Planned holds all three at once, where telling them
+   * apart is the first thing somebody wants.
+   */
+  showKind?: boolean
 }
 
 export function MediaGrid({
@@ -90,7 +60,8 @@ export function MediaGrid({
   emptyTitle = 'No titles match these filters',
   emptyMessage = 'Try widening a filter or clearing them all.',
   errorTitle = "Couldn't reach the search backend",
-  initialVisibleCount
+  initialVisibleCount,
+  showKind = false
 }: MediaGridProps) {
   const [visibleCount, setVisibleCount] = useState(initialVisibleCount ?? BATCH)
   // Read inside the observer callback below instead of closing over
@@ -214,7 +185,7 @@ export function MediaGrid({
   return (
     <ul className={styles.grid}>
       {visibleItems.map((media) => (
-        <MediaCard key={media.id} media={media} />
+        <MediaCard key={media.id} media={media} showKind={showKind} />
       ))}
       {/* Zero-size marker, not another skeleton card — its only job is
           to give the IntersectionObserver above something to watch near

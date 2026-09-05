@@ -17,7 +17,8 @@ import type {
   TrackedItem,
   TrackedItemEnriched
 } from '@shared/media-hub/types'
-import { episodeWatchState } from '@shared/media-hub/catalog-logic'
+import { episodeWatchState, hasAired, isRegularEpisode } from '@shared/media-hub/catalog-logic'
+import { parseRating, parseRuntimeMinutes, parseYear } from '@shared/media-hub/catalogFields'
 import { recommendationReasonLabel } from '@shared/media-hub/recommendationReason'
 import type { OllamaTitleRef } from '@shared/media-hub/ollama'
 import type { MediaItem, MediaType, Recommendation } from '@renderer/types'
@@ -104,20 +105,11 @@ export function mediaItemToTrackablePayload(media: MediaItem): {
   }
 }
 
-function parseRuntimeMinutes(runtime: string): number | undefined {
-  const n = parseInt(runtime, 10)
-  return Number.isFinite(n) && n > 0 ? n : undefined
-}
-
-function parseYear(year: string): number | undefined {
-  const n = parseInt(year, 10)
-  return Number.isFinite(n) && n > 0 ? n : undefined
-}
-
-function parseRating(rating: string): number | undefined {
-  const n = Number(rating)
-  return Number.isFinite(n) && n > 0 ? n : undefined
-}
+// parseRuntimeMinutes/parseYear/parseRating used to be defined right here.
+// They moved to @shared/media-hub/catalogFields because main now derives the
+// same three values when it writes catalog_index, and SQL filters/sorts on
+// the result — two copies would be free to drift into meaning different
+// things on the two sides of the same filter. See that module's own comment.
 
 // The backend has no mood taxonomy at all (CatalogItem carries genres, not
 // moods) — MoodBrowser's mood pills only mean something for MediaItems that
@@ -149,9 +141,26 @@ const GENRE_MOOD_KEYWORDS: Record<string, string[]> = {
   documentary: ['mind-bending']
 }
 
-function genresToMoods(genres: string[]): string[] {
+// `genres` is declared non-optional on CatalogItem, but this runs on the far
+// side of an IPC boundary — the type is a promise about the payload, not a
+// guarantee of it, and a normalizer that omitted the array once already made
+// this throw and blank the entire window (see collection.ts). Tolerating the
+// absence here costs one guard; not tolerating it costs the app.
+/** The inverse direction of GENRE_MOOD_KEYWORDS, for callers that must ask
+ *  the INDEX for mood-relevant rows: does this concrete genre value map to
+ *  any of the selected moods? Kept beside the forward mapping so the two
+ *  directions cannot drift apart. */
+export function genreMatchesMoods(genre: string, moodIds: readonly string[]): boolean {
+  const key = genre.trim().toLowerCase()
+  for (const [needle, tags] of Object.entries(GENRE_MOOD_KEYWORDS)) {
+    if (key.includes(needle) && tags.some((tag) => moodIds.includes(tag))) return true
+  }
+  return false
+}
+
+function genresToMoods(genres: string[] | undefined): string[] {
   const moods = new Set<string>()
-  for (const genre of genres) {
+  for (const genre of genres ?? []) {
     const key = genre.trim().toLowerCase()
     for (const [needle, tags] of Object.entries(GENRE_MOOD_KEYWORDS)) {
       if (key.includes(needle)) tags.forEach((tag) => moods.add(tag))
@@ -204,13 +213,17 @@ export function indexHistoryById(history: HistoryEntry[]): Map<string, HistoryEn
  * The episodes that count toward a title's progress — the denominator for
  * "how far through this am I".
  *
- * Two exclusions, for two different reasons:
+ * Three exclusions, for three different reasons:
  *
  * v.unplayable (see disambiguateVideos in core.ts) is a synthetic Specials
  * entry with no real episode behind it — its watched controls are hidden,
  * so it can never appear in `history`. Counting it would mean watchedCount
  * could never reach total, permanently blocking a series from reading as
  * complete even after every real episode is watched.
+ *
+ * A genuine season-0 special (isRegularEpisode, shared/catalog-logic.ts)
+ * is real and watchable but is not progress: a show is complete when its
+ * numbered episodes are watched, whether or not the OVAs were.
  *
  * Unaired/future episodes (Cinemeta and TMDB both include these in
  * `videos`) are excluded so a currently-airing show someone is fully
@@ -220,13 +233,13 @@ export function indexHistoryById(history: HistoryEntry[]): Map<string, HistoryEn
  * Progress counts, so the "Completed" badge on a catalog card and the
  * percentage in the detail sidebar can't disagree about the denominator.
  */
-export function airedEpisodes<T extends { unplayable?: boolean; released?: string }>(
-  videos: readonly T[] | undefined,
-  now: number = Date.now()
-): T[] {
-  return (videos || []).filter(
-    (v) => !v.unplayable && (!v.released || new Date(v.released).getTime() <= now)
-  )
+export function airedEpisodes<
+  T extends { unplayable?: boolean; released?: string; season?: number | null }
+>(videos: readonly T[] | undefined, now: number = Date.now()): T[] {
+  // hasAired and isRegularEpisode, not inline checks: the same two rules
+  // decide which episode a Play button starts (see nextEpisode.ts), and
+  // two copies of either would eventually disagree.
+  return (videos || []).filter((v) => isRegularEpisode(v) && hasAired(v, now))
 }
 
 /** A series/anime counts as complete once every already-aired episode has
@@ -267,7 +280,7 @@ function seasonEpisodeCounts(
   // episodes — so they're excluded here too, or they'd inflate both the
   // episode count and (by introducing a season that wouldn't otherwise
   // exist) the season count.
-  const playable = (videos || []).filter((v) => !v.unplayable)
+  const playable = (videos || []).filter((v) => isRegularEpisode(v))
   if (playable.length === 0) return {}
   const seasons = new Set(playable.map((v) => v.season).filter((s) => Number.isFinite(s)))
   return {
@@ -295,13 +308,19 @@ export function catalogItemToMediaItem(
     mediaType: toMediaType(item.type),
     mediaKind: item.type,
     title: item.title,
+    // The romaji under an anime's English name — DetailHero draws
+    // `subtitle` beside the title, and stream resolution reads
+    // originalTitle as the name releases actually carry.
+    ...(item.originalTitle
+      ? { subtitle: item.originalTitle, originalTitle: item.originalTitle }
+      : {}),
     description: item.description || undefined,
     posterUrl: item.poster || undefined,
     backdropUrl: item.background || undefined,
     logoUrl: item.logo || undefined,
     releaseYear: parseYear(item.year),
     runtimeMinutes: parseRuntimeMinutes(item.runtime),
-    genres: item.genres,
+    genres: item.genres ?? [],
     moods: genresToMoods(item.genres),
     // Present only on a resolved detail-page item — the catalog list
     // carries none of these (see credits.ts on why they are not on the

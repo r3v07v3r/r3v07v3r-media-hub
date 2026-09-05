@@ -1,6 +1,6 @@
 'use client'
 
-import { useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { MediaItem } from '@renderer/types'
 import type { ContinueWatchingItem } from '@renderer/types'
 import type { Episode, Trailer } from '@shared/media-hub/types'
@@ -11,6 +11,11 @@ import { resolveArtwork } from '@renderer/lib/artwork'
 import { ArtworkImage } from '@renderer/components/media/ArtworkImage'
 import { useYoutubeEmbedControls } from '@renderer/hooks/useYoutubeEmbedControls'
 import styles from './DetailHero.module.css'
+
+/** Same idle window as the movie player's control bar
+ *  (PlayerOverlayWindow's CONTROLS_IDLE_MS) so a trailer and a film feel
+ *  like one player. */
+const TRAILER_CONTROLS_IDLE_MS = 3200
 
 function formatTime(seconds: number): string {
   if (!Number.isFinite(seconds) || seconds < 0) return '0:00'
@@ -31,10 +36,7 @@ export interface DetailHeroProps {
   trailer: Trailer | undefined
   showTrailer: boolean
   onToggleTrailer: () => void
-  inMyList: boolean
-  onToggleMyList: () => void
   onPlay: () => void
-  onWatchTogether: () => Promise<void>
 }
 
 export function DetailHero({
@@ -45,16 +47,12 @@ export function DetailHero({
   trailer,
   showTrailer,
   onToggleTrailer,
-  inMyList,
-  onToggleMyList,
-  onPlay,
-  onWatchTogether
+  onPlay
 }: DetailHeroProps) {
-  const { resolvingMedia, pushNotification, partyStatus } = useAppState()
+  const { resolvingMedia } = useAppState()
   const artwork = resolveArtwork(media)
   const hasProgress = !!continueEntry && !continueEntry.media.completed
   const isResolving = resolvingMedia?.id === media.id
-  const [startingRoomWatch, setStartingRoomWatch] = useState(false)
 
   const trailerFrameRef = useRef<HTMLIFrameElement>(null)
   const trailerActive = showTrailer && !!trailer
@@ -66,6 +64,40 @@ export function DetailHero({
   // Closing the trailer (trailerActive turning false) always restores it,
   // both directly here and via the hook resetting `playing` to false.
   const contentFaded = trailerActive && trailerControls.playing
+
+  // The control bar (play/pause + seek) fades out on idle while the trailer
+  // is playing, the same as the movie player's bar does — otherwise the
+  // seek bar sits over the picture for the whole trailer. Moving the mouse
+  // anywhere over the hero brings it back and re-arms the countdown. Only
+  // while actually playing: a paused or still-loading trailer keeps its bar
+  // up, since that is exactly when someone is about to press something.
+  // The countdown is armed on the play transition itself too, not only on
+  // mouse movement, so autoplay fades the bar without the mouse ever moving.
+  //
+  // Keyboard users get the same two paths the movie player gives them: any
+  // key press while the trailer is open reveals the bar (a hidden bar is
+  // `visibility: hidden`, so it cannot be tabbed into — the key press has
+  // to come first, exactly as a key press wakes the movie player's bar),
+  // and the bar never fades while focus is inside it, so once reached by
+  // Tab it stays put until focus moves on.
+  const [trailerIdle, setTrailerIdle] = useState(false)
+  const [trailerRevealTick, setTrailerRevealTick] = useState(0)
+  const [trailerBarFocused, setTrailerBarFocused] = useState(false)
+  const revealTrailerControls = useCallback(() => {
+    setTrailerIdle(false)
+    setTrailerRevealTick((tick) => tick + 1)
+  }, [])
+  useEffect(() => {
+    if (!contentFaded) return
+    const timer = setTimeout(() => setTrailerIdle(true), TRAILER_CONTROLS_IDLE_MS)
+    return () => clearTimeout(timer)
+  }, [contentFaded, trailerRevealTick])
+  useEffect(() => {
+    if (!trailerActive) return
+    window.addEventListener('keydown', revealTrailerControls)
+    return () => window.removeEventListener('keydown', revealTrailerControls)
+  }, [trailerActive, revealTrailerControls])
+  const trailerControlsHidden = contentFaded && trailerIdle && !trailerBarFocused
 
   const playLabel = useMemo(() => {
     if (isResolving) {
@@ -89,26 +121,13 @@ export function DetailHero({
     nextEpisode
   ])
 
-  async function handleWatchTogether(): Promise<void> {
-    setStartingRoomWatch(true)
-    try {
-      await onWatchTogether()
-    } catch (error) {
-      pushNotification({
-        tone: 'error',
-        message: error instanceof Error ? error.message : 'Could not start a room watch.'
-      })
-    } finally {
-      setStartingRoomWatch(false)
-    }
-  }
-
   return (
     <section
       className={`${styles.hero} ${!config.isEpisodic ? styles.heroMovie : ''} ${
         trailerActive ? styles.heroTrailerOpen : ''
       }`}
       aria-label={`${media.title} details`}
+      onMouseMove={trailerActive ? revealTrailerControls : undefined}
     >
       <div
         className={`${styles.artLayer} ${contentFaded ? styles.artLayerUnmasked : ''}`}
@@ -146,11 +165,27 @@ export function DetailHero({
       </div>
 
       {trailerActive && (
-        <div className={styles.trailerControls}>
+        <div
+          className={`${styles.trailerControls} ${
+            trailerControlsHidden ? styles.trailerControlsHidden : ''
+          }`}
+          onFocus={() => setTrailerBarFocused(true)}
+          onBlur={(event) => {
+            // Focus hopping between this bar's own buttons is not leaving.
+            if (event.currentTarget.contains(event.relatedTarget as Node | null)) return
+            setTrailerBarFocused(false)
+          }}
+        >
           <button
             type="button"
             className={styles.trailerPlayPause}
-            onClick={trailerControls.togglePlay}
+            onClick={() => {
+              // Resuming from a keyboard press arrives with no mouse
+              // movement, so the bar would otherwise fade the instant the
+              // old idle state met the new "playing".
+              revealTrailerControls()
+              trailerControls.togglePlay()
+            }}
             disabled={!trailerControls.ready}
             aria-label={trailerControls.playing ? 'Pause trailer' : 'Play trailer'}
           >
@@ -238,30 +273,14 @@ export function DetailHero({
               {showTrailer ? 'Close Trailer' : 'Trailer'}
             </button>
           )}
-          <button
-            type="button"
-            className={styles.secondaryButton}
-            aria-pressed={inMyList}
-            onClick={onToggleMyList}
-          >
-            <Icon name={inMyList ? 'check' : 'plus'} size={15} />
-            {inMyList ? config.trackedLabel : config.trackLabel}
-          </button>
-          <button
-            type="button"
-            className={styles.secondaryButton}
-            onClick={() => void handleWatchTogether()}
-            disabled={startingRoomWatch}
-          >
-            <Icon name="people" size={15} />
-            {startingRoomWatch
-              ? 'Opening room…'
-              : partyStatus?.inParty
-                ? partyStatus.role === 'host'
-                  ? 'Play in room'
-                  : 'Suggest to room'
-                : 'Watch together'}
-          </button>
+          {/* The list toggle and Watch together used to sit here.
+              The first is the same control the right-hand rail already
+              carries, and two buttons doing one thing on one screen is a
+              question about which is which rather than a convenience.
+              The second goes because rooms are being reworked, and an
+              entry point into a thing that is changing shape is worse
+              than no entry point. Play and Trailer are what this row is
+              for. */}
         </div>
       </div>
     </section>

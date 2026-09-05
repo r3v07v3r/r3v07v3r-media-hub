@@ -1,8 +1,9 @@
 import { AIResponsePanel } from './AIResponsePanel'
 import { ContextMenu } from './ContextMenu'
 import { NotificationLayer } from './NotificationLayer'
-import { OfflineBanner } from './OfflineBanner'
 import { SyncReviewPanel } from './SyncReviewPanel'
+import { StoragePolicyPrompt } from './StoragePolicyPrompt'
+import { WelcomeSetup } from './WelcomeSetup'
 import { ProfilePinPrompt } from '@renderer/components/profiles/ProfilePinPrompt'
 import { SessionHub } from '@renderer/components/party/SessionHub'
 import { PartyLoadingOverlay } from '@renderer/components/party/PartyLoadingOverlay'
@@ -21,7 +22,6 @@ export function GlobalOverlays() {
     // shot entrances need to always finish; only ambient/idle looping
     // animation was ever meant to pause.
     <div data-motion-exempt="true">
-      <OfflineBanner />
       <AIResponsePanel />
       <ContextMenu />
       <PlaybackPreparationOverlay />
@@ -36,6 +36,13 @@ export function GlobalOverlays() {
       <NotificationLayer />
       <SyncReviewPanel />
       <ProfilePinPrompt />
+      {/* Last, so they paint over every other overlay. First run is a
+          sequence, not a pile: WelcomeSetup (name + playback source) shows
+          while setupComplete is false, and StoragePolicyPrompt keys itself
+          to AFTER it — the two share a z-layer but never coexist. Both
+          render nothing at all once answered. */}
+      <WelcomeSetup />
+      <StoragePolicyPrompt />
     </div>
   )
 }

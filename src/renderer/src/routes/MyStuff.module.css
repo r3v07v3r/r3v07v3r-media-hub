@@ -457,10 +457,17 @@
 
 /* ---- Calendar ---------------------------------------------------------- */
 
+/* THE CALENDAR FILLS THE PAGE RATHER THAN OUTGROWING IT. The airing strip
+   keeps its natural height and the grid takes what is left, so the month
+   is on screen instead of below the fold. When what is left is not enough
+   for every week, CalendarGrid pages rather than shrinking the rows past
+   the point a cell can show anything. */
 .calendarWrap {
   display: flex;
   flex-direction: column;
-  gap: 32px;
+  gap: 20px;
+  flex: 1;
+  min-height: 0;
 }
 
 /* ---- Calendar: "What's airing" strip ------------------------------------ */
@@ -591,12 +598,20 @@
 /* Scrolls sideways rather than squeezing seven columns unreadably narrow on
    a short window — same reasoning as .tabs above. */
 .calGridScroll {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
   overflow-x: auto;
+  /* No vertical scroll by design — the grid pages instead. */
+  overflow-y: hidden;
 }
 
 .calGrid {
   display: flex;
   flex-direction: column;
+  flex: 1;
+  min-height: 0;
   min-width: 700px;
 }
 
@@ -620,10 +635,13 @@
   display: flex;
   flex-direction: column;
   gap: 5px;
-  min-height: 92px;
-  padding: 8px;
+  /* The floor CalendarGrid measures against (MIN_WEEK_ROW_PX). Rows share
+     the leftover height evenly above it. */
+  min-height: 96px;
+  padding: 7px;
   border: 1px solid var(--border-subtle);
   margin: -1px 0 0 -1px;
+  overflow: hidden;
 }
 
 /* A day already behind isn't waited on any more, so it recedes rather than
@@ -662,14 +680,48 @@
   color: var(--text-muted);
 }
 
+/* Posters wrap across the cell rather than stacking as rows of text — a
+   day with three airings is three small pictures, which is legible at a
+   size three truncated titles would not be. */
 .calGridEntries {
   list-style: none;
   margin: 0;
   padding: 0;
   display: flex;
-  flex-direction: column;
-  gap: 3px;
+  flex-wrap: wrap;
+  gap: 4px;
   min-width: 0;
+}
+
+.calGridPoster {
+  display: block;
+  width: 38px;
+  aspect-ratio: 2 / 3;
+  padding: 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  overflow: hidden;
+  background: none;
+  cursor: pointer;
+}
+
+/* The box ArtworkImage fills — see the component's className contract. */
+.calGridPosterArt {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.calGridPoster:hover {
+  border-color: var(--accent-cyan);
+  transform: translateY(-1px);
+}
+
+.calGridPoster img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
 }
 
 .calGridEntry {
@@ -721,4 +773,115 @@
   outline: 2px solid var(--accent-cyan);
   outline-offset: 2px;
   border-radius: var(--radius-small);
+}
+
+/* Refresh, and when it last happened. Above the filters because it is
+   about the whole list rather than which part of it you are looking
+   at. */
+.syncRow {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.syncButton {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 13px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border-subtle);
+  background: rgba(255, 255, 255, 0.03);
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.syncButton:hover:not(:disabled) {
+  border-color: var(--border-active);
+  color: var(--text-primary);
+}
+
+.syncButton:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.syncMeta {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+/* Only rendered when the window does not fit — see CalendarGrid. */
+.calPager {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-top: 10px;
+}
+
+.calPagerButton {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border-subtle);
+  background: rgba(255, 255, 255, 0.03);
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.calPagerButton:hover:not(:disabled) {
+  border-color: var(--border-active);
+  color: var(--text-primary);
+}
+
+.calPagerButton:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* The first chevron points back; the second is left as drawn. */
+.calPagerButton:first-child svg {
+  transform: rotate(90deg);
+}
+
+.calPagerButton:last-child svg {
+  transform: rotate(-90deg);
+}
+
+.calPagerLabel {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+/* The calendar route only: a column that fills the window so the grid
+   has a height to measure against. My Stuff itself still scrolls, which
+   is right for a list that can be thousands long. */
+.calendarPage {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* Which service a chip's list came from. A badge rather than a suffix
+   in the name, because the name is the person's own words and this is
+   not — and because it is what says the list cannot be edited here. */
+.chipService {
+  margin-right: 6px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: rgba(141, 77, 255, 0.18);
+  font-size: 9.5px;
+  font-weight: 800;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  color: var(--text-secondary);
 }

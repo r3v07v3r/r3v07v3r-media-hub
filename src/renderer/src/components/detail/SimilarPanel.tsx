@@ -11,21 +11,22 @@ export interface SimilarPanelProps {
   items: MediaItem[]
   config: DetailAdapterConfig
   onSelect: (item: MediaItem) => void
-  onViewAll: () => void
 }
 
 /**
  * Titles in the same vein as this one — genre and style, not the same
  * franchise (see catalog.ts's similarTitles). Lives in the main content
  * column (below About) rather than the sidebar, so it renders as a wide
- * poster carousel instead of a cramped vertical list.
+ * poster carousel instead of a cramped vertical list — every item is
+ * already reachable by scrolling, so there's no separate "show all"
+ * control the way the old sidebar list needed one.
  *
  * There used to be a fourth "unsupported" state here explaining that
  * series had no backend support for this. Every kind is supported now, so
  * the honest remaining states are just loading/ready/error plus a real
  * empty result.
  */
-export function SimilarPanel({ status, items, config, onSelect, onViewAll }: SimilarPanelProps) {
+export function SimilarPanel({ status, items, config, onSelect }: SimilarPanelProps) {
   if (status === 'loading') {
     return (
       <section
@@ -63,12 +64,7 @@ export function SimilarPanel({ status, items, config, onSelect, onViewAll }: Sim
 
   return (
     <section className={`${styles.panel} glass-panel`} aria-label="Similar titles">
-      <div className={styles.headerRow}>
-        <h2 className={styles.heading}>Similar {config.pluralLabel}</h2>
-        <button type="button" className={styles.viewAll} onClick={onViewAll}>
-          View All
-        </button>
-      </div>
+      <h2 className={styles.heading}>Similar {config.pluralLabel}</h2>
       <ul className={`${styles.scroller} thin-scroll`}>
         {items.map((item) => {
           const artwork = resolveArtwork(item)

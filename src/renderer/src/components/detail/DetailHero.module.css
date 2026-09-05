@@ -117,7 +117,22 @@
   border-radius: var(--radius-pill);
   background: rgba(6, 10, 18, 0.55);
   backdrop-filter: blur(10px);
+  transition:
+    opacity 220ms ease,
+    transform 220ms ease,
+    visibility 220ms;
   border: 1px solid var(--border-subtle);
+}
+/* Idle fade while the trailer is playing — mirrors the movie player's
+   .controlsHidden (PlayerOverlayWindow.module.css): opacity + a small drop
+   so the transition reads as the bar leaving, `visibility` rather than
+   `display` so it can actually animate, and pointer-events off so a hidden
+   seek bar cannot catch a click meant for the picture. */
+.trailerControlsHidden {
+  opacity: 0;
+  transform: translateY(12px);
+  visibility: hidden;
+  pointer-events: none;
 }
 .trailerPlayPause {
   flex: 0 0 auto;

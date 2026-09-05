@@ -36,6 +36,11 @@ export interface FetcherDeps {
   credentials: Credentials
   dataDir: string
   log: (message: string) => void
+  /** The allocation the job's owner is held to, or null for "no allocation
+   *  set". Supplied as a callback rather than a map because an admin can
+   *  change it at any time and a fetch decided on a stale copy is exactly
+   *  the kind of thing that goes unnoticed. */
+  quotaFor?: (deviceId: string) => number | null
   /** Test seam: the TorBox resolve step, injectable so the download loop
    *  can be exercised against a stub content host. Production always uses
    *  the real client. */
@@ -46,12 +51,31 @@ export interface FetcherDeps {
   ) => Promise<ResolvedDownload | null>
 }
 
+/**
+ * Whether a pass that ended in an error should be tried again.
+ *
+ * Only if the record is still the one this pass was working on. jobs.cancel
+ * marks a fetching job 'expired' (or removes a queued one outright), the
+ * read loop notices and breaks with a partial, and the short file raises an
+ * incomplete-download error — so a cancel arrives here looking exactly like
+ * a network failure. Retrying it would resume a download somebody stopped
+ * and keep spending their TorBox quota, with the UI reporting the cancel as
+ * successful.
+ *
+ * Split out because the fetch loop around it cannot run without TorBox, and
+ * this is the part with a rule in it.
+ */
+export function shouldRetryAfterFailure(current: JobRecord | undefined): boolean {
+  return current?.state === 'fetching'
+}
+
 export function createFetcher({
   jobs,
   storage,
   credentials,
   dataDir,
   log,
+  quotaFor = () => null,
   resolveDownloadImpl = resolveDownload
 }: FetcherDeps): Fetcher {
   let running = false
@@ -105,13 +129,73 @@ export function createFetcher({
         throw new Error('TorBox has no fetchable file for this torrent yet.')
       }
 
-      // Refuse to start a download the disk cannot hold. The eviction pass
-      // keeps the budget; this keeps the DRIVE — they are different limits.
+      // TWO different limits, both enforced BEFORE a byte is written.
+      //
+      // The drive: what the machine can physically afford.
       const stat = await fsp.statfs(dataDir)
       const free = stat.bavail * stat.bsize
       if (resolved.sizeBytes > 0 && free < resolved.sizeBytes + DISK_MARGIN_BYTES) {
         throw new Error(
           `Not enough free disk for ${(resolved.sizeBytes / 1024 ** 3).toFixed(1)} GB.`
+        )
+      }
+
+      // The budget: what the cache is allowed to use. This used to be left
+      // entirely to the eviction timer, which reclaims space only AFTER it
+      // has been taken — so the cache genuinely sat over its cap between
+      // passes rather than at it. Room is made first now, by evicting
+      // least-recently-accessed items, and a file bigger than the whole
+      // budget is refused instead of either blowing the cap or emptying the
+      // cache to hold one thing.
+      // THE OWNER'S ALLOCATION, checked before a byte is fetched.
+      //
+      // makeRoomFor below bounds this against the whole-disk budget, which
+      // an 8 GB film under a 2 GB device allocation passes cleanly. It then
+      // downloads in full, and the hourly quota pass deletes it for being
+      // over that allocation — leaving no tombstone, deliberately, because
+      // quota pressure is not disinterest. So the feeder asks again, and
+      // the same gigabytes are spent on the same doomed download for as
+      // long as the title stays wanted.
+      //
+      // Refused outright instead, and expired rather than retried: no
+      // amount of waiting makes a file smaller than it is. It says whose
+      // allocation and by how much, because the fix is somebody raising it.
+      const quota = job.ownerDeviceId ? quotaFor(job.ownerDeviceId) : null
+      if (quota !== null && job.ownerDeviceId && resolved.sizeBytes > 0) {
+        // ROOM, not just permission. Comparing the file against the
+        // allocation on its own admits anybody already near their limit —
+        // 9 GB held under a 10 GB allocation plus an 8 GB film is 17 GB
+        // until the hourly sweep takes the older files back. This makes
+        // that room first, from their own oldest items, which is the same
+        // rule applied deliberately instead of an hour late.
+        const fits = await storage.makeRoomForOwner({
+          deviceId: job.ownerDeviceId,
+          bytes: resolved.sizeBytes,
+          quota,
+          keepInfoHash: job.infoHash
+        })
+        if (!fits) {
+          jobs.update(job.contentKey, {
+            state: 'expired',
+            lastError:
+              `${(resolved.sizeBytes / 1024 ** 3).toFixed(1)} GB does not fit this device's ` +
+              `${(quota / 1024 ** 3).toFixed(1)} GB allocation.`
+          })
+          nextAttemptAt.delete(job.contentKey)
+          log(`refused  ${job.title}: over the owner's allocation`)
+          return
+        }
+      }
+
+      // The infoHash is passed so a resume is not charged for the bytes it
+      // has already written — and so the partial itself is not what gets
+      // evicted to make room for it.
+      if (
+        resolved.sizeBytes > 0 &&
+        !(await storage.makeRoomFor(resolved.sizeBytes, job.infoHash))
+      ) {
+        throw new Error(
+          `${(resolved.sizeBytes / 1024 ** 3).toFixed(1)} GB does not fit the cache budget.`
         )
       }
 
@@ -124,7 +208,15 @@ export function createFetcher({
         resolution: job.resolution,
         sourceRef: { source: 'torbox', infoHash: job.infoHash },
         fetchedAt: Date.now(),
-        lastAccessAt: Date.now()
+        lastAccessAt: Date.now(),
+        // Ownership was already tracked for SPENDING — the token used just
+        // above is this device's — and simply never recorded on the item,
+        // which is why it could not be used for reading. Recording it here
+        // is what makes the item privately readable by the person who paid
+        // for it.
+        ownerDeviceId: job.ownerDeviceId,
+        visibility: 'private',
+        entitled: job.ownerDeviceId ? [job.ownerDeviceId] : []
       })
       const filePath = path.join(dir, resolved.fileName)
 
@@ -185,6 +277,22 @@ export function createFetcher({
       nextAttemptAt.delete(job.contentKey)
       log(`fetched  ${job.title} (${(finalSize / 1024 ** 3).toFixed(2)} GB)`)
     } catch (error) {
+      // CANCELLED WHILE IN FLIGHT is not a failure to retry.
+      //
+      // jobs.cancel marks a fetching job 'expired'; the read loop above
+      // notices, keeps the partial and breaks, and the short file then
+      // raises the incomplete-download error — landing here, where the
+      // record used to be put straight back to 'queued'. Cancel therefore
+      // reported success and the download resumed after the backoff,
+      // spending the owner's TorBox quota on something they had stopped.
+      // A record that is no longer 'fetching' was taken away from this
+      // pass deliberately, and is left exactly as it was found.
+      const current = jobs.list().find((candidate) => candidate.contentKey === job.contentKey)
+      if (!shouldRetryAfterFailure(current)) {
+        nextAttemptAt.delete(job.contentKey)
+        log(`cancelled ${job.title}`)
+        return
+      }
       const attempts = job.attempts + 1
       const backoff = RETRY_BACKOFF_MS[Math.min(attempts - 1, RETRY_BACKOFF_MS.length - 1)]
       nextAttemptAt.set(job.contentKey, Date.now() + backoff)

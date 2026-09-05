@@ -46,6 +46,12 @@ export interface CatalogItem {
   id: string
   simklId?: number
   title: string
+  /** The source's own-language name when `title` is a translation — a
+   *  Kitsu anime's romaji canonical title under its English one. Shown as
+   *  a secondary line, searched alongside `title`, and matched against
+   *  release names alongside it: releases are named in romaji, so without
+   *  it an English title would find no stream at all. */
+  originalTitle?: string
   type: MediaKind
   poster: string
   background: string
@@ -111,7 +117,16 @@ export interface CatalogItem {
 }
 
 /** The direct sequel/prequel entries Kitsu lists for an anime release. */
-export type AnimeStoryRelation = 'sequel' | 'prequel'
+/**
+ * How a related anime stands to this one, in Kitsu's own vocabulary.
+ *
+ * `sequel` and `prequel` are the spine; the rest are the bridges — the film
+ * between two seasons, the side story set alongside, the recap, the full
+ * story a summary condensed — which are exactly what somebody following a
+ * franchise in order needs to be shown and used to be filtered out.
+ */
+export type AnimeStoryRelation =
+  'prequel' | 'parent_story' | 'full_story' | 'side_story' | 'spin_off' | 'summary' | 'sequel'
 
 export interface AnimeStoryLink {
   relation: AnimeStoryRelation
@@ -126,32 +141,6 @@ export interface AnimeStoryLink {
  * followed an actor wants their performances, and a single list ordered by
  * neither serves either.
  */
-/** One streaming, rental or purchase service, as TMDB reports it. */
-export interface WatchProvider {
-  id: number
-  name: string
-  /** Already resolved to a full image URL, or '' when TMDB has no logo. */
-  logo: string
-}
-
-/**
- * Where a title can be watched, in one region.
- *
- * Region is part of the answer rather than assumed by the caller: availability
- * is exactly the thing that differs by country, and a list with no country
- * attached to it is not information.
- */
-export interface WatchProvidersResult {
-  region: string
-  /** Included with a subscription — free and ad-supported tiers folded in,
-   *  since the distinction that matters tonight is "can I just watch it". */
-  stream: WatchProvider[]
-  rent: WatchProvider[]
-  buy: WatchProvider[]
-  /** JustWatch's own page for the title, which TMDB supplies. */
-  link: string
-}
-
 /**
  * One episode, on one day.
  *
@@ -183,7 +172,11 @@ export interface TitleCollectionResult {
   /** TMDB's own name for the series, e.g. "The Dune Collection". Empty when
    *  the title belongs to no collection, which is true of most films. */
   name: string
+  /** Every film in the series, the one on screen included, in release order. */
   parts: CatalogItem[]
+  /** The film the question was asked about — the panel marks it rather than
+   *  dropping it, so the order reads as an order. */
+  currentId?: string
 }
 
 export interface PersonCreditsResult {
@@ -198,55 +191,30 @@ export interface AnimeStoryResult {
   checked: boolean
 }
 
-// TorBox `mylist` items matched against the cached catalogs by parsed
-// release-name (see enrichTorBoxItem in core.ts).
-export interface LibraryItem {
-  id: string
-  title: string
-  type: 'library'
-  mediaType: 'movie' | 'series'
-  year: string
-  season: number | null
-  episode: number | null
-  poster: string
-  background: string
-  description: string
-  rating: string
-  runtime: string
-  genres: string[]
-  metadataId: string
-  raw: Record<string, unknown>
-}
-
-/** Where a candidate can be played from. Absent means 'torbox', so every
- *  candidate already persisted in the stream cache stays valid without a
- *  migration — the field was introduced when the media server was. */
 /**
- * Where a playable copy lives, in preference order. The ordering is the
- * product rule ("nearest source that meets the quality target wins"), so it
- * is declared once here and read by resolve rather than re-stated per call
- * site.
+ * Where a playable copy lives. Absent means 'torbox', so every candidate
+ * already persisted in the stream cache stays valid without a migration —
+ * the field was introduced when the media server was.
  *
  *  localcache  - already on this machine's disk; needs no network at all
- *  lancache    - the on-site pre-fetch daemon (not yet implemented)
+ *  lancache    - the on-site pre-fetch daemon (main/media-hub/lanCache.ts)
  *  mediaserver - a configured Jellyfin library
  *  torbox      - the debrid service, over the internet
+ *
+ * PREFERENCE IS NOT A PROPERTY OF THIS TYPE. There was once a
+ * STREAM_SOURCE_RANK here declaring a strict 0..3 ordering, described as
+ * "read by resolve" — it never was, by resolve or anything else, and the
+ * only thing that referenced it was a test asserting 0 < 1 < 2 < 3 against
+ * the constant itself. What actually decides the source is split in two and
+ * lives with the code that does it: torbox.ts's streamResolve short-circuits
+ * on localcache and then lancache (each quality-gated), and core.ts's
+ * rankStreams then SCORES mediaserver against torbox, weighted by the user's
+ * SourcePreference — which on 'prefer-quality' deliberately stops caring
+ * where a copy lives at all. A single numeric rank cannot express that, and
+ * having one here invited exactly the wrong summary of it (see the README's
+ * old "local → server → download" section).
  */
 export type StreamSource = 'localcache' | 'lancache' | 'mediaserver' | 'torbox'
-
-/** Lowest number wins. Absent `source` is 'torbox', which must therefore
- *  keep torbox's rank so pre-existing persisted candidates still sort
- *  correctly. */
-export const STREAM_SOURCE_RANK: Record<StreamSource, number> = {
-  localcache: 0,
-  lancache: 1,
-  mediaserver: 2,
-  torbox: 3
-}
-
-export function streamSourceRank(source: StreamSource | undefined): number {
-  return STREAM_SOURCE_RANK[source ?? 'torbox']
-}
 
 // A discovered stream candidate (from a scraper add-on or a configured
 // media server), after availability checking and ranking merge in
@@ -269,6 +237,10 @@ export interface StreamCandidate {
   name?: string
   title?: string
   sources?: string[]
+  /** The audio languages the file actually carries, when the source can
+   *  say — only a media server can (jellyfin.ts). Strictly better than
+   *  inferring them from the release name, and consulted first. */
+  audioLanguages?: string[]
   resolution?: number
   cached?: boolean
   compatible?: boolean
@@ -380,22 +352,69 @@ export interface BlockedDownload {
  * encodes of the same film together — the failure the totalBytes check
  * used to prevent by refusing adoption outright.
  */
+/**
+ * Which part of the library a main-initiated write touched — see
+ * rendererBridge.ts's notifyLibraryChanged.
+ *
+ *  - history: watched rows, positions, plays (Continue Watching, badges,
+ *    history and stats all derive from these)
+ *  - planned: the tracked / plan-to-watch list
+ *  - ratings: personal scores
+ *  - lists: named lists — the ones made here and the ones read from Trakt
+ *    and Simkl (remoteLists.ts)
+ *  - index: the catalog_index rows the browse grids page through
+ *  - all: something re-keyed the library wholesale (ids remapped, a
+ *    restore) — every hook should start over
+ */
+export type LibraryChangeScope = 'history' | 'planned' | 'ratings' | 'lists' | 'index' | 'all'
+
+export interface LibraryChangedEvent {
+  scopes: LibraryChangeScope[]
+  /** Which job or handler wrote — for the log, not for deciding anything. */
+  sources: string[]
+}
+
 export interface CacheSourceRef {
   source: StreamSource
   /** torbox */
   infoHash?: string
+  /** torbox: the add-on's index of the file these bytes came from, so a
+   *  resume re-selects it rather than guessing from filenames. Absent on
+   *  sessions written before it was recorded. */
+  fileIdx?: number
+  /** torbox: tracker URLs to rebuild the magnet with — see StreamCandidate.sources. */
+  sources?: string[]
   /** mediaserver */
   itemId?: string
   mediaSourceId?: string
 }
 
+/**
+ * What is actually playing, for the player's Info panel: the release as the
+ * scraper named it, its quality and size as read from that name, and which
+ * tier the bytes come from.
+ */
+export interface PlaybackRelease {
+  name: string
+  resolution?: number
+  sizeGb?: number
+  source: StreamSource
+  infoHash?: string
+}
+
 export interface CacheSessionMeta {
   title: string
   posterUrl?: string
+  /** The release these bytes are, for the Info panel. */
+  release?: PlaybackRelease
   catalogId?: string
   mediaKind?: 'movie' | 'series' | 'anime'
   seasonNumber?: number
   episodeNumber?: number
+  /** The episode's own name ("Ghosts"), alongside the coordinates above.
+   *  The player overlay's badge and title line render it; absent for
+   *  movies and for sessions written before it existed. */
+  episodeTitle?: string
   /** Which release these bytes are. Absent on sessions written before this
    *  existed — those stay partial-adoption-ineligible, which is the old
    *  behaviour and safe. */
@@ -411,6 +430,20 @@ export interface StreamCacheEntry extends CacheSessionMeta {
   cachedBytes: number
   totalBytes: number | null
   isActive: boolean
+}
+
+/**
+ * What the local cache holds, and what is left where it lives.
+ *
+ * freeBytes is null where the platform will not say (statfs is not
+ * universal) — rendered as an absence rather than as a zero, because
+ * "0 bytes free" is alarming and wrong.
+ */
+export interface StreamCacheUsage {
+  usedBytes: number
+  freeBytes: number | null
+  /** Where it is, for the one line that says so. */
+  directory: string
 }
 
 export interface PlaybackResult {
@@ -609,6 +642,26 @@ export interface ViewingStats {
  * "Rewatch with Dad", "Halloween", "Started and gave up" — and belong to
  * nobody but the person who made them.
  */
+/** A named list somebody built in Trakt or Simkl. Read-only here: a
+ *  named list has an author, and the first version of this feature
+ *  should not be able to reorder or empty one. */
+export interface RemoteList {
+  /** Service-qualified — two services can both have a list called
+   *  "Watchlist" and they are not the same list. */
+  id: string
+  service: 'simkl' | 'trakt'
+  name: string
+  description?: string
+  items: RemoteListEntry[]
+}
+
+export interface RemoteListEntry {
+  id: string
+  type: MediaKind
+  title: string
+  year?: string
+}
+
 export interface CustomList {
   id: string
   name: string
@@ -637,10 +690,62 @@ export interface ContinueWatchingEntry extends CatalogItem {
 export interface TrackingListResult {
   tracked: TrackedItemEnriched[]
   history: HistoryEntry[]
+  /**
+   * Which tracking services have each planned title on their own list,
+   * keyed by media id.
+   *
+   * Sent with the list rather than fetched separately because every
+   * surface that draws a planned title wants to tag it, and a second
+   * round trip per card is not a thing to build. Absent ids are simply
+   * local-only, which is the ordinary case for anything marked here.
+   */
+  plannedSources: Record<string, PlannedServiceId[]>
+}
+
+/** Services with both a login in this app and a personal list to read.
+ *  Kitsu is deliberately absent: it is a public catalog here, with no
+ *  account, so there is no list of yours to fetch. */
+export type PlannedServiceId = 'simkl' | 'trakt' | 'mal'
+
+/** What one service's watchlist pull did. Reported per service because
+ *  the failure that matters is the quiet one: two lists arriving and a
+ *  third erroring looks exactly like a short list unless somebody says. */
+export interface PlannedServiceReport {
+  service: PlannedServiceId
+  connected: boolean
+  pulled: number
+  /** Entries dropped for want of an id this app could file them under —
+   *  anime, in practice. Counted so the gap is visible. */
+  unmapped: number
+  error?: string
+}
+
+export interface PlannedSyncReport {
+  at: number
+  services: PlannedServiceReport[]
+  added: number
+  /** Titles removed locally because they left every service that had
+   *  them — only ever titles this app pulled in itself. See
+   *  docs/WATCHLIST-SYNC.md rule 2. */
+  removed: number
 }
 
 export interface DislikedListResult {
   disliked: TrackedItem[]
+}
+
+/**
+ * One shelf of suggestions that share a reason — "Because you watched
+ * Dune", "With Zendaya", "More Sci-Fi" — see groupRecommendationRails in
+ * catalog-logic.ts. What turns one row of guesses into something that can
+ * be browsed: the same ranking, shelved by the evidence behind it.
+ */
+export interface RecommendationRail {
+  /** `<kind>:<detail>`, stable across rebuilds — a React key and a rail id. */
+  id: string
+  reason: RecommendationReason
+  /** Best-first, in the ranking's own order. */
+  items: CatalogItem[]
 }
 
 export interface HomePersonalizedResult {
@@ -658,7 +763,23 @@ export interface HomePersonalizedResult {
    * shows no chip rather than one saying nothing.
    */
   recommendationReasons: Record<string, RecommendationReason>
+  /**
+   * The same ranking shelved by reason, for the For You page — drawn from
+   * the whole stored buffer rather than the served row, which is what
+   * gives the shelves depth. Empty until the background rebuild has
+   * produced reasons to shelve by.
+   */
+  recommendationRails: RecommendationRail[]
   preferredGenres: string[]
+  /**
+   * Which tracking services have each planned title on their own list.
+   *
+   * Carried on the home feed because that is the payload the app already
+   * derives its planned set from, so a card can be tagged without a
+   * second round trip per title. Sparse: an id with no entry is planned
+   * here and nowhere else, which is the ordinary case.
+   */
+  plannedSources: Record<string, PlannedServiceId[]>
 }
 
 /**
@@ -730,6 +851,20 @@ export interface WatchStatusDiscrepancy {
    *  surfaced in the first place. */
   localWatched: boolean
   remoteWatched: boolean
+  /**
+   * False when this row's id cannot be expressed to Simkl as a real id
+   * (mockData's m-* demo ids, or anything else unmappable), which makes
+   * "Use Local" structurally unable to stick: the push would go out as a
+   * title/year guess whose outcome can neither be verified nor ever
+   * satisfy the id-joined diff, so the row would return after every
+   * resolution — seen live as three demo-id duplicates surviving five
+   * days of clicks. The row is still shown, because "Use Simkl" resolves
+   * it for real (it rewrites the LOCAL record — for a ghost duplicate,
+   * deleting it), and hiding it would leave that corrupt row in history
+   * forever with no way to clean it. Optional so older cached results
+   * read as pushable, which was the previous behaviour.
+   */
+  pushable?: boolean
 }
 
 export interface ReconcileCheckResult {
@@ -951,6 +1086,19 @@ export interface MediaHubPublicSettings {
   cacheMode: CacheMode
   /** Bound on the in-memory buffer, in MB. Only meaningful in memory mode. */
   memoryCacheMaxMb: number
+  /**
+   * Whether this install may keep MEDIA on the disk at all.
+   *
+   * false is a promise, not a preference: cacheMode is forced to memory
+   * behind it (see preferences.ts effectiveCacheMode), so the disk stays
+   * clean whatever the saved mode says. The app's own library, history and
+   * settings are unaffected — this is about video, not about forgetting
+   * what you watched.
+   */
+  storeMedia: boolean
+  /** Whether watchlist changes travel both ways — see
+   *  docs/WATCHLIST-SYNC.md. */
+  watchlistTwoWay: boolean
 }
 
 export type CacheMode = 'disk' | 'memory'
@@ -981,6 +1129,15 @@ export interface MediaHubSettingsSnapshot extends MediaHubPublicSettings {
    *  of inventing an answer, and "Recommend Next ..." falls back to its own
    *  catalog pick rather than pretending a model chose it. */
   ollamaConnected: boolean
+  /** Whether the storage question has ever been answered. False on a fresh
+   *  install and nowhere else — this is what the first-run prompt keys on,
+   *  which is why it is distinct from storeMedia being true or false. */
+  storagePolicyChosen: boolean
+  /** Whether the welcome flow (pick a name, connect a playback source) has
+   *  been finished or skipped. False only on a fresh install: installs that
+   *  predate the flow are grandfathered in via the storage answer, which
+   *  every active install has necessarily given. Gates WelcomeSetup. */
+  setupComplete: boolean
 }
 
 /** What a probe of an Ollama instance found — see main/media-hub/ollamaService.ts. */
@@ -1116,16 +1273,27 @@ export interface MalReconcileToMal {
   watchedEpisodes: number
 }
 
+/** A MAL rating to pull in locally — targetId is the canonical grouped show
+ *  id (see catalog.ts's resolveAnimeGroupTarget), not the raw kitsuId MAL's
+ *  entry matched to, since a rating belongs to the whole show. */
+export interface MalReconcileRatingToLocal {
+  targetId: string
+  title: string
+  score: number
+}
+
 export interface MalReconcilePreview {
   toMal: MalReconcileToMal[]
   toLocal: MalReconcileToLocal[]
+  ratingsToLocal: MalReconcileRatingToLocal[]
   unmatched: unknown[]
 }
 
 export interface MalReconcileApplyResult {
   toLocal: string[]
   toMal: number[]
-  errors: { kitsuId?: string; malId?: number; error: string }[]
+  ratings: string[]
+  errors: { kitsuId?: string; malId?: number; targetId?: string; error: string }[]
 }
 
 /** Which online subtitle service a SubtitleResult came from. The two are
@@ -1232,11 +1400,26 @@ export interface PartyChatMessage {
 
 export type PartyMode = 'direct' | 'relay'
 
+/** What the watch party is currently watching, as carried on party-state
+ *  broadcasts — enough to offer "Join the film" and name it, nothing more.
+ *  The full replayable announcement (episode coordinates, position) stays
+ *  host-side and is delivered as a real nowPlaying message. */
+export interface PartyNowPlayingSummary {
+  id: string
+  type: string
+  title: string
+  poster?: string
+}
+
 export interface PartyHostResult {
   ok: true
   code: string
   port?: number
   wanAvailable?: boolean
+  /** Whether the R3-Party-Sync relay attached — hosting opens every
+   *  transport it can, so this reports what the single invite code covers
+   *  rather than reflecting a chosen mode. */
+  relayAttached?: boolean
 }
 
 export interface PartyStatusResult {
@@ -1249,10 +1432,17 @@ export interface PartyStatusResult {
   hostName?: string
   /** Host-controlled: when true, every member's own play/pause/seek controls apply and sync to the group, not just the host's. */
   allowMemberControl?: boolean
+  /** See PartyNowPlayingSummary; null when nothing is playing. */
+  nowPlaying?: PartyNowPlayingSummary | null
 }
 
 export type PartyEventPayload =
-  | { type: 'party-state'; members: PartyMemberSummary[]; allowMemberControl?: boolean }
+  | {
+      type: 'party-state'
+      members: PartyMemberSummary[]
+      allowMemberControl?: boolean
+      nowPlaying?: PartyNowPlayingSummary | null
+    }
   | { type: 'queue-sync'; queue: PartyQueueEntry[] }
   | { type: 'chat'; chat: PartyChatMessage }
   | { type: 'message'; from: string; message: unknown }
@@ -1316,6 +1506,11 @@ export type PartyPlaybackAction =
   // every peer, including the host, to give this message itself time to
   // actually arrive over the network before anyone starts playing).
   | { type: 'seek-go'; requestId: string }
+  // Member -> host: "catch me up" — the hub's Join-the-film button for
+  // someone who closed their player but stayed in the party. Answered with
+  // the stored nowPlaying (see watchParty's handlePartyMessage); every
+  // other member deduplicates the replay as already-playing.
+  | { type: 'resync-request' }
 
 export interface NetworkInfoResult {
   lanIp: string
@@ -1327,6 +1522,25 @@ export interface ConnectionTestResult {
   testedBytes: number
   recommendedResolution: number
   recommendedSizeGb: number
+}
+
+/** One mounted drive as the cache-disk probe saw it. */
+export interface CacheDiskDrive {
+  /** Filesystem root, e.g. 'C:\\' on Windows or '/' elsewhere. */
+  root: string
+  freeGb: number
+  totalGb: number
+  /** Whether the current stream-cache directory lives on this drive. */
+  isCacheDrive: boolean
+}
+
+/** What the welcome flow's tuning step sizes the cache from — where the
+ *  cache currently lives and how much room each drive actually has. */
+export interface CacheDiskProbeResult {
+  /** The effective cache root right now (the default app-data location
+   *  when streamCacheDir is unset). */
+  cacheDir: string
+  drives: CacheDiskDrive[]
 }
 
 // ---------------------------------------------------------------------
@@ -1341,6 +1555,18 @@ export interface UpdateStatusPayload {
   version?: string
   percent?: number
   message?: string
+  /** What the OFFERED version changes, from the release body electron-updater
+   *  already carries — so an update can be read about before it is installed.
+   *  Absent on states that describe no particular version. */
+  releaseNotes?: string
+}
+
+/** What the About card shows under the version. */
+export interface ReleaseNotesResult {
+  /** The running build's own note, or '' when it shipped without one (any
+   *  build made outside the release workflow). */
+  current: string
+  version: string
 }
 
 export interface UpdateCheckResult {
@@ -1349,45 +1575,68 @@ export interface UpdateCheckResult {
 }
 
 /** What a friend is watching, shared only when they've opted in. */
-export interface FriendActivity {
+export interface RoomActivity {
   mediaId: string
   kind: string
   title: string
   poster?: string
   /** Absolute position in seconds — lets the UI show "34 min in". */
   position: number
+  /** The title's length in seconds, when the player knows it — what turns
+   *  position into a percentage ("62% in"). Optional: an older build's
+   *  announcements simply don't carry it, and the UI falls back to the
+   *  absolute reading. */
+  duration?: number
   paused: boolean
-  /** Present when this friend is joinable right now. Carried in the
+  /** Present when this member is joinable right now. Carried in the
    *  announcement so the UI can offer "join their party" without a round
    *  trip; absent means they're watching but not hosting anything. */
   partyCode?: string
 }
 
-/** One member of a friends group, as this device currently sees them.
- *  Soft state with a TTL — see friends.ts, presence is announced, never
- *  authoritative. */
-export interface FriendPresence {
+/** One member of a room, as this device currently sees them. Soft state
+ *  with a TTL — see rooms.ts, presence is announced, never authoritative. */
+export interface RoomMemberPresence {
   friendId: string
   name: string
-  activity: FriendActivity | null
+  activity: RoomActivity | null
 }
 
-export interface FriendsStatus {
-  inGroup: boolean
-  code?: string
-  selfId?: string
-  /** Whether the persistent relay socket is up right now. */
-  connected?: boolean
-  /** This device's own opt-in for publishing what it's watching. */
+/** One room as the renderer shows it. */
+export interface RoomView {
+  roomId: string
+  name: string
+  code: string
+  /** Whether this room's relay socket is up right now. */
+  connected: boolean
+  /** Whether THIS device created the room. */
+  isAdmin: boolean
+  /** False for rooms that predate admins — the migrated friends group,
+   *  and rooms joined by an old v2 code. Nothing hides that; the UI says
+   *  the room has no admin rather than inventing one. */
+  hasAdmin: boolean
+  /** Per-room: whether this device publishes what it's watching here. */
   sharing: boolean
-  friends: FriendPresence[]
+  /** Which path the room's socket took: straight to the relay, or
+   *  through the household's cache server as the network's single
+   *  connection for this room. */
+  transport: 'relay' | 'cache-hop'
+  members: RoomMemberPresence[]
 }
 
-/** Direct messages between friends, relayed through the group channel.
+export interface RoomsStatus {
+  /** This install's stable identity, same in every room. */
+  selfId: string
+  rooms: RoomView[]
+}
+
+/** Direct messages between members, relayed through a room's channel.
  *  Addressed by `toFriendId` — the relay fans out to everyone, so the
- *  recipient filters. There is nothing secret in them beyond what the
- *  group secret already protects. */
-export type FriendMessage =
+ *  recipient filters. The wire `type` strings still say "friend": members
+ *  on pre-rooms versions of the app are in the migrated room speaking
+ *  this dialect, and renaming the wire would split the room into two
+ *  populations that cannot see each other. */
+export type RoomMessage =
   // "Let me watch with you." Sent to someone who is watching but has no
   // party open, since a solo watcher has no code to hand out until asked.
   | { type: 'friend-join-request'; fromFriendId: string; toFriendId: string; fromName: string }
@@ -1395,6 +1644,13 @@ export type FriendMessage =
   | { type: 'friend-join-offer'; fromFriendId: string; toFriendId: string; partyCode: string }
   // Politely declining — they stopped watching, or hosting failed.
   | { type: 'friend-join-declined'; fromFriendId: string; toFriendId: string; reason: string }
+
+/** A peer message as delivered to the renderer: the room it arrived on
+ *  rides along so the reply goes back through the same room. */
+export interface RoomInboundMessage {
+  roomId: string
+  message: RoomMessage
+}
 
 /**
  * One piece of work the central scheduler is currently running — see
@@ -1446,4 +1702,121 @@ export interface ActivitySnapshot {
 export interface CatalogListing {
   items: CatalogItem[]
   stale: boolean
+}
+
+/** The browse grid's sort orders. Mirrors the renderer's own SortKey — the
+ *  same six the sort dropdown offers — because the sort is now applied by
+ *  SQL over catalog_index rather than in memory over a loaded array. */
+export type CatalogSortKey =
+  'trending' | 'title-asc' | 'year-desc' | 'rating-desc' | 'runtime-asc' | 'runtime-desc'
+
+/**
+ * One page of the browse grid, as a question for the database.
+ *
+ * Every field is the URL-facing value the category page already carries in
+ * its query string (see the renderer's CategoryFilterState), so a filter
+ * bar's state maps to one of these directly rather than through a
+ * translation layer that could reinterpret it.
+ *
+ * Absent and null both mean "not filtering on this". A bucket value that no
+ * longer exists means "matches nothing", NOT "no filter" — a stale bookmark
+ * should show an empty grid rather than silently show everything.
+ */
+export interface CatalogQuery {
+  kind: MediaKind
+  genre?: string | null
+  /** As a string, matching the URL. Compared against the stored year. */
+  year?: string | null
+  minRating?: number | null
+  /** Bucket `value`s from shared/media-hub/catalogFilters. */
+  runtimeBucket?: string | null
+  seasonsBucket?: string | null
+  episodeLengthBucket?: string | null
+  episodesBucket?: string | null
+  status?: string | null
+  /**
+   * The three watch-state exclusions, applied by the SAME query rather than
+   * by the caller afterwards.
+   *
+   * This is not an optimisation. Filtering a returned page client-side makes
+   * pages shrink unpredictably — ask for 30, render 22 — and makes `total` a
+   * number that does not describe what the person is looking at. Both are
+   * invisible while the whole catalog is in memory and immediately wrong
+   * once it is paged.
+   */
+  hideWatched?: boolean
+  hideCompleted?: boolean
+  hideDisliked?: boolean
+  sort?: CatalogSortKey
+  offset?: number
+  limit?: number
+}
+
+export interface CatalogQueryResult {
+  items: CatalogItem[]
+  /** How many titles match the filters in total, ignoring offset/limit.
+   *  This is what the category hero should quote — the size of the result,
+   *  not the size of the page that came back. */
+  total: number
+  /**
+   * Which of `items` count as finished, resolved against watch history.
+   *
+   * Returned separately rather than set on the CatalogItems because a
+   * CatalogItem describes a title and this describes one profile's
+   * relationship to it — the same row is complete for one person and not for
+   * another. `watched` and `disliked` are deliberately NOT here: the
+   * renderer already holds those id sets globally, and only `completed`
+   * needs a denominator (aired episodes) that lives in the database.
+   */
+  completedIds: string[]
+}
+
+/**
+ * The values that actually occur in the library for one kind, for the filter
+ * bar's dropdowns.
+ *
+ * Replaces deriving the option lists from whatever happened to be loaded.
+ * That was the only thing available while the whole catalog lived in one
+ * array, but it meant the genre list described the loaded slice rather than
+ * the library — and the deeper the catalog got, the more the two diverged.
+ */
+export interface CatalogFacets {
+  genres: string[]
+  /** Newest first, matching the dropdown's own order. */
+  years: number[]
+  statuses: string[]
+}
+
+/** What one press of the deep-scan button did — see catalog:deepScan.
+ *  Depth goes to the INDEX only; the candidate pool never grows. */
+/** catalog:byIds' answer. completedIds rides along because index rows
+ *  carry no episode data — completion is only derivable in SQL, and
+ *  without it every id-fetched show would read as un-completed. */
+export interface CatalogByIdsResult {
+  items: CatalogItem[]
+  completedIds: string[]
+}
+
+export interface DeepScanReport {
+  kind: MediaKind
+  /** Titles the scanned stretch returned, before dedup and skips. */
+  scanned: number
+  /** Titles the index had never seen and now holds. */
+  added: number
+  /** The kind's whole index after the chunk — the library's new size. */
+  indexTotal: number
+  /** Where the NEXT press will start reading. */
+  offset: number
+  /** The stretch came back entirely empty: the upstream catalog has no
+   *  more to give, and the button should say so rather than invite
+   *  another press at the void. */
+  exhausted: boolean
+}
+
+/** Progress while a deep-scan chunk runs, pushed per page-group. */
+export interface DeepScanEvent {
+  kind: MediaKind
+  pagesDone: number
+  pagesTotal: number
+  added: number
 }

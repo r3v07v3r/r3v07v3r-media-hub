@@ -515,6 +515,29 @@
    weight and takes its tint from the accent rather than a colour of its
    own. `fit-content` keeps the pill the width of its text inside the
    column-flex overlay, which would otherwise stretch it the full card. */
+/* WHERE A PLANNED TITLE CAME FROM. Shaped like the reason chip above so
+   the two read as the same kind of annotation, in violet rather than
+   cyan because they answer different questions — that one is why the
+   app is suggesting this, this one is where the person already put
+   it. */
+.plannedChip {
+  align-self: flex-start;
+  width: fit-content;
+  max-width: 100%;
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+  border: 1px solid color-mix(in srgb, var(--accent-violet) 38%, transparent);
+  background: color-mix(in srgb, var(--accent-violet) 16%, rgba(0, 0, 0, 0.55));
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.2px;
+  color: var(--text-primary);
+  text-shadow: 0 1px 6px rgba(0, 0, 0, 0.7);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .reasonChip {
   align-self: flex-start;
   max-width: 100%;
@@ -533,4 +556,38 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* The way out of a row that only shows the first twenty. Sits at the far
+   end of the heading so it reads as part of the shelf's own label
+   rather than another control competing with the cards. */
+.seeAll {
+  margin-left: auto;
+  font-family: var(--font-body);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--accent-cyan);
+}
+
+.seeAll:hover {
+  text-decoration: underline;
+}
+
+/* What a title IS, for lists that hold films, series and anime at once.
+   Quieter than the planned chip beside it: the kind is context, not
+   news. */
+.kindChip {
+  align-self: flex-start;
+  width: fit-content;
+  padding: 1px 7px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border-subtle);
+  background: rgba(0, 0, 0, 0.45);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  color: var(--text-secondary);
 }

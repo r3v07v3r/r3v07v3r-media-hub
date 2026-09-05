@@ -221,17 +221,11 @@ interface PendingRequest {
   description: string
 }
 
-/** Screen rectangle for mpv's own window, in physical pixels. */
-export interface MpvBounds {
-  x: number
-  y: number
-  width: number
-  height: number
-}
-
 export interface MpvSpawnOptions {
-  /** Where to put mpv's window on screen. See the WINDOWING note on start(). */
-  bounds?: MpvBounds
+  /** The main window's HWND as a decimal string, for --wid. See the WINDOWING
+   *  note on start(). Read unsigned, because mpv is documented to assume a
+   *  positive window id (mpv#10189). */
+  wid?: string
   /** How far ahead to keep the demuxer reading — see BUFFERING on start(). */
   bufferSeconds?: number
   onLog?: (line: string) => void
@@ -261,11 +255,6 @@ export function bufferProfileFor(bufferSeconds: number | undefined): {
   return BUFFER_PROFILES[Number(bufferSeconds)] ?? BUFFER_PROFILES[3]
 }
 
-function geometryFor(bounds: MpvBounds): string {
-  // mpv's own format: WxH+X+Y, all integers.
-  return `${Math.round(bounds.width)}x${Math.round(bounds.height)}+${Math.round(bounds.x)}+${Math.round(bounds.y)}`
-}
-
 const COMMAND_TIMEOUT_MS = 15000
 
 /**
@@ -285,31 +274,24 @@ export class MpvPlayer {
   private nextId = 1
   private pipeName = ''
   private onLog: (line: string) => void = () => {}
-  // Mirrors mpv's `ontop`, which this side has to remember rather than read
-  // back: raising the window is done by writing the property and putting it
-  // straight back (see raiseWindow), and that needs to know which band the
-  // window is supposed to end up in.
-  private ontop = false
-  // Mirrors mpv's `fullscreen`, for the same reason as `ontop` and one more:
-  // geometry writes are dropped while it is set (see setBounds), and that
-  // decision is taken on every window move, which is no place for a round trip.
-  private fullscreen = false
 
   get running(): boolean {
     return Boolean(this.child && !this.child.killed && this.socket)
+  }
+
+  /** The mpv process id — how mpvEmbed finds the video child window among the
+   *  main window's children. 0 when not running. */
+  get pid(): number {
+    return this.child?.pid ?? 0
   }
 
   async start(mpvPath: string, options: MpvSpawnOptions = {}): Promise<void> {
     if (!mpvPath) throw new Error('Playback is unavailable (mpv not found).')
     if (this.running) return
 
-    const { bounds, bufferSeconds, onLog, spawnImpl = spawn } = options
+    const { wid, bufferSeconds, onLog, spawnImpl = spawn } = options
     const profile = bufferProfileFor(bufferSeconds)
     this.onLog = onLog ?? (() => {})
-    // A fresh process is back at mpv's defaults, and the args below do not ask
-    // for --ontop, so this is the honest starting state after a respawn.
-    this.ontop = false
-    this.fullscreen = false
     this.pipeName = `r3-media-hub-mpv-${crypto.randomBytes(12).toString('hex')}`
 
     const args = [
@@ -345,49 +327,38 @@ export class MpvPlayer {
       `--volume-max=${MAX_PLAYER_VOLUME * 100}`,
       '--osd-level=0',
       '--hwdec=auto-safe',
-      // WINDOWING. mpv gets its OWN borderless, always-on-top window, sized and
-      // positioned over the app's content area — it is NOT embedded with --wid.
+      // SCALERS START FROM THE DEFAULT ON EVERY FILE. mpv keeps properties
+      // across `loadfile`, so without this a title played after a High or
+      // Sharp one inherited those filters even with Standard selected — and
+      // Standard's whole meaning is "whatever mpv itself would do for this
+      // video output" (see shared/media-hub/videoScaling.ts). The presets
+      // that do set filters do so after the load, in loadFile.
+      '--reset-on-next-file=scale,dscale,cscale',
+      // WINDOWING. mpv is EMBEDDED: --wid (appended below) makes it create a
+      // WS_CHILD window inside the main BrowserWindow, so the video moves,
+      // minimises, clips and alt-tabs with the app for free, and no window on
+      // this desk belongs to anyone but the app.
       //
-      // Embedding was the original design and it does not work. mpv's child
-      // window renders BEHIND Chromium's content surface, so a title played
-      // with audio and a correct clock and no picture at all. Worth being
-      // precise about why that got shipped: the check that "verified" embedding
-      // read mpv's own `current-vo` and `osd-width` properties, which describe
-      // mpv's internal state and say nothing about whether its pixels reach the
-      // screen. A screenshot settles it in one look; two property reads do not.
+      // Embedding alone is NOT enough, and shipping it bare is the mistake
+      // commit 0ae7dfb reverted: mpv's child composites BEHIND Chromium's own
+      // child ("Intermediate D3D Window"), so a title played with audio and a
+      // correct clock and no picture at all. The missing move is raising mpv's
+      // child above that sibling — mpvEmbed.ts's syncEmbeddedVideo, run every
+      // time the child (re)appears (vo-configured) and on every resize. Proven
+      // by OS-level screenshot against a magenta page (the Phase-0 spike),
+      // never by mpv property reads: `current-vo` and `osd-width` describe
+      // mpv's internal state and say nothing about pixels reaching the screen.
       //
-      // --focus-on=never keeps this window from stealing focus from the app,
-      // and the controls overlay is raised above it (see playerWindow.ts).
+      // Two embed-mode facts the rest of the design leans on, both measured:
+      //   - `stop` still destroys the child window (--force-window=no), which
+      //     is what reveals the app UI when playback ends.
+      //   - mpv processes NO mouse input in --wid mode (mouse-pos never
+      //     reports hover), and never holds keyboard focus — all input belongs
+      //     to the app's own windows. See bindSafetyKeys.
       //
-      // Deliberately NOT --ontop while windowed. A topmost video window cannot
-      // be covered by anything, which meant no other application could be put
-      // over a windowed film — the price of never having to think about
-      // z-order. What replaces the flag is re-raising: raiseWindow() below puts
-      // the video back over the app whenever the app is activated, and
-      // fullscreen turns the flag back on (playerBridge's setPlayerTopmost) so
-      // nothing, the taskbar included, sits over a fullscreen film.
-      '--no-border',
+      // --focus-on=never stays as insurance against mpv ever trying to
+      // activate its window on load.
       '--focus-on=never',
-      // WHICH screen a fullscreen film covers: the one mpv's window is already
-      // on, which is the one the app is on, because the window is positioned to
-      // the app's content area. This is mpv's default and is written out anyway
-      // because it is load-bearing on a multi-monitor desk and fails silently
-      // when it is wrong — the film simply opens on the other screen.
-      '--fs-screen=current',
-      // The window is EXACTLY the rectangle it is given, never the shape of the
-      // film in it. mpv defaults --keepaspect-window to yes, which lets it
-      // shrink its own window to the video's aspect ratio after the geometry
-      // below has asked for a specific size — so a 2.35:1 film on a 16:9 screen
-      // gets a window narrower or shorter than the app's content area, and
-      // whatever is behind it shows through the leftover strip. Reported as
-      // "fullscreen doesn't go quite fullscreen, there is a gap on the right",
-      // with the app's own sidebar visible in the gap.
-      //
-      // Fitting the picture INSIDE this window is a separate concern and stays
-      // with keepaspect/panscan, which the fit/fill modes drive — see
-      // shared/media-hub/videoFit.ts. Letterbox bars are mpv's to draw within
-      // the rectangle, not a reason for the rectangle to change size.
-      '--no-keepaspect-window',
       // BUFFERING. mpv's demuxer keeps reading ahead while playback is paused,
       // which is what makes "pause for a moment, resume without waiting" work
       // and what rides out a stall. The default readahead is ONE SECOND, so
@@ -404,22 +375,30 @@ export class MpvPlayer {
       // for no gain.
       '--cache=yes',
       '--cache-on-disk=no',
+      // RECONNECT. The local stream server now breaks the connection when a
+      // region of the file cannot be served (see streamCache.ts's abandon),
+      // instead of ending the body cleanly and letting the film appear to
+      // finish. That is only an improvement if the player treats a broken
+      // transfer as something to retry: with these, ffmpeg's HTTP layer
+      // reconnects at the byte it had reached (a fresh Range request this
+      // server answers from cache), backing off up to ~20s in total before
+      // it reports an error. A stall the cache recovers from is then a pause,
+      // and only one it cannot recover from ends playback — as an error,
+      // which the overlay reports, rather than as a credits roll.
+      '--stream-lavf-o=reconnect=1,reconnect_on_network_error=1,reconnect_delay_max=20',
       `--demuxer-readahead-secs=${profile.readaheadSeconds}`,
       `--cache-secs=${profile.readaheadSeconds}`,
       `--demuxer-max-bytes=${profile.maxBytes}`,
       // Keeps recent history in memory so a short seek backwards is instant
       // rather than a re-read.
       '--demuxer-max-back-bytes=128MiB',
-      // WINDOW DRAGGING OFF. mpv lets a borderless window be dragged from
-      // anywhere in the picture, and defaults to allowing it. Since this window
-      // is positioned to sit exactly over the app, a stray drag detaches the
-      // video from the controls and there is no way to put it back — reported
-      // live as "the video plays in a separate window I can drag round, and the
-      // controls render behind it".
+      // WINDOW DRAGGING OFF. A drag gesture must never translate the embedded
+      // child inside its parent — and with dragging on, mpv treats a
+      // left-press on the picture as the start of one.
       '--window-dragging=no',
       '--msg-level=all=warn'
     ]
-    if (bounds) args.push(`--geometry=${geometryFor(bounds)}`)
+    if (wid) args.push(`--wid=${wid}`)
 
     const child = spawnImpl(mpvPath, args, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] })
     this.child = child
@@ -612,11 +591,6 @@ export class MpvPlayer {
   ): Promise<void> {
     // Defense in depth immediately before the load — see assertPlayableUrl.
     assertPlayableUrl(url)
-    if (videoScaling) {
-      for (const [property, value] of Object.entries(scalerPropertiesFor(videoScaling))) {
-        await this.set(property, value).catch(() => {})
-      }
-    }
     if (audioLanguage) await this.set('alang', audioLanguage)
     if (subtitleLanguage) await this.set('slang', subtitleLanguage)
     // `start` MUST be written as a string, and only when there is somewhere to
@@ -636,115 +610,34 @@ export class MpvPlayer {
     const loaded = this.once('file-loaded', 60000)
     await this.command('loadfile', url, 'replace')
     await loaded
-  }
-
-  /** Moves/resizes mpv's window to follow the app. Runtime `geometry` writes
-   *  are honoured by mpv (verified: osd-width/height follow the new value), so
-   *  the player can track the app window without any native call on this side.
-   *
-   *  Dropped while the window is in mpv's own fullscreen. The screen-covering
-   *  rectangle belongs to mpv there (see setFullscreen), and a geometry write
-   *  arriving mid-transition is at best ignored and at worst becomes the
-   *  rectangle mpv restores to on the way out. The app re-syncs after leaving. */
-  async setBounds(bounds: MpvBounds): Promise<void> {
-    if (!this.socket || this.fullscreen) return
-    await this.set('geometry', geometryFor(bounds)).catch(() => {})
+    // AFTER the load, not before: --reset-on-next-file (see the launch
+    // arguments) puts the scalers back to mpv's defaults as each file
+    // opens, which is what lets Standard mean "the default" at all — so a
+    // preset written ahead of the load would be wiped by the load itself.
+    // Standard sets nothing; High and Sharp set their filters here.
+    if (videoScaling) {
+      for (const [property, value] of Object.entries(scalerPropertiesFor(videoScaling))) {
+        await this.set(property, value).catch(() => {})
+      }
+    }
   }
 
   /**
-   * Puts mpv's window into or out of ITS OWN fullscreen mode.
+   * Binds a keyboard backstop, kept from the floating-window era at zero cost.
    *
-   * Sizing the window to the screen is NOT the same thing, and believing it was
-   * is what left fullscreen short down one side twice. A `geometry` write is a
-   * REQUEST, which mpv reshapes before applying, and every step of that
-   * reshaping is measured against the monitor's WORK AREA rather than the
-   * monitor (mpv's w32_common.c and win_state.c):
+   * Measured in embed mode (the Phase-0 spike): mpv's --wid child processes NO
+   * mouse input at all — mouse-pos never even reports hover — and it never
+   * holds keyboard focus, so in practice none of these bindings can fire. All
+   * real input belongs to the app's own windows now: the overlay owns
+   * pointer input and the player keys, and the main window's own
+   * before-input-event F11 handler (src/main/index.ts) covers fullscreen even
+   * with the overlay gone, because focus can no longer leave the app's windows
+   * for mpv's.
    *
-   *   - the target rectangle comes from get_working_area(), which returns the
-   *     taskbar-excluded rcWork for any window not already in mpv's fullscreen;
-   *   - the position is then added to that work area's ORIGIN rather than the
-   *     desktop's, so +0+0 means the top-left of the work area and a
-   *     side-docked taskbar shifts the whole window sideways;
-   *   - anything that still does not fit is shrunk to fit with the aspect ratio
-   *     of the REQUEST preserved, so height lost to a taskbar costs width too;
-   *   - and which monitor's work area is meant is resolved from wherever mpv's
-   *     window already happens to be.
-   *
-   * None of that is on the fullscreen path: mpv takes the monitor rect whole
-   * (rcMonitor, via get_screen_area) and skips the fitting altogether. So the
-   * screen-covering rectangle is mpv's to compute, and this app's only job is
-   * to say when — which is what this is.
-   *
-   * The mirror is set BEFORE the write lands, deliberately: a fullscreen
-   * transition provokes a burst of geometry writes from the app's own window
-   * tracking, and they have to already be suppressed when they arrive.
-   */
-  async setFullscreen(fullscreen: boolean): Promise<void> {
-    this.fullscreen = fullscreen
-    if (!this.socket) return
-    await this.set('fullscreen', fullscreen).catch(() => {})
-  }
-
-  /** Puts mpv's window in (true) or out of (false) the always-on-top band.
-   *  Only fullscreen asks for true — see playerBridge's setPlayerTopmost. */
-  async setOntop(ontop: boolean): Promise<void> {
-    this.ontop = ontop
-    if (!this.socket) return
-    await this.set('ontop', ontop).catch(() => {})
-  }
-
-  /**
-   * Raises mpv's window to the front of the band it belongs to.
-   *
-   * There is no raise command in mpv's protocol and geometry writes do not
-   * reorder anything, so `ontop` is the only lever from here — and it is
-   * enough, because of how Windows implements it: entering the topmost band
-   * puts a window at the front of that band, and leaving it puts the window at
-   * the front of the ordinary one. Writing the property to the wrong value and
-   * immediately back therefore lands the window exactly where it belongs, in
-   * front.
-   *
-   * The second write is NOT awaited behind the first, deliberately: both are
-   * written to the socket in the same tick, so mpv reads and applies them
-   * together and the window is never seen in the wrong band. Awaiting in
-   * between would put a full round trip in the middle of that, which is exactly
-   * long enough for a windowed film to flash over another application.
-   *
-   * This is what puts the video back over the app's own window after clicking
-   * the app has raised that above it — the job --ontop used to do by never
-   * letting it happen in the first place.
-   */
-  async raiseWindow(): Promise<void> {
-    if (!this.socket) return
-    const leave = this.set('ontop', !this.ontop).catch(() => {})
-    const back = this.set('ontop', this.ontop).catch(() => {})
-    await Promise.all([leave, back])
-  }
-
-  /**
-   * Binds the few inputs that must work even when the controls overlay does not.
-   *
-   * Being unable to pause or close a playing title is a genuinely bad state —
-   * the video sits over the app's content area, and over everything else when
-   * the film is fullscreen. The overlay owns the real
-   * input handling, but it is a separate window that can lose focus, be
-   * covered, or fail to load; mpv's own window can always take an event. Each
-   * binding emits a script-message, which arrives back as a `client-message`
-   * event for playerBridge to act on, so both routes end in the same code.
-   *
-   * The two mouse bindings are here for a reason that is not about failure at
-   * all. The overlay is click-through while the controls are hidden (see
-   * playerWindow.ts), and only mousemove is forwarded to it — clicks are not.
-   * So clicking the picture without moving the mouse first, which is exactly
-   * how someone pauses a film they are already watching, lands on mpv and
-   * nowhere else. Without these, that click does nothing, and neither does the
-   * double-click that means fullscreen.
-   *
-   * MBTN_LEFT_DBL is bound to fullscreen ALONE, with no attempt to undo the
-   * pause its first click caused — deliberately, because mpv is free to emit
-   * either one MBTN_LEFT or two before the _DBL. Undoing would be right for one
-   * of those and wrong for the other, whereas leaving it costs at most a single
-   * unwanted toggle under either.
+   * Left bound anyway: if some mpv build ever does take an event in embed
+   * mode, each binding emits a script-message that arrives back as a
+   * `client-message` for playerBridge to act on — the same code path the
+   * overlay reaches — which fails safe in exactly the direction we want.
    */
   async bindSafetyKeys(): Promise<void> {
     for (const [key, message] of [
@@ -752,14 +645,6 @@ export class MpvPlayer {
       ['SPACE', 'r3-toggle-pause'],
       ['MBTN_LEFT', 'r3-toggle-pause'],
       ['MBTN_LEFT_DBL', 'r3-toggle-fullscreen'],
-      // F11 is the app's fullscreen key everywhere else (src/main/index.ts
-      // registers it on every BrowserWindow). This window is mpv's, not
-      // Electron's, so that handler never sees it — bound to the same
-      // script-message the double-click uses so the key means one thing no
-      // matter which window happens to hold the focus. mpv's own `fullscreen`
-      // property is deliberately NOT what it toggles: mpv follows the main
-      // window (playerBridge's setPlayerFullscreen), and going fullscreen
-      // underneath a windowed app would leave the controls stranded.
       ['F11', 'r3-toggle-fullscreen'],
       ['LEFT', 'r3-seek-back'],
       ['RIGHT', 'r3-seek-forward'],
@@ -770,17 +655,9 @@ export class MpvPlayer {
     }
   }
 
-  /** Hides/shows mpv's window without unloading the title — used when the app
-   *  is minimised or hidden. This window is not owned by the app's window, so
-   *  it does not minimise with it: without this it would be left behind on
-   *  screen, over the desktop the person just went back to. */
-  async setWindowVisible(visible: boolean): Promise<void> {
-    if (!this.socket) return
-    await this.set('window-minimized', !visible).catch(() => {})
-  }
-
-  /** Unloads the current file, which is also what destroys mpv's video window
-   *  and reveals the app UI again. */
+  /** Unloads the current file, which is also what destroys mpv's embedded
+   *  child window and reveals the app UI again (verified in the spike:
+   *  --force-window=no behaves the same under --wid). */
   async stopFile(): Promise<void> {
     if (!this.socket) return
     await this.command('stop').catch(() => {})

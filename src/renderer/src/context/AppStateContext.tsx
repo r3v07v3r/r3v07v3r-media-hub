@@ -18,7 +18,8 @@ import {
   ContinueWatchingItem,
   MediaItem,
   Recommendation,
-  UIActivityState
+  UIActivityState,
+  HomeRail
 } from '@renderer/types'
 import { USER_PROFILES } from '@renderer/data/mockData'
 import type {
@@ -29,7 +30,6 @@ import type {
   MediaTracks,
   PartyHostResult,
   PartyChatMessage,
-  PartyMode,
   PartyQueueEntry,
   PartyStatusResult,
   PlaybackResult,
@@ -49,7 +49,11 @@ import {
   runPlaybackPreparationStage,
   type PlaybackPreparationStage
 } from '@renderer/lib/mediaHub/playbackPreparation'
-import { forgetContinueWatching, rememberTrackedId } from '@renderer/lib/mediaHub/startupSnapshot'
+import {
+  clearStartupSnapshot,
+  forgetContinueWatching,
+  rememberTrackedId
+} from '@renderer/lib/mediaHub/startupSnapshot'
 import {
   startupContinueWatchingFallback,
   startupTrackedIdsFallback,
@@ -58,10 +62,18 @@ import {
   useMediaHubRatings,
   useMediaHubHomeFeed,
   useMediaHubWatchedIds,
-  type CatalogKindState
+  type CatalogKindState,
+  forgetStartupFallbacks
 } from '@renderer/lib/mediaHub/hooks'
 import type { CategoryKind } from '@renderer/lib/mediaHub/categoryFilters'
 import { MAX_PROMPT_TITLES } from '@shared/media-hub/ollama'
+import { demoOnlyTitleMessage, hasExpressibleSimklId } from '@shared/media-hub/serviceIds'
+import { episodeToStart, episodeWatchKey } from '@shared/media-hub/nextEpisode'
+import {
+  isNoticeablyBelowCeiling,
+  resolutionLabel,
+  streamResolution
+} from '@shared/media-hub/streamQuality'
 import { mediaItemToTitleRef } from '@renderer/lib/mediaHub/adapters'
 import {
   recentlyWatchedRefs,
@@ -73,9 +85,19 @@ import { buildMediaId } from '@renderer/lib/mediaHub/streamId'
 import {
   captureBrowsingOrigin,
   deriveBrowsingLabel,
+  isDetailRoute,
   type BrowsingOrigin
 } from '@renderer/lib/mediaHub/browsingContext'
 import { useOverlayActions } from '@renderer/context/OverlayContext'
+import type { PlannedServiceId } from '@shared/media-hub/types'
+
+/** How many steps back the contextual trail remembers. A drill-down chain
+ *  this long is already pathological (each step is a title opened from
+ *  another title's page); the cap exists so the trail cannot grow without
+ *  bound, not because anyone is expected to reach it. Oldest entries drop
+ *  first, so the most recent steps — the ones anyone actually presses Back
+ *  through — always survive. */
+const MAX_TRAIL = 20
 
 /** movie/series/anime -> the route each one's detail page lives at — the
  *  same plural/singular forms App.tsx's own /movies, /series, /anime
@@ -145,7 +167,7 @@ interface AppStateValue {
   partyPanelOpen: boolean
   setPartyPanelOpen: Dispatch<SetStateAction<boolean>>
   refreshPartyStatus: () => void
-  hostParty: (name: string, mode?: PartyMode) => Promise<PartyHostResult>
+  hostParty: (name: string) => Promise<PartyHostResult>
   joinParty: (code: string, name: string) => Promise<void>
   leaveParty: () => Promise<void>
   suggestToParty: (item: {
@@ -168,6 +190,15 @@ interface AppStateValue {
   // round trip.
   myList: Set<string>
   toggleMyList: (media: MediaItem) => void
+  /**
+   * Which tracking services have each planned title on their own list.
+   *
+   * Read straight off the home feed rather than kept as state: nothing in
+   * the app edits it, so a copy here would only be somewhere for it to go
+   * stale. Sparse — an id with no entry is planned here and nowhere else,
+   * which is what everything marked in this app looks like.
+   */
+  plannedSources: Record<string, PlannedServiceId[]>
 
   // "Not interested" — mirrors myList's shape/optimistic-update pattern
   // exactly, backed by the media-hub backend's local disliked store
@@ -225,6 +256,13 @@ interface AppStateValue {
   syncDiscrepancies: WatchStatusDiscrepancy[]
   syncReviewOpen: boolean
   setSyncReviewOpen: Dispatch<SetStateAction<boolean>>
+  /** The control centre — the settings/system surface that folds down from
+   *  the top bar (see components/controlcentre/ControlCentre.tsx). Global
+   *  rather than local to the top bar because two other things open it: the
+   *  sidebar's Settings entry, and the /settings route, which exists now
+   *  only to deep-link into this. */
+  controlCentreOpen: boolean
+  setControlCentreOpen: Dispatch<SetStateAction<boolean>>
   resolveSyncDiscrepancy: (
     discrepancy: WatchStatusDiscrepancy,
     resolution: ReconcileResolution
@@ -248,12 +286,24 @@ interface AppStateValue {
    *  kind behind a successful one. Ask about the kind you are showing. */
   catalogKindStates: Record<MediaKind, CatalogKindState>
   refreshCatalog: () => void
+  /** Adapts backend CatalogItems with this context's own watch/list/
+   *  dislike state — see the useCallback of the same name. Pages that
+   *  fetch their own rows (catalog:query) MUST use this rather than
+   *  calling the adapter bare, or their badges drift from the app's. */
+  adaptCatalogItems: (items: CatalogItem[], completedIds?: string[]) => MediaItem[]
+  /** Ids with any watched history — exposed for the id-matching
+   *  surfaces (My Stuff's Watched tab) that fetch rows from the index
+   *  by id since stage 4 instead of scanning a loaded array for its
+   *  baked-in flags. */
+  watchedIds: Set<string>
 
   // home:personalized's recommendations/featured pool (see
   // useMediaHubHomeFeed) — `homeFeedLive` tells a consumer whether these
   // are real or should fall back to its own mock data, since (unlike
   // `catalog` above) there's no mock blended in here.
   recommendations: Recommendation[]
+  /** The ranking shelved by reason — the For You page's rows. */
+  recommendationRails: HomeRail[]
   featured: MediaItem[]
   homeFeedLive: boolean
   /** The home:personalized fetch is still out. Distinct from
@@ -338,6 +388,13 @@ interface AppStateValue {
   // detail page's contextual back control can return to exactly that
   // spot. See lib/mediaHub/browsingContext.ts and
   // lib/mediaHub/useRestoreBrowsingOrigin.ts (the page-side half of this).
+  //
+  // Those snapshots form a TRAIL, not a single slot, because a title page
+  // can open another title page (Rest of the series, Similar, Story) — so
+  // "where Back goes" is a stack that unwinds one step per press, and
+  // popBrowsingOrigin is how a page takes that step.
+  /** The top of the trail — where a Back press goes next, and the title it
+   *  is labelled with. Null once the chain is fully unwound. */
   browsingOrigin: BrowsingOrigin | null
   /** `originLabelOverride`: only needed when opening a title from within
    *  another detail page — see the implementation's own comment. */
@@ -345,7 +402,14 @@ interface AppStateValue {
   /** Opens what else this catalog has of one person's — see routes/PersonPage.
    *  A drill-down from a title page, not a nav destination. */
   openPerson: (name: string) => void
-  clearBrowsingOrigin: () => void
+  /** Steps one level back out, returning where to navigate to (null when
+   *  there is nowhere left, so the caller can fall back to its category
+   *  page). Also parks that entry as `pendingRestore` for the destination. */
+  popBrowsingOrigin: () => BrowsingOrigin | null
+  /** What the last Back press stepped out of, for the page it landed on to
+   *  restore its scroll/rail/focus from. Consumed once, then cleared. */
+  pendingRestore: BrowsingOrigin | null
+  clearPendingRestore: () => void
 
   // Resolving a stream (stream:resolve, "searching" for a cached source)
   // and starting it (stream:play, "buffering" — spinning up the proxy or
@@ -418,9 +482,6 @@ interface AppStateValue {
   combinedMoods: string[]
   toggleCombinedMood: (moodId: string) => void
 
-  isOffline: boolean
-  setIsOffline: (v: boolean) => void
-
   // Single global "what is the system doing" signal for the motion
   // system — derived from assistantState/playback rather than tracked
   // separately, so nothing can drift out of sync with the state it's
@@ -485,12 +546,23 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   // wrong — see the note above useMediaHubWatchedIds.
   const [libraryEpoch, setLibraryEpoch] = useState(0)
   const libraryKey = `${activeProfileId}:${libraryEpoch}`
+  // Bumped by every watch-state write the renderer makes (see
+  // refreshWatchStatus further down, and markContinueWatching) — declared
+  // up here so the mutation actions between can bump it too. MediaDetailPage
+  // and My Stuff key their own history reads on it.
+  const [watchStatusVersion, setWatchStatusVersion] = useState(0)
   const reloadLibrary = useCallback(() => setLibraryEpoch((n) => n + 1), [])
 
   const homeFeed = useMediaHubHomeFeed(libraryKey)
   const watchedIdsResult = useMediaHubWatchedIds(libraryKey)
   const dislikedIdsResult = useMediaHubDislikedIds(libraryKey)
-  const ratingsResult = useMediaHubRatings(libraryKey)
+  // Ratings have no refresh() of their own (the hook adopts what the backend
+  // reports per rate call), so a write main makes to them — a MAL reconcile
+  // pulling scores down — is answered by re-keying the hook. Folded into its
+  // key rather than added as a second argument so the hook keeps the one
+  // contract every library hook has: "is this still the same library".
+  const [ratingsEpoch, setRatingsEpoch] = useState(0)
+  const ratingsResult = useMediaHubRatings(`${libraryKey}:r${ratingsEpoch}`)
   const browseCatalog = useMediaHubBrowseCatalog(
     myList,
     watchedIdsResult.watchedIds,
@@ -525,7 +597,28 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     similarSource: 'model' | 'catalog' | null
     searching: boolean
   }>({ results: [], similar: [], similarSource: null, searching: false })
-  const [browsingOrigin, setBrowsingOrigin] = useState<BrowsingOrigin | null>(null)
+  // A STACK, not a slot. Opening a title from another title (the Rest of
+  // the series / Similar / Story panels) pushes a second origin, and a
+  // single slot meant the first one was simply overwritten: after
+  // Movie 1 -> its sequel, backing out of the sequel returned to Movie 1
+  // and then pointed the button at Movie 1's own route, so pressing Back
+  // again navigated to the page already on screen. The trail was one deep
+  // and the way out of a franchise was a loop.
+  const [browsingTrail, setBrowsingTrail] = useState<BrowsingOrigin[]>([])
+  // The entry a Back press just consumed, handed to the destination page
+  // so it can restore scroll/rail/focus. Separate from the trail because
+  // the trail is "where Back goes next" while this is "what just
+  // happened" — and because it is only ever written by an actual Back,
+  // never by openDetail, which is what keeps a page from matching an
+  // origin captured for itself (see useRestoreBrowsingOrigin's own note
+  // on the self-consumption bug that shape used to cause).
+  const [pendingRestore, setPendingRestore] = useState<BrowsingOrigin | null>(null)
+  const browsingOrigin = browsingTrail.length > 0 ? browsingTrail[browsingTrail.length - 1] : null
+  // Titles the person has already agreed to watch below their quality
+  // ceiling. Session-scoped and deliberately not persisted: it exists so a
+  // 480p series does not re-ask on every autoplayed episode, not to record
+  // a preference.
+  const acceptedLowQuality = useRef<Set<string>>(new Set())
   const [resolvingMedia, setResolvingMedia] = useState<{
     id: string
     title: string
@@ -541,7 +634,6 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   const [playbackTracks, setPlaybackTracks] = useState<MediaTracks | null>(null)
   const [activeMood, setActiveMood] = useState<string | null>(null)
   const [combinedMoods, setCombinedMoods] = useState<string[]>([])
-  const [isOffline, setIsOffline] = useState(false)
   // The RAW backend rows behind categorySearch, not the MediaItems the rest
   // of the app reads. Those carry watched/completed/disliked/inMyList flags
   // baked in at the moment they were mapped, and a search now outlives the
@@ -569,6 +661,29 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   const searchHistoryById = useMemo(
     () => indexHistoryById(watchedIdsResult.history),
     [watchedIdsResult.history]
+  )
+
+  // The one sanctioned way for a page to turn backend CatalogItems into
+  // MediaItems: the adapter plus THIS context's id-sets, so watched/list/
+  // disliked badges on a paged grid agree with every other surface. The
+  // optional completedIds are the catalog:query result's own — computed
+  // in SQL against the aired-episode counts only the database holds — and
+  // when present they OVERRIDE the adapter's history-derived guess, which
+  // is precisely why the backend returns them.
+  const adaptCatalogItems = useCallback(
+    (items: CatalogItem[], completedIds?: string[]): MediaItem[] => {
+      const completedSet = completedIds ? new Set(completedIds) : null
+      return items.map((item) => {
+        const adapted = catalogItemToMediaItem(item, {
+          trackedIds: myList,
+          watchedIds: watchedIdsResult.watchedIds,
+          historyById: searchHistoryById,
+          dislikedIds
+        })
+        return completedSet ? { ...adapted, completed: completedSet.has(item.id) } : adapted
+      })
+    },
+    [myList, watchedIdsResult.watchedIds, searchHistoryById, dislikedIds]
   )
 
   // Re-derived whenever the watch/dislike/My List state behind it moves, so
@@ -777,13 +892,26 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         // party / Join a party" form with zero indication anything had
         // happened — the analogous 'preparing-cancelled' failure below
         // already does the right thing here.
-        pushNotification({ tone: 'warning', message: 'Lost connection to the party host.' })
+        pushNotification({ tone: 'warning', message: 'Lost connection to the watch party host.' })
       }
     })
   }, [refreshPartyStatus, pushNotification])
 
   const toggleMyList = useCallback(
     (media: MediaItem) => {
+      // Following a demo title is refused before the optimistic Set update,
+      // not after: mockData's pool (the AI assistant's fallback picks) has
+      // ids no tracking service can express, and letting the click through
+      // would flip the chip, write an m-* row into the tracked table, and
+      // push a title/year guess at every connected service — the same leak
+      // that put demo-id ghosts into watch_history on Aug 24 (see
+      // shared/media-hub/serviceIds.ts). UNfollowing stays allowed so a
+      // demo title that already leaked in can be removed; main enforces
+      // the same asymmetry at the IPC boundary as the backstop.
+      if (!myList.has(media.id) && !hasExpressibleSimklId(media.id)) {
+        pushNotification({ tone: 'info', message: demoOnlyTitleMessage(media.title) })
+        return
+      }
       setMyList((prev) => {
         const next = new Set(prev)
         if (next.has(media.id)) next.delete(media.id)
@@ -832,21 +960,28 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
           // refresh, not a broken UI in the moment.
         })
     },
-    [homeFeed]
+    [homeFeed, myList, pushNotification]
   )
 
   const toggleDisliked = useCallback(
     (media: MediaItem) => {
       const api = window.api?.mediaHub
+      // The write goes out once the optimistic set is decided, then the hook
+      // is re-read so its own copy — the one that reseeds this state on the
+      // next library re-key — matches what was actually stored. Without that
+      // read the two copies drifted until a profile switch or restore.
+      const settle = (write: Promise<unknown> | undefined): void => {
+        void write?.then(() => dislikedIdsResult.refresh()).catch(() => {})
+      }
       setDislikedIds((prev) => {
         const next = new Set(prev)
         if (next.has(media.id)) {
           next.delete(media.id)
-          api?.disliked.remove(media.id).catch(() => {})
+          settle(api?.disliked.remove(media.id))
         } else {
           next.add(media.id)
           const payload = mediaItemToTrackablePayload(media)
-          api?.disliked.add(payload).catch(() => {})
+          settle(api?.disliked.add(payload))
         }
         return next
       })
@@ -855,7 +990,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       // out of the rail instead of lingering until some unrelated refetch.
       homeFeed.refresh()
     },
-    [homeFeed]
+    [homeFeed, dislikedIdsResult]
   )
 
   const markContinueWatching = useCallback(
@@ -919,6 +1054,11 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
           // into browseCatalog above) don't go stale until some unrelated
           // catalog refetch happens to pick it up.
           watchedIdsResult.refresh()
+          // And the version the detail page and My Stuff key their own
+          // history reads on — the one thing refreshWatchStatus does that
+          // the two refreshes above do not. Left out, a mark made from a
+          // card's context menu never reached the open detail page.
+          setWatchStatusVersion((v) => v + 1)
         })
         .catch(() => {})
     },
@@ -973,6 +1113,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   // repeated Simkl requests.
   const [syncDiscrepancies, setSyncDiscrepancies] = useState<WatchStatusDiscrepancy[]>([])
   const [syncReviewOpen, setSyncReviewOpen] = useState(false)
+  const [controlCentreOpen, setControlCentreOpen] = useState(false)
 
   // Discarded when the library underneath them changes — a profile switch, or
   // a restore. A discrepancy is a claim about ONE profile's history against
@@ -1104,6 +1245,15 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       api
         .setActive(id, pin)
         .then(({ activeProfileId: active }) => {
+          // The startup snapshot is one file for the whole app, written by
+          // whichever profile was active. Left in place across a switch it
+          // seeds the NEXT launch — and the fallbacks already resolved from
+          // it seed this session's loading states — with the previous
+          // person's rows under this person's name. Cleared before the
+          // library is re-keyed, so nothing remembered outlives its owner;
+          // this profile's own live data rewrites it within the session.
+          clearStartupSnapshot()
+          forgetStartupFallbacks()
           setActiveProfileIdState(active)
           setProfilePinPrompt(null)
         })
@@ -1148,12 +1298,18 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   )
 
   const hostParty = useCallback(
-    async (name: string, mode?: PartyMode) => {
+    async (name: string) => {
       const api = window.api?.mediaHub?.party
       if (!api) throw new Error("Watch Party isn't available outside the desktop app.")
-      const result = await api.host(name, mode)
+      // No transport choice: hosting opens the direct listener and, when
+      // R3-Party-Sync is configured, the relay too — one code, every door.
+      const result = await api.host(name)
       setPartyHostCode(result.code)
-      setPartyWanAvailable(result.wanAvailable ?? false)
+      // "Reachable beyond the LAN", not literally "WAN port mapped": the
+      // relay attaching makes the hybrid invite work across the internet
+      // even when UPnP failed, and the reachability banner must not tell a
+      // host to configure the relay they are already attached to.
+      setPartyWanAvailable((result.wanAvailable ?? false) || (result.relayAttached ?? false))
       setPartyHostPort(result.port ?? null)
       setPartyChat([])
       setPartyPanelOpen(true)
@@ -1204,7 +1360,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
 
   const sendPartyChat = useCallback(async (text: string) => {
     const api = window.api?.mediaHub?.party
-    if (!api) throw new Error("Rooms aren't available outside the desktop app.")
+    if (!api) throw new Error("Watch Party isn't available outside the desktop app.")
     const trimmed = text.trim()
     if (!trimmed) return
     await api.chat({ id: crypto.randomUUID(), text: trimmed, sentAt: Date.now() })
@@ -1292,13 +1448,45 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
           categorySearch,
           activeMood
         })
-      setBrowsingOrigin(captureBrowsingOrigin(route, label))
+      const captured = captureBrowsingOrigin(route, label)
+      setBrowsingTrail((trail) =>
+        // Opening a title from ANOTHER title extends the chain already in
+        // progress; opening one from a grid, Home or search starts a fresh
+        // chain, which is also what keeps the trail from accumulating
+        // stale entries across a session when someone leaves a detail page
+        // by the nav rail instead of the back button.
+        (isDetailRoute(location.pathname) ? [...trail, captured] : [captured]).slice(-MAX_TRAIL)
+      )
+      // A new drill-down invalidates any restore the last Back left pending.
+      setPendingRestore(null)
       closeContextMenu()
       navigate(mediaKindToDetailPath(media))
     },
     [location.pathname, location.search, categorySearch, activeMood, navigate, closeContextMenu]
   )
-  const clearBrowsingOrigin = useCallback(() => setBrowsingOrigin(null), [])
+
+  /**
+   * Takes one step back out: pops the trail and returns the entry that was
+   * on top, having also parked it as `pendingRestore` for the page about to
+   * mount. Null when the trail is empty — the caller (a detail page opened
+   * by deep link, or one whose chain has been fully unwound) falls back to
+   * its own category route.
+   *
+   * The pop and the navigate are deliberately one action. Leaving the entry
+   * on the trail until the destination "used" it worked for a browse page,
+   * which remounts and consumes it, but not for a destination that is
+   * itself a detail page: /movies/:id does not remount when only the id
+   * changes, so nothing ever consumed it and Back stayed pointed at the
+   * page it had just returned to.
+   */
+  const popBrowsingOrigin = useCallback((): BrowsingOrigin | null => {
+    if (!browsingOrigin) return null
+    setBrowsingTrail((trail) => trail.slice(0, -1))
+    setPendingRestore(browsingOrigin)
+    return browsingOrigin
+  }, [browsingOrigin])
+
+  const clearPendingRestore = useCallback(() => setPendingRestore(null), [])
 
   // Playback gate (spec decision: keep the dashboard visible without a
   // TorBox connection, only gate actual playback). `mediaHubSettings ===
@@ -1341,6 +1529,119 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     })
   }, [])
 
+  // Continue Watching, readable from a callback without making that callback
+  // change identity every time the home feed refreshes. resolvePlaybackTarget
+  // below is the only reader, and it wants the latest row, not the one that
+  // existed when it was last rebuilt.
+  const continueWatchingRef = useRef<ContinueWatchingItem[]>(continueWatching)
+  useEffect(() => {
+    continueWatchingRef.current = continueWatching
+  }, [continueWatching])
+
+  /**
+   * Which episode a bare "play this" actually means.
+   *
+   * A title card carries a SHOW, not an episode: nothing on it says where in
+   * the show you are. Everything downstream of here needs a coordinate, and
+   * the one it used to get was buildMediaId's `?? 1` fallback — so pressing
+   * Play on a series card you were four seasons into started season 1,
+   * episode 1. The detail page never had that problem because it computes
+   * first-unwatched itself; the cards, the hero and the context menu did.
+   *
+   * THE EPISODE LIST IS THE SOURCE OF TRUTH, not the Continue Watching row,
+   * even though the row is already in memory and free to read. The row's
+   * `continueSeason/continueEpisode` is core.ts's first-unwatched over the
+   * WHOLE of `videos`, future-dated entries included — so for a show still
+   * airing that somebody is caught up on, it names next week's episode. That
+   * is a real answer to "where are you in this show" and the wrong one for
+   * "what should start now": nothing has been released, so the stream search
+   * would find nothing and give up. episodeToStart applies the same aired
+   * rule the progress bars count by, and needs the list to do it.
+   *
+   * So the row is the FALLBACK, taken only when the metadata or history call
+   * fails, where a possibly-unaired coordinate still beats S1E1.
+   *
+   * An explicit coordinate from the caller always wins — the detail page, the
+   * episode grid and party follow-along all know exactly what they mean and
+   * must not be second-guessed. Movies are returned untouched.
+   *
+   * Total failure is not fatal either: the media comes back as it went in and
+   * the old `?? 1` fallback applies exactly as before.
+   */
+  const resolvePlaybackTarget = useCallback(async (media: MediaItem): Promise<MediaItem> => {
+    const kind = media.mediaKind ?? (media.mediaType === 'series' ? 'series' : 'movie')
+    if (kind === 'movie') return media
+    if (media.seasonNumber != null && media.episodeNumber != null) {
+      // The caller named its coordinates — respect them. But a coordinate
+      // without the episode's NAME leaves the player badge half-blank, so
+      // when the name is missing it is looked up from the (cached)
+      // metadata: a map lookup in the common case, and a failure returns
+      // the media untouched rather than delaying playback.
+      if (media.episodeTitle) return media
+      try {
+        const meta = await window.api?.mediaHub?.catalog.meta(kind, media.id)
+        const picked = meta?.videos?.find(
+          (video) => video.season === media.seasonNumber && video.episode === media.episodeNumber
+        )
+        // The record's alternate title rides along too: an index-backed
+        // card has none, and the resolver's release guard needs it.
+        return {
+          ...media,
+          episodeTitle: picked?.title || media.episodeTitle,
+          originalTitle: media.originalTitle ?? meta?.originalTitle
+        }
+      } catch {
+        return media
+      }
+    }
+
+    const api = window.api?.mediaHub
+    if (api) {
+      try {
+        const [meta, tracking] = await Promise.all([
+          api.catalog.meta(kind, media.id),
+          api.tracking.list()
+        ])
+        const watchedKeys = new Set<string>()
+        for (const row of tracking.history) {
+          if (String(row.id) !== String(media.id)) continue
+          if (row.season == null || row.episode == null) continue
+          watchedKeys.add(episodeWatchKey(row.season, row.episode))
+        }
+        if (meta?.videos?.length) {
+          const target = episodeToStart(meta.videos, watchedKeys)
+          // The picked episode's own name rides along — it is what the
+          // player's badge shows under "S2 · E5".
+          const picked = meta.videos.find(
+            (video) => video.season === target.season && video.episode === target.episode
+          )
+          return {
+            ...media,
+            seasonNumber: target.season,
+            episodeNumber: target.episode,
+            episodeTitle: picked?.title,
+            // See the coordinates branch above — the resolved record's
+            // alternate title, which an index-backed card lacks.
+            originalTitle: media.originalTitle ?? meta.originalTitle
+          }
+        }
+      } catch {
+        // Falls through to the Continue Watching row below.
+      }
+    }
+
+    const entry = continueWatchingRef.current.find((row) => row.media.id === media.id)
+    if (entry?.media.seasonNumber != null && entry.media.episodeNumber != null) {
+      return {
+        ...media,
+        seasonNumber: entry.media.seasonNumber,
+        episodeNumber: entry.media.episodeNumber,
+        episodeTitle: entry.media.episodeTitle
+      }
+    }
+    return media
+  }, [])
+
   const startPlaybackRef = useRef<(media: MediaItem) => Promise<boolean>>(async () => false)
   // Same forward-reference trick as startPlaybackRef above, for the same
   // reason: the player's ui-event listener is subscribed before
@@ -1349,8 +1650,24 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   const startPartyPlaybackRef = useRef<
     (media: MediaItem, opts?: { season?: number; episode?: number }) => Promise<void>
   >(async () => {})
-  const startPlayback = useCallback(
-    async (media: MediaItem): Promise<boolean> => {
+  /**
+   * The whole start-a-title path, reporting WHICH title it actually started
+   * as well as whether it started.
+   *
+   * Split out of startPlayback (which is now a thin boolean wrapper over it)
+   * so that resolving "which episode" happens INSIDE the cancellation
+   * generation established below, not before it. When two bare series cards
+   * are pressed in quick succession, each resolution is a metadata + history
+   * round trip that can finish out of order; whichever call reaches here
+   * second owns the generation, and the first one's late resolution is
+   * discarded at the isCurrent() check rather than cancelling the newer
+   * preparation and starting the title nobody asked for last.
+   *
+   * `target` is what the party path needs: it announces a season and episode
+   * to followers, and that has to be the episode that actually started.
+   */
+  const runPlayback = useCallback(
+    async (requested: MediaItem): Promise<{ started: boolean; target: MediaItem }> => {
       // Either source alone is a complete setup — TorBox, a media server,
       // or both. Only having neither blocks playback.
       if (
@@ -1362,7 +1679,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
           tone: 'warning',
           message: 'Connect TorBox or a media server in Settings to start playback.'
         })
-        return false
+        return { started: false, target: requested }
       }
       const api = window.api?.mediaHub
       if (!api) {
@@ -1370,7 +1687,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
           tone: 'error',
           message: "Playback isn't available outside the desktop app."
         })
-        return false
+        return { started: false, target: requested }
       }
       closeContextMenu()
       cancelPlaybackPreparation()
@@ -1379,6 +1696,15 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       playbackPreparationRef.current = { generation, controller }
       const isCurrent = (): boolean =>
         playbackPreparationRef.current?.generation === generation && !controller.signal.aborted
+      // Which episode "play this series" means, resolved before anything is
+      // built from the coordinate. Inside the spinner rather than before it:
+      // this can be a round trip for metadata and history, and a Play button
+      // that sits dead for it looks broken. Idempotent — a caller that
+      // already named an episode gets its own answer straight back, so the
+      // party path below can resolve first and reach here for free.
+      setResolvingMedia({ id: requested.id, title: requested.title, stage: 'resolving' })
+      const media = await resolvePlaybackTarget(requested)
+      if (!isCurrent()) return { started: false, target: requested }
       const kind = media.mediaKind ?? (media.mediaType === 'series' ? 'series' : 'movie')
       const mediaId = buildMediaId(kind, media.id, media.seasonNumber, media.episodeNumber)
       // For series, the stream search itself needs to know which episode is
@@ -1395,19 +1721,25 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       // returned zero results even for a title with real, cached releases
       // under the correct kitsuId:episode form.
       const resolveId = kind === 'anime' ? `${media.id}:${media.episodeNumber ?? 1}` : mediaId
-      setResolvingMedia({ id: media.id, title: media.title, stage: 'resolving' })
       try {
         const resolved = await runPlaybackPreparationStage(
-          api.stream.resolve(kind, resolveId, media.title, {
-            catalogId: media.id,
-            seasonNumber: media.seasonNumber,
-            episodeNumber: media.episodeNumber
-          }),
+          api.stream.resolve(
+            kind,
+            resolveId,
+            media.title,
+            {
+              catalogId: media.id,
+              seasonNumber: media.seasonNumber,
+              episodeNumber: media.episodeNumber
+            },
+            // Releases are named in romaji; the title is not, any more.
+            media.originalTitle ? [media.originalTitle] : undefined
+          ),
           'resolving',
           30_000,
           controller.signal
         )
-        if (!isCurrent()) return false
+        if (!isCurrent()) return { started: false, target: media }
         setResolvingMedia({ id: media.id, title: media.title, stage: 'safety-checking' })
         if (!resolved.best) {
           // `queued` (see StreamResolveResult's own doc comment) means a
@@ -1422,8 +1754,36 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
               ? "This title wasn't cached yet, so TorBox has started downloading it — try again in a few minutes."
               : 'No sources were found for this title yet — try again later.'
           })
-          return false
+          return { started: false, target: media }
         }
+
+        // An old film that only exists at 480p is still worth watching — the
+        // player upscales — so a shortfall is never a refusal, only a
+        // question. Asked once per title per session: without that, a 480p
+        // series would ask again on every autoplayed episode, which is how a
+        // useful prompt becomes one nobody reads.
+        const ceiling = mediaHubSettings?.maxStreamResolution ?? 0
+        const got = streamResolution(resolved.best)
+        if (isNoticeablyBelowCeiling(got, ceiling) && !acceptedLowQuality.current.has(media.id)) {
+          if (
+            !window.confirm(
+              `The best copy of ${media.title} available right now is ${resolutionLabel(got)}, ` +
+                `below the ${resolutionLabel(ceiling)} you allow. It will be scaled to fit your ` +
+                `screen.\n\nPlay it anyway?`
+            )
+          ) {
+            setResolvingMedia(null)
+            return { started: false, target: media }
+          }
+          // Recorded ONLY on a real acceptance. This used to run on every
+          // resolve, including the ones that met the ceiling and asked
+          // nothing — and since the key is the series rather than the
+          // episode, a first episode that played at full quality silently
+          // bought consent for a later one that only exists at 480p.
+          // Playing a copy that was fine is not agreement to anything.
+          acceptedLowQuality.current.add(media.id)
+        }
+
         setResolvingMedia({ id: media.id, title: media.title, stage: 'buffering' })
         const playTask = api.stream.play(resolved.best, mediaId, kind, resolveId, {
           catalogId: media.id,
@@ -1431,7 +1791,8 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
           posterUrl: media.posterUrl,
           mediaKind: kind,
           seasonNumber: media.seasonNumber,
-          episodeNumber: media.episodeNumber
+          episodeNumber: media.episodeNumber,
+          episodeTitle: media.episodeTitle
         })
         // If cancellation/timeout wins the race, a late successful IPC result
         // must not leave its newly-created backend playback session running.
@@ -1468,7 +1829,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
           90_000,
           controller.signal
         )
-        if (!isCurrent()) return false
+        if (!isCurrent()) return { started: false, target: media }
         setResolvingMedia({ id: media.id, title: media.title, stage: 'starting' })
         setPlaybackResult(played)
         setPlaybackTracks(played.tracks)
@@ -1481,9 +1842,10 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         // no track data at all; the player reports its own track list, so if the
         // file opened there is a real list, and if it did not, that is a hard
         // error reported directly rather than a silent degradation.
-        return true
+        return { started: true, target: media }
       } catch (error) {
-        if (error instanceof PlaybackPreparationCancelledError) return false
+        if (error instanceof PlaybackPreparationCancelledError)
+          return { started: false, target: media }
         pushNotification({
           tone: 'error',
           message: playbackPreparationErrorMessage(error),
@@ -1494,7 +1856,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
             }
           }
         })
-        return false
+        return { started: false, target: media }
       } finally {
         if (playbackPreparationRef.current?.generation === generation) {
           playbackPreparationRef.current = null
@@ -1502,7 +1864,19 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         }
       }
     },
-    [mediaHubSettings, pushNotification, closeContextMenu, cancelPlaybackPreparation]
+    [
+      mediaHubSettings,
+      pushNotification,
+      closeContextMenu,
+      cancelPlaybackPreparation,
+      resolvePlaybackTarget
+    ]
+  )
+  /** The public shape: everything outside this file only wants to know
+   *  whether a title started. */
+  const startPlayback = useCallback(
+    async (media: MediaItem): Promise<boolean> => (await runPlayback(media)).started,
+    [runPlayback]
   )
   useEffect(() => {
     startPlaybackRef.current = startPlayback
@@ -1522,7 +1896,6 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     setPlaybackTracks(null)
   }, [])
 
-  const [watchStatusVersion, setWatchStatusVersion] = useState(0)
   const refreshWatchStatus = useCallback(() => {
     homeFeed.refresh()
     watchedIdsResult.refresh()
@@ -1560,8 +1933,8 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   // before the reload from keeping the video down forever. Between them there
   // is no state main can be left holding that this window does not correct.
   //
-  // Outside playback both reports are no-ops on main's side — restackPlayer
-  // returns without a running player, and there is no overlay to raise.
+  // Outside playback both reports are no-ops on main's side — there is no
+  // video child to hide or reveal, and no overlay to go with it.
   const partyPanelReportedOpen = useRef<boolean | null>(null)
   useEffect(() => {
     const reported = partyPanelReportedOpen.current
@@ -1583,6 +1956,33 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     stopPlaybackRef.current = stopPlayback
     refreshWatchStatusRef.current = refreshWatchStatus
   }, [playbackMedia, stopPlayback, refreshWatchStatus])
+
+  // Main wrote library rows on its own — a background watchlist pull, a MAL
+  // reconcile, the anime id repair, a restore. Every renderer-initiated
+  // write refetches from its own call site; these had no call site here,
+  // and the rows they wrote stayed off the screen until something else
+  // happened to refetch. One listener answers all of them, by scope:
+  // history and planned both come back through the home feed and the
+  // watched ids (the feed's trackedIds reseed My List), ratings has no
+  // refresh of its own so it is re-keyed, and a wholesale change re-keys
+  // everything the way a profile switch does. The index scope is the browse
+  // pages' business — they subscribe to it themselves.
+  useEffect(() => {
+    const api = window.api?.mediaHub?.library
+    if (!api?.onChanged) return
+    return api.onChanged((event) => {
+      const scopes = new Set(event.scopes)
+      if (scopes.has('all')) {
+        reloadLibrary()
+        return
+      }
+      if (scopes.has('ratings')) setRatingsEpoch((n) => n + 1)
+      if (scopes.has('history') || scopes.has('planned')) refreshWatchStatusRef.current()
+    })
+  }, [reloadLibrary])
+  // Whether this session has already been told about a rejected scrobble —
+  // see the 'scrobble' case below.
+  const scrobbleWarnedRef = useRef(false)
   useEffect(() => {
     const api = window.api?.mediaHub?.player
     if (!api) return
@@ -1629,22 +2029,45 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
           // that had just begun and leaving the previous one running.
           const subject = event.media
           if (!subject?.id) return
-          // Fire and forget. A scrobble is a courtesy to a third-party
-          // service; nothing in this app waits on it, and a failure is logged
-          // in main rather than shown over the video.
+          // The year comes from this window's MediaItem when the subject is
+          // the title playing — the session media the overlay carries has
+          // no year of its own. Simkl falls back to title and year when it
+          // cannot place the ids, and an empty year made that fallback
+          // useless. For an outgoing stop during a title change the subject
+          // is already the previous title, so the year is left out rather
+          // than borrowed from the wrong film.
+          const playing = playbackMediaForEventsRef.current
+          const year =
+            playing?.id === subject.id && playing.releaseYear ? String(playing.releaseYear) : ''
+          // Nothing waits on a scrobble and nothing in it can interrupt
+          // playback. A rejection is said ONCE per session, though: two
+          // id_err lines in a log nobody reads is how scrobbling silently
+          // stopped working for a film with a perfectly good id.
           window.api?.mediaHub?.simkl
             .scrobble(
               event.action,
-              {
-                id: subject.id,
-                type: subject.kind,
-                title: subject.title,
-                year: ''
-              },
+              { id: subject.id, type: subject.kind, title: subject.title, year },
               { season: subject.seasonNumber, episode: subject.episodeNumber },
               event.progress
             )
+            .then((result) => {
+              if (!result?.error || scrobbleWarnedRef.current) return
+              scrobbleWarnedRef.current = true
+              pushNotification({
+                tone: 'warning',
+                message: `Simkl did not accept a scrobble for "${subject.title}": ${result.error}. Your local history is unaffected; this will not be repeated this session.`
+              })
+            })
             .catch(() => {})
+          return
+        }
+        case 'resume-title': {
+          // The overlay's "ended early" card. The same call a click on the
+          // title makes: a fresh resolve, a fresh link, and the bookmark the
+          // overlay saved a moment ago picks the position up.
+          const media = playbackMediaForEventsRef.current
+          if (!media) return
+          void startPlaybackRef.current(media)
           return
         }
         case 'refresh-watch-status':
@@ -1673,9 +2096,18 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   // than waiting on its own announcement.
   const startPartyPlayback = useCallback(
     async (media: MediaItem, opts?: { season?: number; episode?: number }) => {
-      const season = opts?.season ?? media.seasonNumber
-      const episode = opts?.episode ?? media.episodeNumber
-      const target = opts ? { ...media, seasonNumber: season, episodeNumber: episode } : media
+      const target = opts
+        ? {
+            ...media,
+            seasonNumber: opts.season ?? media.seasonNumber,
+            episodeNumber: opts.episode ?? media.episodeNumber,
+            // The name belonged to the coordinates being REPLACED — the
+            // autoplay chain spreads the episode that just ended, and its
+            // title must not label the one about to start.
+            // resolvePlaybackTarget re-resolves it from cached metadata.
+            episodeTitle: undefined
+          }
+        : media
       const partyApi = window.api?.mediaHub?.party
       // Hosting from a title card can happen in the same click that creates a
       // room. Read main's live snapshot here instead of waiting for React's
@@ -1686,7 +2118,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         : partyStatus
       const isHosting = !!partyApi && !!livePartyStatus?.inParty && livePartyStatus.role === 'host'
       const partyKind = media.mediaKind ?? (media.mediaType === 'series' ? 'series' : 'movie')
-      // Announce BEFORE resolving, not after. startPlayback below is a
+      // Announce BEFORE resolving, not after. runPlayback below is a
       // stream search plus a buffer wait — seconds, sometimes many — and
       // the nowPlaying announcement can only go out once it finishes,
       // because only then is there something real to announce. That left
@@ -1706,7 +2138,15 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
           })
           .catch(() => {})
       }
-      const started = await startPlayback(target)
+      // runPlayback rather than startPlayback, for the season and episode it
+      // reports back. A bare series card names no episode, and the
+      // announcement below has to carry the one that ACTUALLY started or every
+      // follower resolves a different stream from the host's. Resolving it
+      // here first would have been the obvious way to get it and the wrong
+      // one: it would put a metadata round trip in front of the cancellation
+      // generation, so two quick clicks could finish out of order and let the
+      // older one cancel and replace the newer.
+      const { started, target: playing } = await runPlayback(target)
       if (!started) {
         // The host found no source, so no nowPlaying is ever coming —
         // release the followers rather than leaving them spinning.
@@ -1716,6 +2156,8 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       const api = partyApi
       if (!api || !isHosting) return
       const kind = partyKind
+      const season = playing.seasonNumber
+      const episode = playing.episodeNumber
       api
         .nowPlaying({
           infoHash: '',
@@ -1728,11 +2170,28 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         })
         .catch(() => {})
     },
-    [startPlayback, partyStatus]
+    [runPlayback, partyStatus]
   )
   useEffect(() => {
     startPartyPlaybackRef.current = startPartyPlayback
   }, [startPartyPlayback])
+
+  // Read through refs inside the party handlers below, so those
+  // subscriptions don't tear down and re-establish every time playback
+  // position or settings change — they only care about the values at the
+  // moment a message actually arrives.
+  const playbackMediaRef = useRef(playbackMedia)
+  const hostPartyRef = useRef(hostParty)
+  const mediaHubSettingsRef = useRef(mediaHubSettings)
+  useEffect(() => {
+    playbackMediaRef.current = playbackMedia
+    hostPartyRef.current = hostParty
+    mediaHubSettingsRef.current = mediaHubSettings
+  }, [playbackMedia, hostParty, mediaHubSettings])
+  // The nowPlaying replay currently being resolved (type:id:season:episode),
+  // for the whole gap where playbackMedia is still null — see the follower
+  // unwrap's dedupe below.
+  const nowPlayingInFlightRef = useRef<string | null>(null)
 
   // Follower side of the above: unwrap an incoming `nowPlaying` (see
   // watchParty.ts's handlePartyMessage — every message type other than
@@ -1773,8 +2232,31 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         return
       }
       if (msg?.type !== 'nowPlaying' || !msg.item?.id || !msg.item.type) return
+      // nowPlaying is no longer a one-shot: the host replays it to every
+      // late joiner and to anyone who asks to resync, and on the relay
+      // those replays necessarily reach EVERY member (the worker only fans
+      // out). Two duplicate shapes to refuse:
+      //  - already PLAYING the exact title it names — this copy is someone
+      //    else's catch-up, not an instruction to restart the film;
+      //  - already RESOLVING it — another member being admitted while this
+      //    one's stream search is still running re-broadcasts the same
+      //    event, and playbackMedia is still null for the whole resolve,
+      //    so only the in-flight key below can catch it. Without it, two
+      //    concurrent catalog lookups + startPlayback races.
+      const replayKey = `${msg.item.type}:${msg.item.id}:${msg.season ?? ''}:${msg.episode ?? ''}`
+      const playing = playbackMediaRef.current
+      if (
+        playing &&
+        playing.id === msg.item.id &&
+        (playing.seasonNumber ?? undefined) === (msg.season ?? undefined) &&
+        (playing.episodeNumber ?? undefined) === (msg.episode ?? undefined)
+      ) {
+        return
+      }
+      if (nowPlayingInFlightRef.current === replayKey) return
       const catalogApi = window.api?.mediaHub?.catalog
       if (!catalogApi) return
+      nowPlayingInFlightRef.current = replayKey
       // Covers the case where a follower joins (or the message is missed)
       // after the host already sent `preparing` — nowPlaying implies a
       // load is in progress regardless of what came before it.
@@ -1788,7 +2270,14 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
           setPartyPendingSeek(Number(msg.position) || 0)
           return startPlayback(
             msg.season !== undefined || msg.episode !== undefined
-              ? { ...media, seasonNumber: msg.season, episodeNumber: msg.episode }
+              ? {
+                  ...media,
+                  seasonNumber: msg.season,
+                  episodeNumber: msg.episode,
+                  // New coordinates, so the spread's old name is dropped —
+                  // resolvePlaybackTarget names the episode being joined.
+                  episodeTitle: undefined
+                }
               : media
           )
         })
@@ -1798,7 +2287,14 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         // Cleared on EVERY outcome, not just success: startPlayback
         // resolves false for a no-source or TorBox-not-connected result
         // without throwing, and that path has to release the card too.
-        .finally(() => setPartyPreparing(null))
+        // The in-flight key clears the same way — only if it is still this
+        // resolve's, so a newer title's key is never wiped by an older
+        // resolve finishing late. A finished SUCCESS is covered from then
+        // on by the already-playing check above.
+        .finally(() => {
+          setPartyPreparing(null)
+          if (nowPlayingInFlightRef.current === replayKey) nowPlayingInFlightRef.current = null
+        })
     })
   }, [partyStatus, startPlayback, pushNotification])
 
@@ -1835,36 +2331,24 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     if (!inPartyNow && partyPreparing) setPartyPreparing(null)
   }
 
-  // Read through refs inside the join-request handler below, so that
-  // subscription doesn't tear down and re-establish every time playback
-  // position or settings change — it only cares about their values at the
-  // moment a request actually arrives.
-  const playbackMediaRef = useRef(playbackMedia)
-  const hostPartyRef = useRef(hostParty)
-  const mediaHubSettingsRef = useRef(mediaHubSettings)
-  useEffect(() => {
-    playbackMediaRef.current = playbackMedia
-    hostPartyRef.current = hostParty
-    mediaHubSettingsRef.current = mediaHubSettings
-  }, [playbackMedia, hostParty, mediaHubSettings])
-
-  // Answering "can I watch with you?" from a friend. Lives here rather
-  // than in the friends UI because it needs the things only this context
-  // has: whether we're actually playing something, and the ability to
-  // start hosting.
+  // Answering "can I watch with you?" from a room member. Lives here
+  // rather than in the rooms UI because it needs the things only this
+  // context has: whether we're actually playing something, and the
+  // ability to start hosting.
   //
   // This is what makes a SOLO watcher joinable at all. Someone watching
-  // alone has no party and therefore no code to publish, so a friend has
+  // alone has no party and therefore no code to publish, so a member has
   // nothing to click — the party is created on demand, only when somebody
   // actually asks, rather than forcing everyone to host speculatively.
+  // The reply goes back through the room the request arrived on.
   useEffect(() => {
-    const api = window.api?.mediaHub?.friends
+    const api = window.api?.mediaHub?.rooms
     if (!api) return
-    return api.onMessage((message) => {
+    return api.onMessage(({ roomId, message }) => {
       if (message.type !== 'friend-join-request') return
       const decline = (reason: string): void => {
         api
-          .send({
+          .send(roomId, {
             type: 'friend-join-declined',
             toFriendId: message.fromFriendId,
             fromFriendId: '',
@@ -1880,7 +2364,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       // tearing down a party other people may already be in.
       if (partyStatus?.inParty && partyStatus.role === 'host' && partyHostCode) {
         api
-          .send({
+          .send(roomId, {
             type: 'friend-join-offer',
             toFriendId: message.fromFriendId,
             fromFriendId: '',
@@ -1890,14 +2374,19 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         return
       }
       if (partyStatus?.inParty) {
-        decline("They're already in someone else's party.")
+        decline("They're already in someone else's watch party.")
         return
       }
       hostPartyRef
-        .current(mediaHubSettingsRef.current?.partyDisplayName || 'A friend', 'relay')
+        .current(mediaHubSettingsRef.current?.partyDisplayName || 'A friend')
         .then((result) => {
+          // No nowPlaying announcement here: the party:host handler seeds
+          // the new party with the film already playing — at the LIVE
+          // playhead — in main, where both the session identity and the
+          // observed position actually live. The joiner is then caught up
+          // by the ordinary late-join replay.
           api
-            .send({
+            .send(roomId, {
               type: 'friend-join-offer',
               toFriendId: message.fromFriendId,
               fromFriendId: '',
@@ -1909,7 +2398,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
             message: `${message.fromName} is joining your watch party.`
           })
         })
-        .catch(() => decline('They could not start a party just now.'))
+        .catch(() => decline('They could not start a watch party just now.'))
     })
   }, [partyStatus, partyHostCode, pushNotification])
 
@@ -2213,6 +2702,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       removeFromQueue,
       sendPartyChat,
       myList,
+      plannedSources: homeFeed.plannedSources,
       toggleMyList,
       dislikedIds,
       toggleDisliked,
@@ -2228,7 +2718,10 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       catalogLoading: browseCatalog.loading,
       catalogKindStates: browseCatalog.kindStates,
       refreshCatalog: browseCatalog.refresh,
+      adaptCatalogItems,
+      watchedIds: watchedIdsResult.watchedIds,
       recommendations: homeFeed.recommendations,
+      recommendationRails: homeFeed.rails,
       featured: homeFeed.featured,
       homeFeedLive: homeFeed.live,
       homeFeedLoading: homeFeed.loading,
@@ -2255,7 +2748,9 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       browsingOrigin,
       openDetail,
       openPerson,
-      clearBrowsingOrigin,
+      popBrowsingOrigin,
+      pendingRestore,
+      clearPendingRestore,
       resolvingMedia,
       cancelPlaybackPreparation,
       playbackMedia,
@@ -2279,12 +2774,12 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       setActiveMood,
       combinedMoods,
       toggleCombinedMood,
-      isOffline,
-      setIsOffline,
       uiActivity,
       syncDiscrepancies,
       syncReviewOpen,
+      controlCentreOpen,
       setSyncReviewOpen,
+      setControlCentreOpen,
       resolveSyncDiscrepancy
     }),
     [
@@ -2312,6 +2807,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       removeFromQueue,
       sendPartyChat,
       myList,
+      homeFeed.plannedSources,
       toggleMyList,
       dislikedIds,
       toggleDisliked,
@@ -2327,7 +2823,10 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       browseCatalog.loading,
       browseCatalog.kindStates,
       browseCatalog.refresh,
+      adaptCatalogItems,
+      watchedIdsResult.watchedIds,
       homeFeed.recommendations,
+      homeFeed.rails,
       homeFeed.featured,
       homeFeed.live,
       homeFeed.loading,
@@ -2352,7 +2851,9 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       browsingOrigin,
       openDetail,
       openPerson,
-      clearBrowsingOrigin,
+      popBrowsingOrigin,
+      pendingRestore,
+      clearPendingRestore,
       resolvingMedia,
       cancelPlaybackPreparation,
       playbackMedia,
@@ -2375,10 +2876,10 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       activeMood,
       combinedMoods,
       toggleCombinedMood,
-      isOffline,
       uiActivity,
       syncDiscrepancies,
       syncReviewOpen,
+      controlCentreOpen,
       resolveSyncDiscrepancy
     ]
   )

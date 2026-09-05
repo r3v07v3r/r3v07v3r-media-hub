@@ -8,11 +8,15 @@
 // Two structural behaviours live here rather than in the controls themselves,
 // because they are about the window and not about any one control:
 //
-//  1. CLICK-THROUGH. While the controls are hidden the whole window is
-//     click-through (main calls setIgnoreMouseEvents with forward: true), so
-//     clicks land on mpv while mousemove still reaches this side to reveal the
-//     controls. Without it, an invisible full-screen window would swallow every
-//     click aimed at the picture.
+//  1. ALL POINTER INPUT IS OURS, controls showing or not. The embedded video
+//     child underneath processes no mouse input at all (see mpv.ts's
+//     bindSafetyKeys), so this window is never click-through: the surface
+//     handlers below do click-to-pause and double-click-fullscreen even while
+//     the controls are faded out, which is what keeps a stationary click on
+//     an idle player meaning "pause" — the job mpv's own MBTN_LEFT binding
+//     did when the video was a real window. That also makes the cursor ours
+//     to manage: it hides with the controls (styles.surfaceIdle), since
+//     nothing below this window will ever hide it for us.
 //  2. NO SHOW/HIDE. The window stays up for the whole session and the controls
 //     fade with CSS. Toggling a transparent window's visibility is what
 //     produces the flicker Electron transparent overlays are known for on
@@ -22,7 +26,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { PlayerWindowProvider, usePlayerWindow } from '@renderer/context/PlayerWindowContext'
 import { usePartySync } from '@renderer/hooks/usePartySync'
-import { usePlayerTracking } from '@renderer/hooks/usePlayerTracking'
+import { usePlayerTracking, WATCHED_FRACTION } from '@renderer/hooks/usePlayerTracking'
 import { PlayerSessionRail } from '@renderer/components/party/PlayerSessionRail'
 import {
   AUTOPLAY_NEXT_COUNTDOWN_SECONDS,
@@ -74,7 +78,7 @@ const SCRUB_PREVIEW_WIDTH = 160
  *  live; there is no re-render of anything. */
 const SUBTITLE_DELAY_STEP = 0.25
 
-type Menu = 'audio' | 'subtitles' | 'fit' | 'picture' | 'playback' | 'chapters' | null
+type Menu = 'audio' | 'subtitles' | 'fit' | 'picture' | 'playback' | 'info' | null
 
 /** What the speed control offers. 1 is listed with the rest rather than being
  *  a separate "reset", because it is the value people come back to and hunting
@@ -94,6 +98,14 @@ const SLEEP_OPTIONS = [
   { minutes: 60, label: '1 hour' },
   { minutes: 0, label: 'End of episode' }
 ] as const
+
+/** Where the bytes of the playing release come from, for the Info panel. */
+const SOURCE_LABEL: Record<string, string> = {
+  localcache: 'Local cache',
+  lancache: 'LAN cache',
+  mediaserver: 'Media server',
+  torbox: 'TorBox'
+}
 
 function formatTime(totalSeconds: number): string {
   if (!Number.isFinite(totalSeconds) || totalSeconds < 0) return '0:00'
@@ -120,9 +132,12 @@ function PlayerControls() {
   const [subtitleSearchError, setSubtitleSearchError] = useState<string | null>(null)
   const [pendingSubtitleId, setPendingSubtitleId] = useState<string | null>(null)
   const [subtitleDelay, setSubtitleDelay] = useState(0)
-  const [preview, setPreview] = useState<{ x: number; time: number; url: string | null } | null>(
-    null
-  )
+  const [preview, setPreview] = useState<{
+    x: number
+    time: number
+    url: string | null
+    chapterTitle: string | null
+  } | null>(null)
   const [countdown, setCountdown] = useState(AUTOPLAY_NEXT_COUNTDOWN_SECONDS)
   const [countdownFor, setCountdownFor] = useState<string | null>(null)
   // Which card's countdown has been called off by a hover. Cancelled rather
@@ -169,6 +184,20 @@ function PlayerControls() {
   const speed = state.speed ?? 1
   const chapters = state.chapters ?? EMPTY_CHAPTERS
   const currentChapter = state.chapter ?? -1
+  const chapterRanges = useMemo(
+    () =>
+      duration > 0
+        ? chapters
+            .map((chapter, index) => ({
+              ...chapter,
+              index,
+              start: Math.max(0, Math.min(duration, chapter.time)),
+              end: Math.max(0, Math.min(duration, chapters[index + 1]?.time ?? duration))
+            }))
+            .filter((chapter) => chapter.end > chapter.start)
+        : [],
+    [chapters, duration]
+  )
   const audioDelay = state.audioDelay ?? 0
   const subtitleStyle = session?.settings.subtitleStyle ?? DEFAULT_SUBTITLE_STYLE
   const subtitleStyled = !isSubtitleStyleDefault(subtitleStyle)
@@ -210,8 +239,21 @@ function PlayerControls() {
   // leave the party watching two different episodes with no way back. The host
   // does get it — startPartyPlayback on the main-window side announces whatever
   // it starts, so the room follows along exactly as it would from a click.
+  // The percentage the playhead is at now that the file has ended, when that
+  // is well short of the runtime — the "ended early" card's whole subject.
+  // Derived, not stored: mpv holds the playhead where the bytes ran out
+  // (--keep-open), so the figure is simply read off the clock for as long as
+  // eof-reached stays true, and it clears itself as the next file opens.
+  const endedEarlyAt =
+    state.eofReached === true && duration > 0 && timePos / duration < WATCHED_FRACTION
+      ? Math.round((timePos / duration) * 100)
+      : null
+
   const autoplay: NextEpisodeRef | null =
     state.eofReached === true &&
+    // A stream that stopped short is not the end of the episode, and the
+    // card that belongs to it is the resume card, not the next-episode one.
+    endedEarlyAt === null &&
     !party.following &&
     // A sleep timer set to "end of episode" is somebody saying this is the
     // last one. Offering the next one anyway — and starting it on a countdown
@@ -266,10 +308,14 @@ function PlayerControls() {
 
   // A menu or an in-flight sync has to pin the controls open — otherwise the
   // idle timer closes the surface out from under someone mid-selection.
-  // The post-play card pins too. The window is click-through whenever the
-  // controls are hidden, so a card whose buttons appeared without this would
-  // pass every click straight through to mpv — visible, and unpressable.
-  const pinned = menu !== null || party.syncing || roomRailOpen || autoplay !== null
+  // The post-play card pins too: its buttons must not fade (or lose the
+  // cursor — see surfaceIdle) while someone is deciding.
+  const pinned =
+    menu !== null ||
+    party.syncing ||
+    roomRailOpen ||
+    autoplay !== null ||
+    (state.eofReached === true && endedEarlyAt !== null)
 
   const revealControls = useCallback(() => {
     setControlsVisible(true)
@@ -304,7 +350,9 @@ function PlayerControls() {
     }
   }, [revealControls])
 
-  // The window only takes mouse input while there is something to click.
+  // The window takes mouse input for the whole session; what this reports is
+  // the reveal edge, which main uses to decide when the KEYBOARD should
+  // follow the controls (playerBridge's set-interactive handling).
   useEffect(() => {
     setInteractive(controlsVisible || pinned)
   }, [controlsVisible, pinned, setInteractive])
@@ -399,6 +447,17 @@ function PlayerControls() {
     wasPausedRef.current = paused
   }, [paused, tracking])
 
+  // How far through, kept somewhere a callback can read it WITHOUT depending
+  // on it. closePlayer needs the figure at the arbitrary moment somebody
+  // presses the button; closing over `timePos` instead would give it a new
+  // identity roughly eight times a second, and the sleep timer that depends on
+  // it would clear its own timeout before it could ever fire. Declared above
+  // the end-of-file effect, which reads it for the same reason.
+  const progressRef = useRef(0)
+  useEffect(() => {
+    progressRef.current = duration > 0 ? Math.round((timePos / duration) * 100) : 0
+  }, [timePos, duration])
+
   // Natural end of file. mpv reports it as a property rather than an element
   // event, but the consequence is the same as the old onEnded.
   //
@@ -413,12 +472,30 @@ function PlayerControls() {
   // The guard is on the flag rather than on the event, so the case it exists
   // for still works: a title short enough or seeked past such that 80% never
   // fired is still marked at the end.
+  //
+  // "The end" has to mean the end of the FILM, though, not merely the end of
+  // the bytes. A stream that stops short — the cache starved, a debrid link
+  // that went cold — also arrives here as eof-reached, and marking that
+  // watched recorded a film as finished at the point it broke, pushed that
+  // to every tracking service, and told the close that followed it could
+  // delete the very cache a resume would have played from. So the position
+  // is asked as well: an end of file with the playhead nowhere near the end
+  // is a broken stream, and is left exactly as it was found.
   useEffect(() => {
     if (state.eofReached !== true) return
     tracking.savePositionNow()
     if (tracking.markedWatched()) return
+    // Not the end of the film: nothing is marked, and the "ended early"
+    // card (endedEarlyAt above) offers the way back in instead of the
+    // last frame sitting there as if the credits had rolled.
+    if (progressRef.current < WATCHED_FRACTION * 100) return
     ui({ type: 'mark-watched' })
   }, [state.eofReached, tracking, ui])
+
+  const resumeTitle = useCallback(() => {
+    tracking.savePositionNow()
+    ui({ type: 'resume-title' })
+  }, [tracking, ui])
 
   // Saves BEFORE raising the stop, not only via usePlayerTracking's teardown
   // effect — same explicit call the pause and end-of-file paths above already
@@ -430,16 +507,6 @@ function PlayerControls() {
   // partway through an episode leaves a tile that reflects it. Teardown's own
   // save stays as the backstop for the paths that never come through here
   // (the window being destroyed outright).
-  // How far through, kept somewhere a callback can read it WITHOUT depending
-  // on it. closePlayer needs the figure at the arbitrary moment somebody
-  // presses the button; closing over `timePos` instead would give it a new
-  // identity roughly eight times a second, and the sleep timer that depends on
-  // it would clear its own timeout before it could ever fire.
-  const progressRef = useRef(0)
-  useEffect(() => {
-    progressRef.current = duration > 0 ? Math.round((timePos / duration) * 100) : 0
-  }, [timePos, duration])
-
   const closePlayer = useCallback(() => {
     tracking.savePositionNow()
     // The one transition the scrobble effect above cannot observe: the window
@@ -643,9 +710,10 @@ function PlayerControls() {
   // stays coherent for a watch party: both toggles broadcast, so everyone ends
   // up in the same state rather than the host alone.
   //
-  // All of this covers clicks while the controls are up. When they are hidden
-  // the window is click-through and the click reaches mpv instead, which is
-  // what its MBTN_LEFT binding is for (see mpv.ts's bindSafetyKeys).
+  // Controls up or faded, this is THE click path: the window takes every
+  // mouse event for the whole session (see this file's header), so a
+  // stationary click on an idle player lands here and pauses — the embedded
+  // video below processes no mouse input, and nothing else could act on it.
   const pausedBeforeClick = useRef(paused)
   const handleSurfaceClick = useCallback(
     (event: React.MouseEvent<HTMLDivElement>) => {
@@ -683,26 +751,17 @@ function PlayerControls() {
     [party, toggleFullscreen]
   )
 
-  // Input that reached mpv's window instead of this one, because the controls
-  // were hidden and the overlay was click-through (see mpv.ts's bindSafetyKeys
-  // for which inputs, and why they cannot be applied in main). Routed through
-  // the same handlers as a click here, so the two can never drift apart on who
-  // is allowed to pause or on what the party is told.
+  // Input that reached mpv's window instead of this one. Vestigial with the
+  // embedded player — the video child processes no input and never holds
+  // focus (see mpv.ts's bindSafetyKeys), and this window now takes every
+  // mouse event itself — but the route stays wired: if some mpv build ever
+  // does take an event, it lands in exactly the handlers a click here uses,
+  // so the two can never drift apart on who is allowed to pause or on what
+  // the party is told.
   //
   // The handlers are read from a ref rather than listed as dependencies:
   // usePartySync returns a fresh object every render, and re-subscribing an IPC
   // channel that often for a callback that changes nothing would be waste.
-  // Deliberately NOT revealing the controls here, tempting as it is.
-  //
-  // Revealing them makes this window interactive, and that hands mouse
-  // ownership back from mpv within a few milliseconds — long before the second
-  // click of a double-click arrives. That click would then land on this window
-  // instead, where it is the *first* click as far as Chromium's click counting
-  // is concerned, so mpv never reports MBTN_LEFT_DBL and React never sees a
-  // pair: the double-click-to-fullscreen gesture disappears exactly in the
-  // state these bindings exist to serve. Both clicks have to stay with the
-  // window that saw the first one, so the controls stay put and any mouse
-  // movement brings them back as it always has.
   const forwardedInput = useRef({ party, toggleFullscreen })
   useEffect(() => {
     forwardedInput.current = { party, toggleFullscreen }
@@ -756,6 +815,8 @@ function PlayerControls() {
         void command({ type: 'frame-back-step' })
       } else if (event.key === 's' || event.key === 'S') {
         takeScreenshot()
+      } else if (event.key === 'i' || event.key === 'I') {
+        setMenu((current) => (current === 'info' ? null : 'info'))
       }
       revealControls()
     }
@@ -877,7 +938,16 @@ function PlayerControls() {
       // frames for every bucket it happened to share.
       const cacheKey = `${mediaKey}:${bucket}`
       const cached = thumbnailCache.current.get(cacheKey)
-      setPreview({ x, time, url: cached ?? null })
+      const hoveredChapter = chapterRanges.find(
+        (chapter) => time >= chapter.start && time < chapter.end
+      )
+      setPreview({
+        x,
+        time,
+        url: cached ?? null,
+        chapterTitle:
+          hoveredChapter?.title || (hoveredChapter ? `Chapter ${hoveredChapter.index + 1}` : null)
+      })
       if (cached !== undefined) return
       if (scrubDebounce.current) clearTimeout(scrubDebounce.current)
       const requestId = ++scrubRequest.current
@@ -894,7 +964,7 @@ function PlayerControls() {
           .catch(() => {})
       }, 250)
     },
-    [duration, mediaKey]
+    [chapterRanges, duration, mediaKey]
   )
   useEffect(
     () => () => {
@@ -956,23 +1026,26 @@ function PlayerControls() {
     [subtitleDelay, command]
   )
 
-  // --- Friends activity -----------------------------------------------------
-  // Main decides whether this actually goes out (sharing is opt-in). Cleared on
-  // unmount so closing the player takes the activity down with it.
-  const activityRef = useRef({ timePos, paused })
+  // --- Rooms activity -------------------------------------------------------
+  // Main decides where this actually goes out (sharing is opt-in per room).
+  // Cleared on unmount so closing the player takes the activity down with it.
+  const activityRef = useRef({ timePos, paused, duration })
   useEffect(() => {
-    activityRef.current = { timePos, paused }
-  }, [timePos, paused])
+    activityRef.current = { timePos, paused, duration }
+  }, [timePos, paused, duration])
   useEffect(() => {
     if (!media) return
     const publish = (): void => {
-      window.api?.mediaHub?.friends
+      window.api?.mediaHub?.rooms
         ?.setActivity({
           mediaId: media.id,
           kind: media.kind,
           title: media.title,
           poster: media.posterUrl,
           position: activityRef.current.timePos,
+          // What lets a member's tooltip say "62% in" instead of only an
+          // absolute clock reading. Omitted until mpv reports a real one.
+          duration: activityRef.current.duration > 0 ? activityRef.current.duration : undefined,
           paused: activityRef.current.paused
         })
         .catch(() => {})
@@ -981,7 +1054,7 @@ function PlayerControls() {
     const timer = setInterval(publish, 20_000)
     return () => {
       clearInterval(timer)
-      window.api?.mediaHub?.friends?.setActivity(null).catch(() => {})
+      window.api?.mediaHub?.rooms?.setActivity(null).catch(() => {})
     }
   }, [media])
 
@@ -989,12 +1062,38 @@ function PlayerControls() {
 
   return (
     <div
-      className={styles.surface}
+      // surfaceIdle hides the cursor along with the controls. Ours to do now:
+      // this window owns every mouse event, and the input-less video child
+      // beneath it will never hide a cursor parked over the film.
+      className={`${styles.surface} ${controlsVisible || pinned ? '' : styles.surfaceIdle}`}
       onMouseMove={revealControls}
       onClick={handleSurfaceClick}
       onDoubleClick={handleSurfaceDoubleClick}
     >
       <PlayerSessionRail open={roomRailOpen} onClose={() => setRoomRailOpen(false)} />
+
+      {/* Where am I in the show — season/episode and the episode's name,
+          floating top-left, appearing and fading exactly with the bottom
+          bar (same 220ms, same glass) so a mouse-wiggle answers the
+          question and playback stays chrome-free otherwise. Episodic
+          titles only: a film has no coordinates worth a badge. */}
+      {media && (media.seasonNumber != null || media.episodeNumber != null) && (
+        <div
+          className={`${styles.episodeBadge} ${
+            controlsVisible || pinned ? '' : styles.episodeBadgeHidden
+          }`}
+          aria-hidden={!(controlsVisible || pinned)}
+        >
+          <span className={styles.episodeBadgeCode}>
+            {media.seasonNumber != null ? `S${media.seasonNumber}` : ''}
+            {media.seasonNumber != null && media.episodeNumber != null ? ' · ' : ''}
+            {media.episodeNumber != null ? `E${media.episodeNumber}` : ''}
+          </span>
+          {media.episodeTitle && (
+            <span className={styles.episodeBadgeName}>{media.episodeTitle}</span>
+          )}
+        </div>
+      )}
       {buffering && (
         <div className={styles.buffering} aria-live="polite">
           <span className={styles.spinner} aria-hidden="true" />
@@ -1021,6 +1120,24 @@ function PlayerControls() {
       {/* Post-play. Outside the controls bar for the same reason the skip
           button is: it has to be usable without moving the mouse first, and it
           outlives the bar's idle fade. */}
+      {state.eofReached === true && endedEarlyAt !== null && media && (
+        <div className={styles.postPlay} role="dialog" aria-label="The stream ended early">
+          <p className={styles.postPlayLabel}>The stream ended early</p>
+          <p className={styles.postPlayTitle}>
+            {media.title}
+            {` — ${Math.round(endedEarlyAt)}% watched`}
+          </p>
+          <div className={styles.postPlayActions}>
+            <button type="button" className={styles.postPlayPrimary} onClick={resumeTitle}>
+              Resume
+            </button>
+            <button type="button" className={styles.postPlaySecondary} onClick={closePlayer}>
+              Stop
+            </button>
+          </div>
+        </div>
+      )}
+
       {autoplay && autoplayKey && (
         <div
           className={styles.postPlay}
@@ -1094,10 +1211,38 @@ function PlayerControls() {
             seekTo(((event.clientX - rect.left) / rect.width) * duration)
           }}
         >
-          <div
-            className={styles.scrubberFill}
-            style={{ width: duration ? `${(timePos / duration) * 100}%` : '0%' }}
-          />
+          {chapterRanges.length > 0 ? (
+            <div className={styles.chapterSegments} aria-hidden="true">
+              {chapterRanges.map((chapter) => {
+                const chapterProgress = Math.max(
+                  0,
+                  Math.min(1, (timePos - chapter.start) / (chapter.end - chapter.start))
+                )
+                return (
+                  <div
+                    key={`${chapter.index}-${chapter.start}`}
+                    className={`${styles.chapterSegment} ${
+                      chapter.index === currentChapter ? styles.chapterSegmentCurrent : ''
+                    }`}
+                    style={{
+                      left: `${(chapter.start / duration) * 100}%`,
+                      width: `${((chapter.end - chapter.start) / duration) * 100}%`
+                    }}
+                  >
+                    <span
+                      className={styles.chapterSegmentFill}
+                      style={{ width: `${chapterProgress * 100}%` }}
+                    />
+                  </div>
+                )
+              })}
+            </div>
+          ) : (
+            <div
+              className={styles.scrubberFill}
+              style={{ width: duration ? `${(timePos / duration) * 100}%` : '0%' }}
+            />
+          )}
           {preview && (
             <div className={styles.preview} style={{ left: `${preview.x}px` }}>
               {preview.url ? (
@@ -1105,7 +1250,12 @@ function PlayerControls() {
               ) : (
                 <div className={styles.previewPlaceholder} />
               )}
-              <span>{formatTime(preview.time)}</span>
+              <span className={styles.previewMeta}>
+                {preview.chapterTitle && (
+                  <strong className={styles.previewChapter}>{preview.chapterTitle}</strong>
+                )}
+                <span>{formatTime(preview.time)}</span>
+              </span>
             </div>
           )}
         </div>
@@ -1124,6 +1274,12 @@ function PlayerControls() {
           <span className={styles.time}>
             {formatTime(timePos)} / {formatTime(duration)}
           </span>
+
+          {currentChapter >= 0 && chapterRanges.length > 0 && (
+            <span className={styles.currentChapter}>
+              {chapters[currentChapter]?.title || `Chapter ${currentChapter + 1}`}
+            </span>
+          )}
 
           <div className={styles.spacer} />
 
@@ -1192,6 +1348,86 @@ function PlayerControls() {
               )}
             </div>
           )}
+
+          {/* What is playing: the release as the scraper named it, its
+              quality and size as read from that name, where the bytes come
+              from, what mpv is decoding and which tracks are in use. Also on
+              the `i` key. */}
+          <div className={styles.menuWrap}>
+            <button
+              type="button"
+              className={styles.button}
+              onClick={() => setMenu(menu === 'info' ? null : 'info')}
+            >
+              Info
+            </button>
+            {menu === 'info' && (
+              <div className={`${styles.menu} ${styles.infoMenu}`}>
+                <p className={styles.menuHeading}>Now playing</p>
+                {media?.release ? (
+                  <>
+                    <p className={styles.infoRelease} title={media.release.name}>
+                      {media.release.name || '(unnamed release)'}
+                    </p>
+                    <p className={styles.menuNote}>
+                      {[
+                        media.release.resolution ? `${media.release.resolution}p` : null,
+                        media.release.sizeGb ? `${media.release.sizeGb.toFixed(1)} GB` : null,
+                        SOURCE_LABEL[media.release.source] ?? media.release.source
+                      ]
+                        .filter(Boolean)
+                        .join(' · ')}
+                    </p>
+                    <button
+                      type="button"
+                      className={styles.menuItem}
+                      onClick={() => {
+                        void navigator.clipboard
+                          ?.writeText(media.release?.name ?? '')
+                          .catch(() => {})
+                        ui({ tone: 'success', type: 'notify', message: 'Release name copied.' })
+                      }}
+                    >
+                      Copy release name
+                    </button>
+                  </>
+                ) : (
+                  <p className={styles.menuNote}>No release details for this session.</p>
+                )}
+                <p className={styles.menuHeading}>Picture</p>
+                <p className={styles.menuNote}>
+                  {[
+                    state.video?.width && state.video?.height
+                      ? `${state.video.width}×${state.video.height}`
+                      : null,
+                    state.video?.fps ? `${Math.round(state.video.fps * 100) / 100} fps` : null,
+                    state.video?.codec ? state.video.codec.toUpperCase() : null,
+                    state.video?.hwdec
+                      ? state.video.hwdec === 'no'
+                        ? 'software decode'
+                        : `${state.video.hwdec} decode`
+                      : null
+                  ]
+                    .filter(Boolean)
+                    .join(' · ') || 'Waiting for the decoder…'}
+                </p>
+                <p className={styles.menuHeading}>Tracks</p>
+                <p className={styles.menuNote}>
+                  Audio:{' '}
+                  {audioTracks.find((t) => t.ordinal === state.audioOrdinal)?.label ??
+                    audioTracks[0]?.label ??
+                    '—'}
+                </p>
+                <p className={styles.menuNote}>
+                  Subtitles:{' '}
+                  {state.subtitleOrdinal != null && state.subtitleOrdinal >= 0
+                    ? (subtitleTracks.find((t) => t.ordinal === state.subtitleOrdinal)?.label ??
+                      '—')
+                    : 'Off'}
+                </p>
+              </div>
+            )}
+          </div>
 
           <div className={styles.menuWrap}>
             <button
@@ -1532,42 +1768,6 @@ function PlayerControls() {
             )}
           </div>
 
-          {/* Absent rather than disabled when a release carries no chapter
-              marks, which is most of them — a permanently greyed-out button is
-              a worse answer than no button. */}
-          {chapters.length > 0 && (
-            <div className={styles.menuWrap}>
-              <button
-                type="button"
-                className={styles.button}
-                onClick={() => setMenu(menu === 'chapters' ? null : 'chapters')}
-                aria-expanded={menu === 'chapters'}
-                disabled={locked}
-              >
-                Chapters
-              </button>
-              {menu === 'chapters' && (
-                <div className={`${styles.menu} ${styles.chapterMenu}`}>
-                  {chapters.map((chapter, index) => (
-                    <button
-                      key={`${index}-${chapter.time}`}
-                      type="button"
-                      className={styles.menuItem}
-                      onClick={() => {
-                        void command({ type: 'set-chapter', index })
-                        setMenu(null)
-                      }}
-                    >
-                      {chapter.title || `Chapter ${index + 1}`}
-                      {index === currentChapter ? ' ✓' : ''}
-                      <span className={styles.menuItemNote}>{formatTime(chapter.time)}</span>
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
-
           {/* Fit/fill. mpv applies both underlying properties to the frame
               already on screen, so every option here is instant — there is no
               reload and no reseek behind any of them. */}
@@ -1653,9 +1853,9 @@ function PlayerControls() {
             className={styles.button}
             onClick={() => setRoomRailOpen((open) => !open)}
             aria-pressed={roomRailOpen}
-            aria-label="Open room rail"
+            aria-label="Open the Watch Party and Rooms rail"
           >
-            Room
+            Party
           </button>
 
           <button

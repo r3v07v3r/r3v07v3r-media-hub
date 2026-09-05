@@ -22,6 +22,8 @@
 // ever encounter, precisely because the version is written transactionally.
 
 import type { DatabaseSync } from 'node:sqlite'
+import { hasExpressibleSimklId } from '../../shared/media-hub/serviceIds'
+import { logError } from './logger'
 
 interface Migration {
   /** Human label, for the log line — the version number is the index. */
@@ -241,8 +243,253 @@ const profilesAndPlays: Migration = {
   }
 }
 
+/**
+ * Migration 2 — the accumulating title index.
+ *
+ * The browse catalog used to live in `catalog_cache` as ONE row per kind: a
+ * single JSON blob holding the whole crawl, rewritten wholesale every six
+ * hours and read back in full on every `catalog:list`. That shape is what
+ * capped the library — not the sources, which go far deeper (Cinemeta still
+ * returns full pages past skip=20000 for movies, and Kitsu reports 22,317
+ * anime). A blob has to be small enough to parse and ship on the launch path,
+ * so the crawl had to stay shallow, and every refresh REPLACED it — a title
+ * that fell out of Cinemeta's top window fell out of the library with it.
+ *
+ * Rows here accumulate instead. A crawl upserts what it saw and touches
+ * nothing else, so the index only ever grows and `first_seen` survives every
+ * later refresh of the same title.
+ *
+ * NOT profile-scoped, unlike migration 1's tables. This is shared cache data,
+ * the same as `catalog_cache` (which migration 1 also left alone): what
+ * Cinemeta lists is not a fact about who is signed in, and duplicating tens
+ * of thousands of rows per profile would be pure waste.
+ *
+ * NO PER-EPISODE DATA, deliberately. Episode positions are what make a series
+ * entry several times heavier than a movie one, and the only thing that reads
+ * them off a catalog entry is the browse grid's "Completed" badge — which can
+ * only ever be true for a title that has watch history (see isSeriesCompleted
+ * in the renderer's adapters.ts). So the counts live here for the grid's
+ * season/episode labels, and `completed` is computed against `watch_history`
+ * at query time for the handful of ids that have any. Full episode lists stay
+ * where they already are: metadata()'s own 24h per-title cache.
+ *
+ * Genres get their own table because they are a many-to-many filter facet. A
+ * JSON column would force a scan of every row for every genre filter and for
+ * every "which genres exist" query the filter bar asks.
+ *
+ * `title_sort` is the lowercased title and nothing more — NOT article-stripped.
+ * The sort it has to reproduce is `title.localeCompare(title)`, which files
+ * "The Matrix" under T; stripping articles here would change what the A-Z sort
+ * means as a side effect of moving it into SQL. See catalogFields.ts.
+ *
+ * The typed columns (`year`, `rating`, `runtime_min`) are derived by the same
+ * shared parsers the renderer uses to build a MediaItem, for the same reason:
+ * a filter must not mean one thing in SQL and another in memory. Anything that
+ * does not parse stays NULL rather than becoming 0, so "unknown year" and
+ * "year 0" remain distinguishable to every query.
+ */
+const catalogIndex: Migration = {
+  name: 'catalog-index',
+  apply(sql) {
+    sql.exec(`
+      CREATE TABLE catalog_index(
+        id TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        title TEXT NOT NULL,
+        title_sort TEXT NOT NULL,
+        year INTEGER,
+        rating REAL,
+        runtime_min INTEGER,
+        status TEXT,
+        poster TEXT,
+        background TEXT,
+        logo TEXT,
+        description TEXT,
+        total_seasons INTEGER,
+        total_episodes INTEGER,
+        simkl_id TEXT,
+        grouped_ids TEXT,
+        rank INTEGER,
+        source TEXT,
+        first_seen INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY(id, kind)
+      );
+      CREATE TABLE catalog_index_genre(
+        id TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        genre TEXT NOT NULL,
+        PRIMARY KEY(id, kind, genre)
+      );
+      CREATE INDEX idx_cindex_browse ON catalog_index(kind, rank);
+      CREATE INDEX idx_cindex_year ON catalog_index(kind, year DESC);
+      CREATE INDEX idx_cindex_rating ON catalog_index(kind, rating DESC);
+      CREATE INDEX idx_cindex_title ON catalog_index(kind, title_sort);
+      CREATE INDEX idx_cindex_genre ON catalog_index_genre(kind, genre);
+    `)
+  }
+}
+
+/**
+ * Migration 3 — how many of a series' episodes have actually aired.
+ *
+ * The browse grid's "Completed" badge is not "every episode watched", it is
+ * "every episode that has AIRED watched" — a show someone is fully caught up
+ * on counts, or a still-running series could never earn the badge (see
+ * isSeriesCompleted and airedEpisodes in the renderer's adapters.ts). That
+ * denominator used to come from the per-episode `videos` array on the catalog
+ * blob, and migration 2 deliberately stopped storing per-episode data at all,
+ * because it is what made a series row several times heavier than a movie one.
+ *
+ * So the COUNT is stored instead of the episodes. It is computed at crawl time
+ * with exactly the rule airedEpisodes applies — not unplayable, and either no
+ * release date or one already past — which matters for the two sources
+ * behaving differently: Cinemeta ships a real date per episode, so this is a
+ * genuine aired count, while Kitsu's synthesized episodes carry none, and
+ * `!released` counts as aired there, so it equals the total. Both are what
+ * the in-memory version already concluded from the same data.
+ *
+ * It goes stale between crawls, by at most the six-hour refresh interval, and
+ * only ever in the direction of under-counting a just-aired episode. That is
+ * the honest trade for not storing tens of thousands of episode rows: a badge
+ * that appears a few hours late, rather than a denominator that is wrong in
+ * both directions forever.
+ *
+ * Nullable, and NOT backfilled: rows written by migration 2's crawl have no
+ * aired count and must read as "unknown" rather than as zero, or every series
+ * already in the index would read as complete-with-nothing-aired until its
+ * next refresh. The next crawl fills it.
+ */
+const airedEpisodes: Migration = {
+  name: 'aired-episode-counts',
+  apply(sql) {
+    sql.exec('ALTER TABLE catalog_index ADD COLUMN aired_episodes INTEGER')
+  }
+}
+
+/** The columns the ghost-row cleanup below reads for every history row. */
+export interface HistoryRowForCleanup {
+  profile_id: string
+  watch_key: string
+  content_id: string
+  type: string
+  title: string
+  season: number | null
+  episode: number | null
+}
+
+/** mockData.ts's id scheme, exactly: nextId('m'|'s'|'a') → "m-10". Anchored
+ *  on both ends so nothing merely id-shaped (a hypothetical "m-10x" from a
+ *  future source) is ever swept up with the demo pool. */
+const MOCK_ID = /^[msa]-\d+$/
+
+/**
+ * Which history rows are demo-id GHOSTS: rows whose content_id is a
+ * mockData demo id AND that duplicate a row the same profile already has
+ * for the same title at the same (season, episode) coordinate under a
+ * real, service-expressible id.
+ *
+ * Both halves of that condition are load-bearing. A demo-id row WITHOUT a
+ * real twin is still the only record that the person marked that title
+ * watched — deleting it would erase a watch rather than a duplicate, so it
+ * stays (the sync review's "Use Simkl" offers to remove it, with a human
+ * deciding — see PR #144). And a real-id row that happens to share a title
+ * is never touched at all: only the mock-id side of a duplicate pair is
+ * ever a candidate.
+ *
+ * Exported for the migration test — the migration itself is exercised
+ * through migrate(), but the cross-profile and coordinate edge cases are
+ * cheaper to pin down against this pure function directly.
+ */
+export function findDemoGhostHistoryRows(rows: HistoryRowForCleanup[]): HistoryRowForCleanup[] {
+  // Title-matching is case-insensitive and whitespace-trimmed: the mock
+  // row's title came from mockData.ts and the real row's from Cinemeta,
+  // and "the same film entered twice" must not survive on a stray space.
+  const coordKey = (row: HistoryRowForCleanup): string =>
+    [
+      row.profile_id,
+      row.type,
+      String(row.title).trim().toLowerCase(),
+      row.season ?? '',
+      row.episode ?? ''
+    ].join(' ')
+  const realKeys = new Set(
+    rows.filter((row) => hasExpressibleSimklId(String(row.content_id))).map(coordKey)
+  )
+  return rows.filter((row) => MOCK_ID.test(String(row.content_id)) && realKeys.has(coordKey(row)))
+}
+
+/**
+ * Migration 4 — remove the demo-id ghost duplicates from watch history.
+ *
+ * mockData's demo pool leaked into real user data: openDetail() on an AI
+ * assistant fallback pick led to a detail page whose "mark watched" wrote
+ * the mock id into watch_history. Diagnosed on the live install as three
+ * rows (m-10/m-11/m-13 — Interstellar, The Martian, Ex Machina, all
+ * stamped 2026-08-24 within ~15 seconds) duplicating films already tracked
+ * under their real IMDb ids; they then sat in the Simkl sync review as
+ * rows no resolution could ever clear (PR #144 has that post-mortem). The
+ * write path is now refused at the IPC boundary (tracking.ts's
+ * assertLibraryWritableId); this is the other half — the rows already
+ * written come out, once, on the same one-shot transactional terms as
+ * every other schema repair.
+ *
+ * Scope is deliberately findDemoGhostHistoryRows' (see its comment): only
+ * mock-id rows that DUPLICATE a real-id row go, because for those the real
+ * row still carries the watch and nothing is lost. Their `plays` rows go
+ * with them — migration 1's backfill (and every markWatched since) gave
+ * each ghost a play, and a viewing record for a mark-watched click on a
+ * demo card double-counts the film in viewing stats. Matched by the same
+ * (profile, content_id, season, episode) coordinate so a mock row that
+ * SURVIVES (no real twin) keeps its plays.
+ *
+ * The deletion is logged — ids only, per the log's own discipline (see
+ * PR #144's flush line) — rather than silently applied: a migration runs
+ * before any renderer exists to show a notice, and a log line naming the
+ * removed ids is what lets "where did that row go" be answered later.
+ * Nothing here is unrecoverable in the way the log line implies urgency:
+ * every deleted row's twin remains under its real id.
+ */
+const demoGhostHistoryCleanup: Migration = {
+  name: 'demo-ghost-history-cleanup',
+  apply(sql) {
+    const rows = sql
+      .prepare(
+        'SELECT profile_id, watch_key, content_id, type, title, season, episode FROM watch_history'
+      )
+      .all() as unknown as HistoryRowForCleanup[]
+    const ghosts = findDemoGhostHistoryRows(rows)
+    if (!ghosts.length) return
+    const deleteHistory = sql.prepare(
+      'DELETE FROM watch_history WHERE profile_id = ? AND watch_key = ?'
+    )
+    // COALESCE against a sentinel no real coordinate uses, because
+    // `season = NULL` matches nothing in SQL and a movie ghost's plays
+    // (season/episode both NULL) would otherwise all survive.
+    const deletePlays = sql.prepare(
+      `DELETE FROM plays WHERE profile_id = ? AND content_id = ?
+         AND COALESCE(season, -1) = COALESCE(?, -1) AND COALESCE(episode, -1) = COALESCE(?, -1)`
+    )
+    for (const ghost of ghosts) {
+      deleteHistory.run(ghost.profile_id, ghost.watch_key)
+      deletePlays.run(ghost.profile_id, ghost.content_id, ghost.season, ghost.episode)
+    }
+    logError(
+      'migration:demo-ghost-history-cleanup',
+      `removed ${ghosts.length} demo-id ghost row(s) duplicating real-id history: ` +
+        ghosts.map((ghost) => ghost.watch_key).join(',')
+    )
+  }
+}
+
 /** Ordered, and the order IS the version. Append only. */
-const MIGRATIONS: readonly Migration[] = [baseline, profilesAndPlays]
+const MIGRATIONS: readonly Migration[] = [
+  baseline,
+  profilesAndPlays,
+  catalogIndex,
+  airedEpisodes,
+  demoGhostHistoryCleanup
+]
 
 /** How many migrations exist — a database at this version is fully current. */
 export const SCHEMA_VERSION = MIGRATIONS.length

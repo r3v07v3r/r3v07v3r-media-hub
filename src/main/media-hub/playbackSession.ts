@@ -24,6 +24,7 @@
 import { app } from 'electron'
 import crypto from 'node:crypto'
 import fs from 'node:fs'
+import fsp from 'node:fs/promises'
 import path from 'node:path'
 
 import { MEDIA_HUB_CHANNELS } from '../../shared/media-hub/ipc-channels'
@@ -32,10 +33,13 @@ import type {
   MediaTracks,
   PlaybackResult,
   StreamCacheEntry,
+  StreamCacheUsage,
   SubtitleSelection,
   SubtitlesApplyResult
 } from '../../shared/media-hub/types'
 import { handle } from './ipcGuard'
+import { languageName, tracksLackLanguage } from '../../shared/media-hub/language'
+import { sendToRenderer } from './rendererBridge'
 import { getPlaybackBufferSeconds } from '../../shared/media-hub/playbackBuffer'
 import { normalizeVideoScaling } from '../../shared/media-hub/videoScaling'
 import type { PlayerSessionMedia } from '../../shared/media-hub/player'
@@ -57,10 +61,12 @@ import {
 import { readSettings } from './settingsStore'
 import { setPressure } from './taskScheduler'
 import {
+  cacheRootDir,
   clearAllSessions,
   createStreamCache,
   deleteCacheSession,
   listCacheSessions,
+  memoryModeEnabled,
   MIN_CACHE_BYTES
 } from './streamCache'
 import { downloadSubtitleText } from './subtitlesService'
@@ -96,6 +102,10 @@ const streamCache = createStreamCache()
 // it fired at import time, before a window even existed, competing with
 // the app getting on screen for a sweep of directories that had already
 // been there for days and could wait ten more minutes.
+
+// The scrub-bar thumbnail's serialiser — see the playbackThumbnail handler.
+let thumbnailRequest = 0
+let thumbnailInFlight: Promise<void> = Promise.resolve()
 
 let activeMediaUrl = ''
 // StreamCache's local server URL for the current title — what mpv actually
@@ -133,6 +143,28 @@ export function subtitleCacheDir(): string {
  *  capture reads from, for the same reason: no second connection to the
  *  remote link. Used by movieHash.ts to hash the exact release somebody is
  *  actually watching for a frame-accurate subtitle search. */
+/**
+ * Re-applies the storage answer to whatever is playing right now.
+ *
+ * Called when the setting changes rather than only when a session starts,
+ * because the change that matters most is the one made mid-film: without
+ * this, "do not keep media on this device" took effect on the NEXT title
+ * and the current one carried on filling the disk.
+ */
+export async function applyStoragePolicyToPlayback(): Promise<void> {
+  await streamCache.applyStoragePolicy()
+  // THE SESSIONS THAT ARE NOT PLAYING MATTER JUST AS MUCH. Somebody who
+  // has watched three films and then says "keep nothing on this device"
+  // has three session directories on their disk, and at most one of them
+  // is the live one the call above deals with. Leaving the rest to the 24h
+  // prune makes the setting true of the next film and not of the ones
+  // already sitting there, which is not what it says.
+  //
+  // clearAllSessions skips whatever is in activeCacheTokens, so the live
+  // session is not pulled out from under the player mid-frame.
+  if (memoryModeEnabled()) await clearAllSessions()
+}
+
 export function activeStreamUrl(): string {
   return activeCacheUrl
 }
@@ -299,6 +331,19 @@ async function openPlayback(
     videoScaling: normalizeVideoScaling(settings.videoScaling)
   })
   activeMediaTracks = tracks
+  // The ranking preferred a release that declared the wanted audio, and mpv
+  // asked the container for it (--alang); this is the one place that knows
+  // whether either worked. Said once, as a toast, so "why is this episode
+  // in Japanese" has an answer — and the Audio menu is right there.
+  const wantedAudio = settings.audioLanguage ?? ''
+  if (tracksLackLanguage(tracks, wantedAudio)) {
+    const playing = tracks.audio[0]?.label || tracks.audio[0]?.language || 'another language'
+    sendToRenderer(MEDIA_HUB_CHANNELS.playerUiEvent, {
+      type: 'notify',
+      tone: 'info',
+      message: `No ${languageName(wantedAudio)} audio in this release — playing ${playing}.`
+    })
+  }
   // Now that mpv has opened the file, hand its duration to the cache so the
   // retention window can size itself in bytes rather than chunk counts.
   streamCache.setDuration(tracks.durationSeconds)
@@ -322,7 +367,11 @@ async function openPlayback(
         kind: cacheMeta.mediaKind ?? 'movie',
         seasonNumber: cacheMeta.seasonNumber,
         episodeNumber: cacheMeta.episodeNumber,
-        posterUrl: cacheMeta.posterUrl
+        episodeTitle: cacheMeta.episodeTitle,
+        posterUrl: cacheMeta.posterUrl,
+        // A tier-1 replay is handed thin metadata (no release: the local
+        // candidate never knew one); the session's own manifest does.
+        release: cacheMeta.release ?? cacheResult.meta?.release
       }
     : null
   pushSessionSnapshot({
@@ -458,7 +507,30 @@ export function registerPlaybackIpc(): void {
     MEDIA_HUB_CHANNELS.playbackThumbnail,
     async (_event, seconds) => {
       if (!activeCacheUrl) return null
-      return captureThumbnail(mpvPath, activeCacheUrl, Number(seconds) || 0)
+      const at = Number(seconds) || 0
+      // One capture at a time, and only the latest asked for. A hover across
+      // the scrub bar raises one of these per 250ms bucket, and each spawns
+      // a whole mpv against the live cache; letting them run side by side
+      // multiplied the reads competing with the film. The ones a faster
+      // hover has already superseded answer nothing rather than queueing.
+      const mine = ++thumbnailRequest
+      await thumbnailInFlight
+      if (mine !== thumbnailRequest) return null
+      // Never from bytes that are not on disk yet. A read of an uncached
+      // region is served by pulling the upstream connection away from the
+      // playhead (streamCache's excursions), and a preview is worth nothing
+      // if it costs the film a stall. Two layers: an estimate here spares
+      // spawning an mpv that would fail, and the `?cached=1` mark on the
+      // URL makes the server itself refuse the capture the moment it reads
+      // anything not on disk — which is exact, where the estimate (a
+      // timestamp against the file's average rate) cannot be.
+      if (!streamCache.isPositionCached(at)) return null
+      const capture = captureThumbnail(mpvPath, `${activeCacheUrl}?cached=1`, at)
+      thumbnailInFlight = capture.then(
+        () => undefined,
+        () => undefined
+      )
+      return capture
     }
   )
 
@@ -490,6 +562,24 @@ export function registerPlaybackIpc(): void {
   handle<undefined, StreamCacheEntry[]>(MEDIA_HUB_CHANNELS.streamCacheList, async () =>
     listCacheSessions(streamCache.getActiveToken())
   )
+
+  handle<undefined, StreamCacheUsage>(MEDIA_HUB_CHANNELS.streamCacheUsage, async () => {
+    const sessions = await listCacheSessions(streamCache.getActiveToken())
+    const directory = cacheRootDir()
+    let freeBytes: number | null = null
+    try {
+      const stat = await fsp.statfs(directory)
+      freeBytes = stat.bavail * stat.bsize
+    } catch {
+      // statfs is not universal. Null rather than 0: an absence is honest,
+      // and "0 bytes free" would be both alarming and untrue.
+    }
+    return {
+      usedBytes: sessions.reduce((sum, entry) => sum + entry.cachedBytes, 0),
+      freeBytes,
+      directory
+    }
+  })
 
   handle<{ token?: unknown } | undefined, { ok: true }>(
     MEDIA_HUB_CHANNELS.streamCacheDelete,

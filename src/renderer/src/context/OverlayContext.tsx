@@ -40,6 +40,23 @@ import type { AppNotification, MediaItem } from '@renderer/types'
 
 /** How long a toast stays on screen before it removes itself. */
 const NOTIFICATION_TTL_MS = 4200
+/** Errors get longer: they are read after the fact, not glanced at. */
+const ERROR_TTL_MS = 10_000
+
+/**
+ * When a toast removes itself, or null for one that waits to be dismissed.
+ *
+ * An error that offers an action — "Couldn't start playback. Retry" — used
+ * to vanish on the same 4.2s timer as "Synced 3 titles", taking its only
+ * Retry with it. Two seconds of that were spent looking at a spinner, so
+ * what a person saw was a Play button that did nothing and no explanation
+ * anywhere. Such a toast now stays until the action is taken or it is
+ * dismissed with its own close control (NotificationLayer offers one).
+ */
+function notificationTtlMs(notification: Pick<AppNotification, 'tone' | 'action'>): number | null {
+  if (notification.tone !== 'error') return NOTIFICATION_TTL_MS
+  return notification.action ? null : ERROR_TTL_MS
+}
 
 export interface ContextMenuTarget {
   x: number
@@ -88,10 +105,12 @@ export function OverlayProvider({ children }: { children: React.ReactNode }) {
       notificationSeq += 1
       const id = `n-${notificationSeq}`
       setNotifications((prev) => [...prev, { ...notification, id, createdAt: Date.now() }])
+      const ttl = notificationTtlMs(notification)
+      if (ttl === null) return
       const timer = setTimeout(() => {
         timers.current.delete(id)
         setNotifications((prev) => prev.filter((x) => x.id !== id))
-      }, NOTIFICATION_TTL_MS)
+      }, ttl)
       timers.current.set(id, timer)
     },
     []

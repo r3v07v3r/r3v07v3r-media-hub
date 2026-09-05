@@ -19,16 +19,23 @@
 // job.
 
 import type {
+  CatalogFacets,
   CatalogItem,
   CatalogListing,
+  CatalogQuery,
+  CatalogQueryResult,
   ConnectResult,
+  DeepScanEvent,
+  CatalogByIdsResult,
+  DeepScanReport,
   Episode,
   MediaKind,
   PersonCreditsResult,
-  TitleCollectionResult,
-  WatchProvidersResult
+  TitleCollectionResult
 } from '../../shared/media-hub/types'
 import { MEDIA_HUB_CHANNELS } from '../../shared/media-hub/ipc-channels'
+import { sendToRenderer } from './rendererBridge'
+import { planDeepScanBatch } from './deepScanRules'
 import { fetchJson } from './httpClient'
 import { logError } from './logger'
 import { getDatabase } from './dbState'
@@ -49,13 +56,22 @@ import {
   type RawApiPayload
 } from './core'
 import { isLikelyFranchiseSibling, rankSimilarTitles } from '../../shared/media-hub/catalog-logic'
-import { coalesce, coalesceScope, mapWithLimit, type TaskPriority } from './taskScheduler'
-import { buildGroupedAnimeVideos, groupAnimeCatalog, kitsuRealEpisodes } from './animeSeasons'
+import { coalesce, coalesceScope, PRIORITY_RANK, type TaskPriority } from './taskScheduler'
+import {
+  ANIME_GROUPED_KEY,
+  buildGroupedAnimeVideos,
+  groupAnimeCatalog,
+  groupedIdsFor,
+  invalidateAnimeGroupIndex,
+  kitsuRealEpisodes,
+  groupedVideosAreComplete
+} from './animeSeasons'
 import { omdbRottenTomatoesRating } from './omdb'
 import { searchCredits, titleCredits, titlesFeaturing } from './credits'
 import { titleCollection } from './collection'
 import { contentRating } from './contentRating'
-import { watchProviders, watchRegion } from './watchProviders'
+import { watchRegion } from './watchProviders'
+import { metaCacheKey } from './titleNames'
 
 const catalogUrls: Record<'movie' | 'series', string> = {
   movie: 'https://v3-cinemeta.strem.io/catalog/movie/top.json',
@@ -73,8 +89,9 @@ const catalogUrls: Record<'movie' | 'series', string> = {
 const SIMKL_TRENDING_SPANS = ['today', 'week', 'month'] as const
 
 /**
- * How many 100-entry pages of Cinemeta's top catalog to walk per kind,
- * beyond the first.
+ * How many pages of Cinemeta's top catalog to walk per kind, beyond the
+ * first. With CINEMETA_PAGE_SIZE below, 39 + 1 pages is 2,000 titles per
+ * kind.
  *
  * This is the source that actually makes the library big: Simkl's own
  * feeds are capped at the ~600 unique titles above no matter how they are
@@ -83,34 +100,94 @@ const SIMKL_TRENDING_SPANS = ['today', 'week', 'month'] as const
  * depended on — only more of what is already there, via the addon
  * protocol's `skip=` pagination.
  *
+ * Was 12, which — with the page-size bug below — was 649 unique series.
+ * The ceiling is not upstream: probed live, the movie catalog still
+ * returns full pages past `skip=20000` and series past `skip=10000`, so
+ * even at 40 pages this reads roughly the first tenth of what Cinemeta
+ * will serve. What bounds it is the shape of the cache, not the API. This
+ * catalog is ONE row and one IPC payload per kind, and series is the
+ * expensive kind: ~2.6KB of episode positions per entry against a movie's
+ * ~0.7KB.
+ *
+ * Measured end-to-end against the live catalog, walking exactly what this
+ * constant now generates: the series crawl goes from 649 titles / 4.04MB
+ * to 1,999 titles / 5.20MB — 3.1x the titles for 1.3x the bytes. That
+ * trade only exists because `lightweight` (see normalizeMeta) took the
+ * per-episode prose out first; without it the same crawl is 12.12MB.
+ * Going deeper again means paging the catalog rather than turning this
+ * number up.
+ *
+ * Request cost is not the constraint either — 40 per kind, six-hourly, at
+ * `maintenance`, through a cinemeta lane that allows 4 at a time with an
+ * 80ms gap.
+ *
  * Every page is fetched independently and a failed page contributes
  * nothing rather than failing the catalog (see cinemetaPages). That
  * matters beyond ordinary robustness: it means the worst case for this
  * whole expansion is the library staying exactly the size it is today.
  */
-const CINEMETA_EXTRA_PAGES = 12
-const CINEMETA_PAGE_SIZE = 100
+const CINEMETA_EXTRA_PAGES = 39
+
+/**
+ * The number of entries one Cinemeta catalog page actually returns, and so
+ * the stride between consecutive `skip=` offsets.
+ *
+ * This was 100, which was simply wrong about the upstream: Cinemeta serves
+ * 50. Verified against the live endpoint — `skip=0`, `skip=50` and
+ * `skip=100` each return 50 metas, and the 50 at `skip=50` appear in
+ * NEITHER of the other two. Striding by 100 therefore fetched half the
+ * catalog and silently skipped the other half, one 50-title block at a
+ * time, all the way down. Nothing surfaced it because a short page is
+ * indistinguishable from a deep one here: every page is a valid response
+ * of the expected shape, so there was no error to log and no gap to see.
+ *
+ * Consequence of the fix on its own: the same 13 requests that were
+ * returning 650 titles out of the first 1,300 slots now return 650
+ * contiguous ones. The depth above is what turns that into more titles.
+ */
+const CINEMETA_PAGE_SIZE = 50
 
 const CATALOG_TTL_MS = 6 * 60 * 60 * 1000
 
 /**
- * Marks that the anime catalog currently in cache has been through the
- * franchise-grouping pass.
+ * STAGE 4: how many titles per kind cross the IPC boundary to the
+ * renderer. Applied at the catalog:list HANDLER, not inside
+ * catalogListing — main-side consumers (home:personalized's ranking,
+ * the crawl, index seeding) keep the full blob in-process.
  *
- * Needed because the pass takes minutes and the raw catalog is cached
- * before it starts. Quit in between — closing the app during a crawl is
- * hardly exotic — and the next launch finds a perfectly valid six-hour
- * cache entry, returns it without ever reaching the grouping call, and
- * shows one tile per season for every multi-season franchise until that
- * entry expires. The hourly refresh honours the same cache, so it does
- * not rescue it either.
- *
- * A marker rather than inspecting the catalog for groupedIds: "no item
- * has any siblings" is indistinguishable from "never grouped" by
- * inspection, and guessing wrong there means re-running the largest
- * background job in the app on every cache hit, forever.
+ * The blob is popularity/trending-ordered by construction (Simkl
+ * trending first, then Cinemeta's top pages in order; Kitsu by
+ * popularity rank), so the head IS the candidate pool: the rails, the
+ * mood browser and the hero fallback only ever rank a top slice, and a
+ * thousand is deeper than any of them reach. Everything that needs a
+ * title REGARDLESS of popularity — the browse grid, My Stuff's tabs,
+ * the Planned row — reads the index (catalog:query / catalog:byIds)
+ * since stage 3/4 and never sees this bound.
  */
-const ANIME_GROUPED_KEY = 'catalog:v2:anime:grouped'
+const CANDIDATE_POOL_LIMIT = 1000
+
+/**
+ * STAGE 5: the user-triggered deep scan, one chunk per press.
+ *
+ * The standing crawl's depth is bounded by the shape of the cache blob
+ * (CINEMETA_EXTRA_PAGES' own comment: roughly a tenth of what Cinemeta
+ * serves). The deep scan escapes that bound the only honest way: it
+ * writes THE INDEX ONLY. The blob, the cache row, the pool and the
+ * renderer's memory never grow — the browse grid, search, filters and
+ * the exact totals (all index-backed since stage 3) are what get
+ * deeper.
+ */
+const DEEP_SCAN_CINEMETA_PAGES = 40
+const DEEP_SCAN_KITSU_PAGES = 50
+const KITSU_PAGE_SIZE = 20
+const DEEP_SCAN_OFFSET_KEY = 'deepscan:v1'
+/** How long a persisted `exhausted` short-circuits further presses. The
+ *  upstream catalogs do grow, so exhaustion is a fact with a shelf life —
+ *  a day keeps repeated presses from re-walking 40 pages of nothing while
+ *  still letting next week's press discover next week's titles. */
+const EXHAUSTED_RECHECK_MS = 24 * 60 * 60 * 1000
+/** Effectively forever — the offset is a bookmark, not a cache. */
+const DEEP_SCAN_STATE_TTL_MS = 10 * 365 * 24 * 60 * 60 * 1000
 
 /**
  * How deep into Kitsu's popularity ranking the anime crawl walks, in
@@ -206,47 +283,11 @@ function runAnimeGrouping(items: CatalogItem[], generation: number): void {
   animeGrouping = { generation, promise }
 }
 
-/**
- * Which franchise siblings each crawled anime has, by catalog id.
- *
- * This exists to keep a multi-megabyte JSON.parse off the metadata path.
- * getCache is a synchronous SQLite read followed by a parse of the WHOLE
- * catalog blob, and the groupedIds lookup below runs for every anime whose
- * metadata is being resolved — which, on a launch with a cold metadata
- * cache, is once per tracked anime. Parsing two thousand catalog entries
- * per tracked title, on the thread that answers the window, is precisely
- * the kind of stall this whole change set exists to remove.
- *
- * Only the ids are kept, not the entries: this is the one field the hot
- * path needs, and holding the full parsed catalog in memory to serve it
- * would trade a repeated parse for a permanent tens-of-megabytes
- * footprint. The rarely-taken fallback path further down still reads the
- * whole catalog, because it genuinely needs whole entries and only runs
- * when a live metadata fetch has already failed.
- *
- * Invalidated by hand rather than given a TTL, because there are exactly
- * two writers (catalogData and the grouping pass) and both are in this
- * file — a stale index here would mean a grouped anime silently losing
- * its later seasons, which is not something to leave to a timer.
- */
-let animeGroupIndex: Map<string, string[]> | null = null
-
-function invalidateAnimeGroupIndex(): void {
-  animeGroupIndex = null
-}
-
-function groupedIdsFor(catalogId: string): string[] | undefined {
-  if (!animeGroupIndex) {
-    const items =
-      getDatabase().getCache<CatalogItem[]>('catalog:v2:anime', { allowExpired: true }) || []
-    animeGroupIndex = new Map(
-      items
-        .filter((item) => item.groupedIds?.length)
-        .map((item) => [String(item.id), item.groupedIds as string[]])
-    )
-  }
-  return animeGroupIndex.get(String(catalogId))
-}
+// groupedIdsFor/invalidateAnimeGroupIndex (which franchise siblings each
+// crawled anime has, by catalog id, and the cache-invalidation hook the
+// grouping pass and catalogData use) now live in animeSeasons.ts alongside
+// resolveAnimeGroupTarget, the inverse lookup every tracker sync (MAL,
+// Trakt, Simkl) needs — see that module for the full doc.
 
 /** Cached (7d) Kitsu genre/category titles for one anime id. */
 async function kitsuCategories(id: string, priority: TaskPriority): Promise<string[]> {
@@ -322,129 +363,17 @@ async function cinemetaPages(
           {},
           { priority, label: `${kind} catalog (page ${index + 1})` }
         )
-        return (result.metas || []).map((x) => normalizeMeta(x, kind))
+        // `lightweight`: a crawl path, so the per-episode prose Cinemeta
+        // ships with every series meta is dropped and only the episode
+        // POSITIONS are kept — see normalizeMeta. Nothing reads that prose
+        // from a catalog entry, and at this depth it was the single
+        // largest thing in the cache row.
+        return (result.metas || []).map((x) => normalizeMeta(x, kind, true))
       } catch {
         return []
       }
     })
   )
-}
-
-/**
- * The TMDB lists this app pulls into the catalog, per kind.
- *
- * Not the same list for both: TMDB has no "upcoming" endpoint for TV — its
- * whole now-playing/upcoming distinction is a movie-release-window concept
- * that a show's episodic schedule doesn't map onto — so a series catalog
- * asking for one would be shipping a made-up answer rather than an absent
- * one. `on_the_air` (currently airing) is the honest analogue.
- */
-const TMDB_CURATED_LISTS: Record<'movie' | 'series', string[]> = {
-  movie: ['now_playing', 'upcoming', 'top_rated'],
-  series: ['on_the_air', 'top_rated']
-}
-
-/** How many pages of each TMDB list to pull, and the id-resolution cost that
- *  bounds it: every item pulled costs one `external_ids` request below, so
- *  three lists at two pages of twenty is up to 120 of those per catalog
- *  build — real, but background-priority and six-hourly, the same terms
- *  the rest of this crawl already runs on. */
-const TMDB_CURATED_PAGES = 2
-
-/**
- * How long tmdbCuratedCatalog is allowed before it stops contributing to
- * THIS build.
- *
- * Up to 120 external-id lookups is not free, and catalogListing's merge is
- * on the response path of a cold `catalog:list` — the same "one slow
- * background computation stalls the thing somebody is looking at" failure
- * this app has hit before (see recommendations.ts's own account of an
- * 87.7-SECOND launch-path stall from a similarly unbounded pass). A source
- * that misses this window contributes nothing to this build and is tried
- * again on the next one; it never holds up Simkl or Cinemeta's own results.
- */
-const TMDB_CURATED_TIMEOUT_MS = 6000
-
-/**
- * TMDB's own curated lists — now playing, upcoming, top rated — merged into
- * the SAME catalog Simkl and Cinemeta build, rather than surfaced as a
- * separate browse surface.
- *
- * That choice is deliberate. Simkl's trending feeds and Cinemeta's "top"
- * catalog are both, in the end, popularity rankings of roughly the same
- * pool — which is exactly the "same twenty titles" complaint this exists to
- * fix. TMDB's now-playing and upcoming lists are ranked by RELEASE WINDOW
- * instead, so they reliably surface titles the other two sources have not
- * caught up to yet. Feeding that pool into the one place every browse sort,
- * search and recommendation already reads from means the fix reaches all
- * of them at once, for free — no new page, no new row, no new thing to
- * maintain in sync with the real catalog.
- *
- * Silent and additive on every possible failure, matching Cinemeta's own
- * pages above: no TMDB key connected, a list request failing, or an
- * id that never resolves to an IMDb one all just contribute nothing. The
- * worst case is this catalog staying exactly the size it was before TMDB
- * was added, never smaller.
- */
-async function tmdbCuratedCatalog(
-  kind: Exclude<MediaKind, 'anime'>,
-  priority: TaskPriority
-): Promise<CatalogItem[]> {
-  const { apiKey } = tmdbCredentials()
-  if (!apiKey) return []
-  const auth = `api_key=${encodeURIComponent(apiKey)}`
-  const path = kind === 'series' ? 'tv' : 'movie'
-  const region = watchRegion()
-
-  const genreNames = await tmdbGenreNames(apiKey, path)
-  const namedGenres = (record: RawApiPayload): string[] =>
-    (record.genre_ids || [])
-      .map((g: unknown) => genreNames.get(Number(g)))
-      .filter((x: string | undefined): x is string => Boolean(x))
-
-  const lists = TMDB_CURATED_LISTS[kind]
-  const pages = await Promise.all(
-    lists.flatMap((list) =>
-      Array.from({ length: TMDB_CURATED_PAGES }, (_unused, index) =>
-        fetchJson<RawApiPayload>(
-          `https://api.themoviedb.org/3/${path}/${list}?${auth}&region=${encodeURIComponent(region)}&page=${index + 1}`,
-          {},
-          { priority, label: `${kind} ${list} (page ${index + 1})` }
-        )
-          .then((result) => result.results || [])
-          .catch(() => [] as RawApiPayload[])
-      )
-    )
-  )
-
-  // Deduped by TMDB id BEFORE resolution, since the same title routinely
-  // appears on more than one of these lists (a top-rated film that is also
-  // still in theatres) — resolving it twice would spend two requests to
-  // learn the same IMDb id.
-  const seen = new Set<number>()
-  const candidates: { id: number; record: RawApiPayload }[] = []
-  for (const record of pages.flat()) {
-    const id = tmdbId(record.id)
-    if (!id || seen.has(id)) continue
-    seen.add(id)
-    candidates.push({ id, record })
-  }
-
-  // One external-ids request each, bounded — see TMDB_CURATED_PAGES. A
-  // candidate with no IMDb id is dropped: every route, artwork lookup and
-  // stream search in this app is IMDb-keyed, so keeping it would put an
-  // unopenable tile in the grid.
-  const resolved = await mapWithLimit(candidates, async ({ id, record }) => {
-    const external = await fetchJson<RawApiPayload>(
-      `https://api.themoviedb.org/3/${path}/${id}/external_ids?${auth}`,
-      {},
-      { priority, label: `${kind} curated external id` }
-    )
-    const imdbId = String(external.imdb_id || '')
-    if (!/^tt\d+$/.test(imdbId)) return null
-    return normalizeTmdbTitle(record, imdbId, kind, namedGenres(record))
-  })
-  return resolved.filter((item): item is CatalogItem => Boolean(item))
 }
 
 /** One page (20 items) of Kitsu's most-popular-anime listing, with genre titles resolved from the included `categories` sideload. */
@@ -546,6 +475,28 @@ export async function catalogListing(
       if (kind === 'anime' && db.getCache<boolean>(ANIME_GROUPED_KEY) !== true) {
         startAnimeGrouping(cached)
       }
+      // Seed the index from the blob we already hold, but only when it has
+      // nothing for this kind.
+      //
+      // Without this the index stays EMPTY for up to a full TTL after the
+      // upgrade that creates it, because this early return is the common
+      // path: the crawl below — the only other thing that writes the index —
+      // runs on a cache MISS, and a warm cache means it never runs at all.
+      // Found by launching the app rather than by any test, all of which
+      // called indexUpsert directly and so never met this branch.
+      //
+      // Guarded on being empty rather than done unconditionally: this runs on
+      // every catalog:list, several times per launch, and re-upserting
+      // thousands of rows each time to learn nothing would be a real cost on
+      // a path somebody is waiting for. Once seeded the count is non-zero and
+      // this never fires again; the crawl keeps it current from then on.
+      //
+      // The rows are the same merged, deduped items the crawl would have
+      // written, so seeding cannot disagree with crawling — it only happens
+      // sooner.
+      if (!db.indexCount(kind)) {
+        db.indexUpsert(kind, cached, { source: 'cache-seed' })
+      }
       // A cache entry inside its TTL is current by definition — this is
       // the ordinary hit, not the expired fallback below.
       return { items: cached, stale: false }
@@ -594,22 +545,21 @@ export async function catalogListing(
       // costs its own contribution and nothing else — which also
       // preserves the old fallback guarantee exactly: a total Simkl
       // failure still yields a Cinemeta-filled catalog.
+      // A third source used to sit here: TMDB's curated now_playing/
+      // upcoming/top_rated lists, raced against a 6s timeout. It is gone,
+      // deliberately. It was the only key-gated source in the crawl — it
+      // contributed nothing at all to anyone who had not connected a TMDB
+      // key — and it cost up to 120 external_ids requests per build to
+      // resolve TMDB ids into the IMDb ids everything here is keyed by. It
+      // earned that when Cinemeta was being read 650 titles deep; against a
+      // Cinemeta walk that now goes 2,000 deep and is heading further, its
+      // ~120 titles are noise. Per-title TMDB enrichment (credits, watch
+      // providers, content ratings, collections) is untouched — that costs
+      // nothing when unconfigured, because each of those already returns
+      // empty without issuing a request.
       const settled = await Promise.allSettled([
         simklCatalog(kind, priority).then((list) => [list]),
-        cinemetaPages(kind, priority),
-        // Last, deliberately — see tmdbCuratedCatalog. Simkl and Cinemeta
-        // already fill the bulk of the catalog and set the ranking that
-        // matters (dedupeCatalog keeps the FIRST occurrence of an id), so
-        // this only ever ADDS what they missed rather than reordering
-        // anything they already found. Raced against its own timeout so a
-        // slow resolution pass can never make Simkl and Cinemeta's own
-        // results wait for it — see TMDB_CURATED_TIMEOUT_MS.
-        Promise.race([
-          tmdbCuratedCatalog(kind, priority),
-          new Promise<CatalogItem[]>((resolve) =>
-            setTimeout(() => resolve([]), TMDB_CURATED_TIMEOUT_MS)
-          )
-        ]).then((list) => [list])
+        cinemetaPages(kind, priority)
       ])
       if (settled[0].status === 'rejected') primaryError = settled[0].reason
       items = mergeCatalogSources(settled)
@@ -625,6 +575,19 @@ export async function catalogListing(
     }
 
     db.putCache(key, items, CATALOG_TTL_MS)
+    // ...and into the accumulating index, which is what this blob is on its
+    // way to being replaced by (see migration 2). Written alongside rather
+    // than instead of it for now, on purpose: `catalog:list` still serves
+    // the blob, and cutting it over before the index can answer the browse
+    // grid's questions — filters, sorts, and the Completed badge, which
+    // needs a watch-history join the index does not do yet — would be a
+    // silent regression rather than a migration. Both are written from the
+    // same merged, deduped `items`, so they cannot disagree.
+    //
+    // Unlike the blob, this call never truncates: it upserts what this crawl
+    // saw and leaves every other row alone, which is what lets the library
+    // outlive any single crawl's depth.
+    db.indexUpsert(kind, items, { source: kind === 'anime' ? 'kitsu' : 'cinemeta+simkl' })
     if (kind === 'anime') {
       // This catalog is raw until the pass below says otherwise. Written
       // rather than left absent so a marker from the PREVIOUS catalog
@@ -739,6 +702,20 @@ async function withCredits(
   }
 }
 
+/** A fully resolved title is good for a day. */
+const META_TTL_MS = 24 * 60 * 60 * 1000
+/**
+ * A DEGRADED one — the primary source failed and a catalog or index row
+ * stood in with no episodes, or a grouped anime came back missing whole
+ * seasons — is good for ten minutes. It used to be written for the full
+ * day: one failed Cinemeta call, or a TMDB rate limit on one season, and
+ * the detail page said "No episode data is available for this title yet"
+ * until tomorrow, indistinguishable from a title that genuinely has none.
+ * Ten minutes is long enough that a page left open does not hammer the
+ * source, short enough that the next visit tries again.
+ */
+const DEGRADED_META_TTL_MS = 10 * 60 * 1000
+
 async function resolveMetadata(
   type: MediaKind,
   id: string,
@@ -747,9 +724,11 @@ async function resolveMetadata(
   const resolvedId = String(id).startsWith('simkl:')
     ? await resolveSimklId(type, String(id).slice(6), priority)
     : id
-  const cacheKey = `meta:v3:${type}:${resolvedId}`
+  const cacheKey = metaCacheKey(type, resolvedId)
   const db = getDatabase()
   const cached = db.getCache<CatalogItem>(cacheKey)
+  // Whether what is about to be cached is a stand-in — see DEGRADED_META_TTL_MS.
+  let degraded = false
   // Re-running disambiguateVideos here (not just on the fresh-fetch path
   // below) matters for anyone upgrading into this fix: their existing 24h
   // cache entries were written by the old code and would otherwise keep
@@ -814,18 +793,39 @@ async function resolveMetadata(
       item = normalizeMeta(result.meta || {}, type)
     }
   } catch (primaryError) {
+    // Whatever stands in below is a stand-in — see DEGRADED_META_TTL_MS.
+    degraded = true
     const source = (
       db.getCache<CatalogItem[]>(`catalog:v2:${type}`, { allowExpired: true }) || []
     ).find((x) => String(x.id) === String(resolvedId))
-    if (!source) throw primaryError
-    item = { ...source, videos: [] }
-    if (type === 'series' && source.simklId) {
-      const episodes = await fetchJson<RawApiPayload[]>(
-        `https://api.simkl.com/tv/episodes/${encodeURIComponent(String(source.simklId))}`,
-        {},
-        { priority, label: 'episode list' }
-      )
-      item.videos = (episodes || []).map((x) => simklEpisode(x, resolvedId))
+    if (!source) {
+      // Last fallback: the INDEX. A deep-scanned title lives in neither
+      // the blob above nor the renderer's bounded pool — it exists only
+      // as an index row. That row is lightweight (no episodes), but a
+      // detail page with everything except an episode list beats a hard
+      // error for a title the library visibly contains.
+      const indexed = db.indexByIds([String(resolvedId)]).items.find((x) => x.type === type)
+      if (!indexed) throw primaryError
+      item = { ...indexed, videos: [] }
+    } else {
+      item = { ...source, videos: [] }
+    }
+    if (type === 'series' && source?.simklId) {
+      // Its own try: this runs INSIDE the primary source's failure path, and
+      // a second failure here used to escape as a rejection of the whole
+      // catalog:meta call — the page then had no item at all, when the
+      // stand-in above (a title with everything but its episodes) was
+      // already in hand and is the better answer.
+      try {
+        const episodes = await fetchJson<RawApiPayload[]>(
+          `https://api.simkl.com/tv/episodes/${encodeURIComponent(String(source.simklId))}`,
+          {},
+          { priority, label: 'episode list' }
+        )
+        item.videos = (episodes || []).map((x) => simklEpisode(x, resolvedId))
+      } catch (error) {
+        logError('meta:simkl-episodes', error)
+      }
     }
   }
 
@@ -840,10 +840,21 @@ async function resolveMetadata(
     if (groupedIds?.length) item.groupedIds = groupedIds
   }
   if (type === 'anime' && item.groupedIds?.length) {
+    // buildGroupedAnimeVideos swallows every network error of its own and
+    // answers with a shorter list instead of throwing, so the try below is a
+    // backstop, not the failure path. The failure path is the QUIET one: a
+    // season whose TMDB and Kitsu reads both rate-limited contributes no
+    // episodes and nothing says so. Hence two rules here — an empty build
+    // never replaces the placeholder list the normaliser already produced,
+    // and a build missing whole seasons is cached as degraded (short TTL)
+    // rather than as the truth for a day.
     try {
-      item.videos = await buildGroupedAnimeVideos(item, tmdbCredentials().apiKey, priority)
+      const built = await buildGroupedAnimeVideos(item, tmdbCredentials().apiKey, priority)
+      if (built.length) item.videos = built
+      if (!groupedVideosAreComplete(item.groupedIds.length, built)) degraded = true
     } catch (error) {
       logError('anime:grouped-videos', error)
+      degraded = true
     }
   } else if (type === 'anime' && item.videos.length) {
     // Ungrouped (single-season) anime: item.videos above is still
@@ -877,7 +888,20 @@ async function resolveMetadata(
   // own doc comment for why this is needed and what it does.
   item.videos = disambiguateVideos(item.videos)
 
-  db.putCache(cacheKey, item, 24 * 60 * 60 * 1000)
+  db.putCache(cacheKey, item, degraded ? DEGRADED_META_TTL_MS : META_TTL_MS)
+  // Under the id the caller used as well, when the Simkl lookup mapped it
+  // to another: rows tracked under "simkl:<n>" read this cache by that id
+  // (titleNames.ts's cachedMetadata) and cannot resolve it without a trip.
+  if (resolvedId !== String(id)) {
+    db.putCache(metaCacheKey(type, String(id)), item, degraded ? DEGRADED_META_TTL_MS : META_TTL_MS)
+  }
+  // The index row for this title was written from a catalog preview with no
+  // episodes, so its counts — the denominator the Completed badge and the
+  // browse grid's "N episodes" read — are empty until a crawl happens to
+  // re-list it. A full resolve is exactly the moment those counts are
+  // known: every title somebody opens heals its own row. Counts only —
+  // never the rank or the source a crawl assigned.
+  if (!degraded) db.indexRefreshFromMetadata(type, item)
   return withCredits(item, type, resolvedId, priority)
 }
 
@@ -1198,9 +1222,287 @@ async function similarTitles(kind: MediaKind, id: string): Promise<CatalogItem[]
   }
 }
 
+/** One Cinemeta top-catalog page at an absolute skip offset — the deep
+ *  scan's stride into territory the standing crawl never reaches. Same
+ *  lightweight normalisation — but FAILURE IS NULL, not an empty page.
+ *  The deep scan's bookmark advances past what it has seen, and a
+ *  transient fetch failure disguised as emptiness would advance it past
+ *  titles it never saw, omitting them from the index forever. Empty
+ *  means the upstream genuinely had nothing there. */
+async function cinemetaPageAt(
+  kind: Exclude<MediaKind, 'anime'>,
+  skip: number,
+  priority: TaskPriority
+): Promise<CatalogItem[] | null> {
+  try {
+    const result = await fetchJson<{ metas?: RawApiPayload[] }>(
+      `https://v3-cinemeta.strem.io/catalog/${kind}/top/skip=${skip}.json`,
+      {},
+      { priority, label: `${kind} deep scan (skip ${skip})` }
+    )
+    return (result.metas || []).map((x) => normalizeMeta(x, kind, true))
+  } catch {
+    return null
+  }
+}
+
+/** One walk of a kind's deep scan — see deepScanChunk for how a second
+ *  caller joins or supersedes it. */
+interface DeepScanRun {
+  promise: Promise<DeepScanReport>
+  priority: TaskPriority
+  /** Asks the walk to stop at its last safe group. Idempotent. */
+  cancel: () => void
+}
+
+/** What a walk polls between groups, and races its fetches against. */
+interface DeepScanCancel {
+  readonly cancelled: boolean
+  readonly signal: Promise<'cancelled'>
+}
+
+/** In-flight deep scans, at most one walk per kind — a second caller
+ *  joins or supersedes it, never doubles it. See deepScanChunk. */
+const deepScansInFlight = new Map<MediaKind, DeepScanRun>()
+
+interface DeepScanState {
+  offset: number
+  lastAt?: number
+  lastAdded?: number
+  exhausted?: boolean
+}
+
+function deepScanState(kind: MediaKind): DeepScanState {
+  return (
+    getDatabase().getCache<DeepScanState>(`${DEEP_SCAN_OFFSET_KEY}:${kind}`, {
+      allowExpired: true
+    }) ?? { offset: 0 }
+  )
+}
+
+/**
+ * One chunk of the deep scan: walk the next stretch of the upstream
+ * catalog, add what the index has never seen, advance the bookmark.
+ *
+ * The offset starts where the STANDING crawl's coverage ends, so the
+ * first press begins in new territory rather than re-reading what the
+ * six-hourly refresh already maintains. `exhausted` is the honest end:
+ * a stretch that comes back entirely empty means the upstream has no
+ * more to give, and the button should say so instead of inviting
+ * another press at the void.
+ */
+/**
+ * One chunk of the deep scan, at most one walk per kind: the button and
+ * the hourly background job (backgroundJobs.ts) share this. Which of the
+ * two joins the other, and which supersedes it, is the `priority`
+ * parameter's story below.
+ */
+export function deepScanChunk(
+  kind: MediaKind,
+  /** The lane the page fetches go out on. The button's press is
+   *  'background' (a person is waiting on it); the hourly job passes
+   *  'maintenance', which critical pressure suspends outright — a scan
+   *  that started while idle must not keep 120 requests going once
+   *  playback begins.
+   *
+   *  Two walks of one kind never run together, but joining is not
+   *  symmetric. The job arriving during a press's walk joins it: that walk
+   *  is the person's, and its lane is right. A press arriving during the
+   *  job's walk must NOT join it — under playback pressure the job's lane
+   *  never dispatches, so the press would wait out the film with the
+   *  button frozen. The job's walk is stopped at its last safe group (the
+   *  bookmark stays honest; its in-flight fetches finish on their own and
+   *  are discarded) and the press walks on from there in its own lane. */
+  priority: TaskPriority = 'background'
+): Promise<DeepScanReport> {
+  const running = deepScansInFlight.get(kind)
+  if (running) {
+    if (PRIORITY_RANK[priority] >= PRIORITY_RANK[running.priority]) return running.promise
+    running.cancel()
+    const walkOn = (): Promise<DeepScanReport> => deepScanChunk(kind, priority)
+    return running.promise.then(walkOn, walkOn)
+  }
+  let cancelled = false
+  let onCancel: (() => void) | null = null
+  const signal = new Promise<'cancelled'>((resolve) => {
+    onCancel = () => resolve('cancelled')
+  })
+  const cancel: DeepScanCancel = {
+    get cancelled() {
+      return cancelled
+    },
+    signal
+  }
+  const run: DeepScanRun = {
+    priority,
+    cancel: () => {
+      cancelled = true
+      onCancel?.()
+    },
+    promise: runDeepScan(kind, priority, cancel).finally(() => {
+      if (deepScansInFlight.get(kind) === run) deepScansInFlight.delete(kind)
+    })
+  }
+  deepScansInFlight.set(kind, run)
+  return run.promise
+}
+
+async function runDeepScan(
+  kind: MediaKind,
+  priority: TaskPriority,
+  cancel: DeepScanCancel
+): Promise<DeepScanReport> {
+  const db = getDatabase()
+  const state = deepScanState(kind)
+  // A persisted `exhausted` is honoured: the last chunk walked the whole
+  // stretch and found nothing, so another press within the recheck
+  // window would re-issue 40-50 requests at known emptiness and march
+  // the bookmark further into the void — including after a restart.
+  // After the window, one fresh chunk checks whether upstream has grown.
+  if (state.exhausted && state.lastAt && Date.now() - state.lastAt < EXHAUSTED_RECHECK_MS) {
+    return {
+      kind,
+      scanned: 0,
+      added: 0,
+      indexTotal: db.indexCount(kind),
+      offset: state.offset,
+      exhausted: true
+    }
+  }
+  const crawlDepth =
+    kind === 'anime' ? ANIME_CATALOG_DEPTH : (CINEMETA_EXTRA_PAGES + 1) * CINEMETA_PAGE_SIZE
+  const startOffset = Math.max(state.offset, crawlDepth)
+  const pageSize = kind === 'anime' ? KITSU_PAGE_SIZE : CINEMETA_PAGE_SIZE
+  const pagesTotal = kind === 'anime' ? DEEP_SCAN_KITSU_PAGES : DEEP_SCAN_CINEMETA_PAGES
+  // Deep rows rank BELOW everything already indexed, not merely past the
+  // upstream offset: the standing catalog is a MERGED list (Simkl
+  // trending + Cinemeta, grouped anime) whose ranks can extend past any
+  // upstream offset, and starting at the offset would interleave deep
+  // rows into the curated ordering.
+  const rankFloor = Math.max(startOffset, db.indexMaxRank(kind) + 1)
+
+  const progress = (pagesDone: number, added: number): void => {
+    sendToRenderer(MEDIA_HUB_CHANNELS.catalogDeepScanEvent, {
+      kind,
+      pagesDone,
+      pagesTotal,
+      added
+    } satisfies DeepScanEvent)
+  }
+
+  let scanned = 0
+  let added = 0
+  let sawAnyRows = false
+  // Pages the bookmark may safely move past: their rows were fetched AND
+  // written. A failed fetch or a rolled-back write freezes this at the
+  // last good page, so the next press resumes exactly there — the
+  // bookmark never claims coverage the index does not have.
+  let pagesCompleted = 0
+  let halted = false
+  progress(0, 0)
+  // Pages run through the same lanes as everything else, a few at a
+  // time — this is a background dig, not a race. Groups of five keep
+  // the progress line moving without hammering the lane.
+  for (let group = 0; group * 5 < pagesTotal; group++) {
+    const pageIndexes = Array.from(
+      { length: Math.min(5, pagesTotal - group * 5) },
+      (_, i) => group * 5 + i
+    )
+    // Superseded (see deepScanChunk): stop with the bookmark at the last
+    // group that was fetched AND written. Checked before each group, and
+    // raced against the group's own fetches, which under playback pressure
+    // may never dispatch in this lane at all.
+    if (cancel.cancelled) {
+      halted = true
+      break
+    }
+    const fetched = Promise.all(
+      pageIndexes.map((page) => {
+        const skip = startOffset + page * pageSize
+        return kind === 'anime'
+          ? kitsuPage(skip, priority).catch(() => null)
+          : cinemetaPageAt(kind, skip, priority)
+      })
+    )
+    const outcome = await Promise.race([fetched, cancel.signal])
+    if (outcome === 'cancelled') {
+      halted = true
+      break
+    }
+    const pages = outcome
+    // Everything before the first FAILED page is usable; nothing after
+    // it may count, or the bookmark would skip the failed page's titles
+    // forever (rows past the gap will be re-fetched next press — the
+    // skip set makes that re-read free).
+    const firstFailed = pages.findIndex((page) => page === null)
+    const usable = (firstFailed === -1 ? pages : pages.slice(0, firstFailed)) as CatalogItem[][]
+    const items = usable.flat()
+    scanned += items.length
+    if (items.length > 0) sawAnyRows = true
+    const existing = db.indexExistingIds(
+      kind,
+      items.map((item) => item.id)
+    )
+    if (existing === null) {
+      // Membership could not be established — halt with the bookmark
+      // still before this group, exactly like a failed fetch. Advancing
+      // here would skip the whole chunk while writing none of it.
+      halted = true
+      break
+    }
+    const { add } = planDeepScanBatch(items, existing)
+    if (add.length) {
+      // Rank the deep rows BELOW everything already indexed — see
+      // rankFloor above.
+      const written = db.indexUpsert(kind, add, {
+        source: 'deep-scan',
+        rankBase: rankFloor + group * 5 * pageSize
+      })
+      if (!written) {
+        // The transaction rolled back; nothing landed. Stop with the
+        // bookmark still BEFORE this group.
+        halted = true
+        break
+      }
+      added += add.length
+    }
+    pagesCompleted = group * 5 + usable.length
+    progress(Math.min((group + 1) * 5, pagesTotal), added)
+    if (firstFailed !== -1) {
+      halted = true
+      break
+    }
+  }
+
+  // Exhaustion is only claimable for a CLEAN walk: a halted chunk saw a
+  // failure, not the end of the catalog.
+  const exhausted = !halted && !sawAnyRows
+  const nextState: DeepScanState = {
+    offset: startOffset + pagesCompleted * pageSize,
+    lastAt: Date.now(),
+    lastAdded: added,
+    exhausted
+  }
+  db.putCache(`${DEEP_SCAN_OFFSET_KEY}:${kind}`, nextState, DEEP_SCAN_STATE_TTL_MS, {
+    durable: true
+  })
+  return {
+    kind,
+    scanned,
+    added,
+    indexTotal: db.indexCount(kind),
+    offset: nextState.offset,
+    exhausted
+  }
+}
+
 interface CatalogListPayload {
   kind?: unknown
   force?: unknown
+}
+
+interface CatalogFacetsPayload {
+  kind?: unknown
 }
 
 interface CatalogMetaPayload {
@@ -1226,7 +1528,60 @@ export function registerCatalogIpc(): void {
       const kind = payload?.kind
       const force = payload?.force === true
       if (!isValidCatalogKind(kind)) throw new Error('Unsupported catalog.')
-      return catalogListing(kind, force)
+      const listing = await catalogListing(kind, force)
+      // STAGE 4: the renderer gets the candidate POOL, not the blob —
+      // see CANDIDATE_POOL_LIMIT. Everything needing titles beyond the
+      // pool reads the index (catalog:query / catalog:byIds).
+      return { ...listing, items: listing.items.slice(0, CANDIDATE_POOL_LIMIT) }
+    }
+  )
+
+  // Id-matching without an array to scan: rows for exactly these ids,
+  // straight from the index, all kinds (a tt id can be both a movie and
+  // a series row — the caller dedupes by its own rules). What lets My
+  // Stuff and the Planned row keep every tracked title visible however
+  // small the pool and however deep the index. NO CAP: the renderer
+  // records the answer under the full request key, so a truncated
+  // answer would read as "those titles are gone" — the database layer
+  // already chunks unbounded input, 400 ids per statement.
+  handle<{ ids?: unknown }, CatalogByIdsResult>(
+    MEDIA_HUB_CHANNELS.catalogByIds,
+    async (_e, payload) => {
+      const ids = Array.isArray(payload?.ids)
+        ? payload.ids.filter((id): id is string => typeof id === 'string')
+        : []
+      if (!ids.length) return { items: [], completedIds: [] }
+      return getDatabase().indexByIds(ids)
+    }
+  )
+
+  // STAGE 5: dig one chunk deeper, on purpose, from the library page.
+  // Single-flight per kind — a second press joins the running chunk.
+  handle<{ kind?: unknown }, DeepScanReport>(
+    MEDIA_HUB_CHANNELS.catalogDeepScan,
+    async (_e, payload) => {
+      const kind = payload?.kind
+      if (!isValidCatalogKind(kind)) throw new Error('Unsupported catalog.')
+      return deepScanChunk(kind)
+    }
+  )
+
+  // Reads the index directly and does NOT crawl. That is deliberate: this is
+  // a keystroke-driven path (every filter change is a new query), and a
+  // handler that could trigger a six-hourly crawl on a dropdown change would
+  // put a network round trip behind a UI control. Filling the index stays the
+  // job of catalog:list and the background refresh; this only ever reports
+  // what is already there.
+  handle<CatalogQuery, CatalogQueryResult>(MEDIA_HUB_CHANNELS.catalogQuery, async (_e, query) => {
+    if (!isValidCatalogKind(query?.kind)) throw new Error('Unsupported catalog.')
+    return getDatabase().indexQuery(query)
+  })
+
+  handle<CatalogFacetsPayload, CatalogFacets>(
+    MEDIA_HUB_CHANNELS.catalogFacets,
+    async (_e, { kind }) => {
+      if (!isValidCatalogKind(kind)) throw new Error('Unsupported catalog.')
+      return getDatabase().indexFacets(kind)
     }
   )
 
@@ -1300,15 +1655,11 @@ export function registerCatalogIpc(): void {
     }
   )
 
-  handle<{ type: MediaKind; id: string }, WatchProvidersResult>(
-    MEDIA_HUB_CHANNELS.catalogProviders,
-    async (_e, payload) => {
-      const type = payload?.type
-      if (!isValidCatalogKind(type))
-        return { region: watchRegion(), stream: [], rent: [], buy: [], link: '' }
-      return watchProviders(type, String(payload?.id ?? ''))
-    }
-  )
+  // catalog:providers is gone with the panel it fed. It was a TMDB
+  // round trip per detail page for JustWatch rent-and-buy links —
+  // a request and a parse for the one thing somebody using this app
+  // is least likely to want. watchRegion stays: contentRating and the
+  // settings snapshot both still need to know the region.
 
   handle<{ type: MediaKind; id: string }, { rating: string; region: string }>(
     MEDIA_HUB_CHANNELS.catalogRating,

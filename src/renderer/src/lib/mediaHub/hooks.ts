@@ -27,7 +27,8 @@ import type {
   MediaKind,
   PlayRecord
 } from '@shared/media-hub/types'
-import type { ContinueWatchingItem, MediaItem, Recommendation } from '@renderer/types'
+import type { ContinueWatchingItem, HomeRail, MediaItem, Recommendation } from '@renderer/types'
+import { recommendationReasonLabel } from '@shared/media-hub/recommendationReason'
 import { AI_PICKS, CATALOG, CONTINUE_WATCHING, FEATURED_ITEMS } from '@renderer/data/mockData'
 import {
   catalogItemToMediaItem,
@@ -35,6 +36,7 @@ import {
   catalogItemToRecommendation,
   continueWatchingEntryToItem
 } from './adapters'
+import type { PlannedServiceId } from '@shared/media-hub/types'
 import {
   applyTrackingState,
   mergeRememberedCatalog,
@@ -59,9 +61,11 @@ const NO_ITEMS: MediaItem[] = []
 const EMPTY_HOME_FEED = {
   continueWatching: [] as ContinueWatchingItem[],
   recommendations: [] as Recommendation[],
+  rails: [] as HomeRail[],
   featured: [] as MediaItem[],
   preferredGenres: [] as string[],
-  trackedIds: new Set<string>()
+  trackedIds: new Set<string>(),
+  plannedSources: {} as Record<string, PlannedServiceId[]>
 }
 
 /** True in the real (Electron) app, false in the plain-browser preview build used for visual QA. */
@@ -119,10 +123,32 @@ function startupHomeFeedFallback(): typeof EMPTY_HOME_FEED {
       // backend's *toggle*, which removed a title the person had saved.
       // The last known truth, corrected the moment `live` lands, beats a
       // confident falsehood that loses data on click.
-      trackedIds: new Set(remembered.trackedIds)
+      trackedIds: new Set(remembered.trackedIds),
+      // Not remembered across launches. A tag claiming a title is on
+      // somebody's Trakt list is a statement about Trakt, and repeating
+      // it from a month-old snapshot before anything has asked Trakt is
+      // the kind of confident staleness the trackedIds note above is
+      // about — except here there is no data to lose by waiting, so it
+      // simply starts empty and fills in on the first feed.
+      plannedSources: EMPTY_HOME_FEED.plannedSources
     }
   }
   return homeFeedFallback
+}
+
+/**
+ * Drops both resolved fallbacks so the next consumer re-reads the snapshot.
+ *
+ * They are resolved once per session on purpose (see above) — but the
+ * session is not the library. A profile switch changes whose library this
+ * is, and a fallback resolved under the previous profile would otherwise
+ * keep serving that person's rows as the remembered state of this one.
+ * Called from AppStateContext's switchProfile, after it has cleared the
+ * snapshot itself.
+ */
+export function forgetStartupFallbacks(): void {
+  browseFallback = null
+  homeFeedFallback = null
 }
 
 /** The remembered Continue Watching row, for AppStateContext's own copy of that state. */
@@ -234,7 +260,6 @@ export function useMediaHubBrowseCatalog(
     // and error states clear while it runs rather than sitting there
     // asserting a failure that is currently being re-tested. The rows in
     // `groups` are deliberately NOT cleared alongside them.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     setOutcomes({})
     // Deliberately NOT a Promise.all over the three kinds any more. The
     // anime crawl (catalog.ts's kitsuCatalog walks Kitsu 1000 entries
@@ -802,9 +827,15 @@ export interface HomeFeedResult {
   // longer be defined as "whatever that one adapter happens to return".
   continueWatching: ContinueWatchingItem[]
   recommendations: Recommendation[]
+  /** The same ranking shelved by reason, for the For You page. Not
+   *  remembered across launches: it follows the live feed. */
+  rails: HomeRail[]
   featured: MediaItem[]
   preferredGenres: string[]
   trackedIds: Set<string>
+  /** Which tracking services have each planned title, for the tag on a
+   *  card. Sparse — no entry means planned here and nowhere else. */
+  plannedSources: Record<string, PlannedServiceId[]>
   loading: boolean
   live: boolean
   /** The last home:personalized attempt threw.
@@ -856,7 +887,6 @@ export function useMediaHubHomeFeed(libraryKey: string): HomeFeedResult {
     setLoading(true)
     // A retry in progress is not a failure — see the same reasoning in
     // useMediaHubBrowseCatalog's setOutcomes({}).
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     setError(false)
     api.home
       .personalized()
@@ -873,11 +903,19 @@ export function useMediaHubHomeFeed(libraryKey: string): HomeFeedResult {
               reason: result.recommendationReasons?.[String(item.id)]
             })
           ),
+          rails: (result.recommendationRails ?? [])
+            .map((rail) => ({
+              id: rail.id,
+              title: recommendationReasonLabel(rail.reason),
+              items: rail.items.map((item) => catalogItemToMediaItem(item, { trackedIds }))
+            }))
+            .filter((rail) => rail.title && rail.items.length),
           featured: result.recommendations
             .slice(0, 6)
             .map((item) => catalogItemToMediaItem(item, { trackedIds })),
           preferredGenres: result.preferredGenres,
-          trackedIds
+          trackedIds,
+          plannedSources: result.plannedSources ?? {}
         }
         setState(next)
         // This is the part of the snapshot that matters most: the hero,

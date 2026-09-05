@@ -977,11 +977,17 @@ export const CATALOG: MediaItem[] = [
 // ---------- Nav / chrome ----------
 export const NAV_ITEMS: NavItem[] = [
   { id: 'home', label: 'Home', icon: 'home', href: '/' },
+  // The whole ranking, shelved by reason. Home shows one row of it and
+  // cannot scroll; this is where the rest is.
+  { id: 'foryou', label: 'For You', icon: 'sparkle', href: '/for-you' },
   { id: 'movies', label: 'Movies', icon: 'movies', href: '/movies' },
   { id: 'tv', label: 'Series', icon: 'tv', href: '/series' },
   { id: 'anime', label: 'Anime', icon: 'anime', href: '/anime' },
   { id: 'mystuff', label: 'My Stuff', icon: 'mystuff', href: '/my-stuff' },
-  { id: 'downloads', label: 'Downloads', icon: 'downloads', href: '/downloads' },
+  // Its own entry rather than a tab inside My Stuff. "Is there anything
+  // on tonight" is a different question from "what have I collected",
+  // and it was sitting two clicks deep beside Stats and Not for me.
+  { id: 'calendar', label: 'Calendar', icon: 'calendar', href: '/calendar' },
   { id: 'settings', label: 'Settings', icon: 'settings', href: '/settings' }
 ]
 

@@ -7,6 +7,7 @@
 import type {
   HistoryEntry,
   MalReconcilePreview,
+  MalReconcileRatingToLocal,
   MalReconcileToLocal,
   MalReconcileToMal
 } from '../../shared/media-hub/types'
@@ -43,12 +44,14 @@ export interface MalListEntry {
   title: string
   status: string
   watchedEpisodes: number
+  /** MAL's 1-10 user score, 0 when unrated — same range/meaning as this app's own rating. */
+  score: number
 }
 
 /** Normalizes one raw `{node, list_status}` entry from MAL's anime list API response. */
 export function normalizeMalEntry(entry: {
   node?: { id?: unknown; title?: unknown }
-  list_status?: { status?: unknown; num_episodes_watched?: unknown }
+  list_status?: { status?: unknown; num_episodes_watched?: unknown; score?: unknown }
 }): MalListEntry {
   const node = entry?.node || {}
   const status = entry?.list_status || {}
@@ -56,7 +59,8 @@ export function normalizeMalEntry(entry: {
     malId: Number(node.id) || 0,
     title: String(node.title || 'Untitled'),
     status: String(status.status || ''),
-    watchedEpisodes: Number(status.num_episodes_watched) || 0
+    watchedEpisodes: Number(status.num_episodes_watched) || 0,
+    score: Number(status.score) || 0
   }
 }
 
@@ -95,18 +99,27 @@ export function malStatusForProgress(
 }
 
 /**
- * Diffs MAL's remote watch progress against local watch progress per title.
- * Entries MAL couldn't be matched to a local Kitsu id (`kitsuId` missing)
- * are reported as `unmatched` rather than silently dropped. When MAL is
- * ahead, the gap becomes a toLocal catch-up range; when local is ahead,
- * it becomes a toMal push. Entries in sync produce no action either way.
+ * Diffs MAL's remote watch progress (and ratings) against local state per
+ * title. Entries MAL couldn't be matched to a local Kitsu id (`kitsuId`
+ * missing) are reported as `unmatched` rather than silently dropped. When
+ * MAL is ahead, the gap becomes a toLocal catch-up range; when local is
+ * ahead, it becomes a toMal push. Entries in sync produce no action either
+ * way.
+ *
+ * `targetId` (set by the caller via catalog.ts's resolveAnimeGroupTarget)
+ * is the canonical id a rating belongs to — for a merged franchise this
+ * differs from `kitsuId`, which is whichever sibling MAL matched. Ratings
+ * are gap-filled only, same as db.importRatings: a title already rated
+ * locally keeps that rating rather than being overwritten by MAL's.
  */
 export function computeReconciliation(
-  malEntries: (MalListEntry & { kitsuId?: string })[],
-  localProgressByKitsuId: Record<string, number>
+  malEntries: (MalListEntry & { kitsuId?: string; targetId?: string })[],
+  localProgressByKitsuId: Record<string, number>,
+  localRatingsByTargetId: Record<string, number> = {}
 ): MalReconcilePreview {
   const toMal: MalReconcileToMal[] = []
   const toLocal: MalReconcileToLocal[] = []
+  const ratingsToLocal: MalReconcileRatingToLocal[] = []
   const unmatched: unknown[] = []
   for (const entry of malEntries || []) {
     if (!entry.kitsuId) {
@@ -130,6 +143,9 @@ export function computeReconciliation(
         watchedEpisodes: localCount
       })
     }
+    if (entry.score > 0 && entry.targetId && !(entry.targetId in localRatingsByTargetId)) {
+      ratingsToLocal.push({ targetId: entry.targetId, title: entry.title, score: entry.score })
+    }
   }
-  return { toMal, toLocal, unmatched }
+  return { toMal, toLocal, unmatched, ratingsToLocal }
 }
