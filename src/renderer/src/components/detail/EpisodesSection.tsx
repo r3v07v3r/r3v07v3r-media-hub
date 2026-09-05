@@ -7,6 +7,7 @@ import { useAppState } from '@renderer/context/AppStateContext'
 import { Icon } from '@renderer/components/icons/Icon'
 import { ArtworkImage } from '@renderer/components/media/ArtworkImage'
 import styles from './EpisodesSection.module.css'
+import { episodeStillOrShowArt } from '@renderer/components/media/artworkRetry'
 
 /** One episode's resume bookmark, already reduced to what a tile draws:
  *  how far through it is and how much is left. Built by MediaDetailPage
@@ -27,6 +28,12 @@ export interface EpisodesSectionProps {
   /** Rendered as each tile's eyebrow line, the way the reference design
    *  labels every card with the show it belongs to. */
   showTitle: string
+  /** The show's own backdrop (or poster), drawn on any tile whose episode
+   *  has no still of its own. Whether a tile had art used to depend on
+   *  which metadata path answered — Cinemeta's crawl previews blank the
+   *  thumbnail, Kitsu's synthesised episodes never had one — so the same
+   *  season could render half-illustrated. See episodeStillOrShowArt. */
+  showArtwork?: string
   episodes: Episode[]
   seasons: number[]
   selectedSeason: number | null
@@ -132,6 +139,7 @@ function airDateLabel(released: string | undefined): string | null {
 export function EpisodesSection({
   mediaId,
   showTitle,
+  showArtwork,
   episodes,
   seasons,
   selectedSeason,
@@ -444,7 +452,7 @@ export function EpisodesSection({
               {ep.unplayable ? (
                 <div className={styles.thumbFrame}>
                   <ArtworkImage
-                    src={ep.thumbnail}
+                    src={episodeStillOrShowArt(ep, showArtwork)}
                     alt=""
                     fallbackTitle={title}
                     artTint={['#1c2a45', '#0a1220']}
@@ -464,7 +472,7 @@ export function EpisodesSection({
                   aria-label={`Play ${title}`}
                 >
                   <ArtworkImage
-                    src={ep.thumbnail}
+                    src={episodeStillOrShowArt(ep, showArtwork)}
                     alt=""
                     fallbackTitle={title}
                     artTint={['#1c2a45', '#0a1220']}

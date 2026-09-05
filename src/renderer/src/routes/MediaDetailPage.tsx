@@ -43,6 +43,7 @@ import { SimilarPanel } from '@renderer/components/detail/SimilarPanel'
 import { AnimeStoryPanel } from '@renderer/components/detail/AnimeStoryPanel'
 import styles from './MediaDetailPage.module.css'
 import { playableEpisodesInOrder } from '@shared/media-hub/nextEpisode'
+import { resolveArtwork } from '@renderer/lib/artwork'
 
 type FetchStatus = 'loading' | 'ready' | 'error'
 
@@ -278,6 +279,14 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
     // hard failure for a title the person was just looking at a card for.
     return catalog.find((m) => m.id === id) ?? null
   }, [catalogItem, catalog, id, myList])
+
+  // The show art every episode tile falls back to when its episode has no
+  // still of its own — see EpisodesSection.showArtwork.
+  const showArtwork = useMemo(() => {
+    if (!media) return undefined
+    const art = resolveArtwork(media)
+    return art.backdropUrl ?? art.posterUrl
+  }, [media])
 
   const storyItems = useMemo(
     () =>
@@ -642,6 +651,7 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
             <EpisodesSection
               mediaId={media.id}
               showTitle={media.title}
+              showArtwork={showArtwork}
               episodes={episodes}
               seasons={seasons}
               selectedSeason={selectedSeason}

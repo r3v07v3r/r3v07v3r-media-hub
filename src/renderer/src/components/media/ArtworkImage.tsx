@@ -1,7 +1,11 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import styles from './ArtworkImage.module.css'
-
-type LoadStatus = 'loading' | 'loaded' | 'error'
+import {
+  nextArtworkState,
+  initialArtworkState,
+  ARTWORK_RETRY_MS,
+  type ArtworkLoadState
+} from './artworkRetry'
 
 export interface ArtworkImageProps {
   /** Resolved artwork URL (poster/backdrop/thumbnail/logo). Pass through
@@ -57,7 +61,7 @@ export function ArtworkImage({
   imageClassName,
   objectPosition
 }: ArtworkImageProps) {
-  const [status, setStatus] = useState<LoadStatus>(src ? 'loading' : 'error')
+  const [load, setLoad] = useState<ArtworkLoadState>(() => initialArtworkState(src))
   // Tracks the src this status was computed for, so a prop change can
   // reset status during render ("adjusting state while rendering", per
   // React's docs) instead of in an effect — avoids the extra render pass
@@ -67,12 +71,25 @@ export function ArtworkImage({
   const [statusSrc, setStatusSrc] = useState(src)
   if (statusSrc !== src) {
     setStatusSrc(src)
-    setStatus(src ? 'loading' : 'error')
+    setLoad(initialArtworkState(src))
   }
+  // One retry before the fallback. A single failed load used to be
+  // terminal for the session: an episode still that 404'd once — a CDN
+  // hiccup, a rate limit, a request cancelled by a fast scroll — stayed a
+  // tinted placeholder however many times the grid re-rendered, which is
+  // most of why episode tiles "loaded inconsistently". The rule lives in
+  // artworkRetry.ts so it can be tested; the timer here is the only
+  // stateful part, and it is cleared on unmount.
+  useEffect(() => {
+    if (load.status !== 'retrying') return
+    const timer = setTimeout(() => setLoad((s) => nextArtworkState(s, 'retry')), ARTWORK_RETRY_MS)
+    return () => clearTimeout(timer)
+  }, [load.status])
+  const status = load.status
 
-  const showImage = !!src && status !== 'error'
-  const showSkeleton = showImage && status === 'loading'
-  const showFallback = !showImage
+  const showImage = !!src && status !== 'error' && status !== 'retrying'
+  const showSkeleton = (showImage && status === 'loading') || status === 'retrying'
+  const showFallback = !src || status === 'error'
 
   return (
     <div className={`${styles.wrap} ${className ?? ''}`}>
@@ -87,11 +104,14 @@ export function ArtworkImage({
         // are accepted as props for call-site compatibility but unused;
         // priority still maps onto eager vs. lazy loading.
         <img
+          // Keyed by attempt so the retry mounts a fresh <img>: the browser
+          // does not re-request a URL an existing element already failed.
+          key={load.attempts}
           src={src as string}
           alt={alt}
           loading={priority ? 'eager' : 'lazy'}
-          onLoad={() => setStatus('loaded')}
-          onError={() => setStatus('error')}
+          onLoad={() => setLoad((s) => nextArtworkState(s, 'load'))}
+          onError={() => setLoad((s) => nextArtworkState(s, 'error'))}
           className={`${styles.img} ${status === 'loaded' ? styles.imgLoaded : ''} ${imageClassName ?? ''}`}
           style={objectPosition ? { objectPosition } : undefined}
         />
