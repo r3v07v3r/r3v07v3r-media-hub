@@ -134,6 +134,21 @@ function startupHomeFeedFallback(): typeof EMPTY_HOME_FEED {
   return homeFeedFallback
 }
 
+/**
+ * Drops both resolved fallbacks so the next consumer re-reads the snapshot.
+ *
+ * They are resolved once per session on purpose (see above) — but the
+ * session is not the library. A profile switch changes whose library this
+ * is, and a fallback resolved under the previous profile would otherwise
+ * keep serving that person's rows as the remembered state of this one.
+ * Called from AppStateContext's switchProfile, after it has cleared the
+ * snapshot itself.
+ */
+export function forgetStartupFallbacks(): void {
+  browseFallback = null
+  homeFeedFallback = null
+}
+
 /** The remembered Continue Watching row, for AppStateContext's own copy of that state. */
 export function startupContinueWatchingFallback(): ContinueWatchingItem[] {
   return startupHomeFeedFallback().continueWatching

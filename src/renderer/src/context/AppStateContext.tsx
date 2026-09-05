@@ -48,7 +48,11 @@ import {
   runPlaybackPreparationStage,
   type PlaybackPreparationStage
 } from '@renderer/lib/mediaHub/playbackPreparation'
-import { forgetContinueWatching, rememberTrackedId } from '@renderer/lib/mediaHub/startupSnapshot'
+import {
+  clearStartupSnapshot,
+  forgetContinueWatching,
+  rememberTrackedId
+} from '@renderer/lib/mediaHub/startupSnapshot'
 import {
   startupContinueWatchingFallback,
   startupTrackedIdsFallback,
@@ -57,7 +61,8 @@ import {
   useMediaHubRatings,
   useMediaHubHomeFeed,
   useMediaHubWatchedIds,
-  type CatalogKindState
+  type CatalogKindState,
+  forgetStartupFallbacks
 } from '@renderer/lib/mediaHub/hooks'
 import type { CategoryKind } from '@renderer/lib/mediaHub/categoryFilters'
 import { MAX_PROMPT_TITLES } from '@shared/media-hub/ollama'
@@ -1220,6 +1225,15 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       api
         .setActive(id, pin)
         .then(({ activeProfileId: active }) => {
+          // The startup snapshot is one file for the whole app, written by
+          // whichever profile was active. Left in place across a switch it
+          // seeds the NEXT launch — and the fallbacks already resolved from
+          // it seed this session's loading states — with the previous
+          // person's rows under this person's name. Cleared before the
+          // library is re-keyed, so nothing remembered outlives its owner;
+          // this profile's own live data rewrites it within the session.
+          clearStartupSnapshot()
+          forgetStartupFallbacks()
           setActiveProfileIdState(active)
           setProfilePinPrompt(null)
         })
