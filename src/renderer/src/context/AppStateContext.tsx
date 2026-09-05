@@ -543,6 +543,11 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   // wrong — see the note above useMediaHubWatchedIds.
   const [libraryEpoch, setLibraryEpoch] = useState(0)
   const libraryKey = `${activeProfileId}:${libraryEpoch}`
+  // Bumped by every watch-state write the renderer makes (see
+  // refreshWatchStatus further down, and markContinueWatching) — declared
+  // up here so the mutation actions between can bump it too. MediaDetailPage
+  // and My Stuff key their own history reads on it.
+  const [watchStatusVersion, setWatchStatusVersion] = useState(0)
   const reloadLibrary = useCallback(() => setLibraryEpoch((n) => n + 1), [])
 
   const homeFeed = useMediaHubHomeFeed(libraryKey)
@@ -1039,6 +1044,11 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
           // into browseCatalog above) don't go stale until some unrelated
           // catalog refetch happens to pick it up.
           watchedIdsResult.refresh()
+          // And the version the detail page and My Stuff key their own
+          // history reads on — the one thing refreshWatchStatus does that
+          // the two refreshes above do not. Left out, a mark made from a
+          // card's context menu never reached the open detail page.
+          setWatchStatusVersion((v) => v + 1)
         })
         .catch(() => {})
     },
@@ -1860,7 +1870,6 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     setPlaybackTracks(null)
   }, [])
 
-  const [watchStatusVersion, setWatchStatusVersion] = useState(0)
   const refreshWatchStatus = useCallback(() => {
     homeFeed.refresh()
     watchedIdsResult.refresh()

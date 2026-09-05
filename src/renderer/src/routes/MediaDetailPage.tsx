@@ -479,11 +479,10 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
     const call = watched ? api.tracking.markWatched : api.tracking.unmarkWatched
     try {
       await call({ item, playback: { season: episode.season, episode: episode.episode } })
-      const refreshed = await api.tracking.list()
-      setHistory(refreshed.history.filter((h) => h.id === media.id))
-      // The same write the movie toggle below makes, so the same refresh:
-      // the home feed's Continue Watching row and the grids' badges read
-      // this history too, and this page's own `history` copy is not theirs.
+      // One refetch, not two: refreshWatchStatus bumps watchStatusVersion,
+      // which re-runs this page's own history effect, so the manual
+      // tracking.list() that used to sit here was a second identical read
+      // (and, with Simkl awaited in the handler, a second wait).
       refreshWatchStatus()
     } catch {
       pushNotification({ tone: 'error', message: 'Could not update watched status.' })
@@ -518,8 +517,6 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
     const call = watched ? api.tracking.markWatched : api.tracking.unmarkWatched
     try {
       await call({ item })
-      const refreshed = await api.tracking.list()
-      setHistory(refreshed.history.filter((h) => h.id === media.id))
       refreshWatchStatus()
     } catch {
       pushNotification({ tone: 'error', message: 'Could not update watched status.' })
@@ -567,8 +564,6 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
           )
         )
       }
-      const refreshed = await api.tracking.list()
-      setHistory(refreshed.history.filter((h) => h.id === media.id))
       refreshWatchStatus()
     } catch {
       pushNotification({ tone: 'error', message: 'Could not update the season’s watched status.' })
