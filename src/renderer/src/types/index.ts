@@ -14,6 +14,10 @@ export interface MediaItem {
   mediaKind?: 'movie' | 'series' | 'anime'
   title: string
   subtitle?: string
+  /** The source-language name when `title` is a translation (an anime's
+   *  romaji title) — see CatalogItem.originalTitle. Also drawn as the
+   *  subtitle, and handed to stream resolution as an alternate name. */
+  originalTitle?: string
   description?: string
   posterUrl?: string
   backdropUrl?: string

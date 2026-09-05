@@ -46,6 +46,12 @@ export interface CatalogItem {
   id: string
   simklId?: number
   title: string
+  /** The source's own-language name when `title` is a translation — a
+   *  Kitsu anime's romaji canonical title under its English one. Shown as
+   *  a secondary line, searched alongside `title`, and matched against
+   *  release names alongside it: releases are named in romaji, so without
+   *  it an English title would find no stream at all. */
+  originalTitle?: string
   type: MediaKind
   poster: string
   background: string

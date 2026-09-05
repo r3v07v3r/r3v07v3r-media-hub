@@ -149,8 +149,10 @@ export function parseMediaId(id: string): { imdbId: string; season?: number; epi
 export async function findMovie(
   config: JellyfinConfig,
   imdbId: string,
-  title: string
+  /** The title's names — every one matches; the first is the search term. */
+  title: string | readonly string[]
 ): Promise<JellyfinItem | null> {
+  const primary = String((Array.isArray(title) ? title[0] : title) ?? '')
   // Only ask when there is actually an id to ask about. An empty filter is
   // not a narrow query, it is no query — see matchesProviderId.
   if (imdbId) {
@@ -168,11 +170,11 @@ export async function findMovie(
     if (provided) return provided
   }
 
-  if (!title.trim()) return null
+  if (!primary.trim()) return null
   const byName = await request<JellyfinItemsResponse>(config, '/Items', {
     Recursive: 'true',
     IncludeItemTypes: 'Movie',
-    SearchTerm: title,
+    SearchTerm: primary,
     Fields: FIELDS,
     Limit: '20'
   }).catch(() => null)
@@ -193,10 +195,12 @@ export async function findMovie(
 export async function findEpisode(
   config: JellyfinConfig,
   imdbId: string,
-  title: string,
+  /** The title's names — every one matches; the first is the search term. */
+  title: string | readonly string[],
   season: number,
   episode: number
 ): Promise<JellyfinItem | null> {
+  const primary = String((Array.isArray(title) ? title[0] : title) ?? '')
   let series: JellyfinItem | null = null
 
   if (imdbId) {
@@ -213,11 +217,11 @@ export async function findEpisode(
     series = byProvider?.Items?.find((item) => matchesProviderId(item, imdbId)) ?? null
   }
 
-  if (!series && title.trim()) {
+  if (!series && primary.trim()) {
     const byName = await request<JellyfinItemsResponse>(config, '/Items', {
       Recursive: 'true',
       IncludeItemTypes: 'Series',
-      SearchTerm: title,
+      SearchTerm: primary,
       Fields: 'ProviderIds',
       Limit: '20'
     }).catch(() => null)

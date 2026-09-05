@@ -578,7 +578,7 @@ export function normalizeKitsuEpisode(record: RawApiPayload, parentId: string): 
     season,
     episode,
     number: episode,
-    title: a.canonicalTitle || a.titles?.en_us || a.titles?.en || `Episode ${episode}`,
+    title: a.titles?.en || a.titles?.en_us || a.canonicalTitle || `Episode ${episode}`,
     released: a.airdate || '',
     description: a.synopsis || a.description || '',
     thumbnail: a.thumbnail?.original || ''
@@ -614,9 +614,19 @@ export function normalizeKitsuAnime(record: RawApiPayload, lightweight = false):
   const a = record.attributes || {}
   const id = `kitsu:${record.id}`
   const count = Number(a.episodeCount) || 0
+  // English first. Kitsu's canonical title is the romaji one, which is
+  // what every anime in the library used to be listed and searched under;
+  // the English name is what most people know a show by. The romaji is
+  // kept as originalTitle: it is shown as a secondary line, matched in
+  // search, and — the part that is not optional — matched against release
+  // names, which are romaji. See titleMatchesRelease.
+  const english = String(a.titles?.en || a.titles?.en_us || '').trim()
+  const canonical = String(a.canonicalTitle || '').trim()
+  const original = english && canonical && canonical !== english ? canonical : ''
   return {
     id,
-    title: a.canonicalTitle || a.titles?.en_us || a.titles?.en || 'Untitled',
+    title: english || canonical || 'Untitled',
+    ...(original ? { originalTitle: original } : {}),
     type: 'anime',
     poster: a.posterImage?.large || a.posterImage?.original || '',
     background: a.coverImage?.large || a.coverImage?.original || '',
@@ -871,10 +881,19 @@ function mediaKey(value: string): string {
  * inclusion is exactly what fails here, since "dragonball" is a substring
  * of "dragonballz" too.
  */
-export function titleMatchesRelease(releaseText: string, requestedTitle: string): boolean {
-  if (!requestedTitle.trim()) return true
-  const parsed = parseReleaseName(releaseText)
-  return mediaKey(parsed.title) === mediaKey(requestedTitle)
+export function titleMatchesRelease(
+  releaseText: string,
+  requestedTitle: string | readonly string[]
+): boolean {
+  // Any of the names the title is known by. An anime is listed under its
+  // English name but released under its romaji one, so a match against a
+  // single title would find nothing for it — see CatalogItem.originalTitle.
+  const wanted = (Array.isArray(requestedTitle) ? requestedTitle : [requestedTitle])
+    .map((t) => String(t ?? '').trim())
+    .filter(Boolean)
+  if (!wanted.length) return true
+  const parsed = mediaKey(parseReleaseName(releaseText).title)
+  return wanted.some((t) => mediaKey(t) === parsed)
 }
 
 export interface TorBoxFile {
