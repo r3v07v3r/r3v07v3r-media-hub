@@ -9,6 +9,24 @@ import styles from './AnimeStoryPanel.module.css'
 
 type StoryLink = Omit<AnimeStoryLink, 'item'> & { item: MediaItem }
 
+/** What each relation means to somebody deciding what to watch next. */
+const RELATION_LABEL: Record<AnimeStoryLink['relation'], string> = {
+  prequel: 'Watch first',
+  parent_story: 'The main story',
+  full_story: 'The full story',
+  side_story: 'Side story',
+  spin_off: 'Spin-off',
+  summary: 'Recap',
+  sequel: 'Continue with'
+}
+
+/** Before / alongside / after — the three questions a franchise raises. */
+const STORY_GROUPS: ReadonlyArray<{ label: string; relations: AnimeStoryLink['relation'][] }> = [
+  { label: 'Watch before', relations: ['prequel', 'parent_story', 'full_story'] },
+  { label: 'Alongside', relations: ['side_story', 'spin_off', 'summary'] },
+  { label: 'Watch after', relations: ['sequel'] }
+]
+
 interface AnimeStoryPanelProps {
   status: 'loading' | 'ready' | 'error'
   checked: boolean
@@ -83,9 +101,12 @@ export function AnimeStoryPanel({
     )
   }
 
-  const ordered = [...links].sort(
-    (a, b) => Number(b.relation === 'sequel') - Number(a.relation === 'sequel')
-  )
+  // Already in before / alongside / after order from main (animeStoryLinks);
+  // grouped here under a heading each so the order reads as an order.
+  const groups = STORY_GROUPS.map((group) => ({
+    ...group,
+    links: links.filter((link) => group.relations.includes(link.relation))
+  })).filter((group) => group.links.length)
 
   return (
     <section className={`${styles.panel} glass-panel`} aria-label="Story links">
@@ -98,39 +119,48 @@ export function AnimeStoryPanel({
       </div>
       <p className={styles.context}>{releaseMessage}</p>
 
-      {ordered.length ? (
-        <ul className={styles.list}>
-          {ordered.map((link) => {
-            const artwork = resolveArtwork(link.item)
-            const sequel = link.relation === 'sequel'
-            return (
-              <li key={`${link.relation}:${link.item.id}`}>
-                <button
-                  type="button"
-                  className={`${styles.storyLink} ${sequel ? styles.sequel : styles.prequel}`}
-                  data-media-id={link.item.id}
-                  onClick={() => onSelect(link.item)}
-                >
-                  <ArtworkImage
-                    src={artwork.thumbnailUrl ?? artwork.posterUrl}
-                    alt=""
-                    fallbackTitle={link.item.title}
-                    artTint={link.item.artTint}
-                    className={styles.thumb}
-                  />
-                  <span className={styles.info}>
-                    <span className={styles.linkType}>
-                      {sequel ? 'Continue with' : 'Watch first'}
-                    </span>
-                    <span className={styles.title}>{link.item.title}</span>
-                    <span className={styles.meta}>{availability(link.item)}</span>
-                  </span>
-                  <Icon name="chevron" size={16} className={styles.chevron} />
-                </button>
-              </li>
-            )
-          })}
-        </ul>
+      {groups.length ? (
+        groups.map((group) => (
+          <div key={group.label}>
+            <p className={styles.groupLabel}>{group.label}</p>
+            <ul className={styles.list}>
+              {group.links.map((link) => {
+                const artwork = resolveArtwork(link.item)
+                const after = link.relation === 'sequel'
+                // A one-episode entry in a franchise is a film (or an OVA):
+                // the thing people most want pointed out between seasons.
+                const film = link.item.totalEpisodes === 1
+                return (
+                  <li key={`${link.relation}:${link.item.id}`}>
+                    <button
+                      type="button"
+                      className={`${styles.storyLink} ${after ? styles.sequel : styles.prequel}`}
+                      data-media-id={link.item.id}
+                      onClick={() => onSelect(link.item)}
+                    >
+                      <ArtworkImage
+                        src={artwork.thumbnailUrl ?? artwork.posterUrl}
+                        alt=""
+                        fallbackTitle={link.item.title}
+                        artTint={link.item.artTint}
+                        className={styles.thumb}
+                      />
+                      <span className={styles.info}>
+                        <span className={styles.linkType}>
+                          {RELATION_LABEL[link.relation]}
+                          {film ? ' · Film' : ''}
+                        </span>
+                        <span className={styles.title}>{link.item.title}</span>
+                        <span className={styles.meta}>{availability(link.item)}</span>
+                      </span>
+                      <Icon name="chevron" size={16} className={styles.chevron} />
+                    </button>
+                  </li>
+                )
+              })}
+            </ul>
+          </div>
+        ))
       ) : (
         <p className={styles.empty}>
           No direct sequel or prequel is listed right now. That does not rule out a future

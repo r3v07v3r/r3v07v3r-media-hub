@@ -117,7 +117,16 @@ export interface CatalogItem {
 }
 
 /** The direct sequel/prequel entries Kitsu lists for an anime release. */
-export type AnimeStoryRelation = 'sequel' | 'prequel'
+/**
+ * How a related anime stands to this one, in Kitsu's own vocabulary.
+ *
+ * `sequel` and `prequel` are the spine; the rest are the bridges — the film
+ * between two seasons, the side story set alongside, the recap, the full
+ * story a summary condensed — which are exactly what somebody following a
+ * franchise in order needs to be shown and used to be filtered out.
+ */
+export type AnimeStoryRelation =
+  'prequel' | 'parent_story' | 'full_story' | 'side_story' | 'spin_off' | 'summary' | 'sequel'
 
 export interface AnimeStoryLink {
   relation: AnimeStoryRelation
@@ -163,7 +172,11 @@ export interface TitleCollectionResult {
   /** TMDB's own name for the series, e.g. "The Dune Collection". Empty when
    *  the title belongs to no collection, which is true of most films. */
   name: string
+  /** Every film in the series, the one on screen included, in release order. */
   parts: CatalogItem[]
+  /** The film the question was asked about — the panel marks it rather than
+   *  dropping it, so the order reads as an order. */
+  currentId?: string
 }
 
 export interface PersonCreditsResult {

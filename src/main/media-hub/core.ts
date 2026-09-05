@@ -709,11 +709,24 @@ const FRANCHISE_ANIME_ROLES = new Set([
   'summary'
 ])
 
-const STORY_ANIME_ROLES = new Set<AnimeStoryLink['relation']>(['sequel', 'prequel'])
+/** The relations the story panel shows, in the order it shows them: what
+ *  comes before, what sits alongside, what comes after. */
+export const ANIME_STORY_ORDER: readonly AnimeStoryLink['relation'][] = [
+  'prequel',
+  'parent_story',
+  'full_story',
+  'side_story',
+  'spin_off',
+  'summary',
+  'sequel'
+]
+const STORY_ANIME_ROLES = new Set<AnimeStoryLink['relation']>(ANIME_STORY_ORDER)
 
-/** Direct before/after entries from Kitsu. Side stories and recaps are not
- * useful answers to "what should I watch next?"; an absent sequel is never
- * treated as proof that a future season will not happen. */
+/** The franchise around a title, from Kitsu, ordered before / alongside /
+ * after. Side stories, spin-offs, recaps and the films between seasons used
+ * to be dropped as "not useful answers to what next" — they are exactly the
+ * bridges somebody following a story in order needs pointed out. An absent
+ * sequel is never treated as proof that a future season will not happen. */
 export function animeStoryLinks(payload: RawApiPayload = {}): AnimeStoryLink[] {
   const included = new Map(
     (payload.included || [])
@@ -733,7 +746,12 @@ export function animeStoryLinks(payload: RawApiPayload = {}): AnimeStoryLink[] {
     seen.add(key)
     links.push({ relation, item: normalizeKitsuAnime(dest as RawApiPayload) })
   }
+  // Before, alongside, after — and within a group, the order Kitsu gave.
+  const rank = (relation: AnimeStoryLink['relation']): number => ANIME_STORY_ORDER.indexOf(relation)
   return links
+    .map((link, index) => ({ link, index }))
+    .sort((a, b) => rank(a.link.relation) - rank(b.link.relation) || a.index - b.index)
+    .map(({ link }) => link)
 }
 
 export function filterAnimeRelationships(payload: RawApiPayload = {}): CatalogItem[] {

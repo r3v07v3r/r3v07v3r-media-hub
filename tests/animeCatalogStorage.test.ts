@@ -111,32 +111,40 @@ check('a zero-episode title produces an empty array either way', () => {
 
 console.log('\nanimeStoryLinks')
 
-check('keeps only direct sequel/prequel links and preserves availability status', () => {
-  const links = animeStoryLinks({
-    data: [
-      { attributes: { role: 'sequel' }, relationships: { destination: { data: { id: '2' } } } },
-      { attributes: { role: 'prequel' }, relationships: { destination: { data: { id: '3' } } } },
-      { attributes: { role: 'spin_off' }, relationships: { destination: { data: { id: '4' } } } },
-      { attributes: { role: 'sequel' }, relationships: { destination: { data: { id: '2' } } } }
-    ],
-    included: [
-      { id: '2', type: 'anime', attributes: { canonicalTitle: 'Story After', status: 'upcoming' } },
-      {
-        id: '3',
-        type: 'anime',
-        attributes: { canonicalTitle: 'Story Before', status: 'finished' }
-      },
-      { id: '4', type: 'anime', attributes: { canonicalTitle: 'Spin-off', status: 'finished' } }
-    ]
-  })
-  assert.deepEqual(
-    links.map((link) => [link.relation, link.item.title, link.item.status]),
-    [
-      ['sequel', 'Story After', 'upcoming'],
-      ['prequel', 'Story Before', 'finished']
-    ]
-  )
-})
+check(
+  'keeps every franchise relation, ordered before / alongside / after, and preserves availability status',
+  () => {
+    const links = animeStoryLinks({
+      data: [
+        { attributes: { role: 'sequel' }, relationships: { destination: { data: { id: '2' } } } },
+        { attributes: { role: 'prequel' }, relationships: { destination: { data: { id: '3' } } } },
+        { attributes: { role: 'spin_off' }, relationships: { destination: { data: { id: '4' } } } },
+        { attributes: { role: 'sequel' }, relationships: { destination: { data: { id: '2' } } } }
+      ],
+      included: [
+        {
+          id: '2',
+          type: 'anime',
+          attributes: { canonicalTitle: 'Story After', status: 'upcoming' }
+        },
+        {
+          id: '3',
+          type: 'anime',
+          attributes: { canonicalTitle: 'Story Before', status: 'finished' }
+        },
+        { id: '4', type: 'anime', attributes: { canonicalTitle: 'Spin-off', status: 'finished' } }
+      ]
+    })
+    assert.deepEqual(
+      links.map((link) => [link.relation, link.item.title, link.item.status]),
+      [
+        ['prequel', 'Story Before', 'finished'],
+        ['spin_off', 'Spin-off', 'finished'],
+        ['sequel', 'Story After', 'upcoming']
+      ]
+    )
+  }
+)
 
 check(
   'lightweight still preserves real season/episode positions — the exact thing a "Completed" badge is computed from',
