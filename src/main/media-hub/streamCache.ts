@@ -647,6 +647,12 @@ export interface StreamCache {
   ): Promise<StreamCacheStartResult>
   /** Bare hex token of whatever session is currently loaded ('' when none) — lets the Downloads page's list/delete IPC handlers tell the live session apart from idle ones on disk (see listCacheSessions/deleteCacheSession below). */
   getActiveToken(): string
+  /** Whether the bytes for this playback position are already on disk, so a
+   *  read there costs no upstream traffic. False whenever the answer cannot
+   *  be known (no duration or length yet), which is the safe answer for the
+   *  one caller — the scrub-bar thumbnail, whose read of an uncached region
+   *  would otherwise pull the connection away from the playhead. */
+  isPositionCached(seconds: number): boolean
   /**
    * Supplies the media duration after start(), which is what the retention
    * window needs to convert its behind/ahead *seconds* into bytes.
@@ -1920,6 +1926,11 @@ export function createStreamCache({
   return {
     start,
     getActiveToken: () => token,
+    isPositionCached: (seconds) => {
+      const rate = bytesPerSecond()
+      if (!token || !rate || !Number.isFinite(seconds) || seconds < 0) return false
+      return chunks.get(chunkIndexForByte(Math.floor(seconds * rate))) === 'ready'
+    },
     setDuration: (value: number | undefined) => {
       const seconds = Number(value)
       if (Number.isFinite(seconds) && seconds > 0) durationSeconds = seconds
