@@ -40,7 +40,7 @@ import {
   trackingAccountMarks
 } from './settingsStore'
 import { traktRequest } from './traktClient'
-import { failedServices, firstFailure, pushPlanEverywhere } from './watchlistPush'
+import { failedServices, firstFailure, pushPlanEverywhere, type PushOutcome } from './watchlistPush'
 import { plannedRemovals, type PlannedOrigin } from './watchlistRules'
 import type { MediaKind } from '../../shared/media-hub/types'
 import type { TaskPriority } from './taskScheduler'
@@ -645,52 +645,84 @@ export function pushLocalPlanChange(
   planned: boolean
 ): void {
   if (!twoWaySyncEnabled()) return
-  // What the last pull found holding this title. A removal at a service
+  // Queued behind whatever change to the SAME title is still in flight. A
+  // plan followed by an un-plan before the first push settled used to read
+  // the evidence record ahead of the add that writes to it: the removal
+  // found nothing, skipped Simkl's destructive delete for want of evidence,
+  // and the add then completed and recorded a presence the next pull
+  // restored locally. In order, the removal sees the add's outcome.
+  const previous = planChangeChains.get(item.id) ?? Promise.resolve()
+  // Nothing in a change rethrows (each service's failure is logged by the
+  // push), and a settled chain — however it settled — must never block the
+  // next change to the title.
+  const next = previous.then(() => applyPlanChange(item, planned)).catch(() => {})
+  planChangeChains.set(item.id, next)
+  void next.then(() => {
+    if (planChangeChains.get(item.id) === next) planChangeChains.delete(item.id)
+  })
+}
+
+/** One chain per title with a change in flight — see pushLocalPlanChange.
+ *  An entry is dropped as its chain drains, so this holds only what is
+ *  actually pending. */
+const planChangeChains = new Map<string, Promise<void>>()
+
+const sentServices = (outcome: PushOutcome): PlannedSource[] =>
+  (Object.keys(outcome) as PlannedSource[]).filter((s) => outcome[s].state === 'sent')
+
+async function applyPlanChange(
+  item: { id: string; type: MediaKind; title: string; year?: string },
+  planned: boolean
+): Promise<void> {
+  // What is known to hold this title: the last pull's findings, plus any
+  // add this app has made since (recorded below). A removal at a service
   // whose delete is not scoped to the watchlist is only sent with that
   // evidence in hand — see simklPlan, where sending it without evidence
   // would erase watch history rather than a list row.
   const onServices = planned ? [] : (plannedSources()[item.id] ?? [])
-  void pushPlanEverywhere(item, planned, { onServices }).then((outcome) => {
-    if (planned) {
-      // An add this app made IS evidence the title is on those services —
-      // the same evidence a pull records. Without writing it down, a title
-      // planned and un-planned again before the next pull had no record of
-      // ever reaching Simkl, so the removal there was skipped for lack of
-      // it, and the next pull found the title still on Simkl's list and
-      // quietly planned it here again.
-      rememberPushedSources(
-        item.id,
-        (Object.keys(outcome) as PlannedSource[]).filter((s) => outcome[s].state === 'sent')
-      )
-      return
+  const outcome = await pushPlanEverywhere(item, planned, { onServices })
+  if (planned) {
+    // An add this app made IS evidence the title is on those services —
+    // the same evidence a pull records. Without writing it down, a title
+    // planned and un-planned again before the next pull had no record of
+    // ever reaching Simkl, so the removal there was skipped for lack of
+    // it, and the next pull found the title still on Simkl's list and
+    // quietly planned it here again.
+    rememberPushedSources(item.id, sentServices(outcome))
+    return
+  }
+  // The mirror image: a removal that went out is no longer evidence of a
+  // presence. Left standing, a later un-plan whose re-plan had failed at
+  // Simkl would send the unscoped delete on the strength of a list entry
+  // that is not there — the one request this whole record exists to hold
+  // back.
+  forgetPushedSources(item.id, sentServices(outcome))
+  const failed = failedServices(outcome)
+  if (failed.length) {
+    // Kept, retried at the next sync, and suppressing the re-add until
+    // then. The origin stays too: it is still true that this title came
+    // from that service, and it is what the retry's success will clear.
+    const pending = pendingRemovals()
+    pending[item.id] = {
+      item,
+      services: failed,
+      attempts: 1,
+      at: Date.now(),
+      marks: trackingAccountMarks(),
+      lastError: firstFailure(outcome)
     }
-    const failed = failedServices(outcome)
-    if (failed.length) {
-      // Kept, retried at the next sync, and suppressing the re-add until
-      // then. The origin stays too: it is still true that this title came
-      // from that service, and it is what the retry's success will clear.
-      const pending = pendingRemovals()
-      pending[item.id] = {
-        item,
-        services: failed,
-        attempts: 1,
-        at: Date.now(),
-        marks: trackingAccountMarks(),
-        lastError: firstFailure(outcome)
-      }
-      writePendingRemovals(pending)
-      return
-    }
-    // Nothing left owed, so this app's memory of where the title came
-    // from ends here. Keeping it would let the next pull see an origin
-    // with no remote presence and "remove" something already gone —
-    // harmless, but it would also resurrect the entry if the person
-    // re-planned it here.
-    const origins = plannedOrigins()
-    if (!origins[item.id]) return
-    delete origins[item.id]
-    writeOrigins(origins)
-  })
+    writePendingRemovals(pending)
+    return
+  }
+  // Nothing left owed, so this app's memory of where the title came
+  // from ends here. Keeping it would let the next pull see an origin
+  // with no remote presence and "remove" something already gone —
+  // harmless, but it would also resurrect the entry if the person
+  // re-planned it here.
+  const origins = plannedOrigins()
+  if (!origins[item.id]) return
+  delete origins[item.id]
+  writeOrigins(origins)
 }
 
 /** What the last pull did, for the Settings panel that shows it. Null
@@ -711,6 +743,20 @@ function rememberPushedSources(id: string, services: PlannedSource[]): void {
   const merged = new Set(sources[id] ?? [])
   for (const service of services) merged.add(service)
   sources[id] = [...merged]
+  writeSources(sources)
+}
+
+/** The reverse of rememberPushedSources, for a removal that went out. */
+function forgetPushedSources(id: string, services: PlannedSource[]): void {
+  if (!services.length) return
+  const sources = { ...plannedSources() }
+  const remaining = (sources[id] ?? []).filter((s) => !services.includes(s))
+  if (remaining.length) sources[id] = remaining
+  else delete sources[id]
+  writeSources(sources)
+}
+
+function writeSources(sources: PlannedSources): void {
   const stored: StoredSources = { marks: trackingAccountMarks(), sources }
   getDatabase().putCache(PLANNED_SOURCES_CACHE_KEY, stored, SOURCES_TTL_MS, { durable: true })
 }
