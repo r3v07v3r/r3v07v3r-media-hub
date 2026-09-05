@@ -1446,7 +1446,7 @@ export default function SettingsPage({
                 <SliderRow
                   icon="cpu"
                   title="Video scaling"
-                  description="How video is resized to fit your screen, done on the GPU while playing. Sharp is crisper on older, lower-resolution titles; it can ring slightly on very noisy sources, which is why it isn't the default."
+                  description="How video is resized to fit your screen, done on the GPU while playing. Standard leaves mpv's own scalers in place, which is the lightest on the GPU. Sharp is crisper on older, lower-resolution titles; it can ring slightly on very noisy sources, which is why it isn't the default."
                   value={mediaHubSettings?.videoScaling ?? 'auto'}
                   options={VIDEO_SCALING_OPTIONS}
                   onChange={handleSetVideoScaling}
