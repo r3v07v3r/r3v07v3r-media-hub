@@ -428,3 +428,47 @@ console.log('ok  audio language and release group')
   )
 }
 console.log('ok  release name source and reported tracks')
+
+// A media server is the one source that names the FILE in `name` and the
+// library title in `title` — the reverse of the add-ons. Reading `title`
+// first there lost the group on every Jellyfin copy, so a season that had
+// been playing from the server's [SubsPlease] files stopped preferring them.
+{
+  const jellyfinShaped = {
+    source: 'mediaserver',
+    itemId: 'jf',
+    mediaSourceId: 'ms',
+    name: '[SubsPlease] Show - 06 (1080p) [ABCD1234].mkv',
+    title: 'Show Episode 6',
+    audioLanguages: ['eng', 'jpn'],
+    resolution: 1080,
+    cached: true,
+    compatible: true,
+    exact: true
+  } as StreamCandidate
+  const rivalTorrentio = {
+    infoHash: 'rival',
+    name: 'Torrentio\n2160p',
+    title: '[OtherGrp] Show - 06 [Dual-Audio][2160p]\n👤 40 💾 4.1 GB',
+    cached: true,
+    compatible: true,
+    exact: true
+  } as StreamCandidate
+  assert.equal(streamReleaseName(jellyfinShaped), '[SubsPlease] Show - 06 (1080p) [ABCD1234].mkv')
+  assert.equal(releaseGroup(streamReleaseName(jellyfinShaped)), 'subsplease')
+  assert.equal(
+    rankStreams([rivalTorrentio, jellyfinShaped], 'en', {}, 'prefer-quality', {
+      preferredGroup: 'subsplease'
+    })[0].source,
+    'mediaserver',
+    "the server's own file keeps the season on its group over a higher-resolution rival"
+  )
+  const lockedDown = { ...jellyfinShaped, name: 'Episode 6' } as StreamCandidate
+  assert.equal(
+    streamReleaseName(lockedDown),
+    'Episode 6',
+    'a server that hides Path falls back to the item name, which names no group'
+  )
+  assert.equal(releaseGroup(streamReleaseName(lockedDown)), null)
+}
+console.log('ok  media-server release name')
