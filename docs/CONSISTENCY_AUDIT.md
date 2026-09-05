@@ -146,42 +146,57 @@ Which of C1 or C6 broke this particular stream cannot be told from a log
 that recorded neither; both now log (`streamCache:starved`,
 `streamCache:rangeReply`), as do dropped frames.
 
-## Needs a decision
+## Split verdicts
 
-Split verdicts — one verifier real, one not. Left as they are.
+One verifier called each real, the other did not. Graham decided on
+2026-09-05; the follow-up branch carries the ones taken.
 
-- **S4** The "Standard" scaling preset writes `scale=lanczos`, `cscale=lanczos`
-  on every load; the comment calls these mpv's stock scalers. Whether they
-  cost frames depends on the video output in use. Decide whether Standard
-  should mean mpv's defaults.
-- **S6** Hovering the scrub bar spawns a thumbnail mpv against the live
-  cache; a hover over an uncached region triggers a cache excursion. The
-  cached-region guard exists; captures are not serialised.
+Taken:
+
+- **S4** Standard scaling now leaves mpv's own scalers in place: the preset
+  sets nothing, mpv is launched with `--reset-on-next-file=scale,dscale,cscale`
+  so a title after a High or Sharp one starts from the defaults, and the
+  presets that do set filters do so after the load.
+- **S6** Scrub-bar thumbnail captures run one at a time, only the latest
+  request is served, and a position not yet on disk answers nothing rather
+  than pulling the connection away from the playhead.
+- **S11** A file that ends well short of the runtime shows "The stream
+  ended early" with Resume (a fresh resolve at the saved position) and
+  Stop, and suppresses the next-episode card.
+- **S12** Scrobbles carry the title's release year from the main window's
+  MediaItem, and the first rejection in a session is shown as a warning
+  toast with Simkl's reason.
+
+Left as they are:
+
 - **S7** A main-window reload during playback resets `playbackMedia`; the
   overlay keeps every mouse event, so the practical effect is the
   click-through guard attribute, not navigation.
 - **S10** A second Play click before the button disables cancels the first
   preparation silently.
-- **S11** A movie whose stream ends early looks exactly like one that
-  finished: no card, no message, mpv holding the last frame. With C1 a
-  starved stream now becomes an error instead, but an "ended early —
-  Resume" state would still be clearer.
-- **S12** The scrobble handler sends `year: ''`, and Simkl's `id_err` for a
-  film with a good IMDb id is unexplained; rejections are only logged.
 
-## Follow-ups the maps raised but no lens proved
+## Follow-ups the maps raised
+
+Taken on the follow-up branch:
+
+- `useMediaHubLists` refetches on a new `lists` scope of `library:changed`,
+  which the remote-list read announces.
+- `toggleDisliked` re-reads the disliked hook once the write lands.
+- A failed watchlist *add* push is queued and retried like a removal, and
+  counts as evidence of presence once it lands (docs/WATCHLIST-SYNC.md,
+  rule 6).
+- The dead `catalogProviders` channel and its result types are gone.
+
+Still open:
 
 - `MyStuffPage`'s Lists view and `WatchlistSyncSection` each fetch the
   planned report independently with no shared refresh.
-- `useMediaHubLists` does not refetch while mounted when remote lists
-  arrive; the `library:changed` event has no `lists` scope yet.
-- `toggleDisliked` writes local state without refreshing the disliked
-  hook, so the two can diverge until the next re-key.
-- A failed watchlist *add* push is dropped; only removals are queued.
 - `catalog-logic.ts`'s `isItemWatched` matches by several id forms, a
   second watched rule beside `adapters.ts`'s `watchedIds.has(id)`.
-- `catalogProviders` is defined in `ipc-channels.ts` but handled, exposed
-  and used nowhere.
+
+The film in the playback report was served by the household cache server,
+and no toast appeared when it stopped — consistent with the silent
+end-of-file path (C1) rather than the error path.
 
 ## Rejected
 
