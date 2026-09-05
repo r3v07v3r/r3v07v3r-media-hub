@@ -5,11 +5,6 @@
   flex-direction: column;
   gap: 12px;
 }
-.headerRow {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
 .heading {
   margin: 0;
   font-family: var(--font-display);
@@ -18,14 +13,6 @@
   letter-spacing: 1.5px;
   text-transform: uppercase;
   color: var(--text-secondary);
-}
-.viewAll {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--accent-cyan);
-}
-.viewAll:hover {
-  text-decoration: underline;
 }
 
 .note {
@@ -38,6 +25,9 @@
 /* Wide poster carousel — this panel lives in the main content column now
    (below About), not the sidebar, so there's room for a horizontally
    scrolling row of posters instead of the old cramped vertical list. */
+.scrollerWrap {
+  position: relative;
+}
 .scroller {
   list-style: none;
   margin: 0;
@@ -46,6 +36,38 @@
   gap: 16px;
   overflow-x: auto;
   scroll-behavior: smooth;
+}
+
+/* A plain vertical-wheel mouse has no other discoverable way to reach
+   cards past the fold — see SimilarPanel's onWheel handler — so these
+   mirror RecommendationCarousel's own "<"/">" affordance. */
+.arrow {
+  position: absolute;
+  top: 50%;
+  right: -6px;
+  transform: translateY(-50%);
+  width: 34px;
+  height: 34px;
+  min-width: 34px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-primary);
+  background: rgba(6, 10, 18, 0.75);
+  border: 1px solid var(--border-subtle);
+  z-index: 3;
+}
+.arrow:hover {
+  border-color: var(--border-active);
+}
+.arrow svg {
+  width: 15px;
+  height: 15px;
+}
+.arrowLeft {
+  left: -6px;
+  right: auto;
 }
 
 .cardItem {

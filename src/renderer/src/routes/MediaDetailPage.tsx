@@ -651,6 +651,17 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
                 onPlay={(ep) => ep && handlePlay(ep.season, ep.episode)}
               />
             </div>
+            {/* Ahead of the episode grid, not after it — a long-running
+                series/anime can have hundreds of episode cards below, and
+                these panels used to sit in the sidebar precisely so they
+                stayed reachable without scrolling past all of them. */}
+            <GenresPanel genres={media.genres} onSelectGenre={handleGenreSelect} />
+            <SimilarPanel
+              status={relatedStatus}
+              items={related}
+              config={config}
+              onSelect={(item) => openDetail(item, media.title)}
+            />
             <EpisodesSection
               mediaId={media.id}
               showTitle={media.title}
@@ -669,19 +680,22 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
               status={metaStatus}
             />
           </>
-        ) : null}
-        {/* Movies skip NextToPlayPanel entirely (no isEpisodic branch above)
-            — its movie-specific "Ready to Watch"/"Resume Watching" variant
-            was just a second Play button duplicating the hero's own, per
-            the user's own request. */}
-        {!config.isEpisodic && <AboutPanel media={media} config={config} />}
-        <GenresPanel genres={media.genres} onSelectGenre={handleGenreSelect} />
-        <SimilarPanel
-          status={relatedStatus}
-          items={related}
-          config={config}
-          onSelect={(item) => openDetail(item, media.title)}
-        />
+        ) : (
+          <>
+            {/* Movies skip NextToPlayPanel entirely (no isEpisodic branch
+                above) — its movie-specific "Ready to Watch"/"Resume
+                Watching" variant was just a second Play button duplicating
+                the hero's own, per the user's own request. */}
+            <AboutPanel media={media} config={config} />
+            <GenresPanel genres={media.genres} onSelectGenre={handleGenreSelect} />
+            <SimilarPanel
+              status={relatedStatus}
+              items={related}
+              config={config}
+              onSelect={(item) => openDetail(item, media.title)}
+            />
+          </>
+        )}
       </div>
 
       <div className={styles.sidebar}>
