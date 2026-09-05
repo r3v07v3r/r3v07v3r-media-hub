@@ -368,6 +368,17 @@ export class MpvPlayer {
       // for no gain.
       '--cache=yes',
       '--cache-on-disk=no',
+      // RECONNECT. The local stream server now breaks the connection when a
+      // region of the file cannot be served (see streamCache.ts's abandon),
+      // instead of ending the body cleanly and letting the film appear to
+      // finish. That is only an improvement if the player treats a broken
+      // transfer as something to retry: with these, ffmpeg's HTTP layer
+      // reconnects at the byte it had reached (a fresh Range request this
+      // server answers from cache), backing off up to ~20s in total before
+      // it reports an error. A stall the cache recovers from is then a pause,
+      // and only one it cannot recover from ends playback — as an error,
+      // which the overlay reports, rather than as a credits roll.
+      '--stream-lavf-o=reconnect=1,reconnect_on_network_error=1,reconnect_delay_max=20',
       `--demuxer-readahead-secs=${profile.readaheadSeconds}`,
       `--cache-secs=${profile.readaheadSeconds}`,
       `--demuxer-max-bytes=${profile.maxBytes}`,
