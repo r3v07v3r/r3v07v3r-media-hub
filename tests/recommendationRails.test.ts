@@ -117,9 +117,11 @@ check('the reason is carried whole, so the label can be worded on the other side
 
 console.log('\nenoughStoredRecommendations')
 
-check('a full store must fill the row', () => {
+check('a store that could fill the row must fill it', () => {
   assert.equal(enoughStoredRecommendations(150, 36, 36), true)
   assert.equal(enoughStoredRecommendations(150, 35, 36), false)
+  assert.equal(enoughStoredRecommendations(38, 35, 36), false, 'one short is still short')
+  assert.equal(enoughStoredRecommendations(36, 36, 36), true)
 })
 
 check('a small library is judged against what it held', () => {

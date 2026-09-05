@@ -504,10 +504,12 @@ export function groupRecommendationRails(
  * Whether enough of a stored ranking survives the live exclusions to be
  * served — see readStoredRecommendations in main/media-hub/recommendations.ts.
  *
- * Judged against what the list HELD, not only against the row length: a
- * library too small to ever fill a row would otherwise miss on every read,
- * rank live every time and ask for a rebuild that cannot help. Half of
- * what was stored, capped at the row, is the floor.
+ * A list that could fill the row must still fill it: below that, the
+ * stored copy is depleted and a live ranking may know titles it never saw.
+ * A list that never could — a library too small for a row — is judged
+ * against what it held instead, or it would miss on every read, rank live
+ * every time and ask for a rebuild that cannot help. Half of what was
+ * stored is that floor.
  */
 export function enoughStoredRecommendations(
   storedCount: number,
@@ -515,8 +517,8 @@ export function enoughStoredRecommendations(
   served: number
 ): boolean {
   if (storedCount <= 0) return false
-  const floor = Math.min(served, Math.max(1, Math.floor(storedCount / 2)))
-  return survivingCount >= floor
+  if (storedCount >= served) return survivingCount >= served
+  return survivingCount >= Math.max(1, Math.floor(storedCount / 2))
 }
 
 /** Share of viewing by kind, 0..1, summing to 1. */
