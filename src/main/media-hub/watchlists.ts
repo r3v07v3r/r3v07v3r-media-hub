@@ -28,6 +28,7 @@
 
 import { getDatabase } from './dbState'
 import { logError } from './logger'
+import { notifyLibraryChanged } from './rendererBridge'
 import { kitsuIdForExternal } from './idBridge'
 import { malRequest } from './malSync'
 import { simklRequest } from './simklClient'
@@ -606,6 +607,10 @@ export async function syncPlannedFromServices(
     writeOrigins(origins)
   }
 
+  // Both the hourly pull and the Sync button land here, and neither had a
+  // way to reach the Planned grid: the button's own handler shows the
+  // report and nothing else. One notification covers both.
+  if (added || removed) notifyLibraryChanged('planned-sync', 'planned')
   return report(added, removed)
 }
 
@@ -646,7 +651,19 @@ export function pushLocalPlanChange(
   // would erase watch history rather than a list row.
   const onServices = planned ? [] : (plannedSources()[item.id] ?? [])
   void pushPlanEverywhere(item, planned, { onServices }).then((outcome) => {
-    if (planned) return
+    if (planned) {
+      // An add this app made IS evidence the title is on those services —
+      // the same evidence a pull records. Without writing it down, a title
+      // planned and un-planned again before the next pull had no record of
+      // ever reaching Simkl, so the removal there was skipped for lack of
+      // it, and the next pull found the title still on Simkl's list and
+      // quietly planned it here again.
+      rememberPushedSources(
+        item.id,
+        (Object.keys(outcome) as PlannedSource[]).filter((s) => outcome[s].state === 'sent')
+      )
+      return
+    }
     const failed = failedServices(outcome)
     if (failed.length) {
       // Kept, retried at the next sync, and suppressing the re-add until
@@ -680,6 +697,22 @@ export function pushLocalPlanChange(
  *  before one has ever run. */
 export function lastPlannedSyncReport(): PlannedSyncReport | null {
   return getDatabase().getCache<PlannedSyncReport>(REPORT_CACHE_KEY, { allowExpired: true })
+}
+
+/**
+ * Adds services this app itself just planned a title at to the sources
+ * record, under the account marks in force now — see pushLocalPlanChange.
+ * Merged into whatever the last pull wrote rather than replacing it, and
+ * only ever added to: the pull remains the authority on what has LEFT.
+ */
+function rememberPushedSources(id: string, services: PlannedSource[]): void {
+  if (!services.length) return
+  const sources = { ...plannedSources() }
+  const merged = new Set(sources[id] ?? [])
+  for (const service of services) merged.add(service)
+  sources[id] = [...merged]
+  const stored: StoredSources = { marks: trackingAccountMarks(), sources }
+  getDatabase().putCache(PLANNED_SOURCES_CACHE_KEY, stored, SOURCES_TTL_MS, { durable: true })
 }
 
 /** Whatever the last pull recorded. Expired is still worth showing: a
