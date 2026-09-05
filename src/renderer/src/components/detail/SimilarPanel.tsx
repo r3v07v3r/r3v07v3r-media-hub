@@ -37,9 +37,15 @@ export function SimilarPanel({ status, items, config, onSelect }: SimilarPanelPr
   // and it's overflow-x only — a plain vertical-wheel mouse (no trackpad,
   // no shift+scroll habit) would otherwise have no discoverable way to
   // reach cards past the fold. Same "<"/">" affordance
-  // RecommendationCarousel uses, plus a wheel translation for the mouse
-  // case that carousel doesn't need (it also gets keyboard tabbing, but a
-  // sighted mouse-only user won't discover that on their own).
+  // RecommendationCarousel uses.
+  //
+  // A wheel-to-horizontal translation was tried here too, but React
+  // attaches onWheel as a passive listener, so its preventDefault() was
+  // silently ignored — a vertical mouse-wheel gesture would scroll the
+  // rail AND the detail page underneath it at the same time. Fixing that
+  // properly needs a native, non-passive listener; the arrows alone
+  // already give a mouse-only user full, discoverable access to every
+  // card, so that complexity isn't earning its keep here.
   useEffect(() => {
     const el = scrollerRef.current
     if (!el) return
@@ -56,18 +62,6 @@ export function SimilarPanel({ status, items, config, onSelect }: SimilarPanelPr
       window.removeEventListener('resize', update)
     }
   }, [items])
-
-  function handleWheel(e: React.WheelEvent<HTMLUListElement>) {
-    const el = scrollerRef.current
-    if (!el || e.deltaY === 0) return
-    // Only take over when there's nowhere left to scroll vertically inside
-    // this rail (there never is — it has no vertical overflow of its own)
-    // and horizontal movement is actually possible, so this never fights a
-    // trackpad's native diagonal/horizontal gesture.
-    if (el.scrollWidth <= el.clientWidth) return
-    el.scrollLeft += e.deltaY
-    e.preventDefault()
-  }
 
   function scrollByPage(direction: 1 | -1) {
     const el = scrollerRef.current
@@ -122,11 +116,7 @@ export function SimilarPanel({ status, items, config, onSelect }: SimilarPanelPr
     <section className={`${styles.panel} glass-panel`} aria-label="Similar titles">
       <h2 className={styles.heading}>Similar {config.pluralLabel}</h2>
       <div className={styles.scrollerWrap}>
-        <ul
-          className={`${styles.scroller} thin-scroll`}
-          ref={scrollerRef}
-          onWheel={handleWheel}
-        >
+        <ul className={`${styles.scroller} thin-scroll`} ref={scrollerRef}>
           {items.map((item) => {
             const artwork = resolveArtwork(item)
             return (
