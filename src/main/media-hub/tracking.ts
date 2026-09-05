@@ -1801,11 +1801,15 @@ export function registerTrackingIpc(): void {
           body: JSON.stringify(scrobblePayload(payload.item, payload.playback || {}, progress))
         })
       } catch (error) {
-        // Never surfaced. A scrobble is a courtesy to a third-party service:
+        // Never thrown. A scrobble is a courtesy to a third-party service:
         // it must not interrupt playback, and an account whose token expired
         // mid-film should not produce an error over the video every time
-        // somebody pauses. The local history is the record either way.
+        // somebody pauses. The local history is the record either way. The
+        // reason IS reported back, though — the main window says it once per
+        // session, so a token that expired or an id Simkl will not take is
+        // something a person hears about rather than a line nobody reads.
         logError('simkl:scrobble', error)
+        return { connected: true, error: (error as Error)?.message || String(error) }
       }
       return { connected: true }
     }
