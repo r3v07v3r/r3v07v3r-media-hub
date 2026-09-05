@@ -327,6 +327,13 @@ export class MpvPlayer {
       `--volume-max=${MAX_PLAYER_VOLUME * 100}`,
       '--osd-level=0',
       '--hwdec=auto-safe',
+      // SCALERS START FROM THE DEFAULT ON EVERY FILE. mpv keeps properties
+      // across `loadfile`, so without this a title played after a High or
+      // Sharp one inherited those filters even with Standard selected — and
+      // Standard's whole meaning is "whatever mpv itself would do for this
+      // video output" (see shared/media-hub/videoScaling.ts). The presets
+      // that do set filters do so after the load, in loadFile.
+      '--reset-on-next-file=scale,dscale,cscale',
       // WINDOWING. mpv is EMBEDDED: --wid (appended below) makes it create a
       // WS_CHILD window inside the main BrowserWindow, so the video moves,
       // minimises, clips and alt-tabs with the app for free, and no window on
@@ -584,11 +591,6 @@ export class MpvPlayer {
   ): Promise<void> {
     // Defense in depth immediately before the load — see assertPlayableUrl.
     assertPlayableUrl(url)
-    if (videoScaling) {
-      for (const [property, value] of Object.entries(scalerPropertiesFor(videoScaling))) {
-        await this.set(property, value).catch(() => {})
-      }
-    }
     if (audioLanguage) await this.set('alang', audioLanguage)
     if (subtitleLanguage) await this.set('slang', subtitleLanguage)
     // `start` MUST be written as a string, and only when there is somewhere to
@@ -608,6 +610,16 @@ export class MpvPlayer {
     const loaded = this.once('file-loaded', 60000)
     await this.command('loadfile', url, 'replace')
     await loaded
+    // AFTER the load, not before: --reset-on-next-file (see the launch
+    // arguments) puts the scalers back to mpv's defaults as each file
+    // opens, which is what lets Standard mean "the default" at all — so a
+    // preset written ahead of the load would be wiped by the load itself.
+    // Standard sets nothing; High and Sharp set their filters here.
+    if (videoScaling) {
+      for (const [property, value] of Object.entries(scalerPropertiesFor(videoScaling))) {
+        await this.set(property, value).catch(() => {})
+      }
+    }
   }
 
   /**

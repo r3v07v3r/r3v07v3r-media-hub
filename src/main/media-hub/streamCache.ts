@@ -606,7 +606,8 @@ export function shouldAdoptAsPlayhead({
 // but the check still has to be for real, not just "looks like our URL."
 const activeCacheTokens = new Set<string>()
 
-const OWN_CACHE_URL_RE = /^http:\/\/127\.0\.0\.1:\d+\/stream\/([a-f0-9]{64})$/
+// `?cached=1` is the thumbnail reader's mark — see serveRange's cachedOnly.
+const OWN_CACHE_URL_RE = /^http:\/\/127\.0\.0\.1:\d+\/stream\/([a-f0-9]{64})(?:\?cached=1)?$/
 
 // Same shape as the tokens minted above (crypto.randomBytes(32).toString
 // ('hex')) — pruneIdleSessions/clearAllSessions both walk whatever
@@ -647,6 +648,14 @@ export interface StreamCache {
   ): Promise<StreamCacheStartResult>
   /** Bare hex token of whatever session is currently loaded ('' when none) — lets the Downloads page's list/delete IPC handlers tell the live session apart from idle ones on disk (see listCacheSessions/deleteCacheSession below). */
   getActiveToken(): string
+  /** Whether the bytes AROUND this playback position are probably on disk,
+   *  by the file's average rate — an estimate, since a timestamp does not
+   *  say which byte a seek lands on in a variable-bitrate file. Cheap
+   *  enough to spare spawning a thumbnail mpv that would fail anyway; the
+   *  guarantee that a thumbnail read never costs the film anything is
+   *  serveRange's cachedOnly mode, not this. False whenever the answer
+   *  cannot be estimated at all (no duration or length yet). */
+  isPositionCached(seconds: number): boolean
   /**
    * Supplies the media duration after start(), which is what the retention
    * window needs to convert its behind/ahead *seconds* into bytes.
@@ -1374,7 +1383,20 @@ export function createStreamCache({
   // superseded — only the client actually disconnecting (aborted.flag,
   // e.g. ffmpeg getting killed as part of a restart, or the <video>
   // element aborting its own pending request on a seek) ends this loop.
-  async function serveRange(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  /**
+   * `cachedOnly` is the scrub-bar thumbnail's mode: serve what is on disk
+   * and nothing else. A read it makes of bytes that are not there — and
+   * which bytes an mpv seek touches (header, cues, the keyframe before the
+   * target) cannot be predicted from a timestamp — ends the response
+   * instead of repositioning the one upstream connection away from the
+   * film. The capture fails fast and quietly; the playhead never notices.
+   * Such a reader is also never adopted as the playhead.
+   */
+  async function serveRange(
+    req: IncomingMessage,
+    res: ServerResponse,
+    cachedOnly = false
+  ): Promise<void> {
     const rangeHeader = String(req.headers.range || '')
     const rangeMatch = /bytes=(\d+)-/.exec(rangeHeader)
     const startByte = rangeMatch ? Number(rangeMatch[1]) : 0
@@ -1402,6 +1424,12 @@ export function createStreamCache({
      * the 8MB adoption bar with no later miss to mark it.
      */
     let servingExcursion = false
+    if (cachedOnly && chunks.get(chunkIndexForByte(startByte)) !== 'ready') {
+      // Before the header, so a status can still say it: not now.
+      res.writeHead(503, { 'cache-control': 'no-store' })
+      res.end()
+      return
+    }
     if (!chunks.has(chunkIndexForByte(startByte)) && !isNearFillFrontier(startByte)) {
       servingExcursion = (await reposition(chunkIndexForByte(startByte) * CHUNK_BYTES)) !== null
     }
@@ -1465,6 +1493,12 @@ export function createStreamCache({
           return
         }
         let status = chunks.get(index)
+        if (cachedOnly && status !== 'ready') {
+          // The thumbnail reader ran off the end of what is on disk. Quiet:
+          // it is the expected outcome of hovering ahead of the download.
+          res.destroy()
+          return
+        }
         if (status === undefined) {
           if (!isNearFillFrontier(bytePos)) {
             servingExcursion = (await reposition(index * CHUNK_BYTES)) !== null
@@ -1549,7 +1583,7 @@ export function createStreamCache({
         // probe — which reads a few MB near EOF and disconnects — can't
         // leave the retention centre stranded at the end of the file the
         // way the old forward-only high-water mark did.
-        if (shouldAdoptAsPlayhead({ servedBytes, servingExcursion })) {
+        if (!cachedOnly && shouldAdoptAsPlayhead({ servedBytes, servingExcursion })) {
           highWatermarkByte = bytePos
         }
         if (!canContinue) {
@@ -1581,7 +1615,9 @@ export function createStreamCache({
         res.end()
         return
       }
-      serveRange(req, res).catch((error) => {
+      const cachedOnly =
+        new URL(req.url ?? '', 'http://127.0.0.1').searchParams.get('cached') === '1'
+      serveRange(req, res, cachedOnly).catch((error) => {
         logError('streamCache:serve', error)
         // Before the header: a status the client can act on. After it: the
         // only honest signal left is a broken transfer — see abandon().
@@ -1920,6 +1956,11 @@ export function createStreamCache({
   return {
     start,
     getActiveToken: () => token,
+    isPositionCached: (seconds) => {
+      const rate = bytesPerSecond()
+      if (!token || !rate || !Number.isFinite(seconds) || seconds < 0) return false
+      return chunks.get(chunkIndexForByte(Math.floor(seconds * rate))) === 'ready'
+    },
     setDuration: (value: number | undefined) => {
       const seconds = Number(value)
       if (Number.isFinite(seconds) && seconds > 0) durationSeconds = seconds

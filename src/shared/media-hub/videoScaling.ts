@@ -25,6 +25,16 @@ export function normalizeVideoScaling(value: unknown): VideoScalingPreset {
  * `scale` is upscaling, `dscale` downscaling, `cscale` chroma. Pairing them
  * matters: a sharp luma filter with a soft chroma filter is what actually looks
  * clean, whereas sharpening chroma mostly amplifies compression artefacts.
+ *
+ * Standard ('auto') sets NOTHING, on purpose. It used to write
+ * `scale=lanczos, cscale=lanczos` under the claim that these were mpv's stock
+ * scalers — which they are not for the classic gpu output (bilinear), and
+ * which cost several times the GPU work per frame on both luma and chroma.
+ * What mpv's own default actually is depends on the video output in use, so
+ * the honest way to mean "the default" is to leave the option alone: mpv is
+ * launched with `--reset-on-next-file=scale,dscale,cscale` (see mpv.ts), so a
+ * title that follows a High or Sharp one starts from the defaults again rather
+ * than inheriting the last preset.
  */
 export function scalerPropertiesFor(preset: VideoScalingPreset): Record<string, string> {
   switch (preset) {
@@ -38,7 +48,6 @@ export function scalerPropertiesFor(preset: VideoScalingPreset): Record<string, 
       // sources, which is why it is not the default.
       return { scale: 'ewa_lanczossharp', dscale: 'mitchell', cscale: 'ewa_lanczossoft' }
     default:
-      // mpv's stock scalers.
-      return { scale: 'lanczos', dscale: 'mitchell', cscale: 'lanczos' }
+      return {}
   }
 }

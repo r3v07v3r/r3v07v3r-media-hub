@@ -101,6 +101,10 @@ const streamCache = createStreamCache()
 // the app getting on screen for a sweep of directories that had already
 // been there for days and could wait ten more minutes.
 
+// The scrub-bar thumbnail's serialiser — see the playbackThumbnail handler.
+let thumbnailRequest = 0
+let thumbnailInFlight: Promise<void> = Promise.resolve()
+
 let activeMediaUrl = ''
 // StreamCache's local server URL for the current title — what mpv actually
 // opens. Distinct from activeMediaUrl (the real, remote debrid link), which
@@ -485,7 +489,30 @@ export function registerPlaybackIpc(): void {
     MEDIA_HUB_CHANNELS.playbackThumbnail,
     async (_event, seconds) => {
       if (!activeCacheUrl) return null
-      return captureThumbnail(mpvPath, activeCacheUrl, Number(seconds) || 0)
+      const at = Number(seconds) || 0
+      // One capture at a time, and only the latest asked for. A hover across
+      // the scrub bar raises one of these per 250ms bucket, and each spawns
+      // a whole mpv against the live cache; letting them run side by side
+      // multiplied the reads competing with the film. The ones a faster
+      // hover has already superseded answer nothing rather than queueing.
+      const mine = ++thumbnailRequest
+      await thumbnailInFlight
+      if (mine !== thumbnailRequest) return null
+      // Never from bytes that are not on disk yet. A read of an uncached
+      // region is served by pulling the upstream connection away from the
+      // playhead (streamCache's excursions), and a preview is worth nothing
+      // if it costs the film a stall. Two layers: an estimate here spares
+      // spawning an mpv that would fail, and the `?cached=1` mark on the
+      // URL makes the server itself refuse the capture the moment it reads
+      // anything not on disk — which is exact, where the estimate (a
+      // timestamp against the file's average rate) cannot be.
+      if (!streamCache.isPositionCached(at)) return null
+      const capture = captureThumbnail(mpvPath, `${activeCacheUrl}?cached=1`, at)
+      thumbnailInFlight = capture.then(
+        () => undefined,
+        () => undefined
+      )
+      return capture
     }
   )
 

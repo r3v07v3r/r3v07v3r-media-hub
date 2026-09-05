@@ -231,8 +231,21 @@ function PlayerControls() {
   // leave the party watching two different episodes with no way back. The host
   // does get it — startPartyPlayback on the main-window side announces whatever
   // it starts, so the room follows along exactly as it would from a click.
+  // The percentage the playhead is at now that the file has ended, when that
+  // is well short of the runtime — the "ended early" card's whole subject.
+  // Derived, not stored: mpv holds the playhead where the bytes ran out
+  // (--keep-open), so the figure is simply read off the clock for as long as
+  // eof-reached stays true, and it clears itself as the next file opens.
+  const endedEarlyAt =
+    state.eofReached === true && duration > 0 && timePos / duration < WATCHED_FRACTION
+      ? Math.round((timePos / duration) * 100)
+      : null
+
   const autoplay: NextEpisodeRef | null =
     state.eofReached === true &&
+    // A stream that stopped short is not the end of the episode, and the
+    // card that belongs to it is the resume card, not the next-episode one.
+    endedEarlyAt === null &&
     !party.following &&
     // A sleep timer set to "end of episode" is somebody saying this is the
     // last one. Offering the next one anyway — and starting it on a countdown
@@ -289,7 +302,12 @@ function PlayerControls() {
   // idle timer closes the surface out from under someone mid-selection.
   // The post-play card pins too: its buttons must not fade (or lose the
   // cursor — see surfaceIdle) while someone is deciding.
-  const pinned = menu !== null || party.syncing || roomRailOpen || autoplay !== null
+  const pinned =
+    menu !== null ||
+    party.syncing ||
+    roomRailOpen ||
+    autoplay !== null ||
+    (state.eofReached === true && endedEarlyAt !== null)
 
   const revealControls = useCallback(() => {
     setControlsVisible(true)
@@ -459,9 +477,17 @@ function PlayerControls() {
     if (state.eofReached !== true) return
     tracking.savePositionNow()
     if (tracking.markedWatched()) return
+    // Not the end of the film: nothing is marked, and the "ended early"
+    // card (endedEarlyAt above) offers the way back in instead of the
+    // last frame sitting there as if the credits had rolled.
     if (progressRef.current < WATCHED_FRACTION * 100) return
     ui({ type: 'mark-watched' })
   }, [state.eofReached, tracking, ui])
+
+  const resumeTitle = useCallback(() => {
+    tracking.savePositionNow()
+    ui({ type: 'resume-title' })
+  }, [tracking, ui])
 
   // Saves BEFORE raising the stop, not only via usePlayerTracking's teardown
   // effect — same explicit call the pause and end-of-file paths above already
@@ -1084,6 +1110,24 @@ function PlayerControls() {
       {/* Post-play. Outside the controls bar for the same reason the skip
           button is: it has to be usable without moving the mouse first, and it
           outlives the bar's idle fade. */}
+      {state.eofReached === true && endedEarlyAt !== null && media && (
+        <div className={styles.postPlay} role="dialog" aria-label="The stream ended early">
+          <p className={styles.postPlayLabel}>The stream ended early</p>
+          <p className={styles.postPlayTitle}>
+            {media.title}
+            {` — ${Math.round(endedEarlyAt)}% watched`}
+          </p>
+          <div className={styles.postPlayActions}>
+            <button type="button" className={styles.postPlayPrimary} onClick={resumeTitle}>
+              Resume
+            </button>
+            <button type="button" className={styles.postPlaySecondary} onClick={closePlayer}>
+              Stop
+            </button>
+          </div>
+        </div>
+      )}
+
       {autoplay && autoplayKey && (
         <div
           className={styles.postPlay}

@@ -126,32 +126,6 @@ export interface AnimeStoryLink {
  * followed an actor wants their performances, and a single list ordered by
  * neither serves either.
  */
-/** One streaming, rental or purchase service, as TMDB reports it. */
-export interface WatchProvider {
-  id: number
-  name: string
-  /** Already resolved to a full image URL, or '' when TMDB has no logo. */
-  logo: string
-}
-
-/**
- * Where a title can be watched, in one region.
- *
- * Region is part of the answer rather than assumed by the caller: availability
- * is exactly the thing that differs by country, and a list with no country
- * attached to it is not information.
- */
-export interface WatchProvidersResult {
-  region: string
-  /** Included with a subscription — free and ad-supported tiers folded in,
-   *  since the distinction that matters tonight is "can I just watch it". */
-  stream: WatchProvider[]
-  rent: WatchProvider[]
-  buy: WatchProvider[]
-  /** JustWatch's own page for the title, which TMDB supplies. */
-  link: string
-}
-
 /**
  * One episode, on one day.
  *
@@ -363,11 +337,13 @@ export interface BlockedDownload {
  *    history and stats all derive from these)
  *  - planned: the tracked / plan-to-watch list
  *  - ratings: personal scores
+ *  - lists: named lists — the ones made here and the ones read from Trakt
+ *    and Simkl (remoteLists.ts)
  *  - index: the catalog_index rows the browse grids page through
  *  - all: something re-keyed the library wholesale (ids remapped, a
  *    restore) — every hook should start over
  */
-export type LibraryChangeScope = 'history' | 'planned' | 'ratings' | 'index' | 'all'
+export type LibraryChangeScope = 'history' | 'planned' | 'ratings' | 'lists' | 'index' | 'all'
 
 export interface LibraryChangedEvent {
   scopes: LibraryChangeScope[]

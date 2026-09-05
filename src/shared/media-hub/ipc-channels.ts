@@ -122,9 +122,6 @@ export const MEDIA_HUB_CHANNELS = {
   /** Everything in the catalog this person appears in, from the credits cache
    *  — see main/media-hub/credits.ts's titlesFeaturing on why it is local. */
   catalogPerson: 'mediahub:catalog:person',
-  /** Where a title can be streamed, rented or bought, in the person's own
-   *  region — see main/media-hub/watchProviders.ts. */
-  catalogProviders: 'mediahub:catalog:providers',
   /** The film series a title belongs to — see main/media-hub/collection.ts. */
   catalogCollection: 'mediahub:catalog:collection',
   /** The age certificate for a title in the person's region — see

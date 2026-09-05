@@ -958,15 +958,22 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   const toggleDisliked = useCallback(
     (media: MediaItem) => {
       const api = window.api?.mediaHub
+      // The write goes out once the optimistic set is decided, then the hook
+      // is re-read so its own copy — the one that reseeds this state on the
+      // next library re-key — matches what was actually stored. Without that
+      // read the two copies drifted until a profile switch or restore.
+      const settle = (write: Promise<unknown> | undefined): void => {
+        void write?.then(() => dislikedIdsResult.refresh()).catch(() => {})
+      }
       setDislikedIds((prev) => {
         const next = new Set(prev)
         if (next.has(media.id)) {
           next.delete(media.id)
-          api?.disliked.remove(media.id).catch(() => {})
+          settle(api?.disliked.remove(media.id))
         } else {
           next.add(media.id)
           const payload = mediaItemToTrackablePayload(media)
-          api?.disliked.add(payload).catch(() => {})
+          settle(api?.disliked.add(payload))
         }
         return next
       })
@@ -975,7 +982,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       // out of the rail instead of lingering until some unrelated refetch.
       homeFeed.refresh()
     },
-    [homeFeed]
+    [homeFeed, dislikedIdsResult]
   )
 
   const markContinueWatching = useCallback(
@@ -1945,6 +1952,9 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       if (scopes.has('history') || scopes.has('planned')) refreshWatchStatusRef.current()
     })
   }, [reloadLibrary])
+  // Whether this session has already been told about a rejected scrobble —
+  // see the 'scrobble' case below.
+  const scrobbleWarnedRef = useRef(false)
   useEffect(() => {
     const api = window.api?.mediaHub?.player
     if (!api) return
@@ -1991,22 +2001,45 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
           // that had just begun and leaving the previous one running.
           const subject = event.media
           if (!subject?.id) return
-          // Fire and forget. A scrobble is a courtesy to a third-party
-          // service; nothing in this app waits on it, and a failure is logged
-          // in main rather than shown over the video.
+          // The year comes from this window's MediaItem when the subject is
+          // the title playing — the session media the overlay carries has
+          // no year of its own. Simkl falls back to title and year when it
+          // cannot place the ids, and an empty year made that fallback
+          // useless. For an outgoing stop during a title change the subject
+          // is already the previous title, so the year is left out rather
+          // than borrowed from the wrong film.
+          const playing = playbackMediaForEventsRef.current
+          const year =
+            playing?.id === subject.id && playing.releaseYear ? String(playing.releaseYear) : ''
+          // Nothing waits on a scrobble and nothing in it can interrupt
+          // playback. A rejection is said ONCE per session, though: two
+          // id_err lines in a log nobody reads is how scrobbling silently
+          // stopped working for a film with a perfectly good id.
           window.api?.mediaHub?.simkl
             .scrobble(
               event.action,
-              {
-                id: subject.id,
-                type: subject.kind,
-                title: subject.title,
-                year: ''
-              },
+              { id: subject.id, type: subject.kind, title: subject.title, year },
               { season: subject.seasonNumber, episode: subject.episodeNumber },
               event.progress
             )
+            .then((result) => {
+              if (!result?.error || scrobbleWarnedRef.current) return
+              scrobbleWarnedRef.current = true
+              pushNotification({
+                tone: 'warning',
+                message: `Simkl did not accept a scrobble for "${subject.title}": ${result.error}. Your local history is unaffected; this will not be repeated this session.`
+              })
+            })
             .catch(() => {})
+          return
+        }
+        case 'resume-title': {
+          // The overlay's "ended early" card. The same call a click on the
+          // title makes: a fresh resolve, a fresh link, and the bookmark the
+          // overlay saved a moment ago picks the position up.
+          const media = playbackMediaForEventsRef.current
+          if (!media) return
+          void startPlaybackRef.current(media)
           return
         }
         case 'refresh-watch-status':

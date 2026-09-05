@@ -362,6 +362,11 @@ export type PlayerUiEvent =
   | { type: 'stop-playback'; watched: boolean }
   | { type: 'mark-watched' }
   | { type: 'refresh-watch-status' }
+  /** Re-open the title that is playing, at its saved position — raised by the
+   *  overlay's "ended early" card when a stream reached its end well short of
+   *  the runtime. The main window owns the MediaItem and the resolve, so it is
+   *  asked rather than told; it starts the same title the way a click would. */
+  | { type: 'resume-title' }
   /** Start the next episode — raised by the post-play card, either because its
    *  countdown ran out or because somebody pressed Play now.
    *

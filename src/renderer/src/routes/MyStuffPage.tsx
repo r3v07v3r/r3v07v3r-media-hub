@@ -343,17 +343,38 @@ function ListsView({ watchlist }: { watchlist: MediaItem[] }) {
   // and the fact that these cannot be edited: a named list has an author,
   // and reading one is not permission to reorder it.
   const [remoteLists, setRemoteLists] = useState<RemoteList[]>([])
+  // Re-read when main has finished a fresh read of the services' lists
+  // (remoteLists.ts announces it on library:changed's lists scope). The
+  // first read answers from the cache, so without this a list changed on
+  // Trakt this morning showed its old rows for as long as this page stayed
+  // open, and the new ones only on the mount after the one that fetched.
+  const [remoteGeneration, setRemoteGeneration] = useState(0)
+  useEffect(() => {
+    const api = window.api?.mediaHub?.library
+    if (!api?.onChanged) return
+    return api.onChanged((event) => {
+      if (event.scopes.includes('lists') || event.scopes.includes('all')) {
+        setRemoteGeneration((n) => n + 1)
+      }
+    })
+  }, [])
   useEffect(() => {
     const api = window.api?.mediaHub?.lists
     if (!api?.remoteLists) return
+    let cancelled = false
     void api
       .remoteLists()
-      .then((result) => setRemoteLists(result.lists))
+      .then((result) => {
+        if (!cancelled) setRemoteLists(result.lists)
+      })
       .catch(() => {
         // Nothing to show is the ordinary state for somebody who has made
         // no lists; it is not worth an error.
       })
-  }, [])
+    return () => {
+      cancelled = true
+    }
+  }, [remoteGeneration])
   const selectedRemote = remoteLists.find((list) => list.id === selected) ?? null
 
   // Matched against the INDEX by id (stage 4), so a remote list's rows

@@ -768,7 +768,7 @@ const api = {
         item: SimklPushItem,
         playback?: PlaybackPosition,
         progress?: number
-      ): Promise<{ connected: boolean }> =>
+      ): Promise<{ connected: boolean; error?: string }> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.simklScrobble, {
           action,
           item,
