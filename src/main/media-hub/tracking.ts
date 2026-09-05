@@ -88,7 +88,7 @@ import {
   simklCredentials,
   writeSettings
 } from './settingsStore'
-import { sendToRenderer } from './rendererBridge'
+import { sendToRenderer, notifyLibraryChanged } from './rendererBridge'
 import { cachedRemoteLists, fetchRemoteLists } from './remoteLists'
 import type { RemoteList } from '../../shared/media-hub/types'
 import { assertLibraryWritableId } from '../../shared/media-hub/serviceIds'
@@ -1252,17 +1252,16 @@ export function registerTrackingIpc(): void {
       assertLibraryWritableId(item?.id, item?.title)
       getDatabase().markWatched(item, playback || {})
       requestRecommendationsRebuild()
-      const simklResult = await syncSimklHistory(
-        '/sync/history',
-        historyPayload(item, playback || {})
-      )
-      // Not awaited into the result. Trakt is a third service alongside two
-      // that already report their own outcome, and a person who has connected
-      // all three should not have "I finished this" wait on the slowest of
-      // them — the local row is the record either way, and a Trakt failure is
-      // logged in traktClient rather than surfaced.
+      // None of the services is awaited. The local row IS the record; each
+      // push logs its own failure (syncSimklHistory, pushMalProgress,
+      // traktClient), and nothing in the renderer reads the per-service
+      // fields of this result. Awaiting Simkl and MAL here put two live
+      // round trips between a tap on a tick and the tick appearing — which
+      // is what "tracking does not update properly" felt like.
+      void syncSimklHistory('/sync/history', historyPayload(item, playback || {}))
       void pushTraktHistory(item, playback || {}, 'add')
-      return { ok: true, ...simklResult, ...(await pushMalProgress(item)) }
+      void pushMalProgress(item)
+      return { ok: true, simklSynced: false, malSynced: false }
     }
   )
 
@@ -1272,9 +1271,11 @@ export function registerTrackingIpc(): void {
       const p = playback || {}
       getDatabase().unmarkWatched(item.id, p.season, p.episode)
       requestRecommendationsRebuild()
-      const simklResult = await syncSimklHistory('/sync/history/remove', historyPayload(item, p))
+      // Fire and forget, as above.
+      void syncSimklHistory('/sync/history/remove', historyPayload(item, p))
       void pushTraktHistory(item, p, 'remove')
-      return { ok: true, ...simklResult, ...(await pushMalProgress(item)) }
+      void pushMalProgress(item)
+      return { ok: true, simklSynced: false, malSynced: false }
     }
   )
 
@@ -1290,10 +1291,8 @@ export function registerTrackingIpc(): void {
       const db = getDatabase()
       for (const playback of list) db.markWatched(item, playback)
       requestRecommendationsRebuild()
-      const simklResult = await syncSimklHistory(
-        '/sync/history',
-        seasonHistoryPayload(item, season, episodeNumbers)
-      )
+      // Fire and forget, as the single-episode handler above.
+      void syncSimklHistory('/sync/history', seasonHistoryPayload(item, season, episodeNumbers))
       // Not awaited into the result, same as the single-episode handler
       // above — a Trakt failure is logged in traktClient rather than making
       // "mark this season watched" wait on the slowest connected service.
@@ -1302,7 +1301,8 @@ export function registerTrackingIpc(): void {
       // not, which left every episode of a season marked watched here still
       // unwatched on a connected Trakt account.
       void pushTraktSeasonHistory(item, season, episodeNumbers)
-      return { ok: true, ...simklResult, ...(await pushMalProgress(item)) }
+      void pushMalProgress(item)
+      return { ok: true, simklSynced: false, malSynced: false }
     }
   )
 
@@ -1436,6 +1436,10 @@ export function registerTrackingIpc(): void {
     // Simkl's answer is the one to keep — update the local record to match.
     if (discrepancy.remoteWatched) db.markWatched(item)
     else db.unmarkWatched(item.id)
+    // A write main made on the strength of a remote answer: the panel that
+    // asked refreshes the home feed itself, but the detail page and the
+    // grids learn of it the same way they learn of every other such write.
+    notifyLibraryChanged('reconcile', 'history')
     return { ok: true, queued: false }
   })
 
