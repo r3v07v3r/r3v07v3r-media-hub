@@ -70,6 +70,7 @@ import {
   writeSettings
 } from './settingsStore'
 import { streamReleaseName } from '../../shared/media-hub/streamQuality'
+import { knownTitles } from './titleNames'
 
 export const TORBOX = 'https://api.torbox.app/v1/api'
 
@@ -272,8 +273,14 @@ export async function discoverBestPrefetchCandidate(
   }
   const discoveredRaw = await fetchDiscoveredRaw(type, id)
   if (!discoveredRaw.length) return null
-  const titleFiltered = title
-    ? discoveredRaw.filter((s) => titleMatchesRelease(streamReleaseText(s), title))
+  // The same guard as live resolution, with the same names: the feeder
+  // only has a tracked row's title, and for an anime that is the English
+  // one while its releases are named in romaji — a guard that matched
+  // nothing fell back to the whole unguarded result set, and an add-on's
+  // wrong "exact" match could have the daemon fetch a related title.
+  const titles = knownTitles(type, showKey(type, id), [title])
+  const titleFiltered = titles.length
+    ? discoveredRaw.filter((s) => titleMatchesRelease(streamReleaseText(s), titles))
     : discoveredRaw
   const discovered = titleFiltered.length ? titleFiltered : discoveredRaw
   return (
@@ -462,11 +469,15 @@ export function registerTorBoxIpc(): void {
     MEDIA_HUB_CHANNELS.streamResolve,
     async (_e, payload) => {
       const { type, id, title, altTitles } = payload
-      // Every name the title goes by, for the guards below. Empty means no
-      // title guard at all, exactly as an absent `title` always has.
-      const titles = [title, ...(Array.isArray(altTitles) ? altTitles : [])]
-        .map((t) => String(t ?? '').trim())
-        .filter(Boolean)
+      // Every name the title goes by, for the guards below: what the
+      // renderer sent, plus what the cached record knows (an index-backed
+      // card carries no originalTitle, and a romaji-named release must
+      // still pass the guard). Empty means no title guard at all, exactly
+      // as an absent `title` always has.
+      const titles = knownTitles(type, showKey(type, id), [
+        title,
+        ...(Array.isArray(altTitles) ? altTitles : [])
+      ])
       const auth = getTorBoxToken()
       const mediaServer = mediaServerConfig()
       // Either source alone is a complete configuration. Only having

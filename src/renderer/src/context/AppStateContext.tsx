@@ -1583,7 +1583,13 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         const picked = meta?.videos?.find(
           (video) => video.season === media.seasonNumber && video.episode === media.episodeNumber
         )
-        return picked?.title ? { ...media, episodeTitle: picked.title } : media
+        // The record's alternate title rides along too: an index-backed
+        // card has none, and the resolver's release guard needs it.
+        return {
+          ...media,
+          episodeTitle: picked?.title || media.episodeTitle,
+          originalTitle: media.originalTitle ?? meta?.originalTitle
+        }
       } catch {
         return media
       }
@@ -1613,7 +1619,10 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
             ...media,
             seasonNumber: target.season,
             episodeNumber: target.episode,
-            episodeTitle: picked?.title
+            episodeTitle: picked?.title,
+            // See the coordinates branch above — the resolved record's
+            // alternate title, which an index-backed card lacks.
+            originalTitle: media.originalTitle ?? meta.originalTitle
           }
         }
       } catch {

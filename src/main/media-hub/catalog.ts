@@ -71,6 +71,7 @@ import { searchCredits, titleCredits, titlesFeaturing } from './credits'
 import { titleCollection } from './collection'
 import { contentRating } from './contentRating'
 import { watchRegion } from './watchProviders'
+import { metaCacheKey } from './titleNames'
 
 const catalogUrls: Record<'movie' | 'series', string> = {
   movie: 'https://v3-cinemeta.strem.io/catalog/movie/top.json',
@@ -723,10 +724,7 @@ async function resolveMetadata(
   const resolvedId = String(id).startsWith('simkl:')
     ? await resolveSimklId(type, String(id).slice(6), priority)
     : id
-  // v4: anime titles became English (originalTitle carries the romaji), so
-  // every cached anime entry had to re-resolve rather than read the old
-  // name back for a day.
-  const cacheKey = `meta:v4:${type}:${resolvedId}`
+  const cacheKey = metaCacheKey(type, resolvedId)
   const db = getDatabase()
   const cached = db.getCache<CatalogItem>(cacheKey)
   // Whether what is about to be cached is a stand-in — see DEGRADED_META_TTL_MS.

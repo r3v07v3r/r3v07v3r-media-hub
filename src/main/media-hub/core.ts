@@ -308,7 +308,10 @@ export function releaseGroup(text: string): string | null {
   const leading = /^\[([^\]]{1,40})\]/.exec(raw)
   if (leading) return leading[1].toLowerCase().replace(/[^a-z0-9]/g, '') || null
   const base = raw.replace(/\.(mkv|mp4|avi|mov|webm|m4v|ts)$/i, '')
-  const trailing = /-([a-z0-9]{2,20})$/i.exec(base.split(/\s/)[0])
+  // The whole name, not its first word: scene names come with dots OR
+  // spaces ("Show S01E06 1080p WEB-DL x264-SPARKS"), and the group is the
+  // suffix of the name either way.
+  const trailing = /-([a-z0-9]{2,20})$/i.exec(base)
   if (!trailing) return null
   const group = trailing[1].toLowerCase()
   // "WEB-DL", "BluRay-RIP": a hyphenated format token is not a group.

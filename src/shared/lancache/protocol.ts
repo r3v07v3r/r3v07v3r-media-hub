@@ -78,6 +78,11 @@ export interface LanCacheCatalogItem {
   contentKey: string
   infoHash: string
   title: string
+  /** The file the daemon actually stored — the release as the torrent
+   *  named it. `title` is the catalog title the feeder queued it under,
+   *  which names no release group and is not what the Info panel should
+   *  show. Absent from a daemon older than this field. */
+  fileName?: string
   resolution?: number
   sizeBytes?: number
   complete: boolean

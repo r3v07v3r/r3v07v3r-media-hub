@@ -680,6 +680,8 @@ export function createDaemonServer(deps: ServerDeps): http.Server {
           contentKey: item.contentKey,
           infoHash: item.infoHash,
           title: item.title,
+          // The release as the torrent named it — see LanCacheCatalogItem.
+          fileName: item.fileName,
           resolution: item.resolution,
           sizeBytes: item.sizeBytes,
           complete: item.complete

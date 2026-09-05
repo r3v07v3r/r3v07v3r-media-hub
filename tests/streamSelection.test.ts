@@ -472,3 +472,14 @@ console.log('ok  release name source and reported tracks')
   assert.equal(releaseGroup(streamReleaseName(lockedDown)), null)
 }
 console.log('ok  media-server release name')
+
+// Scene names come with spaces as well as dots; the group is the suffix of
+// the whole name, not of its first word.
+assert.equal(releaseGroup('Show S01E06 1080p WEB-DL x264-SPARKS.mkv'), 'sparks')
+assert.equal(
+  releaseGroup('Show S01E06 1080p WEB-DL'),
+  null,
+  'a spaced name ending in a format token'
+)
+assert.equal(releaseGroup('Show - 06 [1080p]'), null, 'an episode number is not a group')
+console.log('ok  spaced scene groups')
