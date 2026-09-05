@@ -25,8 +25,11 @@ export interface ArtworkImageProps {
   sizes?: string
   /** Wrapper element className — set the sized/aspect-ratio box here
    *  (the component itself is fill-based and inherits its box from this
-   *  className or inline style on the wrapper). */
-  className?: string
+   *  className or inline style on the wrapper). Required, not optional:
+   *  every child is absolutely positioned, so a call site that forgets it
+   *  renders a zero-height box and nothing at all — which is exactly how
+   *  the calendar's day cells and the planned cards stayed empty. */
+  className: string
   /** Extra className applied to the <img> itself, e.g. to tweak
    *  object-position for off-center source art. */
   imageClassName?: string

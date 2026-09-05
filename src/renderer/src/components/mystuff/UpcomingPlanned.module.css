@@ -53,10 +53,13 @@
   cursor: pointer;
 }
 
-.card img {
+/* The sized box ArtworkImage fills. It used to be styled as `.card img`,
+   which never matched: the image is absolutely positioned inside a wrapper
+   that had no size of its own, so the card drew nothing. */
+.cardArt {
   width: 92px;
   aspect-ratio: 2 / 3;
-  object-fit: cover;
+  overflow: hidden;
   border-radius: var(--radius-medium, 10px);
   border: 1px solid var(--border-subtle);
   /* Dimmed, because it is not available. The eye should pass over these on
@@ -64,7 +67,7 @@
   opacity: 0.78;
 }
 
-.card:hover img {
+.card:hover .cardArt {
   opacity: 1;
   border-color: var(--border-active);
 }
