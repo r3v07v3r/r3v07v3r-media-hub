@@ -180,8 +180,13 @@ const PENDING_MAX_ATTEMPTS = 10
 
 interface PendingRemoval {
   item: { id: string; type: MediaKind; title: string; year?: string }
-  /** The services still owed a removal. Shrinks as they succeed. */
+  /** The services still owed the change. Shrinks as they succeed. */
   services: PlannedSource[]
+  /** True for an ADD that a service refused — the same queue, the other
+   *  direction. Absent on entries written before adds were queued, which
+   *  were all removals. Rule 1 says adds always propagate; before this, one
+   *  that failed simply did not, with nothing to try again. */
+  planned?: boolean
   attempts: number
   at: number
   marks: AccountMarks
@@ -227,14 +232,18 @@ async function retryPendingRemovals(): Promise<void> {
   let touchedOrigins = false
   for (const id of ids) {
     const entry = pending[id]
-    const outcome = await pushPlanEverywhere(entry.item, false, {
+    const planned = entry.planned === true
+    const outcome = await pushPlanEverywhere(entry.item, planned, {
       onServices: entry.services,
       only: entry.services
     })
+    // An add that got through is evidence of presence from now on, exactly
+    // as it would have been had it succeeded first time.
+    if (planned) rememberPushedSources(id, sentServices(outcome))
     const failed = failedServices(outcome)
     if (!failed.length) {
       delete pending[id]
-      if (origins[id]) {
+      if (!planned && origins[id]) {
         delete origins[id]
         touchedOrigins = true
       }
@@ -245,9 +254,9 @@ async function retryPendingRemovals(): Promise<void> {
     entry.lastError = firstFailure(outcome)
     if (entry.attempts >= PENDING_MAX_ATTEMPTS) {
       logError(
-        'watchlists:removal-abandoned',
+        'watchlists:push-abandoned',
         new Error(
-          `gave up removing ${id} from ${failed.join(', ')}: ${entry.lastError ?? 'unknown'}`
+          `gave up ${planned ? 'adding' : 'removing'} ${id} ${planned ? 'at' : 'from'} ${failed.join(', ')}: ${entry.lastError ?? 'unknown'}`
         )
       )
       delete pending[id]
@@ -550,7 +559,14 @@ export async function syncPlannedFromServices(
   // A title whose removal has not reached its service yet is still on the
   // service's list, so the pull finds it. Adding it back would undo, in
   // silence, something somebody did on purpose.
-  const awaitingRemoval = new Set(Object.keys(pendingRemovals()))
+  // Only removals still owed suppress a re-add. A queued ADD is the opposite
+  // case: the title is on the local list already, and a pull that finds it
+  // at a service that did take it must be free to record that source.
+  const awaitingRemoval = new Set(
+    Object.entries(pendingRemovals())
+      .filter(([, entry]) => entry.planned !== true)
+      .map(([id]) => id)
+  )
   let added = 0
   // One row per id, not per entry: a film on all three lists is one title
   // planned three times over, not three titles.
@@ -689,6 +705,24 @@ async function applyPlanChange(
     // it, and the next pull found the title still on Simkl's list and
     // quietly planned it here again.
     rememberPushedSources(item.id, sentServices(outcome))
+    // A service that refused the add is owed it, the same way one that
+    // refused a removal is. Queued and retried at the next sync rather than
+    // dropped — dropping it made "adds always propagate" untrue the first
+    // time a service was down.
+    const failedAdd = failedServices(outcome)
+    if (failedAdd.length) {
+      const pending = pendingRemovals()
+      pending[item.id] = {
+        item,
+        services: failedAdd,
+        planned: true,
+        attempts: 1,
+        at: Date.now(),
+        marks: trackingAccountMarks(),
+        lastError: firstFailure(outcome)
+      }
+      writePendingRemovals(pending)
+    }
     return
   }
   // The mirror image: a removal that went out is no longer evidence of a

@@ -21,6 +21,7 @@ import {
 } from './settingsStore'
 import { traktRequest } from './traktClient'
 import { getDatabase } from './dbState'
+import { notifyLibraryChanged } from './rendererBridge'
 import type { RemoteList, RemoteListEntry } from '../../shared/media-hub/types'
 import type { TaskPriority } from './taskScheduler'
 
@@ -216,6 +217,9 @@ export async function fetchRemoteLists(
   if (anyFailed && out.length === 0) return trustedCached()
   const payload: StampedLists = { marks: currentMarks(), lists: out }
   db.putCache(CACHE_KEY, payload, TTL_MS, { durable: true })
+  // My Stuff's lists view reads these through the same hook as the lists
+  // made here, and that hook refetches on this — not on its own schedule.
+  notifyLibraryChanged('remote-lists', 'lists')
   return out
 }
 

@@ -113,6 +113,19 @@ the situation — the title really is still on their list at the service,
 and the app pretending otherwise would hide the failure rather than fix
 it.
 
+The same queue holds an **add** a service refused. Rule 1 says adds
+propagate always, and before this an add that failed simply did not —
+there was nothing to try again. A queued add is retried on the same
+schedule, and once it lands it counts as evidence of presence (rule 3)
+exactly as an add that succeeded first time would. A queued add never
+suppresses anything: the title is on the local list already, and a pull
+that finds it at a service that did take it is free to record that.
+
+Changes to one title are applied in the order they were made. A plan
+followed by an un-plan before the first push has settled waits for it, so
+the removal sees what the add achieved rather than a record it had not
+reached yet.
+
 ### 7. Everything remembered is stamped with the account it came from
 
 "It came from Trakt" is not a fact about a list, because Trakt is not one

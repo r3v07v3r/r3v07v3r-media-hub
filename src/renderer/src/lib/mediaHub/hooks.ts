@@ -618,6 +618,20 @@ export interface ListsResult {
 export function useMediaHubLists(libraryKey: string): ListsResult {
   const [lists, setLists] = useState<CustomList[]>([])
   const [loaded, setLoaded] = useState(() => !window.api?.mediaHub)
+  // Bumped when main reports a lists change of its own — the hourly read of
+  // the lists somebody built in Trakt or Simkl (remoteLists.ts). The
+  // mutations below adopt the backend's answer directly and need no
+  // refetch; this covers the writes that happen without a call from here.
+  const [generation, setGeneration] = useState(0)
+  useEffect(() => {
+    const api = window.api?.mediaHub?.library
+    if (!api?.onChanged) return
+    return api.onChanged((event) => {
+      if (event.scopes.includes('lists') || event.scopes.includes('all')) {
+        setGeneration((n) => n + 1)
+      }
+    })
+  }, [])
 
   useEffect(() => {
     let cancelled = false
@@ -636,7 +650,7 @@ export function useMediaHubLists(libraryKey: string): ListsResult {
     return () => {
       cancelled = true
     }
-  }, [libraryKey])
+  }, [libraryKey, generation])
 
   const create = useCallback(async (name: string) => {
     const api = window.api?.mediaHub
