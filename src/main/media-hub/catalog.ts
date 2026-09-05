@@ -1242,8 +1242,6 @@ async function cinemetaPageAt(
   }
 }
 
-/** In-flight deep scans, single-flight per kind: a second press while
- *  one chunk is running joins it rather than doubling the walk. */
 /** One walk of a kind's deep scan — see deepScanChunk for how a second
  *  caller joins or supersedes it. */
 interface DeepScanRun {
@@ -1259,6 +1257,8 @@ interface DeepScanCancel {
   readonly signal: Promise<'cancelled'>
 }
 
+/** In-flight deep scans, at most one walk per kind — a second caller
+ *  joins or supersedes it, never doubles it. See deepScanChunk. */
 const deepScansInFlight = new Map<MediaKind, DeepScanRun>()
 
 interface DeepScanState {
@@ -1288,9 +1288,10 @@ function deepScanState(kind: MediaKind): DeepScanState {
  * another press at the void.
  */
 /**
- * One chunk of the deep scan, single-flight per kind: the button and the
- * hourly background job (backgroundJobs.ts) share this, so a press during
- * the job joins it rather than starting a second walk of the same pages.
+ * One chunk of the deep scan, at most one walk per kind: the button and
+ * the hourly background job (backgroundJobs.ts) share this. Which of the
+ * two joins the other, and which supersedes it, is the `priority`
+ * parameter's story below.
  */
 export function deepScanChunk(
   kind: MediaKind,

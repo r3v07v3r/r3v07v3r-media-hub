@@ -267,7 +267,10 @@ export function startBackgroundJobs(): void {
   // bookmark, an honest 'exhausted' at the end — which meant most people
   // never got past the standing crawl's depth. The same chunk now runs on
   // its own, one kind at a time, only when nothing else is going on, until
-  // upstream has no more to give; a press still works and simply joins it.
+  // upstream has no more to give. A press still works: it stops this job's
+  // walk at its last safe group and walks on in its own lane (see
+  // deepScanChunk), so the report awaited below may be a halted, partial
+  // one — `grew` and the notify are about what THIS walk added.
   // Skipped while a household cache server is paired: its own crawl feeds
   // this index for every device in the house (lanCacheTitleSync), and a
   // second walk of the same pages from each device would be waste.
