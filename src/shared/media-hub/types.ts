@@ -359,6 +359,12 @@ export interface CacheSourceRef {
   source: StreamSource
   /** torbox */
   infoHash?: string
+  /** torbox: the add-on's index of the file these bytes came from, so a
+   *  resume re-selects it rather than guessing from filenames. Absent on
+   *  sessions written before it was recorded. */
+  fileIdx?: number
+  /** torbox: tracker URLs to rebuild the magnet with — see StreamCandidate.sources. */
+  sources?: string[]
   /** mediaserver */
   itemId?: string
   mediaSourceId?: string

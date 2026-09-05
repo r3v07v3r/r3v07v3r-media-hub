@@ -346,7 +346,15 @@ export function resumeCandidateFor(
   }
   if (ref.source === 'torbox' && ref.infoHash) {
     if (!torboxConnected) return null
-    return { ...base, source: 'torbox', infoHash: ref.infoHash }
+    return {
+      ...base,
+      source: 'torbox',
+      infoHash: ref.infoHash,
+      // Carried back so the resume picks the SAME file the first play did
+      // (and can re-add the torrent with its trackers if TorBox dropped it).
+      ...(ref.fileIdx != null ? { fileIdx: ref.fileIdx } : {}),
+      ...(ref.sources?.length ? { sources: ref.sources } : {})
+    }
   }
   return null
 }
