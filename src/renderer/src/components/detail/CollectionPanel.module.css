@@ -18,6 +18,33 @@
   white-space: nowrap;
 }
 
+/* "In release order", under the heading. */
+.order {
+  margin: -4px 0 10px;
+  font-size: 12px;
+  color: var(--text-muted, rgba(255, 255, 255, 0.55));
+}
+
+/* 1, 2, 3 — the position in the series, so the order reads as one. */
+.ordinal {
+  flex: 0 0 auto;
+  min-width: 22px;
+  text-align: center;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted, rgba(255, 255, 255, 0.55));
+}
+
+/* The film on screen: listed in its place, not clickable, faintly lit. */
+.current {
+  cursor: default;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.current .ordinal {
+  color: var(--accent-cyan, #6cc4d4);
+}
+
 .list {
   list-style: none;
   margin: 0;

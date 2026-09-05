@@ -637,6 +637,12 @@ export interface StreamCacheStartResult {
    *  the "Embedded" subtitle menu upfront rather than only discovering it
    *  can't extract after the person has already clicked. */
   fullRetention: boolean
+  /** Tier 1 only: the session's own manifest, as written when the bytes
+   *  were first fetched. It knows things the caller replaying the session
+   *  does not — which release these bytes ARE, for the Info panel — so the
+   *  player snapshot reads from it rather than from the thinner metadata
+   *  a local-cache candidate carries. */
+  meta?: CacheSessionMeta
 }
 
 export interface StreamCache {
@@ -1716,7 +1722,7 @@ export function createStreamCache({
     void writeMeta({ ...stored, ...meta }, cacheRoot, token)
 
     reportPreparation('buffer', 'Playing from this computer — already downloaded')
-    return { url: `${origin}/stream/${token}`, totalBytes, fullRetention: true }
+    return { url: `${origin}/stream/${token}`, totalBytes, fullRetention: true, meta: stored }
   }
 
   async function start(

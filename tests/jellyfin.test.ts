@@ -199,3 +199,68 @@ async function providerFilterChecks(): Promise<void> {
 void providerFilterChecks().then(() => {
   console.log('ok  jellyfin client')
 })
+
+// --- a series filed under its romaji ---------------------------------------
+//
+// An anime is listed in this app under its English title with the romaji
+// as an alternate. A library that names the series in romaji answers a
+// search for the English name with NOTHING — no rows for the title guard
+// to accept — and anime has no IMDb id to fall back on. Every supplied
+// name is searched, so the second one finds it. This stub, unlike the one
+// above, honours SearchTerm, which is the whole point.
+
+async function alternateTitleChecks(): Promise<void> {
+  const series = {
+    Id: 'series-jp',
+    Name: 'Shingeki no Kyojin',
+    ProviderIds: {},
+    MediaSources: [{ Id: 'ms-s', Path: '/tv/snk/folder.jpg' }]
+  }
+  const episodes = {
+    Items: [
+      {
+        Id: 'ep-1',
+        Name: 'To You, in 2000 Years',
+        SeriesName: 'Shingeki no Kyojin',
+        IndexNumber: 1,
+        ParentIndexNumber: 1,
+        MediaSources: [{ Id: 'ms-ep', Path: '/tv/snk/[SubsPlease] Shingeki no Kyojin - 01.mkv' }]
+      }
+    ]
+  }
+  const searched: string[] = []
+  const server = http.createServer((req, res) => {
+    const url = new URL(req.url ?? '/', 'http://127.0.0.1')
+    res.writeHead(200, { 'content-type': 'application/json' })
+    if (url.pathname.startsWith('/Shows/')) {
+      res.end(JSON.stringify(episodes))
+      return
+    }
+    const term = url.searchParams.get('SearchTerm') ?? ''
+    if (term) searched.push(term)
+    const hit = series.Name.toLowerCase().includes(term.toLowerCase())
+    res.end(JSON.stringify({ Items: term && hit ? [series] : [] }))
+  })
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+  const port = (server.address() as { port: number }).port
+  const config = { baseUrl: `http://127.0.0.1:${port}`, apiKey: 'test-key' }
+
+  try {
+    const found = await findEpisode(config, '', ['Attack on Titan', 'Shingeki no Kyojin'], 1, 1)
+    assert.equal(found?.Id, 'ep-1', 'the romaji name finds a series the English name cannot')
+    assert.deepEqual(
+      searched,
+      ['Attack on Titan', 'Shingeki no Kyojin'],
+      'the English name is searched first, the romaji second'
+    )
+
+    const none = await findEpisode(config, '', ['Attack on Titan'], 1, 1)
+    assert.equal(none, null, 'with only the English name the library stays out of reach')
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()))
+  }
+}
+
+void alternateTitleChecks().then(() => {
+  console.log('ok  jellyfin alternate titles')
+})

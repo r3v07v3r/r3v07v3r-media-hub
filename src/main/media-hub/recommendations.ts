@@ -28,14 +28,22 @@
 //
 // Stale order, never stale membership.
 
-import type { CatalogItem, HistoryEntry, RecommendationReason } from '../../shared/media-hub/types'
+import type {
+  CatalogItem,
+  HistoryEntry,
+  RecommendationRail,
+  RecommendationReason
+} from '../../shared/media-hub/types'
+import type { MediaHubDatabase } from './database'
 import { MEDIA_HUB_CHANNELS } from '../../shared/media-hub/ipc-channels'
 import {
   applyCadence,
   buildTasteProfile,
   rankPersonalizedRecommendationsScored,
   watchCadenceProfile,
-  type ScoredRecommendation
+  type ScoredRecommendation,
+  groupRecommendationRails,
+  enoughStoredRecommendations
 } from '../../shared/media-hub/catalog-logic'
 import { ratingWeight } from '../../shared/media-hub/rating'
 import { creditsFor } from './credits'
@@ -57,7 +65,9 @@ import type { TaskPriority } from './taskScheduler'
 // v3: entries carry the signal that put them there (ScoredRecommendation's
 // `reason`), which a v2 list has no field for — a stale one would serve a
 // whole row of unexplained cards until the next rebuild hours later.
-const STORE_KEY_PREFIX = 'recommendations:v3'
+// v4: the pool grew to include the index and the buffer to 150 — a v3 list
+// is forty titles from the trending feeds, too thin for the shelves.
+const STORE_KEY_PREFIX = 'recommendations:v4'
 
 /**
  * Where one profile's ranked list lives.
@@ -83,10 +93,11 @@ export function storeKey(profileId: string = getDatabase().activeProfile()): str
  * below SERVED_COUNT survivors the read reports a miss and the caller
  * ranks live instead of showing a stub.
  */
-export const STORED_COUNT = 40
+export const STORED_COUNT = 150
 
-/** How many the Home row actually shows — unchanged from what home:personalized always returned. */
-export const SERVED_COUNT = 18
+/** How many the Home row actually shows. Twice the eighteen it used to,
+ *  because the row scrolls and eighteen ran out before the arrows did. */
+export const SERVED_COUNT = 36
 
 /**
  * How long a stored list stays readable. Long, because the age that
@@ -208,6 +219,38 @@ export function abandonedIds(now = Date.now()): Set<string> {
   }
 }
 
+/** How much of the index joins the candidate pool, per kind — two pages of
+ *  the query's own ceiling. Bounded because every candidate costs a credits
+ *  read (see creditsFor) on the rebuild. */
+const INDEX_POOL_PER_KIND = 1000
+const INDEX_PAGE = 500
+
+/** The catalog rows plus the index's most popular titles, deduplicated by
+ *  kind and id with the catalog row winning. */
+function withIndexedTitles(catalog: CatalogItem[], db: MediaHubDatabase): CatalogItem[] {
+  const seen = new Set(catalog.map((item) => `${item.type}:${item.id}`))
+  const pool = [...catalog]
+  for (const kind of ['movie', 'series', 'anime'] as const) {
+    for (let offset = 0; offset < INDEX_POOL_PER_KIND; offset += INDEX_PAGE) {
+      let rows: CatalogItem[] = []
+      try {
+        rows = db.indexQuery({ kind, sort: 'trending', limit: INDEX_PAGE, offset }).items
+      } catch (error) {
+        logError('recommendations:index-pool', error)
+        break
+      }
+      for (const item of rows) {
+        const key = `${item.type}:${item.id}`
+        if (seen.has(key)) continue
+        seen.add(key)
+        pool.push(item)
+      }
+      if (rows.length < INDEX_PAGE) break
+    }
+  }
+  return pool
+}
+
 /**
  * Why each of `items` is there, drawn from the ranking that produced them.
  *
@@ -250,6 +293,7 @@ export function readStoredRecommendations(
 ): {
   items: CatalogItem[]
   reasons: Record<string, RecommendationReason>
+  rails: RecommendationRail[]
   preferredGenres: string[]
 } | null {
   let stored: StoredRecommendations | null = null
@@ -267,7 +311,7 @@ export function readStoredRecommendations(
   }
 
   const surviving = stored.entries.filter((entry) => entry?.item && keep(entry.item, exclusions))
-  if (surviving.length < SERVED_COUNT) {
+  if (!enoughStoredRecommendations(stored.entries.length, surviving.length, SERVED_COUNT)) {
     requestRecommendationsRebuild()
     return null
   }
@@ -282,6 +326,9 @@ export function readStoredRecommendations(
   return {
     items,
     reasons: reasonsFor(items, surviving),
+    // Over everything that survived, not the served row: the shelves are
+    // where the rest of the buffer becomes visible.
+    rails: groupRecommendationRails(surviving),
     preferredGenres: Array.isArray(stored.preferredGenres) ? stored.preferredGenres : []
   }
 }
@@ -363,13 +410,18 @@ export async function rebuildRecommendations(
       catalogData(kind, false, priority).catch(() => [] as CatalogItem[])
     )
   )
-  const pool = [...movies, ...series, ...anime]
+  const db = getDatabase()
+  // The loaded catalog is a bounded candidate pool — the trending feeds,
+  // a few hundred titles a kind. The index is every title this install has
+  // ever resolved, and it is what gives the ranking, and the shelves built
+  // from it, enough to be worth browsing. Catalog rows first so a title in
+  // both keeps the fresher record.
+  const pool = withIndexedTitles([...movies, ...series, ...anime], db)
   // Nothing to rank from. Deliberately leaves whatever is already stored
   // in place: a catalog that is momentarily unreachable is not a reason to
   // replace a working list with an empty one.
   if (!pool.length) return 0
 
-  const db = getDatabase()
   // Captured before the catalog reads above have been consumed and before the
   // ranking below — see storeRecommendations on why the write cannot resolve
   // it for itself.

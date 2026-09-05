@@ -1,5 +1,7 @@
 'use client'
 
+import { useState } from 'react'
+
 import type { MediaItem } from '@renderer/types'
 import type { DetailAdapterConfig } from '@renderer/lib/mediaHub/detailAdapters'
 import { resolveArtwork } from '@renderer/lib/artwork'
@@ -11,8 +13,12 @@ export interface SimilarPanelProps {
   items: MediaItem[]
   config: DetailAdapterConfig
   onSelect: (item: MediaItem) => void
-  onViewAll: () => void
 }
+
+/** Shown before "Show all": enough to be useful, short enough to fit the
+ *  column beside the hero. The rest expands in place — the button used to
+ *  leave for the category's browse page, which is not "all similar". */
+const COLLAPSED_COUNT = 6
 
 /**
  * Titles in the same vein as this one — genre and style, not the same
@@ -23,7 +29,8 @@ export interface SimilarPanelProps {
  * the honest remaining states are just loading/ready/error plus a real
  * empty result.
  */
-export function SimilarPanel({ status, items, config, onSelect, onViewAll }: SimilarPanelProps) {
+export function SimilarPanel({ status, items, config, onSelect }: SimilarPanelProps) {
+  const [expanded, setExpanded] = useState(false)
   if (status === 'loading') {
     return (
       <section
@@ -63,12 +70,19 @@ export function SimilarPanel({ status, items, config, onSelect, onViewAll }: Sim
     <section className={`${styles.panel} glass-panel`} aria-label="Similar titles">
       <div className={styles.headerRow}>
         <h2 className={styles.heading}>Similar {config.pluralLabel}</h2>
-        <button type="button" className={styles.viewAll} onClick={onViewAll}>
-          View All
-        </button>
+        {items.length > COLLAPSED_COUNT && (
+          <button
+            type="button"
+            className={styles.viewAll}
+            aria-expanded={expanded}
+            onClick={() => setExpanded((current) => !current)}
+          >
+            {expanded ? 'Show fewer' : `Show all ${items.length}`}
+          </button>
+        )}
       </div>
       <ul className={styles.list}>
-        {items.slice(0, 6).map((item) => {
+        {(expanded ? items : items.slice(0, COLLAPSED_COUNT)).map((item) => {
           const artwork = resolveArtwork(item)
           return (
             <li key={item.id}>

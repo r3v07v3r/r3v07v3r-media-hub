@@ -78,7 +78,7 @@ const SCRUB_PREVIEW_WIDTH = 160
  *  live; there is no re-render of anything. */
 const SUBTITLE_DELAY_STEP = 0.25
 
-type Menu = 'audio' | 'subtitles' | 'fit' | 'picture' | 'playback' | null
+type Menu = 'audio' | 'subtitles' | 'fit' | 'picture' | 'playback' | 'info' | null
 
 /** What the speed control offers. 1 is listed with the rest rather than being
  *  a separate "reset", because it is the value people come back to and hunting
@@ -98,6 +98,14 @@ const SLEEP_OPTIONS = [
   { minutes: 60, label: '1 hour' },
   { minutes: 0, label: 'End of episode' }
 ] as const
+
+/** Where the bytes of the playing release come from, for the Info panel. */
+const SOURCE_LABEL: Record<string, string> = {
+  localcache: 'Local cache',
+  lancache: 'LAN cache',
+  mediaserver: 'Media server',
+  torbox: 'TorBox'
+}
 
 function formatTime(totalSeconds: number): string {
   if (!Number.isFinite(totalSeconds) || totalSeconds < 0) return '0:00'
@@ -807,6 +815,8 @@ function PlayerControls() {
         void command({ type: 'frame-back-step' })
       } else if (event.key === 's' || event.key === 'S') {
         takeScreenshot()
+      } else if (event.key === 'i' || event.key === 'I') {
+        setMenu((current) => (current === 'info' ? null : 'info'))
       }
       revealControls()
     }
@@ -1338,6 +1348,86 @@ function PlayerControls() {
               )}
             </div>
           )}
+
+          {/* What is playing: the release as the scraper named it, its
+              quality and size as read from that name, where the bytes come
+              from, what mpv is decoding and which tracks are in use. Also on
+              the `i` key. */}
+          <div className={styles.menuWrap}>
+            <button
+              type="button"
+              className={styles.button}
+              onClick={() => setMenu(menu === 'info' ? null : 'info')}
+            >
+              Info
+            </button>
+            {menu === 'info' && (
+              <div className={`${styles.menu} ${styles.infoMenu}`}>
+                <p className={styles.menuHeading}>Now playing</p>
+                {media?.release ? (
+                  <>
+                    <p className={styles.infoRelease} title={media.release.name}>
+                      {media.release.name || '(unnamed release)'}
+                    </p>
+                    <p className={styles.menuNote}>
+                      {[
+                        media.release.resolution ? `${media.release.resolution}p` : null,
+                        media.release.sizeGb ? `${media.release.sizeGb.toFixed(1)} GB` : null,
+                        SOURCE_LABEL[media.release.source] ?? media.release.source
+                      ]
+                        .filter(Boolean)
+                        .join(' · ')}
+                    </p>
+                    <button
+                      type="button"
+                      className={styles.menuItem}
+                      onClick={() => {
+                        void navigator.clipboard
+                          ?.writeText(media.release?.name ?? '')
+                          .catch(() => {})
+                        ui({ tone: 'success', type: 'notify', message: 'Release name copied.' })
+                      }}
+                    >
+                      Copy release name
+                    </button>
+                  </>
+                ) : (
+                  <p className={styles.menuNote}>No release details for this session.</p>
+                )}
+                <p className={styles.menuHeading}>Picture</p>
+                <p className={styles.menuNote}>
+                  {[
+                    state.video?.width && state.video?.height
+                      ? `${state.video.width}×${state.video.height}`
+                      : null,
+                    state.video?.fps ? `${Math.round(state.video.fps * 100) / 100} fps` : null,
+                    state.video?.codec ? state.video.codec.toUpperCase() : null,
+                    state.video?.hwdec
+                      ? state.video.hwdec === 'no'
+                        ? 'software decode'
+                        : `${state.video.hwdec} decode`
+                      : null
+                  ]
+                    .filter(Boolean)
+                    .join(' · ') || 'Waiting for the decoder…'}
+                </p>
+                <p className={styles.menuHeading}>Tracks</p>
+                <p className={styles.menuNote}>
+                  Audio:{' '}
+                  {audioTracks.find((t) => t.ordinal === state.audioOrdinal)?.label ??
+                    audioTracks[0]?.label ??
+                    '—'}
+                </p>
+                <p className={styles.menuNote}>
+                  Subtitles:{' '}
+                  {state.subtitleOrdinal != null && state.subtitleOrdinal >= 0
+                    ? (subtitleTracks.find((t) => t.ordinal === state.subtitleOrdinal)?.label ??
+                      '—')
+                    : 'Off'}
+                </p>
+              </div>
+            )}
+          </div>
 
           <div className={styles.menuWrap}>
             <button

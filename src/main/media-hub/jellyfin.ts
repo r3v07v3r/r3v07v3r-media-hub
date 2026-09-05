@@ -149,7 +149,8 @@ export function parseMediaId(id: string): { imdbId: string; season?: number; epi
 export async function findMovie(
   config: JellyfinConfig,
   imdbId: string,
-  title: string
+  /** The title's names — every one matches, and every one is searched (see searchTerms). */
+  title: string | readonly string[]
 ): Promise<JellyfinItem | null> {
   // Only ask when there is actually an id to ask about. An empty filter is
   // not a narrow query, it is no query — see matchesProviderId.
@@ -168,20 +169,33 @@ export async function findMovie(
     if (provided) return provided
   }
 
-  if (!title.trim()) return null
-  const byName = await request<JellyfinItemsResponse>(config, '/Items', {
-    Recursive: 'true',
-    IncludeItemTypes: 'Movie',
-    SearchTerm: title,
-    Fields: FIELDS,
-    Limit: '20'
-  }).catch(() => null)
-
-  return (
-    byName?.Items?.find(
+  for (const term of searchTerms(title)) {
+    const byName = await request<JellyfinItemsResponse>(config, '/Items', {
+      Recursive: 'true',
+      IncludeItemTypes: 'Movie',
+      SearchTerm: term,
+      Fields: FIELDS,
+      Limit: '20'
+    }).catch(() => null)
+    const found = byName?.Items?.find(
       (item) => item.MediaSources?.length && titleMatchesRelease(item.Name ?? '', title)
-    ) ?? null
-  )
+    )
+    if (found) return found
+  }
+  return null
+}
+
+/**
+ * The names to search by, in order, each once. Every supplied name is
+ * tried, not just the first: an anime is listed here under its English
+ * title with the romaji as an alternate, and a library that files the
+ * series under its romaji answers a search for the English name with
+ * nothing at all — no rows for the title guard to accept. Anime has no
+ * IMDb id to fall back on, so the second search is the only way in.
+ */
+function searchTerms(title: string | readonly string[]): string[] {
+  const names = (Array.isArray(title) ? title : [title]).map((name) => String(name ?? '').trim())
+  return [...new Set(names.filter(Boolean))]
 }
 
 /**
@@ -193,7 +207,8 @@ export async function findMovie(
 export async function findEpisode(
   config: JellyfinConfig,
   imdbId: string,
-  title: string,
+  /** The title's names — every one matches, and every one is searched (see searchTerms). */
+  title: string | readonly string[],
   season: number,
   episode: number
 ): Promise<JellyfinItem | null> {
@@ -213,15 +228,19 @@ export async function findEpisode(
     series = byProvider?.Items?.find((item) => matchesProviderId(item, imdbId)) ?? null
   }
 
-  if (!series && title.trim()) {
-    const byName = await request<JellyfinItemsResponse>(config, '/Items', {
-      Recursive: 'true',
-      IncludeItemTypes: 'Series',
-      SearchTerm: title,
-      Fields: 'ProviderIds',
-      Limit: '20'
-    }).catch(() => null)
-    series = byName?.Items?.find((item) => titleMatchesRelease(item.Name ?? '', title)) ?? null
+  if (!series) {
+    // Each name in turn — see searchTerms.
+    for (const term of searchTerms(title)) {
+      const byName = await request<JellyfinItemsResponse>(config, '/Items', {
+        Recursive: 'true',
+        IncludeItemTypes: 'Series',
+        SearchTerm: term,
+        Fields: 'ProviderIds',
+        Limit: '20'
+      }).catch(() => null)
+      series = byName?.Items?.find((item) => titleMatchesRelease(item.Name ?? '', title)) ?? null
+      if (series) break
+    }
   }
 
   if (!series?.Id) return null

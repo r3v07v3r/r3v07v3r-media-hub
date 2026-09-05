@@ -66,6 +66,14 @@
   color: var(--text-secondary);
 }
 
+.groupLabel {
+  margin: 12px 0 6px;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted, rgba(255, 255, 255, 0.55));
+}
+
 .list {
   display: flex;
   flex-direction: column;

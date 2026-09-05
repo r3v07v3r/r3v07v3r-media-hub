@@ -48,6 +48,7 @@ import type {
   TrackedUpdate,
   ViewingStats
 } from '../../shared/media-hub/types'
+import { isRegularEpisode } from '../../shared/media-hub/catalog-logic'
 
 /** JSON.parse that falls back instead of throwing on malformed/absent data. */
 function parse<T>(value: string, fallback: T): T {
@@ -180,12 +181,13 @@ function indexEpisodeCounts(
   airedEpisodes: number | null
 } {
   // The same rule airedEpisodes (renderer/lib/mediaHub/adapters.ts) applies:
-  // not synthetic, and either no release date or one already past. `!released`
-  // counting as aired is deliberate there and reproduced here — Kitsu's
-  // synthesized episodes carry no dates, so for anime this equals the total,
-  // which is the answer the in-memory version already reached.
+  // a regular episode (not synthetic, not a season-0 special — see
+  // isRegularEpisode), and either no release date or one already past.
+  // `!released` counting as aired is deliberate there and reproduced here —
+  // Kitsu's synthesized episodes carry no dates, so for anime this equals
+  // the total, which is the answer the in-memory version already reached.
   const aired = (item.videos || []).filter(
-    (v) => !v.unplayable && (!v.released || new Date(v.released).getTime() <= now)
+    (v) => isRegularEpisode(v) && (!v.released || new Date(v.released).getTime() <= now)
   ).length
 
   if (item.episodeCounts) {
@@ -199,10 +201,10 @@ function indexEpisodeCounts(
       airedEpisodes: item.episodeCounts.totalEpisodes
     }
   }
-  // `unplayable` entries are synthetic — promotional clips reassigned into a
-  // fabricated season 0 by disambiguateVideos — so they are excluded here
-  // exactly as the grid excludes them, or they would inflate both counts.
-  const playable = (item.videos || []).filter((v) => !v.unplayable)
+  // Specials — synthetic or genuine, both season 0 — are excluded here
+  // exactly as the progress denominator excludes them, or they would
+  // inflate both counts and add a season that is not one.
+  const playable = (item.videos || []).filter((v) => isRegularEpisode(v))
   if (!playable.length) return { totalSeasons: null, totalEpisodes: null, airedEpisodes: null }
   const seasons = new Set(playable.map((v) => v.season).filter((s) => Number.isFinite(s)))
   return {
@@ -368,10 +370,14 @@ const WATCHED_SQL =
   'EXISTS (SELECT 1 FROM watch_history wh WHERE wh.profile_id = @profile AND wh.content_id = catalog_index.id)'
 const DISLIKED_SQL =
   'EXISTS (SELECT 1 FROM disliked d WHERE d.profile_id = @profile AND d.content_id = catalog_index.id)'
+// `wh.season > 0` keeps the numerator on the same footing as the
+// denominator: aired_episodes no longer counts season-0 specials, and a
+// watched special must not count toward finishing the numbered episodes —
+// or two OVAs plus one of three real episodes would read as complete.
 const WATCHED_EPISODES_SQL =
   "(SELECT COUNT(DISTINCT wh.season || ':' || wh.episode) FROM watch_history wh" +
   ' WHERE wh.profile_id = @profile AND wh.content_id = catalog_index.id' +
-  ' AND wh.season IS NOT NULL AND wh.episode IS NOT NULL)'
+  ' AND wh.season IS NOT NULL AND wh.episode IS NOT NULL AND wh.season > 0)'
 const COMPLETED_SQL =
   `(CASE WHEN catalog_index.kind = 'movie' THEN (${WATCHED_SQL})` +
   ` WHEN catalog_index.aired_episodes IS NULL OR catalog_index.aired_episodes <= 0 THEN 0` +
@@ -682,6 +688,18 @@ export interface MediaHubDatabase {
    * thousands of rows, and a statement-at-a-time loop outside a transaction
    * is one fsync per row.
    */
+  /**
+   * Refreshes one index row's TITLE and episode counts from a fully
+   * resolved item — the name the grid shows and the denominator behind the
+   * Completed badge — without touching the rank, source or artwork a crawl
+   * assigned. indexUpsert cannot be used for this: it writes rank and source
+   * unconditionally, so a detail-page resolve would demote every title it
+   * touched to rank 0. Also how deep-scanned and household-synced rows,
+   * which are add-only, pick up an anime's English name once it is opened.
+   * A no-op for a title the index does not hold; empties and nulls never
+   * erase.
+   */
+  indexRefreshFromMetadata(kind: MediaKind, item: CatalogItem, now?: number): void
   indexUpsert(
     kind: MediaKind,
     items: readonly CatalogItem[],
@@ -2074,6 +2092,37 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
       }
     },
 
+    indexRefreshFromMetadata(kind, item, now = Date.now()) {
+      const id = String(item?.id || '')
+      if (!id) return
+      const counts = indexEpisodeCounts(item, now)
+      const title = String(item.title || '').trim()
+      try {
+        sql
+          .prepare(
+            `UPDATE catalog_index SET
+               title=COALESCE(NULLIF(@title,''),title),
+               title_sort=COALESCE(NULLIF(@titleSort,''),title_sort),
+               total_seasons=COALESCE(@totalSeasons,total_seasons),
+               total_episodes=COALESCE(@totalEpisodes,total_episodes),
+               aired_episodes=COALESCE(@airedEpisodes,aired_episodes),
+               updated_at=@now
+             WHERE id=@id AND kind=@kind`
+          )
+          .run({
+            id,
+            kind,
+            title,
+            titleSort: title ? titleSortKey(title) : '',
+            totalSeasons: counts.totalSeasons,
+            totalEpisodes: counts.totalEpisodes,
+            airedEpisodes: counts.airedEpisodes,
+            now
+          })
+      } catch (error) {
+        logError('index:refresh-metadata', error)
+      }
+    },
     indexUpsert(kind, items, { source = '', rankBase = 0, ranks, now = Date.now() } = {}) {
       if (!items.length) return true
       try {

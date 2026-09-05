@@ -15,6 +15,30 @@ export function streamText(stream: StreamCandidate): string {
 }
 
 /**
+ * The one line that actually NAMES the release — the torrent or file name
+ * — as opposed to everything the add-on said about it.
+ *
+ * The sources disagree on where it lives: Torrentio puts it as `title`'s
+ * first line (`name` is "Torrentio\n1080p"), Comet leaves `title` unset and
+ * puts it in `description` (`name` is "[TORRENT] Comet 2160p"), and a
+ * media server does the REVERSE — `name` is the file name and `title` the
+ * library title ("Show Episode 6"; see jellyfinCandidate). A cache
+ * candidate carries the human title in both and names no release at all.
+ * Anything that reads a fact off the release name — its group, what the
+ * Info panel shows — must go through here, and through the SAME function
+ * on both sides of a comparison: streamText above starts with the add-on's
+ * own label, which is how a "[TORRENT] Comet" candidate once parsed as
+ * release group "torrent".
+ */
+export function streamReleaseName(stream: StreamCandidate): string {
+  const text =
+    stream.source === 'mediaserver'
+      ? stream.name || stream.title || ''
+      : stream.title || (stream.description as string | undefined) || stream.name || ''
+  return String(text).split('\n')[0].trim()
+}
+
+/**
  * The resolution a release advertises.
  *
  * Read from the release text first because that is where the scrapers put it

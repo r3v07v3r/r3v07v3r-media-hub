@@ -23,7 +23,8 @@ import {
   type PlayerInputEvent,
   type PlayerSessionSnapshot,
   type PlayerStatePatch,
-  type PlayerUiEvent
+  type PlayerUiEvent,
+  type PlayerVideoFacts
 } from '../../shared/media-hub/player'
 import { MEDIA_HUB_CHANNELS } from '../../shared/media-hub/ipc-channels'
 import {
@@ -96,6 +97,11 @@ let lastTimePos = 0
 // The title's length, from the duration observer, for the one write main
 // makes to the bookmark table itself — see flushPlaybackPosition.
 let lastDuration = 0
+// What mpv reports about the picture — codec, size, frame rate, decoder —
+// kept whole because state patches merge shallowly and this is pushed as
+// one object. See PlayerVideoFacts.
+let videoFacts: PlayerVideoFacts = {}
+
 // What the current title was loaded with, so an mpv error can be answered
 // with one reload at the playhead before it closes the player.
 let lastLoad: {
@@ -364,6 +370,37 @@ async function attachObservers(): Promise<void> {
   await player.observe('paused-for-cache', (value) => {
     if (typeof value === 'boolean') queuePatch({ bufferingForCache: value }, true)
   })
+  // The picture, for the Info panel. Each property arrives on its own, so
+  // the whole object is re-pushed on every change rather than one key.
+  const pushVideoFact = (patch: Partial<PlayerVideoFacts>): void => {
+    videoFacts = { ...videoFacts, ...patch }
+    queuePatch({ video: videoFacts }, true)
+  }
+  await player
+    .observe('video-codec', (value) => {
+      if (typeof value === 'string') pushVideoFact({ codec: value })
+    })
+    .catch(() => {})
+  await player
+    .observe('video-params/w', (value) => {
+      if (typeof value === 'number') pushVideoFact({ width: value })
+    })
+    .catch(() => {})
+  await player
+    .observe('video-params/h', (value) => {
+      if (typeof value === 'number') pushVideoFact({ height: value })
+    })
+    .catch(() => {})
+  await player
+    .observe('container-fps', (value) => {
+      if (typeof value === 'number') pushVideoFact({ fps: value })
+    })
+    .catch(() => {})
+  await player
+    .observe('hwdec-current', (value) => {
+      if (typeof value === 'string') pushVideoFact({ hwdec: value })
+    })
+    .catch(() => {})
   // Dropped frames, so that motion which JUMPS leaves a trace. A person
   // described an eye "suddenly looking right with no motion to get there";
   // whether that was the VO discarding late frames (mpv's default framedrop)
@@ -742,6 +779,13 @@ export async function startPlayerSession(
     },
     retried: false
   }
+  // The picture facts start empty for every title, not only after a full
+  // stop: mpv is kept across consecutive titles, and a property the next
+  // file lacks (no container-fps for variable-frame-rate media) arrives
+  // as null, which the observers ignore — so the previous title's value
+  // would have stood in the Info panel.
+  videoFacts = {}
+  queuePatch({ video: videoFacts }, true)
   await player.loadFile(url, {
     startSeconds: options.startSeconds,
     ...lastLoad.options
@@ -801,6 +845,7 @@ export async function stopPlayerSession(): Promise<void> {
   lastTimePos = 0
   lastDuration = 0
   lastLoad = null
+  videoFacts = {}
   closePlayerOverlay()
   // `stop` destroys mpv's embedded child window (verified in the spike), which
   // is what reveals the app UI again — no window state to unwind on this side.

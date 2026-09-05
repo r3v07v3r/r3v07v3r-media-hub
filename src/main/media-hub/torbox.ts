@@ -25,6 +25,7 @@ import type {
   CacheSourceRef,
   BootstrapResult,
   PlaybackResult,
+  PlaybackRelease,
   StreamCandidate,
   StreamResolveResult,
   TorBoxConnectResult
@@ -37,14 +38,17 @@ import { logError } from './logger'
 import {
   cometConfigPath,
   rankSafeStreams,
+  releaseGroup,
   resumeCandidateFor,
   streamResolution,
+  streamSizeGb,
   selectVideoFile,
   titleMatchesRelease,
   validateTorBoxToken,
   type RawApiPayload,
   type SourcePreference,
-  type TorBoxFile
+  type TorBoxFile,
+  guardedForPrefetch
 } from './core'
 import { sanitizeTrackers } from './security'
 import { isAllowedRemoteMediaUrl } from './playback'
@@ -66,6 +70,8 @@ import {
   readSettings,
   writeSettings
 } from './settingsStore'
+import { streamReleaseName } from '../../shared/media-hub/streamQuality'
+import { knownTitles } from './titleNames'
 
 export const TORBOX = 'https://api.torbox.app/v1/api'
 
@@ -174,8 +180,9 @@ async function fetchAddonStreams(url: string): Promise<StreamCandidate[]> {
  * Torrentio-sourced one for the same search).
  */
 function streamReleaseText(stream: StreamCandidate): string {
-  const text = stream.title || (stream.description as string | undefined) || stream.name || ''
-  return text.split('\n')[0]
+  // One rule, shared with the ranking's release-group comparison — see
+  // streamReleaseName for why they must not drift apart.
+  return streamReleaseName(stream)
 }
 
 /**
@@ -267,10 +274,19 @@ export async function discoverBestPrefetchCandidate(
   }
   const discoveredRaw = await fetchDiscoveredRaw(type, id)
   if (!discoveredRaw.length) return null
-  const titleFiltered = title
-    ? discoveredRaw.filter((s) => titleMatchesRelease(streamReleaseText(s), title))
-    : discoveredRaw
-  const discovered = titleFiltered.length ? titleFiltered : discoveredRaw
+  // The same guard as live resolution, with the same names: the feeder
+  // only has a tracked row's title, and for an anime that is the English
+  // one while its releases are named in romaji — a guard that matched
+  // nothing fell back to the whole unguarded result set, and an add-on's
+  // wrong "exact" match could have the daemon fetch a related title.
+  const titles = knownTitles(type, showKey(type, id), [title])
+  // No fallback to the unguarded set here, unlike live resolution: a
+  // person at the stream picker can see a wrong match and choose again,
+  // but nobody is watching the daemon fetch tonight's file. A name that
+  // matches none of the title's known names is a title this app cannot
+  // vouch for, and "no prefetch" is the right answer for it.
+  const discovered = guardedForPrefetch(discoveredRaw, titles)
+  if (!discovered.length) return null
   return (
     rankSafeStreams(
       discovered,
@@ -321,6 +337,10 @@ interface StreamResolvePayload {
    *  See titleMatchesRelease's own doc comment for what this guards
    *  against. */
   title?: string
+  /** Other names the same title is released under — an anime's romaji
+   *  name beside its English one. Every one of them is accepted by the
+   *  title guard; see titleMatchesRelease. */
+  altTitles?: string[]
   /** The identity play:stream will store on the cache session. Supplied so
    *  the local-cache tier compares like with like instead of guessing it
    *  from `id` — see the preload comment on resolve(). Optional: without
@@ -363,6 +383,48 @@ interface PlayStreamPayload {
  *  re-verified live with a single-hash checkcached before ever being
  *  trusted, never assumed still good. */
 const LAST_STREAM_TTL_MS = 14 * 24 * 60 * 60 * 1000
+
+/**
+ * The show an episode id belongs to, for memory that should span episodes.
+ * An anime resolve id is `<kitsu id>:<episode>` (two segments); a series
+ * one is `<imdb>:<season>:<episode>` (three); a movie's is itself.
+ */
+function showKey(type: string, id: string): string {
+  if (type === 'movie') return String(id)
+  const parts = String(id).split(':')
+  // A show id is one segment ("tt123", a bare Kitsu number) or a prefixed
+  // pair ("simkl:123", "kitsu:555"); whatever follows is coordinates —
+  // however many, since a series position with no season is "id:episode".
+  const prefixed = parts.length > 1 && /^[a-z]+$/i.test(parts[0]) && /^\d+$/.test(parts[1])
+  return prefixed ? parts.slice(0, 2).join(':') : parts[0]
+}
+
+/** Which release group last played an episode of this show — read back by
+ *  the ranking so the next episode prefers the same group, which is what
+ *  keeps its audio and look consistent across a season. */
+function releaseGroupMemoKey(type: string, id: string): string {
+  return `groupmemo:v1:${type}:${showKey(type, id)}`
+}
+
+/** Remembers the release that actually played, under both the episode and
+ *  the show. */
+function rememberPlayedStream(type: string, resolveId: string, stream: StreamCandidate): void {
+  const db = getDatabase()
+  db.putCache(lastStreamKey(type, resolveId), stream, LAST_STREAM_TTL_MS)
+  const group = releaseGroup(streamReleaseText(stream))
+  if (group) db.putCache(releaseGroupMemoKey(type, resolveId), group, LAST_STREAM_TTL_MS)
+}
+
+/** The release as the Info panel shows it — see PlaybackRelease. */
+function releaseFacts(stream: StreamCandidate): PlaybackRelease {
+  return {
+    name: (streamReleaseText(stream) || stream.name || '').split('\n')[0].trim(),
+    resolution: streamResolution(stream) || undefined,
+    sizeGb: streamSizeGb(stream) ?? undefined,
+    source: stream.source ?? 'torbox',
+    infoHash: stream.infoHash
+  }
+}
 
 function lastStreamKey(type: string, id: string): string {
   return `laststream:v1:${type}:${id}`
@@ -413,7 +475,16 @@ export function registerTorBoxIpc(): void {
   handle<StreamResolvePayload, StreamResolveResult>(
     MEDIA_HUB_CHANNELS.streamResolve,
     async (_e, payload) => {
-      const { type, id, title } = payload
+      const { type, id, title, altTitles } = payload
+      // Every name the title goes by, for the guards below: what the
+      // renderer sent, plus what the cached record knows (an index-backed
+      // card carries no originalTitle, and a romaji-named release must
+      // still pass the guard). Empty means no title guard at all, exactly
+      // as an absent `title` always has.
+      const titles = knownTitles(type, showKey(type, id), [
+        title,
+        ...(Array.isArray(altTitles) ? altTitles : [])
+      ])
       const auth = getTorBoxToken()
       const mediaServer = mediaServerConfig()
       // Either source alone is a complete configuration. Only having
@@ -437,6 +508,9 @@ export function registerTorBoxIpc(): void {
         `:${sourcePreference}:${jellyfinFingerprint(mediaServer)}:${lanCacheFingerprint()}`
       const db = getDatabase()
       const audioLanguage = preferences.audioLanguage || 'en'
+      // The group that played the previous episode of this show, if any —
+      // see SAME_RELEASE_GROUP_BONUS in core.ts.
+      const preferredGroup = getDatabase().getCache<string>(releaseGroupMemoKey(type, id)) ?? null
 
       // Fast path 1: an identical resolve (same title/episode, same
       // quality/size limits) already ran within the last hour. The answer
@@ -504,8 +578,24 @@ export function registerTorBoxIpc(): void {
         }
       }
 
+      // The group memo is not part of the key, on purpose: it changes
+      // whenever another episode of the show plays from a different group,
+      // and keying on it would throw away a search that is still right. A
+      // cached answer was RANKED without it, though, so a replay or a
+      // previously resolved episode never saw the same-group bonus.
+      // Re-ranking is a sort, not a search — every cached answer served
+      // from here (the hour-fresh one below, and the expired one the catch
+      // at the end falls back to) goes through this instead.
+      const withGroupMemo = (result: StreamResolveResult): StreamResolveResult => {
+        if (!preferredGroup || result.streams.length < 2) return result
+        const reranked = rankSafeStreams(result.streams, audioLanguage, limits, sourcePreference, {
+          preferredGroup
+        })
+        return reranked.length ? { ...result, streams: reranked, best: reranked[0] } : result
+      }
+
       const recent = db.getCache<StreamResolveResult>(key)
-      if (recent) return recent
+      if (recent) return withGroupMemo(recent)
 
       // TIER 2 — the on-site cache daemon. Same footing as the media
       // server below: one LAN round-trip, quality-gated, best-effort. Only
@@ -541,7 +631,7 @@ export function registerTorBoxIpc(): void {
       // so giving it first refusal costs nothing when it does not have the
       // title, and the remembered TorBox stream is still right there
       // underneath when it does not.
-      const localLookup = findMediaServerCandidate(id, title)
+      const localLookup = findMediaServerCandidate(id, titles)
 
       // A local copy that already satisfies the person's quality ceiling
       // ends the search here — no checkcached round-trip, no add-on calls,
@@ -669,8 +759,8 @@ export function registerTorBoxIpc(): void {
         // nothing: a release-name shape this heuristic can't parse
         // cleanly falls back to the full unfiltered list rather than
         // turning a real, working result into a dead end.
-        const titleFiltered = title
-          ? discoveredRaw.filter((s) => titleMatchesRelease(streamReleaseText(s), title))
+        const titleFiltered = titles.length
+          ? discoveredRaw.filter((s) => titleMatchesRelease(streamReleaseText(s), titles))
           : discoveredRaw
         const discovered = titleFiltered.length ? titleFiltered : discoveredRaw
         const hashes = [...new Set(discovered.map(torrentHash))].slice(0, 100)
@@ -699,7 +789,8 @@ export function registerTorBoxIpc(): void {
           ],
           audioLanguage,
           limits,
-          sourcePreference
+          sourcePreference,
+          { preferredGroup }
         )
         if (streams.length) {
           const result: StreamResolveResult = { streams, best: streams[0] }
@@ -722,7 +813,9 @@ export function registerTorBoxIpc(): void {
         // same honest "nothing available yet" result as before this
         // existed, rather than surfacing a harder error for what's meant
         // to be a fallback path.
-        const candidate = rankSafeStreams(discovered, audioLanguage, limits, sourcePreference)[0]
+        const candidate = rankSafeStreams(discovered, audioLanguage, limits, sourcePreference, {
+          preferredGroup
+        })[0]
         let queued = false
         if (candidate) {
           try {
@@ -754,7 +847,7 @@ export function registerTorBoxIpc(): void {
         return result
       } catch (error) {
         const stale = db.getCache<StreamResolveResult>(key, { allowExpired: true })
-        if (stale) return stale
+        if (stale) return withGroupMemo(stale)
         throw error
       }
     }
@@ -817,7 +910,8 @@ export function registerTorBoxIpc(): void {
                 // mostly leave that field unset and put the real quality in
                 // the release text, so reading the raw field stores
                 // undefined for nearly every TorBox copy.
-                resolution: stream ? streamResolution(stream) || undefined : undefined
+                resolution: stream ? streamResolution(stream) || undefined : undefined,
+                release: stream ? releaseFacts(stream) : undefined
               }
             : undefined
         )
@@ -826,9 +920,7 @@ export function registerTorBoxIpc(): void {
         // read back. Records the stream that was ACTUALLY used, which
         // isn't always stream:resolve's own top pick (a manual choice
         // from the stream picker lands here too).
-        if (type && resolveId) {
-          getDatabase().putCache(lastStreamKey(type, resolveId), stream, LAST_STREAM_TTL_MS)
-        }
+        if (type && resolveId) rememberPlayedStream(type, resolveId, stream)
         return result
       }
 
@@ -850,9 +942,7 @@ export function registerTorBoxIpc(): void {
             : undefined,
           cacheToken
         )
-        if (type && resolveId) {
-          getDatabase().putCache(lastStreamKey(type, resolveId), stream, LAST_STREAM_TTL_MS)
-        }
+        if (type && resolveId) rememberPlayedStream(type, resolveId, stream)
         return result
       }
 

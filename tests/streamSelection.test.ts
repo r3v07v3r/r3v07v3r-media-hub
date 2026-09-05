@@ -1,5 +1,12 @@
 import assert from 'node:assert/strict'
-import { rankStreams, streamSeeders } from '../src/main/media-hub/core'
+import {
+  guardedForPrefetch,
+  rankStreams,
+  releaseGroup,
+  streamSeeders,
+  titleMatchesRelease
+} from '../src/main/media-hub/core'
+import { streamReleaseName } from '../src/shared/media-hub/streamQuality'
 import type { StreamCandidate } from '../src/shared/media-hub/types'
 
 const streams: StreamCandidate[] = [
@@ -257,3 +264,313 @@ console.log('ok  stream selection resolution and size limits')
   )
 }
 console.log('ok  seeder ranking')
+
+// --- the wanted audio, and the group that played last time -----------------
+//
+// The same show used to play one episode dubbed and the next subbed: a raw
+// and a dual-audio release of an episode scored the same. A release that
+// DECLARES the wanted audio now outranks one that says nothing (by more than
+// a resolution tier), and the group that played the previous episode is
+// preferred so audio and look stay consistent across a season.
+{
+  const raw2160 = {
+    infoHash: 'raw',
+    name: '[Raws] Show - 06 [2160p]',
+    cached: true,
+    compatible: true,
+    exact: true
+  } as StreamCandidate
+  const dual1080 = {
+    infoHash: 'dual',
+    name: '[Group] Show - 06 [Dual-Audio][1080p]',
+    cached: true,
+    compatible: true,
+    exact: true
+  } as StreamCandidate
+  const dub1080 = {
+    infoHash: 'dub',
+    name: 'Show S01E06 1080p ENG DUB WEB-DL',
+    cached: true,
+    compatible: true,
+    exact: true
+  } as StreamCandidate
+  assert.equal(
+    rankStreams([raw2160, dual1080], 'en', {}, 'balanced')[0].infoHash,
+    'dual',
+    'a dual-audio 1080p beats a raw 2160p when English is wanted'
+  )
+  assert.equal(
+    rankStreams([raw2160, dual1080], 'ja', {}, 'balanced')[0].infoHash,
+    'dual',
+    'multi counts as carrying the wanted audio for any preference'
+  )
+  assert.equal(
+    rankStreams([raw2160, dub1080], 'en', {}, 'balanced')[0].infoHash,
+    'dub',
+    'an English dub beats a raw of higher resolution'
+  )
+  // A media server that REPORTS its tracks is believed over the name.
+  const serverJa = {
+    source: 'mediaserver',
+    itemId: 'jf',
+    mediaSourceId: 'ms',
+    name: 'Show S01E06 Dual Audio 1080p.mkv',
+    audioLanguages: ['jpn'],
+    resolution: 1080,
+    cached: true,
+    compatible: true,
+    exact: true
+  } as StreamCandidate
+  assert.equal(
+    rankStreams([serverJa, dual1080], 'en', {}, 'prefer-quality')[0].infoHash,
+    'dual',
+    'reported tracks override a misleading name'
+  )
+  // Uncached never wins on language alone: the gate stays above the bonus.
+  const uncachedDual = { ...dual1080, infoHash: 'udual', cached: false } as StreamCandidate
+  assert.equal(
+    rankStreams([raw2160, uncachedDual], 'en', {}, 'balanced')[0].infoHash,
+    'raw',
+    'a playable raw still beats an uncached dual-audio release'
+  )
+
+  // Release group memory.
+  assert.equal(releaseGroup('[SubsPlease] Show - 06 (1080p) [ABCD1234].mkv'), 'subsplease')
+  assert.equal(releaseGroup('Show.S01E06.1080p.WEB-DL.x264-SPARKS.mkv'), 'sparks')
+  assert.equal(releaseGroup('Show S01E06 1080p'), null)
+  assert.equal(releaseGroup('Show.S01E06.1080p.WEB-DL'), null, 'a format token is not a group')
+  assert.equal(releaseGroup('Show.S01E06.1080p.WEB-DL'), null, 'a format token is not a group')
+  const other2160 = {
+    infoHash: 'other',
+    name: '[Other] Show - 06 [Dual-Audio][2160p]',
+    cached: true,
+    compatible: true,
+    exact: true
+  } as StreamCandidate
+  assert.equal(
+    rankStreams([other2160, dual1080], 'en', {}, 'prefer-quality')[0].infoHash,
+    'other',
+    'without a memory the higher resolution wins'
+  )
+  assert.equal(
+    rankStreams([other2160, dual1080], 'en', {}, 'prefer-quality', { preferredGroup: 'group' })[0]
+      .infoHash,
+    'dual',
+    'the group that played the previous episode wins over one resolution tier'
+  )
+  assert.equal(
+    rankStreams([raw2160, other2160], 'en', {}, 'prefer-quality', { preferredGroup: 'raws' })[0]
+      .infoHash,
+    'other',
+    'but not over the wanted audio'
+  )
+}
+console.log('ok  audio language and release group')
+
+// --- what the ranking reads the release name from -------------------------
+//
+// Comet names every candidate "[TORRENT] Comet …" and puts the file name in
+// `description`; Torrentio puts it in `title`. The release group must be
+// read from the same line the memo remembered it from, or a Comet
+// candidate's group is "torrent" and the same-group bonus never applies.
+{
+  const cometShaped = {
+    infoHash: 'comet',
+    name: '[TORRENT] Comet 1080p',
+    description: '[Group] Show - 06 [Dual-Audio][1080p]\n👤 12 💾 1.2 GB',
+    cached: true,
+    compatible: true,
+    exact: true
+  } as StreamCandidate
+  const torrentioShaped = {
+    infoHash: 'torrentio',
+    name: 'Torrentio\n2160p',
+    title: '[Other] Show - 06 [Dual-Audio][2160p]\n👤 40 💾 4.1 GB',
+    cached: true,
+    compatible: true,
+    exact: true
+  } as StreamCandidate
+  assert.equal(streamReleaseName(cometShaped), '[Group] Show - 06 [Dual-Audio][1080p]')
+  assert.equal(streamReleaseName(torrentioShaped), '[Other] Show - 06 [Dual-Audio][2160p]')
+  assert.equal(releaseGroup(streamReleaseName(cometShaped)), 'group')
+  assert.equal(
+    rankStreams([torrentioShaped, cometShaped], 'en', {}, 'prefer-quality', {
+      preferredGroup: 'group'
+    })[0].infoHash,
+    'comet',
+    "the memo's group is found on a Comet-shaped candidate, not the add-on's label"
+  )
+
+  // A media server that reports an English track is not a French dub,
+  // whatever its file is called.
+  const serverTrueFrench = {
+    source: 'mediaserver',
+    itemId: 'jf',
+    mediaSourceId: 'ms',
+    name: 'Film.2019.TRUEFRENCH.1080p.BluRay.mkv',
+    audioLanguages: ['fre', 'eng'],
+    resolution: 1080,
+    cached: true,
+    compatible: true,
+    exact: true
+  } as StreamCandidate
+  const remoteSilent = {
+    infoHash: 'silent',
+    name: 'Film 2019 1080p WEB-DL',
+    cached: true,
+    compatible: true,
+    exact: true
+  } as StreamCandidate
+  assert.equal(
+    rankStreams([remoteSilent, serverTrueFrench], 'en', {}, 'balanced')[0].source,
+    'mediaserver',
+    'reported English audio suppresses the penalty the file name would earn'
+  )
+  const serverFrenchOnly = { ...serverTrueFrench, audioLanguages: ['fre'] } as StreamCandidate
+  assert.equal(
+    rankStreams([remoteSilent, serverFrenchOnly], 'en', {}, 'balanced')[0].infoHash,
+    'silent',
+    'reported tracks that lack the language leave the name-based penalty in place'
+  )
+}
+console.log('ok  release name source and reported tracks')
+
+// A media server is the one source that names the FILE in `name` and the
+// library title in `title` — the reverse of the add-ons. Reading `title`
+// first there lost the group on every Jellyfin copy, so a season that had
+// been playing from the server's [SubsPlease] files stopped preferring them.
+{
+  const jellyfinShaped = {
+    source: 'mediaserver',
+    itemId: 'jf',
+    mediaSourceId: 'ms',
+    name: '[SubsPlease] Show - 06 (1080p) [ABCD1234].mkv',
+    title: 'Show Episode 6',
+    audioLanguages: ['eng', 'jpn'],
+    resolution: 1080,
+    cached: true,
+    compatible: true,
+    exact: true
+  } as StreamCandidate
+  const rivalTorrentio = {
+    infoHash: 'rival',
+    name: 'Torrentio\n2160p',
+    title: '[OtherGrp] Show - 06 [Dual-Audio][2160p]\n👤 40 💾 4.1 GB',
+    cached: true,
+    compatible: true,
+    exact: true
+  } as StreamCandidate
+  assert.equal(streamReleaseName(jellyfinShaped), '[SubsPlease] Show - 06 (1080p) [ABCD1234].mkv')
+  assert.equal(releaseGroup(streamReleaseName(jellyfinShaped)), 'subsplease')
+  assert.equal(
+    rankStreams([rivalTorrentio, jellyfinShaped], 'en', {}, 'prefer-quality', {
+      preferredGroup: 'subsplease'
+    })[0].source,
+    'mediaserver',
+    "the server's own file keeps the season on its group over a higher-resolution rival"
+  )
+  const lockedDown = { ...jellyfinShaped, name: 'Episode 6' } as StreamCandidate
+  assert.equal(
+    streamReleaseName(lockedDown),
+    'Episode 6',
+    'a server that hides Path falls back to the item name, which names no group'
+  )
+  assert.equal(releaseGroup(streamReleaseName(lockedDown)), null)
+}
+console.log('ok  media-server release name')
+
+// Scene names come with spaces as well as dots; the group is the suffix of
+// the whole name, not of its first word.
+assert.equal(releaseGroup('Show S01E06 1080p WEB-DL x264-SPARKS.mkv'), 'sparks')
+assert.equal(
+  releaseGroup('Show S01E06 1080p WEB-DL'),
+  null,
+  'a spaced name ending in a format token'
+)
+assert.equal(releaseGroup('Show - 06 [1080p]'), null, 'an episode number is not a group')
+console.log('ok  spaced scene groups')
+
+// Only a release name carries a group; titles, quality suffixes and codec
+// tokens must not become one — a wrong memo pays a resolution tier's worth
+// of bonus to every unrelated release that happens to share it.
+assert.equal(releaseGroup('The Amazing Spider-Man'), null, 'a hyphenated title is not a release')
+assert.equal(releaseGroup('X-Men'), null)
+assert.equal(releaseGroup('The Show 1990-1995'), null)
+assert.equal(
+  releaseGroup('Attack on Titan - S01E01 - To You, in 2000 Years WEBDL-1080p.mkv'),
+  null,
+  "Sonarr's quality suffix is not a group"
+)
+assert.equal(releaseGroup('The Matrix (1999) Bluray-1080p.mkv'), null)
+assert.equal(releaseGroup('Attack on Titan S01E06 1080p BluRay x265-10bit'), null)
+assert.equal(releaseGroup('Movie 2160p WEB-DL DDP5.1-Atmos'), null)
+assert.equal(releaseGroup('Show S02E01 1080p Multi-Sub'), null)
+assert.equal(releaseGroup('Show S02E01 1080p Dual-Audio'), null)
+assert.equal(releaseGroup('Spider-Man 2002 1080p BluRay x264-GROUP'), 'group')
+assert.equal(
+  releaseGroup('Some.Movie.2019.1080p.BluRay.x264-GROUP [eztv]'),
+  'group',
+  'a dotted name with a suffix after a space still yields its group'
+)
+assert.equal(releaseGroup('Show.S01E06.1080p.WEB-DL.x264-SPARKS.mkv 2.1 GB'), 'sparks')
+
+// The prefetch guard: names to check and none matching means nothing to
+// fetch, never the unguarded set.
+{
+  const right = {
+    infoHash: 'r',
+    name: '[Group] Shingeki no Kyojin - 06 [1080p]'
+  } as StreamCandidate
+  const wrong = {
+    infoHash: 'w',
+    name: '[Group] Shingeki no Kyojin Junior High - 06 [1080p]'
+  } as StreamCandidate
+  const unrelated = { infoHash: 'u', name: 'Some Other Show - 06 [1080p]' } as StreamCandidate
+  assert.deepEqual(
+    guardedForPrefetch([right, wrong, unrelated], ['Attack on Titan', 'Shingeki no Kyojin']).map(
+      (s) => s.infoHash
+    ),
+    ['r'],
+    'the romaji name lets the right release through and keeps the spin-off out'
+  )
+  assert.deepEqual(
+    guardedForPrefetch([unrelated], ['Attack on Titan']),
+    [],
+    'nothing matching means nothing to prefetch'
+  )
+  assert.equal(
+    guardedForPrefetch([unrelated], []).length,
+    1,
+    'with no names the guard has nothing to say'
+  )
+}
+console.log('ok  release-name guards')
+
+// The title guard reads fansub names too — most anime is released that
+// way, and every such name used to fail the guard outright.
+assert.equal(
+  titleMatchesRelease('[SubsPlease] Shingeki no Kyojin S4 - 28 (1080p) [ABCD1234].mkv', [
+    'Attack on Titan',
+    'Shingeki no Kyojin'
+  ]),
+  true
+)
+assert.equal(titleMatchesRelease('[Group] Show - 06v2 [Dual-Audio][1080p]', 'Show'), true)
+assert.equal(
+  titleMatchesRelease('Re:Zero - Starting Life in Another World - 05 [1080p]', [
+    'Re:Zero Starting Life in Another World'
+  ]),
+  true,
+  'a title with its own dash keeps it; only the episode marker comes off'
+)
+assert.equal(
+  titleMatchesRelease('[Group] Shingeki no Kyojin Junior High - 06 [1080p]', 'Shingeki no Kyojin'),
+  false,
+  'a spin-off is still not the show'
+)
+assert.equal(
+  titleMatchesRelease('Shingeki.no.Kyojin.S01E06.1080p.WEB-DL-GROUP', 'Shingeki no Kyojin'),
+  true,
+  'the scene form still matches'
+)
+console.log('ok  fansub title guard')

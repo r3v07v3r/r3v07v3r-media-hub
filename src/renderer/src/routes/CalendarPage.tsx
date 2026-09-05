@@ -351,7 +351,10 @@ function CalendarGrid({
                                 // poster and nothing else. A fixed pair keeps the placeholder
                                 // from being a different colour on every cell.
                                 artTint={CALENDAR_TINT}
-                                sizes="44px"
+                                // ArtworkImage is fill-based: without a sized wrapper it
+                                // collapses to nothing, which is why these cells were empty
+                                // boxes while the strip above (a plain <img>) had art.
+                                className={styles.calGridPosterArt}
                               />
                             </button>
                           </li>

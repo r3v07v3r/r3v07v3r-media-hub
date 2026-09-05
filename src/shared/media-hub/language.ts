@@ -179,7 +179,25 @@ const LOCALISED_RELEASE_TOKENS: Record<string, string> = {
 /** Tokens meaning "this carries more than one audio language", which
  *  almost always includes the original. Their presence cancels a
  *  localisation marker rather than adding to it. */
-const MULTI_LANGUAGE_TOKENS = new Set(['multi', 'dual', 'dualaudio', 'multiaudio', 'multi audio'])
+const MULTI_LANGUAGE_TOKENS = new Set(['multi', 'dual', 'dualaudio', 'multiaudio'])
+
+/** Tokens that turn an adjacent language token into a SUBTITLE claim —
+ *  "[Multi-Subs]", "Eng Sub" — which says nothing about the audio. */
+const SUBTITLE_TOKENS = new Set([
+  'sub',
+  'subs',
+  'subbed',
+  'subtitle',
+  'subtitles',
+  'softsub',
+  'softsubs',
+  'hardsub',
+  'hardsubs',
+  'vostfr',
+  'subfrench'
+])
+/** Tokens that turn an adjacent language token into an AUDIO claim. */
+const DUB_TOKENS = new Set(['dub', 'dubbed', 'dubs', 'audio'])
 
 function tokenize(text: string): string[] {
   return String(text || '')
@@ -209,6 +227,89 @@ export function releaseLacksPreferredLanguage(text: string, preferred: string): 
     const marked = LOCALISED_RELEASE_TOKENS[t]
     return Boolean(marked) && marked !== want
   })
+}
+
+/**
+ * Which audio languages a release name DECLARES, or null when it says
+ * nothing — which is most anime releases, and is deliberately not read as
+ * either "has English" or "lacks it".
+ *
+ * releaseLacksPreferredLanguage above answers only "is this a dub into some
+ * other language"; it says nothing about a release that carries the wanted
+ * language. Ranking on that alone is why a Japanese-only raw and a dual-audio
+ * release of the same episode were indistinguishable, and why a series
+ * played one episode dubbed and the next subbed. The rules, all on tokens
+ * (substring matching is banned — "dub" inside "Dublin" is not a dub):
+ *
+ *  - a multi-audio marker ("Dual-Audio", "MULTI") declares 'multi', unless
+ *    the next token makes it a subtitle marker ("[Multi-Subs]");
+ *  - a language token counts only when it is adjacent to a dub/audio token
+ *    ("eng dub", "dub eng", "english audio") or fused with one ("engdub"),
+ *    and not when adjacent to a subtitle token ("eng sub");
+ *  - a localisation marker ("TRUEFRENCH", "German", "Latino") is a dub
+ *    into that language, so it declares that language's audio.
+ *
+ * Pure; see tests/language.test.ts.
+ */
+export function releaseAudioLanguages(text: string): string[] | null {
+  const tokens = tokenize(text)
+  if (!tokens.length) return null
+  const found = new Set<string>()
+  for (let i = 0; i < tokens.length; i++) {
+    const token = tokens[i]
+    const prev = tokens[i - 1]
+    const next = tokens[i + 1]
+    if (MULTI_LANGUAGE_TOKENS.has(token)) {
+      if (!(next && SUBTITLE_TOKENS.has(next))) found.add('multi')
+      continue
+    }
+    if (SUBTITLE_TOKENS.has(token)) continue
+    const fused = /^([a-z]{2,8})(dub|dubbed)$/.exec(token)
+    if (fused && LANGUAGE_ALIASES[fused[1]]) {
+      found.add(LANGUAGE_ALIASES[fused[1]])
+      continue
+    }
+    const code = LANGUAGE_ALIASES[token]
+    if (code) {
+      const nearDub = Boolean((prev && DUB_TOKENS.has(prev)) || (next && DUB_TOKENS.has(next)))
+      const nearSub = Boolean(
+        (prev && SUBTITLE_TOKENS.has(prev)) || (next && SUBTITLE_TOKENS.has(next))
+      )
+      if (nearDub && !nearSub) found.add(code)
+      continue
+    }
+    const localised = LOCALISED_RELEASE_TOKENS[token]
+    if (localised) found.add(localised)
+  }
+  return found.size ? [...found] : null
+}
+
+/** Whether a release name says it carries the wanted audio — outright, or
+ *  as a multi-audio release, which in practice includes the original and
+ *  the English dub. Unknown is false: silence is not a claim. */
+export function releaseDeclaresLanguage(text: string, preferred: string): boolean {
+  const want = normalizeLanguage(preferred)
+  if (!want) return false
+  const declared = releaseAudioLanguages(text)
+  if (!declared) return false
+  return declared.includes(want) || declared.includes('multi')
+}
+
+/**
+ * The ground truth at playback: the file has audio, a language was asked
+ * for, and no audio track is in it. A release name can be fooled; mpv's
+ * track list cannot. Unlabelled tracks count as not matching, for the same
+ * reason languageMatches treats them so.
+ */
+export function tracksLackLanguage(
+  tracks: { audio: ReadonlyArray<{ language?: string }> } | null | undefined,
+  preferred: string | undefined
+): boolean {
+  const want = normalizeLanguage(String(preferred ?? ''))
+  if (!want) return false
+  const audio = tracks?.audio ?? []
+  if (!audio.length) return false
+  return !audio.some((track) => languageMatches(String(track.language ?? ''), want))
 }
 
 /** Which other language a release looks localised into, for a message

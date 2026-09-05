@@ -28,6 +28,7 @@ import type {
   PlayRecord,
   ViewingStats,
   PendingWatchStatusPush,
+  RecommendationRail,
   RecommendationReason,
   ReconcileCheckResult,
   ReconcileResolution,
@@ -48,6 +49,7 @@ import {
 } from '../../shared/media-hub/reconcileQueue'
 import {
   applyCadence,
+  groupRecommendationRails,
   rankPersonalizedRecommendationsScored,
   watchCadenceProfile
 } from '../../shared/media-hub/catalog-logic'
@@ -86,9 +88,11 @@ import {
   readSettings,
   simklAccountMark,
   simklCredentials,
-  writeSettings
+  writeSettings,
+  traktCredentials,
+  malCredentials
 } from './settingsStore'
-import { sendToRenderer } from './rendererBridge'
+import { sendToRenderer, notifyLibraryChanged } from './rendererBridge'
 import { cachedRemoteLists, fetchRemoteLists } from './remoteLists'
 import type { RemoteList } from '../../shared/media-hub/types'
 import { assertLibraryWritableId } from '../../shared/media-hub/serviceIds'
@@ -110,6 +114,7 @@ import {
   simklUrl,
   simklWatchedSnapshot
 } from './simklClient'
+import { createKeyedSerialQueue } from '../../shared/media-hub/serialQueue'
 
 /** Result of a single "push this watch-state change to Simkl" attempt, merged into every mark/unmark handler's response. */
 interface SimklSyncResult {
@@ -118,6 +123,54 @@ interface SimklSyncResult {
 }
 
 /** Runs a Simkl sync/history POST, translating "not connected" vs. a caught error vs. success into the same three-way shape every mark/unmark handler returns. */
+/**
+ * The watch-state pushes for one title, run after any still in flight for
+ * that title.
+ *
+ * The mark/unmark handlers answer on the local write and let these run
+ * behind it, so a mark and the unmark that reverses it a moment later are
+ * both in flight together — in a Simkl lane whose concurrency is greater
+ * than one. If the add lands after the remove, Simkl says watched while
+ * this database says not, and the handlers have already reported success.
+ * One serial chain per title (see serialQueue.ts) keeps opposing pushes in
+ * the order they were asked for; the three services within one push run
+ * together, since each only has to stay ordered against itself. A push
+ * that fails logs itself (syncSimklHistory, traktClient, pushMalProgress)
+ * and does not hold up the next; a disagreement that survives is what the
+ * sync review is for.
+ */
+const remotePushQueue = createKeyedSerialQueue()
+/** One chain per title: the kind and id, which every handler's item carries. */
+function remotePushKey(item: { id: string; type?: string }): string {
+  return `${item.type ?? ''}:${item.id}`
+}
+function queueRemotePushes(
+  item: { id: string; type?: string },
+  pushes: () => Array<Promise<unknown>>
+): void {
+  // Bound to the accounts connected when it was asked for. A push that
+  // waits behind a slow one reads the credentials only when it runs, so
+  // disconnecting Simkl and connecting another account in between would
+  // post the first account's history to the second. A stamp that no
+  // longer matches means the task is dropped, not run.
+  const stamp = connectedAccountsStamp()
+  void remotePushQueue.run(remotePushKey(item), () =>
+    connectedAccountsStamp() === stamp ? Promise.allSettled(pushes()) : Promise.resolve([])
+  )
+}
+
+/** Which accounts are connected right now — the tail of each token is
+ *  enough to tell one from another, and nothing here is logged. */
+function connectedAccountsStamp(): string {
+  return [
+    simklCredentials().accessToken,
+    traktCredentials().accessToken,
+    malCredentials().accessToken
+  ]
+    .map((token) => String(token ?? '').slice(-12))
+    .join('|')
+}
+
 async function syncSimklHistory(
   pathname: string,
   body: unknown,
@@ -1252,17 +1305,19 @@ export function registerTrackingIpc(): void {
       assertLibraryWritableId(item?.id, item?.title)
       getDatabase().markWatched(item, playback || {})
       requestRecommendationsRebuild()
-      const simklResult = await syncSimklHistory(
-        '/sync/history',
-        historyPayload(item, playback || {})
-      )
-      // Not awaited into the result. Trakt is a third service alongside two
-      // that already report their own outcome, and a person who has connected
-      // all three should not have "I finished this" wait on the slowest of
-      // them — the local row is the record either way, and a Trakt failure is
-      // logged in traktClient rather than surfaced.
-      void pushTraktHistory(item, playback || {}, 'add')
-      return { ok: true, ...simklResult, ...(await pushMalProgress(item)) }
+      // None of the services is awaited. The local row IS the record; each
+      // push logs its own failure (syncSimklHistory, pushMalProgress,
+      // traktClient), and nothing in the renderer reads the per-service
+      // fields of this result. Awaiting Simkl and MAL here put two live
+      // round trips between a tap on a tick and the tick appearing — which
+      // is what "tracking does not update properly" felt like.
+      // Ordered per title, not merely detached — see queueRemotePushes.
+      queueRemotePushes(item, () => [
+        syncSimklHistory('/sync/history', historyPayload(item, playback || {})),
+        pushTraktHistory(item, playback || {}, 'add'),
+        pushMalProgress(item)
+      ])
+      return { ok: true, simklSynced: false, malSynced: false }
     }
   )
 
@@ -1272,9 +1327,15 @@ export function registerTrackingIpc(): void {
       const p = playback || {}
       getDatabase().unmarkWatched(item.id, p.season, p.episode)
       requestRecommendationsRebuild()
-      const simklResult = await syncSimklHistory('/sync/history/remove', historyPayload(item, p))
-      void pushTraktHistory(item, p, 'remove')
-      return { ok: true, ...simklResult, ...(await pushMalProgress(item)) }
+      // Detached as above, and queued behind any push still in flight for
+      // this title — an unmark a moment after a mark must reach the
+      // services second.
+      queueRemotePushes(item, () => [
+        syncSimklHistory('/sync/history/remove', historyPayload(item, p)),
+        pushTraktHistory(item, p, 'remove'),
+        pushMalProgress(item)
+      ])
+      return { ok: true, simklSynced: false, malSynced: false }
     }
   )
 
@@ -1290,19 +1351,20 @@ export function registerTrackingIpc(): void {
       const db = getDatabase()
       for (const playback of list) db.markWatched(item, playback)
       requestRecommendationsRebuild()
-      const simklResult = await syncSimklHistory(
-        '/sync/history',
-        seasonHistoryPayload(item, season, episodeNumbers)
-      )
-      // Not awaited into the result, same as the single-episode handler
-      // above — a Trakt failure is logged in traktClient rather than making
-      // "mark this season watched" wait on the slowest connected service.
-      // This was missing entirely until now: the single-episode handler got
-      // a Trakt push when Trakt sync was added, but this batch action did
-      // not, which left every episode of a season marked watched here still
-      // unwatched on a connected Trakt account.
-      void pushTraktSeasonHistory(item, season, episodeNumbers)
-      return { ok: true, ...simklResult, ...(await pushMalProgress(item)) }
+      // Detached and ordered per title, as the single-episode handler above.
+      // Not awaited into the result — a Trakt failure is logged in
+      // traktClient rather than making "mark this season watched" wait on
+      // the slowest connected service. The Trakt push was missing entirely
+      // until now: the single-episode handler got one when Trakt sync was
+      // added, but this batch action did not, which left every episode of
+      // a season marked watched here still unwatched on a connected Trakt
+      // account.
+      queueRemotePushes(item, () => [
+        syncSimklHistory('/sync/history', seasonHistoryPayload(item, season, episodeNumbers)),
+        pushTraktSeasonHistory(item, season, episodeNumbers),
+        pushMalProgress(item)
+      ])
+      return { ok: true, simklSynced: false, malSynced: false }
     }
   )
 
@@ -1436,6 +1498,10 @@ export function registerTrackingIpc(): void {
     // Simkl's answer is the one to keep — update the local record to match.
     if (discrepancy.remoteWatched) db.markWatched(item)
     else db.unmarkWatched(item.id)
+    // A write main made on the strength of a remote answer: the panel that
+    // asked refreshes the home feed itself, but the detail page and the
+    // grids learn of it the same way they learn of every other such write.
+    notifyLibraryChanged('reconcile', 'history')
     return { ok: true, queued: false }
   })
 
@@ -1603,11 +1669,13 @@ export function registerTrackingIpc(): void {
     const stored = readStoredRecommendations(exclusions, history)
     let recommendations: CatalogItem[]
     let recommendationReasons: Record<string, RecommendationReason>
+    let recommendationRails: RecommendationRail[]
     let preferredGenres: string[]
 
     if (stored) {
       recommendations = stored.items
       recommendationReasons = stored.reasons
+      recommendationRails = stored.rails
       preferredGenres = stored.preferredGenres
     } else {
       // Nothing stored yet (a fresh install, a bumped STORE_KEY), or too
@@ -1667,6 +1735,7 @@ export function registerTrackingIpc(): void {
       // supports — a franchise continuation, a genre, a release year. The
       // background rebuild fills in the rest within minutes.
       recommendationReasons = reasonsFor(recommendations, full)
+      recommendationRails = groupRecommendationRails(full)
     }
 
     // See tracking:list above — same fan-out, same bound, and the two
@@ -1684,6 +1753,7 @@ export function registerTrackingIpc(): void {
       continueWatching: continueWatchingList(details, history).slice(0, 18),
       recommendations,
       recommendationReasons,
+      recommendationRails,
       preferredGenres,
       // Read here rather than fetched: it is whatever the last pull
       // recorded, so tagging a card costs nothing on this path.
@@ -1793,25 +1863,41 @@ export function registerTrackingIpc(): void {
       // scrobble despite the setting promising otherwise — Trakt's own
       // scrobble endpoints are the same start/pause/stop state machine and
       // owe Simkl's connection state nothing.
-      void pushTraktScrobble(payload.item, payload.playback || {}, action, progress)
+      //
+      // On the title's own push chain (see queueRemotePushes): a stop at
+      // high progress IS a watched write on both services, and it fires
+      // from the player at the same moment the auto mark-watched does — so
+      // it must take its turn behind, and ahead of, that title's marks like
+      // any other. That also puts start, pause and stop in the order they
+      // happened, which parallel requests never guaranteed. Awaited, as the
+      // Simkl request always was, so the error below still reaches the
+      // main window.
+      let simklError: string | undefined
+      await remotePushQueue.run(remotePushKey(payload.item), async () => {
+        const trakt = pushTraktScrobble(payload.item, payload.playback || {}, action, progress)
+        if (simklConnected) {
+          try {
+            await simklRequest(`/scrobble/${action}`, {
+              method: 'POST',
+              body: JSON.stringify(scrobblePayload(payload.item, payload.playback || {}, progress))
+            })
+          } catch (error) {
+            // Never thrown. A scrobble is a courtesy to a third-party
+            // service: it must not interrupt playback, and an account whose
+            // token expired mid-film should not produce an error over the
+            // video every time somebody pauses. The local history is the
+            // record either way. The reason IS reported back, though — the
+            // main window says it once per session, so a token that expired
+            // or an id Simkl will not take is something a person hears
+            // about rather than a line nobody reads.
+            logError('simkl:scrobble', error)
+            simklError = (error as Error)?.message || String(error)
+          }
+        }
+        await trakt
+      })
       if (!simklConnected) return { connected: false }
-      try {
-        await simklRequest(`/scrobble/${action}`, {
-          method: 'POST',
-          body: JSON.stringify(scrobblePayload(payload.item, payload.playback || {}, progress))
-        })
-      } catch (error) {
-        // Never thrown. A scrobble is a courtesy to a third-party service:
-        // it must not interrupt playback, and an account whose token expired
-        // mid-film should not produce an error over the video every time
-        // somebody pauses. The local history is the record either way. The
-        // reason IS reported back, though — the main window says it once per
-        // session, so a token that expired or an id Simkl will not take is
-        // something a person hears about rather than a line nobody reads.
-        logError('simkl:scrobble', error)
-        return { connected: true, error: (error as Error)?.message || String(error) }
-      }
-      return { connected: true }
+      return simklError ? { connected: true, error: simklError } : { connected: true }
     }
   )
 }

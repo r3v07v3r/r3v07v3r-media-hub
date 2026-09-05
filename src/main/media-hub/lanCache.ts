@@ -96,7 +96,10 @@ export async function findLanCacheCandidate(contentKey: string): Promise<StreamC
       source: 'lancache',
       infoHash: item.infoHash,
       name: item.title,
-      title: item.title,
+      // The release line — what streamReleaseName reads for the Info
+      // panel and the release-group memo — is the stored file's name when
+      // the daemon reports it; the catalog title names no release.
+      title: item.fileName || item.title,
       resolution: item.resolution,
       sizeBytes: item.sizeBytes,
       cached: true,

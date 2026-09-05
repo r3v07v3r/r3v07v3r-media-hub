@@ -46,6 +46,12 @@ export interface CatalogItem {
   id: string
   simklId?: number
   title: string
+  /** The source's own-language name when `title` is a translation — a
+   *  Kitsu anime's romaji canonical title under its English one. Shown as
+   *  a secondary line, searched alongside `title`, and matched against
+   *  release names alongside it: releases are named in romaji, so without
+   *  it an English title would find no stream at all. */
+  originalTitle?: string
   type: MediaKind
   poster: string
   background: string
@@ -111,7 +117,16 @@ export interface CatalogItem {
 }
 
 /** The direct sequel/prequel entries Kitsu lists for an anime release. */
-export type AnimeStoryRelation = 'sequel' | 'prequel'
+/**
+ * How a related anime stands to this one, in Kitsu's own vocabulary.
+ *
+ * `sequel` and `prequel` are the spine; the rest are the bridges — the film
+ * between two seasons, the side story set alongside, the recap, the full
+ * story a summary condensed — which are exactly what somebody following a
+ * franchise in order needs to be shown and used to be filtered out.
+ */
+export type AnimeStoryRelation =
+  'prequel' | 'parent_story' | 'full_story' | 'side_story' | 'spin_off' | 'summary' | 'sequel'
 
 export interface AnimeStoryLink {
   relation: AnimeStoryRelation
@@ -157,7 +172,11 @@ export interface TitleCollectionResult {
   /** TMDB's own name for the series, e.g. "The Dune Collection". Empty when
    *  the title belongs to no collection, which is true of most films. */
   name: string
+  /** Every film in the series, the one on screen included, in release order. */
   parts: CatalogItem[]
+  /** The film the question was asked about — the panel marks it rather than
+   *  dropping it, so the order reads as an order. */
+  currentId?: string
 }
 
 export interface PersonCreditsResult {
@@ -218,6 +237,10 @@ export interface StreamCandidate {
   name?: string
   title?: string
   sources?: string[]
+  /** The audio languages the file actually carries, when the source can
+   *  say — only a media server can (jellyfin.ts). Strictly better than
+   *  inferring them from the release name, and consulted first. */
+  audioLanguages?: string[]
   resolution?: number
   cached?: boolean
   compatible?: boolean
@@ -366,9 +389,24 @@ export interface CacheSourceRef {
   mediaSourceId?: string
 }
 
+/**
+ * What is actually playing, for the player's Info panel: the release as the
+ * scraper named it, its quality and size as read from that name, and which
+ * tier the bytes come from.
+ */
+export interface PlaybackRelease {
+  name: string
+  resolution?: number
+  sizeGb?: number
+  source: StreamSource
+  infoHash?: string
+}
+
 export interface CacheSessionMeta {
   title: string
   posterUrl?: string
+  /** The release these bytes are, for the Info panel. */
+  release?: PlaybackRelease
   catalogId?: string
   mediaKind?: 'movie' | 'series' | 'anime'
   seasonNumber?: number
@@ -696,6 +734,20 @@ export interface DislikedListResult {
   disliked: TrackedItem[]
 }
 
+/**
+ * One shelf of suggestions that share a reason — "Because you watched
+ * Dune", "With Zendaya", "More Sci-Fi" — see groupRecommendationRails in
+ * catalog-logic.ts. What turns one row of guesses into something that can
+ * be browsed: the same ranking, shelved by the evidence behind it.
+ */
+export interface RecommendationRail {
+  /** `<kind>:<detail>`, stable across rebuilds — a React key and a rail id. */
+  id: string
+  reason: RecommendationReason
+  /** Best-first, in the ranking's own order. */
+  items: CatalogItem[]
+}
+
 export interface HomePersonalizedResult {
   tracked: TrackedItem[]
   updates: TrackedUpdate[]
@@ -711,6 +763,13 @@ export interface HomePersonalizedResult {
    * shows no chip rather than one saying nothing.
    */
   recommendationReasons: Record<string, RecommendationReason>
+  /**
+   * The same ranking shelved by reason, for the For You page — drawn from
+   * the whole stored buffer rather than the served row, which is what
+   * gives the shelves depth. Empty until the background rebuild has
+   * produced reasons to shelve by.
+   */
+  recommendationRails: RecommendationRail[]
   preferredGenres: string[]
   /**
    * Which tracking services have each planned title on their own list.
