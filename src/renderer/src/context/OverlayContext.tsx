@@ -53,9 +53,7 @@ const ERROR_TTL_MS = 10_000
  * anywhere. Such a toast now stays until the action is taken or it is
  * dismissed with its own close control (NotificationLayer offers one).
  */
-export function notificationTtlMs(
-  notification: Pick<AppNotification, 'tone' | 'action'>
-): number | null {
+function notificationTtlMs(notification: Pick<AppNotification, 'tone' | 'action'>): number | null {
   if (notification.tone !== 'error') return NOTIFICATION_TTL_MS
   return notification.action ? null : ERROR_TTL_MS
 }

@@ -421,6 +421,17 @@ function PlayerControls() {
     wasPausedRef.current = paused
   }, [paused, tracking])
 
+  // How far through, kept somewhere a callback can read it WITHOUT depending
+  // on it. closePlayer needs the figure at the arbitrary moment somebody
+  // presses the button; closing over `timePos` instead would give it a new
+  // identity roughly eight times a second, and the sleep timer that depends on
+  // it would clear its own timeout before it could ever fire. Declared above
+  // the end-of-file effect, which reads it for the same reason.
+  const progressRef = useRef(0)
+  useEffect(() => {
+    progressRef.current = duration > 0 ? Math.round((timePos / duration) * 100) : 0
+  }, [timePos, duration])
+
   // Natural end of file. mpv reports it as a property rather than an element
   // event, but the consequence is the same as the old onEnded.
   //
@@ -462,16 +473,6 @@ function PlayerControls() {
   // partway through an episode leaves a tile that reflects it. Teardown's own
   // save stays as the backstop for the paths that never come through here
   // (the window being destroyed outright).
-  // How far through, kept somewhere a callback can read it WITHOUT depending
-  // on it. closePlayer needs the figure at the arbitrary moment somebody
-  // presses the button; closing over `timePos` instead would give it a new
-  // identity roughly eight times a second, and the sleep timer that depends on
-  // it would clear its own timeout before it could ever fire.
-  const progressRef = useRef(0)
-  useEffect(() => {
-    progressRef.current = duration > 0 ? Math.round((timePos / duration) * 100) : 0
-  }, [timePos, duration])
-
   const closePlayer = useCallback(() => {
     tracking.savePositionNow()
     // The one transition the scrobble effect above cannot observe: the window
