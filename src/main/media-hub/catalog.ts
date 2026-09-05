@@ -1277,15 +1277,24 @@ function deepScanState(kind: MediaKind): DeepScanState {
  * hourly background job (backgroundJobs.ts) share this, so a press during
  * the job joins it rather than starting a second walk of the same pages.
  */
-export function deepScanChunk(kind: MediaKind): Promise<DeepScanReport> {
+export function deepScanChunk(
+  kind: MediaKind,
+  /** The lane the page fetches go out on. The button's press is
+   *  'background' (a person is waiting on it); the hourly job passes
+   *  'maintenance', which critical pressure suspends outright — a scan
+   *  that started while idle must not keep 120 requests going once
+   *  playback begins. A press that joins a running job's scan inherits
+   *  the job's lane; the next press starts its own. */
+  priority: TaskPriority = 'background'
+): Promise<DeepScanReport> {
   const running = deepScansInFlight.get(kind)
   if (running) return running
-  const scan = runDeepScan(kind).finally(() => deepScansInFlight.delete(kind))
+  const scan = runDeepScan(kind, priority).finally(() => deepScansInFlight.delete(kind))
   deepScansInFlight.set(kind, scan)
   return scan
 }
 
-async function runDeepScan(kind: MediaKind): Promise<DeepScanReport> {
+async function runDeepScan(kind: MediaKind, priority: TaskPriority): Promise<DeepScanReport> {
   const db = getDatabase()
   const state = deepScanState(kind)
   // A persisted `exhausted` is honoured: the last chunk walked the whole
@@ -1346,8 +1355,8 @@ async function runDeepScan(kind: MediaKind): Promise<DeepScanReport> {
       pageIndexes.map((page) => {
         const skip = startOffset + page * pageSize
         return kind === 'anime'
-          ? kitsuPage(skip, 'background').catch(() => null)
-          : cinemetaPageAt(kind, skip, 'background')
+          ? kitsuPage(skip, priority).catch(() => null)
+          : cinemetaPageAt(kind, skip, priority)
       })
     )
     // Everything before the first FAILED page is usable; nothing after

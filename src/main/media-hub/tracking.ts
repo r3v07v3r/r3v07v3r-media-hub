@@ -112,6 +112,7 @@ import {
   simklUrl,
   simklWatchedSnapshot
 } from './simklClient'
+import { createKeyedSerialQueue } from '../../shared/media-hub/serialQueue'
 
 /** Result of a single "push this watch-state change to Simkl" attempt, merged into every mark/unmark handler's response. */
 interface SimklSyncResult {
@@ -120,6 +121,30 @@ interface SimklSyncResult {
 }
 
 /** Runs a Simkl sync/history POST, translating "not connected" vs. a caught error vs. success into the same three-way shape every mark/unmark handler returns. */
+/**
+ * The watch-state pushes for one title, run after any still in flight for
+ * that title.
+ *
+ * The mark/unmark handlers answer on the local write and let these run
+ * behind it, so a mark and the unmark that reverses it a moment later are
+ * both in flight together — in a Simkl lane whose concurrency is greater
+ * than one. If the add lands after the remove, Simkl says watched while
+ * this database says not, and the handlers have already reported success.
+ * One serial chain per title (see serialQueue.ts) keeps opposing pushes in
+ * the order they were asked for; the three services within one push run
+ * together, since each only has to stay ordered against itself. A push
+ * that fails logs itself (syncSimklHistory, traktClient, pushMalProgress)
+ * and does not hold up the next; a disagreement that survives is what the
+ * sync review is for.
+ */
+const remotePushQueue = createKeyedSerialQueue()
+function queueRemotePushes(
+  item: { id: string; type?: string },
+  pushes: () => Array<Promise<unknown>>
+): void {
+  void remotePushQueue.run(`${item.type ?? ''}:${item.id}`, () => Promise.allSettled(pushes()))
+}
+
 async function syncSimklHistory(
   pathname: string,
   body: unknown,
@@ -1260,9 +1285,12 @@ export function registerTrackingIpc(): void {
       // fields of this result. Awaiting Simkl and MAL here put two live
       // round trips between a tap on a tick and the tick appearing — which
       // is what "tracking does not update properly" felt like.
-      void syncSimklHistory('/sync/history', historyPayload(item, playback || {}))
-      void pushTraktHistory(item, playback || {}, 'add')
-      void pushMalProgress(item)
+      // Ordered per title, not merely detached — see queueRemotePushes.
+      queueRemotePushes(item, () => [
+        syncSimklHistory('/sync/history', historyPayload(item, playback || {})),
+        pushTraktHistory(item, playback || {}, 'add'),
+        pushMalProgress(item)
+      ])
       return { ok: true, simklSynced: false, malSynced: false }
     }
   )
@@ -1273,10 +1301,14 @@ export function registerTrackingIpc(): void {
       const p = playback || {}
       getDatabase().unmarkWatched(item.id, p.season, p.episode)
       requestRecommendationsRebuild()
-      // Fire and forget, as above.
-      void syncSimklHistory('/sync/history/remove', historyPayload(item, p))
-      void pushTraktHistory(item, p, 'remove')
-      void pushMalProgress(item)
+      // Detached as above, and queued behind any push still in flight for
+      // this title — an unmark a moment after a mark must reach the
+      // services second.
+      queueRemotePushes(item, () => [
+        syncSimklHistory('/sync/history/remove', historyPayload(item, p)),
+        pushTraktHistory(item, p, 'remove'),
+        pushMalProgress(item)
+      ])
       return { ok: true, simklSynced: false, malSynced: false }
     }
   )
@@ -1293,17 +1325,19 @@ export function registerTrackingIpc(): void {
       const db = getDatabase()
       for (const playback of list) db.markWatched(item, playback)
       requestRecommendationsRebuild()
-      // Fire and forget, as the single-episode handler above.
-      void syncSimklHistory('/sync/history', seasonHistoryPayload(item, season, episodeNumbers))
-      // Not awaited into the result, same as the single-episode handler
-      // above — a Trakt failure is logged in traktClient rather than making
-      // "mark this season watched" wait on the slowest connected service.
-      // This was missing entirely until now: the single-episode handler got
-      // a Trakt push when Trakt sync was added, but this batch action did
-      // not, which left every episode of a season marked watched here still
-      // unwatched on a connected Trakt account.
-      void pushTraktSeasonHistory(item, season, episodeNumbers)
-      void pushMalProgress(item)
+      // Detached and ordered per title, as the single-episode handler above.
+      // Not awaited into the result — a Trakt failure is logged in
+      // traktClient rather than making "mark this season watched" wait on
+      // the slowest connected service. The Trakt push was missing entirely
+      // until now: the single-episode handler got one when Trakt sync was
+      // added, but this batch action did not, which left every episode of
+      // a season marked watched here still unwatched on a connected Trakt
+      // account.
+      queueRemotePushes(item, () => [
+        syncSimklHistory('/sync/history', seasonHistoryPayload(item, season, episodeNumbers)),
+        pushTraktSeasonHistory(item, season, episodeNumbers),
+        pushMalProgress(item)
+      ])
       return { ok: true, simklSynced: false, malSynced: false }
     }
   )

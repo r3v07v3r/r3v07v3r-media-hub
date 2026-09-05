@@ -283,7 +283,11 @@ export function startBackgroundJobs(): void {
       let grew = false
       for (const kind of ['movie', 'series', 'anime'] as const) {
         try {
-          const report = await deepScanChunk(kind)
+          // The job's own lane, not the button's: 'maintenance' is what
+          // critical pressure suspends, so playback starting mid-scan
+          // pauses the remaining pages instead of sharing the process
+          // with them — see deepScanChunk.
+          const report = await deepScanChunk(kind, 'maintenance')
           if (report.added > 0) grew = true
         } catch (error) {
           logError('job:deep-scan', error)
