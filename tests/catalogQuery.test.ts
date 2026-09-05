@@ -705,6 +705,38 @@ check('a series is complete only once every aired episode is watched', () => {
   db.close()
 })
 
+check('season-0 specials neither count toward nor block completion', () => {
+  const db = tempDb()
+  const base = airedSeries('tt2', 3)
+  const specials = [1, 2].map((n) => ({
+    id: `tt2:0:${n}`,
+    season: 0,
+    episode: n,
+    number: n,
+    title: '',
+    released: '2000-01-01T00:00:00.000Z'
+  }))
+  db.indexUpsert('series', [{ ...base, videos: [...specials, ...(base.videos ?? [])] }])
+  const mark = (season: number, episode: number): void =>
+    db.markWatched({ id: 'tt2', type: 'series', title: 'tt2' }, { season, episode })
+  mark(0, 1)
+  mark(0, 2)
+  mark(1, 1)
+  assert.deepEqual(
+    db.indexQuery({ kind: 'series' }).completedIds,
+    [],
+    'two specials and one real episode are not three real episodes'
+  )
+  mark(1, 2)
+  mark(1, 3)
+  assert.deepEqual(
+    db.indexQuery({ kind: 'series' }).completedIds,
+    ['tt2'],
+    'every numbered episode watched completes it, specials or not'
+  )
+  db.close()
+})
+
 check('rewatching one episode does not complete a series', () => {
   // Documents the intent; note that the guarantee comes from watch_history's
   // own key, not from the query. markWatched upserts on (profile, watch_key)

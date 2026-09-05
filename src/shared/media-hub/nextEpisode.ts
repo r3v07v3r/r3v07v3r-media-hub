@@ -12,7 +12,7 @@
 // different questions, two different rules; they are not a duplication to
 // be merged.
 
-import { hasAired } from './catalog-logic'
+import { hasAired, isRegularEpisode } from './catalog-logic'
 import type { Episode } from './types'
 
 /** The minimum a caller needs to start the next episode and name it. */
@@ -83,11 +83,16 @@ export function episodeWatchKey(
 
 /** Episodes somebody could actually start, in (season, episode) order.
  *
- *  Three exclusions, each for its own reason:
+ *  Four exclusions, each for its own reason:
  *
  *   - `unplayable`, for the reason given on the field itself:
  *     disambiguateVideos' synthetic Specials have no coordinate the
  *     scraper/TorBox pipeline can resolve a stream for.
+ *   - A GENUINE season-0 special. It is a real, playable episode — the grid
+ *     lists it and its own Play works — but it is never what a bare Play on
+ *     the show means, and it sorts before season 1, so without this rule
+ *     Play on a fresh show started with the OVA. isRegularEpisode is the
+ *     same predicate airedEpisodes counts progress by.
  *   - A non-finite coordinate, which cannot be turned into a stream id.
  *   - ANYTHING THAT HAS NOT AIRED. Cinemeta and TMDB both ship future-dated
  *     entries in `videos`, so for a show still airing, "the first unwatched
@@ -110,7 +115,7 @@ export function playableEpisodesInOrder(
   return (videos ?? [])
     .filter(
       (video) =>
-        !video?.unplayable &&
+        isRegularEpisode(video) &&
         Number.isFinite(video?.season) &&
         Number.isFinite(video?.episode) &&
         hasAired(video, now)
@@ -131,9 +136,10 @@ export function playableEpisodesInOrder(
  * sibling so the difference between the two is stated once, in one file,
  * rather than rediscovered every time a new surface grows a Play button.
  *
- * MediaDetailPage computes the same answer inline over the Episode objects
- * it already has in hand (it needs the whole episode, not a reference, to
- * drive its grid) — the rule is the same one, deliberately.
+ * MediaDetailPage asks the same question over the Episode objects it has
+ * in hand (it needs the whole episode, not a reference, to drive its grid):
+ * it runs playableEpisodesInOrder and takes the first unwatched, so the
+ * detail page's Play and a card's Play can never name different episodes.
  *
  * Null for "all watched" rather than silently restarting: the detail page
  * shows a distinct "you've seen everything" state for it, and a caller that
