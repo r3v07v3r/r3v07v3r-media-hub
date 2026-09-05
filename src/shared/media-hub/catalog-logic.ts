@@ -140,6 +140,26 @@ function episodePositionKey(x: { season?: number; episode?: number; number?: num
 }
 
 /**
+ * Is this a real, numbered episode of the show — as opposed to a special?
+ *
+ * Season 0 is where every source files specials, OVAs, recaps and
+ * promotional clips (and where disambiguateVideos parks its synthetic
+ * `unplayable` entries). They are shown in the episode grid under their
+ * own Specials tab, and they can be played from there deliberately. What
+ * they are never: part of the progress denominator, a reason a show is not
+ * Complete, or the answer to a bare Play. Every rule that counts or
+ * chooses episodes applies this one predicate — airedEpisodes,
+ * playableEpisodesInOrder, continueWatchingList, the calendar window and
+ * the index's episode counts — so a special is treated the same way on
+ * every surface.
+ */
+export function isRegularEpisode(
+  video: { unplayable?: boolean; season?: number | null } | undefined | null
+): boolean {
+  return Boolean(video) && !video?.unplayable && (video?.season ?? 1) > 0
+}
+
+/**
  * Has this episode actually come out yet?
  *
  * Cinemeta and TMDB both ship future-dated entries in `videos`, so "the next

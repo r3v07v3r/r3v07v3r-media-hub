@@ -17,7 +17,7 @@ import type {
   TrackedItem,
   TrackedItemEnriched
 } from '@shared/media-hub/types'
-import { episodeWatchState, hasAired } from '@shared/media-hub/catalog-logic'
+import { episodeWatchState, hasAired, isRegularEpisode } from '@shared/media-hub/catalog-logic'
 import { parseRating, parseRuntimeMinutes, parseYear } from '@shared/media-hub/catalogFields'
 import { recommendationReasonLabel } from '@shared/media-hub/recommendationReason'
 import type { OllamaTitleRef } from '@shared/media-hub/ollama'
@@ -213,13 +213,17 @@ export function indexHistoryById(history: HistoryEntry[]): Map<string, HistoryEn
  * The episodes that count toward a title's progress — the denominator for
  * "how far through this am I".
  *
- * Two exclusions, for two different reasons:
+ * Three exclusions, for three different reasons:
  *
  * v.unplayable (see disambiguateVideos in core.ts) is a synthetic Specials
  * entry with no real episode behind it — its watched controls are hidden,
  * so it can never appear in `history`. Counting it would mean watchedCount
  * could never reach total, permanently blocking a series from reading as
  * complete even after every real episode is watched.
+ *
+ * A genuine season-0 special (isRegularEpisode, shared/catalog-logic.ts)
+ * is real and watchable but is not progress: a show is complete when its
+ * numbered episodes are watched, whether or not the OVAs were.
  *
  * Unaired/future episodes (Cinemeta and TMDB both include these in
  * `videos`) are excluded so a currently-airing show someone is fully
@@ -229,14 +233,13 @@ export function indexHistoryById(history: HistoryEntry[]): Map<string, HistoryEn
  * Progress counts, so the "Completed" badge on a catalog card and the
  * percentage in the detail sidebar can't disagree about the denominator.
  */
-export function airedEpisodes<T extends { unplayable?: boolean; released?: string }>(
-  videos: readonly T[] | undefined,
-  now: number = Date.now()
-): T[] {
-  // hasAired, not an inline date comparison: the same rule decides which
-  // episode a Play button starts (see nextEpisode.ts), and two copies of it
-  // would eventually disagree about a show that is still airing.
-  return (videos || []).filter((v) => !v.unplayable && hasAired(v, now))
+export function airedEpisodes<
+  T extends { unplayable?: boolean; released?: string; season?: number | null }
+>(videos: readonly T[] | undefined, now: number = Date.now()): T[] {
+  // hasAired and isRegularEpisode, not inline checks: the same two rules
+  // decide which episode a Play button starts (see nextEpisode.ts), and
+  // two copies of either would eventually disagree.
+  return (videos || []).filter((v) => isRegularEpisode(v) && hasAired(v, now))
 }
 
 /** A series/anime counts as complete once every already-aired episode has
@@ -277,7 +280,7 @@ function seasonEpisodeCounts(
   // episodes — so they're excluded here too, or they'd inflate both the
   // episode count and (by introducing a season that wouldn't otherwise
   // exist) the season count.
-  const playable = (videos || []).filter((v) => !v.unplayable)
+  const playable = (videos || []).filter((v) => isRegularEpisode(v))
   if (playable.length === 0) return {}
   const seasons = new Set(playable.map((v) => v.season).filter((s) => Number.isFinite(s)))
   return {

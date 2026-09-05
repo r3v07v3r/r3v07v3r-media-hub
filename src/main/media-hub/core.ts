@@ -26,7 +26,8 @@ import {
   filterCatalog,
   isItemWatched,
   subtitlesInadequate,
-  hasAired
+  hasAired,
+  isRegularEpisode
 } from '../../shared/media-hub/catalog-logic'
 import { releaseTextMentionsExecutable } from '../../shared/media-hub/unsafeFiles'
 import { releaseLacksPreferredLanguage } from '../../shared/media-hub/language'
@@ -1065,7 +1066,7 @@ export function continueWatchingList(
     // this row, and the row's suggested next episode was one that did not
     // exist yet.
     const episodes = (detail.videos || [])
-      .filter((v) => (v.season ?? 1) > 0 && !v.unplayable && hasAired(v))
+      .filter((v) => isRegularEpisode(v) && hasAired(v))
       .sort(
         (a, b) =>
           (a.season || 1) - (b.season || 1) ||
