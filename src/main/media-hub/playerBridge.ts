@@ -47,6 +47,7 @@ import {
   subtitleStyleProperties,
   type SubtitleStyle
 } from '../../shared/media-hub/subtitleStyle'
+import { getDatabase } from './dbState'
 import { handle } from './ipcGuard'
 import { logError } from './logger'
 import { readSettings, writeSettings } from './settingsStore'
@@ -91,6 +92,42 @@ let sessionSnapshot: PlayerSessionSnapshot | null = null
 // its nowPlaying from a film already in progress — can name the real
 // position instead of 0. Reset with the session it describes.
 let lastTimePos = 0
+// The title's length, from the duration observer, for the one write main
+// makes to the bookmark table itself — see flushPlaybackPosition.
+let lastDuration = 0
+
+/** A dropped-frame burst is logged once it has grown by this many frames... */
+const FRAME_DROP_REPORT_MIN = 10
+/** ...and at most this often, so a struggling machine does not flood the log. */
+const FRAME_DROP_REPORT_GAP_MS = 15_000
+
+/**
+ * Writes the live playhead to the resume bookmark, from THIS process.
+ *
+ * Every other bookmark write comes from the overlay's usePlayerTracking —
+ * on a timer every 20s, on pause, on close, on unmount. None of those runs
+ * when the app quits: before-quit tears the windows down without giving a
+ * renderer a turn, so up to 20 seconds of a film watched right up to
+ * closing the app were lost, and it reopened that much earlier. Main has
+ * the same two facts the overlay saves — the session's media and the
+ * playhead it observes — so it saves them itself on the way out. The
+ * database applies its own rules (under 20s is not stored, past 90% clears
+ * the bookmark), which is why this passes the raw figures through.
+ */
+export function flushPlaybackPosition(): void {
+  const media = sessionSnapshot?.media
+  if (!media || !(lastTimePos > 0)) return
+  try {
+    getDatabase().savePlaybackPosition(
+      media.id,
+      { season: media.seasonNumber, episode: media.episodeNumber },
+      lastTimePos,
+      lastDuration > 0 ? lastDuration : undefined
+    )
+  } catch (error) {
+    logError('media-hub:player:flush-position', error)
+  }
+}
 
 /**
  * What this app is playing RIGHT NOW, for a watch party being created
@@ -319,6 +356,48 @@ async function attachObservers(): Promise<void> {
   await player.observe('paused-for-cache', (value) => {
     if (typeof value === 'boolean') queuePatch({ bufferingForCache: value }, true)
   })
+  // Dropped frames, so that motion which JUMPS leaves a trace. A person
+  // described an eye "suddenly looking right with no motion to get there";
+  // whether that was the VO discarding late frames (mpv's default framedrop)
+  // or the decoder skipping to catch up after a cache underrun could not be
+  // told from a log that recorded neither. Reported as bursts rather than
+  // per frame: a counter that only ever climbs, written once per crossing
+  // of a threshold and at most every few seconds, with the position and the
+  // demuxer's lead so the two causes can be told apart after the fact.
+  const dropReport = { vo: 0, decoder: 0, at: 0, timePos: 0, cacheAhead: 0 }
+  await player.observe('time-pos', (value) => {
+    if (typeof value === 'number') dropReport.timePos = value
+  })
+  await player.observe('duration', (value) => {
+    if (typeof value === 'number') lastDuration = value
+  })
+  await player.observe('demuxer-cache-duration', (value) => {
+    if (typeof value === 'number') dropReport.cacheAhead = value
+  })
+  const reportDrops = (kind: 'vo' | 'decoder', count: number): void => {
+    const since = count - dropReport[kind]
+    if (since < FRAME_DROP_REPORT_MIN || Date.now() - dropReport.at < FRAME_DROP_REPORT_GAP_MS)
+      return
+    dropReport[kind] = count
+    dropReport.at = Date.now()
+    logError(
+      'media-hub:player:frames',
+      new Error(
+        `${since} ${kind === 'vo' ? 'late frames dropped by the video output' : 'frames dropped by the decoder'} ` +
+          `(${count} total) at ${dropReport.timePos.toFixed(1)}s with ${dropReport.cacheAhead.toFixed(1)}s buffered ahead`
+      )
+    )
+  }
+  await player
+    .observe('frame-drop-count', (value) => {
+      if (typeof value === 'number') reportDrops('vo', value)
+    })
+    .catch(() => {})
+  await player
+    .observe('decoder-frame-drop-count', (value) => {
+      if (typeof value === 'number') reportDrops('decoder', value)
+    })
+    .catch(() => {})
   // The moment mpv's video child genuinely exists — created per loadfile, and
   // re-created on things like a mid-playback resolution change. `file-loaded`
   // is too early, since the window is created a little after the file is.
@@ -682,6 +761,7 @@ export async function stopPlayerSession(): Promise<void> {
   }
   sessionSnapshot = null
   lastTimePos = 0
+  lastDuration = 0
   closePlayerOverlay()
   // `stop` destroys mpv's embedded child window (verified in the spike), which
   // is what reveals the app UI again — no window state to unwind on this side.

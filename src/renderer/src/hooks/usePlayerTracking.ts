@@ -21,8 +21,11 @@ const RESUME_SAVE_INTERVAL_MS = 20_000
 /** Fraction of the runtime past which a title counts as watched. Deliberately
  *  not "reached the end": by the time the credits finish and `eof-reached`
  *  fires, the person has usually already closed the player, and continue-
- *  watching needs to be correct at that moment rather than after it. */
-const WATCHED_FRACTION = 0.8
+ *  watching needs to be correct at that moment rather than after it.
+ *  Exported so the overlay's end-of-file path judges by the SAME line —
+ *  see PlayerOverlayWindow's eof effect on why an end of file is not, by
+ *  itself, evidence that anything was watched. */
+export const WATCHED_FRACTION = 0.8
 
 interface Options {
   media: PlayerSessionMedia | null

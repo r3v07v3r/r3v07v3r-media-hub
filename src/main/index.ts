@@ -17,7 +17,7 @@ import { setupAutoUpdater } from './media-hub/autoUpdate'
 import { installDownloadGuard } from './media-hub/downloadGuard'
 import { closeParty } from './media-hub/watchParty'
 import { stopPlayback } from './media-hub/playbackSession'
-import { shutdownPlayer } from './media-hub/playerBridge'
+import { flushPlaybackPosition, shutdownPlayer } from './media-hub/playerBridge'
 import { shutdownScheduler } from './media-hub/taskScheduler'
 import { startBackgroundJobs, stopBackgroundJobs } from './media-hub/backgroundJobs'
 import { sendToPlayerOverlay } from './media-hub/playerWindow'
@@ -252,6 +252,10 @@ app.on('before-quit', () => {
   // the scheduler makes it possible to rule out in one place.
   shutdownScheduler()
   stopBackgroundJobs()
+  // The bookmark first, while the session that describes it still exists:
+  // stopPlayback below clears that session, and the overlay's own saves
+  // never get a turn on the way out — see playerBridge.flushPlaybackPosition.
+  flushPlaybackPosition()
   stopPlayback(true).catch(() => {})
   // mpv is a child process that outlives any single title deliberately (see
   // playerBridge.ts) — quitting the app is the one point it must actually be
