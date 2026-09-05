@@ -734,6 +734,20 @@ export interface DislikedListResult {
   disliked: TrackedItem[]
 }
 
+/**
+ * One shelf of suggestions that share a reason — "Because you watched
+ * Dune", "With Zendaya", "More Sci-Fi" — see groupRecommendationRails in
+ * catalog-logic.ts. What turns one row of guesses into something that can
+ * be browsed: the same ranking, shelved by the evidence behind it.
+ */
+export interface RecommendationRail {
+  /** `<kind>:<detail>`, stable across rebuilds — a React key and a rail id. */
+  id: string
+  reason: RecommendationReason
+  /** Best-first, in the ranking's own order. */
+  items: CatalogItem[]
+}
+
 export interface HomePersonalizedResult {
   tracked: TrackedItem[]
   updates: TrackedUpdate[]
@@ -749,6 +763,13 @@ export interface HomePersonalizedResult {
    * shows no chip rather than one saying nothing.
    */
   recommendationReasons: Record<string, RecommendationReason>
+  /**
+   * The same ranking shelved by reason, for the For You page — drawn from
+   * the whole stored buffer rather than the served row, which is what
+   * gives the shelves depth. Empty until the background rebuild has
+   * produced reasons to shelve by.
+   */
+  recommendationRails: RecommendationRail[]
   preferredGenres: string[]
   /**
    * Which tracking services have each planned title on their own list.

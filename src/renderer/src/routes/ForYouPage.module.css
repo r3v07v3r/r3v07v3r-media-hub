@@ -1,0 +1,39 @@
+/* The For You page: a scrolling stack of shelves. The shelves reuse
+   RecommendationCarousel's own .section/.scroller so the cards are the
+   same as Home's; the rules here only undo what that module assumes
+   about living in Home's grid. */
+
+.page {
+  display: flex;
+  flex-direction: column;
+}
+
+.description {
+  margin: -10px 0 22px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  max-width: 640px;
+}
+
+.rails {
+  display: flex;
+  flex-direction: column;
+  gap: 26px;
+  padding-bottom: 32px;
+}
+
+/* .section carries a min-height sized for Home's row 2 and a grid-area
+   that means nothing here. A shelf is as tall as its cards. */
+.rail {
+  grid-area: auto;
+  min-height: 0;
+  flex: 0 0 auto;
+}
+
+.note {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}

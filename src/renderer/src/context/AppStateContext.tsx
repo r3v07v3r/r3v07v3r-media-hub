@@ -18,7 +18,8 @@ import {
   ContinueWatchingItem,
   MediaItem,
   Recommendation,
-  UIActivityState
+  UIActivityState,
+  HomeRail
 } from '@renderer/types'
 import { USER_PROFILES } from '@renderer/data/mockData'
 import type {
@@ -301,6 +302,8 @@ interface AppStateValue {
   // are real or should fall back to its own mock data, since (unlike
   // `catalog` above) there's no mock blended in here.
   recommendations: Recommendation[]
+  /** The ranking shelved by reason — the For You page's rows. */
+  recommendationRails: HomeRail[]
   featured: MediaItem[]
   homeFeedLive: boolean
   /** The home:personalized fetch is still out. Distinct from
@@ -2709,6 +2712,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       adaptCatalogItems,
       watchedIds: watchedIdsResult.watchedIds,
       recommendations: homeFeed.recommendations,
+      recommendationRails: homeFeed.rails,
       featured: homeFeed.featured,
       homeFeedLive: homeFeed.live,
       homeFeedLoading: homeFeed.loading,
@@ -2813,6 +2817,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       adaptCatalogItems,
       watchedIdsResult.watchedIds,
       homeFeed.recommendations,
+      homeFeed.rails,
       homeFeed.featured,
       homeFeed.live,
       homeFeed.loading,

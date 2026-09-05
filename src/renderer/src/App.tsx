@@ -11,6 +11,7 @@ import AnimePage from '@renderer/routes/AnimePage'
 import { MediaDetailPage } from '@renderer/routes/MediaDetailPage'
 import MyStuffPage from '@renderer/routes/MyStuffPage'
 import CalendarPage from '@renderer/routes/CalendarPage'
+import ForYouPage from '@renderer/routes/ForYouPage'
 import SettingsPage from '@renderer/routes/SettingsPage'
 import MoodExplorePage from '@renderer/routes/MoodExplorePage'
 import PersonPage from '@renderer/routes/PersonPage'
@@ -68,6 +69,7 @@ export default function App() {
             <RoutedErrorBoundary>
               <Routes>
                 <Route path="/" element={<HomeDashboard />} />
+                <Route path="/for-you" element={<ForYouPage />} />
                 <Route path="/movies" element={<MoviesPage />} />
                 <Route path="/movies/:id" element={<MediaDetailPage kind="movie" />} />
                 <Route path="/series" element={<SeriesPage />} />

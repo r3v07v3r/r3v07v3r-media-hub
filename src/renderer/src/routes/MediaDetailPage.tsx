@@ -711,7 +711,6 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
           items={related}
           config={config}
           onSelect={(item) => openDetail(item, media.title)}
-          onViewAll={() => navigate(`/${config.path}`)}
         />
       </div>
     </div>

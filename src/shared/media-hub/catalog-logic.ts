@@ -12,7 +12,8 @@ import {
   HistoryEntry,
   MediaKind,
   RecommendationReason,
-  TitleCredits
+  TitleCredits,
+  RecommendationRail
 } from './types'
 
 export interface FilterCatalogOptions {
@@ -449,6 +450,74 @@ export const RECOMMENDATION_REASON_ORDER: readonly RecommendationReason['kind'][
   'genre',
   'new'
 ]
+
+/** A shelf shorter than this is a chip, not a shelf. */
+export const RAIL_MIN_ITEMS = 4
+/** Longer than this and the tail is titles the ranking barely wanted. */
+export const RAIL_MAX_ITEMS = 24
+/** Enough to browse; past this the page is scrolling for its own sake. */
+export const RAILS_MAX = 8
+
+/**
+ * The ranking shelved by reason — see RecommendationRail.
+ *
+ * Every entry that carries a reason lands on the shelf for that exact
+ * reason (kind AND detail: "With Zendaya" and "With Timothée Chalamet"
+ * are two shelves). Entries arrive best-first, so each shelf keeps the
+ * ranking's own order. Shelves are ordered by how much the reason says
+ * about the person (RECOMMENDATION_REASON_ORDER), then by where their
+ * best title ranked, so "Because you watched X" leads and "New in 2026"
+ * closes. Pure; see tests/recommendationRails.test.ts.
+ */
+export function groupRecommendationRails(
+  entries: readonly ScoredRecommendation[],
+  {
+    minItems = RAIL_MIN_ITEMS,
+    maxItems = RAIL_MAX_ITEMS,
+    maxRails = RAILS_MAX
+  }: { minItems?: number; maxItems?: number; maxRails?: number } = {}
+): RecommendationRail[] {
+  const shelves = new Map<string, RecommendationRail & { firstRank: number }>()
+  entries.forEach((entry, rank) => {
+    const detail = String(entry.reason?.detail ?? '').trim()
+    if (!entry.reason || !detail) return
+    const id = `${entry.reason.kind}:${detail}`
+    let shelf = shelves.get(id)
+    if (!shelf) {
+      shelf = { id, reason: { kind: entry.reason.kind, detail }, items: [], firstRank: rank }
+      shelves.set(id, shelf)
+    }
+    if (shelf.items.length < maxItems) shelf.items.push(entry.item)
+  })
+  return [...shelves.values()]
+    .filter((shelf) => shelf.items.length >= minItems)
+    .sort(
+      (a, b) =>
+        RECOMMENDATION_REASON_ORDER.indexOf(a.reason.kind) -
+          RECOMMENDATION_REASON_ORDER.indexOf(b.reason.kind) || a.firstRank - b.firstRank
+    )
+    .slice(0, Math.max(0, maxRails))
+    .map(({ id, reason, items }) => ({ id, reason, items }))
+}
+
+/**
+ * Whether enough of a stored ranking survives the live exclusions to be
+ * served — see readStoredRecommendations in main/media-hub/recommendations.ts.
+ *
+ * Judged against what the list HELD, not only against the row length: a
+ * library too small to ever fill a row would otherwise miss on every read,
+ * rank live every time and ask for a rebuild that cannot help. Half of
+ * what was stored, capped at the row, is the floor.
+ */
+export function enoughStoredRecommendations(
+  storedCount: number,
+  survivingCount: number,
+  served: number
+): boolean {
+  if (storedCount <= 0) return false
+  const floor = Math.min(served, Math.max(1, Math.floor(storedCount / 2)))
+  return survivingCount >= floor
+}
 
 /** Share of viewing by kind, 0..1, summing to 1. */
 export type CadenceShares = Record<MediaKind, number>

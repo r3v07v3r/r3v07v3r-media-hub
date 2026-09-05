@@ -99,6 +99,14 @@ export interface Recommendation {
   generatedAt: string
 }
 
+/** One shelf of the For You page — a RecommendationRail with its reason
+ *  already worded ("Because you watched Dune") and its titles adapted. */
+export interface HomeRail {
+  id: string
+  title: string
+  items: MediaItem[]
+}
+
 export interface MoodCategory {
   id: string
   label: string
