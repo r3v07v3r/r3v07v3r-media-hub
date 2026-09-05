@@ -1272,6 +1272,19 @@ function deepScanState(kind: MediaKind): DeepScanState {
  * more to give, and the button should say so instead of inviting
  * another press at the void.
  */
+/**
+ * One chunk of the deep scan, single-flight per kind: the button and the
+ * hourly background job (backgroundJobs.ts) share this, so a press during
+ * the job joins it rather than starting a second walk of the same pages.
+ */
+export function deepScanChunk(kind: MediaKind): Promise<DeepScanReport> {
+  const running = deepScansInFlight.get(kind)
+  if (running) return running
+  const scan = runDeepScan(kind).finally(() => deepScansInFlight.delete(kind))
+  deepScansInFlight.set(kind, scan)
+  return scan
+}
+
 async function runDeepScan(kind: MediaKind): Promise<DeepScanReport> {
   const db = getDatabase()
   const state = deepScanState(kind)
@@ -1469,11 +1482,7 @@ export function registerCatalogIpc(): void {
     async (_e, payload) => {
       const kind = payload?.kind
       if (!isValidCatalogKind(kind)) throw new Error('Unsupported catalog.')
-      const running = deepScansInFlight.get(kind)
-      if (running) return running
-      const scan = runDeepScan(kind).finally(() => deepScansInFlight.delete(kind))
-      deepScansInFlight.set(kind, scan)
-      return scan
+      return deepScanChunk(kind)
     }
   )
 
