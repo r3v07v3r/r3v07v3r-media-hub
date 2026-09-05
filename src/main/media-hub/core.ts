@@ -35,7 +35,11 @@ import {
   releaseDeclaresLanguage,
   releaseLacksPreferredLanguage
 } from '../../shared/media-hub/language'
-import { streamResolution, streamText } from '../../shared/media-hub/streamQuality'
+import {
+  streamResolution,
+  streamText,
+  streamReleaseName
+} from '../../shared/media-hub/streamQuality'
 
 export { airingStatus, episodeWatchState, filterCatalog, isItemWatched, subtitlesInadequate }
 
@@ -323,6 +327,22 @@ function declaresPreferredLanguage(stream: StreamCandidate, preferred: string): 
   return releaseDeclaresLanguage(streamText(stream), preferred)
 }
 
+/**
+ * Whether a candidate is a dub into some OTHER language — the
+ * WRONG_LANGUAGE_PENALTY test. Reported tracks that include the wanted
+ * language settle it: a file a media server says has English audio is not
+ * penalised for a "TRUEFRENCH" in its name, whatever the name says. When
+ * nothing is reported, or what is reported lacks the language, the name
+ * is still read the way it always was — reported tracks suppress a
+ * penalty the name would invent, they never invent one themselves.
+ */
+function lacksPreferredLanguage(stream: StreamCandidate, preferred: string): boolean {
+  if (stream.audioLanguages?.some((language) => languageMatches(language, preferred))) {
+    return false
+  }
+  return releaseLacksPreferredLanguage(streamText(stream), preferred)
+}
+
 export interface RankOptions {
   /** The release group the previous episode of this show played from —
    *  see SAME_RELEASE_GROUP_BONUS. */
@@ -372,7 +392,9 @@ export function rankStreams(
     // says nothing, which is how the same show stops alternating between
     // dubbed and subbed episodes.
     (declaresPreferredLanguage(s, preferredLanguage) ? PREFERRED_LANGUAGE_BONUS : 0) +
-    (preferredGroup && releaseGroup(streamText(s)) === preferredGroup
+    // Read off the release NAME, exactly as the memo that remembered the
+    // previous episode's group was — see streamReleaseName.
+    (preferredGroup && releaseGroup(streamReleaseName(s)) === preferredGroup
       ? SAME_RELEASE_GROUP_BONUS
       : 0) +
     streamResolution(s) +
@@ -384,7 +406,7 @@ export function rankStreams(
     // Track selection can't fix that one — a dub is a different release,
     // and there was no English in the file to select. It has to be settled
     // here, when the release is chosen.
-    (releaseLacksPreferredLanguage(streamText(s), preferredLanguage) ? WRONG_LANGUAGE_PENALTY : 0)
+    (lacksPreferredLanguage(s, preferredLanguage) ? WRONG_LANGUAGE_PENALTY : 0)
   const withinLimits = streams.filter((stream) => {
     const resolution = streamResolution(stream)
     const size = streamSizeGb(stream)

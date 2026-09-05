@@ -69,6 +69,7 @@ import {
   readSettings,
   writeSettings
 } from './settingsStore'
+import { streamReleaseName } from '../../shared/media-hub/streamQuality'
 
 export const TORBOX = 'https://api.torbox.app/v1/api'
 
@@ -177,8 +178,9 @@ async function fetchAddonStreams(url: string): Promise<StreamCandidate[]> {
  * Torrentio-sourced one for the same search).
  */
 function streamReleaseText(stream: StreamCandidate): string {
-  const text = stream.title || (stream.description as string | undefined) || stream.name || ''
-  return text.split('\n')[0]
+  // One rule, shared with the ranking's release-group comparison — see
+  // streamReleaseName for why they must not drift apart.
+  return streamReleaseName(stream)
 }
 
 /**

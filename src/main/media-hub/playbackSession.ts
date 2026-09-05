@@ -369,7 +369,9 @@ async function openPlayback(
         episodeNumber: cacheMeta.episodeNumber,
         episodeTitle: cacheMeta.episodeTitle,
         posterUrl: cacheMeta.posterUrl,
-        release: cacheMeta.release
+        // A tier-1 replay is handed thin metadata (no release: the local
+        // candidate never knew one); the session's own manifest does.
+        release: cacheMeta.release ?? cacheResult.meta?.release
       }
     : null
   pushSessionSnapshot({

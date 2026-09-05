@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { rankStreams, releaseGroup, streamSeeders } from '../src/main/media-hub/core'
+import { streamReleaseName } from '../src/shared/media-hub/streamQuality'
 import type { StreamCandidate } from '../src/shared/media-hub/types'
 
 const streams: StreamCandidate[] = [
@@ -359,3 +360,71 @@ console.log('ok  seeder ranking')
   )
 }
 console.log('ok  audio language and release group')
+
+// --- what the ranking reads the release name from -------------------------
+//
+// Comet names every candidate "[TORRENT] Comet …" and puts the file name in
+// `description`; Torrentio puts it in `title`. The release group must be
+// read from the same line the memo remembered it from, or a Comet
+// candidate's group is "torrent" and the same-group bonus never applies.
+{
+  const cometShaped = {
+    infoHash: 'comet',
+    name: '[TORRENT] Comet 1080p',
+    description: '[Group] Show - 06 [Dual-Audio][1080p]\n👤 12 💾 1.2 GB',
+    cached: true,
+    compatible: true,
+    exact: true
+  } as StreamCandidate
+  const torrentioShaped = {
+    infoHash: 'torrentio',
+    name: 'Torrentio\n2160p',
+    title: '[Other] Show - 06 [Dual-Audio][2160p]\n👤 40 💾 4.1 GB',
+    cached: true,
+    compatible: true,
+    exact: true
+  } as StreamCandidate
+  assert.equal(streamReleaseName(cometShaped), '[Group] Show - 06 [Dual-Audio][1080p]')
+  assert.equal(streamReleaseName(torrentioShaped), '[Other] Show - 06 [Dual-Audio][2160p]')
+  assert.equal(releaseGroup(streamReleaseName(cometShaped)), 'group')
+  assert.equal(
+    rankStreams([torrentioShaped, cometShaped], 'en', {}, 'prefer-quality', {
+      preferredGroup: 'group'
+    })[0].infoHash,
+    'comet',
+    "the memo's group is found on a Comet-shaped candidate, not the add-on's label"
+  )
+
+  // A media server that reports an English track is not a French dub,
+  // whatever its file is called.
+  const serverTrueFrench = {
+    source: 'mediaserver',
+    itemId: 'jf',
+    mediaSourceId: 'ms',
+    name: 'Film.2019.TRUEFRENCH.1080p.BluRay.mkv',
+    audioLanguages: ['fre', 'eng'],
+    resolution: 1080,
+    cached: true,
+    compatible: true,
+    exact: true
+  } as StreamCandidate
+  const remoteSilent = {
+    infoHash: 'silent',
+    name: 'Film 2019 1080p WEB-DL',
+    cached: true,
+    compatible: true,
+    exact: true
+  } as StreamCandidate
+  assert.equal(
+    rankStreams([remoteSilent, serverTrueFrench], 'en', {}, 'balanced')[0].source,
+    'mediaserver',
+    'reported English audio suppresses the penalty the file name would earn'
+  )
+  const serverFrenchOnly = { ...serverTrueFrench, audioLanguages: ['fre'] } as StreamCandidate
+  assert.equal(
+    rankStreams([remoteSilent, serverFrenchOnly], 'en', {}, 'balanced')[0].infoHash,
+    'silent',
+    'reported tracks that lack the language leave the name-based penalty in place'
+  )
+}
+console.log('ok  release name source and reported tracks')
