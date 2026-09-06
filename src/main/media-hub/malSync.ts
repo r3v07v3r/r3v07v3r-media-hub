@@ -41,7 +41,7 @@ import {
   normalizeMalEntry
 } from './mal'
 import { isAllowedExternalUrl } from './security'
-import { seasonHistoryPayload } from './simkl'
+import { hasSimklContent, seasonHistoryPayload } from './simkl'
 import { simklRequest, simklWatchedSnapshot } from './simklClient'
 import {
   encrypt,
@@ -421,11 +421,15 @@ export function registerMalIpc(): void {
           for (const episode of episodeNumbers) {
             getDatabase().markWatched(media, { season: target.season, episode })
           }
-          if (simklCredentials().accessToken) {
+          // Empty when Simkl has no id for this title — see
+          // historyPayload. Posting it would ask Simkl to match by title
+          // and year and change the account on a guess.
+          const simklBody = seasonHistoryPayload(media, target.season, episodeNumbers)
+          if (simklCredentials().accessToken && hasSimklContent(simklBody)) {
             try {
               await simklRequest('/sync/history', {
                 method: 'POST',
-                body: JSON.stringify(seasonHistoryPayload(media, target.season, episodeNumbers))
+                body: JSON.stringify(simklBody)
               })
             } catch (error) {
               logError('mal:reconcile:simkl-push', error)

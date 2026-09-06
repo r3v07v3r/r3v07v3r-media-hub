@@ -18,10 +18,13 @@ import {
 import {
   batchHistoryPayload,
   hasExpressibleSimklId,
+  hasSimklContent,
+  historyPayload,
   idsForCatalogId,
+  scrobblePayload,
+  seasonHistoryPayload,
   unmatchedCatalogIds
 } from '../src/main/media-hub/simkl'
-import { assertLibraryWritableId, demoOnlyTitleMessage } from '../src/shared/media-hub/serviceIds'
 
 let pass = 0
 function check(name: string, fn: () => void): void {
@@ -216,11 +219,14 @@ check('every real id space is expressible to Simkl', () => {
   }
 })
 
-check('demo and unmappable ids are not, so the review never offers them', () => {
-  // mockData's m-* ids are the live case: a local history row carrying one
-  // can never be joined to any Simkl entry, and its "Use Local" push would
-  // go out as an unverifiable title/year guess — the review row returned
-  // after every resolution, forever, until these were excluded.
+check('unmappable ids are not, so the review never offers them', () => {
+  // A local history row carrying one of these can never be joined to any
+  // Simkl entry, and its "Use Local" push would go out as an unverifiable
+  // title/year guess — the review row returned after every resolution,
+  // forever, until these were excluded. Note what this no longer decides:
+  // such a row is still kept locally, and still shown. Only the push is
+  // withheld — see serviceIds.ts on the library-write guard that used to
+  // read the same predicate and is gone.
   for (const id of ['m-13', 'tmdb:157336', 'simkl:250822', '', 'not-an-id']) {
     assert.equal(hasExpressibleSimklId(id), false, `${id} should not be expressible`)
   }
@@ -232,25 +238,47 @@ check('idsForCatalogId matches what a push would actually send', () => {
   assert.deepEqual(idsForCatalogId('m-13'), {})
 })
 
-// --- the IPC-boundary refusal of demo-id library writes --------------------
+// --- what may be SENT to Simkl at all ---------------------------------------
 
-check('a demo id is refused a library write, by name', () => {
-  // The message is what a person sees when a surface without its own guard
-  // hits the boundary, so it has to name the title, not the id scheme.
-  assert.throws(
-    () => assertLibraryWritableId('m-10', 'Interstellar'),
-    (error: Error) =>
-      error.message === demoOnlyTitleMessage('Interstellar') &&
-      error.message.includes('Interstellar')
-  )
-  // With no title in hand the id itself is still better than nothing.
-  assert.throws(() => assertLibraryWritableId('m-10'), /m-10/)
+check('a title Simkl has no id for produces no push body', () => {
+  // The local write for such a title goes ahead — it is a real title, and
+  // this app's own database is the record. What must not happen is a push
+  // that carries `ids: {}` and a title/year, which asks Simkl to guess:
+  // it can land on the wrong entry, and even a right one produces a row
+  // no later diff can join back to this id.
+  const unmappable = { id: 'simkl:250822', type: 'series' as const, title: 'Silo', year: '2023' }
+  assert.equal(hasSimklContent(historyPayload(unmappable, { season: 3, episode: 10 })), false)
+  assert.equal(hasSimklContent(seasonHistoryPayload(unmappable, 3, [1, 2, 3])), false)
+  assert.equal(scrobblePayload(unmappable, { season: 3, episode: 10 }, 40), null)
 })
 
-check('every real id space passes the library-write gate untouched', () => {
-  for (const id of ['tt4877122', 'kitsu:7', 'mal:6', 'anilist:30', 'anidb:17']) {
-    assert.doesNotThrow(() => assertLibraryWritableId(id, 'Anything'))
-  }
+check('a real id still produces one, unchanged', () => {
+  const real = { id: 'tt14688458', type: 'series' as const, title: 'Silo', year: '2023' }
+  const payload = historyPayload(real, { season: 3, episode: 10 })
+  assert.equal(hasSimklContent(payload), true)
+  assert.deepEqual(payload.shows?.[0].ids, { imdb: 'tt14688458' })
+  assert.equal(payload.shows?.[0].seasons[0].number, 3)
+  assert.notEqual(scrobblePayload(real, { season: 3, episode: 10 }, 40), null)
+})
+
+check('a batch drops the unaddressable rows and keeps the rest', () => {
+  const payload = batchHistoryPayload([
+    { item: { id: 'tt14688458', type: 'series', title: 'Silo', year: '2023' } },
+    { item: { id: 'simkl:250822', type: 'series', title: 'Silo', year: '2023' } },
+    { item: { id: 'm-13', type: 'movie', title: 'Ex Machina', year: '2014' } }
+  ])
+  assert.equal(payload.shows?.length, 1)
+  assert.equal(payload.movies, undefined)
+  assert.equal(hasSimklContent(payload), true)
+})
+
+check('a batch of nothing addressable is not worth sending', () => {
+  assert.equal(
+    hasSimklContent(
+      batchHistoryPayload([{ item: { id: 'm-13', type: 'movie', title: 'Ex Machina' } }])
+    ),
+    false
+  )
 })
 
 console.log(`\n${pass} passing`)

@@ -22,7 +22,7 @@ export interface CategoryFilterFields {
 export interface CategoryConfig {
   kind: CategoryKind
   /** Route path — must match App.tsx's <Route path> and NAV_ITEMS' href
-   *  (mockData.ts) exactly; there is exactly one routing pattern in this
+   *  (data/constants.ts) exactly; there is exactly one routing pattern in this
    *  app (HashRouter + react-router-dom) and this config doesn't invent a
    *  second one. */
   path: string

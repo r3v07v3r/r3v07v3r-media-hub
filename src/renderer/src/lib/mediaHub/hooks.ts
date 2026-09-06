@@ -9,15 +9,17 @@
 // loaded; false (with a remembered/empty fallback) otherwise — the UI is
 // never meant to silently present stale or mock data as if it were live.
 //
-// What `live: false` falls back TO changed: it used to be mockData.ts's
-// demo pools, which is why every cold start opened on Blade Runner 2049
-// and Interstellar regardless of what the person actually watches. It is
-// now the previous session's real data (startupSnapshot.ts), and the mock
-// pools survive only for the non-Electron preview build — the browser
-// harness used for visual QA/screenshots, which has no bridge to get real
-// data from and no snapshot to have written one. In the app itself,
-// "nothing remembered yet" renders a skeleton rather than someone else's
-// taste in films.
+// What `live: false` falls back TO changed twice. It used to be
+// mockData.ts's demo pools, which is why every cold start opened on Blade
+// Runner 2049 and Interstellar regardless of what the person actually
+// watches. It became the previous session's real data
+// (startupSnapshot.ts), with the demo pools kept for the non-Electron
+// preview build. Those pools are now deleted outright, preview build
+// included: a fallback catalogue of invented titles has no honest way to
+// present itself on a screen whose whole claim is "your library", and the
+// preview harness showing a different set of titles than the app is a
+// worse QA signal than showing the real empty state. "Nothing remembered
+// yet" now renders a skeleton everywhere.
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type {
@@ -29,7 +31,6 @@ import type {
 } from '@shared/media-hub/types'
 import type { ContinueWatchingItem, HomeRail, MediaItem, Recommendation } from '@renderer/types'
 import { recommendationReasonLabel } from '@shared/media-hub/recommendationReason'
-import { AI_PICKS, CATALOG, CONTINUE_WATCHING, FEATURED_ITEMS } from '@renderer/data/mockData'
 import {
   catalogItemToMediaItem,
   indexHistoryById,
@@ -68,11 +69,6 @@ const EMPTY_HOME_FEED = {
   plannedSources: {} as Record<string, PlannedServiceId[]>
 }
 
-/** True in the real (Electron) app, false in the plain-browser preview build used for visual QA. */
-function hasBridge(): boolean {
-  return Boolean(window.api?.mediaHub)
-}
-
 // Resolved once per session, not per render: what the snapshot held at
 // startup is a fixed fact for this run (later writes are for the NEXT
 // launch), and a fresh array identity here would churn every memo
@@ -82,37 +78,31 @@ let browseFallback: MediaItem[] | null = null
 function startupCatalogFallback(): MediaItem[] {
   if (!browseFallback) {
     const remembered = rememberedCatalog()
-    browseFallback = remembered.length ? remembered : hasBridge() ? NO_ITEMS : CATALOG
+    browseFallback = remembered.length ? remembered : NO_ITEMS
   }
   return browseFallback
 }
 
-// The single place the "remembered, else mock, else nothing" decision is
-// made. Keeping it here rather than in each consumer is deliberate: the
-// bug this fixes existed because three components each made that call
-// independently and all three defaulted to the demo pools.
+// The single place the "remembered, else nothing" decision is made.
+// Keeping it here rather than in each consumer is deliberate: the bug
+// this fixes existed because three components each made that call
+// independently and all three defaulted to the demo pools. There is no
+// demo tier left to default to — see the header note — so whether a
+// bridge exists no longer changes the answer, only how quickly a real
+// one arrives.
 let homeFeedFallback: typeof EMPTY_HOME_FEED | null = null
 function startupHomeFeedFallback(): typeof EMPTY_HOME_FEED {
   if (!homeFeedFallback) {
     const remembered = rememberedHomeFeed()
-    const bridge = hasBridge()
     homeFeedFallback = {
       ...EMPTY_HOME_FEED,
-      featured: remembered.featured.length
-        ? remembered.featured
-        : bridge
-          ? EMPTY_HOME_FEED.featured
-          : FEATURED_ITEMS,
+      featured: remembered.featured.length ? remembered.featured : EMPTY_HOME_FEED.featured,
       recommendations: remembered.recommendations.length
         ? remembered.recommendations
-        : bridge
-          ? EMPTY_HOME_FEED.recommendations
-          : AI_PICKS,
+        : EMPTY_HOME_FEED.recommendations,
       continueWatching: remembered.continueWatching.length
         ? remembered.continueWatching
-        : bridge
-          ? EMPTY_HOME_FEED.continueWatching
-          : CONTINUE_WATCHING,
+        : EMPTY_HOME_FEED.continueWatching,
       preferredGenres: remembered.preferredGenres,
       // This used to stay empty, on the reasoning that a remembered set is
       // a claim about server state nothing has re-checked. That was wrong,
@@ -201,9 +191,9 @@ export interface BrowseCatalogResult {
 
 /**
  * The flat "browse everything" pool backing mood filtering, My Stuff, and
- * the Movies/Series/Anime category pages — mirrors mockData.ts's CATALOG
- * (movies + series + anime merged), but fetched from the real catalog:list
- * handler across all three kinds. Falls back to the previous session's
+ * the Movies/Series/Anime category pages — movies + series + anime
+ * merged, fetched from the real catalog:list handler across all three
+ * kinds. Falls back to the previous session's
  * remembered catalog (startupSnapshot.ts) while the fetch is out or has
  * failed, so mood browsing and My List never go blank — per kind, not
  * all-or-nothing, since the three kinds no longer land together.
@@ -404,12 +394,14 @@ export function useMediaHubBrowseCatalog(
   // since. See applyTrackingState, including what it deliberately cannot
   // restore.
   //
-  // Skipped without a bridge, where the fallback is mockData's demo pool:
-  // those rows' flags are authored demo state, not a stale reading of
-  // anything, and the empty tracking sets would simply erase them.
+  // This used to be skipped without a bridge, because the bridgeless
+  // fallback was mockData's demo pool and its rows' flags were authored
+  // demo state that empty tracking sets would simply erase. There is no
+  // demo pool any more: bridgeless means the remembered catalogue or
+  // nothing, and remembered rows want the same correction as any other.
   const rememberedItems = useMemo(() => {
     const remembered = startupCatalogFallback()
-    if (!remembered.length || !hasBridge()) return remembered
+    if (!remembered.length) return remembered
     // A set is handed over only once it has been read. Passing it before
     // then would assert that nothing is watched and nothing is disliked,
     // which is not what an empty set fresh out of useState means — and
@@ -444,9 +436,9 @@ export function useMediaHubBrowseCatalog(
   // with last week's badges on it. The write is deferred and coalesced —
   // see startupSnapshot.ts's WRITE_DELAY_MS.
   //
-  // Guarded on `mapped`, not on `catalog`: with no bridge, `catalog` is
-  // mockData's demo pool, and persisting THAT as this app's memory would
-  // be the original bug wearing a new hat.
+  // Guarded on `mapped`, not on `catalog`: `catalog` carries remembered
+  // rows forward, so writing it back would re-date a snapshot nothing
+  // fetched this run and keep it alive indefinitely.
   useEffect(() => {
     // `freshStamps`, not `heldKinds` and not every kind in `catalog` —
     // see both definitions above. Only rows this run actually fetched may
@@ -862,8 +854,7 @@ export interface HomeFeedResult {
  * backend has no equivalent of; the top few recommendations stand in for
  * it here). Until the fetch lands, this reports the previous session's
  * remembered feed (startupSnapshot.ts) — real titles this person really
- * did see, not mockData.ts's demo pools, which are now reachable only
- * from the bridgeless preview build. `live: false` still means "nothing
+ * did see. `live: false` still means "nothing
  * has been re-checked this run", so a caller that needs to distinguish
  * remembered from fresh still can.
  */

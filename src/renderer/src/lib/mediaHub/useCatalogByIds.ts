@@ -31,7 +31,7 @@ export function useCatalogByIds(
    *  until the ids themselves changed, and a full Planned list would
    *  render as an empty shelf. */
   revision: unknown = null
-): { items: MediaItem[]; loading: boolean } {
+): { items: MediaItem[]; loading: boolean; failed: boolean } {
   // A stable, sorted key so set identity churn (a fresh Set of the same
   // ids every render) never refetches, and a genuine membership change
   // always does.
@@ -46,9 +46,28 @@ export function useCatalogByIds(
     items: [],
     completedIds: []
   })
+  // The id set whose last SETTLED answer was a refusal, or '' for none.
+  //
+  // A caller cannot tell "still waiting" from "asked and was refused" out
+  // of `loading` alone — it stays up for a rejected fetch on purpose (see
+  // the catch below), which is right for a surface that keeps showing
+  // stale rows and wrong for one that has to decide whether to keep
+  // waiting. Home's browsing-origin restore is the latter: it waited on
+  // the Planned rail and, on a cold mount whose lookup rejected, waited
+  // forever.
+  //
+  // Cleared by the next SUCCESS for the same ids, not by the next
+  // attempt: "the last answer we got was a refusal" stays true while a
+  // retry is out, which is the claim a caller can actually act on. The
+  // alternative — clearing when an attempt starts — would flap a
+  // dependent view back into waiting on every retry, and has to write
+  // state from the effect body to do it.
+  const [failedKey, setFailedKey] = useState('')
+
   // Derived, not set: a fetch is outstanding exactly while the rows on
   // show belong to an older id set than the one wanted now.
   const loading = idsKey !== '' && rows.key !== idsKey
+  const failed = idsKey !== '' && failedKey === idsKey
 
   useEffect(() => {
     if (!idsKey) return
@@ -57,6 +76,7 @@ export function useCatalogByIds(
       .byIds(idsKey.split(SEP))
       .then((result) => {
         if (cancelled) return
+        setFailedKey((previous) => (previous === idsKey ? '' : previous))
         // Dedupe by id, first row wins — see the header comment.
         const seen = new Set<string>()
         setRows({
@@ -73,7 +93,9 @@ export function useCatalogByIds(
         // Keep whatever was showing; an id-match surface flashing empty
         // on a transient failure reads as "your list is gone". The
         // loading flag stays up (the key still lags), which is the
-        // truthful description of an unanswered fetch.
+        // truthful description of an unanswered fetch — `failed` is how
+        // a caller that must not wait forever tells the two apart.
+        if (!cancelled) setFailedKey(idsKey)
       })
     return () => {
       cancelled = true
@@ -100,5 +122,5 @@ export function useCatalogByIds(
     // is exactly when badges must recompute — no refetch involved.
   }, [idsKey, rows.items, rows.completedIds, adapt])
 
-  return { items, loading }
+  return { items, loading, failed }
 }

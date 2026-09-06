@@ -7,14 +7,17 @@
 // bodies for a third-party API.
 
 import type { CatalogItem, HistoryEntry, MediaKind } from '../../shared/media-hub/types'
-import { idsForCatalogId, type SimklMediaIds } from '../../shared/media-hub/serviceIds'
+import {
+  hasExpressibleSimklId,
+  idsForCatalogId,
+  type SimklMediaIds
+} from '../../shared/media-hub/serviceIds'
 
 // The id-expressibility half of this module moved to shared/media-hub/
-// serviceIds.ts (the renderer's demo-title guards and the ghost-row
-// migration both need it, and neither can import main-process code).
-// Re-exported here so every existing main-side import — and the tests that
-// exercise the predicate — keep reading it from the module whose payloads
-// it exists to serve.
+// serviceIds.ts (the ghost-row migration needs it too, and cannot import
+// main-process code). Re-exported here so every existing main-side
+// import — and the tests that exercise the predicate — keep reading it
+// from the module whose payloads it exists to serve.
 export {
   idsForCatalogId,
   hasExpressibleSimklId,
@@ -107,11 +110,22 @@ function numberOr(value: unknown, fallback: number): number {
  * Body for a single "mark as watched" call. Movies push a bare ref; shows
  * and anime nest a single episode under a season (defaulting to season 1
  * when playback doesn't specify one, e.g. a movie-shaped anime special).
+ *
+ * EMPTY for a title whose id resolves to no Simkl id at all. Simkl treats
+ * an empty `ids` as "match this by title and year", so such a push lands
+ * on whatever Simkl thinks that string means — possibly the wrong title,
+ * possibly a right one the local row can never be joined back to. Either
+ * way the account is changed on a guess and the disagreement cannot be
+ * reconciled by id afterwards (see unmatchedCatalogIds). Trakt has said
+ * the same thing for longer, via traktIds returning null; this is the
+ * matching answer for Simkl, and callers skip an empty payload rather
+ * than posting it (hasSimklContent).
  */
 export function historyPayload(
   item: SimklPushItem,
   playback: PlaybackPosition = {}
 ): SimklHistoryPayload {
+  if (!hasExpressibleSimklId(String(item?.id ?? ''))) return {}
   const ref = mediaRef(item)
   if (item.type === 'movie') return { movies: [ref] }
   const entry: SimklShowRef = {
@@ -206,12 +220,20 @@ export function unmatchedCatalogIds(
     .map((item) => String(item.id))
 }
 
+/** True when a payload has anything in it worth sending — Simkl's
+ *  counterpart to trakt.ts's hasTraktContent, and how callers tell an
+ *  id-less title's empty payload from a real one. */
+export function hasSimklContent(payload: SimklHistoryPayload): boolean {
+  return Boolean(payload.movies?.length || payload.shows?.length || payload.anime?.length)
+}
+
 /** Same as historyPayload but for marking a whole batch of episode numbers within one season watched at once. */
 export function seasonHistoryPayload(
   item: SimklPushItem,
   season: number | undefined,
   episodeNumbers: number[]
 ): SimklHistoryPayload {
+  if (!hasExpressibleSimklId(String(item?.id ?? ''))) return {}
   const ref = mediaRef(item)
   const entry: SimklShowRef = {
     ...ref,
@@ -222,12 +244,15 @@ export function seasonHistoryPayload(
   return item.type === 'anime' ? { anime: [entry] } : { shows: [entry] }
 }
 
-/** Body for POST /scrobble/* — reports in-progress playback rather than a completed watch. */
+/** Body for POST /scrobble/* — reports in-progress playback rather than a
+ *  completed watch. Null on an id Simkl cannot be told, for the reason
+ *  historyPayload gives. */
 export function scrobblePayload(
   item: SimklPushItem,
   playback: PlaybackPosition = {},
   progress = 0
-): SimklScrobblePayload {
+): SimklScrobblePayload | null {
+  if (!hasExpressibleSimklId(String(item?.id ?? ''))) return null
   const ref = mediaRef(item)
   if (item.type === 'movie') return { progress, movie: ref }
   const key = item.type === 'anime' ? 'anime' : 'show'

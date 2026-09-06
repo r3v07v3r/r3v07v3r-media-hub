@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { MOOD_CATEGORIES, leadMoodFor, moodLabelsFor } from '@renderer/data/mockData'
+import { MOOD_CATEGORIES, leadMoodFor, moodLabelsFor } from '@renderer/data/constants'
 import { useAppState } from '@renderer/context/AppStateContext'
 import { Icon } from '@renderer/components/icons/Icon'
 import { useReducedMotion } from '@renderer/hooks/useReducedMotion'

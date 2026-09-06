@@ -29,7 +29,10 @@
 .heading {
   display: flex;
   align-items: center;
-  gap: 9px;
+  /* Was 9px, which separated the row icon from its title. Both now sit
+     inside a .tab (with that same 9px of their own), so this gap separates
+     one TAB from the next and needs to read as a gap between labels. */
+  gap: 22px;
   font-family: var(--font-display);
   font-size: 13px;
   font-weight: 700;
@@ -50,6 +53,60 @@
   width: 16px;
   height: 16px;
   color: var(--accent-violet);
+}
+
+/* Each tab is a button that has to read as the heading it replaced: the
+   row's title, at the row's weight, not a control sitting above it. Only
+   the INACTIVE one dims — with a single rail (the common case, and the
+   only case before Planned moved in here) there is nothing to dim and the
+   strip is indistinguishable from the old <h2>'s text. */
+.tab {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  letter-spacing: inherit;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.tab[aria-selected='false'] {
+  color: var(--text-secondary);
+}
+
+.tab[aria-selected='false'] svg {
+  color: var(--text-secondary);
+}
+
+.tab:hover {
+  color: var(--text-primary);
+}
+
+.tab:focus-visible {
+  outline: 2px solid var(--accent-cyan);
+  outline-offset: 4px;
+  border-radius: 4px;
+}
+
+.tabActive {
+  color: var(--text-primary);
+}
+
+/* How many are behind the tab, so switching to it is a decision rather
+   than a guess. */
+.tabCount {
+  padding: 1px 6px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border-subtle);
+  background: rgba(0, 0, 0, 0.35);
+  font-family: var(--font-body);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0;
+  color: var(--text-secondary);
 }
 
 .emptyState {

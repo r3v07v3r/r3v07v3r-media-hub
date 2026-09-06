@@ -3,16 +3,24 @@
 //
 // This lived in src/main/media-hub/simkl.ts (it is still re-exported from
 // there, unchanged, for everything main-side that already imports it). It
-// moved to shared because the question it answers stopped being a Simkl
-// payload detail the moment demo ids leaked into real user data: three
+// moved to shared when demo ids leaked into real user data: three
 // watch_history rows with mockData ids (m-10/m-11/m-13 — Interstellar,
-// The Martian, Ex Machina) were written on 2026-08-24 through the demo-pool
-// fallback, duplicating films already tracked under their real IMDb ids,
-// and every layer that could have stopped it needs the same predicate —
-// the renderer (to refuse the click with an explanation), the IPC boundary
-// (to refuse a renderer that didn't), and the migration that cleans up the
-// rows already written. Main-only placement is what left the renderer
-// unable to ask.
+// The Martian, Ex Machina) were written on 2026-08-24 through the
+// demo-pool fallback, duplicating films already tracked under their real
+// IMDb ids, and both the renderer and the migration that cleans up those
+// rows needed the same predicate.
+//
+// The predicate has since been narrowed back to what its name says. It
+// briefly also served as a library-WRITE guard — refuse the add, tell the
+// person "this is a demo title from the built-in sample catalog" — which
+// only held while the demo pool was the sole producer of an inexpressible
+// id. The pool is gone (see renderer/src/data/constants.ts), and the
+// guard's remaining catch was real titles: a tracked show with a good
+// IMDb id, reached through a surface that handed over an episode-shaped
+// or not-yet-bridged id, was told it was demo data. Nothing writes on
+// this answer any more. It decides what can be PUSHED, and a title that
+// can't be pushed is still perfectly real and still belongs in the local
+// library.
 //
 // Simkl's id space is deliberately the one tested: it is the UNION of what
 // every connected service can address (IMDb for movies/series — which is
@@ -62,41 +70,4 @@ export function idsForCatalogId(id: string): SimklMediaIds {
  */
 export function hasExpressibleSimklId(id: string): boolean {
   return Object.keys(idsForCatalogId(id)).length > 0
-}
-
-/**
- * The one sentence every surface shows when it refuses to write a demo
- * title into the library. Shared between the renderer's toasts and the
- * main-process rejection below so the person reads the same explanation
- * whichever layer caught it — two wordings for one refusal would read as
- * two different problems.
- *
- * "Demo title" rather than "unmappable id": the only source of such ids a
- * person can actually click on is mockData's sample pool (the AI
- * assistant's last-resort fallback and the bridgeless preview build), so
- * naming the id scheme would explain the mechanism to us and nothing to
- * them.
- */
-export function demoOnlyTitleMessage(title: string): string {
-  return `"${title}" is a demo title from the built-in sample catalog — it can't be added to your library or synced to a tracking service.`
-}
-
-/**
- * Refuses a library WRITE for an id no service can express. This is the
- * IPC-boundary backstop behind the renderer's own per-click guards: any
- * mutation surface that forgets (or postdates) those guards still cannot
- * write an m-* id into watch_history/tracked/ratings/lists, which is
- * exactly how the Aug 24 rows got there.
- *
- * Deliberately only for the ADD direction. Removals (unmark, untrack,
- * un-rate via score 0, remove-from-list) of an inexpressible id are how
- * pollution that already exists gets cleaned up, and refusing those would
- * lock the ghosts in — the same reasoning PR #144 applied when it kept
- * unpushable rows in the sync review so "Use Simkl" could delete them.
- * Callers enforce the direction; this just throws uniformly.
- */
-export function assertLibraryWritableId(id: unknown, title?: unknown): void {
-  const catalogId = String(id ?? '')
-  if (hasExpressibleSimklId(catalogId)) return
-  throw new Error(demoOnlyTitleMessage(String(title || '') || catalogId))
 }

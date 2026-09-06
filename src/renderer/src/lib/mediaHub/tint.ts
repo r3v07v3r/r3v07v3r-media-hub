@@ -1,9 +1,9 @@
 // MediaItem.artTint/initials are UI-only fallback affordances (see
 // ArtworkImage) — rendered only when there's no usable poster/backdrop
-// URL, or the image fails to load. mockData.ts hand-picks these per title;
-// real catalog data (Simkl/Kitsu/Cinemeta/TMDB) has no such field, so this
-// derives both deterministically from the title/id instead of inventing
-// per-item art direction. Same input always produces the same output, so
+// URL, or the image fails to load. Catalogue data
+// (Simkl/Kitsu/Cinemeta/TMDB) carries no such field, so this derives both
+// deterministically from the title/id instead of inventing per-item art
+// direction. Same input always produces the same output, so
 // a title's fallback color doesn't flicker between renders/refetches.
 
 const TINT_PAIRS: Array<[string, string]> = [
@@ -33,7 +33,7 @@ export function tintFromSeed(seed: string): [string, string] {
   return TINT_PAIRS[hashString(seed) % TINT_PAIRS.length]
 }
 
-/** Up to 2 uppercase letters from the title's significant words — same rule mockData.ts's hand-picked initials follow (e.g. "Blade Runner 2049" -> "BR"). */
+/** Up to 2 uppercase letters from the title's significant words (e.g. "Blade Runner 2049" -> "BR"). */
 export function initialsFromTitle(title: string): string {
   const words = title
     .replace(/[^\p{L}\p{N}\s]/gu, ' ')

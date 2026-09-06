@@ -77,7 +77,7 @@ export default function App() {
                 <Route path="/anime" element={<AnimePage />} />
                 <Route path="/anime/:id" element={<MediaDetailPage kind="anime" />} />
                 {/* /tv-shows was this route's path before the Series category
-                  page existed (NAV_ITEMS' 'tv' entry — mockData.ts — now
+                  page existed (NAV_ITEMS' 'tv' entry — data/constants.ts — now
                   points at /series); redirected rather than removed outright
                   so any existing deep link/bookmark still lands somewhere
                   real instead of 404ing, without adding a second routing
