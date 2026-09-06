@@ -1,9 +1,14 @@
 'use client'
 
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useAppState } from '@renderer/context/AppStateContext'
-import { usePlannedTitles } from '@renderer/lib/mediaHub/usePlannedTitles'
+import {
+  activeHomeRailTab,
+  setActiveHomeRailTab,
+  type HomeRailTab
+} from '@renderer/lib/mediaHub/homeRailTab'
+import type { MediaItem } from '@renderer/types'
 import { Icon } from '@renderer/components/icons/Icon'
 import { MediaCard } from './MediaCard'
 import styles from './RecommendationCarousel.module.css'
@@ -18,22 +23,40 @@ const SEE_ALL = {
  *  one click away, and the link says so rather than the row trailing off. */
 const PLANNED_ROW_LIMIT = 20
 
-export function RecommendationCarousel() {
+/** Stable identity for "no Planned rail" — a `?? []` default would build a
+ *  fresh array every render and churn the memo/effect deps below. */
+const NO_PLANNED: MediaItem[] = []
+
+/**
+ * `planned` is Home's second rail. The category pages render this same
+ * component for their own picks row and pass none — they have no
+ * plan-to-watch shelf of their own, so they get the single-heading form
+ * this always had, and they leave the remembered tab (homeRailTab.ts)
+ * alone rather than resetting Home's to Recommended in passing.
+ */
+export function RecommendationCarousel({ planned }: { planned?: MediaItem[] }) {
   const { recommendations, homeFeedLoading, homeFeedError, refreshHomeFeed } = useAppState()
   // home:personalized's recommendations once it resolves; before that,
   // the picks this app last really showed (see lib/mediaHub/
   // startupSnapshot.ts). There is no third tier: the mock AI_PICKS pool
   // this used to fall back to is deleted, preview build included.
   const picks = recommendations
-  // The other half of this cell. Home cannot scroll and row 2 is the only
-  // place either rail can go, so they share it as tabs rather than as two
-  // sections stacked in the same grid area — which is what they were, one
-  // heading drawn over the other, for anyone with a non-empty list.
-  const planned = usePlannedTitles()
-  const [tab, setTab] = useState<'picks' | 'planned'>('picks')
+  // `planned` is the other half of this cell, fetched by HomeDashboard
+  // (which needs it too — see its restore gate). Home cannot scroll and
+  // row 2 is the only place either rail can go, so they share it as tabs
+  // rather than as two sections stacked in the same grid area, which is
+  // what they were: one heading drawn over the other, for anyone with a
+  // non-empty list.
+  //
+  // Seeded from the module, not from a constant: Home unmounts when a
+  // title is opened from it, and coming back to the wrong tab loses the
+  // browsing origin — see homeRailTab.ts.
+  const tabbed = planned !== undefined
+  const plannedItems = planned ?? NO_PLANNED
+  const [tab, setTab] = useState<HomeRailTab>(() => (tabbed ? activeHomeRailTab() : 'picks'))
   // A tab with nothing behind it is not offered, and cannot stay selected
   // if the list empties out from under it (unfollowing the last title).
-  const activeTab = tab === 'planned' && planned.length === 0 ? 'picks' : tab
+  const activeTab = tab === 'planned' && plannedItems.length === 0 ? 'picks' : tab
   const [skeletonDone, setSkeletonDone] = useState(false)
   // `loading` is derived, not stored: the fake reveal timer below is one
   // input, whether anything is actually in hand is the other.
@@ -51,6 +74,34 @@ export function RecommendationCarousel() {
   // row that has nothing left to reveal.
   const [canScrollForward, setCanScrollForward] = useState(false)
   const scrollerRef = useRef<HTMLUListElement>(null)
+
+  // Each rail keeps its own offset. One <ul> serves both, so without this
+  // the scroll position simply carried across a tab switch — landing the
+  // other rail wherever this one happened to be, or past its end.
+  const railOffsets = useRef<Record<HomeRailTab, number>>({ picks: 0, planned: 0 })
+  const shownTab = useRef<HomeRailTab>(activeTab)
+
+  function selectTab(next: HomeRailTab): void {
+    railOffsets.current[activeTab] = scrollerRef.current?.scrollLeft ?? 0
+    setActiveHomeRailTab(next)
+    setTab(next)
+  }
+
+  // Applied before paint so a switch never shows the outgoing rail's
+  // offset for a frame. Deliberately keyed on the tab actually rendered:
+  // a fall back to picks (the list emptied) is a switch like any other.
+  useLayoutEffect(() => {
+    if (shownTab.current === activeTab) return
+    shownTab.current = activeTab
+    if (scrollerRef.current) scrollerRef.current.scrollLeft = railOffsets.current[activeTab]
+  }, [activeTab])
+
+  // Keep the module in step when the fallback above overrides the stored
+  // tab, so the next mount does not try Planned again and re-lose a
+  // restore against a rail that is not there.
+  useEffect(() => {
+    if (tabbed && activeTab !== tab) setActiveHomeRailTab(activeTab)
+  }, [tabbed, activeTab, tab])
 
   // Staggered skeleton -> reveal on first mount, standing in for a real
   // "generating recommendations" round trip (spec section 15 / 18) — moot
@@ -92,7 +143,7 @@ export function RecommendationCarousel() {
     // the scroller's contents without any loading state in between, and a
     // short Planned list after a long picks row would otherwise keep an
     // arrow pointing at nothing.
-  }, [loading, picks, planned, activeTab])
+  }, [loading, picks, plannedItems, activeTab])
 
   // The arrows used to scroll a flat 380px regardless of how many cards
   // that actually covers — on a row this wide that's a fraction of one
@@ -146,12 +197,12 @@ export function RecommendationCarousel() {
           aria-selected={activeTab === 'picks'}
           aria-controls="home-rail-panel"
           className={`${styles.tab} ${activeTab === 'picks' ? styles.tabActive : ''}`}
-          onClick={() => setTab('picks')}
+          onClick={() => selectTab('picks')}
         >
           <Icon name="sparkle" />
           Recommended For You
         </button>
-        {planned.length > 0 && (
+        {plannedItems.length > 0 && (
           <button
             type="button"
             role="tab"
@@ -159,11 +210,11 @@ export function RecommendationCarousel() {
             aria-selected={activeTab === 'planned'}
             aria-controls="home-rail-panel"
             className={`${styles.tab} ${activeTab === 'planned' ? styles.tabActive : ''}`}
-            onClick={() => setTab('planned')}
+            onClick={() => selectTab('planned')}
           >
             <Icon name="tracked" />
             Planned
-            <span className={styles.tabCount}>{planned.length}</span>
+            <span className={styles.tabCount}>{plannedItems.length}</span>
           </button>
         )}
         {(activeTab === 'planned' || picks.length > 0) && (
@@ -232,7 +283,7 @@ export function RecommendationCarousel() {
             onKeyDown={handleKeyDown}
           >
             {activeTab === 'planned'
-              ? planned
+              ? plannedItems
                   .slice(0, PLANNED_ROW_LIMIT)
                   .map((media) => <MediaCard key={media.id} media={media} />)
               : loading

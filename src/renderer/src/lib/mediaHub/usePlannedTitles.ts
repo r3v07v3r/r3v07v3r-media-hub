@@ -17,7 +17,7 @@ import { useAppState } from '@renderer/context/AppStateContext'
 import { useCatalogByIds } from './useCatalogByIds'
 import type { MediaItem } from '@renderer/types'
 
-export function usePlannedTitles(): MediaItem[] {
+export function usePlannedTitles(): { items: MediaItem[]; loading: boolean } {
   const { myList, adaptCatalogItems, catalogKindStates } = useAppState()
   // From the INDEX by id (stage 4): the loaded catalog is a bounded
   // candidate pool now, and a planned title has every right to live
@@ -25,7 +25,7 @@ export function usePlannedTitles(): MediaItem[] {
   // sync losing titles. Same source My Stuff uses, same adapter — so a
   // title pulled in from a service shows the artwork and ratings this app
   // resolved for it, not the thinner remote record.
-  const { items } = useCatalogByIds(
+  return useCatalogByIds(
     myList,
     adaptCatalogItems,
     // Refetch when a kind settles — on a fresh database this query can
@@ -33,5 +33,4 @@ export function usePlannedTitles(): MediaItem[] {
     // not stand once titles exist.
     `${catalogKindStates.movie}:${catalogKindStates.series}:${catalogKindStates.anime}`
   )
-  return items
 }
