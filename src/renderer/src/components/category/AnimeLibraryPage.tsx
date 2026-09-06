@@ -6,6 +6,7 @@ import { useAppState } from '@renderer/context/AppStateContext'
 import { Icon } from '@renderer/components/icons/Icon'
 import { ArtworkImage } from '@renderer/components/media/ArtworkImage'
 import { resolveArtwork } from '@renderer/lib/artwork'
+import { parseRating } from '@shared/media-hub/catalogFields'
 import type { MediaItem } from '@renderer/types'
 import {
   applyCategoryFilters,
@@ -20,7 +21,8 @@ import {
   useCatalogBrowse,
   useCatalogKindTotals
 } from '@renderer/lib/mediaHub/useCatalogBrowse'
-import type { CatalogFacets, DeepScanEvent } from '@shared/media-hub/types'
+import type { CatalogFacets, CatalogItem, DeepScanEvent, MediaKind } from '@shared/media-hub/types'
+import { episodeToStart, episodeWatchKey } from '@shared/media-hub/nextEpisode'
 import { ANIME_CONFIG, type CategoryConfig } from '@renderer/lib/mediaHub/categoryConfig'
 import { useRestoreBrowsingOrigin } from '@renderer/lib/mediaHub/useRestoreBrowsingOrigin'
 import { useBatchReveal } from '@renderer/lib/mediaHub/useBatchReveal'
@@ -53,6 +55,18 @@ function mediaKindLabel(media: MediaItem): string {
   if (media.mediaKind === 'anime') return 'Anime'
   if (media.mediaKind === 'movie' || media.mediaType === 'movie') return 'Movie'
   return 'Series'
+}
+
+/** The one thing about a title worth reading off the grid at a glance:
+ *  have I seen this, or is it on the list to see. Both facts are already on
+ *  every MediaItem the shelves render (watched/completed from tracking
+ *  history, inMyList from My List), so no tile needs to fetch anything to
+ *  say so. Watched wins over planned when a title is somehow both — having
+ *  seen it is the more final of the two. */
+function watchState(media: MediaItem): 'watched' | 'planned' | null {
+  if (media.watched || media.completed) return 'watched'
+  if (media.inMyList) return 'planned'
+  return null
 }
 
 function uniqueItems(items: MediaItem[]): MediaItem[] {
@@ -156,11 +170,14 @@ function LibraryTile({
 }) {
   const artwork = resolveArtwork(media)
   const rating = score(media)
+  const state = watchState(media)
 
   return (
     <li>
       <article
-        className={`${styles.tile} ${selected ? styles.tileSelected : ''}`}
+        className={`${styles.tile} ${selected ? styles.tileSelected : ''} ${
+          state === 'watched' ? styles.tileWatched : state === 'planned' ? styles.tilePlanned : ''
+        }`}
         data-media-id={media.id}
         tabIndex={0}
         role="button"
@@ -172,7 +189,9 @@ function LibraryTile({
             onSelect(media)
           }
         }}
-        aria-label={`${media.title}. Select for details; double click to open.`}
+        aria-label={`${media.title}.${
+          state === 'watched' ? ' Watched.' : state === 'planned' ? ' Planned to watch.' : ''
+        } Select for details; double click to open.`}
       >
         <ArtworkImage
           className={styles.tileArtwork}
@@ -183,6 +202,20 @@ function LibraryTile({
           sizes="190px"
         />
         <div className={styles.tileShade} aria-hidden="true" />
+        {/* The state in colour, in the corner — the whole point is that a
+            shelf can be read without reading it. Named in the tile's
+            aria-label above rather than here, so the corner mark stays one
+            glyph rather than a second announcement of the same fact. */}
+        {state && (
+          <span
+            className={`${styles.tileState} ${
+              state === 'watched' ? styles.tileStateWatched : styles.tileStatePlanned
+            }`}
+            aria-hidden="true"
+          >
+            <Icon name={state === 'watched' ? 'check' : 'clock'} size={11} />
+          </span>
+        )}
         {rating && (
           <span className={styles.tileRating}>
             <Icon name="star" size={11} />
@@ -332,9 +365,133 @@ function EverythingSection({
   )
 }
 
+type DetailTab = 'details' | 'similar'
+
+/** What "Play now" is going to start, for a series or anime.
+ *
+ *  Computed with episodeToStart — the SAME function AppStateContext's
+ *  resolvePlaybackTarget runs when the button is actually pressed — so the
+ *  coordinate this panel shows and the one that plays cannot drift apart.
+ *  That also means it names the first episode again for a finished show
+ *  rather than showing nothing, because that is what pressing Play there
+ *  really does. */
+interface NextUpTarget {
+  season: number
+  episode: number
+  title: string
+  thumbnail?: string
+}
+
 function LibraryDetails({ media, config }: { media: MediaItem | null; config: CategoryConfig }) {
-  const { startPartyPlayback, toggleMyList, markContinueWatching, openDetail, resolvingMedia } =
-    useAppState()
+  const {
+    startPartyPlayback,
+    toggleMyList,
+    markContinueWatching,
+    openDetail,
+    resolvingMedia,
+    ratings,
+    adaptCatalogItems
+  } = useAppState()
+
+  const [tab, setTab] = useState<DetailTab>('details')
+  // The grid row this panel is handed comes from the browse index, which
+  // carries no Rotten Tomatoes figure and no episode list — both of those
+  // only exist on the full metadata record (see catalog.ts's metadata()).
+  // So the panel fetches that for whichever title is selected, and falls
+  // back to the row it already has until the fetch lands.
+  // Keyed by the id that was REQUESTED, not by the record's own: a title
+  // tracked under a Simkl id comes back as its resolved IMDb record (see
+  // catalog.ts's metadata()), so `item.id === media.id` is not a reliable
+  // "is this the selected title" test. The key also covers the one render
+  // between a new selection and the effect below clearing this.
+  const [detail, setDetail] = useState<{ id: string; item: CatalogItem } | null>(null)
+  const [nextUp, setNextUp] = useState<NextUpTarget | null>(null)
+  const [similar, setSimilar] = useState<MediaItem[]>([])
+  const [similarStatus, setSimilarStatus] = useState<'loading' | 'ready' | 'error'>('loading')
+
+  const mediaId = media?.id ?? null
+  const kind: MediaKind = media?.mediaKind ?? (media?.mediaType === 'movie' ? 'movie' : 'series')
+
+  useEffect(() => {
+    if (!mediaId) return
+    let cancelled = false
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- same "clear before the fetch starts" pattern MediaDetailPage uses, so a slow lookup can never show the previous title's episode against this one's poster
+    setDetail(null)
+    setNextUp(null)
+    const api = window.api?.mediaHub
+    if (!api) return
+    // Somebody arrowing along a shelf changes the selection several times a
+    // second. Without this pause every one of those would be a metadata and
+    // history round trip for a card they have already left.
+    const timer = setTimeout(() => {
+      void (async () => {
+        try {
+          const [item, tracking] = await Promise.all([
+            api.catalog.meta(kind, mediaId),
+            kind === 'movie' ? Promise.resolve(null) : api.tracking.list()
+          ])
+          if (cancelled) return
+          setDetail({ id: mediaId, item })
+          if (!tracking || !item.videos?.length) return
+          const watchedKeys = new Set<string>()
+          for (const row of tracking.history) {
+            if (String(row.id) !== String(mediaId)) continue
+            if (row.season == null || row.episode == null) continue
+            watchedKeys.add(episodeWatchKey(row.season, row.episode))
+          }
+          const target = episodeToStart(item.videos, watchedKeys)
+          const picked = item.videos.find(
+            (video) => video.season === target.season && video.episode === target.episode
+          )
+          setNextUp({
+            season: target.season,
+            episode: target.episode,
+            title: String(picked?.title ?? ''),
+            thumbnail: picked?.thumbnail
+          })
+        } catch {
+          // Nothing to surface: the panel already renders everything the
+          // grid row carried. A failed lookup costs the Rotten Tomatoes
+          // figure and the episode card, not the panel.
+        }
+      })()
+    }, 220)
+    return () => {
+      cancelled = true
+      clearTimeout(timer)
+    }
+  }, [mediaId, kind])
+
+  // Only once the tab is actually open — a suggestions call per selection
+  // would be a request for every card somebody clicks past.
+  useEffect(() => {
+    if (!mediaId || tab !== 'similar') return
+    let cancelled = false
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- as above
+    setSimilarStatus('loading')
+    const api = window.api?.mediaHub
+    if (!api) {
+      setSimilarStatus('error')
+      return
+    }
+    api.catalog
+      .related(kind, mediaId)
+      .then((items) => {
+        if (cancelled) return
+        setSimilar(adaptCatalogItems(items))
+        setSimilarStatus('ready')
+      })
+      .catch(() => {
+        if (!cancelled) setSimilarStatus('error')
+      })
+    return () => {
+      cancelled = true
+    }
+    // adaptCatalogItems intentionally excluded — its identity changes every
+    // time a My List/watched id moves anywhere in the app, and refetching
+    // suggestions for that would be a request per toggle.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mediaId, kind, tab])
 
   if (!media) {
     return (
@@ -348,106 +505,255 @@ function LibraryDetails({ media, config }: { media: MediaItem | null; config: Ca
   // The two fields carry the same number; prefer the one named for what it
   // is, and fall back so a future item with only the other still shows.
   const crowdRating = media.imdbRating?.toFixed(1) ?? score(media) ?? undefined
-  const rottenTomatoesRating = media.rottenTomatoesRating
+  // Only ever on the full metadata record — see the fetch above.
+  const rottenTomatoesRating =
+    detail?.id === media.id ? parseRating(detail.item.rottenTomatoesRating || '') : undefined
+  const yourRating = ratings.get(media.id) ?? 0
   const isResolving = resolvingMedia?.id === media.id
+  const episodic = kind !== 'movie'
 
   return (
     <aside className={`${styles.details} glass-panel`} aria-label={`${media.title} details`}>
-      <div className={styles.detailTabs} aria-hidden="true">
-        <span className={styles.detailTabActive}>Details</span>
-        <span>Story</span>
-        <span>Similar</span>
+      {/* Real tabs now, not decoration. Story is gone: it was a third label
+          with nothing behind it, and the one story surface that does exist
+          (the anime story bridge) lives on the full detail page. */}
+      <div className={styles.detailTabs} role="tablist" aria-label="Title panel">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={tab === 'details'}
+          className={tab === 'details' ? styles.detailTabActive : undefined}
+          onClick={() => setTab('details')}
+        >
+          Details
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={tab === 'similar'}
+          className={tab === 'similar' ? styles.detailTabActive : undefined}
+          onClick={() => setTab('similar')}
+        >
+          Similar
+        </button>
       </div>
-      <div className={styles.detailHero}>
-        <ArtworkImage
-          className={styles.detailPoster}
-          src={artwork.posterUrl ?? artwork.backdropUrl}
-          alt=""
-          fallbackTitle={media.title}
-          artTint={media.artTint}
-          sizes="120px"
+
+      {tab === 'similar' ? (
+        <LibrarySimilar
+          status={similarStatus}
+          items={similar}
+          config={config}
+          onOpen={(item) => openDetail(item)}
         />
-        <div>
-          <p className={styles.detailKicker}>Selected title</p>
-          <h2>{media.title}</h2>
-          <p>
-            {media.releaseYear ?? '—'} · {formatLibraryMeta(media)}
+      ) : (
+        <>
+          <div className={styles.detailHero}>
+            <ArtworkImage
+              className={styles.detailPoster}
+              src={artwork.posterUrl ?? artwork.backdropUrl}
+              alt=""
+              fallbackTitle={media.title}
+              artTint={media.artTint}
+              sizes="120px"
+            />
+            <div>
+              <p className={styles.detailKicker}>Selected title</p>
+              <h2>{media.title}</h2>
+              <p>
+                {media.releaseYear ?? '—'} · {formatLibraryMeta(media)}
+              </p>
+            </div>
+          </div>
+
+          {/* ONE crowd figure, not the same one twice. communityRating and
+              imdbRating are both filled from CatalogItem.rating (adapters.ts),
+              so "Community 7.8" beside "IMDb 7.8" was a single number wearing
+              two hats — which reads as two sources agreeing when there is only
+              ever one. Labelled by where it actually came from: IMDb for films
+              and series, whose ids ARE IMDb ids, and Kitsu for anime, which has
+              no IMDb id at all. Rotten Tomatoes joins it when OMDb is connected
+              and has an entry; that one is genuinely independent. Your own
+              score sits last, and only when you have given one. */}
+          <div className={styles.detailScores}>
+            {crowdRating && (
+              <RatingBadge source={ratingSourceFor(media.mediaKind)} value={crowdRating} />
+            )}
+            {rottenTomatoesRating !== undefined && (
+              <RatingBadge source="rottenTomatoes" value={`${rottenTomatoesRating}%`} />
+            )}
+            {yourRating > 0 && (
+              <span className={styles.yourScore}>
+                <Icon name="star" size={13} />
+                <b>{yourRating}</b>
+                <span className={styles.yourScoreOutOf}>/10</span>
+                <span className="visually-hidden">your rating</span>
+              </span>
+            )}
+            {!crowdRating && rottenTomatoesRating === undefined && yourRating === 0 && (
+              <span className={styles.noScores}>No ratings for this title yet.</span>
+            )}
+          </div>
+
+          <p className={styles.detailDescription}>
+            {media.description ?? 'No synopsis is available for this title yet.'}
           </p>
-        </div>
-      </div>
 
-      {/* ONE crowd figure, not the same one twice. communityRating and
-          imdbRating are both filled from CatalogItem.rating (adapters.ts),
-          so "Community 7.8" beside "IMDb 7.8" was a single number wearing
-          two hats — which reads as two sources agreeing when there is only
-          ever one. Labelled by where it actually came from: IMDb for films
-          and series, whose ids ARE IMDb ids, and Kitsu for anime, which has
-          no IMDb id at all. Rotten Tomatoes joins it when OMDb is connected
-          and has an entry; that one is genuinely independent. */}
-      <div className={styles.detailScores}>
-        {crowdRating && (
-          <RatingBadge source={ratingSourceFor(media.mediaKind)} value={crowdRating} />
-        )}
-        {rottenTomatoesRating !== undefined && (
-          <RatingBadge source="rottenTomatoes" value={`${rottenTomatoesRating}%`} />
-        )}
-        {!crowdRating && rottenTomatoesRating === undefined && (
-          <span>
-            <b>—</b>
-            Ratings unavailable
-          </span>
-        )}
-      </div>
+          <dl className={styles.detailFacts}>
+            <div>
+              <dt>Genres</dt>
+              <dd>{media.genres.length ? media.genres.slice(0, 3).join(' · ') : '—'}</dd>
+            </div>
+            <div>
+              <dt>Status</dt>
+              <dd>{media.status ?? 'Library title'}</dd>
+            </div>
+            <div>
+              <dt>
+                {media.mediaKind === 'movie' || media.mediaType === 'movie'
+                  ? 'Runtime'
+                  : 'Episodes'}
+              </dt>
+              <dd>{formatLibraryMeta(media)}</dd>
+            </div>
+          </dl>
 
-      <p className={styles.detailDescription}>
-        {media.description ?? 'No synopsis is available for this title yet.'}
-      </p>
+          {/* Pressing Play on a series card has always started the episode
+              you are actually up to (AppStateContext's resolvePlaybackTarget)
+              — it just never said which one, so the button was a guess you
+              had to take on trust. This is that episode, named and pictured,
+              directly above the button that starts it. */}
+          {episodic && nextUp && (
+            <div className={styles.nextUp}>
+              <ArtworkImage
+                className={styles.nextUpThumb}
+                src={nextUp.thumbnail || artwork.backdropUrl || artwork.posterUrl}
+                alt=""
+                fallbackTitle={media.title}
+                artTint={media.artTint}
+                sizes="120px"
+              />
+              <div className={styles.nextUpCopy}>
+                <span className={styles.nextUpKicker}>
+                  Next up · S{nextUp.season} E{nextUp.episode}
+                </span>
+                <span className={styles.nextUpTitle}>
+                  {nextUp.title || `Episode ${nextUp.episode}`}
+                </span>
+              </div>
+            </div>
+          )}
 
-      <dl className={styles.detailFacts}>
-        <div>
-          <dt>Genres</dt>
-          <dd>{media.genres.length ? media.genres.slice(0, 3).join(' · ') : '—'}</dd>
-        </div>
-        <div>
-          <dt>Status</dt>
-          <dd>{media.status ?? 'Library title'}</dd>
-        </div>
-        <div>
-          <dt>
-            {media.mediaKind === 'movie' || media.mediaType === 'movie' ? 'Runtime' : 'Episodes'}
-          </dt>
-          <dd>{formatLibraryMeta(media)}</dd>
-        </div>
-      </dl>
-
-      <div className={styles.detailActions}>
-        <button
-          type="button"
-          className={styles.primaryAction}
-          onClick={() => startPartyPlayback(media)}
-          disabled={isResolving}
-        >
-          <Icon name="play" size={15} />
-          {isResolving ? 'Preparing…' : 'Play now'}
-        </button>
-        <button type="button" className={styles.action} onClick={() => openDetail(media)}>
-          <Icon name="info" size={15} />
-          Open full details
-        </button>
-        <button type="button" className={styles.action} onClick={() => toggleMyList(media)}>
-          <Icon name={media.inMyList ? 'check' : 'plus'} size={15} />
-          {media.inMyList ? 'Planned' : 'Plan to Watch'}
-        </button>
-        <button
-          type="button"
-          className={styles.action}
-          onClick={() => markContinueWatching(media.id, !media.watched, media)}
-        >
-          <Icon name={media.watched ? 'eye-off' : 'check'} size={15} />
-          {media.watched ? 'Mark as unwatched' : 'Mark as watched'}
-        </button>
-      </div>
+          <div className={styles.detailActions}>
+            <button
+              type="button"
+              className={styles.primaryAction}
+              onClick={() => startPartyPlayback(media)}
+              disabled={isResolving}
+            >
+              <Icon name="play" size={15} />
+              {isResolving
+                ? 'Preparing…'
+                : episodic && nextUp
+                  ? `Play S${nextUp.season} E${nextUp.episode}`
+                  : 'Play now'}
+            </button>
+            <button type="button" className={styles.action} onClick={() => openDetail(media)}>
+              <Icon name="info" size={15} />
+              Open full details
+            </button>
+            {/* Both toggles carry their state in colour as well as in words
+                — planned in the library's own cyan, watched in green, the
+                same two colours the grid tiles use — so a glance answers
+                "have I seen this" without reading anything. */}
+            <button
+              type="button"
+              className={`${styles.action} ${media.inMyList ? styles.actionPlanned : ''}`}
+              onClick={() => toggleMyList(media)}
+            >
+              <Icon name={media.inMyList ? 'check' : 'plus'} size={15} />
+              {media.inMyList ? 'Planned' : 'Plan to Watch'}
+            </button>
+            <button
+              type="button"
+              className={`${styles.action} ${media.watched ? styles.actionWatched : ''}`}
+              onClick={() => markContinueWatching(media.id, !media.watched, media)}
+            >
+              <Icon name={media.watched ? 'eye-off' : 'check'} size={15} />
+              {media.watched ? 'Mark as unwatched' : 'Mark as watched'}
+            </button>
+          </div>
+        </>
+      )}
     </aside>
+  )
+}
+
+/** The Similar tab: the same catalog:related suggestions the full detail
+ *  page carousels, as a list sized for the rail. Opening one leaves the
+ *  library for that title's own page — a suggestion is usually not in the
+ *  shelves behind this panel, so there is nothing here to select it in. */
+function LibrarySimilar({
+  status,
+  items,
+  config,
+  onOpen
+}: {
+  status: 'loading' | 'ready' | 'error'
+  items: MediaItem[]
+  config: CategoryConfig
+  onOpen: (media: MediaItem) => void
+}) {
+  if (status === 'loading') {
+    return (
+      <div className={styles.similarList} aria-busy="true">
+        {[0, 1, 2, 3].map((i) => (
+          <span key={i} className={styles.similarSkeleton} />
+        ))}
+      </div>
+    )
+  }
+  if (status === 'error') {
+    return <p className={styles.noScores}>Couldn&apos;t load suggestions right now.</p>
+  }
+  if (items.length === 0) {
+    return (
+      <p className={styles.noScores}>
+        No similar {config.pluralLabel.toLowerCase()} found for this one.
+      </p>
+    )
+  }
+  return (
+    <ul className={styles.similarList}>
+      {items.slice(0, 10).map((item) => {
+        const artwork = resolveArtwork(item)
+        return (
+          <li key={item.id}>
+            <button
+              type="button"
+              className={styles.similarRow}
+              data-media-id={item.id}
+              onClick={() => onOpen(item)}
+            >
+              <ArtworkImage
+                className={styles.similarThumb}
+                src={artwork.posterUrl ?? artwork.thumbnailUrl}
+                alt=""
+                fallbackTitle={item.title}
+                artTint={item.artTint}
+                sizes="46px"
+              />
+              <span className={styles.similarCopy}>
+                <span className={styles.similarTitle}>{item.title}</span>
+                <span className={styles.similarMeta}>
+                  {item.releaseYear ?? 'New'}
+                  {item.communityRating ? ` · ★ ${item.communityRating.toFixed(1)}` : ''}
+                </span>
+              </span>
+            </button>
+          </li>
+        )
+      })}
+    </ul>
   )
 }
 

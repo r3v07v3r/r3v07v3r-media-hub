@@ -21,12 +21,17 @@
   height: 9px;
 }
 
+/* Two meanings, two colours: violet for "part way through", green for
+   "seen it". Watched used to be cyan, which put a finished film and a
+   half-finished one in the same cool half of the palette and made the one
+   thing worth spotting on a grid — what is already done — the slowest
+   thing to spot. Watched and completed are both "done", so they share the
+   green; the label on the pill is what separates a finished film from a
+   finished show. */
 .inProgress {
   background: rgba(139, 92, 246, 0.82);
 }
-.watched {
-  background: rgba(56, 193, 255, 0.82);
-}
+.watched,
 .completed {
   background: rgba(94, 224, 130, 0.85);
   color: #06210f;

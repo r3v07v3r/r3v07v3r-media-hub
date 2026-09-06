@@ -33,10 +33,18 @@ export interface DetailHeroProps {
   config: DetailAdapterConfig
   continueEntry: ContinueWatchingItem | undefined
   nextEpisode: Episode | null
+  /** True once every aired, playable episode is watched — the state the
+   *  hero's next-up card degrades to instead of simply vanishing, so
+   *  "there is nothing left to play" stays visible now that the separate
+   *  Next-to-Play panel beside About is gone. */
+  allEpisodesWatched: boolean
   trailer: Trailer | undefined
   showTrailer: boolean
   onToggleTrailer: () => void
   onPlay: () => void
+  /** Plays one specific episode, as opposed to onPlay's "resume wherever
+   *  this title left off" — the next-up card always means that episode. */
+  onPlayEpisode: (episode: Episode) => void
 }
 
 export function DetailHero({
@@ -44,10 +52,12 @@ export function DetailHero({
   config,
   continueEntry,
   nextEpisode,
+  allEpisodesWatched,
   trailer,
   showTrailer,
   onToggleTrailer,
-  onPlay
+  onPlay,
+  onPlayEpisode
 }: DetailHeroProps) {
   const { resolvingMedia } = useAppState()
   const artwork = resolveArtwork(media)
@@ -282,6 +292,49 @@ export function DetailHero({
               than no entry point. Play and Trailer are what this row is
               for. */}
         </div>
+
+        {/* The next unwatched episode, in the hero itself rather than in a
+            panel beside About: the whole card is the play control for it,
+            directly under the action row where the eye already is. Only
+            the "here is the next episode" state and the caught-up note
+            moved here — the old panel's third state (a generic play card
+            for the title when there is no episode list at all) was pure
+            duplication of the Play button immediately above it. */}
+        {config.isEpisodic && nextEpisode && (
+          <button
+            type="button"
+            className={styles.nextUpCard}
+            onClick={() => onPlayEpisode(nextEpisode)}
+            disabled={isResolving}
+            aria-busy={isResolving}
+          >
+            <ArtworkImage
+              src={nextEpisode.thumbnail || artwork.thumbnailUrl || artwork.backdropUrl}
+              alt=""
+              fallbackTitle={media.title}
+              artTint={media.artTint}
+              className={styles.nextUpThumb}
+            />
+            <div className={styles.nextUpInfo}>
+              <span className={styles.nextUpLabel}>
+                <Icon name="play" size={12} />
+                Next Up · S{nextEpisode.season} E{nextEpisode.episode}
+              </span>
+              <span className={styles.nextUpTitle}>
+                {nextEpisode.title || `Episode ${nextEpisode.episode}`}
+              </span>
+              {nextEpisode.description && (
+                <span className={styles.nextUpDescription}>{nextEpisode.description}</span>
+              )}
+            </div>
+          </button>
+        )}
+        {config.isEpisodic && !nextEpisode && allEpisodesWatched && (
+          <p className={styles.caughtUp}>
+            <Icon name="check" size={13} />
+            You&apos;re all caught up — every known episode is watched.
+          </p>
+        )}
       </div>
     </section>
   )

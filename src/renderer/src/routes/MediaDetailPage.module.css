@@ -1,8 +1,8 @@
 /* Shared movie/series/anime detail page shell. Two-column grid below the
    back button (main content column + a narrower right sidebar). The wide
-   left column carries Next-to-Play/episodes/about plus genres and the
-   similar-titles carousel underneath; the right column is ONE continuous
-   sidebar (progress/ratings/collection/where-to-watch/request/story),
+   left column carries about, genres, the episode grid and the
+   similar-titles carousel underneath it; the right column is ONE
+   continuous sidebar (progress/ratings/collection/request/story),
    spanning both the hero row and the main row — NOT a hero-row/main-row
    split. That split used to leave a large gap in the middle of the right
    column: whatever sat in the hero row was fixed to match the hero's own
@@ -38,18 +38,6 @@
   display: flex;
   flex-direction: column;
   gap: 22px;
-}
-
-.overviewRow {
-  min-width: 0;
-  display: grid;
-  grid-template-columns: minmax(0, 1.65fr) minmax(420px, 1fr);
-  gap: 16px;
-  align-items: stretch;
-}
-
-.overviewRow > * {
-  min-width: 0;
 }
 
 .sidebar {
@@ -140,9 +128,5 @@
       'main'
       'sidebar';
     overflow-y: auto;
-  }
-
-  .overviewRow {
-    grid-template-columns: 1fr;
   }
 }

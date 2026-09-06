@@ -332,6 +332,46 @@
     0 0 0 1px rgba(155, 92, 255, 0.32);
   outline: none;
 }
+/* Watch state, in colour, on the tile itself. A single-class weight on
+   purpose: .tile:hover / .tileSelected above are two classes, so hovering
+   or selecting a tile still wins the border and this never fights it. */
+.tileWatched {
+  border-color: rgba(39, 230, 154, 0.55);
+}
+.tilePlanned {
+  border-color: rgba(80, 230, 255, 0.45);
+}
+.tileState {
+  position: absolute;
+  z-index: 2;
+  top: 9px;
+  right: 9px;
+  display: grid;
+  place-items: center;
+  width: 21px;
+  height: 21px;
+  border-radius: 50%;
+  box-shadow: 0 2px 8px -2px rgba(0, 0, 0, 0.6);
+  transition: opacity var(--transition-fast);
+}
+.tileStateWatched {
+  background: rgba(39, 230, 154, 0.92);
+  color: #05271a;
+}
+.tileStatePlanned {
+  background: rgba(80, 230, 255, 0.92);
+  color: #042630;
+}
+/* .tileOpen takes this corner on hover — two marks stacked on top of each
+   other would be neither. */
+.tile:hover .tileState,
+.tile:focus-visible .tileState {
+  opacity: 0;
+}
+.tileState svg {
+  width: 11px;
+  height: 11px;
+}
 .tileArtwork {
   position: absolute;
   inset: 0;
@@ -486,15 +526,21 @@
 }
 .detailTabs {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(2, 1fr);
   margin: 0 -16px 14px;
   border-bottom: 1px solid var(--border-subtle);
   color: var(--text-muted);
   font-size: 11px;
   text-align: center;
 }
-.detailTabs span {
+.detailTabs button {
   padding: 15px 4px 11px;
+  color: inherit;
+  font: inherit;
+  transition: color var(--transition-fast);
+}
+.detailTabs button:hover {
+  color: var(--text-primary);
 }
 .detailTabs .detailTabActive {
   color: var(--text-primary);
@@ -535,27 +581,42 @@
   border-top: 1px solid var(--border-subtle);
   border-bottom: 1px solid var(--border-subtle);
 }
-.detailScores span {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  color: var(--text-muted);
-  font-size: 9px;
+/* RatingBadge draws itself — wordmark, then figure, on one line. The rules
+   here used to force every span in this row to `flex-direction: column` and
+   absolutely position every svg inside it, which stacked the badge and,
+   once a second badge could appear, would have flung the Rotten Tomatoes
+   mark to the corner of the whole (position: sticky) panel. Layout of the
+   row, nothing about the badges in it. */
+.detailScores {
+  align-items: center;
+  font-size: 12px;
 }
-.detailScores span:first-child {
-  position: relative;
-  padding-left: 20px;
+.yourScore {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px 2px 6px;
+  border-radius: var(--radius-pill);
+  border: 1px solid rgba(245, 197, 24, 0.45);
+  background: rgba(245, 197, 24, 0.12);
+  color: var(--text-primary);
+  white-space: nowrap;
 }
-.detailScores svg {
-  position: absolute;
-  left: 0;
-  top: 1px;
+.yourScore svg {
   color: var(--accent-yellow);
 }
-.detailScores b {
-  color: var(--text-primary);
-  font-size: 16px;
-  line-height: 1;
+.yourScore b {
+  font-size: 13px;
+  font-weight: 700;
+}
+.yourScoreOutOf {
+  color: var(--text-muted);
+  font-size: 10px;
+}
+.noScores {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 11px;
 }
 .detailDescription {
   display: -webkit-box;
@@ -588,6 +649,119 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* The episode Play is going to start. Sits directly above the button so
+   the picture and the coordinate are read as part of pressing it, not as a
+   separate fact somewhere else on the panel. */
+.nextUp {
+  display: grid;
+  grid-template-columns: 96px minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+  margin-bottom: 10px;
+  padding: 8px;
+  border-radius: 12px;
+  border: 1px solid var(--border-subtle);
+  background: rgba(5, 10, 20, 0.4);
+}
+.nextUpThumb {
+  width: 96px;
+  aspect-ratio: 16 / 9;
+  border-radius: 7px;
+  object-fit: cover;
+}
+.nextUpCopy {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+.nextUpKicker {
+  color: var(--library-cyan);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.nextUpTitle {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+/* The Similar tab. A rail this narrow reads best as rows, which is also
+   what the shelves behind it are not — so a suggestion never looks like
+   something already on the page. */
+.similarList {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+}
+.similarRow {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px;
+  border-radius: 10px;
+  text-align: left;
+  transition: background var(--transition-fast);
+}
+.similarRow:hover,
+.similarRow:focus-visible {
+  background: rgba(80, 230, 255, 0.08);
+}
+.similarThumb {
+  flex: 0 0 auto;
+  width: 46px;
+  aspect-ratio: 2 / 3;
+  border-radius: 7px;
+  object-fit: cover;
+}
+.similarCopy {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.similarTitle {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 600;
+}
+.similarMeta {
+  color: var(--text-muted);
+  font-size: 10px;
+}
+.similarSkeleton {
+  height: 69px;
+  border-radius: 10px;
+  background: linear-gradient(
+    100deg,
+    rgba(255, 255, 255, 0.03),
+    rgba(255, 255, 255, 0.07),
+    rgba(255, 255, 255, 0.03)
+  );
+  background-size: 200% 100%;
+  animation: librarySkeleton 1.5s ease-in-out infinite;
+}
+@keyframes librarySkeleton {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
+}
+
 .detailActions {
   display: grid;
   gap: 7px;
@@ -630,6 +804,19 @@
   color: var(--text-primary);
   border-color: rgba(80, 230, 255, 0.5);
   background: rgba(80, 230, 255, 0.08);
+}
+/* On-state colour for the two toggles, matching the grid tiles: green for
+   seen, the library's cyan for planned. Declared after .action:hover with
+   the same one-class weight, so hovering still reads as hovering. */
+.actionWatched {
+  color: var(--accent-green);
+  border-color: rgba(39, 230, 154, 0.5);
+  background: rgba(39, 230, 154, 0.12);
+}
+.actionPlanned {
+  color: var(--library-cyan);
+  border-color: rgba(80, 230, 255, 0.45);
+  background: rgba(80, 230, 255, 0.1);
 }
 
 @media (max-width: 1439px) {

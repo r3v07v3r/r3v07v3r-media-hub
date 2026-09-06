@@ -402,6 +402,102 @@
   height: 15px;
 }
 
+/* Next-to-play, folded into the hero's own content column (see
+   DetailHero.tsx). The whole card is the button — a separate "Play Next"
+   control inside it would be the third play affordance in the same corner
+   of the screen, after the hero's primary Play/Resume button and the
+   episode grid's own tiles. Sits at the end of the content stack so the
+   copy above it keeps its reading order; .content's max-width is what
+   keeps it from stretching across the banner. */
+.nextUpCard {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  margin-top: 10px;
+  padding: 10px 16px 10px 10px;
+  text-align: left;
+  border-radius: var(--radius-medium);
+  border: 1px solid var(--border-subtle);
+  background: rgba(6, 11, 20, 0.62);
+  backdrop-filter: blur(10px);
+  transition:
+    border-color var(--transition-fast),
+    background var(--transition-fast),
+    transform var(--transition-fast);
+}
+.nextUpCard:hover,
+.nextUpCard:focus-visible {
+  border-color: var(--border-active);
+  background: rgba(10, 16, 28, 0.8);
+  transform: translateY(-1px);
+}
+.nextUpCard:disabled {
+  opacity: 0.7;
+  cursor: default;
+  transform: none;
+}
+.nextUpThumb {
+  flex: 0 0 auto;
+  width: 124px;
+  aspect-ratio: 16 / 9;
+  border-radius: var(--radius-small);
+  overflow: hidden;
+}
+.nextUpInfo {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.nextUpLabel {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-family: var(--font-display);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 1.4px;
+  text-transform: uppercase;
+  color: var(--accent-cyan);
+}
+.nextUpLabel svg {
+  width: 12px;
+  height: 12px;
+}
+.nextUpTitle {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.nextUpDescription {
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+}
+
+.caughtUp {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 10px 0 0;
+  font-size: 13.5px;
+  color: var(--text-secondary);
+}
+.caughtUp svg {
+  width: 13px;
+  height: 13px;
+  color: var(--accent-cyan);
+}
+
 @media (max-width: 1439px) {
   .hero {
     padding: 26px 24px;
@@ -416,6 +512,13 @@
 
 @media (max-width: 1099px) {
   .description {
+    display: none;
+  }
+  /* Same reasoning as .description above — at this width the content
+     column is too narrow to spend three more lines on synopsis text. The
+     card itself stays: its still, episode number and title are the part
+     that makes it a play target. */
+  .nextUpDescription {
     display: none;
   }
 }
