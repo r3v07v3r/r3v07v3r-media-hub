@@ -30,7 +30,6 @@ import { demoOnlyTitleMessage, hasExpressibleSimklId } from '@shared/media-hub/s
 import type { MediaItem } from '@renderer/types'
 import { ContextBackButton } from '@renderer/components/detail/ContextBackButton'
 import { DetailHero } from '@renderer/components/detail/DetailHero'
-import { NextToPlayPanel } from '@renderer/components/detail/NextToPlayPanel'
 import { AboutPanel } from '@renderer/components/detail/AboutPanel'
 import { EpisodesSection } from '@renderer/components/detail/EpisodesSection'
 import type { EpisodeResume } from '@renderer/components/detail/EpisodesSection'
@@ -628,40 +627,34 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
         config={config}
         continueEntry={continueEntry}
         nextEpisode={nextEpisode}
+        // Judged against the episodes that have AIRED and count: a show
+        // whose every episode is still to come has nothing to play next,
+        // but nobody has watched it either.
+        allEpisodesWatched={playableInOrder.length > 0 && !nextEpisode}
         trailer={catalogItem?.trailers?.[0]}
         showTrailer={showTrailer}
         onToggleTrailer={() => setShowTrailer((v) => !v)}
         onPlay={() =>
           handlePlay(continueEntry?.media.seasonNumber, continueEntry?.media.episodeNumber)
         }
+        onPlayEpisode={(ep) => handlePlay(ep.season, ep.episode)}
       />
 
       <div className={styles.main}>
         {config.isEpisodic ? (
           <>
-            <div className={styles.overviewRow}>
-              <AboutPanel media={media} config={config} />
-              <NextToPlayPanel
-                media={media}
-                nextEpisode={nextEpisode}
-                // Judged against the episodes that have AIRED and count:
-                // a show whose every episode is still to come has nothing
-                // to play next, but nobody has watched it either.
-                allWatched={playableInOrder.length > 0 && !nextEpisode}
-                onPlay={(ep) => ep && handlePlay(ep.season, ep.episode)}
-              />
-            </div>
-            {/* Ahead of the episode grid, not after it — a long-running
-                series/anime can have hundreds of episode cards below, and
-                these panels used to sit in the sidebar precisely so they
-                stayed reachable without scrolling past all of them. */}
+            {/* About runs the full width of this column now — the
+                Next-to-Play panel that used to sit beside it lives in the
+                hero (see DetailHero's next-up card), so the synopsis, cast
+                and story tags get the whole width instead of ~60% of it. */}
+            <AboutPanel media={media} config={config} />
+            {/* Genres stays ahead of the episode grid: a long-running
+                series can have hundreds of episode cards below it, and a
+                genre chip is a navigation control, not something to read
+                at the end. Similar goes below the grid instead, per the
+                request — it's the "what next, after this one" row, which
+                belongs at the end of the page. */}
             <GenresPanel genres={media.genres} onSelectGenre={handleGenreSelect} />
-            <SimilarPanel
-              status={relatedStatus}
-              items={related}
-              config={config}
-              onSelect={(item) => openDetail(item, media.title)}
-            />
             <EpisodesSection
               mediaId={media.id}
               showTitle={media.title}
@@ -679,13 +672,15 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
               onMarkSeason={handleMarkSeasonWatched}
               status={metaStatus}
             />
+            <SimilarPanel
+              status={relatedStatus}
+              items={related}
+              config={config}
+              onSelect={(item) => openDetail(item, media.title)}
+            />
           </>
         ) : (
           <>
-            {/* Movies skip NextToPlayPanel entirely (no isEpisodic branch
-                above) — its movie-specific "Ready to Watch"/"Resume
-                Watching" variant was just a second Play button duplicating
-                the hero's own, per the user's own request. */}
             <AboutPanel media={media} config={config} />
             <GenresPanel genres={media.genres} onSelectGenre={handleGenreSelect} />
             <SimilarPanel
