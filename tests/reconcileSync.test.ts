@@ -18,7 +18,11 @@ import {
 import {
   batchHistoryPayload,
   hasExpressibleSimklId,
+  hasSimklContent,
+  historyPayload,
   idsForCatalogId,
+  scrobblePayload,
+  seasonHistoryPayload,
   unmatchedCatalogIds
 } from '../src/main/media-hub/simkl'
 
@@ -232,6 +236,49 @@ check('idsForCatalogId matches what a push would actually send', () => {
   assert.deepEqual(idsForCatalogId('tt4877122'), { imdb: 'tt4877122' })
   assert.deepEqual(idsForCatalogId('kitsu:7'), { kitsu: 7 })
   assert.deepEqual(idsForCatalogId('m-13'), {})
+})
+
+// --- what may be SENT to Simkl at all ---------------------------------------
+
+check('a title Simkl has no id for produces no push body', () => {
+  // The local write for such a title goes ahead — it is a real title, and
+  // this app's own database is the record. What must not happen is a push
+  // that carries `ids: {}` and a title/year, which asks Simkl to guess:
+  // it can land on the wrong entry, and even a right one produces a row
+  // no later diff can join back to this id.
+  const unmappable = { id: 'simkl:250822', type: 'series' as const, title: 'Silo', year: '2023' }
+  assert.equal(hasSimklContent(historyPayload(unmappable, { season: 3, episode: 10 })), false)
+  assert.equal(hasSimklContent(seasonHistoryPayload(unmappable, 3, [1, 2, 3])), false)
+  assert.equal(scrobblePayload(unmappable, { season: 3, episode: 10 }, 40), null)
+})
+
+check('a real id still produces one, unchanged', () => {
+  const real = { id: 'tt14688458', type: 'series' as const, title: 'Silo', year: '2023' }
+  const payload = historyPayload(real, { season: 3, episode: 10 })
+  assert.equal(hasSimklContent(payload), true)
+  assert.deepEqual(payload.shows?.[0].ids, { imdb: 'tt14688458' })
+  assert.equal(payload.shows?.[0].seasons[0].number, 3)
+  assert.notEqual(scrobblePayload(real, { season: 3, episode: 10 }, 40), null)
+})
+
+check('a batch drops the unaddressable rows and keeps the rest', () => {
+  const payload = batchHistoryPayload([
+    { item: { id: 'tt14688458', type: 'series', title: 'Silo', year: '2023' } },
+    { item: { id: 'simkl:250822', type: 'series', title: 'Silo', year: '2023' } },
+    { item: { id: 'm-13', type: 'movie', title: 'Ex Machina', year: '2014' } }
+  ])
+  assert.equal(payload.shows?.length, 1)
+  assert.equal(payload.movies, undefined)
+  assert.equal(hasSimklContent(payload), true)
+})
+
+check('a batch of nothing addressable is not worth sending', () => {
+  assert.equal(
+    hasSimklContent(
+      batchHistoryPayload([{ item: { id: 'm-13', type: 'movie', title: 'Ex Machina' } }])
+    ),
+    false
+  )
 })
 
 console.log(`\n${pass} passing`)

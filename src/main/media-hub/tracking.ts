@@ -98,11 +98,13 @@ import type { RemoteList } from '../../shared/media-hub/types'
 import {
   batchHistoryPayload,
   hasExpressibleSimklId,
+  hasSimklContent,
   historyPayload,
   scrobblePayload,
   seasonHistoryPayload,
   unmatchedCatalogIds,
   type PlaybackPosition,
+  type SimklHistoryPayload,
   type SimklHistoryResponse,
   type SimklPushItem
 } from './simkl'
@@ -172,10 +174,17 @@ function connectedAccountsStamp(): string {
 
 async function syncSimklHistory(
   pathname: string,
-  body: unknown,
+  body: SimklHistoryPayload,
   priority: TaskPriority = 'interactive'
 ): Promise<SimklSyncResult> {
   if (!simklCredentials().accessToken) return { simklSynced: false }
+  // An empty payload is a title Simkl has no id for (see historyPayload).
+  // Posting it anyway would ask Simkl to match by title and year, which
+  // changes an account on a guess and produces a row this app can never
+  // join back to its own — so the local write stands alone and nothing
+  // goes out. Not an error: there is nothing wrong with the title, only
+  // with what can be said about it to this particular service.
+  if (!hasSimklContent(body)) return { simklSynced: false }
   try {
     await simklRequest(pathname, { method: 'POST', body: JSON.stringify(body) }, priority)
     return { simklSynced: true }
@@ -753,13 +762,17 @@ async function pushPendingToServices(priority: TaskPriority): Promise<Set<string
     // other's token.
     if (disowned()) return new Set()
     const items = group.map(pushItemFor)
+    // Nothing addressable in the whole group. In practice unreachable —
+    // only ids that passed hasExpressibleSimklId reach this queue — but
+    // an empty body would come back with an empty not_found, which this
+    // loop would read as "every row confirmed pushed" and record as a
+    // first-hand fact about an account nothing was sent to.
+    const body = batchHistoryPayload(items.map((item) => ({ item })))
+    if (!hasSimklContent(body)) continue
     try {
       const response = await simklRequest<SimklHistoryResponse>(
         pathname,
-        {
-          method: 'POST',
-          body: JSON.stringify(batchHistoryPayload(items.map((item) => ({ item }))))
-        },
+        { method: 'POST', body: JSON.stringify(body) },
         priority
       )
       const unmatched = new Set(unmatchedCatalogIds(response, items))
@@ -1858,11 +1871,14 @@ export function registerTrackingIpc(): void {
       let simklError: string | undefined
       await remotePushQueue.run(remotePushKey(payload.item), async () => {
         const trakt = pushTraktScrobble(payload.item, payload.playback || {}, action, progress)
-        if (simklConnected) {
+        // Null for a title Simkl has no id for — the same refusal to guess
+        // by title/year that syncSimklHistory makes above.
+        const scrobble = scrobblePayload(payload.item, payload.playback || {}, progress)
+        if (simklConnected && scrobble) {
           try {
             await simklRequest(`/scrobble/${action}`, {
               method: 'POST',
-              body: JSON.stringify(scrobblePayload(payload.item, payload.playback || {}, progress))
+              body: JSON.stringify(scrobble)
             })
           } catch (error) {
             // Never thrown. A scrobble is a courtesy to a third-party
