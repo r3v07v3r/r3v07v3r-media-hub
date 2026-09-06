@@ -15,21 +15,29 @@ import styles from './HomeDashboard.module.css'
 // which no longer renders a system-monitor widget).
 export function HomeDashboard() {
   // Home is a common origin for opening a title's detail page too
-  // (Continue Watching, AI Picks, mood results) — restores scroll/rail/
-  // focus the same way CategoryPage does. Home's own content (catalog,
-  // recommendations) is already app-level/global state, same reasoning
-  // as CategoryPage's `true` here.
-  // Fetched HERE rather than inside the carousel so the row and the
-  // restore gate below read one answer, not two fetches of it.
-  const { items: planned, loading: plannedLoading } = usePlannedTitles()
+  // (Continue Watching, AI Picks, Planned, mood results) — restores
+  // scroll/rail/focus the same way CategoryPage does.
+  //
+  // Planned is fetched HERE rather than inside the carousel so the row
+  // and the restore gate below read one answer, not two fetches of it.
+  // Home's other content is app-level state that is simply there, which
+  // is why CategoryPage can pass a bare `true` and this cannot.
+  const planned = usePlannedTitles()
   // "Ready" has to mean the rail the origin was captured FROM is on
   // screen. Restoration runs two frames after mount and consumes the
   // pending origin whether or not it found anything, so returning to the
   // Planned tab while its titles were still in flight lost the position
-  // outright. Gated only for that tab: useCatalogByIds keeps `loading`
-  // up for a fetch that never answers, and a Recommended-tab restore
-  // must not be held hostage to it.
-  useRestoreBrowsingOrigin(activeHomeRailTab() !== 'planned' || !plannedLoading)
+  // outright.
+  //
+  // Two escapes from the wait, because useCatalogByIds keeps `loading` up
+  // for a fetch that never answers and this must not become a way for
+  // Home to stop restoring at all: a tab other than Planned has nothing
+  // to wait for, and a Planned rail that already has rows on screen —
+  // last answer's, held deliberately while a refetch is out — is a rail
+  // the restore can land in.
+  useRestoreBrowsingOrigin(
+    activeHomeRailTab() !== 'planned' || !planned.loading || planned.items.length > 0
+  )
 
   return (
     <div className={styles.dashboard}>

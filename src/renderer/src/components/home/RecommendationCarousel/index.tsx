@@ -27,6 +27,14 @@ const PLANNED_ROW_LIMIT = 20
  *  fresh array every render and churn the memo/effect deps below. */
 const NO_PLANNED: MediaItem[] = []
 
+/** Home's Planned rail, exactly as usePlannedTitles reports it. `loading`
+ *  is part of the contract, not an implementation detail: an empty list
+ *  that is still being fetched must not be mistaken for an empty list. */
+export interface PlannedRail {
+  items: MediaItem[]
+  loading: boolean
+}
+
 /**
  * `planned` is Home's second rail. The category pages render this same
  * component for their own picks row and pass none — they have no
@@ -34,7 +42,7 @@ const NO_PLANNED: MediaItem[] = []
  * this always had, and they leave the remembered tab (homeRailTab.ts)
  * alone rather than resetting Home's to Recommended in passing.
  */
-export function RecommendationCarousel({ planned }: { planned?: MediaItem[] }) {
+export function RecommendationCarousel({ planned }: { planned?: PlannedRail }) {
   const { recommendations, homeFeedLoading, homeFeedError, refreshHomeFeed } = useAppState()
   // home:personalized's recommendations once it resolves; before that,
   // the picks this app last really showed (see lib/mediaHub/
@@ -52,11 +60,23 @@ export function RecommendationCarousel({ planned }: { planned?: MediaItem[] }) {
   // title is opened from it, and coming back to the wrong tab loses the
   // browsing origin — see homeRailTab.ts.
   const tabbed = planned !== undefined
-  const plannedItems = planned ?? NO_PLANNED
+  const plannedItems = planned?.items ?? NO_PLANNED
   const [tab, setTab] = useState<HomeRailTab>(() => (tabbed ? activeHomeRailTab() : 'picks'))
   // A tab with nothing behind it is not offered, and cannot stay selected
   // if the list empties out from under it (unfollowing the last title).
-  const activeTab = tab === 'planned' && plannedItems.length === 0 ? 'picks' : tab
+  //
+  // "Nothing behind it" means an ANSWERED fetch that came back empty, not
+  // merely an empty array. catalog:byIds starts every mount empty, so
+  // without the loading term this fell back to Recommended for the length
+  // of the request on exactly the path that matters — coming back to
+  // Planned from a title opened out of it. The rail stays mounted and
+  // empty for that moment instead, which is also what keeps its
+  // `data-rail-id` in the DOM for restoreBrowsingOrigin to find.
+  const plannedEmpty = plannedItems.length === 0 && !planned?.loading
+  const activeTab = tab === 'planned' && plannedEmpty ? 'picks' : tab
+  // Offered whenever it is reachable: it has titles, or it is the tab in
+  // hand while they load.
+  const showPlannedTab = plannedItems.length > 0 || activeTab === 'planned'
   const [skeletonDone, setSkeletonDone] = useState(false)
   // `loading` is derived, not stored: the fake reveal timer below is one
   // input, whether anything is actually in hand is the other.
@@ -96,12 +116,13 @@ export function RecommendationCarousel({ planned }: { planned?: MediaItem[] }) {
     if (scrollerRef.current) scrollerRef.current.scrollLeft = railOffsets.current[activeTab]
   }, [activeTab])
 
-  // Keep the module in step when the fallback above overrides the stored
-  // tab, so the next mount does not try Planned again and re-lose a
-  // restore against a rail that is not there.
-  useEffect(() => {
-    if (tabbed && activeTab !== tab) setActiveHomeRailTab(activeTab)
-  }, [tabbed, activeTab, tab])
+  // The module is written ONLY by selectTab — an explicit choice. It is
+  // deliberately not synced to the fallback above: a fallback is a
+  // statement about this render, not about where the person was, and an
+  // effect that persisted it overwrote a remembered `planned` with
+  // `picks` during the very reload the remembering exists to survive.
+  // Left alone, a genuinely empty list simply renders Recommended each
+  // mount and the stored tab costs nothing.
 
   // Staggered skeleton -> reveal on first mount, standing in for a real
   // "generating recommendations" round trip (spec section 15 / 18) — moot
@@ -202,7 +223,7 @@ export function RecommendationCarousel({ planned }: { planned?: MediaItem[] }) {
           <Icon name="sparkle" />
           Recommended For You
         </button>
-        {plannedItems.length > 0 && (
+        {showPlannedTab && (
           <button
             type="button"
             role="tab"
