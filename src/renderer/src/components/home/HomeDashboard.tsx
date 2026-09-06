@@ -29,14 +29,21 @@ export function HomeDashboard() {
   // Planned tab while its titles were still in flight lost the position
   // outright.
   //
-  // Two escapes from the wait, because useCatalogByIds keeps `loading` up
-  // for a fetch that never answers and this must not become a way for
-  // Home to stop restoring at all: a tab other than Planned has nothing
-  // to wait for, and a Planned rail that already has rows on screen —
-  // last answer's, held deliberately while a refetch is out — is a rail
-  // the restore can land in.
+  // Three escapes from the wait, because useCatalogByIds keeps `loading`
+  // up for a lookup that was REFUSED as well as one still in flight, and
+  // this must not become a way for Home to stop restoring at all: a tab
+  // other than Planned has nothing to wait for; a Planned rail that
+  // already has rows on screen — last answer's, held deliberately while a
+  // refetch is out — is a rail the restore can land in; and a refused
+  // lookup is over, however empty it left the rail. On that last one the
+  // carousel has already fallen back to Recommended, so the restore runs
+  // against the rail actually rendered rather than waiting forever for
+  // one that is not coming.
   useRestoreBrowsingOrigin(
-    activeHomeRailTab() !== 'planned' || !planned.loading || planned.items.length > 0
+    activeHomeRailTab() !== 'planned' ||
+      !planned.loading ||
+      planned.failed ||
+      planned.items.length > 0
   )
 
   return (

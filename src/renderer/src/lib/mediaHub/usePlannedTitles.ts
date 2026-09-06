@@ -17,7 +17,7 @@ import { useAppState } from '@renderer/context/AppStateContext'
 import { useCatalogByIds } from './useCatalogByIds'
 import type { MediaItem } from '@renderer/types'
 
-export function usePlannedTitles(): { items: MediaItem[]; loading: boolean } {
+export function usePlannedTitles(): { items: MediaItem[]; loading: boolean; failed: boolean } {
   const { myList, adaptCatalogItems, catalogKindStates } = useAppState()
   // From the INDEX by id (stage 4): the loaded catalog is a bounded
   // candidate pool now, and a planned title has every right to live

@@ -27,12 +27,14 @@ const PLANNED_ROW_LIMIT = 20
  *  fresh array every render and churn the memo/effect deps below. */
 const NO_PLANNED: MediaItem[] = []
 
-/** Home's Planned rail, exactly as usePlannedTitles reports it. `loading`
- *  is part of the contract, not an implementation detail: an empty list
- *  that is still being fetched must not be mistaken for an empty list. */
+/** Home's Planned rail, exactly as usePlannedTitles reports it. The two
+ *  flags are part of the contract, not implementation detail: an empty
+ *  list still being fetched must not be mistaken for an empty list, and a
+ *  fetch that was refused must not be mistaken for one still coming. */
 export interface PlannedRail {
   items: MediaItem[]
   loading: boolean
+  failed: boolean
 }
 
 /**
@@ -65,14 +67,21 @@ export function RecommendationCarousel({ planned }: { planned?: PlannedRail }) {
   // A tab with nothing behind it is not offered, and cannot stay selected
   // if the list empties out from under it (unfollowing the last title).
   //
-  // "Nothing behind it" means an ANSWERED fetch that came back empty, not
+  // "Nothing behind it" means a SETTLED fetch with nothing to show, not
   // merely an empty array. catalog:byIds starts every mount empty, so
   // without the loading term this fell back to Recommended for the length
   // of the request on exactly the path that matters — coming back to
   // Planned from a title opened out of it. The rail stays mounted and
   // empty for that moment instead, which is also what keeps its
   // `data-rail-id` in the DOM for restoreBrowsingOrigin to find.
-  const plannedEmpty = plannedItems.length === 0 && !planned?.loading
+  //
+  // Settled includes REFUSED. `loading` stays up for a rejected lookup
+  // (useCatalogByIds holds stale rows rather than blinking a list away),
+  // so on a cold mount whose fetch rejects there is nothing to show and
+  // nothing more coming — waiting on that is how the tab became an empty
+  // rail with no way out. Recommended is the honest thing to show.
+  const plannedSettled = !planned?.loading || Boolean(planned?.failed)
+  const plannedEmpty = plannedItems.length === 0 && plannedSettled
   const activeTab = tab === 'planned' && plannedEmpty ? 'picks' : tab
   // Offered whenever it is reachable: it has titles, or it is the tab in
   // hand while they load.
