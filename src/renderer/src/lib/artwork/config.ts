@@ -2,7 +2,8 @@
 // section 10: "Keep all image-provider configuration in one file").
 
 /** Which provider is active. "demo" (default) reads the URLs already
- *  attached to mockData.ts's MediaItem objects — see providers/
+ *  already attached to each MediaItem by the catalogue adapter — see
+ *  providers/
  *  demoProvider.ts. Switch via VITE_ARTWORK_PROVIDER (a .env file read by
  *  Vite's import.meta.env, the Vite equivalent of Next's NEXT_PUBLIC_*
  *  vars) for local testing; nothing else in the app needs to change. */

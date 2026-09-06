@@ -21,7 +21,6 @@ import {
   idsForCatalogId,
   unmatchedCatalogIds
 } from '../src/main/media-hub/simkl'
-import { assertLibraryWritableId, demoOnlyTitleMessage } from '../src/shared/media-hub/serviceIds'
 
 let pass = 0
 function check(name: string, fn: () => void): void {
@@ -216,11 +215,14 @@ check('every real id space is expressible to Simkl', () => {
   }
 })
 
-check('demo and unmappable ids are not, so the review never offers them', () => {
-  // mockData's m-* ids are the live case: a local history row carrying one
-  // can never be joined to any Simkl entry, and its "Use Local" push would
-  // go out as an unverifiable title/year guess — the review row returned
-  // after every resolution, forever, until these were excluded.
+check('unmappable ids are not, so the review never offers them', () => {
+  // A local history row carrying one of these can never be joined to any
+  // Simkl entry, and its "Use Local" push would go out as an unverifiable
+  // title/year guess — the review row returned after every resolution,
+  // forever, until these were excluded. Note what this no longer decides:
+  // such a row is still kept locally, and still shown. Only the push is
+  // withheld — see serviceIds.ts on the library-write guard that used to
+  // read the same predicate and is gone.
   for (const id of ['m-13', 'tmdb:157336', 'simkl:250822', '', 'not-an-id']) {
     assert.equal(hasExpressibleSimklId(id), false, `${id} should not be expressible`)
   }
@@ -230,27 +232,6 @@ check('idsForCatalogId matches what a push would actually send', () => {
   assert.deepEqual(idsForCatalogId('tt4877122'), { imdb: 'tt4877122' })
   assert.deepEqual(idsForCatalogId('kitsu:7'), { kitsu: 7 })
   assert.deepEqual(idsForCatalogId('m-13'), {})
-})
-
-// --- the IPC-boundary refusal of demo-id library writes --------------------
-
-check('a demo id is refused a library write, by name', () => {
-  // The message is what a person sees when a surface without its own guard
-  // hits the boundary, so it has to name the title, not the id scheme.
-  assert.throws(
-    () => assertLibraryWritableId('m-10', 'Interstellar'),
-    (error: Error) =>
-      error.message === demoOnlyTitleMessage('Interstellar') &&
-      error.message.includes('Interstellar')
-  )
-  // With no title in hand the id itself is still better than nothing.
-  assert.throws(() => assertLibraryWritableId('m-10'), /m-10/)
-})
-
-check('every real id space passes the library-write gate untouched', () => {
-  for (const id of ['tt4877122', 'kitsu:7', 'mal:6', 'anilist:30', 'anidb:17']) {
-    assert.doesNotThrow(() => assertLibraryWritableId(id, 'Anything'))
-  }
 })
 
 console.log(`\n${pass} passing`)

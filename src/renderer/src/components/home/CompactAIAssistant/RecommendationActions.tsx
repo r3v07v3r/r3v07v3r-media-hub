@@ -2,7 +2,6 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { useAppState } from '@renderer/context/AppStateContext'
-import { AI_PICKS } from '@renderer/data/mockData'
 import { matchesCategoryKind, CategoryKind } from '@renderer/lib/mediaHub/categoryFilters'
 import { mediaItemToTitleRef } from '@renderer/lib/mediaHub/adapters'
 import { MAX_PROMPT_TITLES } from '@shared/media-hub/ollama'
@@ -90,18 +89,21 @@ export function RecommendationActions({ kinds = ['movie', 'series'] }: Recommend
 
   // Prefer the real recommendation backend (home:personalized's
   // genre-scored recommendations — see adapters.ts's
-  // catalogItemToRecommendation) once it has actually loaded; only fall
-  // back to the browse catalog (still real backend data when connected,
-  // see hooks.ts) or the mock AI_PICKS pool when nothing live is available
-  // yet, rather than blocking the button entirely.
+  // catalogItemToRecommendation) once it has actually loaded, and fall
+  // back to the browse catalog (still real backend data, see hooks.ts)
+  // while it hasn't.
+  //
+  // There is no third tier any more. This used to end at a mock AI_PICKS
+  // pool, which meant a button labelled "picked for you based on your
+  // watch history" could hand back a title from a hand-written sample
+  // list — the one outcome it must never have. An empty pool is answered
+  // by the caller, which says so plainly.
   function candidatePool(kind: CategoryKind): MediaItem[] {
     const liveMatches = homeFeedLive
       ? recommendations.map((r) => r.media).filter((m) => matchesCategoryKind(m, kind))
       : []
     if (liveMatches.length) return liveMatches
-    const catalogMatches = catalog.filter((m) => matchesCategoryKind(m, kind))
-    if (catalogMatches.length) return catalogMatches
-    return AI_PICKS.map((r) => r.media).filter((m) => matchesCategoryKind(m, kind))
+    return catalog.filter((m) => matchesCategoryKind(m, kind))
   }
 
   /** A model chose this one, and said why. */

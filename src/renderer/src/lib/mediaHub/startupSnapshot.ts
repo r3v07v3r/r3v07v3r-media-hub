@@ -1,5 +1,6 @@
 // Remembers the last real media-hub data this app actually displayed, so
-// the next cold start paints THAT instead of mockData.ts's demo titles.
+// the next cold start paints THAT instead of a blank dashboard (and,
+// before the demo catalogue was deleted, instead of its titles).
 //
 // Before this existed, every startup fallback pointed at the mock pools
 // (FEATURED_ITEMS / AI_PICKS / CONTINUE_WATCHING / CATALOG), which meant
@@ -70,7 +71,7 @@ export interface HomeFeedSnapshot {
  */
 type CatalogStamps = Record<string, number>
 
-/** Stamp key for rows with no `mediaKind` — mockData's, which are never persisted, and anything a future shape forgets to tag. */
+/** Stamp key for rows with no `mediaKind` — anything a future shape, or an older snapshot, forgets to tag. */
 const UNKINDED = '_'
 
 interface StoredSnapshot extends HomeFeedSnapshot {
@@ -456,9 +457,8 @@ export type ResolvedKind = NonNullable<MediaItem['mediaKind']>
  *
  * A kind that has answered always wins outright for its own rows, so a
  * title genuinely dropped from the live catalog does not linger. Items
- * with no `mediaKind` (mockData's, in the bridgeless preview build)
- * belong to no kind and are always carried; that build resolves no kinds
- * anyway.
+ * with no `mediaKind` belong to no kind and are always carried — there
+ * is no kind whose answer could ever supersede them.
  */
 export function mergeRememberedCatalog(
   live: MediaItem[],

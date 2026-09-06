@@ -3,7 +3,6 @@
 import { useAppState } from '@renderer/context/AppStateContext'
 import type { MediaItem } from '@renderer/types'
 import { MAX_RATING, ratingLabel } from '@shared/media-hub/rating'
-import { demoOnlyTitleMessage, hasExpressibleSimklId } from '@shared/media-hub/serviceIds'
 import styles from './RatingsPanel.module.css'
 import { RatingSourceMark } from './RatingBadge'
 import { ratingSourceFor, type RatingSource } from './ratingSource'
@@ -136,22 +135,11 @@ export function RatingsPanel({ media }: { media: MediaItem }) {
  * control.
  */
 function YourRating({ media }: { media: MediaItem }) {
-  const { ratings, rateMedia, pushNotification } = useAppState()
+  const { ratings, rateMedia } = useAppState()
   const score = ratings.get(media.id) ?? 0
 
   function handleScore(value: number): void {
     const next = score === value ? 0 : value
-    // A demo title (mockData's m-*/s-*/a-* pool, reachable via the AI
-    // assistant's fallback picks) never takes a NEW score: the id can't be
-    // expressed to any tracking service, and the write would pollute the
-    // real ratings table the way the Aug 24 watch-history ghosts did — see
-    // shared/media-hub/serviceIds.ts. Refused here with the why, and again
-    // at the IPC boundary for any surface without this check. Clearing
-    // (next === 0) stays allowed so an already-leaked score can be undone.
-    if (next > 0 && !hasExpressibleSimklId(media.id)) {
-      pushNotification({ tone: 'info', message: demoOnlyTitleMessage(media.title) })
-      return
-    }
     void rateMedia(media.id, next, {
       type: media.mediaKind ?? (media.mediaType === 'series' ? 'series' : 'movie'),
       title: media.title

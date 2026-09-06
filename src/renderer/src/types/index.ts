@@ -1,9 +1,8 @@
 // Core data model — see spec section 17. These shapes are intentionally
-// framework-agnostic (plain interfaces, no class instances) so the mock
-// data in src/data/mockData.ts can later be swapped for a real API client
-// (REST, GraphQL, tRPC, whatever) without touching any component code —
-// every component reads these interfaces, never the mock data shape
-// directly.
+// framework-agnostic (plain interfaces, no class instances), which is what
+// let the app's original hand-written data be swapped for the real
+// media-hub client without touching any component: every component reads
+// these interfaces, never the source's own shape.
 
 export type MediaType = 'movie' | 'series' | 'episode' | 'live'
 

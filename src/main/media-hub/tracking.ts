@@ -95,7 +95,6 @@ import {
 import { sendToRenderer, notifyLibraryChanged } from './rendererBridge'
 import { cachedRemoteLists, fetchRemoteLists } from './remoteLists'
 import type { RemoteList } from '../../shared/media-hub/types'
-import { assertLibraryWritableId } from '../../shared/media-hub/serviceIds'
 import {
   batchHistoryPayload,
   hasExpressibleSimklId,
@@ -1266,11 +1265,6 @@ export function registerTrackingIpc(): void {
   handle<TrackableItem, { tracked: boolean }>(MEDIA_HUB_CHANNELS.trackingToggle, (_e, item) => {
     const db = getDatabase()
     const tracked = db.isTracked(item.id)
-    // Only the TRACK direction is refused for an inexpressible id — a
-    // toggle that untracks is how a demo title that already leaked into
-    // the tracked table gets removed, and the guard must not lock it in.
-    // See the mark-watched handler above for the full reasoning.
-    if (!tracked) assertLibraryWritableId(item?.id, item?.title)
     if (tracked) db.untrack(item.id)
     else db.track(item)
     requestRecommendationsRebuild()
@@ -1293,16 +1287,16 @@ export function registerTrackingIpc(): void {
   handle<MarkWatchedPayload, MarkWatchedResult>(
     MEDIA_HUB_CHANNELS.trackingMarkWatched,
     async (_e, { item, playback }) => {
-      // No library ADD for an id no service can express (mockData's m-*
-      // demo pool, reachable through the AI assistant's last-resort
-      // fallback). This exact write is how three demo-id duplicates of
-      // already-tracked films got into real watch_history on Aug 24 and
-      // then sat in the sync review as unresolvable rows for five days
-      // (PR #144 has the post-mortem). The renderer refuses the click
-      // with the same message before it gets here; this is the boundary
-      // that holds when some surface forgets to. Unmark below is
-      // deliberately NOT guarded — removing a ghost is the cleanup.
-      assertLibraryWritableId(item?.id, item?.title)
+      // This handler used to refuse any id no tracking service can
+      // express, on the grounds that only mockData's m-* demo pool could
+      // produce one — the write that put three demo-id duplicates into
+      // real watch_history on Aug 24 (PR #144 has the post-mortem). The
+      // demo pool has since been deleted outright, so the only ids that
+      // predicate still caught were real titles the id bridge hasn't
+      // mapped yet, and refusing those loses real history to protect
+      // against a source that no longer exists. Whether a row can be
+      // PUSHED is still asked, per row, on the way out (see
+      // hasExpressibleSimklId in reconcileCheck).
       getDatabase().markWatched(item, playback || {})
       requestRecommendationsRebuild()
       // None of the services is awaited. The local row IS the record; each
@@ -1342,10 +1336,6 @@ export function registerTrackingIpc(): void {
   handle<MarkSeasonWatchedPayload, MarkWatchedResult>(
     MEDIA_HUB_CHANNELS.trackingMarkSeasonWatched,
     async (_e, { item, season, episodes }) => {
-      // Same refusal as the single-episode handler above, for the same
-      // reason — a season of demo-id history rows is the same corruption,
-      // multiplied by the episode count.
-      assertLibraryWritableId(item?.id, item?.title)
       const list = Array.isArray(episodes) ? episodes : []
       const episodeNumbers = list.map((p) => p.episode)
       const db = getDatabase()
@@ -1557,9 +1547,6 @@ export function registerTrackingIpc(): void {
   handle<{ listId: string; item: TrackableItem }, { lists: CustomList[] }>(
     MEDIA_HUB_CHANNELS.listsAdd,
     (_e, payload) => {
-      // Adds only — listsRemove stays open so a demo title already in a
-      // list can be taken out. See the mark-watched handler above.
-      assertLibraryWritableId(payload?.item?.id, payload?.item?.title)
       const db = getDatabase()
       db.addToList(String(payload?.listId ?? ''), payload?.item ?? { id: '' })
       return { lists: db.lists() }
@@ -1605,10 +1592,6 @@ export function registerTrackingIpc(): void {
     { id: string; score: number; type?: MediaKind; title?: string },
     { ratings: Record<string, number> }
   >(MEDIA_HUB_CHANNELS.ratingSet, (_e, payload) => {
-    // A real score is a library ADD (and a Trakt push); 0 is this app's
-    // "cleared" signal and stays allowed so a rating that already leaked
-    // onto a demo id can be removed. See the mark-watched handler above.
-    if (Number(payload?.score) > 0) assertLibraryWritableId(payload?.id, payload?.title)
     const db = getDatabase()
     db.rate(String(payload?.id ?? ''), Number(payload?.score))
     // Trakt keeps ratings too, and a score given here should not have to be

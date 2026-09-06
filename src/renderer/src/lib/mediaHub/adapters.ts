@@ -115,11 +115,10 @@ export function mediaItemToTrackablePayload(media: MediaItem): {
 // moods) — MoodBrowser's mood pills only mean something for MediaItems that
 // have `moods` set, so real catalog items are heuristically tagged here by
 // keyword-matching their genres against this dashboard's 7 mood categories
-// (see mockData.ts's MOOD_CATEGORIES). This is a best-effort approximation,
-// not real editorial mood tagging — a genre like "Drama" always maps to
-// 'emotional' whether or not a given drama actually feels that way. An item
-// can (and often does) match multiple moods, same as the hand-tagged mock
-// catalog.
+// (see data/constants.ts's MOOD_CATEGORIES). This is a best-effort
+// approximation, not real editorial mood tagging — a genre like "Drama"
+// always maps to 'emotional' whether or not a given drama actually feels
+// that way. An item can, and often does, match multiple moods.
 const GENRE_MOOD_KEYWORDS: Record<string, string[]> = {
   action: ['action', 'thrilling'],
   adventure: ['thrilling', 'action'],

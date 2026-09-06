@@ -227,14 +227,13 @@ export const RUNTIME_SORT_OPTIONS: { value: SortKey; label: string }[] = [
 ]
 
 /**
- * Whether a MediaItem belongs on a given category page. Real backend items
+ * Whether a MediaItem belongs on a given category page. Backend items
  * always carry `mediaKind` (set by catalogItemToMediaItem) and match
- * exactly. Mock fallback items only carry `mediaKind` when the mock data
- * explicitly tagged it as anime (see mockData.ts's `anime()` helper) — a
- * plain mock movie/series item has no `mediaKind` at all, so it falls back
- * to `mediaType`, which has no 'anime' member. That asymmetry is
- * deliberate: a mock series item must never leak onto the Anime page just
- * because `mediaType` can't tell the two apart.
+ * exactly. Anything that reaches here without one — a hand-built item in
+ * a test, or a row from an older snapshot written before the field
+ * existed — falls back to `mediaType`, which has no 'anime' member. That
+ * asymmetry is deliberate: an untagged series must never leak onto the
+ * Anime page just because `mediaType` can't tell the two apart.
  */
 export function matchesCategoryKind(media: MediaItem, kind: CategoryKind): boolean {
   if (media.mediaKind) return media.mediaKind === kind

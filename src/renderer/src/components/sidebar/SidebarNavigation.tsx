@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Link, useLocation } from 'react-router-dom'
-import { NAV_ITEMS } from '@renderer/data/mockData'
+import { NAV_ITEMS } from '@renderer/data/constants'
 import { Icon } from '@renderer/components/icons/Icon'
 import styles from './SidebarNavigation.module.css'
 

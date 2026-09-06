@@ -21,7 +21,7 @@ import {
   UIActivityState,
   HomeRail
 } from '@renderer/types'
-import { USER_PROFILES } from '@renderer/data/mockData'
+import { USER_PROFILES } from '@renderer/data/constants'
 import type {
   CatalogItem,
   MediaHubSettingsSnapshot,
@@ -67,7 +67,6 @@ import {
 } from '@renderer/lib/mediaHub/hooks'
 import type { CategoryKind } from '@renderer/lib/mediaHub/categoryFilters'
 import { MAX_PROMPT_TITLES } from '@shared/media-hub/ollama'
-import { demoOnlyTitleMessage, hasExpressibleSimklId } from '@shared/media-hub/serviceIds'
 import { episodeToStart, episodeWatchKey } from '@shared/media-hub/nextEpisode'
 import {
   isNoticeablyBelowCeiling,
@@ -899,19 +898,16 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
 
   const toggleMyList = useCallback(
     (media: MediaItem) => {
-      // Following a demo title is refused before the optimistic Set update,
-      // not after: mockData's pool (the AI assistant's fallback picks) has
-      // ids no tracking service can express, and letting the click through
-      // would flip the chip, write an m-* row into the tracked table, and
-      // push a title/year guess at every connected service — the same leak
-      // that put demo-id ghosts into watch_history on Aug 24 (see
-      // shared/media-hub/serviceIds.ts). UNfollowing stays allowed so a
-      // demo title that already leaked in can be removed; main enforces
-      // the same asymmetry at the IPC boundary as the backstop.
-      if (!myList.has(media.id) && !hasExpressibleSimklId(media.id)) {
-        pushNotification({ tone: 'info', message: demoOnlyTitleMessage(media.title) })
-        return
-      }
+      // This used to refuse the click outright when `media.id` was not
+      // expressible to a tracking service, on the grounds that such an id
+      // could only have come from mockData's demo pool (the source of the
+      // m-* ghosts written into watch_history on Aug 24). The demo pool is
+      // gone, so that inference no longer holds and the refusal was only
+      // ever reaching real titles — a tracked show with a real IMDb id was
+      // told it was a demo title. Following is a LOCAL act; whether the
+      // library can also tell Simkl about it is a separate question the
+      // push path answers on its own (see hasExpressibleSimklId's
+      // remaining callers in tracking.ts).
       setMyList((prev) => {
         const next = new Set(prev)
         if (next.has(media.id)) next.delete(media.id)
@@ -960,7 +956,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
           // refresh, not a broken UI in the moment.
         })
     },
-    [homeFeed, myList, pushNotification]
+    [homeFeed]
   )
 
   const toggleDisliked = useCallback(

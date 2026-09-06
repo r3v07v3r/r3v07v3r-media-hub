@@ -429,8 +429,8 @@ export function findDemoGhostHistoryRows(rows: HistoryRowForCleanup[]): HistoryR
  * stamped 2026-08-24 within ~15 seconds) duplicating films already tracked
  * under their real IMDb ids; they then sat in the Simkl sync review as
  * rows no resolution could ever clear (PR #144 has that post-mortem). The
- * write path is now refused at the IPC boundary (tracking.ts's
- * assertLibraryWritableId); this is the other half — the rows already
+ * write path that produced them is gone at the source — the demo pool
+ * itself was deleted — and this is the other half: the rows already
  * written come out, once, on the same one-shot transactional terms as
  * every other schema repair.
  *
