@@ -4,7 +4,6 @@ import { ContinueWatchingPanel } from './ContinueWatchingPanel'
 import { RecommendationCarousel } from './RecommendationCarousel'
 import { PerformanceWidget } from './PerformanceWidget'
 import { MoodBrowser } from './MoodBrowser'
-import { PlannedRow } from './PlannedRow'
 import { useRestoreBrowsingOrigin } from '@renderer/lib/mediaHub/useRestoreBrowsingOrigin'
 import styles from './HomeDashboard.module.css'
 
@@ -25,9 +24,10 @@ export function HomeDashboard() {
       <CompactAIAssistant />
       <FeaturedHero />
       <ContinueWatchingPanel />
-      {/* Above the guesses: what somebody has already decided they
-          want beats what this app thinks they might. */}
-      <PlannedRow />
+      {/* Both rails — Planned and Recommended — live in this one cell,
+          as tabs. Home is clipped to no scroll (see HomeDashboard.module.css) and
+          row 2 is the only place either can go; two sections claiming
+          `grid-area: picks` drew one heading over the other. */}
       <RecommendationCarousel />
       <PerformanceWidget />
       <MoodBrowser />

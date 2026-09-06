@@ -3,18 +3,37 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useAppState } from '@renderer/context/AppStateContext'
+import { usePlannedTitles } from '@renderer/lib/mediaHub/usePlannedTitles'
 import { Icon } from '@renderer/components/icons/Icon'
 import { MediaCard } from './MediaCard'
 import styles from './RecommendationCarousel.module.css'
+
+/** Where the row's own "See all" goes, per tab. */
+const SEE_ALL = {
+  picks: { to: '/for-you', label: 'See all' },
+  planned: { to: '/my-stuff', label: 'See all' }
+} as const
+
+/** Enough to browse without turning Home into the whole list. The rest is
+ *  one click away, and the link says so rather than the row trailing off. */
+const PLANNED_ROW_LIMIT = 20
 
 export function RecommendationCarousel() {
   const { recommendations, homeFeedLoading, homeFeedError, refreshHomeFeed } = useAppState()
   // home:personalized's recommendations once it resolves; before that,
   // the picks this app last really showed (see lib/mediaHub/
-  // startupSnapshot.ts). The mock AI_PICKS pool this used to fall back to
-  // now only reaches the bridgeless preview build, and only through that
-  // same fallback — see hooks.ts.
+  // startupSnapshot.ts). There is no third tier: the mock AI_PICKS pool
+  // this used to fall back to is deleted, preview build included.
   const picks = recommendations
+  // The other half of this cell. Home cannot scroll and row 2 is the only
+  // place either rail can go, so they share it as tabs rather than as two
+  // sections stacked in the same grid area — which is what they were, one
+  // heading drawn over the other, for anyone with a non-empty list.
+  const planned = usePlannedTitles()
+  const [tab, setTab] = useState<'picks' | 'planned'>('picks')
+  // A tab with nothing behind it is not offered, and cannot stay selected
+  // if the list empties out from under it (unfollowing the last title).
+  const activeTab = tab === 'planned' && planned.length === 0 ? 'picks' : tab
   const [skeletonDone, setSkeletonDone] = useState(false)
   // `loading` is derived, not stored: the fake reveal timer below is one
   // input, whether anything is actually in hand is the other.
@@ -68,7 +87,12 @@ export function RecommendationCarousel() {
     // above). A short remembered row swapped for a longer live one then
     // left the forward arrow hidden over a scroller that had plenty left
     // to show, until some unrelated resize or scroll re-measured it.
-  }, [loading, picks])
+    //
+    // `activeTab` for the same reason once more: switching tabs replaces
+    // the scroller's contents without any loading state in between, and a
+    // short Planned list after a long picks row would otherwise keep an
+    // arrow pointing at nothing.
+  }, [loading, picks, planned, activeTab])
 
   // The arrows used to scroll a flat 380px regardless of how many cards
   // that actually covers — on a row this wide that's a fraction of one
@@ -109,14 +133,42 @@ export function RecommendationCarousel() {
 
   return (
     <section className={styles.section} aria-label="Recommended for you">
-      <h2 className={styles.heading}>
-        <Icon name="sparkle" />
-        Recommended For You
-        {/* Home cannot scroll (see HomeDashboard.module.css), so the rest
-            of the ranking — shelved by reason — lives on its own page. */}
-        {picks.length > 0 && (
-          <Link to="/for-you" className={styles.seeAll}>
-            See all
+      {/* The heading IS the tab strip. With only one rail to show it reads
+          as a plain heading — the Planned tab appears when there is a list
+          behind it — so the common case looks exactly as it did.
+          Home cannot scroll (see HomeDashboard.module.css), so "See all"
+          on either tab is where the rest of that list lives. */}
+      <h2 className={styles.heading} role="tablist" aria-label="Home rows">
+        <button
+          type="button"
+          role="tab"
+          id="home-rail-tab-picks"
+          aria-selected={activeTab === 'picks'}
+          aria-controls="home-rail-panel"
+          className={`${styles.tab} ${activeTab === 'picks' ? styles.tabActive : ''}`}
+          onClick={() => setTab('picks')}
+        >
+          <Icon name="sparkle" />
+          Recommended For You
+        </button>
+        {planned.length > 0 && (
+          <button
+            type="button"
+            role="tab"
+            id="home-rail-tab-planned"
+            aria-selected={activeTab === 'planned'}
+            aria-controls="home-rail-panel"
+            className={`${styles.tab} ${activeTab === 'planned' ? styles.tabActive : ''}`}
+            onClick={() => setTab('planned')}
+          >
+            <Icon name="tracked" />
+            Planned
+            <span className={styles.tabCount}>{planned.length}</span>
+          </button>
+        )}
+        {(activeTab === 'planned' || picks.length > 0) && (
+          <Link to={SEE_ALL[activeTab].to} className={styles.seeAll}>
+            {SEE_ALL[activeTab].label}
           </Link>
         )}
       </h2>
@@ -130,7 +182,7 @@ export function RecommendationCarousel() {
           fetched this run, or a mid-session refresh that failed) because
           both make the same claim: what you are looking at may have
           moved on. */}
-      {homeFeedError && picks.length > 0 && (
+      {activeTab === 'picks' && homeFeedError && picks.length > 0 && (
         <p className={styles.staleNotice} role="status">
           <Icon name="wifi-off" size={13} />
           Couldn&apos;t reach the media hub backend — these picks may be out of date.
@@ -140,7 +192,7 @@ export function RecommendationCarousel() {
           </button>
         </p>
       )}
-      {!loading && picks.length === 0 ? (
+      {activeTab === 'picks' && !loading && picks.length === 0 ? (
         // An empty row has two causes and they are not interchangeable.
         //
         // main ranks recommendations over the WHOLE catalog when it has
@@ -167,19 +219,29 @@ export function RecommendationCarousel() {
         </p>
       ) : (
         <div className={styles.scrollerWrap}>
+          {/* `data-rail-id` differs per tab so each rail's scroll offset is
+              restored to its own row rather than to whichever was last
+              open — see useRestoreBrowsingOrigin. */}
           <ul
             className={`${styles.scroller} thin-scroll`}
             ref={scrollerRef}
-            data-rail-id="ai-picks"
+            id="home-rail-panel"
+            role="tabpanel"
+            aria-labelledby={`home-rail-tab-${activeTab}`}
+            data-rail-id={activeTab === 'planned' ? 'planned' : 'ai-picks'}
             onKeyDown={handleKeyDown}
           >
-            {loading
-              ? Array.from({ length: 6 }).map((_, i) => (
-                  <li key={i} className={styles.skeletonCard} aria-hidden="true" />
-                ))
-              : picks.map((rec) => (
-                  <MediaCard key={rec.media.id} media={rec.media} reason={rec.reasons[0]} />
-                ))}
+            {activeTab === 'planned'
+              ? planned
+                  .slice(0, PLANNED_ROW_LIMIT)
+                  .map((media) => <MediaCard key={media.id} media={media} />)
+              : loading
+                ? Array.from({ length: 6 }).map((_, i) => (
+                    <li key={i} className={styles.skeletonCard} aria-hidden="true" />
+                  ))
+                : picks.map((rec) => (
+                    <MediaCard key={rec.media.id} media={rec.media} reason={rec.reasons[0]} />
+                  ))}
           </ul>
           {!loading && canScrollBack && (
             <button
