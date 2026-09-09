@@ -34,10 +34,17 @@ export const SUBTITLE_SCALE_MIN = 0.5
 export const SUBTITLE_SCALE_MAX = 2
 export const SUBTITLE_SCALE_STEP = 0.1
 
-/** mpv's own range. Below ~50 the text is in the middle of the picture, which
- *  is a legitimate choice for a badly cropped source and a strange default. */
+/** mpv's own range is 0-150, not 0-100: 100 is the bottom edge of the video
+ *  picture itself, and anything past it moves into whatever's below the
+ *  picture within the player window — the letterbox bar on a wider-than-
+ *  window source, or just the window background otherwise. Capping this at
+ *  100 (as an earlier version of this did) meant a letterboxed title could
+ *  never get its subtitles off the picture and into the black bar under
+ *  it, which is the whole reason someone reaches for this slider. Below
+ *  ~50 the text is in the middle of the picture, which is a legitimate
+ *  choice for a badly cropped source and a strange default. */
 export const SUBTITLE_POSITION_MIN = 50
-export const SUBTITLE_POSITION_MAX = 100
+export const SUBTITLE_POSITION_MAX = 150
 
 export const DEFAULT_SUBTITLE_STYLE: SubtitleStyle = {
   scale: 1,
