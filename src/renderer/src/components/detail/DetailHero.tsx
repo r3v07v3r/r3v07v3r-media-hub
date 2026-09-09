@@ -10,6 +10,7 @@ import { Icon } from '@renderer/components/icons/Icon'
 import { resolveArtwork } from '@renderer/lib/artwork'
 import { ArtworkImage } from '@renderer/components/media/ArtworkImage'
 import { useYoutubeEmbedControls } from '@renderer/hooks/useYoutubeEmbedControls'
+import { formatReleaseDate, isFutureRelease } from '@renderer/lib/mediaHub/releaseDate'
 import styles from './DetailHero.module.css'
 
 /** Same idle window as the movie player's control bar
@@ -64,6 +65,21 @@ export function DetailHero({
   const hasProgress = !!continueEntry && !continueEntry.media.completed
   const isResolving = resolvingMedia?.id === media.id
 
+  // What "Play" would even resolve to right now, so a title/episode that
+  // hasn't come out yet doesn't offer a Play button that can only fail.
+  // Someone with existing progress is never shown this — they've already
+  // watched *something* of this title, so whatever gap remains isn't a
+  // "not released yet" gap. Episodic titles key off the next unwatched
+  // episode's own air date rather than the show's premiere: a three-season
+  // show that's fully aired must never say "Releases on <2019 premiere>".
+  const unreleasedDate = useMemo(() => {
+    if (hasProgress) return undefined
+    if (config.isEpisodic) {
+      return nextEpisode && isFutureRelease(nextEpisode.released) ? nextEpisode.released : undefined
+    }
+    return isFutureRelease(media.releaseDate) ? media.releaseDate : undefined
+  }, [hasProgress, config.isEpisodic, nextEpisode, media.releaseDate])
+
   const trailerFrameRef = useRef<HTMLIFrameElement>(null)
   const trailerActive = showTrailer && !!trailer
   const trailerControls = useYoutubeEmbedControls(trailerFrameRef, trailerActive)
@@ -110,6 +126,10 @@ export function DetailHero({
   const trailerControlsHidden = contentFaded && trailerIdle && !trailerBarFocused
 
   const playLabel = useMemo(() => {
+    if (unreleasedDate) {
+      const formatted = formatReleaseDate(unreleasedDate)
+      return formatted ? `Releases ${formatted}` : 'Not yet released'
+    }
     if (isResolving) {
       return resolvingMedia?.stage === 'resolving' ? 'Searching…' : 'Preparing…'
     }
@@ -123,6 +143,7 @@ export function DetailHero({
     }
     return 'Play'
   }, [
+    unreleasedDate,
     isResolving,
     resolvingMedia?.stage,
     hasProgress,
@@ -267,13 +288,14 @@ export function DetailHero({
             type="button"
             className={styles.playButton}
             onClick={onPlay}
-            disabled={isResolving}
+            disabled={isResolving || !!unreleasedDate}
             aria-busy={isResolving}
+            aria-disabled={!!unreleasedDate}
           >
             {isResolving ? (
               <span className={styles.playSpinner} aria-hidden="true" />
             ) : (
-              <Icon name="play" size={16} />
+              <Icon name={unreleasedDate ? 'clock' : 'play'} size={16} />
             )}
             {playLabel}
           </button>

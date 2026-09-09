@@ -318,6 +318,7 @@ export function catalogItemToMediaItem(
     backdropUrl: item.background || undefined,
     logoUrl: item.logo || undefined,
     releaseYear: parseYear(item.year),
+    releaseDate: item.releaseDate || undefined,
     runtimeMinutes: parseRuntimeMinutes(item.runtime),
     genres: item.genres ?? [],
     moods: genresToMoods(item.genres),

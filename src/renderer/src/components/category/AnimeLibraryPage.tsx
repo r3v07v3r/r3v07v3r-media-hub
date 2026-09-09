@@ -26,6 +26,7 @@ import { episodeToStart, episodeWatchKey } from '@shared/media-hub/nextEpisode'
 import { ANIME_CONFIG, type CategoryConfig } from '@renderer/lib/mediaHub/categoryConfig'
 import { useRestoreBrowsingOrigin } from '@renderer/lib/mediaHub/useRestoreBrowsingOrigin'
 import { useBatchReveal } from '@renderer/lib/mediaHub/useBatchReveal'
+import { formatReleaseDate, isFutureRelease } from '@renderer/lib/mediaHub/releaseDate'
 import { CategoryFilterBar } from './CategoryFilterBar'
 import styles from './AnimeLibraryPage.module.css'
 import { RatingBadge } from '@renderer/components/detail/RatingBadge'
@@ -511,6 +512,12 @@ function LibraryDetails({ media, config }: { media: MediaItem | null; config: Ca
   const yourRating = ratings.get(media.id) ?? 0
   const isResolving = resolvingMedia?.id === media.id
   const episodic = kind !== 'movie'
+  // Series/anime key off the next episode's own air date on the detail
+  // page (see DetailHero), which this card doesn't have loaded — only a
+  // movie's own release date is known here, so only that case is gated.
+  const isMovie = media.mediaKind === 'movie' || media.mediaType === 'movie'
+  const unreleasedDate =
+    isMovie && isFutureRelease(media.releaseDate) ? media.releaseDate : undefined
 
   return (
     <aside className={`${styles.details} glass-panel`} aria-label={`${media.title} details`}>
@@ -648,14 +655,17 @@ function LibraryDetails({ media, config }: { media: MediaItem | null; config: Ca
               type="button"
               className={styles.primaryAction}
               onClick={() => startPartyPlayback(media)}
-              disabled={isResolving}
+              disabled={isResolving || !!unreleasedDate}
+              aria-disabled={!!unreleasedDate}
             >
-              <Icon name="play" size={15} />
+              <Icon name={unreleasedDate ? 'clock' : 'play'} size={15} />
               {isResolving
                 ? 'Preparing…'
-                : episodic && nextUp
-                  ? `Play S${nextUp.season} E${nextUp.episode}`
-                  : 'Play now'}
+                : unreleasedDate
+                  ? `Releases ${formatReleaseDate(unreleasedDate) ?? ''}`
+                  : episodic && nextUp
+                    ? `Play S${nextUp.season} E${nextUp.episode}`
+                    : 'Play now'}
             </button>
             <button type="button" className={styles.action} onClick={() => openDetail(media)}>
               <Icon name="info" size={15} />

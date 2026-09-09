@@ -49,6 +49,30 @@ function episodeKey(season: number | null | undefined, episode: number | null | 
   return `${season ?? ''}:${episode ?? ''}`
 }
 
+/** Adds or removes one (season, episode) row from a local `history` snapshot
+ *  without a round trip — the mark/unmark IPC call writes the real row
+ *  synchronously before it ever awaits Simkl/Trakt/MAL, so by the time that
+ *  call resolves the local database already agrees with this. Applying it
+ *  here too means the grid updates the instant a click happens rather than
+ *  after a second `tracking:list` fetch, which matters most exactly when
+ *  someone is marking a run of episodes watched back to back. `watchedAt`
+ *  is a local guess (now) — close enough for the tile's own watched/
+ *  unwatched styling, which is all this optimistic copy is read for; the
+ *  background refresh below still fetches the real value. */
+function applyOptimisticMark(
+  history: HistoryEntry[],
+  id: string,
+  type: MediaKind,
+  season: number | null,
+  episode: number | null,
+  watched: boolean
+): HistoryEntry[] {
+  const matches = (h: HistoryEntry) => h.id === id && h.season === season && h.episode === episode
+  if (!watched) return history.filter((h) => !matches(h))
+  if (history.some(matches)) return history
+  return [...history, { id, type, season, episode, watchedAt: new Date().toISOString() }]
+}
+
 export function MediaDetailPage({ kind }: { kind: MediaKind }) {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
@@ -464,15 +488,70 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
       year: media.releaseYear ? String(media.releaseYear) : '',
       ...(media.totalEpisodes != null ? { totalEpisodes: media.totalEpisodes } : {})
     }
+    const previous = history
+    setHistory((h) => applyOptimisticMark(h, media.id, kind, episode.season, episode.episode, watched))
     const call = watched ? api.tracking.markWatched : api.tracking.unmarkWatched
     try {
       await call({ item, playback: { season: episode.season, episode: episode.episode } })
-      // One refetch, not two: refreshWatchStatus bumps watchStatusVersion,
-      // which re-runs this page's own history effect, so the manual
-      // tracking.list() that used to sit here was a second identical read
-      // (and, with Simkl awaited in the handler, a second wait).
+      // The optimistic setHistory above already shows the right state
+      // instantly; this reconciles it with the real record (real
+      // watchedAt, any server-side correction) and — via
+      // watchStatusVersion — propagates to the catalog grids and
+      // personalized rails, which have no other way to learn of this.
+      // One bump, not a second manual tracking.list() read: refreshWatchStatus
+      // re-runs this page's own history effect on its own.
       refreshWatchStatus()
     } catch {
+      setHistory(previous)
+      pushNotification({ tone: 'error', message: 'Could not update watched status.' })
+    }
+  }
+
+  /** Bulk equivalent of handleMarkEpisodeWatched for a shift/ctrl-selected
+   *  run of episodes (EpisodesSection's own selection UI) — same optimistic-
+   *  then-reconcile shape, just applied to every selected episode at once so
+   *  marking 7-8 episodes reads as one instant update instead of a visible
+   *  step per click. Selection only ever holds episodes from the single
+   *  season currently on screen (EpisodesSection resets it on season
+   *  change), so the real batch IPC (one Simkl call for the whole set) can
+   *  be used for the watched direction exactly as handleMarkSeasonWatched
+   *  already does; unwatched has no batch endpoint, so those go out in
+   *  parallel the same way that function's own unwatched branch does. */
+  async function handleMarkManyWatched(eps: Episode[], watched: boolean): Promise<void> {
+    const api = window.api?.mediaHub
+    if (!api || !media || eps.length === 0) return
+    const item = {
+      id: media.id,
+      type: kind,
+      title: media.title,
+      poster: media.posterUrl ?? '',
+      year: media.releaseYear ? String(media.releaseYear) : '',
+      ...(media.totalEpisodes != null ? { totalEpisodes: media.totalEpisodes } : {})
+    }
+    const previous = history
+    setHistory((h) =>
+      eps.reduce(
+        (acc, ep) => applyOptimisticMark(acc, media.id, kind, ep.season, ep.episode, watched),
+        h
+      )
+    )
+    try {
+      if (watched) {
+        await api.tracking.markSeasonWatched({
+          item,
+          season: eps[0].season,
+          episodes: eps.map((e) => ({ season: e.season, episode: e.episode }))
+        })
+      } else {
+        await Promise.all(
+          eps.map((e) =>
+            api.tracking.unmarkWatched({ item, playback: { season: e.season, episode: e.episode } })
+          )
+        )
+      }
+      refreshWatchStatus()
+    } catch {
+      setHistory(previous)
       pushNotification({ tone: 'error', message: 'Could not update watched status.' })
     }
   }
@@ -501,11 +580,14 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
       year: media.releaseYear ? String(media.releaseYear) : '',
       ...(media.totalEpisodes != null ? { totalEpisodes: media.totalEpisodes } : {})
     }
+    const previous = history
+    setHistory((h) => applyOptimisticMark(h, media.id, kind, null, null, watched))
     const call = watched ? api.tracking.markWatched : api.tracking.unmarkWatched
     try {
       await call({ item })
       refreshWatchStatus()
     } catch {
+      setHistory(previous)
       pushNotification({ tone: 'error', message: 'Could not update watched status.' })
     }
   }
@@ -536,6 +618,13 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
       poster: media.posterUrl ?? '',
       year: media.releaseYear ? String(media.releaseYear) : ''
     }
+    const previous = history
+    setHistory((h) =>
+      seasonEpisodes.reduce(
+        (acc, ep) => applyOptimisticMark(acc, media.id, kind, ep.season, ep.episode, watched),
+        h
+      )
+    )
     try {
       if (watched) {
         await api.tracking.markSeasonWatched({
@@ -552,6 +641,7 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
       }
       refreshWatchStatus()
     } catch {
+      setHistory(previous)
       pushNotification({ tone: 'error', message: 'Could not update the season’s watched status.' })
     }
   }
@@ -647,6 +737,7 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
               nextEpisode={nextEpisode}
               onPlay={(ep) => handlePlay(ep.season, ep.episode)}
               onMarkWatched={handleMarkEpisodeWatched}
+              onMarkMany={handleMarkManyWatched}
               onMarkSeason={handleMarkSeasonWatched}
               status={metaStatus}
             />

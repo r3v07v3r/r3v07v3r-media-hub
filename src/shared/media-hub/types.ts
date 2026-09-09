@@ -58,6 +58,14 @@ export interface CatalogItem {
   logo: string
   year: string
   status?: string
+  /** Full release date (YYYY-MM-DD, or an ISO datetime some sources give),
+   *  when the source has one — Cinemeta's `released` for movies/series,
+   *  Kitsu's `startDate` for anime. `year` alone can't say whether a title
+   *  releases in three days or three months, which matters for a title
+   *  someone opens before it exists yet: see DetailHero/AboutPanel's own
+   *  "releases on" state. Empty when the source gave no date, never a
+   *  guess from `year`. */
+  releaseDate?: string
   description: string
   rating: string
   /** Rotten Tomatoes critic score (0-100, as a plain number string, e.g.

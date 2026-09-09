@@ -6,6 +6,7 @@ import type { Episode } from '@shared/media-hub/types'
 import { useAppState } from '@renderer/context/AppStateContext'
 import { Icon } from '@renderer/components/icons/Icon'
 import { ArtworkImage } from '@renderer/components/media/ArtworkImage'
+import { formatReleaseDate as airDateLabel, isFutureRelease } from '@renderer/lib/mediaHub/releaseDate'
 import styles from './EpisodesSection.module.css'
 import { episodeStillOrShowArt } from '@renderer/components/media/artworkRetry'
 
@@ -51,6 +52,10 @@ export interface EpisodesSectionProps {
   nextEpisode: Episode | null
   onPlay: (episode: Episode) => void
   onMarkWatched: (episode: Episode, watched: boolean) => void
+  /** Bulk-marks a shift/ctrl-selected run of episodes (this component's own
+   *  selection UI, below) watched/unwatched in one go. Always a same-season
+   *  set — selection resets whenever `selectedSeason` changes. */
+  onMarkMany: (episodes: Episode[], watched: boolean) => void
   /** Batch-marks every episode in a season watched/unwatched in one go —
    *  see MediaDetailPage's handleMarkSeasonWatched for how "watched" maps
    *  to the real tracking:mark-season-watched batch IPC, while "unwatched"
@@ -112,30 +117,6 @@ function episodeCode(ep: Episode): string {
   return `${ep.season === 0 ? 'SP' : 'E'}${ep.episode}`
 }
 
-/** Air date as a compact "12 Mar 2003". Returns null for the empty or
- *  unparseable `released` values Kitsu's placeholder episodes carry, so
- *  the caller renders nothing rather than "Invalid Date".
- *
- *  A bare YYYY-MM-DD is built from local calendar components rather than
- *  handed to `new Date(string)`, which per spec reads a date-ONLY string
- *  as UTC midnight (a date-TIME string without an offset is read as
- *  local — the inconsistency is the trap). Both real sources for this
- *  field are date-only — Kitsu's `airdate` and TMDB's `air_date`, see
- *  core.ts's normalizeKitsuEpisode and animeSeasons.ts — so west of
- *  Greenwich every tile rendered the day BEFORE the episode aired.
- *  Anything with a time in it still goes through the normal parse. */
-const DATE_ONLY = /^(\d{4})-(\d{2})-(\d{2})$/
-
-function airDateLabel(released: string | undefined): string | null {
-  if (!released) return null
-  const parts = DATE_ONLY.exec(released.trim())
-  const date = parts
-    ? new Date(Number(parts[1]), Number(parts[2]) - 1, Number(parts[3]))
-    : new Date(released)
-  if (Number.isNaN(date.getTime())) return null
-  return date.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })
-}
-
 export function EpisodesSection({
   mediaId,
   showTitle,
@@ -150,11 +131,29 @@ export function EpisodesSection({
   nextEpisode,
   onPlay,
   onMarkWatched,
+  onMarkMany,
   onMarkSeason,
   status
 }: EpisodesSectionProps) {
   const { resolvingMedia } = useAppState()
   const [pendingKey, setPendingKey] = useState<string | null>(null)
+
+  // Shift/ctrl-click multi-select, scoped to whichever season is on screen
+  // — cleared on season change since a selection spanning two seasons has
+  // no single batch call it could resolve to (see onMarkMany's own note).
+  const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set())
+  const [selectAnchor, setSelectAnchor] = useState<string | null>(null)
+  // Derived-during-render reset (same pattern as wasShowResolving below)
+  // rather than an effect: an effect's setState here would commit the old
+  // selection for one extra render before clearing it, which is exactly
+  // the "still marked selected from the last season" flash this exists to
+  // avoid.
+  const [lastSeason, setLastSeason] = useState(selectedSeason)
+  if (lastSeason !== selectedSeason) {
+    setLastSeason(selectedSeason)
+    setSelectedKeys(new Set())
+    setSelectAnchor(null)
+  }
   const isShowResolving = resolvingMedia?.id === mediaId
   // Cleared as soon as this show is no longer the one resolving —
   // whether that's because it just succeeded (playbackMedia opens) or
@@ -265,6 +264,18 @@ export function EpisodesSection({
     }
   }, [openMenu, closeMenu])
 
+  useEffect(() => {
+    if (selectedKeys.size === 0) return
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') {
+        setSelectedKeys(new Set())
+        setSelectAnchor(null)
+      }
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [selectedKeys.size])
+
   if (status === 'loading') {
     return (
       <section
@@ -303,6 +314,36 @@ export function EpisodesSection({
   const menuEpisodeWatched = menuEpisode
     ? watchedKeys.has(key(menuEpisode.season, menuEpisode.episode))
     : false
+
+  // Shift extends the selection from the last-clicked tile through the one
+  // just clicked (ordinary file-manager behaviour); ctrl/cmd toggles just
+  // that one tile in or out without disturbing the rest. Either way the
+  // click is consumed as a selection action, not a play — the modifier is
+  // the signal someone means to pick episodes rather than watch one.
+  function toggleSelect(ep: Episode, shiftKey: boolean): void {
+    const epKey = key(ep.season, ep.episode)
+    if (shiftKey && selectAnchor) {
+      const anchorIndex = visible.findIndex((e) => key(e.season, e.episode) === selectAnchor)
+      const targetIndex = visible.findIndex((e) => key(e.season, e.episode) === epKey)
+      if (anchorIndex !== -1 && targetIndex !== -1) {
+        const [from, to] = anchorIndex < targetIndex ? [anchorIndex, targetIndex] : [targetIndex, anchorIndex]
+        const range = visible
+          .slice(from, to + 1)
+          .filter((e) => !e.unplayable && !isFutureRelease(e.released))
+        setSelectedKeys(new Set(range.map((e) => key(e.season, e.episode))))
+        return
+      }
+    }
+    setSelectedKeys((prev) => {
+      const next = new Set(prev)
+      if (next.has(epKey)) next.delete(epKey)
+      else next.add(epKey)
+      return next
+    })
+    setSelectAnchor(epKey)
+  }
+
+  const selectedEpisodes = visible.filter((e) => selectedKeys.has(key(e.season, e.episode)))
 
   return (
     <section className={`${styles.section} glass-panel`} aria-label="Episodes">
@@ -422,6 +463,45 @@ export function EpisodesSection({
           document.body
         )}
 
+      {selectedEpisodes.length > 0 && (
+        <div className={styles.selectionBar} role="toolbar" aria-label="Selected episodes">
+          <span className={styles.selectionCount}>{selectedEpisodes.length} selected</span>
+          <span className={styles.selectionHint}>Shift-click to extend, Ctrl-click to toggle</span>
+          <div className={styles.selectionActions}>
+            <button
+              type="button"
+              className={styles.selectionButton}
+              onClick={() => {
+                onMarkMany(selectedEpisodes, true)
+                setSelectedKeys(new Set())
+              }}
+            >
+              <Icon name="eye" size={13} />
+              Mark watched
+            </button>
+            <button
+              type="button"
+              className={styles.selectionButton}
+              onClick={() => {
+                onMarkMany(selectedEpisodes, false)
+                setSelectedKeys(new Set())
+              }}
+            >
+              <Icon name="eye-off" size={13} />
+              Mark unwatched
+            </button>
+            <button
+              type="button"
+              className={styles.selectionButton}
+              onClick={() => setSelectedKeys(new Set())}
+            >
+              <Icon name="x" size={13} />
+              Clear
+            </button>
+          </div>
+        </div>
+      )}
+
       <ul className={styles.grid}>
         {visible.map((ep) => {
           const epKey = key(ep.season, ep.episode)
@@ -436,19 +516,23 @@ export function EpisodesSection({
           const menuOpen = openMenu?.kind === 'episode' && openMenu.episode.id === ep.id
           const title = ep.title || `Episode ${ep.episode}`
           const airDate = airDateLabel(ep.released)
+          const isSelected = selectedKeys.has(epKey)
+          const unaired = isFutureRelease(ep.released)
           return (
             <li
               key={ep.id}
               className={`${styles.tile} ${isNext ? styles.tileNext : ''} ${
                 watched ? styles.tileWatched : ''
-              }`}
+              } ${isSelected ? styles.tileSelected : ''}`}
             >
               {/* The whole thumbnail is the play target, the way the
                   reference design works — a separate small play button
                   would be a far smaller hit area for the one action a
                   tile is overwhelmingly clicked for. Unplayable entries
                   (disambiguateVideos' synthetic Specials, see core.ts)
-                  get a plain non-interactive thumbnail instead. */}
+                  get a plain non-interactive thumbnail instead, same as an
+                  episode whose air date hasn't happened yet — there is
+                  nothing a stream resolver could find for either. */}
               {ep.unplayable ? (
                 <div className={styles.thumbFrame}>
                   <ArtworkImage
@@ -459,16 +543,39 @@ export function EpisodesSection({
                     className={styles.thumb}
                   />
                 </div>
+              ) : unaired ? (
+                <div className={`${styles.thumbFrame} ${styles.thumbFrameUnaired}`}>
+                  <ArtworkImage
+                    src={ep.thumbnail}
+                    alt=""
+                    fallbackTitle={title}
+                    artTint={['#1c2a45', '#0a1220']}
+                    className={styles.thumb}
+                  />
+                  <span className={styles.playOverlay} aria-hidden="true">
+                    <Icon name="clock" size={20} />
+                  </span>
+                  {airDate && (
+                    <span className={`${styles.badge} ${styles.badgeUnaired}`}>
+                      Releases {airDate}
+                    </span>
+                  )}
+                </div>
               ) : (
                 <button
                   type="button"
                   className={styles.thumbFrame}
-                  onClick={() => {
+                  onClick={(e) => {
+                    if (e.ctrlKey || e.metaKey || e.shiftKey) {
+                      toggleSelect(ep, e.shiftKey)
+                      return
+                    }
                     setPendingKey(epKey)
                     onPlay(ep)
                   }}
                   disabled={isResolving}
                   aria-busy={isResolving}
+                  aria-pressed={isSelected}
                   aria-label={`Play ${title}`}
                 >
                   <ArtworkImage
@@ -485,6 +592,11 @@ export function EpisodesSection({
                       <Icon name={watched ? 'refresh' : 'play'} size={20} />
                     )}
                   </span>
+                  {isSelected && (
+                    <span className={styles.selectMark} aria-hidden="true">
+                      <Icon name="check" size={12} />
+                    </span>
+                  )}
                   {watched ? (
                     <span className={`${styles.badge} ${styles.badgeWatched}`}>
                       <Icon name="check" size={10} />
@@ -531,7 +643,7 @@ export function EpisodesSection({
                   <span className={styles.subLabel}>
                     {airDate ?? (ep.unplayable ? 'Extra' : '')}
                   </span>
-                  {!ep.unplayable && (
+                  {!ep.unplayable && !unaired && (
                     <button
                       type="button"
                       className={styles.tileMenuTrigger}

@@ -27,6 +27,12 @@ export interface MediaItem {
    *  preview blur while the real image loads. */
   artworkBlurhash?: string
   releaseYear?: number
+  /** Full release date (YYYY-MM-DD, or an ISO datetime some sources give) —
+   *  see CatalogItem.releaseDate. Undefined whenever only a bare year is
+   *  known; a title with no date here can't be told apart from one that
+   *  already released this year, so "not yet released" logic (DetailHero,
+   *  AboutPanel, EpisodesSection) only fires when this is actually set. */
+  releaseDate?: string
   runtimeMinutes?: number
   genres: string[]
   moods?: string[]

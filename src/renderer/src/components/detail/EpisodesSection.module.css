@@ -166,6 +166,87 @@
   border-color: rgba(94, 193, 255, 0.55);
   box-shadow: 0 0 0 1px rgba(94, 193, 255, 0.25);
 }
+.tileSelected .thumbFrame {
+  border-color: var(--accent-blue);
+  box-shadow: 0 0 0 2px rgba(94, 193, 255, 0.4);
+}
+/* Not a <button> (there is nothing to resolve a stream for yet), but keeps
+   the same frame geometry/overlay language as a playable tile so the grid
+   doesn't jump around depending on air date. */
+.thumbFrameUnaired .thumb {
+  opacity: 0.4;
+}
+.thumbFrameUnaired .playOverlay {
+  opacity: 0.9;
+  background: rgba(6, 12, 22, 0.65);
+}
+.badgeUnaired {
+  color: #04121c;
+  background: var(--accent-cyan);
+  right: auto;
+  left: 7px;
+}
+.selectMark {
+  position: absolute;
+  z-index: 2;
+  top: 7px;
+  left: 7px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  color: #04121c;
+  background: var(--accent-cyan);
+  box-shadow: 0 2px 8px -3px rgba(0, 0, 0, 0.6);
+}
+
+/* Appears above the grid the instant a shift/ctrl-click starts a
+   selection — same glass-panel language as the rest of the section, kept
+   compact since it sits inline rather than floating over content. */
+.selectionBar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px 16px;
+  padding: 10px 14px;
+  border-radius: var(--radius-medium);
+  border: 1px solid var(--border-subtle);
+  background: rgba(10, 15, 25, 0.5);
+}
+.selectionCount {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+.selectionHint {
+  font-size: 11.5px;
+  color: var(--text-muted);
+}
+.selectionActions {
+  display: flex;
+  gap: 8px;
+  margin-left: auto;
+}
+.selectionButton {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 12px;
+  border-radius: var(--radius-small);
+  border: 1px solid var(--border-subtle);
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-primary);
+  transition:
+    background var(--transition-fast),
+    border-color var(--transition-fast);
+}
+.selectionButton:hover {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: var(--border-active);
+}
 
 /* Always visible (not hover-only), matching the reference: on a dense
    grid the affordance is what tells you the tiles are playable at all.
