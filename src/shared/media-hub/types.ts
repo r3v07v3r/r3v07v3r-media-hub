@@ -1,3 +1,5 @@
+import type { Anime4kSettings } from './anime4k'
+
 // Shared data-model contract for the media-hub backend integration —
 // ported from r3v07v3r/r3v07v3r-media-hub (a separate, standalone
 // TorBox-powered Electron app) into this project's main/preload/renderer
@@ -1014,6 +1016,9 @@ export interface MediaHubPublicSettings {
   playbackBuffer: string
   /** GPU scaling quality — see shared/media-hub/videoScaling.ts. */
   videoScaling: string
+  /** Anime4K shader pack: whether it is on disk, whether it is in the
+   *  pipeline, and which mode — see shared/media-hub/anime4k.ts. */
+  anime4k: Anime4kSettings
   /** On by default: fetches and applies an OpenSubtitles match (in
    *  `subtitleLanguage` below) automatically as soon as a title starts,
    *  same as picking the first OpenSubtitles search result manually would

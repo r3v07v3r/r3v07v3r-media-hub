@@ -49,6 +49,13 @@ import {
   type SubtitleStyle
 } from '../../shared/media-hub/subtitleStyle'
 import { getDatabase } from './dbState'
+import {
+  normalizeVideoScaling,
+  scalerPropertiesFor,
+  type VideoScalingPreset
+} from '../../shared/media-hub/videoScaling'
+import { anime4kShaderPaths } from './anime4kInstall'
+import { anime4kSettings } from './preferences'
 import { handle } from './ipcGuard'
 import { logError } from './logger'
 import { readSettings, writeSettings } from './settingsStore'
@@ -253,6 +260,65 @@ async function resetPictureSettings(): Promise<void> {
   }
   pictureSettings = reset
   queuePatch(picturePatch(pictureSettings), true)
+}
+
+/**
+ * Applies a scaler preset to the frame on screen and stores it.
+ *
+ * Stored as well as applied, unlike fit mode: the same preset has a row in
+ * Settings, and a player that showed "Sharp" while Settings said "Standard"
+ * would be two controls disagreeing about one value. loadFile() still reads
+ * the stored preset per title, so this also decides how the next one opens.
+ */
+async function applyVideoScaling(preset: VideoScalingPreset): Promise<void> {
+  // Standard names no properties (see scalerPropertiesFor), which is right
+  // for the next title — --reset-on-next-file puts the defaults back — but
+  // the frame on screen still has the last preset's filters. Asking mpv for
+  // each option's own default, rather than writing a name that may not be
+  // the default for the video output in use, is what "Standard" means.
+  const wanted = scalerPropertiesFor(preset)
+  for (const property of ['scale', 'dscale', 'cscale']) {
+    const value =
+      wanted[property] ?? (await player.get<string>(`option-info/${property}/default-value`))
+    await player.set(property, value)
+  }
+  const settings = readSettings()
+  settings.videoScaling = preset
+  writeSettings(settings)
+  queuePatch({ videoScaling: preset }, true)
+}
+
+// The live Anime4K switch. Like fitMode, it belongs with the long-lived mpv
+// process rather than the overlay: switched off during one episode, it stays
+// off for the next. It does NOT persist across restarts — the Settings toggle
+// is the standing preference, this is the in-the-moment one, and a session
+// always starts with the standing one.
+let anime4kActive: boolean | null = null
+
+/**
+ * Puts the Anime4K chain in front of mpv's scaler, or takes it out.
+ *
+ * `clr` then one `append` per file rather than a single `set` with a joined
+ * list: `set` parses its value with the platform list separator (`;` on
+ * Windows), and shader paths under userData are whatever the person's
+ * username is. `append` takes one item verbatim.
+ *
+ * Never throws for "nothing to apply": the overlay hides the control when
+ * the pack is absent or disabled, but a keypress can still arrive, and a
+ * stale one is not worth an error toast.
+ */
+async function applyAnime4k(active: boolean): Promise<void> {
+  const prefs = anime4kSettings(readSettings())
+  const available = prefs.installed && prefs.enabled
+  const on = available && active
+  await player.command('change-list', 'glsl-shaders', 'clr', '')
+  if (on) {
+    for (const shader of anime4kShaderPaths(prefs.mode)) {
+      await player.command('change-list', 'glsl-shaders', 'append', shader)
+    }
+  }
+  anime4kActive = active
+  queuePatch({ anime4k: { available, active: on, mode: prefs.mode } }, true)
 }
 
 export function getPlayer(): MpvPlayer {
@@ -808,6 +874,14 @@ export async function startPlayerSession(
   // would still be showing the mode that was chosen before.
   await applyFitMode(fitMode).catch(() => {})
   await applyPictureSettings().catch(() => {})
+  // Same again for the shader chain, with one more reason: Settings may have
+  // installed, enabled, or changed the mode since the last title, and this is
+  // where that becomes real. A session starts with the standing preference;
+  // the live switch (anime4kActive) only carries over once somebody has used
+  // it in this process.
+  await applyAnime4k(anime4kActive ?? true).catch(() => {})
+  // The overlay's Scaling menu shows what loadFile() just applied.
+  queuePatch({ videoScaling: normalizeVideoScaling(options.videoScaling) }, true)
 
   // Re-asserted per title rather than assumed, because main-window UI being up
   // is a state a title change does NOT close: a host playing something from
@@ -1079,6 +1153,12 @@ async function runCommand(command: PlayerCommand): Promise<PlayerCommandOutcome>
       // unrecognized mode has an obvious safe reading (the default) instead of
       // being worth failing the call over.
       await applyFitMode(normalizeVideoFit(command.mode))
+      return
+    case 'set-video-scaling':
+      await applyVideoScaling(normalizeVideoScaling(command.preset))
+      return
+    case 'set-anime4k':
+      await applyAnime4k(command.active === true)
       return
     case 'set-picture-control': {
       if (!isVideoPictureControl(command.control)) throw new Error('Invalid picture control.')

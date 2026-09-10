@@ -16,6 +16,13 @@ export const MEDIA_HUB_CHANNELS = {
   settingsSetAudioLanguage: 'mediahub:settings:set-audio-language',
   settingsSetPlaybackBuffer: 'mediahub:settings:set-playback-buffer',
   settingsSetVideoScaling: 'mediahub:settings:set-video-scaling',
+  /** Anime4K shader pack — fetched on demand, see main/media-hub/anime4kInstall.ts. */
+  anime4kStatusGet: 'mediahub:anime4k:status',
+  anime4kInstall: 'mediahub:anime4k:install',
+  anime4kRemove: 'mediahub:anime4k:remove',
+  anime4kStatus: 'mediahub:anime4k:status-event', // push event
+  settingsSetAnime4kEnabled: 'mediahub:settings:set-anime4k-enabled',
+  settingsSetAnime4kMode: 'mediahub:settings:set-anime4k-mode',
   settingsSetAutoSubtitles: 'mediahub:settings:set-auto-subtitles',
   settingsSetAutoplayNext: 'mediahub:settings:set-autoplay-next',
   settingsSetWatchRegion: 'mediahub:settings:set-watch-region',

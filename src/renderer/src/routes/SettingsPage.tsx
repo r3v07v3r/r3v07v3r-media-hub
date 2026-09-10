@@ -23,6 +23,11 @@ import type {
   ProfilePublic,
   SourcePreference
 } from '@shared/media-hub/types'
+import {
+  ANIME4K_MODES,
+  anime4kModeLabel,
+  type Anime4kStatus
+} from '@shared/media-hub/anime4k'
 import styles from './Settings.module.css'
 import { WatchlistSyncSection } from '@renderer/components/settings/WatchlistSyncSection'
 
@@ -46,6 +51,11 @@ const VIDEO_SCALING_OPTIONS: { value: string; label: string }[] = [
   { value: 'high', label: 'High' },
   { value: 'sharp', label: 'Sharp' }
 ]
+
+const ANIME4K_MODE_OPTIONS: { value: string; label: string }[] = ANIME4K_MODES.map((mode) => ({
+  value: mode,
+  label: anime4kModeLabel(mode)
+}))
 
 const QUALITY_OPTIONS = [
   { value: '0', label: 'Any' },
@@ -900,6 +910,9 @@ export default function SettingsPage({
     kind: 'idle' | 'busy' | 'ok' | 'error'
     message?: string
   }>({ kind: 'idle' })
+  // Pushed by main while an install runs, and pulled once on mount so a
+  // reload mid-install still shows "installing".
+  const [anime4kStatus, setAnime4kStatus] = useState<Anime4kStatus | null>(null)
   const runAction = useAsyncAction()
 
   async function saveSetting(scope: string, action: () => Promise<unknown>) {
@@ -911,6 +924,57 @@ export default function SettingsPage({
       retry: true
     })
     if (result.ok) refreshMediaHubSettings()
+  }
+
+  useEffect(() => {
+    const api = window.api?.mediaHub
+    if (!api) return
+    api.anime4k
+      .status()
+      .then(setAnime4kStatus)
+      .catch(() => {})
+    return api.anime4k.onStatus((status) => {
+      setAnime4kStatus(status)
+      // installed/removed changes what the snapshot says, and the toggle
+      // and mode rows read from the snapshot.
+      if (status.state !== 'installing') refreshMediaHubSettings()
+    })
+  }, [refreshMediaHubSettings])
+
+  async function handleAnime4kInstallOrRemove() {
+    const api = window.api?.mediaHub
+    if (!api) return
+    if (anime4kStatus?.state === 'installed') {
+      await runAction({
+        scope: 'settings.anime4k-remove',
+        action: () => api.anime4k.remove(),
+        errorMessage: "Couldn't remove the Anime4K shaders.",
+        successMessage: 'Anime4K shaders removed.'
+      })
+    } else {
+      setAnime4kStatus({ state: 'installing' })
+      // The result is also pushed on anime4kStatus; taking it here as well
+      // covers a push that raced ahead of this component mounting.
+      const status = await api.anime4k.install().catch(
+        (error): Anime4kStatus => ({
+          state: 'error',
+          message: error instanceof Error ? error.message : String(error)
+        })
+      )
+      setAnime4kStatus(status)
+    }
+    refreshMediaHubSettings()
+  }
+
+  async function handleSetAnime4kEnabled(enabled: boolean) {
+    const api = window.api?.mediaHub
+    if (api)
+      await saveSetting('settings.anime4k-enabled', () => api.settings.setAnime4kEnabled(enabled))
+  }
+
+  async function handleSetAnime4kMode(mode: string) {
+    const api = window.api?.mediaHub
+    if (api) await saveSetting('settings.anime4k-mode', () => api.settings.setAnime4kMode(mode))
   }
 
   useEffect(() => {
@@ -1451,6 +1515,42 @@ export default function SettingsPage({
                   options={VIDEO_SCALING_OPTIONS}
                   onChange={handleSetVideoScaling}
                 />
+                <ActionRow
+                  icon="cpu"
+                  title="Anime4K shaders"
+                  description={
+                    anime4kStatus?.state === 'installed'
+                      ? 'Installed. Neural-network shaders that restore line art and upscale anime on the GPU while it plays. Once enabled below, the player gets an on/off button and the A key.'
+                      : 'Downloads the Anime4K v4.0.1 shader pack (under 1 MB, MIT licensed) from its GitHub release and keeps the ten files the modes below use. Nothing changes until you also enable it.'
+                  }
+                  label={anime4kStatus?.state === 'installed' ? 'Remove' : 'Install'}
+                  busy={anime4kStatus?.state === 'installing'}
+                  onClick={() => void handleAnime4kInstallOrRemove()}
+                />
+                {anime4kStatus?.state === 'error' && (
+                  <span className={`${styles.statusMessage} ${styles.statusError}`}>
+                    {anime4kStatus.message || "Couldn't install the Anime4K shaders."}
+                  </span>
+                )}
+                {mediaHubSettings?.anime4k.installed && (
+                  <>
+                    <ToggleRow
+                      icon="play"
+                      title="Use Anime4K while watching"
+                      description="Puts the shaders in the playback pipeline for every title. The player's Anime4K button (or the A key) switches them off and on without leaving the film. Best on anime; leave it off for live action."
+                      checked={mediaHubSettings.anime4k.enabled}
+                      onChange={handleSetAnime4kEnabled}
+                    />
+                    <SliderRow
+                      icon="cpu"
+                      title="Anime4K mode"
+                      description="A restores lines and upscales, and suits most shows. B is a softer restore for sources that already ring. C denoises without line restore, for clean high-bitrate sources. The doubled modes add a second restore pass: cleaner lines, more GPU. Applies from the next title."
+                      value={mediaHubSettings.anime4k.mode}
+                      options={ANIME4K_MODE_OPTIONS}
+                      onChange={handleSetAnime4kMode}
+                    />
+                  </>
+                )}
               </section>
 
               <section

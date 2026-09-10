@@ -14,8 +14,34 @@
 
 export type VideoScalingPreset = 'auto' | 'high' | 'sharp'
 
+export const VIDEO_SCALING_PRESETS: readonly VideoScalingPreset[] = ['auto', 'high', 'sharp']
+
 export function normalizeVideoScaling(value: unknown): VideoScalingPreset {
   return value === 'high' || value === 'sharp' ? value : 'auto'
+}
+
+/** One wording, used by both the Settings row and the player's menu, so the
+ *  same preset never has two names. */
+export function videoScalingLabel(preset: VideoScalingPreset): string {
+  switch (preset) {
+    case 'high':
+      return 'High'
+    case 'sharp':
+      return 'Sharp'
+    default:
+      return 'Standard'
+  }
+}
+
+export function videoScalingDescription(preset: VideoScalingPreset): string {
+  switch (preset) {
+    case 'high':
+      return 'Cleaner resize, no visible artefacts.'
+    case 'sharp':
+      return 'Crispest on low-resolution sources. Can ring on noisy ones.'
+    default:
+      return "mpv's stock scalers."
+  }
 }
 
 /**

@@ -15,7 +15,9 @@ import type {
 } from '../../shared/media-hub/types'
 import { normalizePlaybackBuffer } from '../../shared/media-hub/playbackBuffer'
 import { normalizeVideoScaling } from '../../shared/media-hub/videoScaling'
+import { normalizeAnime4kMode, type Anime4kSettings } from '../../shared/media-hub/anime4k'
 import { normalizeOllamaBaseUrl, normalizeOllamaModel } from '../../shared/media-hub/ollama'
+import { isAnime4kInstalled } from './anime4kInstall'
 import { watchRegion } from './watchProviders'
 
 export const THEMES: Theme[] = [
@@ -55,6 +57,7 @@ export function publicSettings(settings: Record<string, unknown> = {}): MediaHub
     updateChannel: normalizeUpdateChannel(settings.updateChannel),
     playbackBuffer: normalizePlaybackBuffer(settings.playbackBuffer),
     videoScaling: normalizeVideoScaling(settings.videoScaling),
+    anime4k: anime4kSettings(settings),
     autoSubtitlesEnabled: settings.autoSubtitlesEnabled !== false,
     autoplayNextEnabled: settings.autoplayNextEnabled !== false,
     savedFilters: normalizeSavedFilters(settings.savedFilters),
@@ -104,6 +107,21 @@ export function publicSettings(settings: Record<string, unknown> = {}): MediaHub
     // yes: every install that had the one-way pull is somebody who
     // connected an account to keep things in step.
     watchlistTwoWay: settings.watchlistTwoWay !== false
+  }
+}
+
+/**
+ * The Anime4K preference as the renderer and the player both see it.
+ * `enabled` is only ever true while the files are actually on disk: a flag
+ * left behind by a removed pack (or a pack removed by hand) must not make
+ * the player hand mpv paths that do not exist.
+ */
+export function anime4kSettings(settings: Record<string, unknown> = {}): Anime4kSettings {
+  const installed = isAnime4kInstalled()
+  return {
+    installed,
+    enabled: installed && settings.anime4kEnabled === true,
+    mode: normalizeAnime4kMode(settings.anime4kMode)
   }
 }
 

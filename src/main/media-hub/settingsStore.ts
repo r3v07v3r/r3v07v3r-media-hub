@@ -107,6 +107,11 @@ export interface MediaHubRawSettings {
   playbackBuffer?: string
   /** GPU scaling quality — see shared/media-hub/videoScaling.ts. */
   videoScaling?: string
+  /** Whether the Anime4K shaders go into the playback pipeline. Only
+   *  meaningful while the pack is installed — see shared/media-hub/anime4k.ts. */
+  anime4kEnabled?: boolean
+  /** One of ANIME4K_MODES; read through normalizeAnime4kMode. */
+  anime4kMode?: string
   autoSubtitlesEnabled?: boolean
   autoplayNextEnabled?: boolean
   /** Named filter combinations — see SavedFilter. Device-level, like the

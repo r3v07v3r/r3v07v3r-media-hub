@@ -64,6 +64,13 @@ interface RestoreResult {
 
 import { normalizePlaybackBuffer } from '../../shared/media-hub/playbackBuffer'
 import { normalizeVideoScaling } from '../../shared/media-hub/videoScaling'
+import {
+  normalizeAnime4kMode,
+  type Anime4kSettings,
+  type Anime4kStatus
+} from '../../shared/media-hub/anime4k'
+import { anime4kStatus, installAnime4k, isAnime4kInstalled, removeAnime4k } from './anime4kInstall'
+import { anime4kSettings } from './preferences'
 import { isAllowedExternalUrl } from './security'
 import { cacheRootDir, clearAllSessions, MIN_CACHE_BYTES } from './streamCache'
 import {
@@ -227,6 +234,46 @@ export function registerAppIpc(): void {
       settings.videoScaling = normalizeVideoScaling(value)
       writeSettings(settings)
       return { videoScaling: settings.videoScaling }
+    }
+  )
+
+  // Anime4K. Install/remove are actions on the disk, the other two are
+  // preferences; all four answer with the same Anime4kSettings shape the
+  // snapshot carries, so the Settings pane has one thing to render.
+  handle<undefined, Anime4kStatus>(MEDIA_HUB_CHANNELS.anime4kStatusGet, () => anime4kStatus())
+
+  handle<undefined, Anime4kStatus>(MEDIA_HUB_CHANNELS.anime4kInstall, () => installAnime4k())
+
+  handle<undefined, Anime4kStatus>(MEDIA_HUB_CHANNELS.anime4kRemove, () => {
+    const status = removeAnime4k()
+    // The flag goes with the files: leaving it set would have a later
+    // reinstall silently switch the shaders back on.
+    const settings = readSettings()
+    settings.anime4kEnabled = false
+    writeSettings(settings)
+    return status
+  })
+
+  handle<unknown, { anime4k: Anime4kSettings }>(
+    MEDIA_HUB_CHANNELS.settingsSetAnime4kEnabled,
+    (_event, value) => {
+      const settings = readSettings()
+      // Cannot be turned on without the files — anime4kSettings would report
+      // it off anyway, and storing a true here would make it spring to life
+      // on the next install without being asked.
+      settings.anime4kEnabled = value === true && isAnime4kInstalled()
+      writeSettings(settings)
+      return { anime4k: anime4kSettings(settings) }
+    }
+  )
+
+  handle<unknown, { anime4k: Anime4kSettings }>(
+    MEDIA_HUB_CHANNELS.settingsSetAnime4kMode,
+    (_event, value) => {
+      const settings = readSettings()
+      settings.anime4kMode = normalizeAnime4kMode(value)
+      writeSettings(settings)
+      return { anime4k: anime4kSettings(settings) }
     }
   )
 
