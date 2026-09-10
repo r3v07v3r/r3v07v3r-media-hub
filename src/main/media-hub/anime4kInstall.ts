@@ -27,7 +27,7 @@ import {
 import { MEDIA_HUB_CHANNELS } from '../../shared/media-hub/ipc-channels'
 import { logError } from './logger'
 import { sendToRenderer } from './rendererBridge'
-import { inflateZipEntry, readZipCentralDirectory } from './zipArchive'
+import { extractAnime4kShaders } from './anime4kArchive'
 
 /** Bump these three together when upgrading. The asset name has not tracked
  *  the tag upstream (v4.0.1 ships Anime4K_v4.0.zip), so it is pinned
@@ -43,8 +43,6 @@ const ANIME4K_URL = `https://github.com/bloc97/Anime4K/releases/download/${ANIME
 /** The archive is ~0.75MB. Anything past this is not the pinned file, and
  *  the hash check would reject it anyway — this just refuses to buffer it. */
 const MAX_ARCHIVE_BYTES = 4 * 1024 * 1024
-/** Largest shader in the pack is ~310KB. */
-const MAX_SHADER_BYTES = 2 * 1024 * 1024
 
 const STAMP_FILE = '.anime4k-version.json'
 
@@ -76,24 +74,6 @@ export function isAnime4kInstalled(): boolean {
 export function anime4kShaderPaths(mode: Anime4kMode): string[] {
   const dir = anime4kDir()
   return anime4kShaderChain(mode).map((name) => path.join(dir, name))
-}
-
-/**
- * Picks the required shaders out of the archive. Pure, so the test can feed
- * it an in-memory zip. Throws if any required file is absent: a pack missing
- * one shader would make some modes silently fail in mpv later, which is worse
- * than refusing the install now.
- */
-export function extractAnime4kShaders(archive: Buffer): Map<string, Buffer> {
-  const entries = readZipCentralDirectory(archive)
-  const byName = new Map(entries.map((entry) => [path.posix.basename(entry.fileName), entry]))
-  const out = new Map<string, Buffer>()
-  for (const name of ANIME4K_REQUIRED_FILES) {
-    const entry = byName.get(name)
-    if (!entry) throw new Error(`${name} is missing from ${ANIME4K_ASSET}`)
-    out.set(name, inflateZipEntry(archive, entry, MAX_SHADER_BYTES))
-  }
-  return out
 }
 
 let installing = false

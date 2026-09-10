@@ -14,7 +14,7 @@ import {
   anime4kShaderChain,
   normalizeAnime4kMode
 } from '../src/shared/media-hub/anime4k'
-import { extractAnime4kShaders } from '../src/main/media-hub/anime4kInstall'
+import { extractAnime4kShaders } from '../src/main/media-hub/anime4kArchive'
 
 /** Same in-memory zip construction as zipArchive.test.ts. */
 function makeZip(files: { name: string; body: Buffer | string }[]): Buffer {
