@@ -15,6 +15,8 @@ import type { NextEpisodeRef } from './nextEpisode'
 import type { SubtitleStyle } from './subtitleStyle'
 import type { VideoFitMode } from './videoFit'
 import type { VideoPictureControl } from './videoPicture'
+import type { VideoScalingPreset } from './videoScaling'
+import type { Anime4kPlayerState } from './anime4k'
 
 /**
  * How long the post-play card counts down before starting the next episode.
@@ -258,6 +260,13 @@ export interface PlayerStatePatch {
    *  choice, and main is the side that knows which choice they add up to — so
    *  it pushes the mode it just applied rather than the overlay inferring it. */
   fitMode?: VideoFitMode
+  /** The scaler preset in use. Pushed by main for the same reason as
+   *  fitMode: three mpv properties add up to one choice, and main is the
+   *  side that knows which. */
+  videoScaling?: VideoScalingPreset
+  /** Anime4K: whether the toggle is offered at all, and whether it is on.
+   *  See shared/media-hub/anime4k.ts. */
+  anime4k?: Anime4kPlayerState
   /** MPV's live picture offsets. Each is an integer in the -100–100 range;
    * zero is the original picture. */
   brightness?: number
@@ -317,6 +326,14 @@ export type PlayerCommand =
   | { type: 'set-night-mode'; enabled: boolean }
   /** How the picture is fitted into the window — see shared/media-hub/videoFit.ts. */
   | { type: 'set-fit-mode'; mode: VideoFitMode }
+  /** Scaler preset — see shared/media-hub/videoScaling.ts. Applied to the
+   *  frame on screen AND stored, so the Settings pane agrees with the player
+   *  and the next title opens the same way. */
+  | { type: 'set-video-scaling'; preset: VideoScalingPreset }
+  /** Anime4K on or off, live. Ignored (no-op, not an error) when the pack is
+   *  not installed or not enabled in Settings — the overlay does not show the
+   *  control then, but a stale keypress must not fail. */
+  | { type: 'set-anime4k'; active: boolean }
   /** One of the small set of live MPV picture controls. */
   | { type: 'set-picture-control'; control: VideoPictureControl; value: number }
   /** Returns every picture control to the original, unadjusted picture. */

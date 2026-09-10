@@ -106,6 +106,7 @@ import type {
   WatchStatusDiscrepancy
 } from '../shared/media-hub/types'
 import type { OllamaTitleRef } from '../shared/media-hub/ollama'
+import type { Anime4kSettings, Anime4kStatus } from '../shared/media-hub/anime4k'
 import type {
   PlayerCommand,
   PlayerCommandResult,
@@ -215,6 +216,10 @@ const api = {
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.settingsSetPlaybackBuffer, preset),
       setVideoScaling: (preset: string): Promise<{ videoScaling: string }> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.settingsSetVideoScaling, preset),
+      setAnime4kEnabled: (enabled: boolean): Promise<{ anime4k: Anime4kSettings }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.settingsSetAnime4kEnabled, enabled),
+      setAnime4kMode: (mode: string): Promise<{ anime4k: Anime4kSettings }> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.settingsSetAnime4kMode, mode),
       setAutoSubtitles: (enabled: boolean): Promise<{ autoSubtitlesEnabled: boolean }> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.settingsSetAutoSubtitles, enabled),
       setAutoplayNext: (enabled: boolean): Promise<{ autoplayNextEnabled: boolean }> =>
@@ -464,6 +469,15 @@ const api = {
 
     openExternal: (url: string): Promise<{ ok: true }> =>
       ipcRenderer.invoke(MEDIA_HUB_CHANNELS.openExternal, url),
+
+    /** The on-demand Anime4K shader pack — see main/media-hub/anime4kInstall.ts. */
+    anime4k: {
+      status: (): Promise<Anime4kStatus> => ipcRenderer.invoke(MEDIA_HUB_CHANNELS.anime4kStatusGet),
+      install: (): Promise<Anime4kStatus> => ipcRenderer.invoke(MEDIA_HUB_CHANNELS.anime4kInstall),
+      remove: (): Promise<Anime4kStatus> => ipcRenderer.invoke(MEDIA_HUB_CHANNELS.anime4kRemove),
+      onStatus: (onEvent: (status: Anime4kStatus) => void): (() => void) =>
+        subscribe<Anime4kStatus>(MEDIA_HUB_CHANNELS.anime4kStatus, onEvent)
+    },
 
     update: {
       check: (): Promise<UpdateCheckResult> => ipcRenderer.invoke(MEDIA_HUB_CHANNELS.updateCheck),

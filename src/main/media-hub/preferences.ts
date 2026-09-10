@@ -15,6 +15,7 @@ import type {
 } from '../../shared/media-hub/types'
 import { normalizePlaybackBuffer } from '../../shared/media-hub/playbackBuffer'
 import { normalizeVideoScaling } from '../../shared/media-hub/videoScaling'
+import { normalizeAnime4kMode, type Anime4kSettings } from '../../shared/media-hub/anime4k'
 import { normalizeOllamaBaseUrl, normalizeOllamaModel } from '../../shared/media-hub/ollama'
 import { watchRegion } from './watchProviders'
 
@@ -55,6 +56,7 @@ export function publicSettings(settings: Record<string, unknown> = {}): MediaHub
     updateChannel: normalizeUpdateChannel(settings.updateChannel),
     playbackBuffer: normalizePlaybackBuffer(settings.playbackBuffer),
     videoScaling: normalizeVideoScaling(settings.videoScaling),
+    anime4k: anime4kSettings(settings),
     autoSubtitlesEnabled: settings.autoSubtitlesEnabled !== false,
     autoplayNextEnabled: settings.autoplayNextEnabled !== false,
     savedFilters: normalizeSavedFilters(settings.savedFilters),
@@ -104,6 +106,32 @@ export function publicSettings(settings: Record<string, unknown> = {}): MediaHub
     // yes: every install that had the one-way pull is somebody who
     // connected an account to keep things in step.
     watchlistTwoWay: settings.watchlistTwoWay !== false
+  }
+}
+
+// Whether the shader files are on disk is anime4kInstall.ts's to answer,
+// and that module needs electron for the userData path. This one is
+// imported by streamCache.ts and, through it, by the unit tests, which run
+// without Electron — so the probe is injected at startup rather than
+// imported, and reads as "not installed" until it is.
+let anime4kInstalledProbe: () => boolean = () => false
+
+export function setAnime4kInstalledProbe(probe: () => boolean): void {
+  anime4kInstalledProbe = probe
+}
+
+/**
+ * The Anime4K preference as the renderer and the player both see it.
+ * `enabled` is only ever true while the files are actually on disk: a flag
+ * left behind by a removed pack (or a pack removed by hand) must not make
+ * the player hand mpv paths that do not exist.
+ */
+export function anime4kSettings(settings: Record<string, unknown> = {}): Anime4kSettings {
+  const installed = anime4kInstalledProbe()
+  return {
+    installed,
+    enabled: installed && settings.anime4kEnabled === true,
+    mode: normalizeAnime4kMode(settings.anime4kMode)
   }
 }
 
@@ -220,12 +248,18 @@ export function logoutSettings(settings: Record<string, unknown> = {}): Pick<
   Partial<Pick<MediaHubPublicSettings, 'storeMedia'>> &
   // Raw-settings field, not a public one — same three-state contract as
   // storeMedia, carried for the same reason (see the spread below).
-  Partial<{ setupComplete: boolean }> {
+  Partial<{ setupComplete: boolean }> &
+  // Raw fields again (the public shape folds them into `anime4k`): a device
+  // preference like videoScaling beside it — the shader files stay on this
+  // machine through a logout, so the choice to use them should too.
+  Partial<{ anime4kEnabled: boolean; anime4kMode: string }> {
   return {
     theme: normalizeTheme(settings.theme),
     updateChannel: normalizeUpdateChannel(settings.updateChannel),
     playbackBuffer: normalizePlaybackBuffer(settings.playbackBuffer),
     videoScaling: normalizeVideoScaling(settings.videoScaling),
+    anime4kEnabled: settings.anime4kEnabled === true,
+    anime4kMode: normalizeAnime4kMode(settings.anime4kMode),
     autoSubtitlesEnabled: settings.autoSubtitlesEnabled !== false,
     autoplayNextEnabled: settings.autoplayNextEnabled !== false,
     savedFilters: normalizeSavedFilters(settings.savedFilters),

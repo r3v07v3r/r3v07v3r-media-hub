@@ -61,6 +61,12 @@ import {
   VIDEO_PICTURE_MAX,
   VIDEO_PICTURE_MIN
 } from '@shared/media-hub/videoPicture'
+import {
+  VIDEO_SCALING_PRESETS,
+  videoScalingDescription,
+  videoScalingLabel
+} from '@shared/media-hub/videoScaling'
+import { anime4kModeLabel } from '@shared/media-hub/anime4k'
 import styles from './PlayerOverlayWindow.module.css'
 
 const CONTROLS_IDLE_MS = 3200
@@ -78,7 +84,7 @@ const SCRUB_PREVIEW_WIDTH = 160
  *  live; there is no re-render of anything. */
 const SUBTITLE_DELAY_STEP = 0.25
 
-type Menu = 'audio' | 'subtitles' | 'fit' | 'picture' | 'playback' | 'info' | null
+type Menu = 'audio' | 'subtitles' | 'fit' | 'scaling' | 'picture' | 'playback' | 'info' | null
 
 /** What the speed control offers. 1 is listed with the rest rather than being
  *  a separate "reset", because it is the value people come back to and hunting
@@ -174,6 +180,12 @@ function PlayerControls() {
   // Main owns this, and pushes it — the overlay never guesses, so the label
   // stays right across a title change or a remount.
   const fitMode = state.fitMode ?? DEFAULT_VIDEO_FIT
+  const videoScaling = state.videoScaling ?? 'auto'
+  // Absent until main has applied it once per session; the control is not
+  // drawn at all until then, and not at all when the pack is off in Settings.
+  const anime4k = state.anime4k
+  const anime4kAvailable = anime4k?.available === true
+  const anime4kActive = anime4k?.active === true
   const pictureSettings = {
     brightness: state.brightness ?? DEFAULT_VIDEO_PICTURE.brightness,
     contrast: state.contrast ?? DEFAULT_VIDEO_PICTURE.contrast,
@@ -817,6 +829,11 @@ function PlayerControls() {
         takeScreenshot()
       } else if (event.key === 'i' || event.key === 'I') {
         setMenu((current) => (current === 'info' ? null : 'info'))
+      } else if ((event.key === 'a' || event.key === 'A') && anime4kAvailable) {
+        // Anime4K on/off, live. Only while the control is on screen too —
+        // a key that silently did nothing would be worse than none.
+        event.preventDefault()
+        void command({ type: 'set-anime4k', active: !anime4kActive })
       }
       revealControls()
     }
@@ -832,7 +849,9 @@ function PlayerControls() {
     revealControls,
     locked,
     command,
-    takeScreenshot
+    takeScreenshot,
+    anime4kAvailable,
+    anime4kActive
   ])
 
   // --- Skip intro/credits ---------------------------------------------------
@@ -1809,6 +1828,56 @@ function PlayerControls() {
               </div>
             )}
           </div>
+
+          {/* Scaler preset. The same setting as the Settings page's "Video
+              scaling" row, switchable here without leaving the film: mpv
+              swaps the filter on the frame already on screen. */}
+          <div className={styles.menuWrap}>
+            <button
+              type="button"
+              className={styles.button}
+              onClick={() => setMenu(menu === 'scaling' ? null : 'scaling')}
+              aria-expanded={menu === 'scaling'}
+              aria-label={`Video scaling: ${videoScalingLabel(videoScaling)}`}
+            >
+              Scaling
+            </button>
+            {menu === 'scaling' && (
+              <div className={styles.menu}>
+                {VIDEO_SCALING_PRESETS.map((preset) => (
+                  <button
+                    key={preset}
+                    type="button"
+                    className={styles.menuItem}
+                    onClick={() => {
+                      void command({ type: 'set-video-scaling', preset })
+                      setMenu(null)
+                    }}
+                  >
+                    {videoScalingLabel(preset)}
+                    {videoScaling === preset ? ' ✓' : ''}
+                    <span className={styles.menuItemNote}>{videoScalingDescription(preset)}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Anime4K, only once installed AND enabled in Settings — there is
+              nothing to toggle before that, and a control that says "not
+              available" is a settings page in the wrong place. */}
+          {anime4kAvailable && anime4k && (
+            <button
+              type="button"
+              className={styles.button}
+              aria-pressed={anime4kActive}
+              onClick={() => void command({ type: 'set-anime4k', active: !anime4kActive })}
+              aria-label={`Anime4K ${anime4kModeLabel(anime4k.mode)}: ${anime4kActive ? 'on' : 'off'}`}
+              title={`Anime4K ${anime4kModeLabel(anime4k.mode)} (A)`}
+            >
+              Anime4K {anime4kActive ? 'On' : 'Off'}
+            </button>
+          )}
 
           <div className={styles.menuWrap}>
             <button
