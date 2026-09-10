@@ -285,6 +285,10 @@ async function applyVideoScaling(preset: VideoScalingPreset): Promise<void> {
   const settings = readSettings()
   settings.videoScaling = preset
   writeSettings(settings)
+  // The one-shot error reload replays lastLoad's options, and loadFile
+  // reapplies the preset it is handed — so it has to be handed this one,
+  // not the one the title started with.
+  if (lastLoad) lastLoad.options = { ...lastLoad.options, videoScaling: preset }
   queuePatch({ videoScaling: preset }, true)
 }
 

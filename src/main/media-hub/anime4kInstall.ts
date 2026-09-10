@@ -28,6 +28,7 @@ import { MEDIA_HUB_CHANNELS } from '../../shared/media-hub/ipc-channels'
 import { logError } from './logger'
 import { sendToRenderer } from './rendererBridge'
 import { extractAnime4kShaders } from './anime4kArchive'
+import { setAnime4kInstalledProbe } from './preferences'
 
 /** Bump these three together when upgrading. The asset name has not tracked
  *  the tag upstream (v4.0.1 ships Anime4K_v4.0.zip), so it is pinned
@@ -67,6 +68,10 @@ export function isAnime4kInstalled(): boolean {
   }
   return ANIME4K_REQUIRED_FILES.every((name) => fs.existsSync(path.join(dir, name)))
 }
+
+// preferences.ts reads installed-ness through this rather than importing
+// here — see setAnime4kInstalledProbe.
+setAnime4kInstalledProbe(() => isAnime4kInstalled())
 
 /** Absolute paths for a mode's chain, in order. Only meaningful when
  *  isAnime4kInstalled() — the caller checks, so a missing file is never
