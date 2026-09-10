@@ -14,9 +14,15 @@ import {
 
 assert.deepEqual([...VIDEO_SCALING_PRESETS], ['auto', 'high', 'sharp'])
 
+// Standard sets nothing — mpv's own defaults are restored per option (see
+// scalerPropertiesFor and playerBridge's applyVideoScaling); the other two
+// name all three scalers so a live switch never leaves one half-applied.
+assert.deepEqual(scalerPropertiesFor('auto'), {})
 for (const preset of VIDEO_SCALING_PRESETS) {
   const properties = scalerPropertiesFor(preset)
-  assert.deepEqual(Object.keys(properties).sort(), ['cscale', 'dscale', 'scale'], preset)
+  if (preset !== 'auto') {
+    assert.deepEqual(Object.keys(properties).sort(), ['cscale', 'dscale', 'scale'], preset)
+  }
   for (const value of Object.values(properties)) assert.match(value, /^[a-z0-9_]+$/)
   assert.ok(videoScalingLabel(preset).length > 0)
   assert.ok(videoScalingDescription(preset).length > 0)
