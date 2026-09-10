@@ -10,6 +10,7 @@ import { Icon } from '@renderer/components/icons/Icon'
 import { resolveArtwork } from '@renderer/lib/artwork'
 import { ArtworkImage } from '@renderer/components/media/ArtworkImage'
 import { useYoutubeEmbedControls } from '@renderer/hooks/useYoutubeEmbedControls'
+import { formatReleaseDate, isFutureRelease } from '@renderer/lib/mediaHub/releaseDate'
 import styles from './DetailHero.module.css'
 
 /** Same idle window as the movie player's control bar
@@ -38,6 +39,14 @@ export interface DetailHeroProps {
    *  "there is nothing left to play" stays visible now that the separate
    *  Next-to-Play panel beside About is gone. */
   allEpisodesWatched: boolean
+  /** The earliest upcoming episode's own air date, for a title that hasn't
+   *  started airing at all — nextEpisode is always null in that case
+   *  (playableEpisodesInOrder excludes every unaired episode by
+   *  construction, see MediaDetailPage), so it carries no date of its own
+   *  to read a release gate off of. Undefined once at least one episode
+   *  has aired (nextEpisode or allEpisodesWatched already answer the
+   *  question then) or when there's no episode data at all. */
+  nextAiringDate: string | undefined
   trailer: Trailer | undefined
   showTrailer: boolean
   onToggleTrailer: () => void
@@ -53,6 +62,7 @@ export function DetailHero({
   continueEntry,
   nextEpisode,
   allEpisodesWatched,
+  nextAiringDate,
   trailer,
   showTrailer,
   onToggleTrailer,
@@ -63,6 +73,31 @@ export function DetailHero({
   const artwork = resolveArtwork(media)
   const hasProgress = !!continueEntry && !continueEntry.media.completed
   const isResolving = resolvingMedia?.id === media.id
+
+  // What "Play" would even resolve to right now, so a title/episode that
+  // hasn't come out yet doesn't offer a Play button that can only fail.
+  // Someone with existing progress is never shown this — they've already
+  // watched *something* of this title, so whatever gap remains isn't a
+  // "not released yet" gap. Episodic titles key off an actual upcoming
+  // episode's own air date rather than the show's premiere: a three-season
+  // show that's fully aired must never say "Releases on <2019 premiere>".
+  //
+  // nextEpisode itself is NEVER unaired (playableEpisodesInOrder excludes
+  // every unaired episode before nextEpisode is even derived from it) — so
+  // a title that hasn't started airing at all always has nextEpisode ===
+  // null here, same as a title that's fully watched. nextAiringDate is
+  // what tells those two apart: it only carries a value in the former
+  // case (see MediaDetailPage), so checking it after nextEpisode is what
+  // actually gates a not-yet-aired show instead of leaving Play enabled
+  // and falling back to a stream nothing can resolve.
+  const unreleasedDate = useMemo(() => {
+    if (hasProgress) return undefined
+    if (config.isEpisodic) {
+      if (nextEpisode) return undefined
+      return nextAiringDate && isFutureRelease(nextAiringDate) ? nextAiringDate : undefined
+    }
+    return isFutureRelease(media.releaseDate) ? media.releaseDate : undefined
+  }, [hasProgress, config.isEpisodic, nextEpisode, nextAiringDate, media.releaseDate])
 
   const trailerFrameRef = useRef<HTMLIFrameElement>(null)
   const trailerActive = showTrailer && !!trailer
@@ -110,6 +145,10 @@ export function DetailHero({
   const trailerControlsHidden = contentFaded && trailerIdle && !trailerBarFocused
 
   const playLabel = useMemo(() => {
+    if (unreleasedDate) {
+      const formatted = formatReleaseDate(unreleasedDate)
+      return formatted ? `Releases ${formatted}` : 'Not yet released'
+    }
     if (isResolving) {
       return resolvingMedia?.stage === 'resolving' ? 'Searching…' : 'Preparing…'
     }
@@ -123,6 +162,7 @@ export function DetailHero({
     }
     return 'Play'
   }, [
+    unreleasedDate,
     isResolving,
     resolvingMedia?.stage,
     hasProgress,
@@ -267,13 +307,14 @@ export function DetailHero({
             type="button"
             className={styles.playButton}
             onClick={onPlay}
-            disabled={isResolving}
+            disabled={isResolving || !!unreleasedDate}
             aria-busy={isResolving}
+            aria-disabled={!!unreleasedDate}
           >
             {isResolving ? (
               <span className={styles.playSpinner} aria-hidden="true" />
             ) : (
-              <Icon name="play" size={16} />
+              <Icon name={unreleasedDate ? 'clock' : 'play'} size={16} />
             )}
             {playLabel}
           </button>

@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import type { MediaItem } from '@renderer/types'
 import type { DetailAdapterConfig } from '@renderer/lib/mediaHub/detailAdapters'
 import { useAppState } from '@renderer/context/AppStateContext'
+import { formatReleaseDate, isFutureRelease } from '@renderer/lib/mediaHub/releaseDate'
 import styles from './AboutPanel.module.css'
 
 const COLLAPSE_LENGTH = 320
@@ -68,6 +69,8 @@ export function AboutPanel({ media, config }: { media: MediaItem; config: Detail
   const description = media.description ?? ''
   const isLong = description.length > COLLAPSE_LENGTH
   const shown = !isLong || expanded ? description : `${description.slice(0, COLLAPSE_LENGTH)}…`
+  const unreleased = isFutureRelease(media.releaseDate)
+  const formattedReleaseDate = unreleased ? formatReleaseDate(media.releaseDate) : null
 
   return (
     <section
@@ -92,11 +95,18 @@ export function AboutPanel({ media, config }: { media: MediaItem; config: Detail
         <p className={styles.synopsis}>No synopsis available.</p>
       )}
       <dl className={styles.factList}>
-        {media.releaseYear && (
+        {formattedReleaseDate ? (
           <div className={styles.fact}>
-            <dt>Released</dt>
-            <dd>{media.releaseYear}</dd>
+            <dt>Releases</dt>
+            <dd className={styles.unreleased}>{formattedReleaseDate}</dd>
           </div>
+        ) : (
+          media.releaseYear && (
+            <div className={styles.fact}>
+              <dt>Released</dt>
+              <dd>{media.releaseYear}</dd>
+            </div>
+          )
         )}
         {certificate && (
           <div className={styles.fact}>

@@ -55,6 +55,10 @@
 .capitalize {
   text-transform: capitalize;
 }
+.unreleased {
+  color: var(--accent-cyan);
+  font-weight: 600;
+}
 
 /* Cast and story-type labels sit below the fact grid rather than in it:
    both are lists that run long, and a name list wrapping across a

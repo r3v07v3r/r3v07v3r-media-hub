@@ -724,6 +724,7 @@ export function normalizeMeta(
     logo: meta.logo || '',
     year: String(meta.year || ''),
     status: meta.status || '',
+    releaseDate: meta.released || '',
     description: meta.description || '',
     rating: String(meta.imdbRating || meta.rating || ''),
     runtime: String(meta.runtime || ''),
@@ -799,6 +800,7 @@ export function normalizeKitsuAnime(record: RawApiPayload, lightweight = false):
     logo: '',
     year: String(a.startDate || '').slice(0, 4),
     status: a.status || '',
+    releaseDate: a.startDate || '',
     description: a.synopsis || a.description || '',
     rating:
       a.averageRating != null && a.averageRating !== ''
@@ -831,6 +833,9 @@ export function normalizeSimklCatalog(item: RawApiPayload, type: MediaKind): Cat
     background,
     logo: '',
     year,
+    releaseDate: /^\d{4}-\d{2}-\d{2}/.test(String(item.release_date || ''))
+      ? item.release_date
+      : '',
     description: item.overview || '',
     rating: String(item.ratings?.imdb?.rating || item.ratings?.simkl?.rating || ''),
     runtime: String(item.runtime || ''),

@@ -660,6 +660,28 @@
   cursor: pointer;
 }
 
+/* Bigger thumb and taller hit area than the default range control — this
+   is the one slider in the menu someone actually wants to drag by feel
+   (nudging subtitles up/down while watching where they land), not just
+   click to a value, so it gets more pixels to drag across accurately. */
+.subtitlePositionSlider {
+  height: 22px;
+}
+.subtitlePositionSlider::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 2px;
+}
+.subtitlePositionSlider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 20px;
+  height: 20px;
+  margin-top: -8px;
+  border-radius: 50%;
+  background: var(--accent, #4da3ff);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.5);
+}
+
 .colorRow {
   display: flex;
   align-items: center;

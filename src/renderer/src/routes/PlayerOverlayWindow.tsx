@@ -1509,15 +1509,24 @@ function PlayerControls() {
                 </label>
                 <label className={styles.styleControl}>
                   <span>
-                    Height<output>{subtitleStyle.position}</output>
+                    Height
+                    <output>
+                      {subtitleStyle.position}
+                      {/* Past 100 the text has left the picture entirely and
+                          is sitting in whatever's below it (a letterbox bar,
+                          or just the window) — worth saying plainly, since
+                          the number alone doesn't make that obvious. */}
+                      {subtitleStyle.position > 100 ? ' · below picture' : ''}
+                    </output>
                   </span>
                   <input
                     type="range"
+                    className={styles.subtitlePositionSlider}
                     min={SUBTITLE_POSITION_MIN}
                     max={SUBTITLE_POSITION_MAX}
                     step={1}
                     value={subtitleStyle.position}
-                    aria-label="Subtitle position"
+                    aria-label="Subtitle position — drag to move up or down, including below the picture"
                     onChange={(event) =>
                       applySubtitleStyle({ position: Number(event.target.value) })
                     }
