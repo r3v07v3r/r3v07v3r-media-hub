@@ -39,6 +39,14 @@ export interface DetailHeroProps {
    *  "there is nothing left to play" stays visible now that the separate
    *  Next-to-Play panel beside About is gone. */
   allEpisodesWatched: boolean
+  /** The earliest upcoming episode's own air date, for a title that hasn't
+   *  started airing at all — nextEpisode is always null in that case
+   *  (playableEpisodesInOrder excludes every unaired episode by
+   *  construction, see MediaDetailPage), so it carries no date of its own
+   *  to read a release gate off of. Undefined once at least one episode
+   *  has aired (nextEpisode or allEpisodesWatched already answer the
+   *  question then) or when there's no episode data at all. */
+  nextAiringDate: string | undefined
   trailer: Trailer | undefined
   showTrailer: boolean
   onToggleTrailer: () => void
@@ -54,6 +62,7 @@ export function DetailHero({
   continueEntry,
   nextEpisode,
   allEpisodesWatched,
+  nextAiringDate,
   trailer,
   showTrailer,
   onToggleTrailer,
@@ -69,16 +78,26 @@ export function DetailHero({
   // hasn't come out yet doesn't offer a Play button that can only fail.
   // Someone with existing progress is never shown this — they've already
   // watched *something* of this title, so whatever gap remains isn't a
-  // "not released yet" gap. Episodic titles key off the next unwatched
+  // "not released yet" gap. Episodic titles key off an actual upcoming
   // episode's own air date rather than the show's premiere: a three-season
   // show that's fully aired must never say "Releases on <2019 premiere>".
+  //
+  // nextEpisode itself is NEVER unaired (playableEpisodesInOrder excludes
+  // every unaired episode before nextEpisode is even derived from it) — so
+  // a title that hasn't started airing at all always has nextEpisode ===
+  // null here, same as a title that's fully watched. nextAiringDate is
+  // what tells those two apart: it only carries a value in the former
+  // case (see MediaDetailPage), so checking it after nextEpisode is what
+  // actually gates a not-yet-aired show instead of leaving Play enabled
+  // and falling back to a stream nothing can resolve.
   const unreleasedDate = useMemo(() => {
     if (hasProgress) return undefined
     if (config.isEpisodic) {
-      return nextEpisode && isFutureRelease(nextEpisode.released) ? nextEpisode.released : undefined
+      if (nextEpisode) return undefined
+      return nextAiringDate && isFutureRelease(nextAiringDate) ? nextAiringDate : undefined
     }
     return isFutureRelease(media.releaseDate) ? media.releaseDate : undefined
-  }, [hasProgress, config.isEpisodic, nextEpisode, media.releaseDate])
+  }, [hasProgress, config.isEpisodic, nextEpisode, nextAiringDate, media.releaseDate])
 
   const trailerFrameRef = useRef<HTMLIFrameElement>(null)
   const trailerActive = showTrailer && !!trailer

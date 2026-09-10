@@ -25,13 +25,23 @@ export function parseReleaseDate(date: string | undefined): Date | null {
 
 /** True only when the date is real AND strictly after today — a title that
  *  released earlier today is not "coming soon" just because playback
- *  hasn't caught up with it yet. */
+ *  hasn't caught up with it yet.
+ *
+ *  Compares calendar days, not instants: a source can hand this a full ISO
+ *  datetime (CatalogItem.releaseDate allows one), and a bare instant
+ *  comparison against local midnight would keep a title released EARLIER
+ *  TODAY reading as "future" for the rest of the day — any time past
+ *  00:00:00 is later than midnight, so the compare never flips false until
+ *  the calendar date itself rolls over. Normalizing both sides to midnight
+ *  first makes "today" compare equal, not greater. */
 export function isFutureRelease(date: string | undefined): boolean {
   const parsed = parseReleaseDate(date)
   if (!parsed) return false
   const today = new Date()
   today.setHours(0, 0, 0, 0)
-  return parsed.getTime() > today.getTime()
+  const releaseDay = new Date(parsed)
+  releaseDay.setHours(0, 0, 0, 0)
+  return releaseDay.getTime() > today.getTime()
 }
 
 /** "12 Mar 2003" — compact, locale-aware. Null for an empty/unparseable date. */

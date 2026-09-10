@@ -41,6 +41,7 @@ import { SimilarPanel } from '@renderer/components/detail/SimilarPanel'
 import { AnimeStoryPanel } from '@renderer/components/detail/AnimeStoryPanel'
 import styles from './MediaDetailPage.module.css'
 import { playableEpisodesInOrder } from '@shared/media-hub/nextEpisode'
+import { isRegularEpisode } from '@shared/media-hub/catalog-logic'
 import { resolveArtwork } from '@renderer/lib/artwork'
 
 type FetchStatus = 'loading' | 'ready' | 'error'
@@ -422,6 +423,26 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
     [playableInOrder, watchedKeys]
   )
 
+  /** The earliest upcoming episode's own air date, for DetailHero's
+   *  "Releases <date>" gate on a title that hasn't started airing at all
+   *  yet. playableInOrder (nextEpisode's source) excludes every unaired
+   *  episode by construction, so a show still fully in the future always
+   *  has nextEpisode === null with nothing in it to read a date off of —
+   *  the exact case this gate exists for. Only computed when there is no
+   *  playable episode at all: once even one has aired, nextEpisode (or
+   *  allEpisodesWatched) already answers the question correctly and this
+   *  would just be redundant work re-sorting the full episode list. */
+  const nextAiringDate = useMemo(() => {
+    if (playableInOrder.length > 0) return undefined
+    const upcoming = episodes
+      .filter(
+        (e) => isRegularEpisode(e) && Number.isFinite(e.season) && Number.isFinite(e.episode)
+      )
+      .slice()
+      .sort((a, b) => a.season - b.season || a.episode - b.episode)[0]
+    return upcoming?.released || undefined
+  }, [playableInOrder, episodes])
+
   // The first REAL season, so a show that opens with a Specials block lands
   // on season 1 rather than on the OVAs.
   const selectedSeason =
@@ -699,6 +720,7 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
         // whose every episode is still to come has nothing to play next,
         // but nobody has watched it either.
         allEpisodesWatched={playableInOrder.length > 0 && !nextEpisode}
+        nextAiringDate={nextAiringDate}
         trailer={catalogItem?.trailers?.[0]}
         showTrailer={showTrailer}
         onToggleTrailer={() => setShowTrailer((v) => !v)}

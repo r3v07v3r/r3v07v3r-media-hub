@@ -515,9 +515,19 @@ function LibraryDetails({ media, config }: { media: MediaItem | null; config: Ca
   // Series/anime key off the next episode's own air date on the detail
   // page (see DetailHero), which this card doesn't have loaded — only a
   // movie's own release date is known here, so only that case is gated.
+  //
+  // media.releaseDate is undefined on the normal browse path: `media` here
+  // comes from the indexed catalog row (catalog:query), which carries no
+  // release date at all. `detail.item` — the full metadata this panel
+  // already fetches on selection (see the effect above, and
+  // rottenTomatoesRating's identical guard just above) — is the one place
+  // it actually exists; media.releaseDate is kept only as a fallback for
+  // the moment before that fetch resolves.
   const isMovie = media.mediaKind === 'movie' || media.mediaType === 'movie'
+  const detailReleaseDate = detail?.id === media.id ? detail.item.releaseDate : undefined
+  const releaseDateForGate = detailReleaseDate ?? media.releaseDate
   const unreleasedDate =
-    isMovie && isFutureRelease(media.releaseDate) ? media.releaseDate : undefined
+    isMovie && isFutureRelease(releaseDateForGate) ? releaseDateForGate : undefined
 
   return (
     <aside className={`${styles.details} glass-panel`} aria-label={`${media.title} details`}>
