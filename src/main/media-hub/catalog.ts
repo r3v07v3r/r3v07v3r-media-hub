@@ -917,13 +917,37 @@ async function kitsuSearch(query: string): Promise<CatalogItem[]> {
     {},
     { priority: 'interactive', label: 'anime search' }
   )
+  // One malformed record (an unexpected shape from Kitsu — a field this
+  // normalizer assumes is present coming back null/missing for just that
+  // title) used to throw out of the whole .map() and fail the ENTIRE
+  // search with no results shown at all, indistinguishable from "nothing
+  // matched" unless someone happened to check the console. A single bad
+  // row is now just a dropped row, the same "a catalog that fails
+  // contributes nothing rather than failing the search" principle this
+  // file already applies to a whole catalog going down.
+  const items: CatalogItem[] = []
+  for (const record of result.data || []) {
+    try {
+      items.push(normalizeKitsuAnime(record, true))
+    } catch (error) {
+      logError('catalog:kitsu-search-normalize', error)
+    }
+  }
   // 'interactive' throughout, unlike the crawl's own grouping pass: this
   // one is 20 items with somebody watching a search box, not 1000 items
   // nobody asked for.
-  return groupAnimeCatalog(
-    (result.data || []).map((record) => normalizeKitsuAnime(record, true)),
-    'interactive'
-  )
+  try {
+    return await groupAnimeCatalog(items, 'interactive')
+  } catch (error) {
+    // Same reasoning: a grouping pass that fails (a franchise-mapping
+    // lookup blowing up in some new way none of its own try/catches
+    // anticipated) must not cost the search its results — an ungrouped
+    // list (occasionally one extra tile for a multi-season franchise) is
+    // a far smaller miss than showing nothing for a title that is
+    // genuinely there.
+    logError('catalog:kitsu-search-group', error)
+    return items
+  }
 }
 
 /** Free-text movie/series search against Simkl. */
