@@ -1,6 +1,6 @@
-import type { ReactNode } from 'react'
+import { useEffect, type ReactNode } from 'react'
 import { HashRouter, Routes, Route, Navigate, useLocation, useParams } from 'react-router-dom'
-import { AppStateProvider } from '@renderer/context/AppStateContext'
+import { AppStateProvider, useAppState } from '@renderer/context/AppStateContext'
 import { OverlayProvider } from '@renderer/context/OverlayContext'
 import { AppShell } from '@renderer/components/layout/AppShell'
 import { ErrorBoundary } from '@renderer/components/errors/ErrorBoundary'
@@ -29,6 +29,30 @@ function RoutedErrorBoundary({ children }: { children: ReactNode }) {
       {children}
     </ErrorBoundary>
   )
+}
+
+/**
+ * A new page starts at the top.
+ *
+ * The routed pages share one scroller (AppShell's <main>), and a route
+ * change alone leaves its offset where it was — so a title opened from
+ * half-way down a library grid landed on its own About panel with the
+ * hero scrolled out of sight. The one exception is a return to a page
+ * whose position is being put back (useRestoreBrowsingOrigin): that
+ * navigation parks a pendingRestore first, and the restore owns the
+ * scroller until it has run.
+ */
+function ScrollToTopOnNavigate() {
+  const location = useLocation()
+  const { pendingRestore } = useAppState()
+  useEffect(() => {
+    if (pendingRestore) return
+    document.getElementById('main-content')?.scrollTo({ top: 0 })
+    // Only a new path is a new page; a changed query string is the same
+    // page with different filters, and its own list is what moved.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location.pathname])
+  return null
 }
 
 function LegacyTvShowDetailRedirect() {
@@ -66,6 +90,7 @@ export default function App() {
       <OverlayProvider>
         <AppStateProvider>
           <AppShell>
+            <ScrollToTopOnNavigate />
             <RoutedErrorBoundary>
               <Routes>
                 <Route path="/" element={<HomeDashboard />} />

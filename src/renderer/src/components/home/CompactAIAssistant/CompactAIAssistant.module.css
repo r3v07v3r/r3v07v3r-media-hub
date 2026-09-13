@@ -181,4 +181,13 @@
   .actionDescription {
     display: none;
   }
+  /* As a strip above the hero the two cards read as competing neon
+     banners; the glow that suited a tall side column is dialled down so
+     the row is a quiet utility bar and the hero stays the first thing seen. */
+  .actionButton {
+    border-width: 1px;
+    box-shadow:
+      0 0 0 1px rgba(0, 0, 0, 0.25) inset,
+      0 0 12px -6px var(--action-glow);
+  }
 }

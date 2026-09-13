@@ -95,7 +95,8 @@ export function CollectionPanel({ media }: { media: MediaItem }) {
                     sizes="52px"
                     className={styles.artImage}
                   />
-                  <WatchStatusBadge status={getWatchStatus(item, continueWatching)} />
+                  {/* compact: a 38px poster has room for a tick, not a word. */}
+                  <WatchStatusBadge status={getWatchStatus(item, continueWatching)} compact />
                 </span>
                 <span className={styles.ordinal} aria-hidden="true">
                   {index + 1}

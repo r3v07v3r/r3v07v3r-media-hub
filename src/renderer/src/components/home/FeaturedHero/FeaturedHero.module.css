@@ -132,9 +132,13 @@
      atmosphere instead of a color boundary. This is the "subtle
      atmospheric blending" the boundary-softening (mask + artVignette)
      alone can't fully provide. */
+  /* The transparent stops are measured against this oversized box, so
+     they have to land well inside the hero's own edge: at 58%/72% the
+     bottom-left wash was still mid-fade where .hero's overflow clipped
+     it, and the glow stopped dead on the rounded corner. */
   background:
-    radial-gradient(circle at 68% 42%, var(--art-a, #ff8a3d) 0%, transparent 58%),
-    radial-gradient(ellipse 70% 55% at 8% 96%, rgba(70, 110, 200, 0.5) 0%, transparent 72%);
+    radial-gradient(circle at 68% 42%, var(--art-a, #ff8a3d) 0%, transparent 52%),
+    radial-gradient(ellipse 60% 48% at 8% 96%, rgba(70, 110, 200, 0.5) 0%, transparent 78%);
   opacity: 0.32;
   mix-blend-mode: soft-light;
   animation: heroDrift 22s ease-in-out infinite;

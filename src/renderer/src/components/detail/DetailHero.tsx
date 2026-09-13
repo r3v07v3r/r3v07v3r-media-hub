@@ -275,7 +275,9 @@ export function DetailHero({
       )}
 
       <div className={`${styles.content} ${contentFaded ? styles.contentFaded : ''}`}>
-        <span className={styles.label}>Featured {config.label}</span>
+        {/* What it is, not "featured": every title's own page said
+            Featured, which is only true on the library heroes. */}
+        <span className={styles.label}>{config.label}</span>
         <h1 className={styles.title}>
           {media.title}
           {media.subtitle && <span className={styles.subtitle}>{media.subtitle}</span>}
