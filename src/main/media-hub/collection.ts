@@ -44,8 +44,6 @@ const EMPTY: TitleCollectionResult = { name: '', parts: [] }
  */
 export async function titleCollection(imdbId: string): Promise<TitleCollectionResult> {
   if (!/^tt\d+$/.test(imdbId)) return EMPTY
-  const { apiKey } = tmdbCredentials()
-  if (!apiKey) return EMPTY
 
   const db = getDatabase()
   // v2, not v1: entries written before the parts below carried a complete
@@ -58,6 +56,12 @@ export async function titleCollection(imdbId: string): Promise<TitleCollectionRe
   const cacheKey = `collection:v3:${imdbId}`
   const cached = db.getCache<TitleCollectionResult>(cacheKey)
   if (cached) return cached
+
+  // The key gates the network, not the cache: an answer already on disk is
+  // as true without a key as with one, and the recommendations rebuild
+  // reads this for every recent film whether or not TMDB is reachable.
+  const { apiKey } = tmdbCredentials()
+  if (!apiKey) return EMPTY
 
   const auth = `api_key=${encodeURIComponent(apiKey)}`
   try {

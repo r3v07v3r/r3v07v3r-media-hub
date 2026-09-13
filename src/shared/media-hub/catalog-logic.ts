@@ -420,10 +420,30 @@ export function rankSimilarTitles(
     .map((x) => x.item)
 }
 
+/**
+ * Why a title is "the next one": the title it follows, and when that was
+ * last watched. The date is what the boost is weighed by — see
+ * recencyWeight — and what lets the read side tell "still on that
+ * series" from "moved on".
+ */
+export interface Continuation {
+  from: string
+  watchedAt: string | null
+}
+
 /** One ranked title, with the score that put it there — see rankPersonalizedRecommendationsScored. */
 export interface ScoredRecommendation {
   item: CatalogItem
   score: number
+  /**
+   * Set when this title is THE next instalment after something watched
+   * recently (see PersonalizedRecommendationOptions.continuations). Kept
+   * on the stored entry because the read side treats it differently: a
+   * continuation may be a title already seen — a rewatch in progress —
+   * so "never serve what was watched" becomes "drop it once it has been
+   * watched again since this list was built".
+   */
+  continuation?: Continuation
   /**
    * The signal that contributed most to `score`, if any did — see
    * RecommendationReason. Absent when nothing about this person's viewing
@@ -444,6 +464,7 @@ export interface ScoredRecommendation {
  * "it came out this year" is true of everyone.
  */
 export const RECOMMENDATION_REASON_ORDER: readonly RecommendationReason['kind'][] = [
+  'next',
   'continues',
   'creator',
   'cast',
@@ -481,23 +502,37 @@ export function groupRecommendationRails(
   entries.forEach((entry, rank) => {
     const detail = String(entry.reason?.detail ?? '').trim()
     if (!entry.reason || !detail) return
-    const id = `${entry.reason.kind}:${detail}`
+    // Every continuation on ONE shelf. Each is the single next instalment
+    // of a different series, so shelving by detail would make one-card
+    // shelves that never reach the minimum; together they are the most
+    // useful shelf on the page. The empty detail is what tells the label
+    // side to name the idea rather than a title (recommendationRailTitle).
+    const next = entry.reason.kind === 'next'
+    const id = next ? 'next' : `${entry.reason.kind}:${detail}`
     let shelf = shelves.get(id)
     if (!shelf) {
-      shelf = { id, reason: { kind: entry.reason.kind, detail }, items: [], firstRank: rank }
+      shelf = {
+        id,
+        reason: { kind: entry.reason.kind, detail: next ? '' : detail },
+        items: [],
+        firstRank: rank
+      }
       shelves.set(id, shelf)
     }
     if (shelf.items.length < maxItems) shelf.items.push(entry.item)
   })
-  return [...shelves.values()]
-    .filter((shelf) => shelf.items.length >= minItems)
-    .sort(
-      (a, b) =>
-        RECOMMENDATION_REASON_ORDER.indexOf(a.reason.kind) -
-          RECOMMENDATION_REASON_ORDER.indexOf(b.reason.kind) || a.firstRank - b.firstRank
-    )
-    .slice(0, Math.max(0, maxRails))
-    .map(({ id, reason, items }) => ({ id, reason, items }))
+  return (
+    [...shelves.values()]
+      // One continuation is a shelf: each card on it stands on its own.
+      .filter((shelf) => shelf.items.length >= (shelf.reason.kind === 'next' ? 1 : minItems))
+      .sort(
+        (a, b) =>
+          RECOMMENDATION_REASON_ORDER.indexOf(a.reason.kind) -
+            RECOMMENDATION_REASON_ORDER.indexOf(b.reason.kind) || a.firstRank - b.firstRank
+      )
+      .slice(0, Math.max(0, maxRails))
+      .map(({ id, reason, items }) => ({ id, reason, items }))
+  )
 }
 
 /**
@@ -999,6 +1034,16 @@ export interface PersonalizedRecommendationOptions {
    */
   credits?: ReadonlyMap<string, TitleCredits>
   taste?: TasteProfile
+  /**
+   * The next instalment after each title watched recently, keyed by the
+   * NEXT title's id — see main/media-hub/continuations.ts, which reads it
+   * off TMDB collections and Kitsu sequels rather than guessing from the
+   * title. Wins over the title-shaped franchise guess for the same
+   * candidate, and lets that candidate through the watched filter: the
+   * next film of a series somebody is rewatching in order is the right
+   * suggestion even though they have seen it before.
+   */
+  continuations?: ReadonlyMap<string, Continuation>
 }
 
 /**
@@ -1010,6 +1055,35 @@ export interface PersonalizedRecommendationOptions {
  * outranks "this is the next instalment of something you finished".
  */
 const ABANDONED_PENALTY = 25
+
+/**
+ * What being the next instalment of something watched is worth, before
+ * recency. The strongest signal in the ranking by design: it is a fact
+ * about this person's last few evenings, not a taste inferred over years.
+ */
+export const CONTINUATION_BOOST = 100
+
+/**
+ * How much a watch still says about tonight.
+ *
+ * The continuation boost used to be flat, so the sequel to something
+ * finished two years ago ranked level with the sequel to last night's
+ * film — and a row of eighteen "Because you watched" cards read as a list
+ * of every franchise ever started. Something watched this week is the
+ * thing most likely to be continued; the weight falls away from there,
+ * never to nothing, since an unfinished series stays worth a mention. A
+ * rewatch counts as a watch: markWatched moves the date.
+ */
+export function recencyWeight(watchedAt: string | null | undefined, now: Date): number {
+  const at = watchedAt ? Date.parse(watchedAt) : Number.NaN
+  if (!Number.isFinite(at)) return 0.45
+  const days = (now.getTime() - at) / 86_400_000
+  if (days <= 3) return 1.6
+  if (days <= 14) return 1.3
+  if (days <= 60) return 1
+  if (days <= 180) return 0.7
+  return 0.45
+}
 
 function releaseYear(item: Pick<CatalogItem, 'year'> | HistoryEntry): number | null {
   const year = Number.parseInt(String(item.year || ''), 10)
@@ -1090,7 +1164,8 @@ export function rankPersonalizedRecommendationsScored(
     now = new Date(),
     abandonedIds,
     credits,
-    taste
+    taste,
+    continuations
   }: PersonalizedRecommendationOptions
 ): ScoredRecommendation[] {
   const preferred = new Set(preferredGenres.map((genre) => String(genre).toLowerCase()))
@@ -1102,7 +1177,10 @@ export function rankPersonalizedRecommendationsScored(
   const unwatched: RankableItem[] = []
   const byTypeAndFirstWord = new Map<string, RankableItem[]>()
   for (const item of pool) {
-    if (isWatchedById(item, watchedIds)) continue
+    // A watched title is out — unless it is the next instalment of a series
+    // being rewatched in order, which is the one time "seen it" is not a
+    // reason to leave it off.
+    if (isWatchedById(item, watchedIds) && !continuations?.has(String(item.id))) continue
     const entry: RankableItem = { item, year: releaseYear(item), tokens: titleTokens(item.title) }
     unwatched.push(entry)
     const firstWord = entry.tokens.words[0]
@@ -1121,7 +1199,7 @@ export function rankPersonalizedRecommendationsScored(
   // title that earned it. First writer wins — the loop walks the history
   // newest-first, so a title following several things somebody watched is
   // attributed to the most recent of them, which is the one they remember.
-  const nextFranchise = new Map<string, string>()
+  const nextFranchise = new Map<string, Continuation>()
   const askedAlready = new Set<string>()
   for (const watchedEntry of history) {
     const watchedTitle = watchedEntry?.title
@@ -1147,7 +1225,10 @@ export function rankPersonalizedRecommendationsScored(
       if (!next || isEarlierInstalment(candidate, next)) next = candidate
     }
     if (next && !nextFranchise.has(String(next.item.id))) {
-      nextFranchise.set(String(next.item.id), watchedTitle)
+      nextFranchise.set(String(next.item.id), {
+        from: watchedTitle,
+        watchedAt: watchedEntry.watchedAt ?? null
+      })
     }
   }
 
@@ -1162,8 +1243,17 @@ export function rankPersonalizedRecommendationsScored(
         if (!matchedGenre) matchedGenre = String(genre).trim()
       }
       const recentReleaseBoost = year === currentYear ? 18 : year === currentYear - 1 ? 8 : 0
-      const continuedFrom = nextFranchise.get(String(item.id))
-      const continuationBoost = continuedFrom ? 100 : 0
+      // The catalogue's own answer to "what comes next" outranks the
+      // title-shaped guess, and the guess yields for the same candidate
+      // rather than counting twice.
+      const continuation = continuations?.get(String(item.id))
+      const nextBoost = continuation
+        ? CONTINUATION_BOOST * 1.2 * recencyWeight(continuation.watchedAt, now)
+        : 0
+      const continuedFrom = continuation ? undefined : nextFranchise.get(String(item.id))
+      const continuationBoost = continuedFrom
+        ? CONTINUATION_BOOST * recencyWeight(continuedFrom.watchedAt, now)
+        : 0
       const rating = Math.min(Math.max(Number.parseFloat(item.rating) || 0, 0), 10)
       // Nothing at all until the background enrichment pass has been round
       // — see PersonalizedRecommendationOptions.credits.
@@ -1172,7 +1262,9 @@ export function rankPersonalizedRecommendationsScored(
       return {
         item,
         year,
+        continuation,
         score:
+          nextBoost +
           continuationBoost +
           recentReleaseBoost +
           genreMatches * 12 +
@@ -1183,7 +1275,8 @@ export function rankPersonalizedRecommendationsScored(
         // put it there cannot disagree. The rating is not among them: every
         // title has one, so it separates nothing and explains nothing.
         reason: strongestReason([
-          { kind: 'continues', detail: continuedFrom ?? '', weight: continuationBoost },
+          { kind: 'next', detail: continuation?.from ?? '', weight: nextBoost },
+          { kind: 'continues', detail: continuedFrom?.from ?? '', weight: continuationBoost },
           {
             kind: 'creator',
             detail: affinity.creators.first,
@@ -1201,7 +1294,12 @@ export function rankPersonalizedRecommendationsScored(
         (b.year || 0) - (a.year || 0) ||
         a.item.title.localeCompare(b.item.title)
     )
-    .map(({ item, score, reason }) => (reason ? { item, score, reason } : { item, score }))
+    .map(({ item, score, reason, continuation }) => {
+      const entry: ScoredRecommendation = { item, score }
+      if (reason) entry.reason = reason
+      if (continuation) entry.continuation = continuation
+      return entry
+    })
 }
 
 /** One candidate explanation and what it was worth to the score. */

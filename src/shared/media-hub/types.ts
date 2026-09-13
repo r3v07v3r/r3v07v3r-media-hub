@@ -505,8 +505,11 @@ export interface TitleCredits {
  * title would put one profile's viewing into a row the next profile reads.
  */
 export interface RecommendationReason {
-  /** Which signal won — see RECOMMENDATION_REASON_ORDER in catalog-logic.ts. */
-  kind: 'continues' | 'creator' | 'cast' | 'genre' | 'new'
+  /** Which signal won — see RECOMMENDATION_REASON_ORDER in catalog-logic.ts.
+   *  'next' is the one instalment that follows something watched recently
+   *  (a TMDB collection or a Kitsu sequel — see main/media-hub/
+   *  continuations.ts); 'continues' is the older title-shaped guess. */
+  kind: 'next' | 'continues' | 'creator' | 'cast' | 'genre' | 'new'
   /**
    * The evidence, in the person's own terms: the title they finished, the
    * name they keep coming back to, the genre they watch. Always something
@@ -803,6 +806,29 @@ export interface RecommendationsChanged {
   builtAt: number
   /** How many ranked titles were stored — the buffer, not the number shown. */
   count: number
+}
+
+/**
+ * The one status a title has, as the person sees it.
+ *
+ * 'planned' is the tracked table (what the tracking services call plan to
+ * watch); 'watched' is watch_history — a film's own row, or every aired
+ * regular episode of a show. Watched outranks planned wherever both are
+ * true. The renderer's own derivation (which can also say "watching") is
+ * lib/mediaHub/titleStatus.ts; the transition rules are
+ * main/media-hub/titleStatusRules.ts.
+ */
+export type TitleStatus = 'unwatched' | 'planned' | 'watched'
+
+export interface SetTitleStatusPayload {
+  item: Partial<CatalogItem> & { id: string; type: MediaKind; title?: string }
+  status: TitleStatus
+}
+
+export interface SetTitleStatusResult {
+  status: TitleStatus
+  /** Episode rows written or removed by this change; 0 for a film. */
+  episodes: number
 }
 
 export interface MarkWatchedResult {

@@ -422,9 +422,27 @@ export function catalogItemToRecommendation(
 ): Recommendation {
   const matchedGenres = item.genres.filter((g) => preferredGenres.includes(g))
   const confidence =
-    preferredGenres.length === 0
-      ? 70
-      : Math.min(97, 60 + matchedGenres.length * 15 + (parseRating(item.rating) ?? 0) * 2)
+    // The next part of a series being watched is the surest thing on the
+    // row, whatever its own genres and rating say (a part that reached the
+    // list from its collection record carries neither).
+    context.reason?.kind === 'next'
+      ? 96
+      : preferredGenres.length === 0
+        ? 70
+        : Math.min(
+            98,
+            // Spread out on purpose. The old 60 + 15 per genre + 2 per rating
+            // point cleared the 97 ceiling for almost anything with two genre
+            // matches, so every card said "97% Match" and the figure meant
+            // nothing. A continuation is the strongest claim the ranker makes,
+            // and is scored like one.
+            Math.round(
+              50 +
+                matchedGenres.length * 11 +
+                (parseRating(item.rating) ?? 0) * 2 +
+                (context.reason?.kind === 'continues' ? 16 : 0)
+            )
+          )
   // The reason the RANKER gave, not one re-derived here.
   //
   // What this replaces was a second opinion about an ordering it did not

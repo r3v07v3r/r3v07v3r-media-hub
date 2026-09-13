@@ -30,7 +30,7 @@ import type {
   PlayRecord
 } from '@shared/media-hub/types'
 import type { ContinueWatchingItem, HomeRail, MediaItem, Recommendation } from '@renderer/types'
-import { recommendationReasonLabel } from '@shared/media-hub/recommendationReason'
+import { recommendationRailTitle } from '@shared/media-hub/recommendationReason'
 import {
   catalogItemToMediaItem,
   indexHistoryById,
@@ -897,7 +897,7 @@ export function useMediaHubHomeFeed(libraryKey: string): HomeFeedResult {
           rails: (result.recommendationRails ?? [])
             .map((rail) => ({
               id: rail.id,
-              title: recommendationReasonLabel(rail.reason),
+              title: recommendationRailTitle(rail.reason),
               items: rail.items.map((item) => catalogItemToMediaItem(item, { trackedIds }))
             }))
             .filter((rail) => rail.title && rail.items.length),

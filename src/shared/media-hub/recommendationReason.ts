@@ -25,6 +25,10 @@ export function recommendationReasonLabel(reason: RecommendationReason | undefin
   const detail = String(reason?.detail ?? '').trim()
   if (!reason || !detail) return ''
   switch (reason.kind) {
+    // The instalment after something watched days ago. Short, because it
+    // sits on a card: "Next after" says both that it follows and what.
+    case 'next':
+      return `Next after ${detail}`
     case 'continues':
       return `Because you watched ${detail}`
     // Directors for a film, creators for a show, studios for anime — one
@@ -43,4 +47,17 @@ export function recommendationReasonLabel(reason: RecommendationReason | undefin
     default:
       return ''
   }
+}
+
+/**
+ * A shelf's heading. The same words as the chip for every shelf but one:
+ * the "next" shelf gathers every continuation at once — one per series
+ * somebody is part-way through — so it names the idea rather than a
+ * single title (see groupRecommendationRails, which files them under one
+ * shelf with an empty detail). Empty means no shelf, as with the chip.
+ */
+export function recommendationRailTitle(reason: RecommendationReason | undefined): string {
+  if (reason?.kind === 'next' && !String(reason.detail ?? '').trim())
+    return 'Up next in your series'
+  return recommendationReasonLabel(reason)
 }
