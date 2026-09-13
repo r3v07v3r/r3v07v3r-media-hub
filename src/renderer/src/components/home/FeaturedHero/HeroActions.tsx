@@ -3,11 +3,11 @@
 import { useAppState } from '@renderer/context/AppStateContext'
 import { MediaItem } from '@renderer/types'
 import { Icon } from '@renderer/components/icons/Icon'
+import { TitleStatusButton } from '@renderer/components/media/TitleStatusButton'
 import styles from './FeaturedHero.module.css'
 
 export function HeroActions({ item }: { item: MediaItem }) {
-  const { startPartyPlayback, myList, toggleMyList } = useAppState()
-  const saved = myList.has(item.id)
+  const { startPartyPlayback } = useAppState()
 
   return (
     <div className={styles.actions}>
@@ -15,15 +15,10 @@ export function HeroActions({ item }: { item: MediaItem }) {
         <Icon name="play" />
         Watch Now
       </button>
-      <button
-        type="button"
-        className={styles.myList}
-        onClick={() => toggleMyList(item)}
-        aria-pressed={saved}
-      >
-        <Icon name={saved ? 'check' : 'plus'} />
-        {saved ? 'Planned' : 'Plan to Watch'}
-      </button>
+      {/* The status pill rather than a plan-only toggle: the hero is the
+          one place a title is put in front of somebody unasked, and
+          "seen it" is as common an answer as "later". */}
+      <TitleStatusButton media={item} variant="hero" />
     </div>
   )
 }

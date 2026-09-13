@@ -1,0 +1,91 @@
+/* One pill, four states. The colours are the ones the grid tiles and
+   badges already use for the same facts — green for seen, the library's
+   cyan for planned, violet for part-way — so the control and the corner
+   mark on a card never disagree about what a colour means. */
+.button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-pill);
+  background: rgba(5, 10, 20, 0.35);
+  color: var(--text-secondary);
+  font: inherit;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background var(--transition-fast),
+    border-color var(--transition-fast),
+    color var(--transition-fast),
+    transform var(--transition-fast);
+}
+.button:hover {
+  color: var(--text-primary);
+  border-color: var(--border-active);
+}
+.button:active {
+  transform: scale(0.98);
+}
+.button svg {
+  flex: 0 0 auto;
+}
+.label {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 2px;
+}
+.count {
+  font-weight: 500;
+  opacity: 0.8;
+  font-variant-numeric: tabular-nums;
+}
+
+/* --- shapes --------------------------------------------------------- */
+.chip {
+  padding: 5px 13px 5px 11px;
+  font-size: 12px;
+}
+.action {
+  width: 100%;
+  min-height: 35px;
+  padding: 0 12px;
+  border-radius: 10px;
+  font-size: 11px;
+}
+.hero {
+  padding: 11px 22px 11px 18px;
+  font-size: 14px;
+  font-weight: 700;
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.28);
+  color: var(--text-primary);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+.hero:hover {
+  background: rgba(255, 255, 255, 0.14);
+}
+
+/* --- states --------------------------------------------------------- */
+.planned {
+  color: var(--accent-cyan);
+  border-color: rgba(56, 229, 255, 0.45);
+  background: rgba(56, 229, 255, 0.1);
+}
+.watching {
+  color: #c9b3ff;
+  border-color: rgba(141, 77, 255, 0.5);
+  background: rgba(141, 77, 255, 0.12);
+}
+.watched {
+  color: var(--accent-green);
+  border-color: rgba(39, 230, 154, 0.45);
+  background: rgba(39, 230, 154, 0.1);
+}
+.planned:hover,
+.watching:hover,
+.watched:hover {
+  color: var(--text-primary);
+}

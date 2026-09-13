@@ -2,6 +2,7 @@ import type { ContinueWatchingItem, MediaItem } from '@renderer/types'
 
 export type WatchStatus =
   | { state: 'unwatched' }
+  | { state: 'planned' }
   | { state: 'in-progress'; progressPercentage: number }
   | { state: 'watched' }
   | { state: 'completed'; progressPercentage: number }
@@ -21,6 +22,11 @@ export type WatchStatus =
  * continue — shows as "completed" with a full progress bar, distinguishing
  * "this show is done" from "this movie has been watched" the way the
  * reference design does.
+ *
+ * 'planned' is the third fact a card can carry (the plan-to-watch list,
+ * `inMyList`), and it ranks below the two above: something both planned
+ * and seen reads as seen, the same precedence lib/mediaHub/titleStatus.ts
+ * gives the status control.
  */
 export function getWatchStatus(
   media: MediaItem,
@@ -37,5 +43,6 @@ export function getWatchStatus(
       ? { state: 'completed', progressPercentage: 100 }
       : { state: 'watched' }
   }
+  if (media.inMyList) return { state: 'planned' }
   return { state: 'unwatched' }
 }

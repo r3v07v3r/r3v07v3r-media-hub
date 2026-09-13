@@ -576,6 +576,19 @@ export interface MediaHubDatabase {
   ): TrackedItem
   unmarkWatched(id: string | number, season?: number, episode?: number): boolean
   /**
+   * Clears every watch_history row of one title, for the whole-title
+   * "not watched" (see tracking.ts's set-title-status handler), and
+   * returns the coordinates of what was cleared so the services can be
+   * told exactly which episodes — never "the show".
+   *
+   * Unlike unmarkWatched, the plays stay. This is one click over a whole
+   * series, and the record of the evenings it was actually watched is not
+   * the thing being corrected — the History tab removes single viewings
+   * for anyone who does mean that. The watched index is what the badges,
+   * grids and next-episode maths read, and that is what goes.
+   */
+  unmarkTitle(id: string | number): { season: number | null; episode: number | null }[]
+  /**
    * Writes viewings brought in from another service, keeping their real
    * dates, in one transaction, without overwriting anything already here.
    *
@@ -792,6 +805,8 @@ interface PreparedQueries {
   trackedRows: StatementSync
   watched: StatementSync
   unwatch: StatementSync
+  titleHistory: StatementSync
+  unwatchTitle: StatementSync
   history: StatementSync
   dislike: StatementSync
   undislike: StatementSync
@@ -947,6 +962,12 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
        ON CONFLICT(profile_id,watch_key) DO UPDATE SET watched_at=excluded.watched_at,metadata_json=excluded.metadata_json`
     ),
     unwatch: sql.prepare('DELETE FROM watch_history WHERE profile_id=? AND watch_key=?'),
+    // The whole-title pair — read what is there, then clear it, both on
+    // idx_history_content (profile_id, content_id, watched_at).
+    titleHistory: sql.prepare(
+      'SELECT season,episode FROM watch_history WHERE profile_id=? AND content_id=?'
+    ),
+    unwatchTitle: sql.prepare('DELETE FROM watch_history WHERE profile_id=? AND content_id=?'),
     history: sql.prepare(
       'SELECT metadata_json,season,episode,watched_at FROM watch_history WHERE profile_id=? ORDER BY watched_at DESC'
     ),
@@ -1679,6 +1700,32 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
           }
         })
         return value
+      } catch (error) {
+        return fail(error as Error)
+      }
+    },
+
+    unmarkTitle(id) {
+      try {
+        const contentId = String(id)
+        return durable(() => {
+          sql.exec('BEGIN')
+          try {
+            const rows = q.titleHistory.all(currentProfileId, contentId).map((r) => {
+              const row = r as Row
+              return {
+                season: Number.isFinite(row.season) ? (row.season as number) : null,
+                episode: Number.isFinite(row.episode) ? (row.episode as number) : null
+              }
+            })
+            if (rows.length) q.unwatchTitle.run(currentProfileId, contentId)
+            sql.exec('COMMIT')
+            return rows
+          } catch (error) {
+            sql.exec('ROLLBACK')
+            throw error
+          }
+        })
       } catch (error) {
         return fail(error as Error)
       }

@@ -28,6 +28,8 @@ import { useRestoreBrowsingOrigin } from '@renderer/lib/mediaHub/useRestoreBrows
 import { useBatchReveal } from '@renderer/lib/mediaHub/useBatchReveal'
 import { formatReleaseDate, isFutureRelease } from '@renderer/lib/mediaHub/releaseDate'
 import { CategoryFilterBar } from './CategoryFilterBar'
+import { TitleStatusButton } from '@renderer/components/media/TitleStatusButton'
+import { titleStatusOf } from '@renderer/lib/mediaHub/titleStatus'
 import styles from './AnimeLibraryPage.module.css'
 import { RatingBadge } from '@renderer/components/detail/RatingBadge'
 import { ratingSourceFor } from '@renderer/components/detail/ratingSource'
@@ -65,9 +67,10 @@ function mediaKindLabel(media: MediaItem): string {
  *  say so. Watched wins over planned when a title is somehow both — having
  *  seen it is the more final of the two. */
 function watchState(media: MediaItem): 'watched' | 'planned' | null {
-  if (media.watched || media.completed) return 'watched'
-  if (media.inMyList) return 'planned'
-  return null
+  // The one precedence rule, from titleStatus.ts; a show part-way through
+  // carries no corner mark here — Continue watching is where that shows.
+  const status = titleStatusOf(media)
+  return status === 'watched' || status === 'planned' ? status : null
 }
 
 function uniqueItems(items: MediaItem[]): MediaItem[] {
@@ -384,15 +387,8 @@ interface NextUpTarget {
 }
 
 function LibraryDetails({ media, config }: { media: MediaItem | null; config: CategoryConfig }) {
-  const {
-    startPartyPlayback,
-    toggleMyList,
-    markContinueWatching,
-    openDetail,
-    resolvingMedia,
-    ratings,
-    adaptCatalogItems
-  } = useAppState()
+  const { startPartyPlayback, openDetail, resolvingMedia, ratings, adaptCatalogItems } =
+    useAppState()
 
   const [tab, setTab] = useState<DetailTab>('details')
   // The grid row this panel is handed comes from the browse index, which
@@ -681,26 +677,13 @@ function LibraryDetails({ media, config }: { media: MediaItem | null; config: Ca
               <Icon name="info" size={15} />
               Open full details
             </button>
-            {/* Both toggles carry their state in colour as well as in words
-                — planned in the library's own cyan, watched in green, the
-                same two colours the grid tiles use — so a glance answers
-                "have I seen this" without reading anything. */}
-            <button
-              type="button"
-              className={`${styles.action} ${media.inMyList ? styles.actionPlanned : ''}`}
-              onClick={() => toggleMyList(media)}
-            >
-              <Icon name={media.inMyList ? 'check' : 'plus'} size={15} />
-              {media.inMyList ? 'Planned' : 'Plan to Watch'}
-            </button>
-            <button
-              type="button"
-              className={`${styles.action} ${media.watched ? styles.actionWatched : ''}`}
-              onClick={() => markContinueWatching(media.id, !media.watched, media)}
-            >
-              <Icon name={media.watched ? 'eye-off' : 'check'} size={15} />
-              {media.watched ? 'Mark as unwatched' : 'Mark as watched'}
-            </button>
+            {/* One status control in place of the plan and watched pair.
+                Its colours are the grid tiles' own — cyan for planned,
+                green for seen — so a glance still answers "have I seen
+                this" without reading anything. It also works for a show
+                now: the old "Mark as watched" needed an episode number this
+                panel never had, and quietly did nothing for series. */}
+            <TitleStatusButton media={media} variant="action" />
           </div>
         </>
       )}
@@ -1301,7 +1284,7 @@ export function LibraryPage({ config }: { config: CategoryConfig }) {
               selectedId={selected?.id ?? null}
               onSelect={(media) => setSelectedId(media.id)}
               onOpen={openDetail}
-              emptyMessage="Finished Everything? 😱"
+              emptyMessage="Nothing in progress here yet"
               collapseWhenEmpty
             />
             <LibraryShelf

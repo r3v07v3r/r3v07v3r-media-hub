@@ -142,6 +142,33 @@ origin justifies no deletion, its queued removal is never sent. Records
 written before stamps existed name no account and are treated the same
 way — unattributable, and therefore safe.
 
+### 8. Marking a planned title watched takes it off the plan — without a removal
+
+The app has one status per title: not watched, plan to watch, watched.
+Marking a planned title watched (a film, or every aired episode of a
+show) drops it from the local plan. That is NOT rule 3's removal, and two
+services must not hear it as one:
+
+- **Simkl** moves a title from plan to watch to completed by itself when
+  its history arrives. Its removal call is the un-watch call (rule 3), and
+  the evidence gate would let it through — the title is on the Simkl plan
+  list — so sent after the history push it would delete the watch just
+  recorded. Nothing is sent.
+- **MyAnimeList** deletes the whole list entry on a plan removal when the
+  status is still plan_to_watch, which is where a progress push can leave
+  it. The progress push's status change is the plan removal there.
+- **Trakt**'s watchlist removal is scoped and harmless, so Trakt is told.
+
+The local bookkeeping is cleared regardless: the sources record and the
+origin, and any queued add for the title. A stale Simkl tag would be the
+evidence a later un-plan needs to fire the destructive call; an origin left
+standing would let the next pull remove the title again.
+
+The pull side has the matching rule: a title with local watch history is
+never planned by a pull, however many services still list it. Watched
+outranks planned, and a service still listing something since seen is
+stale data, not a new intent.
+
 ## What this deliberately does not do
 
 - **No merging of what a "list" means.** Trakt's watchlist, Simkl's

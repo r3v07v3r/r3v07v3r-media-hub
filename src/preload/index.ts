@@ -48,6 +48,8 @@ import type {
   MalStartPayload,
   MalStatus,
   MarkWatchedResult,
+  SetTitleStatusPayload,
+  SetTitleStatusResult,
   MediaHubSettingsSnapshot,
   MediaKind,
   NetworkInfoResult,
@@ -564,6 +566,8 @@ const api = {
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.trackingUnmarkWatched, payload),
       markSeasonWatched: (payload: MarkSeasonWatchedPayload): Promise<MarkWatchedResult> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.trackingMarkSeasonWatched, payload),
+      setTitleStatus: (payload: SetTitleStatusPayload): Promise<SetTitleStatusResult> =>
+        ipcRenderer.invoke(MEDIA_HUB_CHANNELS.trackingSetTitleStatus, payload),
       getPosition: (payload: GetPositionPayload): Promise<PlaybackPositionResult | null> =>
         ipcRenderer.invoke(MEDIA_HUB_CHANNELS.trackingGetPosition, payload),
       savePosition: (payload: SavePositionPayload): Promise<{ ok: true }> =>

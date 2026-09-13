@@ -51,7 +51,7 @@ export function ContinueWatchingPanel({ kindFilter, className }: ContinueWatchin
       {isEmpty ? (
         <div className={styles.empty}>
           <Icon name="tracked" size={18} />
-          Finished Everything? <span aria-hidden="true">😱</span>
+          Nothing in progress
         </div>
       ) : (
         <>

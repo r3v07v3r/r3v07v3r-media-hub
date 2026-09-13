@@ -13,7 +13,10 @@
   letter-spacing: 0.3px;
   text-transform: uppercase;
   color: #fff;
-  backdrop-filter: blur(6px);
+  /* No backdrop-filter here. One is drawn per card, and a browse grid
+     holds dozens at once — each was its own compositor pass for a 6px
+     blur on a pill nobody could tell from a flat fill. The fills are
+     opaque enough to read on any artwork. */
   box-shadow: 0 2px 8px -2px rgba(0, 0, 0, 0.5);
 }
 .badge svg {
@@ -21,33 +24,43 @@
   height: 9px;
 }
 
-/* Two meanings, two colours: violet for "part way through", green for
-   "seen it". Watched used to be cyan, which put a finished film and a
-   half-finished one in the same cool half of the palette and made the one
-   thing worth spotting on a grid — what is already done — the slowest
-   thing to spot. Watched and completed are both "done", so they share the
-   green; the label on the pill is what separates a finished film from a
-   finished show. */
+/* Three meanings, three colours, the same three the grid tiles and the
+   status control use: cyan for "on the list", violet for "part way
+   through", green for "seen it". Watched and completed are both "done",
+   so they share the green; the label on the pill is what separates a
+   finished film from a finished show. */
+.planned {
+  background: rgba(56, 229, 255, 0.9);
+  color: #042630;
+}
 .inProgress {
-  background: rgba(139, 92, 246, 0.82);
+  background: rgba(139, 92, 246, 0.9);
 }
 .watched,
 .completed {
-  background: rgba(94, 224, 130, 0.85);
+  background: rgba(94, 224, 130, 0.92);
   color: #06210f;
 }
 
-/* Small tiles (MoodBrowser) — icon/dot only, no text label, tucked closer
-   to the corner. */
+/* Small tiles (MoodBrowser, the collection panel) — icon/dot only, no
+   text label, a 16px round mark tucked into the corner so it sits fully
+   inside a poster under 40px wide. */
 .badgeCompact {
-  top: 5px;
-  left: 5px;
-  padding: 3px;
+  top: 4px;
+  left: 4px;
+  width: 16px;
+  height: 16px;
+  padding: 0;
   gap: 0;
+  justify-content: center;
+}
+.badgeCompact svg {
+  width: 9px;
+  height: 9px;
 }
 .dot {
-  width: 7px;
-  height: 7px;
+  width: 6px;
+  height: 6px;
   border-radius: 50%;
   background: #fff;
 }

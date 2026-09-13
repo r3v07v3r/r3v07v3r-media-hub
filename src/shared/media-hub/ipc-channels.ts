@@ -147,6 +147,10 @@ export const MEDIA_HUB_CHANNELS = {
   trackingMarkWatched: 'mediahub:tracking:mark-watched',
   trackingUnmarkWatched: 'mediahub:tracking:unmark-watched',
   trackingMarkSeasonWatched: 'mediahub:tracking:mark-season-watched',
+  /** One title, one status — see SetTitleStatusPayload. The whole-title
+   *  form of mark/unmark, so a card with no episode list can still say
+   *  "watched" about a show. */
+  trackingSetTitleStatus: 'mediahub:tracking:set-title-status',
   trackingGetPosition: 'mediahub:tracking:get-position',
   trackingSavePosition: 'mediahub:tracking:save-position',
   trackingListPositions: 'mediahub:tracking:list-positions',

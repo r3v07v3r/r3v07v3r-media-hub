@@ -37,6 +37,7 @@ import type {
   ReconcileResolution,
   WatchStatusDiscrepancy
 } from '@shared/media-hub/types'
+import type { TitleStatus } from '@shared/media-hub/types'
 import {
   mediaItemToTrackablePayload,
   catalogItemToMediaItem,
@@ -189,6 +190,15 @@ interface AppStateValue {
   // round trip.
   myList: Set<string>
   toggleMyList: (media: MediaItem) => void
+  /**
+   * The one status a title has — not watched, plan to watch, watched —
+   * set as a whole. Main decides what that takes (every aired episode of
+   * a show, the plan removal that follows a mark) and tells the services;
+   * see tracking.ts's set-title-status handler and
+   * lib/mediaHub/titleStatus.ts for the display side. The control is
+   * components/media/TitleStatusButton.tsx.
+   */
+  setTitleStatus: (media: MediaItem, status: TitleStatus) => void
   /**
    * Which tracking services have each planned title on their own list.
    *
@@ -1931,6 +1941,72 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   //
   // Outside playback both reports are no-ops on main's side — there is no
   // video child to hide or reveal, and no overlay to go with it.
+  const setTitleStatus = useCallback(
+    (media: MediaItem, status: TitleStatus) => {
+      const id = media.id
+      // The plan set is local state and answers immediately; the watched
+      // sets are re-read once the write lands, since "watched" for a show
+      // is every aired episode and main is the one that knows them.
+      setMyList((prev) => {
+        const next = new Set(prev)
+        if (status === 'planned') next.add(id)
+        else next.delete(id)
+        return next
+      })
+      if (status === 'watched') {
+        setContinueWatching((prev) => prev.filter((c) => c.media.id !== id))
+      }
+      const api = window.api?.mediaHub
+      if (!api?.tracking?.setTitleStatus) return
+      const item = mediaItemToTrackablePayload(media)
+      const settle = (): void => {
+        homeFeed.refresh()
+        watchedIdsResult.refresh()
+        setWatchStatusVersion((v) => v + 1)
+      }
+      api.tracking
+        .setTitleStatus({ item, status })
+        .then((result) => {
+          rememberTrackedId(id, status === 'planned')
+          if (status === 'watched') forgetContinueWatching(id)
+          settle()
+          // A whole show in one click is worth a word, and — in the
+          // clearing direction — a way back.
+          if (result.episodes > 0 && status === 'unwatched') {
+            pushNotification({
+              tone: 'info',
+              message: `${media.title}: ${result.episodes} episode${result.episodes === 1 ? '' : 's'} marked not watched.`,
+              action: {
+                label: 'Undo',
+                run: () => {
+                  api.tracking
+                    .setTitleStatus({ item, status: 'watched' })
+                    .then(settle)
+                    .catch(() => {})
+                }
+              }
+            })
+          } else if (result.episodes > 0 && status === 'watched') {
+            pushNotification({
+              tone: 'success',
+              message: `${media.title}: ${result.episodes} episode${result.episodes === 1 ? '' : 's'} marked watched.`
+            })
+          }
+        })
+        .catch((error: unknown) => {
+          settle()
+          pushNotification({
+            tone: 'error',
+            message:
+              error instanceof Error && error.message
+                ? error.message.replace(/^Error invoking remote method '[^']+': Error: /, '')
+                : 'Could not update the status.'
+          })
+        })
+    },
+    [homeFeed, watchedIdsResult, pushNotification]
+  )
+
   const partyPanelReportedOpen = useRef<boolean | null>(null)
   useEffect(() => {
     const reported = partyPanelReportedOpen.current
@@ -2700,6 +2776,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       myList,
       plannedSources: homeFeed.plannedSources,
       toggleMyList,
+      setTitleStatus,
       dislikedIds,
       toggleDisliked,
       ratings: ratingsResult.ratings,
@@ -2805,6 +2882,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       myList,
       homeFeed.plannedSources,
       toggleMyList,
+      setTitleStatus,
       dislikedIds,
       toggleDisliked,
       ratingsResult.ratings,

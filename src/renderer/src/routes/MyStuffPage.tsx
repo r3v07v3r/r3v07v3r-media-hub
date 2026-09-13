@@ -30,12 +30,18 @@ import {
   type PlannedFilterState
 } from '@renderer/components/mystuff/plannedFilterRules'
 
-type TabId = 'list' | 'progress' | 'watched' | 'rated' | 'history' | 'stats' | 'dropped'
+type TabId = 'planned' | 'progress' | 'watched' | 'list' | 'rated' | 'history' | 'stats' | 'dropped'
 
+// Planned first and on its own: it is a STATUS (the same one Simkl and
+// Trakt call plan to watch), not a list somebody built, and it used to be
+// a chip inside Lists beside the named ones — with its own sync button,
+// upcoming banner and filters crammed into a tab about something else.
+// Lists holds the named lists, here and on the services.
 const TABS: { id: TabId; label: string }[] = [
-  { id: 'list', label: 'Lists' },
+  { id: 'planned', label: 'Planned' },
   { id: 'progress', label: 'In progress' },
   { id: 'watched', label: 'Watched' },
+  { id: 'list', label: 'Lists' },
   { id: 'rated', label: 'Rated' },
   { id: 'history', label: 'History' },
   { id: 'stats', label: 'Stats' },
@@ -277,7 +283,14 @@ function syncWhen(at: number): string {
   return `${days} day${days === 1 ? '' : 's'} ago`
 }
 
-function ListsView({ watchlist }: { watchlist: MediaItem[] }) {
+function ListsView({
+  watchlist,
+  mode
+}: {
+  watchlist: MediaItem[]
+  /** 'planned' renders the plan-to-watch status view; 'lists' the named lists. */
+  mode: 'planned' | 'lists'
+}) {
   const { openDetail, libraryKey, plannedSources, adaptCatalogItems, catalogKindStates } =
     useAppState()
   const indexRevision = `${catalogKindStates.movie}:${catalogKindStates.series}:${catalogKindStates.anime}`
@@ -331,7 +344,10 @@ function ListsView({ watchlist }: { watchlist: MediaItem[] }) {
   const [draftName, setDraftName] = useState('')
   // A selected list that has just been deleted falls back to My List rather
   // than leaving the chips with nothing highlighted.
-  const selectedList = lists.find((list) => list.id === selected) ?? null
+  // On the Lists tab the first list is open until another is chosen;
+  // a tab that opened onto nothing was the old "Planned" chip's job.
+  const selectedList =
+    lists.find((list) => list.id === selected) ?? (mode === 'lists' ? (lists[0] ?? null) : null)
   const effective = selectedList?.id ?? null
 
   // THE LISTS SOMEBODY BUILT ELSEWHERE, read only.
@@ -420,74 +436,69 @@ function ListsView({ watchlist }: { watchlist: MediaItem[] }) {
 
   return (
     <>
-      <div className={styles.chips}>
-        <button
-          type="button"
-          className={`${styles.chip} ${effective === null ? styles.chipActive : ''}`}
-          onClick={() => setSelected(null)}
-        >
-          Planned <span className={styles.chipCount}>{watchlist.length}</span>
-        </button>
-        {lists.map((list) => (
-          <button
-            key={list.id}
-            type="button"
-            className={`${styles.chip} ${effective === list.id ? styles.chipActive : ''}`}
-            onClick={() => setSelected(list.id)}
-          >
-            {list.name} <span className={styles.chipCount}>{list.count}</span>
-          </button>
-        ))}
-        {remoteLists.map((list) => (
-          <button
-            key={list.id}
-            type="button"
-            className={`${styles.chip} ${selected === list.id ? styles.chipActive : ''}`}
-            onClick={() => setSelected(list.id)}
-            title={list.description || `From ${list.service === 'trakt' ? 'Trakt' : 'Simkl'}`}
-          >
-            <span className={styles.chipService}>
-              {list.service === 'trakt' ? 'Trakt' : 'Simkl'}
-            </span>
-            {list.name} <span className={styles.chipCount}>{list.items.length}</span>
-          </button>
-        ))}
-        {naming ? (
-          <form
-            className={styles.chipForm}
-            onSubmit={(event) => {
-              event.preventDefault()
-              void submitName()
-            }}
-          >
-            <input
-              autoFocus
-              className={styles.chipInput}
-              value={draftName}
-              maxLength={80}
-              placeholder="List name"
-              aria-label="New list name"
-              onChange={(event) => setDraftName(event.target.value)}
-              onBlur={() => void submitName()}
-              onKeyDown={(event) => {
-                if (event.key === 'Escape') {
-                  setNaming(false)
-                  setDraftName('')
-                }
+      {mode === 'lists' && (
+        <div className={styles.chips}>
+          {lists.map((list) => (
+            <button
+              key={list.id}
+              type="button"
+              className={`${styles.chip} ${effective === list.id ? styles.chipActive : ''}`}
+              onClick={() => setSelected(list.id)}
+            >
+              {list.name} <span className={styles.chipCount}>{list.count}</span>
+            </button>
+          ))}
+          {remoteLists.map((list) => (
+            <button
+              key={list.id}
+              type="button"
+              className={`${styles.chip} ${selected === list.id ? styles.chipActive : ''}`}
+              onClick={() => setSelected(list.id)}
+              title={list.description || `From ${list.service === 'trakt' ? 'Trakt' : 'Simkl'}`}
+            >
+              <span className={styles.chipService}>
+                {list.service === 'trakt' ? 'Trakt' : 'Simkl'}
+              </span>
+              {list.name} <span className={styles.chipCount}>{list.items.length}</span>
+            </button>
+          ))}
+          {naming ? (
+            <form
+              className={styles.chipForm}
+              onSubmit={(event) => {
+                event.preventDefault()
+                void submitName()
               }}
-            />
-          </form>
-        ) : (
-          <button
-            type="button"
-            className={styles.chip}
-            onClick={() => setNaming(true)}
-            disabled={!loaded}
-          >
-            + New list
-          </button>
-        )}
-      </div>
+            >
+              <input
+                autoFocus
+                className={styles.chipInput}
+                value={draftName}
+                maxLength={80}
+                placeholder="List name"
+                aria-label="New list name"
+                onChange={(event) => setDraftName(event.target.value)}
+                onBlur={() => void submitName()}
+                onKeyDown={(event) => {
+                  if (event.key === 'Escape') {
+                    setNaming(false)
+                    setDraftName('')
+                  }
+                }}
+              />
+            </form>
+          ) : (
+            <button
+              type="button"
+              className={styles.chip}
+              onClick={() => setNaming(true)}
+              disabled={!loaded}
+            >
+              + New list
+            </button>
+          )}
+        </div>
+      )}
 
       {selectedRemote ? (
         <>
@@ -511,7 +522,7 @@ function ListsView({ watchlist }: { watchlist: MediaItem[] }) {
             emptyMessage="It is empty on the service, or holds only entries this app cannot open — people and episodes are skipped."
           />
         </>
-      ) : effective === null || !selectedList ? (
+      ) : mode === 'planned' ? (
         <>
           {/* Where the list stands and how to refresh it, above the list
               itself. The time matters as much as the button: "planned"
@@ -564,10 +575,14 @@ function ListsView({ watchlist }: { watchlist: MediaItem[] }) {
           />
           {watchlist.length > 0 && (
             <p className={styles.footnote}>
-              Right-click a title to take it off the list, mark it watched, or set it aside.
+              Right-click a title to take it off the plan, mark it watched, or set it aside.
             </p>
           )}
         </>
+      ) : !selectedList ? (
+        <p className={styles.empty}>
+          No lists yet. Make one with “+ New list”, then add titles from their own pages.
+        </p>
       ) : (
         <>
           <div className={styles.listActions}>
@@ -576,7 +591,7 @@ function ListsView({ watchlist }: { watchlist: MediaItem[] }) {
               className={styles.remove}
               onClick={() => {
                 const name = window.prompt('Rename this list', selectedList.name)
-                if (name !== null) void rename(effective, name)
+                if (name !== null) void rename(selectedList.id, name)
               }}
             >
               Rename
@@ -588,7 +603,7 @@ function ListsView({ watchlist }: { watchlist: MediaItem[] }) {
                 // Confirmed because it takes the contents with it: the foreign
                 // key cascades, and there is no undo behind this.
                 if (window.confirm(`Delete "${selectedList.name}" and everything in it?`)) {
-                  void remove(effective)
+                  void remove(selectedList.id)
                   setSelected(null)
                 }
               }}
@@ -625,7 +640,7 @@ function ListsView({ watchlist }: { watchlist: MediaItem[] }) {
                     <button
                       type="button"
                       className={styles.remove}
-                      onClick={() => void removeItem(effective, item.contentId)}
+                      onClick={() => void removeItem(selectedList.id, item.contentId)}
                       aria-label={`Remove ${item.title} from ${selectedList.name}`}
                     >
                       <Icon name="x" size={12} />
@@ -657,7 +672,7 @@ export default function MyStuffPage() {
   // settling (first seed on a fresh database included) is exactly when
   // an early empty answer stops being true.
   const indexRevision = `${catalogKindStates.movie}:${catalogKindStates.series}:${catalogKindStates.anime}`
-  const [tab, setTab] = useState<TabId>('list')
+  const [tab, setTab] = useState<TabId>('planned')
   useRestoreBrowsingOrigin(true)
 
   // Global defaults only, no per-page override — same as the Mood Browser.
@@ -730,7 +745,8 @@ export default function MyStuffPage() {
         ))}
       </div>
 
-      {tab === 'list' && <ListsView watchlist={listItems} />}
+      {tab === 'planned' && <ListsView watchlist={listItems} mode="planned" />}
+      {tab === 'list' && <ListsView watchlist={listItems} mode="lists" />}
 
       {tab === 'progress' && (
         <MediaGrid

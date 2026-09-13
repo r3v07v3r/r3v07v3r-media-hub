@@ -48,7 +48,6 @@ export function MediaCard({
   const { openDetail, startPartyPlayback, openContextMenu, continueWatching, resolvingMedia } =
     useAppState()
   const artwork = resolveArtwork(media)
-  const watchStatus = getWatchStatus(media, continueWatching)
   const isResolving = resolvingMedia?.id === media.id
 
   // One label for however many services agree, because three chips in a
@@ -60,14 +59,27 @@ export function MediaCard({
   // unexplained: a list holding some Simkl chips and some bare cards
   // reads as though the bare ones came from somewhere unnamed. They came
   // from this app, which is worth one word.
+  //
+  // Only on the mixed lists (showKind — the Planned tab and the lists),
+  // where "which service" is a filter: everywhere else the corner badge
+  // already says planned, and a second pill saying "Added here" under
+  // every title was the noisiest thing on the card.
   const sources = plannedSources[String(media.id)] ?? []
-  const plannedTag = !myList.has(media.id)
-    ? ''
-    : sources.length === 0
-      ? 'Added here'
-      : sources.length === 1
-        ? SOURCE_LABELS[sources[0]]
-        : `${sources.length} lists`
+  const plannedTag =
+    !showKind || !myList.has(media.id)
+      ? ''
+      : sources.length === 0
+        ? 'Added here'
+        : sources.length === 1
+          ? SOURCE_LABELS[sources[0]]
+          : `${sources.length} lists`
+
+  // On the Planned tab every card is planned, so the corner badge would
+  // say the same thing forty times; the provenance chip is the fact worth
+  // reading there. Everywhere else the badge is how a planned title shows.
+  const status = getWatchStatus(media, continueWatching)
+  const watchStatus =
+    status.state === 'planned' && plannedTag ? { state: 'unwatched' as const } : status
 
   function handleContextMenu(e: React.MouseEvent) {
     e.preventDefault()
@@ -153,17 +165,18 @@ export function MediaCard({
             </span>
           )}
           <span className={styles.cardTitle}>{media.title}</span>
-          {/* What it is, for a list that holds all three kinds. */}
-          {showKind && <span className={styles.kindChip}>{KIND_LABELS[kindOf(media)]}</span>}
-          {/* WHERE THIS CAME FROM, when it came from somewhere.
-              A title on somebody's Trakt or Simkl watchlist is on this
-              list because of a decision they made months ago in another
-              app — and without saying so, a list pulled in from three
-              services looks like one this app invented. Absent for
-              anything planned here, which needs no explanation. */}
-          {plannedTag && (
-            <span className={styles.plannedChip} title={`On your ${plannedTag} watchlist`}>
-              {plannedTag}
+          {/* What it is, and where it came from, on one row: the kind for a
+              list that holds all three, and — on the Planned tab only — the
+              service whose watchlist it arrived from, since a list pulled in
+              from three services otherwise looks like one this app invented. */}
+          {(showKind || plannedTag) && (
+            <span className={styles.chipRow}>
+              {showKind && <span className={styles.kindChip}>{KIND_LABELS[kindOf(media)]}</span>}
+              {plannedTag && (
+                <span className={styles.plannedChip} title={`On your ${plannedTag} watchlist`}>
+                  {plannedTag}
+                </span>
+              )}
             </span>
           )}
           {/* This used to read "★ 8.6 | IMDb 8.6" and was described as a

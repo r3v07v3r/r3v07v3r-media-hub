@@ -93,7 +93,12 @@ export function localWatchedEpisodeCounts(history: HistoryEntry[]): Record<strin
 export function malStatusForProgress(
   watchedEpisodes: number,
   totalEpisodes: number | undefined
-): 'completed' | 'watching' | undefined {
+): 'completed' | 'watching' | 'plan_to_watch' | undefined {
+  // Nothing watched is not "watching". A show cleared back to not watched
+  // used to be reported as currently watching at zero episodes — a status
+  // nobody chose, and one that stops MAL's own plan removal from ever
+  // finding the entry in the state it checks for.
+  if (!(watchedEpisodes > 0)) return 'plan_to_watch'
   if (!Number.isFinite(totalEpisodes) || !totalEpisodes || totalEpisodes < 0) return undefined
   return watchedEpisodes >= totalEpisodes ? 'completed' : 'watching'
 }
