@@ -1958,7 +1958,12 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       }
       const id = media.id
       const wasPlanned = myList.has(id)
-      setTitleStatusPending((prev) => ({ ...prev, [id]: status }))
+      // Shown as where the write lands: clearing a planned title leaves
+      // its plan (titleStatusRules.ts), so what comes back is Planned.
+      setTitleStatusPending((prev) => ({
+        ...prev,
+        [id]: status === 'unwatched' && wasPlanned ? 'planned' : status
+      }))
       // The plan set is local state and answers immediately; the watched
       // sets are re-read once the write lands, since "watched" for a show
       // is every aired episode and main is the one that knows them. Clearing
@@ -2016,9 +2021,11 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
                       // Marking watched also took the title off the plan;
                       // its undo puts it back, or "undo" would leave a
                       // planned title neither watched nor planned.
+                      // Idempotent: 'planned' is a no-op on a title that was
+                      // re-planned meanwhile, where a toggle would have taken
+                      // it off again.
                       if (status === 'watched' && wasPlanned) {
-                        return api.tracking.toggle(item).then((toggled) => {
-                          if (!toggled?.tracked) return
+                        return api.tracking.setTitleStatus({ item, status: 'planned' }).then(() => {
                           setMyList((prev) => new Set(prev).add(id))
                           rememberTrackedId(id, true)
                         })

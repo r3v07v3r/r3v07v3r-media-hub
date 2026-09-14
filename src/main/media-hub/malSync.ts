@@ -172,8 +172,11 @@ export async function pushMalProgress(
 
     const counts = localWatchedEpisodeCounts(getDatabase().history())
     const watchedEpisodes = counts[item.id] || 0
-    const inferred = malStatusForProgress(watchedEpisodes, item.totalEpisodes)
-    const chosen = status && watchedEpisodes === 0 ? status : inferred
+    // A zero count selects no status of its own: with a known total it
+    // would infer "watching, 0 of 28" over an entry somebody else set to
+    // completed. At zero only an explicitly chosen status is sent, or none.
+    const chosen =
+      watchedEpisodes === 0 ? status : malStatusForProgress(watchedEpisodes, item.totalEpisodes)
 
     await malRequest(`/anime/${malId}/my_list_status`, {
       method: 'PATCH',

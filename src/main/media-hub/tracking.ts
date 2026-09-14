@@ -1457,8 +1457,12 @@ export function registerTrackingIpc(): void {
       }
       const plan = { id, type, title: pushItem.title, year: pushItem.year || undefined }
       const changed: ChangedEpisode[] = []
+      // The whole push item, not a hand-built subset: what is spread here
+      // is what normalizeTitle keeps as the row's metadata — the poster the
+      // History tab draws, the Simkl id — exactly as markWatched received it.
       const importRows = (rows: ChangedEpisode[], fallbackAt: string): ImportedPlay[] =>
         rows.map((row) => ({
+          ...pushItem,
           id,
           type,
           title: pushItem.title,
@@ -1467,6 +1471,11 @@ export function registerTrackingIpc(): void {
           episode: row.episode,
           watchedAt: row.watchedAt || fallbackAt
         }))
+      /** How many episodes a list of viewings covers — a rewatched episode is one. */
+      const distinctEpisodes = (rows: readonly ChangedEpisode[]): number =>
+        new Set(
+          rows.filter((row) => row.episode != null).map((row) => `${row.season}:${row.episode}`)
+        ).size
       const settle = (): void => {
         requestRecommendationsRebuild()
         // Every open surface — grids, the detail page, Home — learns of it
@@ -1481,14 +1490,13 @@ export function registerTrackingIpc(): void {
           // is already there is left alone rather than re-stamped.
           db.importWatched(importRows(episodes, now))
         } else {
-          for (const row of episodes) {
-            db.unmarkWatched(id, row.season ?? undefined, row.episode ?? undefined)
-          }
+          // One transaction, like the mark it undoes.
+          db.unmarkEpisodes(id, episodes)
         }
         changed.push(...episodes)
         pushTitleHistory(pushItem, episodes, status === 'watched' ? 'add' : 'remove')
         settle()
-        return { status, episodes: episodes.filter((row) => row.episode != null).length, changed }
+        return { status, episodes: distinctEpisodes(episodes), changed }
       }
 
       const own = db.watchedEpisodesOf(id)
@@ -1536,7 +1544,14 @@ export function registerTrackingIpc(): void {
         switch (step.kind) {
           case 'track':
             db.track(pushItem)
-            pushLocalPlanChange(plan, true)
+            // Enqueued behind whatever this title's history chain still
+            // owes — the un-plan a mark queued moments ago must land before
+            // a re-plan (an undo) is even asked for, or it would undo the
+            // undo at Trakt and clear the origin the re-plan just wrote.
+            queueRemotePushes(pushItem, () => {
+              pushLocalPlanChange(plan, true)
+              return []
+            })
             break
           case 'untrack':
             db.untrack(id)
@@ -1581,7 +1596,7 @@ export function registerTrackingIpc(): void {
         }
       }
       if (steps.length) settle()
-      return { status, episodes: changed.filter((row) => row.episode != null).length, changed }
+      return { status, episodes: distinctEpisodes(changed), changed }
     }
   )
 
@@ -1970,7 +1985,15 @@ export function registerTrackingIpc(): void {
       plannedSources: plannedSources(),
       // See HomePersonalizedResult.completedIds — the index's own
       // completion query, for the rows served here that carry no episodes.
-      completedIds: db.indexByIds(recommendations.map((item) => String(item.id))).completedIds
+      // Over everything served — the row AND the shelves, which reach past
+      // the row into the whole buffer — so a finished show reads the same
+      // wherever it appears.
+      completedIds: db.indexByIds([
+        ...new Set([
+          ...recommendations.map((item) => String(item.id)),
+          ...recommendationRails.flatMap((rail) => rail.items.map((item) => String(item.id)))
+        ])
+      ]).completedIds
     }
   })
 

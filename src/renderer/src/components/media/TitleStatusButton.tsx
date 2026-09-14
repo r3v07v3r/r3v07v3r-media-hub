@@ -77,8 +77,12 @@ export function TitleStatusButton({
       type="button"
       className={classes}
       data-status={status}
-      onClick={() => setTitleStatus(media, next)}
-      disabled={Boolean(pending)}
+      // Not disabled while pending: a disabled control drops keyboard focus
+      // to the document for as long as a whole-show mark takes. A second
+      // press simply does nothing until the first has landed.
+      onClick={() => {
+        if (!pending) setTitleStatus(media, next)
+      }}
       aria-busy={Boolean(pending)}
       title={TITLE_STATUS_ACTION[next]}
       aria-label={`${label}${count ? ` · ${count}` : ''}. ${TITLE_STATUS_ACTION[next]}`}

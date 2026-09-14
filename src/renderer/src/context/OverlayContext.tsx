@@ -54,8 +54,11 @@ const ERROR_TTL_MS = 10_000
  * dismissed with its own close control (NotificationLayer offers one).
  */
 function notificationTtlMs(notification: Pick<AppNotification, 'tone' | 'action'>): number | null {
-  if (notification.tone !== 'error') return NOTIFICATION_TTL_MS
-  return notification.action ? null : ERROR_TTL_MS
+  // Anything offering an action stays until it is used or dismissed: an
+  // "Undo" that vanishes four seconds after a sixty-episode mark is not a
+  // way back. The close button is always there.
+  if (notification.action) return null
+  return notification.tone !== 'error' ? NOTIFICATION_TTL_MS : ERROR_TTL_MS
 }
 
 export interface ContextMenuTarget {

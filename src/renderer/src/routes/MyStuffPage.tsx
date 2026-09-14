@@ -379,6 +379,8 @@ function ListsView({
       }
     })
   }, [])
+  // Answered-or-not, so "no lists" is only claimed once both reads are in.
+  const [remoteLoaded, setRemoteLoaded] = useState(() => !window.api?.mediaHub?.lists?.remoteLists)
   useEffect(() => {
     const api = window.api?.mediaHub?.lists
     if (!api?.remoteLists) return
@@ -386,17 +388,25 @@ function ListsView({
     void api
       .remoteLists()
       .then((result) => {
-        if (!cancelled) setRemoteLists(result.lists)
+        if (cancelled) return
+        setRemoteLists(result.lists)
+        setRemoteLoaded(true)
       })
       .catch(() => {
         // Nothing to show is the ordinary state for somebody who has made
         // no lists; it is not worth an error.
+        if (!cancelled) setRemoteLoaded(true)
       })
     return () => {
       cancelled = true
     }
   }, [remoteGeneration])
-  const selectedRemote = remoteLists.find((list) => list.id === selected) ?? null
+  // With no list of one's own, the first list from a service is the one
+  // open — the tab used to open onto "No lists yet" under a row of Trakt
+  // chips.
+  const selectedRemote =
+    remoteLists.find((list) => list.id === selected) ??
+    (mode === 'lists' && selected === null && lists.length === 0 ? (remoteLists[0] ?? null) : null)
 
   // Matched against the INDEX by id (stage 4), so a remote list's rows
   // carry this app's own artwork and ratings rather than the thin record
@@ -522,7 +532,6 @@ function ListsView({
           </p>
           <MediaGrid
             showKind
-            showProvenance
             items={remoteListItems}
             emptyTitle="Nothing in this list"
             emptyMessage="It is empty on the service, or holds only entries this app cannot open — people and episodes are skipped."
@@ -588,7 +597,7 @@ function ListsView({
         </>
       ) : !selectedList ? (
         <p className={styles.empty}>
-          {loaded
+          {loaded && remoteLoaded
             ? 'No lists yet. Make one with “+ New list”, then add titles from their own pages.'
             : 'Opening…'}
         </p>

@@ -586,7 +586,22 @@ export interface MediaHubDatabase {
   unmarkTitle(
     id: string | number
   ): { season: number | null; episode: number | null; watchedAt: string }[]
-  /** The title's own history rows — cheap, for the one title a status change is about. */
+  /**
+   * Removes exactly these rows of one title — history and their plays — in
+   * one transaction: the undo of a whole-show mark, which would otherwise
+   * be one fsync per episode. Returns how many history rows went.
+   */
+  unmarkEpisodes(
+    id: string | number,
+    refs: readonly { season: number | null; episode: number | null }[]
+  ): number
+  /**
+   * Every viewing this title has here — the plays, which keep one row per
+   * viewing, plus any history row without one — newest first. Cheap, for
+   * the one title a status change is about, and exactly what an undo of a
+   * clear has to put back: a history row alone would lose every earlier
+   * viewing of a rewatched episode.
+   */
   watchedEpisodesOf(
     id: string | number
   ): { season: number | null; episode: number | null; watchedAt: string }[]
@@ -810,6 +825,7 @@ interface PreparedQueries {
   titleHistory: StatementSync
   unwatchTitle: StatementSync
   deleteTitlePlays: StatementSync
+  titlePlays: StatementSync
   history: StatementSync
   dislike: StatementSync
   undislike: StatementSync
@@ -972,6 +988,9 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
     ),
     unwatchTitle: sql.prepare('DELETE FROM watch_history WHERE profile_id=? AND content_id=?'),
     deleteTitlePlays: sql.prepare('DELETE FROM plays WHERE profile_id=? AND content_id=?'),
+    titlePlays: sql.prepare(
+      'SELECT season,episode,watched_at FROM plays WHERE profile_id=? AND content_id=?'
+    ),
     history: sql.prepare(
       'SELECT metadata_json,season,episode,watched_at FROM watch_history WHERE profile_id=? ORDER BY watched_at DESC'
     ),
@@ -1231,6 +1250,28 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
     listPositions: sql.prepare(
       'SELECT season,episode,position_seconds,duration_seconds FROM playback_positions WHERE profile_id=? AND content_id=?'
     )
+  }
+
+  /** Every viewing of one title, newest first: the plays (one row per
+   *  viewing) plus any history row that has no play, deduplicated. */
+  function titleViewings(
+    contentId: string
+  ): { season: number | null; episode: number | null; watchedAt: string }[] {
+    const seen = new Set<string>()
+    const rows: { season: number | null; episode: number | null; watchedAt: string }[] = []
+    const take = (r: unknown): void => {
+      const row = r as Row
+      const season = Number.isFinite(row.season) ? (row.season as number) : null
+      const episode = Number.isFinite(row.episode) ? (row.episode as number) : null
+      const watchedAt = String(row.watched_at ?? '')
+      const key = `${season ?? 'movie'}:${episode ?? 'movie'}:${watchedAt}`
+      if (seen.has(key)) return
+      seen.add(key)
+      rows.push({ season, episode, watchedAt })
+    }
+    for (const r of q.titlePlays.all(currentProfileId, contentId)) take(r)
+    for (const r of q.titleHistory.all(currentProfileId, contentId)) take(r)
+    return rows.sort((a, b) => b.watchedAt.localeCompare(a.watchedAt))
   }
 
   const db: MediaHubDatabase = {
@@ -1711,12 +1752,31 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
 
     watchedEpisodesOf(id) {
       try {
-        return q.titleHistory.all(currentProfileId, String(id)).map((r) => {
-          const row = r as Row
-          return {
-            season: Number.isFinite(row.season) ? (row.season as number) : null,
-            episode: Number.isFinite(row.episode) ? (row.episode as number) : null,
-            watchedAt: String(row.watched_at ?? '')
+        return titleViewings(String(id))
+      } catch (error) {
+        return fail(error as Error)
+      }
+    },
+
+    unmarkEpisodes(id, refs) {
+      try {
+        const contentId = String(id)
+        return durable(() => {
+          sql.exec('BEGIN')
+          try {
+            let removed = 0
+            for (const ref of refs) {
+              const season = Number.isFinite(ref.season) ? (ref.season as number) : null
+              const episode = Number.isFinite(ref.episode) ? (ref.episode as number) : null
+              const key = `${contentId}:${season ?? 'movie'}:${episode ?? 'movie'}`
+              removed += Number(q.unwatch.run(currentProfileId, key).changes)
+              q.deletePlays.run({ profile: currentProfileId, id: contentId, season, episode })
+            }
+            sql.exec('COMMIT')
+            return removed
+          } catch (error) {
+            sql.exec('ROLLBACK')
+            throw error
           }
         })
       } catch (error) {
@@ -1730,14 +1790,7 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
         return durable(() => {
           sql.exec('BEGIN')
           try {
-            const rows = q.titleHistory.all(currentProfileId, contentId).map((r) => {
-              const row = r as Row
-              return {
-                season: Number.isFinite(row.season) ? (row.season as number) : null,
-                episode: Number.isFinite(row.episode) ? (row.episode as number) : null,
-                watchedAt: String(row.watched_at ?? '')
-              }
-            })
+            const rows = titleViewings(contentId)
             if (rows.length) {
               q.unwatchTitle.run(currentProfileId, contentId)
               q.deleteTitlePlays.run(currentProfileId, contentId)

@@ -12,7 +12,11 @@
 // Run with: npx tsx tests/titleStatus.test.ts
 
 import assert from 'node:assert/strict'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 
+import { createDatabase } from '../src/main/media-hub/database'
 import {
   airedRegularEpisodes,
   bySeason,
@@ -278,5 +282,54 @@ check('a watched title is not planned again by a pull', () => {
   assert.equal(remotePlanAdoptable('tt-owed', state), false)
   assert.equal(remotePlanAdoptable('tt-seen', state), false, 'watched outranks planned')
 })
+
+console.log('\nthe rows a clear returns and an undo puts back')
+
+{
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'r3-title-status-test-'))
+  const db = createDatabase(path.join(dir, 'test.sqlite'), 'profile-test')
+  const show = { id: 'tt5', type: 'series' as const, title: 'Show', year: '2020', poster: 'p.jpg' }
+
+  check('every viewing comes back, newest first, a rewatch as two rows', () => {
+    db.importWatched([
+      { ...show, season: 1, episode: 1, watchedAt: '2026-01-01T00:00:00.000Z' },
+      { ...show, season: 1, episode: 2, watchedAt: '2026-01-02T00:00:00.000Z' },
+      { ...show, season: 1, episode: 1, watchedAt: '2026-02-01T00:00:00.000Z' }
+    ])
+    const rows = db.watchedEpisodesOf('tt5')
+    assert.deepEqual(
+      rows.map((r) => `${r.season}:${r.episode}@${r.watchedAt.slice(0, 10)}`),
+      ['1:1@2026-02-01', '1:2@2026-01-02', '1:1@2026-01-01']
+    )
+  })
+
+  check('a whole-title clear removes history and plays, and returns what an undo needs', () => {
+    const removed = db.unmarkTitle('tt5')
+    assert.equal(removed.length, 3)
+    assert.equal(db.watchedEpisodesOf('tt5').length, 0)
+    assert.equal(db.history().filter((h) => h.id === 'tt5').length, 0)
+    // The undo: the same rows, dates kept, and the poster still on them.
+    db.importWatched(removed.map((r) => ({ ...show, ...r })))
+    const back = db.watchedEpisodesOf('tt5')
+    assert.equal(back.length, 3, 'both viewings of episode 1 are back')
+    const history = db.history().filter((h) => h.id === 'tt5')
+    assert.equal(history.length, 2)
+    assert.ok(
+      history.every((h) => h.poster === 'p.jpg'),
+      'the row keeps what the push item carried'
+    )
+  })
+
+  check('named rows go in one call, and only those', () => {
+    const gone = db.unmarkEpisodes('tt5', [{ season: 1, episode: 2 }])
+    assert.equal(gone, 1)
+    const left = db.watchedEpisodesOf('tt5')
+    assert.deepEqual(
+      [...new Set(left.map((r) => `${r.season}:${r.episode}`))],
+      ['1:1'],
+      'episode 2 is gone, both viewings of episode 1 stay'
+    )
+  })
+}
 
 console.log(`\n${pass} passed`)
