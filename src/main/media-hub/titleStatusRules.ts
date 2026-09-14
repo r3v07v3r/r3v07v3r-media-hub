@@ -135,3 +135,12 @@ export function planTitleStatusChange(
   if (watched) steps.push(episodic ? { kind: 'unmark-title' } : { kind: 'unmark-movie' })
   return steps
 }
+
+/**
+ * Regular episodes per season, from the refs airedRegularEpisodes gives:
+ * what a service that keeps an entry per season (MAL) judges "completed"
+ * against, entry by entry, in place of the show's total.
+ */
+export function episodesPerSeason(refs: readonly EpisodeRef[]): Map<number, number> {
+  return new Map(bySeason(refs).map(({ season, episodes }) => [season, episodes.length]))
+}

@@ -20,6 +20,7 @@ import { createDatabase } from '../src/main/media-hub/database'
 import {
   airedRegularEpisodes,
   bySeason,
+  episodesPerSeason,
   episodeKey,
   planTitleStatusChange
 } from '../src/main/media-hub/titleStatusRules'
@@ -329,6 +330,51 @@ console.log('\nthe rows a clear returns and an undo puts back')
       ['1:1'],
       'episode 2 is gone, both viewings of episode 1 stay'
     )
+  })
+}
+
+console.log('\nseasons for the services that keep one entry per season')
+
+check('episodesPerSeason counts the regular episodes of each season once', () => {
+  const totals = episodesPerSeason([
+    { season: 1, episode: 1 },
+    { season: 1, episode: 2 },
+    { season: 1, episode: 2 },
+    { season: 2, episode: 1 }
+  ])
+  assert.deepEqual(
+    [...totals],
+    [
+      [1, 2],
+      [2, 1]
+    ]
+  )
+})
+
+console.log('\nthe viewings a film clear returns and an undo puts back')
+
+{
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'r3-title-status-film-'))
+  const db = createDatabase(path.join(dir, 'test.sqlite'), 'profile-test')
+  const film = { id: 'tt9', type: 'movie' as const, title: 'Film', year: '2019', poster: 'f.jpg' }
+
+  check('every dated viewing of a film comes back after a clear is undone', () => {
+    db.importWatched([
+      { ...film, season: null, episode: null, watchedAt: '2025-06-01T00:00:00.000Z' },
+      { ...film, season: null, episode: null, watchedAt: '2026-03-01T00:00:00.000Z' }
+    ])
+    // What the unmark-movie step reports as `changed`: every viewing.
+    const own = db.watchedEpisodesOf('tt9')
+    assert.equal(own.length, 2)
+    assert.equal(db.unmarkWatched('tt9'), true)
+    assert.equal(db.watchedEpisodesOf('tt9').length, 0, 'the clear takes the plays too')
+    // The undo replays exactly those rows, dates kept.
+    db.importWatched(own.map((r) => ({ ...film, ...r })))
+    assert.deepEqual(
+      db.watchedEpisodesOf('tt9').map((r) => r.watchedAt.slice(0, 10)),
+      ['2026-03-01', '2025-06-01']
+    )
+    assert.equal(db.history().filter((h) => h.id === 'tt9').length, 1)
   })
 }
 

@@ -149,3 +149,84 @@ export function computeReconciliation(
   }
   return { toMal, toLocal, unmatched, ratingsToLocal }
 }
+
+/** The list a MAL entry sits on, as far as this app ever sets it. */
+export type MalListStatus = 'completed' | 'watching' | 'plan_to_watch'
+
+/**
+ * One MAL entry told its new progress: the Kitsu id that names the entry
+ * (a group member's own, never the canonical's standing in for it), the
+ * count, and the status when one follows from it.
+ */
+export interface MalEntryPush {
+  id: string
+  watchedEpisodes: number
+  status?: MalListStatus
+}
+
+/**
+ * Distinct watched episodes of one title, per season. MAL keeps a season
+ * per entry where this app keeps one show, so a grouped title's push needs
+ * its count season by season, not the id's sum.
+ */
+export function localSeasonEpisodeCounts(history: HistoryEntry[], id: string): Map<number, number> {
+  const seen = new Map<number, Set<number>>()
+  for (const entry of history || []) {
+    if (String(entry.id) !== id || !Number.isFinite(entry.episode)) continue
+    const season = Number.isFinite(entry.season) ? (entry.season as number) : 1
+    if (!seen.has(season)) seen.set(season, new Set())
+    seen.get(season)!.add(entry.episode as number)
+  }
+  return new Map([...seen].map(([season, episodes]) => [season, episodes.size]))
+}
+
+/**
+ * The pushes one title's change makes at MAL, one per entry.
+ *
+ * A title with `members` is a grouped anime: one show here, several
+ * entries there, one per season. Its history rows are keyed on the
+ * canonical id with the member's season number — member k of the group
+ * is season k+1 (see animeSeasons.ts's buildAnimeGroupIndexes) — so the
+ * change goes to the members owning the seasons it touched, each with
+ * that season's count and, when the caller knows it, that season's total.
+ * Never the group's sum on the first season's entry, which is what one
+ * push for the canonical id amounted to, and never the group's total in
+ * place of a member's own: a member whose total is unknown gets its count
+ * and keeps whatever status it had. Seasons the change did not touch are
+ * left alone — MAL's PATCH creates an entry that is missing, and a season
+ * nobody watched must not appear on the list at zero. An ungrouped title
+ * is one entry, counted over every row.
+ *
+ * A zero count picks no status of its own — only one chosen explicitly (a
+ * planned title's clear says plan_to_watch); see pushMalProgress.
+ */
+export function planMalPushes(
+  history: HistoryEntry[],
+  title: { id: string; members?: readonly string[]; totalEpisodes?: number },
+  change: {
+    seasons: Iterable<number>
+    seasonTotals?: ReadonlyMap<number, number>
+    status?: 'plan_to_watch'
+  }
+): MalEntryPush[] {
+  const entry = (
+    id: string,
+    watchedEpisodes: number,
+    totalEpisodes: number | undefined
+  ): MalEntryPush => {
+    const status =
+      watchedEpisodes === 0 ? change.status : malStatusForProgress(watchedEpisodes, totalEpisodes)
+    return status ? { id, watchedEpisodes, status } : { id, watchedEpisodes }
+  }
+  if (!title.members?.length) {
+    return [entry(title.id, localWatchedEpisodeCounts(history)[title.id] || 0, title.totalEpisodes)]
+  }
+  const counts = localSeasonEpisodeCounts(history, title.id)
+  const pushes: MalEntryPush[] = []
+  for (const season of [...new Set(change.seasons)].sort((a, b) => a - b)) {
+    const id = title.members[season - 1]
+    if (!id) continue
+    pushes.push(entry(id, counts.get(season) ?? 0, change.seasonTotals?.get(season)))
+  }
+  return pushes
+}

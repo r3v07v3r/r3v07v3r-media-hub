@@ -2004,23 +2004,27 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
           // all, and touches nothing else. An undo itself (episodes given)
           // is not offered another.
           const count = result.episodes
+          const viewings = result.changed.length
           // A film's own click is its own undo — the next press reverses
           // it — except when marking it watched also took it off the plan,
-          // which no single press puts back.
+          // which no single press puts back, and when clearing it dropped
+          // every dated viewing, which the next press would replace with
+          // one stamped now.
           const worthAToast =
             !episodes &&
-            result.changed.length > 0 &&
-            (count > 0 || (status === 'watched' && wasPlanned))
+            viewings > 0 &&
+            (count > 0 || status === 'unwatched' || (status === 'watched' && wasPlanned))
           if (worthAToast) {
             const plural = count === 1 ? '' : 's'
             const reverse: TitleStatus = status === 'watched' ? 'unwatched' : 'watched'
             const verb = status === 'watched' ? 'watched' : 'not watched'
+            let summary = 'marked watched and taken off the plan'
+            if (count > 0) summary = `${count} episode${plural} marked ${verb}`
+            else if (status === 'unwatched')
+              summary = viewings === 1 ? 'marked not watched' : `${viewings} viewings cleared`
             pushNotification({
               tone: status === 'watched' ? 'success' : 'info',
-              message:
-                count > 0
-                  ? `${media.title}: ${count} episode${plural} marked ${verb}.`
-                  : `${media.title}: marked watched and taken off the plan.`,
+              message: `${media.title}: ${summary}.`,
               action: {
                 label: 'Undo',
                 run: () => {

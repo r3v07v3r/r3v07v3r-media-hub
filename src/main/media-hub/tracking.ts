@@ -81,11 +81,12 @@ import { fetchJson } from './httpClient'
 import { mapWithLimit, type TaskPriority } from './taskScheduler'
 import { handle } from './ipcGuard'
 import { logError } from './logger'
-import { pushMalProgress } from './malSync'
+import { pushMalProgress, pushMalTitleProgress } from './malSync'
 import {
   airedRegularEpisodes,
   bySeason,
   episodeKey,
+  episodesPerSeason,
   planTitleStatusChange,
   type EpisodeRef
 } from './titleStatusRules'
@@ -216,13 +217,24 @@ type TrackableItem = Partial<CatalogItem> & { id: string }
  * Trakt, and a progress recompute to MAL — on the title's own chain, after
  * whatever is already in flight for it. A film goes as its own reference;
  * a show always as explicit seasons and episodes (see titleHistoryPayload
- * in simkl.ts for what a bare show reference would do).
+ * in simkl.ts for what a bare show reference would do), and to MAL season
+ * by season, since a grouped anime is an entry per season there (see
+ * planMalPushes in mal.ts).
  */
 function pushTitleHistory(
   item: SimklPushItem & { totalEpisodes?: number },
   rows: readonly { season: number | null; episode: number | null }[],
   action: 'add' | 'remove',
-  malStatus?: 'plan_to_watch'
+  {
+    malStatus,
+    seasonTotals
+  }: {
+    /** A list status chosen for MAL rather than inferred — see pushMalProgress. */
+    malStatus?: 'plan_to_watch'
+    /** Regular episodes per season, when the episode list was loaded: what
+     *  each MAL entry is judged complete against. */
+    seasonTotals?: ReadonlyMap<number, number>
+  } = {}
 ): void {
   const path = action === 'add' ? '/sync/history' : '/sync/history/remove'
   if (item.type === 'movie') {
@@ -242,7 +254,11 @@ function pushTitleHistory(
   queueRemotePushes(item, () => [
     syncSimklHistory(path, titleHistoryPayload(item, seasons)),
     pushTraktTitleHistory(item, seasons, action),
-    pushMalProgress(item, { status: malStatus })
+    pushMalTitleProgress(item, {
+      status: malStatus,
+      seasons: seasons.map((s) => s.season),
+      seasonTotals
+    })
   ])
 }
 
@@ -1371,7 +1387,7 @@ export function registerTrackingIpc(): void {
       queueRemotePushes(item, () => [
         syncSimklHistory('/sync/history', historyPayload(item, playback || {})),
         pushTraktHistory(item, playback || {}, 'add'),
-        pushMalProgress(item)
+        pushMalProgress(item, { season: playback?.season ?? undefined })
       ])
       return { ok: true, simklSynced: false, malSynced: false }
     }
@@ -1389,7 +1405,7 @@ export function registerTrackingIpc(): void {
       queueRemotePushes(item, () => [
         syncSimklHistory('/sync/history/remove', historyPayload(item, p)),
         pushTraktHistory(item, p, 'remove'),
-        pushMalProgress(item)
+        pushMalProgress(item, { season: p.season ?? undefined })
       ])
       return { ok: true, simklSynced: false, malSynced: false }
     }
@@ -1414,7 +1430,7 @@ export function registerTrackingIpc(): void {
       queueRemotePushes(item, () => [
         syncSimklHistory('/sync/history', seasonHistoryPayload(item, season, episodeNumbers)),
         pushTraktSeasonHistory(item, season, episodeNumbers),
-        pushMalProgress(item)
+        pushMalProgress(item, { season })
       ])
       return { ok: true, simklSynced: false, malSynced: false }
     }
@@ -1513,6 +1529,7 @@ export function registerTrackingIpc(): void {
       // The episode list only when it is needed: a film has none, and
       // clearing a show reads what history holds rather than what aired.
       let aired: EpisodeRef[] = []
+      let seasonTotals: Map<number, number> | undefined
       if (episodic && status === 'watched') {
         let detail: CatalogItem
         try {
@@ -1525,12 +1542,14 @@ export function registerTrackingIpc(): void {
         }
         aired = airedRegularEpisodes(detail.videos, Date.now())
         if (!pushItem.year && detail.year) pushItem.year = detail.year
-        // MAL's status is decided against the show's total — see
-        // malStatusForProgress — and a card rarely carries it.
+        // MAL's status is decided against a total — see
+        // malStatusForProgress — and a card rarely carries one. Per season
+        // as well as for the show: a grouped anime is an entry per season
+        // there, each judged complete against its own.
+        const known = airedRegularEpisodes(detail.videos, Infinity)
+        seasonTotals = episodesPerSeason(known)
         if (pushItem.totalEpisodes == null) {
-          pushItem.totalEpisodes =
-            detail.episodeCounts?.totalEpisodes ??
-            airedRegularEpisodes(detail.videos, Infinity).length
+          pushItem.totalEpisodes = detail.episodeCounts?.totalEpisodes ?? known.length
         }
         if (!aired.length) {
           throw new Error(
@@ -1577,7 +1596,7 @@ export function registerTrackingIpc(): void {
             // and one fsync per row held the main process for seconds.
             db.importWatched(importRows(rows, now))
             changed.push(...rows)
-            pushTitleHistory(pushItem, rows, 'add')
+            pushTitleHistory(pushItem, rows, 'add', { seasonTotals })
             break
           }
           case 'unmark-title': {
@@ -1585,12 +1604,9 @@ export function registerTrackingIpc(): void {
             changed.push(...removed)
             // A planned anime cleared to not watched is, on MAL, plan to
             // watch at zero — said explicitly, never inferred from the count.
-            pushTitleHistory(
-              pushItem,
-              removed,
-              'remove',
-              state.planned ? 'plan_to_watch' : undefined
-            )
+            pushTitleHistory(pushItem, removed, 'remove', {
+              malStatus: state.planned ? 'plan_to_watch' : undefined
+            })
             break
           }
         }

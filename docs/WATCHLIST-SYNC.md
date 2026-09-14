@@ -156,7 +156,10 @@ services must not hear it as one:
   recorded. Nothing is sent.
 - **MyAnimeList** deletes the whole list entry on a plan removal when the
   status is still plan_to_watch, which is where a progress push can leave
-  it. The progress push's status change is the plan removal there.
+  it. The progress push's status change is the plan removal there. A
+  grouped anime is an entry per season at MAL, so the push goes season by
+  season, each entry with its own count and total (`planMalPushes` in
+  `mal.ts`); a season the change did not touch is left alone.
 - **Trakt**'s watchlist removal is scoped and harmless, so Trakt is told.
 
 The local bookkeeping is cleared regardless: the sources record and the

@@ -26,7 +26,7 @@ import type {
   MalStatus,
   MediaKind
 } from '../../shared/media-hub/types'
-import { animeGroupingReady, resolveAnimeGroupTarget } from './animeSeasons'
+import { animeGroupingReady, groupedIdsFor, resolveAnimeGroupTarget } from './animeSeasons'
 import { getDatabase } from './dbState'
 import { fetchJson } from './httpClient'
 import { crossIdsForKitsu, kitsuIdForExternal } from './idBridge'
@@ -36,9 +36,9 @@ import { notifyLibraryChanged } from './rendererBridge'
 import {
   buildAuthorizeUrl,
   computeReconciliation,
-  localWatchedEpisodeCounts,
-  malStatusForProgress,
-  normalizeMalEntry
+  normalizeMalEntry,
+  planMalPushes,
+  type MalEntryPush
 } from './mal'
 import { isAllowedExternalUrl } from './security'
 import { hasSimklContent, seasonHistoryPayload } from './simkl'
@@ -137,12 +137,66 @@ export async function resolveMalIdForKitsu(kitsuId: string): Promise<number> {
 }
 
 /**
+ * A Kitsu id as MAL keeps it. A member of a grouped anime — the canonical
+ * id or any sibling — is one entry among the group's, in season order;
+ * anything else is one entry on its own. Before the anime catalogue is
+ * cached nothing is grouped, and every id is its own entry, as it was.
+ */
+function malTitleOf(kitsuId: string): { id: string; members?: string[]; season: number } {
+  const target = resolveAnimeGroupTarget(kitsuId)
+  const siblings = groupedIdsFor(target.id)
+  if (!siblings?.length) return { id: kitsuId, season: 1 }
+  return { id: target.id, members: [target.id, ...siblings], season: target.season }
+}
+
+/** One entry's PATCH — the way every MAL progress push lands. */
+async function patchMalListStatus(
+  push: MalEntryPush
+): Promise<{ malSynced: boolean; malError?: string }> {
+  try {
+    const malId = await resolveMalIdForKitsu(push.id)
+    if (!malId) return { malSynced: false }
+    await malRequest(`/anime/${malId}/my_list_status`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        num_watched_episodes: String(push.watchedEpisodes),
+        ...(push.status ? { status: push.status } : {})
+      })
+    })
+    return { malSynced: true }
+  } catch (error) {
+    logError('mal:push-progress', error)
+    return { malSynced: false, malError: (error as Error).message }
+  }
+}
+
+/** One after another — a group is a handful of entries, and MAL paces its API. */
+async function sendMalPushes(
+  pushes: MalEntryPush[]
+): Promise<{ malSynced: boolean; malError?: string }> {
+  let malSynced = false
+  let malError: string | undefined
+  for (const push of pushes) {
+    const result = await patchMalListStatus(push)
+    malSynced = malSynced || result.malSynced
+    malError = malError ?? result.malError
+  }
+  return malError ? { malSynced, malError } : { malSynced }
+}
+
+/**
  * Pushes this app's local watched-episode count for one anime item up to
  * MAL, as a `my_list_status` PATCH. No-ops (not an error) for non-anime
  * items, non-Kitsu ids, or when MAL isn't connected — callers (tracking.ts's
  * mark-watched/unmark-watched/mark-season-watched handlers) call this
  * unconditionally after every local watch-state change and merge the result
  * into their own response.
+ *
+ * A grouped anime is one show here and an entry per season at MAL, so what
+ * is sent is one season's count — the season the change was in, given as
+ * `season`, or the member's own place in the group — to that season's
+ * entry. See planMalPushes.
  */
 export async function pushMalProgress(
   item: {
@@ -151,7 +205,8 @@ export async function pushMalProgress(
     totalEpisodes?: number
   },
   {
-    status
+    status,
+    season
   }: {
     /**
      * A status the person chose, rather than one inferred from the count.
@@ -161,36 +216,56 @@ export async function pushMalProgress(
      * set to completed got rewritten. Never inferred here.
      */
     status?: 'plan_to_watch'
+    /** The season the change was in, as the episode list numbers it. */
+    season?: number
   } = {}
 ): Promise<{ malSynced: boolean; malError?: string }> {
   if (item.type !== 'anime' || !String(item.id).startsWith('kitsu:')) return { malSynced: false }
   if (!malCredentials().accessToken) return { malSynced: false }
+  const title = malTitleOf(item.id)
+  // A sibling's entry is its own season whatever the caller says; only the
+  // canonical id, which fronts the whole group, is told which season.
+  const touched = item.id === title.id ? (season ?? title.season) : title.season
+  return sendMalPushes(
+    planMalPushes(
+      getDatabase().history(),
+      { id: title.id, members: title.members, totalEpisodes: item.totalEpisodes },
+      { status, seasons: [touched] }
+    )
+  )
+}
 
-  try {
-    const malId = await resolveMalIdForKitsu(item.id)
-    if (!malId) return { malSynced: false }
-
-    const counts = localWatchedEpisodeCounts(getDatabase().history())
-    const watchedEpisodes = counts[item.id] || 0
-    // A zero count selects no status of its own: with a known total it
-    // would infer "watching, 0 of 28" over an entry somebody else set to
-    // completed. At zero only an explicitly chosen status is sent, or none.
-    const chosen =
-      watchedEpisodes === 0 ? status : malStatusForProgress(watchedEpisodes, item.totalEpisodes)
-
-    await malRequest(`/anime/${malId}/my_list_status`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        num_watched_episodes: String(watchedEpisodes),
-        ...(chosen ? { status: chosen } : {})
-      })
-    })
-    return { malSynced: true }
-  } catch (error) {
-    logError('mal:push-progress', error)
-    return { malSynced: false, malError: (error as Error).message }
+/**
+ * pushMalProgress for a change that spans seasons — the whole-title mark
+ * and clear (tracking.ts's set-title-status handler). Each season of a
+ * grouped anime is its own MAL entry and gets its own count and, when the
+ * episode list was loaded, its own total to be judged complete against;
+ * an ungrouped title is one entry either way.
+ */
+export async function pushMalTitleProgress(
+  item: { id: string; type: MediaKind; totalEpisodes?: number },
+  {
+    status,
+    seasons,
+    seasonTotals
+  }: {
+    status?: 'plan_to_watch'
+    /** The seasons the change touched — the only entries it may write. */
+    seasons: Iterable<number>
+    /** Regular episodes per season, when known. */
+    seasonTotals?: ReadonlyMap<number, number>
   }
+): Promise<{ malSynced: boolean; malError?: string }> {
+  if (item.type !== 'anime' || !String(item.id).startsWith('kitsu:')) return { malSynced: false }
+  if (!malCredentials().accessToken) return { malSynced: false }
+  const title = malTitleOf(item.id)
+  return sendMalPushes(
+    planMalPushes(
+      getDatabase().history(),
+      { id: title.id, members: title.members, totalEpisodes: item.totalEpisodes },
+      { status, seasons, seasonTotals }
+    )
+  )
 }
 
 interface MalAnimeListResponse {
