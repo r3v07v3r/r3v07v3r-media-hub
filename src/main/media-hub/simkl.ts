@@ -296,7 +296,7 @@ export function scrobblePayload(
 /** Minimal fields this port reads from a `/sync/all-items/movies/completed` response. */
 export interface SimklMoviesPayload {
   movies?: Array<{
-    movie?: { ids?: { imdb?: string } }
+    movie?: { ids?: { imdb?: string; simkl?: number } }
     last_watched_at?: string
   }>
 }
@@ -317,7 +317,10 @@ export interface SimklShowsPayload {
  * shows) into this app's flat HistoryEntry list, keyed by IMDb id since
  * that's the only id space this app's history matches against. Entries
  * without an imdb id (Simkl couldn't resolve one) are dropped. Only
- * episodes that Simkl reports a `watched_at` for are included.
+ * episodes that Simkl reports a `watched_at` for are included. Movies also
+ * carry Simkl's own number as `simklId`: a local row written under a
+ * `simkl:<n>` id (see imdbForSimklKeyedId) is folded into its IMDb twin
+ * through exactly this pairing.
  */
 export function watchedFromAllItems(
   moviesPayload: SimklMoviesPayload = {},
@@ -327,8 +330,10 @@ export function watchedFromAllItems(
   for (const entry of moviesPayload.movies || []) {
     const imdb = entry.movie?.ids?.imdb
     if (!imdb) continue
+    const simkl = Number(entry.movie?.ids?.simkl)
     entries.push({
       id: imdb,
+      simklId: Number.isFinite(simkl) && simkl > 0 ? simkl : null,
       type: 'movie' as MediaKind,
       season: null,
       episode: null,
