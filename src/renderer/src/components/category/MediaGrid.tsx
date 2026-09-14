@@ -50,6 +50,9 @@ export interface MediaGridProps {
    * apart is the first thing somebody wants.
    */
   showKind?: boolean
+  /** Name the service each planned title came from — the Planned tab and
+   *  the lists, where that is a filter. See MediaCard. */
+  showProvenance?: boolean
 }
 
 export function MediaGrid({
@@ -61,7 +64,8 @@ export function MediaGrid({
   emptyMessage = 'Try widening a filter or clearing them all.',
   errorTitle = "Couldn't reach the search backend",
   initialVisibleCount,
-  showKind = false
+  showKind = false,
+  showProvenance = false
 }: MediaGridProps) {
   const [visibleCount, setVisibleCount] = useState(initialVisibleCount ?? BATCH)
   // Read inside the observer callback below instead of closing over
@@ -185,7 +189,12 @@ export function MediaGrid({
   return (
     <ul className={styles.grid}>
       {visibleItems.map((media) => (
-        <MediaCard key={media.id} media={media} showKind={showKind} />
+        <MediaCard
+          key={media.id}
+          media={media}
+          showKind={showKind}
+          showProvenance={showProvenance}
+        />
       ))}
       {/* Zero-size marker, not another skeleton card — its only job is
           to give the IntersectionObserver above something to watch near

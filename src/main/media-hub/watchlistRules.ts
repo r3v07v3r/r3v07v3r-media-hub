@@ -98,6 +98,29 @@ export function mayRemoveAt(service: PlannedSource, known: readonly PlannedSourc
  *     anywhere that counts.
  *  5. It is still on the local list, or there is nothing to remove.
  */
+/**
+ * Whether a title a service reports as planned should be planned here.
+ *
+ * Not if it already is; not if this app still owes that service a
+ * removal (the failed request would otherwise be undone by its own
+ * retry); and not if it has been WATCHED here. The last one is the
+ * three-state rule: watched outranks plan to watch, so a service still
+ * listing a title somebody has since seen is stale, not a new intent —
+ * and without this, marking a planned film watched (which takes it off
+ * the plan without telling Simkl, see docs/WATCHLIST-SYNC.md rule 8)
+ * would be reversed by the next pull.
+ */
+export function remotePlanAdoptable(
+  id: string,
+  state: {
+    tracked: ReadonlySet<string>
+    awaitingRemoval: ReadonlySet<string>
+    watched: ReadonlySet<string>
+  }
+): boolean {
+  return !state.tracked.has(id) && !state.awaitingRemoval.has(id) && !state.watched.has(id)
+}
+
 export function plannedRemovals(input: RemovalInput): string[] {
   const tracked = new Set(input.tracked)
   const out: string[] = []

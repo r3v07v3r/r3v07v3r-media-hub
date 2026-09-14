@@ -244,6 +244,36 @@ export function seasonHistoryPayload(
   return item.type === 'anime' ? { anime: [entry] } : { shows: [entry] }
 }
 
+/**
+ * Every named episode of a title in one body — the whole-title mark and
+ * unmark (see tracking.ts's set-title-status handler). Movies take the
+ * movie shape; a film routed through the show shape would be a `shows`
+ * entry for something that is not one.
+ *
+ * ALWAYS names its seasons and episodes, and callers must pass the rows
+ * they are actually about to change: a show reference with no seasons
+ * sent to /sync/history/remove removes the show's ENTIRE history, which is
+ * the one request a bulk unwatch must never make by accident.
+ */
+export function titleHistoryPayload(
+  item: SimklPushItem,
+  seasons: readonly { season: number; episodes: readonly number[] }[]
+): SimklHistoryPayload {
+  if (!hasExpressibleSimklId(String(item?.id ?? ''))) return {}
+  const ref = mediaRef(item)
+  if (item.type === 'movie') return { movies: [ref] }
+  const named = seasons.filter((entry) => entry.episodes.length > 0)
+  if (!named.length) return {}
+  const entry: SimklShowRef = {
+    ...ref,
+    seasons: named.map((season) => ({
+      number: numberOr(season.season, 1),
+      episodes: season.episodes.map((number) => ({ number }))
+    }))
+  }
+  return item.type === 'anime' ? { anime: [entry] } : { shows: [entry] }
+}
+
 /** Body for POST /scrobble/* — reports in-progress playback rather than a
  *  completed watch. Null on an id Simkl cannot be told, for the reason
  *  historyPayload gives. */

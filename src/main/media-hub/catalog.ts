@@ -957,7 +957,14 @@ async function simklSearch(kind: MediaKind, query: string): Promise<CatalogItem[
     `/search/${endpointType}?q=${encodeURIComponent(query)}&extended=full`,
     'interactive'
   )
-  return (Array.isArray(result) ? result : []).map((x) => normalizeSimklSearchResult(x, kind))
+  // Same filter as the trending feeds (see simklTrending): a record Simkl
+  // has no IMDb id for would reach the renderer as `simkl:<id>`, a title
+  // no service can be told about and no other path resolves to — a card
+  // marked watched from search wrote history under that id, and opening
+  // the same film wrote a second row under its IMDb id.
+  return (Array.isArray(result) ? result : [])
+    .map((x) => normalizeSimklSearchResult(x, kind))
+    .filter((x) => x.id && !x.id.startsWith('simkl:'))
 }
 
 /** Cached (24h) franchise-relationship anime titles (sequel/prequel/side-story/etc.) from Kitsu, falling back to a stale cache entry (or `[]`) on error rather than failing the caller. */

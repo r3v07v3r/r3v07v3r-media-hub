@@ -146,6 +146,34 @@ export function seasonHistoryPayload(
 }
 
 /**
+ * Every named episode of a series in one body — Trakt's half of the
+ * whole-title mark and unmark. Series only, like seasonHistoryPayload: a
+ * movie goes through historyPayload, and anime is not pushable to Trakt
+ * at all (see isTraktPushable). Empty when there is nothing to name, and
+ * NEVER a show entry without seasons, which Trakt reads as the whole show.
+ */
+export function titleHistoryPayload(
+  item: TraktPushItem,
+  seasons: readonly { season: number; episodes: readonly number[] }[]
+): TraktSyncPayload {
+  const ids = traktIds(item)
+  if (!ids || !isTraktPushable(item) || item.type !== 'series') return {}
+  const named = seasons.filter((entry) => entry.episodes.length > 0)
+  if (!named.length) return {}
+  return {
+    shows: [
+      {
+        ids,
+        seasons: named.map((season) => ({
+          number: numberOr(season.season, 1),
+          episodes: season.episodes.map((number) => ({ number }))
+        }))
+      }
+    ]
+  }
+}
+
+/**
  * Body for POST /sync/ratings.
  *
  * Rates the TITLE rather than an episode even for a series: this app's own

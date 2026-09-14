@@ -1,5 +1,10 @@
 import assert from 'node:assert'
-import { computeReconciliation, malStatusForProgress } from '../src/main/media-hub/mal'
+import {
+  computeReconciliation,
+  localSeasonEpisodeCounts,
+  malStatusForProgress,
+  planMalPushes
+} from '../src/main/media-hub/mal'
 
 let pass = 0
 function check(name: string, fn: () => void): void {
@@ -99,6 +104,99 @@ check('an unmatched MAL entry is reported, not silently dropped', () => {
   const result = computeReconciliation([entry], {}, {})
   assert.equal(result.unmatched.length, 1)
   assert.equal(result.ratingsToLocal.length, 0)
+})
+
+console.log('\nplanMalPushes')
+
+const canonical = 'kitsu:1'
+const members = ['kitsu:1', 'kitsu:2', 'kitsu:3']
+const row = (
+  season: number,
+  episode: number,
+  watchedAt = '2026-01-01T00:00:00.000Z'
+): { id: string; type: 'anime'; season: number; episode: number; watchedAt: string } => ({
+  id: canonical,
+  type: 'anime',
+  season,
+  episode,
+  watchedAt
+})
+const history = [
+  row(1, 1),
+  row(1, 2),
+  row(1, 2, '2026-02-01T00:00:00.000Z'),
+  row(2, 1),
+  row(2, 2),
+  row(2, 3)
+]
+
+check('a season counts each episode once, however often it was watched', () => {
+  assert.deepEqual(
+    [...localSeasonEpisodeCounts(history, canonical)],
+    [
+      [1, 2],
+      [2, 3]
+    ]
+  )
+  assert.deepEqual([...localSeasonEpisodeCounts(history, 'kitsu:9')], [])
+})
+
+check(
+  'a grouped title goes to one entry per touched season, each with its own count and total',
+  () => {
+    const pushes = planMalPushes(
+      history,
+      { id: canonical, members, totalEpisodes: 25 },
+      {
+        seasons: [2, 1],
+        seasonTotals: new Map([
+          [1, 2],
+          [2, 13]
+        ])
+      }
+    )
+    assert.deepEqual(pushes, [
+      { id: 'kitsu:1', watchedEpisodes: 2, status: 'completed' },
+      { id: 'kitsu:2', watchedEpisodes: 3, status: 'watching' }
+    ])
+  }
+)
+
+check('a season the change did not touch is not written, and one with no member is skipped', () => {
+  const pushes = planMalPushes(history, { id: canonical, members }, { seasons: [2, 4, 0] })
+  assert.deepEqual(pushes, [{ id: 'kitsu:2', watchedEpisodes: 3 }])
+})
+
+check("the group's total never judges a member; without its own, a member gets no status", () => {
+  const pushes = planMalPushes(
+    history,
+    { id: canonical, members, totalEpisodes: 2 },
+    { seasons: [1] }
+  )
+  assert.deepEqual(pushes, [{ id: 'kitsu:1', watchedEpisodes: 2 }])
+})
+
+check(
+  'a planned clear says plan_to_watch to each touched entry at zero, and nothing otherwise',
+  () => {
+    const planned = planMalPushes(
+      [],
+      { id: canonical, members },
+      { seasons: [1, 2], status: 'plan_to_watch' }
+    )
+    assert.deepEqual(planned, [
+      { id: 'kitsu:1', watchedEpisodes: 0, status: 'plan_to_watch' },
+      { id: 'kitsu:2', watchedEpisodes: 0, status: 'plan_to_watch' }
+    ])
+    assert.deepEqual(planMalPushes([], { id: canonical, members }, { seasons: [1] }), [
+      { id: 'kitsu:1', watchedEpisodes: 0 }
+    ])
+  }
+)
+
+check('an ungrouped title is one entry over every row, judged against its own total', () => {
+  const pushes = planMalPushes(history, { id: canonical, totalEpisodes: 5 }, { seasons: [2] })
+  assert.deepEqual(pushes, [{ id: 'kitsu:1', watchedEpisodes: 5, status: 'completed' }])
 })
 
 console.log(`\n${pass} passed`)

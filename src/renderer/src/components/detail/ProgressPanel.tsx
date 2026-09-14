@@ -4,6 +4,7 @@ import type { ContinueWatchingItem, MediaItem } from '@renderer/types'
 import type { DetailAdapterConfig } from '@renderer/lib/mediaHub/detailAdapters'
 import { useEffect, useState } from 'react'
 import { Icon } from '@renderer/components/icons/Icon'
+import { TitleStatusButton } from '@renderer/components/media/TitleStatusButton'
 import { useAppState } from '@renderer/context/AppStateContext'
 import { useMediaHubLists } from '@renderer/lib/mediaHub/hooks'
 import styles from './ProgressPanel.module.css'
@@ -31,8 +32,6 @@ export interface ProgressPanelProps {
    *  continueEntry derivation rather than showing a confident zero. */
   episodeStats: { watchedCount: number; total: number } | null
   continueEntry: ContinueWatchingItem | undefined
-  inMyList: boolean
-  onToggleMyList: () => void
   onOpenLastWatched: () => void
   /** Used in the config.isEpisodic:false branch only — media.watched/
    *  completed can't be trusted here (see MediaDetailPage's own comment on
@@ -44,7 +43,6 @@ export interface ProgressPanelProps {
    *  props unconditional there is simpler than threading an optional
    *  pair through just for a branch this page's other kind never hits. */
   movieWatched: boolean
-  onToggleMovieWatched: (watched: boolean) => void
 }
 
 /**
@@ -98,27 +96,32 @@ export function ProgressPanel({
   media,
   episodeStats,
   continueEntry,
-  inMyList,
-  onToggleMyList,
   onOpenLastWatched,
-  movieWatched,
-  onToggleMovieWatched
+  movieWatched
 }: ProgressPanelProps) {
   const episodic = episodicCounts(media, episodeStats, continueEntry)
 
   return (
-    <section className={`${styles.panel} glass-panel`} aria-label="Tracked and progress">
+    <section className={`${styles.panel} glass-panel`} aria-label="Status and progress">
       <div className={styles.headerRow}>
-        <h2 className={styles.heading}>Tracked &amp; Progress</h2>
-        <button
-          type="button"
-          className={`${styles.followChip} ${inMyList ? styles.followChipActive : ''}`}
-          aria-pressed={inMyList}
-          onClick={onToggleMyList}
-        >
-          {inMyList ? config.trackedLabel : config.trackLabel}
-        </button>
-        <AddToListButton media={media} />
+        <h2 className={styles.heading}>Status</h2>
+        {/* The one status control — not watched, planned, watched — in
+            place of the follow chip that used to sit here beside a
+            separate watched toggle below. Fed the page's own numbers,
+            which are the accurate ones (see the props' comments). */}
+        <div className={styles.headerControls}>
+          <TitleStatusButton
+            media={media}
+            variant="chip"
+            watched={config.isEpisodic ? undefined : movieWatched}
+            progress={
+              config.isEpisodic && episodeStats
+                ? { watched: episodeStats.watchedCount, total: episodeStats.total }
+                : undefined
+            }
+          />
+          <AddToListButton media={media} />
+        </div>
       </div>
 
       {config.isEpisodic ? (
@@ -162,19 +165,9 @@ export function ProgressPanel({
         </>
       ) : (
         <div className={styles.movieStats}>
-          <button
-            type="button"
-            className={`${styles.watchedToggle} ${movieWatched ? styles.watchedToggleActive : ''}`}
-            aria-pressed={movieWatched}
-            onClick={() => onToggleMovieWatched(!movieWatched)}
-          >
-            <Icon name={movieWatched ? 'check' : 'eye'} size={13} />
-            {movieWatched
-              ? 'Watched'
-              : media.progressPercentage
-                ? `${media.progressPercentage}% watched`
-                : 'Not started'}
-          </button>
+          {!movieWatched && media.progressPercentage ? (
+            <span className={styles.movieStatLine}>{media.progressPercentage}% watched</span>
+          ) : null}
           {media.remainingMinutes != null && !movieWatched && (
             <span className={styles.movieStatLine}>{media.remainingMinutes}m remaining</span>
           )}

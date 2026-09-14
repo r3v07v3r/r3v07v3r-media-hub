@@ -37,6 +37,7 @@ import type {
   ReconcileResolution,
   WatchStatusDiscrepancy
 } from '@shared/media-hub/types'
+import type { ChangedEpisode, TitleStatus } from '@shared/media-hub/types'
 import {
   mediaItemToTrackablePayload,
   catalogItemToMediaItem,
@@ -189,6 +190,22 @@ interface AppStateValue {
   // round trip.
   myList: Set<string>
   toggleMyList: (media: MediaItem) => void
+  /**
+   * The one status a title has — not watched, plan to watch, watched —
+   * set as a whole. Main decides what that takes (every aired episode of
+   * a show, the plan removal that follows a mark) and tells the services;
+   * see tracking.ts's set-title-status handler and
+   * lib/mediaHub/titleStatus.ts for the display side. The control is
+   * components/media/TitleStatusButton.tsx.
+   */
+  setTitleStatus: (media: MediaItem, status: TitleStatus, episodes?: ChangedEpisode[]) => void
+  /**
+   * Titles whose status write is in flight, with the status they are on
+   * their way to. The control shows this rather than the last-known
+   * state, so "Mark watched" never reads "Not watched" for the round
+   * trips a whole-show mark takes.
+   */
+  titleStatusPending: Record<string, TitleStatus>
   /**
    * Which tracking services have each planned title on their own list.
    *
@@ -847,8 +864,22 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   // below, can reference pushNotification — the lint rule that enforces
   // hook-result declare-before-use ordering doesn't care that a closure
   // only actually reads it later, at event time.
-  const { pushNotification, dismissNotification, openContextMenu, closeContextMenu } =
-    useOverlayActions()
+  const {
+    pushNotification,
+    dismissNotification,
+    dismissNotificationsOutside,
+    openContextMenu,
+    closeContextMenu
+  } = useOverlayActions()
+
+  // A person's toasts go with them. Whatever changed the active profile —
+  // the avatar menu, a restored backup — every toast bound to another
+  // profile is dropped once this one is on screen, its Undo with it. Main
+  // refuses that undo anyway; this keeps the title it names off the other
+  // person's screen.
+  useEffect(() => {
+    dismissNotificationsOutside(activeProfileId)
+  }, [activeProfileId, dismissNotificationsOutside])
 
   useEffect(() => {
     const api = window.api?.mediaHub?.party
@@ -1931,6 +1962,152 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   //
   // Outside playback both reports are no-ops on main's side — there is no
   // video child to hide or reveal, and no overlay to go with it.
+  const [titleStatusPending, setTitleStatusPending] = useState<Record<string, TitleStatus>>({})
+  const setTitleStatus = useCallback(
+    (media: MediaItem, status: TitleStatus, episodes?: ChangedEpisode[]) => {
+      const api = window.api?.mediaHub
+      if (!api?.tracking?.setTitleStatus) {
+        pushNotification({ tone: 'error', message: 'The media hub backend is not available.' })
+        return
+      }
+      const id = media.id
+      const wasPlanned = myList.has(id)
+      // Shown as where the write lands: clearing a planned title leaves
+      // its plan (titleStatusRules.ts), so what comes back is Planned.
+      setTitleStatusPending((prev) => ({
+        ...prev,
+        [id]: status === 'unwatched' && wasPlanned ? 'planned' : status
+      }))
+      // The plan set is local state and answers immediately; the watched
+      // sets are re-read once the write lands, since "watched" for a show
+      // is every aired episode and main is the one that knows them. Clearing
+      // to not watched leaves the plan alone — see titleStatusRules.ts.
+      if (status === 'planned' || (status === 'watched' && wasPlanned)) {
+        setMyList((prev) => {
+          const next = new Set(prev)
+          if (status === 'planned') next.add(id)
+          else next.delete(id)
+          return next
+        })
+      }
+      if (status === 'watched') {
+        setContinueWatching((prev) => prev.filter((c) => c.media.id !== id))
+      }
+      const item = mediaItemToTrackablePayload(media)
+      const clearPending = (): void =>
+        setTitleStatusPending((prev) => {
+          if (!(id in prev)) return prev
+          const next = { ...prev }
+          delete next[id]
+          return next
+        })
+      const settle = (): void => {
+        homeFeed.refresh()
+        watchedIdsResult.refresh()
+        setWatchStatusVersion((v) => v + 1)
+      }
+      // A rejected invoke arrives prefixed with the channel name; the
+      // person gets the handler's own sentence.
+      const failureMessage = (error: unknown, fallback: string): string =>
+        error instanceof Error && error.message
+          ? error.message.replace(/^Error invoking remote method '[^']+': Error: /, '')
+          : fallback
+      api.tracking
+        .setTitleStatus({ item, status, episodes })
+        .then((result) => {
+          if (status !== 'unwatched') rememberTrackedId(id, status === 'planned')
+          if (status === 'watched') forgetContinueWatching(id)
+          settle()
+          clearPending()
+          // A whole show in one click is worth a word, and a way back: the
+          // undo replays exactly the rows this change reported, dates and
+          // all, and touches nothing else. An undo itself (episodes given)
+          // is not offered another.
+          const count = result.episodes
+          const viewings = result.changed.length
+          // A film's own click is its own undo — the next press reverses
+          // it — except when marking it watched also took it off the plan,
+          // which no single press puts back, and when clearing it dropped
+          // every dated viewing, which the next press would replace with
+          // one stamped now.
+          const worthAToast =
+            !episodes &&
+            viewings > 0 &&
+            (count > 0 || status === 'unwatched' || (status === 'watched' && wasPlanned))
+          if (worthAToast) {
+            const plural = count === 1 ? '' : 's'
+            const reverse: TitleStatus = status === 'watched' ? 'unwatched' : 'watched'
+            const verb = status === 'watched' ? 'watched' : 'not watched'
+            let summary = 'marked watched and taken off the plan'
+            if (count > 0) summary = `${count} episode${plural} marked ${verb}`
+            else if (status === 'unwatched')
+              summary = viewings === 1 ? 'marked not watched' : `${viewings} viewings cleared`
+            pushNotification({
+              tone: status === 'watched' ? 'success' : 'info',
+              message: `${media.title}: ${summary}.`,
+              // Bound to the profile the change was made on: the toast goes
+              // with a switch, and main refuses the undo for any other.
+              profileId: result.profileId,
+              action: {
+                label: 'Undo',
+                run: () => {
+                  api.tracking
+                    .setTitleStatus({
+                      item,
+                      status: reverse,
+                      episodes: result.changed,
+                      profileId: result.profileId
+                    })
+                    .then(() => {
+                      // Marking watched also took the title off the plan;
+                      // its undo puts it back, or "undo" would leave a
+                      // planned title neither watched nor planned.
+                      // Idempotent: 'planned' is a no-op on a title that was
+                      // re-planned meanwhile, where a toggle would have taken
+                      // it off again.
+                      if (status === 'watched' && wasPlanned) {
+                        return api.tracking
+                          .setTitleStatus({ item, status: 'planned', profileId: result.profileId })
+                          .then(() => {
+                            setMyList((prev) => new Set(prev).add(id))
+                            rememberTrackedId(id, true)
+                          })
+                      }
+                      return undefined
+                    })
+                    .then(settle)
+                    .catch((error: unknown) => {
+                      pushNotification({
+                        tone: 'error',
+                        message: failureMessage(error, 'Could not undo that change.')
+                      })
+                    })
+                }
+              }
+            })
+          }
+        })
+        .catch((error: unknown) => {
+          clearPending()
+          // Put the plan set back exactly; the watched sets never moved.
+          if (status === 'planned' || (status === 'watched' && wasPlanned)) {
+            setMyList((prev) => {
+              const next = new Set(prev)
+              if (wasPlanned) next.add(id)
+              else next.delete(id)
+              return next
+            })
+          }
+          settle()
+          pushNotification({
+            tone: 'error',
+            message: failureMessage(error, 'Could not update the status.')
+          })
+        })
+    },
+    [homeFeed, watchedIdsResult, pushNotification, myList]
+  )
+
   const partyPanelReportedOpen = useRef<boolean | null>(null)
   useEffect(() => {
     const reported = partyPanelReportedOpen.current
@@ -2700,6 +2877,8 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       myList,
       plannedSources: homeFeed.plannedSources,
       toggleMyList,
+      setTitleStatus,
+      titleStatusPending,
       dislikedIds,
       toggleDisliked,
       ratings: ratingsResult.ratings,
@@ -2805,6 +2984,8 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       myList,
       homeFeed.plannedSources,
       toggleMyList,
+      setTitleStatus,
+      titleStatusPending,
       dislikedIds,
       toggleDisliked,
       ratingsResult.ratings,

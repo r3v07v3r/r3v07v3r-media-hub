@@ -40,6 +40,7 @@ import {
   ratingsPayload,
   scrobblePayload,
   seasonHistoryPayload,
+  titleHistoryPayload,
   type TraktPlaybackPosition,
   type TraktPushItem
 } from './trakt'
@@ -301,6 +302,28 @@ export async function pushTraktSeasonHistory(
     await traktRequest('/sync/history', { method: 'POST', body: JSON.stringify(payload) })
   } catch (error) {
     logError('trakt:season-history', error)
+  }
+}
+
+/** Every named episode of a series, added or removed in one request — the
+ *  whole-title mark and unmark. Movies are pushTraktHistory's; see
+ *  trakt.ts's titleHistoryPayload for why a series entry always names its
+ *  seasons. */
+export async function pushTraktTitleHistory(
+  item: TraktPushItem,
+  seasons: readonly { season: number; episodes: readonly number[] }[],
+  action: 'add' | 'remove'
+): Promise<void> {
+  const payload = titleHistoryPayload(item, seasons)
+  if (!hasTraktContent(payload)) return
+  if (!traktCredentials().accessToken) return
+  try {
+    await traktRequest(action === 'add' ? '/sync/history' : '/sync/history/remove', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    })
+  } catch (error) {
+    logError('trakt:title-history', error)
   }
 }
 

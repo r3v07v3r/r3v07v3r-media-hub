@@ -505,13 +505,19 @@ export interface TitleCredits {
  * title would put one profile's viewing into a row the next profile reads.
  */
 export interface RecommendationReason {
-  /** Which signal won — see RECOMMENDATION_REASON_ORDER in catalog-logic.ts. */
-  kind: 'continues' | 'creator' | 'cast' | 'genre' | 'new'
+  /** Which signal won — see RECOMMENDATION_REASON_ORDER in catalog-logic.ts.
+   *  'next' is the one instalment that follows something watched recently
+   *  (a TMDB collection or a Kitsu sequel — see main/media-hub/
+   *  continuations.ts); 'continues' is the older title-shaped guess. */
+  kind: 'next' | 'continues' | 'creator' | 'cast' | 'genre' | 'new'
   /**
    * The evidence, in the person's own terms: the title they finished, the
    * name they keep coming back to, the genre they watch. Always something
    * that was really matched — never a guess, and never a placeholder, so a
-   * reason with nothing to point at is simply not emitted.
+   * reason with nothing to point at is simply not emitted. The one
+   * exception is the "next" SHELF (not a card's own reason): it gathers
+   * every continuation and carries an empty detail, which
+   * recommendationRailTitle names as the idea rather than a title.
    */
   detail: string
 }
@@ -751,7 +757,8 @@ export interface DislikedListResult {
  * be browsed: the same ranking, shelved by the evidence behind it.
  */
 export interface RecommendationRail {
-  /** `<kind>:<detail>`, stable across rebuilds — a React key and a rail id. */
+  /** `<kind>:<detail>` — or the bare `next` for the one shelf that gathers
+   *  every continuation — stable across rebuilds: a React key and a rail id. */
   id: string
   reason: RecommendationReason
   /** Best-first, in the ranking's own order. */
@@ -790,6 +797,13 @@ export interface HomePersonalizedResult {
    * here and nowhere else, which is the ordinary case.
    */
   plannedSources: Record<string, PlannedServiceId[]>
+  /**
+   * Which of `recommendations` are fully watched shows, from the index's
+   * own completion query — a continuation can be a title already seen (a
+   * rewatch in order), and these rows carry no episode list of their own
+   * for the renderer to tell "finished" from "started".
+   */
+  completedIds: string[]
 }
 
 /**
@@ -803,6 +817,55 @@ export interface RecommendationsChanged {
   builtAt: number
   /** How many ranked titles were stored — the buffer, not the number shown. */
   count: number
+}
+
+/**
+ * The one status a title has, as the person sees it.
+ *
+ * 'planned' is the tracked table (what the tracking services call plan to
+ * watch); 'watched' is watch_history — a film's own row, or every aired
+ * regular episode of a show. Watched outranks planned wherever both are
+ * true. The renderer's own derivation (which can also say "watching") is
+ * lib/mediaHub/titleStatus.ts; the transition rules are
+ * main/media-hub/titleStatusRules.ts.
+ */
+export type TitleStatus = 'unwatched' | 'planned' | 'watched'
+
+/** One history row a status change wrote or removed — a film's own row
+ *  has null season and episode. The date is kept so an undo puts the row
+ *  back as it was rather than as "now". */
+export interface ChangedEpisode {
+  season: number | null
+  episode: number | null
+  watchedAt?: string
+}
+
+export interface SetTitleStatusPayload {
+  item: Partial<CatalogItem> & { id: string; type: MediaKind; title?: string }
+  status: TitleStatus
+  /**
+   * Exactly these rows, rather than the title's aired list: the undo of a
+   * whole-title change replays what that change reported in `changed`.
+   * Never touches the plan. Ignored for 'planned'.
+   */
+  episodes?: ChangedEpisode[]
+  /**
+   * The profile a change was made on, as its result reported — given by
+   * every call an undo makes, the replay and the re-plan alike. Refused
+   * while another profile is active, so an undo left on screen across a
+   * switch cannot land in somebody else's library.
+   */
+  profileId?: string
+}
+
+export interface SetTitleStatusResult {
+  status: TitleStatus
+  /** Episode rows written or removed by this change; 0 for a film. */
+  episodes: number
+  /** What was written or removed, so it can be put back exactly. */
+  changed: ChangedEpisode[]
+  /** The profile this change was written to — what its undo must name. */
+  profileId: string
 }
 
 export interface MarkWatchedResult {

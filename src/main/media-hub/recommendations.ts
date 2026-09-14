@@ -46,6 +46,7 @@ import {
   enoughStoredRecommendations
 } from '../../shared/media-hub/catalog-logic'
 import { ratingWeight } from '../../shared/media-hub/rating'
+import { latestWatchById } from './continuations'
 import { creditsFor } from './credits'
 import { getDatabase } from './dbState'
 import { logError } from './logger'
@@ -67,7 +68,10 @@ import type { TaskPriority } from './taskScheduler'
 // whole row of unexplained cards until the next rebuild hours later.
 // v4: the pool grew to include the index and the buffer to 150 — a v3 list
 // is forty titles from the trending feeds, too thin for the shelves.
-const STORE_KEY_PREFIX = 'recommendations:v4'
+// v5: entries may carry `continuation` and the reason kind 'next', and the
+// continuation boost is weighed by recency — a v4 list would serve the old
+// flat ordering, with every old franchise level with last night's.
+const STORE_KEY_PREFIX = 'recommendations:v5'
 
 /**
  * Where one profile's ranked list lives.
@@ -160,6 +164,28 @@ function keep(item: CatalogItem, exclusions: LiveExclusions): boolean {
     !exclusions.trackedIds.has(id) &&
     !exclusions.dislikedIds.has(id)
   )
+}
+
+/**
+ * keep(), for a stored entry.
+ *
+ * A continuation — the next part of a series being watched in order — is
+ * the one kind of entry allowed to be something already seen or already
+ * planned: that is precisely what "rewatching the series" and "the sequel
+ * is on my list" look like. What retires it instead is being watched AGAIN
+ * after the list was built: they carried on, and the rebuild that watch
+ * requested will name the part after. "Not interested" still wins.
+ */
+function keepStored(
+  entry: ScoredRecommendation,
+  exclusions: LiveExclusions,
+  latestWatch: ReadonlyMap<string, number>,
+  builtAt: number
+): boolean {
+  const id = String(entry.item.id)
+  if (exclusions.dislikedIds.has(id)) return false
+  if (entry.continuation) return (latestWatch.get(id) ?? 0) <= builtAt
+  return keep(entry.item, exclusions)
 }
 
 // Somebody has to ask for a rebuild, and it must not be this module: the
@@ -310,7 +336,11 @@ export function readStoredRecommendations(
     return null
   }
 
-  const surviving = stored.entries.filter((entry) => entry?.item && keep(entry.item, exclusions))
+  const latestWatch = latestWatchById(history)
+  const builtAt = Number(stored.builtAt) || 0
+  const surviving = stored.entries.filter(
+    (entry) => entry?.item && keepStored(entry, exclusions, latestWatch, builtAt)
+  )
   if (!enoughStoredRecommendations(stored.entries.length, surviving.length, SERVED_COUNT)) {
     requestRecommendationsRebuild()
     return null
@@ -405,6 +435,7 @@ export async function rebuildRecommendations(
   // rebuild request — and a top-level import here would take all of it down
   // with the one function that genuinely needs a catalog.
   const { catalogData } = await import('./catalog')
+  const { continuationsFor, defaultSources } = await import('./continuations')
   const [movies, series, anime] = await Promise.all(
     (['movie', 'series', 'anime'] as const).map((kind) =>
       catalogData(kind, false, priority).catch(() => [] as CatalogItem[])
@@ -446,7 +477,29 @@ export async function rebuildRecommendations(
       weight: ratingWeight(scores.get(id))
     }))
   )
-  const candidates = pool.filter((item) => keep(item, exclusions))
+  // What comes next after the last couple of weeks' viewing, from the
+  // catalogue rather than from title shapes — see continuations.ts. These
+  // are the only candidates allowed past the watched/planned exclusions
+  // (keepStored says why), and a next part the pool never held joins it.
+  const poolById = new Map(pool.map((item) => [String(item.id), item]))
+  const continuations = await continuationsFor(
+    history,
+    poolById,
+    Date.now(),
+    defaultSources(priority)
+  )
+  for (const found of continuations.values()) {
+    const id = String(found.item.id)
+    if (!poolById.has(id)) {
+      poolById.set(id, found.item)
+      pool.push(found.item)
+    }
+  }
+  const candidates = pool.filter((item) =>
+    continuations.has(String(item.id))
+      ? !exclusions.dislikedIds.has(String(item.id))
+      : keep(item, exclusions)
+  )
   const credits = creditsFor(candidates.map((item) => String(item.id)))
 
   const ranked = rankPersonalizedRecommendationsScored(candidates, {
@@ -454,7 +507,8 @@ export async function rebuildRecommendations(
     preferredGenres,
     abandonedIds: abandonedIds(),
     credits,
-    taste
+    taste,
+    continuations
   })
 
   if (!ranked.length) return 0

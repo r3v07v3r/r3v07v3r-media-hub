@@ -5,6 +5,7 @@ import { useAppState } from '@renderer/context/AppStateContext'
 import { useOverlayActions, useOverlayState } from '@renderer/context/OverlayContext'
 import { Icon } from '@renderer/components/icons/Icon'
 import { positionFloatingPanel } from '@renderer/lib/floatingPanel'
+import { titleStatusOf, TITLE_STATUS_ACTION } from '@renderer/lib/mediaHub/titleStatus'
 import styles from './Overlays.module.css'
 
 export function ContextMenu() {
@@ -19,6 +20,7 @@ export function ContextMenu() {
     toggleDisliked,
     dislikedIds,
     markContinueWatching,
+    setTitleStatus,
     pushNotification,
     openDetail
   } = useAppState()
@@ -60,25 +62,43 @@ export function ContextMenu() {
   // the title's own detail page (EpisodesSection); this menu item is
   // limited to the cases it can actually represent correctly rather than
   // silently corrupting the rest.
-  const canToggleWatched =
-    media.mediaType === 'movie' || (media.seasonNumber != null && media.episodeNumber != null)
+  // Two marks, said apart. A card that names an episode (Continue
+  // Watching's do) marks THAT episode, as it always has; the whole-title
+  // mark is its own item, worded as one, and main resolves the show's
+  // episode list for it — so a series card without an episode number is
+  // no longer a card that cannot be marked at all.
+  const status = titleStatusOf(media, { planned: saved })
+  const watched = status === 'watched'
+  const episode =
+    media.mediaType !== 'movie' && media.seasonNumber != null && media.episodeNumber != null
+      ? `S${media.seasonNumber} E${media.episodeNumber}`
+      : null
 
   const items: { icon: string; label: string; onSelect: () => void }[] = [
     { icon: 'play', label: 'Play', onSelect: () => startPartyPlayback(media) },
     {
-      icon: saved ? 'check' : 'plus',
-      label: saved ? 'Remove from Planned' : 'Plan to Watch',
+      icon: saved ? 'x' : 'clock',
+      label: saved ? 'Remove from plan' : TITLE_STATUS_ACTION.planned,
       onSelect: () => toggleMyList(media)
     },
-    ...(canToggleWatched
+    ...(episode
       ? [
           {
-            icon: 'check',
-            label: media.watched ? 'Mark unwatched' : 'Mark watched',
+            icon: media.watched ? 'eye-off' : 'check',
+            label: media.watched ? `Mark ${episode} unwatched` : `Mark ${episode} watched`,
             onSelect: () => markContinueWatching(media.id, !media.watched, media)
           }
         ]
       : []),
+    {
+      icon: watched ? 'eye-off' : 'check',
+      label: watched
+        ? TITLE_STATUS_ACTION.unwatched
+        : media.mediaType === 'movie'
+          ? TITLE_STATUS_ACTION.watched
+          : 'Mark all watched',
+      onSelect: () => setTitleStatus(media, watched ? 'unwatched' : 'watched')
+    },
     {
       icon: 'thumbs-down',
       label: disliked ? 'Remove dislike' : 'Not interested',
@@ -96,16 +116,9 @@ export function ContextMenu() {
       icon: 'grid',
       label: 'More like this',
       onSelect: () => openDetail(media)
-    },
-    {
-      icon: 'info',
-      label: 'Why recommended?',
-      onSelect: () =>
-        pushNotification({
-          tone: 'info',
-          message: `Recommended because it matches your recent ${media.genres[0] ?? 'viewing'} activity.`
-        })
     }
+    // "Why recommended?" is gone. It invented a genre-shaped reason on the
+    // spot; the real one is the chip on the card (see MediaCard).
   ]
 
   return (

@@ -11,6 +11,7 @@ import { fetchJson } from './httpClient'
 import { handle } from './ipcGuard'
 import { logError } from './logger'
 import { isValidCatalogKind } from './security'
+import type { TaskPriority } from './taskScheduler'
 
 const STORY_TTL_MS = 24 * 60 * 60 * 1000
 
@@ -21,7 +22,10 @@ interface CatalogStoryPayload {
 
 /** A failed live request can use a stale known answer; otherwise it says it
  * was not checked rather than silently reporting "no sequel exists." */
-async function storyForAnime(id: string): Promise<AnimeStoryResult> {
+export async function storyForAnime(
+  id: string,
+  priority: TaskPriority = 'interactive'
+): Promise<AnimeStoryResult> {
   // v2: side stories, spin-offs, recaps and full stories are part of the
   // answer now; a v1 row would read back with only sequels and prequels.
   const key = `story:v2:anime:${id}`
@@ -34,7 +38,9 @@ async function storyForAnime(id: string): Promise<AnimeStoryResult> {
       .replace(/^kitsu:/, '')
       .split(':')[0]
     const payload = await fetchJson<RawApiPayload>(
-      `https://kitsu.io/api/edge/anime/${encodeURIComponent(kitsuId)}/media-relationships?include=destination&page%5Blimit%5D=20`
+      `https://kitsu.io/api/edge/anime/${encodeURIComponent(kitsuId)}/media-relationships?include=destination&page%5Blimit%5D=20`,
+      {},
+      { priority }
     )
     const value: AnimeStoryResult = { links: animeStoryLinks(payload), checked: true }
     db.putCache(key, value, STORY_TTL_MS)

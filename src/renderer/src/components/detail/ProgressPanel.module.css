@@ -11,6 +11,13 @@
   justify-content: space-between;
   gap: 10px;
 }
+.headerControls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
 .heading {
   margin: 0;
   font-family: var(--font-display);
@@ -20,6 +27,7 @@
   text-transform: uppercase;
   color: var(--text-secondary);
 }
+/* "Add to list" borrows this chip shape. */
 .followChip {
   padding: 5px 14px;
   border-radius: var(--radius-pill);
@@ -28,11 +36,6 @@
   font-weight: 600;
   color: var(--text-secondary);
   transition: all var(--transition-fast);
-}
-.followChipActive {
-  color: var(--accent-green);
-  border-color: rgba(39, 230, 154, 0.4);
-  background: rgba(39, 230, 154, 0.08);
 }
 
 .statRow {
@@ -123,34 +126,14 @@
   gap: 6px;
   align-items: flex-start;
 }
+/* A watched film with no resume point has nothing to list; an empty box
+   would still claim the panel's 14px gap under the status chip. */
+.movieStats:empty {
+  display: none;
+}
 .movieStatLine {
   font-size: 13.5px;
   color: var(--text-secondary);
-}
-
-/* Same "toggle chip" pattern as .followChip above, sized up slightly
-   since this is the primary status display for a movie (not a small
-   header-row accent) and needs room for its icon. */
-.watchedToggle {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  padding: 7px 14px;
-  border-radius: var(--radius-pill);
-  border: 1px solid var(--border-subtle);
-  font-size: 13.5px;
-  font-weight: 600;
-  color: var(--text-secondary);
-  transition: all var(--transition-fast);
-}
-.watchedToggle:hover {
-  border-color: var(--border-active);
-  color: var(--text-primary);
-}
-.watchedToggleActive {
-  color: var(--accent-green);
-  border-color: rgba(39, 230, 154, 0.4);
-  background: rgba(39, 230, 154, 0.08);
 }
 
 /* ---- Add to list ------------------------------------------------------- */

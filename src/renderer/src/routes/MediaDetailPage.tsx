@@ -82,7 +82,6 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
     browsingOrigin,
     popBrowsingOrigin,
     myList,
-    toggleMyList,
     continueWatching,
     startPartyPlayback,
     playbackMedia,
@@ -320,8 +319,6 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
     [storyLinks, myList]
   )
 
-  const inMyList = id ? myList.has(id) : false
-
   const episodes = useMemo<Episode[]>(() => {
     if (!catalogItem?.videos?.length) return []
     return [...catalogItem.videos].sort((a, b) => a.season - b.season || a.episode - b.episode)
@@ -435,9 +432,7 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
   const nextAiringDate = useMemo(() => {
     if (playableInOrder.length > 0) return undefined
     const upcoming = episodes
-      .filter(
-        (e) => isRegularEpisode(e) && Number.isFinite(e.season) && Number.isFinite(e.episode)
-      )
+      .filter((e) => isRegularEpisode(e) && Number.isFinite(e.season) && Number.isFinite(e.episode))
       .slice()
       .sort((a, b) => a.season - b.season || a.episode - b.episode)[0]
     return upcoming?.released || undefined
@@ -510,7 +505,9 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
       ...(media.totalEpisodes != null ? { totalEpisodes: media.totalEpisodes } : {})
     }
     const previous = history
-    setHistory((h) => applyOptimisticMark(h, media.id, kind, episode.season, episode.episode, watched))
+    setHistory((h) =>
+      applyOptimisticMark(h, media.id, kind, episode.season, episode.episode, watched)
+    )
     const call = watched ? api.tracking.markWatched : api.tracking.unmarkWatched
     try {
       await call({ item, playback: { season: episode.season, episode: episode.episode } })
@@ -570,42 +567,6 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
           )
         )
       }
-      refreshWatchStatus()
-    } catch {
-      setHistory(previous)
-      pushNotification({ tone: 'error', message: 'Could not update watched status.' })
-    }
-  }
-
-  /**
-   * Same primitive as handleMarkEpisodeWatched, minus a season/episode —
-   * movies have no per-episode granularity, so `playback` is omitted
-   * entirely rather than sent as {season: undefined, episode: undefined}.
-   *
-   * Also calls refreshWatchStatus(), as handleMarkEpisodeWatched and
-   * handleMarkSeasonWatched above do — this page's own `history`
-   * state is enough to keep ProgressPanel's toggle itself correct, but
-   * the catalog grids (watchedIdsResult) and personalized rails
-   * (homeFeed) this toggle also affects have no other way to learn about
-   * it, the same reasoning toggleMyList's own refreshWatchStatus-adjacent
-   * fix (AppStateContext) already applies to following a title.
-   */
-  async function handleToggleMovieWatched(watched: boolean): Promise<void> {
-    const api = window.api?.mediaHub
-    if (!api || !media) return
-    const item = {
-      id: media.id,
-      type: kind,
-      title: media.title,
-      poster: media.posterUrl ?? '',
-      year: media.releaseYear ? String(media.releaseYear) : '',
-      ...(media.totalEpisodes != null ? { totalEpisodes: media.totalEpisodes } : {})
-    }
-    const previous = history
-    setHistory((h) => applyOptimisticMark(h, media.id, kind, null, null, watched))
-    const call = watched ? api.tracking.markWatched : api.tracking.unmarkWatched
-    try {
-      await call({ item })
       refreshWatchStatus()
     } catch {
       setHistory(previous)
@@ -790,13 +751,10 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
           media={media}
           episodeStats={episodeStats}
           continueEntry={continueEntry}
-          inMyList={inMyList}
-          onToggleMyList={() => toggleMyList(media)}
           onOpenLastWatched={() =>
             handlePlay(continueEntry?.media.seasonNumber, continueEntry?.media.episodeNumber)
           }
           movieWatched={movieWatched}
-          onToggleMovieWatched={handleToggleMovieWatched}
         />
         <RatingsPanel media={media} />
         <CollectionPanel media={media} />

@@ -175,6 +175,12 @@ export interface AppNotification {
     label: string
     run: () => void
   }
+  /**
+   * The profile whose library this is about. A toast bound to one is
+   * dropped when another profile becomes active: its Undo is theirs, and
+   * the title it names may be too.
+   */
+  profileId?: string
 }
 
 export type MatchTier = 'excellent' | 'good' | 'fair' | 'low'

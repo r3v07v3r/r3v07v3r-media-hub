@@ -39,7 +39,9 @@ play something. Optional metadata, tracking, and subtitle services add to the ex
 - **Browse movies, series, and anime** with search, a trailer on the title page, seasons,
   episodes, ratings, the age certificate for your region, and recommendations. Filter by genre,
   year, minimum rating, runtime, season or episode count, and status, hide what you have already
-  watched, and save any combination as a named view that comes back as a chip. Cast and crew names
+  watched, and save any combination as a named view that comes back as a chip. Suggestions weigh
+  what you watched this week most, and after a film or anime the next part of its series is
+  offered first — a rewatch counts, so two films into a marathon the third is waiting. Cast and crew names
   are clickable — they open what else of theirs is in your catalog, and typing a director's name in
   search finds their films rather than films with their name in the title. A film's page lists the
   rest of its collection; an anime's lists its prequels and sequels in order. Where a title can be
@@ -62,16 +64,20 @@ play something. Optional metadata, tracking, and subtitle services add to the ex
 - **Rate what you have seen** out of 10 on a title's page. Scores are private to the profile that
   gave them, and they steer what gets suggested — a genre watched often but enjoyed little stops
   leading the recommendations.
-- **Build a personal library** in **My Stuff**, with tabs for your lists, what is in progress, what
-  you have finished, what you have rated, a calendar of what is airing, your full viewing
-  history, your stats, and what you
-  have set aside. Make as many named lists as you like alongside My List, and add titles to them
-  from their own page.
-  Any single viewing can be removed from the history without un-watching the episode.
+- **One status per title.** Every title is either not watched, planned, or watched, and one
+  control cycles through the three — on a title's page, in the library side panel, on the Home
+  hero and in the right-click menu. Planned is the same status Simkl, Trakt and MyAnimeList call
+  plan to watch and syncs with them; marking a whole series watched marks every aired episode,
+  and clearing it offers an undo. Lists are separate from status.
+- **Build a personal library** in **My Stuff**, with tabs for what you plan to watch, what is in
+  progress, what you have finished, your named lists, what you have rated, your full viewing
+  history, your stats, and what you have set aside. Make as many named lists as you like, and add
+  titles to them from their own page. Any single viewing can be removed from the history without
+  un-watching the episode. What is airing has its own **Calendar** page.
 - **Manage downloads** and optionally connect Jellyfin, Sonarr, Radarr, qBittorrent, and Prowlarr.
-  Torrents can be paused, resumed and removed from the Downloads page, with keeping or deleting the
-  files asked separately. With Prowlarr connected, the page names any indexer currently in a failure
-  backoff, so an empty Sonarr/Radarr search stops being unexplained.
+  Torrents can be paused, resumed and removed from the control centre's Caching section, with
+  keeping or deleting the files asked separately. With Prowlarr connected, it names any indexer
+  currently in a failure backoff, so an empty Sonarr/Radarr search stops being unexplained.
 - **Pre-fetch over your LAN with a cache server.** Run [r3-cache](daemon/README.md) on any Windows
   or Linux box on your network and it downloads what you plan to watch ahead of time, then serves it
   over one LAN hop instead of a slow internet link. The app finds it by itself; pair it under

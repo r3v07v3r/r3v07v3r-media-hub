@@ -135,6 +135,15 @@
   background:
     radial-gradient(circle at 68% 42%, var(--art-a, #ff8a3d) 0%, transparent 58%),
     radial-gradient(ellipse 70% 55% at 8% 96%, rgba(70, 110, 200, 0.5) 0%, transparent 72%);
+  /* The bottom-left wash is centred below the hero, so no choice of stops
+     can fade it before .hero's rounded corner clips it. The layer itself
+     is feathered instead: fully lit through the middle, gone before its
+     own (oversized) edge, so the clip never meets a lit pixel. */
+  /* Transparent by 78% of a half-box (0.39 of the box's width from the
+     centre): the hero's own edge sits at 0.417, and heroDrift's scale(1.06)
+     only stretches that reach to 0.413 — still inside. */
+  -webkit-mask-image: radial-gradient(ellipse 50% 50% at 50% 50%, #000 30%, transparent 78%);
+  mask-image: radial-gradient(ellipse 50% 50% at 50% 50%, #000 30%, transparent 78%);
   opacity: 0.32;
   mix-blend-mode: soft-light;
   animation: heroDrift 22s ease-in-out infinite;

@@ -13,7 +13,11 @@
 
 import assert from 'node:assert/strict'
 
-import { mayRemoveAt, plannedRemovals } from '../src/main/media-hub/watchlistRules'
+import {
+  mayRemoveAt,
+  plannedRemovals,
+  remotePlanAdoptable
+} from '../src/main/media-hub/watchlistRules'
 
 const HOUR = 60 * 60 * 1000
 const now = Date.now()
@@ -190,5 +194,28 @@ assert.equal(mayRemoveAt('simkl', ['simkl', 'trakt']), true, 'seen on Simkl, so 
 // MAL's push checks the entry's status before deleting it.
 assert.equal(mayRemoveAt('trakt', []), true, 'a watchlist-scoped removal is safe without evidence')
 assert.equal(mayRemoveAt('mal', []), true, 'a status-scoped removal is safe without evidence')
+
+// --- rule 8: a watched title outranks a planned one ---------------------
+
+// Marking a planned title watched takes it off the plan without asking
+// Simkl (whose removal is the un-watch call). The pull must then not put
+// it back, however many services still list it as planned.
+assert.equal(
+  remotePlanAdoptable('tt-seen', {
+    tracked: new Set(),
+    awaitingRemoval: new Set(),
+    watched: new Set(['tt-seen'])
+  }),
+  false,
+  'a title with local history is never planned by a pull'
+)
+assert.equal(
+  remotePlanAdoptable('tt-fresh', {
+    tracked: new Set(),
+    awaitingRemoval: new Set(),
+    watched: new Set(['tt-seen'])
+  }),
+  true
+)
 
 console.log('ok  watchlist two-way removal rule')

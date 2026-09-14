@@ -100,8 +100,8 @@
 .tabCount {
   padding: 1px 6px;
   border-radius: var(--radius-pill);
-  border: 1px solid var(--border-subtle);
-  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid color-mix(in srgb, var(--accent-cyan) 30%, transparent);
+  background: color-mix(in srgb, var(--accent-cyan) 12%, rgba(0, 0, 0, 0.45));
   font-family: var(--font-body);
   font-size: 10px;
   font-weight: 700;
@@ -557,6 +557,27 @@
     padding: 8px 11px 10px;
     gap: 3px;
   }
+  /* The chips too — left at their 255px-card size on a 160px card they
+     were the one thing that did not shrink, and the first to truncate. */
+  .reasonChip,
+  .plannedChip {
+    font-size: 9.5px;
+    padding: 1px 6px;
+  }
+  /* Three lines here: the prefix alone is two on a card this narrow, and
+     the title is the half worth reading. */
+  .reasonChip {
+    -webkit-line-clamp: 3;
+  }
+  /* Kind and provenance do not both fit on a card this narrow; the list
+     they appear on already filters by kind, so the kind is the one to go. */
+  .chipRow:has(.plannedChip) .kindChip {
+    display: none;
+  }
+  .kindChip {
+    font-size: 9px;
+    padding: 0 6px;
+  }
   .playButton {
     bottom: 10px;
     right: 10px;
@@ -608,11 +629,32 @@
   letter-spacing: 0.2px;
   color: var(--text-primary);
   text-shadow: 0 1px 6px rgba(0, 0, 0, 0.7);
-  /* A franchise title can be long. One line, clipped, with the full text on
-     the element's own title attribute. */
-  white-space: nowrap;
+  /* A franchise title can be long. Two lines, then clipped, with the full
+     text on the element's own title attribute — one line cut every card's
+     reason off at "Because you watc…", which said nothing at all. */
+  line-height: 1.25;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
   overflow: hidden;
-  text-overflow: ellipsis;
+  overflow-wrap: anywhere;
+}
+/* The kind and provenance chips share one row under the title — one
+   line, always: a second row lifts the title out of the scrim onto the
+   artwork, so the longer chip gives way instead. */
+.chipRow {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 5px;
+  align-items: center;
+  min-width: 0;
+}
+.chipRow > * {
+  align-self: center;
+}
+.chipRow .plannedChip {
+  min-width: 0;
+  flex: 0 1 auto;
 }
 
 /* The way out of a row that only shows the first twenty. Sits at the far

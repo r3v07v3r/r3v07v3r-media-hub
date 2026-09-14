@@ -30,7 +30,7 @@ import type {
   PlayRecord
 } from '@shared/media-hub/types'
 import type { ContinueWatchingItem, HomeRail, MediaItem, Recommendation } from '@renderer/types'
-import { recommendationReasonLabel } from '@shared/media-hub/recommendationReason'
+import { recommendationRailTitle } from '@shared/media-hub/recommendationReason'
 import {
   catalogItemToMediaItem,
   indexHistoryById,
@@ -884,26 +884,36 @@ export function useMediaHubHomeFeed(libraryKey: string): HomeFeedResult {
       .then((result) => {
         if (cancelled) return
         const trackedIds = new Set(result.tracked.map((t) => t.id))
+        // These rows carry no episode list, so "finished" comes from the
+        // index's own completion query (HomePersonalizedResult.completedIds)
+        // — without it a fully watched show on the hero read as merely
+        // started, and its status control could never say Watched.
+        const completed = new Set(result.completedIds ?? [])
+        const finished = (media: MediaItem): MediaItem =>
+          completed.has(media.id) ? { ...media, watched: true, completed: true } : media
         const next = {
           continueWatching: result.continueWatching.map(continueWatchingEntryToItem),
-          recommendations: result.recommendations.map((item) =>
-            catalogItemToRecommendation(item, result.preferredGenres, {
+          recommendations: result.recommendations.map((item) => {
+            const rec = catalogItemToRecommendation(item, result.preferredGenres, {
               trackedIds,
               // Sparse by design — a title nothing picked out has no entry,
               // and its card shows no chip. See RecommendationReason.
               reason: result.recommendationReasons?.[String(item.id)]
             })
-          ),
+            return { ...rec, media: finished(rec.media) }
+          }),
           rails: (result.recommendationRails ?? [])
             .map((rail) => ({
               id: rail.id,
-              title: recommendationReasonLabel(rail.reason),
-              items: rail.items.map((item) => catalogItemToMediaItem(item, { trackedIds }))
+              title: recommendationRailTitle(rail.reason),
+              items: rail.items.map((item) =>
+                finished(catalogItemToMediaItem(item, { trackedIds }))
+              )
             }))
             .filter((rail) => rail.title && rail.items.length),
           featured: result.recommendations
             .slice(0, 6)
-            .map((item) => catalogItemToMediaItem(item, { trackedIds })),
+            .map((item) => finished(catalogItemToMediaItem(item, { trackedIds }))),
           preferredGenres: result.preferredGenres,
           trackedIds,
           plannedSources: result.plannedSources ?? {}

@@ -16,6 +16,7 @@ import { fetchJson } from './httpClient'
 import { getDatabase } from './dbState'
 import { logError } from './logger'
 import { tmdbCredentials } from './settingsStore'
+import type { TaskPriority } from './taskScheduler'
 
 /**
  * Thirty days. Which films are in a series is about as fixed as facts get —
@@ -42,10 +43,11 @@ const EMPTY: TitleCollectionResult = { name: '', parts: [] }
  * card that cannot be opened, which is worse than not listing it. Parts that
  * carry no IMDb id are dropped rather than shown as dead entries.
  */
-export async function titleCollection(imdbId: string): Promise<TitleCollectionResult> {
+export async function titleCollection(
+  imdbId: string,
+  priority: TaskPriority = 'interactive'
+): Promise<TitleCollectionResult> {
   if (!/^tt\d+$/.test(imdbId)) return EMPTY
-  const { apiKey } = tmdbCredentials()
-  if (!apiKey) return EMPTY
 
   const db = getDatabase()
   // v2, not v1: entries written before the parts below carried a complete
@@ -59,10 +61,18 @@ export async function titleCollection(imdbId: string): Promise<TitleCollectionRe
   const cached = db.getCache<TitleCollectionResult>(cacheKey)
   if (cached) return cached
 
+  // The key gates the network, not the cache: an answer already on disk is
+  // as true without a key as with one, and the recommendations rebuild
+  // reads this for every recent film whether or not TMDB is reachable.
+  const { apiKey } = tmdbCredentials()
+  if (!apiKey) return EMPTY
+
   const auth = `api_key=${encodeURIComponent(apiKey)}`
   try {
     const found = await fetchJson<{ movie_results?: { id?: unknown }[] }>(
-      `https://api.themoviedb.org/3/find/${encodeURIComponent(imdbId)}?${auth}&external_source=imdb_id`
+      `https://api.themoviedb.org/3/find/${encodeURIComponent(imdbId)}?${auth}&external_source=imdb_id`,
+      {},
+      { priority }
     )
     const sourceId = Number(found.movie_results?.[0]?.id)
     if (!Number.isFinite(sourceId) || sourceId <= 0) {
@@ -74,7 +84,7 @@ export async function titleCollection(imdbId: string): Promise<TitleCollectionRe
 
     const detail = await fetchJson<{
       belongs_to_collection?: { id?: unknown; name?: unknown } | null
-    }>(`https://api.themoviedb.org/3/movie/${sourceId}?${auth}`)
+    }>(`https://api.themoviedb.org/3/movie/${sourceId}?${auth}`, {}, { priority })
     const collectionId = Number(detail.belongs_to_collection?.id)
     if (!Number.isFinite(collectionId) || collectionId <= 0) {
       // Most films are in no collection at all. That is a real answer and
@@ -84,7 +94,9 @@ export async function titleCollection(imdbId: string): Promise<TitleCollectionRe
     }
 
     const collection = await fetchJson<{ name?: unknown; parts?: RawPart[] }>(
-      `https://api.themoviedb.org/3/collection/${collectionId}?${auth}`
+      `https://api.themoviedb.org/3/collection/${collectionId}?${auth}`,
+      {},
+      { priority }
     )
 
     // Full release dates, for the sort below. Kept beside the parts rather
@@ -103,7 +115,9 @@ export async function titleCollection(imdbId: string): Promise<TitleCollectionRe
             let partImdb = imdbId
             if (partId !== sourceId) {
               const external = await fetchJson<{ imdb_id?: unknown }>(
-                `https://api.themoviedb.org/3/movie/${partId}/external_ids?${auth}`
+                `https://api.themoviedb.org/3/movie/${partId}/external_ids?${auth}`,
+                {},
+                { priority }
               )
               partImdb = String(external.imdb_id ?? '')
             }

@@ -4,11 +4,12 @@ import styles from './WatchStatusBadge.module.css'
 
 const BADGE: Record<
   Exclude<WatchStatus['state'], 'unwatched'>,
-  { label: string; className: string }
+  { label: string; className: string; icon: 'check' | 'clock' | null }
 > = {
-  'in-progress': { label: 'In Progress', className: styles.inProgress },
-  watched: { label: 'Watched', className: styles.watched },
-  completed: { label: 'Completed', className: styles.completed }
+  planned: { label: 'Planned', className: styles.planned, icon: 'clock' },
+  'in-progress': { label: 'In Progress', className: styles.inProgress, icon: null },
+  watched: { label: 'Watched', className: styles.watched, icon: 'check' },
+  completed: { label: 'Completed', className: styles.completed, icon: 'check' }
 }
 
 /**
@@ -16,12 +17,14 @@ const BADGE: Record<
  * see lib/mediaHub/watchStatus.ts for how the status itself is derived.
  * Renders nothing for 'unwatched' (no badge is itself the "not started"
  * signal, per the reference design) and no progress bar for a plain
- * 'watched' movie (nothing meaningful to show a fraction of).
+ * 'watched' movie or a 'planned' title (nothing meaningful to show a
+ * fraction of).
  *
  * `compact` drops the text label down to just an icon (a dot for
- * in-progress, a check for watched/completed) and thins the progress bar —
- * for small tiles (MoodBrowser's ~110x66 result cards) where the full
- * "In Progress"/"Completed" pill would be wider than the tile itself.
+ * in-progress, a clock for planned, a tick for watched/completed) and
+ * thins the progress bar — for small tiles (MoodBrowser's ~110x66 result
+ * cards, the collection panel's 38px posters) where the full pill would
+ * be wider than the tile itself.
  */
 export function WatchStatusBadge({
   status,
@@ -32,6 +35,7 @@ export function WatchStatusBadge({
 }) {
   if (status.state === 'unwatched') return null
   const badge = BADGE[status.state]
+  const hasProgress = status.state === 'in-progress' || status.state === 'completed'
 
   return (
     <>
@@ -39,16 +43,14 @@ export function WatchStatusBadge({
         className={`${styles.badge} ${badge.className} ${compact ? styles.badgeCompact : ''}`}
         aria-label={badge.label}
       >
-        {status.state === 'in-progress' ? (
-          compact ? (
-            <span className={styles.dot} aria-hidden="true" />
-          ) : null
-        ) : (
-          <Icon name="check" size={10} />
-        )}
+        {badge.icon ? (
+          <Icon name={badge.icon} size={10} />
+        ) : compact ? (
+          <span className={styles.dot} aria-hidden="true" />
+        ) : null}
         {!compact && badge.label}
       </span>
-      {status.state !== 'watched' && (
+      {hasProgress && (
         <div
           className={`${styles.progressTrack} ${compact ? styles.progressTrackCompact : ''}`}
           role="progressbar"

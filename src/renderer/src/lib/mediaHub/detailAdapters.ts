@@ -23,14 +23,6 @@ export interface DetailAdapterConfig {
    *  richer arc/cour taxonomy here would be inventing structure the data
    *  doesn't have. */
   isEpisodic: boolean
-  /** "Follow" reads more naturally for an ongoing series/anime than "My
-   *  List" (which implies a one-time save, not tracking new episodes) —
-   *  both call the exact same tracking:toggle action underneath; the
-   *  backend has no separate follow/watchlist concept (see
-   *  AppStateContext's toggleMyList and tracking.ts's registerTrackingIpc
-   *  — "watchlist" and "follow" are the same "tracked" store). */
-  trackLabel: string
-  trackedLabel: string
 }
 
 export const MOVIE_DETAIL_CONFIG: DetailAdapterConfig = {
@@ -38,9 +30,7 @@ export const MOVIE_DETAIL_CONFIG: DetailAdapterConfig = {
   path: 'movies',
   label: 'Movie',
   pluralLabel: 'movies',
-  isEpisodic: false,
-  trackLabel: 'My List',
-  trackedLabel: 'In My List'
+  isEpisodic: false
 }
 
 export const SERIES_DETAIL_CONFIG: DetailAdapterConfig = {
@@ -48,9 +38,7 @@ export const SERIES_DETAIL_CONFIG: DetailAdapterConfig = {
   path: 'series',
   label: 'Series',
   pluralLabel: 'series',
-  isEpisodic: true,
-  trackLabel: 'Follow',
-  trackedLabel: 'Following'
+  isEpisodic: true
 }
 
 export const ANIME_DETAIL_CONFIG: DetailAdapterConfig = {
@@ -58,9 +46,7 @@ export const ANIME_DETAIL_CONFIG: DetailAdapterConfig = {
   path: 'anime',
   label: 'Anime',
   pluralLabel: 'anime',
-  isEpisodic: true,
-  trackLabel: 'Follow',
-  trackedLabel: 'Following'
+  isEpisodic: true
 }
 
 export const DETAIL_CONFIGS: Record<MediaKind, DetailAdapterConfig> = {

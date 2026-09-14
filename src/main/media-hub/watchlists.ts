@@ -41,7 +41,7 @@ import {
 } from './settingsStore'
 import { traktRequest } from './traktClient'
 import { failedServices, firstFailure, pushPlanEverywhere, type PushOutcome } from './watchlistPush'
-import { plannedRemovals, type PlannedOrigin } from './watchlistRules'
+import { plannedRemovals, remotePlanAdoptable, type PlannedOrigin } from './watchlistRules'
 import type { MediaKind } from '../../shared/media-hub/types'
 import type { TaskPriority } from './taskScheduler'
 
@@ -567,6 +567,8 @@ export async function syncPlannedFromServices(
       .filter(([, entry]) => entry.planned !== true)
       .map(([id]) => id)
   )
+  // Watched here outranks planned there — see remotePlanAdoptable.
+  const watched = new Set(db.history().map((entry) => String(entry.id)))
   let added = 0
   // One row per id, not per entry: a film on all three lists is one title
   // planned three times over, not three titles.
@@ -574,8 +576,9 @@ export async function syncPlannedFromServices(
   for (const entry of entries) {
     if (seen.has(entry.id)) continue
     seen.add(entry.id)
-    if (alreadyTracked.has(entry.id)) continue
-    if (awaitingRemoval.has(entry.id)) continue
+    if (!remotePlanAdoptable(entry.id, { tracked: alreadyTracked, awaitingRemoval, watched })) {
+      continue
+    }
     try {
       db.track({ id: entry.id, type: entry.type, title: entry.title, year: entry.year })
       rememberOrigin(entry.id, entry.source)
@@ -585,6 +588,14 @@ export async function syncPlannedFromServices(
     }
   }
 
+  // Rule 8's other half: a title watched here and no longer on the local
+  // plan keeps no removal evidence. unplanBecauseWatched cleared it; this
+  // rebuild would put it back from the service's own list, and a later
+  // re-plan and un-plan would then send Simkl the unscoped delete against
+  // a title that has history.
+  for (const id of Object.keys(sources)) {
+    if (watched.has(id) && !db.isTracked(id)) delete sources[id]
+  }
   const stored: StoredSources = { marks: trackingAccountMarks(), sources }
   db.putCache(PLANNED_SOURCES_CACHE_KEY, stored, SOURCES_TTL_MS, { durable: true })
 
@@ -676,6 +687,74 @@ export function pushLocalPlanChange(
   void next.then(() => {
     if (planChangeChains.get(item.id) === next) planChangeChains.delete(item.id)
   })
+}
+
+/**
+ * Takes a title off the plan because it has just been marked watched.
+ *
+ * NOT pushLocalPlanChange(item, false), and the difference is the whole
+ * point (docs/WATCHLIST-SYNC.md rule 8). Two of the three services must
+ * not be asked to remove it:
+ *
+ *  - Simkl's removal is /sync/history/remove — the un-watch endpoint — and
+ *    mayRemoveAt would let it through, since the title IS on the Simkl
+ *    plan list. Sent after the history push, it deletes the watch just
+ *    recorded. Simkl moves a title from plan to watch to completed by
+ *    itself when its history arrives, so nothing needs sending.
+ *  - MAL's removal deletes the whole list entry when the status is still
+ *    plan_to_watch — which is where pushMalProgress leaves it whenever the
+ *    episode total is unknown. The status change IS the plan removal
+ *    there, and it happens on the progress push.
+ *
+ * Trakt's watchlist removal is scoped and harmless, so Trakt is told. The
+ * local bookkeeping is cleared regardless: a stale 'simkl' tag in the
+ * sources record is exactly the evidence a later un-plan needs to fire
+ * that unscoped delete against a title that now has history, and an
+ * origin left standing would let the next pull "remove" it again.
+ *
+ * Callers run this on the same per-title chain as the history push (see
+ * queueRemotePushes in tracking.ts) so it cannot overtake it.
+ */
+export async function unplanBecauseWatched(item: {
+  id: string
+  type: MediaKind
+  title: string
+  year?: string
+}): Promise<void> {
+  const queued = pendingRemovals()
+  if (queued[item.id]) {
+    // A plan add still owed from an outage must not be retried now — it
+    // would put the title back on the service it was just watched on.
+    delete queued[item.id]
+    writePendingRemovals(queued)
+  }
+  if (twoWaySyncEnabled()) {
+    const onServices = plannedSources()[item.id] ?? []
+    try {
+      const outcome = await pushPlanEverywhere(item, false, { onServices, only: ['trakt'] })
+      const failed = failedServices(outcome)
+      if (failed.length) {
+        const pending = pendingRemovals()
+        pending[item.id] = {
+          item,
+          services: failed,
+          attempts: 1,
+          at: Date.now(),
+          marks: trackingAccountMarks(),
+          lastError: firstFailure(outcome)
+        }
+        writePendingRemovals(pending)
+      }
+    } catch (error) {
+      logError('watchlists:unplan-watched', error)
+    }
+  }
+  forgetPushedSources(item.id, ['simkl', 'trakt', 'mal'])
+  const origins = plannedOrigins()
+  if (origins[item.id]) {
+    delete origins[item.id]
+    writeOrigins(origins)
+  }
 }
 
 /** One chain per title with a change in flight — see pushLocalPlanChange.
