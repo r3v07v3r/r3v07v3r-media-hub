@@ -198,7 +198,10 @@ export async function continuationsFor(
         // first season's sequel is its own second season — inside the
         // tile — so the question is asked of the tile's LAST member: what
         // follows the whole show.
-        const members = [watch.id, ...(pool.get(watch.id)?.groupedIds ?? [])]
+        // The tile's own record, from the index when the pool does not
+        // hold it — a show outside the top thousand is still grouped, and
+        // asked from its first season it would answer with its second.
+        const members = [watch.id, ...(resolveItem(watch.id)?.groupedIds ?? [])]
         const story = await sources.story(members[members.length - 1])
         const sequel = story?.links?.find((link) => link.relation === 'sequel')
         if (!sequel?.item?.id) continue

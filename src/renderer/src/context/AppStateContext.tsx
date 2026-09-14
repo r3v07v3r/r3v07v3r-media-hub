@@ -2004,14 +2004,23 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
           // all, and touches nothing else. An undo itself (episodes given)
           // is not offered another.
           const count = result.episodes
-          if (count > 0 && !episodes) {
+          // A film's own click is its own undo — the next press reverses
+          // it — except when marking it watched also took it off the plan,
+          // which no single press puts back.
+          const worthAToast =
+            !episodes &&
+            result.changed.length > 0 &&
+            (count > 0 || (status === 'watched' && wasPlanned))
+          if (worthAToast) {
             const plural = count === 1 ? '' : 's'
             const reverse: TitleStatus = status === 'watched' ? 'unwatched' : 'watched'
+            const verb = status === 'watched' ? 'watched' : 'not watched'
             pushNotification({
               tone: status === 'watched' ? 'success' : 'info',
-              message: `${media.title}: ${count} episode${plural} marked ${
-                status === 'watched' ? 'watched' : 'not watched'
-              }.`,
+              message:
+                count > 0
+                  ? `${media.title}: ${count} episode${plural} marked ${verb}.`
+                  : `${media.title}: marked watched and taken off the plan.`,
               action: {
                 label: 'Undo',
                 run: () => {

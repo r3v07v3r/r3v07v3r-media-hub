@@ -214,6 +214,18 @@ async function main(): Promise<void> {
       grouped.set(knight1.id, anime(knight1.id, knight1.title, [knight2.id]))
       const folded = await continuationsFor([watch(knight1, daysAgo(1))], grouped, NOW, sources())
       assert.deepEqual([...folded.keys()], [knight3.id])
+      // The same show outside the pool: its grouping comes from the index,
+      // so the answer is still the film, not its own second season.
+      const absent = await continuationsFor(
+        [watch(knight1, daysAgo(1))],
+        new Map([[knight3.id, knight3]]),
+        NOW,
+        sources({
+          lookup: (ids) =>
+            ids[0] === knight1.id ? [anime(knight1.id, knight1.title, [knight2.id])] : []
+        })
+      )
+      assert.deepEqual([...absent.keys()], [knight3.id])
     }
   )
 
