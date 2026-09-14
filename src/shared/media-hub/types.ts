@@ -849,6 +849,13 @@ export interface SetTitleStatusPayload {
    * Never touches the plan. Ignored for 'planned'.
    */
   episodes?: ChangedEpisode[]
+  /**
+   * The profile a change was made on, as its result reported — given by
+   * every call an undo makes, the replay and the re-plan alike. Refused
+   * while another profile is active, so an undo left on screen across a
+   * switch cannot land in somebody else's library.
+   */
+  profileId?: string
 }
 
 export interface SetTitleStatusResult {
@@ -857,6 +864,8 @@ export interface SetTitleStatusResult {
   episodes: number
   /** What was written or removed, so it can be put back exactly. */
   changed: ChangedEpisode[]
+  /** The profile this change was written to — what its undo must name. */
+  profileId: string
 }
 
 export interface MarkWatchedResult {

@@ -587,14 +587,18 @@ export interface MediaHubDatabase {
     id: string | number
   ): { season: number | null; episode: number | null; watchedAt: string }[]
   /**
-   * Removes exactly these rows of one title — history and their plays — in
-   * one transaction: the undo of a whole-show mark, which would otherwise
-   * be one fsync per episode. Returns how many history rows went.
+   * Takes back exactly these rows of one title, in one transaction — the
+   * undo of a whole-show mark, which would otherwise be one fsync per
+   * episode. A row with `watchedAt` gives back only the viewing recorded at
+   * that instant: one recorded since — a genuine rewatch — stands, and the
+   * episode stays watched, dated to it. Without one, the episode and every
+   * play of it go. Returns the rows no longer watched at all, which is
+   * exactly what the services are to be told.
    */
   unmarkEpisodes(
     id: string | number,
-    refs: readonly { season: number | null; episode: number | null }[]
-  ): number
+    refs: readonly { season: number | null; episode: number | null; watchedAt?: string }[]
+  ): { season: number | null; episode: number | null }[]
   /**
    * Every viewing this title has here — the plays, which keep one row per
    * viewing, plus any history row without one — newest first. Cheap, for
@@ -815,6 +819,9 @@ interface PreparedQueries {
   ratings: StatementSync
   recordPlay: StatementSync
   deletePlays: StatementSync
+  deletePlayAt: StatementSync
+  latestPlayAt: StatementSync
+  restampWatched: StatementSync
   playCounts: StatementSync
   untrack: StatementSync
   isTracked: StatementSync
@@ -1007,6 +1014,20 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
     deletePlays: sql.prepare(
       `DELETE FROM plays WHERE profile_id=@profile AND content_id=@id
        AND season IS @season AND episode IS @episode`
+    ),
+    // The undo of a mark takes back the viewing the mark recorded — matched
+    // on its instant, as importPlay matches — and nothing recorded since.
+    // What is left dates the row (see unmarkEpisodes).
+    deletePlayAt: sql.prepare(
+      `DELETE FROM plays WHERE profile_id=@profile AND content_id=@id
+       AND season IS @season AND episode IS @episode AND watched_at=@at`
+    ),
+    latestPlayAt: sql.prepare(
+      `SELECT MAX(watched_at) AS at FROM plays WHERE profile_id=@profile AND content_id=@id
+       AND season IS @season AND episode IS @episode`
+    ),
+    restampWatched: sql.prepare(
+      'UPDATE watch_history SET watched_at=@at WHERE profile_id=@profile AND watch_key=@key'
     ),
     playCounts: sql.prepare(
       'SELECT content_id,COUNT(*) AS plays FROM plays WHERE profile_id=? GROUP BY content_id'
@@ -1764,23 +1785,41 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
         return durable(() => {
           sql.exec('BEGIN')
           try {
-            let removed = 0
+            const gone: { season: number | null; episode: number | null }[] = []
             for (const ref of refs) {
               const season = Number.isFinite(ref.season) ? (ref.season as number) : null
               const episode = Number.isFinite(ref.episode) ? (ref.episode as number) : null
               const key = `${contentId}:${season ?? 'movie'}:${episode ?? 'movie'}`
-              removed += Number(q.unwatch.run(currentProfileId, key).changes)
-              q.deletePlays.run({ profile: currentProfileId, id: contentId, season, episode })
+              const where = { profile: currentProfileId, id: contentId, season, episode }
+              if (ref.watchedAt) {
+                // Only the viewing the mark recorded. One recorded since
+                // stands — the undo of a mark is not a claim that a later
+                // viewing did not happen — and the row is dated to it.
+                q.deletePlayAt.run({ ...where, at: ref.watchedAt })
+                const latest = (q.latestPlayAt.get(where) as Row | undefined)?.at
+                if (latest) {
+                  q.restampWatched.run({ profile: currentProfileId, key, at: String(latest) })
+                  continue
+                }
+              } else {
+                q.deletePlays.run(where)
+              }
+              if (Number(q.unwatch.run(currentProfileId, key).changes) > 0) {
+                gone.push({ season, episode })
+              }
             }
             sql.exec('COMMIT')
-            return removed
+            return gone
           } catch (error) {
             sql.exec('ROLLBACK')
             throw error
           }
         })
       } catch (error) {
-        return fail(error as Error)
+        return fail(error as Error) as unknown as {
+          season: number | null
+          episode: number | null
+        }[]
       }
     },
 

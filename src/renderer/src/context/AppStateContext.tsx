@@ -864,8 +864,22 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   // below, can reference pushNotification — the lint rule that enforces
   // hook-result declare-before-use ordering doesn't care that a closure
   // only actually reads it later, at event time.
-  const { pushNotification, dismissNotification, openContextMenu, closeContextMenu } =
-    useOverlayActions()
+  const {
+    pushNotification,
+    dismissNotification,
+    dismissNotificationsOutside,
+    openContextMenu,
+    closeContextMenu
+  } = useOverlayActions()
+
+  // A person's toasts go with them. Whatever changed the active profile —
+  // the avatar menu, a restored backup — every toast bound to another
+  // profile is dropped once this one is on screen, its Undo with it. Main
+  // refuses that undo anyway; this keeps the title it names off the other
+  // person's screen.
+  useEffect(() => {
+    dismissNotificationsOutside(activeProfileId)
+  }, [activeProfileId, dismissNotificationsOutside])
 
   useEffect(() => {
     const api = window.api?.mediaHub?.party
@@ -1992,6 +2006,12 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         watchedIdsResult.refresh()
         setWatchStatusVersion((v) => v + 1)
       }
+      // A rejected invoke arrives prefixed with the channel name; the
+      // person gets the handler's own sentence.
+      const failureMessage = (error: unknown, fallback: string): string =>
+        error instanceof Error && error.message
+          ? error.message.replace(/^Error invoking remote method '[^']+': Error: /, '')
+          : fallback
       api.tracking
         .setTitleStatus({ item, status, episodes })
         .then((result) => {
@@ -2025,11 +2045,19 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
             pushNotification({
               tone: status === 'watched' ? 'success' : 'info',
               message: `${media.title}: ${summary}.`,
+              // Bound to the profile the change was made on: the toast goes
+              // with a switch, and main refuses the undo for any other.
+              profileId: result.profileId,
               action: {
                 label: 'Undo',
                 run: () => {
                   api.tracking
-                    .setTitleStatus({ item, status: reverse, episodes: result.changed })
+                    .setTitleStatus({
+                      item,
+                      status: reverse,
+                      episodes: result.changed,
+                      profileId: result.profileId
+                    })
                     .then(() => {
                       // Marking watched also took the title off the plan;
                       // its undo puts it back, or "undo" would leave a
@@ -2038,15 +2066,22 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
                       // re-planned meanwhile, where a toggle would have taken
                       // it off again.
                       if (status === 'watched' && wasPlanned) {
-                        return api.tracking.setTitleStatus({ item, status: 'planned' }).then(() => {
-                          setMyList((prev) => new Set(prev).add(id))
-                          rememberTrackedId(id, true)
-                        })
+                        return api.tracking
+                          .setTitleStatus({ item, status: 'planned', profileId: result.profileId })
+                          .then(() => {
+                            setMyList((prev) => new Set(prev).add(id))
+                            rememberTrackedId(id, true)
+                          })
                       }
                       return undefined
                     })
                     .then(settle)
-                    .catch(() => {})
+                    .catch((error: unknown) => {
+                      pushNotification({
+                        tone: 'error',
+                        message: failureMessage(error, 'Could not undo that change.')
+                      })
+                    })
                 }
               }
             })
@@ -2066,10 +2101,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
           settle()
           pushNotification({
             tone: 'error',
-            message:
-              error instanceof Error && error.message
-                ? error.message.replace(/^Error invoking remote method '[^']+': Error: /, '')
-                : 'Could not update the status.'
+            message: failureMessage(error, 'Could not update the status.')
           })
         })
     },

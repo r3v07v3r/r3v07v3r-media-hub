@@ -70,6 +70,8 @@ export interface ContextMenuTarget {
 export interface OverlayActions {
   pushNotification: (notification: Omit<AppNotification, 'id' | 'createdAt'>) => void
   dismissNotification: (id: string) => void
+  /** Drops every toast bound to a profile other than this one. */
+  dismissNotificationsOutside: (profileId: string) => void
   openContextMenu: (x: number, y: number, media: MediaItem) => void
   closeContextMenu: () => void
 }
@@ -101,6 +103,27 @@ export function OverlayProvider({ children }: { children: React.ReactNode }) {
       timers.current.delete(id)
     }
     setNotifications((prev) => prev.filter((x) => x.id !== id))
+  }, [])
+
+  // A person's toasts go with them: one bound to a profile (see
+  // AppNotification.profileId) is dropped the moment another becomes
+  // active, so an Undo made for one library is never on screen over
+  // another's. Clearing a timer twice is harmless, which is what lets this
+  // run inside the updater (StrictMode calls updaters twice).
+  const dismissNotificationsOutside = useCallback((profileId: string) => {
+    setNotifications((prev) => {
+      const kept = prev.filter((x) => !x.profileId || x.profileId === profileId)
+      if (kept.length === prev.length) return prev
+      for (const x of prev) {
+        if (kept.includes(x)) continue
+        const timer = timers.current.get(x.id)
+        if (timer) {
+          clearTimeout(timer)
+          timers.current.delete(x.id)
+        }
+      }
+      return kept
+    })
   }, [])
 
   const pushNotification = useCallback(
@@ -137,8 +160,20 @@ export function OverlayProvider({ children }: { children: React.ReactNode }) {
   // useCallback with no dependencies of its own, so this object is created
   // once and no consumer of it ever re-renders because of a toast.
   const actions = useMemo<OverlayActions>(
-    () => ({ pushNotification, dismissNotification, openContextMenu, closeContextMenu }),
-    [pushNotification, dismissNotification, openContextMenu, closeContextMenu]
+    () => ({
+      pushNotification,
+      dismissNotification,
+      dismissNotificationsOutside,
+      openContextMenu,
+      closeContextMenu
+    }),
+    [
+      pushNotification,
+      dismissNotification,
+      dismissNotificationsOutside,
+      openContextMenu,
+      closeContextMenu
+    ]
   )
 
   const state = useMemo<OverlayState>(

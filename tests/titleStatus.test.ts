@@ -323,13 +323,31 @@ console.log('\nthe rows a clear returns and an undo puts back')
 
   check('named rows go in one call, and only those', () => {
     const gone = db.unmarkEpisodes('tt5', [{ season: 1, episode: 2 }])
-    assert.equal(gone, 1)
+    assert.deepEqual(gone, [{ season: 1, episode: 2 }])
     const left = db.watchedEpisodesOf('tt5')
     assert.deepEqual(
       [...new Set(left.map((r) => `${r.season}:${r.episode}`))],
       ['1:1'],
       'episode 2 is gone, both viewings of episode 1 stay'
     )
+  })
+
+  check('the undo of a mark gives back only the viewing the mark recorded', () => {
+    const marked = '2026-03-01T00:00:00.000Z'
+    // The mark: a row and a play at one instant. Then a genuine rewatch.
+    db.importWatched([{ ...show, season: 2, episode: 1, watchedAt: marked }])
+    db.markWatched(show, { season: 2, episode: 1 })
+    const gone = db.unmarkEpisodes('tt5', [{ season: 2, episode: 1, watchedAt: marked }])
+    assert.deepEqual(gone, [], 'the episode is still watched')
+    const left = db.watchedEpisodesOf('tt5').filter((r) => r.season === 2)
+    assert.equal(left.length, 1, 'the rewatch is the one viewing left')
+    assert.ok(left[0].watchedAt > marked)
+    const row = db.history().find((h) => h.id === 'tt5' && h.season === 2)
+    assert.equal(row?.watchedAt, left[0].watchedAt, 'the row is dated to the viewing that stands')
+    // The rewatch's own undo is what takes the episode away.
+    const rest = db.unmarkEpisodes('tt5', [{ season: 2, episode: 1, watchedAt: left[0].watchedAt }])
+    assert.deepEqual(rest, [{ season: 2, episode: 1 }])
+    assert.equal(db.watchedEpisodesOf('tt5').filter((r) => r.season === 2).length, 0)
   })
 }
 
@@ -375,6 +393,18 @@ console.log('\nthe viewings a film clear returns and an undo puts back')
       ['2026-03-01', '2025-06-01']
     )
     assert.equal(db.history().filter((h) => h.id === 'tt9').length, 1)
+  })
+
+  check('the undo of a film mark leaves a viewing recorded since', () => {
+    const marked = '2026-04-01T00:00:00.000Z'
+    db.importWatched([{ ...film, season: null, episode: null, watchedAt: marked }])
+    db.markWatched(film, {})
+    const gone = db.unmarkEpisodes('tt9', [{ season: null, episode: null, watchedAt: marked }])
+    assert.deepEqual(gone, [], 'the film is still watched')
+    const left = db.watchedEpisodesOf('tt9')
+    assert.equal(left.length, 3, 'the two earlier viewings and the new one stay')
+    assert.ok(left[0].watchedAt > marked, 'newest first, and it is the viewing since')
+    assert.ok(!left.some((r) => r.watchedAt === marked))
   })
 }
 

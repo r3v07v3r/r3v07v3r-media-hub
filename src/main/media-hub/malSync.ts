@@ -171,6 +171,16 @@ async function patchMalListStatus(
   }
 }
 
+/**
+ * The count a push sends is read from the active profile's history when
+ * the push runs — after whatever the title's chain still owes. A profile
+ * switched in between would have another person's count sent to the
+ * account; the push is skipped instead, and the next change catches up.
+ */
+function pushIsForActiveProfile(profile: string | undefined): boolean {
+  return !profile || getDatabase().activeProfile() === profile
+}
+
 /** One after another — a group is a handful of entries, and MAL paces its API. */
 async function sendMalPushes(
   pushes: MalEntryPush[]
@@ -206,7 +216,8 @@ export async function pushMalProgress(
   },
   {
     status,
-    season
+    season,
+    profile
   }: {
     /**
      * A status the person chose, rather than one inferred from the count.
@@ -218,10 +229,14 @@ export async function pushMalProgress(
     status?: 'plan_to_watch'
     /** The season the change was in, as the episode list numbers it. */
     season?: number
+    /** The profile whose history the count is for, captured when the change
+     *  was made — see pushIsForActiveProfile. */
+    profile?: string
   } = {}
 ): Promise<{ malSynced: boolean; malError?: string }> {
   if (item.type !== 'anime' || !String(item.id).startsWith('kitsu:')) return { malSynced: false }
   if (!malCredentials().accessToken) return { malSynced: false }
+  if (!pushIsForActiveProfile(profile)) return { malSynced: false }
   const title = malTitleOf(item.id)
   // A sibling's entry is its own season whatever the caller says; only the
   // canonical id, which fronts the whole group, is told which season.
@@ -247,17 +262,21 @@ export async function pushMalTitleProgress(
   {
     status,
     seasons,
-    seasonTotals
+    seasonTotals,
+    profile
   }: {
     status?: 'plan_to_watch'
     /** The seasons the change touched — the only entries it may write. */
     seasons: Iterable<number>
     /** Regular episodes per season, when known. */
     seasonTotals?: ReadonlyMap<number, number>
+    /** As pushMalProgress's. */
+    profile?: string
   }
 ): Promise<{ malSynced: boolean; malError?: string }> {
   if (item.type !== 'anime' || !String(item.id).startsWith('kitsu:')) return { malSynced: false }
   if (!malCredentials().accessToken) return { malSynced: false }
+  if (!pushIsForActiveProfile(profile)) return { malSynced: false }
   const title = malTitleOf(item.id)
   return sendMalPushes(
     planMalPushes(

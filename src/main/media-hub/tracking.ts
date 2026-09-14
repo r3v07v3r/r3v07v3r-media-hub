@@ -251,13 +251,16 @@ function pushTitleHistory(
       .map((row) => ({ season: row.season ?? 1, episode: row.episode as number }))
   )
   if (!seasons.length) return
+  // The MAL count is read when the push runs; it has to be this profile's.
+  const profile = getDatabase().activeProfile()
   queueRemotePushes(item, () => [
     syncSimklHistory(path, titleHistoryPayload(item, seasons)),
     pushTraktTitleHistory(item, seasons, action),
     pushMalTitleProgress(item, {
       status: malStatus,
       seasons: seasons.map((s) => s.season),
-      seasonTotals
+      seasonTotals,
+      profile
     })
   ])
 }
@@ -1384,10 +1387,11 @@ export function registerTrackingIpc(): void {
       // round trips between a tap on a tick and the tick appearing — which
       // is what "tracking does not update properly" felt like.
       // Ordered per title, not merely detached — see queueRemotePushes.
+      const profile = getDatabase().activeProfile()
       queueRemotePushes(item, () => [
         syncSimklHistory('/sync/history', historyPayload(item, playback || {})),
         pushTraktHistory(item, playback || {}, 'add'),
-        pushMalProgress(item, { season: playback?.season ?? undefined })
+        pushMalProgress(item, { season: playback?.season ?? undefined, profile })
       ])
       return { ok: true, simklSynced: false, malSynced: false }
     }
@@ -1402,10 +1406,11 @@ export function registerTrackingIpc(): void {
       // Detached as above, and queued behind any push still in flight for
       // this title — an unmark a moment after a mark must reach the
       // services second.
+      const profile = getDatabase().activeProfile()
       queueRemotePushes(item, () => [
         syncSimklHistory('/sync/history/remove', historyPayload(item, p)),
         pushTraktHistory(item, p, 'remove'),
-        pushMalProgress(item, { season: p.season ?? undefined })
+        pushMalProgress(item, { season: p.season ?? undefined, profile })
       ])
       return { ok: true, simklSynced: false, malSynced: false }
     }
@@ -1427,10 +1432,11 @@ export function registerTrackingIpc(): void {
       // added, but this batch action did not, which left every episode of
       // a season marked watched here still unwatched on a connected Trakt
       // account.
+      const profile = db.activeProfile()
       queueRemotePushes(item, () => [
         syncSimklHistory('/sync/history', seasonHistoryPayload(item, season, episodeNumbers)),
         pushTraktSeasonHistory(item, season, episodeNumbers),
-        pushMalProgress(item, { season })
+        pushMalProgress(item, { season, profile })
       ])
       return { ok: true, simklSynced: false, malSynced: false }
     }
@@ -1459,8 +1465,17 @@ export function registerTrackingIpc(): void {
    */
   handle<SetTitleStatusPayload, SetTitleStatusResult>(
     MEDIA_HUB_CHANNELS.trackingSetTitleStatus,
-    async (_e, { item, status, episodes }) => {
+    async (_e, { item, status, episodes, profileId }) => {
       const db = getDatabase()
+      // The profile is the database's one mutable scope, and every write
+      // below is for whoever is active now. An undo names the profile its
+      // change was made on and is refused for any other; the one wait in
+      // here is checked against it after, so a switch during it lands in
+      // nobody's library.
+      const profile = db.activeProfile()
+      if (profileId && profileId !== profile) {
+        throw new Error('That change was made on another profile. Switch back to it to undo.')
+      }
       const id = String(item.id)
       const type = (item.type ?? 'movie') as MediaKind
       const episodic = type !== 'movie'
@@ -1498,6 +1513,12 @@ export function registerTrackingIpc(): void {
         // from this one event rather than each caller remembering to ask.
         notifyLibraryChanged('title-status', 'history', 'planned')
       }
+      const result = (): SetTitleStatusResult => ({
+        status,
+        episodes: distinctEpisodes(changed),
+        changed,
+        profileId: profile
+      })
 
       if (episodes?.length && status !== 'planned') {
         const now = new Date().toISOString()
@@ -1505,25 +1526,19 @@ export function registerTrackingIpc(): void {
           // importWatched: one transaction, original dates, and a row that
           // is already there is left alone rather than re-stamped.
           db.importWatched(importRows(episodes, now))
+          changed.push(...episodes)
+          pushTitleHistory(pushItem, episodes, 'add')
         } else {
-          // One transaction, like the mark it undoes.
-          db.unmarkEpisodes(id, episodes)
+          // One transaction, like the mark it undoes — and only the
+          // viewings that mark recorded: an episode watched again since
+          // stays watched (see unmarkEpisodes), and the services hear of
+          // the episodes that are gone, not of one still standing.
+          const gone = db.unmarkEpisodes(id, episodes)
+          changed.push(...gone)
+          if (gone.length) pushTitleHistory(pushItem, gone, 'remove')
         }
-        changed.push(...episodes)
-        pushTitleHistory(pushItem, episodes, status === 'watched' ? 'add' : 'remove')
         settle()
-        return { status, episodes: distinctEpisodes(episodes), changed }
-      }
-
-      const own = db.watchedEpisodesOf(id)
-      const state = {
-        planned: db.isTracked(id),
-        movieWatched: own.length > 0,
-        watchedKeys: new Set(
-          own
-            .filter((entry) => entry.episode != null)
-            .map((entry) => episodeKey(entry.season, entry.episode as number))
-        )
+        return result()
       }
 
       // The episode list only when it is needed: a film has none, and
@@ -1538,6 +1553,11 @@ export function registerTrackingIpc(): void {
           logError('tracking:set-title-status:meta', error)
           throw new Error(
             "Could not load this title's episode list. Check the connection and try again."
+          )
+        }
+        if (db.activeProfile() !== profile) {
+          throw new Error(
+            'The profile changed while this title was loading, so nothing was changed.'
           )
         }
         aired = airedRegularEpisodes(detail.videos, Date.now())
@@ -1556,6 +1576,19 @@ export function registerTrackingIpc(): void {
             'No aired episodes are known for this title yet, so it cannot be marked watched.'
           )
         }
+      }
+
+      // Read after the wait, not before it: the change is decided against
+      // what is watched now, which is also what its undo has to reverse.
+      const own = db.watchedEpisodesOf(id)
+      const state = {
+        planned: db.isTracked(id),
+        movieWatched: own.length > 0,
+        watchedKeys: new Set(
+          own
+            .filter((entry) => entry.episode != null)
+            .map((entry) => episodeKey(entry.season, entry.episode as number))
+        )
       }
 
       const steps = planTitleStatusChange(status, state, { episodic, aired })
@@ -1578,8 +1611,13 @@ export function registerTrackingIpc(): void {
             queueRemotePushes(pushItem, () => [unplanBecauseWatched(plan)])
             break
           case 'mark-movie': {
-            db.markWatched(pushItem, {})
-            changed.push({ season: null, episode: null })
+            // Through importWatched rather than markWatched, for the one
+            // thing the undo needs and markWatched does not report: the
+            // instant of the viewing it recorded (see unmarkEpisodes).
+            const now = new Date().toISOString()
+            const row = { season: null, episode: null, watchedAt: now }
+            db.importWatched(importRows([row], now))
+            changed.push(row)
             pushTitleHistory(pushItem, changed, 'add')
             break
           }
@@ -1612,7 +1650,7 @@ export function registerTrackingIpc(): void {
         }
       }
       if (steps.length) settle()
-      return { status, episodes: distinctEpisodes(changed), changed }
+      return result()
     }
   )
 
