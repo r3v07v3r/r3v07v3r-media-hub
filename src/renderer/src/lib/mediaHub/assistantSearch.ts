@@ -16,6 +16,7 @@
 
 import type { CatalogItem, HistoryEntry, MediaKind } from '@shared/media-hub/types'
 import type { OllamaTitleRef } from '@shared/media-hub/ollama'
+import { CLOSE_MATCH_RANK, mergeSearchResults, titleMatchRank } from '@shared/media-hub/titleSearch'
 
 /** The kinds the app has, and the order results fall back to when nothing scores better. Movies first because that is what most questions are about. */
 const KINDS: MediaKind[] = ['movie', 'series', 'anime']
@@ -29,36 +30,7 @@ const MAX_WATCHED_CONTEXT = 20
 /** The backend refuses anything shorter (see catalog.ts's catalogSearch), so there is no point spending three requests to hear it three times. */
 const MIN_QUERY_LENGTH = 2
 
-/** Lowercased, punctuation-flattened form used only for comparing a title to a query. */
-function comparable(value: string): string {
-  return value
-    .toLowerCase()
-    .replace(/[^\p{L}\p{N}]+/gu, ' ')
-    .trim()
-}
-
-/**
- * How well a result answers the question that was typed, lower being
- * better.
- *
- * Three catalogs are searched at once and each ranks only against itself,
- * so their results arrive as three unrelated lists — concatenating them
- * puts every movie ahead of an exactly-matching anime purely because movies
- * were listed first. This is the one comparison that can be made across
- * them: whether the title IS the question, starts with it, or merely
- * contains it.
- */
-function matchRank(title: string, query: string): number {
-  const a = comparable(title)
-  const b = comparable(query)
-  if (!a || !b) return 4
-  if (a === b) return 0
-  if (a.startsWith(b)) return 1
-  if (a.includes(b)) return 2
-  return 3
-}
-
-/** Drops repeats by id, keeping the first occurrence — which, after sorting, is the best-ranked one. */
+/** Drops repeats by id, keeping the first occurrence. */
 function dedupeById(items: CatalogItem[]): CatalogItem[] {
   const seen = new Set<string>()
   const out: CatalogItem[] = []
@@ -82,6 +54,12 @@ function dedupeById(items: CatalogItem[]): CatalogItem[] {
  *
  * A catalog that fails contributes nothing rather than failing the search —
  * one provider being down should not turn a findable title into no answer.
+ *
+ * Each kind's list arrives ranked only against itself, so the three are
+ * merged by how well each title answers the query (mergeSearchResults) —
+ * the same ranking main applied within each kind, so an exactly-matching
+ * anime is not filed behind every movie merely because movies were asked
+ * first.
  */
 export async function searchAppCatalog(query: string): Promise<CatalogItem[]> {
   const q = query.trim()
@@ -93,19 +71,7 @@ export async function searchAppCatalog(query: string): Promise<CatalogItem[]> {
     KINDS.map((kind) => api.search(kind, q).catch((): CatalogItem[] => []))
   )
 
-  return dedupeById(
-    perKind
-      .flatMap((items, kindIndex) => items.map((item, position) => ({ item, kindIndex, position })))
-      .sort((a, b) => {
-        const rank = matchRank(a.item.title, q) - matchRank(b.item.title, q)
-        if (rank !== 0) return rank
-        // Equally good matches keep each catalog's own idea of relevance,
-        // interleaved by position so one catalog cannot take every slot.
-        if (a.position !== b.position) return a.position - b.position
-        return a.kindIndex - b.kindIndex
-      })
-      .map((entry) => entry.item)
-  ).slice(0, MAX_ASSISTANT_RESULTS)
+  return mergeSearchResults(q, perKind, MAX_ASSISTANT_RESULTS)
 }
 
 /**
@@ -135,7 +101,7 @@ export async function resolveSimilarTitles(
       // The best match for a title the model wrote out in full, not the
       // first of six — a loose hit here would put an unrelated title under
       // a heading that says the model suggested it.
-      return hits.find((hit) => matchRank(hit.title, name) <= 1) ?? null
+      return hits.find((hit) => titleMatchRank(hit.title, name) <= CLOSE_MATCH_RANK) ?? null
     })
   )
   return dedupeById(found.filter((item): item is CatalogItem => Boolean(item))).filter(

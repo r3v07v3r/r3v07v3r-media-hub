@@ -722,7 +722,10 @@ export function normalizeMeta(
     poster: meta.poster || '',
     background: meta.background || '',
     logo: meta.logo || '',
-    year: String(meta.year || ''),
+    // Cinemeta's search hits carry no `year`, only `releaseInfo` — which
+    // for its full metas holds the same "2021–" string `year` does, so
+    // the fallback reads as the same field rather than a different one.
+    year: String(meta.year || meta.releaseInfo || ''),
     status: meta.status || '',
     releaseDate: meta.released || '',
     description: meta.description || '',
@@ -842,29 +845,6 @@ export function normalizeSimklCatalog(item: RawApiPayload, type: MediaKind): Cat
     genres: Array.isArray(item.genres) ? item.genres : [],
     videos: [],
     trailers: normalizeTrailers(item.trailer ? [item.trailer] : [])
-  }
-}
-
-export function normalizeSimklSearchResult(item: RawApiPayload, type: MediaKind): CatalogItem {
-  const poster = item.poster ? `https://simkl.in/posters/${item.poster}_m.jpg` : ''
-  return {
-    // The IMDb id where Simkl has one, as the catalog normaliser above
-    // already does. A `simkl:` id exists nowhere in watch state, so a search
-    // result minted with one could never show as watched, planned or rated
-    // however many times the person had seen it.
-    id: item.ids?.imdb || `simkl:${item.ids?.simkl_id}`,
-    title: item.title || 'Untitled',
-    type,
-    poster,
-    background: '',
-    logo: '',
-    year: String(item.year || ''),
-    description: '',
-    rating: String(item.ratings?.imdb?.rating || item.ratings?.simkl?.rating || ''),
-    runtime: '',
-    genres: [],
-    videos: [],
-    trailers: []
   }
 }
 

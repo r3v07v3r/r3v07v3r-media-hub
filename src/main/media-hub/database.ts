@@ -31,6 +31,7 @@ import {
   type Bucket
 } from '../../shared/media-hub/catalogFilters'
 import { runtimeMinutesOrZero } from '../../shared/media-hub/runtime'
+import { searchTokens } from '../../shared/media-hub/titleSearch'
 import type {
   CatalogFacets,
   CatalogItem,
@@ -762,6 +763,11 @@ export interface MediaHubDatabase {
    *  match the filters in total. See indexWhere/indexOrderBy for how each
    *  clause maps onto the in-memory filter it reproduces. */
   indexQuery(query: CatalogQuery): CatalogQueryResult
+  /** Titles of one kind whose name contains every word of `query`, best
+   *  match first — the local half of catalog:search. This is what makes a
+   *  title the crawl has already seen findable with no request at all,
+   *  and findable offline. Empty for a query with no words in it. */
+  indexSearch(kind: MediaKind, query: string, limit?: number): CatalogItem[]
   /** The genre/year/status values that actually occur for one kind — the
    *  filter bar's dropdown contents, over the whole library rather than
    *  over whatever slice happens to be loaded. */
@@ -2519,6 +2525,59 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
         // blank window is not.
         logError('catalog:index:query', error)
         return { items: [], total: 0, completedIds: [] }
+      }
+    },
+
+    indexSearch(kind, query, limit = 100) {
+      // Matched against title_sort, not title: it is already lowercased
+      // with diacritics folded (titleSortKey), and searchTokens folds the
+      // query the same way, so "amelie" finds "Amélie" and SQLite's
+      // ASCII-only LIKE never has to think about case. Every word must
+      // appear, in any order — "yoga foundations" finds "Foundations of
+      // Yoga" — and the tokens are letters and digits only, so neither
+      // LIKE wildcard can reach the pattern.
+      //
+      // The ORDER BY is a coarse cut, not the final order: it keeps an
+      // exact or leading match inside the LIMIT however many other titles
+      // merely contain the word, and the caller re-ranks the survivors
+      // with titleMatchRank alongside whatever a provider returned.
+      const tokens = searchTokens(query)
+      if (!tokens.length) return []
+      try {
+        const values: Record<string, SQLInputValue> = {
+          kind,
+          limit: Math.max(0, Math.min(limit, 500)),
+          exact: tokens.join(' '),
+          leading: `${tokens.join(' ')}%`,
+          word: `% ${tokens.join(' ')}%`
+        }
+        const clauses = tokens.map((token, i) => {
+          values[`t${i}`] = `%${token}%`
+          return `title_sort LIKE @t${i}`
+        })
+        const rows = sql
+          .prepare(
+            `SELECT id,kind,title,year,rating,runtime_min,status,poster,background,logo,description,
+                    total_seasons,total_episodes,simkl_id,grouped_ids,
+                    (SELECT group_concat(genre, char(31)) FROM catalog_index_genre g
+                      WHERE g.id = catalog_index.id AND g.kind = catalog_index.kind) AS genres
+             FROM catalog_index
+             WHERE kind = @kind AND ${clauses.join(' AND ')}
+             ORDER BY CASE
+                        WHEN title_sort = @exact THEN 0
+                        WHEN title_sort LIKE @leading THEN 1
+                        WHEN title_sort LIKE @word THEN 2
+                        ELSE 3
+                      END, rank, id
+             LIMIT @limit`
+          )
+          .all(values) as Row[]
+        return rows.map((row) => indexRowToItem(row, kind, splitGenres(row.genres)))
+      } catch (error) {
+        // Logged for the same reason indexQuery logs: an empty answer here
+        // reads as "nothing is called that", which is a claim.
+        logError('catalog:index:search', error)
+        return []
       }
     },
 
