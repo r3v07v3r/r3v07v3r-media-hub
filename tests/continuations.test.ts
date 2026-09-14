@@ -115,10 +115,11 @@ function sources(over: Partial<ContinuationSources> = {}): ContinuationSources {
   }
 }
 
-const pool = new Map(
-  [wick1, wick2, wick3, wick4, knight1, knight2, knight3].map((x) => [x.id, x])
-)
-const series = (id: string, title: string): CatalogItem => ({ ...film(id, title, '2020'), type: 'series' })
+const pool = new Map([wick1, wick2, wick3, wick4, knight1, knight2, knight3].map((x) => [x.id, x]))
+const series = (id: string, title: string): CatalogItem => ({
+  ...film(id, title, '2020'),
+  type: 'series'
+})
 
 async function main(): Promise<void> {
   console.log('recentWatches')
