@@ -96,7 +96,12 @@ export function SyncReviewPanel() {
                       Use Local
                     </button>
                   ) : (
-                    <span className={styles.unpushableNote}>Local-only id — can’t be pushed</span>
+                    <span
+                      className={styles.unpushableNote}
+                      title="This entry has a local-only id that Simkl can’t recognise, so it can’t be pushed. Use Simkl to rewrite the local record."
+                    >
+                      Can’t push
+                    </span>
                   )}
                   <button
                     type="button"
