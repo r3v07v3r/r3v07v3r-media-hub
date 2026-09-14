@@ -588,6 +588,14 @@ export async function syncPlannedFromServices(
     }
   }
 
+  // Rule 8's other half: a title watched here and no longer on the local
+  // plan keeps no removal evidence. unplanBecauseWatched cleared it; this
+  // rebuild would put it back from the service's own list, and a later
+  // re-plan and un-plan would then send Simkl the unscoped delete against
+  // a title that has history.
+  for (const id of Object.keys(sources)) {
+    if (watched.has(id) && !db.isTracked(id)) delete sources[id]
+  }
   const stored: StoredSources = { marks: trackingAccountMarks(), sources }
   db.putCache(PLANNED_SOURCES_CACHE_KEY, stored, SOURCES_TTL_MS, { durable: true })
 

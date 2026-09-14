@@ -19,6 +19,7 @@ export function ContextMenu() {
     myList,
     toggleDisliked,
     dislikedIds,
+    markContinueWatching,
     setTitleStatus,
     pushNotification,
     openDetail
@@ -61,12 +62,17 @@ export function ContextMenu() {
   // the title's own detail page (EpisodesSection); this menu item is
   // limited to the cases it can actually represent correctly rather than
   // silently corrupting the rest.
-  // Whole-title, whatever the card knows: main resolves a show's own
-  // episode list, so "Mark watched" on a series card marks every aired
-  // episode rather than being missing (it used to be offered only when
-  // the card happened to carry an episode number).
+  // Two marks, said apart. A card that names an episode (Continue
+  // Watching's do) marks THAT episode, as it always has; the whole-title
+  // mark is its own item, worded as one, and main resolves the show's
+  // episode list for it — so a series card without an episode number is
+  // no longer a card that cannot be marked at all.
   const status = titleStatusOf(media, { planned: saved })
   const watched = status === 'watched'
+  const episode =
+    media.mediaType !== 'movie' && media.seasonNumber != null && media.episodeNumber != null
+      ? `S${media.seasonNumber} E${media.episodeNumber}`
+      : null
 
   const items: { icon: string; label: string; onSelect: () => void }[] = [
     { icon: 'play', label: 'Play', onSelect: () => startPartyPlayback(media) },
@@ -75,9 +81,22 @@ export function ContextMenu() {
       label: saved ? 'Remove from plan' : TITLE_STATUS_ACTION.planned,
       onSelect: () => toggleMyList(media)
     },
+    ...(episode
+      ? [
+          {
+            icon: media.watched ? 'eye-off' : 'check',
+            label: media.watched ? `Mark ${episode} unwatched` : `Mark ${episode} watched`,
+            onSelect: () => markContinueWatching(media.id, !media.watched, media)
+          }
+        ]
+      : []),
     {
       icon: watched ? 'eye-off' : 'check',
-      label: watched ? TITLE_STATUS_ACTION.unwatched : TITLE_STATUS_ACTION.watched,
+      label: watched
+        ? TITLE_STATUS_ACTION.unwatched
+        : media.mediaType === 'movie'
+          ? TITLE_STATUS_ACTION.watched
+          : 'Mark all watched',
       onSelect: () => setTitleStatus(media, watched ? 'unwatched' : 'watched')
     },
     {

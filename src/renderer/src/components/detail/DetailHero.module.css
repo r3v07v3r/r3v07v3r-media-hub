@@ -276,12 +276,15 @@
   font-size: clamp(32px, 4.2vw, 58px);
   text-transform: uppercase;
   margin: 0;
-  /* A long anime title with its romaji line under it ran to five lines
-     at this size and pushed the play button half a screen down. Three
-     lines of title and one of subtitle is as tall as the hero goes. */
+}
+/* A long anime title with its romaji line under it ran to five lines at
+   this size and pushed the play button half a screen down. Three lines
+   of title and one of subtitle is as tall as the hero goes — clamped on
+   the text alone, so the subtitle is never the line that goes. */
+.titleText {
   display: -webkit-box;
   -webkit-box-orient: vertical;
-  -webkit-line-clamp: 4;
+  -webkit-line-clamp: 3;
   overflow: hidden;
 }
 .subtitle {

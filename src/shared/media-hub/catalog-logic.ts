@@ -1076,13 +1076,16 @@ export const CONTINUATION_BOOST = 100
  */
 export function recencyWeight(watchedAt: string | null | undefined, now: Date): number {
   const at = watchedAt ? Date.parse(watchedAt) : Number.NaN
-  if (!Number.isFinite(at)) return 0.45
+  if (!Number.isFinite(at)) return 0.5
   const days = (now.getTime() - at) / 86_400_000
   if (days <= 3) return 1.6
   if (days <= 14) return 1.3
   if (days <= 60) return 1
   if (days <= 180) return 0.7
-  return 0.45
+  // The floor sits just above four genre matches (48), so a continuation
+  // always gets to explain itself — "Because you watched" beats "More
+  // Sci-Fi" for the same title, however long ago the watch was.
+  return 0.5
 }
 
 function releaseYear(item: Pick<CatalogItem, 'year'> | HistoryEntry): number | null {

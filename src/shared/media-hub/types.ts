@@ -514,7 +514,10 @@ export interface RecommendationReason {
    * The evidence, in the person's own terms: the title they finished, the
    * name they keep coming back to, the genre they watch. Always something
    * that was really matched — never a guess, and never a placeholder, so a
-   * reason with nothing to point at is simply not emitted.
+   * reason with nothing to point at is simply not emitted. The one
+   * exception is the "next" SHELF (not a card's own reason): it gathers
+   * every continuation and carries an empty detail, which
+   * recommendationRailTitle names as the idea rather than a title.
    */
   detail: string
 }
@@ -754,7 +757,8 @@ export interface DislikedListResult {
  * be browsed: the same ranking, shelved by the evidence behind it.
  */
 export interface RecommendationRail {
-  /** `<kind>:<detail>`, stable across rebuilds — a React key and a rail id. */
+  /** `<kind>:<detail>` — or the bare `next` for the one shelf that gathers
+   *  every continuation — stable across rebuilds: a React key and a rail id. */
   id: string
   reason: RecommendationReason
   /** Best-first, in the ranking's own order. */
@@ -793,6 +797,13 @@ export interface HomePersonalizedResult {
    * here and nowhere else, which is the ordinary case.
    */
   plannedSources: Record<string, PlannedServiceId[]>
+  /**
+   * Which of `recommendations` are fully watched shows, from the index's
+   * own completion query — a continuation can be a title already seen (a
+   * rewatch in order), and these rows carry no episode list of their own
+   * for the renderer to tell "finished" from "started".
+   */
+  completedIds: string[]
 }
 
 /**
@@ -820,15 +831,32 @@ export interface RecommendationsChanged {
  */
 export type TitleStatus = 'unwatched' | 'planned' | 'watched'
 
+/** One history row a status change wrote or removed — a film's own row
+ *  has null season and episode. The date is kept so an undo puts the row
+ *  back as it was rather than as "now". */
+export interface ChangedEpisode {
+  season: number | null
+  episode: number | null
+  watchedAt?: string
+}
+
 export interface SetTitleStatusPayload {
   item: Partial<CatalogItem> & { id: string; type: MediaKind; title?: string }
   status: TitleStatus
+  /**
+   * Exactly these rows, rather than the title's aired list: the undo of a
+   * whole-title change replays what that change reported in `changed`.
+   * Never touches the plan. Ignored for 'planned'.
+   */
+  episodes?: ChangedEpisode[]
 }
 
 export interface SetTitleStatusResult {
   status: TitleStatus
   /** Episode rows written or removed by this change; 0 for a film. */
   episodes: number
+  /** What was written or removed, so it can be put back exactly. */
+  changed: ChangedEpisode[]
 }
 
 export interface MarkWatchedResult {

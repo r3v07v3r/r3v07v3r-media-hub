@@ -37,7 +37,7 @@ import type {
   ReconcileResolution,
   WatchStatusDiscrepancy
 } from '@shared/media-hub/types'
-import type { TitleStatus } from '@shared/media-hub/types'
+import type { ChangedEpisode, TitleStatus } from '@shared/media-hub/types'
 import {
   mediaItemToTrackablePayload,
   catalogItemToMediaItem,
@@ -198,7 +198,14 @@ interface AppStateValue {
    * lib/mediaHub/titleStatus.ts for the display side. The control is
    * components/media/TitleStatusButton.tsx.
    */
-  setTitleStatus: (media: MediaItem, status: TitleStatus) => void
+  setTitleStatus: (media: MediaItem, status: TitleStatus, episodes?: ChangedEpisode[]) => void
+  /**
+   * Titles whose status write is in flight, with the status they are on
+   * their way to. The control shows this rather than the last-known
+   * state, so "Mark watched" never reads "Not watched" for the round
+   * trips a whole-show mark takes.
+   */
+  titleStatusPending: Record<string, TitleStatus>
   /**
    * Which tracking services have each planned title on their own list.
    *
@@ -1941,59 +1948,101 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   //
   // Outside playback both reports are no-ops on main's side — there is no
   // video child to hide or reveal, and no overlay to go with it.
+  const [titleStatusPending, setTitleStatusPending] = useState<Record<string, TitleStatus>>({})
   const setTitleStatus = useCallback(
-    (media: MediaItem, status: TitleStatus) => {
+    (media: MediaItem, status: TitleStatus, episodes?: ChangedEpisode[]) => {
+      const api = window.api?.mediaHub
+      if (!api?.tracking?.setTitleStatus) {
+        pushNotification({ tone: 'error', message: 'The media hub backend is not available.' })
+        return
+      }
       const id = media.id
+      const wasPlanned = myList.has(id)
+      setTitleStatusPending((prev) => ({ ...prev, [id]: status }))
       // The plan set is local state and answers immediately; the watched
       // sets are re-read once the write lands, since "watched" for a show
-      // is every aired episode and main is the one that knows them.
-      setMyList((prev) => {
-        const next = new Set(prev)
-        if (status === 'planned') next.add(id)
-        else next.delete(id)
-        return next
-      })
+      // is every aired episode and main is the one that knows them. Clearing
+      // to not watched leaves the plan alone — see titleStatusRules.ts.
+      if (status === 'planned' || (status === 'watched' && wasPlanned)) {
+        setMyList((prev) => {
+          const next = new Set(prev)
+          if (status === 'planned') next.add(id)
+          else next.delete(id)
+          return next
+        })
+      }
       if (status === 'watched') {
         setContinueWatching((prev) => prev.filter((c) => c.media.id !== id))
       }
-      const api = window.api?.mediaHub
-      if (!api?.tracking?.setTitleStatus) return
       const item = mediaItemToTrackablePayload(media)
+      const clearPending = (): void =>
+        setTitleStatusPending((prev) => {
+          if (!(id in prev)) return prev
+          const next = { ...prev }
+          delete next[id]
+          return next
+        })
       const settle = (): void => {
         homeFeed.refresh()
         watchedIdsResult.refresh()
         setWatchStatusVersion((v) => v + 1)
       }
       api.tracking
-        .setTitleStatus({ item, status })
+        .setTitleStatus({ item, status, episodes })
         .then((result) => {
-          rememberTrackedId(id, status === 'planned')
+          if (status !== 'unwatched') rememberTrackedId(id, status === 'planned')
           if (status === 'watched') forgetContinueWatching(id)
           settle()
-          // A whole show in one click is worth a word, and — in the
-          // clearing direction — a way back.
-          if (result.episodes > 0 && status === 'unwatched') {
+          clearPending()
+          // A whole show in one click is worth a word, and a way back: the
+          // undo replays exactly the rows this change reported, dates and
+          // all, and touches nothing else. An undo itself (episodes given)
+          // is not offered another.
+          const count = result.episodes
+          if (count > 0 && !episodes) {
+            const plural = count === 1 ? '' : 's'
+            const reverse: TitleStatus = status === 'watched' ? 'unwatched' : 'watched'
             pushNotification({
-              tone: 'info',
-              message: `${media.title}: ${result.episodes} episode${result.episodes === 1 ? '' : 's'} marked not watched.`,
+              tone: status === 'watched' ? 'success' : 'info',
+              message: `${media.title}: ${count} episode${plural} marked ${
+                status === 'watched' ? 'watched' : 'not watched'
+              }.`,
               action: {
                 label: 'Undo',
                 run: () => {
                   api.tracking
-                    .setTitleStatus({ item, status: 'watched' })
+                    .setTitleStatus({ item, status: reverse, episodes: result.changed })
+                    .then(() => {
+                      // Marking watched also took the title off the plan;
+                      // its undo puts it back, or "undo" would leave a
+                      // planned title neither watched nor planned.
+                      if (status === 'watched' && wasPlanned) {
+                        return api.tracking.toggle(item).then((toggled) => {
+                          if (!toggled?.tracked) return
+                          setMyList((prev) => new Set(prev).add(id))
+                          rememberTrackedId(id, true)
+                        })
+                      }
+                      return undefined
+                    })
                     .then(settle)
                     .catch(() => {})
                 }
               }
             })
-          } else if (result.episodes > 0 && status === 'watched') {
-            pushNotification({
-              tone: 'success',
-              message: `${media.title}: ${result.episodes} episode${result.episodes === 1 ? '' : 's'} marked watched.`
-            })
           }
         })
         .catch((error: unknown) => {
+          clearPending()
+          // Put the plan set back exactly; the watched sets never moved.
+          if (status === 'planned' || (status === 'watched' && wasPlanned)) {
+            setMyList((prev) => {
+              const next = new Set(prev)
+              if (wasPlanned) next.add(id)
+              else next.delete(id)
+              return next
+            })
+          }
           settle()
           pushNotification({
             tone: 'error',
@@ -2004,7 +2053,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
           })
         })
     },
-    [homeFeed, watchedIdsResult, pushNotification]
+    [homeFeed, watchedIdsResult, pushNotification, myList]
   )
 
   const partyPanelReportedOpen = useRef<boolean | null>(null)
@@ -2777,6 +2826,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       plannedSources: homeFeed.plannedSources,
       toggleMyList,
       setTitleStatus,
+      titleStatusPending,
       dislikedIds,
       toggleDisliked,
       ratings: ratingsResult.ratings,
@@ -2883,6 +2933,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       homeFeed.plannedSources,
       toggleMyList,
       setTitleStatus,
+      titleStatusPending,
       dislikedIds,
       toggleDisliked,
       ratingsResult.ratings,

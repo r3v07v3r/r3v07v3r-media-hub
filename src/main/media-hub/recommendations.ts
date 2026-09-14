@@ -46,6 +46,7 @@ import {
   enoughStoredRecommendations
 } from '../../shared/media-hub/catalog-logic'
 import { ratingWeight } from '../../shared/media-hub/rating'
+import { latestWatchById } from './continuations'
 import { creditsFor } from './credits'
 import { getDatabase } from './dbState'
 import { logError } from './logger'
@@ -185,17 +186,6 @@ function keepStored(
   if (exclusions.dislikedIds.has(id)) return false
   if (entry.continuation) return (latestWatch.get(id) ?? 0) <= builtAt
   return keep(entry.item, exclusions)
-}
-
-/** When each title was last watched, by id — history is newest-first, so the first row wins. */
-function latestWatchById(history: readonly HistoryEntry[]): Map<string, number> {
-  const latest = new Map<string, number>()
-  for (const entry of history) {
-    const id = String(entry?.id ?? '')
-    if (!id || latest.has(id)) continue
-    latest.set(id, Date.parse(entry.watchedAt ?? '') || 0)
-  }
-  return latest
 }
 
 // Somebody has to ask for a rebuild, and it must not be this module: the
@@ -445,7 +435,7 @@ export async function rebuildRecommendations(
   // rebuild request — and a top-level import here would take all of it down
   // with the one function that genuinely needs a catalog.
   const { catalogData } = await import('./catalog')
-  const { continuationsFor } = await import('./continuations')
+  const { continuationsFor, defaultSources } = await import('./continuations')
   const [movies, series, anime] = await Promise.all(
     (['movie', 'series', 'anime'] as const).map((kind) =>
       catalogData(kind, false, priority).catch(() => [] as CatalogItem[])
@@ -492,7 +482,12 @@ export async function rebuildRecommendations(
   // are the only candidates allowed past the watched/planned exclusions
   // (keepStored says why), and a next part the pool never held joins it.
   const poolById = new Map(pool.map((item) => [String(item.id), item]))
-  const continuations = await continuationsFor(history, poolById)
+  const continuations = await continuationsFor(
+    history,
+    poolById,
+    Date.now(),
+    defaultSources(priority)
+  )
   for (const found of continuations.values()) {
     const id = String(found.item.id)
     if (!poolById.has(id)) {

@@ -34,12 +34,23 @@
 .label {
   display: inline-flex;
   align-items: baseline;
-  gap: 2px;
+  gap: 4px;
 }
+/* The separator is drawn, not typed: a leading space at the start of a
+   flex item never paints, so " · 10/12" as text lost its first space. */
 .count {
   font-weight: 500;
   opacity: 0.8;
   font-variant-numeric: tabular-nums;
+}
+.count::before {
+  content: '·';
+  margin-right: 4px;
+  opacity: 0.7;
+}
+.busy {
+  opacity: 0.75;
+  cursor: progress;
 }
 
 /* --- shapes --------------------------------------------------------- */
@@ -69,6 +80,9 @@
 }
 
 /* --- states --------------------------------------------------------- */
+.unwatched {
+  color: var(--text-secondary);
+}
 .planned {
   color: var(--accent-cyan);
   border-color: rgba(56, 229, 255, 0.45);

@@ -27,6 +27,7 @@ import type {
 import type { Continuation } from '../../shared/media-hub/catalog-logic'
 import { getDatabase } from './dbState'
 import { logError } from './logger'
+import type { TaskPriority } from './taskScheduler'
 
 /** How far back a watch still says "I am in the middle of this". */
 export const RECENT_WATCH_WINDOW_MS = 14 * 24 * 60 * 60 * 1000
@@ -57,10 +58,23 @@ export interface RecentWatch {
   watchedAt: string
 }
 
+/** Whether a history row is one this module can answer for: a film with
+ *  an IMDb id (a TMDB collection) or an anime with a Kitsu id (a story
+ *  link). A series has no "next title" — its next episode is on its own
+ *  page — so it is not allowed to spend the cap below. */
+export function canContinue(entry: Pick<HistoryEntry, 'id' | 'type'>): boolean {
+  const id = String(entry?.id ?? '')
+  return (
+    (entry.type === 'movie' && /^tt\d+$/.test(id)) ||
+    (entry.type === 'anime' && /^kitsu:\d+$/.test(id))
+  )
+}
+
 /**
- * The most recent distinct titles in `history` (which is newest-first, see
- * database.ts history()), within the window and the cap. A series watched
- * sixty episodes deep is one entry, dated by its latest episode.
+ * The most recent distinct answerable titles in `history` (which is
+ * newest-first, see database.ts history()), within the window and the
+ * cap. An anime watched sixty episodes deep is one entry, dated by its
+ * latest episode.
  */
 export function recentWatches(
   history: readonly HistoryEntry[],
@@ -76,6 +90,7 @@ export function recentWatches(
     const id = String(entry?.id ?? '')
     if (!id || seen.has(id)) continue
     seen.add(id)
+    if (!canContinue(entry)) continue
     const watchedAt = entry.watchedAt ?? ''
     const at = Date.parse(watchedAt)
     if (!Number.isFinite(at) || now - at > windowMs) continue
@@ -85,13 +100,20 @@ export function recentWatches(
   return recent
 }
 
-/** When each title was last watched, by id — the first row wins because history is newest-first. */
-function latestWatchById(history: readonly HistoryEntry[]): Map<string, number> {
+/**
+ * When each title was last watched, by id — the first row wins because
+ * history is newest-first. A row with no usable date (Simkl omits one for
+ * some films, see HistoryEntry.watchedAt) is "watched, date unknown" and
+ * reads as Infinity: later than anything, so it is never mistaken for
+ * "never watched" by the comparisons that use this.
+ */
+export function latestWatchById(history: readonly HistoryEntry[]): Map<string, number> {
   const latest = new Map<string, number>()
   for (const entry of history) {
     const id = String(entry?.id ?? '')
     if (!id || latest.has(id)) continue
-    latest.set(id, Date.parse(entry.watchedAt ?? '') || 0)
+    const at = Date.parse(entry.watchedAt ?? '')
+    latest.set(id, Number.isFinite(at) ? at : Number.POSITIVE_INFINITY)
   }
   return latest
 }
@@ -109,13 +131,16 @@ function worthSuggesting(nextId: string, sourceAt: number, latest: Map<string, n
   return nextAt === undefined || nextAt < sourceAt
 }
 
-const defaultSources = (): ContinuationSources => ({
+/** The real lookups, at the caller's scheduler tier — the rebuild is a
+ *  maintenance job and its requests must stand down behind anything
+ *  somebody is waiting for. */
+export const defaultSources = (priority: TaskPriority = 'maintenance'): ContinuationSources => ({
   // Both imported late, for the reason recommendations.ts gives about
   // electron: the anime story module registers an IPC handler at import
   // time, which throws wherever the Electron binary is absent, and the
   // collection lookup reaches the settings store for its TMDB key.
-  collection: async (imdbId) => (await import('./collection')).titleCollection(imdbId),
-  story: async (kitsuId) => (await import('./animeStory')).storyForAnime(kitsuId),
+  collection: async (imdbId) => (await import('./collection')).titleCollection(imdbId, priority),
+  story: async (kitsuId) => (await import('./animeStory')).storyForAnime(kitsuId, priority),
   lookup: (ids) => getDatabase().indexByIds(ids).items
 })
 
@@ -168,14 +193,19 @@ export async function continuationsFor(
         if (!item || found.has(String(item.id))) continue
         found.set(String(item.id), { item, from: watch.title, watchedAt: watch.watchedAt })
       } else if (watch.type === 'anime' && /^kitsu:\d+$/.test(watch.id)) {
-        const story = await sources.story(watch.id)
+        // A multi-season anime is one tile whose canonical id is its FIRST
+        // season (animeSeasons.ts), and history is keyed on that id. Its
+        // first season's sequel is its own second season — inside the
+        // tile — so the question is asked of the tile's LAST member: what
+        // follows the whole show.
+        const members = [watch.id, ...(pool.get(watch.id)?.groupedIds ?? [])]
+        const story = await sources.story(members[members.length - 1])
         const sequel = story?.links?.find((link) => link.relation === 'sequel')
         if (!sequel?.item?.id) continue
         const nextId = String(sequel.item.id)
         // A season folded into the same tile is not a different title to
         // suggest — the show's own page already plays straight on.
-        const source = pool.get(watch.id)
-        if (source?.groupedIds?.includes(nextId)) continue
+        if (members.includes(nextId)) continue
         if (!worthSuggesting(nextId, sourceAt, latest)) continue
         const item = resolveItem(nextId, sequel.item)
         if (!item || found.has(String(item.id))) continue

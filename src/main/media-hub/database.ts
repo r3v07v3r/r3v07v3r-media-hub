@@ -576,18 +576,20 @@ export interface MediaHubDatabase {
   ): TrackedItem
   unmarkWatched(id: string | number, season?: number, episode?: number): boolean
   /**
-   * Clears every watch_history row of one title, for the whole-title
-   * "not watched" (see tracking.ts's set-title-status handler), and
-   * returns the coordinates of what was cleared so the services can be
-   * told exactly which episodes — never "the show".
-   *
-   * Unlike unmarkWatched, the plays stay. This is one click over a whole
-   * series, and the record of the evenings it was actually watched is not
-   * the thing being corrected — the History tab removes single viewings
-   * for anyone who does mean that. The watched index is what the badges,
-   * grids and next-episode maths read, and that is what goes.
+   * Clears every watch_history row of one title — and, as unmarkWatched
+   * does per episode, its plays — for the whole-title "not watched" (see
+   * tracking.ts's set-title-status handler). Returns what was cleared,
+   * dates included, so the services can be told exactly which episodes
+   * (never "the show") and an undo can put the rows back as they were
+   * through importWatched.
    */
-  unmarkTitle(id: string | number): { season: number | null; episode: number | null }[]
+  unmarkTitle(
+    id: string | number
+  ): { season: number | null; episode: number | null; watchedAt: string }[]
+  /** The title's own history rows — cheap, for the one title a status change is about. */
+  watchedEpisodesOf(
+    id: string | number
+  ): { season: number | null; episode: number | null; watchedAt: string }[]
   /**
    * Writes viewings brought in from another service, keeping their real
    * dates, in one transaction, without overwriting anything already here.
@@ -807,6 +809,7 @@ interface PreparedQueries {
   unwatch: StatementSync
   titleHistory: StatementSync
   unwatchTitle: StatementSync
+  deleteTitlePlays: StatementSync
   history: StatementSync
   dislike: StatementSync
   undislike: StatementSync
@@ -965,9 +968,10 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
     // The whole-title pair — read what is there, then clear it, both on
     // idx_history_content (profile_id, content_id, watched_at).
     titleHistory: sql.prepare(
-      'SELECT season,episode FROM watch_history WHERE profile_id=? AND content_id=?'
+      'SELECT season,episode,watched_at FROM watch_history WHERE profile_id=? AND content_id=?'
     ),
     unwatchTitle: sql.prepare('DELETE FROM watch_history WHERE profile_id=? AND content_id=?'),
+    deleteTitlePlays: sql.prepare('DELETE FROM plays WHERE profile_id=? AND content_id=?'),
     history: sql.prepare(
       'SELECT metadata_json,season,episode,watched_at FROM watch_history WHERE profile_id=? ORDER BY watched_at DESC'
     ),
@@ -1705,6 +1709,21 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
       }
     },
 
+    watchedEpisodesOf(id) {
+      try {
+        return q.titleHistory.all(currentProfileId, String(id)).map((r) => {
+          const row = r as Row
+          return {
+            season: Number.isFinite(row.season) ? (row.season as number) : null,
+            episode: Number.isFinite(row.episode) ? (row.episode as number) : null,
+            watchedAt: String(row.watched_at ?? '')
+          }
+        })
+      } catch (error) {
+        return fail(error as Error)
+      }
+    },
+
     unmarkTitle(id) {
       try {
         const contentId = String(id)
@@ -1715,10 +1734,14 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
               const row = r as Row
               return {
                 season: Number.isFinite(row.season) ? (row.season as number) : null,
-                episode: Number.isFinite(row.episode) ? (row.episode as number) : null
+                episode: Number.isFinite(row.episode) ? (row.episode as number) : null,
+                watchedAt: String(row.watched_at ?? '')
               }
             })
-            if (rows.length) q.unwatchTitle.run(currentProfileId, contentId)
+            if (rows.length) {
+              q.unwatchTitle.run(currentProfileId, contentId)
+              q.deleteTitlePlays.run(currentProfileId, contentId)
+            }
             sql.exec('COMMIT')
             return rows
           } catch (error) {

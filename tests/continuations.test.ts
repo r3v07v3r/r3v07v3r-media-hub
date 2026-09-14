@@ -98,6 +98,7 @@ const WICK = { name: 'John Wick Collection', parts: [wick1, wick2, wick3, wick4]
 
 const knight1 = anime('kitsu:100', 'Skeleton Knight')
 const knight2 = anime('kitsu:200', 'Skeleton Knight Season 2')
+const knight3 = anime('kitsu:300', 'Skeleton Knight: The Movie')
 
 function sources(over: Partial<ContinuationSources> = {}): ContinuationSources {
   return {
@@ -106,13 +107,18 @@ function sources(over: Partial<ContinuationSources> = {}): ContinuationSources {
     story: async (id) =>
       id === knight1.id
         ? { links: [{ relation: 'sequel', item: knight2 }], checked: true }
-        : { links: [], checked: true },
+        : id === knight2.id
+          ? { links: [{ relation: 'sequel', item: knight3 }], checked: true }
+          : { links: [], checked: true },
     lookup: () => [],
     ...over
   }
 }
 
-const pool = new Map([wick1, wick2, wick3, wick4, knight1, knight2].map((x) => [x.id, x]))
+const pool = new Map(
+  [wick1, wick2, wick3, wick4, knight1, knight2, knight3].map((x) => [x.id, x])
+)
+const series = (id: string, title: string): CatalogItem => ({ ...film(id, title, '2020'), type: 'series' })
 
 async function main(): Promise<void> {
   console.log('recentWatches')
@@ -131,6 +137,28 @@ async function main(): Promise<void> {
       recent.map((r) => r.id),
       [wick2.id, wick1.id]
     )
+  })
+
+  await check('series never spend the cap: a week of shows leaves room for the film', () => {
+    const shows = Array.from({ length: 20 }, (_, i) =>
+      watch(series(`tt900${i}`, `Show ${i}`), daysAgo(1))
+    )
+    const recent = recentWatches([...shows, watch(wick2, daysAgo(8))], NOW)
+    assert.deepEqual(
+      recent.map((r) => r.id),
+      [wick2.id]
+    )
+  })
+
+  await check('a watch with no usable date counts as watched, not as never', () => {
+    // Simkl omits the date on some films; "never watched" would wrongly
+    // suggest the part again, and keep suggesting it.
+    return continuationsFor(
+      [watch(wick2, daysAgo(1)), { ...watch(wick3, daysAgo(30)), watchedAt: null }],
+      pool,
+      NOW,
+      sources()
+    ).then((found) => assert.equal(found.size, 0))
   })
 
   console.log('\ncontinuationsFor')
@@ -175,14 +203,16 @@ async function main(): Promise<void> {
   })
 
   await check(
-    'an anime sequel from the story links, unless it is folded into the same tile',
+    'an anime sequel from the story links; a grouped show asks from its last season',
     async () => {
       const found = await continuationsFor([watch(knight1, daysAgo(1))], pool, NOW, sources())
       assert.ok(found.has(knight2.id))
+      // Seasons 1 and 2 are one tile keyed on season 1; season 2 is not a
+      // different title to suggest, and what follows the tile is the film.
       const grouped = new Map(pool)
       grouped.set(knight1.id, anime(knight1.id, knight1.title, [knight2.id]))
       const folded = await continuationsFor([watch(knight1, daysAgo(1))], grouped, NOW, sources())
-      assert.equal(folded.size, 0, 'a season inside the same tile is not a different title')
+      assert.deepEqual([...folded.keys()], [knight3.id])
     }
   )
 

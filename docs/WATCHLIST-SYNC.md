@@ -167,7 +167,17 @@ standing would let the next pull remove the title again.
 The pull side has the matching rule: a title with local watch history is
 never planned by a pull, however many services still list it. Watched
 outranks planned, and a service still listing something since seen is
-stale data, not a new intent.
+stale data, not a new intent. The pull also records no removal evidence
+for such a title while it is off the local plan, so the tag the mark
+cleared cannot come back through the next sync.
+
+The reverse move — clearing a title to **not watched** — touches history
+only. Simkl and Trakt are told exactly the episodes that were held here,
+never a bare show reference (which at Simkl removes the show's entire
+history, including episodes watched elsewhere), and a plan the title
+carried stays: the status reads planned again. Taking it off the plan is
+"Remove from plan", the evidence-gated removal of rule 3, on purpose a
+separate action.
 
 ## What this deliberately does not do
 

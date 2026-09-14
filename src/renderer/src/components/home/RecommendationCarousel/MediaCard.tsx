@@ -37,12 +37,17 @@ const SOURCE_LABELS: Record<PlannedServiceId, string> = {
 export function MediaCard({
   media,
   reason,
-  showKind = false
+  showKind = false,
+  showProvenance = false
 }: {
   media: MediaItem
   reason?: string
   /** See MediaGrid's own prop — on for mixed lists, off everywhere else. */
   showKind?: boolean
+  /** Name the service a planned title came from, in place of the planned
+   *  badge — the Planned tab and the lists, where every card is planned
+   *  and "which service" is the fact worth reading. */
+  showProvenance?: boolean
 }) {
   const { plannedSources, myList } = useAppState()
   const { openDetail, startPartyPlayback, openContextMenu, continueWatching, resolvingMedia } =
@@ -66,7 +71,7 @@ export function MediaCard({
   // every title was the noisiest thing on the card.
   const sources = plannedSources[String(media.id)] ?? []
   const plannedTag =
-    !showKind || !myList.has(media.id)
+    !showProvenance || !myList.has(media.id)
       ? ''
       : sources.length === 0
         ? 'Added here'

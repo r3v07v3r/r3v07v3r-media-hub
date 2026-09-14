@@ -279,7 +279,9 @@ export function DetailHero({
             Featured, which is only true on the library heroes. */}
         <span className={styles.label}>{config.label}</span>
         <h1 className={styles.title}>
-          {media.title}
+          {/* Clamped on its own, so a four-line title can never spend the
+              subtitle's line for it. */}
+          <span className={styles.titleText}>{media.title}</span>
           {media.subtitle && <span className={styles.subtitle}>{media.subtitle}</span>}
         </h1>
         {media.episodeTitle && (

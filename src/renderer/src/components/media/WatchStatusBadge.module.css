@@ -30,15 +30,18 @@
    so they share the green; the label on the pill is what separates a
    finished film from a finished show. */
 .planned {
-  background: rgba(56, 229, 255, 0.9);
+  background: color-mix(in srgb, var(--accent-cyan) 92%, transparent);
   color: #042630;
 }
+/* Opaque and a shade darker than the token: white text on the token's
+   violet over pale artwork fell short of a readable contrast once the
+   blur went. */
 .inProgress {
-  background: rgba(139, 92, 246, 0.9);
+  background: #6d38d6;
 }
 .watched,
 .completed {
-  background: rgba(94, 224, 130, 0.92);
+  background: color-mix(in srgb, var(--accent-green) 92%, transparent);
   color: #06210f;
 }
 

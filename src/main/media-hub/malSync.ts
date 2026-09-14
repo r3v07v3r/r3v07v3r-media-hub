@@ -144,11 +144,25 @@ export async function resolveMalIdForKitsu(kitsuId: string): Promise<number> {
  * unconditionally after every local watch-state change and merge the result
  * into their own response.
  */
-export async function pushMalProgress(item: {
-  id: string
-  type: MediaKind
-  totalEpisodes?: number
-}): Promise<{ malSynced: boolean; malError?: string }> {
+export async function pushMalProgress(
+  item: {
+    id: string
+    type: MediaKind
+    totalEpisodes?: number
+  },
+  {
+    status
+  }: {
+    /**
+     * A status the person chose, rather than one inferred from the count.
+     * The whole-title "not watched" of a planned anime sends plan_to_watch:
+     * zero episodes says nothing about which list the entry belongs on, and
+     * inferring one from a zero count is how a remote entry somebody else
+     * set to completed got rewritten. Never inferred here.
+     */
+    status?: 'plan_to_watch'
+  } = {}
+): Promise<{ malSynced: boolean; malError?: string }> {
   if (item.type !== 'anime' || !String(item.id).startsWith('kitsu:')) return { malSynced: false }
   if (!malCredentials().accessToken) return { malSynced: false }
 
@@ -158,14 +172,15 @@ export async function pushMalProgress(item: {
 
     const counts = localWatchedEpisodeCounts(getDatabase().history())
     const watchedEpisodes = counts[item.id] || 0
-    const status = malStatusForProgress(watchedEpisodes, item.totalEpisodes)
+    const inferred = malStatusForProgress(watchedEpisodes, item.totalEpisodes)
+    const chosen = status && watchedEpisodes === 0 ? status : inferred
 
     await malRequest(`/anime/${malId}/my_list_status`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({
         num_watched_episodes: String(watchedEpisodes),
-        ...(status ? { status } : {})
+        ...(chosen ? { status: chosen } : {})
       })
     })
     return { malSynced: true }

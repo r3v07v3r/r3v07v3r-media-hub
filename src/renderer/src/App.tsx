@@ -46,7 +46,11 @@ function ScrollToTopOnNavigate() {
   const location = useLocation()
   const { pendingRestore } = useAppState()
   useEffect(() => {
-    if (pendingRestore) return
+    // Only the route the restore is for. An entry nobody consumed (a page
+    // without the restore hook) must not veto every later navigation.
+    if (pendingRestore && pendingRestore.route === `${location.pathname}${location.search}`) {
+      return
+    }
     document.getElementById('main-content')?.scrollTo({ top: 0 })
     // Only a new path is a new page; a changed query string is the same
     // page with different filters, and its own list is what moved.

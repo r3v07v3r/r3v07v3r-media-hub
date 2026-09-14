@@ -342,12 +342,18 @@ function ListsView({
   const [items, setItems] = useState<{ key: string; values: CustomListItem[] } | null>(null)
   const [naming, setNaming] = useState(false)
   const [draftName, setDraftName] = useState('')
+  // Declared ahead of the selection below, which has to know whether a
+  // remote list is the one chosen.
+  const [remoteLists, setRemoteLists] = useState<RemoteList[]>([])
   // A selected list that has just been deleted falls back to My List rather
   // than leaving the chips with nothing highlighted.
   // On the Lists tab the first list is open until another is chosen;
   // a tab that opened onto nothing was the old "Planned" chip's job.
+  // ...but never over a remote list somebody actually chose.
+  const remoteChosen = selected !== null && remoteLists.some((list) => list.id === selected)
   const selectedList =
-    lists.find((list) => list.id === selected) ?? (mode === 'lists' ? (lists[0] ?? null) : null)
+    lists.find((list) => list.id === selected) ??
+    (mode === 'lists' && !remoteChosen ? (lists[0] ?? null) : null)
   const effective = selectedList?.id ?? null
 
   // THE LISTS SOMEBODY BUILT ELSEWHERE, read only.
@@ -358,7 +364,6 @@ function ListsView({
   // their lists. What tells them apart is the service badge on the chip
   // and the fact that these cannot be edited: a named list has an author,
   // and reading one is not permission to reorder it.
-  const [remoteLists, setRemoteLists] = useState<RemoteList[]>([])
   // Re-read when main has finished a fresh read of the services' lists
   // (remoteLists.ts announces it on library:changed's lists scope). The
   // first read answers from the cache, so without this a list changed on
@@ -517,6 +522,7 @@ function ListsView({
           </p>
           <MediaGrid
             showKind
+            showProvenance
             items={remoteListItems}
             emptyTitle="Nothing in this list"
             emptyMessage="It is empty on the service, or holds only entries this app cannot open — people and episodes are skipped."
@@ -563,6 +569,7 @@ function ListsView({
 
           <MediaGrid
             showKind
+            showProvenance
             items={filtered}
             emptyTitle={
               watchlist.length > 0 ? 'Nothing matches those filters' : 'Nothing planned yet'
@@ -581,7 +588,9 @@ function ListsView({
         </>
       ) : !selectedList ? (
         <p className={styles.empty}>
-          No lists yet. Make one with “+ New list”, then add titles from their own pages.
+          {loaded
+            ? 'No lists yet. Make one with “+ New list”, then add titles from their own pages.'
+            : 'Opening…'}
         </p>
       ) : (
         <>

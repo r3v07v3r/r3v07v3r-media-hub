@@ -564,6 +564,16 @@
     font-size: 9.5px;
     padding: 1px 6px;
   }
+  /* Three lines here: the prefix alone is two on a card this narrow, and
+     the title is the half worth reading. */
+  .reasonChip {
+    -webkit-line-clamp: 3;
+  }
+  /* Kind and provenance do not both fit on a card this narrow; the list
+     they appear on already filters by kind, so the kind is the one to go. */
+  .chipRow:has(.plannedChip) .kindChip {
+    display: none;
+  }
   .kindChip {
     font-size: 9px;
     padding: 0 6px;
@@ -629,12 +639,22 @@
   overflow: hidden;
   overflow-wrap: anywhere;
 }
-/* The kind and provenance chips share one row under the title. */
+/* The kind and provenance chips share one row under the title — one
+   line, always: a second row lifts the title out of the scrim onto the
+   artwork, so the longer chip gives way instead. */
 .chipRow {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: 5px;
   align-items: center;
+  min-width: 0;
+}
+.chipRow > * {
+  align-self: center;
+}
+.chipRow .plannedChip {
+  min-width: 0;
+  flex: 0 1 auto;
 }
 
 /* The way out of a row that only shows the first twenty. Sits at the far

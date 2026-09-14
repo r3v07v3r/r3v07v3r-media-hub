@@ -112,7 +112,7 @@ check('a film: not watched -> planned -> watched -> not watched', () => {
       { planned: true, movieWatched: false, watchedKeys: none },
       { episodic: false, aired: [] }
     ),
-    [{ kind: 'mark-movie' }, { kind: 'untrack', because: 'watched' }],
+    [{ kind: 'mark-movie' }, { kind: 'untrack' }],
     'the mark comes first so the un-plan queues behind it'
   )
   assert.deepEqual(
@@ -140,7 +140,7 @@ check('a show marked watched gets only the episodes still missing', () => {
           { season: 2, episode: 1 }
         ]
       },
-      { kind: 'untrack', because: 'watched' }
+      { kind: 'untrack' }
     ]
   )
 })
@@ -152,7 +152,7 @@ check('a show already fully watched has nothing to mark, only a plan to drop', (
       { planned: true, movieWatched: false, watchedKeys: all },
       { episodic: true, aired }
     ),
-    [{ kind: 'untrack', because: 'watched' }]
+    [{ kind: 'untrack' }]
   )
   assert.deepEqual(
     planTitleStatusChange(
@@ -164,14 +164,24 @@ check('a show already fully watched has nothing to mark, only a plan to drop', (
   )
 })
 
-check('clearing a show clears its history and its plan', () => {
+check('clearing a title clears its history and leaves its plan alone', () => {
+  // The un-plan is deliberately NOT part of clearing: sent to Simkl it is
+  // the unscoped history/remove for a bare show (rules 3 and 8).
   assert.deepEqual(
     planTitleStatusChange(
       'unwatched',
       { planned: true, movieWatched: false, watchedKeys: half },
       { episodic: true, aired }
     ),
-    [{ kind: 'unmark-title' }, { kind: 'untrack', because: 'unwatched' }]
+    [{ kind: 'unmark-title' }]
+  )
+  assert.deepEqual(
+    planTitleStatusChange(
+      'unwatched',
+      { planned: true, movieWatched: true, watchedKeys: none },
+      { episodic: false, aired: [] }
+    ),
+    [{ kind: 'unmark-movie' }]
   )
 })
 
@@ -247,9 +257,10 @@ check('Trakt: series only, always with its seasons', () => {
   assert.deepEqual(traktTitlePayload({ id: 'kitsu:5', type: 'anime', title: 'Anime' }, seasons), {})
 })
 
-check('MAL: nothing watched is plan to watch, not watching at zero', () => {
-  assert.equal(malStatusForProgress(0, 12), 'plan_to_watch')
-  assert.equal(malStatusForProgress(0, undefined), 'plan_to_watch')
+check('MAL: a status is never invented from a zero count', () => {
+  // Zero with no known total leaves the remote status alone; the one case
+  // that means plan to watch says so explicitly (pushMalProgress's status).
+  assert.equal(malStatusForProgress(0, undefined), undefined)
   assert.equal(malStatusForProgress(1, 12), 'watching')
   assert.equal(malStatusForProgress(12, 12), 'completed')
 })

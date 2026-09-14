@@ -34,6 +34,8 @@ import type {
   ReconcileResolution,
   ReconcileResolveResult,
   ReconcileSyncReport,
+  ChangedEpisode,
+  ImportedPlay,
   SetTitleStatusPayload,
   SetTitleStatusResult,
   SimklPinStart,
@@ -208,6 +210,41 @@ async function syncSimklHistory(
 
 /** A `Partial<CatalogItem>` with a required id — assignable everywhere MediaHubDatabase's looser `{id: unknown}` item shape is expected, without a cast at the call site. */
 type TrackableItem = Partial<CatalogItem> & { id: string }
+
+/**
+ * The remote half of a whole-title change: the named rows to Simkl and
+ * Trakt, and a progress recompute to MAL — on the title's own chain, after
+ * whatever is already in flight for it. A film goes as its own reference;
+ * a show always as explicit seasons and episodes (see titleHistoryPayload
+ * in simkl.ts for what a bare show reference would do).
+ */
+function pushTitleHistory(
+  item: SimklPushItem & { totalEpisodes?: number },
+  rows: readonly { season: number | null; episode: number | null }[],
+  action: 'add' | 'remove',
+  malStatus?: 'plan_to_watch'
+): void {
+  const path = action === 'add' ? '/sync/history' : '/sync/history/remove'
+  if (item.type === 'movie') {
+    queueRemotePushes(item, () => [
+      syncSimklHistory(path, historyPayload(item, {})),
+      pushTraktHistory(item, {}, action),
+      pushMalProgress(item)
+    ])
+    return
+  }
+  const seasons = bySeason(
+    rows
+      .filter((row) => row.episode != null)
+      .map((row) => ({ season: row.season ?? 1, episode: row.episode as number }))
+  )
+  if (!seasons.length) return
+  queueRemotePushes(item, () => [
+    syncSimklHistory(path, titleHistoryPayload(item, seasons)),
+    pushTraktTitleHistory(item, seasons, action),
+    pushMalProgress(item, { status: malStatus })
+  ])
+}
 
 interface MarkWatchedPayload {
   item: SimklPushItem
@@ -1394,14 +1431,19 @@ export function registerTrackingIpc(): void {
    * follows a mark can never overtake the history it depends on.
    *
    * "Watched" for a show means every aired regular episode, read from the
-   * title's own metadata; "not watched" clears whatever history holds and
-   * tells the services exactly which episodes, never "the show". Marking
-   * watched takes a planned title off the plan — without asking Simkl or
-   * MAL to remove it, for the reasons unplanBecauseWatched gives.
+   * title's own metadata and written in one transaction; "not watched"
+   * clears whatever history holds and tells the services exactly which
+   * episodes, never "the show". Marking watched takes a planned title off
+   * the plan — without asking Simkl or MAL to remove it, for the reasons
+   * unplanBecauseWatched gives. Clearing leaves the plan alone (see the
+   * rules file header for why).
+   *
+   * `episodes` is the undo: exactly those rows, dates kept, and nothing
+   * about the plan — replaying what the change being undone reported.
    */
   handle<SetTitleStatusPayload, SetTitleStatusResult>(
     MEDIA_HUB_CHANNELS.trackingSetTitleStatus,
-    async (_e, { item, status }) => {
+    async (_e, { item, status, episodes }) => {
       const db = getDatabase()
       const id = String(item.id)
       const type = (item.type ?? 'movie') as MediaKind
@@ -1413,8 +1455,43 @@ export function registerTrackingIpc(): void {
         title: String(item.title ?? ''),
         year: item.year ? String(item.year) : ''
       }
+      const plan = { id, type, title: pushItem.title, year: pushItem.year || undefined }
+      const changed: ChangedEpisode[] = []
+      const importRows = (rows: ChangedEpisode[], fallbackAt: string): ImportedPlay[] =>
+        rows.map((row) => ({
+          id,
+          type,
+          title: pushItem.title,
+          year: pushItem.year || undefined,
+          season: row.season,
+          episode: row.episode,
+          watchedAt: row.watchedAt || fallbackAt
+        }))
+      const settle = (): void => {
+        requestRecommendationsRebuild()
+        // Every open surface — grids, the detail page, Home — learns of it
+        // from this one event rather than each caller remembering to ask.
+        notifyLibraryChanged('title-status', 'history', 'planned')
+      }
 
-      const own = db.history().filter((entry) => String(entry.id) === id)
+      if (episodes?.length && status !== 'planned') {
+        const now = new Date().toISOString()
+        if (status === 'watched') {
+          // importWatched: one transaction, original dates, and a row that
+          // is already there is left alone rather than re-stamped.
+          db.importWatched(importRows(episodes, now))
+        } else {
+          for (const row of episodes) {
+            db.unmarkWatched(id, row.season ?? undefined, row.episode ?? undefined)
+          }
+        }
+        changed.push(...episodes)
+        pushTitleHistory(pushItem, episodes, status === 'watched' ? 'add' : 'remove')
+        settle()
+        return { status, episodes: episodes.filter((row) => row.episode != null).length, changed }
+      }
+
+      const own = db.watchedEpisodesOf(id)
       const state = {
         planned: db.isTracked(id),
         movieWatched: own.length > 0,
@@ -1429,19 +1506,23 @@ export function registerTrackingIpc(): void {
       // clearing a show reads what history holds rather than what aired.
       let aired: EpisodeRef[] = []
       if (episodic && status === 'watched') {
+        let detail: CatalogItem
         try {
-          const detail = await metadata(type, id, 'interactive')
-          aired = airedRegularEpisodes(detail.videos, Date.now())
-          if (!pushItem.year && detail.year) pushItem.year = detail.year
-          // MAL's status is decided against the show's total — see
-          // malStatusForProgress — and a card rarely carries it.
-          if (pushItem.totalEpisodes == null) {
-            pushItem.totalEpisodes =
-              detail.episodeCounts?.totalEpisodes ??
-              airedRegularEpisodes(detail.videos, Infinity).length
-          }
+          detail = await metadata(type, id, 'interactive')
         } catch (error) {
           logError('tracking:set-title-status:meta', error)
+          throw new Error(
+            "Could not load this title's episode list. Check the connection and try again."
+          )
+        }
+        aired = airedRegularEpisodes(detail.videos, Date.now())
+        if (!pushItem.year && detail.year) pushItem.year = detail.year
+        // MAL's status is decided against the show's total — see
+        // malStatusForProgress — and a card rarely carries it.
+        if (pushItem.totalEpisodes == null) {
+          pushItem.totalEpisodes =
+            detail.episodeCounts?.totalEpisodes ??
+            airedRegularEpisodes(detail.videos, Infinity).length
         }
         if (!aired.length) {
           throw new Error(
@@ -1450,9 +1531,7 @@ export function registerTrackingIpc(): void {
         }
       }
 
-      const plan = { id, type, title: pushItem.title, year: pushItem.year || undefined }
       const steps = planTitleStatusChange(status, state, { episodic, aired })
-      let episodes = 0
       for (const step of steps) {
         switch (step.kind) {
           case 'track':
@@ -1461,63 +1540,48 @@ export function registerTrackingIpc(): void {
             break
           case 'untrack':
             db.untrack(id)
-            if (step.because === 'watched') {
-              // Behind the history push on the same chain — see the header.
-              queueRemotePushes(pushItem, () => [unplanBecauseWatched(plan)])
-            } else {
-              pushLocalPlanChange(plan, false)
-            }
+            // Behind the history push on the same chain — see the header.
+            queueRemotePushes(pushItem, () => [unplanBecauseWatched(plan)])
             break
-          case 'mark-movie':
+          case 'mark-movie': {
             db.markWatched(pushItem, {})
-            queueRemotePushes(pushItem, () => [
-              syncSimklHistory('/sync/history', historyPayload(pushItem, {})),
-              pushTraktHistory(pushItem, {}, 'add'),
-              pushMalProgress(pushItem)
-            ])
+            changed.push({ season: null, episode: null })
+            pushTitleHistory(pushItem, changed, 'add')
             break
-          case 'unmark-movie':
+          }
+          case 'unmark-movie': {
+            changed.push(...own)
             db.unmarkWatched(id)
-            queueRemotePushes(pushItem, () => [
-              syncSimklHistory('/sync/history/remove', historyPayload(pushItem, {})),
-              pushTraktHistory(pushItem, {}, 'remove'),
-              pushMalProgress(pushItem)
-            ])
+            pushTitleHistory(pushItem, changed, 'remove')
             break
+          }
           case 'mark-episodes': {
-            for (const ref of step.episodes) db.markWatched(pushItem, ref)
-            episodes += step.episodes.length
-            const seasons = bySeason(step.episodes)
-            queueRemotePushes(pushItem, () => [
-              syncSimklHistory('/sync/history', titleHistoryPayload(pushItem, seasons)),
-              pushTraktTitleHistory(pushItem, seasons, 'add'),
-              pushMalProgress(pushItem)
-            ])
+            const now = new Date().toISOString()
+            const rows = step.episodes.map((ref) => ({ ...ref, watchedAt: now }))
+            // One transaction for the lot: a long show is hundreds of rows,
+            // and one fsync per row held the main process for seconds.
+            db.importWatched(importRows(rows, now))
+            changed.push(...rows)
+            pushTitleHistory(pushItem, rows, 'add')
             break
           }
           case 'unmark-title': {
-            const refs = db
-              .unmarkTitle(id)
-              .filter((row) => row.episode != null)
-              .map((row) => ({ season: row.season ?? 1, episode: row.episode as number }))
-            episodes += refs.length
-            const seasons = bySeason(refs)
-            queueRemotePushes(pushItem, () => [
-              syncSimklHistory('/sync/history/remove', titleHistoryPayload(pushItem, seasons)),
-              pushTraktTitleHistory(pushItem, seasons, 'remove'),
-              pushMalProgress(pushItem)
-            ])
+            const removed = db.unmarkTitle(id)
+            changed.push(...removed)
+            // A planned anime cleared to not watched is, on MAL, plan to
+            // watch at zero — said explicitly, never inferred from the count.
+            pushTitleHistory(
+              pushItem,
+              removed,
+              'remove',
+              state.planned ? 'plan_to_watch' : undefined
+            )
             break
           }
         }
       }
-      if (steps.length) {
-        requestRecommendationsRebuild()
-        // Every open surface — grids, the detail page, Home — learns of it
-        // from this one event rather than each caller remembering to ask.
-        notifyLibraryChanged('title-status', 'history', 'planned')
-      }
-      return { status, episodes }
+      if (steps.length) settle()
+      return { status, episodes: changed.filter((row) => row.episode != null).length, changed }
     }
   )
 
@@ -1903,7 +1967,10 @@ export function registerTrackingIpc(): void {
       preferredGenres,
       // Read here rather than fetched: it is whatever the last pull
       // recorded, so tagging a card costs nothing on this path.
-      plannedSources: plannedSources()
+      plannedSources: plannedSources(),
+      // See HomePersonalizedResult.completedIds — the index's own
+      // completion query, for the rows served here that carry no episodes.
+      completedIds: db.indexByIds(recommendations.map((item) => String(item.id))).completedIds
     }
   })
 

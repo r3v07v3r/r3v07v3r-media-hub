@@ -5,12 +5,17 @@
 //
 // Three statuses, one title: not watched, plan to watch, watched. Plan to
 // watch is the tracked table; watched is watch_history — a film's own row,
-// or every aired regular episode of a show. They are exclusive on the way
-// to "watched" and on the way to "not watched": marking a planned film
-// watched takes it off the plan (the services do the same by themselves),
-// and clearing a watched show clears its plan too. Planning never touches
-// history: "plan to watch" on something already seen is a plan to see it
-// again, and the badge keeps saying watched until it is cleared.
+// or every aired regular episode of a show. Marking a planned title
+// watched takes it off the plan (the services do the same by themselves).
+// Clearing a watched title clears its history and NOTHING ELSE: a plan it
+// also carried stays, so it reads as planned again. The alternative — an
+// un-plan sent to the services on the way — is Simkl's unscoped
+// history/remove for a bare show, which erases whatever history that
+// account holds beyond the episodes just named (docs/WATCHLIST-SYNC.md
+// rules 3 and 8); "Remove from plan" is its own, evidence-gated action.
+// Planning never touches history: "plan to watch" on something already
+// seen is a plan to see it again, and the badge keeps saying watched
+// until it is cleared.
 
 import type { Episode, TitleStatus } from '../../shared/media-hub/types'
 import { hasAired, isRegularEpisode } from '../../shared/media-hub/catalog-logic'
@@ -82,7 +87,8 @@ export interface TitleState {
 
 export type TitleStatusStep =
   | { kind: 'track' }
-  | { kind: 'untrack'; because: 'watched' | 'unwatched' }
+  /** Only ever because the title was marked watched — see the file header. */
+  | { kind: 'untrack' }
   | { kind: 'mark-movie' }
   | { kind: 'unmark-movie' }
   | { kind: 'mark-episodes'; episodes: EpisodeRef[] }
@@ -121,12 +127,11 @@ export function planTitleStatusChange(
     }
     // After the marks, so the un-plan is queued behind the history push
     // (tracking.ts runs the steps in order on one per-title chain).
-    if (state.planned) steps.push({ kind: 'untrack', because: 'watched' })
+    if (state.planned) steps.push({ kind: 'untrack' })
     return steps
   }
 
-  // target === 'unwatched'
+  // target === 'unwatched' — history only; the plan stays (file header).
   if (watched) steps.push(episodic ? { kind: 'unmark-title' } : { kind: 'unmark-movie' })
-  if (state.planned) steps.push({ kind: 'untrack', because: 'unwatched' })
   return steps
 }
