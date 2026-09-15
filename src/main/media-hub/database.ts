@@ -660,6 +660,18 @@ export interface MediaHubDatabase {
    * rows were genuinely relocated.
    */
   remapContentIds(mappings: ContentIdRemap[]): number
+  /**
+   * Folds every row keyed by `fromId` into `toId` — watch history, plays
+   * and rating, across every profile — keeping each row's type, season
+   * and date. A destination row already there wins and the source copy
+   * is dropped, so merging a duplicate never doubles a viewing or moves a
+   * date somebody here saw happen. Built for history written under a
+   * `simkl:<n>` id that later turns out to be an IMDb-keyed title this
+   * app already tracks (see imdbForSimklKeyedId); unlike remapContentIds
+   * it does not retype rows as anime or shift seasons. Returns how many
+   * history rows moved.
+   */
+  mergeContentId(fromId: string, toId: string): number
   history(): HistoryEntry[]
   dislike(item: Partial<CatalogItem> & { id: unknown }, now?: Date): TrackedItem
   undislike(id: string | number): boolean
@@ -802,6 +814,8 @@ interface PreparedQueries {
   importRating: StatementSync
   remapWatched: StatementSync
   dropRemappedWatched: StatementSync
+  mergeWatched: StatementSync
+  mergePlays: StatementSync
   remapPlays: StatementSync
   dropRemappedPlays: StatementSync
   remapRating: StatementSync
@@ -1091,6 +1105,20 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
        ON CONFLICT(profile_id,watch_key) DO NOTHING`
     ),
     dropRemappedWatched: sql.prepare('DELETE FROM watch_history WHERE content_id=?'),
+    // The type-preserving sibling of remapWatched, for mergeContentId. The
+    // key is rebuilt in the exact `${id}:${season ?? 'movie'}:${episode ??
+    // 'movie'}` form markWatched writes, NULLs included, so a moved movie
+    // row collides with (and yields to) the one already under the real id.
+    mergeWatched: sql.prepare(
+      `INSERT INTO watch_history(profile_id,watch_key,content_id,type,title,season,episode,watched_at,metadata_json)
+       SELECT profile_id,
+              @to || ':' || COALESCE(CAST(season AS TEXT),'movie') || ':' || COALESCE(CAST(episode AS TEXT),'movie'),
+              @to,type,title,season,episode,watched_at,
+              json_set(metadata_json,'$.id',@to)
+         FROM watch_history
+        WHERE content_id=@from
+       ON CONFLICT(profile_id,watch_key) DO NOTHING`
+    ),
     // plays has no uniqueness to arbitrate with (it is an append-only
     // record, and a rewatch is legitimately two rows), so the copy is
     // unconditional and the delete below is what stops it doubling.
@@ -1102,6 +1130,20 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
         WHERE content_id=@from AND season IS NOT NULL AND episode IS NOT NULL`
     ),
     dropRemappedPlays: sql.prepare('DELETE FROM plays WHERE content_id=?'),
+    // A viewing already recorded under the real id at the same instant is
+    // the same viewing — the duplicate row was written seconds apart by
+    // the same click, not by a rewatch (same rule as importWatched).
+    mergePlays: sql.prepare(
+      `INSERT INTO plays(profile_id,content_id,type,title,season,episode,watched_at,metadata_json)
+       SELECT p.profile_id,@to,p.type,p.title,p.season,p.episode,p.watched_at,
+              json_set(p.metadata_json,'$.id',@to)
+         FROM plays p
+        WHERE p.content_id=@from
+          AND NOT EXISTS (SELECT 1 FROM plays q
+                           WHERE q.profile_id=p.profile_id AND q.content_id=@to
+                             AND q.season IS p.season AND q.episode IS p.episode
+                             AND q.watched_at=p.watched_at)`
+    ),
     // A rating already given to the canonical show wins — same rule as
     // importRating just below, and for the same reason.
     remapRating: sql.prepare(
@@ -1926,6 +1968,33 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
           }
         })
         return added
+      } catch (error) {
+        return fail(error as Error) as unknown as number
+      }
+    },
+
+    mergeContentId(fromId, toId) {
+      const from = String(fromId)
+      const to = String(toId)
+      if (!from || !to || from === to) return 0
+      try {
+        let moved = 0
+        durable(() => {
+          sql.exec('BEGIN')
+          try {
+            moved = Number(q.mergeWatched.run({ from, to }).changes || 0)
+            q.dropRemappedWatched.run(from)
+            q.mergePlays.run({ from, to })
+            q.dropRemappedPlays.run(from)
+            q.remapRating.run({ from, to })
+            q.dropRemappedRating.run(from)
+            sql.exec('COMMIT')
+          } catch (error) {
+            sql.exec('ROLLBACK')
+            throw error
+          }
+        })
+        return moved
       } catch (error) {
         return fail(error as Error) as unknown as number
       }

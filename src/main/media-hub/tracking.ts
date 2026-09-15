@@ -131,6 +131,8 @@ import {
   simklWatchedSnapshot
 } from './simklClient'
 import { createKeyedSerialQueue } from '../../shared/media-hub/serialQueue'
+import { cachedMetadata } from './titleNames'
+import { imdbForSimklKeyedId, isSimklKeyedId } from './simklKeyedHistory'
 
 /** Result of a single "push this watch-state change to Simkl" attempt, merged into every mark/unmark handler's response. */
 interface SimklSyncResult {
@@ -1164,13 +1166,34 @@ async function computeMovieDiscrepancies(
   // retrying) its push. Surfacing one of these would be asking the same
   // question a second time about something nobody changed their mind on.
   const decided = new Set(pendingPushes().map((entry) => entry.id))
+  const db = getDatabase()
   const localMovies = new Map(
-    getDatabase()
+    db
       .history()
       .filter((h) => h.type === 'movie')
       .map((h) => [h.id, h] as const)
   )
   const snapshot = await simklWatchedSnapshot(priority)
+  // A row written under Simkl's own number for a title this account holds
+  // under its IMDb id is the same viewing twice, not a disagreement — fold
+  // it into the real row before diffing (see simklKeyedHistory.ts). Done
+  // here, on the snapshot already fetched, rather than in a migration:
+  // the pairing only Simkl can supply arrives with every check, and a
+  // fresh duplicate is healed on the next pass the same as an old one.
+  let folded = 0
+  for (const [id, entry] of [...localMovies]) {
+    if (!isSimklKeyedId(id)) continue
+    const imdb = imdbForSimklKeyedId(
+      id,
+      snapshot.entries,
+      (key) => cachedMetadata('movie', key)?.id
+    )
+    if (!imdb) continue
+    folded += db.mergeContentId(id, imdb)
+    localMovies.delete(id)
+    if (!localMovies.has(imdb)) localMovies.set(imdb, { ...entry, id: imdb })
+  }
+  if (folded) notifyLibraryChanged('reconcile', 'history')
   // No trustworthy remote side means there is nothing to diff. An
   // unreadable Simkl comes back as an EMPTY Simkl, and an empty Simkl
   // makes every movie watched locally look like a disagreement — a review
@@ -1378,6 +1401,19 @@ export function registerTrackingIpc(): void {
       // against a source that no longer exists. Whether a row can be
       // PUSHED is still asked, per row, on the way out (see
       // hasExpressibleSimklId in reconcileCheck).
+      //
+      // A card minted under Simkl's own number whose real id this app has
+      // since learned (the detail page resolved it) is written under that
+      // real id, so one click does not leave two rows for the reconcile
+      // pass to fold later — see simklKeyedHistory.ts.
+      if (isSimklKeyedId(String(item.id))) {
+        const imdb = imdbForSimklKeyedId(
+          String(item.id),
+          [],
+          (key) => cachedMetadata(String(item.type ?? 'movie'), key)?.id
+        )
+        if (imdb) item = { ...item, id: imdb }
+      }
       getDatabase().markWatched(item, playback || {})
       requestRecommendationsRebuild()
       // None of the services is awaited. The local row IS the record; each
