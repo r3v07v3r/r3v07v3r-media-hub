@@ -9,6 +9,7 @@
 // the assistant rank the same title differently for the same words.
 
 import type { CatalogItem } from './types'
+import { fillMissing } from './catalogMerge'
 
 /**
  * The form a title and a query are compared in: lowercased, diacritics
@@ -76,12 +77,24 @@ export const CLOSE_MATCH_RANK = 1
  * relevance, interleaved by position so one source cannot take every
  * slot, and fall back to source order last.
  *
- * A title that more than one source returned appears once, as the item
- * from the EARLIEST source — callers list their richest source first
- * (the index row carries genres, rating and a synopsis; a provider's
- * search hit carries a poster and a year) — sorted by the best rank and
- * position any source gave it. Anything without an id is dropped: it can
- * never be opened, so it is not a result.
+ * A title that more than one source returned appears once, built from the
+ * EARLIEST source's item — callers list their richest source first (the
+ * index row carries genres, rating and a synopsis; a provider's search hit
+ * carries a poster and a year) — with its gaps filled from the later ones
+ * (fillMissing, the same coalescing the catalog crawl does), sorted by the
+ * best rank and position any source gave it. An index row a crawl wrote
+ * sparse still gets its poster from the hit that had one.
+ *
+ * The title travels with the rank: when a later source names the same id
+ * in a way that answers the query better ("Frieren: Beyond Journey's End"
+ * for "frieren", where the index held the romaji), the result carries THAT
+ * name. A card ranked for one name and labelled with another would read
+ * as a mismatch, and resolveSimilarTitles checks the label against the
+ * name the model gave — a result whose label did not match would be
+ * rejected for the very reason it was found.
+ *
+ * Anything without an id is dropped: it can never be opened, so it is not
+ * a result.
  */
 export function mergeSearchResults(
   query: string,
@@ -102,7 +115,11 @@ export function mergeSearchResults(
         best.set(id, { item, rank, position, source })
         return
       }
-      held.rank = Math.min(held.rank, rank)
+      held.item = fillMissing(held.item, item)
+      if (rank < held.rank) {
+        held.rank = rank
+        held.item = { ...held.item, title: item.title }
+      }
       held.position = Math.min(held.position, position)
     })
   })

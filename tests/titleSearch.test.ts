@@ -153,10 +153,41 @@ check('a duplicate sorts by the best position any source gave it', () => {
   assert.equal(merged[0].description, 'rich')
 })
 
-check('a duplicate takes the better rank when the sources name it differently', () => {
-  const local = [item('tt1', 'Sousou no Frieren')]
-  const remote = [item('tt1', "Frieren: Beyond Journey's End"), item('tt2', 'Frieren')]
-  assert.deepEqual(ids(mergeSearchResults('frieren', [local, remote])), ['tt2', 'tt1'])
+check(
+  'a duplicate takes the better rank, and the name that earned it, when the sources name it differently',
+  () => {
+    const local = [item('tt1', 'Sousou no Frieren', { genres: ['Adventure'] })]
+    const remote = [item('tt1', "Frieren: Beyond Journey's End"), item('tt2', 'Frieren')]
+    const merged = mergeSearchResults('frieren', [local, remote])
+    assert.deepEqual(ids(merged), ['tt2', 'tt1'])
+    // The label agrees with the rank — which is what resolveSimilarTitles
+    // checks a suggested title against — and the rest is still the index row.
+    assert.equal(merged[1].title, "Frieren: Beyond Journey's End")
+    assert.ok(titleMatchRank(merged[1].title, 'frieren') <= CLOSE_MATCH_RANK)
+    assert.deepEqual(merged[1].genres, ['Adventure'])
+  }
+)
+
+check('a sparse index row gains what the provider hit knew, and keeps what it had', () => {
+  const local = [
+    item('tt1', 'Foundation', { poster: '', year: '', genres: ['Sci-Fi'], rating: '7.6' })
+  ]
+  const remote = [
+    item('tt1', 'Foundation', {
+      poster: 'https://images/poster.jpg',
+      year: '2021',
+      rating: '1.0',
+      genres: ['Wrong'],
+      videos: [{ id: 'tt1:1:1', season: 1, episode: 1, title: 'Pilot' } as never]
+    })
+  ]
+  const [merged] = mergeSearchResults('foundation', [local, remote])
+  assert.equal(merged.poster, 'https://images/poster.jpg')
+  assert.equal(merged.year, '2021')
+  assert.equal(merged.videos.length, 1)
+  // Present values are never overwritten, only gaps are filled.
+  assert.equal(merged.rating, '7.6')
+  assert.deepEqual(merged.genres, ['Sci-Fi'])
 })
 
 check('idless entries are dropped and the limit is honoured', () => {

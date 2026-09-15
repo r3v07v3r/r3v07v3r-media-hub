@@ -30,6 +30,7 @@ import {
   isRegularEpisode
 } from '../../shared/media-hub/catalog-logic'
 import { releaseTextMentionsExecutable } from '../../shared/media-hub/unsafeFiles'
+import { fillMissing } from '../../shared/media-hub/catalogMerge'
 import {
   languageMatches,
   releaseDeclaresLanguage,
@@ -1153,44 +1154,6 @@ export function selectVideoFile(
     return match || null
   }
   return candidates.sort((a, b) => (b.size || 0) - (a.size || 0))[0] || null
-}
-
-/**
- * Fills the gaps in `into` from `from`, without ever overwriting something
- * already there.
- *
- * The two sources describe the same title but do not carry the same fields:
- * a Simkl trending entry has a simklId and no episode list at all, a
- * Cinemeta entry has the full episode list and no simklId. Whichever is
- * seen first should keep its position and its own values, and gain what it
- * was missing — which is exactly what the index's own upsert does with
- * COALESCE(NULLIF(...)), applied here so the two agree.
- *
- * Empty counts as missing, deliberately: `videos: []` and `poster: ''` are
- * how these normalizers say "this source has none", not "this source says
- * there are none".
- */
-function fillMissing(into: CatalogItem, from: CatalogItem): CatalogItem {
-  const merged: CatalogItem = { ...into }
-  for (const key of [
-    'poster',
-    'background',
-    'logo',
-    'description',
-    'status',
-    'rating',
-    'runtime',
-    'year'
-  ] as const) {
-    if (!merged[key] && from[key]) merged[key] = from[key]
-  }
-  if (!merged.genres?.length && from.genres?.length) merged.genres = from.genres
-  if (!merged.videos?.length && from.videos?.length) merged.videos = from.videos
-  if (!merged.trailers?.length && from.trailers?.length) merged.trailers = from.trailers
-  if (merged.simklId == null && from.simklId != null) merged.simklId = from.simklId
-  if (!merged.episodeCounts && from.episodeCounts) merged.episodeCounts = from.episodeCounts
-  if (!merged.groupedIds?.length && from.groupedIds?.length) merged.groupedIds = from.groupedIds
-  return merged
 }
 
 /**
