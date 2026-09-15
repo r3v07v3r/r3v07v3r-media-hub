@@ -20,6 +20,13 @@
          background art) — all read straight off
          CatalogItem.poster/background/logo, never proxied.
 
+         m.media-amazon.com is IMDb's own image CDN: Cinemeta's SEARCH
+         hits (catalog:search, see main/media-hub/catalog.ts) carry their
+         poster there rather than on metahub, and a search result the
+         index did not already hold rendered as a blank tint gradient
+         until it was added here — the same silent CSP failure kitsu.app
+         went through above.
+
          media-src allows http://127.0.0.1:* (any port) plus data: — the
          media-hub playback proxy and VLC-compatibility transcoder both
          bind to an ephemeral loopback-only port per playback session (see
@@ -30,7 +37,7 @@
          subtitles:apply can return. -->
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://image.tmdb.org https://simkl.in https://*.simkl.in https://kitsu.io https://*.kitsu.io https://kitsu.app https://*.kitsu.app https://images.metahub.space https://*.metahub.space; media-src 'self' data: http://127.0.0.1:*; connect-src 'self'; frame-src https://www.youtube-nocookie.com"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://image.tmdb.org https://simkl.in https://*.simkl.in https://kitsu.io https://*.kitsu.io https://kitsu.app https://*.kitsu.app https://images.metahub.space https://*.metahub.space https://m.media-amazon.com; media-src 'self' data: http://127.0.0.1:*; connect-src 'self'; frame-src https://www.youtube-nocookie.com"
     />
   </head>
 

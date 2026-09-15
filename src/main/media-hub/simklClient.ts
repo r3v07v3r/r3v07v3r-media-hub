@@ -60,7 +60,10 @@ export async function simklPublicRequest<T = unknown>(
   options: RequestInit = {}
 ): Promise<T> {
   const { clientId } = simklCredentials()
-  if (!clientId) throw new Error('Add a Simkl Client ID in Settings to search movies & series.')
+  // Title search no longer runs through here — it reads the index and
+  // Cinemeta (see catalog.ts's catalog:search) — so the message must not
+  // claim it does. What still needs a Client ID is resolving a Simkl id.
+  if (!clientId) throw new Error('Add a Simkl Client ID in Settings to look titles up on Simkl.')
   return fetchJson<T>(
     simklUrl(pathname, clientId),
     {

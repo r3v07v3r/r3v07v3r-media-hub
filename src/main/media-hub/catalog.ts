@@ -51,11 +51,11 @@ import {
   normalizeKitsuAnime,
   normalizeMeta,
   normalizeSimklCatalog,
-  normalizeSimklSearchResult,
   normalizeTmdbTitle,
   type RawApiPayload
 } from './core'
 import { isLikelyFranchiseSibling, rankSimilarTitles } from '../../shared/media-hub/catalog-logic'
+import { mergeSearchResults } from '../../shared/media-hub/titleSearch'
 import { coalesce, coalesceScope, PRIORITY_RANK, type TaskPriority } from './taskScheduler'
 import {
   ANIME_GROUPED_KEY,
@@ -915,7 +915,7 @@ async function kitsuSearch(query: string): Promise<CatalogItem[]> {
   const result = await fetchJson<RawApiPayload>(
     `https://kitsu.io/api/edge/anime?filter%5Btext%5D=${encodeURIComponent(query)}&page%5Blimit%5D=20`,
     {},
-    { priority: 'interactive', label: 'anime search' }
+    { priority: 'interactive', label: 'anime search', timeoutMs: SEARCH_TIMEOUT_MS }
   )
   // One malformed record (an unexpected shape from Kitsu — a field this
   // normalizer assumes is present coming back null/missing for just that
@@ -950,21 +950,96 @@ async function kitsuSearch(query: string): Promise<CatalogItem[]> {
   }
 }
 
-/** Free-text movie/series search against Simkl. */
-async function simklSearch(kind: MediaKind, query: string): Promise<CatalogItem[]> {
-  const endpointType = kind === 'series' ? 'tv' : 'movie'
-  const result = await simklPublicRequest<RawApiPayload[] | RawApiPayload>(
-    `/search/${endpointType}?q=${encodeURIComponent(query)}&extended=full`,
-    'interactive'
+/**
+ * Free-text movie/series search against Cinemeta — the same addon the
+ * browse catalog is crawled from, asked by name instead of by page.
+ *
+ * This replaced a Simkl search. Confirmed live against Simkl's /search
+ * endpoint: its hits carry a Simkl id and a TMDB id and never an IMDb
+ * one, even with extended=full — and this app is IMDb-keyed, so every
+ * hit was minted as `simkl:<id>` and dropped by the very filter that
+ * keeps such ids out of the renderer. "Foundation", a series sitting in
+ * the index at rank 243, came back as nothing. Cinemeta answers with
+ * IMDb ids, needs no credential, and covers what the crawl has not
+ * reached yet — which is the half of "find anything" the index cannot.
+ *
+ * `lightweight`, as every catalog-shaped read of Cinemeta is: a search
+ * hit is opened through metadata(), which fetches the full meta itself.
+ */
+async function cinemetaSearch(
+  kind: Exclude<MediaKind, 'anime'>,
+  query: string
+): Promise<CatalogItem[]> {
+  const result = await fetchJson<{ metas?: RawApiPayload[] }>(
+    `https://v3-cinemeta.strem.io/catalog/${kind}/top/search=${encodeURIComponent(query)}.json`,
+    {},
+    { priority: 'interactive', label: `${kind} search`, timeoutMs: SEARCH_TIMEOUT_MS }
   )
-  // Same filter as the trending feeds (see simklTrending): a record Simkl
-  // has no IMDb id for would reach the renderer as `simkl:<id>`, a title
-  // no service can be told about and no other path resolves to — a card
-  // marked watched from search wrote history under that id, and opening
-  // the same film wrote a second row under its IMDb id.
-  return (Array.isArray(result) ? result : [])
-    .map((x) => normalizeSimklSearchResult(x, kind))
-    .filter((x) => x.id && !x.id.startsWith('simkl:'))
+  // The poster comes back as delivered: a search hit's art is on IMDb's
+  // CDN (m.media-amazon.com) rather than the metahub proxy the catalog
+  // pages use, and the renderer's CSP admits that host for exactly this
+  // reason (see index.html). Rewriting to metahub was tried first and
+  // 404s for the lesser-known titles a search is most likely to surface.
+  return (result.metas || []).map((x) => normalizeMeta(x, kind, true)).filter((x) => x.id)
+}
+
+/**
+ * The provider half of catalog:search for one kind, and never a failure:
+ * Kitsu for anime, Cinemeta otherwise. The index half always answers, so
+ * a provider being down costs the titles it alone knew and nothing else —
+ * the "one source failing contributes nothing rather than failing the
+ * search" rule this file applies everywhere, applied here to the one path
+ * that used to have a single source.
+ */
+async function providerSearch(kind: MediaKind, query: string): Promise<CatalogItem[]> {
+  try {
+    return kind === 'anime' ? await kitsuSearch(query) : await cinemetaSearch(kind, query)
+  } catch (error) {
+    logError('catalog:search:provider', error)
+    return []
+  }
+}
+
+/** How many index rows one search considers before the merge. The re-rank
+ *  happens over these, so it must hold every exact and leading match — the
+ *  index's own ORDER BY guarantees those come first (see indexSearch). */
+const INDEX_SEARCH_CANDIDATES = 100
+
+/** How many title matches one search returns. Enough to page through a
+ *  common word; bounded so the IPC reply stays a reply. */
+const MAX_SEARCH_RESULTS = 120
+
+/** How long a provider's search request may run. fetchJson's default is
+ *  thirty seconds, which suits a crawl page nobody is watching; a search
+ *  answer that takes longer than this is one nobody is still waiting for. */
+const SEARCH_TIMEOUT_MS = 10_000
+
+/** How long the index's hits wait for the provider to add its own. Cinemeta
+ *  and Kitsu answer well inside this on a working link; on a stalled one
+ *  the person sees what the index found rather than a spinner for the
+ *  provider's whole timeout. */
+const PROVIDER_GRACE_MS = 4_000
+
+/**
+ * `promise`, or `fallback` once `ms` has passed without it settling. The
+ * promise is not cancelled — the scheduler owns the request, and a late
+ * answer simply goes unread — only no longer waited for. The timer is
+ * cleared on settle so a prompt answer leaves nothing running.
+ */
+function settleWithin<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(fallback), ms)
+    promise.then(
+      (value) => {
+        clearTimeout(timer)
+        resolve(value)
+      },
+      () => {
+        clearTimeout(timer)
+        resolve(fallback)
+      }
+    )
+  })
 }
 
 /** Cached (24h) franchise-relationship anime titles (sequel/prequel/side-story/etc.) from Kitsu, falling back to a stale cache entry (or `[]`) on error rather than failing the caller. */
@@ -1627,7 +1702,28 @@ export function registerCatalogIpc(): void {
       if (!isValidCatalogKind(kind)) throw new Error('Unsupported catalog.')
       const q = String(query || '').trim()
       if (q.length < 2) return []
-      const byTitle = kind === 'anime' ? await kitsuSearch(q) : await simklSearch(kind, q)
+
+      // The index and the provider at once, then one ranked list of both.
+      // The index is what this app already has — thirty thousand titles
+      // across the crawl, the deep scan and the household sync, answered
+      // from disk in a few milliseconds with no network at all — and it is
+      // listed first so that a title both know shows as the index's richer
+      // row. The provider is what the index has not reached: a search must
+      // find anything, not only what has been browsed past.
+      //
+      // The provider is started first and read last, and how long it is
+      // waited for depends on whether the index found anything. With hits
+      // in hand it gets a short grace to add its own and no more — a
+      // title already found must not sit behind a stalled request for
+      // the whole of its timeout, which would make the offline path only
+      // as fast as the network it exists to not need. With none, the
+      // provider is the only hope, and it gets its full time.
+      const remotePending = providerSearch(kind, q)
+      const local = getDatabase().indexSearch(kind, q, INDEX_SEARCH_CANDIDATES)
+      const remote = local.length
+        ? await settleWithin(remotePending, PROVIDER_GRACE_MS, [] as CatalogItem[])
+        : await remotePending
+      const byTitle = mergeSearchResults(q, [local, remote], MAX_SEARCH_RESULTS)
 
       // Then the same query against everything already known about each
       // title's cast, creators and story labels. This is what makes typing a

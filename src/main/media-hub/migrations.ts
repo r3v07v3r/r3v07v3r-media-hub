@@ -24,6 +24,7 @@
 import type { DatabaseSync } from 'node:sqlite'
 import { hasExpressibleSimklId } from '../../shared/media-hub/serviceIds'
 import { logError } from './logger'
+import { comparableTitle } from '../../shared/media-hub/titleSearch'
 
 interface Migration {
   /** Human label, for the log line — the version number is the index. */
@@ -482,13 +483,43 @@ const demoGhostHistoryCleanup: Migration = {
   }
 }
 
+/**
+ * Migration 5 — a search key per index row.
+ *
+ * catalog:search matches a typed query against the index by name, and the
+ * query arrives with its punctuation flattened to spaces (comparableTitle):
+ * "spider man" for "Spider-Man". title_sort keeps punctuation — it exists
+ * for the A–Z sort, where "spider-man" must file beside "spider-man 2" —
+ * so it cannot be the column that comparison runs against: the exact title
+ * lands in the "merely contains the words" bucket of the search's ORDER BY
+ * and, behind enough better-ranked rows that also contain them, outside the
+ * candidate limit altogether. This column is the title in the query's own
+ * form, written by every path that writes a title and backfilled here for
+ * the rows already on disk.
+ *
+ * NOT NULL DEFAULT '' rather than nullable: a row that somehow had no key
+ * should match nothing, not turn a LIKE into a null comparison.
+ */
+const titleSearchKey: Migration = {
+  name: 'title-search-key',
+  apply(sql) {
+    sql.exec("ALTER TABLE catalog_index ADD COLUMN title_key TEXT NOT NULL DEFAULT ''")
+    const update = sql.prepare('UPDATE catalog_index SET title_key=? WHERE id=? AND kind=?')
+    for (const r of sql.prepare('SELECT id, kind, title FROM catalog_index').all()) {
+      const row = r as Record<string, unknown>
+      update.run(comparableTitle(String(row.title ?? '')), String(row.id), String(row.kind))
+    }
+  }
+}
+
 /** Ordered, and the order IS the version. Append only. */
 const MIGRATIONS: readonly Migration[] = [
   baseline,
   profilesAndPlays,
   catalogIndex,
   airedEpisodes,
-  demoGhostHistoryCleanup
+  demoGhostHistoryCleanup,
+  titleSearchKey
 ]
 
 /** How many migrations exist — a database at this version is fully current. */
