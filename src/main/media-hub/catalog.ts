@@ -915,7 +915,7 @@ async function kitsuSearch(query: string): Promise<CatalogItem[]> {
   const result = await fetchJson<RawApiPayload>(
     `https://kitsu.io/api/edge/anime?filter%5Btext%5D=${encodeURIComponent(query)}&page%5Blimit%5D=20`,
     {},
-    { priority: 'interactive', label: 'anime search' }
+    { priority: 'interactive', label: 'anime search', timeoutMs: SEARCH_TIMEOUT_MS }
   )
   // One malformed record (an unexpected shape from Kitsu — a field this
   // normalizer assumes is present coming back null/missing for just that
@@ -973,7 +973,7 @@ async function cinemetaSearch(
   const result = await fetchJson<{ metas?: RawApiPayload[] }>(
     `https://v3-cinemeta.strem.io/catalog/${kind}/top/search=${encodeURIComponent(query)}.json`,
     {},
-    { priority: 'interactive', label: `${kind} search` }
+    { priority: 'interactive', label: `${kind} search`, timeoutMs: SEARCH_TIMEOUT_MS }
   )
   // The poster comes back as delivered: a search hit's art is on IMDb's
   // CDN (m.media-amazon.com) rather than the metahub proxy the catalog
@@ -1008,6 +1008,39 @@ const INDEX_SEARCH_CANDIDATES = 100
 /** How many title matches one search returns. Enough to page through a
  *  common word; bounded so the IPC reply stays a reply. */
 const MAX_SEARCH_RESULTS = 120
+
+/** How long a provider's search request may run. fetchJson's default is
+ *  thirty seconds, which suits a crawl page nobody is watching; a search
+ *  answer that takes longer than this is one nobody is still waiting for. */
+const SEARCH_TIMEOUT_MS = 10_000
+
+/** How long the index's hits wait for the provider to add its own. Cinemeta
+ *  and Kitsu answer well inside this on a working link; on a stalled one
+ *  the person sees what the index found rather than a spinner for the
+ *  provider's whole timeout. */
+const PROVIDER_GRACE_MS = 4_000
+
+/**
+ * `promise`, or `fallback` once `ms` has passed without it settling. The
+ * promise is not cancelled — the scheduler owns the request, and a late
+ * answer simply goes unread — only no longer waited for. The timer is
+ * cleared on settle so a prompt answer leaves nothing running.
+ */
+function settleWithin<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(fallback), ms)
+    promise.then(
+      (value) => {
+        clearTimeout(timer)
+        resolve(value)
+      },
+      () => {
+        clearTimeout(timer)
+        resolve(fallback)
+      }
+    )
+  })
+}
 
 /** Cached (24h) franchise-relationship anime titles (sequel/prequel/side-story/etc.) from Kitsu, falling back to a stale cache entry (or `[]`) on error rather than failing the caller. */
 async function relatedAnime(id: string): Promise<CatalogItem[]> {
@@ -1677,10 +1710,19 @@ export function registerCatalogIpc(): void {
       // listed first so that a title both know shows as the index's richer
       // row. The provider is what the index has not reached: a search must
       // find anything, not only what has been browsed past.
-      const [local, remote] = await Promise.all([
-        Promise.resolve().then(() => getDatabase().indexSearch(kind, q, INDEX_SEARCH_CANDIDATES)),
-        providerSearch(kind, q)
-      ])
+      //
+      // The provider is started first and read last, and how long it is
+      // waited for depends on whether the index found anything. With hits
+      // in hand it gets a short grace to add its own and no more — a
+      // title already found must not sit behind a stalled request for
+      // the whole of its timeout, which would make the offline path only
+      // as fast as the network it exists to not need. With none, the
+      // provider is the only hope, and it gets its full time.
+      const remotePending = providerSearch(kind, q)
+      const local = getDatabase().indexSearch(kind, q, INDEX_SEARCH_CANDIDATES)
+      const remote = local.length
+        ? await settleWithin(remotePending, PROVIDER_GRACE_MS, [] as CatalogItem[])
+        : await remotePending
       const byTitle = mergeSearchResults(q, [local, remote], MAX_SEARCH_RESULTS)
 
       // Then the same query against everything already known about each

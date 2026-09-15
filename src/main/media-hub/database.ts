@@ -31,7 +31,7 @@ import {
   type Bucket
 } from '../../shared/media-hub/catalogFilters'
 import { runtimeMinutesOrZero } from '../../shared/media-hub/runtime'
-import { searchTokens } from '../../shared/media-hub/titleSearch'
+import { comparableTitle, searchTokens } from '../../shared/media-hub/titleSearch'
 import type {
   CatalogFacets,
   CatalogItem,
@@ -1194,11 +1194,12 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
     // would let whichever source happened to be written second ERASE a good
     // value with an empty string. Blank never overwrites non-blank.
     indexPut: sql.prepare(
-      `INSERT INTO catalog_index(id,kind,title,title_sort,year,rating,runtime_min,status,poster,background,logo,description,total_seasons,total_episodes,aired_episodes,simkl_id,grouped_ids,rank,source,first_seen,updated_at)
-       VALUES(@id,@kind,@title,@titleSort,@year,@rating,@runtime,@status,@poster,@background,@logo,@description,@totalSeasons,@totalEpisodes,@airedEpisodes,@simklId,@groupedIds,@rank,@source,@now,@now)
+      `INSERT INTO catalog_index(id,kind,title,title_sort,title_key,year,rating,runtime_min,status,poster,background,logo,description,total_seasons,total_episodes,aired_episodes,simkl_id,grouped_ids,rank,source,first_seen,updated_at)
+       VALUES(@id,@kind,@title,@titleSort,@titleKey,@year,@rating,@runtime,@status,@poster,@background,@logo,@description,@totalSeasons,@totalEpisodes,@airedEpisodes,@simklId,@groupedIds,@rank,@source,@now,@now)
        ON CONFLICT(id,kind) DO UPDATE SET
          title=excluded.title,
          title_sort=excluded.title_sort,
+         title_key=excluded.title_key,
          year=COALESCE(excluded.year,catalog_index.year),
          rating=COALESCE(excluded.rating,catalog_index.rating),
          runtime_min=COALESCE(excluded.runtime_min,catalog_index.runtime_min),
@@ -2271,6 +2272,7 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
             `UPDATE catalog_index SET
                title=COALESCE(NULLIF(@title,''),title),
                title_sort=COALESCE(NULLIF(@titleSort,''),title_sort),
+               title_key=COALESCE(NULLIF(@titleKey,''),title_key),
                total_seasons=COALESCE(@totalSeasons,total_seasons),
                total_episodes=COALESCE(@totalEpisodes,total_episodes),
                aired_episodes=COALESCE(@airedEpisodes,aired_episodes),
@@ -2282,6 +2284,7 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
             kind,
             title,
             titleSort: title ? titleSortKey(title) : '',
+            titleKey: title ? comparableTitle(title) : '',
             totalSeasons: counts.totalSeasons,
             totalEpisodes: counts.totalEpisodes,
             airedEpisodes: counts.airedEpisodes,
@@ -2308,6 +2311,7 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
               kind,
               title: String(item.title || ''),
               titleSort: titleSortKey(item.title),
+              titleKey: comparableTitle(String(item.title || '')),
               year: parseYear(item.year) ?? null,
               rating: parseRating(item.rating) ?? null,
               runtime: parseRuntimeMinutes(item.runtime) ?? null,
@@ -2529,18 +2533,23 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
     },
 
     indexSearch(kind, query, limit = 100) {
-      // Matched against title_sort, not title: it is already lowercased
-      // with diacritics folded (titleSortKey), and searchTokens folds the
-      // query the same way, so "amelie" finds "Amélie" and SQLite's
-      // ASCII-only LIKE never has to think about case. Every word must
-      // appear, in any order — "yoga foundations" finds "Foundations of
-      // Yoga" — and the tokens are letters and digits only, so neither
-      // LIKE wildcard can reach the pattern.
+      // Matched against title_key, the title in the query's own form
+      // (comparableTitle, migration 5): lowercased, diacritics folded,
+      // punctuation flattened to spaces — so "amelie" finds "Amélie",
+      // "spider man" IS "Spider-Man", and SQLite's ASCII-only LIKE never
+      // has to think about case. Not title_sort, which keeps punctuation
+      // for the A–Z sort and would file that exact match as a mere
+      // substring. Every word must appear, in any order — "yoga
+      // foundations" finds "Foundations of Yoga" — and the tokens are
+      // letters and digits only, so neither LIKE wildcard can reach the
+      // pattern.
       //
       // The ORDER BY is a coarse cut, not the final order: it keeps an
       // exact or leading match inside the LIMIT however many other titles
-      // merely contain the word, and the caller re-ranks the survivors
-      // with titleMatchRank alongside whatever a provider returned.
+      // merely contain the words, and the caller re-ranks the survivors
+      // with titleMatchRank alongside whatever a provider returned. That
+      // only works because both sides of the comparison are in the same
+      // form — which is the whole reason the column exists.
       const tokens = searchTokens(query)
       if (!tokens.length) return []
       try {
@@ -2553,7 +2562,7 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
         }
         const clauses = tokens.map((token, i) => {
           values[`t${i}`] = `%${token}%`
-          return `title_sort LIKE @t${i}`
+          return `title_key LIKE @t${i}`
         })
         const rows = sql
           .prepare(
@@ -2564,9 +2573,9 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
              FROM catalog_index
              WHERE kind = @kind AND ${clauses.join(' AND ')}
              ORDER BY CASE
-                        WHEN title_sort = @exact THEN 0
-                        WHEN title_sort LIKE @leading THEN 1
-                        WHEN title_sort LIKE @word THEN 2
+                        WHEN title_key = @exact THEN 0
+                        WHEN title_key LIKE @leading THEN 1
+                        WHEN title_key LIKE @word THEN 2
                         ELSE 3
                       END, rank, id
              LIMIT @limit`

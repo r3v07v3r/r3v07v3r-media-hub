@@ -14,6 +14,7 @@ import assert from 'node:assert'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
 import { createDatabase } from '../src/main/media-hub/database'
 import {
   CLOSE_MATCH_RANK,
@@ -291,6 +292,48 @@ check('the limit bounds the answer but never drops the best match', () => {
   assert.equal(found.length, 2)
   assert.equal(found[0].id, 'tt0804484')
   assert.deepEqual(db.indexSearch('series', 'foundation', 0), [])
+})
+
+check(
+  'an exact title survives the candidate limit however many better-ranked rows share its words',
+  () => {
+    // "Spider-Man" is stored with its hyphen; the query arrives without one.
+    // Ranked behind every "Spider Man ..." row in the crawl's order, with a
+    // limit smaller than that crowd, it must still be the first candidate —
+    // which only holds if the ordering compares like with like (title_key,
+    // not title_sort, which keeps the hyphen).
+    seed('movie', [
+      item('sm1', 'Spider Man Chronicles', { type: 'movie' }),
+      item('sm2', 'Spider Man Returns', { type: 'movie' }),
+      item('sm3', 'Spider Man Forever', { type: 'movie' })
+    ])
+    assert.ok(
+      db.indexUpsert('movie', [item('tt0145487', 'Spider-Man', { type: 'movie' })], {
+        source: 'test',
+        rankBase: 500
+      })
+    )
+    const found = db.indexSearch('movie', 'spider man', 2)
+    assert.equal(found.length, 2)
+    assert.equal(found[0].id, 'tt0145487')
+  }
+)
+
+check('an index crawled before migration 5 gets its search keys backfilled', () => {
+  const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'r3-title-key-')), 'test.sqlite')
+  const before = createDatabase(file, 'profile-under-test')
+  assert.ok(before.indexUpsert('movie', [item('tt0145487', 'Spider-Man', { type: 'movie' })]))
+  before.close()
+  // Roll the database back to the version before the key existed, row and
+  // all — the state every install that crawled before this migration is in
+  // when it next opens.
+  const raw = new DatabaseSync(file)
+  raw.exec('ALTER TABLE catalog_index DROP COLUMN title_key')
+  raw.exec('PRAGMA user_version = 5')
+  raw.close()
+  const after = createDatabase(file, 'profile-under-test')
+  assert.deepEqual(ids(after.indexSearch('movie', 'spider man')), ['tt0145487'])
+  after.close()
 })
 
 check('the index search survives a bad database rather than throwing into the handler', () => {

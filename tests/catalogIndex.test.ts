@@ -201,6 +201,18 @@ check('title_sort is lowercased and NOT article-stripped', () => {
   db.close()
 })
 
+check('title_key is the title in a search query’s own form', () => {
+  // The name search compares a punctuation-free query against this column
+  // (see indexSearch), so what "Spider-Man" stores must equal what somebody
+  // typing "spider man" is compared as — the same fold the query goes through.
+  const dbPath = tempDbPath()
+  const db = createDatabase(dbPath, TEST_PROFILE)
+  db.indexUpsert('movie', [item('tt1', { title: 'Spider-Man: Amélie’s Web' })])
+  assert.equal(raw(dbPath, 'tt1')?.title_key, 'spider man amelie s web')
+  assert.equal(raw(dbPath, 'tt1')?.title_sort, 'spider-man: amelie’s web')
+  db.close()
+})
+
 // --- episode counts replace episode positions ---------------------------
 
 check('episode counts are derived from videos when no override is given', () => {

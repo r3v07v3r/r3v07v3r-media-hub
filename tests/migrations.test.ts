@@ -253,6 +253,10 @@ function userVersion(sql: DatabaseSync): number {
   assert.equal(columns.get('first_seen'), 'INTEGER')
   assert.equal(columns.get('updated_at'), 'INTEGER')
   assert.ok(columns.has('title_sort'), 'the A-Z sort has a column to use')
+  // Migration 5. The name search compares a punctuation-free query against
+  // this column, never against title_sort, which keeps punctuation for the
+  // A-Z sort.
+  assert.ok(columns.has('title_key'), 'the name search has a column in the query’s own form')
   assert.ok(!columns.has('videos'), 'no per-episode data is stored here')
 
   // Migration 3. The Completed badge counts AIRED episodes, not all of them,
