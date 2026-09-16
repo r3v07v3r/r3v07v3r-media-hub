@@ -739,6 +739,17 @@ export interface MediaHubDatabase {
    * erase.
    */
   indexRefreshFromMetadata(kind: MediaKind, item: CatalogItem, now?: number): void
+  /**
+   * Refreshes only the aired count of one index row — the one figure in
+   * indexRefreshFromMetadata that moves by itself as time passes: a dated
+   * episode crosses its air time between two reads of the same cached
+   * entry, and nothing about the entry changed but the answer. Written only
+   * when the stored count differs (an UPDATE that matches no row touches
+   * nothing), so the metadata cache-hit path can call it on every read —
+   * the calendar's and the trackers' sweeps included — without paying a
+   * write per title. A null count (no episode data) never erases.
+   */
+  indexRefreshAiredCount(kind: MediaKind, item: CatalogItem, now?: number): void
   indexUpsert(
     kind: MediaKind,
     items: readonly CatalogItem[],
@@ -2296,6 +2307,23 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
           })
       } catch (error) {
         logError('index:refresh-metadata', error)
+      }
+    },
+
+    indexRefreshAiredCount(kind, item, now = Date.now()) {
+      const id = String(item?.id || '')
+      if (!id) return
+      const { airedEpisodes } = indexEpisodeCounts(item, now)
+      if (airedEpisodes === null) return
+      try {
+        sql
+          .prepare(
+            `UPDATE catalog_index SET aired_episodes=@airedEpisodes, updated_at=@now
+             WHERE id=@id AND kind=@kind AND aired_episodes IS NOT @airedEpisodes`
+          )
+          .run({ id, kind, airedEpisodes, now })
+      } catch (error) {
+        logError('index:refresh-aired', error)
       }
     },
     indexUpsert(kind, items, { source = '', rankBase = 0, ranks, now = Date.now() } = {}) {

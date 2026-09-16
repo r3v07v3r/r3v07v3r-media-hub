@@ -15,7 +15,6 @@ import {
 import { hasAired } from '../src/shared/media-hub/catalog-logic'
 import { episodeToStart, playableEpisodesInOrder } from '../src/shared/media-hub/nextEpisode'
 import { airingScheduleFromNode } from '../src/main/media-hub/anilist'
-import { episodeAiringChanged } from '../src/main/media-hub/episodeAiring'
 import { isFutureRelease, isUpcomingEpisode } from '../src/renderer/src/lib/mediaHub/releaseDate'
 import type { Episode } from '../src/shared/media-hub/types'
 
@@ -373,33 +372,6 @@ assert.deepEqual(
 // the caller caches the difference.
 assert.equal(airingScheduleFromNode(null), null)
 assert.equal(airingScheduleFromNode(undefined), null)
-
-// ---------------------------------------------------------------------------
-// Serving a cached title: the index is refreshed only when a verdict moved.
-
-{
-  const cached = [ep(1, 1, { released: LAST_WEEK }), ep(1, 2, { upcoming: true }), ep(1, 3)]
-  assert.equal(
-    episodeAiringChanged(
-      cached,
-      cached.map((v) => ({ ...v }))
-    ),
-    false,
-    'same verdicts'
-  )
-  assert.equal(
-    episodeAiringChanged(cached, [cached[0], ep(1, 2, { released: TOMORROW }), cached[2]]),
-    true,
-    'a schedule dated an episode'
-  )
-  assert.equal(
-    episodeAiringChanged(cached, [cached[0], ep(1, 2), cached[2]]),
-    true,
-    'a flag was cleared'
-  )
-  assert.equal(episodeAiringChanged(cached, cached.slice(0, 2)), true, 'a different list')
-  assert.equal(episodeAiringChanged(undefined, []), false)
-}
 
 // ---------------------------------------------------------------------------
 // The renderer's side of the same question. isUpcomingEpisode decides

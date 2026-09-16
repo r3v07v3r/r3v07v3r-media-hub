@@ -67,7 +67,7 @@ import {
   groupedVideosAreComplete
 } from './animeSeasons'
 import { omdbRottenTomatoesRating } from './omdb'
-import { episodeAiringChanged, withUpcomingEpisodes } from './episodeAiring'
+import { withUpcomingEpisodes } from './episodeAiring'
 import { searchCredits, titleCredits, titlesFeaturing } from './credits'
 import { titleCollection } from './collection'
 import { contentRating } from './contentRating'
@@ -763,16 +763,19 @@ async function resolveMetadata(
     // does, plus one of its own: an anime's airing schedule is cached for
     // hours, not the day this entry is, so a title opened again after this
     // week's episode landed learns so without waiting for the entry to expire.
-    const videos = disambiguateVideos(cached.videos)
-    const served = await withUpcomingEpisodes({ ...cached, videos }, priority)
-    // The index row's aired count was written from the verdicts this entry
-    // was cached with (see the fresh path below). When the re-run moved
-    // one — an episode aired, or a schedule correction dated one — the
-    // Completed badge and "N episodes" in the browse grid would otherwise
-    // keep the old count for the rest of this entry's day. One UPDATE,
-    // and only when something actually changed: this path also serves the
-    // calendar's and the trackers' sweeps over every followed title.
-    if (episodeAiringChanged(videos, served.videos)) db.indexRefreshFromMetadata(type, served)
+    const served = await withUpcomingEpisodes(
+      { ...cached, videos: disambiguateVideos(cached.videos) },
+      priority
+    )
+    // The index row's aired count was written when this entry was cached
+    // (see the fresh path below), and it goes stale on its own: an episode
+    // dated then crosses its air time now, with nothing about the entry
+    // changing but the answer — or the re-run above moved a verdict. The
+    // Completed badge and the grid's "N episodes" would otherwise keep the
+    // old count for the rest of this entry's day. Every read, then; the
+    // write only happens when the stored count differs, which is what
+    // keeps this affordable on the calendar's and trackers' sweeps.
+    db.indexRefreshAiredCount(type, served)
     return withCredits(served, type, resolvedId, priority)
   }
 
