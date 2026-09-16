@@ -15,7 +15,11 @@ import {
 import { hasAired } from '../src/shared/media-hub/catalog-logic'
 import { episodeToStart, playableEpisodesInOrder } from '../src/shared/media-hub/nextEpisode'
 import { airingScheduleFromNode } from '../src/main/media-hub/anilist'
-import { scheduleWorthAsking, seasonStillAiring } from '../src/main/media-hub/episodeAiring'
+import {
+  isTerminalSchedule,
+  scheduleWorthAsking,
+  seasonStillAiring
+} from '../src/main/media-hub/episodeAiring'
 import { isFutureRelease, isUpcomingEpisode } from '../src/renderer/src/lib/mediaHub/releaseDate'
 import type { Episode } from '../src/shared/media-hub/types'
 
@@ -285,6 +289,44 @@ const SCHEDULE_NEXT_12 = {
   assert.equal(applied[0].released, '2026-09-17T15:30:00.000Z')
 }
 
+// An episode the schedule says has aired loses a date still ahead of now —
+// the broadcast was moved earlier since that date was learned, and a date
+// wins everywhere else, so left alone it would keep the tile blocked until
+// the old instant passed. A date already behind now is consistent and kept.
+{
+  const movedEarlier = [
+    ep(1, 11, { released: YESTERDAY }),
+    ep(1, 12, { released: '2026-09-24T15:30:00.000Z' }),
+    ep(1, 13, { released: '2026-10-01T15:30:00.000Z' })
+  ]
+  const applied = applyAiringSchedule(
+    movedEarlier,
+    1,
+    { status: 'RELEASING', nextEpisode: 13, airDates: { 13: '2026-10-01T15:30:00.000Z' } },
+    NOW
+  )
+  assert.equal(applied[0].released, YESTERDAY, 'a past date is consistent with "aired"')
+  assert.equal(applied[1].released, '', 'the stale future date is cleared')
+  assert.equal(applied[1].upcoming, undefined)
+  assert.equal(hasAired(applied[1], NOW), true, 'so it reads as aired, as the schedule says')
+  assert.equal(applied[2].released, '2026-10-01T15:30:00.000Z', 'still scheduled: kept')
+  // FINISHED does the same for every episode of the season.
+  const done = applyAiringSchedule(
+    movedEarlier,
+    1,
+    { status: 'FINISHED', nextEpisode: null, airDates: {} },
+    NOW
+  )
+  assert.deepEqual(
+    done.map((v) => v.released),
+    [YESTERDAY, '', '']
+  )
+  assert.deepEqual(
+    playableEpisodesInOrder(done, NOW).map((v) => v.episode),
+    [11, 12, 13]
+  )
+}
+
 // Only the season the schedule is for — a grouped anime's earlier seasons
 // are numbered by their own entries and are not this schedule's business.
 {
@@ -420,10 +462,25 @@ assert.equal(
   assert.equal(scheduleWorthAsking(allOut, 1, { ...finished, status: null }, NOW), false)
   assert.equal(scheduleWorthAsking(allOut, 1, null, NOW), false, 'never read: nothing to go on')
   assert.equal(
-    scheduleWorthAsking([ep(1, 13)], 1, finished, NOW),
+    scheduleWorthAsking([ep(1, 13)], 1, null, NOW),
     true,
     'the list still airing is reason enough on its own'
   )
+  // ...except against AniList's own terminal word: a grouped franchise whose
+  // last season is dateless placeholders looks "still airing" by the list
+  // forever, and must not stay on the request lane forever with it.
+  assert.equal(
+    scheduleWorthAsking([ep(1, 13)], 1, finished, NOW),
+    false,
+    'FINISHED beats undated placeholders'
+  )
+  assert.equal(
+    scheduleWorthAsking([ep(1, 13)], 1, { ...finished, status: 'CANCELLED' }, NOW),
+    false
+  )
+  assert.equal(isTerminalSchedule(finished), true)
+  assert.equal(isTerminalSchedule(releasing), false)
+  assert.equal(isTerminalSchedule(null), false)
 }
 
 // ---------------------------------------------------------------------------

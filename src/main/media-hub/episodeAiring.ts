@@ -48,9 +48,24 @@ export function seasonStillAiring(
   })
 }
 
+/** AniList's word that nothing more will air on this entry. */
+export function isTerminalSchedule(last: AiringSchedule | null): boolean {
+  return last?.status === 'FINISHED' || last?.status === 'CANCELLED'
+}
+
 /**
- * Whether to read the schedule (from its 12h cache, or AniList) for this
- * season now. Two reasons, either sufficient:
+ * Whether to read the schedule afresh (from its 12h cache, or AniList) for
+ * this season now.
+ *
+ * Never once AniList has called the entry FINISHED or CANCELLED: nothing
+ * more will air, whatever the list looks like — and a grouped franchise
+ * whose last season is dateless Kitsu placeholders looks "still airing"
+ * forever by the list alone, which would have kept it on the request lane
+ * every 12h for good. That last read still gets APPLIED (see
+ * withUpcomingEpisodes), so a flag rule 1 raised on such placeholders is
+ * cleared exactly as a fresh read would clear it.
+ *
+ * Otherwise, either reason is sufficient:
  *
  *   - The list says the season is still airing (seasonStillAiring).
  *   - AniList itself last said the title was not finished. This is what
@@ -60,9 +75,8 @@ export function seasonStillAiring(
  *     search for a stream that is not there, until the metadata entry
  *     expired (or forever, when Kitsu keeps the old date). The last read,
  *     expired or not, still says RELEASING, so the next read happens, and
- *     it carries the new instant. Once AniList says FINISHED (or
- *     CANCELLED) that read is cached and this stays false: a finished
- *     title costs one request after its finale, then none.
+ *     it carries the new instant. A finished title costs one request after
+ *     its finale, then none.
  *
  * Pure — the caller supplies what the cache last held — so it is tested.
  */
@@ -72,9 +86,9 @@ export function scheduleWorthAsking(
   last: AiringSchedule | null,
   now: number = Date.now()
 ): boolean {
+  if (isTerminalSchedule(last)) return false
   if (seasonStillAiring(videos, season, now)) return true
-  const status = last?.status
-  return status != null && status !== 'FINISHED' && status !== 'CANCELLED'
+  return last?.status != null
 }
 
 /**
@@ -119,7 +133,11 @@ export async function withUpcomingEpisodes(
         // 30 days) for a title with nothing left to air.
         const known = cachedAnilistId(kitsuId)
         const last = known ? lastKnownAiringSchedule(known) : null
-        if (scheduleWorthAsking(videos, season, last)) {
+        if (isTerminalSchedule(last)) {
+          // Nothing left to air, so nothing to ask — but what it said still
+          // applies, clearing any flag rule 1 raised on dateless placeholders.
+          videos = applyAiringSchedule(videos, season, last as AiringSchedule)
+        } else if (scheduleWorthAsking(videos, season, last)) {
           const anilistId = known ?? (await anilistIdForKitsu(kitsuId, priority))
           // A refresh that fails (AniList down, rate-limited) falls back to
           // the schedule last read, however old: its instants still judge

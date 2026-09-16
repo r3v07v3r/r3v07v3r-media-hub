@@ -159,14 +159,22 @@ export interface AiringSchedule {
  *   - FINISHED clears every flag in the season; NOT_YET_RELEASED with no
  *     schedule flags every episode. HIATUS and CANCELLED say nothing about
  *     WHICH episodes are out, so rule 1's verdict stands for them.
+ *   - An episode the schedule says HAS aired loses a date still ahead of
+ *     now. That date came from an earlier read (or from Kitsu) and the
+ *     broadcast has since been moved earlier, or the title finished; a
+ *     date wins over the flag everywhere else, so left in place it would
+ *     keep the tile blocked and the episode out of the aired count until
+ *     the old instant passed. Cleared, the episode is dateless and
+ *     unflagged: aired, as the schedule says.
  *
  * As with rule 1, only an undated episode ends up carrying the flag; a
- * dated one is judged by its date.
+ * dated one is judged by its date. `now` is injectable for the tests.
  */
 export function applyAiringSchedule(
   videos: readonly Episode[] | undefined | null,
   season: number,
-  schedule: AiringSchedule
+  schedule: AiringSchedule,
+  now: number = Date.now()
 ): Episode[] {
   const finished = schedule.status === 'FINISHED'
   const notStarted = schedule.status === 'NOT_YET_RELEASED'
@@ -181,6 +189,11 @@ export function applyAiringSchedule(
     else if (notStarted) verdict = true
     if (verdict === null) return dated
 
-    return withUpcoming(dated, verdict && releasedAt(dated) === null)
+    if (!verdict) {
+      const at = releasedAt(dated)
+      const stale = at !== null && at > now
+      return withUpcoming(stale ? { ...dated, released: '' } : dated, false)
+    }
+    return withUpcoming(dated, releasedAt(dated) === null)
   })
 }
