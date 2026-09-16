@@ -121,7 +121,16 @@ export async function withUpcomingEpisodes(
         const last = known ? lastKnownAiringSchedule(known) : null
         if (scheduleWorthAsking(videos, season, last)) {
           const anilistId = known ?? (await anilistIdForKitsu(kitsuId, priority))
-          const schedule = anilistId ? await anilistAiringSchedule(anilistId, priority) : null
+          // A refresh that fails (AniList down, rate-limited) falls back to
+          // the schedule last read, however old: its instants still judge
+          // themselves against the clock, and its verdicts are the best
+          // there are. With nothing applied at all, a not-yet-released
+          // title's undated placeholders — whose cached flags rule 1 has
+          // just cleared, having no dated boundary to reason from — would
+          // read as aired, and every tile as playable, until AniList came
+          // back.
+          const schedule =
+            (anilistId ? await anilistAiringSchedule(anilistId, priority) : null) ?? last
           if (schedule) videos = applyAiringSchedule(videos, season, schedule)
         }
       } catch (error) {
