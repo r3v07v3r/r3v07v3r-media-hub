@@ -378,6 +378,25 @@ const SCHEDULE_NEXT_12 = {
   assert.equal(legacy[2].released, '', 'no since: ahead of now, pulled')
 }
 
+// A title that has not started, with nothing scheduled: every episode is
+// upcoming, and a date already behind now (a premiere pushed back after
+// Kitsu dated it) is stale — cleared and flagged, or it would read as aired.
+// A date still ahead is kept and judges itself.
+{
+  const applied = applyAiringSchedule(
+    [ep(1, 1, { released: YESTERDAY }), ep(1, 2, { released: TOMORROW }), ep(1, 3)],
+    1,
+    { status: 'NOT_YET_RELEASED', nextEpisode: null, airDates: {} },
+    NOW
+  )
+  assert.equal(applied[0].released, '', 'the premiere date that passed without a premiere')
+  assert.equal(applied[0].upcoming, true)
+  assert.equal(applied[1].released, TOMORROW, 'still ahead: kept')
+  assert.equal(applied[1].upcoming, undefined, 'judged by its date')
+  assert.equal(applied[2].upcoming, true)
+  assert.deepEqual(playableEpisodesInOrder(applied, NOW), [], 'nothing to play yet')
+}
+
 // FINISHED clears every flag in the season; NOT_YET_RELEASED with nothing
 // scheduled flags every episode; HIATUS says nothing and rule 1 stands.
 {

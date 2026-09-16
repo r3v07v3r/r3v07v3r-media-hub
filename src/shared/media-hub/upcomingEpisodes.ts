@@ -163,11 +163,14 @@ export interface AiringSchedule {
  *     is the exact broadcast moment, where Kitsu's is a calendar day.
  *   - With a next episode named, everything from it onward is upcoming and
  *     everything before it has aired — whatever rule 1 concluded.
- *   - FINISHED clears every flag in the season; NOT_YET_RELEASED with no
- *     schedule flags every episode. Neither touches a date: a status is
- *     the title's word, not an episode's, and a FINISHED entered a little
- *     early on a community-edited database must not turn a finale still
- *     dated ahead into a Play button.
+ *   - FINISHED clears every flag in the season, and touches no date: a
+ *     status is the title's word, not an episode's, and a FINISHED entered
+ *     a little early on a community-edited database must not turn a
+ *     finale still dated ahead into a Play button.
+ *   - NOT_YET_RELEASED with no schedule flags every episode, and clears a
+ *     date already behind now — a premiere pushed back after the season's
+ *     source dated it, which would otherwise read as aired. A date still
+ *     ahead is kept.
  *   - An episode the schedule names as aired — below the next one to air
  *     — loses a date still ahead of now. That date came from an earlier
  *     read (or from Kitsu) and the broadcast has since been moved
@@ -214,7 +217,15 @@ export function applyAiringSchedule(
       const stale = at !== null && at > now
       return withUpcoming(stale ? { ...dated, released: '' } : dated, false)
     }
-    if (notStarted) return withUpcoming(dated, releasedAt(dated) === null)
+    if (notStarted) {
+      // Nothing has aired. A date already behind now is stale — the
+      // premiere was pushed back after the season's source dated it — and
+      // left in place it would read as aired; it goes, and the episode is
+      // flagged. A date still ahead is kept and judges itself.
+      const at = releasedAt(dated)
+      const stale = at !== null && at <= now
+      return withUpcoming(stale ? { ...dated, released: '' } : dated, at === null || stale)
+    }
     if (!halted) return dated
     const at = releasedAt(dated)
     return at !== null && at > haltedAt ? withUpcoming({ ...dated, released: '' }, true) : dated
