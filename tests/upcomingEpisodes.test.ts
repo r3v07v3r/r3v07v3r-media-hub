@@ -15,6 +15,7 @@ import {
 import { hasAired } from '../src/shared/media-hub/catalog-logic'
 import { episodeToStart, playableEpisodesInOrder } from '../src/shared/media-hub/nextEpisode'
 import { airingScheduleFromNode } from '../src/main/media-hub/anilist'
+import { seasonStillAiring } from '../src/main/media-hub/episodeAiring'
 import { isFutureRelease, isUpcomingEpisode } from '../src/renderer/src/lib/mediaHub/releaseDate'
 import type { Episode } from '../src/shared/media-hub/types'
 
@@ -372,6 +373,36 @@ assert.deepEqual(
 // the caller caches the difference.
 assert.equal(airingScheduleFromNode(null), null)
 assert.equal(airingScheduleFromNode(undefined), null)
+
+// ---------------------------------------------------------------------------
+// When main asks AniList at all: while the season still has episodes to
+// air, and not once every one is out.
+
+assert.equal(
+  seasonStillAiring([ep(1, 1), ep(1, 2)], 1, NOW),
+  true,
+  'placeholders with no dates: the schedule may date them'
+)
+assert.equal(
+  seasonStillAiring([ep(1, 1, { released: LAST_WEEK }), ep(1, 2, { released: TOMORROW })], 1, NOW),
+  true,
+  'a dated episode still ahead: the schedule may move it'
+)
+assert.equal(
+  seasonStillAiring([ep(1, 1, { released: LAST_WEEK }), ep(1, 2, { released: YESTERDAY })], 1, NOW),
+  false,
+  'every episode out: nothing left to ask'
+)
+assert.equal(
+  seasonStillAiring([ep(1, 1, { released: LAST_WEEK }), ep(2, 1)], 1, NOW),
+  false,
+  'only the season asked about counts'
+)
+assert.equal(
+  seasonStillAiring([ep(0, 1), ep(0, -1, { unplayable: true })], 0, NOW),
+  false,
+  'specials and synthetic entries are never a reason to ask'
+)
 
 // ---------------------------------------------------------------------------
 // The renderer's side of the same question. isUpcomingEpisode decides

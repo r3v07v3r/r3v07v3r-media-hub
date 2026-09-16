@@ -25,8 +25,8 @@
 //
 // The second, equally narrow use is the airing schedule (anilistAiringSchedule
 // below): ONE title, ONE request, only when that title is opened AND its
-// episode list has undated episodes nothing else can date (see
-// episodeAiring.ts for the gate), cached 12h. It answers the one question
+// last season still has episodes to air (see episodeAiring.ts for the
+// gate — a finished title never asks), cached 12h. It answers the one question
 // Kitsu cannot — which episode of a running show airs next, and when — so
 // the detail page stops offering Play on an episode that does not exist
 // yet. Same terms, same rate limit, same lane.

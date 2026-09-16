@@ -20,15 +20,27 @@ import { anilistAiringSchedule, anilistIdForKitsu } from './anilist'
 import { logError } from './logger'
 import type { TaskPriority } from './taskScheduler'
 
-/** True when a date-less regular episode sits in `season` — the only
- *  situation the schedule can improve on. Dated episodes are judged by
- *  their dates already (hasAired), and asking AniList about a season whose
- *  every episode carries one would be a request for nothing. */
-function seasonHasUndatedEpisode(videos: readonly Episode[], season: number): boolean {
+/**
+ * True while a regular episode of `season` has still to air — no usable
+ * date at all, or a date ahead of now. That is exactly how long the
+ * schedule is worth asking for: it can date a placeholder, and it can MOVE
+ * a date it gave last time (a delayed broadcast), which is why a season
+ * whose every remaining episode already carries an AniList instant keeps
+ * being checked against the 12h schedule cache until the last one is out.
+ * Once every episode has aired nothing the schedule says can change, and
+ * the request stops — a finished title with dated episodes never asks.
+ * Exported for its tests.
+ */
+export function seasonStillAiring(
+  videos: readonly Episode[],
+  season: number,
+  now: number = Date.now()
+): boolean {
   return videos.some((v) => {
     if (!isRegularEpisode(v) || v.season !== season) return false
     if (!v.released) return true
-    return !Number.isFinite(new Date(v.released).getTime())
+    const at = new Date(v.released).getTime()
+    return !Number.isFinite(at) || at > now
   })
 }
 
@@ -65,9 +77,9 @@ export async function withUpcomingEpisodes(
     // finished show has nothing airing next, whatever its dates say. A
     // grouped title's status is season 1's (normalizeKitsuAnime of the
     // canonical member), which says nothing about the last season — so
-    // the undated-episode gate alone decides there.
+    // the still-airing gate alone decides there.
     const finished = !item.groupedIds?.length && isFinishedStatus(item.status)
-    if (!finished && kitsuId && seasonHasUndatedEpisode(videos, season)) {
+    if (!finished && kitsuId && seasonStillAiring(videos, season)) {
       try {
         const anilistId = await anilistIdForKitsu(kitsuId, priority)
         const schedule = anilistId ? await anilistAiringSchedule(anilistId, priority) : null
