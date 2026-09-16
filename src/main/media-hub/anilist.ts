@@ -26,8 +26,8 @@
 // The second, equally narrow use is the airing schedule (anilistAiringSchedule
 // below): ONE title, ONE request, only when that title is opened AND its
 // last season still has episodes to air, or the schedule last read for it
-// said it was still releasing (see episodeAiring.ts for the gate — a title
-// AniList has called finished never asks again), cached 12h. It answers the one question
+// said it was still releasing (see episodeAiring.ts for the gate), cached
+// 12h while airing and a week once AniList calls it finished. It answers the one question
 // Kitsu cannot — which episode of a running show airs next, and when — so
 // the detail page stops offering Play on an episode that does not exist
 // yet. Same terms, same rate limit, same lane.
@@ -352,11 +352,27 @@ export function lastKnownAiringSchedule(anilistId: number): AiringSchedule | nul
   })
 }
 
+/** A title AniList has called FINISHED or CANCELLED — or one it has no
+ *  node for at all — changes so rarely that a week between reads is
+ *  plenty. Not never: AniList is community-edited, a premature FINISHED
+ *  happens, and a title read every week self-corrects on that cadence
+ *  rather than sticking for good. A row re-read weekly also stays well
+ *  inside the cache prune's month-past-expiry grace (database.ts), so a
+ *  cancelled title's `since` survives for as long as the title is opened. */
+const SETTLED_TTL_MS = 7 * 24 * 60 * 60 * 1000
+
+function isSettled(schedule: AiringSchedule): boolean {
+  return (
+    schedule.status === null || schedule.status === 'FINISHED' || schedule.status === 'CANCELLED'
+  )
+}
+
 /**
- * One anime's airing schedule from AniList, cached (see AIRING_TTL_MS).
- * Best-effort like everything else in this file: a failed request answers
- * null and caches nothing, so the episode list falls back to what its own
- * dates say rather than failing the title.
+ * One anime's airing schedule from AniList, cached — for AIRING_TTL_MS
+ * while it is airing, SETTLED_TTL_MS once it is not. Best-effort like
+ * everything else in this file: a failed request answers null and caches
+ * nothing, so the caller falls back to the schedule last read (or to what
+ * the list's own dates say) rather than failing the title.
  */
 export async function anilistAiringSchedule(
   anilistId: number,
@@ -385,12 +401,22 @@ export async function anilistAiringSchedule(
       },
       { priority, label: 'AniList airing schedule' }
     )
-    const schedule = airingScheduleFromNode(result.data?.Media) ?? {
+    const read = airingScheduleFromNode(result.data?.Media) ?? {
       status: null,
       nextEpisode: null,
       airDates: {}
     }
-    db.putCache(key, schedule, AIRING_TTL_MS)
+    // `since`: when this status was first seen, kept from the previous row
+    // (expired or not) while the status holds, so a cancellation or hiatus
+    // stays anchored to the read that first reported it rather than to
+    // every re-read after. See AiringSchedule.since for what it decides.
+    const previous = db.getCache<AiringSchedule>(key, { allowExpired: true })
+    const since =
+      previous?.status === read.status && typeof previous.since === 'number'
+        ? previous.since
+        : Date.now()
+    const schedule: AiringSchedule = { ...read, since }
+    db.putCache(key, schedule, isSettled(schedule) ? SETTLED_TTL_MS : AIRING_TTL_MS)
     return schedule
   } catch (error) {
     logError('anime:anilist-airing', error)

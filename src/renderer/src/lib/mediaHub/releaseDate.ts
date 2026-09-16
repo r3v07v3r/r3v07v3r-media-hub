@@ -4,24 +4,13 @@
 // title/episode reads the same everywhere rather than each panel guessing
 // independently.
 
-/** A bare YYYY-MM-DD is built from local calendar components rather than
- *  handed to `new Date(string)`, which per spec reads a date-ONLY string as
- *  UTC midnight (a date-TIME string without an offset is read as local —
- *  the inconsistency is the trap). Cinemeta/Kitsu dates are date-only, so
- *  west of Greenwich a plain `new Date(released)` would read a title as
- *  released a day earlier than it actually is — mattering most exactly on
- *  release day itself. Anything with a time in it still goes through the
- *  normal parse. */
-const DATE_ONLY = /^(\d{4})-(\d{2})-(\d{2})$/
+import { parseReleaseDate } from '@shared/media-hub/releaseDate'
 
-export function parseReleaseDate(date: string | undefined): Date | null {
-  if (!date) return null
-  const parts = DATE_ONLY.exec(date.trim())
-  const parsed = parts
-    ? new Date(Number(parts[1]), Number(parts[2]) - 1, Number(parts[3]))
-    : new Date(date)
-  return Number.isNaN(parsed.getTime()) ? null : parsed
-}
+// The parse itself lives in shared/media-hub/releaseDate.ts now, so that
+// hasAired and the upcoming-episode rules in main read a bare calendar day
+// exactly as this file does (local midnight); re-exported so this module's
+// callers are unchanged.
+export { parseReleaseDate }
 
 /** True only when the date is real AND still ahead of now.
  *

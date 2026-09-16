@@ -34,6 +34,7 @@
 // which assembles the list, and the renderer, which draws it.
 
 import { isRegularEpisode } from './catalog-logic'
+import { releaseInstant } from './releaseDate'
 import type { Episode } from './types'
 
 /** A title that is no longer producing episodes — Kitsu's `finished`,
@@ -44,13 +45,12 @@ export function isFinishedStatus(status: string | undefined | null): boolean {
   return /^(finished|ended|completed|cancell?ed)$/i.test(String(status ?? '').trim())
 }
 
-/** The instant an episode's `released` names, or null for none/unparseable.
- *  `new Date(string)` on purpose: it is the same parse hasAired applies, so
- *  the two can never disagree about whether a date is a date. */
+/** The instant an episode's `released` names, or null for none/unparseable
+ *  — the same parse hasAired and the renderer's tile apply
+ *  (shared/media-hub/releaseDate.ts), so the three can never disagree
+ *  about whether a date is a date, or which day a bare date means. */
 function releasedAt(video: { released?: string }): number | null {
-  if (!video.released) return null
-  const at = new Date(video.released).getTime()
-  return Number.isFinite(at) ? at : null
+  return releaseInstant(video.released)
 }
 
 function byPosition(a: Episode, b: Episode): number {
@@ -144,6 +144,13 @@ export interface AiringSchedule {
    *  number. Keys are numbers in code and strings once JSON-cached; both
    *  index the same way. */
   airDates: Record<number, string>
+  /** When AniList was first seen reporting this `status`, carried forward
+   *  across re-reads while the status holds (anilist.ts). What a halted
+   *  title's dates are judged against: nothing airs after a cancellation
+   *  or into a hiatus, so an episode dated later than this never did —
+   *  whatever the clock says now. Absent on rows cached before it existed;
+   *  the clock stands in then. */
+  since?: number
 }
 
 /**
@@ -157,18 +164,33 @@ export interface AiringSchedule {
  *   - With a next episode named, everything from it onward is upcoming and
  *     everything before it has aired — whatever rule 1 concluded.
  *   - FINISHED clears every flag in the season; NOT_YET_RELEASED with no
- *     schedule flags every episode. HIATUS and CANCELLED say nothing about
- *     WHICH episodes are out, so rule 1's verdict stands for them.
- *   - An episode the schedule says HAS aired loses a date still ahead of
- *     now. That date came from an earlier read (or from Kitsu) and the
- *     broadcast has since been moved earlier, or the title finished; a
- *     date wins over the flag everywhere else, so left in place it would
- *     keep the tile blocked and the episode out of the aired count until
- *     the old instant passed. Cleared, the episode is dateless and
- *     unflagged: aired, as the schedule says.
+ *     schedule flags every episode. Neither touches a date: a status is
+ *     the title's word, not an episode's, and a FINISHED entered a little
+ *     early on a community-edited database must not turn a finale still
+ *     dated ahead into a Play button.
+ *   - An episode the schedule names as aired — below the next one to air
+ *     — loses a date still ahead of now. That date came from an earlier
+ *     read (or from Kitsu) and the broadcast has since been moved
+ *     earlier; a date wins over the flag everywhere else, so left in
+ *     place it would keep the tile blocked and the episode out of the
+ *     aired count until the old instant passed. Cleared, the episode is
+ *     dateless and unflagged: aired, as the schedule says — and, until a
+ *     later read dates it, absent from the calendar's window, which reads
+ *     dates only. The old date was wrong and the new one is unknown; no
+ *     date is the truthful state.
+ *   - CANCELLED and HIATUS say nothing about which undated episodes are
+ *     out, so rule 1's verdict stands for those. But nothing airs after a
+ *     cancellation or into a hiatus, so an episode DATED later than the
+ *     moment AniList first reported the halt (`since`) never aired: its
+ *     date — a broadcast that was scheduled and then pulled — goes, and
+ *     it is flagged. Judged against `since`, not the clock, because a
+ *     cancelled title is never read again (see episodeAiring.ts) and its
+ *     pulled dates would otherwise "pass" and read as aired.
  *
  * As with rule 1, only an undated episode ends up carrying the flag; a
- * dated one is judged by its date. `now` is injectable for the tests.
+ * dated one is judged by its date — the two cases above that remove a date
+ * are the only ways this function changes what a date says. `now` is
+ * injectable for the tests.
  */
 export function applyAiringSchedule(
   videos: readonly Episode[] | undefined | null,
@@ -178,22 +200,23 @@ export function applyAiringSchedule(
 ): Episode[] {
   const finished = schedule.status === 'FINISHED'
   const notStarted = schedule.status === 'NOT_YET_RELEASED'
+  const halted = schedule.status === 'CANCELLED' || schedule.status === 'HIATUS'
+  const haltedAt = schedule.since ?? now
   return (videos ?? []).map((v) => {
     if (!isRegularEpisode(v) || v.season !== season || !Number.isFinite(v.episode)) return v
     const scheduled = schedule.airDates[v.episode]
     const dated = scheduled && scheduled !== v.released ? { ...v, released: scheduled } : v
 
-    let verdict: boolean | null = null
-    if (finished) verdict = false
-    else if (schedule.nextEpisode !== null) verdict = v.episode >= schedule.nextEpisode
-    else if (notStarted) verdict = true
-    if (verdict === null) return dated
-
-    if (!verdict) {
+    if (finished) return withUpcoming(dated, false)
+    if (schedule.nextEpisode !== null) {
+      if (v.episode >= schedule.nextEpisode) return withUpcoming(dated, releasedAt(dated) === null)
       const at = releasedAt(dated)
       const stale = at !== null && at > now
       return withUpcoming(stale ? { ...dated, released: '' } : dated, false)
     }
-    return withUpcoming(dated, releasedAt(dated) === null)
+    if (notStarted) return withUpcoming(dated, releasedAt(dated) === null)
+    if (!halted) return dated
+    const at = releasedAt(dated)
+    return at !== null && at > haltedAt ? withUpcoming({ ...dated, released: '' }, true) : dated
   })
 }

@@ -18,6 +18,7 @@ import { airingScheduleFromNode } from '../src/main/media-hub/anilist'
 import {
   isTerminalSchedule,
   scheduleWorthAsking,
+  seasonAcceptsSchedule,
   seasonStillAiring
 } from '../src/main/media-hub/episodeAiring'
 import { isFutureRelease, isUpcomingEpisode } from '../src/renderer/src/lib/mediaHub/releaseDate'
@@ -310,20 +311,23 @@ const SCHEDULE_NEXT_12 = {
   assert.equal(applied[1].upcoming, undefined)
   assert.equal(hasAired(applied[1], NOW), true, 'so it reads as aired, as the schedule says')
   assert.equal(applied[2].released, '2026-10-01T15:30:00.000Z', 'still scheduled: kept')
-  // FINISHED does the same for every episode of the season.
+  // FINISHED does NOT: a status is the title's word, not an episode's, and
+  // a FINISHED entered early on a community-edited database must not turn
+  // a finale still dated ahead into a Play button. Flags cleared, dates kept.
   const done = applyAiringSchedule(
-    movedEarlier,
+    [...movedEarlier, ep(1, 14, { upcoming: true })],
     1,
     { status: 'FINISHED', nextEpisode: null, airDates: {} },
     NOW
   )
   assert.deepEqual(
     done.map((v) => v.released),
-    [YESTERDAY, '', '']
+    [YESTERDAY, '2026-09-24T15:30:00.000Z', '2026-10-01T15:30:00.000Z', '']
   )
+  assert.deepEqual(upcomingKeys(done), [])
   assert.deepEqual(
     playableEpisodesInOrder(done, NOW).map((v) => v.episode),
-    [11, 12, 13]
+    [11, 14]
   )
 }
 
@@ -334,6 +338,44 @@ const SCHEDULE_NEXT_12 = {
   assert.equal(applied[0].released, '')
   assert.equal(applied[1].released, '2026-09-17T15:30:00.000Z')
   assert.equal(applied[2].released, '', 'specials are never touched')
+}
+
+// A cancelled (or paused) title: nothing airs after the moment AniList first
+// said so. An episode dated later than that never aired — its pulled date
+// goes and it is flagged, whatever the clock says now, because a cancelled
+// title is never read again and its dates would otherwise "pass". One dated
+// before it is consistent with having aired; undated ones keep rule 1's
+// verdict. A row cached before `since` existed is judged against now.
+{
+  const cancelledAt = Date.UTC(2026, 8, 10)
+  const list = [
+    ep(1, 10, { released: '2026-09-03T15:30:00.000Z' }),
+    ep(1, 11, { released: '2026-09-12T15:30:00.000Z' }),
+    ep(1, 12, { released: '2026-09-24T15:30:00.000Z' }),
+    ep(1, 13, { upcoming: true }),
+    ep(1, 14)
+  ]
+  const cancelled = { status: 'CANCELLED', nextEpisode: null, airDates: {}, since: cancelledAt }
+  const applied = applyAiringSchedule(list, 1, cancelled, NOW)
+  assert.equal(applied[0].released, '2026-09-03T15:30:00.000Z', 'aired before: kept')
+  assert.equal(applied[1].released, '', 'dated after the cancellation, though past now: pulled')
+  assert.equal(applied[1].upcoming, true)
+  assert.equal(applied[2].released, '', 'dated after and still ahead: pulled')
+  assert.equal(applied[2].upcoming, true)
+  assert.equal(applied[3].upcoming, true, 'undated: rule 1 stands')
+  assert.equal(applied[4].upcoming, undefined, 'undated: rule 1 stands')
+  assert.deepEqual(
+    playableEpisodesInOrder(applied, NOW).map((v) => v.episode),
+    [10, 14]
+  )
+  assert.deepEqual(
+    applyAiringSchedule(list, 1, { ...cancelled, status: 'HIATUS' }, NOW).map((v) => v.released),
+    ['2026-09-03T15:30:00.000Z', '', '', '', ''],
+    'a hiatus is judged the same way — until a later read resumes the schedule'
+  )
+  const legacy = applyAiringSchedule(list, 1, { ...cancelled, since: undefined }, NOW)
+  assert.equal(legacy[1].released, '2026-09-12T15:30:00.000Z', 'no since: past now, kept')
+  assert.equal(legacy[2].released, '', 'no since: ahead of now, pulled')
 }
 
 // FINISHED clears every flag in the season; NOT_YET_RELEASED with nothing
@@ -426,9 +468,18 @@ assert.equal(
   'placeholders with no dates: the schedule may date them'
 )
 assert.equal(
-  seasonStillAiring([ep(1, 1, { released: LAST_WEEK }), ep(1, 2, { released: TOMORROW })], 1, NOW),
+  seasonStillAiring(
+    [ep(1, 1, { released: LAST_WEEK }), ep(1, 2, { released: '2026-09-17T15:30:00.000Z' })],
+    1,
+    NOW
+  ),
   true,
-  'a dated episode still ahead: the schedule may move it'
+  'an AniList instant still ahead: the schedule may move it'
+)
+assert.equal(
+  seasonStillAiring([ep(1, 1, { released: LAST_WEEK }), ep(1, 2, { released: TOMORROW })], 1, NOW),
+  false,
+  "a bare calendar day ahead is the season's own source's plan, not the schedule's to refresh"
 )
 assert.equal(
   seasonStillAiring([ep(1, 1, { released: LAST_WEEK }), ep(1, 2, { released: YESTERDAY })], 1, NOW),
@@ -452,7 +503,12 @@ assert.equal(
 // (or CANCELLED) on the last read, or no read at all, leaves the list's own
 // verdict as the only reason.
 {
-  const allOut = [ep(1, 12, { released: LAST_WEEK }), ep(1, 13, { released: YESTERDAY })]
+  // Instants: dates this module learned from AniList, which is what marks
+  // the season as one the schedule speaks for (see seasonAcceptsSchedule).
+  const allOut = [
+    ep(1, 12, { released: '2026-09-09T15:30:00.000Z' }),
+    ep(1, 13, { released: '2026-09-15T15:30:00.000Z' })
+  ]
   const releasing = { status: 'RELEASING', nextEpisode: 13, airDates: {} }
   const finished = { status: 'FINISHED', nextEpisode: null, airDates: {} }
   assert.equal(scheduleWorthAsking(allOut, 1, releasing, NOW), true, 'a postponed finale')
@@ -481,6 +537,41 @@ assert.equal(
   assert.equal(isTerminalSchedule(finished), true)
   assert.equal(isTerminalSchedule(releasing), false)
   assert.equal(isTerminalSchedule(null), false)
+}
+
+// Whether the schedule may be applied to a season at all: its episodes must
+// be numbered the way AniList's entry is. Undated episodes and AniList's own
+// instants say so; a bare calendar day ahead of now says the season's own
+// source (TMDB, whose seasons need not match; Kitsu's planned dates) is in
+// charge, and the schedule stays out.
+{
+  const kitsuPartial = [ep(1, 1, { released: LAST_WEEK }), ep(1, 2)]
+  const learned = [
+    ep(1, 1, { released: LAST_WEEK }),
+    ep(1, 2, { released: '2026-09-17T15:30:00.000Z' })
+  ]
+  const tmdbAhead = [ep(1, 1, { released: LAST_WEEK }), ep(1, 2, { released: TOMORROW })]
+  const settled = [ep(1, 1, { released: LAST_WEEK }), ep(1, 2, { released: YESTERDAY })]
+  assert.equal(
+    seasonAcceptsSchedule(kitsuPartial, 1, NOW),
+    true,
+    'undated: only the schedule can date it'
+  )
+  assert.equal(seasonAcceptsSchedule(learned, 1, NOW), true, 'an instant it wrote before')
+  assert.equal(seasonAcceptsSchedule(tmdbAhead, 1, NOW), false, 'its own source dates it ahead')
+  assert.equal(seasonAcceptsSchedule(settled, 1, NOW), false, 'nothing for the schedule to settle')
+  assert.equal(
+    seasonAcceptsSchedule([...kitsuPartial, ep(1, 3, { released: TOMORROW })], 1, NOW),
+    false
+  )
+  assert.equal(seasonAcceptsSchedule([ep(2, 1)], 1, NOW), false, 'another season is not this one')
+  // ...and scheduleWorthAsking defers to it: a TMDB-numbered season with
+  // its own future dates is never asked about, whatever AniList last said.
+  assert.equal(scheduleWorthAsking(tmdbAhead, 1, null, NOW), false)
+  assert.equal(
+    scheduleWorthAsking(tmdbAhead, 1, { status: 'RELEASING', nextEpisode: 2, airDates: {} }, NOW),
+    false
+  )
 }
 
 // ---------------------------------------------------------------------------
@@ -519,5 +610,34 @@ assert.equal(
 // later today: not playable, in both places.
 assert.equal(hasAired(ep(1, 1, { released: LATER_TODAY }), LOCAL_NOON), false)
 assert.equal(isUpcomingEpisode(ep(1, 1, { released: LATER_TODAY }), LOCAL_NOON), true)
+
+// ...and for a bare calendar day, which every catalogue source hands over:
+// both read it as the viewer's LOCAL day. hasAired used to read it as UTC
+// midnight, so west of Greenwich the tile and the rule disagreed for the
+// timezone's worth of hours around every release.
+assert.equal(hasAired(ep(1, 1, { released: '2026-09-16' }), LOCAL_NOON), true, 'today: out')
+assert.equal(hasAired(ep(1, 1, { released: '2026-09-17' }), LOCAL_NOON), false, 'tomorrow: not')
+assert.equal(isUpcomingEpisode(ep(1, 1, { released: '2026-09-17' }), LOCAL_NOON), true)
+
+// The stale-date clearing judges a bare day the same way, so a Kitsu date of
+// "tomorrow" on an episode AniList says has aired (moved earlier) is cleared
+// at the moment the tile would otherwise block it — not a timezone later.
+{
+  const applied = applyAiringSchedule(
+    [ep(1, 11, { released: '2026-09-17' }), ep(1, 12)],
+    1,
+    { status: 'RELEASING', nextEpisode: 12, airDates: {} },
+    LOCAL_NOON
+  )
+  assert.equal(applied[0].released, '', 'cleared: the tile would have read it as tomorrow')
+  assert.equal(isUpcomingEpisode(applied[0], LOCAL_NOON), false)
+  const kept = applyAiringSchedule(
+    [ep(1, 11, { released: '2026-09-16' }), ep(1, 12)],
+    1,
+    { status: 'RELEASING', nextEpisode: 12, airDates: {} },
+    LOCAL_NOON
+  )
+  assert.equal(kept[0].released, '2026-09-16', "today's date is consistent with aired: kept")
+}
 
 console.log('upcomingEpisodes: ok')

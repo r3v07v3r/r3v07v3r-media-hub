@@ -11,6 +11,7 @@
 
 import type { CatalogItem, Episode } from '../../shared/media-hub/types'
 import { isRegularEpisode } from '../../shared/media-hub/catalog-logic'
+import { isDateOnly, releaseInstant } from '../../shared/media-hub/releaseDate'
 import {
   applyAiringSchedule,
   isFinishedStatus,
@@ -26,57 +27,103 @@ import {
 import { logError } from './logger'
 import type { TaskPriority } from './taskScheduler'
 
+/** The regular episodes of one season. */
+function seasonEpisodes(videos: readonly Episode[], season: number): Episode[] {
+  return videos.filter((v) => isRegularEpisode(v) && v.season === season)
+}
+
 /**
- * True while a regular episode of `season` has still to air — no usable
- * date at all, or a date ahead of now. The first of the two reasons the
- * schedule is worth asking for (see scheduleWorthAsking): it can date a
- * placeholder, and it can MOVE a date it gave last time (a delayed
- * broadcast), which is why a season whose every remaining episode already
- * carries an AniList instant keeps being checked against the 12h schedule
- * cache until the last one is out. Exported for its tests.
+ * Whether AniList's schedule may be applied to this season at all — i.e.
+ * whether the season's episodes are numbered the way the schedule's are.
+ *
+ * The schedule is read for the season's Kitsu member, and AniList numbers
+ * that entry's episodes from 1 exactly as Kitsu's own /episodes and
+ * normalizeKitsuAnime's placeholders do. A season buildGroupedAnimeVideos
+ * took from TMDB instead is numbered TMDB's way, which need not agree: TMDB
+ * models a two-cour show as one 24-episode season where Kitsu and AniList
+ * have two 12-episode entries, so "episode 13 airs next" means different
+ * episodes on the two lists — and a FINISHED for the first cour, applied
+ * to the TMDB season, would wipe the second cour's real dates and offer
+ * Play for episodes that have not aired.
+ *
+ * The tell is the dates themselves. A bare calendar day comes from the
+ * season's own source (Kitsu's airdate, TMDB's air_date); an ISO instant
+ * is one this module learned from AniList. So the schedule applies when
+ * the season has something only it can settle — an undated episode, or an
+ * instant it wrote before — and never when the season's own source still
+ * dates an episode ahead of now: that source has its own numbering and its
+ * own plan, and the schedule must not overrule it. A season whose every
+ * date is its own and in the past is settled either way. Exported for its
+ * tests.
+ */
+export function seasonAcceptsSchedule(
+  videos: readonly Episode[],
+  season: number,
+  now: number = Date.now()
+): boolean {
+  let evidence = false
+  for (const v of seasonEpisodes(videos, season)) {
+    const at = releaseInstant(v.released)
+    if (at === null) {
+      evidence = true
+      continue
+    }
+    if (isDateOnly(v.released)) {
+      if (at > now) return false
+      continue
+    }
+    evidence = true
+  }
+  return evidence
+}
+
+/**
+ * True while a regular episode of `season` has still to air by what the
+ * schedule can speak to — no usable date at all, or an AniList instant
+ * ahead of now. The first of the two reasons the schedule is worth asking
+ * for (see scheduleWorthAsking): it can date a placeholder, and it can
+ * MOVE an instant it gave last time (a delayed broadcast), which is why a
+ * season whose every remaining episode already carries one keeps being
+ * checked against the 12h schedule cache until the last one is out. A
+ * bare calendar day ahead of now is the season's own source's plan, not
+ * this module's to refresh — see seasonAcceptsSchedule. Exported for its
+ * tests.
  */
 export function seasonStillAiring(
   videos: readonly Episode[],
   season: number,
   now: number = Date.now()
 ): boolean {
-  return videos.some((v) => {
-    if (!isRegularEpisode(v) || v.season !== season) return false
-    if (!v.released) return true
-    const at = new Date(v.released).getTime()
-    return !Number.isFinite(at) || at > now
+  return seasonEpisodes(videos, season).some((v) => {
+    const at = releaseInstant(v.released)
+    if (at === null) return true
+    return !isDateOnly(v.released) && at > now
   })
 }
 
 /** AniList's word that nothing more will air on this entry. */
-export function isTerminalSchedule(last: AiringSchedule | null): boolean {
+export function isTerminalSchedule(last: AiringSchedule | null): last is AiringSchedule {
   return last?.status === 'FINISHED' || last?.status === 'CANCELLED'
 }
 
 /**
  * Whether to read the schedule afresh (from its 12h cache, or AniList) for
- * this season now.
+ * a season AniList has NOT called finished. (A finished or cancelled entry
+ * is re-read on its own, weekly, cadence — see withUpcomingEpisodes.)
  *
- * Never once AniList has called the entry FINISHED or CANCELLED: nothing
- * more will air, whatever the list looks like — and a grouped franchise
- * whose last season is dateless Kitsu placeholders looks "still airing"
- * forever by the list alone, which would have kept it on the request lane
- * every 12h for good. That last read still gets APPLIED (see
- * withUpcomingEpisodes), so a flag rule 1 raised on such placeholders is
- * cleared exactly as a fresh read would clear it.
- *
- * Otherwise, either reason is sufficient:
+ * Only for a season the schedule can be applied to (seasonAcceptsSchedule);
+ * then either reason is sufficient:
  *
  *   - The list says the season is still airing (seasonStillAiring).
  *   - AniList itself last said the title was not finished. This is what
- *     catches a postponed finale: the stored air time passes, the list
+ *     catches a postponed finale: the stored instant passes, the list
  *     reads as fully aired, and by the first reason alone nothing would
  *     ever ask again — the finale would count as out, and Play would
  *     search for a stream that is not there, until the metadata entry
  *     expired (or forever, when Kitsu keeps the old date). The last read,
  *     expired or not, still says RELEASING, so the next read happens, and
  *     it carries the new instant. A finished title costs one request after
- *     its finale, then none.
+ *     its finale, then one a week while it is opened.
  *
  * Pure — the caller supplies what the cache last held — so it is tested.
  */
@@ -86,9 +133,13 @@ export function scheduleWorthAsking(
   last: AiringSchedule | null,
   now: number = Date.now()
 ): boolean {
-  if (isTerminalSchedule(last)) return false
+  // Read once: isTerminalSchedule is a type guard, and past its early
+  // return TypeScript would narrow `last` to never.
+  const status = last?.status ?? null
+  if (status === 'FINISHED' || status === 'CANCELLED') return false
+  if (!seasonAcceptsSchedule(videos, season, now)) return false
   if (seasonStillAiring(videos, season, now)) return true
-  return last?.status != null
+  return status !== null
 }
 
 /**
@@ -133,10 +184,19 @@ export async function withUpcomingEpisodes(
         // 30 days) for a title with nothing left to air.
         const known = cachedAnilistId(kitsuId)
         const last = known ? lastKnownAiringSchedule(known) : null
-        if (isTerminalSchedule(last)) {
-          // Nothing left to air, so nothing to ask — but what it said still
-          // applies, clearing any flag rule 1 raised on dateless placeholders.
-          videos = applyAiringSchedule(videos, season, last as AiringSchedule)
+        if (isTerminalSchedule(last) && known) {
+          // Nothing left to air — but what AniList said still applies
+          // where the season accepts it: it clears any flag rule 1 raised
+          // on dateless placeholders, and for a cancelled title it keeps
+          // the pulled dates pulled. Re-read on the settled cadence
+          // (anilist.ts's SETTLED_TTL_MS: the row is served from cache
+          // until then), so a premature FINISHED corrects itself within a
+          // week of the title being opened rather than never; a failed
+          // re-read falls back to the last one.
+          if (seasonAcceptsSchedule(videos, season)) {
+            const schedule = (await anilistAiringSchedule(known, priority)) ?? last
+            videos = applyAiringSchedule(videos, season, schedule)
+          }
         } else if (scheduleWorthAsking(videos, season, last)) {
           const anilistId = known ?? (await anilistIdForKitsu(kitsuId, priority))
           // A refresh that fails (AniList down, rate-limited) falls back to

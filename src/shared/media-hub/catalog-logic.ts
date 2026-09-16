@@ -15,6 +15,7 @@ import {
   TitleCredits,
   RecommendationRail
 } from './types'
+import { releaseInstant } from './releaseDate'
 
 export interface FilterCatalogOptions {
   includeGenres?: string[]
@@ -185,10 +186,13 @@ export function hasAired(
   video: { released?: string; upcoming?: boolean } | undefined | null,
   now: number = Date.now()
 ): boolean {
-  if (!video?.released) return video?.upcoming !== true
-  const at = new Date(video.released).getTime()
-  // An unparseable date is a metadata gap, same as a missing one.
-  if (!Number.isFinite(at)) return video.upcoming !== true
+  // releaseInstant, not `new Date(string)`: a bare calendar day is the
+  // viewer's local day, the same reading the renderer's tile applies —
+  // see shared/media-hub/releaseDate.ts for why the two must not differ.
+  const at = releaseInstant(video?.released)
+  // A missing or unparseable date is a metadata gap, unless main said
+  // otherwise on `upcoming`.
+  if (at === null) return video?.upcoming !== true
   return at <= now
 }
 
