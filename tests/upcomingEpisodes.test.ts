@@ -15,7 +15,7 @@ import {
 import { hasAired } from '../src/shared/media-hub/catalog-logic'
 import { episodeToStart, playableEpisodesInOrder } from '../src/shared/media-hub/nextEpisode'
 import { airingScheduleFromNode } from '../src/main/media-hub/anilist'
-import { seasonStillAiring } from '../src/main/media-hub/episodeAiring'
+import { scheduleWorthAsking, seasonStillAiring } from '../src/main/media-hub/episodeAiring'
 import { isFutureRelease, isUpcomingEpisode } from '../src/renderer/src/lib/mediaHub/releaseDate'
 import type { Episode } from '../src/shared/media-hub/types'
 
@@ -403,6 +403,28 @@ assert.equal(
   false,
   'specials and synthetic entries are never a reason to ask'
 )
+
+// ...and the second reason: what AniList last said. A finale whose stored
+// air time has passed reads as fully aired, but a last read that still said
+// RELEASING means it may have been postponed since — ask again. FINISHED
+// (or CANCELLED) on the last read, or no read at all, leaves the list's own
+// verdict as the only reason.
+{
+  const allOut = [ep(1, 12, { released: LAST_WEEK }), ep(1, 13, { released: YESTERDAY })]
+  const releasing = { status: 'RELEASING', nextEpisode: 13, airDates: {} }
+  const finished = { status: 'FINISHED', nextEpisode: null, airDates: {} }
+  assert.equal(scheduleWorthAsking(allOut, 1, releasing, NOW), true, 'a postponed finale')
+  assert.equal(scheduleWorthAsking(allOut, 1, { ...releasing, status: 'HIATUS' }, NOW), true)
+  assert.equal(scheduleWorthAsking(allOut, 1, finished, NOW), false, 'finished: never again')
+  assert.equal(scheduleWorthAsking(allOut, 1, { ...finished, status: 'CANCELLED' }, NOW), false)
+  assert.equal(scheduleWorthAsking(allOut, 1, { ...finished, status: null }, NOW), false)
+  assert.equal(scheduleWorthAsking(allOut, 1, null, NOW), false, 'never read: nothing to go on')
+  assert.equal(
+    scheduleWorthAsking([ep(1, 13)], 1, finished, NOW),
+    true,
+    'the list still airing is reason enough on its own'
+  )
+}
 
 // ---------------------------------------------------------------------------
 // The renderer's side of the same question. isUpcomingEpisode decides

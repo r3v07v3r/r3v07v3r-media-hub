@@ -25,8 +25,9 @@
 //
 // The second, equally narrow use is the airing schedule (anilistAiringSchedule
 // below): ONE title, ONE request, only when that title is opened AND its
-// last season still has episodes to air (see episodeAiring.ts for the
-// gate — a finished title never asks), cached 12h. It answers the one question
+// last season still has episodes to air, or the schedule last read for it
+// said it was still releasing (see episodeAiring.ts for the gate — a title
+// AniList has called finished never asks again), cached 12h. It answers the one question
 // Kitsu cannot — which episode of a running show airs next, and when — so
 // the detail page stops offering Play on an episode that does not exist
 // yet. Same terms, same rate limit, same lane.
@@ -336,6 +337,20 @@ const AIRING_TTL_MS = 12 * 60 * 60 * 1000
 /** How far ahead to read. AniList caps a page at 50; a weekly show has at
  *  most a cour's worth scheduled, and a long-runner only a few weeks. */
 const AIRING_SCHEDULE_PAGE = 50
+
+/**
+ * The schedule last read for this id, expired or not — for the gate that
+ * decides whether to read a fresh one (episodeAiring.ts's
+ * scheduleWorthAsking): a title whose last known status was still
+ * releasing is worth asking about even once every stored air time has
+ * passed, because the finale that "passed" may have been postponed since
+ * that read. Null when the title was never asked about.
+ */
+export function lastKnownAiringSchedule(anilistId: number): AiringSchedule | null {
+  return getDatabase().getCache<AiringSchedule>(`anilist:airing:${anilistId}`, {
+    allowExpired: true
+  })
+}
 
 /**
  * One anime's airing schedule from AniList, cached (see AIRING_TTL_MS).

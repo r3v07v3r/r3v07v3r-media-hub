@@ -14,22 +14,26 @@ import { isRegularEpisode } from '../../shared/media-hub/catalog-logic'
 import {
   applyAiringSchedule,
   isFinishedStatus,
-  markUpcomingEpisodes
+  markUpcomingEpisodes,
+  type AiringSchedule
 } from '../../shared/media-hub/upcomingEpisodes'
-import { anilistAiringSchedule, anilistIdForKitsu } from './anilist'
+import {
+  anilistAiringSchedule,
+  anilistIdForKitsu,
+  cachedAnilistId,
+  lastKnownAiringSchedule
+} from './anilist'
 import { logError } from './logger'
 import type { TaskPriority } from './taskScheduler'
 
 /**
  * True while a regular episode of `season` has still to air — no usable
- * date at all, or a date ahead of now. That is exactly how long the
- * schedule is worth asking for: it can date a placeholder, and it can MOVE
- * a date it gave last time (a delayed broadcast), which is why a season
- * whose every remaining episode already carries an AniList instant keeps
- * being checked against the 12h schedule cache until the last one is out.
- * Once every episode has aired nothing the schedule says can change, and
- * the request stops — a finished title with dated episodes never asks.
- * Exported for its tests.
+ * date at all, or a date ahead of now. The first of the two reasons the
+ * schedule is worth asking for (see scheduleWorthAsking): it can date a
+ * placeholder, and it can MOVE a date it gave last time (a delayed
+ * broadcast), which is why a season whose every remaining episode already
+ * carries an AniList instant keeps being checked against the 12h schedule
+ * cache until the last one is out. Exported for its tests.
  */
 export function seasonStillAiring(
   videos: readonly Episode[],
@@ -42,6 +46,35 @@ export function seasonStillAiring(
     const at = new Date(v.released).getTime()
     return !Number.isFinite(at) || at > now
   })
+}
+
+/**
+ * Whether to read the schedule (from its 12h cache, or AniList) for this
+ * season now. Two reasons, either sufficient:
+ *
+ *   - The list says the season is still airing (seasonStillAiring).
+ *   - AniList itself last said the title was not finished. This is what
+ *     catches a postponed finale: the stored air time passes, the list
+ *     reads as fully aired, and by the first reason alone nothing would
+ *     ever ask again — the finale would count as out, and Play would
+ *     search for a stream that is not there, until the metadata entry
+ *     expired (or forever, when Kitsu keeps the old date). The last read,
+ *     expired or not, still says RELEASING, so the next read happens, and
+ *     it carries the new instant. Once AniList says FINISHED (or
+ *     CANCELLED) that read is cached and this stays false: a finished
+ *     title costs one request after its finale, then none.
+ *
+ * Pure — the caller supplies what the cache last held — so it is tested.
+ */
+export function scheduleWorthAsking(
+  videos: readonly Episode[],
+  season: number,
+  last: AiringSchedule | null,
+  now: number = Date.now()
+): boolean {
+  if (seasonStillAiring(videos, season, now)) return true
+  const status = last?.status
+  return status != null && status !== 'FINISHED' && status !== 'CANCELLED'
 }
 
 /**
@@ -77,13 +110,20 @@ export async function withUpcomingEpisodes(
     // finished show has nothing airing next, whatever its dates say. A
     // grouped title's status is season 1's (normalizeKitsuAnime of the
     // canonical member), which says nothing about the last season — so
-    // the still-airing gate alone decides there.
+    // the gate alone decides there.
     const finished = !item.groupedIds?.length && isFinishedStatus(item.status)
-    if (!finished && kitsuId && seasonStillAiring(videos, season)) {
+    if (!finished && kitsuId) {
       try {
-        const anilistId = await anilistIdForKitsu(kitsuId, priority)
-        const schedule = anilistId ? await anilistAiringSchedule(anilistId, priority) : null
-        if (schedule) videos = applyAiringSchedule(videos, season, schedule)
+        // Cache reads only, until the gate says to ask: an AniList id the
+        // crawl never mapped is not looked up (a Kitsu request, once per
+        // 30 days) for a title with nothing left to air.
+        const known = cachedAnilistId(kitsuId)
+        const last = known ? lastKnownAiringSchedule(known) : null
+        if (scheduleWorthAsking(videos, season, last)) {
+          const anilistId = known ?? (await anilistIdForKitsu(kitsuId, priority))
+          const schedule = anilistId ? await anilistAiringSchedule(anilistId, priority) : null
+          if (schedule) videos = applyAiringSchedule(videos, season, schedule)
+        }
       } catch (error) {
         logError('anime:episode-airing', error)
       }
