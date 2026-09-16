@@ -221,18 +221,22 @@ function PlayerControls() {
   // Where the previous/next chapter buttons would land from here. Seeks go
   // through seekTo like the arrow keys do — not a chapter command to mpv —
   // so a party's host carries its guests along with a chapter jump exactly
-  // as with any other seek. `next` is the first chapter starting after now
-  // (a small tolerance, so landing exactly on a mark does not re-offer it);
+  // as with any other seek. Both targets are found by POSITION relative to
+  // the chapter now playing (the last one whose start is at or before the
+  // playhead), never by a time threshold on the marks themselves: a mark
+  // 0.4s ahead of the playhead is still the next chapter, and a threshold
+  // that skipped it would jump two chapters at once. `next` is simply the
+  // chapter after the current one (the first chapter, from before any);
   // `previous` is this chapter's start once past CHAPTER_RESTART_SECONDS,
   // else the one before — and from inside the first chapter, or before any
   // chapter at all, the top of the title.
   const chapterTargets = useMemo(() => {
     if (!chapterRanges.length) return null
-    const next = chapterRanges.find((chapter) => chapter.start > timePos + 0.5) ?? null
     let currentIndex = -1
     chapterRanges.forEach((chapter, index) => {
       if (chapter.start <= timePos) currentIndex = index
     })
+    const next = chapterRanges[currentIndex + 1] ?? null
     const current = currentIndex >= 0 ? chapterRanges[currentIndex] : null
     const restart = current ? current.start : 0
     const previous =
