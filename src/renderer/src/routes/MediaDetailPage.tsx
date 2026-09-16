@@ -438,6 +438,21 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
     return upcoming?.released || undefined
   }, [playableInOrder, episodes])
 
+  /** The same "nothing has aired" fact for a list whose upcoming episodes
+   *  carry no date (every tile TBA — see Episode.upcoming): nextAiringDate
+   *  is undefined for it, and without this the hero offered Play. Real
+   *  episodes only, for the reason playableEpisodesInOrder skips specials:
+   *  a title that is nothing but season-0 extras has playable tiles and is
+   *  not "unreleased". */
+  const notYetAired = useMemo(
+    () =>
+      playableInOrder.length === 0 &&
+      episodes.some(
+        (e) => isRegularEpisode(e) && Number.isFinite(e.season) && Number.isFinite(e.episode)
+      ),
+    [playableInOrder, episodes]
+  )
+
   // The first REAL season, so a show that opens with a Specials block lands
   // on season 1 rather than on the OVAs.
   const selectedSeason =
@@ -682,6 +697,7 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
         // but nobody has watched it either.
         allEpisodesWatched={playableInOrder.length > 0 && !nextEpisode}
         nextAiringDate={nextAiringDate}
+        notYetAired={notYetAired}
         trailer={catalogItem?.trailers?.[0]}
         showTrailer={showTrailer}
         onToggleTrailer={() => setShowTrailer((v) => !v)}

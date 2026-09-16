@@ -15,6 +15,7 @@ import {
 import { hasAired } from '../src/shared/media-hub/catalog-logic'
 import { episodeToStart, playableEpisodesInOrder } from '../src/shared/media-hub/nextEpisode'
 import { airingScheduleFromNode } from '../src/main/media-hub/anilist'
+import { isFutureRelease, isUpcomingEpisode } from '../src/renderer/src/lib/mediaHub/releaseDate'
 import type { Episode } from '../src/shared/media-hub/types'
 
 // A fixed "today", so the boundary is testable: 16 Sep 2026, midday UTC.
@@ -371,5 +372,42 @@ assert.deepEqual(
 // the caller caches the difference.
 assert.equal(airingScheduleFromNode(null), null)
 assert.equal(airingScheduleFromNode(undefined), null)
+
+// ---------------------------------------------------------------------------
+// The renderer's side of the same question. isUpcomingEpisode decides
+// whether a tile is a Play button; it must agree with hasAired about an
+// episode airing LATER TODAY, which a calendar-day compare got wrong.
+
+// Local noon on the 16th, built from local components so the date-only
+// cases below (which parse to LOCAL midnight) hold in any timezone.
+const LOCAL_NOON = new Date(2026, 8, 16, 12).getTime()
+const LATER_TODAY = new Date(LOCAL_NOON + 3 * 60 * 60 * 1000).toISOString()
+const EARLIER_TODAY = new Date(LOCAL_NOON - 3 * 60 * 60 * 1000).toISOString()
+
+assert.equal(isFutureRelease('2026-09-16', LOCAL_NOON), false, 'dated today: out since midnight')
+assert.equal(isFutureRelease('2026-09-17', LOCAL_NOON), true, 'dated tomorrow: still coming')
+assert.equal(isFutureRelease(EARLIER_TODAY, LOCAL_NOON), false, 'an instant earlier today: out')
+assert.equal(
+  isFutureRelease(LATER_TODAY, LOCAL_NOON),
+  true,
+  'an instant later today is NOT out yet — the AniList broadcast moment'
+)
+assert.equal(isFutureRelease('', LOCAL_NOON), false)
+assert.equal(isFutureRelease('not a date', LOCAL_NOON), false)
+
+assert.equal(isUpcomingEpisode(ep(1, 1, { released: LATER_TODAY }), LOCAL_NOON), true)
+assert.equal(isUpcomingEpisode(ep(1, 1, { released: EARLIER_TODAY }), LOCAL_NOON), false)
+assert.equal(isUpcomingEpisode(ep(1, 1, { upcoming: true }), LOCAL_NOON), true, 'TBA')
+assert.equal(isUpcomingEpisode(ep(1, 1), LOCAL_NOON), false, 'undated, unflagged: a gap')
+assert.equal(
+  isUpcomingEpisode(ep(1, 1, { released: EARLIER_TODAY, upcoming: true }), LOCAL_NOON),
+  false,
+  'the date wins over a stale flag here too'
+)
+
+// The grid and the shared rule give one answer for the episode airing
+// later today: not playable, in both places.
+assert.equal(hasAired(ep(1, 1, { released: LATER_TODAY }), LOCAL_NOON), false)
+assert.equal(isUpcomingEpisode(ep(1, 1, { released: LATER_TODAY }), LOCAL_NOON), true)
 
 console.log('upcomingEpisodes: ok')

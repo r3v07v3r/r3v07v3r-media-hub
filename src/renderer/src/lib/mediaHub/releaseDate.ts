@@ -23,25 +23,23 @@ export function parseReleaseDate(date: string | undefined): Date | null {
   return Number.isNaN(parsed.getTime()) ? null : parsed
 }
 
-/** True only when the date is real AND strictly after today — a title that
- *  released earlier today is not "coming soon" just because playback
- *  hasn't caught up with it yet.
+/** True only when the date is real AND still ahead of now.
  *
- *  Compares calendar days, not instants: a source can hand this a full ISO
- *  datetime (CatalogItem.releaseDate allows one), and a bare instant
- *  comparison against local midnight would keep a title released EARLIER
- *  TODAY reading as "future" for the rest of the day — any time past
- *  00:00:00 is later than midnight, so the compare never flips false until
- *  the calendar date itself rolls over. Normalizing both sides to midnight
- *  first makes "today" compare equal, not greater. */
-export function isFutureRelease(date: string | undefined): boolean {
+ *  A bare instant comparison, on purpose. A date-only string parses to
+ *  LOCAL midnight (parseReleaseDate), so a title dated today has been "out"
+ *  since 00:00 and reads as released all day, and one dated tomorrow reads
+ *  as coming until midnight — the calendar-day answer, with no day
+ *  truncation needed. A full datetime is compared as the instant it names:
+ *  an episode AniList schedules for 20:00 UTC today is not out at 09:00,
+ *  and the tile must not offer Play for it — the same rule hasAired
+ *  (shared/media-hub/catalog-logic.ts) applies to the same string, so the
+ *  grid and the next-up card cannot disagree about an episode airing later
+ *  today. This used to truncate both sides to local midnight, which made
+ *  exactly that episode playable from midnight on. */
+export function isFutureRelease(date: string | undefined, now: number = Date.now()): boolean {
   const parsed = parseReleaseDate(date)
   if (!parsed) return false
-  const today = new Date()
-  today.setHours(0, 0, 0, 0)
-  const releaseDay = new Date(parsed)
-  releaseDay.setHours(0, 0, 0, 0)
-  return releaseDay.getTime() > today.getTime()
+  return parsed.getTime() > now
 }
 
 /** "12 Mar 2003" — compact, locale-aware. Null for an empty/unparseable date. */
@@ -52,13 +50,17 @@ export function formatReleaseDate(date: string | undefined): string | null {
 }
 
 /** Has this episode still to come out? The date decides when there is one
- *  (isFutureRelease's calendar-day rule, so an episode out earlier today is
- *  not "coming"); with no usable date, main's own verdict on `upcoming`
- *  does — see Episode.upcoming (shared/media-hub/types.ts) for how it is
- *  reached and why the date takes precedence over it. The tile grid,
- *  its multi-select and its per-tile menu all ask this one question, so
- *  an episode can never be selectable but not playable, or the reverse. */
-export function isUpcomingEpisode(episode: { released?: string; upcoming?: boolean }): boolean {
-  if (parseReleaseDate(episode.released)) return isFutureRelease(episode.released)
+ *  (isFutureRelease, so an episode out earlier today is not "coming" and
+ *  one airing later today still is); with no usable date, main's own
+ *  verdict on `upcoming` does — see Episode.upcoming
+ *  (shared/media-hub/types.ts) for how it is reached and why the date
+ *  takes precedence over it. The tile grid, its multi-select and its
+ *  per-tile menu all ask this one question, so an episode can never be
+ *  selectable but not playable, or the reverse. */
+export function isUpcomingEpisode(
+  episode: { released?: string; upcoming?: boolean },
+  now: number = Date.now()
+): boolean {
+  if (parseReleaseDate(episode.released)) return isFutureRelease(episode.released, now)
   return episode.upcoming === true
 }

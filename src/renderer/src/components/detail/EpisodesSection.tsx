@@ -550,12 +550,7 @@ export function EpisodesSection({
                   />
                 </div>
               ) : unaired ? (
-                <div
-                  className={`${styles.thumbFrame} ${styles.thumbFrameUnaired}`}
-                  aria-label={
-                    airDate ? `${title} releases ${airDate}` : `${title} release date TBA`
-                  }
-                >
+                <div className={`${styles.thumbFrame} ${styles.thumbFrameUnaired}`}>
                   <ArtworkImage
                     src={episodeStillOrShowArt(ep, showArtwork)}
                     alt=""
@@ -566,8 +561,10 @@ export function EpisodesSection({
                   {/* Real text, not an icon with a tooltip: this is the
                       one thing the tile has to say, so it sits in the
                       middle of the picture where the play affordance
-                      would be. */}
-                  <span className={styles.upcomingLabel} aria-hidden="true">
+                      would be — and is read out as ordinary text, which
+                      is why it is not aria-hidden (a div has no role for
+                      an aria-label to hang off). */}
+                  <span className={styles.upcomingLabel}>
                     <Icon name="clock" size={14} />
                     <span className={styles.upcomingEyebrow}>
                       {airDate ? 'Releases' : 'Release date'}
