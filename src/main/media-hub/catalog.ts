@@ -67,7 +67,7 @@ import {
   groupedVideosAreComplete
 } from './animeSeasons'
 import { omdbRottenTomatoesRating } from './omdb'
-import { withUpcomingEpisodes } from './episodeAiring'
+import { episodeAiringChanged, withUpcomingEpisodes } from './episodeAiring'
 import { searchCredits, titleCredits, titlesFeaturing } from './credits'
 import { titleCollection } from './collection'
 import { contentRating } from './contentRating'
@@ -763,15 +763,17 @@ async function resolveMetadata(
     // does, plus one of its own: an anime's airing schedule is cached for
     // hours, not the day this entry is, so a title opened again after this
     // week's episode landed learns so without waiting for the entry to expire.
-    return withCredits(
-      await withUpcomingEpisodes(
-        { ...cached, videos: disambiguateVideos(cached.videos) },
-        priority
-      ),
-      type,
-      resolvedId,
-      priority
-    )
+    const videos = disambiguateVideos(cached.videos)
+    const served = await withUpcomingEpisodes({ ...cached, videos }, priority)
+    // The index row's aired count was written from the verdicts this entry
+    // was cached with (see the fresh path below). When the re-run moved
+    // one — an episode aired, or a schedule correction dated one — the
+    // Completed badge and "N episodes" in the browse grid would otherwise
+    // keep the old count for the rest of this entry's day. One UPDATE,
+    // and only when something actually changed: this path also serves the
+    // calendar's and the trackers' sweeps over every followed title.
+    if (episodeAiringChanged(videos, served.videos)) db.indexRefreshFromMetadata(type, served)
+    return withCredits(served, type, resolvedId, priority)
   }
 
   let item: CatalogItem

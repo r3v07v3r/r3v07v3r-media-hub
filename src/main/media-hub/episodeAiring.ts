@@ -50,6 +50,26 @@ function airingSeason(item: CatalogItem): { season: number; kitsuId: string } {
 }
 
 /**
+ * Whether a pass over the list changed any episode's airing verdict — its
+ * `upcoming` flag or its `released` date — so a caller serving a CACHED
+ * title knows the persisted index counts (aired_episodes, the Completed
+ * badge's denominator) were computed from the old verdicts and need
+ * refreshing. Position by position: both lists are the same title's
+ * episodes in the same order, only their verdicts differ.
+ */
+export function episodeAiringChanged(
+  before: readonly Episode[] | undefined,
+  after: readonly Episode[] | undefined
+): boolean {
+  const a = before ?? []
+  const b = after ?? []
+  if (a.length !== b.length) return true
+  return a.some(
+    (v, i) => (v.released || '') !== (b[i].released || '') || v.upcoming !== b[i].upcoming
+  )
+}
+
+/**
  * The title with every episode's `upcoming` (and, where AniList knows one,
  * `released`) decided. Never throws: a title whose schedule cannot be read
  * keeps rule 1's verdict, which is the pre-existing behaviour at worst.
