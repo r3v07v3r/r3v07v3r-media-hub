@@ -222,20 +222,27 @@ function PlayerControls() {
   // through seekTo like the arrow keys do — not a chapter command to mpv —
   // so a party's host carries its guests along with a chapter jump exactly
   // as with any other seek. Both targets are found by POSITION relative to
-  // the chapter now playing (the last one whose start is at or before the
-  // playhead), never by a time threshold on the marks themselves: a mark
-  // 0.4s ahead of the playhead is still the next chapter, and a threshold
-  // that skipped it would jump two chapters at once. `next` is simply the
-  // chapter after the current one (the first chapter, from before any);
-  // `previous` is this chapter's start once past CHAPTER_RESTART_SECONDS,
-  // else the one before — and from inside the first chapter, or before any
-  // chapter at all, the top of the title.
+  // the chapter now playing, never by a time threshold on the marks
+  // themselves: a mark 0.4s ahead of the playhead is still the next
+  // chapter, and a threshold that skipped it would jump two chapters at
+  // once. "Now playing" is mpv's own `chapter` index where it has one —
+  // after a seek to a mark, mpv can report time-pos a few milliseconds
+  // SHORT of it for a tick while already counting the chapter as current,
+  // and a scan by time would offer the mark just landed on as "next" — and
+  // a scan by time only when mpv has not said (chapter -1, or a mark
+  // chapterRanges dropped). `next` is simply the chapter after the current
+  // one (the first chapter, from before any); `previous` is this chapter's
+  // start once past CHAPTER_RESTART_SECONDS, else the one before — and from
+  // inside the first chapter, or before any chapter at all, the top of the
+  // title.
   const chapterTargets = useMemo(() => {
     if (!chapterRanges.length) return null
-    let currentIndex = -1
-    chapterRanges.forEach((chapter, index) => {
-      if (chapter.start <= timePos) currentIndex = index
-    })
+    let currentIndex = chapterRanges.findIndex((chapter) => chapter.index === currentChapter)
+    if (currentIndex === -1) {
+      chapterRanges.forEach((chapter, index) => {
+        if (chapter.start <= timePos) currentIndex = index
+      })
+    }
     const next = chapterRanges[currentIndex + 1] ?? null
     const current = currentIndex >= 0 ? chapterRanges[currentIndex] : null
     const restart = current ? current.start : 0
@@ -254,7 +261,7 @@ function PlayerControls() {
       next: next ? { time: next.start, title: next.title } : null,
       previous
     }
-  }, [chapterRanges, timePos])
+  }, [chapterRanges, currentChapter, timePos])
   const audioDelay = state.audioDelay ?? 0
   const subtitleStyle = session?.settings.subtitleStyle ?? DEFAULT_SUBTITLE_STYLE
   const subtitleStyled = !isSubtitleStyleDefault(subtitleStyle)
