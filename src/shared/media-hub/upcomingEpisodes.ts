@@ -1,0 +1,186 @@
+// Which episodes of a title have not come out yet, when the date alone
+// cannot say.
+//
+// Cinemeta, TMDB and Kitsu all list episodes that have not aired — with a
+// date when the schedule is known, and with no date at all when it is not:
+// a season announced but unscheduled, or a Kitsu title whose /episodes
+// resource has nothing yet, so its list is normalizeKitsuAnime's
+// count-only placeholders. hasAired reads a missing date as "aired" (a
+// metadata gap must not hide real episodes), which is right for a gap in
+// the middle of a finished show and wrong for the tail of one still airing:
+// the detail page offered a Play button for next week's episode, and the
+// stream search found nothing and gave up.
+//
+// Two sources of "not yet", applied in this order:
+//
+//   1. The list's own shape (markUpcomingEpisodes). In a title that is
+//      still running, an undated episode after the last dated one that has
+//      aired is upcoming. In any title, an undated episode after a
+//      future-dated one is upcoming too. Every other undated episode stays
+//      what it always was: a gap, presumed aired.
+//   2. AniList's airing schedule (applyAiringSchedule), anime only: the
+//      exact episode number airing next, and an instant for every scheduled
+//      episode after it. It overrides rule 1 for the season it covers — it
+//      is the broadcaster's schedule, not an inference from the list.
+//
+// The verdict lands on Episode.upcoming, and a learned instant on
+// Episode.released. Consumers read the DATE first and the flag only when
+// there is no date (hasAired, isUpcomingEpisode): a date is time-sensitive
+// and flips by itself the moment it passes, while the flag was decided when
+// the metadata was assembled and only says what was true then.
+//
+// Pure — no clock unless injected, no Electron — so the rules are unit
+// tested (tests/upcomingEpisodes.test.ts) and shared verbatim between main,
+// which assembles the list, and the renderer, which draws it.
+
+import { isRegularEpisode } from './catalog-logic'
+import type { Episode } from './types'
+
+/** A title that is no longer producing episodes — Kitsu's `finished`,
+ *  Cinemeta/TheTVDB's `Ended`, TMDB's `Ended`/`Canceled`. Any other
+ *  non-empty status (`current`, `Continuing`, `upcoming`, …) reads as still
+ *  running; an EMPTY status reads as unknown, which is not the same thing. */
+export function isFinishedStatus(status: string | undefined | null): boolean {
+  return /^(finished|ended|completed|cancell?ed)$/i.test(String(status ?? '').trim())
+}
+
+/** The instant an episode's `released` names, or null for none/unparseable.
+ *  `new Date(string)` on purpose: it is the same parse hasAired applies, so
+ *  the two can never disagree about whether a date is a date. */
+function releasedAt(video: { released?: string }): number | null {
+  if (!video.released) return null
+  const at = new Date(video.released).getTime()
+  return Number.isFinite(at) ? at : null
+}
+
+function byPosition(a: Episode, b: Episode): number {
+  return a.season - b.season || a.episode - b.episode
+}
+
+/** Sets or clears the flag without disturbing anything else on the
+ *  episode. Cleared means REMOVED, not `false`: the metadata cache stores
+ *  these as JSON, and a `false` on every episode of every title is bytes
+ *  for nothing. An episode that keeps its verdict keeps its identity. */
+function withUpcoming(video: Episode, upcoming: boolean): Episode {
+  if (upcoming) return video.upcoming === true ? video : { ...video, upcoming: true }
+  if (video.upcoming === undefined) return video
+  const rest = { ...video }
+  delete rest.upcoming
+  return rest
+}
+
+export interface MarkUpcomingOptions {
+  /** The title's own status string, as its source gave it. */
+  status?: string | null
+  /** Injectable so a test can pin the clock. */
+  now?: number
+}
+
+/**
+ * Rule 1: decides `upcoming` for every undated regular episode from the
+ * shape of the list, and clears it from every other. Idempotent — the
+ * verdict is recomputed from dates and status each time, so running it over
+ * a list that already carries flags (a cached title) is the same as running
+ * it over one that does not.
+ *
+ * Only undated episodes are ever flagged. A dated episode is judged by its
+ * date, which is both more precise and self-correcting (see the header).
+ * Specials and synthetic entries (isRegularEpisode) are never touched: they
+ * are outside the numbered run the walk reasons about.
+ */
+export function markUpcomingEpisodes(
+  videos: readonly Episode[] | undefined | null,
+  options: MarkUpcomingOptions = {}
+): Episode[] {
+  const list = videos ?? []
+  const now = options.now ?? Date.now()
+  const status = String(options.status ?? '').trim()
+  const running = status !== '' && !isFinishedStatus(status)
+
+  const regular = list
+    .filter((v) => isRegularEpisode(v) && Number.isFinite(v.season) && Number.isFinite(v.episode))
+    .slice()
+    .sort(byPosition)
+
+  // The boundary: the last episode that is dated AND has aired. Everything
+  // after it is, by construction, undated or in the future.
+  let lastAired = -1
+  regular.forEach((v, i) => {
+    const at = releasedAt(v)
+    if (at !== null && at <= now) lastAired = i
+  })
+
+  const upcoming = new Set<Episode>()
+  let seenFuture = false
+  regular.forEach((v, i) => {
+    const at = releasedAt(v)
+    if (at !== null) {
+      if (at > now) seenFuture = true
+      return
+    }
+    // Undated. After a future-dated episode it cannot have aired, whatever
+    // the title's status says. After the last aired episode it has not
+    // aired either — but only when the title is known to still be running:
+    // a finished show with a dateless tail is a gap in the record, and
+    // hiding real episodes behind "TBA" would be worse than the old
+    // behaviour. No aired episode at all (a placeholder list with no dates
+    // anywhere) leaves nothing to reason from; rule 2 handles that for
+    // anime, and nothing else can.
+    if (seenFuture || (running && lastAired !== -1 && i > lastAired)) upcoming.add(v)
+  })
+
+  return list.map((v) => withUpcoming(v, upcoming.has(v)))
+}
+
+/** One season's broadcast schedule, as anilist.ts reads it off AniList. */
+export interface AiringSchedule {
+  /** AniList's own MediaStatus — RELEASING, FINISHED, NOT_YET_RELEASED,
+   *  CANCELLED or HIATUS — or null when it gave none. */
+  status: string | null
+  /** The episode number airing next, or null when nothing is scheduled
+   *  (finished, on hiatus, or simply not yet announced). */
+  nextEpisode: number | null
+  /** ISO instants for the scheduled, not-yet-aired episodes, by episode
+   *  number. Keys are numbers in code and strings once JSON-cached; both
+   *  index the same way. */
+  airDates: Record<number, string>
+}
+
+/**
+ * Rule 2: overrides rule 1 for one season with what the broadcaster's
+ * schedule says. Episode numbers on AniList count within the entry, exactly
+ * as Kitsu's do within a title and a TMDB season's do within the season, so
+ * `season` is the one whose episodes are numbered the way the schedule is.
+ *
+ *   - A scheduled instant replaces whatever date the episode had: AniList's
+ *     is the exact broadcast moment, where Kitsu's is a calendar day.
+ *   - With a next episode named, everything from it onward is upcoming and
+ *     everything before it has aired — whatever rule 1 concluded.
+ *   - FINISHED clears every flag in the season; NOT_YET_RELEASED with no
+ *     schedule flags every episode. HIATUS and CANCELLED say nothing about
+ *     WHICH episodes are out, so rule 1's verdict stands for them.
+ *
+ * As with rule 1, only an undated episode ends up carrying the flag; a
+ * dated one is judged by its date.
+ */
+export function applyAiringSchedule(
+  videos: readonly Episode[] | undefined | null,
+  season: number,
+  schedule: AiringSchedule
+): Episode[] {
+  const finished = schedule.status === 'FINISHED'
+  const notStarted = schedule.status === 'NOT_YET_RELEASED'
+  return (videos ?? []).map((v) => {
+    if (!isRegularEpisode(v) || v.season !== season || !Number.isFinite(v.episode)) return v
+    const scheduled = schedule.airDates[v.episode]
+    const dated = scheduled && scheduled !== v.released ? { ...v, released: scheduled } : v
+
+    let verdict: boolean | null = null
+    if (finished) verdict = false
+    else if (schedule.nextEpisode !== null) verdict = v.episode >= schedule.nextEpisode
+    else if (notStarted) verdict = true
+    if (verdict === null) return dated
+
+    return withUpcoming(dated, verdict && releasedAt(dated) === null)
+  })
+}

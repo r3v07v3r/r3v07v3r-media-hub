@@ -6,7 +6,10 @@ import type { Episode } from '@shared/media-hub/types'
 import { useAppState } from '@renderer/context/AppStateContext'
 import { Icon } from '@renderer/components/icons/Icon'
 import { ArtworkImage } from '@renderer/components/media/ArtworkImage'
-import { formatReleaseDate as airDateLabel, isFutureRelease } from '@renderer/lib/mediaHub/releaseDate'
+import {
+  formatReleaseDate as airDateLabel,
+  isUpcomingEpisode
+} from '@renderer/lib/mediaHub/releaseDate'
 import styles from './EpisodesSection.module.css'
 import { episodeStillOrShowArt } from '@renderer/components/media/artworkRetry'
 
@@ -329,7 +332,7 @@ export function EpisodesSection({
         const [from, to] = anchorIndex < targetIndex ? [anchorIndex, targetIndex] : [targetIndex, anchorIndex]
         const range = visible
           .slice(from, to + 1)
-          .filter((e) => !e.unplayable && !isFutureRelease(e.released))
+          .filter((e) => !e.unplayable && !isUpcomingEpisode(e))
         setSelectedKeys(new Set(range.map((e) => key(e.season, e.episode))))
         return
       }
@@ -517,7 +520,7 @@ export function EpisodesSection({
           const title = ep.title || `Episode ${ep.episode}`
           const airDate = airDateLabel(ep.released)
           const isSelected = selectedKeys.has(epKey)
-          const unaired = isFutureRelease(ep.released)
+          const unaired = isUpcomingEpisode(ep)
           return (
             <li
               key={ep.id}
@@ -531,8 +534,11 @@ export function EpisodesSection({
                   tile is overwhelmingly clicked for. Unplayable entries
                   (disambiguateVideos' synthetic Specials, see core.ts)
                   get a plain non-interactive thumbnail instead, same as an
-                  episode whose air date hasn't happened yet — there is
-                  nothing a stream resolver could find for either. */}
+                  episode that hasn't come out yet — there is nothing a
+                  stream resolver could find for either. The latter says
+                  so on the picture itself: the air date when one is
+                  known, TBA when the title is still running but nobody
+                  has scheduled this episode (see isUpcomingEpisode). */}
               {ep.unplayable ? (
                 <div className={styles.thumbFrame}>
                   <ArtworkImage
@@ -544,22 +550,30 @@ export function EpisodesSection({
                   />
                 </div>
               ) : unaired ? (
-                <div className={`${styles.thumbFrame} ${styles.thumbFrameUnaired}`}>
+                <div
+                  className={`${styles.thumbFrame} ${styles.thumbFrameUnaired}`}
+                  aria-label={
+                    airDate ? `${title} releases ${airDate}` : `${title} release date TBA`
+                  }
+                >
                   <ArtworkImage
-                    src={ep.thumbnail}
+                    src={episodeStillOrShowArt(ep, showArtwork)}
                     alt=""
                     fallbackTitle={title}
                     artTint={['#1c2a45', '#0a1220']}
                     className={styles.thumb}
                   />
-                  <span className={styles.playOverlay} aria-hidden="true">
-                    <Icon name="clock" size={20} />
-                  </span>
-                  {airDate && (
-                    <span className={`${styles.badge} ${styles.badgeUnaired}`}>
-                      Releases {airDate}
+                  {/* Real text, not an icon with a tooltip: this is the
+                      one thing the tile has to say, so it sits in the
+                      middle of the picture where the play affordance
+                      would be. */}
+                  <span className={styles.upcomingLabel} aria-hidden="true">
+                    <Icon name="clock" size={14} />
+                    <span className={styles.upcomingEyebrow}>
+                      {airDate ? 'Releases' : 'Release date'}
                     </span>
-                  )}
+                    <span className={styles.upcomingDate}>{airDate ?? 'TBA'}</span>
+                  </span>
                 </div>
               ) : (
                 <button
@@ -641,7 +655,7 @@ export function EpisodesSection({
                 </h3>
                 <div className={styles.metaFooter}>
                   <span className={styles.subLabel}>
-                    {airDate ?? (ep.unplayable ? 'Extra' : '')}
+                    {airDate ?? (unaired ? 'TBA' : ep.unplayable ? 'Extra' : '')}
                   </span>
                   {!ep.unplayable && !unaired && (
                     <button

@@ -50,3 +50,15 @@ export function formatReleaseDate(date: string | undefined): string | null {
   if (!parsed) return null
   return parsed.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })
 }
+
+/** Has this episode still to come out? The date decides when there is one
+ *  (isFutureRelease's calendar-day rule, so an episode out earlier today is
+ *  not "coming"); with no usable date, main's own verdict on `upcoming`
+ *  does — see Episode.upcoming (shared/media-hub/types.ts) for how it is
+ *  reached and why the date takes precedence over it. The tile grid,
+ *  its multi-select and its per-tile menu all ask this one question, so
+ *  an episode can never be selectable but not playable, or the reverse. */
+export function isUpcomingEpisode(episode: { released?: string; upcoming?: boolean }): boolean {
+  if (parseReleaseDate(episode.released)) return isFutureRelease(episode.released)
+  return episode.upcoming === true
+}

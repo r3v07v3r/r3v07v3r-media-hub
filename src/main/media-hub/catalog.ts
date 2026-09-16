@@ -67,6 +67,7 @@ import {
   groupedVideosAreComplete
 } from './animeSeasons'
 import { omdbRottenTomatoesRating } from './omdb'
+import { withUpcomingEpisodes } from './episodeAiring'
 import { searchCredits, titleCredits, titlesFeaturing } from './credits'
 import { titleCollection } from './collection'
 import { contentRating } from './contentRating'
@@ -758,8 +759,15 @@ async function resolveMetadata(
   const groupingIsNewer =
     type === 'anime' && !cached?.groupedIds?.length && Boolean(groupedIdsFor(resolvedId)?.length)
   if (cached && !groupingIsNewer) {
+    // withUpcomingEpisodes re-runs here for the same reason disambiguateVideos
+    // does, plus one of its own: an anime's airing schedule is cached for
+    // hours, not the day this entry is, so a title opened again after this
+    // week's episode landed learns so without waiting for the entry to expire.
     return withCredits(
-      { ...cached, videos: disambiguateVideos(cached.videos) },
+      await withUpcomingEpisodes(
+        { ...cached, videos: disambiguateVideos(cached.videos) },
+        priority
+      ),
       type,
       resolvedId,
       priority
@@ -887,6 +895,12 @@ async function resolveMetadata(
   // grouped-anime all assign item.videos above) — see disambiguateVideos'
   // own doc comment for why this is needed and what it does.
   item.videos = disambiguateVideos(item.videos)
+  // After disambiguation, so the synthetic Specials it minted are already
+  // out of the numbered run the upcoming rules walk. Cached WITH its
+  // verdicts: every direct reader of this row (continue-watching, the
+  // calendar, the status rules) then applies hasAired to the same flags the
+  // detail page draws.
+  item = await withUpcomingEpisodes(item, priority)
 
   db.putCache(cacheKey, item, degraded ? DEGRADED_META_TTL_MS : META_TTL_MS)
   // Under the id the caller used as well, when the Simkl lookup mapped it

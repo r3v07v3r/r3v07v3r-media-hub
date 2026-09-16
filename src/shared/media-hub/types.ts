@@ -37,6 +37,15 @@ export interface Episode {
    *  a "next episode" or a play target must skip these; they're
    *  informational list entries only. */
   unplayable?: boolean
+  /** Set by main (shared/media-hub/upcomingEpisodes.ts, applied as
+   *  metadata() assembles the list) on an episode known NOT to have aired
+   *  yet when `released` is empty and so cannot say: the dateless tail of
+   *  a still-running show, or an anime episode AniList's schedule puts
+   *  after the one airing next. Read only when there is no date — a date
+   *  is judged on its own (hasAired), because it flips by itself the
+   *  moment it passes, while this was decided when the list was built.
+   *  Absent (never `false`) on everything else. */
+  upcoming?: boolean
 }
 
 // The canonical normalized catalog item — union of every field any of the

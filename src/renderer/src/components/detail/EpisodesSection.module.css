@@ -171,20 +171,64 @@
   box-shadow: 0 0 0 2px rgba(94, 193, 255, 0.4);
 }
 /* Not a <button> (there is nothing to resolve a stream for yet), but keeps
-   the same frame geometry/overlay language as a playable tile so the grid
-   doesn't jump around depending on air date. */
+   the same frame geometry as a playable tile so the grid doesn't jump
+   around depending on air date. No hover lift either: a tile that does
+   nothing must not invite a click. */
+.thumbFrameUnaired {
+  cursor: default;
+}
+.thumbFrameUnaired:hover {
+  border-color: transparent;
+  transform: none;
+  box-shadow: none;
+}
 .thumbFrameUnaired .thumb {
-  opacity: 0.4;
+  opacity: 0.35;
 }
-.thumbFrameUnaired .playOverlay {
-  opacity: 0.9;
-  background: rgba(6, 12, 22, 0.65);
+/* The date (or TBA) printed over the picture, centred where a playable
+   tile's play affordance sits — same glass/blur idiom as .playOverlay and
+   .badge, keyed to the cyan the Next badge and the hero's "Releases" state
+   already use for "coming". */
+.upcomingLabel {
+  position: absolute;
+  z-index: 2;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  max-width: calc(100% - 20px);
+  padding: 7px 12px 8px;
+  border-radius: var(--radius-small);
+  color: #eaf7ff;
+  background: rgba(6, 12, 22, 0.72);
+  border: 1px solid rgba(94, 193, 255, 0.35);
+  backdrop-filter: blur(6px);
+  box-shadow: 0 4px 14px -6px rgba(0, 0, 0, 0.8);
+  text-align: center;
+  white-space: nowrap;
 }
-.badgeUnaired {
-  color: #04121c;
-  background: var(--accent-cyan);
-  right: auto;
-  left: 7px;
+.upcomingLabel svg {
+  width: 14px;
+  height: 14px;
+  color: var(--accent-cyan);
+  margin-bottom: 1px;
+}
+.upcomingEyebrow {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.9px;
+  text-transform: uppercase;
+  color: rgba(214, 220, 237, 0.75);
+}
+.upcomingDate {
+  font-family: var(--font-display);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+  color: var(--accent-cyan);
 }
 .selectMark {
   position: absolute;
