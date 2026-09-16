@@ -72,6 +72,15 @@
 .menuItem:hover {
   background: rgba(255, 255, 255, 0.06);
 }
+/* "Mark season watched" on a season with nothing aired yet — the menu is
+   there for its "unwatched" sibling, this item simply has nothing to do. */
+.menuItem:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.menuItem:disabled:hover {
+  background: transparent;
+}
 .seasonPill {
   flex: 0 0 auto;
   padding: 8px 18px;

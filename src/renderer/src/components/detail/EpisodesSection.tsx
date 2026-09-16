@@ -317,6 +317,15 @@ export function EpisodesSection({
   const menuEpisodeWatched = menuEpisode
     ? watchedKeys.has(key(menuEpisode.season, menuEpisode.episode))
     : false
+  // "Mark season watched" acts on the season's aired episodes only
+  // (MediaDetailPage's handleMarkSeasonWatched), so for a season with none
+  // it would do nothing — disabled rather than a silent no-op. The menu
+  // itself can still be open for such a season, for "unwatched" (see
+  // hasSeasonActions below).
+  const menuSeasonMarkable =
+    openMenu?.kind === 'season'
+      ? episodes.some((e) => e.season === openMenu.season && !e.unplayable && !isUpcomingEpisode(e))
+      : false
 
   // Shift extends the selection from the last-clicked tile through the one
   // just clicked (ordinary file-manager behaviour); ctrl/cmd toggles just
@@ -368,9 +377,16 @@ export function EpisodesSection({
             // the per-tile play/actions controls for these entries. A
             // season that has not started airing (every episode upcoming —
             // isUpcomingEpisode, the same test that hides each tile's menu)
-            // has nothing to mark watched either, so it gets no menu too.
-            const hasPlayableEpisodes = episodes.some(
-              (e) => e.season === s && !e.unplayable && !isUpcomingEpisode(e)
+            // has nothing to mark watched either — unless a mark already
+            // sits on one of its episodes (left by the bulk action before
+            // it learned to skip them, or imported from a tracker): the
+            // tile's own menu is hidden for an upcoming episode, so the
+            // season menu's "unwatched" is the only way to clear it.
+            const hasSeasonActions = episodes.some(
+              (e) =>
+                e.season === s &&
+                !e.unplayable &&
+                (!isUpcomingEpisode(e) || watchedKeys.has(key(e.season, e.episode)))
             )
             return (
               <div key={s} className={styles.seasonItem}>
@@ -383,7 +399,7 @@ export function EpisodesSection({
                 >
                   {seasonLabel(s)}
                 </button>
-                {isActive && hasPlayableEpisodes && (
+                {isActive && hasSeasonActions && (
                   <button
                     type="button"
                     className={styles.seasonMenuTrigger}
@@ -416,6 +432,7 @@ export function EpisodesSection({
                   type="button"
                   role="menuitem"
                   className={styles.menuItem}
+                  disabled={!menuSeasonMarkable}
                   onClick={() => {
                     onMarkSeason(openMenu.season, true)
                     closeMenu()

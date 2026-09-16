@@ -378,6 +378,36 @@ const SCHEDULE_NEXT_12 = {
   assert.equal(legacy[2].released, '', 'no since: ahead of now, pulled')
 }
 
+// Beyond the next episode to air, a date already behind now that the
+// schedule did not supply (Kitsu's date from before a postponement) is
+// stale: cleared and flagged, or it would read as aired. An instant the
+// schedule DID supply is kept even once it has passed — that is the episode
+// really airing, and must not wait for the schedule cache to refresh.
+{
+  const postponed = [
+    ep(1, 11, { released: YESTERDAY }),
+    ep(1, 12, { released: '2026-09-16T09:00:00.000Z' }),
+    ep(1, 13, { released: YESTERDAY }),
+    ep(1, 14, { released: TOMORROW })
+  ]
+  const applied = applyAiringSchedule(
+    postponed,
+    1,
+    { status: 'RELEASING', nextEpisode: 12, airDates: { 12: '2026-09-16T09:00:00.000Z' } },
+    NOW
+  )
+  assert.equal(applied[0].released, YESTERDAY, 'before the boundary: aired, kept')
+  assert.equal(applied[1].released, '2026-09-16T09:00:00.000Z', 'the schedule’s own instant')
+  assert.equal(hasAired(applied[1], NOW), true, 'passed three hours ago: it aired')
+  assert.equal(applied[2].released, '', 'Kitsu’s pre-postponement date: stale, cleared')
+  assert.equal(applied[2].upcoming, true)
+  assert.equal(applied[3].released, TOMORROW, 'still ahead: kept, judged by itself')
+  assert.deepEqual(
+    playableEpisodesInOrder(applied, NOW).map((v) => v.episode),
+    [11, 12]
+  )
+}
+
 // A title that has not started, with nothing scheduled: every episode is
 // upcoming, and a date already behind now (a premiere pushed back after
 // Kitsu dated it) is stale — cleared and flagged, or it would read as aired.

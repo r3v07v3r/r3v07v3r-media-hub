@@ -162,7 +162,11 @@ export interface AiringSchedule {
  *   - A scheduled instant replaces whatever date the episode had: AniList's
  *     is the exact broadcast moment, where Kitsu's is a calendar day.
  *   - With a next episode named, everything from it onward is upcoming and
- *     everything before it has aired — whatever rule 1 concluded.
+ *     everything before it has aired — whatever rule 1 concluded. An
+ *     episode from it onward that still carries a date behind now which
+ *     the schedule did not supply (the season's source dated it before a
+ *     postponement) loses that date and is flagged; an instant the
+ *     schedule supplied is kept, and judges itself once it passes.
  *   - FINISHED clears every flag in the season, and touches no date: a
  *     status is the title's word, not an episode's, and a FINISHED entered
  *     a little early on a community-edited database must not turn a
@@ -211,21 +215,29 @@ export function applyAiringSchedule(
     const dated = scheduled && scheduled !== v.released ? { ...v, released: scheduled } : v
 
     if (finished) return withUpcoming(dated, false)
+
+    // An episode the schedule says has NOT aired, carrying a date already
+    // behind now that the schedule did not supply: the season's source
+    // dated it before a postponement, and left in place the date would
+    // read as aired. It goes, and the episode is flagged. An instant the
+    // schedule itself supplied is never stale this way — once it passes,
+    // the episode really has aired, and blocking it until the schedule
+    // cache refreshed would be the old bug in reverse.
+    const notYet = (): Episode => {
+      const at = releasedAt(dated)
+      const stale = at !== null && at <= now && !scheduled
+      return withUpcoming(stale ? { ...dated, released: '' } : dated, at === null || stale)
+    }
+
     if (schedule.nextEpisode !== null) {
-      if (v.episode >= schedule.nextEpisode) return withUpcoming(dated, releasedAt(dated) === null)
+      if (v.episode >= schedule.nextEpisode) return notYet()
       const at = releasedAt(dated)
       const stale = at !== null && at > now
       return withUpcoming(stale ? { ...dated, released: '' } : dated, false)
     }
-    if (notStarted) {
-      // Nothing has aired. A date already behind now is stale — the
-      // premiere was pushed back after the season's source dated it — and
-      // left in place it would read as aired; it goes, and the episode is
-      // flagged. A date still ahead is kept and judges itself.
-      const at = releasedAt(dated)
-      const stale = at !== null && at <= now
-      return withUpcoming(stale ? { ...dated, released: '' } : dated, at === null || stale)
-    }
+    // Nothing has aired: every episode is not yet, and a premiere date that
+    // passed without a premiere is stale exactly as above.
+    if (notStarted) return notYet()
     if (!halted) return dated
     const at = releasedAt(dated)
     return at !== null && at > haltedAt ? withUpcoming({ ...dated, released: '' }, true) : dated
