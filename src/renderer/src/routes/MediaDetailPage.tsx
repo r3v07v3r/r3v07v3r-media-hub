@@ -42,6 +42,7 @@ import { AnimeStoryPanel } from '@renderer/components/detail/AnimeStoryPanel'
 import styles from './MediaDetailPage.module.css'
 import { playableEpisodesInOrder } from '@shared/media-hub/nextEpisode'
 import { isRegularEpisode } from '@shared/media-hub/catalog-logic'
+import { isUpcomingEpisode } from '@renderer/lib/mediaHub/releaseDate'
 import { resolveArtwork } from '@renderer/lib/artwork'
 
 type FetchStatus = 'loading' | 'ready' | 'error'
@@ -605,8 +606,16 @@ export function MediaDetailPage({ kind }: { kind: MediaKind }) {
     // (season, episode) coordinate — sending it through markSeasonWatched/
     // unmarkWatched would push a fabricated (0, -N) pair into local
     // history and Simkl sync for a promotional clip that was never a real
-    // episode.
-    const seasonEpisodes = episodes.filter((e) => e.season === season && !e.unplayable)
+    // episode. An episode that has not aired (isUpcomingEpisode — the same
+    // test that hides its tile's Play and menu) is left out of the WATCHED
+    // direction for a related reason: nobody has seen next week's episode,
+    // and "Mark season watched" on a season still airing means "everything
+    // out so far", not a history entry Simkl would carry for something that
+    // does not exist yet. Unwatched still sweeps the whole season, so a mark
+    // that landed on such an episode before this rule existed can be undone.
+    const seasonEpisodes = episodes.filter(
+      (e) => e.season === season && !e.unplayable && (!watched || !isUpcomingEpisode(e))
+    )
     if (seasonEpisodes.length === 0) return
     const item = {
       id: media.id,

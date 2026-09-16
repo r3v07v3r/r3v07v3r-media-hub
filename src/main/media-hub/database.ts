@@ -215,7 +215,12 @@ function indexEpisodeCounts(
   return {
     totalSeasons: seasons.size || null,
     totalEpisodes: playable.length,
-    airedEpisodes: aired || null
+    // A confirmed zero, not null: with real episodes in hand, "none of
+    // them has aired yet" is an answer (a show opened before its premiere,
+    // an anime whose schedule starts at episode 1), and null would read as
+    // "no data" to both refresh paths' COALESCE — leaving a row written
+    // earlier from dateless placeholders claiming every episode has aired.
+    airedEpisodes: aired
   }
 }
 

@@ -365,8 +365,13 @@ export function EpisodesSection({
             // it here would just silently no-op on an empty list. Hiding
             // the trigger (and so the menu it opens) for that case instead
             // of leaving a dead control, per the same reasoning that hides
-            // the per-tile play/actions controls for these entries.
-            const hasPlayableEpisodes = episodes.some((e) => e.season === s && !e.unplayable)
+            // the per-tile play/actions controls for these entries. A
+            // season that has not started airing (every episode upcoming —
+            // isUpcomingEpisode, the same test that hides each tile's menu)
+            // has nothing to mark watched either, so it gets no menu too.
+            const hasPlayableEpisodes = episodes.some(
+              (e) => e.season === s && !e.unplayable && !isUpcomingEpisode(e)
+            )
             return (
               <div key={s} className={styles.seasonItem}>
                 <button

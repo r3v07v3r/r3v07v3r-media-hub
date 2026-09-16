@@ -397,4 +397,27 @@ check('a cached title re-read after an episode airs refreshes its aired count', 
   db.close()
 })
 
+check('a title whose episodes have all still to air stores a confirmed zero', () => {
+  // The row was first written from a crawl's dateless placeholders (every
+  // one presumed aired); the resolve then learns none has. Zero must land,
+  // or the COALESCE that protects real counts from "no data" would keep
+  // the placeholder count and the title would read as watchable — and, once
+  // its episodes were marked, as Completed.
+  const dbPath = tempDbPath()
+  const db = createDatabase(dbPath, TEST_PROFILE)
+  const placeholders = [
+    { id: 'a', season: 1, episode: 1, number: 1, title: '', released: '' },
+    { id: 'b', season: 1, episode: 2, number: 2, title: '', released: '' }
+  ]
+  db.indexUpsert('anime', [item('kitsu:1', { type: 'anime', videos: placeholders })])
+  assert.equal(raw(dbPath, 'kitsu:1')?.aired_episodes, 2, 'placeholders count as aired')
+  const resolved = item('kitsu:1', {
+    type: 'anime',
+    videos: placeholders.map((v) => ({ ...v, upcoming: true }))
+  })
+  db.indexRefreshFromMetadata('anime', resolved)
+  assert.equal(raw(dbPath, 'kitsu:1')?.aired_episodes, 0, 'none aired is zero, not "no data"')
+  db.close()
+})
+
 console.log(`\n${pass} passed`)
