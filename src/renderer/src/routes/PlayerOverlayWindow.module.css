@@ -131,6 +131,23 @@
   background: rgba(255, 255, 255, 0.2);
 }
 
+/* Previous/next chapter, either side of play. Icon-only, so squarer than a
+   text button; disabled (no chapter that way) rather than hidden, so the
+   pair never shifts the controls beside it mid-title. */
+.chapterButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px 9px;
+}
+.chapterButton:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+.chapterButton:disabled:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+
 .time {
   font-variant-numeric: tabular-nums;
   font-size: 13px;

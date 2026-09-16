@@ -23,6 +23,10 @@ const PATHS: Record<string, string> = {
   stack:
     '<path d="M12 3.5l8.5 4.4L12 12.3 3.5 7.9 12 3.5z"/><path d="M3.5 12.1l8.5 4.4 8.5-4.4M3.5 16.3l8.5 4.4 8.5-4.4"/>',
   play: '<path d="M7 4.5v15l13-7.5-13-7.5z"/>',
+  // Chapter transport for the player: a bar and a triangle pointing at it,
+  // the same glyph every remote and player uses for previous/next.
+  'skip-back': '<path d="M18 5.5v13L8.5 12 18 5.5z"/><path d="M6 5.5v13"/>',
+  'skip-forward': '<path d="M6 5.5v13l9.5-6.5L6 5.5z"/><path d="M18 5.5v13"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',
   clock: '<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/>',
   sparkle:
