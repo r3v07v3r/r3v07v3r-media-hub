@@ -685,7 +685,9 @@ export interface MediaHubDatabase {
    * `simkl:<n>` id that later turns out to be an IMDb-keyed title this
    * app already tracks (see imdbForSimklKeyedId); unlike remapContentIds
    * it does not retype rows as anime or shift seasons. Returns how many
-   * history rows moved.
+   * history rows were keyed by `fromId` — moved or dropped as duplicates —
+   * so a caller can tell "nothing to fold" from "folded into a row that
+   * was already there".
    */
   mergeContentId(fromId: string, toId: string): number
   history(): HistoryEntry[]
@@ -843,6 +845,7 @@ interface PreparedQueries {
   dropRemappedWatched: StatementSync
   mergeWatched: StatementSync
   mergePlays: StatementSync
+  countKeyedWatched: StatementSync
   remapPlays: StatementSync
   dropRemappedPlays: StatementSync
   remapRating: StatementSync
@@ -1157,9 +1160,11 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
         WHERE content_id=@from AND season IS NOT NULL AND episode IS NOT NULL`
     ),
     dropRemappedPlays: sql.prepare('DELETE FROM plays WHERE content_id=?'),
-    // A viewing already recorded under the real id at the same instant is
+    // A viewing already recorded under the real id within ten minutes is
     // the same viewing — the duplicate row was written seconds apart by
-    // the same click, not by a rewatch (same rule as importWatched).
+    // the same sitting (John Wick's two rows were eight seconds apart),
+    // not by a rewatch, and copying it would count the film watched
+    // twice. importWatched's instant-equality rule is too strict here.
     mergePlays: sql.prepare(
       `INSERT INTO plays(profile_id,content_id,type,title,season,episode,watched_at,metadata_json)
        SELECT p.profile_id,@to,p.type,p.title,p.season,p.episode,p.watched_at,
@@ -1169,8 +1174,9 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
           AND NOT EXISTS (SELECT 1 FROM plays q
                            WHERE q.profile_id=p.profile_id AND q.content_id=@to
                              AND q.season IS p.season AND q.episode IS p.episode
-                             AND q.watched_at=p.watched_at)`
+                             AND abs(julianday(q.watched_at) - julianday(p.watched_at)) * 86400 <= 600)`
     ),
+    countKeyedWatched: sql.prepare('SELECT COUNT(*) AS n FROM watch_history WHERE content_id=?'),
     // A rating already given to the canonical show wins — same rule as
     // importRating just below, and for the same reason.
     remapRating: sql.prepare(
@@ -2005,11 +2011,12 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
       const to = String(toId)
       if (!from || !to || from === to) return 0
       try {
-        let moved = 0
+        let affected = 0
         durable(() => {
           sql.exec('BEGIN')
           try {
-            moved = Number(q.mergeWatched.run({ from, to }).changes || 0)
+            affected = Number((q.countKeyedWatched.get(from) as { n?: number } | undefined)?.n || 0)
+            q.mergeWatched.run({ from, to })
             q.dropRemappedWatched.run(from)
             q.mergePlays.run({ from, to })
             q.dropRemappedPlays.run(from)
@@ -2021,7 +2028,7 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
             throw error
           }
         })
-        return moved
+        return affected
       } catch (error) {
         return fail(error as Error) as unknown as number
       }

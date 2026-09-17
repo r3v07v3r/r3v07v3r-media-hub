@@ -1151,6 +1151,22 @@ function scheduleFlush(): void {
   }, PENDING_FLUSH_DELAY_MS)
 }
 
+/**
+ * The id a library write for `item` should go under. A card minted under
+ * Simkl's own number whose real id this app has since learned (the detail
+ * page resolved it into the metadata cache) is written under that real
+ * id, so one click does not leave two rows for the reconcile pass to fold
+ * later — see simklKeyedHistory.ts. Every other id is returned as it is.
+ */
+function canonicalWriteId(item: { id: unknown; type?: unknown }): string {
+  const id = String(item.id)
+  if (!isSimklKeyedId(id)) return id
+  return (
+    imdbForSimklKeyedId(id, [], (key) => cachedMetadata(String(item.type ?? 'movie'), key)?.id) ??
+    id
+  )
+}
+
 /** The actual diff. Local and remote are each reduced to "which movie ids
  *  does this side consider watched," and only ids where the two sides
  *  disagree are returned — an id watched (or not) on both sides is
@@ -1193,7 +1209,8 @@ async function computeMovieDiscrepancies(
     localMovies.delete(id)
     if (!localMovies.has(imdb)) localMovies.set(imdb, { ...entry, id: imdb })
   }
-  if (folded) notifyLibraryChanged('reconcile', 'history')
+  // Ratings too: the fold carries a score given under the old id across.
+  if (folded) notifyLibraryChanged('reconcile', 'history', 'ratings')
   // No trustworthy remote side means there is nothing to diff. An
   // unreadable Simkl comes back as an EMPTY Simkl, and an empty Simkl
   // makes every movie watched locally look like a disagreement — a review
@@ -1402,18 +1419,7 @@ export function registerTrackingIpc(): void {
       // PUSHED is still asked, per row, on the way out (see
       // hasExpressibleSimklId in reconcileCheck).
       //
-      // A card minted under Simkl's own number whose real id this app has
-      // since learned (the detail page resolved it) is written under that
-      // real id, so one click does not leave two rows for the reconcile
-      // pass to fold later — see simklKeyedHistory.ts.
-      if (isSimklKeyedId(String(item.id))) {
-        const imdb = imdbForSimklKeyedId(
-          String(item.id),
-          [],
-          (key) => cachedMetadata(String(item.type ?? 'movie'), key)?.id
-        )
-        if (imdb) item = { ...item, id: imdb }
-      }
+      item = { ...item, id: canonicalWriteId(item) }
       getDatabase().markWatched(item, playback || {})
       requestRecommendationsRebuild()
       // None of the services is awaited. The local row IS the record; each
@@ -1512,7 +1518,7 @@ export function registerTrackingIpc(): void {
       if (profileId && profileId !== profile) {
         throw new Error('That change was made on another profile. Switch back to it to undo.')
       }
-      const id = String(item.id)
+      const id = canonicalWriteId(item)
       const type = (item.type ?? 'movie') as MediaKind
       const episodic = type !== 'movie'
       const pushItem: SimklPushItem & { totalEpisodes?: number } = {

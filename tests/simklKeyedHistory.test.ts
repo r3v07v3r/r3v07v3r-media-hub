@@ -85,9 +85,10 @@ assert.equal(
   db.rate('simkl:342994', 9)
   assert.equal(db.history().filter((h) => h.type === 'movie').length, 2)
 
-  const moved = db.mergeContentId('simkl:342994', 'tt2911666')
-  // The real row was already there, so the duplicate yields to it.
-  assert.equal(moved, 0)
+  const affected = db.mergeContentId('simkl:342994', 'tt2911666')
+  // The real row was already there, so the duplicate yields to it — and
+  // the caller still learns a row was folded, so the renderer is told.
+  assert.equal(affected, 1)
   const movies = db.history().filter((h) => h.type === 'movie')
   assert.deepEqual(
     movies.map((h) => h.id),
@@ -98,7 +99,8 @@ assert.equal(
   assert.equal(db.ratings().get('tt2911666'), 9)
   assert.equal(db.ratings().has('simkl:342994'), false)
   assert.equal(db.plays().filter((p) => p.contentId === 'simkl:342994').length, 0)
-  assert.ok(db.plays().filter((p) => p.contentId === 'tt2911666').length >= 1)
+  // Two marks seconds apart are one viewing, not a rewatch.
+  assert.equal(db.plays().filter((p) => p.contentId === 'tt2911666').length, 1)
 }
 
 {
