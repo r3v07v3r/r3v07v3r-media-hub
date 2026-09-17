@@ -124,14 +124,21 @@ function compareEpisode(a: EpisodePosition, b: EpisodePosition): number {
   return a.season - b.season || a.episode - b.episode
 }
 
+/** hasAired — THE aired rule (shared/media-hub/catalog-logic.ts) — over the
+ *  raw-Cinemeta `firstAired` fallback EpisodeLike allows. Used for a tracked
+ *  title's baseline and its "new episodes", so neither can name an episode
+ *  the detail page shows as TBA or "Releases …": an inline
+ *  `!date || new Date(date) <= now` used to live in both, and read a
+ *  flagged, dateless upcoming episode as released. */
+function airedAt(v: EpisodeLike, now: Date): boolean {
+  return hasAired({ released: v.released || v.firstAired, upcoming: v.upcoming }, now.getTime())
+}
+
 /** Highest already-aired episode position at `now`, or {0,0} when nothing has aired yet. */
 function latestReleased(videos: EpisodeLike[] | undefined, now: Date): EpisodePosition {
   return (
     (videos || [])
-      .filter((v) => {
-        const released = v.released || v.firstAired
-        return !released || new Date(released) <= now
-      })
+      .filter((v) => airedAt(v, now))
       .map(episodePosition)
       .filter((v) => v.episode > 0)
       .sort(compareEpisode)
@@ -2670,11 +2677,9 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
           }
           const last = compareEpisode(watched, baseline) >= 0 ? watched : baseline
 
-          const released = ((detail.videos as EpisodeLike[] | undefined) || []).filter((v) => {
-            const p = episodePosition(v)
-            const date = v.released || v.firstAired
-            return (!date || new Date(date) <= now) && compareEpisode(p, last) > 0
-          })
+          const released = ((detail.videos as EpisodeLike[] | undefined) || []).filter(
+            (v) => airedAt(v, now) && compareEpisode(episodePosition(v), last) > 0
+          )
           if (released.length) {
             updates.push({
               ...tracked,
