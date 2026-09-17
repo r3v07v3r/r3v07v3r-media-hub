@@ -10,6 +10,7 @@ import assert from 'node:assert/strict'
 import {
   applyAiringSchedule,
   isFinishedStatus,
+  isNotStartedStatus,
   markUpcomingEpisodes
 } from '../src/shared/media-hub/upcomingEpisodes'
 import { hasAired } from '../src/shared/media-hub/catalog-logic'
@@ -141,6 +142,23 @@ assert.equal(isFinishedStatus(undefined), false)
     now: NOW
   })
   assert.deepEqual(upcomingKeys(marked), [])
+}
+
+// ...unless the source says the title has not started at all: then every
+// undated episode is upcoming, with no aired boundary needed — a premiere's
+// placeholders stay off the Play button even when AniList cannot be read.
+{
+  const placeholders = [ep(1, 1), ep(1, 2), ep(0, 1)]
+  for (const status of ['upcoming', 'unreleased', 'tba', 'Not yet released']) {
+    assert.deepEqual(
+      upcomingKeys(markUpcomingEpisodes(placeholders, { status, now: NOW })),
+      ['1:1', '1:2'],
+      `status ${status}: every regular episode, never a special`
+    )
+  }
+  assert.equal(isNotStartedStatus('current'), false)
+  assert.equal(isNotStartedStatus('finished'), false)
+  assert.equal(isNotStartedStatus(''), false)
 }
 
 // Order is by (season, episode), not array position, and the boundary
@@ -621,6 +639,17 @@ assert.equal(
     scheduleWorthAsking(tmdbAhead, 1, { status: 'RELEASING', nextEpisode: 2, airDates: {} }, NOW),
     false
   )
+  // An ungrouped title's only source is Kitsu, numbered as AniList numbers
+  // it: the same calendar day ahead is exactly what the schedule should
+  // sharpen into a broadcast instant, so it is asked about and applied to.
+  const kitsu = { kitsuNumbered: true }
+  assert.equal(seasonAcceptsSchedule(tmdbAhead, 1, NOW, kitsu), true, 'Kitsu-numbered: applies')
+  assert.equal(seasonAcceptsSchedule(settled, 1, NOW, kitsu), true)
+  assert.equal(seasonAcceptsSchedule([ep(2, 1)], 1, NOW, kitsu), false, 'but not to no season')
+  assert.equal(seasonStillAiring(tmdbAhead, 1, NOW, kitsu), true, "Kitsu's day ahead counts")
+  assert.equal(seasonStillAiring(settled, 1, NOW, kitsu), false)
+  assert.equal(scheduleWorthAsking(tmdbAhead, 1, null, NOW, kitsu), true)
+  assert.equal(scheduleWorthAsking(settled, 1, null, NOW, kitsu), false, 'all out, never read')
 }
 
 // ---------------------------------------------------------------------------

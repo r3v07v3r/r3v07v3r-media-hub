@@ -46,21 +46,34 @@ function seasonEpisodes(videos: readonly Episode[], season: number): Episode[] {
  * to the TMDB season, would wipe the second cour's real dates and offer
  * Play for episodes that have not aired.
  *
- * The tell is the dates themselves. A bare calendar day comes from the
- * season's own source (Kitsu's airdate, TMDB's air_date); an ISO instant
- * is one this module learned from AniList. So the schedule applies when
- * the season has something only it can settle — an undated episode, or an
- * instant it wrote before — and never when the season's own source still
- * dates an episode ahead of now: that source has its own numbering and its
- * own plan, and the schedule must not overrule it. A season whose every
- * date is its own and in the past is settled either way. Exported for its
- * tests.
+ * An UNGROUPED title has only ever one source, Kitsu, whose numbering the
+ * schedule shares — so for it (`kitsuNumbered`) the schedule applies to any
+ * season with episodes at all, and Kitsu's own calendar days are exactly
+ * what it should refine into broadcast instants and correct after a delay.
+ *
+ * For a grouped title the season's source is not known here, and the tell
+ * is the dates themselves. A bare calendar day comes from the season's own
+ * source (Kitsu's airdate, TMDB's air_date); an ISO instant is one this
+ * module learned from AniList. So the schedule applies when the season has
+ * something only it can settle — an undated episode, or an instant it
+ * wrote before — and never when the season's own source still dates an
+ * episode ahead of now: that source has its own numbering and its own
+ * plan, and the schedule must not overrule it. A season whose every date
+ * is its own and in the past is settled either way. Exported for its tests.
  */
+export interface SeasonNumbering {
+  /** The season's episodes are numbered the way the schedule's are — true
+   *  for an ungrouped title, whose only source is Kitsu. */
+  kitsuNumbered?: boolean
+}
+
 export function seasonAcceptsSchedule(
   videos: readonly Episode[],
   season: number,
-  now: number = Date.now()
+  now: number = Date.now(),
+  numbering: SeasonNumbering = {}
 ): boolean {
+  if (numbering.kitsuNumbered) return seasonEpisodes(videos, season).length > 0
   let evidence = false
   for (const v of seasonEpisodes(videos, season)) {
     const at = releaseInstant(v.released)
@@ -86,18 +99,21 @@ export function seasonAcceptsSchedule(
  * season whose every remaining episode already carries one keeps being
  * checked against the 12h schedule cache until the last one is out. A
  * bare calendar day ahead of now is the season's own source's plan, not
- * this module's to refresh — see seasonAcceptsSchedule. Exported for its
- * tests.
+ * this module's to refresh — unless that source is Kitsu on an ungrouped
+ * title (`kitsuNumbered`), whose day the schedule is exactly the thing to
+ * sharpen into a broadcast instant; see seasonAcceptsSchedule. Exported
+ * for its tests.
  */
 export function seasonStillAiring(
   videos: readonly Episode[],
   season: number,
-  now: number = Date.now()
+  now: number = Date.now(),
+  numbering: SeasonNumbering = {}
 ): boolean {
   return seasonEpisodes(videos, season).some((v) => {
     const at = releaseInstant(v.released)
     if (at === null) return true
-    return !isDateOnly(v.released) && at > now
+    return (numbering.kitsuNumbered || !isDateOnly(v.released)) && at > now
   })
 }
 
@@ -131,14 +147,15 @@ export function scheduleWorthAsking(
   videos: readonly Episode[],
   season: number,
   last: AiringSchedule | null,
-  now: number = Date.now()
+  now: number = Date.now(),
+  numbering: SeasonNumbering = {}
 ): boolean {
   // Read once: isTerminalSchedule is a type guard, and past its early
   // return TypeScript would narrow `last` to never.
   const status = last?.status ?? null
   if (status === 'FINISHED' || status === 'CANCELLED') return false
-  if (!seasonAcceptsSchedule(videos, season, now)) return false
-  if (seasonStillAiring(videos, season, now)) return true
+  if (!seasonAcceptsSchedule(videos, season, now, numbering)) return false
+  if (seasonStillAiring(videos, season, now, numbering)) return true
   return status !== null
 }
 
@@ -170,14 +187,22 @@ export async function withUpcomingEpisodes(
 ): Promise<CatalogItem> {
   let videos = markUpcomingEpisodes(item.videos, { status: item.status })
   if (item.type === 'anime' && videos.length) {
+    const grouped = Boolean(item.groupedIds?.length)
     const { season, kitsuId } = airingSeason(item)
+    // An ungrouped title's only source is Kitsu, so its season is numbered
+    // the way the schedule is (seasonAcceptsSchedule); a grouped title's
+    // last season may be TMDB's, and is judged by its dates.
+    const numbering: SeasonNumbering = { kitsuNumbered: !grouped }
     // An ungrouped title's Kitsu status is its own and is trusted: a
-    // finished show has nothing airing next, whatever its dates say. A
-    // grouped title's status is season 1's (normalizeKitsuAnime of the
-    // canonical member), which says nothing about the last season — so
-    // the gate alone decides there.
-    const finished = !item.groupedIds?.length && isFinishedStatus(item.status)
-    if (!finished && kitsuId) {
+    // finished show has nothing airing next, whatever its dates say, so it
+    // is never ASKED about. (What AniList said before still applies below
+    // — a cancelled title's pulled dates must stay pulled across the
+    // metadata refresh that would otherwise restore them.) A grouped
+    // title's status is season 1's (normalizeKitsuAnime of the canonical
+    // member), which says nothing about the last season — so the gate
+    // alone decides there.
+    const settledByKitsu = !grouped && isFinishedStatus(item.status)
+    if (kitsuId) {
       try {
         // Cache reads only, until the gate says to ask: an AniList id the
         // crawl never mapped is not looked up (a Kitsu request, once per
@@ -193,11 +218,14 @@ export async function withUpcomingEpisodes(
           // until then), so a premature FINISHED corrects itself within a
           // week of the title being opened rather than never; a failed
           // re-read falls back to the last one.
-          if (seasonAcceptsSchedule(videos, season)) {
+          if (seasonAcceptsSchedule(videos, season, Date.now(), numbering)) {
             const schedule = (await anilistAiringSchedule(known, priority)) ?? last
             videos = applyAiringSchedule(videos, season, schedule)
           }
-        } else if (scheduleWorthAsking(videos, season, last)) {
+        } else if (
+          !settledByKitsu &&
+          scheduleWorthAsking(videos, season, last, Date.now(), numbering)
+        ) {
           const anilistId = known ?? (await anilistIdForKitsu(kitsuId, priority))
           // A refresh that fails (AniList down, rate-limited) falls back to
           // the schedule last read, however old: its instants still judge

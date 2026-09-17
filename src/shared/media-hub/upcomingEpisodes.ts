@@ -16,8 +16,9 @@
 //   1. The list's own shape (markUpcomingEpisodes). In a title that is
 //      still running, an undated episode after the last dated one that has
 //      aired is upcoming. In any title, an undated episode after a
-//      future-dated one is upcoming too. Every other undated episode stays
-//      what it always was: a gap, presumed aired.
+//      future-dated one is upcoming too; in a title its source says has
+//      not started, every undated episode is. Every other undated episode
+//      stays what it always was: a gap, presumed aired.
 //   2. AniList's airing schedule (applyAiringSchedule), anime only: the
 //      exact episode number airing next, and an instant for every scheduled
 //      episode after it. It overrides rule 1 for the season it covers — it
@@ -43,6 +44,13 @@ import type { Episode } from './types'
  *  running; an EMPTY status reads as unknown, which is not the same thing. */
 export function isFinishedStatus(status: string | undefined | null): boolean {
   return /^(finished|ended|completed|cancell?ed)$/i.test(String(status ?? '').trim())
+}
+
+/** A title its source says has not started — Kitsu's `upcoming`,
+ *  `unreleased` and `tba`, or an "Upcoming"/"Not yet released" from
+ *  elsewhere. Not one episode of it has aired, whatever its list says. */
+export function isNotStartedStatus(status: string | undefined | null): boolean {
+  return /^(upcoming|unreleased|tba|not[ _-]?yet[ _-]?released)$/i.test(String(status ?? '').trim())
 }
 
 /** The instant an episode's `released` names, or null for none/unparseable
@@ -96,6 +104,11 @@ export function markUpcomingEpisodes(
   const now = options.now ?? Date.now()
   const status = String(options.status ?? '').trim()
   const running = status !== '' && !isFinishedStatus(status)
+  // A title that has not started has nothing aired: every undated episode
+  // is upcoming, with no aired boundary needed to reason from. This is
+  // what keeps a premiere's count-only placeholders off the Play button
+  // when the schedule (rule 2) cannot be read.
+  const notStarted = isNotStartedStatus(status)
 
   const regular = list
     .filter((v) => isRegularEpisode(v) && Number.isFinite(v.season) && Number.isFinite(v.episode))
@@ -126,7 +139,9 @@ export function markUpcomingEpisodes(
     // behaviour. No aired episode at all (a placeholder list with no dates
     // anywhere) leaves nothing to reason from; rule 2 handles that for
     // anime, and nothing else can.
-    if (seenFuture || (running && lastAired !== -1 && i > lastAired)) upcoming.add(v)
+    if (notStarted || seenFuture || (running && lastAired !== -1 && i > lastAired)) {
+      upcoming.add(v)
+    }
   })
 
   return list.map((v) => withUpcoming(v, upcoming.has(v)))
