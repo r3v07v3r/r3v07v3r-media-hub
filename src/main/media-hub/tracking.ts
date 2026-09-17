@@ -1157,14 +1157,31 @@ function scheduleFlush(): void {
  * page resolved it into the metadata cache) is written under that real
  * id, so one click does not leave two rows for the reconcile pass to fold
  * later — see simklKeyedHistory.ts. Every other id is returned as it is.
+ *
+ * Whatever the library already holds under the Simkl-keyed id is folded
+ * into the real id FIRST. No live surface mints these ids any more (the
+ * trending feed drops them, and Simkl search is gone), so a Simkl-keyed
+ * card on screen is drawn from a legacy history or plan row — and a
+ * write that read state under the real id while that row sat untouched
+ * would clear nothing, or plan a title twice. Folding moves the rows the
+ * card is drawn from, and the library-changed push that follows rekeys
+ * the card itself.
  */
 function canonicalWriteId(item: { id: unknown; type?: unknown }): string {
   const id = String(item.id)
   if (!isSimklKeyedId(id)) return id
-  return (
-    imdbForSimklKeyedId(id, [], (key) => cachedMetadata(String(item.type ?? 'movie'), key)?.id) ??
-    id
+  const imdb = imdbForSimklKeyedId(
+    id,
+    [],
+    (key) => cachedMetadata(String(item.type ?? 'movie'), key)?.id
   )
+  if (!imdb) return id
+  const db = getDatabase()
+  const hadPlan = db.isTracked(id)
+  if (db.mergeContentId(id, imdb) || hadPlan) {
+    notifyLibraryChanged('canonical-id', 'history', 'planned', 'ratings')
+  }
+  return imdb
 }
 
 /** The actual diff. Local and remote are each reduced to "which movie ids

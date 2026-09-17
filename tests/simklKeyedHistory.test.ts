@@ -162,6 +162,19 @@ assert.equal(
 }
 
 {
+  // The plan follows too: a title planned from a Simkl-keyed card is
+  // planned under the real id after the fold, and only once.
+  const db = tempDb()
+  db.track({ id: 'simkl:342994', type: 'movie', title: 'John Wick' })
+  assert.equal(db.mergeContentId('simkl:342994', 'tt2911666'), 0)
+  assert.equal(db.isTracked('simkl:342994'), false)
+  assert.equal(db.isTracked('tt2911666'), true)
+  db.track({ id: 'simkl:342994', type: 'movie', title: 'John Wick' })
+  db.mergeContentId('simkl:342994', 'tt2911666')
+  assert.equal(db.tracked().filter((t) => t.id === 'tt2911666').length, 1)
+}
+
+{
   // The reverse — the real row is the later one — leaves its date alone.
   const db = tempDb()
   const wick = { type: 'movie' as const, title: 'John Wick' }

@@ -677,8 +677,8 @@ export interface MediaHubDatabase {
    */
   remapContentIds(mappings: ContentIdRemap[]): number
   /**
-   * Folds every row keyed by `fromId` into `toId` — watch history, plays
-   * and rating, across every profile — keeping each row's type, season
+   * Folds every row keyed by `fromId` into `toId` — watch history, plays,
+   * rating and plan, across every profile — keeping each row's type, season
    * and date. A destination row already there wins and the source copy
    * is dropped, so merging a duplicate never doubles a viewing — but a
    * source row that is the later viewing hands its date to the survivor,
@@ -848,6 +848,8 @@ interface PreparedQueries {
   mergePlays: StatementSync
   bumpMergedWatchedAt: StatementSync
   countKeyedWatched: StatementSync
+  mergeTracked: StatementSync
+  dropRemappedTracked: StatementSync
   remapPlays: StatementSync
   dropRemappedPlays: StatementSync
   remapRating: StatementSync
@@ -1213,6 +1215,16 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
               ) > watched_at`
     ),
     countKeyedWatched: sql.prepare('SELECT COUNT(*) AS n FROM watch_history WHERE content_id=?'),
+    // The plan row too, or a title planned from a Simkl-keyed card stays
+    // planned under an id nothing draws any more. A plan already under
+    // the real id wins, as with ratings.
+    mergeTracked: sql.prepare(
+      `INSERT INTO tracked(profile_id,content_id,type,title,poster,metadata_json,tracked_at,baseline_season,baseline_episode)
+       SELECT profile_id,@to,type,title,poster,json_set(metadata_json,'$.id',@to),tracked_at,baseline_season,baseline_episode
+         FROM tracked WHERE content_id=@from
+       ON CONFLICT(profile_id,content_id) DO NOTHING`
+    ),
+    dropRemappedTracked: sql.prepare('DELETE FROM tracked WHERE content_id=?'),
     // A rating already given to the canonical show wins — same rule as
     // importRating just below, and for the same reason.
     remapRating: sql.prepare(
@@ -2060,6 +2072,8 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
             q.dropRemappedWatched.run(from)
             q.remapRating.run({ from, to })
             q.dropRemappedRating.run(from)
+            q.mergeTracked.run({ from, to })
+            q.dropRemappedTracked.run(from)
             sql.exec('COMMIT')
           } catch (error) {
             sql.exec('ROLLBACK')
