@@ -45,6 +45,7 @@ import { normalizeVideoScaling } from '../../shared/media-hub/videoScaling'
 import type { PlayerSessionMedia } from '../../shared/media-hub/player'
 import { metadata } from './catalog'
 import { nextEpisodeInOrder } from '../../shared/media-hub/nextEpisode'
+import { hasAired } from '../../shared/media-hub/catalog-logic'
 import { reportPreparation } from './playbackProgress'
 import { captureThumbnail, mpvPath } from './mpv'
 import {
@@ -240,6 +241,17 @@ async function resolveNextUp(media: PlayerSessionMedia | null): Promise<void> {
       episode: media.episodeNumber
     })
     if (!next) return
+    // In order, but only if it is out: nextEpisodeInOrder is deliberately
+    // positional (see its header), so on the last aired episode of a
+    // running show it names next week's — dated in the future, or flagged
+    // `upcoming` with no date — and a card for that would autoplay into a
+    // stream search that finds nothing. No card at all is the right answer,
+    // exactly as at the end of a season; the walk must NOT skip on to a
+    // later episode, which would be further from what just finished.
+    const video = (meta.videos || []).find(
+      (v) => v.season === next.season && v.episode === next.episode
+    )
+    if (video && !hasAired(video)) return
     const current = getSessionSnapshot()
     if (
       !current?.media ||

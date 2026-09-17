@@ -15,6 +15,7 @@ import {
   TitleCredits,
   RecommendationRail
 } from './types'
+import { releaseInstant } from './releaseDate'
 
 export interface FilterCatalogOptions {
   includeGenres?: string[]
@@ -168,7 +169,12 @@ export function isRegularEpisode(
  * one in the list" and "the next one you could actually watch" are different
  * questions for any show still airing. An episode with no date at all counts
  * as aired — that is a gap in the metadata, not evidence it is in the future,
- * and treating it as unaired would hide real episodes.
+ * and treating it as unaired would hide real episodes — UNLESS main has
+ * already worked out that it has not aired and said so on `upcoming` (see
+ * shared/media-hub/upcomingEpisodes.ts: the dateless tail of a running show,
+ * or an anime episode AniList's schedule puts after the one airing next).
+ * The date still wins whenever there is one: it flips by itself the moment
+ * it passes, where the flag only says what was true when the list was built.
  *
  * THE ONE DEFINITION. adapters.ts's airedEpisodes (the denominator behind the
  * "Completed" badge and the detail page's progress) and nextEpisode.ts's
@@ -177,13 +183,17 @@ export function isRegularEpisode(
  * from two different ideas of "aired".
  */
 export function hasAired(
-  video: { released?: string } | undefined | null,
+  video: { released?: string; upcoming?: boolean } | undefined | null,
   now: number = Date.now()
 ): boolean {
-  if (!video?.released) return true
-  const at = new Date(video.released).getTime()
-  // An unparseable date is a metadata gap, same as a missing one.
-  return !Number.isFinite(at) || at <= now
+  // releaseInstant, not `new Date(string)`: a bare calendar day is the
+  // viewer's local day, the same reading the renderer's tile applies —
+  // see shared/media-hub/releaseDate.ts for why the two must not differ.
+  const at = releaseInstant(video?.released)
+  // A missing or unparseable date is a metadata gap, unless main said
+  // otherwise on `upcoming`.
+  if (at === null) return video?.upcoming !== true
+  return at <= now
 }
 
 export function episodeWatchState(

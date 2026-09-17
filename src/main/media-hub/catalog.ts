@@ -67,6 +67,7 @@ import {
   groupedVideosAreComplete
 } from './animeSeasons'
 import { omdbRottenTomatoesRating } from './omdb'
+import { withUpcomingEpisodes } from './episodeAiring'
 import { searchCredits, titleCredits, titlesFeaturing } from './credits'
 import { titleCollection } from './collection'
 import { contentRating } from './contentRating'
@@ -725,6 +726,14 @@ async function resolveMetadata(
     ? await resolveSimklId(type, String(id).slice(6), priority)
     : id
   const cacheKey = metaCacheKey(type, resolvedId)
+  // A marker beside a DEGRADED entry, on the same short TTL, so a cache hit
+  // inside that window knows the list it is serving is a stand-in or is
+  // missing seasons — the fresh path never refreshes the index from such a
+  // list (see the end of this function), and a hit must not either: the
+  // aired count it would derive is too small, and a caught-up viewer
+  // would read as Completed. The entry itself carries no such flag, and
+  // its TTL is not readable back.
+  const degradedKey = `${cacheKey}:degraded`
   const db = getDatabase()
   const cached = db.getCache<CatalogItem>(cacheKey)
   // Whether what is about to be cached is a stand-in — see DEGRADED_META_TTL_MS.
@@ -758,12 +767,25 @@ async function resolveMetadata(
   const groupingIsNewer =
     type === 'anime' && !cached?.groupedIds?.length && Boolean(groupedIdsFor(resolvedId)?.length)
   if (cached && !groupingIsNewer) {
-    return withCredits(
+    // withUpcomingEpisodes re-runs here for the same reason disambiguateVideos
+    // does, plus one of its own: an anime's airing schedule is cached for
+    // hours, not the day this entry is, so a title opened again after this
+    // week's episode landed learns so without waiting for the entry to expire.
+    const served = await withUpcomingEpisodes(
       { ...cached, videos: disambiguateVideos(cached.videos) },
-      type,
-      resolvedId,
       priority
     )
+    // The index row's aired count was written when this entry was cached
+    // (see the fresh path below), and it goes stale on its own: an episode
+    // dated then crosses its air time now, with nothing about the entry
+    // changing but the answer — or the re-run above moved a verdict. The
+    // Completed badge and the grid's "N episodes" would otherwise keep the
+    // old count for the rest of this entry's day. Every read, then; the
+    // write only happens when the stored count differs, which is what
+    // keeps this affordable on the calendar's and trackers' sweeps. Never
+    // from a degraded entry, exactly as the fresh path never is.
+    if (!db.getCache<boolean>(degradedKey)) db.indexRefreshAiredCount(type, served)
+    return withCredits(served, type, resolvedId, priority)
   }
 
   let item: CatalogItem
@@ -887,8 +909,18 @@ async function resolveMetadata(
   // grouped-anime all assign item.videos above) — see disambiguateVideos'
   // own doc comment for why this is needed and what it does.
   item.videos = disambiguateVideos(item.videos)
+  // After disambiguation, so the synthetic Specials it minted are already
+  // out of the numbered run the upcoming rules walk. Cached WITH its
+  // verdicts: every direct reader of this row (continue-watching, the
+  // calendar, the status rules) then applies hasAired to the same flags the
+  // detail page draws.
+  item = await withUpcomingEpisodes(item, priority)
 
   db.putCache(cacheKey, item, degraded ? DEGRADED_META_TTL_MS : META_TTL_MS)
+  // The marker lives and dies with the degraded entry; a full resolve
+  // clears any left over from a degraded one it replaced early.
+  if (degraded) db.putCache(degradedKey, true, DEGRADED_META_TTL_MS)
+  else db.deleteCache(degradedKey)
   // Under the id the caller used as well, when the Simkl lookup mapped it
   // to another: rows tracked under "simkl:<n>" read this cache by that id
   // (titleNames.ts's cachedMetadata) and cannot resolve it without a trip.
