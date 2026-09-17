@@ -104,6 +104,59 @@ assert.equal(
 }
 
 {
+  // A collision where the Simkl-keyed row is a genuine later rewatch: the
+  // real row survives but takes the later date, and both viewings stay in
+  // plays (they are days apart, not seconds).
+  const db = tempDb()
+  const wick = { type: 'movie' as const, title: 'John Wick' }
+  db.importWatched([
+    {
+      ...wick,
+      id: 'tt2911666',
+      season: null,
+      episode: null,
+      watchedAt: '2026-08-01T20:00:00.000Z'
+    },
+    {
+      ...wick,
+      id: 'simkl:342994',
+      season: null,
+      episode: null,
+      watchedAt: '2026-09-11T21:10:09.352Z'
+    }
+  ])
+  assert.equal(db.mergeContentId('simkl:342994', 'tt2911666'), 1)
+  const [row] = db.history().filter((h) => h.type === 'movie')
+  assert.equal(row.id, 'tt2911666')
+  assert.equal(row.watchedAt, '2026-09-11T21:10:09.352Z')
+  assert.equal(db.plays().filter((p) => p.contentId === 'tt2911666').length, 2)
+}
+
+{
+  // The reverse — the real row is the later one — leaves its date alone.
+  const db = tempDb()
+  const wick = { type: 'movie' as const, title: 'John Wick' }
+  db.importWatched([
+    {
+      ...wick,
+      id: 'tt2911666',
+      season: null,
+      episode: null,
+      watchedAt: '2026-09-11T21:10:17.129Z'
+    },
+    {
+      ...wick,
+      id: 'simkl:342994',
+      season: null,
+      episode: null,
+      watchedAt: '2026-08-01T20:00:00.000Z'
+    }
+  ])
+  db.mergeContentId('simkl:342994', 'tt2911666')
+  assert.equal(db.history()[0].watchedAt, '2026-09-11T21:10:17.129Z')
+}
+
+{
   // No real row yet: the row moves, keeping its type and date, and reads
   // back under the real id.
   const db = tempDb()

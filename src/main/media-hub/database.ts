@@ -680,8 +680,9 @@ export interface MediaHubDatabase {
    * Folds every row keyed by `fromId` into `toId` — watch history, plays
    * and rating, across every profile — keeping each row's type, season
    * and date. A destination row already there wins and the source copy
-   * is dropped, so merging a duplicate never doubles a viewing or moves a
-   * date somebody here saw happen. Built for history written under a
+   * is dropped, so merging a duplicate never doubles a viewing — but a
+   * source row that is the later viewing hands its date to the survivor,
+   * since that rewatch is the one somebody here saw happen most recently. Built for history written under a
    * `simkl:<n>` id that later turns out to be an IMDb-keyed title this
    * app already tracks (see imdbForSimklKeyedId); unlike remapContentIds
    * it does not retype rows as anime or shift seasons. Returns how many
@@ -845,6 +846,7 @@ interface PreparedQueries {
   dropRemappedWatched: StatementSync
   mergeWatched: StatementSync
   mergePlays: StatementSync
+  bumpMergedWatchedAt: StatementSync
   countKeyedWatched: StatementSync
   remapPlays: StatementSync
   dropRemappedPlays: StatementSync
@@ -1175,6 +1177,23 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
                            WHERE q.profile_id=p.profile_id AND q.content_id=@to
                              AND q.season IS p.season AND q.episode IS p.episode
                              AND abs(julianday(q.watched_at) - julianday(p.watched_at)) * 86400 <= 600)`
+    ),
+    // A collision where the source row is the LATER viewing — a rewatch
+    // marked from a Simkl-keyed card after the real-id row was written —
+    // keeps the real row but takes its date, so history() and everything
+    // recency-based (continuations, recently watched) see the rewatch the
+    // plays table already records. Rows are matched on the same
+    // season/episode coordinates the rebuilt key carries.
+    bumpMergedWatchedAt: sql.prepare(
+      `UPDATE watch_history
+          SET watched_at = (SELECT MAX(s.watched_at) FROM watch_history s
+                             WHERE s.profile_id=watch_history.profile_id AND s.content_id=@from
+                               AND s.season IS watch_history.season AND s.episode IS watch_history.episode)
+        WHERE content_id=@to
+          AND EXISTS (SELECT 1 FROM watch_history s
+                       WHERE s.profile_id=watch_history.profile_id AND s.content_id=@from
+                         AND s.season IS watch_history.season AND s.episode IS watch_history.episode
+                         AND s.watched_at > watch_history.watched_at)`
     ),
     countKeyedWatched: sql.prepare('SELECT COUNT(*) AS n FROM watch_history WHERE content_id=?'),
     // A rating already given to the canonical show wins — same rule as
@@ -2017,6 +2036,7 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
           try {
             affected = Number((q.countKeyedWatched.get(from) as { n?: number } | undefined)?.n || 0)
             q.mergeWatched.run({ from, to })
+            q.bumpMergedWatchedAt.run({ from, to })
             q.dropRemappedWatched.run(from)
             q.mergePlays.run({ from, to })
             q.dropRemappedPlays.run(from)
