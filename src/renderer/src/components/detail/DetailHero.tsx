@@ -10,7 +10,11 @@ import { Icon } from '@renderer/components/icons/Icon'
 import { resolveArtwork } from '@renderer/lib/artwork'
 import { ArtworkImage } from '@renderer/components/media/ArtworkImage'
 import { useYoutubeEmbedControls } from '@renderer/hooks/useYoutubeEmbedControls'
-import { formatReleaseDate, isFutureRelease } from '@renderer/lib/mediaHub/releaseDate'
+import {
+  formatReleaseDate,
+  isFutureInstant,
+  isFutureRelease
+} from '@renderer/lib/mediaHub/releaseDate'
 import styles from './DetailHero.module.css'
 
 /** Same idle window as the movie player's control bar
@@ -105,7 +109,9 @@ export function DetailHero({
     if (hasProgress) return null
     if (config.isEpisodic) {
       if (nextEpisode) return null
-      if (nextAiringDate && isFutureRelease(nextAiringDate)) return { date: nextAiringDate }
+      // An episode's air date is a broadcast moment (isFutureInstant), where
+      // a film's release date below is a day (isFutureRelease).
+      if (nextAiringDate && isFutureInstant(nextAiringDate)) return { date: nextAiringDate }
       return notYetAired ? {} : null
     }
     return isFutureRelease(media.releaseDate) ? { date: media.releaseDate } : null

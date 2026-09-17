@@ -24,6 +24,7 @@ import {
   cachedAnilistId,
   lastKnownAiringSchedule
 } from './anilist'
+import { getDatabase } from './dbState'
 import { logError } from './logger'
 import type { TaskPriority } from './taskScheduler'
 
@@ -170,10 +171,32 @@ export function scheduleWorthAsking(
  * episodes came from Kitsu's /episodes or from normalizeKitsuAnime's
  * placeholders; a TMDB-sourced season carries dates and never gets here.
  */
-function airingSeason(item: CatalogItem): { season: number; kitsuId: string } {
+function airingSeason(item: CatalogItem): { season: number; memberId: string; kitsuId: string } {
   const members = [item.id, ...(item.groupedIds ?? [])]
-  const last = members[members.length - 1]
-  return { season: members.length, kitsuId: String(last).replace(/^kitsu:/, '') }
+  const last = String(members[members.length - 1])
+  return { season: members.length, memberId: last, kitsuId: last.replace(/^kitsu:/, '') }
+}
+
+/**
+ * A grouped anime's last member's own Kitsu status. The crawl indexes every
+ * Kitsu title under its own id before the grouping pass folds the siblings
+ * into one tile (catalog.ts's indexUpsert runs on the raw list), so the
+ * member's row — and its `current`/`upcoming`/`finished` — is one local
+ * read away, where the canonical item's status is season 1's and says
+ * nothing about the season that can still be airing. Undefined when the
+ * member was never crawled (a title reached by search alone), or the index
+ * has no status for it.
+ */
+function memberStatus(memberId: string): string | undefined {
+  try {
+    const row = getDatabase()
+      .indexByIds([memberId])
+      .items.find((x) => x.type === 'anime')
+    const status = String(row?.status ?? '').trim()
+    return status || undefined
+  } catch {
+    return undefined
+  }
 }
 
 /**
@@ -185,23 +208,39 @@ export async function withUpcomingEpisodes(
   item: CatalogItem,
   priority: TaskPriority
 ): Promise<CatalogItem> {
-  let videos = markUpcomingEpisodes(item.videos, { status: item.status })
-  if (item.type === 'anime' && videos.length) {
-    const grouped = Boolean(item.groupedIds?.length)
-    const { season, kitsuId } = airingSeason(item)
+  if (item.type !== 'anime' || !item.videos?.length) {
+    return { ...item, videos: markUpcomingEpisodes(item.videos, { status: item.status }) }
+  }
+
+  const grouped = Boolean(item.groupedIds?.length)
+  const { season, memberId, kitsuId } = airingSeason(item)
+  // Whose status rule 1 reasons from. An ungrouped title's is its own. A
+  // grouped title's (normalizeKitsuAnime of the canonical member) is
+  // season 1's, normally `finished` however live the newest season is —
+  // so the LAST member's own status stands in, scoped to its season, and
+  // the canonical's is only the fallback for a member the index never saw.
+  const lastMember = grouped ? memberStatus(memberId) : undefined
+  const status = lastMember ?? item.status
+  let videos = markUpcomingEpisodes(item.videos, {
+    status,
+    statusSeason: grouped && lastMember ? season : undefined
+  })
+
+  {
     // An ungrouped title's only source is Kitsu, so its season is numbered
     // the way the schedule is (seasonAcceptsSchedule); a grouped title's
     // last season may be TMDB's, and is judged by its dates.
     const numbering: SeasonNumbering = { kitsuNumbered: !grouped }
-    // An ungrouped title's Kitsu status is its own and is trusted: a
+    // A Kitsu status that is the airing season's own is trusted: a
     // finished show has nothing airing next, whatever its dates say, so it
     // is never ASKED about. (What AniList said before still applies below
     // — a cancelled title's pulled dates must stay pulled across the
     // metadata refresh that would otherwise restore them.) A grouped
-    // title's status is season 1's (normalizeKitsuAnime of the canonical
-    // member), which says nothing about the last season — so the gate
-    // alone decides there.
-    const settledByKitsu = !grouped && isFinishedStatus(item.status)
+    // title whose last member the index never saw has no such status, and
+    // the gate alone decides for it.
+    const settledByKitsu = grouped
+      ? lastMember !== undefined && isFinishedStatus(lastMember)
+      : isFinishedStatus(item.status)
     if (kitsuId) {
       try {
         // Cache reads only, until the gate says to ask: an AniList id the

@@ -78,8 +78,17 @@ function withUpcoming(video: Episode, upcoming: boolean): Episode {
 }
 
 export interface MarkUpcomingOptions {
-  /** The title's own status string, as its source gave it. */
+  /** The title's own status string, as its source gave it — or, for a
+   *  grouped anime, its LAST member's (see episodeAiring.ts): the one
+   *  season that can still be airing has its own status, and the
+   *  canonical member's says nothing about it. */
   status?: string | null
+  /** The season `status` speaks for, when it is one member's rather than
+   *  the whole title's. A not-started status then flags undated episodes
+   *  from that season on only: the earlier seasons are other members',
+   *  long finished, and their dateless placeholders are gaps, not the
+   *  future. Unset, the status is the whole title's. */
+  statusSeason?: number
   /** Injectable so a test can pin the clock. */
   now?: number
 }
@@ -109,6 +118,7 @@ export function markUpcomingEpisodes(
   // what keeps a premiere's count-only placeholders off the Play button
   // when the schedule (rule 2) cannot be read.
   const notStarted = isNotStartedStatus(status)
+  const notStartedFrom = options.statusSeason ?? Number.NEGATIVE_INFINITY
 
   const regular = list
     .filter((v) => isRegularEpisode(v) && Number.isFinite(v.season) && Number.isFinite(v.episode))
@@ -139,7 +149,11 @@ export function markUpcomingEpisodes(
     // behaviour. No aired episode at all (a placeholder list with no dates
     // anywhere) leaves nothing to reason from; rule 2 handles that for
     // anime, and nothing else can.
-    if (notStarted || seenFuture || (running && lastAired !== -1 && i > lastAired)) {
+    if (
+      (notStarted && v.season >= notStartedFrom) ||
+      seenFuture ||
+      (running && lastAired !== -1 && i > lastAired)
+    ) {
       upcoming.add(v)
     }
   })

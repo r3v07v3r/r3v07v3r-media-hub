@@ -22,7 +22,11 @@ import {
   seasonAcceptsSchedule,
   seasonStillAiring
 } from '../src/main/media-hub/episodeAiring'
-import { isFutureRelease, isUpcomingEpisode } from '../src/renderer/src/lib/mediaHub/releaseDate'
+import {
+  isFutureInstant,
+  isFutureRelease,
+  isUpcomingEpisode
+} from '../src/renderer/src/lib/mediaHub/releaseDate'
 import type { Episode } from '../src/shared/media-hub/types'
 
 // A fixed "today", so the boundary is testable: 16 Sep 2026, midday UTC.
@@ -159,6 +163,25 @@ assert.equal(isFinishedStatus(undefined), false)
   assert.equal(isNotStartedStatus('current'), false)
   assert.equal(isNotStartedStatus('finished'), false)
   assert.equal(isNotStartedStatus(''), false)
+}
+
+// A grouped anime reasons from its LAST member's status, scoped to that
+// member's season: the earlier seasons are other members', long finished,
+// and their dateless placeholders are gaps, not the future.
+{
+  const franchise = [ep(1, 1), ep(1, 2), ep(2, 1), ep(2, 2)]
+  assert.deepEqual(
+    upcomingKeys(
+      markUpcomingEpisodes(franchise, { status: 'upcoming', statusSeason: 2, now: NOW })
+    ),
+    ['2:1', '2:2'],
+    'season 2 has not started; season 1 is not judged by that'
+  )
+  assert.deepEqual(
+    upcomingKeys(markUpcomingEpisodes(franchise, { status: 'upcoming', now: NOW })),
+    ['1:1', '1:2', '2:1', '2:2'],
+    'unscoped, the status is the whole title’s'
+  )
 }
 
 // Order is by (season, episode), not array position, and the boundary
@@ -663,13 +686,29 @@ const LOCAL_NOON = new Date(2026, 8, 16, 12).getTime()
 const LATER_TODAY = new Date(LOCAL_NOON + 3 * 60 * 60 * 1000).toISOString()
 const EARLIER_TODAY = new Date(LOCAL_NOON - 3 * 60 * 60 * 1000).toISOString()
 
-assert.equal(isFutureRelease('2026-09-16', LOCAL_NOON), false, 'dated today: out since midnight')
-assert.equal(isFutureRelease('2026-09-17', LOCAL_NOON), true, 'dated tomorrow: still coming')
-assert.equal(isFutureRelease(EARLIER_TODAY, LOCAL_NOON), false, 'an instant earlier today: out')
+// An episode's air date is a broadcast moment...
+assert.equal(isFutureInstant('2026-09-16', LOCAL_NOON), false, 'dated today: out since midnight')
+assert.equal(isFutureInstant('2026-09-17', LOCAL_NOON), true, 'dated tomorrow: still coming')
+assert.equal(isFutureInstant(EARLIER_TODAY, LOCAL_NOON), false, 'an instant earlier today: out')
 assert.equal(
-  isFutureRelease(LATER_TODAY, LOCAL_NOON),
+  isFutureInstant(LATER_TODAY, LOCAL_NOON),
   true,
   'an instant later today is NOT out yet — the AniList broadcast moment'
+)
+assert.equal(isFutureInstant('', LOCAL_NOON), false)
+assert.equal(isFutureInstant('not a date', LOCAL_NOON), false)
+
+// ...where a TITLE's release date is a day, however its source spells it:
+// Cinemeta writes a film's release day as a midnight-UTC datetime, and the
+// film is out all of that local day, not from 09:00 in Tokyo.
+assert.equal(isFutureRelease('2026-09-16', LOCAL_NOON), false, 'dated today: out')
+assert.equal(isFutureRelease('2026-09-17', LOCAL_NOON), true, 'dated tomorrow: coming')
+assert.equal(isFutureRelease(LATER_TODAY, LOCAL_NOON), false, 'a moment later today is today')
+assert.equal(isFutureRelease(EARLIER_TODAY, LOCAL_NOON), false)
+assert.equal(
+  isFutureRelease(new Date(LOCAL_NOON + 24 * 60 * 60 * 1000).toISOString(), LOCAL_NOON),
+  true,
+  'a moment tomorrow is tomorrow'
 )
 assert.equal(isFutureRelease('', LOCAL_NOON), false)
 assert.equal(isFutureRelease('not a date', LOCAL_NOON), false)
