@@ -1402,6 +1402,9 @@ export function registerTrackingIpc(): void {
 
   handle<TrackableItem, { tracked: boolean }>(MEDIA_HUB_CHANNELS.trackingToggle, (_e, item) => {
     const db = getDatabase()
+    // Same canonical id as every other write, so Add to My List from a
+    // legacy Simkl-keyed card plans the real title, once.
+    item = { ...item, id: canonicalWriteId(item) }
     const tracked = db.isTracked(item.id)
     if (tracked) db.untrack(item.id)
     else db.track(item)
@@ -1484,6 +1487,7 @@ export function registerTrackingIpc(): void {
       const list = Array.isArray(episodes) ? episodes : []
       const episodeNumbers = list.map((p) => p.episode)
       const db = getDatabase()
+      item = { ...item, id: canonicalWriteId(item) }
       for (const playback of list) db.markWatched(item, playback)
       requestRecommendationsRebuild()
       // Detached and ordered per title, as the single-episode handler above.
