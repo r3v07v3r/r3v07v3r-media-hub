@@ -359,4 +359,65 @@ check('counting a kind with nothing in it is 0, not an error', () => {
   db.close()
 })
 
+// --- the aired count moves by itself as air dates pass ------------------
+
+check('a cached title re-read after an episode airs refreshes its aired count', () => {
+  // The metadata cache-hit path calls this on every read (catalog.ts): the
+  // entry it serves has not changed, but a dated episode in it has crossed
+  // its air time since the row was written.
+  const dbPath = tempDbPath()
+  const db = createDatabase(dbPath, TEST_PROFILE)
+  const airsAt = Date.UTC(2026, 8, 17, 3)
+  const title = item('tt1', {
+    type: 'series',
+    videos: [
+      { id: 'a', season: 1, episode: 1, number: 1, title: '', released: '2026-09-10T03:00:00Z' },
+      { id: 'b', season: 1, episode: 2, number: 2, title: '', released: '2026-09-17T03:00:00Z' },
+      { id: 'c', season: 1, episode: 3, number: 3, title: '', released: '', upcoming: true }
+    ]
+  })
+  db.indexUpsert('series', [title], { now: 1_000 })
+  db.indexRefreshFromMetadata('series', title, airsAt - 60_000)
+  assert.equal(raw(dbPath, 'tt1')?.aired_episodes, 1, 'before air time: one aired, one flagged')
+
+  db.indexRefreshAiredCount('series', title, airsAt + 60_000)
+  const after = raw(dbPath, 'tt1')
+  assert.equal(after?.aired_episodes, 2, 'after air time: the dated episode counts')
+  assert.equal(after?.updated_at, airsAt + 60_000, 'a real change is a sighting')
+
+  db.indexRefreshAiredCount('series', title, airsAt + 120_000)
+  assert.equal(
+    raw(dbPath, 'tt1')?.updated_at,
+    airsAt + 60_000,
+    'an unchanged count writes nothing — the sweeps call this on every read'
+  )
+
+  db.indexRefreshAiredCount('series', item('tt1', { type: 'series', videos: [] }), airsAt)
+  assert.equal(raw(dbPath, 'tt1')?.aired_episodes, 2, 'no episode data never erases a count')
+  db.close()
+})
+
+check('a title whose episodes have all still to air stores a confirmed zero', () => {
+  // The row was first written from a crawl's dateless placeholders (every
+  // one presumed aired); the resolve then learns none has. Zero must land,
+  // or the COALESCE that protects real counts from "no data" would keep
+  // the placeholder count and the title would read as watchable — and, once
+  // its episodes were marked, as Completed.
+  const dbPath = tempDbPath()
+  const db = createDatabase(dbPath, TEST_PROFILE)
+  const placeholders = [
+    { id: 'a', season: 1, episode: 1, number: 1, title: '', released: '' },
+    { id: 'b', season: 1, episode: 2, number: 2, title: '', released: '' }
+  ]
+  db.indexUpsert('anime', [item('kitsu:1', { type: 'anime', videos: placeholders })])
+  assert.equal(raw(dbPath, 'kitsu:1')?.aired_episodes, 2, 'placeholders count as aired')
+  const resolved = item('kitsu:1', {
+    type: 'anime',
+    videos: placeholders.map((v) => ({ ...v, upcoming: true }))
+  })
+  db.indexRefreshFromMetadata('anime', resolved)
+  assert.equal(raw(dbPath, 'kitsu:1')?.aired_episodes, 0, 'none aired is zero, not "no data"')
+  db.close()
+})
+
 console.log(`\n${pass} passed`)

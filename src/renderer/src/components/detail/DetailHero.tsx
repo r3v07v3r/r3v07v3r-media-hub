@@ -10,7 +10,11 @@ import { Icon } from '@renderer/components/icons/Icon'
 import { resolveArtwork } from '@renderer/lib/artwork'
 import { ArtworkImage } from '@renderer/components/media/ArtworkImage'
 import { useYoutubeEmbedControls } from '@renderer/hooks/useYoutubeEmbedControls'
-import { formatReleaseDate, isFutureRelease } from '@renderer/lib/mediaHub/releaseDate'
+import {
+  formatReleaseDate,
+  isFutureInstant,
+  isFutureRelease
+} from '@renderer/lib/mediaHub/releaseDate'
 import styles from './DetailHero.module.css'
 
 /** Same idle window as the movie player's control bar
@@ -47,6 +51,14 @@ export interface DetailHeroProps {
    *  has aired (nextEpisode or allEpisodesWatched already answer the
    *  question then) or when there's no episode data at all. */
   nextAiringDate: string | undefined
+  /** True when the title has real episodes but not one of them has aired —
+   *  the same fact as nextAiringDate, for the list that carries no date to
+   *  read: every episode flagged `upcoming` (see Episode.upcoming) with an
+   *  empty `released`. Without it the hero offered Play for a show whose
+   *  every tile says TBA, and Play searched for a stream that does not
+   *  exist yet. False when there is no episode data at all, or when the
+   *  only entries are specials — those play from the grid on their own. */
+  notYetAired: boolean
   trailer: Trailer | undefined
   showTrailer: boolean
   onToggleTrailer: () => void
@@ -63,6 +75,7 @@ export function DetailHero({
   nextEpisode,
   allEpisodesWatched,
   nextAiringDate,
+  notYetAired,
   trailer,
   showTrailer,
   onToggleTrailer,
@@ -89,15 +102,20 @@ export function DetailHero({
   // what tells those two apart: it only carries a value in the former
   // case (see MediaDetailPage), so checking it after nextEpisode is what
   // actually gates a not-yet-aired show instead of leaving Play enabled
-  // and falling back to a stream nothing can resolve.
-  const unreleasedDate = useMemo(() => {
-    if (hasProgress) return undefined
+  // and falling back to a stream nothing can resolve. notYetAired is the
+  // same gate for a show whose upcoming episodes carry no date at all
+  // (TBA on every tile): unreleased, with nothing to print but the fact.
+  const unreleased = useMemo<{ date?: string } | null>(() => {
+    if (hasProgress) return null
     if (config.isEpisodic) {
-      if (nextEpisode) return undefined
-      return nextAiringDate && isFutureRelease(nextAiringDate) ? nextAiringDate : undefined
+      if (nextEpisode) return null
+      // An episode's air date is a broadcast moment (isFutureInstant), where
+      // a film's release date below is a day (isFutureRelease).
+      if (nextAiringDate && isFutureInstant(nextAiringDate)) return { date: nextAiringDate }
+      return notYetAired ? {} : null
     }
-    return isFutureRelease(media.releaseDate) ? media.releaseDate : undefined
-  }, [hasProgress, config.isEpisodic, nextEpisode, nextAiringDate, media.releaseDate])
+    return isFutureRelease(media.releaseDate) ? { date: media.releaseDate } : null
+  }, [hasProgress, config.isEpisodic, nextEpisode, nextAiringDate, notYetAired, media.releaseDate])
 
   const trailerFrameRef = useRef<HTMLIFrameElement>(null)
   const trailerActive = showTrailer && !!trailer
@@ -145,8 +163,8 @@ export function DetailHero({
   const trailerControlsHidden = contentFaded && trailerIdle && !trailerBarFocused
 
   const playLabel = useMemo(() => {
-    if (unreleasedDate) {
-      const formatted = formatReleaseDate(unreleasedDate)
+    if (unreleased) {
+      const formatted = formatReleaseDate(unreleased.date)
       return formatted ? `Releases ${formatted}` : 'Not yet released'
     }
     if (isResolving) {
@@ -162,7 +180,7 @@ export function DetailHero({
     }
     return 'Play'
   }, [
-    unreleasedDate,
+    unreleased,
     isResolving,
     resolvingMedia?.stage,
     hasProgress,
@@ -311,14 +329,14 @@ export function DetailHero({
             type="button"
             className={styles.playButton}
             onClick={onPlay}
-            disabled={isResolving || !!unreleasedDate}
+            disabled={isResolving || !!unreleased}
             aria-busy={isResolving}
-            aria-disabled={!!unreleasedDate}
+            aria-disabled={!!unreleased}
           >
             {isResolving ? (
               <span className={styles.playSpinner} aria-hidden="true" />
             ) : (
-              <Icon name={unreleasedDate ? 'clock' : 'play'} size={16} />
+              <Icon name={unreleased ? 'clock' : 'play'} size={16} />
             )}
             {playLabel}
           </button>

@@ -49,7 +49,7 @@ import type {
   TrackedUpdate,
   ViewingStats
 } from '../../shared/media-hub/types'
-import { isRegularEpisode } from '../../shared/media-hub/catalog-logic'
+import { hasAired, isRegularEpisode } from '../../shared/media-hub/catalog-logic'
 
 /** JSON.parse that falls back instead of throwing on malformed/absent data. */
 function parse<T>(value: string, fallback: T): T {
@@ -124,14 +124,21 @@ function compareEpisode(a: EpisodePosition, b: EpisodePosition): number {
   return a.season - b.season || a.episode - b.episode
 }
 
+/** hasAired — THE aired rule (shared/media-hub/catalog-logic.ts) — over the
+ *  raw-Cinemeta `firstAired` fallback EpisodeLike allows. Used for a tracked
+ *  title's baseline and its "new episodes", so neither can name an episode
+ *  the detail page shows as TBA or "Releases …": an inline
+ *  `!date || new Date(date) <= now` used to live in both, and read a
+ *  flagged, dateless upcoming episode as released. */
+function airedAt(v: EpisodeLike, now: Date): boolean {
+  return hasAired({ released: v.released || v.firstAired, upcoming: v.upcoming }, now.getTime())
+}
+
 /** Highest already-aired episode position at `now`, or {0,0} when nothing has aired yet. */
 function latestReleased(videos: EpisodeLike[] | undefined, now: Date): EpisodePosition {
   return (
     (videos || [])
-      .filter((v) => {
-        const released = v.released || v.firstAired
-        return !released || new Date(released) <= now
-      })
+      .filter((v) => airedAt(v, now))
       .map(episodePosition)
       .filter((v) => v.episode > 0)
       .sort(compareEpisode)
@@ -181,25 +188,29 @@ function indexEpisodeCounts(
   totalEpisodes: number | null
   airedEpisodes: number | null
 } {
-  // The same rule airedEpisodes (renderer/lib/mediaHub/adapters.ts) applies:
-  // a regular episode (not synthetic, not a season-0 special — see
-  // isRegularEpisode), and either no release date or one already past.
-  // `!released` counting as aired is deliberate there and reproduced here —
-  // Kitsu's synthesized episodes carry no dates, so for anime this equals
-  // the total, which is the answer the in-memory version already reached.
-  const aired = (item.videos || []).filter(
-    (v) => isRegularEpisode(v) && (!v.released || new Date(v.released).getTime() <= now)
-  ).length
+  // The same two rules airedEpisodes (renderer/lib/mediaHub/adapters.ts)
+  // applies — isRegularEpisode and hasAired themselves, not a paraphrase:
+  // an inline `!released || released <= now` used to live here and silently
+  // missed hasAired's `upcoming` clause once that existed, so the index
+  // counted next week's episode as aired while the detail page did not.
+  const regular = (item.videos || []).filter((v) => isRegularEpisode(v))
+  const aired = regular.filter((v) => hasAired(v, now)).length
 
   if (item.episodeCounts) {
     return {
       totalSeasons: item.episodeCounts.totalSeasons,
       totalEpisodes: item.episodeCounts.totalEpisodes,
-      // A grouped anime's `videos` only covers its first season, so counting
-      // aired episodes off it would under-report the franchise badly. The
-      // supplied total is the better answer, and anime has no per-episode
-      // dates to be more precise with anyway.
-      airedEpisodes: item.episodeCounts.totalEpisodes
+      // A grouped anime's CATALOG entry carries only its first season in
+      // `videos`, so counting aired episodes off that would under-report
+      // the franchise badly; the supplied total is the better answer
+      // there. A RESOLVED entry (indexRefreshFromMetadata, after
+      // metadata() built the full multi-season list) has every season in
+      // hand, with next week's episodes dated or flagged, and its own
+      // count is exact — recognisable by the list covering the total.
+      airedEpisodes:
+        regular.length >= item.episodeCounts.totalEpisodes
+          ? aired
+          : item.episodeCounts.totalEpisodes
     }
   }
   // Specials — synthetic or genuine, both season 0 — are excluded here
@@ -211,7 +222,12 @@ function indexEpisodeCounts(
   return {
     totalSeasons: seasons.size || null,
     totalEpisodes: playable.length,
-    airedEpisodes: aired || null
+    // A confirmed zero, not null: with real episodes in hand, "none of
+    // them has aired yet" is an answer (a show opened before its premiere,
+    // an anime whose schedule starts at episode 1), and null would read as
+    // "no data" to both refresh paths' COALESCE — leaving a row written
+    // earlier from dateless placeholders claiming every episode has aired.
+    airedEpisodes: aired
   }
 }
 
@@ -735,6 +751,17 @@ export interface MediaHubDatabase {
    * erase.
    */
   indexRefreshFromMetadata(kind: MediaKind, item: CatalogItem, now?: number): void
+  /**
+   * Refreshes only the aired count of one index row — the one figure in
+   * indexRefreshFromMetadata that moves by itself as time passes: a dated
+   * episode crosses its air time between two reads of the same cached
+   * entry, and nothing about the entry changed but the answer. Written only
+   * when the stored count differs (an UPDATE that matches no row touches
+   * nothing), so the metadata cache-hit path can call it on every read —
+   * the calendar's and the trackers' sweeps included — without paying a
+   * write per title. A null count (no episode data) never erases.
+   */
+  indexRefreshAiredCount(kind: MediaKind, item: CatalogItem, now?: number): void
   indexUpsert(
     kind: MediaKind,
     items: readonly CatalogItem[],
@@ -2294,6 +2321,23 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
         logError('index:refresh-metadata', error)
       }
     },
+
+    indexRefreshAiredCount(kind, item, now = Date.now()) {
+      const id = String(item?.id || '')
+      if (!id) return
+      const { airedEpisodes } = indexEpisodeCounts(item, now)
+      if (airedEpisodes === null) return
+      try {
+        sql
+          .prepare(
+            `UPDATE catalog_index SET aired_episodes=@airedEpisodes, updated_at=@now
+             WHERE id=@id AND kind=@kind AND aired_episodes IS NOT @airedEpisodes`
+          )
+          .run({ id, kind, airedEpisodes, now })
+      } catch (error) {
+        logError('index:refresh-aired', error)
+      }
+    },
     indexUpsert(kind, items, { source = '', rankBase = 0, ranks, now = Date.now() } = {}) {
       if (!items.length) return true
       try {
@@ -2633,11 +2677,9 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
           }
           const last = compareEpisode(watched, baseline) >= 0 ? watched : baseline
 
-          const released = ((detail.videos as EpisodeLike[] | undefined) || []).filter((v) => {
-            const p = episodePosition(v)
-            const date = v.released || v.firstAired
-            return (!date || new Date(date) <= now) && compareEpisode(p, last) > 0
-          })
+          const released = ((detail.videos as EpisodeLike[] | undefined) || []).filter(
+            (v) => airedAt(v, now) && compareEpisode(episodePosition(v), last) > 0
+          )
           if (released.length) {
             updates.push({
               ...tracked,

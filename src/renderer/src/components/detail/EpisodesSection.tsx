@@ -6,7 +6,10 @@ import type { Episode } from '@shared/media-hub/types'
 import { useAppState } from '@renderer/context/AppStateContext'
 import { Icon } from '@renderer/components/icons/Icon'
 import { ArtworkImage } from '@renderer/components/media/ArtworkImage'
-import { formatReleaseDate as airDateLabel, isFutureRelease } from '@renderer/lib/mediaHub/releaseDate'
+import {
+  formatReleaseDate as airDateLabel,
+  isUpcomingEpisode
+} from '@renderer/lib/mediaHub/releaseDate'
 import styles from './EpisodesSection.module.css'
 import { episodeStillOrShowArt } from '@renderer/components/media/artworkRetry'
 
@@ -314,6 +317,15 @@ export function EpisodesSection({
   const menuEpisodeWatched = menuEpisode
     ? watchedKeys.has(key(menuEpisode.season, menuEpisode.episode))
     : false
+  // "Mark season watched" acts on the season's aired episodes only
+  // (MediaDetailPage's handleMarkSeasonWatched), so for a season with none
+  // it would do nothing — disabled rather than a silent no-op. The menu
+  // itself can still be open for such a season, for "unwatched" (see
+  // hasSeasonActions below).
+  const menuSeasonMarkable =
+    openMenu?.kind === 'season'
+      ? episodes.some((e) => e.season === openMenu.season && !e.unplayable && !isUpcomingEpisode(e))
+      : false
 
   // Shift extends the selection from the last-clicked tile through the one
   // just clicked (ordinary file-manager behaviour); ctrl/cmd toggles just
@@ -329,7 +341,7 @@ export function EpisodesSection({
         const [from, to] = anchorIndex < targetIndex ? [anchorIndex, targetIndex] : [targetIndex, anchorIndex]
         const range = visible
           .slice(from, to + 1)
-          .filter((e) => !e.unplayable && !isFutureRelease(e.released))
+          .filter((e) => !e.unplayable && !isUpcomingEpisode(e))
         setSelectedKeys(new Set(range.map((e) => key(e.season, e.episode))))
         return
       }
@@ -362,8 +374,20 @@ export function EpisodesSection({
             // it here would just silently no-op on an empty list. Hiding
             // the trigger (and so the menu it opens) for that case instead
             // of leaving a dead control, per the same reasoning that hides
-            // the per-tile play/actions controls for these entries.
-            const hasPlayableEpisodes = episodes.some((e) => e.season === s && !e.unplayable)
+            // the per-tile play/actions controls for these entries. A
+            // season that has not started airing (every episode upcoming —
+            // isUpcomingEpisode, the same test that hides each tile's menu)
+            // has nothing to mark watched either — unless a mark already
+            // sits on one of its episodes (left by the bulk action before
+            // it learned to skip them, or imported from a tracker): the
+            // tile's own menu is hidden for an upcoming episode, so the
+            // season menu's "unwatched" is the only way to clear it.
+            const hasSeasonActions = episodes.some(
+              (e) =>
+                e.season === s &&
+                !e.unplayable &&
+                (!isUpcomingEpisode(e) || watchedKeys.has(key(e.season, e.episode)))
+            )
             return (
               <div key={s} className={styles.seasonItem}>
                 <button
@@ -375,7 +399,7 @@ export function EpisodesSection({
                 >
                   {seasonLabel(s)}
                 </button>
-                {isActive && hasPlayableEpisodes && (
+                {isActive && hasSeasonActions && (
                   <button
                     type="button"
                     className={styles.seasonMenuTrigger}
@@ -408,6 +432,7 @@ export function EpisodesSection({
                   type="button"
                   role="menuitem"
                   className={styles.menuItem}
+                  disabled={!menuSeasonMarkable}
                   onClick={() => {
                     onMarkSeason(openMenu.season, true)
                     closeMenu()
@@ -517,7 +542,7 @@ export function EpisodesSection({
           const title = ep.title || `Episode ${ep.episode}`
           const airDate = airDateLabel(ep.released)
           const isSelected = selectedKeys.has(epKey)
-          const unaired = isFutureRelease(ep.released)
+          const unaired = isUpcomingEpisode(ep)
           return (
             <li
               key={ep.id}
@@ -531,8 +556,11 @@ export function EpisodesSection({
                   tile is overwhelmingly clicked for. Unplayable entries
                   (disambiguateVideos' synthetic Specials, see core.ts)
                   get a plain non-interactive thumbnail instead, same as an
-                  episode whose air date hasn't happened yet — there is
-                  nothing a stream resolver could find for either. */}
+                  episode that hasn't come out yet — there is nothing a
+                  stream resolver could find for either. The latter says
+                  so on the picture itself: the air date when one is
+                  known, TBA when the title is still running but nobody
+                  has scheduled this episode (see isUpcomingEpisode). */}
               {ep.unplayable ? (
                 <div className={styles.thumbFrame}>
                   <ArtworkImage
@@ -546,20 +574,25 @@ export function EpisodesSection({
               ) : unaired ? (
                 <div className={`${styles.thumbFrame} ${styles.thumbFrameUnaired}`}>
                   <ArtworkImage
-                    src={ep.thumbnail}
+                    src={episodeStillOrShowArt(ep, showArtwork)}
                     alt=""
                     fallbackTitle={title}
                     artTint={['#1c2a45', '#0a1220']}
                     className={styles.thumb}
                   />
-                  <span className={styles.playOverlay} aria-hidden="true">
-                    <Icon name="clock" size={20} />
-                  </span>
-                  {airDate && (
-                    <span className={`${styles.badge} ${styles.badgeUnaired}`}>
-                      Releases {airDate}
+                  {/* Real text, not an icon with a tooltip: this is the
+                      one thing the tile has to say, so it sits in the
+                      middle of the picture where the play affordance
+                      would be — and is read out as ordinary text, which
+                      is why it is not aria-hidden (a div has no role for
+                      an aria-label to hang off). */}
+                  <span className={styles.upcomingLabel}>
+                    <Icon name="clock" size={14} />
+                    <span className={styles.upcomingEyebrow}>
+                      {airDate ? 'Releases' : 'Release date'}
                     </span>
-                  )}
+                    <span className={styles.upcomingDate}>{airDate ?? 'TBA'}</span>
+                  </span>
                 </div>
               ) : (
                 <button
@@ -641,7 +674,7 @@ export function EpisodesSection({
                 </h3>
                 <div className={styles.metaFooter}>
                   <span className={styles.subLabel}>
-                    {airDate ?? (ep.unplayable ? 'Extra' : '')}
+                    {airDate ?? (unaired ? 'TBA' : ep.unplayable ? 'Extra' : '')}
                   </span>
                   {!ep.unplayable && !unaired && (
                     <button

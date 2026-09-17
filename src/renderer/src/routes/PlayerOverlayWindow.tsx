@@ -28,6 +28,7 @@ import { PlayerWindowProvider, usePlayerWindow } from '@renderer/context/PlayerW
 import { usePartySync } from '@renderer/hooks/usePartySync'
 import { usePlayerTracking, WATCHED_FRACTION } from '@renderer/hooks/usePlayerTracking'
 import { PlayerSessionRail } from '@renderer/components/party/PlayerSessionRail'
+import { Icon } from '@renderer/components/icons/Icon'
 import {
   AUTOPLAY_NEXT_COUNTDOWN_SECONDS,
   MAX_PLAYER_VOLUME,
@@ -76,6 +77,13 @@ const CONTROLS_IDLE_MS = 3200
 // that memo on every tick instead of only when the chapter list actually
 // changes.
 const EMPTY_CHAPTERS: PlayerChapter[] = []
+
+/** How far into a chapter "previous chapter" still means the one before it
+ *  rather than the start of this one — mpv's own chapter-seek-threshold
+ *  default, and the behaviour of every CD player ever: a press within the
+ *  first seconds is "I overshot", a press later is "take me back to the
+ *  top of this one". */
+const CHAPTER_RESTART_SECONDS = 5
 /** Scrub previews are bucketed so hovering along the bar reuses frames instead
  *  of asking for one per pixel — each is a separate short-lived process. */
 const THUMBNAIL_BUCKET_SECONDS = 5
@@ -210,6 +218,50 @@ function PlayerControls() {
         : [],
     [chapters, duration]
   )
+  // Where the previous/next chapter buttons would land from here. Seeks go
+  // through seekTo like the arrow keys do — not a chapter command to mpv —
+  // so a party's host carries its guests along with a chapter jump exactly
+  // as with any other seek. Both targets are found by POSITION relative to
+  // the chapter now playing, never by a time threshold on the marks
+  // themselves: a mark 0.4s ahead of the playhead is still the next
+  // chapter, and a threshold that skipped it would jump two chapters at
+  // once. "Now playing" is mpv's own `chapter` index where it has one —
+  // after a seek to a mark, mpv can report time-pos a few milliseconds
+  // SHORT of it for a tick while already counting the chapter as current,
+  // and a scan by time would offer the mark just landed on as "next" — and
+  // a scan by time only when mpv has not said (chapter -1, or a mark
+  // chapterRanges dropped). `next` is simply the chapter after the current
+  // one (the first chapter, from before any); `previous` is this chapter's
+  // start once past CHAPTER_RESTART_SECONDS, else the one before — and from
+  // inside the first chapter, or before any chapter at all, the top of the
+  // title.
+  const chapterTargets = useMemo(() => {
+    if (!chapterRanges.length) return null
+    let currentIndex = chapterRanges.findIndex((chapter) => chapter.index === currentChapter)
+    if (currentIndex === -1) {
+      chapterRanges.forEach((chapter, index) => {
+        if (chapter.start <= timePos) currentIndex = index
+      })
+    }
+    const next = chapterRanges[currentIndex + 1] ?? null
+    const current = currentIndex >= 0 ? chapterRanges[currentIndex] : null
+    const restart = current ? current.start : 0
+    const previous =
+      timePos - restart > CHAPTER_RESTART_SECONDS
+        ? { time: restart, title: current?.title ?? '' }
+        : currentIndex > 0
+          ? {
+              time: chapterRanges[currentIndex - 1].start,
+              title: chapterRanges[currentIndex - 1].title
+            }
+          : restart > 0
+            ? { time: 0, title: '' }
+            : null
+    return {
+      next: next ? { time: next.start, title: next.title } : null,
+      previous
+    }
+  }, [chapterRanges, currentChapter, timePos])
   const audioDelay = state.audioDelay ?? 0
   const subtitleStyle = session?.settings.subtitleStyle ?? DEFAULT_SUBTITLE_STYLE
   const subtitleStyled = !isSubtitleStyleDefault(subtitleStyle)
@@ -815,6 +867,15 @@ function PlayerControls() {
       } else if (event.key === 'ArrowDown') {
         event.preventDefault()
         nudgeVolume(-PLAYER_VOLUME_STEP)
+      } else if (event.key === 'PageUp' || event.key === 'PageDown') {
+        // mpv's and Kodi's own binding: Page Up forward a chapter, Page Down
+        // back one. Only consumed while there are chapters to move between;
+        // otherwise the key is left to whatever else wants it.
+        const target = event.key === 'PageUp' ? chapterTargets?.next : chapterTargets?.previous
+        if (target) {
+          event.preventDefault()
+          seekTo(target.time)
+        }
       } else if (event.key === 'f') {
         toggleFullscreen()
       } else if (event.key === 'Escape') {
@@ -843,6 +904,7 @@ function PlayerControls() {
     party,
     seekTo,
     timePos,
+    chapterTargets,
     nudgeVolume,
     toggleFullscreen,
     handleEscape,
@@ -1280,6 +1342,27 @@ function PlayerControls() {
         </div>
 
         <div className={styles.row}>
+          {/* Previous / next chapter flank play, the way a disc player's
+              transport does. Only for a file that has chapter marks at all
+              — the many that carry none get the bar they always had. Each
+              is disabled, not hidden, when there is nothing that way. */}
+          {chapterTargets && (
+            <button
+              type="button"
+              className={`${styles.button} ${styles.chapterButton}`}
+              onClick={() => chapterTargets.previous && seekTo(chapterTargets.previous.time)}
+              disabled={locked || !chapterTargets.previous}
+              aria-label="Previous chapter"
+              title={
+                chapterTargets.previous?.title
+                  ? `Previous chapter: ${chapterTargets.previous.title}`
+                  : 'Previous chapter'
+              }
+            >
+              <Icon name="skip-back" size={16} />
+            </button>
+          )}
+
           <button
             type="button"
             className={styles.button}
@@ -1289,6 +1372,23 @@ function PlayerControls() {
           >
             {paused ? '▶' : '❚❚'}
           </button>
+
+          {chapterTargets && (
+            <button
+              type="button"
+              className={`${styles.button} ${styles.chapterButton}`}
+              onClick={() => chapterTargets.next && seekTo(chapterTargets.next.time)}
+              disabled={locked || !chapterTargets.next}
+              aria-label="Next chapter"
+              title={
+                chapterTargets.next?.title
+                  ? `Next chapter: ${chapterTargets.next.title}`
+                  : 'Next chapter'
+              }
+            >
+              <Icon name="skip-forward" size={16} />
+            </button>
+          )}
 
           <span className={styles.time}>
             {formatTime(timePos)} / {formatTime(duration)}
