@@ -133,6 +133,35 @@ assert.equal(
 }
 
 {
+  // The source is later but inside the ten-minute window: its play was
+  // skipped as the same viewing, so the history date stays on the play
+  // that survived — a history date no play carries would read as a
+  // second viewing to titleViewings.
+  const db = tempDb()
+  const wick = { type: 'movie' as const, title: 'John Wick' }
+  db.importWatched([
+    {
+      ...wick,
+      id: 'tt2911666',
+      season: null,
+      episode: null,
+      watchedAt: '2026-09-11T21:10:09.352Z'
+    },
+    {
+      ...wick,
+      id: 'simkl:342994',
+      season: null,
+      episode: null,
+      watchedAt: '2026-09-11T21:10:17.129Z'
+    }
+  ])
+  db.mergeContentId('simkl:342994', 'tt2911666')
+  const plays = db.plays().filter((p) => p.contentId === 'tt2911666')
+  assert.equal(plays.length, 1)
+  assert.equal(db.history()[0].watchedAt, plays[0].watchedAt)
+}
+
+{
   // The reverse — the real row is the later one — leaves its date alone.
   const db = tempDb()
   const wick = { type: 'movie' as const, title: 'John Wick' }

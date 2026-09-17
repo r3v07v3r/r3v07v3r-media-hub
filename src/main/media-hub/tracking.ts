@@ -1443,6 +1443,9 @@ export function registerTrackingIpc(): void {
     MEDIA_HUB_CHANNELS.trackingUnmarkWatched,
     async (_e, { item, playback }) => {
       const p = playback || {}
+      // The same id the mark went under, so an unmark of a Simkl-keyed
+      // card deletes the row the mark wrote and queues behind its push.
+      item = { ...item, id: canonicalWriteId(item) }
       getDatabase().unmarkWatched(item.id, p.season, p.episode)
       requestRecommendationsRebuild()
       // Detached as above, and queued behind any push still in flight for

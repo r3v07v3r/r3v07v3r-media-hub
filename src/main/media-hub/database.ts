@@ -1180,20 +1180,37 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
     ),
     // A collision where the source row is the LATER viewing — a rewatch
     // marked from a Simkl-keyed card after the real-id row was written —
-    // keeps the real row but takes its date, so history() and everything
-    // recency-based (continuations, recently watched) see the rewatch the
-    // plays table already records. Rows are matched on the same
-    // season/episode coordinates the rebuilt key carries.
+    // keeps the real row but takes the rewatch's date, so history() and
+    // everything recency-based (continuations, recently watched) see the
+    // rewatch the plays table records. The date is read from the plays
+    // that SURVIVED the fold (run after mergePlays), never from the source
+    // history row: a source play inside the ten-minute window was skipped
+    // as the same viewing, and stamping history with a date no play
+    // carries would make titleViewings count it as a second one. Rows are
+    // matched on the season/episode coordinates the rebuilt key carries.
+    // History without any play (older imports) falls back to the source
+    // row's own date, where there is no play to disagree with.
     bumpMergedWatchedAt: sql.prepare(
       `UPDATE watch_history
-          SET watched_at = (SELECT MAX(s.watched_at) FROM watch_history s
-                             WHERE s.profile_id=watch_history.profile_id AND s.content_id=@from
-                               AND s.season IS watch_history.season AND s.episode IS watch_history.episode)
+          SET watched_at = COALESCE(
+                (SELECT MAX(p.watched_at) FROM plays p
+                  WHERE p.profile_id=watch_history.profile_id AND p.content_id=@to
+                    AND p.season IS watch_history.season AND p.episode IS watch_history.episode),
+                (SELECT MAX(s.watched_at) FROM watch_history s
+                  WHERE s.profile_id=watch_history.profile_id AND s.content_id=@from
+                    AND s.season IS watch_history.season AND s.episode IS watch_history.episode))
         WHERE content_id=@to
           AND EXISTS (SELECT 1 FROM watch_history s
                        WHERE s.profile_id=watch_history.profile_id AND s.content_id=@from
-                         AND s.season IS watch_history.season AND s.episode IS watch_history.episode
-                         AND s.watched_at > watch_history.watched_at)`
+                         AND s.season IS watch_history.season AND s.episode IS watch_history.episode)
+          AND COALESCE(
+                (SELECT MAX(p.watched_at) FROM plays p
+                  WHERE p.profile_id=watch_history.profile_id AND p.content_id=@to
+                    AND p.season IS watch_history.season AND p.episode IS watch_history.episode),
+                (SELECT MAX(s.watched_at) FROM watch_history s
+                  WHERE s.profile_id=watch_history.profile_id AND s.content_id=@from
+                    AND s.season IS watch_history.season AND s.episode IS watch_history.episode)
+              ) > watched_at`
     ),
     countKeyedWatched: sql.prepare('SELECT COUNT(*) AS n FROM watch_history WHERE content_id=?'),
     // A rating already given to the canonical show wins — same rule as
@@ -2036,10 +2053,11 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
           try {
             affected = Number((q.countKeyedWatched.get(from) as { n?: number } | undefined)?.n || 0)
             q.mergeWatched.run({ from, to })
-            q.bumpMergedWatchedAt.run({ from, to })
-            q.dropRemappedWatched.run(from)
+            // Plays first: the date bump reads the plays that survived.
             q.mergePlays.run({ from, to })
             q.dropRemappedPlays.run(from)
+            q.bumpMergedWatchedAt.run({ from, to })
+            q.dropRemappedWatched.run(from)
             q.remapRating.run({ from, to })
             q.dropRemappedRating.run(from)
             sql.exec('COMMIT')
