@@ -227,7 +227,7 @@ check('unmappable ids are not, so the review never offers them', () => {
   // such a row is still kept locally, and still shown. Only the push is
   // withheld — see serviceIds.ts on the library-write guard that used to
   // read the same predicate and is gone.
-  for (const id of ['m-13', 'tmdb:157336', 'simkl:250822', '', 'not-an-id']) {
+  for (const id of ['m-13', 'tmdb:157336', 'simkl:', '', 'not-an-id']) {
     assert.equal(hasExpressibleSimklId(id), false, `${id} should not be expressible`)
   }
 })
@@ -235,6 +235,9 @@ check('unmappable ids are not, so the review never offers them', () => {
 check('idsForCatalogId matches what a push would actually send', () => {
   assert.deepEqual(idsForCatalogId('tt4877122'), { imdb: 'tt4877122' })
   assert.deepEqual(idsForCatalogId('kitsu:7'), { kitsu: 7 })
+  // Simkl's own number is a real id Simkl matches exactly — a row a list
+  // card wrote under it is pushable (see simklKeyedHistory.ts).
+  assert.deepEqual(idsForCatalogId('simkl:250822'), { simkl: 250822 })
   assert.deepEqual(idsForCatalogId('m-13'), {})
 })
 
@@ -246,7 +249,7 @@ check('a title Simkl has no id for produces no push body', () => {
   // that carries `ids: {}` and a title/year, which asks Simkl to guess:
   // it can land on the wrong entry, and even a right one produces a row
   // no later diff can join back to this id.
-  const unmappable = { id: 'simkl:250822', type: 'series' as const, title: 'Silo', year: '2023' }
+  const unmappable = { id: 'tmdb:157336', type: 'series' as const, title: 'Silo', year: '2023' }
   assert.equal(hasSimklContent(historyPayload(unmappable, { season: 3, episode: 10 })), false)
   assert.equal(hasSimklContent(seasonHistoryPayload(unmappable, 3, [1, 2, 3])), false)
   assert.equal(scrobblePayload(unmappable, { season: 3, episode: 10 }, 40), null)
@@ -264,7 +267,7 @@ check('a real id still produces one, unchanged', () => {
 check('a batch drops the unaddressable rows and keeps the rest', () => {
   const payload = batchHistoryPayload([
     { item: { id: 'tt14688458', type: 'series', title: 'Silo', year: '2023' } },
-    { item: { id: 'simkl:250822', type: 'series', title: 'Silo', year: '2023' } },
+    { item: { id: 'tmdb:157336', type: 'series', title: 'Silo', year: '2023' } },
     { item: { id: 'm-13', type: 'movie', title: 'Ex Machina', year: '2014' } }
   ])
   assert.equal(payload.shows?.length, 1)

@@ -248,7 +248,7 @@ check('Simkl: a film takes the movie shape and anime the anime key', () => {
   )
   assert.ok(anime.anime?.length === 1 && !anime.shows)
   assert.deepEqual(
-    simklTitlePayload({ id: 'simkl:9', type: 'movie', title: 'Nope', year: '2020' }, []),
+    simklTitlePayload({ id: 'tmdb:9', type: 'movie', title: 'Nope', year: '2020' }, []),
     {},
     'an id no service can be told about sends nothing'
   )

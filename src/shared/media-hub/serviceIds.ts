@@ -34,6 +34,7 @@
 /** At most one id is ever populated, keyed by which service the catalog id encodes. */
 export interface SimklMediaIds {
   imdb?: string
+  simkl?: number
   kitsu?: number
   mal?: number
   anilist?: number
@@ -44,15 +45,20 @@ export interface SimklMediaIds {
  * Derives Simkl's `ids` object from our internal catalog id string.
  * `tt1234567` (Cinemeta/IMDb) maps straight to `{imdb}`; everything else
  * uses this app's `${provider}:${id}` convention (kitsu/mal/anilist/anidb).
- * Unrecognized ids resolve to `{}` — Simkl treats an empty ids object as
- * "match by title/year" fallback rather than an error.
+ * `simkl:<n>` is Simkl's own numbering — the id normalizeSimklCatalog mints
+ * when a Simkl list or search result arrives without an IMDb id — and goes
+ * out as `{simkl}`, which Simkl matches exactly. Unrecognized ids resolve
+ * to `{}` — Simkl treats an empty ids object as "match by title/year"
+ * fallback rather than an error.
  */
 export function idsForCatalogId(id: string): SimklMediaIds {
   if (/^tt\d+$/i.test(id)) return { imdb: id }
-  for (const key of ['kitsu', 'mal', 'anilist', 'anidb'] as const) {
+  for (const key of ['simkl', 'kitsu', 'mal', 'anilist', 'anidb'] as const) {
     if (id.startsWith(`${key}:`)) {
       const value = Number(id.split(':')[1])
-      if (Number.isFinite(value)) return { [key]: value } as SimklMediaIds
+      // A bare prefix (`simkl:`, from a list item with no number at all)
+      // is not an id, and `{simkl: 0}` would be a real payload for nothing.
+      if (Number.isInteger(value) && value > 0) return { [key]: value } as SimklMediaIds
     }
   }
   return {}

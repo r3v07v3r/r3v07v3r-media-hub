@@ -131,6 +131,8 @@ import {
   simklWatchedSnapshot
 } from './simklClient'
 import { createKeyedSerialQueue } from '../../shared/media-hub/serialQueue'
+import { cachedMetadata } from './titleNames'
+import { imdbForSimklKeyedId, isSimklKeyedId } from './simklKeyedHistory'
 
 /** Result of a single "push this watch-state change to Simkl" attempt, merged into every mark/unmark handler's response. */
 interface SimklSyncResult {
@@ -1149,6 +1151,39 @@ function scheduleFlush(): void {
   }, PENDING_FLUSH_DELAY_MS)
 }
 
+/**
+ * The id a library write for `item` should go under. A card minted under
+ * Simkl's own number whose real id this app has since learned (the detail
+ * page resolved it into the metadata cache) is written under that real
+ * id, so one click does not leave two rows for the reconcile pass to fold
+ * later — see simklKeyedHistory.ts. Every other id is returned as it is.
+ *
+ * Whatever the library already holds under the Simkl-keyed id is folded
+ * into the real id FIRST. No live surface mints these ids any more (the
+ * trending feed drops them, and Simkl search is gone), so a Simkl-keyed
+ * card on screen is drawn from a legacy history or plan row — and a
+ * write that read state under the real id while that row sat untouched
+ * would clear nothing, or plan a title twice. Folding moves the rows the
+ * card is drawn from, and the library-changed push that follows rekeys
+ * the card itself.
+ */
+function canonicalWriteId(item: { id: unknown; type?: unknown }): string {
+  const id = String(item.id)
+  if (!isSimklKeyedId(id)) return id
+  const imdb = imdbForSimklKeyedId(
+    id,
+    [],
+    (key) => cachedMetadata(String(item.type ?? 'movie'), key)?.id
+  )
+  if (!imdb) return id
+  const db = getDatabase()
+  const hadPlan = db.isTracked(id)
+  if (db.mergeContentId(id, imdb) || hadPlan) {
+    notifyLibraryChanged('canonical-id', 'history', 'planned', 'ratings')
+  }
+  return imdb
+}
+
 /** The actual diff. Local and remote are each reduced to "which movie ids
  *  does this side consider watched," and only ids where the two sides
  *  disagree are returned — an id watched (or not) on both sides is
@@ -1164,13 +1199,35 @@ async function computeMovieDiscrepancies(
   // retrying) its push. Surfacing one of these would be asking the same
   // question a second time about something nobody changed their mind on.
   const decided = new Set(pendingPushes().map((entry) => entry.id))
+  const db = getDatabase()
   const localMovies = new Map(
-    getDatabase()
+    db
       .history()
       .filter((h) => h.type === 'movie')
       .map((h) => [h.id, h] as const)
   )
   const snapshot = await simklWatchedSnapshot(priority)
+  // A row written under Simkl's own number for a title this account holds
+  // under its IMDb id is the same viewing twice, not a disagreement — fold
+  // it into the real row before diffing (see simklKeyedHistory.ts). Done
+  // here, on the snapshot already fetched, rather than in a migration:
+  // the pairing only Simkl can supply arrives with every check, and a
+  // fresh duplicate is healed on the next pass the same as an old one.
+  let folded = 0
+  for (const [id, entry] of [...localMovies]) {
+    if (!isSimklKeyedId(id)) continue
+    const imdb = imdbForSimklKeyedId(
+      id,
+      snapshot.entries,
+      (key) => cachedMetadata('movie', key)?.id
+    )
+    if (!imdb) continue
+    folded += db.mergeContentId(id, imdb)
+    localMovies.delete(id)
+    if (!localMovies.has(imdb)) localMovies.set(imdb, { ...entry, id: imdb })
+  }
+  // Ratings too: the fold carries a score given under the old id across.
+  if (folded) notifyLibraryChanged('reconcile', 'history', 'ratings')
   // No trustworthy remote side means there is nothing to diff. An
   // unreadable Simkl comes back as an EMPTY Simkl, and an empty Simkl
   // makes every movie watched locally look like a disagreement — a review
@@ -1345,6 +1402,9 @@ export function registerTrackingIpc(): void {
 
   handle<TrackableItem, { tracked: boolean }>(MEDIA_HUB_CHANNELS.trackingToggle, (_e, item) => {
     const db = getDatabase()
+    // Same canonical id as every other write, so Add to My List from a
+    // legacy Simkl-keyed card plans the real title, once.
+    item = { ...item, id: canonicalWriteId(item) }
     const tracked = db.isTracked(item.id)
     if (tracked) db.untrack(item.id)
     else db.track(item)
@@ -1378,6 +1438,8 @@ export function registerTrackingIpc(): void {
       // against a source that no longer exists. Whether a row can be
       // PUSHED is still asked, per row, on the way out (see
       // hasExpressibleSimklId in reconcileCheck).
+      //
+      item = { ...item, id: canonicalWriteId(item) }
       getDatabase().markWatched(item, playback || {})
       requestRecommendationsRebuild()
       // None of the services is awaited. The local row IS the record; each
@@ -1401,6 +1463,9 @@ export function registerTrackingIpc(): void {
     MEDIA_HUB_CHANNELS.trackingUnmarkWatched,
     async (_e, { item, playback }) => {
       const p = playback || {}
+      // The same id the mark went under, so an unmark of a Simkl-keyed
+      // card deletes the row the mark wrote and queues behind its push.
+      item = { ...item, id: canonicalWriteId(item) }
       getDatabase().unmarkWatched(item.id, p.season, p.episode)
       requestRecommendationsRebuild()
       // Detached as above, and queued behind any push still in flight for
@@ -1422,6 +1487,7 @@ export function registerTrackingIpc(): void {
       const list = Array.isArray(episodes) ? episodes : []
       const episodeNumbers = list.map((p) => p.episode)
       const db = getDatabase()
+      item = { ...item, id: canonicalWriteId(item) }
       for (const playback of list) db.markWatched(item, playback)
       requestRecommendationsRebuild()
       // Detached and ordered per title, as the single-episode handler above.
@@ -1476,7 +1542,7 @@ export function registerTrackingIpc(): void {
       if (profileId && profileId !== profile) {
         throw new Error('That change was made on another profile. Switch back to it to undo.')
       }
-      const id = String(item.id)
+      const id = canonicalWriteId(item)
       const type = (item.type ?? 'movie') as MediaKind
       const episodic = type !== 'movie'
       const pushItem: SimklPushItem & { totalEpisodes?: number } = {

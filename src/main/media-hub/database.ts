@@ -676,6 +676,21 @@ export interface MediaHubDatabase {
    * rows were genuinely relocated.
    */
   remapContentIds(mappings: ContentIdRemap[]): number
+  /**
+   * Folds every row keyed by `fromId` into `toId` — watch history, plays,
+   * rating and plan, across every profile — keeping each row's type, season
+   * and date. A destination row already there wins and the source copy
+   * is dropped, so merging a duplicate never doubles a viewing — but a
+   * source row that is the later viewing hands its date to the survivor,
+   * since that rewatch is the one somebody here saw happen most recently. Built for history written under a
+   * `simkl:<n>` id that later turns out to be an IMDb-keyed title this
+   * app already tracks (see imdbForSimklKeyedId); unlike remapContentIds
+   * it does not retype rows as anime or shift seasons. Returns how many
+   * history rows were keyed by `fromId` — moved or dropped as duplicates —
+   * so a caller can tell "nothing to fold" from "folded into a row that
+   * was already there".
+   */
+  mergeContentId(fromId: string, toId: string): number
   history(): HistoryEntry[]
   dislike(item: Partial<CatalogItem> & { id: unknown }, now?: Date): TrackedItem
   undislike(id: string | number): boolean
@@ -829,6 +844,12 @@ interface PreparedQueries {
   importRating: StatementSync
   remapWatched: StatementSync
   dropRemappedWatched: StatementSync
+  mergeWatched: StatementSync
+  mergePlays: StatementSync
+  bumpMergedWatchedAt: StatementSync
+  countKeyedWatched: StatementSync
+  mergeTracked: StatementSync
+  dropRemappedTracked: StatementSync
   remapPlays: StatementSync
   dropRemappedPlays: StatementSync
   remapRating: StatementSync
@@ -1118,6 +1139,20 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
        ON CONFLICT(profile_id,watch_key) DO NOTHING`
     ),
     dropRemappedWatched: sql.prepare('DELETE FROM watch_history WHERE content_id=?'),
+    // The type-preserving sibling of remapWatched, for mergeContentId. The
+    // key is rebuilt in the exact `${id}:${season ?? 'movie'}:${episode ??
+    // 'movie'}` form markWatched writes, NULLs included, so a moved movie
+    // row collides with (and yields to) the one already under the real id.
+    mergeWatched: sql.prepare(
+      `INSERT INTO watch_history(profile_id,watch_key,content_id,type,title,season,episode,watched_at,metadata_json)
+       SELECT profile_id,
+              @to || ':' || COALESCE(CAST(season AS TEXT),'movie') || ':' || COALESCE(CAST(episode AS TEXT),'movie'),
+              @to,type,title,season,episode,watched_at,
+              json_set(metadata_json,'$.id',@to)
+         FROM watch_history
+        WHERE content_id=@from
+       ON CONFLICT(profile_id,watch_key) DO NOTHING`
+    ),
     // plays has no uniqueness to arbitrate with (it is an append-only
     // record, and a rewatch is legitimately two rows), so the copy is
     // unconditional and the delete below is what stops it doubling.
@@ -1129,6 +1164,67 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
         WHERE content_id=@from AND season IS NOT NULL AND episode IS NOT NULL`
     ),
     dropRemappedPlays: sql.prepare('DELETE FROM plays WHERE content_id=?'),
+    // A viewing already recorded under the real id within ten minutes is
+    // the same viewing — the duplicate row was written seconds apart by
+    // the same sitting (John Wick's two rows were eight seconds apart),
+    // not by a rewatch, and copying it would count the film watched
+    // twice. importWatched's instant-equality rule is too strict here.
+    mergePlays: sql.prepare(
+      `INSERT INTO plays(profile_id,content_id,type,title,season,episode,watched_at,metadata_json)
+       SELECT p.profile_id,@to,p.type,p.title,p.season,p.episode,p.watched_at,
+              json_set(p.metadata_json,'$.id',@to)
+         FROM plays p
+        WHERE p.content_id=@from
+          AND NOT EXISTS (SELECT 1 FROM plays q
+                           WHERE q.profile_id=p.profile_id AND q.content_id=@to
+                             AND q.season IS p.season AND q.episode IS p.episode
+                             AND abs(julianday(q.watched_at) - julianday(p.watched_at)) * 86400 <= 600)`
+    ),
+    // A collision where the source row is the LATER viewing — a rewatch
+    // marked from a Simkl-keyed card after the real-id row was written —
+    // keeps the real row but takes the rewatch's date, so history() and
+    // everything recency-based (continuations, recently watched) see the
+    // rewatch the plays table records. The date is read from the plays
+    // that SURVIVED the fold (run after mergePlays), never from the source
+    // history row: a source play inside the ten-minute window was skipped
+    // as the same viewing, and stamping history with a date no play
+    // carries would make titleViewings count it as a second one. Rows are
+    // matched on the season/episode coordinates the rebuilt key carries.
+    // History without any play (older imports) falls back to the source
+    // row's own date, where there is no play to disagree with.
+    bumpMergedWatchedAt: sql.prepare(
+      `UPDATE watch_history
+          SET watched_at = COALESCE(
+                (SELECT MAX(p.watched_at) FROM plays p
+                  WHERE p.profile_id=watch_history.profile_id AND p.content_id=@to
+                    AND p.season IS watch_history.season AND p.episode IS watch_history.episode),
+                (SELECT MAX(s.watched_at) FROM watch_history s
+                  WHERE s.profile_id=watch_history.profile_id AND s.content_id=@from
+                    AND s.season IS watch_history.season AND s.episode IS watch_history.episode))
+        WHERE content_id=@to
+          AND EXISTS (SELECT 1 FROM watch_history s
+                       WHERE s.profile_id=watch_history.profile_id AND s.content_id=@from
+                         AND s.season IS watch_history.season AND s.episode IS watch_history.episode)
+          AND COALESCE(
+                (SELECT MAX(p.watched_at) FROM plays p
+                  WHERE p.profile_id=watch_history.profile_id AND p.content_id=@to
+                    AND p.season IS watch_history.season AND p.episode IS watch_history.episode),
+                (SELECT MAX(s.watched_at) FROM watch_history s
+                  WHERE s.profile_id=watch_history.profile_id AND s.content_id=@from
+                    AND s.season IS watch_history.season AND s.episode IS watch_history.episode)
+              ) > watched_at`
+    ),
+    countKeyedWatched: sql.prepare('SELECT COUNT(*) AS n FROM watch_history WHERE content_id=?'),
+    // The plan row too, or a title planned from a Simkl-keyed card stays
+    // planned under an id nothing draws any more. A plan already under
+    // the real id wins, as with ratings.
+    mergeTracked: sql.prepare(
+      `INSERT INTO tracked(profile_id,content_id,type,title,poster,metadata_json,tracked_at,baseline_season,baseline_episode)
+       SELECT profile_id,@to,type,title,poster,json_set(metadata_json,'$.id',@to),tracked_at,baseline_season,baseline_episode
+         FROM tracked WHERE content_id=@from
+       ON CONFLICT(profile_id,content_id) DO NOTHING`
+    ),
+    dropRemappedTracked: sql.prepare('DELETE FROM tracked WHERE content_id=?'),
     // A rating already given to the canonical show wins — same rule as
     // importRating just below, and for the same reason.
     remapRating: sql.prepare(
@@ -1953,6 +2049,38 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
           }
         })
         return added
+      } catch (error) {
+        return fail(error as Error) as unknown as number
+      }
+    },
+
+    mergeContentId(fromId, toId) {
+      const from = String(fromId)
+      const to = String(toId)
+      if (!from || !to || from === to) return 0
+      try {
+        let affected = 0
+        durable(() => {
+          sql.exec('BEGIN')
+          try {
+            affected = Number((q.countKeyedWatched.get(from) as { n?: number } | undefined)?.n || 0)
+            q.mergeWatched.run({ from, to })
+            // Plays first: the date bump reads the plays that survived.
+            q.mergePlays.run({ from, to })
+            q.dropRemappedPlays.run(from)
+            q.bumpMergedWatchedAt.run({ from, to })
+            q.dropRemappedWatched.run(from)
+            q.remapRating.run({ from, to })
+            q.dropRemappedRating.run(from)
+            q.mergeTracked.run({ from, to })
+            q.dropRemappedTracked.run(from)
+            sql.exec('COMMIT')
+          } catch (error) {
+            sql.exec('ROLLBACK')
+            throw error
+          }
+        })
+        return affected
       } catch (error) {
         return fail(error as Error) as unknown as number
       }
