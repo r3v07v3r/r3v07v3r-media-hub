@@ -11,6 +11,7 @@ export default defineConfig(
       '**/node_modules',
       '**/dist',
       '**/out',
+      'dist-web/**',
       '.claude/**',
       '.wrangler-config/**',
       'party-sync-worker/**'

@@ -15,6 +15,10 @@ files:
   - '!{.eslintcache,eslint.config.mjs,.prettierignore,.prettierrc.yaml,dev-app-update.yml,CHANGELOG.md,README.md}'
   - '!{.env,.env.*,.npmrc,pnpm-lock.yaml}'
   - '!{tsconfig.json,tsconfig.node.json,tsconfig.web.json}'
+  # The renderer built for outside the Electron shell (npm run build:web).
+  # Never part of the desktop app; without this, a local build:web would be
+  # swept into app.asar by the default glob.
+  - '!dist-web/**'
   # Ships only via win.extraResources below (to resourcesPath/mpv) — this
   # exclusion stops the default files glob from ALSO pulling it into
   # app.asar.unpacked. That trap is well established here: the same mistake

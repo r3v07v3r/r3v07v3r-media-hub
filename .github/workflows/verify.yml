@@ -52,6 +52,31 @@ jobs:
       - name: Audit production dependencies
         run: npm audit --omit=dev --audit-level=critical
 
+  # The renderer with no Electron shell behind it — the build the TV and phone
+  # apps load. Nothing else exercises it, so without this job it can stop
+  # booting and no one finds out until it is needed.
+  web:
+    name: Web bundle checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.checkout-ref }}
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install dependencies without lifecycle scripts
+        run: npm ci --ignore-scripts
+      - name: Build the renderer as a static site
+        run: npm run build:web
+      - name: Install the browser the smoke test drives
+        run: npx playwright install --with-deps chromium
+      # Served over http under the app's real CSP — see the test's header.
+      - name: Boot it with no backend
+        run: npx tsx tests/webBundle.e2e.ts
+
   party-sync-worker:
     name: Party relay checks
     runs-on: ubuntu-latest
