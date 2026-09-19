@@ -5,6 +5,7 @@
     "vite.web.config.ts",
     "vite.fonts.ts",
     "src/main/**/*",
+    "src/headless/**/*",
     "src/preload/**/*"
   ],
   "compilerOptions": {

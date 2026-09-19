@@ -1,5 +1,5 @@
 import { resolve } from 'path'
-import { defineConfig } from 'vite'
+import { defineConfig, type Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
 import { fontPackageRoot } from './vite.fonts'
 
@@ -15,6 +15,29 @@ import { fontPackageRoot } from './vite.fonts'
 // stripped afterwards (scripts/build-preview.mjs) because inlined script
 // cannot run under `script-src 'self'`. This build keeps scripts, styles and
 // fonts as separate same-origin files precisely so the real CSP holds.
+/**
+ * index.html is shared with the desktop build and names the desktop entry.
+ * Outside Electron there is no preload to have made `window.api` first, so
+ * this build enters through web/main.ts, which does that and then loads the
+ * ordinary entry. Swapped here rather than by keeping a second html file, so
+ * there is exactly one copy of the page — and of its CSP — to keep right.
+ */
+function webEntry(): Plugin {
+  const desktopEntry = '/src/main.tsx'
+  return {
+    name: 'r3-web-entry',
+    transformIndexHtml: {
+      order: 'pre',
+      handler(html) {
+        if (!html.includes(desktopEntry)) {
+          throw new Error(`index.html no longer loads ${desktopEntry}; update vite.web.config.ts`)
+        }
+        return html.replace(desktopEntry, '/src/web/main.ts')
+      }
+    }
+  }
+}
+
 export default defineConfig({
   root: resolve('src/renderer'),
   // Relative, so the output works from any mount point — a static server's
@@ -33,7 +56,7 @@ export default defineConfig({
       allow: [resolve('.'), fontPackageRoot()]
     }
   },
-  plugins: [react()],
+  plugins: [react(), webEntry()],
   build: {
     outDir: resolve('dist-web'),
     emptyOutDir: true

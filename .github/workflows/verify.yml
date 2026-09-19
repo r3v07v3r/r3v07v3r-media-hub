@@ -76,6 +76,15 @@ jobs:
       # Served over http under the app's real CSP — see the test's header.
       - name: Boot it with no backend
         run: npx tsx tests/webBundle.e2e.ts
+      # The service layer as a plain Node process, behind the stand-in for
+      # `electron`. The build itself is a check: a name the service layer
+      # imports from 'electron' that the stand-in lacks fails it.
+      - name: Build the service layer without Electron
+        run: npm run build:headless
+      # Both halves together, in a real browser: sign in, first-run flow, a
+      # write read back, the backend killed and the page recovering unaided.
+      - name: Run the whole app with no Electron in it
+        run: npx tsx tests/headlessApp.e2e.ts
 
   party-sync-worker:
     name: Party relay checks

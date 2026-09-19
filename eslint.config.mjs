@@ -12,6 +12,7 @@ export default defineConfig(
       '**/dist',
       '**/out',
       'dist-web/**',
+      'dist-headless/**',
       '.claude/**',
       '.wrangler-config/**',
       'party-sync-worker/**'
