@@ -2,24 +2,13 @@ import { app, shell, BrowserWindow } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
-import { registerTelemetryIpc } from './ipc/telemetry'
-import { registerSettingsIpc } from './ipc/settings'
-import { registerHttpProxyIpc } from './ipc/httpProxy'
-import { registerMediaHubIpc } from './ipc/mediaHub'
+import { startBackend, stopBackend } from './backend'
 import { APP_SCHEME, registerAppSchemeAsPrivileged, registerAppSchemeHandler } from './appProtocol'
-import { createDatabase } from './media-hub/database'
-import { activeProfileId } from './media-hub/profiles'
-import { ensureSetupCompleteDecided } from './media-hub/settingsStore'
-import { getDatabase, setDatabase } from './media-hub/dbState'
 import { setActiveWindow, sendToRenderer } from './media-hub/rendererBridge'
 import { isAllowedExternalUrl } from './media-hub/security'
 import { setupAutoUpdater } from './media-hub/autoUpdate'
 import { installDownloadGuard } from './media-hub/downloadGuard'
-import { closeParty } from './media-hub/watchParty'
-import { stopPlayback } from './media-hub/playbackSession'
-import { flushPlaybackPosition, shutdownPlayer } from './media-hub/playerBridge'
-import { shutdownScheduler } from './media-hub/taskScheduler'
-import { startBackgroundJobs, stopBackgroundJobs } from './media-hub/backgroundJobs'
+import { startBackgroundJobs } from './media-hub/backgroundJobs'
 import { sendToPlayerOverlay } from './media-hub/playerWindow'
 import { toggleMainWindowFullscreen } from './media-hub/windowFullscreen'
 import { MEDIA_HUB_CHANNELS } from '../shared/media-hub/ipc-channels'
@@ -200,28 +189,9 @@ app.whenReady().then(() => {
     watchFullscreenShortcut(window)
   })
 
-  registerTelemetryIpc()
-  registerSettingsIpc()
-  registerHttpProxyIpc()
-
-  // media-hub's own SQLite store (tracked items/watch history/catalog
-  // cache) — must exist before registerMediaHubIpc()'s handlers can ever
-  // be invoked, though since ipcMain.handle registration itself is
-  // synchronous and handlers only actually run once the renderer calls
-  // them (well after this whole block completes), the ordering here is
-  // for clarity more than strict necessity.
-  // Resolved BEFORE the database opens, and seeded here if this is a first
-  // launch: the connection is scoped to a profile from the moment it opens,
-  // and the profile-scoping migration attributes every row that predates
-  // profiles to whichever one is active now — which, on any install that has
-  // never switched, is the only one there has ever been.
-  // BEFORE activeProfileId(): that call seeds the default "Profile 1" on a
-  // fresh launch, and the setupComplete decision uses existing profiles as
-  // evidence of a pre-existing install — decided any later, every fresh
-  // install would look pre-existing and the welcome flow would never show.
-  ensureSetupCompleteDecided()
-  setDatabase(createDatabase(join(app.getPath('userData'), 'media-hub.sqlite'), activeProfileId()))
-  registerMediaHubIpc()
+  // Every IPC handler, and the database they read — see backend.ts, which
+  // the headless backend shares.
+  startBackend()
 
   createWindow()
 
@@ -238,39 +208,9 @@ app.whenReady().then(() => {
   })
 })
 
-// media-hub cleanup: stop any in-flight playback (closes StreamCache +
-// kills a running ffmpeg transcoder), leave/close any active Watch Party,
-// and close the SQLite handle. Ported from the original app's `before-quit`
-// handler. deleteCache=true here (unlike an ordinary close mid-session,
-// which leaves the cache for a likely near-term resume — see
-// playbackSession.ts's stopPlayback): there's no future session left to
-// resume into once the app has actually quit.
-app.on('before-quit', () => {
-  // First, so nothing new is dispatched while everything below is being
-  // torn down — a queued catalog crawl reaching for the database this
-  // handler is about to close is exactly the kind of shutdown-order race
-  // the scheduler makes it possible to rule out in one place.
-  shutdownScheduler()
-  stopBackgroundJobs()
-  // The bookmark first, while the session that describes it still exists:
-  // stopPlayback below clears that session, and the overlay's own saves
-  // never get a turn on the way out — see playerBridge.flushPlaybackPosition.
-  flushPlaybackPosition()
-  stopPlayback(true).catch(() => {})
-  // mpv is a child process that outlives any single title deliberately (see
-  // playerBridge.ts) — quitting the app is the one point it must actually be
-  // torn down, or it survives as an orphan holding the window handle it was
-  // embedded into.
-  shutdownPlayer().catch(() => {})
-  closeParty()
-  try {
-    getDatabase().close()
-  } catch {
-    // best-effort close only — if the DB was never initialized (e.g. quit
-    // during startup before app.whenReady() finished), there's nothing to
-    // close.
-  }
-})
+// The service layer's teardown — playback, the player, any party, the
+// database. See backend.ts.
+app.on('before-quit', stopBackend)
 
 // Quit when all windows are closed, except on macOS. There, it's common
 // for applications and their menu bar to stay active until the user quits

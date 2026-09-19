@@ -2,6 +2,7 @@ import { ipcMain, WebContents } from 'electron'
 import { Worker } from 'worker_threads'
 import { join } from 'path'
 import { IPC_CHANNELS, SystemSnapshot } from '../../shared/ipc-types'
+import { platformCapabilities } from '../media-hub/platform'
 import { assertTrustedSender } from './trustedSender'
 
 const EMPTY_SNAPSHOT: SystemSnapshot = {
@@ -20,7 +21,10 @@ const subscribers = new Set<WebContents>()
 // off-thread: the systeminformation calls it makes measured at 700ms-1s+ of
 // genuine main-thread blocking each poll on this class of hardware, which
 // read as the whole app freezing every ~1.5s.
-function ensureWorker(): Worker {
+function ensureWorker(): Worker | null {
+  // A host with no telemetry answers with the idle snapshot and never pushes
+  // — which is what the gauges already show for a window with no bridge.
+  if (!platformCapabilities().systemTelemetry) return null
   if (worker) return worker
   worker = new Worker(join(__dirname, 'telemetryWorker.js'))
   worker.on(
