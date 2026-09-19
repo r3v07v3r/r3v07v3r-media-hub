@@ -1,0 +1,142 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=1920" />
+    <title>R3 spike overlay</title>
+    <style>
+      /* Transparent all the way down: whatever the page does not paint is the
+         video underneath. This is the whole compositing question in one rule. */
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        background: transparent;
+        color: #fff;
+        font: 28px/1.3 system-ui, sans-serif;
+        overflow: hidden;
+      }
+      #meter {
+        position: fixed;
+        left: 48px;
+        top: 40px;
+        padding: 12px 20px;
+        border-radius: 12px;
+        background: rgba(0, 0, 0, 0.6);
+        font: 600 24px/1.4 monospace;
+      }
+      #grid {
+        position: fixed;
+        left: 48px;
+        right: 48px;
+        bottom: 190px;
+        display: grid;
+        grid-template-columns: repeat(8, 1fr);
+        gap: 20px;
+      }
+      .tile {
+        height: 150px;
+        border-radius: 16px;
+        border: 3px solid transparent;
+        background: rgba(10, 30, 45, 0.55);
+        color: #cfe;
+        font: inherit;
+        transition: transform 120ms ease, border-color 120ms ease;
+      }
+      #bar {
+        position: fixed;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        height: 150px;
+        display: flex;
+        gap: 24px;
+        align-items: center;
+        justify-content: center;
+        background: linear-gradient(transparent, rgba(0, 0, 0, 0.85));
+      }
+      #bar button {
+        min-width: 170px;
+        height: 78px;
+        border-radius: 39px;
+        border: 3px solid transparent;
+        background: rgba(255, 255, 255, 0.14);
+        color: #fff;
+        font: inherit;
+        transition: transform 120ms ease, border-color 120ms ease;
+      }
+      :focus {
+        outline: none;
+        border-color: #19d3da !important;
+        transform: scale(1.06);
+      }
+    </style>
+  </head>
+  <body>
+    <div id="meter">press the D-pad…</div>
+    <div id="grid"></div>
+    <div id="bar">
+      <button>⏮ Prev</button><button>⏪ 10s</button><button>⏯ Pause</button><button>⏩ 10s</button
+      ><button>⏭ Next</button><button>Audio</button><button>Subtitles</button><button>Chat</button>
+    </div>
+    <script>
+      var grid = document.getElementById('grid')
+      for (var i = 1; i <= 16; i++) {
+        var tile = document.createElement('button')
+        tile.className = 'tile'
+        tile.textContent = 'Title ' + i
+        grid.appendChild(tile)
+      }
+
+      // Geometric focus: from the focused element, the nearest one whose centre
+      // lies in the pressed direction, distance weighted against drifting
+      // sideways. A first cut of what the TV UI will use over the real app's
+      // own focusable elements.
+      function focusables() {
+        return Array.prototype.slice.call(document.querySelectorAll('button'))
+      }
+      function centre(el) {
+        var r = el.getBoundingClientRect()
+        return { x: r.left + r.width / 2, y: r.top + r.height / 2 }
+      }
+      function move(dx, dy) {
+        var from = document.activeElement && document.activeElement.tagName === 'BUTTON' ? document.activeElement : null
+        if (!from) return focusables()[0].focus()
+        var a = centre(from), best = null, bestScore = Infinity
+        focusables().forEach(function (el) {
+          if (el === from) return
+          var b = centre(el), along = (b.x - a.x) * dx + (b.y - a.y) * dy
+          if (along <= 1) return
+          var across = Math.abs((b.x - a.x) * dy) + Math.abs((b.y - a.y) * dx)
+          var score = along + across * 3
+          if (score < bestScore) { bestScore = score; best = el }
+        })
+        if (best) best.focus()
+      }
+
+      var samples = []
+      var meter = document.getElementById('meter')
+      document.addEventListener('keydown', function (event) {
+        var dir = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[event.key]
+        if (!dir) return
+        event.preventDefault()
+        var t0 = performance.now()
+        move(dir[0], dir[1])
+        // Two frames: styled, then on screen.
+        requestAnimationFrame(function () {
+          requestAnimationFrame(function () {
+            samples.push(performance.now() - t0)
+            if (samples.length > 40) samples.shift()
+            var sorted = samples.slice().sort(function (x, y) { return x - y })
+            var p50 = sorted[Math.floor(sorted.length / 2)]
+            var text = 'key→paint  last ' + samples[samples.length - 1].toFixed(0) + ' ms · median ' + p50.toFixed(0) +
+              ' ms · worst ' + sorted[sorted.length - 1].toFixed(0) + ' ms  (n=' + samples.length + ')'
+            meter.textContent = text
+            if (samples.length % 10 === 0) console.log('[r3-perf] overlay ' + text)
+          })
+        })
+      })
+      focusables()[0].focus()
+    </script>
+  </body>
+</html>

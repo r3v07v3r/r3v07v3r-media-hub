@@ -25,6 +25,11 @@ out
 preview-dist/
 dist-web/
 dist-headless/
+# Gradle output and the scratch profile of the device spikes
+android-spike/.gradle/
+android-spike/build/
+android-spike/app/build/
+.spike-profile/
 
 # Bundled mpv player — fetched by scripts/fetch-mpv.ts on postinstall rather
 # than committed like resources/ffmpeg-win, because mpv ships as one ~114MB

@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The TV launcher requires a banner (320x180dp); a drawable is enough. -->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item>
+        <shape android:shape="rectangle">
+            <size android:width="320dp" android:height="180dp" />
+            <gradient android:angle="0" android:startColor="#02060B" android:endColor="#0B3A4A" />
+        </shape>
+    </item>
+    <item android:left="120dp" android:top="60dp" android:right="120dp" android:bottom="60dp">
+        <shape android:shape="rectangle">
+            <corners android:radius="8dp" />
+            <solid android:color="#19D3DA" />
+        </shape>
+    </item>
+</layer-list>
