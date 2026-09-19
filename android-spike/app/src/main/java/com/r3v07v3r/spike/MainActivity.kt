@@ -20,6 +20,7 @@ import android.view.SurfaceHolder
 import android.view.SurfaceView
 import android.view.ViewGroup.LayoutParams.MATCH_PARENT
 import android.view.ViewGroup.LayoutParams.WRAP_CONTENT
+import android.view.WindowManager
 import android.webkit.ConsoleMessage
 import android.webkit.WebChromeClient
 import android.webkit.WebView
@@ -64,6 +65,11 @@ class MainActivity : Activity(), SurfaceHolder.Callback, MPVLib.EventObserver, M
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        // A player must hold the screen awake itself: a sleeping display pauses the
+        // page (no animation frames), which reads as a hung app and ruins a
+        // measurement. Found the hard way on the first phone run.
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
         // Order is z-order: video at the bottom, the page over it, the HUD on top.
         surface = SurfaceView(this)
