@@ -15,7 +15,11 @@ export default defineConfig(
       'dist-headless/**',
       '.claude/**',
       '.wrangler-config/**',
-      'party-sync-worker/**'
+      'party-sync-worker/**',
+      // The throwaway Android measurement app: Kotlin plus a few plain-JS files
+      // that are injected into a WebView on the device. Not app source, never
+      // type-checked, and built by its own workflow.
+      'android-spike/**'
     ]
   },
   tseslint.configs.recommended,
