@@ -5,8 +5,16 @@ import { api } from '../lib/api'
 import { isMediaKind, kindLabel } from '../lib/mediaKind'
 import { toPosterItem } from '../lib/posterItem'
 import PosterCard from '../components/PosterCard'
+import PosterSkeleton from '../components/PosterSkeleton'
+import Spinner from '../components/Spinner'
+import LoadingNote from '../components/LoadingNote'
 import StatusNote from '../components/StatusNote'
 import './Browse.css'
+
+// How many skeleton tiles stand in for the first page while it loads — see
+// the task brief: enough to read as a real grid rather than a couple of
+// stray placeholders, without rendering more DOM than the page needs.
+const SKELETON_COUNT = 12
 
 // v1 cap on how many posters this screen will ever hold at once. An
 // unbounded infinite grid grows the DOM without bound on a device that may
@@ -110,17 +118,46 @@ export default function Browse() {
 
   if (!kind) return <StatusNote tone="error">Unknown category.</StatusNote>
 
+  // Distinguished so a fresh page shows full-grid skeletons (nothing to
+  // draw yet at all) while paging in more of an already-visible grid only
+  // adds a small spinner under it — see the task brief.
+  const firstLoad = loading && items.length === 0
+  const loadingMore = loading && items.length > 0
+
   return (
-    <div className="browse-screen">
+    <div className="browse-screen" aria-busy={loading}>
       <h1>{kindLabel(kind)}</h1>
-      {error && <StatusNote tone="error">{error}</StatusNote>}
-      <div className="poster-grid">
-        {items.map((item) => (
-          <PosterCard key={item.id} item={toPosterItem(item)} />
-        ))}
-      </div>
-      {loading && <StatusNote>Loading…</StatusNote>}
-      {!loading && !items.length && !error && <StatusNote>No titles found.</StatusNote>}
+      {error && (
+        <div className="browse-error">
+          <StatusNote tone="error">{error}</StatusNote>
+          <button type="button" onClick={loadMore}>
+            Try again
+          </button>
+        </div>
+      )}
+      {firstLoad ? (
+        <div className="poster-grid">
+          {Array.from({ length: SKELETON_COUNT }, (_, index) => (
+            <PosterSkeleton key={index} />
+          ))}
+        </div>
+      ) : (
+        <div className="poster-grid">
+          {items.map((item) => (
+            <PosterCard key={item.id} item={toPosterItem(item)} />
+          ))}
+        </div>
+      )}
+      {loadingMore && (
+        <div className="browse-spinner-row">
+          <Spinner />
+        </div>
+      )}
+      {!loading && !items.length && !error && <StatusNote>Nothing here yet.</StatusNote>}
+      <LoadingNote
+        loading={loading}
+        subject={kind === 'anime' ? 'the anime catalogue' : 'a catalogue'}
+      />
       {!done && <div ref={sentinelRef} className="browse-sentinel" aria-hidden="true" />}
       {done && items.length >= MAX_ITEMS && (
         <StatusNote>Showing the first {MAX_ITEMS} titles.</StatusNote>

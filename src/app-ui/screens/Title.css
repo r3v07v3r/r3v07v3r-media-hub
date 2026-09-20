@@ -1,36 +1,95 @@
+/* Title screen: a full-bleed hero photo up top, a header/actions/overview
+   stack below it, then (series/anime only) season pills and one-button
+   episode rows. Replaces a side-by-side poster+text layout that, on a
+   phone, crushed the whole page into a narrow column beside the poster —
+   see the task brief for the exact complaints this rewrite answers. */
+
 .title-screen {
   position: relative;
 }
 
-.title-screen__backdrop {
-  position: absolute;
-  inset: -1rem -1rem auto -1rem;
-  height: 14rem;
-  background-size: cover;
-  background-position: center;
-  -webkit-mask-image: linear-gradient(to bottom, black, transparent);
-  mask-image: linear-gradient(to bottom, black, transparent);
-  z-index: -1;
+/* ---------- Hero ---------- */
+
+.title-screen__hero {
+  position: relative;
+  /* Bleeds past .app-content's own 1rem side padding (app.css) so the
+     photo reaches the screen edges without this page needing a layout
+     wrapper of its own — the same trick the old __backdrop used, just an
+     in-flow box now instead of a decorative absolutely-positioned one. */
+  margin: 0 -1rem;
+  aspect-ratio: 16 / 9;
+  overflow: hidden;
+  background: var(--panel);
 }
 
-.title-screen__body {
+.title-screen__hero-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+/* No backdrop at all: a flat tinted panel at the same height — never a
+   blur of the poster (see the task brief: no filter/backdrop-filter
+   anywhere in this app). */
+.title-screen__hero-fallback {
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(160deg, rgba(24, 169, 255, 0.18), var(--panel-strong));
+}
+
+.title-screen__scrim {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(transparent, var(--background));
+}
+
+.title-screen__back {
+  position: absolute;
+  top: 0.75rem;
+  left: 0.75rem;
+  width: 2.75rem;
+  height: 2.75rem;
+  padding: 0;
+  border-radius: var(--radius-pill);
   display: flex;
-  gap: 1rem;
-  padding-top: 2.5rem;
+  align-items: center;
+  justify-content: center;
+  background: var(--panel-strong);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-primary);
+}
+
+/* ---------- Header / chips / actions / overview / seasons ---------- */
+
+.title-screen__content {
+  display: grid;
+  grid-template-columns: 6.5rem 1fr;
+  grid-template-areas:
+    'poster heading'
+    'chips chips'
+    'actions actions'
+    'overview overview'
+    'seasons seasons';
+  column-gap: 1rem;
+  row-gap: 0.85rem;
+  padding-top: 0.75rem;
 }
 
 .title-screen__poster {
+  grid-area: poster;
   display: block;
-  flex: 0 0 auto;
-  /* A flex row stretches its children to the tallest one by default, which
-     beats aspect-ratio: beside a long overview the poster became a tall
-     sliver. Pinned to its own height instead. */
-  align-self: flex-start;
-  width: 8rem;
+  width: 6.5rem;
   aspect-ratio: 2 / 3;
   border-radius: var(--radius-medium);
   overflow: hidden;
   background: var(--panel);
+  /* Pulled up to overlap the hero's bottom edge, and pinned to its own
+     height rather than stretched to the header row's — a grid row sizes
+     to its tallest item by default, and a three-line title would otherwise
+     stretch the poster tall and thin beside it. */
+  margin-top: -2.5rem;
+  align-self: flex-start;
 }
 
 .title-screen__poster img {
@@ -40,44 +99,153 @@
   display: block;
 }
 
-.title-screen__info {
-  flex: 1;
+.title-screen__heading {
+  grid-area: heading;
   min-width: 0;
+  align-self: flex-end;
 }
 
-.title-screen__meta,
-.title-screen__genres {
+.title-screen__heading h1 {
+  font-size: 1.35rem;
+  font-weight: 700;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.title-screen__meta {
   color: var(--text-secondary);
-  margin: 0 0 0.4rem;
+  font-size: 0.9rem;
+  margin: 0;
 }
 
-.title-screen__overview {
-  margin: 0 0 0.75rem;
-  line-height: 1.4;
+.title-screen__chips {
+  grid-area: chips;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.title-screen__chip {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-pill);
+  padding: 0.2rem 0.65rem;
+}
+
+.title-screen__actions {
+  grid-area: actions;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.title-screen__actions-row {
+  display: flex;
+  gap: 0.5rem;
 }
 
 .title-screen__play {
+  flex: 1;
+  min-height: 3rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
   background: var(--accent-blue);
   color: #02060d;
   border: none;
+  font-weight: 700;
+  font-size: 1rem;
+}
+
+/* The Play button's own spinner sits on the accent background, not the
+   page background — the ring's default border colour reads as invisible
+   there, so it's darkened to match the button's text colour instead. */
+.title-screen__play .spinner {
+  border-color: rgba(2, 6, 13, 0.3);
+  border-top-color: #02060d;
+}
+
+.title-screen__mylist {
+  flex: 0 0 auto;
+  width: 3rem;
+  height: 3rem;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.title-screen__mylist[aria-pressed='true'] {
+  border-color: var(--border-active);
+  color: var(--accent-green);
+}
+
+.title-screen__overview {
+  grid-area: overview;
+}
+
+.title-screen__overview-text {
+  margin: 0;
+  font-size: 0.95rem;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.title-screen__overview-text.is-expanded {
+  display: block;
+  -webkit-line-clamp: unset;
+  overflow: visible;
+}
+
+.title-screen__overview-toggle {
+  background: none;
+  border: none;
+  padding: 0.3rem 0 0;
+  color: var(--accent-blue);
   font-weight: 600;
-  padding: 0.6rem 1.4rem;
 }
 
 .title-screen__seasons {
-  margin-top: 1.5rem;
+  grid-area: seasons;
+  /* The row swipes (and takes D-pad focus); a scrollbar track under the pills
+     is only clutter. */
+  scrollbar-width: none;
+}
+
+.title-screen__seasons::-webkit-scrollbar {
+  display: none;
+}
+
+.title-screen__seasons h2 {
+  font-size: 1.05rem;
 }
 
 .title-screen__season-tabs {
   display: flex;
   gap: 0.5rem;
   overflow-x: auto;
+  padding-bottom: 0.25rem;
   margin-bottom: 0.75rem;
 }
 
-.title-screen__season-tab.is-active {
-  border-color: var(--border-active);
-  color: var(--text-primary);
+.title-screen__season-tab {
+  flex: 0 0 auto;
+  border-radius: var(--radius-pill);
+  font-size: 0.85rem;
+}
+
+.title-screen__season-tab[aria-pressed='true'] {
+  background: var(--accent-blue);
+  border-color: var(--accent-blue);
+  color: #02060d;
 }
 
 .title-screen__episodes {
@@ -90,25 +258,33 @@
 }
 
 .episode-row {
+  width: 100%;
+  min-height: 3.25rem;
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 0.75rem;
   background: var(--panel);
   border-radius: var(--radius-small);
-  padding: 0.6rem 0.85rem;
+  padding: 0.5rem 0.85rem;
+  text-align: left;
 }
 
-.episode-row__info {
-  display: flex;
-  align-items: baseline;
-  gap: 0.6rem;
-  min-width: 0;
+.episode-row:disabled {
+  opacity: 0.5;
 }
 
 .episode-row__number {
+  flex: 0 0 2.25rem;
   color: var(--text-secondary);
-  flex: 0 0 auto;
+  font-size: 0.85rem;
+}
+
+.episode-row__body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
 }
 
 .episode-row__title {
@@ -117,8 +293,98 @@
   white-space: nowrap;
 }
 
-.episode-row__badge {
-  flex: 0 0 auto;
+.episode-row__date {
   font-size: 0.75rem;
-  color: var(--accent-orange);
+  color: var(--text-secondary);
+}
+
+.episode-row__glyph {
+  flex: 0 0 auto;
+  color: var(--accent-blue);
+}
+
+/* ---------- Loading skeleton (catalog.meta in flight) ---------- */
+/* Shaped like the real hero + header above so nothing jumps around once
+   the real data replaces it — see the task brief. */
+
+.title-screen__hero-skeleton {
+  display: block;
+  margin: 0 -1rem;
+  aspect-ratio: 16 / 9;
+}
+
+.title-screen__skeleton-body {
+  display: flex;
+  gap: 1rem;
+  padding-top: 0.75rem;
+}
+
+.title-screen__skeleton-lines {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  padding-top: 0.5rem;
+}
+
+.title-screen__skeleton-line {
+  display: block;
+  height: 0.9rem;
+  border-radius: var(--radius-small);
+}
+
+.title-screen__skeleton-line--title {
+  width: 70%;
+  height: 1.3rem;
+}
+
+.title-screen__skeleton-line--meta {
+  width: 40%;
+}
+
+.title-screen__skeleton-line--overview {
+  width: 90%;
+}
+
+/* ---------- Wide landscape (TV-shaped viewport) ---------- */
+
+@media (min-width: 900px) and (orientation: landscape) {
+  .title-screen__hero {
+    /* Becomes a decorative band behind the top of the page rather than a
+       box in the flow — the two-column content below sits over the tail
+       end of it instead of being pushed down by its full height. Bleeds
+       to the true screen edges, including under the nav rail (app.css's
+       6rem left padding at this width): the rail paints over it
+       (z-index: 20), so nothing is lost by reaching underneath. */
+    position: absolute;
+    top: -1.5rem;
+    left: -6rem;
+    right: -1.5rem;
+    margin: 0;
+    aspect-ratio: auto;
+    height: 55vh;
+    max-height: 55vh;
+    z-index: 0;
+  }
+
+  .title-screen__content {
+    position: relative;
+    z-index: 1;
+    /* Clears the band, leaving only the (larger) poster to overlap its
+       tail — same idea as the portrait poster's -2.5rem pull, scaled to a
+       viewport-relative hero. */
+    margin-top: calc(55vh - 3rem);
+    grid-template-columns: 16rem 1fr;
+    grid-template-areas:
+      'poster heading'
+      'poster chips'
+      'actions overview'
+      '.      seasons';
+    column-gap: 2rem;
+  }
+
+  .title-screen__poster {
+    width: 100%;
+    margin-top: 0;
+  }
 }

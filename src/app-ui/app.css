@@ -105,8 +105,50 @@ html {
    In a grid the COLUMN decides the width: left at its fixed size, every card
    sat at the left edge of a wider cell and the whole grid read as pushed to
    the left, with the slack piled up on the right. */
-.poster-grid .poster-card {
+.poster-grid .poster-card,
+.poster-grid .poster-skeleton {
   width: 100%;
+}
+
+/* Visually hidden but still readable by a screen reader — used for the
+   spoken label on Spinner and anywhere else an icon-only control needs a
+   name nothing sighted should see. */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Shared pulse used by every loading placeholder (PosterSkeleton, Home's
+   row headings, Title's skeleton). Only background + the animation live
+   here — sizing/shape is each usage's own class — so this never fights
+   another rule's border-radius over which one wins by source order. */
+@keyframes skeleton-pulse {
+  0%,
+  100% {
+    opacity: 0.6;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+.skeleton-bar {
+  background: var(--panel);
+  animation: skeleton-pulse 1.6s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skeleton-bar {
+    animation: none;
+    opacity: 0.8;
+  }
 }
 
 .status-note {
