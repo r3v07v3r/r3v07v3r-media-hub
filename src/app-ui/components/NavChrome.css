@@ -1,0 +1,52 @@
+.nav-chrome {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 20;
+  display: flex;
+  justify-content: space-around;
+  background: var(--panel-strong);
+  border-top: 1px solid var(--border-subtle);
+  padding: 0.4rem 0.25rem calc(0.4rem + env(safe-area-inset-bottom));
+}
+
+.nav-chrome__item {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
+  color: var(--text-secondary);
+  font-size: 0.7rem;
+  padding: 0.4rem 0.6rem;
+  border-radius: var(--radius-small);
+  /* Transform/opacity only, and quick — see the task brief's motion rule. */
+  transition:
+    color 120ms ease,
+    background-color 120ms ease;
+}
+
+.nav-chrome__item.is-active {
+  color: var(--text-primary);
+  background: var(--panel);
+}
+
+/* TV-shaped viewport: the same bar becomes a left rail. */
+@media (min-width: 900px) and (orientation: landscape) {
+  .nav-chrome {
+    top: 0;
+    bottom: 0;
+    right: auto;
+    width: 5rem;
+    flex-direction: column;
+    justify-content: flex-start;
+    gap: 0.75rem;
+    padding-top: 1.5rem;
+    border-top: none;
+    border-right: 1px solid var(--border-subtle);
+  }
+
+  .nav-chrome__item {
+    width: 100%;
+  }
+}

@@ -19,6 +19,7 @@
     "dev": "electron-vite dev",
     "build": "npm run typecheck && electron-vite build",
     "build:web": "vite build -c vite.web.config.ts",
+    "build:app": "vite build -c vite.app.config.ts",
     "build:headless": "node scripts/build-headless.mjs",
     "postinstall": "electron-builder install-app-deps && tsx scripts/fetch-mpv.ts",
     "build:unpack": "npm run build && electron-builder --dir",
