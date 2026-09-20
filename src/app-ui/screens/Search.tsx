@@ -4,6 +4,8 @@ import { api } from '../lib/api'
 import { kindLabel } from '../lib/mediaKind'
 import { toPosterItem } from '../lib/posterItem'
 import PosterCard from '../components/PosterCard'
+import Spinner from '../components/Spinner'
+import LoadingNote from '../components/LoadingNote'
 import StatusNote from '../components/StatusNote'
 import './Search.css'
 
@@ -74,7 +76,7 @@ export default function Search() {
   )
 
   return (
-    <div className="search-screen">
+    <div className="search-screen" aria-busy={loading}>
       <h1>Search</h1>
       <form className="search-form" onSubmit={onSubmit}>
         <input
@@ -100,10 +102,16 @@ export default function Search() {
           </button>
         ))}
       </div>
-      {loading && <StatusNote>Searching…</StatusNote>}
+      {loading && (
+        <div className="search-status">
+          <Spinner size="sm" />
+          <StatusNote>Searching…</StatusNote>
+        </div>
+      )}
+      <LoadingNote loading={loading} />
       {error && <StatusNote tone="error">{error}</StatusNote>}
       {!loading && !error && searched && !results.length && (
-        <StatusNote>No titles found.</StatusNote>
+        <StatusNote>{`No results for "${query.trim()}".`}</StatusNote>
       )}
       <div className="poster-grid">
         {results.map((item) => (

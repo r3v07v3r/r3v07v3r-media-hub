@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from 'react'
 import { api, useAsync } from '../lib/api'
+import Spinner from '../components/Spinner'
 import StatusNote from '../components/StatusNote'
 import './Settings.css'
 
@@ -56,19 +57,29 @@ export default function Settings() {
   const activeProfile = profiles.data?.profiles.find((p) => p.id === profiles.data?.activeProfileId)
 
   return (
-    <div className="settings-screen">
+    <div className="settings-screen" aria-busy={settings.loading || profiles.loading || connecting}>
       <h1>Settings</h1>
 
       <section className="settings-section">
         <h2>Profile</h2>
-        {profiles.loading && <StatusNote>Loading…</StatusNote>}
+        {profiles.loading && (
+          <div className="settings-status-loading">
+            <Spinner size="sm" />
+            <StatusNote>Loading…</StatusNote>
+          </div>
+        )}
         {profiles.error && <StatusNote tone="error">Could not load the profile.</StatusNote>}
         {activeProfile && <p>{activeProfile.name}</p>}
       </section>
 
       <section className="settings-section">
         <h2>TorBox</h2>
-        {settings.loading && <StatusNote>Loading…</StatusNote>}
+        {settings.loading && (
+          <div className="settings-status-loading">
+            <Spinner size="sm" />
+            <StatusNote>Loading…</StatusNote>
+          </div>
+        )}
         {settings.error && <StatusNote tone="error">Could not reach the backend.</StatusNote>}
         {settings.data && (
           <p className="settings-status">
@@ -90,7 +101,13 @@ export default function Settings() {
               aria-label="TorBox API token"
               autoComplete="off"
             />
-            <button type="submit" disabled={connecting || !token.trim()}>
+            <button
+              type="submit"
+              disabled={connecting || !token.trim()}
+              aria-busy={connecting}
+              className="settings-connect"
+            >
+              {connecting && <Spinner size="sm" />}
               {connecting ? 'Connecting…' : 'Connect'}
             </button>
           </form>

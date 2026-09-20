@@ -4,8 +4,26 @@ import type { HomePersonalizedResult } from '@shared/media-hub/types'
 import { api, useAsync } from '../lib/api'
 import { toPosterItem, type PosterItem } from '../lib/posterItem'
 import PosterRow from '../components/PosterRow'
+import PosterSkeleton from '../components/PosterSkeleton'
+import LoadingNote from '../components/LoadingNote'
 import StatusNote from '../components/StatusNote'
 import './Home.css'
+
+/** Stands in for one PosterRow while home:personalized hasn't answered yet
+ *  — a heading-shaped bar over four poster-shaped ones, so the page reads
+ *  as "loading" rather than as an empty Home with nothing to show. */
+function SkeletonRow() {
+  return (
+    <section className="poster-row" aria-hidden="true">
+      <span className="home-skeleton-heading skeleton-bar" />
+      <div className="poster-row__track">
+        {Array.from({ length: 4 }, (_, index) => (
+          <PosterSkeleton key={index} />
+        ))}
+      </div>
+    </section>
+  )
+}
 
 interface Rail {
   id: string
@@ -57,22 +75,32 @@ export default function Home() {
   )
   const rails = useMemo(() => buildRails(data), [data])
   const empty = !loading && !continueItems.length && !rails.length
+  const firstLoad = loading && !data
 
   return (
-    <div className="home-screen">
+    <div className="home-screen" aria-busy={loading}>
       <h1>Home</h1>
-      {loading && !data && <StatusNote>Loading…</StatusNote>}
-      {error && (
-        <StatusNote tone="error">Could not reach the backend for recommendations.</StatusNote>
-      )}
-      <PosterRow title="Continue Watching" items={continueItems} />
-      {rails.map((rail) => (
-        <PosterRow key={rail.id} title={rail.title} items={rail.items} />
-      ))}
-      {empty && !error && (
-        <StatusNote>
-          Nothing to show yet — browse Movies, Series or Anime to get started.
-        </StatusNote>
+      {firstLoad ? (
+        <>
+          <SkeletonRow />
+          <SkeletonRow />
+          <LoadingNote loading={loading} />
+        </>
+      ) : (
+        <>
+          {error && (
+            <StatusNote tone="error">Could not reach the backend for recommendations.</StatusNote>
+          )}
+          <PosterRow title="Continue Watching" items={continueItems} />
+          {rails.map((rail) => (
+            <PosterRow key={rail.id} title={rail.title} items={rail.items} />
+          ))}
+          {empty && !error && (
+            <StatusNote>
+              Nothing to show yet — browse Movies, Series or Anime to get started.
+            </StatusNote>
+          )}
+        </>
       )}
     </div>
   )

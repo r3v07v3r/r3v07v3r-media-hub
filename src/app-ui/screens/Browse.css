@@ -1,3 +1,17 @@
 .browse-screen h1 {
   margin-bottom: 0.25rem;
 }
+
+.browse-error {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.browse-spinner-row {
+  display: flex;
+  justify-content: center;
+  padding: 1rem 0;
+}
