@@ -21,6 +21,7 @@ files:
   # by the default glob.
   - '!dist-web/**'
   - '!dist-headless/**'
+  - '!dist-app/**'
   # Ships only via win.extraResources below (to resourcesPath/mpv) — this
   # exclusion stops the default files glob from ALSO pulling it into
   # app.asar.unpacked. That trap is well established here: the same mistake

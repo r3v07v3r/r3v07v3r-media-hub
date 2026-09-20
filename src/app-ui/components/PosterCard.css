@@ -1,0 +1,41 @@
+.poster-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  text-decoration: none;
+  color: var(--text-primary);
+  width: 9rem;
+  flex: 0 0 auto;
+}
+
+/* Fixed aspect-ratio box so a missing/slow/failed image never shifts the
+   surrounding layout — the placeholder tint fills the same space the art
+   would have. */
+.poster-card__art {
+  display: block;
+  aspect-ratio: 2 / 3;
+  border-radius: var(--radius-small);
+  overflow: hidden;
+  background: linear-gradient(160deg, rgba(24, 169, 255, 0.22), rgba(12, 18, 30, 0.9));
+}
+
+.poster-card__art img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.poster-card__title {
+  font-size: 0.85rem;
+  line-height: 1.25;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.poster-card__subtitle {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}

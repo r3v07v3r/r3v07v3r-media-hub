@@ -1,0 +1,21 @@
+.settings-section {
+  margin-bottom: 1.5rem;
+}
+
+.settings-status {
+  color: var(--text-secondary);
+}
+
+.settings-form {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.settings-form input {
+  flex: 1;
+}
+
+.settings-version {
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}

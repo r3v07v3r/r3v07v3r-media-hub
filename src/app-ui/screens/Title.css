@@ -1,0 +1,124 @@
+.title-screen {
+  position: relative;
+}
+
+.title-screen__backdrop {
+  position: absolute;
+  inset: -1rem -1rem auto -1rem;
+  height: 14rem;
+  background-size: cover;
+  background-position: center;
+  -webkit-mask-image: linear-gradient(to bottom, black, transparent);
+  mask-image: linear-gradient(to bottom, black, transparent);
+  z-index: -1;
+}
+
+.title-screen__body {
+  display: flex;
+  gap: 1rem;
+  padding-top: 2.5rem;
+}
+
+.title-screen__poster {
+  display: block;
+  flex: 0 0 auto;
+  /* A flex row stretches its children to the tallest one by default, which
+     beats aspect-ratio: beside a long overview the poster became a tall
+     sliver. Pinned to its own height instead. */
+  align-self: flex-start;
+  width: 8rem;
+  aspect-ratio: 2 / 3;
+  border-radius: var(--radius-medium);
+  overflow: hidden;
+  background: var(--panel);
+}
+
+.title-screen__poster img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.title-screen__info {
+  flex: 1;
+  min-width: 0;
+}
+
+.title-screen__meta,
+.title-screen__genres {
+  color: var(--text-secondary);
+  margin: 0 0 0.4rem;
+}
+
+.title-screen__overview {
+  margin: 0 0 0.75rem;
+  line-height: 1.4;
+}
+
+.title-screen__play {
+  background: var(--accent-blue);
+  color: #02060d;
+  border: none;
+  font-weight: 600;
+  padding: 0.6rem 1.4rem;
+}
+
+.title-screen__seasons {
+  margin-top: 1.5rem;
+}
+
+.title-screen__season-tabs {
+  display: flex;
+  gap: 0.5rem;
+  overflow-x: auto;
+  margin-bottom: 0.75rem;
+}
+
+.title-screen__season-tab.is-active {
+  border-color: var(--border-active);
+  color: var(--text-primary);
+}
+
+.title-screen__episodes {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.episode-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  background: var(--panel);
+  border-radius: var(--radius-small);
+  padding: 0.6rem 0.85rem;
+}
+
+.episode-row__info {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  min-width: 0;
+}
+
+.episode-row__number {
+  color: var(--text-secondary);
+  flex: 0 0 auto;
+}
+
+.episode-row__title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.episode-row__badge {
+  flex: 0 0 auto;
+  font-size: 0.75rem;
+  color: var(--accent-orange);
+}
