@@ -215,13 +215,6 @@
 
 .title-screen__seasons {
   grid-area: seasons;
-  /* The row swipes (and takes D-pad focus); a scrollbar track under the pills
-     is only clutter. */
-  scrollbar-width: none;
-}
-
-.title-screen__seasons::-webkit-scrollbar {
-  display: none;
 }
 
 .title-screen__seasons h2 {
@@ -234,6 +227,13 @@
   overflow-x: auto;
   padding-bottom: 0.25rem;
   margin-bottom: 0.75rem;
+  /* The row swipes (and takes D-pad focus); a scrollbar track under the pills
+     is only clutter. */
+  scrollbar-width: none;
+}
+
+.title-screen__season-tabs::-webkit-scrollbar {
+  display: none;
 }
 
 .title-screen__season-tab {
