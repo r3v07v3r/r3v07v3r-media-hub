@@ -175,28 +175,28 @@ async function checkAsync(name: string, fn: () => Promise<void>): Promise<void> 
   }
 }
 
+type FakePlayer = { player: MpvPlayer; sent: string[]; emit(event: string): void }
+
 /** An MpvPlayer wired to a stub socket that records what was written and
- *  auto-answers every request, so awaited command() calls resolve. */
-function fakePlayer(replyError = 'success'): { player: MpvPlayer; sent: string[] } {
+ *  auto-answers every request, so awaited command() calls resolve. `emit`
+ *  delivers an mpv event the way the real socket would. */
+function fakePlayer(replyError = 'success'): FakePlayer {
   const sent: string[] = []
   const player = new MpvPlayer()
+  const receive = (message: object): void =>
+    (player as unknown as { onData(chunk: string): void }).onData(`${JSON.stringify(message)}\n`)
   ;(player as unknown as { socket: unknown }).socket = {
     write(line: string) {
       sent.push(line)
       const { request_id: requestId } = JSON.parse(line) as { request_id: number }
-      queueMicrotask(() =>
-        (player as unknown as { onData(chunk: string): void }).onData(
-          `${JSON.stringify({ request_id: requestId, error: replyError, data: null })}
-`
-        )
-      )
+      queueMicrotask(() => receive({ request_id: requestId, error: replyError, data: null }))
       return true
     },
     destroy() {
       /* the stub owns no resources */
     }
   }
-  return { player, sent }
+  return { player, sent, emit: (event) => receive({ event }) }
 }
 
 function writesFor(sent: string[], property: string): unknown[] {
@@ -234,12 +234,24 @@ async function launchArgs(wid?: MpvSpawnOptions['wid']): Promise<string[]> {
   return captured
 }
 
-/** Starts a load without awaiting it — `file-loaded` never arrives on a fake
- *  socket, so the returned promise is expected to reject on its own timeout
- *  long after the assertions are done. Swallowed so it cannot surface as an
- *  unhandled rejection and fail the run. */
-function startLoad(player: MpvPlayer, options: Parameters<MpvPlayer['loadFile']>[1]): void {
-  void player.loadFile('https://example.com/a.mkv', options).catch(() => {})
+/**
+ * Starts a load without awaiting it, so the writes can be inspected while
+ * loadFile is still waiting on `file-loaded`. The returned `finish` delivers
+ * that event and awaits the load — call it (in a `finally`) before the check
+ * ends. Left pending, loadFile's 60-second file-loaded timer keeps the process
+ * alive a full minute after the last assertion.
+ */
+function startLoad(
+  { player, emit }: FakePlayer,
+  options: Parameters<MpvPlayer['loadFile']>[1]
+): () => Promise<void> {
+  const load = player.loadFile('https://example.com/a.mkv', options)
+  // Marks an early rejection as handled; `finish` still rethrows it.
+  load.catch(() => {})
+  return async () => {
+    emit('file-loaded')
+    await load
+  }
 }
 
 const settle = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 20))
@@ -270,29 +282,45 @@ async function main(): Promise<void> {
   })
 
   await checkAsync('loadFile writes a non-zero start as a STRING, never a number', async () => {
-    const { player, sent } = fakePlayer()
-    startLoad(player, { startSeconds: 90 })
-    await settle()
-    const starts = writesFor(sent, 'start')
-    assert.deepEqual(starts, ['90'], `start was written as ${JSON.stringify(starts)}`)
-    assert.equal(typeof starts[0], 'string')
+    const fake = fakePlayer()
+    const finish = startLoad(fake, { startSeconds: 90 })
+    try {
+      await settle()
+      const starts = writesFor(fake.sent, 'start')
+      assert.deepEqual(starts, ['90'], `start was written as ${JSON.stringify(starts)}`)
+      assert.equal(typeof starts[0], 'string')
+    } finally {
+      await finish()
+    }
   })
 
   await checkAsync('loadFile omits start entirely when there is nowhere to resume', async () => {
     for (const options of [{}, { startSeconds: 0 }, { startSeconds: Number.NaN }]) {
-      const { player, sent } = fakePlayer()
-      startLoad(player, options)
-      await settle()
-      assert.deepEqual(writesFor(sent, 'start'), [], `wrote start for ${JSON.stringify(options)}`)
+      const fake = fakePlayer()
+      const finish = startLoad(fake, options)
+      try {
+        await settle()
+        assert.deepEqual(
+          writesFor(fake.sent, 'start'),
+          [],
+          `wrote start for ${JSON.stringify(options)}`
+        )
+      } finally {
+        await finish()
+      }
     }
   })
 
   await checkAsync('loadFile passes language preferences through as strings', async () => {
-    const { player, sent } = fakePlayer()
-    startLoad(player, { audioLanguage: 'en', subtitleLanguage: 'fr' })
-    await settle()
-    assert.deepEqual(writesFor(sent, 'alang'), ['en'])
-    assert.deepEqual(writesFor(sent, 'slang'), ['fr'])
+    const fake = fakePlayer()
+    const finish = startLoad(fake, { audioLanguage: 'en', subtitleLanguage: 'fr' })
+    try {
+      await settle()
+      assert.deepEqual(writesFor(fake.sent, 'alang'), ['en'])
+      assert.deepEqual(writesFor(fake.sent, 'slang'), ['fr'])
+    } finally {
+      await finish()
+    }
   })
 
   await checkAsync('loadFile refuses a URL that fails the SSRF guard', async () => {
