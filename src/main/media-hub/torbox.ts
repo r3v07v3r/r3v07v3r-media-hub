@@ -36,6 +36,7 @@ import { fetchJson, type HttpError } from './httpClient'
 import { handle } from './ipcGuard'
 import { logError } from './logger'
 import {
+  checkcachedShortlist,
   cometConfigPath,
   rankSafeStreams,
   releaseGroup,
@@ -763,7 +764,9 @@ export function registerTorBoxIpc(): void {
           ? discoveredRaw.filter((s) => titleMatchesRelease(streamReleaseText(s), titles))
           : discoveredRaw
         const discovered = titleFiltered.length ? titleFiltered : discoveredRaw
-        const hashes = [...new Set(discovered.map(torrentHash))].slice(0, 100)
+        const hashes = checkcachedShortlist(discovered, audioLanguage, limits, sourcePreference, {
+          preferredGroup
+        })
         const cached = await torboxFetch<{
           data?: { hash?: string }[] | Record<string, unknown>
         }>(`${TORBOX}/torrents/checkcached?format=object&list_files=true`, {

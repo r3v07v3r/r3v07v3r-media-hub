@@ -274,6 +274,36 @@ export function rankSafeStreams(
   )
 }
 
+/** How many hashes one TorBox checkcached call is given. */
+export const CHECKCACHED_BATCH = 100
+
+/**
+ * The hashes worth asking TorBox about, best first, at most
+ * CHECKCACHED_BATCH of them.
+ *
+ * Chosen AFTER ranking, not in the order the add-ons listed them. Comet
+ * returns every release it knows (653 for Spider-Man: Across the
+ * Spider-Verse, found live), 2160p remuxes first, and it is merged ahead
+ * of Torrentio — so the first hundred were all 4K remuxes. Under a 1080p
+ * ceiling the ranking then threw every one of them away, Torrentio's
+ * ordinary encodes were never checked at all, and a film with hundreds of
+ * releases reported no sources. Ranking first drops what the person's
+ * limits and the safety filter would drop anyway, so the batch is spent
+ * on releases that could actually be played.
+ */
+export function checkcachedShortlist(
+  streams: StreamCandidate[],
+  preferredLanguage = 'en',
+  limits: StreamLimits = {},
+  sourcePreference: SourcePreference = 'balanced',
+  options: RankOptions = {}
+): string[] {
+  const hashes = rankSafeStreams(streams, preferredLanguage, limits, sourcePreference, options)
+    .map((s) => s.infoHash?.toLowerCase() ?? '')
+    .filter(Boolean)
+  return [...new Set(hashes)].slice(0, CHECKCACHED_BATCH)
+}
+
 /**
  * What a release in the wrong language costs it.
  *
