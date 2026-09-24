@@ -151,6 +151,18 @@ async function main(): Promise<void> {
 
   const settle = (ms = 150): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
 
+  /** Waits for what a step is actually waiting on rather than a fixed
+   *  sleep — loopback WebSockets land in milliseconds. Checks that
+   *  something did NOT arrive wait on a sibling that did: the hop fans a
+   *  message to every local subscriber in one pass. */
+  const until = async (what: string, done: () => boolean, timeoutMs = 2000): Promise<void> => {
+    const deadline = Date.now() + timeoutMs
+    while (!done()) {
+      if (Date.now() > deadline) throw new Error(`Timed out waiting for: ${what}`)
+      await settle(10)
+    }
+  }
+
   /** Parses one hop message down to the relay envelope it carries, or
    *  null — the test reads the protocol properly rather than grepping
    *  JSON-escaped strings. */
@@ -199,7 +211,10 @@ async function main(): Promise<void> {
   a.messages.length = 0
   b.messages.length = 0
   a.ws.send(JSON.stringify({ type: 'send', roomId: ROOM_ID, body: 'ciphertext-from-a' }))
-  await settle()
+  await until(
+    'the send to reach the relay and the sibling',
+    () => relayReceived.length > 0 && b.messages.some((m) => m.includes('ciphertext-from-a'))
+  )
   assert.deepEqual(relayReceived, ['ciphertext-from-a'], 'the send reaches the relay once')
   assert.ok(
     b.messages.some((m) => {
@@ -233,7 +248,9 @@ async function main(): Promise<void> {
   const remote = new WebSocket(`ws://127.0.0.1:${relayPort}/party/${ROOM_ID}?member=remote-1`)
   await new Promise((resolve) => remote.once('open', resolve))
   remote.send('ciphertext-from-remote')
-  await settle()
+  await until('A and B to hear the wider room', () =>
+    [a, b].every((client) => client.messages.some((m) => m.includes('ciphertext-from-remote')))
+  )
   for (const [name, client] of [
     ['A', a],
     ['B', b]
@@ -271,10 +288,13 @@ async function main(): Promise<void> {
     }
   }
   assert.equal(await kickedNotice, true, 'the kicked subscriber is told and dropped')
-  await settle()
+  // No wait needed: the hop drops the subscriber in the same pass that
+  // sends room-kicked, so nothing can be queued behind the notice.
   const kickedCount = kicked.messages.length
   remote.send('post-kick-ciphertext')
-  await settle()
+  await until('the survivors to hear the post-kick send', () =>
+    b.messages.some((m) => m.includes('post-kick-ciphertext'))
+  )
   assert.ok(
     b.messages.some((m) => m.includes('post-kick-ciphertext')),
     'survivors keep hearing the room'
@@ -310,7 +330,12 @@ async function main(): Promise<void> {
   a.ws.send(
     JSON.stringify({ type: 'send', roomId: ROOM_ID, body: 'rekey-ciphertext', transient: true })
   )
-  await settle()
+  await until(
+    'the transient send to reach the relay and the sibling',
+    () =>
+      relayReceived.includes('rekey-ciphertext') &&
+      b.messages.some((m) => m.includes('rekey-ciphertext'))
+  )
   const late = await subscribe(generateIdentity())
   assert.ok(
     !late.messages.some((m) => m.includes('rekey-ciphertext')),
@@ -324,28 +349,38 @@ async function main(): Promise<void> {
     'but current siblings still hear it — the echo is not retention'
   )
   late.ws.close()
-  await settle()
 
   // --- sends are paced under the relay's rate ceiling ------------------------
+  //
+  // The hop flushes a window's allowance in one synchronous pass and waits
+  // at least 50ms before the next, so the moment the first send lands is
+  // the moment to count: exactly one flush has gone up. Counting at the
+  // first arrival holds however much of the current window earlier sends
+  // already spent.
   relayReceived.length = 0
   for (let i = 0; i < 12; i++) {
     a.ws.send(JSON.stringify({ type: 'send', roomId: ROOM_ID, body: `burst-${i}` }))
   }
-  await settle(100)
+  await until('the first flush to reach the relay', () => relayReceived.length > 0)
   assert.ok(
     relayReceived.length <= 5,
     `within one window at most the ceiling goes upstream (got ${relayReceived.length})`
   )
-  await settle(900)
+  await until('the paced queue to drain', () => relayReceived.length >= 12)
   assert.equal(relayReceived.length, 12, 'the queue drains — paced, never dropped')
 
   // --- teardown --------------------------------------------------------------
   a.ws.close()
   b.ws.close()
+  // A fixed wait: this pins that nothing changes, so there is no event to
+  // wait on.
   await settle()
   assert.equal(hop.upstreamCount(), 1, 'the upstream survives while anyone local remains')
   c.ws.close()
-  await settle(300)
+  await until(
+    'the upstream to close and the relay to see the household leave',
+    () => hop.upstreamCount() === 0 && relayConns.every((conn) => !conn.pub)
+  )
   assert.equal(hop.upstreamCount(), 0, 'the last local unsubscribe closes the upstream')
   assert.equal(
     relayConns.filter((conn) => conn.pub).length,
