@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import {
+  checkcachedShortlist,
   guardedForPrefetch,
   rankStreams,
   releaseGroup,
@@ -574,3 +575,28 @@ assert.equal(
   'the scene form still matches'
 )
 console.log('ok  fansub title guard')
+
+// --- checkcached shortlist -------------------------------------------------
+
+{
+  // Comet lists every release it has, 4K remuxes first, merged ahead of
+  // Torrentio. The batch used to be the first hundred of that list, so a
+  // 1080p ceiling left nothing checked that could ever be played.
+  const remuxes: StreamCandidate[] = Array.from({ length: 150 }, (_, i) => ({
+    infoHash: `r${i}`.padEnd(40, '0'),
+    name: `Movie 2023 2160p UHD BluRay REMUX 70 GB`
+  }))
+  const encode: StreamCandidate = {
+    infoHash: 'e'.padEnd(40, '0'),
+    name: 'Movie 2023 1080p WEB-DL 6 GB'
+  }
+  const shortlist = checkcachedShortlist([...remuxes, encode], 'en', { maxResolution: 1080 })
+  assert.deepEqual(
+    shortlist,
+    [encode.infoHash],
+    'releases over the ceiling are not spent on the checkcached batch'
+  )
+  const unlimited = checkcachedShortlist([...remuxes, encode], 'en', {})
+  assert.equal(unlimited.length, 100, 'the batch is still capped')
+}
+console.log('ok  checkcached shortlist')
