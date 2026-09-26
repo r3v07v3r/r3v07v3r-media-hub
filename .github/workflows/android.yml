@@ -1,0 +1,80 @@
+name: Android app
+
+# Builds the phone/TV app (android/): the app UI (src/app-ui) and the headless
+# backend (src/headless) from this commit, a Node runtime from Termux
+# (scripts/android-node-payload.mjs), and the Kotlin shell that runs them.
+# Debug-signed for now: installable by tapping the APK, not yet a release.
+on:
+  workflow_dispatch: {}
+  pull_request:
+    paths:
+      - 'android/**'
+      - 'src/**'
+      - 'scripts/android-node-payload.mjs'
+      - 'scripts/build-headless.mjs'
+      - 'vite.app.config.ts'
+      - 'package-lock.json'
+      - '.github/workflows/android.yml'
+  push:
+    branches: [preview]
+    paths:
+      - 'android/**'
+      - 'src/**'
+      - 'scripts/android-node-payload.mjs'
+      - 'scripts/build-headless.mjs'
+      - 'vite.app.config.ts'
+      - 'package-lock.json'
+      - '.github/workflows/android.yml'
+
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  apk:
+    name: Build APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install dependencies without lifecycle scripts
+        run: npm ci --ignore-scripts
+      - name: Build the app UI and the headless backend
+        run: |
+          npm run build:app
+          npm run build:headless
+      - name: Stage the backend and the page as app assets
+        run: |
+          mkdir -p android/app/src/main/assets/app
+          cp dist-headless/backend.cjs android/app/src/main/assets/app/backend.cjs
+          cp -r dist-app android/app/src/main/assets/app/site
+      - name: Stage the Node runtime (Termux, SHA-256 checked against its index)
+        run: node scripts/android-node-payload.mjs android/app/src/main/jniLibs/arm64-v8a android/app/src/main/assets
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          distribution: temurin
+          java-version: 17
+      # No Gradle wrapper is checked in (its jar is a binary nobody can
+      # review), so the version is pinned here instead — as in the spike.
+      - uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
+        with:
+          gradle-version: '9.7.1'
+      - name: Build debug APK
+        env:
+          R3_VERSION_CODE: ${{ github.run_number }}
+          R3_VERSION_NAME: 0.1.${{ github.run_number }}
+        run: gradle -p android --no-daemon assembleDebug
+      - name: Name the artifact for what it is
+        run: cp android/app/build/outputs/apk/debug/app-debug.apk r3-media-hub-android.apk
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: r3-media-hub-android
+          path: r3-media-hub-android.apk
+          retention-days: 30
