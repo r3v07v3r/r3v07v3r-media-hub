@@ -167,10 +167,6 @@ export interface PairingBundle {
   from: string
   torboxToken?: string
   simkl?: { clientId: string; accessToken: string }
-  /** The app registration only. The phone signs in to Trakt itself. */
-  trakt?: { clientId: string; clientSecret: string }
-  /** Likewise for MyAnimeList. */
-  mal?: { clientId: string; clientSecret: string }
   tmdbApiKey?: string
   omdbApiKey?: string
   subdlApiKey?: string
@@ -188,8 +184,6 @@ export function bundleContents(bundle: PairingBundle): string[] {
   const names: string[] = []
   if (bundle.torboxToken) names.push('TorBox')
   if (bundle.simkl) names.push('Simkl')
-  if (bundle.trakt) names.push('Trakt app')
-  if (bundle.mal) names.push('MyAnimeList app')
   if (bundle.tmdbApiKey) names.push('TMDB')
   if (bundle.omdbApiKey) names.push('OMDb')
   if (bundle.subdlApiKey) names.push('SubDL')
@@ -202,10 +196,16 @@ export function bundleContents(bundle: PairingBundle): string[] {
  * One snapshot of what a new device needs, out of this device's settings.
  *
  * Left behind on purpose:
- * - Trakt and MAL access and refresh tokens. Both services rotate the
- *   refresh token on every use, so two devices holding one pair would sign
- *   each other out at the first refresh. The app registration travels; the
- *   phone runs the sign-in itself (traktClient.ts, malSync.ts).
+ * - Trakt and MyAnimeList, entirely. Their tokens cannot travel: both
+ *   services rotate the refresh token on every use, so two devices holding
+ *   one pair would sign each other out at the first refresh. The phone must
+ *   run the sign-in itself, and the phone UI has no Trakt or MAL sign-in
+ *   yet — so sending even the app registration would only advertise an
+ *   account the phone cannot use. When that sign-in exists, the app
+ *   registration can travel, with one rule: a registration that differs
+ *   from the one the phone already holds must clear the phone's tokens and
+ *   expiry with it, or its old refresh token is sent under the new client
+ *   and every refresh fails.
  * - The r3-cache device token. The cache server approves DEVICES, by name;
  *   a phone using the desktop's token would be the desktop as far as the
  *   server's administrator can tell. The phone pairs on its own.
@@ -225,14 +225,6 @@ export function buildBundle(
   const simklToken = decrypt(settings.simklAccessToken)
   if (settings.simklClientId && simklToken) {
     bundle.simkl = { clientId: settings.simklClientId, accessToken: simklToken }
-  }
-  const traktSecret = decrypt(settings.traktClientSecret)
-  if (settings.traktClientId && traktSecret) {
-    bundle.trakt = { clientId: settings.traktClientId, clientSecret: traktSecret }
-  }
-  const malSecret = decrypt(settings.malClientSecret)
-  if (settings.malClientId) {
-    bundle.mal = { clientId: settings.malClientId, clientSecret: malSecret }
   }
   const tmdb = decrypt(settings.tmdbApiKey)
   if (tmdb) bundle.tmdbApiKey = tmdb
@@ -272,29 +264,15 @@ export function normalizeBundle(value: unknown): PairingBundle | null {
   if (!value || typeof value !== 'object') return null
   const raw = value as Record<string, unknown>
   if (raw.v !== 1) return null
-  const pair = <A extends string, B extends string>(
-    v: unknown,
-    a: A,
-    b: B,
-    bOptional = false
-  ): Record<A | B, string> | undefined => {
-    if (!v || typeof v !== 'object') return undefined
-    const o = v as Record<string, unknown>
-    const first = str(o[a])
-    const second = str(o[b]) ?? (bOptional ? '' : undefined)
-    return first !== undefined && second !== undefined
-      ? ({ [a]: first, [b]: second } as Record<A | B, string>)
-      : undefined
-  }
   const bundle: PairingBundle = { v: 1, from: str(raw.from) ?? 'another device' }
   const torbox = str(raw.torboxToken)
   if (torbox) bundle.torboxToken = torbox
-  const simkl = pair(raw.simkl, 'clientId', 'accessToken')
-  if (simkl) bundle.simkl = simkl
-  const trakt = pair(raw.trakt, 'clientId', 'clientSecret')
-  if (trakt) bundle.trakt = trakt
-  const mal = pair(raw.mal, 'clientId', 'clientSecret', true)
-  if (mal) bundle.mal = mal
+  if (raw.simkl && typeof raw.simkl === 'object') {
+    const o = raw.simkl as Record<string, unknown>
+    const clientId = str(o.clientId)
+    const accessToken = str(o.accessToken)
+    if (clientId && accessToken) bundle.simkl = { clientId, accessToken }
+  }
   for (const key of ['tmdbApiKey', 'omdbApiKey', 'subdlApiKey'] as const) {
     const v = str(raw[key])
     if (v) bundle[key] = v
@@ -342,14 +320,6 @@ export function applyBundle(
   if (bundle.simkl) {
     next.simklClientId = bundle.simkl.clientId
     next.simklAccessToken = encrypt(bundle.simkl.accessToken)
-  }
-  if (bundle.trakt) {
-    next.traktClientId = bundle.trakt.clientId
-    next.traktClientSecret = encrypt(bundle.trakt.clientSecret)
-  }
-  if (bundle.mal) {
-    next.malClientId = bundle.mal.clientId
-    if (bundle.mal.clientSecret) next.malClientSecret = encrypt(bundle.mal.clientSecret)
   }
   if (bundle.tmdbApiKey) next.tmdbApiKey = encrypt(bundle.tmdbApiKey)
   if (bundle.omdbApiKey) next.omdbApiKey = encrypt(bundle.omdbApiKey)

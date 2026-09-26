@@ -176,6 +176,38 @@ export function cancelPairing(): void {
   finish('cancelled')
 }
 
+/** A sealed bundle is a few kilobytes. Anything bigger is not one. */
+const MAX_RESPONSE_BYTES = 64 * 1024
+
+/**
+ * The body as JSON, or null — read no further than MAX_RESPONSE_BYTES. The
+ * link names a LAN address, and whatever answers there is not trusted until
+ * GCM says so: an unbounded body would let it fill the phone's memory before
+ * authentication ever runs.
+ */
+async function readBoundedJson(response: Response): Promise<unknown> {
+  if (Number(response.headers.get('content-length')) > MAX_RESPONSE_BYTES) return null
+  const reader = response.body?.getReader()
+  if (!reader) return null
+  const chunks: Uint8Array[] = []
+  let size = 0
+  try {
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      size += value.byteLength
+      if (size > MAX_RESPONSE_BYTES) {
+        await reader.cancel()
+        return null
+      }
+      chunks.push(value)
+    }
+    return JSON.parse(Buffer.concat(chunks).toString('utf8'))
+  } catch {
+    return null
+  }
+}
+
 /** The phone's half: fetch the sealed snapshot, open it, keep it. */
 export async function redeemPairing(link: string): Promise<PairingRedeemResult> {
   const parsed = parseTicketLink(link)
@@ -205,7 +237,7 @@ export async function redeemPairing(link: string): Promise<PairingRedeemResult> 
       sawRefusal = true
       continue
     }
-    const bundle = openBundle(ticket, await response.json().catch(() => null))
+    const bundle = openBundle(ticket, await readBoundedJson(response))
     if (!bundle) {
       return { ok: false, message: 'The computer answered, but not with this code. Scan it again.' }
     }

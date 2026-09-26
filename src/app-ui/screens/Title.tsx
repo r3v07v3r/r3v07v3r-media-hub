@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import type { CatalogItem, Episode } from '@shared/media-hub/types'
 import { hasAired } from '@shared/media-hub/catalog-logic'
@@ -22,6 +22,8 @@ type PlayStatus =
   | { stage: 'resolving'; season?: number; episode?: number }
   | { stage: 'starting'; season?: number; episode?: number }
   | { stage: 'error'; message: string }
+  /** A source was resolved, but this host has no player yet. */
+  | { stage: 'found'; message: string }
 
 /** The (season, episode) a play request in flight targets, or null when
  *  nothing is resolving/starting right now. */
@@ -174,9 +176,17 @@ export default function Title() {
 
   const [playStatus, setPlayStatus] = useState<PlayStatus>({ stage: 'idle' })
   const playRequestRef = useRef(0)
+  // Leaving the title (or moving to another one) abandons a request still
+  // resolving, so it cannot land on a page nobody is looking at.
+  useEffect(() => {
+    const requests = playRequestRef
+    return () => {
+      requests.current += 1
+    }
+  }, [kind, id])
 
   const play = useCallback(
-    (season?: number, episode?: number, episodeTitle?: string) => {
+    (season?: number, episode?: number) => {
       if (!kind || !item) return
       const mediaHub = api()
       const requestId = ++playRequestRef.current
@@ -213,23 +223,16 @@ export default function Title() {
             })
             return null
           }
-          setPlayStatus({ stage: 'starting', season, episode })
-          return mediaHub.stream.play(best, mediaId, kind, resolveId, {
-            catalogId: item.id,
-            title: item.title,
-            posterUrl: item.poster,
-            mediaKind: kind,
-            seasonNumber: season,
-            episodeNumber: episode,
-            episodeTitle
+          // The desktop's stream:play drives mpv in an Electron window, which a
+          // headless backend (the phone/TV app) does not have. Until the
+          // on-device player exists, resolving is as far as this goes: it
+          // still answers "can this be played", and caches the source.
+          setPlayStatus({
+            stage: 'found',
+            message:
+              'A source is ready. Playing on this device comes with the player, the next part of the app.'
           })
-        })
-        .then((result) => {
-          if (!result || playRequestRef.current !== requestId) return
-          // Nothing more to show here yet — an embedded player isn't wired
-          // into this UI in this step (see the task brief); a successful
-          // stream:play just means the backend genuinely started one.
-          setPlayStatus({ stage: 'idle' })
+          return null
         })
         .catch((error: unknown) => {
           if (playRequestRef.current !== requestId) return
@@ -261,7 +264,9 @@ export default function Title() {
   const isTracked =
     item && pendingTracked?.id === item.id ? pendingTracked.tracked : trackedFromList
   const toggleTracked = useCallback(() => {
-    if (!item) return
+    // toggle() flips whatever the backend holds, so pressing it before the
+    // list has loaded could remove a title the button offered to add.
+    if (!item || !tracking.data) return
     const mediaHub = api()
     if (!mediaHub) return
     const next = !isTracked
@@ -270,7 +275,7 @@ export default function Title() {
       (result) => setPendingTracked({ id: item.id, tracked: result.tracked }),
       () => setPendingTracked({ id: item.id, tracked: !next })
     )
-  }, [item, isTracked])
+  }, [item, isTracked, tracking.data])
 
   const [overviewExpanded, setOverviewExpanded] = useState(false)
 
@@ -398,12 +403,14 @@ export default function Title() {
               aria-pressed={isTracked}
               aria-label={isTracked ? 'Remove from My List' : 'Add to My List'}
               onClick={toggleTracked}
+              disabled={!tracking.data}
             >
               {isTracked ? <CheckIcon /> : <PlusIcon />}
             </button>
           </div>
           {playStatus.stage === 'resolving' && <StatusNote>Resolving stream…</StatusNote>}
           {playStatus.stage === 'starting' && <StatusNote>Starting playback…</StatusNote>}
+          {playStatus.stage === 'found' && <StatusNote>{playStatus.message}</StatusNote>}
           {playStatus.stage === 'error' && (
             <StatusNote tone="error">{playStatus.message}</StatusNote>
           )}
@@ -460,7 +467,7 @@ export default function Title() {
                       className="episode-row"
                       disabled={!aired || busyTarget !== null}
                       aria-busy={isBusyHere}
-                      onClick={() => play(episode.season, episode.episode, episode.title)}
+                      onClick={() => play(episode.season, episode.episode)}
                     >
                       <span className="episode-row__number">E{episode.episode}</span>
                       <span className="episode-row__body">

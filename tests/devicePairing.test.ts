@@ -54,8 +54,9 @@ const desktop: MediaHubRawSettings = {
 const bundle = buildBundle(desktop, dec, 'DESKTOP')
 assert.equal(bundle.torboxToken, 'tb-token')
 assert.deepEqual(bundle.simkl, { clientId: 'simkl-id', accessToken: 'simkl-token' })
-assert.deepEqual(bundle.trakt, { clientId: 'trakt-id', clientSecret: 'trakt-secret' })
-assert.deepEqual(bundle.mal, { clientId: 'mal-id', clientSecret: 'mal-secret' })
+// Trakt and MAL stay behind until the phone can sign in to them itself.
+assert.equal('trakt' in bundle, false)
+assert.equal('mal' in bundle, false)
 assert.deepEqual(bundle.openSubtitles, {
   apiKey: 'os-key',
   username: 'os-user',
@@ -66,6 +67,10 @@ assert.deepEqual(bundle.prefs, { subtitleLanguage: 'en', partyDisplayName: 'Grah
 // Rotating tokens and per-install identity never leave, in any field.
 const wire = JSON.stringify(bundle)
 for (const secret of [
+  'trakt-id',
+  'trakt-secret',
+  'mal-id',
+  'mal-secret',
   'trakt-access',
   'trakt-refresh',
   'mal-access',
@@ -140,7 +145,13 @@ assert.equal(dec(phone.torboxToken), 'tb-token')
 assert.equal(phone.onboardingVersion, 2)
 assert.equal(phone.simklClientId, 'simkl-id')
 assert.equal(dec(phone.simklAccessToken), 'simkl-token')
-assert.equal(dec(phone.traktClientSecret), 'trakt-secret')
+// A bundle that claims to carry Trakt (from a newer desktop, say) cannot
+// replace the phone's registration under its existing tokens.
+const withTrakt = openBundle(
+  ticket,
+  sealBundle(ticket, { ...bundle, trakt: { clientId: 'x', clientSecret: 'y' } } as never)
+)!
+assert.equal('trakt' in withTrakt, false)
 assert.equal(dec(phone.osPassword), 'os-pass')
 assert.equal(phone.subtitleLanguage, 'en')
 // What the phone already had and the desktop didn't send is kept.

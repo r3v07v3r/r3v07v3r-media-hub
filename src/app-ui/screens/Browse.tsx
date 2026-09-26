@@ -114,7 +114,9 @@ export default function Browse() {
   const params = useParams<{ kind: string }>()
   const kind = isMediaKind(params.kind) ? params.kind : null
   const { items, loading, error, done, loadMore } = useBrowseCatalog(kind ?? 'movie')
-  const sentinelRef = useLoadMoreOnVisible(loadMore, Boolean(kind) && !done)
+  // Paused after an error: the observer would otherwise retry the moment it
+  // is re-created, over and over. "Try again" clears the error and resumes it.
+  const sentinelRef = useLoadMoreOnVisible(loadMore, Boolean(kind) && !done && !error)
 
   if (!kind) return <StatusNote tone="error">Unknown category.</StatusNote>
 

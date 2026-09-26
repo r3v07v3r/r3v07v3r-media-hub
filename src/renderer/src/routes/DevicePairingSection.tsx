@@ -114,8 +114,8 @@ export function DevicePairingSection() {
       <p className={styles.serviceNote}>
         Sign the R3 phone app in to the same services as this computer. Show a code, scan it with
         the phone’s camera, done. The code works once, for three minutes, on your own Wi-Fi. Trakt
-        and MyAnimeList still ask you to sign in on the phone, since they only allow one device per
-        sign-in.
+        and MyAnimeList are not sent: a sign-in can’t be shared between devices, and signing in to
+        them on the phone is still to come.
       </p>
 
       {link && state === 'waiting' ? (
