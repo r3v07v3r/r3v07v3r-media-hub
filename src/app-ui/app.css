@@ -1,0 +1,181 @@
+/* Base layout, reset and the handful of classes shared by every screen
+   (poster-grid, status-note). Per-screen detail lives in that screen's own
+   CSS file — see the task brief's "one small CSS file per screen". */
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--background);
+  color: var(--text-primary);
+  font-family: var(--font-body);
+  -webkit-font-smoothing: antialiased;
+}
+
+h1,
+h2 {
+  font-family: var(--font-display);
+  font-weight: 600;
+  margin: 0 0 0.5rem;
+}
+
+button,
+input {
+  font: inherit;
+  color: inherit;
+}
+
+button {
+  background: var(--panel);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-small);
+  padding: 0.5rem 0.9rem;
+  cursor: pointer;
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+input {
+  background: var(--panel);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-small);
+  padding: 0.5rem 0.75rem;
+}
+
+a {
+  color: inherit;
+}
+
+/* Every interactive element gets the same visible ring in the theme's
+   accent colour — required for anyone driving this with a D-pad/keyboard
+   rather than a pointer, where hover has no equivalent. */
+a:focus-visible,
+button:focus-visible,
+input:focus-visible,
+[tabindex='0']:focus-visible {
+  outline: 2px solid var(--accent-blue);
+  outline-offset: 2px;
+}
+
+/* Comfortable on a phone at the base size; scaled up on a TV-sized
+   landscape viewport so text is legible from a couch rather than a lap. */
+html {
+  font-size: 16px;
+}
+@media (min-width: 1600px) {
+  html {
+    font-size: 20px;
+  }
+}
+
+.app-shell {
+  min-height: 100%;
+}
+
+.app-content {
+  padding: 1rem 1rem calc(4.5rem + env(safe-area-inset-bottom));
+  max-width: 100rem;
+  margin: 0 auto;
+}
+
+@media (min-width: 900px) and (orientation: landscape) {
+  .app-content {
+    padding: 1.5rem 1.5rem 1.5rem 6rem;
+  }
+}
+
+.poster-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(9rem, 1fr));
+  gap: 0.9rem;
+  margin-top: 0.75rem;
+}
+
+/* A card has a fixed width for the horizontal rows, where it must not shrink.
+   In a grid the COLUMN decides the width: left at its fixed size, every card
+   sat at the left edge of a wider cell and the whole grid read as pushed to
+   the left, with the slack piled up on the right. */
+.poster-grid .poster-card,
+.poster-grid .poster-skeleton {
+  width: 100%;
+}
+
+/* Visually hidden but still readable by a screen reader — used for the
+   spoken label on Spinner and anywhere else an icon-only control needs a
+   name nothing sighted should see. */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Shared pulse used by every loading placeholder (PosterSkeleton, Home's
+   row headings, Title's skeleton). Only background + the animation live
+   here — sizing/shape is each usage's own class — so this never fights
+   another rule's border-radius over which one wins by source order. */
+@keyframes skeleton-pulse {
+  0%,
+  100% {
+    opacity: 0.6;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+.skeleton-bar {
+  background: var(--panel);
+  animation: skeleton-pulse 1.6s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skeleton-bar {
+    animation: none;
+    opacity: 0.8;
+  }
+}
+
+.status-note {
+  color: var(--text-secondary);
+  margin: 0.75rem 0;
+}
+
+.status-note--error {
+  color: var(--accent-orange);
+}
+
+.browse-sentinel {
+  height: 1px;
+}
+
+.not-connected {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  padding: 2rem;
+  text-align: center;
+  gap: 0.5rem;
+}
+
+.not-connected p {
+  color: var(--text-secondary);
+  max-width: 32rem;
+}
