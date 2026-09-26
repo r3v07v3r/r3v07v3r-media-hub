@@ -8,20 +8,24 @@ that mapping fails, which on many routers it does. Rooms — the standing
 family or film-friends groups — exist only on the relay, so creating one
 requires it.
 
-This is **not bundled or auto-deployed** with the app. Nothing is shared
-between different installs of R3 Media Hub unless you deploy this yourself
-and everyone enters the same URL and invite key.
+This is **not bundled or auto-deployed** with the app. Without it, Watch
+Parties still work over the direct route (the same network, or a router
+port the app managed to map), but Rooms cannot be created. Only the person
+hosting a party or creating a room enters this Worker's URL and invite
+key; guests and members get the relay route inside the invite code.
 
 ## What this costs
 
 The relay keeps each room in a Durable Object with the SQLite storage
-backend (`new_sqlite_classes` in `wrangler.toml`). Cloudflare includes
-SQLite-backed Durable Objects in the Workers Free plan within that plan's
-limits; the Workers Paid plan (currently $5/month) raises them. Rooms use
-Durable Object hibernation, so a room that stays open for days is not
-billed for duration the whole time: the object is evicted from memory
-between messages and woken to handle one. Check Cloudflare's current
-pricing page before relying on either plan.
+backend (`new_sqlite_classes` in `wrangler.toml`). At the time of writing
+Cloudflare offers SQLite-backed Durable Objects on the Workers Free plan
+within that plan's limits, and the Workers Paid plan (currently $5/month)
+raises them; the comment in `wrangler.toml` that says Durable Objects need
+the Paid plan predates that. Rooms use Durable Object hibernation, so a
+room that stays open for days is not billed for duration the whole time:
+while it is idle the runtime can evict the object from memory with the
+sockets still open, and wakes it for the next message. Check Cloudflare's
+current pricing page before relying on either plan.
 
 ## Deploy it
 
@@ -48,9 +52,11 @@ pricing page before relying on either plan.
 5. In R3 Media Hub, open the control centre (the gear icon in the top bar),
    choose **Community**, and under **Watch Party relay** paste that URL and
    the same invite key you set in step 3, then connect.
-6. Host a Watch Party as usual. The single invite code now carries the
-   relay route as well as the direct one, and each guest's app uses the
-   first route that answers. Rooms can now be created too.
+6. Host a Watch Party as usual. If your app reached the Worker when the
+   party started, the single invite code carries the relay route as well
+   as the direct one. Each guest's app tries the direct route first (same
+   network, then the mapped router port) and falls back to the relay when
+   the host does not answer directly. Rooms can now be created too.
 
 ## How it works (if you're curious / need to debug it)
 
@@ -58,18 +64,25 @@ pricing page before relying on either plan.
   Object per room) and returns a `roomId` plus a `roomToken` that identifies
   whoever holds it as that room's host. With `{"membership": true}` it also
   returns a `joinSecret` (see Rooms membership below).
-- Everyone connects to `wss://<your-worker>/party/<roomId>` — the host with
-  `?token=<roomToken>`, everyone else with no token as a regular member.
+- Everyone connects to `wss://<your-worker>/party/<roomId>`, the host with
+  `?token=<roomToken>`. In a Watch Party everyone else connects with no
+  token. In a membership room every connection, the host's included, must
+  also present a signed cryptogram (`pub`, `ts`, `ctr`, `sig`), plus
+  `join=<joinSecret>` the first time an identity is seen (see Rooms
+  membership below).
 - On connect you get `{"type":"assigned","connId":"..."}` once, naming your
   own tag. You are then replayed each other member's last message, if it is
   under 10 minutes old, as `{"type":"retained","ageMs":...,"connId":...,
 "isHost":...,"body":...}`; subtract `ageMs` before treating `body` as
-  current.
+  current. Then comes `{"type":"peers","connIds":[...]}`, listing every
+  connection currently in the room.
 - The server never decrypts anything. Every real message (who is in the
   party, what is playing, seek and pause, chat, suggestions) is encrypted
   end to end by the app before it reaches this Worker; the Worker tags each
-  message with who sent it and relays it to everyone else in the room. If
-  you inspect traffic here, you only ever see ciphertext.
+  message with who sent it and relays it to everyone else in the room. Message bodies are always ciphertext. What the Worker does see in the
+  clear is routing metadata (connection tags, host flags, the live peer
+  list, banned identity hashes) and the admission credentials it checks:
+  invite key, host token, join secret and signed cryptograms.
 - Limits: at most 32 connections per room (`Party is full.`, HTTP 429), at
   most 40 messages per connection per 10 seconds, and no message over 60 KiB;
   exceeding the last two closes that socket (codes 1008 and 1009).
@@ -96,11 +109,15 @@ cd party-sync-worker && npm run deploy
 
 ## Rooms hop (LAN daemon)
 
-When an [r3-cache](../daemon/README.md) daemon runs on the household's LAN,
-devices in the same room do not each open their own WebSocket to this
-Worker. The daemon opens one upstream connection per room, presenting
-itself with `?carrier=1`, and fans messages out to the local devices itself.
-It relays ciphertext only and never holds anyone's room credential.
+When a device is paired with an [r3-cache](../daemon/README.md) daemon on
+the household's LAN, and that daemon offers the rooms hop, the device
+subscribes to its rooms through the daemon instead of opening its own
+WebSocket to this Worker. The daemon opens one upstream connection per
+room (for a membership room it presents `?carrier=1` with the first
+member's forwarded cryptogram) and fans messages out to the local devices
+itself. It never holds the room's content key or anyone's private key; it
+forwards members' single-use cryptograms and, for a first admission, the
+room's join secret.
 
 ## Local testing
 
@@ -111,11 +128,14 @@ npx wrangler dev --var INVITE_KEY:some-test-key
 
 Runs the Worker locally with local Durable Object emulation so you can test
 `/host` and `/party/{roomId}` before deploying anything real. `/host` turns
-away any request whose `inviteKey` does not match `INVITE_KEY`, so a plain
-`npx wrangler dev` with no key refuses every `/host` call (a `.dev.vars`
-file with `INVITE_KEY=...` works too). The WebSocket route only needs a room
-that already exists.
+away any request whose `inviteKey` does not match `INVITE_KEY`, so with a plain
+`npx wrangler dev` and no key `/host` answers 403 and no room can ever be
+created (a `.dev.vars` file with `INVITE_KEY=...` works too).
 
-CI (`.github/workflows/verify.yml`) typechecks this folder, runs
-`npx wrangler deploy --dry-run`, and audits its production dependencies on
-every pull request.
+CI (`.github/workflows/verify.yml`, on every pull request and as the
+preview/stable release gate) typechecks `src/`, runs
+`npx wrangler deploy --dry-run`, and runs `npm audit --omit=dev`, which
+only matters once the Worker gains a production dependency.
+`tests/kick.e2e.ts` is manual: start
+`npx wrangler dev --port 8788 --var INVITE_KEY:e2e-test-key` here, then run
+`npx tsx party-sync-worker/tests/kick.e2e.ts` from the repo root.

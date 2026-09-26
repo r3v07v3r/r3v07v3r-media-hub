@@ -54,11 +54,13 @@ trending feed (either one alone fills the grid), anime from Kitsu. No key is req
   episodes, ratings, similar titles, and recommendations. Filter by genre, year and minimum
   rating, plus runtime for movies, number of seasons and episode length for series, episode count
   for anime, and status. Hide what you have started or watched, shows you are caught up on, and
-  titles you marked **Not for me**, in any combination, and choose which of those start switched on
+  titles you marked **Not interested** (they collect under My Stuff → Not for me), in any
+  combination, and choose which of those start switched on
   from the Settings page's Browsing card. Save any filter combination as a named view; it comes back as
   a chip. **Scan deeper** on a category page pulls in more of the catalog than loaded by itself.
 - **Recommendations that say why.** Home shows the top row; **For You** shows the whole ranking,
-  shelved by reason: a franchise continuation, a director or actor you follow, a genre match. After
+  shelved by reason: a franchise continuation, a director or actor who recurs in what you have watched, a genre
+  match. After
   a film or anime, the next part of its series is offered first, and a rewatch counts. Your own
   ratings steer it: a genre you watch often but enjoy little stops leading.
 - **Cast and crew are clickable** once a TMDB key is connected: names open what else of theirs
@@ -69,12 +71,14 @@ trending feed (either one alone fills the grid), anime from Kitsu. No key is req
   anime episodes show their air date or TBA on the title page and cannot be played early.
 - **With a TMDB key** (optional): the age certificate for your region, cast and crew,
   the rest of a film's collection, better similar-title lists, and per-season episode data for
-  grouped anime. An anime's page lays out its franchise in story order (prequels, the main or full
-  story, side stories, spin-offs, recaps, sequels). **With an OMDb key**: the Rotten Tomatoes score.
+  grouped anime. **With an OMDb key**: the Rotten Tomatoes score.
+- **Anime franchises in story order.** An anime's page lays out its franchise (prequels, the main
+  or full story, side stories, spin-offs, recaps, sequels) from Kitsu, with no key needed.
 
 ### 2. Choose a source — needs TorBox or a Jellyfin server
 
-Play is only offered when **TorBox** or an enabled **Jellyfin** server is connected. Sonarr, Radarr,
+Play only works when **TorBox** or an enabled **Jellyfin** server is connected; without either,
+pressing Play shows a notice asking you to connect one. Sonarr, Radarr,
 qBittorrent, Prowlarr and Bazarr are management and status connections, not playback sources: what
 they fetch becomes playable once it reaches your Jellyfin library.
 
@@ -90,14 +94,15 @@ limits:
    TorBox instead of winning outright.
 4. **TorBox.** The stream that played last time is checked first. Otherwise the Torrentio and Comet
    add-ons are searched for releases, TorBox is asked which of them it already has, and the
-   candidates are scored on whether they can play right now, their resolution and their audio
-   language. If nothing is cached, the best release is submitted to TorBox and you are told to try
+   candidates are scored on whether they are the right title, whether they can play right now, their
+   resolution and their audio language, with a nudge toward the release group that played the
+   previous episode. If nothing is cached, the best release is submitted to TorBox and you are told to try
    again in a few minutes.
 
-**Settings → Playback** (in the control centre) holds the knobs: **Where to play from** (Media
-server, Balanced, Best quality), the maximum resolution and download size that every remote tier
-must meet, and a **Connection recommendation** test that suggests both. If the best copy is
-noticeably below your ceiling, the app asks once per title whether to play it anyway.
+**Control centre → Playback → Network** holds the knobs: **Where to play from** (Media server,
+Balanced, Best quality), the maximum video quality and download size that every remote tier must
+meet, and a **Connection recommendation** test that suggests both. If the best copy is noticeably
+below your ceiling, the app asks once per title per session whether to play it anyway.
 
 > Known limitation: the "is a source connected" check runs before the two cache tiers, so a title
 > that is fully cached on this machine or on the LAN still needs TorBox or Jellyfin connected to
@@ -118,7 +123,7 @@ Playback is mpv, embedded inside the app's own window on Windows; there is no tr
 - **Keys:** <kbd>Space</kbd> play/pause, <kbd>←</kbd>/<kbd>→</kbd> seek, <kbd>↑</kbd>/<kbd>↓</kbd>
   volume, <kbd>PageUp</kbd>/<kbd>PageDown</kbd> chapters, <kbd>f</kbd> fullscreen, <kbd>.</kbd> and
   <kbd>,</kbd> frame step, <kbd>s</kbd> screenshot, <kbd>i</kbd> stream info, <kbd>a</kbd> Anime4K
-  on or off, <kbd>Esc</kbd> close.
+  on or off, <kbd>Esc</kbd> leave fullscreen, or close the player.
 - **Skip the intro and the credits.** Anime uses Aniskip's community-submitted times; movies and
   series read the release's own chapter marks, so a mislabeled chapter is never trusted.
 - **Keep watching a series.** When an episode ends, the next one is offered on a post-play card and
@@ -132,14 +137,15 @@ Playback is mpv, embedded inside the app's own window on Windows; there is no tr
   Performance & Display**, then toggle it live with the player's button or <kbd>a</kbd>, and pick a
   mode. The same card holds **Video scaling** (Standard, High or Sharp), the **Playback buffer** preset,
   and the switch for Home's live CPU, GPU, RAM and network gauges.
-- **A download guard** refuses files it judges unsafe from any playback path and shows a warning
-  naming the file, where it came from, and the reason.
+- **Unsafe files are kept out.** A release whose name advertises an executable is never chosen or
+  submitted to TorBox, and any file the app's web content tries to save to disk is refused if its
+  type is on the blocklist, with a warning that names the file, where it came from, and the reason.
 
 ### 4. Keep track — needs nothing
 
 - **One status per title:** not watched, planned, or watched. A pill on a title's page, in the
   library side panel and on the Home hero cycles through the three; the right-click menu offers
-  **Plan to watch** and **Mark watched** as separate items. Marking a whole series watched marks
+  **Plan to watch** and **Mark watched** (**Mark all watched** on a series) as separate items. Marking a whole series watched marks
   every aired episode, and clearing it offers an undo. On the episode list, **Mark season watched**
   acts on a season's aired episodes, and <kbd>Ctrl</kbd>- or <kbd>Shift</kbd>-clicking episodes
   selects several to mark at once. Lists are separate from status.
@@ -159,7 +165,8 @@ Playback is mpv, embedded inside the app's own window on Windows; there is no tr
 ### 5. Sync — optional, one account per service
 
 Each tracking service needs its own API application: create one on the service's developer site and
-enter the Client ID (and, for Trakt and MyAnimeList, the secret) under **Control centre → Accounts**.
+enter the Client ID (and, for Trakt, the client secret; MyAnimeList's is optional) under
+**Control centre → Accounts**.
 
 | Service         | What it does                                                                                                                                                                                                                                     |
 | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -214,7 +221,7 @@ over to its second face. It is where the installation is configured and watched:
 | **Updates**       | The build you are on, the **Stable** or **Preview** channel, a download progress bar, and what the offered version changes.                                                                                                            |
 | **General**       | Display preferences, notifications, Performance & Display (Anime4K, video scaling, buffer, gauges), Your library (backup, imports).                                                                                                    |
 | **Playback**      | Episodes, subtitles and languages, Network (limits, Where to play from, speed test), Storage while playing.                                                                                                                            |
-| **Media servers** | TorBox, Jellyfin, Sonarr, Radarr, qBittorrent, Prowlarr and Bazarr, each with a connection test.                                                                                                                                       |
+| **Media servers** | TorBox (connect with its API token), and Jellyfin, Sonarr, Radarr, qBittorrent, Prowlarr and Bazarr, each with a connection test.                                                                                                      |
 | **Accounts**      | Tracking (Simkl, Trakt, MyAnimeList), Artwork & metadata (TMDB, OMDb), Subtitles (SubDL, OpenSubtitles).                                                                                                                               |
 | **AI**            | The local Ollama model behind the assistant and Recommend Next.                                                                                                                                                                        |
 | **Community**     | The Watch Party relay, and profiles.                                                                                                                                                                                                   |
@@ -260,8 +267,8 @@ now**), whether video may be cached to disk, and, if so, a quick network and dis
 a quality cap, a size cap and a cache size. Everything it sets is changeable later.
 
 1. If you skipped the source step, open the control centre (gear icon), choose **Media servers**,
-   and connect **TorBox** (paste the API token from your TorBox account) or **Jellyfin** (server
-   URL and API key, then **Test connection** and **Save changes**).
+   and connect **TorBox** (paste the API token from your TorBox account) or **Jellyfin** (switch the
+   card on, enter the server URL and API key, then **Test connection** and **Save changes**).
 2. Optional: under **Control centre → Playback**, choose your preferred audio and subtitle
    languages and connect a subtitle service under **Accounts**.
 3. Open **Movies**, **Series**, or **Anime**, select a title, and press **Play**. It reads
@@ -331,8 +338,8 @@ UPnP/NAT-PMP when hosting a party.
 - [Node.js](https://nodejs.org/) 22.13 or newer. The database uses Node's built-in `node:sqlite`,
   which needs no flag from 22.13 on; CI runs on Node 22.
 - npm (included with Node.js) and Git.
-- Windows, for playback: `npm install` downloads the mpv player (about 114 MB) in its `postinstall`
-  step for Windows only. On other platforms set `MPV_PATH` to an installed mpv.
+- Windows, for playback: `npm install` downloads the mpv player (a 32 MB archive, about 114 MB unpacked) in its
+  `postinstall` step for Windows only. On other platforms set `MPV_PATH` to an installed mpv.
 
 ```bash
 git clone https://github.com/r3v07v3r/r3v07v3r-media-hub.git
@@ -412,7 +419,8 @@ Three optional companions ship from this repository: [`daemon/`](daemon/README.m
 LAN pre-fetch server, [`party-sync-worker/`](party-sync-worker/README.md) is the Watch Party relay
 you deploy yourself, and `src/headless/` with `npm run build:web` is the same app built to run
 without Electron, the base for TV and phone clients that are still in progress. Playback in that
-build works only where an mpv can be reached through `MPV_PATH` today.
+build needs an mpv it can find: `MPV_PATH`, the copy `npm install` fetches into
+`resources/mpv-win` on Windows, or a standard Windows install.
 
 ### What CI checks
 
@@ -436,7 +444,7 @@ npm test
 
 Confirm that TorBox or Jellyfin is connected: open the control centre, **Media servers**, and check
 that the TorBox card says **Connected** (reconnect if the token was revoked; a rejected token
-disconnects it and tells you) or that Jellyfin's **Test connection** succeeds. Sonarr, Radarr and
+disconnects it and tells you) or that the Jellyfin card is switched on and its **Test connection** succeeds. Sonarr, Radarr and
 qBittorrent are not playback sources.
 
 If a title plays but not from where you expected, check **Control centre → Playback → Where to play
@@ -504,8 +512,9 @@ Use the full base URL, including `http://` or `https://` and a non-default port 
   from TorBox also queries the Torrentio (`torrentio.strem.fun`) and Comet
   (`cometfortheweebs.midnightignite.me`) add-ons for releases; neither is configurable. Every
   other host is one you connected yourself.
-- The [security review playbook](docs/SECURITY_REVIEW.md) describes the trust model, the checks
-  applied to IPC and the HTTP proxy, and known limitations.
+- The [security review playbook](docs/SECURITY_REVIEW.md) lists the manual checks worth running
+  (renderer-to-main capability, the HTTP proxy, secrets, the packaged app, media processing) and
+  the automated checks still to add.
 - Report security issues privately to the maintainer rather than in a public issue.
 
 ## Known limitations
@@ -515,7 +524,10 @@ Found by the 2026-09-27 audit and tracked in [docs/AUDIT-2026-09-27.md](docs/AUD
 - A fully cached title still needs TorBox or Jellyfin connected before it will play.
 - Anime the r3-cache server has pre-fetched is not yet served from the LAN tier, because the
   feeder and the resolver build the cache key differently.
-- A watch mark made while a tracking service is unreachable is dropped rather than retried.
+- A watch mark made while a tracking service is unreachable is dropped rather than retried, and a
+  plan-to-watch push and a history push for the same title can land out of order.
+- When the usual episode sources fail, the Simkl episode fallback is expected to fail too (it omits
+  Simkl's client id), so a degraded title page shows no episodes. Not yet confirmed live.
 - The weather readout in the top bar is a placeholder, not live data.
 
 ## Contributing

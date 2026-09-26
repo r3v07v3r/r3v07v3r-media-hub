@@ -13,8 +13,9 @@ and **Ask to join**. There is no pairing code. The first device to claim
 the server becomes its administrator and approves everyone else from
 their own app, or lets anyone on the network join without asking.
 Everything the daemon stores expires on its own: an idle TTL (14 days,
-refreshed by playing), a hard maximum age nothing survives (30 days), a
-disk budget with LRU eviction, and a per-device allocation inside it.
+refreshed by playing), a hard maximum age (30 days, deferred only while someone
+is actually streaming the file), a disk budget with LRU eviction, and a
+per-device allocation inside it.
 
 ## Running it
 
@@ -27,7 +28,7 @@ npx tsx daemon/main.ts
 Deployment builds two shapes:
 
 ```
-npm run build:daemon        # -> dist-daemon/r3-cache.cjs (about 80 KB, needs Node >= 20)
+npm run build:daemon        # -> dist-daemon/r3-cache.cjs (a few hundred KB, needs Node >= 20)
 npm run build:daemon:sea    # -> + r3-cache-win-x64.exe / r3-cache-linux-x64
                             #      (self-contained, nothing to install)
 ```
@@ -38,32 +39,35 @@ page, stamped with the same version, so the app can judge compatibility
 from `/api/ping`, and the daemon's own self-updater (below) follows the
 same feed. For most people "install" is: download the executable for your
 OS from the latest release, run it once with `--install`, then join it
-from the app.
+from the app. On Windows the task first starts at your next logon, so run
+the executable once by hand (or sign out and back in) before joining.
 
 Data lives in `%LOCALAPPDATA%\r3-cache` (Windows) or
-`~/.local/share/r3-cache` (Linux); override with `R3_CACHE_DIR`. An
+`$XDG_DATA_HOME/r3-cache`, normally `~/.local/share/r3-cache` (Linux);
+override with `R3_CACHE_DIR`. An
 optional `r3-cache.json` in that directory overrides defaults; it is never
 required:
 
-| Key             | Default                                            |
-| --------------- | -------------------------------------------------- |
-| `port`          | `8945`                                             |
-| `diskBudgetGb`  | 80% of the free space at first start, capped at 50 |
-| `idleTtlDays`   | `14`                                               |
-| `hardMaxDays`   | `30`                                               |
-| `tombstoneDays` | `60` (how long an evicted title is not re-queued)  |
-| `serverName`    | the machine's hostname                             |
-| `updateChannel` | `"preview"` (or `"stable"`)                        |
-| `autoUpdate`    | `true`                                             |
+| Key             | Default                                                         |
+| --------------- | --------------------------------------------------------------- |
+| `port`          | `8945`                                                          |
+| `diskBudgetGb`  | 80% of the free space each time the daemon starts, capped at 50 |
+| `idleTtlDays`   | `14`                                                            |
+| `hardMaxDays`   | `30`                                                            |
+| `tombstoneDays` | `60` (how long an evicted title is not re-queued)               |
+| `serverName`    | the machine's hostname                                          |
+| `updateChannel` | `"preview"` (or `"stable"`)                                     |
+| `autoUpdate`    | `true`                                                          |
 
 Environment variables: `R3_CACHE_DIR` (the data directory), `R3_CACHE_NO_MDNS=1`
 (do not announce over mDNS), `R3_CACHE_UPDATE_FEED` (a different release feed,
 for testing the updater), and `XDG_DATA_HOME`, honoured for the default data
 directory on Linux.
 
-Command-line flags: `--install`, `--uninstall`, `--claim-admin` (lets the
-next device to claim the server through, even though one already has: the
-recovery for a lost administrator device) and `--version`.
+Command-line flags: `--install`, `--uninstall`, `--claim-admin` (stop the
+daemon, run this, then start it again: the next device to claim the server
+is then let through even though one already has, which is the recovery for
+a lost administrator device) and `--version`.
 
 ### Linux, as a service
 
@@ -85,7 +89,8 @@ server from the app it also logs an UNCLAIMED reminder every five minutes.
 ### Windows, at login
 
 Prefer `r3-cache --install`. It registers a per-user logon Scheduled Task
-(no admin rights) and then adds a restart interval (`/RI 1 /DU 9999:59`) so
+(intended to need no admin rights; if `schtasks` answers "Access is
+denied", run it once from an elevated prompt) and then adds a restart interval (`/RI 1 /DU 9999:59`) so
 a daemon that stops comes back on its own and the launcher's rollback can
 do its job. `ONLOGON` alone starts it once and never again, which is why a
 hand-written `schtasks /Create ... /SC ONLOGON` is not enough on its own.
@@ -94,30 +99,38 @@ The console window shows the same banner as above.
 ## Who may use what
 
 - **Joining.** A device asks to join from the app; the request waits until
-  the administrator approves it, unless open join is switched on. There is
+  the administrator approves it, unless open join is switched on or the
+  server has no administrator yet (then every request is let in, since any
+  device could claim the server anyway). There is
   nothing to type on either side. Asking is unauthenticated, so requests
   are throttled and the pending list is capped.
 - **The administrator.** The first device to claim the server. From
-  **Control centre → Caching** they approve, deny or revoke devices, set
+  **Control centre → Caching** they **Approve** or **Deny** devices that
+  ask, **Remove** approved ones, set
   each device's disk allocation and the default allocation for new ones
   (a percentage of the budget), turn open join on or off, and can ask the
   daemon to check for an update now.
 - **Private by default.** What one device fetches is visible only to that
-  device until it shares the title with everyone or with named devices,
-  from **What you have cached** in the same section. A second device that
-  asks for the same title is added to the existing copy's entitled list
-  rather than triggering a second download. `GET /api/catalog` requires a
-  `keys` filter and only returns what the caller is entitled to;
-  `/stream/{infoHash}` applies the same check.
-- **Jobs are scoped, not annotated.** Each device sees its own queue and a
-  count of everyone else's; the administrator sees them all.
+  device until it shares the title with everyone, using the switch in
+  **What you have cached** in the same section (the daemon's sharing API can
+  also name individual devices; the app does not offer that yet). A second
+  device that asks for the same release (the same torrent) once it is fully
+  cached is added to that copy's entitled list rather than triggering a
+  second download. `GET /api/catalog` requires a `keys` filter and only
+  lists cached items the caller is entitled to (in-flight and tombstone
+  state are still reported for any key named); `/stream/{infoHash}` applies
+  the same entitlement check.
+- **Jobs are scoped.** Each device sees its own queue and a count of
+  everyone else's; the administrator sees the whole queue with each job's
+  device name.
 - **Everyone pays for their own downloads.** Each person shares their own
   TorBox key from the app, kept in one `0600` `credentials.json` in the
   daemon's data directory, keyed by device (file permissions, not an OS
   keychain). A fetch is always made with the account of whoever asked for
   that title; the daemon never bills one household member for another's
-  watchlist. A job whose owner has not shared a key waits, and is adopted
-  if someone who has shared one wants the same title. Unpairing revokes
+  watchlist. A job whose owner has not shared a key waits; if anyone else
+  asks for the same title while it is still queued, the job becomes theirs
+  and is fetched with their key. Unpairing revokes
   only your own key.
 
 The design is written up in [docs/CACHE-PERMISSIONS.md](../docs/CACHE-PERMISSIONS.md).
@@ -127,12 +140,14 @@ The design is written up in [docs/CACHE-PERMISSIONS.md](../docs/CACHE-PERMISSION
 - **A household catalog.** The daemon crawls the title catalog (Cinemeta
   for movies and series, Kitsu for anime) once every six hours and serves
   it at `GET /api/titles`, paged by a change-sequence watermark, so paired
-  devices sync the catalog from this box instead of each crawling it.
+  devices get the full-depth catalog from this box instead of each crawling
+  it to depth (the short trending crawl still runs locally).
 - **One relay connection per room.** When paired devices have Rooms open,
   the daemon holds a single upstream connection to the
   [R3 Party Sync](../party-sync-worker/README.md) relay per room and fans
   the traffic out locally (`roomsHop.ts`). It relays ciphertext only and
-  never holds anyone's room credential.
+  never sees the room's encryption key; a room's join secret passes through
+  it for a stranger's first admission but admits nobody by itself.
 
 ## Auto-start, self-updating, rollback
 
@@ -140,7 +155,8 @@ The design is written up in [docs/CACHE-PERMISSIONS.md](../docs/CACHE-PERMISSION
 this nobody goes back to it. Windows: a per-user logon Scheduled Task.
 Linux: a systemd user unit, enabled, with linger. Everything else the
 daemon does, updates included, happens inside the user's own directories,
-so no elevation is requested again. `--uninstall` reverses it.
+so no elevation is requested again. `--uninstall` removes the task or
+unit (on Linux, linger stays on; `loginctl disable-linger` turns it off).
 
 Updates are fully unattended. The daemon polls the app's GitHub release
 feed (`updateChannel` in `r3-cache.json`, default `preview`), downloads
@@ -178,12 +194,14 @@ property nobody stated is a security property nobody can rely on:
   above.
 
 A launcher embedded in the executable makes bad updates self-healing: it
-records a tripwire before booting any version, and a version that fails
-to reach healthy twice is marked bad and never tried again. The daemon
-falls back to the previous good version, or ultimately to the payload
-compiled into the executable itself, which cannot be deleted. Rollback is
-automatic and needs nobody's attention; `autoUpdate: false` in
-`r3-cache.json` turns the whole mechanism off.
+records a tripwire before booting any version, and a version that twice
+fails to boot, or dies within ten minutes of reporting healthy, is marked
+bad and never tried again. The daemon falls back to the newest staged
+version not marked bad, or ultimately to the payload compiled into the
+executable itself, which cannot be deleted. Rollback is automatic and
+needs nobody's attention. `autoUpdate: false` in `r3-cache.json` stops
+the daemon checking for and staging updates; the launcher still boots
+whatever is already staged and still rolls back a bad one.
 
 ## Live verification
 
