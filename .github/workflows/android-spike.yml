@@ -1,0 +1,44 @@
+name: Android spike
+
+# Builds the throwaway device-measurement APK (android-spike/). Deliberately NOT
+# part of Verify: it gates nothing, ships nowhere, and goes away with the folder
+# once the TV plan's go/no-go questions are answered.
+on:
+  workflow_dispatch: {}
+  push:
+    paths:
+      - 'android-spike/**'
+      - '.github/workflows/android-spike.yml'
+
+concurrency:
+  group: android-spike-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  apk:
+    name: Build spike APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          distribution: temurin
+          java-version: 17
+      # No Gradle wrapper is checked in (its jar is a binary nobody can review),
+      # so the version is pinned here instead.
+      - uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
+        with:
+          gradle-version: '9.7.1'
+      - name: Build debug APK
+        run: gradle -p android-spike --no-daemon assembleDebug
+      - name: Name the artifact for what it is
+        run: cp android-spike/app/build/outputs/apk/debug/app-debug.apk r3-spike-debug.apk
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: r3-spike-debug
+          path: r3-spike-debug.apk
+          retention-days: 30
