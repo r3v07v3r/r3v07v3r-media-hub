@@ -20,6 +20,7 @@ import { registerAnimeStoryIpc } from '../media-hub/animeStory'
 import { registerCalendarIpc } from '../media-hub/calendar'
 import { registerCatalogIpc } from '../media-hub/catalog'
 import { registerLanCacheIpc } from '../media-hub/lanCache'
+import { registerDevicePairingIpc } from '../media-hub/devicePairing'
 import { publishTrustedMediaHosts } from './settings'
 import { registerDownloadGuardIpc } from '../media-hub/downloadGuard'
 import { registerMalIpc } from '../media-hub/malSync'
@@ -43,6 +44,7 @@ export function registerMediaHubIpc(): void {
   registerTorBoxIpc()
   registerCatalogIpc()
   registerLanCacheIpc(publishTrustedMediaHosts)
+  registerDevicePairingIpc()
   registerCalendarIpc()
   registerAnimeStoryIpc()
   registerTrackingIpc()

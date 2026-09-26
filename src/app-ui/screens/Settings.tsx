@@ -1,10 +1,15 @@
 import { useState, type FormEvent } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { api, useAsync } from '../lib/api'
 import Spinner from '../components/Spinner'
 import StatusNote from '../components/StatusNote'
+import LinkComputer from '../components/LinkComputer'
 import './Settings.css'
 
 export default function Settings() {
+  // Set when the app was opened from a scanned pairing code (#/pair?link=…).
+  const [params] = useSearchParams()
+  const pairLink = params.get('link') ?? ''
   const settings = useAsync(() => {
     const mediaHub = api()
     if (!mediaHub) return Promise.reject(new Error('Not connected to a backend.'))
@@ -70,6 +75,17 @@ export default function Settings() {
         )}
         {profiles.error && <StatusNote tone="error">Could not load the profile.</StatusNote>}
         {activeProfile && <p>{activeProfile.name}</p>}
+      </section>
+
+      <section className="settings-section">
+        <h2>Your computer</h2>
+        <LinkComputer
+          initialLink={pairLink}
+          onLinked={() => {
+            settings.reload()
+            profiles.reload()
+          }}
+        />
       </section>
 
       <section className="settings-section">

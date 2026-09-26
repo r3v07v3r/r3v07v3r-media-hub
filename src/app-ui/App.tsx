@@ -20,6 +20,8 @@ function Shell() {
           <Route path="/search" element={<Search />} />
           <Route path="/title/:kind/:id" element={<Title />} />
           <Route path="/settings" element={<Settings />} />
+          {/* Where a scanned pairing code lands: Settings, with the link filled in. */}
+          <Route path="/pair" element={<Settings />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </main>

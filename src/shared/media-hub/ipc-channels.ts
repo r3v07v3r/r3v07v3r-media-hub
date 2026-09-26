@@ -36,6 +36,12 @@ export const MEDIA_HUB_CHANNELS = {
   settingsSetCacheMode: 'mediahub:settings:set-cache-mode',
   /** The one-time storage question, answerable again from Settings. */
   settingsSetStoreMedia: 'mediahub:settings:set-store-media',
+  /** Linking a phone: the desktop shows a one-time code, the phone redeems
+   *  it. See main/media-hub/devicePairingCore.ts. */
+  devicePairingStart: 'mediahub:device-pairing:start',
+  devicePairingStatus: 'mediahub:device-pairing:status',
+  devicePairingCancel: 'mediahub:device-pairing:cancel',
+  devicePairingRedeem: 'mediahub:device-pairing:redeem',
   lanCacheDiscover: 'mediahub:lancache:discover',
   lanCachePair: 'mediahub:lancache:pair',
   lanCacheUnpair: 'mediahub:lancache:unpair',
