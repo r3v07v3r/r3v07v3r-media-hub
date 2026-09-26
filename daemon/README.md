@@ -56,6 +56,11 @@ required:
 | `updateChannel` | `"preview"` (or `"stable"`)                        |
 | `autoUpdate`    | `true`                                             |
 
+Environment variables: `R3_CACHE_DIR` (the data directory), `R3_CACHE_NO_MDNS=1`
+(do not announce over mDNS), `R3_CACHE_UPDATE_FEED` (a different release feed,
+for testing the updater), and `XDG_DATA_HOME`, honoured for the default data
+directory on Linux.
+
 Command-line flags: `--install`, `--uninstall`, `--claim-admin` (lets the
 next device to claim the server through, even though one already has: the
 recovery for a lost administrator device) and `--version`.

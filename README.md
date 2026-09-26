@@ -61,12 +61,13 @@ trending feed (either one alone fills the grid), anime from Kitsu. No key is req
   shelved by reason: a franchise continuation, a director or actor you follow, a genre match. After
   a film or anime, the next part of its series is offered first, and a rewatch counts. Your own
   ratings steer it: a genre you watch often but enjoy little stops leading.
-- **Cast and crew are clickable** and open what else of theirs the catalog holds. Typing a
-  director's name in search finds their films rather than films with their name in the title.
+- **Cast and crew are clickable** once a TMDB key is connected: names open what else of theirs
+  the catalog holds, and typing a director's name in search finds their films rather than films
+  with their name in the title.
 - **Moods.** A Browse-by-mood tray on Home, and a full mood page.
 - **Calendar.** Its own page: episodes of what you follow, a week back and six weeks ahead. Unaired
   anime episodes show their air date or TBA on the title page and cannot be played early.
-- **With a TMDB key** (optional): the age certificate for your region, richer cast and crew,
+- **With a TMDB key** (optional): the age certificate for your region, cast and crew,
   the rest of a film's collection, better similar-title lists, and per-season episode data for
   grouped anime. An anime's page lays out its franchise in story order (prequels, the main or full
   story, side stories, spin-offs, recaps, sequels). **With an OMDb key**: the Rotten Tomatoes score.
@@ -121,14 +122,15 @@ Playback is mpv, embedded inside the app's own window on Windows; there is no tr
 - **Skip the intro and the credits.** Anime uses Aniskip's community-submitted times; movies and
   series read the release's own chapter marks, so a mislabeled chapter is never trusted.
 - **Keep watching a series.** When an episode ends, the next one is offered on a post-play card and
-  starts after a short countdown. Turn it off with **Play the next episode** on the Settings page.
+  starts after a short countdown. If a stream stops well short of its runtime, a card says so and
+  offers Resume or Stop instead of marking the title watched. Turn it off with **Play the next episode** on the Settings page.
   Play on a series card starts the next episode you have not watched, not the first.
 - **Subtitles** come from the release's embedded tracks, or are searched automatically when SubDL
   or OpenSubtitles is connected. Both are searched together; SubDL rows come first because its
   downloads are unmetered, and OpenSubtitles can match by file hash for frame-accurate sync.
 - **Anime4K** (optional): install the shader pack once from **Control centre → General →
   Performance & Display**, then toggle it live with the player's button or <kbd>a</kbd>, and pick a
-  mode. The same card holds **Video scaling** (Standard or Sharp), the **Playback buffer** preset,
+  mode. The same card holds **Video scaling** (Standard, High or Sharp), the **Playback buffer** preset,
   and the switch for Home's live CPU, GPU, RAM and network gauges.
 - **A download guard** refuses files it judges unsafe from any playback path and shows a warning
   naming the file, where it came from, and the reason.
@@ -138,7 +140,9 @@ Playback is mpv, embedded inside the app's own window on Windows; there is no tr
 - **One status per title:** not watched, planned, or watched. A pill on a title's page, in the
   library side panel and on the Home hero cycles through the three; the right-click menu offers
   **Plan to watch** and **Mark watched** as separate items. Marking a whole series watched marks
-  every aired episode, and clearing it offers an undo. Lists are separate from status.
+  every aired episode, and clearing it offers an undo. On the episode list, **Mark season watched**
+  acts on a season's aired episodes, and <kbd>Ctrl</kbd>- or <kbd>Shift</kbd>-clicking episodes
+  selects several to mark at once. Lists are separate from status.
 - **Rate what you have seen** out of 10 on a title's page. Each profile keeps its own scores, and
   they steer recommendations. If Trakt is connected, scores are also sent to that account.
 - **My Stuff** has eight tabs: **Planned** (filterable by kind and by the service it came from,
@@ -239,6 +243,10 @@ Download the Windows installer (NSIS setup executable) from the
 `preview` publishes a **Preview** build; promoting one to **Stable** is a manual step, and the
 channel is yours to pick under **Control centre → Updates**.
 
+The installer is per-machine, so Windows asks for elevation, and the install folder is fixed. The
+app keeps its settings, database (`media-hub.sqlite`) and log (`logs/media-hub.log`) under
+`%APPDATA%\r3v07v3r-media-hub`; include that log in a bug report.
+
 macOS and Linux packages are configured in `electron-builder.yml` but are not published: the release
 workflow builds Windows only, and the bundled mpv player is fetched for Windows only. Building for
 another platform from source needs an mpv you supply through `MPV_PATH`, and macOS also needs Apple
@@ -332,6 +340,16 @@ cd r3v07v3r-media-hub
 npm install
 npm run dev
 ```
+
+### Environment variables
+
+The desktop app reads one: `MPV_PATH`, the path to an mpv binary, which is also the only way to
+get a player on macOS or Linux when running from source. The headless backend is configured
+entirely by environment: `R3_USER_DATA` (settings, database and logs; required), `R3_SITE_DIR`
+(the `build:web` output to serve; required), `R3_BRIDGE_PORT` (loopback port; the OS picks one
+if unset), `R3_MASTER_KEY` (32 bytes, base64, sealing stored credentials), `R3_LOCALE`,
+`R3_APP_VERSION`, and `R3_STOP_ON_STDIN_CLOSE=1` for a host that owns the process. The daemon's
+variables are in [daemon/README.md](daemon/README.md).
 
 ### Project commands
 
@@ -479,6 +497,13 @@ Use the full base URL, including `http://` or `https://` and a non-default port 
 
 - Keep API keys, account credentials, and party invitations private; never commit them.
 - Prefer HTTPS for remote service connections.
+- Know what the app talks to. Without any account it contacts Cinemeta (`v3-cinemeta.strem.io`),
+  Simkl's public feed (`data.simkl.in`), Kitsu (`kitsu.io`), AniList (`graphql.anilist.co`),
+  Aniskip (`api.aniskip.com`), YouTube's no-cookie domain for trailers, Cloudflare's speed-test
+  endpoint when you run the connection test, and GitHub for updates and the Anime4K pack. Playing
+  from TorBox also queries the Torrentio (`torrentio.strem.fun`) and Comet
+  (`cometfortheweebs.midnightignite.me`) add-ons for releases; neither is configurable. Every
+  other host is one you connected yourself.
 - The [security review playbook](docs/SECURITY_REVIEW.md) describes the trust model, the checks
   applied to IPC and the HTTP proxy, and known limitations.
 - Report security issues privately to the maintainer rather than in a public issue.
@@ -495,12 +520,14 @@ Found by the 2026-09-27 audit and tracked in [docs/AUDIT-2026-09-27.md](docs/AUD
 
 ## Contributing
 
-Issues and focused pull requests are welcome. Run the four CI commands above before submitting, keep
-credentials and generated build output out of commits, and let Prettier, ESLint and TypeScript keep
-the style consistent.
+Issues and focused pull requests are welcome. Pull requests target `preview`; every merge there
+publishes a Preview build, and Stable is promoted by hand. Run the four CI commands above before
+submitting, keep credentials and generated build output out of commits, and let Prettier, ESLint
+and TypeScript keep the style consistent.
 
 ---
 
 <div align="center">
-  Built with Electron, React, and TypeScript.
+  Built with Electron, React, and TypeScript. Playback is <a href="https://mpv.io">mpv</a> (GPL),
+  fetched at install time from shinchiro's Windows builds.
 </div>

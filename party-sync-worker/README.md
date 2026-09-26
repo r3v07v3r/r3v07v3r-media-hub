@@ -112,7 +112,9 @@ npx wrangler dev --var INVITE_KEY:some-test-key
 Runs the Worker locally with local Durable Object emulation so you can test
 `/host` and `/party/{roomId}` before deploying anything real. `/host` turns
 away any request whose `inviteKey` does not match `INVITE_KEY`, so a plain
-`npx wrangler dev` with no key answers 403 to everything.
+`npx wrangler dev` with no key refuses every `/host` call (a `.dev.vars`
+file with `INVITE_KEY=...` works too). The WebSocket route only needs a room
+that already exists.
 
 CI (`.github/workflows/verify.yml`) typechecks this folder, runs
 `npx wrangler deploy --dry-run`, and audits its production dependencies on
