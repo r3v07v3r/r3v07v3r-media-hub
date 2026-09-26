@@ -23,6 +23,8 @@ out
 .ai/screenshots/current/*.png
 .ai/screenshots/current/*.jpg
 preview-dist/
+dist-web/
+dist-headless/
 
 # Bundled mpv player — fetched by scripts/fetch-mpv.ts on postinstall rather
 # than committed like resources/ffmpeg-win, because mpv ships as one ~114MB
