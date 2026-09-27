@@ -7,7 +7,8 @@
 
 import type { StreamCandidate, StreamResolveResult } from '../../shared/media-hub/types'
 import type { LocalCacheCandidate } from './streamCache'
-import { resumeCandidateFor } from './core'
+import { resumeCandidateFor, type SourcePreference } from './core'
+import { RESOLUTION_STEPS } from '../../shared/media-hub/streamQuality'
 
 /** What stream:resolve says when a title is held nowhere near and there is
  *  no source to fetch it from. Thrown only after both cache tiers have
@@ -65,6 +66,55 @@ export function withinQualityCeiling(
   if (!ceiling) return true
   if (!resolution) return true
   return resolution <= ceiling
+}
+
+/**
+ * Whether a usable media-server copy ends the search on its own, without
+ * asking TorBox whether it has something better.
+ *
+ *  - prefer-local: always. The person put the file on their server so it
+ *    would be used.
+ *  - prefer-quality: never. That setting means "look at everything and pick
+ *    the best"; the local copy competes in the final ranking instead.
+ *  - balanced: only when no remote copy the person's limits allow could
+ *    outrank it. The ranking (rankStreams, balancedBonusWithdrawn in
+ *    core.ts) keeps a local copy ahead of any remote one up to twice its
+ *    resolution. So a local copy at most one step of RESOLUTION_STEPS below
+ *    the highest resolution allowed cannot be outclassed, and asking TorBox
+ *    would be a round-trip spent confirming what the ranking would say
+ *    anyway. Further down it could be: a local 720p under a 4K limit loses
+ *    to a remote 2160p, so the search carries on and the local copy takes
+ *    its place in the final ranking alongside what TorBox has.
+ *
+ *    The step ladder is deliberately stricter than the ranking: a local
+ *    1080p under a 4K limit is two steps down (1440 sits between), so the
+ *    search carries on even though the ranking would still choose it. The
+ *    cost is one TorBox round-trip; the other way round would be a better
+ *    copy never seen.
+ *
+ * `maxResolution` of 0 means no limit, which is 2160, the top of the ladder.
+ * A limit between steps is read as the step at or above it, so the
+ * threshold is never lower than the ranking allows.
+ *
+ * An unknown local resolution does NOT end the search on Balanced. A copy
+ * whose quality we cannot read may be the best there is or may be 480p, and
+ * ending the search on it could hide a better copy the person would want.
+ * Carrying on costs a round-trip, and the local copy still competes in the
+ * ranking, so nothing playable is lost either way.
+ */
+export function mediaServerCopyEndsSearch(
+  sourcePreference: SourcePreference,
+  localResolution: number | undefined,
+  maxResolution: number
+): boolean {
+  if (sourcePreference === 'prefer-local') return true
+  if (sourcePreference === 'prefer-quality') return false
+  if (!localResolution) return false
+  const top = RESOLUTION_STEPS[RESOLUTION_STEPS.length - 1]
+  const ceiling = maxResolution > 0 ? Math.min(maxResolution, top) : top
+  const ceilingStep = RESOLUTION_STEPS.findIndex((step) => step >= ceiling)
+  const threshold = RESOLUTION_STEPS[Math.max(0, ceilingStep - 1)]
+  return localResolution >= threshold
 }
 
 /**

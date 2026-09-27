@@ -313,7 +313,8 @@ const WRONG_LANGUAGE_PENALTY = 40000
  * episode, which is why a series played one episode in English and the
  * next in Japanese. Sized to sit above the whole resolution term (max 2160,
  * so audio language outranks a picture tier), below LOCAL_SOURCE_BONUS's
- * balanced 5000 (a local copy still wins under 'balanced'), below
+ * balanced 5000 (a local copy still wins under 'balanced' unless a remote
+ * one outclasses it), below
  * REMUX_PENALTY (a dual-audio remux still loses to a normal encode), and far
  * below the `cached` gate — an uncached correct-language release never
  * beats one that can be played right now.
@@ -441,11 +442,26 @@ interface RankOptions {
  *  - prefer-local: sized above WRONG_LANGUAGE_PENALTY's neighbours so the
  *    local copy wins essentially always. For the person on a slow link who
  *    put the file on the server precisely so it would be used.
- *  - balanced: 5000. Below the `cached` gate (20000), so a local copy
- *    never beats a "can actually be played right now" distinction, and
- *    above one resolution step (max 4320), so it wins ties and beats one
- *    tier down — a local 1080p is preferred to a remote 2160p, a local
- *    720p is not. Same sizing logic as REMUX_PENALTY above.
+ *  - balanced: 5000, unless a remote copy outclasses the local one — see
+ *    balancedBonusWithdrawn. Below the `cached` gate (20000), so a local
+ *    copy never beats a "can actually be played right now" distinction,
+ *    and above the language and same-group bonuses, so the local copy
+ *    wins ties. The rule it serves is "a local 1080p is preferred to a
+ *    remote 2160p, a local 720p is not".
+ *
+ *    A flat 5000 could not say that on its own. The resolution term is the
+ *    resolution itself (streamResolution, 2160 at most), so the widest gap
+ *    any two copies can have is 2160 — far below 5000, and a local 720p
+ *    beat a remote 2160p exactly as a local 1080p did. (This comment used
+ *    to size the bonus against "one resolution step (max 4320)", a step
+ *    the scoring never had.) Nobody noticed because resolve never ranked
+ *    the two against each other on Balanced: any usable local copy ended
+ *    the search before TorBox was asked. Shrinking the bonus to fit between
+ *    a 1080 and a 1440 gap would have fixed the resolution cases and
+ *    quietly let a remote copy's language or release-group bonus beat a
+ *    local copy at the same resolution, which the balanced setting has
+ *    always promised not to do. So the bonus stays, and is withdrawn when
+ *    it would be hiding a copy that is plainly better.
  *  - prefer-quality: 0. The local copy competes on pure merit and wins
  *    only an exact tie, which the `cached` term already decides its way.
  */
@@ -457,6 +473,52 @@ const LOCAL_SOURCE_BONUS: Record<SourcePreference, number> = {
   'prefer-quality': 0
 }
 
+/**
+ * How much sharper a remote copy must be before Balanced stops favouring
+ * the local one: MORE than this many times its resolution. 2160 against
+ * 1080 is exactly twice, so the local 1080p keeps its bonus; 2160 against
+ * 720 is three times, so the local 720p loses it. 1080 against 720 (1.5x)
+ * leaves the local copy ahead, as does 1440 against 720 (exactly 2x).
+ * A ratio rather than a fixed gap, because a gap large enough to keep the
+ * 1080p would also let a 480p hold off a 1440p.
+ */
+const BALANCED_OUTCLASS_RATIO = 2
+
+/**
+ * Whether Balanced withdraws its bonus from a media-server copy because a
+ * remote copy in the same list outclasses it.
+ *
+ * Outclassing takes two things at once. The remote copy must be more than
+ * BALANCED_OUTCLASS_RATIO times as sharp, and it must already beat the
+ * local copy on everything else the score weighs (`baseScores`, the score
+ * without the bonus). The second half is what keeps a copy that would lose
+ * anyway — uncached, the wrong language, a remote remux — from stripping
+ * the bonus and handing the win to some third copy the local one should
+ * have beaten: a remote 1080p must not win over a local 720p just because
+ * an uncached 2160p is also in the list.
+ *
+ * An unknown local resolution counts as 0, so any sharper remote copy that
+ * otherwise ties or beats it outclasses it: a copy whose quality we cannot
+ * read gets no benefit of the doubt over one we know is good.
+ *
+ * Without the bonus the local copy competes on merit, as it does on
+ * prefer-quality. Pure; see tests/streamSelection.test.ts.
+ */
+function balancedBonusWithdrawn(
+  local: StreamCandidate,
+  candidates: StreamCandidate[],
+  baseScores: Map<StreamCandidate, number>
+): boolean {
+  const localResolution = streamResolution(local)
+  const localBase = baseScores.get(local) ?? 0
+  return candidates.some(
+    (other) =>
+      other.source !== 'mediaserver' &&
+      streamResolution(other) > localResolution * BALANCED_OUTCLASS_RATIO &&
+      (baseScores.get(other) ?? 0) >= localBase
+  )
+}
+
 export function rankStreams(
   streams: StreamCandidate[],
   preferredLanguage = 'en',
@@ -465,11 +527,12 @@ export function rankStreams(
   options: RankOptions = {}
 ): StreamCandidate[] {
   const preferredGroup = options.preferredGroup ? String(options.preferredGroup) : null
-  const score = (s: StreamCandidate): number =>
+  // Everything but the local-source bonus, which on Balanced depends on
+  // what else is in the list — see balancedBonusWithdrawn.
+  const baseScore = (s: StreamCandidate): number =>
     (s.exact === false ? 0 : 100000) +
     (s.cached === false ? 0 : 20000) +
     (s.compatible === false ? -50000 : 10000) +
-    (s.source === 'mediaserver' ? LOCAL_SOURCE_BONUS[sourcePreference] : 0) +
     // A release that says it carries the wanted audio — dual audio, an
     // English dub, a server that reports the tracks — outranks one that
     // says nothing, which is how the same show stops alternating between
@@ -498,7 +561,23 @@ export function rankStreams(
       (!limits.maxSizeGb || size === null || size <= limits.maxSizeGb)
     )
   })
-  return [...withinLimits].sort((a, b) => score(b) - score(a))
+  // Scored once each rather than inside the comparator: the Balanced bonus
+  // looks across the whole list, and a list can hold hundreds of releases.
+  const baseScores = new Map(withinLimits.map((s) => [s, baseScore(s)]))
+  const scores = new Map(
+    withinLimits.map((s) => {
+      let bonus = s.source === 'mediaserver' ? LOCAL_SOURCE_BONUS[sourcePreference] : 0
+      if (
+        bonus &&
+        sourcePreference === 'balanced' &&
+        balancedBonusWithdrawn(s, withinLimits, baseScores)
+      ) {
+        bonus = 0
+      }
+      return [s, (baseScores.get(s) ?? 0) + bonus]
+    })
+  )
+  return [...withinLimits].sort((a, b) => (scores.get(b) ?? 0) - (scores.get(a) ?? 0))
 }
 
 /**

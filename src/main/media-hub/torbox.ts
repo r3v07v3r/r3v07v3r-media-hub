@@ -50,7 +50,11 @@ import {
   type TorBoxFile,
   guardedForPrefetch
 } from './core'
-import { NO_PLAYBACK_SOURCE_MESSAGE, answerFromCacheTiers } from './streamTierRules'
+import {
+  NO_PLAYBACK_SOURCE_MESSAGE,
+  answerFromCacheTiers,
+  mediaServerCopyEndsSearch
+} from './streamTierRules'
 import { sanitizeTrackers } from './security'
 import { isAllowedRemoteMediaUrl } from './playback'
 import { jellyfinFingerprint } from './jellyfin'
@@ -463,8 +467,11 @@ export function registerTorBoxIpc(): void {
       // which server is configured, so both join the key. Without them a
       // person who switches preference, or points at a different server,
       // keeps being served the previous answer for an hour.
+      // v4 -> v5: a Balanced answer used to be whatever the media server
+      // had; it can now be a TorBox copy that outclasses it, so a Balanced
+      // answer cached under v4 means something different.
       const key =
-        `stream:v4:${type}:${id}:${limits.maxResolution}:${limits.maxSizeGb}` +
+        `stream:v5:${type}:${id}:${limits.maxResolution}:${limits.maxSizeGb}` +
         `:${sourcePreference}:${jellyfinFingerprint(mediaServer)}:${lanCacheFingerprint()}`
       const db = getDatabase()
       const audioLanguage = preferences.audioLanguage || 'en'
@@ -559,21 +566,42 @@ export function registerTorBoxIpc(): void {
       const localLookup = findMediaServerCandidate(id, titles)
 
       // A local copy that already satisfies the person's quality ceiling
-      // ends the search here — no checkcached round-trip, no add-on calls,
-      // and no remembered-stream lookup. This is the slow-connection
+      // can end the search here — no checkcached round-trip, no add-on
+      // calls, and no remembered-stream lookup. This is the slow-connection
       // payoff: resolution drops from seconds to a single LAN request.
       //
-      // prefer-quality opts out by definition: that setting means "look at
-      // everything and pick the best", so short-circuiting on the first
-      // acceptable local copy would silently ignore a better remote one.
+      // Whether it does is mediaServerCopyEndsSearch's call: always on
+      // prefer-local, never on prefer-quality, and on Balanced only when no
+      // remote copy the limits allow could outrank it. Balanced used to end
+      // here on any usable local copy, which made it Media server under
+      // another name. With no TorBox token there is nothing else to ask, so
+      // a usable copy ends the search whatever that rule says.
+      //
+      // prefer-quality skips the block entirely, so the add-on calls below
+      // never queue behind the media server on that path.
+      //
+      // A Balanced copy that does not end the search is kept: it competes
+      // with what TorBox has further down, and it is still the answer if
+      // that search fails.
+      let deferredLocal: StreamCandidate[] = []
       if (sourcePreference !== 'prefer-quality') {
         const local = await localLookup
         const acceptable =
           local && rankSafeStreams([local], audioLanguage, limits, sourcePreference)
         if (acceptable?.length) {
-          const result: StreamResolveResult = { streams: acceptable, best: acceptable[0] }
-          db.putCache(key, result, 60 * 60 * 1000)
-          return result
+          if (
+            !auth ||
+            mediaServerCopyEndsSearch(
+              sourcePreference,
+              streamResolution(acceptable[0]),
+              limits.maxResolution
+            )
+          ) {
+            const result: StreamResolveResult = { streams: acceptable, best: acceptable[0] }
+            db.putCache(key, result, 60 * 60 * 1000)
+            return result
+          }
+          deferredLocal = acceptable
         }
       }
 
@@ -621,7 +649,23 @@ export function registerTorBoxIpc(): void {
                   : Object.keys(verified.data || {}).some((h) => h.toLowerCase() === rememberedHash)
               })()
           if (stillCached) {
-            const result: StreamResolveResult = { streams: [remembered], best: remembered }
+            // A Balanced local copy that did not end the search still
+            // competes with the remembered stream, as it would in the full
+            // search: a TorBox 1080p that played last time must not beat a
+            // local 720p the ranking prefers just because it was
+            // remembered. Empty on every other path, so nothing changes
+            // there.
+            const streams =
+              deferredLocal.length && remembered.source !== 'mediaserver'
+                ? rankSafeStreams(
+                    [remembered, ...deferredLocal],
+                    audioLanguage,
+                    limits,
+                    sourcePreference,
+                    { preferredGroup }
+                  )
+                : [remembered]
+            const result: StreamResolveResult = { streams, best: streams[0] }
             db.putCache(key, result, 60 * 60 * 1000)
             return result
           }
@@ -665,8 +709,8 @@ export function registerTorBoxIpc(): void {
         const local = await localLookup
         if (!discoveredRaw.length) {
           // The scrapers found nothing, but the server may still have it —
-          // this is the prefer-quality path, where the short-circuit above
-          // deliberately did not run.
+          // this is the prefer-quality path, or a Balanced one where the
+          // local copy did not end the search above.
           const localOnly = local
             ? rankSafeStreams([local], audioLanguage, limits, sourcePreference)
             : []
@@ -703,10 +747,11 @@ export function registerTorBoxIpc(): void {
             ? cached.data.map((x) => String(x.hash || x).toLowerCase())
             : Object.keys(cached.data || {}).map((x) => x.toLowerCase())
         )
-        // One ranking pass over both sources. On the prefer-quality path
-        // this is where the local copy finally competes; on the others it
-        // is a no-op, because an acceptable local copy already returned
-        // above.
+        // One ranking pass over both sources. On the prefer-quality path,
+        // and on a Balanced one where the local copy did not end the search
+        // above, this is where the local copy finally competes. On
+        // prefer-local it is a no-op, because an acceptable local copy
+        // already returned above.
         const streams = rankSafeStreams(
           [
             ...discovered
@@ -773,6 +818,11 @@ export function registerTorBoxIpc(): void {
         db.putCache(key, result, 3 * 60 * 1000)
         return result
       } catch (error) {
+        // A Balanced local copy held back from the short-circuit is still
+        // playable when TorBox or the add-ons fail, and it is what Balanced
+        // would have answered outright before. Not cached: the next resolve
+        // should search again.
+        if (deferredLocal.length) return { streams: deferredLocal, best: deferredLocal[0] }
         const stale = db.getCache<StreamResolveResult>(key, { allowExpired: true })
         if (stale) return withGroupMemo(stale)
         throw error

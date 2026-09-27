@@ -5,8 +5,10 @@ import {
   rankStreams,
   releaseGroup,
   streamSeeders,
-  titleMatchesRelease
+  titleMatchesRelease,
+  type SourcePreference
 } from '../src/main/media-hub/core'
+import { mediaServerCopyEndsSearch } from '../src/main/media-hub/streamTierRules'
 import { streamReleaseName } from '../src/shared/media-hub/streamQuality'
 import type { StreamCandidate } from '../src/shared/media-hub/types'
 
@@ -600,3 +602,165 @@ console.log('ok  fansub title guard')
   assert.equal(unlimited.length, 100, 'the batch is still capped')
 }
 console.log('ok  checkcached shortlist')
+
+// --- what "Balanced" means between a local and a remote copy ----------------
+// Both copies cached, compatible, exact and in the wanted language, no
+// release-group memo: only locality and resolution differ. The rule, from
+// LOCAL_SOURCE_BONUS in core.ts: the local copy wins ties and beats a
+// remote copy one tier better, but not more — "a local 1080p is preferred
+// to a remote 2160p, a local 720p is not".
+
+{
+  const serverCopy = (resolution: number): StreamCandidate => ({
+    source: 'mediaserver',
+    itemId: `jf-${resolution}`,
+    mediaSourceId: `ms-${resolution}`,
+    name: `Movie.2019.${resolution}p.WEB-DL.mkv`,
+    audioLanguages: ['eng'],
+    resolution,
+    cached: true,
+    compatible: true,
+    exact: true
+  })
+  const torboxCopy = (resolution: number): StreamCandidate => ({
+    infoHash: `remote${resolution}`,
+    name: `Movie 2019 ${resolution}p WEB-DL`,
+    audioLanguages: ['eng'],
+    cached: true,
+    compatible: true,
+    exact: true
+  })
+  // 'tie' when the winner is whichever copy was listed first — the scores
+  // are equal, which is what prefer-quality means at equal resolution.
+  const winner = (local: number, remote: number, preference: SourcePreference): string => {
+    const [remoteFirst, localFirst] = [
+      [torboxCopy(remote), serverCopy(local)],
+      [serverCopy(local), torboxCopy(remote)]
+    ].map((list) => rankStreams(list, 'en', {}, preference)[0].source)
+    if (remoteFirst !== localFirst) return 'tie'
+    return remoteFirst === 'mediaserver' ? 'local' : 'remote'
+  }
+
+  // [local, remote, balanced, prefer-local, prefer-quality]
+  const cases: [number, number, string, string, string][] = [
+    [1080, 2160, 'local', 'local', 'remote'],
+    [720, 2160, 'remote', 'local', 'remote'],
+    [720, 1080, 'local', 'local', 'remote'],
+    [1080, 1080, 'local', 'local', 'tie']
+  ]
+  for (const [local, remote, balanced, preferLocal, preferQuality] of cases) {
+    assert.equal(
+      winner(local, remote, 'balanced'),
+      balanced,
+      `balanced: local ${local} vs remote ${remote}`
+    )
+    assert.equal(
+      winner(local, remote, 'prefer-local'),
+      preferLocal,
+      `prefer-local: local ${local} vs remote ${remote}`
+    )
+    assert.equal(
+      winner(local, remote, 'prefer-quality'),
+      preferQuality,
+      `prefer-quality: local ${local} vs remote ${remote}`
+    )
+  }
+
+  // A copy that would lose anyway must not strip the local copy's bonus and
+  // hand the win to a third copy the local one should beat.
+  const uncached2160 = { ...torboxCopy(2160), infoHash: 'uncached2160', cached: false }
+  assert.equal(
+    rankStreams([uncached2160, torboxCopy(1080), serverCopy(720)], 'en', {}, 'balanced')[0].source,
+    'mediaserver',
+    'an uncached 2160p does not let a remote 1080p beat a local 720p'
+  )
+  // Outclassed, the local copy still competes on merit rather than
+  // dropping out: it stays ahead of anything it beats on its own.
+  assert.deepEqual(
+    rankStreams([torboxCopy(2160), serverCopy(720), uncached2160], 'en', {}, 'balanced').map(
+      (s) => s.infoHash ?? s.source
+    ),
+    ['remote2160', 'mediaserver', 'uncached2160'],
+    'an outclassed local copy keeps its place behind the one that outclassed it'
+  )
+  // Language still outranks locality and resolution alike.
+  const remote2160Silent = { ...torboxCopy(2160), audioLanguages: undefined }
+  assert.equal(
+    rankStreams([remote2160Silent, serverCopy(720)], 'en', {}, 'balanced')[0].source,
+    'mediaserver',
+    'a remote 2160p that does not declare the wanted audio does not outclass a local copy that does'
+  )
+}
+console.log('ok  balanced source preference')
+
+// --- does a media-server copy end the search? --------------------------------
+
+{
+  // [preference, maxResolution, localResolution, expected]
+  const cases: [SourcePreference, number, number | undefined, boolean][] = []
+  const ladders: [number, number, number, number][] = [
+    // limit, at, one step below, two steps below
+    [0, 2160, 1440, 1080],
+    [1080, 1080, 720, 480],
+    [2160, 2160, 1440, 1080]
+  ]
+  for (const [limit, at, oneBelow, twoBelow] of ladders) {
+    for (const local of [at, oneBelow, twoBelow, undefined]) {
+      cases.push(['prefer-local', limit, local, true])
+      cases.push(['prefer-quality', limit, local, false])
+    }
+    cases.push(['balanced', limit, at, true])
+    cases.push(['balanced', limit, oneBelow, true])
+    cases.push(['balanced', limit, twoBelow, false])
+    cases.push(['balanced', limit, undefined, false])
+  }
+  for (const [preference, limit, local, expected] of cases) {
+    assert.equal(
+      mediaServerCopyEndsSearch(preference, local, limit),
+      expected,
+      `${preference}, limit ${limit}, local ${local ?? 'unknown'}`
+    )
+  }
+  // A limit between steps reads as the step at or above it, so the
+  // threshold is never lower than the ranking allows.
+  assert.equal(mediaServerCopyEndsSearch('balanced', 720, 1000), true)
+  assert.equal(mediaServerCopyEndsSearch('balanced', 480, 1000), false)
+  assert.equal(
+    mediaServerCopyEndsSearch('balanced', 0, 2160),
+    false,
+    'a zero resolution is unknown'
+  )
+
+  // The rule never ends the search on a copy the ranking would let a remote
+  // copy within the limit outrank: at every limit, the lowest local
+  // resolution it accepts still beats the sharpest remote copy allowed.
+  for (const limit of [480, 720, 1080, 1440, 2160]) {
+    const accepted = [480, 720, 1080, 1440, 2160].filter(
+      (r) => r <= limit && mediaServerCopyEndsSearch('balanced', r, limit)
+    )
+    const lowest = Math.min(...accepted)
+    const local: StreamCandidate = {
+      source: 'mediaserver',
+      itemId: 'jf',
+      mediaSourceId: 'ms',
+      name: `Movie.${lowest}p.mkv`,
+      resolution: lowest,
+      cached: true,
+      compatible: true,
+      exact: true
+    }
+    const remote: StreamCandidate = {
+      infoHash: 'remote',
+      name: `Movie ${limit}p WEB-DL`,
+      cached: true,
+      compatible: true,
+      exact: true
+    }
+    assert.equal(
+      rankStreams([remote, local], 'en', { maxResolution: limit }, 'balanced')[0].source,
+      'mediaserver',
+      `limit ${limit}: an accepted local ${lowest}p is not outranked`
+    )
+  }
+}
+console.log('ok  media-server copy ends the search')
