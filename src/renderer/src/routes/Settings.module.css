@@ -40,36 +40,6 @@
   font-size: 13px;
 }
 
-.categoryNav {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 4px;
-  overflow-x: auto;
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-pill);
-  background: rgba(255, 255, 255, 0.035);
-}
-
-.categoryNav button {
-  padding: 7px 12px;
-  border-radius: var(--radius-pill);
-  color: var(--text-secondary);
-  font-size: 12px;
-  font-weight: 600;
-  white-space: nowrap;
-  transition:
-    color var(--transition-fast),
-    background var(--transition-fast);
-}
-
-.categoryNav button:hover,
-.categoryNav button:focus-visible {
-  color: var(--text-primary);
-  background: rgba(56, 193, 255, 0.12);
-  outline: none;
-}
-
 /* The settings canvas flows horizontally like a shelf. A category is a
    visual chapter rather than a rigid page-sized column; its cards pack into
    two rows and naturally use more horizontal space when the chapter has
@@ -204,10 +174,6 @@
     align-items: flex-start;
     flex-direction: column;
     gap: 14px;
-  }
-
-  .categoryNav {
-    max-width: 100%;
   }
 
   .settingsGroup {
@@ -860,9 +826,7 @@
 
 .embedded .tileArea {
   display: block;
-  /* Vertical scrolling, not horizontal. The category nav still works —
-     it scrollIntoViews the group ids, which is more useful down a column
-     than across a filmstrip. */
+  /* Vertical scrolling, not horizontal. */
   overflow-x: hidden;
   overflow-y: auto;
   scroll-snap-type: none;
@@ -959,18 +923,6 @@
    single group there is nothing for it to distinguish. */
 .embedded .groupHeader::after {
   content: none;
-}
-
-.embedded .pageHeader {
-  /* The category nav stays reachable while scrolling the face — it is the
-     only navigation this surface has now that it is one long column. */
-  position: sticky;
-  top: 0;
-  z-index: 2;
-  padding: 10px 2px;
-  margin: 0 0 6px;
-  backdrop-filter: blur(18px);
-  background: linear-gradient(180deg, rgba(3, 16, 11, 0.92), rgba(3, 16, 11, 0.55));
 }
 
 /* .wrap's left padding compensates for .main being widened leftward by 80%
