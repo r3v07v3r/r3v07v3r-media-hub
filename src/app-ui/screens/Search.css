@@ -1,0 +1,30 @@
+.search-form {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.search-form input {
+  flex: 1;
+}
+
+.search-tabs {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.search-tabs__item.is-active {
+  border-color: var(--border-active);
+  color: var(--text-primary);
+}
+
+.search-status {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0.75rem 0;
+}
+
+.search-status .status-note {
+  margin: 0;
+}

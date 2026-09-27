@@ -1,0 +1,37 @@
+/*
+ * Colour, radius and font tokens copied from
+ * src/renderer/src/styles/global.css (:root, lines ~14-57) so this app
+ * matches the desktop client's palette. Only the values this app actually
+ * uses are copied — the desktop's --blur-panel and --motion-* tokens are
+ * deliberately left out: this UI has no backdrop-filter and no ambient
+ * animation (see the task brief), so there is nothing here that would read
+ * them.
+ */
+:root {
+  --background: #02060d;
+  --panel: rgba(10, 17, 29, 0.68);
+  --panel-strong: rgba(12, 18, 30, 0.9);
+  --text-primary: #f4f6fb;
+  --text-secondary: #a9b0bf;
+  --text-muted: #6f7889;
+
+  --accent-blue: #18a9ff;
+  --accent-green: #27e69a;
+  --accent-orange: #ff7a28;
+
+  --border-subtle: rgba(160, 190, 230, 0.18);
+  --border-active: rgba(94, 193, 255, 0.62);
+
+  --radius-small: 12px;
+  --radius-medium: 20px;
+  --radius-pill: 999px;
+
+  /* The desktop bundles @fontsource packages for these; this app doesn't
+     (see main.tsx's header comment on staying small), so the names fall
+     through to the same system-font stack the desktop falls back to
+     before its webfonts load. */
+  --font-body: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-display: 'Rajdhani', var(--font-body);
+
+  color-scheme: dark;
+}

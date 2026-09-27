@@ -4,6 +4,7 @@ import { Icon } from '@renderer/components/icons/Icon'
 import { useAsyncAction } from '@renderer/hooks/useAsyncAction'
 import { AboutUpdateSection } from './AboutUpdateSection'
 import { LanCacheSection } from './LanCacheSection'
+import { DevicePairingSection } from './DevicePairingSection'
 import { MediaServicesSection } from './MediaServicesSection'
 import {
   TorBoxSection,
@@ -1948,6 +1949,7 @@ export default function SettingsPage({
               {!embedded && <LanCacheSection />}
               <MediaServicesSection />
               <TorBoxSection />
+              <DevicePairingSection />
             </div>
           </section>
         )}

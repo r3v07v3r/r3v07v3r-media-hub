@@ -1,0 +1,101 @@
+/* The player screen draws only controls: the video is the Android app's
+   libmpv, UNDER the page. `video-under` (set on <html> while this screen is
+   up) makes every layer between the two transparent, and puts the app's
+   navigation away. */
+html.video-under,
+html.video-under body,
+html.video-under #root,
+html.video-under .app-shell,
+html.video-under .app-content {
+  background: transparent !important;
+}
+
+html.video-under .nav-chrome {
+  display: none;
+}
+
+.player-screen {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  color: #fff;
+  transition: opacity 250ms ease;
+}
+
+/* Faded, not removed: a touch anywhere (or any key) brings them back. */
+.player-screen--idle .player-screen__top,
+.player-screen--idle .player-screen__bottom {
+  opacity: 0;
+}
+
+.player-screen__top,
+.player-screen__bottom {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 1rem 1.25rem;
+  transition: opacity 250ms ease;
+}
+
+.player-screen__top {
+  flex-direction: row;
+  align-items: center;
+  background: linear-gradient(to bottom, rgb(0 0 0 / 70%), transparent);
+}
+
+.player-screen__bottom {
+  background: linear-gradient(to top, rgb(0 0 0 / 80%), transparent);
+}
+
+.player-screen__title {
+  overflow: hidden;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.player-screen__seek {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.player-screen__seek input {
+  flex: 1;
+  accent-color: var(--accent, #19d3da);
+}
+
+.player-screen__buttons {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+}
+
+.player-screen__buttons button,
+.player-screen__top button,
+.player-screen__buttons select {
+  min-height: 44px;
+  padding: 0 1rem;
+  border: 1px solid rgb(255 255 255 / 25%);
+  border-radius: 999px;
+  color: #fff;
+  background: rgb(0 0 0 / 45%);
+}
+
+.player-screen__play {
+  min-width: 64px;
+  font-size: 1.25rem;
+}
+
+.player-screen__buffering {
+  align-self: center;
+  padding: 0.5rem 1rem;
+  border-radius: 999px;
+  background: rgb(0 0 0 / 55%);
+}
