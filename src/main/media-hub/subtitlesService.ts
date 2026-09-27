@@ -23,6 +23,7 @@
 import { app } from 'electron'
 
 import { MEDIA_HUB_CHANNELS } from '../../shared/media-hub/ipc-channels'
+import { readLimitedResponseBytes } from '../../shared/media-hub/responseLimit'
 import type { ConnectResult, SubtitleResult, SubtitleSelection } from '../../shared/media-hub/types'
 import { fetchJson, type HttpError } from './httpClient'
 import { handle } from './ipcGuard'
@@ -110,6 +111,12 @@ async function osRequest<T = unknown>(pathname: string, options: RequestInit = {
   }
 }
 
+/** Caps a single subtitle file pulled from OpenSubtitles' download link. A
+ *  feature-length SRT is around 100 KB and even a heavily typeset one stays
+ *  well under this; it bounds what a hostile or broken host can make the
+ *  main process buffer. */
+const MAX_SUBTITLE_FILE_BYTES = 8 * 1024 * 1024
+
 /** Downloads and returns the raw SRT text for an OpenSubtitles file id. Reached through downloadSubtitleText below, which is what playbackSession.ts's subtitles:apply handler calls. */
 async function osDownloadSubtitleText(fileId: number): Promise<string> {
   const result = await osRequest<{ link?: string }>('/download', {
@@ -120,7 +127,12 @@ async function osDownloadSubtitleText(fileId: number): Promise<string> {
   if (!result.link) throw new Error('OpenSubtitles did not return a download link.')
   const response = await fetch(result.link)
   if (!response.ok) throw new Error('Could not download the subtitle file.')
-  return response.text()
+  const body = await readLimitedResponseBytes(
+    response,
+    MAX_SUBTITLE_FILE_BYTES,
+    'The subtitle file is unexpectedly large.'
+  )
+  return new TextDecoder().decode(body)
 }
 
 // --- SubDL ----------------------------------------------------------------
@@ -178,20 +190,16 @@ async function subdlDownloadSubtitleText(downloadPath: string): Promise<string> 
   const response = await fetch(url)
   if (!response.ok) throw new Error('Could not download the subtitle file.')
 
-  // Checked BEFORE reading the body, not after: buffering the whole
-  // response first and then measuring it would be a guard that has already
-  // let the thing it guards against happen. The post-read check stays as
-  // the backstop for a response that under-reports (or omits) its length.
-  const declared = Number(response.headers.get('content-length'))
-  if (Number.isFinite(declared) && declared > MAX_SUBDL_ARCHIVE_BYTES) {
-    throw new Error('The subtitle archive is unexpectedly large.')
-  }
-
-  const archive = Buffer.from(await response.arrayBuffer())
-  if (archive.byteLength > MAX_SUBDL_ARCHIVE_BYTES) {
-    throw new Error('The subtitle archive is unexpectedly large.')
-  }
-  return readSrtFromZip(archive)
+  // Capped while streaming, not after: buffering the whole response first
+  // and then measuring it would be a guard that has already let the thing
+  // it guards against happen. A declared length over the cap is refused
+  // before any of the body is read.
+  const archive = await readLimitedResponseBytes(
+    response,
+    MAX_SUBDL_ARCHIVE_BYTES,
+    'The subtitle archive is unexpectedly large.'
+  )
+  return readSrtFromZip(Buffer.from(archive.buffer, archive.byteOffset, archive.byteLength))
 }
 
 /**

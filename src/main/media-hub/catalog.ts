@@ -42,7 +42,13 @@ import { getDatabase } from './dbState'
 import { handle } from './ipcGuard'
 import { simklPublicRequest } from './simklClient'
 import { isValidCatalogKind } from './security'
-import { encrypt, readSettings, tmdbCredentials, writeSettings } from './settingsStore'
+import {
+  encrypt,
+  readSettings,
+  simklCredentials,
+  tmdbCredentials,
+  writeSettings
+} from './settingsStore'
 import {
   dedupeCatalog,
   disambiguateVideos,
@@ -832,17 +838,22 @@ async function resolveMetadata(
     } else {
       item = { ...source, videos: [] }
     }
-    if (type === 'series' && source?.simklId) {
+    // Simkl's episode endpoint refuses a request without the client id, so
+    // it goes through the same helper as every other public Simkl call. With
+    // no client id configured there is nothing to ask: the stand-in above
+    // stays as it is, with no request and nothing logged.
+    if (type === 'series' && source?.simklId && simklCredentials().clientId) {
       // Its own try: this runs INSIDE the primary source's failure path, and
       // a second failure here used to escape as a rejection of the whole
       // catalog:meta call — the page then had no item at all, when the
       // stand-in above (a title with everything but its episodes) was
       // already in hand and is the better answer.
       try {
-        const episodes = await fetchJson<RawApiPayload[]>(
-          `https://api.simkl.com/tv/episodes/${encodeURIComponent(String(source.simklId))}`,
+        const episodes = await simklPublicRequest<RawApiPayload[]>(
+          `/tv/episodes/${encodeURIComponent(String(source.simklId))}`,
+          priority,
           {},
-          { priority, label: 'episode list' }
+          'episode list'
         )
         item.videos = (episodes || []).map((x) => simklEpisode(x, resolvedId))
       } catch (error) {

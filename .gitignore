@@ -22,7 +22,6 @@ out
 .ai/reports/*.json
 .ai/screenshots/current/*.png
 .ai/screenshots/current/*.jpg
-preview-dist/
 dist-web/
 dist-headless/
 dist-app/
@@ -35,3 +34,4 @@ resources/mpv-win/
 dist-daemon/
 .ai/spike/
 resources/release-notes.txt
+.claude/settings.local.json

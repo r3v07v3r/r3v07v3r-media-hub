@@ -192,3 +192,15 @@ daemon applies, not encryption: anyone with shell access to the box reads everyt
 identity is a bearer token — whoever holds it is that device. And with open pairing, anyone who can
 reach the daemon can hold one, which is exactly why entitlement has to carry the weight the code
 used to. Say all of this in the UI where somebody might otherwise assume otherwise.
+
+## Known limits
+
+`GET /api/catalog?keys=…` scopes `items` to what the caller is entitled to, but `inFlight` and
+`tombstoned` still answer for any key the caller names, whoever queued it. A device can therefore
+learn that a title it names is being fetched right now or was recently expired, though not by whom.
+This is left open on purpose, because those two lists steer the app's feeder rather than just
+describe the cache: a feeder that stopped seeing a housemate's queued job would queue the same title
+again, and the job store's ownership healing would then hand that job to the second device; and
+tombstones record no owner at all, so hiding them would let every other device re-fetch a title the
+TTL just expired. Closing it needs a decision about who owns a shared in-flight fetch, not only a
+filter on the response.
