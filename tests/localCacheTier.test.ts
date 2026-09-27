@@ -124,6 +124,172 @@ async function resumeChecks(): Promise<void> {
   )
 }
 
+// --- the tiers that need no credentials answer before the source gate ------
+// stream:resolve once refused with "Connect TorBox or a media server" BEFORE
+// looking at this disk or the paired cache server, so a title held complete
+// could not play once the token was gone. The order lives in
+// answerFromCacheTiers now, and the stubs record which lookups were reached:
+// the order is the contract, not just the answer.
+async function sourceGateChecks(): Promise<void> {
+  const { answerFromCacheTiers, NO_PLAYBACK_SOURCE_MESSAGE } =
+    await import('../src/main/media-hub/streamTierRules')
+  type Lookups = Parameters<typeof answerFromCacheTiers>[2]
+  type LocalCopy = Awaited<ReturnType<Lookups['local']>>
+  type Answer = NonNullable<ReturnType<Lookups['recent']>>
+  type Candidate = Answer['streams'][number]
+
+  const token = 'a'.repeat(64)
+  const completeCopy: NonNullable<LocalCopy> = {
+    token,
+    complete: true,
+    cachedBytes: 4096,
+    totalBytes: 4096,
+    resolution: 1080,
+    title: 'Sintel'
+  }
+  const partialCopy: NonNullable<LocalCopy> = {
+    token,
+    complete: false,
+    cachedBytes: 1024,
+    totalBytes: 4096,
+    resolution: 1080,
+    sourceRef: { source: 'torbox', infoHash: 'abc123' },
+    title: 'Sintel'
+  }
+  const lanCopy: Candidate = {
+    source: 'lancache',
+    infoHash: 'f'.repeat(40),
+    name: 'Sintel',
+    resolution: 1080,
+    cached: true,
+    compatible: true,
+    exact: true
+  }
+  const torboxStream: Candidate = { source: 'torbox', infoHash: 'e'.repeat(40), name: 'Sintel' }
+  const torboxAnswer: Answer = { streams: [torboxStream], best: torboxStream }
+
+  const none = { torbox: false, mediaServer: false, lanCache: false }
+  const daemonOnly = { torbox: false, mediaServer: false, lanCache: true }
+  const torboxAndDaemon = { torbox: true, mediaServer: false, lanCache: true }
+
+  function stubs(given: {
+    local?: LocalCopy
+    recent?: Answer | null
+    lan?: Candidate | null
+    rankLan?: Lookups['rankLan']
+  }): { lookups: Lookups; called: { recent: boolean; lan: boolean } } {
+    const called = { recent: false, lan: false }
+    const lookups: Lookups = {
+      local: async () => given.local ?? null,
+      recent: () => {
+        called.recent = true
+        return given.recent ?? null
+      },
+      lan: async () => {
+        called.lan = true
+        return given.lan ?? null
+      },
+      rankLan: given.rankLan ?? ((candidate) => [candidate])
+    }
+    return { lookups, called }
+  }
+
+  // Offline replay — the case the old handler refused outright.
+  {
+    const { lookups } = stubs({ local: completeCopy })
+    const answer = await answerFromCacheTiers(none, 1080, lookups)
+    assert.equal(answer?.result.best?.source, 'localcache')
+    assert.equal(answer?.result.best?.cacheToken, token)
+    assert.equal(answer?.result.best?.complete, true)
+    assert.equal(answer?.remember, true, 'a complete local hit is remembered for the hour')
+  }
+
+  // Tier 1 stays ahead of the hour cache and the daemon.
+  {
+    const { lookups, called } = stubs({ local: completeCopy, recent: torboxAnswer, lan: lanCopy })
+    const answer = await answerFromCacheTiers(torboxAndDaemon, 1080, lookups)
+    assert.equal(answer?.result.best?.source, 'localcache')
+    assert.equal(answer?.remember, true)
+    assert.equal(called.recent, false, 'a copy on this disk never reads the hour cache')
+    assert.equal(called.lan, false, 'nor asks the daemon')
+  }
+
+  // A device paired with the daemon and nothing else.
+  {
+    const { lookups, called } = stubs({ recent: torboxAnswer, lan: lanCopy })
+    const answer = await answerFromCacheTiers(daemonOnly, 1080, lookups)
+    assert.equal(answer?.result.best?.source, 'lancache')
+    assert.equal(answer?.remember, true)
+    assert.equal(
+      called.recent,
+      false,
+      'with no network source, an answer cached before the disconnect is never served'
+    )
+  }
+
+  // The hour cache stays ahead of tier 2 for anyone with a network source.
+  {
+    const { lookups, called } = stubs({ recent: torboxAnswer, lan: lanCopy })
+    const answer = await answerFromCacheTiers(torboxAndDaemon, 1080, lookups)
+    assert.equal(answer?.result, torboxAnswer, 'the cached answer itself, not a copy')
+    assert.equal(answer?.remember, false, 'already in the cache it was read from')
+    assert.equal(called.lan, false)
+  }
+
+  // Held nowhere: the handler is told so, and says so.
+  {
+    const { lookups, called } = stubs({ lan: lanCopy })
+    assert.equal(await answerFromCacheTiers(none, 1080, lookups), null)
+    assert.equal(called.lan, false, 'an unpaired daemon is not asked')
+    assert.ok(NO_PLAYBACK_SOURCE_MESSAGE.length > 0)
+    assert.ok(NO_PLAYBACK_SOURCE_MESSAGE.includes('this computer'))
+    assert.ok(NO_PLAYBACK_SOURCE_MESSAGE.includes('TorBox'))
+  }
+
+  // The quality ceiling applies to both tiers, source or no source.
+  {
+    const sharp = stubs({ local: { ...completeCopy, resolution: 2160 } })
+    assert.equal(
+      await answerFromCacheTiers(none, 1080, sharp.lookups),
+      null,
+      'a 4K copy on disk is over a 1080p ceiling'
+    )
+    const sharpLan = stubs({ lan: { ...lanCopy, resolution: 2160 } })
+    assert.equal(
+      await answerFromCacheTiers(daemonOnly, 1080, sharpLan.lookups),
+      null,
+      'and so is a 4K copy on the daemon'
+    )
+    const unranked = stubs({ lan: lanCopy, rankLan: () => [] })
+    assert.equal(
+      await answerFromCacheTiers(daemonOnly, 1080, unranked.lookups),
+      null,
+      'a LAN copy the ranking refuses is not an answer'
+    )
+  }
+
+  // A partial copy resumes from the source it came from, or not at all.
+  {
+    const connected = stubs({ local: partialCopy, recent: torboxAnswer })
+    const answer = await answerFromCacheTiers(
+      { torbox: true, mediaServer: false, lanCache: false },
+      1080,
+      connected.lookups
+    )
+    assert.equal(answer?.result.best?.source, 'torbox')
+    assert.equal(answer?.result.best?.infoHash, 'abc123', 'the release the bytes came from')
+    assert.equal(answer?.remember, false, 'a download still in flight is never cached')
+    assert.equal(connected.called.recent, false)
+
+    const disconnected = stubs({ local: partialCopy })
+    assert.equal(
+      await answerFromCacheTiers(none, 1080, disconnected.lookups),
+      null,
+      'half a file and nowhere to fetch the rest from cannot play'
+    )
+  }
+}
+
 // --- what a cached copy records as its quality ----------------------------
 // The scrapers mostly leave StreamCandidate.resolution unset and put the
 // quality in the release text, so recording the raw field stored undefined
@@ -148,6 +314,7 @@ async function resolutionChecks(): Promise<void> {
 
 async function main(): Promise<void> {
   await resumeChecks()
+  await sourceGateChecks()
   await resolutionChecks()
   const { findLocalCacheCandidate } = await import('../src/main/media-hub/streamCache')
 

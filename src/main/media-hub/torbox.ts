@@ -40,7 +40,6 @@ import {
   cometConfigPath,
   rankSafeStreams,
   releaseGroup,
-  resumeCandidateFor,
   streamResolution,
   streamSizeGb,
   selectVideoFile,
@@ -51,6 +50,7 @@ import {
   type TorBoxFile,
   guardedForPrefetch
 } from './core'
+import { NO_PLAYBACK_SOURCE_MESSAGE, answerFromCacheTiers } from './streamTierRules'
 import { sanitizeTrackers } from './security'
 import { isAllowedRemoteMediaUrl } from './playback'
 import { jellyfinFingerprint } from './jellyfin'
@@ -184,42 +184,6 @@ function streamReleaseText(stream: StreamCandidate): string {
   // One rule, shared with the ranking's release-group comparison — see
   // streamReleaseName for why they must not drift apart.
   return streamReleaseName(stream)
-}
-
-/**
- * Whether a copy from a nearer tier is usable, given the person's ceiling.
- *
- * `maxResolution` is a MAXIMUM. The Settings row is "Maximum video quality —
- * avoid releases sharper than this display needs", and the speed test writes
- * it as `min(what the line can carry, what the screen can show)`. So the only
- * question a near tier has to answer is whether its copy is within it.
- *
- * THIS USED TO READ `resolution >= target`, treating the ceiling as a floor,
- * and the damage grew with the setting: at "4K" the local-cache tier could
- * only fire for a 2160p copy, so a 1080p file already on this disk was passed
- * over and re-downloaded from TorBox. At "1080p" a 720p copy on the LAN cache
- * was skipped the same way. Only "Any" behaved correctly, because 0 skips the
- * check — every explicit choice made it worse, which is the signature of an
- * inverted comparison rather than a tuning problem.
- *
- * The intent behind the old rule was real — do not settle for a poor copy
- * when something better exists — but it cannot be expressed with a ceiling,
- * and there is no separate "preferred quality" setting to express it with.
- * The trade is now made deliberately and told to the person instead of being
- * enforced silently: a copy already on this machine or on the LAN is played,
- * and `belowCeiling` on the result says when what they got is a full tier or
- * more below what they allowed, so the renderer can ask before playing it.
- *
- * An unknown resolution is accepted rather than discarded — refusing to play
- * a copy we hold because its metadata is thin would be worse than playing it.
- */
-function withinQualityCeiling(
-  resolution: number | undefined,
-  ceiling: number | undefined
-): boolean {
-  if (!ceiling) return true
-  if (!resolution) return true
-  return resolution <= ceiling
 }
 
 /** The cache-session identity for a resolve request, in exactly the shape
@@ -488,12 +452,6 @@ export function registerTorBoxIpc(): void {
       ])
       const auth = getTorBoxToken()
       const mediaServer = mediaServerConfig()
-      // Either source alone is a complete configuration. Only having
-      // neither is an error, and it names both so the message is
-      // actionable for whichever one the person meant to set up.
-      if (!auth && !mediaServer) {
-        throw new Error('Connect TorBox or a media server to start playback.')
-      }
       const preferences = readSettings()
       const limits = {
         maxResolution: Number(preferences.maxStreamResolution) || 0,
@@ -513,72 +471,6 @@ export function registerTorBoxIpc(): void {
       // see SAME_RELEASE_GROUP_BONUS in core.ts.
       const preferredGroup = getDatabase().getCache<string>(releaseGroupMemoKey(type, id)) ?? null
 
-      // Fast path 1: an identical resolve (same title/episode, same
-      // quality/size limits) already ran within the last hour. The answer
-      // was already being cached below — it just was never actually READ
-      // here, only ever pulled as a last-resort fallback when the fresh
-      // search below threw. That's the actual reason replaying or resuming
-      // something just watched re-ran the full two-addon search plus a
-      // TorBox checkcached call every single time, instead of reusing an
-      // answer that hadn't changed.
-      // TIER 1 — already on this machine.
-      //
-      // Ahead of the resolve cache above deliberately. That cache holds
-      // "which source to use" for an hour, so a title finished downloading
-      // five minutes ago would still route back through TorBox to mint a
-      // link and read a length, purely to end up adopting bytes already on
-      // this disk. Nothing that plays offline should need a round trip to
-      // learn that.
-      //
-      // Answered from the filesystem alone: no source contacted, no network
-      // touched. Two distinct outcomes, and the partial one is the reason
-      // sessions record where their bytes came from:
-      //
-      //  COMPLETE  play it straight from disk, offline.
-      //  PARTIAL   re-request THE SAME RELEASE from the source it was
-      //            originally pulled from, so the half we already hold is
-      //            resumed rather than abandoned. Handing back a candidate
-      //            for the original source (not a localcache one) is what
-      //            makes that work: play mints a link for that exact
-      //            release, and streamCache.start's own findReusableSession
-      //            then adopts the existing chunks, because the release
-      //            matching means its totalBytes check passes.
-      //
-      // Without this, a partial session was dead weight: the search below
-      // could return a different encode of the same title, whose length
-      // differs, so adoption was refused and the bytes already downloaded
-      // were re-downloaded from scratch.
-      //
-      // Subject to the quality target like every other tier: a cached 720p
-      // copy does not win when 1080p was asked for.
-      const cached = await findLocalCacheCandidate(cacheMetaFor(payload, title))
-      if (cached && withinQualityCeiling(cached.resolution, limits.maxResolution)) {
-        if (cached.complete) {
-          const candidate: StreamCandidate = {
-            source: 'localcache',
-            cacheToken: cached.token,
-            complete: true,
-            name: cached.title,
-            resolution: cached.resolution,
-            cached: true,
-            compatible: true,
-            exact: true
-          }
-          const result: StreamResolveResult = { streams: [candidate], best: candidate }
-          db.putCache(key, result, 60 * 60 * 1000)
-          return result
-        }
-
-        const resume = resumeCandidateFor(cached, Boolean(auth), Boolean(mediaServer))
-        if (resume) {
-          // Deliberately NOT cached under `key`: this is a resume of a
-          // download still in flight, and once it finishes the complete
-          // branch above should take over on the next play rather than a
-          // stale hour-old row sending us back to the source.
-          return { streams: [resume], best: resume }
-        }
-      }
-
       // The group memo is not part of the key, on purpose: it changes
       // whenever another episode of the show plays from a different group,
       // and keying on it would throw away a search that is still right. A
@@ -595,28 +487,52 @@ export function registerTorBoxIpc(): void {
         return reranked.length ? { ...result, streams: reranked, best: reranked[0] } : result
       }
 
-      const recent = db.getCache<StreamResolveResult>(key)
-      if (recent) return withGroupMemo(recent)
-
-      // TIER 2 — the on-site cache daemon. Same footing as the media
-      // server below: one LAN round-trip, quality-gated, best-effort. Only
-      // COMPLETE items produce a candidate (the daemon 404s partials on
-      // /stream), so a hit here is playable this second.
-      if (isLanCacheConnected()) {
-        const meta = cacheMetaFor(payload, title)
-        const lanKey = meta
-          ? `${String(meta.catalogId).trim().toLowerCase()}:${meta.seasonNumber ?? ''}:${meta.episodeNumber ?? ''}`
-          : ''
-        const lan = await findLanCacheCandidate(lanKey)
-        if (lan && withinQualityCeiling(lan.resolution, limits.maxResolution)) {
-          const ranked = rankSafeStreams([lan], audioLanguage, limits, sourcePreference)
-          if (ranked.length) {
-            const result: StreamResolveResult = { streams: ranked, best: ranked[0] }
-            db.putCache(key, result, 60 * 60 * 1000)
-            return result
-          }
+      // The tiers that need no credentials: this disk (tier 1), the
+      // hour-cached answer, the paired cache daemon (tier 2). Their order,
+      // and why each sits where it does, is answerFromCacheTiers' own —
+      // held in streamTierRules so tests can pin it.
+      const answer = await answerFromCacheTiers(
+        {
+          torbox: Boolean(auth),
+          mediaServer: Boolean(mediaServer),
+          lanCache: isLanCacheConnected()
+        },
+        limits.maxResolution,
+        {
+          local: () => findLocalCacheCandidate(cacheMetaFor(payload, title)),
+          // Fast path 1: an identical resolve (same title/episode, same
+          // quality/size limits) already ran within the last hour. The answer
+          // was already being cached below — it just was never actually READ
+          // here, only ever pulled as a last-resort fallback when the fresh
+          // search below threw. That's the actual reason replaying or resuming
+          // something just watched re-ran the full two-addon search plus a
+          // TorBox checkcached call every single time, instead of reusing an
+          // answer that hadn't changed.
+          recent: () => {
+            const recent = db.getCache<StreamResolveResult>(key)
+            return recent ? withGroupMemo(recent) : null
+          },
+          lan: () => {
+            const meta = cacheMetaFor(payload, title)
+            const lanKey = meta
+              ? `${String(meta.catalogId).trim().toLowerCase()}:${meta.seasonNumber ?? ''}:${meta.episodeNumber ?? ''}`
+              : ''
+            return findLanCacheCandidate(lanKey)
+          },
+          rankLan: (candidate) =>
+            rankSafeStreams([candidate], audioLanguage, limits, sourcePreference)
         }
+      )
+      if (answer) {
+        if (answer.remember) db.putCache(key, answer.result, 60 * 60 * 1000)
+        return answer.result
       }
+
+      // Both credential-free tiers have missed, so from here on a source
+      // is needed. Either alone is a complete configuration; only having
+      // neither is an error, and it names both so the message is
+      // actionable for whichever one the person meant to set up.
+      if (!auth && !mediaServer) throw new Error(NO_PLAYBACK_SOURCE_MESSAGE)
 
       // Asked BEFORE the remembered-stream path below, not after.
       //

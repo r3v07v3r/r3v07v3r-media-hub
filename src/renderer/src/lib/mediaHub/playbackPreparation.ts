@@ -76,5 +76,9 @@ export function playbackPreparationErrorMessage(error: unknown): string {
   if (error instanceof PlaybackPreparationTimeoutError) {
     return `${error.message} Check the connection and try again.`
   }
-  return error instanceof Error ? error.message : 'Playback failed to start.'
+  // A rejected invoke arrives prefixed with the channel name; the person
+  // gets the handler's own sentence.
+  return error instanceof Error
+    ? error.message.replace(/^Error invoking remote method '[^']+': Error: /, '')
+    : 'Playback failed to start.'
 }

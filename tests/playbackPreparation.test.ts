@@ -40,6 +40,17 @@ async function main(): Promise<void> {
     PlaybackPreparationCancelledError
   )
 
+  // A rejected invoke arrives prefixed with the channel name. The toast
+  // shows the handler's own sentence, not the plumbing around it.
+  assert.equal(
+    playbackPreparationErrorMessage(
+      new Error("Error invoking remote method 'mediahub:stream:resolve': Error: Connect it.")
+    ),
+    'Connect it.'
+  )
+  assert.equal(playbackPreparationErrorMessage(new Error('Plain.')), 'Plain.')
+  assert.equal(playbackPreparationErrorMessage('not an error'), 'Playback failed to start.')
+
   console.log('ok  playback preparation success, cancellation, and timeout')
 }
 
