@@ -1,9 +1,13 @@
 // The per-key serial queue behind the tracking handlers' detached remote
-// pushes (src/shared/media-hub/serialQueue.ts).
+// pushes (src/shared/media-hub/serialQueue.ts), and the one instance of it
+// the main process keeps per title (src/main/media-hub/titlePushQueue.ts).
 // Run with: npx tsx tests/serialQueue.test.ts
 
 import assert from 'node:assert/strict'
+import fs from 'node:fs'
+import path from 'node:path'
 
+import { titlePushQueue, titlePushKey } from '../src/main/media-hub/titlePushQueue'
 import { createKeyedSerialQueue } from '../src/shared/media-hub/serialQueue'
 
 let pass = 0
@@ -80,6 +84,62 @@ async function main(): Promise<void> {
     await second
     await tick()
     assert.equal(queue.size(), 0)
+  })
+
+  await check('titlePushKey is the id alone', () => {
+    const bare = titlePushKey({ id: 'tt1' })
+    // Callers disagree on `type` (undefined from the renderer, defaulted to
+    // 'movie' elsewhere), so it must not be part of the key.
+    assert.equal(titlePushKey({ id: 'tt1', type: 'movie' } as { id: string }), bare)
+    assert.equal(titlePushKey({ id: 'tt1', type: 'series' } as { id: string }), bare)
+    assert.notEqual(titlePushKey({ id: 'tt2' }), bare)
+  })
+
+  await check(
+    'a plan push waits for a history push already queued for the same title',
+    async () => {
+      const events: string[] = []
+      // The queue is a module singleton, so this id is used by no other check.
+      const history = titlePushQueue.run(
+        titlePushKey({ id: 'tt-order', type: 'series' } as { id: string }),
+        async () => {
+          events.push('history:start')
+          await tick()
+          await tick()
+          events.push('history:done')
+        }
+      )
+      const plan = titlePushQueue.run(
+        titlePushKey({ id: 'tt-order', type: 'movie' } as { id: string }),
+        async () => {
+          events.push('plan:start')
+        }
+      )
+      await Promise.all([history, plan])
+      assert.deepEqual(events, ['history:start', 'history:done', 'plan:start'])
+    }
+  )
+
+  await check('one per-title push queue in the main process', () => {
+    const root = path.resolve(__dirname, '..')
+    const dir = path.join(root, 'src', 'main')
+    const files = (fs.readdirSync(dir, { recursive: true }) as string[])
+      .filter((name) => name.endsWith('.ts'))
+      .map((name) => ({
+        // Windows returns backslashes; the assertion names a repo path.
+        file: path.relative(root, path.join(dir, name)).split(path.sep).join('/'),
+        text: fs.readFileSync(path.join(dir, name), 'utf8')
+      }))
+    // A second queue, or a hand-rolled chain, is a second order: pushes for
+    // one title on two chains do not wait on each other.
+    assert.deepEqual(
+      files.filter(({ text }) => text.includes('createKeyedSerialQueue()')).map(({ file }) => file),
+      ['src/main/media-hub/titlePushQueue.ts']
+    )
+    assert.deepEqual(
+      files.filter(({ text }) => text.includes('planChangeChains')).map(({ file }) => file),
+      []
+    )
   })
 
   console.log(`\n${pass} passed`)
