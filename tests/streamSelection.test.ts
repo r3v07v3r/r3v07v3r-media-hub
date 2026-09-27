@@ -699,21 +699,25 @@ console.log('ok  balanced source preference')
   // [preference, maxResolution, localResolution, expected]
   const cases: [SourcePreference, number, number | undefined, boolean][] = []
   const ladders: [number, number, number, number][] = [
-    // limit, at, one step below, two steps below
-    [0, 2160, 1440, 1080],
+    // limit, at the limit, half the limit (cannot be outclassed), below half
+    [0, 2160, 1080, 720],
     [1080, 1080, 720, 480],
-    [2160, 2160, 1440, 1080]
+    [2160, 2160, 1080, 720]
   ]
-  for (const [limit, at, oneBelow, twoBelow] of ladders) {
-    for (const local of [at, oneBelow, twoBelow, undefined]) {
+  for (const [limit, at, half, belowHalf] of ladders) {
+    for (const local of [at, half, belowHalf, undefined]) {
       cases.push(['prefer-local', limit, local, true])
       cases.push(['prefer-quality', limit, local, false])
     }
     cases.push(['balanced', limit, at, true])
-    cases.push(['balanced', limit, oneBelow, true])
-    cases.push(['balanced', limit, twoBelow, false])
+    cases.push(['balanced', limit, half, true])
+    cases.push(['balanced', limit, belowHalf, false])
     cases.push(['balanced', limit, undefined, false])
   }
+  // The common case the gate exists for: a 1080p library with no limit set
+  // plays from the server at once, and so does 1440p.
+  assert.equal(mediaServerCopyEndsSearch('balanced', 1080, 0), true)
+  assert.equal(mediaServerCopyEndsSearch('balanced', 1440, 0), true)
   for (const [preference, limit, local, expected] of cases) {
     assert.equal(
       mediaServerCopyEndsSearch(preference, local, limit),
@@ -721,8 +725,7 @@ console.log('ok  balanced source preference')
       `${preference}, limit ${limit}, local ${local ?? 'unknown'}`
     )
   }
-  // A limit between steps reads as the step at or above it, so the
-  // threshold is never lower than the ranking allows.
+  // A limit between the usual resolutions is taken as it is.
   assert.equal(mediaServerCopyEndsSearch('balanced', 720, 1000), true)
   assert.equal(mediaServerCopyEndsSearch('balanced', 480, 1000), false)
   assert.equal(

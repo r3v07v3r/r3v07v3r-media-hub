@@ -577,14 +577,17 @@ export function registerTorBoxIpc(): void {
       // another name. With no TorBox token there is nothing else to ask, so
       // a usable copy ends the search whatever that rule says.
       //
-      // prefer-quality skips the block entirely, so the add-on calls below
-      // never queue behind the media server on that path.
+      // prefer-quality with TorBox connected skips the block entirely, so
+      // the add-on calls below never queue behind the media server there.
       //
       // A Balanced copy that does not end the search is kept: it competes
       // with what TorBox has further down, and it is still the answer if
       // that search fails.
       let deferredLocal: StreamCandidate[] = []
-      if (sourcePreference !== 'prefer-quality') {
+      // Without a TorBox token the media server is the only source there is,
+      // so it is asked on Best quality too. It used to be skipped there, and
+      // a title the server held came back as "no sources".
+      if (sourcePreference !== 'prefer-quality' || !auth) {
         const local = await localLookup
         const acceptable =
           local && rankSafeStreams([local], audioLanguage, limits, sourcePreference)

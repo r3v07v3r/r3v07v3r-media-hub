@@ -482,7 +482,7 @@ const LOCAL_SOURCE_BONUS: Record<SourcePreference, number> = {
  * A ratio rather than a fixed gap, because a gap large enough to keep the
  * 1080p would also let a 480p hold off a 1440p.
  */
-const BALANCED_OUTCLASS_RATIO = 2
+export const BALANCED_OUTCLASS_RATIO = 2
 
 /**
  * Whether Balanced withdraws its bonus from a media-server copy because a
