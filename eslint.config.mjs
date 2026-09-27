@@ -48,8 +48,8 @@ export default defineConfig(
     }
   },
   {
-    // Plain-JS, run-with-node build/tooling scripts (TMDB art fetcher,
-    // preview post-processor) — never type-checked by tsc the way the
+    // Plain-JS, run-with-node build/tooling scripts (the daemon and
+    // headless bundlers) — never type-checked by tsc the way the
     // app source is, so the same "already checked elsewhere" rationale
     // above doesn't apply, but requiring hand-written return-type
     // annotations on ad-hoc utility scripts is equally not worth it.

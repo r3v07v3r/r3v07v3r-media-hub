@@ -100,9 +100,8 @@
   height: 100%;
 }
 .artImage {
-  /* Real TMDB stills now load (see build-preview.mjs's TMDB inlining
-     step) — a touch of extra contrast/saturation over the previous
-     near-neutral filter keeps the right-hand two-thirds of the frame
+  /* Real stills now load — a touch of extra contrast/saturation over the
+     previous near-neutral filter keeps the right-hand two-thirds of the frame
      reading as vivid cinematic key art rather than a slightly flat
      photo, per the brief's "retain strong detail and contrast on the
      right". */

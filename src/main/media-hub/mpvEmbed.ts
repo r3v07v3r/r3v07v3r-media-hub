@@ -5,8 +5,8 @@
 // "Intermediate D3D Window" that carries the web content, which is the failure
 // that un-embedded mpv in commit 0ae7dfb (audio, correct clock, no picture).
 // Raising mpv's child above that sibling is the missing move, proven by the
-// Phase-0 spike's OS-level screenshots (embedSpike.ts) — never by mpv property
-// reads.
+// Phase-0 spike's OS-level screenshots (the spike harness was deleted once
+// this shipped) — never by mpv property reads.
 //
 // Everything here is idempotent and cheap, and syncEmbeddedVideo() is
 // deliberately re-run on every event that can disturb the arrangement:
