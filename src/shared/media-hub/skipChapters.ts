@@ -26,12 +26,12 @@
 // Both gates have to pass. Either alone lets through exactly the kind of
 // mislabeled or unconventional chapter this exists to not act on.
 
-export interface ChapterMark {
+interface ChapterMark {
   title: string
   time: number
 }
 
-export interface ChapterSkipWindows {
+interface ChapterSkipWindows {
   intro?: { start: number; end: number }
   credits?: { start: number; end: number }
 }

@@ -61,7 +61,7 @@ const OOB_REDIRECT = 'urn:ietf:wg:oauth:2.0:oob'
  */
 const REFRESH_WINDOW_MS = 7 * 24 * 60 * 60 * 1000
 
-export interface TraktDeviceCode {
+interface TraktDeviceCode {
   deviceCode: string
   userCode: string
   verificationUrl: string
@@ -70,7 +70,7 @@ export interface TraktDeviceCode {
   expiresIn: number
 }
 
-export interface TraktStatus {
+interface TraktStatus {
   connected: boolean
   /** Whether both halves of the app credential are saved — the thing somebody
    *  has to do before sign-in is even offered. */
@@ -106,7 +106,7 @@ function storeTokens(payload: TokenResponse): void {
   writeSettings(settings)
 }
 
-export function clearTraktTokens(): void {
+function clearTraktTokens(): void {
   const settings = readSettings()
   settings.traktAccessToken = undefined
   settings.traktRefreshToken = undefined
@@ -115,7 +115,7 @@ export function clearTraktTokens(): void {
 }
 
 /** Starts a sign-in: returns the code the person types into trakt.tv. */
-export async function requestDeviceCode(): Promise<TraktDeviceCode> {
+async function requestDeviceCode(): Promise<TraktDeviceCode> {
   const { clientId } = traktCredentials()
   if (!clientId) throw new Error('Enter your Trakt client ID and secret first.')
   const payload = await fetchJson<{
@@ -142,7 +142,7 @@ export async function requestDeviceCode(): Promise<TraktDeviceCode> {
   }
 }
 
-export type TraktPollOutcome =
+type TraktPollOutcome =
   | { state: 'pending' }
   | { state: 'connected' }
   | { state: 'expired' }
@@ -158,7 +158,7 @@ export type TraktPollOutcome =
  * return, and turning that into an error would end a sign-in the moment it
  * started.
  */
-export async function pollDeviceToken(deviceCode: string): Promise<TraktPollOutcome> {
+async function pollDeviceToken(deviceCode: string): Promise<TraktPollOutcome> {
   const { clientId, clientSecret } = traktCredentials()
   if (!clientId || !clientSecret) return { state: 'error', message: 'Trakt is not configured.' }
 

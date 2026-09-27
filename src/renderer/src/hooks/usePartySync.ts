@@ -41,7 +41,7 @@ const SYNC_TIMEOUT_MS = 20_000
 const SYNC_PLAY_DELAY_MS = 1500
 const HOST_HEARTBEAT_MS = 5000
 
-export type PartySyncNotice = 'synced' | 'correcting' | 'delayed' | null
+type PartySyncNotice = 'synced' | 'correcting' | 'delayed' | null
 
 interface Options {
   timePos: number
@@ -53,7 +53,7 @@ interface Options {
   command: (command: PlayerCommand) => Promise<unknown>
 }
 
-export interface PartySync {
+interface PartySync {
   status: PartyStatusResult | null
   isHost: boolean
   /** In a party and NOT allowed to drive playback — the UI locks its controls. */

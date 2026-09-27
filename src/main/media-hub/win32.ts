@@ -13,20 +13,20 @@
 import type { BrowserWindow } from 'electron'
 import koffi from 'koffi'
 
-export const GW_HWNDNEXT = 2
-export const GW_CHILD = 5
+const GW_HWNDNEXT = 2
+const GW_CHILD = 5
 
-export const SW_HIDE = 0
-export const SW_SHOWNA = 8
+const SW_HIDE = 0
+const SW_SHOWNA = 8
 
-export const GWL_STYLE = -16
-export const GWL_EXSTYLE = -20
+const GWL_STYLE = -16
+const GWL_EXSTYLE = -20
 
 export const WS_DISABLED = 0x08000000n
 export const WS_CHILD = 0x40000000n
 export const WS_CLIPSIBLINGS = 0x04000000n
 
-export const HWND_TOP = 0n
+const HWND_TOP = 0n
 
 const SWP_NOSIZE = 0x0001
 const SWP_NOMOVE = 0x0002
@@ -109,7 +109,7 @@ export function isWindowAlive(hwnd: bigint): boolean {
   return u ? u.IsWindow(hwnd) : false
 }
 
-export function classNameOf(hwnd: bigint): string {
+function classNameOf(hwnd: bigint): string {
   const u = api()
   if (!u) return ''
   const buf = new Uint16Array(256)
@@ -117,7 +117,7 @@ export function classNameOf(hwnd: bigint): string {
   return len > 0 ? Buffer.from(buf.buffer, 0, len * 2).toString('utf16le') : ''
 }
 
-export function windowPidOf(hwnd: bigint): number {
+function windowPidOf(hwnd: bigint): number {
   const u = api()
   if (!u) return 0
   const pid = new Uint32Array(1)
@@ -125,7 +125,7 @@ export function windowPidOf(hwnd: bigint): number {
   return pid[0]
 }
 
-export function windowStyleOf(hwnd: bigint): { style: bigint; exStyle: bigint } {
+function windowStyleOf(hwnd: bigint): { style: bigint; exStyle: bigint } {
   const u = api()
   if (!u) return { style: 0n, exStyle: 0n }
   return {

@@ -10,7 +10,7 @@ import styles from './ContinueWatchingPanel.module.css'
 import { RatingBadge } from '@renderer/components/detail/RatingBadge'
 import { ratingSourceFor } from '@renderer/components/detail/ratingSource'
 
-export interface ContinueWatchingPanelProps {
+interface ContinueWatchingPanelProps {
   /** Restricts the row to one kind — used by the Movies/Series/Anime
    *  category pages so "Continue Watching" on the Movies page doesn't show
    *  an in-progress series. Home omits this (unchanged: every kind mixed

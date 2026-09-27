@@ -24,14 +24,14 @@ import { inflateZipEntry, readZipCentralDirectory } from './zipArchive'
 /** Public host serving the subtitle archives. Search results carry only a
  *  root-relative path (`/subtitle/<id>-<id>.zip`); this is the only host it
  *  is ever joined to — see resolveSubdlDownloadUrl's SSRF note. */
-export const SUBDL_DOWNLOAD_ORIGIN = 'https://dl.subdl.com'
+const SUBDL_DOWNLOAD_ORIGIN = 'https://dl.subdl.com'
 
 /**
  * Raw SubDL search result row. Loosely typed on purpose: this is untrusted
  * external API response data, same defensive stance as
  * OpenSubtitlesRawEntry. Field names follow SubDL's snake_case JSON.
  */
-export interface SubdlRawEntry {
+interface SubdlRawEntry {
   release_name?: unknown
   name?: unknown
   url?: unknown

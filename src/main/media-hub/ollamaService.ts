@@ -55,7 +55,7 @@ const PROBE_TIMEOUT_MS = 6000
  *  on. The UI shows a working state throughout. */
 const GENERATE_TIMEOUT_MS = 120000
 
-export type OllamaConfig = OllamaEndpoint
+type OllamaConfig = OllamaEndpoint
 
 /** The address + model + off-switch as actually written in the settings file, all re-normalized on read. Either string may be ''. */
 function savedConfig(): SavedOllamaConfig {

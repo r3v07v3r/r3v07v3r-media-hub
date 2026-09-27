@@ -762,7 +762,7 @@ export function restoreRooms(): void {
  * only actually reaches the network on the next announce, or immediately
  * in the rooms that share when the title itself changed.
  */
-export function setRoomsActivity(activity: RoomActivity | null): void {
+function setRoomsActivity(activity: RoomActivity | null): void {
   const changedTitle = (currentActivity?.mediaId || '') !== (activity?.mediaId || '')
   currentActivity = activity
   if (!changedTitle) return

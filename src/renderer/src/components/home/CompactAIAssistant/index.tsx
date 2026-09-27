@@ -4,7 +4,7 @@ import type { CategoryKind } from '@renderer/lib/mediaHub/categoryFilters'
 import { RecommendationActions } from './RecommendationActions'
 import styles from './CompactAIAssistant.module.css'
 
-export interface CompactAIAssistantProps {
+interface CompactAIAssistantProps {
   /** Passed straight through to RecommendationActions — see that
    *  component for why Home omits this (both movie+series buttons) while
    *  a category page passes its own single kind. */

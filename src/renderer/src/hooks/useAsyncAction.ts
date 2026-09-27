@@ -1,7 +1,7 @@
 import { useCallback } from 'react'
 import { useOverlayActions } from '@renderer/context/OverlayContext'
 
-export interface AsyncActionOptions<T> {
+interface AsyncActionOptions<T> {
   action: () => Promise<T>
   errorMessage: string
   successMessage?: string
@@ -10,7 +10,7 @@ export interface AsyncActionOptions<T> {
   retry?: boolean
 }
 
-export type AsyncActionResult<T> = { ok: true; value: T } | { ok: false }
+type AsyncActionResult<T> = { ok: true; value: T } | { ok: false }
 
 /**
  * Runs a user-triggered async operation with one consistent feedback policy.

@@ -91,7 +91,7 @@ function show(title: string, body: string): void {
  * the first time each profile is checked rather than only the first time the
  * setting is turned on.
  */
-export async function checkForNewEpisodes(now = new Date()): Promise<number> {
+async function checkForNewEpisodes(now = new Date()): Promise<number> {
   if (!notificationsEnabled()) return 0
 
   const db = getDatabase()

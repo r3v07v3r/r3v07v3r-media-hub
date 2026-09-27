@@ -131,7 +131,7 @@ export interface HideStateDefaults {
   hideDisliked: boolean
 }
 
-export const NO_HIDE_DEFAULTS: HideStateDefaults = {
+const NO_HIDE_DEFAULTS: HideStateDefaults = {
   hideWatched: false,
   hideCompleted: false,
   hideDisliked: false

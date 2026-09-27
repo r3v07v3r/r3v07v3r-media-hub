@@ -32,7 +32,7 @@ import {
   type ClientFrame
 } from '@shared/bridgeProtocol'
 
-export type BridgeState = 'connecting' | 'open' | 'reconnecting'
+type BridgeState = 'connecting' | 'open' | 'reconnecting'
 
 export interface WebTransport extends ApiTransport {
   state(): BridgeState

@@ -7,7 +7,7 @@ import {
   type ArtworkLoadState
 } from './artworkRetry'
 
-export interface ArtworkImageProps {
+interface ArtworkImageProps {
   /** Resolved artwork URL (poster/backdrop/thumbnail/logo). Pass through
    *  resolveArtwork() from src/lib/artwork — never read *Url fields off a
    *  MediaItem directly, so a future provider swap only touches that one

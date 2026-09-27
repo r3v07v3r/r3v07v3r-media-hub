@@ -65,8 +65,8 @@ export type UpdateChannel = 'stable' | 'preview'
  *  SEA executable: the bundle is what the launcher requires, it is ~60KB
  *  instead of ~88MB, and replacing a running executable on Windows is a
  *  fight this design simply never has to have. */
-export const UPDATE_ASSET = 'r3-cache.cjs'
-export const UPDATE_CHECKSUM_ASSET = 'r3-cache.cjs.sha256'
+const UPDATE_ASSET = 'r3-cache.cjs'
+const UPDATE_CHECKSUM_ASSET = 'r3-cache.cjs.sha256'
 
 /**
  * Picks the newest applicable release from a feed page.

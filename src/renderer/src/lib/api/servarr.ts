@@ -9,12 +9,12 @@ import { ClientResult, ConnectionTestResult, isConfigured, normalizeBaseUrl } fr
 // exists in this sandbox); shaped from the public Servarr API docs
 // (https://sonarr.tv/docs/api / https://radarr.video/docs/api).
 
-export interface ServarrSystemStatus {
+interface ServarrSystemStatus {
   version?: string
   appName?: string
 }
 
-export interface ServarrQueueItem {
+interface ServarrQueueItem {
   id: number
   title?: string
   series?: { title?: string }
@@ -91,7 +91,7 @@ function headers(config: ServiceConfig): Record<string, string> {
   return config.apiKey ? { 'X-Api-Key': config.apiKey } : {}
 }
 
-export function createServarrClient(kind: 'sonarr' | 'radarr') {
+function createServarrClient(kind: 'sonarr' | 'radarr') {
   const label = kind === 'sonarr' ? 'Sonarr' : 'Radarr'
 
   async function testConnection(config: ServiceConfig): Promise<ConnectionTestResult> {

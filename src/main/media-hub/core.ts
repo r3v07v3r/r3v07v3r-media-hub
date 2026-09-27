@@ -76,7 +76,7 @@ export function streamSizeGb(stream: StreamCandidate): number | null {
   return Number.isFinite(bytes) && bytes > 0 ? bytes / 1024 ** 3 : null
 }
 
-export interface StreamLimits {
+interface StreamLimits {
   maxResolution?: number
   maxSizeGb?: number
 }
@@ -225,7 +225,7 @@ function seederBonus(stream: StreamCandidate): number {
  * once submitted, the whole payload gets fetched into the person's
  * account whether this app ever plays a byte of it or not.
  */
-export function isUnsafeStream(stream: StreamCandidate): boolean {
+function isUnsafeStream(stream: StreamCandidate): boolean {
   return releaseTextMentionsExecutable(streamText(stream))
 }
 
@@ -265,7 +265,7 @@ export function rankSafeStreams(
 }
 
 /** How many hashes one TorBox checkcached call is given. */
-export const CHECKCACHED_BATCH = 100
+const CHECKCACHED_BATCH = 100
 
 /**
  * The hashes worth asking TorBox about, best first, at most
@@ -426,7 +426,7 @@ function lacksPreferredLanguage(stream: StreamCandidate, preferred: string): boo
   return releaseLacksPreferredLanguage(streamText(stream), preferred)
 }
 
-export interface RankOptions {
+interface RankOptions {
   /** The release group the previous episode of this show played from —
    *  see SAME_RELEASE_GROUP_BONUS. */
   preferredGroup?: string | null
@@ -883,7 +883,7 @@ const FRANCHISE_ANIME_ROLES = new Set([
 
 /** The relations the story panel shows, in the order it shows them: what
  *  comes before, what sits alongside, what comes after. */
-export const ANIME_STORY_ORDER: readonly AnimeStoryLink['relation'][] = [
+const ANIME_STORY_ORDER: readonly AnimeStoryLink['relation'][] = [
   'prequel',
   'parent_story',
   'full_story',
@@ -1014,14 +1014,14 @@ function readableTitle(value: string): string {
     .join(' ')
 }
 
-export interface ParsedReleaseName {
+interface ParsedReleaseName {
   title: string
   year: string
   season: number | null
   episode: number | null
 }
 
-export function parseReleaseName(value: string): ParsedReleaseName {
+function parseReleaseName(value: string): ParsedReleaseName {
   let name = String(value || '')
     .split(/[\\/]/)
     .pop()!

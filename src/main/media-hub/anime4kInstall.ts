@@ -33,9 +33,9 @@ import { setAnime4kInstalledProbe } from './preferences'
 /** Bump these three together when upgrading. The asset name has not tracked
  *  the tag upstream (v4.0.1 ships Anime4K_v4.0.zip), so it is pinned
  *  separately rather than derived. */
-export const ANIME4K_RELEASE_TAG = 'v4.0.1'
-export const ANIME4K_ASSET = 'Anime4K_v4.0.zip'
-export const ANIME4K_SHA256 = '139cd282086457c5adc79caf7b75b8b825091d71c9b54958c18745fea62d7ed7'
+const ANIME4K_RELEASE_TAG = 'v4.0.1'
+const ANIME4K_ASSET = 'Anime4K_v4.0.zip'
+const ANIME4K_SHA256 = '139cd282086457c5adc79caf7b75b8b825091d71c9b54958c18745fea62d7ed7'
 
 const ANIME4K_URL = `https://github.com/bloc97/Anime4K/releases/download/${ANIME4K_RELEASE_TAG}/${ANIME4K_ASSET}`
 
@@ -45,7 +45,7 @@ const MAX_ARCHIVE_BYTES = 4 * 1024 * 1024
 
 const STAMP_FILE = '.anime4k-version.json'
 
-export function anime4kDir(): string {
+function anime4kDir(): string {
   return path.join(app.getPath('userData'), 'anime4k')
 }
 

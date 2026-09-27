@@ -44,7 +44,7 @@ const WATERMARK_TTL_MS = 10 * 365 * 24 * 60 * 60 * 1000
 
 const KINDS: MediaKind[] = ['movie', 'series', 'anime']
 
-export interface TitleSyncReport {
+interface TitleSyncReport {
   /** Rows fetched, rows that passed validation, rows actually added. */
   fetched: number
   accepted: number

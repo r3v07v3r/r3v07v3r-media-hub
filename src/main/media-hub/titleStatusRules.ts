@@ -26,7 +26,7 @@ export interface EpisodeRef {
 }
 
 /** One season's episode numbers — the shape every whole-title push wants. */
-export interface SeasonEpisodes {
+interface SeasonEpisodes {
   season: number
   episodes: number[]
 }
@@ -77,7 +77,7 @@ export function bySeason(refs: readonly EpisodeRef[]): SeasonEpisodes[] {
 }
 
 /** What is true of the title now, read from the database by the caller. */
-export interface TitleState {
+interface TitleState {
   planned: boolean
   /** A film: whether its own row exists. A show: ignored. */
   movieWatched: boolean
@@ -85,7 +85,7 @@ export interface TitleState {
   watchedKeys: ReadonlySet<string>
 }
 
-export type TitleStatusStep =
+type TitleStatusStep =
   | { kind: 'track' }
   /** Only ever because the title was marked watched — see the file header. */
   | { kind: 'untrack' }

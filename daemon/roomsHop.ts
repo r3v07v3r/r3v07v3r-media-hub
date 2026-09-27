@@ -130,7 +130,7 @@ interface Upstream {
   pendingCarries: ((error: string | null) => void)[]
 }
 
-export interface RoomsHop {
+interface RoomsHop {
   /** Wire this to the http server's 'upgrade' event. Returns true when
    *  the request was for the hop (handled or refused). */
   handleUpgrade(req: http.IncomingMessage, socket: Duplex, head: Buffer): boolean

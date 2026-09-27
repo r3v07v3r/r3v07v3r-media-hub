@@ -145,7 +145,7 @@ export function listStagedVersions(dataDir: string): string[] {
  * whose tripwire shows attempts >= MAX_BOOT_ATTEMPTS is moved to `bad`
  * here — this is the rollback.
  */
-export interface PlanBootOptions {
+interface PlanBootOptions {
   now?: number
   /** The version compiled into the running executable, so a freshly
    *  installed newer build is not shadowed by an older staged one. */
@@ -222,13 +222,13 @@ export function markHealthyState(
 /** Staged versions older than the last few known-good are disk noise;
  *  called by the payload's updater after a successful boot. Never removes
  *  the running version or anything not strictly older than it. */
-export function pruneKeepList(staged: readonly string[], runningVersion: string): string[] {
+function pruneKeepList(staged: readonly string[], runningVersion: string): string[] {
   const keep = new Set(staged.slice(0, 3))
   keep.add(runningVersion)
   return staged.filter((version) => !keep.has(version))
 }
 
-export interface LauncherOptions {
+interface LauncherOptions {
   dataDir: string
   launcherVersion: string
   /** Test seam only — production always uses BOOT_RETRY_DELAY_MS. */

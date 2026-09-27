@@ -68,7 +68,7 @@ const TIER_BUDGET: Record<SchedulerPressure, Record<TaskPriority, number>> = {
   critical: { interactive: 4, visible: 2, background: 1, maintenance: 0 }
 }
 
-export interface LaneConfig {
+interface LaneConfig {
   /** Tasks from this lane allowed to run at once. */
   concurrency: number
   /** Minimum gap between two dispatches out of this lane. This is the
@@ -154,7 +154,7 @@ const STARVATION_MS = 60_000
  *  already waiting, instead of racing it for the remaining slots. */
 const YIELDING_RANK = PRIORITY_RANK.background
 
-export interface ScheduleOptions {
+interface ScheduleOptions {
   /** What this work is for. Drives the hierarchy — see TaskPriority. */
   priority?: TaskPriority
   /** Which upstream's budget this spends. Derive it from a URL with
@@ -624,7 +624,7 @@ export async function mapWithLimit<TIn, TOut>(
   return results
 }
 
-export interface SchedulerSnapshot {
+interface SchedulerSnapshot {
   pressure: SchedulerPressure
   running: { label: string; lane: string; priority: TaskPriority; startedAt: number }[]
   queued: number

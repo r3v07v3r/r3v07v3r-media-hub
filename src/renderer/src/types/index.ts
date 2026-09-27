@@ -183,7 +183,7 @@ export interface AppNotification {
   profileId?: string
 }
 
-export type MatchTier = 'excellent' | 'good' | 'fair' | 'low'
+type MatchTier = 'excellent' | 'good' | 'fair' | 'low'
 
 export function matchTier(pct: number | undefined): MatchTier {
   if (pct === undefined) return 'low'

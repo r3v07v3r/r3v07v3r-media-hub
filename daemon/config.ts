@@ -39,7 +39,7 @@ export interface DaemonConfig {
 }
 
 /** OS-appropriate default data root, overridable via R3_CACHE_DIR. */
-export function defaultDataDir(): string {
+function defaultDataDir(): string {
   const override = process.env.R3_CACHE_DIR
   if (override && override.trim()) return path.resolve(override.trim())
   if (process.platform === 'win32') {
@@ -50,7 +50,7 @@ export function defaultDataDir(): string {
   return path.join(base, 'r3-cache')
 }
 
-export const DEFAULTS = {
+const DEFAULTS = {
   port: 8945,
   idleTtlDays: 14,
   hardMaxDays: 30,

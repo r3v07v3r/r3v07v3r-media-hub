@@ -144,7 +144,7 @@ export interface CatalogItem {
  * story a summary condensed — which are exactly what somebody following a
  * franchise in order needs to be shown and used to be filtered out.
  */
-export type AnimeStoryRelation =
+type AnimeStoryRelation =
   'prequel' | 'parent_story' | 'full_story' | 'side_story' | 'spin_off' | 'summary' | 'sequel'
 
 export interface AnimeStoryLink {
@@ -1376,7 +1376,7 @@ export interface MalReconcileApplyResult {
  *  searched together and merged into one list (see subtitlesService.ts), so
  *  every result has to say where it came from — the download step differs
  *  per provider and cannot be inferred from the row's other fields. */
-export type SubtitleProvider = 'opensubtitles' | 'subdl'
+type SubtitleProvider = 'opensubtitles' | 'subdl'
 
 export interface SubtitleResult {
   id: string

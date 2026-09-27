@@ -539,7 +539,7 @@ export function traktAccountMark(): string {
     .slice(0, 16)
 }
 
-export function malAccountMark(): string {
+function malAccountMark(): string {
   const { accessToken } = malCredentials()
   if (!accessToken) return ''
   return crypto.createHash('sha256').update(`mal-account:${accessToken}`).digest('hex').slice(0, 16)

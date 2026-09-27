@@ -30,7 +30,7 @@ export interface Fetcher {
   stop(): Promise<void>
 }
 
-export interface FetcherDeps {
+interface FetcherDeps {
   jobs: JobStore
   storage: ItemStore
   credentials: Credentials

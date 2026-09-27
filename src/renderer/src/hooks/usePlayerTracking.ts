@@ -43,7 +43,7 @@ interface Options {
   onMarkWatched: () => void
 }
 
-export interface PlayerTracking {
+interface PlayerTracking {
   /** Resume position fetched for this title, or null once applied/absent. */
   resumeSeconds: number | null
   consumeResume: () => void

@@ -39,7 +39,7 @@ export function buildAuthorizeUrl(
  * a matched `kitsuId` (see computeReconciliation below, which accepts the
  * merged shape). Deliberately narrower than any single types.ts shape.
  */
-export interface MalListEntry {
+interface MalListEntry {
   malId: number
   title: string
   status: string
@@ -151,7 +151,7 @@ export function computeReconciliation(
 }
 
 /** The list a MAL entry sits on, as far as this app ever sets it. */
-export type MalListStatus = 'completed' | 'watching' | 'plan_to_watch'
+type MalListStatus = 'completed' | 'watching' | 'plan_to_watch'
 
 /**
  * One MAL entry told its new progress: the Kitsu id that names the entry

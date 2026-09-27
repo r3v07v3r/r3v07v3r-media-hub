@@ -46,7 +46,7 @@ import type { MediaKind } from '../../shared/media-hub/types'
 import type { TaskPriority } from './taskScheduler'
 
 /** Which services a title is planned on. The renderer tags cards with it. */
-export const PLANNED_SOURCES_CACHE_KEY = 'planned:sources'
+const PLANNED_SOURCES_CACHE_KEY = 'planned:sources'
 
 /** A day. The pull runs with the background watch sync, so this only has
  *  to outlive the gap between two of those — long enough that tags
@@ -56,7 +56,7 @@ const SOURCES_TTL_MS = 24 * 60 * 60 * 1000
 
 export type PlannedSource = 'simkl' | 'trakt' | 'mal'
 
-export interface PlannedEntry {
+interface PlannedEntry {
   /** IMDb id for film and series, `kitsu:<id>` for anime — the same
    *  identity the catalog and the tracked table use, or this would add
    *  duplicates of titles already on the list. */
@@ -68,7 +68,7 @@ export interface PlannedEntry {
 }
 
 /** Map of media id -> the services that have it planned. */
-export type PlannedSources = Record<string, PlannedSource[]>
+type PlannedSources = Record<string, PlannedSource[]>
 
 /**
  * What one service's pull actually did.
@@ -153,7 +153,7 @@ function writeOrigins(origins: PlannedOrigins): void {
 
 /** Whether the person has asked for changes here to reach the services.
  *  Off leaves the pull running and stops every write — see the doc. */
-export function twoWaySyncEnabled(): boolean {
+function twoWaySyncEnabled(): boolean {
   return readSettings().watchlistTwoWay !== false
 }
 

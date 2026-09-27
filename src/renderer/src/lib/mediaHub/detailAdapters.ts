@@ -25,7 +25,7 @@ export interface DetailAdapterConfig {
   isEpisodic: boolean
 }
 
-export const MOVIE_DETAIL_CONFIG: DetailAdapterConfig = {
+const MOVIE_DETAIL_CONFIG: DetailAdapterConfig = {
   kind: 'movie',
   path: 'movies',
   label: 'Movie',
@@ -33,7 +33,7 @@ export const MOVIE_DETAIL_CONFIG: DetailAdapterConfig = {
   isEpisodic: false
 }
 
-export const SERIES_DETAIL_CONFIG: DetailAdapterConfig = {
+const SERIES_DETAIL_CONFIG: DetailAdapterConfig = {
   kind: 'series',
   path: 'series',
   label: 'Series',
@@ -41,7 +41,7 @@ export const SERIES_DETAIL_CONFIG: DetailAdapterConfig = {
   isEpisodic: true
 }
 
-export const ANIME_DETAIL_CONFIG: DetailAdapterConfig = {
+const ANIME_DETAIL_CONFIG: DetailAdapterConfig = {
   kind: 'anime',
   path: 'anime',
   label: 'Anime',

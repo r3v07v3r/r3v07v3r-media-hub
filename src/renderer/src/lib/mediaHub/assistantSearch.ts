@@ -22,7 +22,7 @@ import { CLOSE_MATCH_RANK, mergeSearchResults, titleMatchRank } from '@shared/me
 const KINDS: MediaKind[] = ['movie', 'series', 'anime']
 
 /** How many search hits the panel shows. Enough to cover a remake or a franchise, few enough to stay one glance. */
-export const MAX_ASSISTANT_RESULTS = 6
+const MAX_ASSISTANT_RESULTS = 6
 
 /** How many past titles the model is told about. Same reasoning as MAX_PROMPT_TITLES — prompt length is what a local model's answer time is made of. */
 const MAX_WATCHED_CONTEXT = 20
