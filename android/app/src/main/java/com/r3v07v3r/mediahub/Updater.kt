@@ -4,9 +4,12 @@ import android.app.PendingIntent
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageInfo
 import android.content.pm.PackageInstaller
+import android.content.pm.PackageManager
 import android.os.Build
 import android.util.Log
+import android.widget.Toast
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -32,6 +35,14 @@ object Updater {
     private const val RELEASES = "https://api.github.com/repos/r3v07v3r/r3v07v3r-media-hub/releases?per_page=30"
     private const val ASSET = "r3-media-hub-android.apk"
     private const val ACTION_STATUS = "com.r3v07v3r.mediahub.INSTALL_STATUS"
+
+    /** Test builds were signed with the committed debug key; releases are
+     *  signed with a key kept out of the repository. Android will not put one
+     *  over the other, and only the person can remove the old build. */
+    private const val DIFFERENT_KEY = "This update is signed with a different key from the R3 Media Hub " +
+        "on this phone, so Android will not install it over this one. To move to it, uninstall " +
+        "R3 Media Hub once (this removes its settings and sign-ins from this phone), then install " +
+        "r3-media-hub-android.apk from the latest release."
 
     data class Release(val version: String, val code: Long, val url: String, val bytes: Long)
 
@@ -149,6 +160,7 @@ object Updater {
         @Suppress("DEPRECATION")
         val code = if (Build.VERSION.SDK_INT >= 28) archive.longVersionCode else archive.versionCode.toLong()
         if (code <= installedCode(context)) error("The download is not newer than this version.")
+        if (signedWithDifferentKey(context, file)) error(DIFFERENT_KEY)
 
         val installer = context.packageManager.packageInstaller
         val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL)
@@ -168,8 +180,45 @@ object Updater {
         }
     }
 
+    /** True only when both signers could be read and share no certificate
+     *  (a rotated key keeps the old one in its history, so it still counts as
+     *  the same). If either cannot be read, the install goes ahead and the
+     *  system's own check, reported by StatusReceiver, has the last word. */
+    @Suppress("DEPRECATION") // the Int-flag lookups; still the only ones below API 33
+    private fun signedWithDifferentKey(context: Context, file: File): Boolean {
+        return try {
+            val pm = context.packageManager
+            val (installed, download) = if (Build.VERSION.SDK_INT >= 28) {
+                val flags = PackageManager.GET_SIGNING_CERTIFICATES
+                signers(pm.getPackageInfo(context.packageName, flags)) to
+                    signers(pm.getPackageArchiveInfo(file.path, flags))
+            } else {
+                val flags = PackageManager.GET_SIGNATURES
+                oldSigners(pm.getPackageInfo(context.packageName, flags)) to
+                    oldSigners(pm.getPackageArchiveInfo(file.path, flags))
+            }
+            installed.isNotEmpty() && download.isNotEmpty() && installed.intersect(download).isEmpty()
+        } catch (error: Exception) {
+            Log.w(TAG, "could not compare signing keys", error)
+            false
+        }
+    }
+
+    @Suppress("DEPRECATION") // PackageInfo.signatures, the only record below API 28
+    private fun oldSigners(info: PackageInfo?): Set<String> =
+        info?.signatures?.map { it.toCharsString() }?.toSet().orEmpty()
+
+    private fun signers(info: PackageInfo?): Set<String> {
+        if (Build.VERSION.SDK_INT < 28) return emptySet()
+        val signing = info?.signingInfo ?: return emptySet()
+        val certificates = if (signing.hasMultipleSigners()) signing.apkContentsSigners else signing.signingCertificateHistory
+        return certificates?.map { it.toCharsString() }?.toSet().orEmpty()
+    }
+
     /** The installer reports here. "Pending user action" carries the system's
-     *  confirmation screen, which has to be started by us. */
+     *  confirmation screen, which has to be started by us. A refusal over the
+     *  signing key (normally caught before the download is handed over, see
+     *  signedWithDifferentKey) is told to the person, not just logged. */
     class StatusReceiver : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
             when (intent.getIntExtra(PackageInstaller.EXTRA_STATUS, PackageInstaller.STATUS_FAILURE)) {
@@ -179,6 +228,10 @@ object Updater {
                     context.startActivity(confirm.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
                 }
                 PackageInstaller.STATUS_SUCCESS -> Log.i(TAG, "update installed")
+                PackageInstaller.STATUS_FAILURE_CONFLICT -> {
+                    Log.w(TAG, "update not installed: ${intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE)}")
+                    Toast.makeText(context.applicationContext, DIFFERENT_KEY, Toast.LENGTH_LONG).show()
+                }
                 else -> Log.w(TAG, "update not installed: ${intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE)}")
             }
         }
