@@ -292,27 +292,7 @@ ul {
   }
 }
 
-/* Slow "breathing" — glow expansion + faint opacity/scale shift. Give
-   each instance a different --breathe-delay so panels don't pulse in
-   sync. */
-.breathing-glow {
-  animation: breathe var(--motion-breathe) var(--ease-organic) infinite;
-  animation-delay: var(--breathe-delay, 0s);
-}
-@keyframes breathe {
-  0%,
-  100% {
-    opacity: 0.55;
-    transform: scale(1);
-  }
-  50% {
-    opacity: 1;
-    transform: scale(1.03);
-  }
-}
-
-/* One diagonal light sweep on hover/active — used on cards and the
-   search field during processing. */
+/* One diagonal light sweep on hover — used on cards. */
 .light-sweep {
   position: relative;
   overflow: hidden;
@@ -332,8 +312,7 @@ ul {
   transform: translateX(-130%);
   transition: transform 750ms var(--ease-smooth);
 }
-.light-sweep:hover::after,
-.light-sweep.sweep-active::after {
+.light-sweep:hover::after {
   transform: translateX(130%);
 }
 

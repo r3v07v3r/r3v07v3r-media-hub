@@ -724,34 +724,6 @@
   display: block;
 }
 
-.calGridEntry {
-  display: block;
-  width: 100%;
-  appearance: none;
-  border: 0;
-  border-radius: var(--radius-small);
-  background: var(--panel);
-  color: var(--text-primary);
-  font: inherit;
-  font-size: 11px;
-  font-weight: 600;
-  text-align: left;
-  padding: 3px 6px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  cursor: pointer;
-}
-
-.calGridEntry:hover {
-  color: var(--accent-cyan);
-}
-
-.calGridEntry:focus-visible {
-  outline: 2px solid var(--accent-cyan);
-  outline-offset: 1px;
-}
-
 .calGridMore {
   align-self: flex-start;
   appearance: none;

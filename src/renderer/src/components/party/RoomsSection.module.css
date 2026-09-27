@@ -25,11 +25,6 @@
   color: var(--text-muted);
 }
 
-.connState {
-  font-size: 11px;
-  color: var(--text-secondary);
-}
-
 .dotOnline,
 .dotOffline {
   width: 6px;
@@ -199,14 +194,6 @@
 }
 .joinButton:hover:not(:disabled) {
   background: rgba(39, 230, 154, 0.24);
-}
-
-.footerRow {
-  display: flex;
-  gap: 8px;
-}
-.footerRow > * {
-  flex: 1 1 0;
 }
 
 /* The "join party or just watch too?" choice, shown in place of the

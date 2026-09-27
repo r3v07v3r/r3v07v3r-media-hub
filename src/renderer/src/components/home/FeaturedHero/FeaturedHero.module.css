@@ -347,30 +347,6 @@
   width: 16px;
   height: 16px;
 }
-.myList {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  padding: 13px 22px;
-  border-radius: var(--radius-pill);
-  background: rgba(10, 15, 25, 0.5);
-  border: 1px solid var(--border-subtle);
-  color: var(--text-primary);
-  font-weight: 500;
-  font-size: 14px;
-  min-height: 44px;
-  transition:
-    border-color var(--transition-fast),
-    background var(--transition-fast);
-}
-.myList:hover {
-  border-color: var(--border-active);
-  background: rgba(10, 15, 25, 0.75);
-}
-.myList svg {
-  width: 15px;
-  height: 15px;
-}
 
 /* ---------- Slide selector ---------- */
 .selectorWrap {
@@ -650,11 +626,6 @@
   .watchNow {
     padding: 10px 20px;
     font-size: 13.5px;
-    min-height: 40px;
-  }
-  .myList {
-    padding: 10px 18px;
-    font-size: 13px;
     min-height: 40px;
   }
   .selectorWrap {
