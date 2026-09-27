@@ -53,11 +53,15 @@ export async function simklRequest<T = unknown>(
   )
 }
 
-/** Client-ID-only Simkl request (search/lookup endpoints that don't require a connected account). */
+/**
+ * Client-ID-only Simkl request (search/lookup endpoints that don't require a
+ * connected account). `label` names the request in the scheduler's queue.
+ */
 export async function simklPublicRequest<T = unknown>(
   pathname: string,
   priority: TaskPriority = 'interactive',
-  options: RequestInit = {}
+  options: RequestInit = {},
+  label = 'Simkl'
 ): Promise<T> {
   const { clientId } = simklCredentials()
   // Title search no longer runs through here — it reads the index and
@@ -73,7 +77,7 @@ export async function simklPublicRequest<T = unknown>(
         ...options.headers
       }
     },
-    { priority, label: 'Simkl' }
+    { priority, label }
   )
 }
 
