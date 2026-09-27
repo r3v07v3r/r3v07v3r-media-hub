@@ -252,7 +252,7 @@ export function ServicesSection() {
                   return (
                     <li key={torrent.hash} className={`${styles.job} ${own.torrentRow}`}>
                       <span className={`${styles.jobTitle} ${own.torrentTitle}`}>
-                        <span className={styles.jobTitleText}>{torrent.name}</span>
+                        {torrent.name}
                       </span>
                       <span className={styles.jobState}>
                         {Math.round(torrent.progress * 100)}%
@@ -297,8 +297,8 @@ export function ServicesSection() {
                           type="button"
                           className={styles.ghostButton}
                           disabled={busy === torrent.hash}
-                          title="Remove from qBittorrent and delete the downloaded files too"
-                          aria-label="Remove from qBittorrent and delete the downloaded files too"
+                          title="Delete with files: remove from qBittorrent and delete the downloaded files too"
+                          aria-label="Delete with files: remove from qBittorrent and delete the downloaded files too"
                           onClick={() =>
                             void act(torrent.hash, () =>
                               deleteTorrent(settings[id], torrent.hash, true)
