@@ -739,9 +739,9 @@ export function createStreamCache({
   let aheadSeconds = DEFAULT_AHEAD_SECONDS
   // Bumped on every stop()/reposition — lets a superseded fill loop
   // recognize itself as stale instead of racing a newer one for the same
-  // chunk files (same ordering trick as vlc.ts's createFfmpegTranscoder:
-  // bumped BEFORE the abort, so the old loop's own catch block already
-  // sees the new generation when it wakes up).
+  // chunk files. The ordering is the point: bumped BEFORE the abort, so
+  // the old loop's own catch block already sees the new generation when
+  // it wakes up.
   let generation = 0
   let currentAbort: AbortController | null = null
   let fillFrontierByte = 0
@@ -1810,10 +1810,8 @@ export function createStreamCache({
     // Unbounded, explicitly: this is the fill the playhead is about to read
     // from, whatever highWatermarkByte happens to say on a resumed session.
     void runFill(firstGap === null ? 0 : firstGap * CHUNK_BYTES, myGeneration, null)
-    // Wait for at least the first chunk so the very first read from ffmpeg/
-    // the <video> element doesn't land on nothing — mirrors the readiness
-    // gate createFfmpegTranscoder already uses before its own start()
-    // resolves (vlc.ts's READY_BYTES/MIN_BUFFER_MS).
+    // Wait for at least the first chunk so mpv's very first read from the
+    // local server doesn't land on nothing.
     //
     // On a slow link that first 4MB is a real wait with nothing else to
     // show for it, so it's reported as it fills (fillFrontierByte is the

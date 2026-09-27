@@ -7,8 +7,9 @@
 // append-only `plays` table that now exists.
 //
 // Tabs rather than five nav entries, per the roadmap's first ground rule: the
-// navigation stays at seven, and everything about "what I have watched and
-// what I mean to" belongs behind one destination.
+// navigation stays at eight (Calendar being the one exception), and
+// everything about "what I have watched and what I mean to" belongs behind
+// one destination.
 
 import { useEffect, useMemo, useState } from 'react'
 import { useAppState } from '@renderer/context/AppStateContext'

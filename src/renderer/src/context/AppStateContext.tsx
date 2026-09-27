@@ -428,8 +428,9 @@ interface AppStateValue {
   clearPendingRestore: () => void
 
   // Resolving a stream (stream:resolve, "searching" for a cached source)
-  // and starting it (stream:play, "buffering" — spinning up the proxy or
-  // ffmpeg transcode session) both take a real network round trip.
+  // and starting it (play:stream, "buffering" — opening a StreamCache
+  // session and handing it to the embedded mpv player) both take a real
+  // network round trip.
   // Previously PlaybackOverlay opened immediately on click and did this
   // work itself, showing a mostly-blank full-screen takeover the whole
   // time (and, on a no-source/error outcome, staying open just to show
@@ -1537,9 +1538,10 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     pending.controller.abort()
     playbackPreparationRef.current = null
     setResolvingMedia(null)
-    // A stream:play IPC request may have reached the main process already.
-    // Stop is idempotent and prevents a late result leaving an orphan proxy
-    // or ffmpeg process behind after the UI has cancelled it.
+    // A play:stream IPC request may have reached the main process already.
+    // Stop is idempotent and prevents a late result leaving an orphan
+    // stream-cache session and mpv load behind after the UI has cancelled
+    // it.
     window.api?.mediaHub?.playback.stop().catch(() => {})
   }, [])
 
@@ -1547,9 +1549,8 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   // PlaybackPrepareProgress). Subscribed for the app's whole lifetime
   // rather than per-preparation: these arrive from a session that's
   // already in flight, and a subscription set up alongside it would race
-  // the first few events. Anything that lands while nothing is being
-  // prepared — the identical ffmpeg restarts a seek performs mid-playback
-  // — falls through the `prev ? ... : prev` and changes nothing.
+  // the first few events. Progress that arrives while nothing is being
+  // prepared falls through the `prev ? ... : prev` and changes nothing.
   useEffect(() => {
     return window.api?.mediaHub?.playback.onPrepareProgress((payload) => {
       setResolvingMedia((prev) => (prev ? { ...prev, detail: payload.message } : prev))
@@ -1831,25 +1832,23 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
             // The awaited, deadline-bounded branch below owns user feedback.
           }
         )
-        // This one IPC call (stream:play) covers the whole real critical
-        // path for starting a title, not just the transcode: TorBox's own
-        // requestdl round trip, torbox.ts's retry-once wrapper around it
-        // (a full second attempt, on top of the first, when the initial
-        // link comes back not-yet-servable), then preparePlayback's own
-        // probeMedia (up to 15s — probeMedia's own execFile timeout) and,
-        // when the source needs it, a real ffmpeg transcode start (up to
-        // 25s for audio-only compatibility mode, or 60s when a forced
-        // video re-encode is engaged — see createFfmpegTranscoder's own
-        // budget in vlc.ts). Summed, that worst case alone already reaches
-        // or exceeds the previous 45s budget here — found live as the
-        // actual cause of "playback fails and I have to try again": this
-        // stage was timing out and showing an error for a start that the
-        // backend would have finished seconds later, throwing away
-        // real progress and forcing a full from-scratch retry (new probe,
-        // new transcode) instead of just waiting a bit longer for one
-        // already under way. 90s gives real margin over that summed worst
-        // case while the ordinary fast path (a few seconds) is completely
-        // unaffected — this is a ceiling, not a typical wait.
+        // This one IPC call (play:stream) covers the whole real critical
+        // path for starting a title, not just the player opening: TorBox's
+        // own requestdl round trip, torbox.ts's retry-once wrapper around
+        // it (a full second attempt, on top of the first, when the initial
+        // link comes back not-yet-servable), then preparePlayback opening
+        // the StreamCache session and waiting for its first chunk to
+        // download (streamCache.ts's start), and finally mpv loading the
+        // file from the cache's local server (startPlayerSession). Every
+        // one of those is as slow as the link it runs over. The budget
+        // here was 45s once, and that was found live as the actual cause
+        // of "playback fails and I have to try again": this stage was
+        // timing out and showing an error for a start that the backend
+        // would have finished seconds later, throwing away real progress
+        // and forcing a full from-scratch retry instead of just waiting a
+        // bit longer for one already under way. 90s gives real margin
+        // over that while the ordinary fast path (a few seconds) is
+        // completely unaffected — this is a ceiling, not a typical wait.
         const played = await runPlaybackPreparationStage(
           playTask,
           'buffering',

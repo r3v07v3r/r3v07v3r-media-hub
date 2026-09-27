@@ -184,7 +184,7 @@ function clearActiveSubtitle(): void {
 /**
  * Starts playback of `url`: opens a StreamCache session for it and hands that
  * cache's local server to the embedded player, which demuxes and decodes it
- * directly. Also used by torbox.ts's play:stream/library:play handlers.
+ * directly. Also used by torbox.ts's play:stream handler.
  *
  * There is no codec decision here anymore. The old version probed the file and
  * branched into an ffmpeg transcode whenever Chromium could not decode its
