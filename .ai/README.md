@@ -41,7 +41,7 @@ Git is the shared source of truth between the two agents — not chat context. E
 2. `npm install -D tsx playwright` (then `npx playwright install chromium` if Playwright hasn't fetched a browser there yet).
 3. Add the four `ai:*` scripts below to `package.json`.
 4. Rewrite `.ai/REQUIREMENTS.md` for that project's actual current task, delete the demo content in it.
-5. Adjust `.ai/config.json` — at minimum, `screenshots.routes` (or set `screenshots.enabled: false` for a non-visual project) and `screenshots.serveDir` if the build output doesn't land in `out/renderer`, `dist`, `build`, or `preview-dist` (the four directories `ai-screenshots.ts` checks on its own).
+5. Adjust `.ai/config.json` — at minimum, `screenshots.routes` (or set `screenshots.enabled: false` for a non-visual project) and `screenshots.serveDir` if the build output doesn't land in `out/renderer`, `dist`, `build`, or `preview-dist` (the four directories `ai-screenshots.ts` checks on its own; nothing in this repository builds into `preview-dist` any more).
 6. Add `OPENAI_API_KEY` (and optionally `OPENAI_MODEL`) to that project's `.env.local`, or export them in your shell, and make sure `.env.local` is gitignored. `scripts/ai-utils.ts` reads `process.env` and a hand-parsed `.env.local` only; a plain `.env` file is not read.
 7. `git init` if the project isn't already a git repo — the loop reads `git diff`/`git status` as evidence and refuses to run without one.
 

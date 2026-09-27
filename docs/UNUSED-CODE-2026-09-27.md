@@ -1,5 +1,12 @@
 # Unused code and shipped bloat, verified list (2026-09-27)
 
+> **Status: removed.** Everything in sections 1 to 5 below was removed in #178 on 2026-09-27, with
+> three exceptions: the `.ai/` review loop (a maintainer decision), `LocalCacheCandidate` (still
+> exported, because `streamTierRules.ts` now imports it), and the single-file preview build, which
+> section 6 lists as kept but which was removed along with the only thing that used it. The
+> duplication findings in section 7 are untouched apart from the first one's dead branch. This
+> list is kept as the record of what was verified and why.
+
 Produced by the 2026-09-27 audit (see [AUDIT-2026-09-27.md](AUDIT-2026-09-27.md)). Method: a grep-based scan proposed candidates; one agent per batch classified each by reading the defining file and grepping the whole tree (imports, re-exports, string names, esbuild aliases, CSS-module access, tests, scripts, workflows, electron-builder.yml); every proposed deletion was then checked again by an adversarial verifier that defaulted to "keep" unless it could confirm safety. Only items that survived both passes are listed as deletable. Line numbers were correct at commit 7a3ee9c; re-grep before editing.
 
 | Category                                                          | Count |
