@@ -5,12 +5,13 @@
 //                                                  executable for THIS OS
 //   R3_CACHE_VERSION=1.0.84 node scripts/...       stamp a release version
 //
-// The bundle (~80 KB) runs on any Node >= 20. The SEA build (Node's
-// single-executable application support) embeds the bundle inside a copy
-// of the running Node binary, so the result needs nothing installed at
-// all — that is the file a household member double-clicks. SEA is built
-// per-OS (an executable embeds its platform's node), which is why CI runs
-// this on a Windows and a Linux runner rather than cross-compiling.
+// The bundle, a single small .cjs file, runs on any Node >= 20. The SEA
+// build (Node's single-executable application support) embeds the bundle
+// inside a copy of the running Node binary, so the result needs nothing
+// installed at all — that is the file a household member double-clicks.
+// SEA is built per-OS (an executable embeds its platform's node), which
+// is why CI runs this on a Windows and a Linux runner rather than
+// cross-compiling.
 //
 // Everything here goes through the esbuild and postject JS APIs rather
 // than spawning their CLIs. That is not tidiness: an adversarial review

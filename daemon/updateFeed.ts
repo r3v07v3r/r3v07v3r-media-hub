@@ -62,8 +62,9 @@ export interface UpdateCandidate {
 export type UpdateChannel = 'stable' | 'preview'
 
 /** The asset name the updater installs. Deliberately the BUNDLE, not the
- *  SEA executable: the bundle is what the launcher requires, it is ~60KB
- *  instead of ~88MB, and replacing a running executable on Windows is a
+ *  SEA executable: the bundle is what the launcher requires, it is a
+ *  small fraction of the executable's size (which carries a whole Node
+ *  binary), and replacing a running executable on Windows is a
  *  fight this design simply never has to have. */
 const UPDATE_ASSET = 'r3-cache.cjs'
 const UPDATE_CHECKSUM_ASSET = 'r3-cache.cjs.sha256'
