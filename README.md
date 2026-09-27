@@ -545,6 +545,13 @@ Three problems the same audit found are fixed: anime is now served from the r3-c
 titles play without TorBox or Jellyfin, and plan-to-watch and history pushes for a title keep
 their order. The placeholder weather readout is gone.
 
+## License
+
+R3 Media Hub is open source under the [MIT License](LICENSE): anyone may use, change and share it,
+as long as the copyright notice stays with it. If you build on it, a mention of R3 Media Hub is
+appreciated. The player, fonts and other components it ships or fetches keep their own licenses,
+listed in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
+
 ## Contributing
 
 Issues and focused pull requests are welcome. Pull requests target `preview`; every merge there
