@@ -91,9 +91,12 @@ limits:
    your resolution limit only. A partial download is resumed from the source it originally came
    from rather than restarted.
 2. **A paired [r3-cache](daemon/README.md) server on your LAN**, when it holds the title complete.
-3. **Your Jellyfin server.** On the **Media server** and **Balanced** settings a Jellyfin copy within
-   your limits plays straight away and TorBox is never asked. On **Best quality** it competes with
-   TorBox instead of winning outright.
+3. **Your Jellyfin server.** On **Media server** a copy within your limits plays straight away and
+   TorBox is never asked. On **Balanced**, the default, it also plays straight away unless a copy
+   more than twice as sharp could exist within your limits: a 1080p copy always plays, a 720p copy
+   under a 4K limit makes the app ask TorBox and compare the two. The server copy still wins ties.
+   On **Best quality** the two always compete. With no TorBox connected, the server copy plays on
+   every setting.
 4. **TorBox.** The stream that played last time is checked first. Otherwise the Torrentio and Comet
    add-ons are searched for releases, TorBox is asked which of them it already has, and the
    candidates are scored on whether they are the right title, whether they can play right now, their
@@ -211,18 +214,18 @@ Two different things, deliberately:
 The gear icon in the top bar (and the **Control centre** button on the Settings page) flips the app
 over to its second face. It is where the installation is configured and watched:
 
-| Section           | What is there                                                                                                                                                                                                                          |
-| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Pipeline**      | How a title gets from you asking for it to it playing, with every service drawn where it sits and whether it is live.                                                                                                                  |
-| **Services**      | What each connected service is doing now: qBittorrent's torrents (pause, resume, or delete with files), the Sonarr and Radarr queues, how many Prowlarr indexers are failing, Bazarr's status, and the app's own background work.      |
-| **Caching**       | The r3-cache server: find it, ask to join, claim it as administrator, approve devices and set their allocations, see what it holds, and what you have cached with a private/shared switch per title. Also what this device has cached. |
-| **Updates**       | The build you are on, the **Stable** or **Preview** channel, a download progress bar, and what the offered version changes.                                                                                                            |
-| **General**       | Display preferences, notifications, Performance & Display (Anime4K, video scaling, buffer, gauges), Your library (backup, imports).                                                                                                    |
-| **Playback**      | Episodes, subtitles and languages, Network (limits, Where to play from, speed test), Storage while playing.                                                                                                                            |
-| **Media servers** | TorBox (connect with its API token), and Jellyfin, Sonarr, Radarr, qBittorrent, Prowlarr and Bazarr, each with a connection test.                                                                                                      |
-| **Accounts**      | Tracking (Simkl, Trakt, MyAnimeList), Artwork & metadata (TMDB, OMDb), Subtitles (SubDL, OpenSubtitles).                                                                                                                               |
-| **AI**            | The local Ollama model behind the assistant and Recommend Next.                                                                                                                                                                        |
-| **Community**     | The Watch Party relay, and profiles.                                                                                                                                                                                                   |
+| Section           | What is there                                                                                                                                                                                                                                                |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Pipeline**      | How a title gets from you asking for it to it playing, with every service drawn where it sits and whether it is live.                                                                                                                                        |
+| **Services**      | What each connected service is doing now: qBittorrent's torrents (pause, resume, remove and keep the files, or delete with files), the Sonarr and Radarr queues, how many Prowlarr indexers are failing, Bazarr's status, and the app's own background work. |
+| **Caching**       | The r3-cache server: find it, ask to join, claim it as administrator, approve devices and set their allocations, see what it holds, and what you have cached with a private/shared switch per title. Also what this device has cached.                       |
+| **Updates**       | The build you are on, the **Stable** or **Preview** channel, a download progress bar, and what the offered version changes.                                                                                                                                  |
+| **General**       | Display preferences, notifications, Performance & Display (Anime4K, video scaling, buffer, gauges), Your library (backup, imports).                                                                                                                          |
+| **Playback**      | Episodes, subtitles and languages, Network (limits, Where to play from, speed test), Storage while playing.                                                                                                                                                  |
+| **Media servers** | TorBox (connect with its API token), and Jellyfin, Sonarr, Radarr, qBittorrent, Prowlarr and Bazarr, each with a connection test.                                                                                                                            |
+| **Accounts**      | Tracking (Simkl, Trakt, MyAnimeList), Artwork & metadata (TMDB, OMDb), Subtitles (SubDL, OpenSubtitles).                                                                                                                                                     |
+| **AI**            | The local Ollama model behind the assistant and Recommend Next.                                                                                                                                                                                              |
+| **Community**     | The Watch Party relay, and profiles.                                                                                                                                                                                                                         |
 
 - **Ask Sonarr or Radarr for a title** straight from its page, picking the quality profile and
   folder, with a search starting as soon as it is added. Movies and series only; anime is
@@ -258,7 +261,8 @@ app keeps its settings, database (`media-hub.sqlite`) and log (`logs/media-hub.l
 `%APPDATA%\r3v07v3r-media-hub`; include that log in a bug report.
 
 Every release also carries `r3-media-hub-android.apk`, one build for phones and Android TV. It
-is signed with a debug key for now, so treat it as a build for test devices; see
+is signed with a debug key until a release key is added to the repository secrets, so treat it as
+a build for test devices until then; see
 [android/README.md](android/README.md).
 
 macOS and Linux packages are configured in `electron-builder.yml` but are not published: the release
@@ -321,7 +325,7 @@ the control centre; API credentials are entered in the app, never in the source 
 | **Jellyfin**        | One of the two play sources     | Plays from your own library over the LAN, ranked against TorBox by **Where to play from**.                                                 | Media servers, or the welcome flow |
 | **r3-cache**        | No                              | Pre-fetches what you plan to watch onto a LAN box and serves it in one hop. See [daemon/README.md](daemon/README.md).                      | Caching                            |
 | **Sonarr / Radarr** | No                              | Request a series or film from its page; see their queues.                                                                                  | Media servers                      |
-| **qBittorrent**     | No                              | See, pause, resume or delete torrents. Not a playback source.                                                                              | Media servers                      |
+| **qBittorrent**     | No                              | See, pause, resume or remove torrents, keeping or deleting their files. Not a playback source.                                             | Media servers                      |
 | **Prowlarr**        | No                              | A count of indexers in a failure backoff. Does not feed discovery.                                                                         | Media servers                      |
 | **Bazarr**          | No                              | Connection status only.                                                                                                                    | Media servers                      |
 | **TMDB**            | No (Letterboxd import needs it) | Age certificates, cast and crew, collections, better similar titles, grouped-anime episodes.                                               | Accounts → Artwork & metadata      |
@@ -543,6 +547,13 @@ Three problems the same audit found are fixed: anime is now served from the r3-c
 titles play without TorBox or Jellyfin, and plan-to-watch and history pushes for a title keep
 their order. The placeholder weather readout is gone, and the Simkl episode fallback now sends
 its client id.
+
+## License
+
+R3 Media Hub is open source under the [MIT License](LICENSE): anyone may use, change and share it,
+as long as the copyright notice stays with it. If you build on it, a mention of R3 Media Hub is
+appreciated. The player, fonts and other components it ships or fetches keep their own licenses,
+listed in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
 
 ## Contributing
 

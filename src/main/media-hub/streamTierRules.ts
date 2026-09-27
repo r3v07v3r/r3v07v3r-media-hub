@@ -7,7 +7,8 @@
 
 import type { StreamCandidate, StreamResolveResult } from '../../shared/media-hub/types'
 import type { LocalCacheCandidate } from './streamCache'
-import { resumeCandidateFor } from './core'
+import { BALANCED_OUTCLASS_RATIO, resumeCandidateFor, type SourcePreference } from './core'
+import { RESOLUTION_STEPS } from '../../shared/media-hub/streamQuality'
 
 /** What stream:resolve says when a title is held nowhere near and there is
  *  no source to fetch it from. Thrown only after both cache tiers have
@@ -65,6 +66,51 @@ export function withinQualityCeiling(
   if (!ceiling) return true
   if (!resolution) return true
   return resolution <= ceiling
+}
+
+/**
+ * Whether a usable media-server copy ends the search on its own, without
+ * asking TorBox whether it has something better.
+ *
+ *  - prefer-local: always. The person put the file on their server so it
+ *    would be used.
+ *  - prefer-quality: never. That setting means "look at everything and pick
+ *    the best"; the local copy competes in the final ranking instead.
+ *  - balanced: only when no remote copy the person's limits allow could
+ *    outrank it. The ranking (rankStreams, balancedBonusWithdrawn in
+ *    core.ts) keeps a local copy ahead of any remote one up to
+ *    BALANCED_OUTCLASS_RATIO times its resolution, so a local copy at least
+ *    half as sharp as the highest resolution allowed cannot be outclassed,
+ *    and asking TorBox would be seconds spent confirming what the ranking
+ *    would say anyway. Below that it could be: a local 720p under a 4K limit
+ *    loses to a remote 2160p, so the search carries on and the local copy
+ *    takes its place in the final ranking alongside what TorBox has.
+ *
+ *    The gate and the ranking read the same constant on purpose. Balanced is
+ *    the default and most libraries are 1080p: a gate stricter than the
+ *    ranking made every one of those plays wait on a search whose answer
+ *    could not change.
+ *
+ * `maxResolution` of 0 means no limit, which is 2160, the sharpest a release
+ * is scored at.
+ *
+ * An unknown local resolution does NOT end the search on Balanced. A copy
+ * whose quality we cannot read may be the best there is or may be 480p, and
+ * ending the search on it could hide a better copy the person would want.
+ * Carrying on costs a round-trip, and the local copy still competes in the
+ * ranking, so nothing playable is lost either way.
+ */
+export function mediaServerCopyEndsSearch(
+  sourcePreference: SourcePreference,
+  localResolution: number | undefined,
+  maxResolution: number
+): boolean {
+  if (sourcePreference === 'prefer-local') return true
+  if (sourcePreference === 'prefer-quality') return false
+  if (!localResolution) return false
+  const top = RESOLUTION_STEPS[RESOLUTION_STEPS.length - 1]
+  const ceiling = maxResolution > 0 ? Math.min(maxResolution, top) : top
+  return localResolution * BALANCED_OUTCLASS_RATIO >= ceiling
 }
 
 /**

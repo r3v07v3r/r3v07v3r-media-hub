@@ -34,11 +34,66 @@ adb push r3-media-hub-android.apk /sdcard/Download/
 
 On every launch the app checks the GitHub releases for a newer APK on its
 channel (preview until linked to a desktop that says stable) and offers to
-install it (`Updater.kt`). Android always asks the person to confirm. Builds
-are signed with the committed debug key (`debug.p12`), so updates install
-over each other and keep the app's data. **Before the app goes beyond test
-phones, switch to a release key kept out of the repository** — anyone holding
-the debug key can build an APK that installs over this one.
+install it (`Updater.kt`). Android always asks the person to confirm, and
+only installs an update signed with the same key as the build on the phone.
+Pull-request builds, and releases made before the release key below is set up,
+are signed with the committed debug key (`debug.p12`), which anyone can use to
+build an APK that installs over them.
+
+## Release signing
+
+Release builds are signed with a key that is never in the repository. The
+**Android app** workflow uses it on release runs whenever the four secrets
+below exist; without them it signs with the debug key as before. Its **Build
+APK** step ends with a line saying which key signed the build.
+
+1. Create the keystore (PKCS12, valid for 25 years) with `keytool`, which
+   comes with any JDK (Android Studio has one in `jbr/bin`). Keep the file
+   outside this repository. keytool asks for a password; with PKCS12 the key
+   has the same password as the keystore.
+
+   ```
+   keytool -genkeypair -v -storetype PKCS12 -keystore r3-release-key.p12 -alias r3-release -keyalg RSA -keysize 4096 -validity 9131 -dname "CN=R3 Media Hub"
+   ```
+
+2. Encode it as base64 on one line.
+
+   Windows (PowerShell), copied to the clipboard:
+
+   ```
+   [Convert]::ToBase64String([IO.File]::ReadAllBytes("$PWD\r3-release-key.p12")) | Set-Clipboard
+   ```
+
+   Linux:
+
+   ```
+   base64 -w0 r3-release-key.p12
+   ```
+
+3. On GitHub: the repository's **Settings → Secrets and variables → Actions →
+   New repository secret**, one for each:
+
+   | Secret | Value |
+   |---|---|
+   | `ANDROID_KEYSTORE_BASE64` | the base64 text from step 2 |
+   | `ANDROID_KEYSTORE_PASSWORD` | the keystore password |
+   | `ANDROID_KEY_ALIAS` | `r3-release` (the `-alias` above) |
+   | `ANDROID_KEY_PASSWORD` | the same password again |
+
+   Set all four. With the keystore set but any of the other three missing,
+   the release build stops rather than fall back to the debug key.
+
+4. Keep `r3-release-key.p12` and its password somewhere safe outside GitHub,
+   such as a password manager. GitHub will not show a secret again, and if the
+   key or password is lost no future update can install over a released build:
+   every phone would have to uninstall the app and start again.
+
+5. The first release-signed build will not install over a debug-signed one;
+   the app says so when the person taps Update. On each phone running a
+   debug-signed build, uninstall R3 Media Hub once (this removes its settings,
+   sign-ins and desktop link from that phone), then install
+   `r3-media-hub-android.apk` from the latest release and link it again.
+   Updates after that install over each other as before.
 
 ## Linking to the desktop
 
@@ -58,4 +113,3 @@ app's own scanner reads it. See `src/main/media-hub/devicePairingCore.ts`.
   on the phone player screen: the backend supports them, the screen does not
   show them yet.
 - 32-bit devices (`armeabi-v7a`): needs Termux's `arm` Node staged the same way.
-- Release signing.

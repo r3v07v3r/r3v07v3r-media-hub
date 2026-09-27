@@ -18,6 +18,31 @@ fun versionCodeOf(name: String): Int {
 
 val r3VersionName = System.getenv("R3_VERSION_NAME") ?: "0.1.0"
 
+/**
+ * The release key, which is never in the repository. CI passes it in on
+ * release runs only (.github/workflows/android.yml; setup in android/README.md,
+ * "Release signing"). All four or none: with none set the build is signed with
+ * the debug key below, exactly as before. A partial set is a broken setup, and
+ * quietly falling back to the debug key would ship an APK that cannot install
+ * over a release-signed one, so it stops the build instead.
+ */
+val releaseSigning: Map<String, String>? = listOf(
+    "R3_ANDROID_KEYSTORE_FILE",
+    "R3_ANDROID_KEYSTORE_PASSWORD",
+    "R3_ANDROID_KEY_ALIAS",
+    "R3_ANDROID_KEY_PASSWORD",
+).associateWith { System.getenv(it).orEmpty() }.let { values ->
+    val missing = values.filterValues { it.isEmpty() }.keys
+    when {
+        missing.isEmpty() -> values
+        missing.size == values.size -> null
+        else -> throw GradleException(
+            "Release signing is half set up. Missing: ${missing.joinToString(", ")}. " +
+                "Set all four R3_ANDROID_* variables to sign with the release key, or none to sign with the debug key."
+        )
+    }
+}
+
 android {
     namespace = "com.r3v07v3r.mediahub"
     compileSdk = 36
@@ -49,6 +74,26 @@ android {
             storePassword = "android"
             keyAlias = "androiddebugkey"
             keyPassword = "android"
+        }
+        releaseSigning?.let { key ->
+            create("release") {
+                storeFile = file(key.getValue("R3_ANDROID_KEYSTORE_FILE"))
+                storeType = "pkcs12"
+                storePassword = key.getValue("R3_ANDROID_KEYSTORE_PASSWORD")
+                keyAlias = key.getValue("R3_ANDROID_KEY_ALIAS")
+                keyPassword = key.getValue("R3_ANDROID_KEY_PASSWORD")
+            }
+        }
+    }
+
+    if (releaseSigning != null) {
+        buildTypes {
+            // Still the debug build type the workflow has always shipped
+            // (assembleDebug; MainActivity keeps chrome://inspect on for it),
+            // only signed with the release key instead of debug.p12.
+            getByName("debug") {
+                signingConfig = signingConfigs.getByName("release")
+            }
         }
     }
 

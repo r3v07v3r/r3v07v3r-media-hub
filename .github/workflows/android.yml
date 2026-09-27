@@ -3,7 +3,11 @@ name: Android app
 # Builds the phone/TV app (android/): the app UI (src/app-ui) and the headless
 # backend (src/headless) from this commit, a Node runtime from Termux
 # (scripts/android-node-payload.mjs), and the Kotlin shell that runs them.
-# Debug-signed for now: installable by tapping the APK, not yet a release.
+# Always the debug build type, installable by tapping the APK. Release runs
+# sign it with the release key when the repository has one (the
+# ANDROID_KEYSTORE_* / ANDROID_KEY_* secrets; android/README.md, "Release
+# signing"); every other run, and a release run without that key, signs it
+# with the committed debug key.
 on:
   workflow_dispatch: {}
   # Called by build-and-release.yml so every release carries the APK built
@@ -18,6 +22,21 @@ on:
         description: Release version, e.g. 1.0.84-preview.130 (sets versionName and versionCode)
         required: true
         type: string
+    # The release key, passed down explicitly by build-and-release.yml. All
+    # optional: with none set the release is debug-signed, as before.
+    secrets:
+      ANDROID_KEYSTORE_BASE64:
+        description: The release keystore (PKCS12), base64-encoded
+        required: false
+      ANDROID_KEYSTORE_PASSWORD:
+        description: The release keystore's password
+        required: false
+      ANDROID_KEY_ALIAS:
+        description: The release key's alias in that keystore
+        required: false
+      ANDROID_KEY_PASSWORD:
+        description: The release key's password
+        required: false
   pull_request:
     paths:
       - 'android/**'
@@ -71,12 +90,75 @@ jobs:
       - uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
         with:
           gradle-version: '9.7.1'
-      - name: Build debug APK
+      # Release runs only, so pull-request runs never touch the secrets. The
+      # keystore goes to the runner's temp directory (outside the checkout,
+      # never uploaded) and the step after the build deletes it. Values reach
+      # the build step through GITHUB_ENV, never on a command line.
+      - name: Prepare the release key (release runs, when configured)
+        if: inputs.version
+        shell: bash
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if [ -z "$KEYSTORE_BASE64" ]; then
+            echo "No release key is configured; this release will be signed with the debug key."
+            exit 0
+          fi
+          problems=""
+          for name in KEYSTORE_PASSWORD KEY_ALIAS KEY_PASSWORD; do
+            value="${!name}"
+            if [ -z "$value" ]; then
+              problems="$problems ANDROID_$name (not set)"
+            elif [ "$(printf '%s' "$value" | tr -d '\r\n')" != "$value" ]; then
+              problems="$problems ANDROID_$name (has a line break)"
+            fi
+          done
+          if [ -n "$problems" ]; then
+            echo "::error::ANDROID_KEYSTORE_BASE64 is set but the release key is incomplete:$problems"
+            exit 1
+          fi
+          umask 077
+          keystore="$RUNNER_TEMP/r3-release-key.p12"
+          if ! printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$keystore" 2>/dev/null || [ ! -s "$keystore" ]; then
+            echo "::error::ANDROID_KEYSTORE_BASE64 is not valid base64."
+            exit 1
+          fi
+          {
+            echo "R3_ANDROID_KEYSTORE_FILE=$keystore"
+            echo "R3_ANDROID_KEYSTORE_PASSWORD=$KEYSTORE_PASSWORD"
+            echo "R3_ANDROID_KEY_ALIAS=$KEY_ALIAS"
+            echo "R3_ANDROID_KEY_PASSWORD=$KEY_PASSWORD"
+          } >> "$GITHUB_ENV"
+      - name: Build APK
         env:
           # Releases name the build after the release; anything else is a
           # dev build that any release counts as newer than.
           R3_VERSION_NAME: ${{ inputs.version || format('0.1.{0}', github.run_number) }}
-        run: gradle -p android --no-daemon assembleDebug
+        run: |
+          gradle -p android --no-daemon assembleDebug
+          if [ -n "${R3_ANDROID_KEYSTORE_FILE:-}" ]; then
+            echo "Signed with the release key."
+          else
+            echo "Signed with the debug key."
+          fi
+      # Runs even when the build failed. Blanks the values for every later
+      # step as well as deleting the file.
+      - name: Remove the release key
+        if: always() && inputs.version
+        shell: bash
+        run: |
+          rm -f "$RUNNER_TEMP/r3-release-key.p12"
+          if [ -n "${R3_ANDROID_KEYSTORE_FILE:-}" ]; then
+            {
+              echo "R3_ANDROID_KEYSTORE_FILE="
+              echo "R3_ANDROID_KEYSTORE_PASSWORD="
+              echo "R3_ANDROID_KEY_ALIAS="
+              echo "R3_ANDROID_KEY_PASSWORD="
+            } >> "$GITHUB_ENV"
+          fi
       - name: Name the artifact for what it is
         run: cp android/app/build/outputs/apk/debug/app-debug.apk r3-media-hub-android.apk
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

@@ -2,7 +2,8 @@
   "name": "r3-party-sync",
   "version": "1.0.0",
   "private": true,
-  "description": "Relay server for R3 Media Center's Watch Party 'relay' mode — deploy this to Cloudflare Workers so hosting/joining a party works over the internet regardless of either side's router/NAT (see the main app's src/main/media-hub/watchParty.ts for the client this implements the protocol for).",
+  "license": "MIT",
+  "description": "Relay server for R3 Media Hub's Watch Party 'relay' mode — deploy this to Cloudflare Workers so hosting/joining a party works over the internet regardless of either side's router/NAT (see the main app's src/main/media-hub/watchParty.ts for the client this implements the protocol for).",
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",

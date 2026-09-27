@@ -57,3 +57,33 @@
   color: var(--text-muted);
   white-space: nowrap;
 }
+
+/* A qBittorrent row: name, progress, then three buttons. Caching's .job row
+   is a single line, which was fine with two buttons but not with three at
+   the control centre's phone width — they overflowed the card and squeezed
+   the name to nothing. Here the row may wrap: the name keeps a floor of
+   width, and when name, progress and buttons cannot share a line the
+   buttons move to a second one, wrapping among themselves if even that
+   line is too narrow for all three. */
+.torrentRow {
+  flex-wrap: wrap;
+}
+
+/* The name wraps rather than ending in an ellipsis, so it can always be read
+   in full. Torrent names are usually one unbroken run of dots and dashes,
+   which has nowhere to wrap and would draw over the progress figure and the
+   buttons, so it may break anywhere once it runs out of room. */
+.torrentRow > .torrentTitle {
+  flex: 1 1 10rem;
+  overflow-wrap: anywhere;
+}
+
+.torrentActions {
+  flex: 0 1 auto;
+  min-width: 0;
+  margin-left: auto;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px 12px;
+}
