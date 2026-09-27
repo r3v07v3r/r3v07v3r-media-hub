@@ -576,6 +576,13 @@ async function postToRelay<T>(url: string, body: unknown, refused: string): Prom
   } catch (error) {
     const status = (error as { status?: unknown } | null)?.status
     if (typeof status === 'number') throw new Error(`${refused}: ${status}`)
+    // A relay that accepts the connection and then says nothing ends in the
+    // timeout's own abort, whose text ("This operation was aborted") tells
+    // the person nothing about what to do next.
+    const name = (error as { name?: unknown } | null)?.name
+    if (name === 'AbortError' || name === 'TimeoutError') {
+      throw new Error('The relay did not answer. Check that it is running, then try again.')
+    }
     throw error
   }
 }
