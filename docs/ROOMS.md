@@ -22,8 +22,11 @@ constraint, and none of it weakens it.
 
 ## The admin
 
-The room's creator, named in the invite code itself (`adminFriendId` in
-the v3 share code). Members trust the code they joined with, so the
+The room's creator, named in the invite code itself: the v4 room code
+carries the admin's public key (`admin: { id, pub }`, `party.ts`
+`ShareCodePayloadV4`, the id being the sha256 of the key), and each
+member keeps that id locally as the room's `adminFriendId`
+(`roomRules.ts`). Members trust the code they joined with, so the
 admin badge and the rename rule work offline, with no relay round-trip,
 on any transport. The creator also holds two credentials nobody else
 has:
