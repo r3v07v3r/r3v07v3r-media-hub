@@ -10,6 +10,7 @@
 // down from a component unmount broke the *next* title in a watch party.
 
 import { BrowserWindow, app } from 'electron'
+import type { spawn } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 
@@ -57,6 +58,8 @@ import {
 import { anime4kShaderPaths } from './anime4kInstall'
 import { anime4kSettings } from './preferences'
 import { handle } from './ipcGuard'
+import { hostSpawn } from './hostPlayer'
+import { platformCapabilities } from './platform'
 import { logError } from './logger'
 import { readSettings, writeSettings } from './settingsStore'
 import {
@@ -740,15 +743,30 @@ export async function startPlayerSession(
     throw new Error('No application window is available for playback.')
   }
 
+  // Where the host shows the video (the Android app), there is no window to
+  // embed into and no binary to find: the host starts libmpv when asked, and
+  // everything from the IPC socket on is the same as below. See hostPlayer.ts.
+  const hostShown = platformCapabilities().hostPlayer
+
   // The player process outlives titles, but --wid is a spawn-time option: a
   // player embedded into a window that has since been recreated is attached to
   // a dead HWND and has to be respawned, not reused.
-  if (player.running && !embedTargetMatches(mainWindow)) {
+  if (!hostShown && player.running && !embedTargetMatches(mainWindow)) {
     await player.quit().catch(() => {})
     detachEmbedTarget()
   }
 
-  if (!player.running) {
+  if (!player.running && hostShown) {
+    await player.start('libmpv', {
+      bufferSeconds: options.bufferSeconds,
+      spawnImpl: hostSpawn as unknown as typeof spawn,
+      onLog: (chunk) => {
+        const line = chunk.trim()
+        if (line) logError('mpv:stderr', line)
+      }
+    })
+    await attachObservers()
+  } else if (!player.running) {
     if (!mpvPath) {
       throw new Error(
         'The bundled player is missing. Reinstall the app, or run the postinstall step ' +
@@ -773,7 +791,7 @@ export async function startPlayerSession(
     await attachObservers()
     await player.bindSafetyKeys()
   }
-  trackWindow(mainWindow)
+  if (!hostShown) trackWindow(mainWindow)
 
   openPlayerOverlay(mainWindow)
 

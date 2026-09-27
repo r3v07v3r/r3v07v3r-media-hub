@@ -1,0 +1,11 @@
+.home-screen h1 {
+  margin-bottom: 1rem;
+}
+
+.home-skeleton-heading {
+  display: block;
+  width: 40%;
+  height: 1.1rem;
+  border-radius: var(--radius-small);
+  margin-bottom: 0.5rem;
+}

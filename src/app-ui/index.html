@@ -1,0 +1,19 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>R3 Media Hub</title>
+    <!-- Verbatim copy of src/renderer/index.html's Content-Security-Policy —
+         see that file for what each source is and why. This app is served
+         by the same headless bridge and needs the same img/media hosts. -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://image.tmdb.org https://simkl.in https://*.simkl.in https://kitsu.io https://*.kitsu.io https://kitsu.app https://*.kitsu.app https://images.metahub.space https://*.metahub.space https://m.media-amazon.com; media-src 'self' data: http://127.0.0.1:*; connect-src 'self'; frame-src https://www.youtube-nocookie.com"
+    />
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/main.tsx"></script>
+  </body>
+</html>

@@ -329,6 +329,24 @@ export function createApi(transport: ApiTransport) {
         logout: (): Promise<{ ok: true }> => transport.invoke(MEDIA_HUB_CHANNELS.logout)
       },
 
+      /** Linking a phone to this computer — see main/media-hub/devicePairing.ts. */
+      devicePairing: {
+        start: (): Promise<{
+          ok: boolean
+          message?: string
+          link?: string
+          expiresAt?: number
+          contents?: string[]
+        }> => transport.invoke(MEDIA_HUB_CHANNELS.devicePairingStart),
+        status: (): Promise<{
+          state: 'idle' | 'waiting' | 'done' | 'expired' | 'failed' | 'cancelled'
+        }> => transport.invoke(MEDIA_HUB_CHANNELS.devicePairingStatus),
+        cancel: (): Promise<{ ok: true }> =>
+          transport.invoke(MEDIA_HUB_CHANNELS.devicePairingCancel),
+        redeem: (link: string): Promise<{ ok: boolean; message: string; imported?: string[] }> =>
+          transport.invoke(MEDIA_HUB_CHANNELS.devicePairingRedeem, { link })
+      },
+
       lanCache: {
         discover: (): Promise<{
           daemons: Array<{ name: string; host: string; port: number; url: string }>
@@ -785,6 +803,9 @@ export function createApi(transport: ApiTransport) {
          *  that for itself — see the channel's own comment. */
         onControlsShown: (onEvent: () => void): (() => void) =>
           subscribe<void>(MEDIA_HUB_CHANNELS.playerControlsShown, onEvent),
+        /** Host-shown video only (the Android app): the session ended. */
+        onHostClosed: (onEvent: () => void): (() => void) =>
+          subscribe<void>(MEDIA_HUB_CHANNELS.playerHostClosed, onEvent),
         /** Main-window side of the bridge: actions the overlay raised that belong
          *  to this window's state (close the player, toast, refresh watch
          *  status, open the party panel). */

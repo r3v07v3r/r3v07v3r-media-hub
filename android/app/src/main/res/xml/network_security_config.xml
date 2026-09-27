@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The page is served by the app's own backend on loopback, over plain HTTP.
+     That, and nothing else, may be cleartext. (The backend is a separate Node
+     process and reaches the internet itself; this file does not govern it.) -->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false" />
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">127.0.0.1</domain>
+    </domain-config>
+</network-security-config>

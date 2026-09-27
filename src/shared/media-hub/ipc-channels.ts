@@ -36,6 +36,12 @@ export const MEDIA_HUB_CHANNELS = {
   settingsSetCacheMode: 'mediahub:settings:set-cache-mode',
   /** The one-time storage question, answerable again from Settings. */
   settingsSetStoreMedia: 'mediahub:settings:set-store-media',
+  /** Linking a phone: the desktop shows a one-time code, the phone redeems
+   *  it. See main/media-hub/devicePairingCore.ts. */
+  devicePairingStart: 'mediahub:device-pairing:start',
+  devicePairingStatus: 'mediahub:device-pairing:status',
+  devicePairingCancel: 'mediahub:device-pairing:cancel',
+  devicePairingRedeem: 'mediahub:device-pairing:redeem',
   lanCacheDiscover: 'mediahub:lancache:discover',
   lanCachePair: 'mediahub:lancache:pair',
   lanCacheUnpair: 'mediahub:lancache:unpair',
@@ -245,6 +251,10 @@ export const MEDIA_HUB_CHANNELS = {
    *  controls' idle countdown ran during the load and a cold stream slower than
    *  it started the film with the bar already faded out. */
   playerControlsShown: 'mediahub:player:controls-shown', // push event
+  /** The session ended, however it ended — only where the host shows the
+   *  video (the Android app), whose player screen leaves on this. See
+   *  playerWindow.ts's HOST MODE. */
+  playerHostClosed: 'mediahub:player:host-closed', // push event
   streamCacheList: 'mediahub:stream-cache:list',
   /** One line of arithmetic for the Downloads page: what the cache holds
    *  and what is left on the drive it sits on. */

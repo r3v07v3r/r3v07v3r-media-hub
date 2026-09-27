@@ -11,12 +11,15 @@
 //   R3_BRIDGE_PORT  loopback port; omitted, the OS picks one
 //   R3_MASTER_KEY   32 bytes, base64: the key settings are sealed with
 //   R3_STOP_ON_STDIN_CLOSE=1   shut down when stdin closes (a host that owns us)
+//   R3_HOST_PLAYER=1   the host shows the video itself (the Android app's
+//                      libmpv) — see src/main/media-hub/hostPlayer.ts
 
 import path from 'node:path'
 
 import { startBackend, stopBackend } from '../main/backend'
 import { setActiveWindow } from '../main/media-hub/rendererBridge'
 import { setPlatformCapabilities } from '../main/media-hub/platform'
+import { setHostOverlay } from '../main/media-hub/playerWindow'
 import { startBackgroundJobs } from '../main/media-hub/backgroundJobs'
 import { startBridge, type Bridge } from './bridge'
 import { BrowserWindow } from './electronShim'
@@ -36,12 +39,16 @@ async function main(): Promise<void> {
 
   // Before anything under src/main runs: several subsystems decide what to be
   // at the moment they are first touched.
-  setPlatformCapabilities({ systemTelemetry: false })
+  const hostPlayer = process.env.R3_HOST_PLAYER === '1'
+  setPlatformCapabilities({ systemTelemetry: false, hostPlayer })
 
   // Not windows — names for the two ends of the bridge the service layer
   // pushes to. See electronShim's BrowserWindow.
   const mainWindow = new BrowserWindow()
   const overlayWindow = new BrowserWindow()
+  // With the video in the host, the player's controls are the page's own
+  // screen on the 'overlay' connection, not a window the backend opens.
+  if (hostPlayer) setHostOverlay(overlayWindow as never)
 
   startBackend()
   setActiveWindow(mainWindow as never)
