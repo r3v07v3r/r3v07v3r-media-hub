@@ -120,9 +120,9 @@ export interface MediaHubRawSettings {
   /** Desktop notifications for new episodes of tracked shows. Off until
    *  somebody turns it on — see main/media-hub/notifications.ts. */
   notificationsEnabled?: boolean
-  /** ISO 3166-1 alpha-2, for "where to watch" — availability is exactly the
-   *  thing that differs by country, so there is no global answer. Unset means
-   *  fall back to the machine's own locale. */
+  /** ISO 3166-1 alpha-2 region whose content-rating certification is shown
+   *  (contentRating.ts) — certification bodies are national, so there is no
+   *  global answer. Unset means fall back to the machine's own locale. */
   watchRegion?: string
   /** Loudness normalization — see NIGHT_MODE_AUDIO_FILTER. */
   nightModeEnabled?: boolean

@@ -5,12 +5,15 @@
 //
 // TWO RULES SHAPE THIS WHOLE SECTION.
 //
-// Only services with a real integration appear. Bazarr, Jellyseerr,
-// SABnzbd and NZBGet have none in this app, so there is no card for them —
-// a greyed-out brand implies a capability that is not there and invites
-// somebody to file a bug about a feature nobody wrote. Subtitles are done
-// by the app directly (SubDL / OpenSubtitles), so there is nothing to draw
-// for Bazarr even in principle.
+// Only services with a real integration appear. Jellyseerr, SABnzbd and
+// NZBGet have none in this app, so there is no card for them — a
+// greyed-out brand implies a capability that is not there and invites
+// somebody to file a bug about a feature nobody wrote.
+//
+// Bazarr has a card, and it shows connection status only: the app tests
+// the connection (lib/api/bazarr.ts) and never drives it. Subtitles for a
+// streamed title still come from SubDL / OpenSubtitles, which the app
+// searches directly.
 //
 // And only figures the APIs actually report are shown. Uptime is the
 // obvious omission: none of Sonarr, Radarr, Prowlarr, qBittorrent or

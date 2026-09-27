@@ -5,11 +5,15 @@
 // config panel all read the same list — three views of one pipeline that
 // disagreed about what is in it would be worse than no diagram.
 //
-// EVERY NODE HERE IS REAL. There is no entry for Jellyseerr, Bazarr,
-// SABnzbd, NZBGet, Unpackerr or a transcoder, because this app integrates
-// with none of them: a node you can click that cannot do anything is worse
-// than an empty slot, and subtitles are fetched by the app itself, so there
-// is nothing for Bazarr to do here even if somebody ran one.
+// EVERY NODE HERE IS REAL. There is no entry for Jellyseerr, SABnzbd,
+// NZBGet, Unpackerr or a transcoder, because this app integrates with none
+// of them: a node you can click that cannot do anything is worse than an
+// empty slot.
+//
+// Bazarr DOES have a node, under Process, and it is status only: the app
+// tests the connection and never drives it (lib/api/bazarr.ts). It is drawn
+// as the source of subtitles for library files — see the comment above the
+// node for why it sits there and what it cannot do for a streamed title.
 //
 // R3'S OWN FUNCTION COMES FIRST in every stage that has one, because it is
 // what runs when nothing else is set up — and a stage whose only live node
@@ -24,8 +28,8 @@ import type { ServiceId } from '@shared/ipc-types'
 /** Where a node's settings actually live, which decides what the panel
  *  below the diagram can offer for it. */
 export type NodeConfig =
-  /** One of the five servers in ServiceSettings: address, key, on/off, and
-   *  a connection test — all editable right here. */
+  /** One of the servers in ServiceSettings (ServiceId): address, key,
+   *  on/off, and a connection test — all editable right here. */
   | { kind: 'service'; service: ServiceId }
   /** An account with credentials, linked and unlinked right here. The
    *  `account` id selects which fields and which bridge call — those live in
@@ -90,10 +94,14 @@ export const PIPELINE: PipelineStage[] = [
         icon: 'stack',
         config: { kind: 'builtin' }
       },
+      // The app does not search through Prowlarr. All it reads is the count
+      // of failing indexers shown in Control Centre → Services; the node
+      // sits under Discovery because Prowlarr feeds the searches Sonarr and
+      // Radarr run.
       {
         id: 'prowlarr',
         label: 'Prowlarr',
-        detail: 'Indexer manager',
+        detail: 'Indexer health',
         icon: 'net',
         config: { kind: 'service', service: 'prowlarr' }
       }
@@ -219,7 +227,7 @@ export const PIPELINE: PipelineStage[] = [
       {
         id: 'jellyfin-library',
         label: 'Jellyfin',
-        detail: 'Library, resume points',
+        detail: 'Your library, streamed',
         icon: 'grid',
         config: { kind: 'service', service: 'jellyfin' }
       }

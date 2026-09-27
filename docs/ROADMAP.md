@@ -20,8 +20,11 @@ filters, explained recommendations, the player's remaining mpv capabilities,
 subtitle hash matching, IMDb ratings import, a deeper catalog, chapter-based
 skip-intro for movies and series, Letterboxd import, and indexer visibility
 — has since merged to `preview` (PRs #115-#123); the branch that carried it,
-`claude/post-preview70-fixes`, is gone. All 58 registered tests pass, both
-TypeScript projects typecheck, and ESLint reports zero errors.
+`claude/post-preview70-fixes`, is gone. As of 2026-09-27 the `test` script
+in `package.json` registers 88 test files (five of them under
+`daemon/tests`), and there are three typecheck projects: node, web and
+daemon. No pass count is quoted here, because one should not be without
+re-running it — run `npm test`, the three typechecks and `npm run lint`.
 
 **Phase 0, 1, 2 and 3 are all complete. Phase 4 is done except two rows —
 browsing a connected library, and a debrid provider abstraction; see that
@@ -63,7 +66,7 @@ stores it verbatim — but that is a code argument, not a measurement.
 | Letterboxd import                | 2     | Reads a Letterboxd "Export Your Data" zip's diary and ratings. No id in the export at all, unlike Trakt or IMDb — each row is resolved to an IMDb id by a strict TMDB title+year match (exactly one confident candidate or the row is skipped), cached 90 days so a second run doesn't re-search what it already knows. |
 | Person pages                     | 3     | Cast and crew names open what else of theirs the catalog holds.                                                                                                                                                                                                                                                         |
 | Search by credits                | 3     | Typing a director's name finds their films, not films with their name in the title.                                                                                                                                                                                                                                     |
-| Where to watch                   | 3     | Streaming, rent and buy for your region, from JustWatch via TMDB.                                                                                                                                                                                                                                                       |
+| ~~Where to watch~~ (removed)     | 3     | Shipped as streaming, rent and buy for your region, from JustWatch via TMDB, and since removed: the panel was deleted, and the region setting now only picks the content-rating country (see `watchProviders.ts`).                                                                                                      |
 | Calendar                         | 3     | A week back and six weeks forward, from air dates already on disk.                                                                                                                                                                                                                                                      |
 | Collection pages                 | 3     | The rest of a film's series, from TMDB data the similar-titles pass already fetched and discarded.                                                                                                                                                                                                                      |
 | Content ratings                  | 3     | The age certificate for your region, and the prerequisite for parental controls.                                                                                                                                                                                                                                        |
@@ -73,7 +76,7 @@ stores it verbatim — but that is a code argument, not a measurement.
 | Sonarr/Radarr requests           | 4     | Lookup by IMDb id through the server, add with a chosen profile and folder, search on add.                                                                                                                                                                                                                              |
 | qBittorrent control              | 4     | Pause, resume and remove, with keeping or deleting the files asked separately.                                                                                                                                                                                                                                          |
 | Notifications                    | 4     | New episodes of tracked shows, off by default, deferred while watching.                                                                                                                                                                                                                                                 |
-| Indexer visibility               | 4     | Connect Prowlarr as a fifth service; the Downloads page names any indexer currently in a failure backoff, so "no results" from Sonarr/Radarr stops being unexplained. Silent when everything is healthy.                                                                                                                |
+| Indexer visibility               | 4     | Connect Prowlarr as a service; the control centre's Services card counts indexers currently in a failure backoff, so "no results" from Sonarr/Radarr stops being unexplained.                                                                                                                                           |
 
 ### Corrected along the way
 
@@ -121,15 +124,18 @@ app, a media source and those services.
 Five constraints every item obeys. They exist because the failure mode here is not shipping too
 little — it is shipping all of it and ending up with a slower, noisier app than the one we have.
 
-1. **The navigation stays at seven.** History, stats, lists, and the calendar land as tabs inside My
-   Stuff. People and collections are drill-downs from a detail page. A new top-level destination
-   requires a genuinely new mode, not a new noun.
+1. **The navigation stays at eight.** Home, For You, Movies, Series, Anime, My Stuff, Calendar,
+   Settings (`NAV_ITEMS` in `data/constants.ts`). History, stats and lists land as tabs inside My
+   Stuff; Calendar is the one exception, with an entry of its own. People and collections are
+   drill-downs from a detail page. A new top-level destination requires a genuinely new mode, not a
+   new noun.
 2. **Nothing new runs at launch.** `recommendations.ts` set the precedent: rank in a background job,
    store the row, read it on open. Stats, the calendar, and the taste profile follow the same shape.
    Opening the app is a read — never a computation, never a network call.
 3. **One schema migration, not five.** Four phases want new columns and three want new tables. The
-   current style (a `PRAGMA table_info` probe appended per column, `database.ts:319-345`) does not
-   survive that. Build the versioned runner once, up front.
+   style this rule was written against (a `PRAGMA table_info` probe appended per column) does not
+   survive that. The versioned runner was built once, up front, and new schema goes through it:
+   `src/main/media-hub/migrations.ts`, on `PRAGMA user_version`.
 4. **Every feature is free when unused.** New recurring work registers with `registerRecurringJob`
    and declares its pressure ceiling, so it never competes with a cold catalog crawl. New panels
    fetch on mount.
@@ -219,9 +225,10 @@ decided deliberately rather than drifted into halfway.
 - **Casting.** DLNA/UPnP first — `upnp.ts` already exists for port mapping and discovery lives beside
   it. Chromecast needs a receiver app and a real protocol implementation. An "open in VLC/Infuse"
   handoff is the cheap version and buys most of the benefit for an afternoon.
-- **Companion remote.** A phone driving the desktop player. `friends.ts` and the party relay already
-  do authenticated, encrypted, host-less messaging between devices — this is that channel with a
-  different payload, not new infrastructure. The most under-priced item here.
+- **Companion remote.** A phone driving the desktop player. `rooms.ts` (Rooms grew out of the
+  friends group in #131) and the party relay already do authenticated, encrypted, host-less
+  messaging between devices — this is that channel with a different payload, not new
+  infrastructure. The most under-priced item here.
 - **Offline pinning.** `streamCache.ts` is a rolling window tied to a session. Pinning means an
   eviction exemption, a deliberate download queue with its own quota, and a quality choice per
   download.
@@ -240,6 +247,10 @@ decided deliberately rather than drifted into halfway.
 Agreed 2026-08-29, deliberately scheduled AFTER the next major release: a navigation split is the
 highest-risk-to-polish change there is, and none of it is a new capability. Written down now so it
 is built from a decision rather than assembled in pieces.
+
+**Status, 2026-09-27.** Part of step 1 below has since shipped as the Control Centre
+(`src/renderer/src/components/controlcentre/**`, #124, #125 and #141). The viewer/operator split
+itself has not happened.
 
 ### The problem
 
@@ -265,15 +276,18 @@ Control, and Viewer keeps a read-only line saying whether AI is available.
 
 ### Build it in this order
 
-1. **The Server dashboard, as one new destination.** This is the only part that is a NEW
-   capability rather than a relocation, and it is the part that was asked for: which component is
-   doing what, live connection health, throughput, and errors in one place. `activityGet` /
-   `activityChanged` already report running work (see `taskScheduler.ts`), and `logError` is
-   already called everywhere — but nothing surfaces it, so a failing subtitle provider or an
-   unreachable daemon is invisible unless somebody happens to be watching the right card. Shipping
-   this alone is worth doing even if the split never happens.
-2. **Owner labels on the shared parts** — the daemon protocol addition below, so the cache server's
-   queue can say whose fetch is running and whose account it bills.
+1. **The Server dashboard, as one new destination.** _Half shipped._ This is the only part that is a
+   NEW capability rather than a relocation, and it is the part that was asked for: which component
+   is doing what, live connection health, throughput, and errors in one place. What exists: Control
+   Centre → Services shows each connected service's connection status and embeds
+   `BackgroundActivitySection`, which reads the running work `activityGet` / `activityChanged`
+   report (see `taskScheduler.ts`). What does not: an error-log surface. `logError` is called
+   everywhere and nothing surfaces it yet, so a failing subtitle provider is still invisible unless
+   somebody happens to be watching the right card.
+2. **Owner labels on the shared parts.** _Done differently._ The plan was a daemon protocol addition
+   so the cache server's queue could say whose fetch is running. What was built scopes the list
+   instead of annotating it: each device sees its own jobs plus an `othersJobCount`, and `ownerName`
+   is sent to the admin only (`src/shared/lancache/protocol.ts`, ~203-206 and ~234-236).
 3. **Move the operator settings behind it**, once the grouping has been lived with.
 4. **The mode toggle last**, if it is still wanted — by then it is a nav change over an already
    correct grouping, not a redesign.
@@ -302,29 +316,29 @@ is true today and does not change. A screen called "Server Control" must not imp
 model the app does not have, so the dashboard should show _who_ an action belongs to and never
 suggest it is gating one.
 
-**The one protocol gap.** `LanCacheStatusResponse.jobs` carries contentKey, title, state, attempts
-and progress — but no owner, even though the daemon knows it. A household view cannot say whose
-fetch is running, or why the budget is full, without it. Adding an owner label (not the device id —
-a name the person chose when pairing) to that payload is the prerequisite for the shared half of
-this, and is small.
+**The one protocol gap — closed, differently.** `LanCacheStatusResponse.jobs` carried contentKey,
+title, state, attempts and progress, but no owner, so a household view could not say whose fetch
+was running. The job list is now scoped rather than annotated: every device sees its own jobs and
+an `othersJobCount` for the rest, and `ownerName` is sent to the admin only (see step 2 above).
 
-**And one real hole, specified separately.** Ownership is enforced for spending and ignored for
-seeing: `GET /api/catalog` with no `keys` filter hands **every cached item, with titles, to any
-paired device**, and `/stream/{infoHash}` authorises on "is this token paired" rather than on who
-owns the item. So anybody in the house can enumerate what everyone else has watched. Private-by-
-default items, sharing with everyone or with named people, per-person storage quotas, and a Super
-Admin claimed with a button are designed in [CACHE-PERMISSIONS.md](CACHE-PERMISSIONS.md) — which
-also drops the pairing code entirely, replacing it with in-app approval.
+**The one real hole — closed.** Ownership used to be enforced for spending and ignored for seeing:
+`GET /api/catalog` with no `keys` filter handed every cached item, with titles, to any paired
+device, and `/stream/{infoHash}` authorised on "is this token paired" rather than on who owned the
+item. [CACHE-PERMISSIONS.md](CACHE-PERMISSIONS.md) was built on 2026-08-29: `GET /api/catalog` now
+returns nothing without `?keys=` and filters what it does return by `isEntitled`, `/stream` uses the
+same `isEntitled` check, and the pairing code is gone, replaced by in-app approval. That document
+is the reference for private-by-default items, sharing, per-device allocation and the Super Admin
+claim.
 
-**The build order there is not negotiable: entitlement first, then remove the code.** Today
-"paired" means "may stream everything", so dropping the code before entitlement is enforced would
-let anyone on the LAN watch the whole cache. Afterwards, pairing buys almost nothing on its own,
-which is exactly what makes open pairing reasonable.
+**The build order there was followed: entitlement first, then the code removed.** Before
+entitlement, "paired" meant "may stream everything", so dropping the code first would have let
+anyone on the LAN watch the whole cache. CACHE-PERMISSIONS.md records that order as the one it was
+built in.
 
 **Rooms are the existing precedent, not a new problem.** A party already has a host who owns the
-queue and the member-control toggles (`SessionHub.tsx`), and Friends groups are deliberately
-host-less so they survive anyone going offline (`friends.ts`). Both models already work; Server
-Control surfaces them rather than redesigning them.
+queue and the member-control toggles (`SessionHub.tsx`), and Rooms — which grew out of the friends
+group in #131 — are still host-less presence channels, so they survive anyone going offline
+(`rooms.ts`). Both models already work; Server Control surfaces them rather than redesigning them.
 
 ### Constraints that are already decided
 
@@ -334,9 +348,10 @@ Control surfaces them rather than redesigning them.
 - **No new IPC for step 1.** Everything the dashboard needs is already crossing the bridge; it is a
   presentation problem. An error log is the one addition, and it belongs beside `logger.ts` rather
   than as a new subsystem.
-- **The Downloads page is the precedent, not a casualty.** It already aggregates four backends and
-  is where people look for "what is happening". Server Control either absorbs it or links to it —
-  what must not happen is two pages that both half-answer the question.
+- **The Downloads page was absorbed.** `/downloads` redirects Home, and its contents live in the
+  Control Centre: Caching for cached streams, Services for queues and background activity. The
+  constraint it stood for still holds — what must not happen is two pages that both half-answer
+  "what is happening".
 
 ## Phase 6 — The long tail
 
@@ -350,10 +365,13 @@ these up between phases rather than saving them for an end that never comes.
 | Artwork selection | S      | Choose the poster, logo, and backdrop. Plex, Jellyfin, and Kodi all allow it.                                                  |
 | Extras            | S      | Featurettes, deleted scenes, behind-the-scenes, from the TMDB record already fetched.                                          |
 | Notes and reviews | M      | A private note per title, and an optional public review if the social work happens.                                            |
-| Social layer      | L      | A persistent activity feed, follows, shareable profiles. `friends.ts` gives live presence and nothing that survives a session. |
+| Social layer      | L      | A persistent activity feed, follows, shareable profiles. `rooms.ts` keeps standing membership but provides only live presence. |
 | Party reach       | L      | A web-join link for someone without the app, plus reactions and voice.                                                         |
 
-## Order of operations
+## Order of operations (historical)
+
+Kept as the record of how the phases were sequenced, not as a plan still to run: Progress above
+says which phases are complete, and Next up below says what is open.
 
 - **Phase 0 goes first and goes whole.** The only genuinely blocking phase, and the one with no
   visible payoff — which is exactly why it gets skipped and then paid for five times.
@@ -366,18 +384,21 @@ these up between phases rather than saving them for an end that never comes.
 - **Phase 5 is a decision, not a sprint.** One bet at a time, after Phases 0-3 land — most of them
   quietly assume profile-scoped data or content ratings.
 
-## The first five tickets
+## Next up
 
-1. **Autoplay next episode.** The biggest single behavioural gap, and the session already holds
-   everything it needs.
-2. **Migration runner and schema v2.** Invisible, unskippable. Every ticket after it is cheaper, and
-   per-profile history stops being a known defect in a shipped feature.
-3. **Ratings, wired into the recommender.** A small UI on a Phase 0 table, and the first real quality
-   signal the ranking has ever had.
-4. **Sonarr and Radarr requests.** Two endpoints. Turns four configured services from a dashboard into
-   something that does work on your behalf.
-5. **The player menu harvest.** Speed, chapters, subtitle styling, audio delay, sleep timer — five
-   expected features in one menu.
+This section first listed five tickets, and all five have shipped — see the Shipped table under
+Progress: autoplay next episode, the migration runner and schema v2, ratings wired into the
+recommender, Sonarr and Radarr requests, and the player menu harvest.
+
+What is still open:
+
+1. **Phase 4: browse a connected library.** A page that lists what a source actually holds — the
+   part of that phase that did not land.
+2. **Phase 4: the debrid provider abstraction.** Still deliberately deferred, for the reason that
+   phase gives.
+3. **Phase 4.5: Viewer and Server Control.** Part of step 1 has shipped as the Control Centre; the
+   split itself has not.
+4. **Phase 5.** Bets, one at a time.
 
 Every phase ships behind the gates the project already runs: `npm test`, `npm run lint`,
 `npm run typecheck`, plus a migration test against a v1 fixture database for Phase 0.

@@ -1,11 +1,11 @@
 // Ported from r3v07v3r-media-hub's src/main.cjs — the TorBox API client
-// (token()/torbox()/getJson()), account bootstrap (app:bootstrap,
-// torbox:connect, torbox:disconnect), stream discovery/resolution
-// (stream:resolve, backed by the Meteor P2P addon + TorBox's checkcached),
-// playback kickoff (play:stream), and the TorBox "library" (mylist) view
-// (library:list, library:play). Logic is preserved 1:1 (translated to
-// TypeScript, not redesigned) — every error message, fallback path and
-// field name below matches the original exactly.
+// (token()/torbox()/getJson()), account bootstrap (app:bootstrap, which
+// also returns the account's TorBox mylist; torbox:connect,
+// torbox:disconnect), stream discovery/resolution (stream:resolve, backed
+// by the Meteor P2P addon + TorBox's checkcached), and playback kickoff
+// (play:stream). Logic is preserved 1:1 (translated to TypeScript, not
+// redesigned) — every error message, fallback path and field name below
+// matches the original exactly.
 //
 // The original's single global `getJson` hardcoded a TorBox-specific side
 // effect: `if (response.status===401 && String(url).startsWith(TORBOX))
@@ -396,7 +396,7 @@ function lastStreamKey(type: string, id: string): string {
   return `laststream:v1:${type}:${id}`
 }
 
-/** Registers app:bootstrap, torbox:connect/disconnect, stream:resolve, play:stream, and library:list/play. */
+/** Registers app:bootstrap, torbox:connect/disconnect, stream:resolve and play:stream. */
 export function registerTorBoxIpc(): void {
   handle<undefined, BootstrapResult>(MEDIA_HUB_CHANNELS.bootstrap, async () => {
     const configured = Boolean(getTorBoxToken())

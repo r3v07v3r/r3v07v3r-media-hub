@@ -7,11 +7,17 @@ bug-fix patch.
 
 ## P0 — make failures actionable
 
-1. **Unify asynchronous action errors.** Several renderer actions intentionally
-   discard rejected IPC promises. Route them through a shared action runner that
-   reports a concise toast, logs technical context in the main process, and offers
-   a retry for safe idempotent operations. Acceptance: no user-triggered settings,
-   update, playback, or party action can fail without visible feedback.
+1. **Unify asynchronous action errors.** _Partly done._ Several renderer actions
+   intentionally discard rejected IPC promises. Route them through a shared action
+   runner that reports a concise toast, logs technical context in the main process,
+   and offers a retry for safe idempotent operations. Acceptance: no user-triggered
+   settings, update, playback, or party action can fail without visible feedback.
+   The runner exists — `src/renderer/src/hooks/useAsyncAction.ts` (a toast, an
+   `[action:<scope>]` console log, an optional Retry) — and is used by
+   `SettingsPage.tsx` and `useUpdateManager.ts`. Still to do: the provider actions
+   in `routes/MediaHubSettingsSections.tsx`, and the playback and party actions
+   that end in `.catch(() => {})`, such as `components/party/PlayerSessionRail.tsx`,
+   `SessionHub.tsx` and `RoomsSection.tsx`.
 2. **Add bounded response-body reads to every main-process HTTP client.** The proxy
    timeout fix in this patch should become a shared fetch primitive used by catalog,
    tracking, subtitle, and metadata clients. Acceptance: a server that sends headers
@@ -28,10 +34,12 @@ bug-fix patch.
    in session-scoped main-process state. Acceptance: returning from a detail page
    after a renderer reload restores the same catalog position, while expired state
    is ignored.
-3. **Give playback preparation explicit stages.** Replace a generic loading state
-   with resolving, safety-checking, buffering, and starting stages plus cancellation.
-   Acceptance: every stage has a timeout, a useful failure message, and a single
-   obvious next action.
+3. **Give playback preparation explicit stages.** _Done._ Replace a generic loading
+   state with resolving, safety-checking, buffering, and starting stages plus
+   cancellation. Acceptance: every stage has a timeout, a useful failure message,
+   and a single obvious next action. Built in
+   `src/renderer/src/lib/mediaHub/playbackPreparation.ts`, which defines the four
+   stages and the timeout and cancellation errors.
 
 ## P2 — reduce avoidable work and ambiguity
 
@@ -45,6 +53,7 @@ bug-fix patch.
 
 ## Suggested next slice
 
-Start with the shared async action/error runner and migrate Settings plus About/
-Update first. Those screens contain small, low-risk operations and will establish
-the feedback pattern before it is applied to playback and party coordination.
+Status: started. The shared async action/error runner exists, and Settings plus
+About/Update were migrated first, because those screens contain small, low-risk
+operations and establish the feedback pattern. Playback and party coordination
+remain.

@@ -1620,20 +1620,24 @@ export default function SettingsPage({
                 <h2 id="settings-episodes" className={styles.sectionTitle}>
                   Episodes
                 </h2>
-                {/* Two letters, typed rather than picked from a list: TMDB
-                  answers for well over a hundred regions, and a dropdown of
-                  all of them is a worse control than a field somebody fills in
-                  once. An empty or malformed value clears the setting, which
-                  puts it back on the machine's own locale. */}
+                {/* The country whose content-rating certification a movie or
+                  series shows (main/media-hub/contentRating.ts) — the only
+                  thing this value picks. Two letters, typed rather than picked
+                  from a list: TMDB answers for well over a hundred regions,
+                  and a dropdown of all of them is a worse control than a field
+                  somebody fills in once. An empty or malformed value clears
+                  the setting, which puts it back on the machine's own
+                  locale. */}
                 <div className={`${styles.row} ${styles.rowSegmented}`}>
                   <div className={styles.rowIcon} aria-hidden="true">
                     <Icon name="planet" size={17} />
                   </div>
                   <div className={styles.rowText}>
-                    <span className={styles.rowTitle}>Region for “Where to watch”</span>
+                    <span className={styles.rowTitle}>Region for age ratings</span>
                     <span className={styles.rowDescription}>
-                      Two-letter country code. Streaming availability differs by country, so there
-                      is no global answer. Leave it blank to follow this computer&apos;s own region.
+                      Two-letter country code. Age ratings are certified per country, so a movie or
+                      series shows the rating for this region. Leave it blank to follow this
+                      computer&apos;s own region.
                     </span>
                   </div>
                   <span className={styles.field} style={{ flex: '0 0 88px' }}>
@@ -1642,7 +1646,7 @@ export default function SettingsPage({
                       style={{ padding: '5px 10px', fontSize: 12, textAlign: 'center' }}
                       maxLength={2}
                       defaultValue={mediaHubSettings?.watchRegion ?? ''}
-                      aria-label="Region for where to watch"
+                      aria-label="Region for age ratings"
                       onBlur={(event) => void handleSetWatchRegion(event.target.value)}
                       onKeyDown={(event) => {
                         if (event.key === 'Enter') event.currentTarget.blur()
