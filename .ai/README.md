@@ -4,6 +4,8 @@ An automated Claude ⇄ GPT review cycle for this project: Claude implements aga
 
 It is not trying to remove you from the loop. It's trying to remove the manual tedium of: take a screenshot → copy code/results → paste into GPT → read feedback → paste feedback to Claude → wait → repeat. Human defines intent, Claude implements, automated QA verifies, GPT critiques, Claude corrects, human approves — the human decision points don't move, they just stop costing you copy-paste.
 
+**Status in this repository:** scaffolded on 2026-07-25 and never run. `.ai/STATE.json` is still at its initial `not_started` state, `.ai/CHANGELOG.md` has no entries, no `.ai/REVIEW.md` has ever been generated, and `REQUIREMENTS.md` is still the template. Nothing in the app, its tests or CI depends on these files, so keeping or removing the loop is a workflow decision, not a code one.
+
 ## Architecture
 
 ```
@@ -20,7 +22,8 @@ It is not trying to remove you from the loop. It's trying to remove the manual t
 ├── screenshots/
 │   ├── current/         regenerated every run (gitignored)
 │   └── reference/       human-provided baseline images, compared by name (committed)
-└── reports/             raw QA/screenshot JSON per run (gitignored, latest kept as *-latest.json)
+└── reports/             raw QA/screenshot JSON (gitignored): qa-latest.json plus a timestamped
+                         qa-<ms>.json per run; screenshots-latest.json only, overwritten each run
 
 scripts/
 ├── ai-loop.ts           orchestrator — the full iteration cycle
@@ -38,8 +41,8 @@ Git is the shared source of truth between the two agents — not chat context. E
 2. `npm install -D tsx playwright` (then `npx playwright install chromium` if Playwright hasn't fetched a browser there yet).
 3. Add the four `ai:*` scripts below to `package.json`.
 4. Rewrite `.ai/REQUIREMENTS.md` for that project's actual current task, delete the demo content in it.
-5. Adjust `.ai/config.json` — at minimum, `screenshots.routes` (or set `screenshots.enabled: false` for a non-visual project) and `screenshots.serveDir` if the build output doesn't land in `out/renderer`, `dist`, or `build`.
-6. Add `OPENAI_API_KEY` (and optionally `OPENAI_MODEL`) to that project's `.env.local` / `.env`, and make sure it's gitignored.
+5. Adjust `.ai/config.json` — at minimum, `screenshots.routes` (or set `screenshots.enabled: false` for a non-visual project) and `screenshots.serveDir` if the build output doesn't land in `out/renderer`, `dist`, `build`, or `preview-dist` (the four directories `ai-screenshots.ts` checks on its own; nothing in this repository builds into `preview-dist` any more).
+6. Add `OPENAI_API_KEY` (and optionally `OPENAI_MODEL`) to that project's `.env.local`, or export them in your shell, and make sure `.env.local` is gitignored. `scripts/ai-utils.ts` reads `process.env` and a hand-parsed `.env.local` only; a plain `.env` file is not read.
 7. `git init` if the project isn't already a git repo — the loop reads `git diff`/`git status` as evidence and refuses to run without one.
 
 Everything in `scripts/ai-utils.ts`, `ai-qa.ts` (stack auto-detection), and `ai-loop.ts`'s state machine is stack-agnostic and copyable unchanged. `ai-screenshots.ts` is copyable unchanged for any project whose build output is a static site (which covers Vite/webpack/CRA-style web and Electron-renderer builds); a genuinely different rendering model (native, server-rendered-only, etc.) would need its own capture step but can still feed the same `ScreenshotReport` shape into `ai-review.ts`.
@@ -48,7 +51,9 @@ Everything in `scripts/ai-utils.ts`, `ai-qa.ts` (stack auto-detection), and `ai-
 
 ```
 npm run ai:loop              full iteration cycle (QA -> screenshots -> GPT review -> Claude fixes -> repeat)
-npm run ai:loop -- --dry-run inspect config/env/detected commands; zero API calls, zero code changes
+npm run ai:loop -- --dry-run check config/env, then RUN the detected QA commands (lint, typecheck,
+                             test, build) through ai-qa.ts; zero API calls, zero code changes, but
+                             it takes as long as a real QA pass and writes .ai/reports/qa-*.json
 npm run ai:review            review-only mode: collect evidence, call GPT, write REVIEW.json/.md, stop
 npm run ai:qa                just the QA runner
 npm run ai:screenshot        just the screenshot capture
@@ -65,6 +70,7 @@ npm run ai:screenshot        just the screenshot capture
 | `autoFixPriorities`                           | Which issue priorities get handed to Claude automatically (default `P0, P1, P2`).                                                                                           |
 | `requireBuildSuccess` / `requireTestsSuccess` | If true, a failing build/test run blocks approval regardless of score.                                                                                                      |
 | `review.model`                                | `"${OPENAI_MODEL}"` by default — resolved from the env var at runtime so upgrading models doesn't require a code change. Falls back to `gpt-4o` if `OPENAI_MODEL` is unset. |
+| `review.provider`                             | A label only. It is shown by `--dry-run` but nothing branches on it: `callOpenAI()` always calls the OpenAI endpoint.                                                       |
 | `screenshots.*`                               | `enabled`, `viewport`, `routes` (`{name, url, captureOffsetsMs?}`), `serveDir` (auto-detected if omitted), `settleMs` (wait before capture).                                |
 | `claude.command` / `claude.args`              | How `ai-loop.ts` invokes Claude non-interactively (default `claude -p`).                                                                                                    |
 
@@ -84,7 +90,7 @@ npm run ai:screenshot        just the screenshot capture
 
 ## Human approval gate
 
-The loop always stops and prints a summary (see below) rather than proceeding, whenever: max iterations is reached, GPT returns `human_review_required` or `blocked`, oscillation is detected, or `ai:loop` hits a hard error (missing API key, Claude CLI not found, no git repo, etc). It is never silent about why it stopped.
+The loop always stops rather than proceeding whenever max iterations is reached, GPT returns `human_review_required` or `blocked`, or oscillation is detected (`ai-review.ts` turns oscillation into `human_review_required`); in each of those cases it prints the summary below. A hard error (missing API key, Claude CLI not found, no git repo) stops it too, but as a thrown error with its message and a non-zero exit, not as the summary. It is never silent about why it stopped.
 
 ```
 AI DEVELOPMENT REVIEW COMPLETE
@@ -114,11 +120,11 @@ READY FOR HUMAN REVIEW
 
 ## Safety
 
-`scripts/ai-utils.ts`'s git helpers are read-only (`status`, `diff`, `diff --stat`) — nothing under `scripts/ai-*.ts` calls a mutating git command. The loop will never, on its own: push a remote branch, merge, rewrite git history, discard uncommitted work, delete large areas of the project, reset the repository, force-checkout, remove major dependencies, change a database schema destructively, touch deployment infrastructure, expose credentials, or deploy to production. It is safe to run against a working tree with uncommitted changes already in it — it never runs anything that would touch them. All of that is why the loop stops at a human gate for anything resembling those categories instead of attempting to route around them.
+`scripts/ai-utils.ts`'s git helpers are read-only (`status`, `diff`, `diff --stat`) — nothing under `scripts/ai-*.ts` calls a mutating git command. The scripts themselves will never: push a remote branch, merge, rewrite git history, discard uncommitted work, delete large areas of the project, reset the repository, force-checkout, remove major dependencies, change a database schema destructively, touch deployment infrastructure, expose credentials, or deploy to production. That guarantee covers the orchestrator only. In a full (non-dry-run) `ai:loop`, whenever the reviewer returns `changes_required`, the approved issues are handed to the `claude` CLI (`claude.command`/`claude.args` in `.ai/config.json`), which edits source files in the working tree under its own permission model; this framework does not sandbox it. So the loop does not discard uncommitted work, but it does add to it. All of that is why the loop stops at a human gate for anything resembling those categories instead of attempting to route around them.
 
 ## Environment variables
 
-Set in `.env.local` (already gitignored) or your shell:
+Set in `.env.local` (already gitignored) or your shell — not in a plain `.env`, which these scripts do not read:
 
 - `OPENAI_API_KEY` — required for `ai:review` / `ai:loop`. `ai:qa`, `ai:screenshot`, and `ai:loop -- --dry-run` never need it.
 - `OPENAI_MODEL` — optional, e.g. `gpt-4o`, `gpt-4.1`. Falls back to `gpt-4o` if unset.
@@ -140,4 +146,4 @@ Each `ai:review` call sends: the reviewer system prompt, `REQUIREMENTS.md`, the 
 
 ## Resuming after human review
 
-`ai-loop.ts` reads `.ai/STATE.json`'s `iteration` field and resumes from there rather than restarting at 1, so after you've reviewed a `human_review_required` stop and made whatever call was needed (updated `REQUIREMENTS.md`, fixed something yourself, whatever), re-running `npm run ai:loop` continues the count rather than silently giving you `maxIterations` more iterations than you configured. To start a fresh cycle instead (e.g. for a new task), reset `.ai/STATE.json` to its initial shape (`iteration: 0, status: "not_started", previousScores: [], issueHistory: {}`) — or just delete it; `ai-loop.ts` recreates it with those defaults if it's missing.
+`ai-loop.ts` reads `.ai/STATE.json`'s `iteration` field and resumes from there rather than restarting at 1, so after you've reviewed a `human_review_required` stop and made whatever call was needed (updated `REQUIREMENTS.md`, fixed something yourself, whatever), re-running `npm run ai:loop` continues the count rather than silently giving you `maxIterations` more iterations than you configured. To start a fresh cycle instead (e.g. for a new task), reset `.ai/STATE.json` to its initial shape (`iteration: 0, lastScore: null, status: "not_started", previousScores: [], openIssues: 0, issueHistory: {}`) — or just delete it; `ai-loop.ts` recreates it with those defaults if it's missing.

@@ -20,7 +20,7 @@
 
 import type { UpdateStatusPayload } from '@shared/media-hub/types'
 
-export interface UpdateStoreState {
+interface UpdateStoreState {
   status: UpdateStatusPayload | null
   /** A check somebody started here, before main has pushed anything back.
    *  Shared too, so pressing Check on one surface reads as "Checking…" on the

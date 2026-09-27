@@ -126,6 +126,11 @@ followed by an un-plan before the first push has settled waits for it, so
 the removal sees what the add achieved rather than a record it had not
 reached yet.
 
+Plan changes share that per-title chain with watch-history pushes and
+scrobbles (`src/main/media-hub/titlePushQueue.ts`), so the un-plan that
+marking a title watched triggers, and a re-plan that undoes it, cannot
+overtake each other or the history push.
+
 ### 7. Everything remembered is stamped with the account it came from
 
 "It came from Trakt" is not a fact about a list, because Trakt is not one

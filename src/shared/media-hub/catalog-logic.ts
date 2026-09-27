@@ -17,7 +17,7 @@ import {
 } from './types'
 import { releaseInstant } from './releaseDate'
 
-export interface FilterCatalogOptions {
+interface FilterCatalogOptions {
   includeGenres?: string[]
   excludeGenres?: string[]
   minRating?: number | string
@@ -28,7 +28,7 @@ export interface FilterCatalogOptions {
   sort?: 'rating' | 'year' | 'title' | string
 }
 
-export interface EpisodeWatchState {
+interface EpisodeWatchState {
   watchedKeys: Set<string>
   watchedCount: number
   total: number
@@ -40,7 +40,7 @@ export interface EpisodeWatchState {
 // callers might pass an item as (CatalogItem, TrackedItem, or a raw
 // Simkl/IMDB-shaped record with imdbId/imdb_id) is optional here since the
 // function only ever reads identity fields, never the rest of the item.
-export type WatchableItem = Partial<CatalogItem> & {
+type WatchableItem = Partial<CatalogItem> & {
   id?: string
   simklId?: number | string
   imdbId?: string
@@ -278,7 +278,7 @@ export function airingStatus(
 // ---------------------------------------------------------------------
 
 /** The subject of the comparison. A CatalogItem satisfies this. */
-export interface SimilarSource {
+interface SimilarSource {
   id: string
   title: string
   genres?: string[]
@@ -483,11 +483,11 @@ export const RECOMMENDATION_REASON_ORDER: readonly RecommendationReason['kind'][
 ]
 
 /** A shelf shorter than this is a chip, not a shelf. */
-export const RAIL_MIN_ITEMS = 4
+const RAIL_MIN_ITEMS = 4
 /** Longer than this and the tail is titles the ranking barely wanted. */
-export const RAIL_MAX_ITEMS = 24
+const RAIL_MAX_ITEMS = 24
 /** Enough to browse; past this the page is scrolling for its own sake. */
-export const RAILS_MAX = 8
+const RAILS_MAX = 8
 
 /**
  * The ranking shelved by reason — see RecommendationRail.
@@ -567,10 +567,10 @@ export function enoughStoredRecommendations(
 }
 
 /** Share of viewing by kind, 0..1, summing to 1. */
-export type CadenceShares = Record<MediaKind, number>
+type CadenceShares = Record<MediaKind, number>
 
 /** What one person watches at one time of the week. */
-export interface CadenceProfile {
+interface CadenceProfile {
   shares: CadenceShares
   /** Dated rows the slot was measured from — the confidence behind `shares`. */
   samples: number
@@ -785,9 +785,9 @@ export function applyCadence(
  * weighs 1 — the neutral value that makes an unrated library rank exactly as
  * it did before ratings existed. See shared/media-hub/rating.ts.
  */
-export type WeightedCredits = TitleCredits | { credits: TitleCredits; weight: number }
+type WeightedCredits = TitleCredits | { credits: TitleCredits; weight: number }
 
-export interface TasteProfile {
+interface TasteProfile {
   cast: ReadonlySet<string>
   creators: ReadonlySet<string>
   keywords: ReadonlySet<string>
@@ -1071,7 +1071,7 @@ const ABANDONED_PENALTY = 25
  * recency. The strongest signal in the ranking by design: it is a fact
  * about this person's last few evenings, not a taste inferred over years.
  */
-export const CONTINUATION_BOOST = 100
+const CONTINUATION_BOOST = 100
 
 /**
  * How much a watch still says about tonight.

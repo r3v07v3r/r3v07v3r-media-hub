@@ -242,13 +242,13 @@ export interface MpvSpawnOptions {
  * binding constraint at ordinary streaming bitrates (roughly 25Mbps), which is
  * what makes "pause, let it fill, resume without waiting" actually work.
  */
-export const BUFFER_PROFILES: Record<number, { readaheadSeconds: number; maxBytes: string }> = {
+const BUFFER_PROFILES: Record<number, { readaheadSeconds: number; maxBytes: string }> = {
   3: { readaheadSeconds: 60, maxBytes: '256MiB' },
   8: { readaheadSeconds: 180, maxBytes: '512MiB' },
   15: { readaheadSeconds: 420, maxBytes: '1024MiB' }
 }
 
-export function bufferProfileFor(bufferSeconds: number | undefined): {
+function bufferProfileFor(bufferSeconds: number | undefined): {
   readaheadSeconds: number
   maxBytes: string
 } {

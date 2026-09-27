@@ -46,8 +46,8 @@ export const REFRESH_COOLDOWN_MS = 15 * 60 * 1000
  *  must not turn the walk into an infinite loop. Both sit well past the
  *  real catalog sizes observed (Cinemeta top ~15k rows/kind, Kitsu ~22k
  *  anime), so the empty-page stop is the one that fires in practice. */
-export const MAX_CINEMETA_PAGES = 400
-export const MAX_KITSU_PAGES = 1500
+const MAX_CINEMETA_PAGES = 400
+const MAX_KITSU_PAGES = 1500
 
 const CINEMETA_PAGE_SIZE = 100
 const KITSU_PAGE_SIZE = 20
@@ -59,7 +59,7 @@ const PAGE_GAP_MS = 150
 
 const FETCH_TIMEOUT_MS = 20_000
 
-export type PageFetcher = (kind: MediaKind, pageIndex: number) => Promise<CatalogItem[]>
+type PageFetcher = (kind: MediaKind, pageIndex: number) => Promise<CatalogItem[]>
 
 async function fetchJsonWithTimeout(url: string): Promise<RawApiPayload> {
   const controller = new AbortController()
@@ -79,7 +79,7 @@ async function fetchJsonWithTimeout(url: string): Promise<RawApiPayload> {
 /** One upstream page, normalized with the app's own normalizers. Fails to
  *  empty — a bad page costs its rows and nothing else, exactly the app's
  *  crawl contract. */
-export async function fetchCatalogPage(kind: MediaKind, pageIndex: number): Promise<CatalogItem[]> {
+async function fetchCatalogPage(kind: MediaKind, pageIndex: number): Promise<CatalogItem[]> {
   try {
     if (kind === 'anime') {
       const offset = pageIndex * KITSU_PAGE_SIZE

@@ -39,7 +39,7 @@ export const TITLE_SYNC_PAGE_LIMIT = 500
  *  stopped, so depth arrives across passes rather than in one gulp. */
 export const TITLE_SYNC_MAX_PAGES_PER_PASS = 40
 
-export interface SanitizedTitleRow {
+interface SanitizedTitleRow {
   seq: number
   kind: MediaKind
   rank: number

@@ -3,7 +3,7 @@ import { applyWatchStateFilters } from './categoryFilters'
 
 export const SPOTLIGHT_PICK_COUNT = 4
 
-export type MoodWatchStateFilters = Parameters<typeof applyWatchStateFilters>[1]
+type MoodWatchStateFilters = Parameters<typeof applyWatchStateFilters>[1]
 
 /**
  * Mood selection deliberately keeps the current "match any selected mood"
@@ -56,7 +56,7 @@ export function rankMoodSpotlight(
   })
 }
 
-export interface MoodSpotlightShuffle {
+interface MoodSpotlightShuffle {
   picks: MediaItem[]
   seenIds: string[]
 }

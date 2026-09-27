@@ -288,7 +288,7 @@ export async function anilistIdForKitsu(
 
 /** The airing fields this reads off one AniList Media node. `airingAt` is
  *  AniList's Unix-seconds timestamp. Exported for the parser's tests. */
-export interface AnilistAiringNode {
+interface AnilistAiringNode {
   status?: string | null
   nextAiringEpisode?: { episode?: number | null; airingAt?: number | null } | null
   airingSchedule?: {

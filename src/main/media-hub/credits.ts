@@ -84,7 +84,7 @@ function clean(values: unknown, limit: number): string[] {
 }
 
 /** What has already been looked up for one title. `null` means "not looked up yet", NOT "nothing to find" — see the empty-credits note in fetchCredits. */
-export function cachedCredits(id: string): TitleCredits | null {
+function cachedCredits(id: string): TitleCredits | null {
   try {
     return getDatabase().getCache<TitleCredits>(cacheKey(id), { allowExpired: true })
   } catch {

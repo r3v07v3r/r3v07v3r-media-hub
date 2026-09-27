@@ -125,7 +125,7 @@ export type EvictionReason = 'hard-max' | 'idle' | 'quota' | 'budget'
  *  also runs a trading system) the cache is the least important tenant,
  *  so when something else fills the disk, the cache is what yields. Same
  *  figure the fetcher refuses to start a download without. */
-export const DISK_PRESSURE_MARGIN_BYTES = 2 * 1024 ** 3
+const DISK_PRESSURE_MARGIN_BYTES = 2 * 1024 ** 3
 
 /**
  * Which items must go, and why — pure, so the three-layer expiry rule is

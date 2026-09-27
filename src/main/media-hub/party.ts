@@ -77,7 +77,7 @@ export type PartyQueueEvent =
   | { type: 'vote'; queueId: string; voterId: string; direction: number }
   | { type: 'queue-sync'; queue: PartyQueueEntry[] }
 
-export function isValidEndpoint(endpoint: unknown): endpoint is PartyLanEndpoint {
+function isValidEndpoint(endpoint: unknown): endpoint is PartyLanEndpoint {
   const e = endpoint as { ip?: unknown; port?: unknown } | null | undefined
   if (!e || typeof e.ip !== 'string' || !Number.isInteger(e.port)) return false
   if ((e.port as number) < 1 || (e.port as number) > 65535) return false
@@ -466,7 +466,7 @@ export function decodeShareCode(code: unknown): ShareCodePayload | null {
   }
 }
 
-export function deriveKey(secret: string): Buffer {
+function deriveKey(secret: string): Buffer {
   return crypto.createHash('sha256').update(String(secret)).digest()
 }
 
@@ -504,11 +504,11 @@ export function createMemberId(
   return (randomBytes(8) as Buffer).toString('hex')
 }
 
-export function queueScore(entry: PartyQueueEntry): number {
+function queueScore(entry: PartyQueueEntry): number {
   return Object.values(entry?.votes || {}).reduce((sum: number, v) => sum + v, 0)
 }
 
-export function sortQueue(list: PartyQueueEntry[]): PartyQueueEntry[] {
+function sortQueue(list: PartyQueueEntry[]): PartyQueueEntry[] {
   return list
     .map((entry, index) => ({ entry, index }))
     .sort((a, b) => queueScore(b.entry) - queueScore(a.entry) || a.index - b.index)

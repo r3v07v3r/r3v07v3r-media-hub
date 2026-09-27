@@ -459,7 +459,7 @@ export async function catalogData(
  * CatalogListing. catalogData stays the plain-items form for the callers
  * that only want a catalog to rank over.
  */
-export async function catalogListing(
+async function catalogListing(
   kind: MediaKind,
   force = false,
   priority: TaskPriority = 'visible'

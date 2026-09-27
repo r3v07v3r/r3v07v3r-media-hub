@@ -33,7 +33,7 @@ import { sendToRenderer } from './rendererBridge'
 const blocked: BlockedDownload[] = []
 const MAX_REMEMBERED = 50
 
-export function blockedDownloads(): BlockedDownload[] {
+function blockedDownloads(): BlockedDownload[] {
   return [...blocked]
 }
 

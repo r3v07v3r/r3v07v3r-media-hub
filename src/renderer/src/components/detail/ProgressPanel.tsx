@@ -9,7 +9,7 @@ import { useAppState } from '@renderer/context/AppStateContext'
 import { useMediaHubLists } from '@renderer/lib/mediaHub/hooks'
 import styles from './ProgressPanel.module.css'
 
-export interface ProgressPanelProps {
+interface ProgressPanelProps {
   config: DetailAdapterConfig
   media: MediaItem
   /** Watched-vs-total over this title's REAL episode list, from the same

@@ -41,7 +41,7 @@ function safeLabel(name: string): string {
   return name.replace(/[^a-zA-Z0-9-]/g, '-').replace(/^-+|-+$/g, '') || 'r3-cache'
 }
 
-export interface MdnsAnnouncer {
+interface MdnsAnnouncer {
   start(): void
   stop(): void
 }

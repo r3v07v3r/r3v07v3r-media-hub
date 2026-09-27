@@ -306,5 +306,3 @@ export function restoreBackup(sql: DatabaseSync, backup: BackupFile): RestoreSum
     activeProfileId: declared.includes(wanted) ? wanted : declared[0]
   }
 }
-
-export { BACKUP_TABLES }

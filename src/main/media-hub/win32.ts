@@ -13,24 +13,20 @@
 import type { BrowserWindow } from 'electron'
 import koffi from 'koffi'
 
-export const GW_HWNDNEXT = 2
-export const GW_CHILD = 5
+const GW_HWNDNEXT = 2
+const GW_CHILD = 5
 
-export const SW_HIDE = 0
-export const SW_SHOWNA = 8
+const SW_HIDE = 0
+const SW_SHOWNA = 8
 
-export const GWL_STYLE = -16
-export const GWL_EXSTYLE = -20
-export const GWLP_HWNDPARENT = -8
+const GWL_STYLE = -16
+const GWL_EXSTYLE = -20
 
-export const WS_VISIBLE = 0x10000000n
 export const WS_DISABLED = 0x08000000n
 export const WS_CHILD = 0x40000000n
 export const WS_CLIPSIBLINGS = 0x04000000n
-export const WS_CLIPCHILDREN = 0x02000000n
-export const WS_EX_TOOLWINDOW = 0x00000080n
 
-export const HWND_TOP = 0n
+const HWND_TOP = 0n
 
 const SWP_NOSIZE = 0x0001
 const SWP_NOMOVE = 0x0002
@@ -67,8 +63,6 @@ interface User32 {
   SetWindowLongPtrW: (hwnd: bigint, index: number, value: bigint) => number | bigint
   SetParent: (hwnd: bigint, parent: bigint) => number | bigint
   GetWindowThreadProcessId: (hwnd: bigint, pid: Uint32Array) => number
-  SetCursorPos: (x: number, y: number) => boolean
-  mouse_event: (flags: number, dx: number, dy: number, data: number, extra: bigint) => void
 }
 
 let user32: User32 | null | undefined
@@ -96,9 +90,7 @@ function api(): User32 | null {
     SetParent: lib.func('int64_t SetParent(int64_t, int64_t)'),
     GetWindowThreadProcessId: lib.func(
       'uint32_t GetWindowThreadProcessId(int64_t, _Out_ uint32_t *)'
-    ),
-    SetCursorPos: lib.func('bool SetCursorPos(int, int)'),
-    mouse_event: lib.func('void mouse_event(uint32_t, uint32_t, uint32_t, uint32_t, uint64_t)')
+    )
   }
   return user32
 }
@@ -117,7 +109,7 @@ export function isWindowAlive(hwnd: bigint): boolean {
   return u ? u.IsWindow(hwnd) : false
 }
 
-export function classNameOf(hwnd: bigint): string {
+function classNameOf(hwnd: bigint): string {
   const u = api()
   if (!u) return ''
   const buf = new Uint16Array(256)
@@ -125,7 +117,7 @@ export function classNameOf(hwnd: bigint): string {
   return len > 0 ? Buffer.from(buf.buffer, 0, len * 2).toString('utf16le') : ''
 }
 
-export function windowPidOf(hwnd: bigint): number {
+function windowPidOf(hwnd: bigint): number {
   const u = api()
   if (!u) return 0
   const pid = new Uint32Array(1)
@@ -133,7 +125,7 @@ export function windowPidOf(hwnd: bigint): number {
   return pid[0]
 }
 
-export function windowStyleOf(hwnd: bigint): { style: bigint; exStyle: bigint } {
+function windowStyleOf(hwnd: bigint): { style: bigint; exStyle: bigint } {
   const u = api()
   if (!u) return { style: 0n, exStyle: 0n }
   return {
@@ -234,23 +226,4 @@ export function raiseToTopOfSiblings(hwnd: bigint): boolean {
 
 export function setShown(hwnd: bigint, shown: boolean): void {
   api()?.ShowWindow(hwnd, shown ? SW_SHOWNA : SW_HIDE)
-}
-
-/** Moves the pointer to a physical screen point (spike only: the cursor
- *  sprite darkens whatever pixel it sits on, so it must be parked away from
- *  anything a screenshot will sample). */
-export function moveCursorTo(x: number, y: number): void {
-  api()?.SetCursorPos(Math.round(x), Math.round(y))
-}
-
-/** Synthesizes one left click at a physical screen point (spike only: proves
- *  input reaches an embedded child with nobody at the keyboard). */
-export function clickAtScreenPoint(x: number, y: number): void {
-  const u = api()
-  if (!u) return
-  const MOUSEEVENTF_LEFTDOWN = 0x0002
-  const MOUSEEVENTF_LEFTUP = 0x0004
-  u.SetCursorPos(Math.round(x), Math.round(y))
-  u.mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0n)
-  u.mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0n)
 }

@@ -70,6 +70,7 @@ import { airingStatus, continueWatchingList } from './core'
 import { catalogData, metadata } from './catalog'
 import { getDatabase } from './dbState'
 import {
+  applyLocalPlanChange,
   lastPlannedSyncReport,
   pushLocalPlanChange,
   plannedSources,
@@ -130,7 +131,7 @@ import {
   simklUrl,
   simklWatchedSnapshot
 } from './simklClient'
-import { createKeyedSerialQueue } from '../../shared/media-hub/serialQueue'
+import { titlePushQueue, titlePushKey } from './titlePushQueue'
 import { cachedMetadata } from './titleNames'
 import { imdbForSimklKeyedId, isSimklKeyedId } from './simklKeyedHistory'
 
@@ -150,18 +151,16 @@ interface SimklSyncResult {
  * both in flight together — in a Simkl lane whose concurrency is greater
  * than one. If the add lands after the remove, Simkl says watched while
  * this database says not, and the handlers have already reported success.
- * One serial chain per title (see serialQueue.ts) keeps opposing pushes in
- * the order they were asked for; the three services within one push run
- * together, since each only has to stay ordered against itself. A push
- * that fails logs itself (syncSimklHistory, traktClient, pushMalProgress)
- * and does not hold up the next; a disagreement that survives is what the
- * sync review is for.
+ * One serial chain per title (titlePushQueue.ts — the same chain the plan
+ * changes in watchlists.ts and the scrobbles below run on) keeps opposing
+ * pushes in the order they were asked for; the three services within one
+ * push run together, since each only has to stay ordered against itself.
+ *
+ * Ordered is all it is. A push that fails logs itself (syncSimklHistory,
+ * traktClient, pushMalProgress), does not hold up the next, and is not
+ * retried. The sync review only catches a disagreement over a Simkl movie;
+ * drift on a series, at Trakt or at MAL is not detected yet.
  */
-const remotePushQueue = createKeyedSerialQueue()
-/** One chain per title: the kind and id, which every handler's item carries. */
-function remotePushKey(item: { id: string; type?: string }): string {
-  return `${item.type ?? ''}:${item.id}`
-}
 function queueRemotePushes(
   item: { id: string; type?: string },
   pushes: () => Array<Promise<unknown>>
@@ -172,7 +171,7 @@ function queueRemotePushes(
   // post the first account's history to the second. A stamp that no
   // longer matches means the task is dropped, not run.
   const stamp = connectedAccountsStamp()
-  void remotePushQueue.run(remotePushKey(item), () =>
+  void titlePushQueue.run(titlePushKey(item), () =>
     connectedAccountsStamp() === stamp ? Promise.allSettled(pushes()) : Promise.resolve([])
   )
 }
@@ -1666,10 +1665,7 @@ export function registerTrackingIpc(): void {
             // owes — the un-plan a mark queued moments ago must land before
             // a re-plan (an undo) is even asked for, or it would undo the
             // undo at Trakt and clear the origin the re-plan just wrote.
-            queueRemotePushes(pushItem, () => {
-              pushLocalPlanChange(plan, true)
-              return []
-            })
+            queueRemotePushes(pushItem, () => [applyLocalPlanChange(plan, true)])
             break
           case 'untrack':
             db.untrack(id)
@@ -2229,7 +2225,7 @@ export function registerTrackingIpc(): void {
       // Simkl request always was, so the error below still reaches the
       // main window.
       let simklError: string | undefined
-      await remotePushQueue.run(remotePushKey(payload.item), async () => {
+      await titlePushQueue.run(titlePushKey(payload.item), async () => {
         const trakt = pushTraktScrobble(payload.item, payload.playback || {}, action, progress)
         // Null for a title Simkl has no id for — the same refusal to guess
         // by title/year that syncSimklHistory makes above.

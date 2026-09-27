@@ -44,7 +44,7 @@ export interface JobRecord {
 
 /** A job unfetchable for this long is marked expired and stops retrying —
  *  the feeder can re-queue it later if the title is still wanted. */
-export const JOB_EXPIRY_MS = 48 * 60 * 60 * 1000
+const JOB_EXPIRY_MS = 48 * 60 * 60 * 1000
 
 const INFO_HASH_RE = /^[a-f0-9]{40}$/
 

@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict'
 
-// The near-tier gate (torbox.ts's withinQualityCeiling) is module-private, so
-// this pins the RULE it implements against the setting's own meaning. The
+// The near-tier gate (withinQualityCeiling) now lives in streamTierRules.ts.
+// This file keeps its own copy on purpose: it pins the RULE against the
+// setting's own meaning, not whatever the module currently says. The
 // Settings row is "Maximum video quality — avoid releases sharper than this
 // display needs", and the speed test writes it as min(line, screen): it is a
 // ceiling. It was once compared as `resolution >= ceiling`, which inverted it.

@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict'
-import { computeWantedList } from '../src/shared/lancache/wantedList'
+import { computeWantedList, lanCacheContentKey } from '../src/shared/lancache/wantedList'
 import type { HistoryEntry, TrackedItem } from '../src/shared/media-hub/types'
 
 // The wanted list is where the three prefetch triggers become concrete
-// contentKeys. The keys must match cacheContentKey's shape exactly, and
-// anime must keep its no-season addressing — a mismatch on either doesn't
+// contentKeys. Every key comes from lanCacheContentKey, the same builder
+// stream:resolve's tier-2 lookup asks the daemon with, and anime must keep
+// its no-season addressing there. A mismatch between the two sides doesn't
 // error, it just makes the daemon invisibly never used for that title.
 
 // Explicit-return functions, not `=> ({...})` arrow-objects: TypeScript's
@@ -75,8 +76,9 @@ function historyEntry(overrides: Partial<HistoryEntry>): HistoryEntry {
 }
 
 // Anime keeps its no-season addressing: kitsuId:episode as the resolve id,
-// and an empty season segment in the content key — the same special case
-// startPlayback and the local-cache tier already handle.
+// and an empty season segment in the content key. Kitsu ids are already
+// season-scoped, so lanCacheContentKey drops the season for anime on both
+// the feeder and the tier-2 lookup.
 {
   const wanted = computeWantedList(
     [trackedItem({ id: 'kitsu:555', type: 'anime', title: 'Anime' })],
@@ -105,6 +107,94 @@ function historyEntry(overrides: Partial<HistoryEntry>): HistoryEntry {
   )
   const wanted = computeWantedList(many, [])
   assert.ok(wanted.length <= 30, `bounded (got ${wanted.length})`)
+}
+
+// lanCacheContentKey is the single formula for the daemon's contentKey: the
+// feeder queues under it and stream:resolve's tier-2 lookup asks under it.
+// The resolver's inputs are what the renderer sends, and the renderer always
+// sends a season for anime, so the builder has to drop it.
+{
+  assert.equal(
+    lanCacheContentKey({
+      catalogId: 'kitsu:555',
+      kind: 'anime',
+      seasonNumber: 1,
+      episodeNumber: 9
+    }),
+    'kitsu:555::9',
+    'anime drops the season the renderer sends'
+  )
+  assert.equal(
+    lanCacheContentKey({
+      catalogId: 'kitsu:555',
+      kind: 'anime',
+      seasonNumber: undefined,
+      episodeNumber: 9
+    }),
+    'kitsu:555::9',
+    'anime with no season builds the same key'
+  )
+  assert.equal(
+    lanCacheContentKey({
+      catalogId: 'TT200 ',
+      kind: 'series',
+      seasonNumber: 2,
+      episodeNumber: 6
+    }),
+    'tt200:2:6',
+    'series keeps its season; the id is trimmed and lowercased'
+  )
+  assert.equal(
+    lanCacheContentKey({ catalogId: 'tt100', kind: 'movie' }),
+    'tt100::',
+    'movie has empty season and episode segments'
+  )
+  assert.equal(lanCacheContentKey({ catalogId: '', kind: 'movie' }), '', 'empty id builds no key')
+  assert.equal(
+    lanCacheContentKey({ catalogId: '   ', kind: 'anime', episodeNumber: 3 }),
+    '',
+    'blank id builds no key'
+  )
+
+  // Round trip: the key the resolver builds from a renderer payload is one
+  // the feeder queued for the same title.
+  const animeKeys = computeWantedList(
+    [trackedItem({ id: 'kitsu:555', type: 'anime', title: 'Anime' })],
+    [historyEntry({ id: 'kitsu:555', type: 'anime', season: null, episode: 8, title: 'Anime' })]
+  ).map((entry) => entry.contentKey)
+  assert.ok(
+    animeKeys.includes(
+      lanCacheContentKey({
+        catalogId: 'kitsu:555',
+        kind: 'anime',
+        seasonNumber: 1,
+        episodeNumber: 9
+      })
+    ),
+    'the resolver finds the anime episode the feeder queued'
+  )
+  const seriesKeys = computeWantedList(
+    [trackedItem({ id: 'tt200', type: 'series', title: 'Show' })],
+    [historyEntry({ id: 'tt200', season: 2, episode: 5, title: 'Show' })]
+  ).map((entry) => entry.contentKey)
+  assert.ok(
+    seriesKeys.includes(
+      lanCacheContentKey({
+        catalogId: 'tt200',
+        kind: 'series',
+        seasonNumber: 2,
+        episodeNumber: 6
+      })
+    ),
+    'the resolver finds the series episode the feeder queued'
+  )
+
+  // An empty id never becomes a job the daemon would reject.
+  assert.deepEqual(
+    computeWantedList([trackedItem({ id: '', type: 'anime' })], []),
+    [],
+    'a tracked item with no id yields no wanted entries'
+  )
 }
 
 console.log('ok  lancache feeder wanted list')

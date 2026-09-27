@@ -32,7 +32,7 @@ export interface ActivitySnapshot {
   hourCounts: number[]
 }
 
-export interface RestartDecisionInput {
+interface RestartDecisionInput {
   activeStreams: number
   lastStreamAt: number
   hourCounts: readonly number[]

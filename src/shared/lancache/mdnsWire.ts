@@ -15,11 +15,11 @@ export const TYPE_A = 1
 export const TYPE_PTR = 12
 export const TYPE_TXT = 16
 export const TYPE_SRV = 33
-export const CLASS_IN = 1
+const CLASS_IN = 1
 /** cache-flush bit set on records we are authoritative for. */
-export const CLASS_IN_FLUSH = 0x8001
+const CLASS_IN_FLUSH = 0x8001
 
-export interface DnsQuestion {
+interface DnsQuestion {
   name: string
   type: number
 }
@@ -32,14 +32,14 @@ export interface DnsRecord {
   data: DnsRecordData
 }
 
-export type DnsRecordData =
+type DnsRecordData =
   | { kind: 'ptr'; target: string }
   | { kind: 'srv'; priority: number; weight: number; port: number; target: string }
   | { kind: 'txt'; entries: string[] }
   | { kind: 'a'; address: string }
   | { kind: 'raw'; bytes: Uint8Array }
 
-export interface DnsMessage {
+interface DnsMessage {
   id: number
   isResponse: boolean
   questions: DnsQuestion[]

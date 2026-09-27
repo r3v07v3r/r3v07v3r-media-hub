@@ -30,7 +30,7 @@ import type { MediaItem } from '@renderer/types'
 import type { CatalogKindState } from './hooks'
 import { filterStateToCatalogQuery, type CategoryFilterState } from './categoryFilters'
 
-export const BROWSE_PAGE_SIZE = 60
+const BROWSE_PAGE_SIZE = 60
 
 /** ensureItem's RUNAWAY GUARD, not its reach. The loop's real
  *  terminator is the honest end of the result set (appendPage returns
@@ -56,7 +56,7 @@ const BACKEND_QUERY_LIMIT = 500
 export const CATALOG_BRIDGE_AVAILABLE =
   typeof window !== 'undefined' && Boolean(window.api?.mediaHub?.catalog?.query)
 
-export interface CatalogBrowseResult {
+interface CatalogBrowseResult {
   items: MediaItem[]
   /** Exact size of the filtered result — the number the count labels
    *  quote. Zero only means "nothing matches" once `loading` is false. */

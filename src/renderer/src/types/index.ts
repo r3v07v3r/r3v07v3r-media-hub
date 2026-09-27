@@ -152,12 +152,6 @@ export type AssistantState = 'idle' | 'hover' | 'focused' | 'processing' | 'resp
 export type UIActivityState =
   'idle' | 'hovering' | 'processing' | 'responding' | 'playing' | 'loading' | 'error'
 
-export interface WeatherSnapshot {
-  tempC: number
-  condition: 'clear' | 'clouds' | 'rain' | 'storm' | 'snow'
-  loading: boolean
-}
-
 export interface PerformanceSnapshot {
   cpu: number
   gpu: number
@@ -183,7 +177,7 @@ export interface AppNotification {
   profileId?: string
 }
 
-export type MatchTier = 'excellent' | 'good' | 'fair' | 'low'
+type MatchTier = 'excellent' | 'good' | 'fair' | 'low'
 
 export function matchTier(pct: number | undefined): MatchTier {
   if (pct === undefined) return 'low'

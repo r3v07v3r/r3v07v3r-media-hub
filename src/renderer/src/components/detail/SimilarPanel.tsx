@@ -8,7 +8,7 @@ import { ArtworkImage } from '@renderer/components/media/ArtworkImage'
 import { Icon } from '@renderer/components/icons/Icon'
 import styles from './SimilarPanel.module.css'
 
-export interface SimilarPanelProps {
+interface SimilarPanelProps {
   status: 'loading' | 'ready' | 'error'
   items: MediaItem[]
   config: DetailAdapterConfig

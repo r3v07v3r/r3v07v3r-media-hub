@@ -20,7 +20,7 @@ import styles from './MediaGrid.module.css'
 
 const BATCH = 30
 
-export interface MediaGridProps {
+interface MediaGridProps {
   items: MediaItem[]
   loading?: boolean
   error?: boolean

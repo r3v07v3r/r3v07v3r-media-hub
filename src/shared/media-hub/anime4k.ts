@@ -21,9 +21,9 @@
 export const ANIME4K_MODES = ['A', 'B', 'C', 'A+A', 'B+B', 'C+A'] as const
 export type Anime4kMode = (typeof ANIME4K_MODES)[number]
 
-export const DEFAULT_ANIME4K_MODE: Anime4kMode = 'A'
+const DEFAULT_ANIME4K_MODE: Anime4kMode = 'A'
 
-export function isAnime4kMode(value: unknown): value is Anime4kMode {
+function isAnime4kMode(value: unknown): value is Anime4kMode {
   return (ANIME4K_MODES as readonly unknown[]).includes(value)
 }
 

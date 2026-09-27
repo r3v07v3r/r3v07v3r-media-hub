@@ -30,12 +30,12 @@ import { logError } from './logger'
 import type { TaskPriority } from './taskScheduler'
 
 /** How far back a watch still says "I am in the middle of this". */
-export const RECENT_WATCH_WINDOW_MS = 14 * 24 * 60 * 60 * 1000
+const RECENT_WATCH_WINDOW_MS = 14 * 24 * 60 * 60 * 1000
 
 /** How many recent titles are asked. Each film is up to four TMDB requests
  *  the first time (cached for a month after), so this is a network cap as
  *  much as a relevance one. */
-export const RECENT_WATCH_LIMIT = 12
+const RECENT_WATCH_LIMIT = 12
 
 /** A found continuation, with the catalogue record to rank. */
 export interface FoundContinuation extends Continuation {

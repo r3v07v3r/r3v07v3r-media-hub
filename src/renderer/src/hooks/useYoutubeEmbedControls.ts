@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type RefObject } from 'react'
 
 const YT_ORIGIN = 'https://www.youtube-nocookie.com'
 
-export interface YoutubeEmbedControls {
+interface YoutubeEmbedControls {
   /** True once the embed has responded at least once — before this, play/
    *  pause/seek calls are harmless no-ops (the player just isn't there yet). */
   ready: boolean

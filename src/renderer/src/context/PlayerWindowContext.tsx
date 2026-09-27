@@ -35,7 +35,7 @@ import type {
   PlayerUiEvent
 } from '@shared/media-hub/player'
 
-export interface PlayerWindowValue {
+interface PlayerWindowValue {
   /** Which title is playing, its tracks, and the settings that affect
    *  playback. Null until the first snapshot arrives. */
   session: PlayerSessionSnapshot | null

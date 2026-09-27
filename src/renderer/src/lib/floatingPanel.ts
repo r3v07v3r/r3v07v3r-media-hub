@@ -1,4 +1,4 @@
-export interface FloatingPanelPosition {
+interface FloatingPanelPosition {
   left: number
   top: number
 }

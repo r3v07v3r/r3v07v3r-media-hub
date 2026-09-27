@@ -24,7 +24,7 @@ import {
 } from '@renderer/lib/mediaHub/titleStatus'
 import styles from './TitleStatusButton.module.css'
 
-export interface TitleStatusButtonProps extends TitleStatusOverrides {
+interface TitleStatusButtonProps extends TitleStatusOverrides {
   media: MediaItem
   variant?: 'chip' | 'action' | 'hero'
   className?: string

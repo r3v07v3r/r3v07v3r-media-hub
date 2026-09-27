@@ -11,7 +11,7 @@ import type { CategoryKind } from './categoryFilters'
  *  in the filter bar — movies get runtime, series get seasons+episode
  *  length, anime gets episodes+status (series also gets status). Exactly
  *  the field lists from the spec's per-page FILTER BAR sections. */
-export interface CategoryFilterFields {
+interface CategoryFilterFields {
   runtime: boolean
   seasons: boolean
   episodeLength: boolean
@@ -80,5 +80,3 @@ export const ANIME_CONFIG: CategoryConfig = {
     status: true
   }
 }
-
-export const CATEGORY_CONFIGS: CategoryConfig[] = [MOVIES_CONFIG, SERIES_CONFIG, ANIME_CONFIG]

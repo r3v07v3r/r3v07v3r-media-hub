@@ -17,7 +17,7 @@ interface JellyfinSystemInfo {
   Id?: string
 }
 
-export interface JellyfinResumeItem {
+interface JellyfinResumeItem {
   Id: string
   Name: string
   SeriesName?: string

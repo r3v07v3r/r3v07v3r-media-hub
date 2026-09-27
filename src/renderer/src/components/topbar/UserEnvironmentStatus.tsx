@@ -3,7 +3,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useAppState } from '@renderer/context/AppStateContext'
 import { useClock } from '@renderer/hooks/useClock'
-import { useWeather } from '@renderer/hooks/useWeather'
 import { Icon } from '@renderer/components/icons/Icon'
 import { PartyButton } from '@renderer/components/party/PartyButton'
 import { SyncNotificationButton } from './SyncNotificationButton'
@@ -13,7 +12,6 @@ import styles from './TopUtilityBar.module.css'
 export function UserEnvironmentStatus() {
   const { profiles, activeProfileId, switchProfile } = useAppState()
   const { time, date } = useClock()
-  const weather = useWeather()
   const [menuOpen, setMenuOpen] = useState(false)
   const rootRef = useRef<HTMLDivElement>(null)
   const activeProfile = profiles.find((p) => p.id === activeProfileId) ?? profiles[0]
@@ -41,15 +39,6 @@ export function UserEnvironmentStatus() {
       <ControlCentreButton />
       <SyncNotificationButton />
       <PartyButton />
-
-      <div className={styles.weather} aria-live="off">
-        <Icon name="weather" className={styles.weatherIcon} />
-        {weather.loading ? (
-          <span className={styles.weatherSkeleton} aria-label="Loading weather" />
-        ) : (
-          <span className={styles.weatherTemp}>{Math.round(weather.tempC)}°</span>
-        )}
-      </div>
 
       <div className={styles.timeBlock}>
         <span className={styles.time}>{time}</span>

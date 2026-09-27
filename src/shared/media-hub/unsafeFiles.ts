@@ -26,7 +26,7 @@
  * macOS or Linux. Grouped by why they are here, because a bare list
  * invites someone to "tidy up" entries whose danger isn't obvious.
  */
-export const BLOCKED_EXTENSIONS: ReadonlySet<string> = new Set([
+const BLOCKED_EXTENSIONS: ReadonlySet<string> = new Set([
   // Native executables and installers
   'exe',
   'com',
@@ -115,7 +115,7 @@ export const BLOCKED_EXTENSIONS: ReadonlySet<string> = new Set([
 ])
 
 /** Download MIME types that mean "executable" regardless of filename. */
-export const BLOCKED_MIME_TYPES: ReadonlySet<string> = new Set([
+const BLOCKED_MIME_TYPES: ReadonlySet<string> = new Set([
   'application/x-msdownload',
   'application/x-msdos-program',
   'application/x-msi',

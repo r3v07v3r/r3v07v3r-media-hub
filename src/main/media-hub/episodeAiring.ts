@@ -62,7 +62,7 @@ function seasonEpisodes(videos: readonly Episode[], season: number): Episode[] {
  * plan, and the schedule must not overrule it. A season whose every date
  * is its own and in the past is settled either way. Exported for its tests.
  */
-export interface SeasonNumbering {
+interface SeasonNumbering {
   /** The season's episodes are numbered the way the schedule's are — true
    *  for an ungrouped title, whose only source is Kitsu. */
   kitsuNumbered?: boolean

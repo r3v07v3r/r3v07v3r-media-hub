@@ -144,7 +144,7 @@ export interface CatalogItem {
  * story a summary condensed — which are exactly what somebody following a
  * franchise in order needs to be shown and used to be filtered out.
  */
-export type AnimeStoryRelation =
+type AnimeStoryRelation =
   'prequel' | 'parent_story' | 'full_story' | 'side_story' | 'spin_off' | 'summary' | 'sequel'
 
 export interface AnimeStoryLink {
@@ -312,15 +312,6 @@ export interface MediaTracks {
   // targets during compatibility playback. Undefined if ffprobe didn't
   // report a usable duration (e.g. probing failed).
   durationSeconds?: number
-}
-
-export interface PlaybackSelection {
-  audio?: number
-  subtitle?: number
-  startTime?: number
-  externalSubtitlePath?: string
-  /** 0 (or omitted) means "no change to whatever's already active" — every restart (seek, track change, subtitle apply) round-trips through this same selection object, so upscale state has to stay sticky across all of them, not just the call that turned it on. Explicitly 0 from the player's own "Off" menu item is what actually turns it back off. */
-  upscaleHeight?: number
 }
 
 /**
@@ -1117,10 +1108,11 @@ export interface MediaHubPublicSettings {
    *  Off by default: an app that starts notifying because it was updated has
    *  made a decision that was not its to make. */
   notificationsEnabled: boolean
-  /** Which country "where to watch" answers for, ISO 3166-1 alpha-2. Always a
-   *  real value in the snapshot: an unset setting resolves to the machine's
-   *  locale before it gets here, so the Settings pane shows what is in use
-   *  rather than an empty field. */
+  /** Which country's content-rating certification is shown
+   *  (main/media-hub/contentRating.ts), ISO 3166-1 alpha-2. Always a real
+   *  value in the snapshot: an unset setting resolves to the machine's locale
+   *  before it gets here, so the Settings pane shows what is in use rather
+   *  than an empty field. */
   watchRegion: string
   /** Decorative UI animation (idle ambient motion, not playback itself) — layered alongside, not replacing, the automatic motion-suspend-during-playback behavior in global.css. */
   uiAnimationsEnabled: boolean
@@ -1197,8 +1189,9 @@ export interface MediaHubSettingsSnapshot extends MediaHubPublicSettings {
   themes: Theme[]
   torboxConnected: boolean
   /** Whether a media server is configured, enabled, and has credentials.
-   *  Playback is gated on having at least one of this and torboxConnected
-   *  — either source alone is a complete setup. */
+   *  Either this or torboxConnected alone is a complete setup. With
+   *  neither, stream:resolve in main refuses — but only after the
+   *  local-cache and LAN-cache tiers miss, so a title already held plays. */
   mediaServerConnected: boolean
   tmdbConnected: boolean
   omdbConnected: boolean
@@ -1385,7 +1378,7 @@ export interface MalReconcileApplyResult {
  *  searched together and merged into one list (see subtitlesService.ts), so
  *  every result has to say where it came from — the download step differs
  *  per provider and cannot be inferred from the row's other fields. */
-export type SubtitleProvider = 'opensubtitles' | 'subdl'
+type SubtitleProvider = 'opensubtitles' | 'subdl'
 
 export interface SubtitleResult {
   id: string

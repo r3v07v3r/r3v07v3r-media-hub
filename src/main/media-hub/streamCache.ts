@@ -187,7 +187,7 @@ function metaFilePath(root: string, token: string): string {
  * the retention window, the fill loop, the range server — is written
  * against chunk indices and does not care which of these is underneath.
  */
-export interface ChunkStore {
+interface ChunkStore {
   /** Whether chunks outlive the process. False for the memory store, and
    *  that single fact is what makes session reuse, chunk adoption, meta
    *  files and the Downloads listing all meaningless for it. */
@@ -364,7 +364,7 @@ export function chunkIndexForByte(byte: number, chunkBytes = CHUNK_BYTES): numbe
   return Math.floor(byte / chunkBytes)
 }
 
-export interface RangeReplyVerdict {
+interface RangeReplyVerdict {
   /** Why the reply must NOT be written as chunk data, or null when it may. */
   problem: string | null
   /** The file length the reply declared, when it declared one. */
@@ -427,7 +427,7 @@ export function inspectRangeReply(
   return { problem: null, total }
 }
 
-export interface RetentionParams {
+interface RetentionParams {
   /** Every chunk index currently on disk — in fullRetention mode nothing is ever evicted, so the retained set is just this, verbatim. */
   presentChunkIndices: Iterable<number>
   fullRetention: boolean
@@ -626,7 +626,7 @@ export function isOwnCacheUrl(url: unknown): boolean {
   return Boolean(match && activeCacheTokens.has(match[1]))
 }
 
-export interface StreamCacheStartResult {
+interface StreamCacheStartResult {
   url: string
   totalBytes: number | null
   /** True when the configured cache size is large enough to eventually hold
@@ -703,7 +703,7 @@ export interface StreamCache {
   applyStoragePolicy(): Promise<void>
 }
 
-export interface CreateStreamCacheOptions {
+interface CreateStreamCacheOptions {
   fetchImpl?: typeof fetch
   resolveHost?: (host: string) => Promise<string[]>
   randomBytesImpl?: typeof crypto.randomBytes
@@ -739,9 +739,9 @@ export function createStreamCache({
   let aheadSeconds = DEFAULT_AHEAD_SECONDS
   // Bumped on every stop()/reposition — lets a superseded fill loop
   // recognize itself as stale instead of racing a newer one for the same
-  // chunk files (same ordering trick as vlc.ts's createFfmpegTranscoder:
-  // bumped BEFORE the abort, so the old loop's own catch block already
-  // sees the new generation when it wakes up).
+  // chunk files. The ordering is the point: bumped BEFORE the abort, so
+  // the old loop's own catch block already sees the new generation when
+  // it wakes up.
   let generation = 0
   let currentAbort: AbortController | null = null
   let fillFrontierByte = 0
@@ -1810,10 +1810,8 @@ export function createStreamCache({
     // Unbounded, explicitly: this is the fill the playhead is about to read
     // from, whatever highWatermarkByte happens to say on a resumed session.
     void runFill(firstGap === null ? 0 : firstGap * CHUNK_BYTES, myGeneration, null)
-    // Wait for at least the first chunk so the very first read from ffmpeg/
-    // the <video> element doesn't land on nothing — mirrors the readiness
-    // gate createFfmpegTranscoder already uses before its own start()
-    // resolves (vlc.ts's READY_BYTES/MIN_BUFFER_MS).
+    // Wait for at least the first chunk so mpv's very first read from the
+    // local server doesn't land on nothing.
     //
     // On a slow link that first 4MB is a real wait with nothing else to
     // show for it, so it's reported as it fills (fillFrontierByte is the

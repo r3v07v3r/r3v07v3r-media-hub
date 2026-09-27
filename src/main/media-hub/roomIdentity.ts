@@ -48,12 +48,12 @@ const RAW_PUB_BYTES = 32
  *  exporter puts in front of the raw 32. Fixed by RFC 8410. */
 const SPKI_PREFIX = Buffer.from('302a300506032b6570032100', 'hex')
 
-export function rawPublicKey(publicKey: crypto.KeyObject): Buffer {
+function rawPublicKey(publicKey: crypto.KeyObject): Buffer {
   const der = publicKey.export({ format: 'der', type: 'spki' })
   return Buffer.from(der.subarray(der.length - RAW_PUB_BYTES))
 }
 
-export function publicKeyFromRaw(pubB64: string): crypto.KeyObject | null {
+function publicKeyFromRaw(pubB64: string): crypto.KeyObject | null {
   try {
     const raw = Buffer.from(pubB64, 'base64url')
     if (raw.length !== RAW_PUB_BYTES) return null

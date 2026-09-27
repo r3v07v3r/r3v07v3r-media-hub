@@ -68,7 +68,7 @@ import { getDatabase } from './dbState'
 import { normalizeKitsuAnime, normalizeKitsuEpisode, type RawApiPayload } from './core'
 import { anilistTitleInfo, cacheAnilistIdFromMappings, cachedAnilistId } from './anilist'
 
-export interface TvdbMapping {
+interface TvdbMapping {
   seriesId: string
   season: number
 }

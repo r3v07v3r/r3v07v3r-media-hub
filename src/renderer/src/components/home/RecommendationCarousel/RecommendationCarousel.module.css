@@ -407,42 +407,12 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
-/* 10-foot-interface pass: "improve metadata hierarchy... star/rating
-   brighter; IMDb separated visually; AI match percentage more
-   prominent." Previously a single flat-opacity row (star+rating and
-   "IMDb X.X" reading with equal, dimmed weight, no separation from the
-   title beyond position) — split into a bright primary rating group, a
-   visible divider, and a dimmer secondary IMDb group so the hierarchy
-   is legible at a glance, not just on close reading. */
+/* The row the shared RatingBadge sits in; the badge draws the figures. */
 .cardRatings {
   font-size: 12.5px;
   display: flex;
   gap: 8px;
   align-items: center;
-}
-.ratingStar {
-  display: flex;
-  align-items: center;
-  color: var(--text-primary);
-  font-weight: 700;
-}
-.ratingStar svg {
-  width: 12px;
-  height: 12px;
-  color: var(--accent-yellow);
-  margin-right: 3px;
-  vertical-align: -1px;
-}
-.ratingDivider {
-  width: 1px;
-  height: 11px;
-  background: var(--border-subtle);
-  opacity: 0.7;
-}
-.ratingImdb {
-  color: var(--text-secondary);
-  opacity: 0.62;
-  font-weight: 500;
 }
 .matchText {
   /* 10-foot-interface pass: "AI match percentage more prominent" —

@@ -33,7 +33,7 @@ function formatTime(seconds: number): string {
   return h > 0 ? `${h}:${mm}:${ss}` : `${mm}:${ss}`
 }
 
-export interface DetailHeroProps {
+interface DetailHeroProps {
   media: MediaItem
   config: DetailAdapterConfig
   continueEntry: ContinueWatchingItem | undefined

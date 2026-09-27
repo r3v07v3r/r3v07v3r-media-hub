@@ -29,7 +29,7 @@
   z-index: 30;
   /* Same min-width:0 fix as the faces below — the topbar shares the mobile
      layout's single 1fr column, so its own content (search field,
-     weather/clock/avatar cluster) would otherwise set the column's implicit
+     clock/avatar cluster) would otherwise set the column's implicit
      minimum width and stretch every row to match, silently overflowing the
      viewport. */
   min-width: 0;

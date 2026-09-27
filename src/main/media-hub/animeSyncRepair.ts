@@ -43,7 +43,7 @@ import { readSettings, writeSettings } from './settingsStore'
  */
 const REPAIR_VERSION = 1
 
-export function animeRepairDone(): boolean {
+function animeRepairDone(): boolean {
   return Number(readSettings().animeIdRepairVersion || 0) >= REPAIR_VERSION
 }
 

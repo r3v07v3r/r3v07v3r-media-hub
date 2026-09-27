@@ -31,7 +31,7 @@
  */
 
 /** The first sample, and on a slow line the only one. */
-export const FIRST_SAMPLE_BYTES = 1024 * 1024
+const FIRST_SAMPLE_BYTES = 1024 * 1024
 
 /**
  * Under this, a sample is treated as a measurement of TCP slow-start rather
@@ -49,7 +49,7 @@ export const FIRST_SAMPLE_BYTES = 1024 * 1024
  * stops, which is both accurate at that speed and the whole point of keeping
  * the escalation self-limiting.
  */
-export const MIN_SAMPLE_SECONDS = 0.5
+const MIN_SAMPLE_SECONDS = 0.5
 
 /** What an escalated sample aims to spend on the wire — long enough to be
  *  clear of slow-start and to average over wifi jitter. */
@@ -58,7 +58,7 @@ const TARGET_SAMPLE_SECONDS = 2.5
 /** Ceiling on any single sample, so a very fast line cannot turn a settings
  *  button into a hundreds-of-megabytes download. A sample this size is
  *  already past slow-start on any connection that could finish it quickly. */
-export const MAX_SAMPLE_BYTES = 64 * 1024 * 1024
+const MAX_SAMPLE_BYTES = 64 * 1024 * 1024
 
 /** Two rounds is enough to go 1 MiB -> a real sample even from a bad first
  *  estimate, without turning a stalled link into a long sequence of retries. */

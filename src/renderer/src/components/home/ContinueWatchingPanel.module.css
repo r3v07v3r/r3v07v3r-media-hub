@@ -270,41 +270,14 @@
   color: var(--text-muted);
   flex: 0 0 auto;
 }
-/* 10-foot-interface pass: same ratings-hierarchy treatment as the AI
-   recommendation cards (see RecommendationCarousel.module.css's
-   .ratingStar/.ratingDivider/.ratingImdb) — bright primary star rating,
-   a visible divider, dimmer secondary IMDb figure, instead of one flat
-   equal-weight row. Text also grew alongside the rest of this panel's
-   ~15% typography increase (10px -> 11.5px). */
+/* The row the shared RatingBadge sits in; the badge draws the figures.
+   Text grew alongside the rest of this panel's ~15% typography increase
+   (10px -> 11.5px). */
 .ratings {
   font-size: 11.5px;
   display: flex;
   gap: 8px;
   align-items: center;
-}
-.ratingStar {
-  display: flex;
-  align-items: center;
-  color: var(--text-secondary);
-  font-weight: 700;
-}
-.ratingStar svg {
-  width: 10px;
-  height: 10px;
-  color: var(--accent-yellow);
-  margin-right: 3px;
-  vertical-align: -1px;
-}
-.ratingDivider {
-  width: 1px;
-  height: 10px;
-  background: var(--border-subtle);
-  opacity: 0.7;
-}
-.ratingImdb {
-  color: var(--text-muted);
-  opacity: 0.75;
-  font-weight: 500;
 }
 
 .hoverActions {
