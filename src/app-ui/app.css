@@ -79,6 +79,9 @@ html {
 }
 
 .app-shell {
+  /* Above the fixed backdrop (components/BackgroundEffects). */
+  position: relative;
+  z-index: 1;
   min-height: 100%;
 }
 
@@ -165,6 +168,8 @@ html {
 }
 
 .not-connected {
+  position: relative;
+  z-index: 1;
   display: flex;
   flex-direction: column;
   align-items: center;

@@ -10,7 +10,8 @@ html.video-under .app-content {
   background: transparent !important;
 }
 
-html.video-under .nav-chrome {
+html.video-under .nav-chrome,
+html.video-under .app-bg {
   display: none;
 }
 

@@ -13,7 +13,11 @@ export interface PosterItem {
   subtitle?: string
 }
 
-export function toPosterItem(item: CatalogItem): PosterItem {
+/** Anything with a catalog item's identity and poster: a CatalogItem, a
+ *  tracked title, a new-episode update. */
+export function toPosterItem(
+  item: Pick<CatalogItem, 'id' | 'type' | 'title' | 'poster'>
+): PosterItem {
   return {
     id: item.id,
     kind: item.type,

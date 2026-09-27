@@ -9,6 +9,7 @@ import Title from './screens/Title'
 import Settings from './screens/Settings'
 import Player from './screens/Player'
 import NotConnected from './screens/NotConnected'
+import BackgroundEffects from './components/BackgroundEffects'
 
 function Shell() {
   useSpatialNav()
@@ -37,10 +38,16 @@ export default function App() {
   // every render — same pattern as this app's own data hooks (see
   // src/renderer/src/lib/mediaHub/hooks.ts's identical `useState(() => ...)`).
   const [connected] = useState(() => Boolean(window.api?.mediaHub))
-  if (!connected) return <NotConnected />
   return (
-    <HashRouter>
-      <Shell />
-    </HashRouter>
+    <>
+      <BackgroundEffects />
+      {connected ? (
+        <HashRouter>
+          <Shell />
+        </HashRouter>
+      ) : (
+        <NotConnected />
+      )}
+    </>
   )
 }

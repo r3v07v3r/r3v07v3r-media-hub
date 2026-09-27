@@ -9,3 +9,110 @@
   border-radius: var(--radius-small);
   margin-bottom: 0.5rem;
 }
+
+/* The title at the top: backdrop art, fading into the page's own backdrop
+   at the bottom and the left so the text stays readable on any image. */
+.home-hero {
+  position: relative;
+  display: flex;
+  align-items: flex-end;
+  min-height: clamp(14rem, 52vw, 26rem);
+  margin: -1rem -1rem 1.5rem;
+  overflow: hidden;
+  color: inherit;
+  text-decoration: none;
+  isolation: isolate;
+}
+
+@media (min-width: 900px) and (orientation: landscape) {
+  .home-hero {
+    margin: -1.5rem -1.5rem 1.5rem;
+    border-radius: 0 0 var(--radius-medium) var(--radius-medium);
+  }
+}
+
+.home-hero--skeleton {
+  display: block;
+  border-radius: 0;
+}
+
+.home-hero__art {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center 25%;
+  animation: home-hero-in 600ms ease both;
+}
+
+.home-hero::after {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  content: '';
+  background:
+    linear-gradient(to top, var(--background) 2%, rgb(2 6 13 / 55%) 45%, transparent 75%),
+    linear-gradient(to right, rgb(2 6 13 / 70%), transparent 60%);
+}
+
+.home-hero__text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  max-width: 36rem;
+  padding: 1.25rem 1rem;
+}
+
+.home-hero__eyebrow {
+  color: var(--accent-blue);
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.home-hero__title {
+  font-family: var(--font-display);
+  font-size: clamp(1.6rem, 6vw, 2.6rem);
+  font-weight: 700;
+  line-height: 1.1;
+  text-shadow: 0 2px 12px rgb(0 0 0 / 60%);
+}
+
+.home-hero__detail {
+  color: var(--text-secondary);
+}
+
+.home-hero__action {
+  align-self: flex-start;
+  margin-top: 0.5rem;
+  padding: 0.55rem 1.2rem;
+  border-radius: var(--radius-pill);
+  background: var(--accent-blue);
+  color: #02060d;
+  font-weight: 700;
+}
+
+.home-hero:focus-visible {
+  outline: none;
+}
+
+.home-hero:focus-visible .home-hero__action {
+  outline: 2px solid var(--text-primary);
+  outline-offset: 3px;
+}
+
+@keyframes home-hero-in {
+  from {
+    opacity: 0;
+    transform: scale(1.04);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .home-hero__art {
+    animation: none;
+  }
+}
