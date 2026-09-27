@@ -25,6 +25,7 @@ import {
   type Anime4kStatus
 } from '../../shared/media-hub/anime4k'
 import { MEDIA_HUB_CHANNELS } from '../../shared/media-hub/ipc-channels'
+import { readLimitedResponseBytes } from '../../shared/media-hub/responseLimit'
 import { logError } from './logger'
 import { sendToRenderer } from './rendererBridge'
 import { extractAnime4kShaders } from './anime4kArchive'
@@ -40,7 +41,8 @@ const ANIME4K_SHA256 = '139cd282086457c5adc79caf7b75b8b825091d71c9b54958c18745fe
 const ANIME4K_URL = `https://github.com/bloc97/Anime4K/releases/download/${ANIME4K_RELEASE_TAG}/${ANIME4K_ASSET}`
 
 /** The archive is ~0.75MB. Anything past this is not the pinned file, and
- *  the hash check would reject it anyway — this just refuses to buffer it. */
+ *  the hash check would reject it anyway — this just refuses to buffer it
+ *  (the read stops the moment it passes this, see installAnime4k). */
 const MAX_ARCHIVE_BYTES = 4 * 1024 * 1024
 
 const STAMP_FILE = '.anime4k-version.json'
@@ -112,10 +114,14 @@ export async function installAnime4k(): Promise<Anime4kStatus> {
     if (!response.ok) {
       throw new Error(`GET ${ANIME4K_ASSET} failed: ${response.status} ${response.statusText}`)
     }
-    const declared = Number(response.headers.get('content-length') || 0)
-    if (declared > MAX_ARCHIVE_BYTES) throw new Error('Download is larger than expected.')
-    const archive = Buffer.from(await response.arrayBuffer())
-    if (archive.length > MAX_ARCHIVE_BYTES) throw new Error('Download is larger than expected.')
+    // Capped while streaming, so an oversized body is abandoned as soon as
+    // it passes the limit rather than buffered whole and measured after.
+    const body = await readLimitedResponseBytes(
+      response,
+      MAX_ARCHIVE_BYTES,
+      'Download is larger than expected.'
+    )
+    const archive = Buffer.from(body.buffer, body.byteOffset, body.byteLength)
 
     const actual = createHash('sha256').update(archive).digest('hex')
     if (actual !== ANIME4K_SHA256) {

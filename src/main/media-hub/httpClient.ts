@@ -24,6 +24,10 @@
 // never queue behind a catalog crawl, and the stream cache already owns
 // its own connection budget against TorBox's per-link limits.
 
+import {
+  readLimitedResponseBytes,
+  ResponseTooLargeError
+} from '../../shared/media-hub/responseLimit'
 import { laneForUrl, schedule, type TaskPriority } from './taskScheduler'
 
 export interface HttpError extends Error {
@@ -65,9 +69,27 @@ interface FetchScheduling {
    * failure for an update that was in fact working.
    */
   timeoutMs?: number
+  /**
+   * Override the response size cap (DEFAULT_MAX_RESPONSE_BYTES) for a call
+   * known to answer with something larger than an ordinary API page.
+   */
+  maxResponseBytes?: number
 }
 
 const REQUEST_TIMEOUT_MS = 30000
+
+/**
+ * The most a single response body may be before the read is abandoned.
+ *
+ * Every JSON API call in the app comes through here, so without a cap one
+ * hostile or broken upstream could make the process buffer an unbounded
+ * body. The largest legitimate answers are whole-library reads — Simkl's
+ * all-items with per-episode watch times, a big Jellyfin or TorBox listing,
+ * a batched AniList query — which should stay in single-digit megabytes for a
+ * heavy account, so 64 MiB leaves an order of magnitude of headroom while
+ * still bounding the worst case.
+ */
+export const DEFAULT_MAX_RESPONSE_BYTES = 64 * 1024 * 1024
 
 /**
  * Fetches `url`, parses the response as JSON (tolerating a non-JSON/empty
@@ -85,12 +107,15 @@ export function fetchJson<T = unknown>(
   options: RequestInit = {},
   scheduling: FetchScheduling = {}
 ): Promise<T> {
-  return schedule(() => request<T>(url, options, scheduling.timeoutMs), {
-    lane: scheduling.lane ?? laneForUrl(url),
-    priority: scheduling.priority ?? 'interactive',
-    key: scheduling.key,
-    label: scheduling.label ?? hostLabel(url)
-  })
+  return schedule(
+    () => request<T>(url, options, scheduling.timeoutMs, scheduling.maxResponseBytes),
+    {
+      lane: scheduling.lane ?? laneForUrl(url),
+      priority: scheduling.priority ?? 'interactive',
+      key: scheduling.key,
+      label: scheduling.label ?? hostLabel(url)
+    }
+  )
 }
 
 function hostLabel(url: string | URL): string {
@@ -104,14 +129,15 @@ function hostLabel(url: string | URL): string {
 async function request<T>(
   url: string | URL,
   options: RequestInit,
-  timeoutMs = REQUEST_TIMEOUT_MS
+  timeoutMs = REQUEST_TIMEOUT_MS,
+  maxResponseBytes = DEFAULT_MAX_RESPONSE_BYTES
 ): Promise<T> {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), timeoutMs)
 
   try {
     const response = await fetch(String(url), { ...options, signal: controller.signal })
-    const body = (await response.json().catch(() => ({}))) as JsonErrorBody &
+    const body = (await readJsonBody(response, maxResponseBytes)) as JsonErrorBody &
       Record<string, unknown>
 
     if (!response.ok || body.success === false) {
@@ -125,5 +151,28 @@ async function request<T>(
     return body as T
   } finally {
     clearTimeout(timer)
+  }
+}
+
+/**
+ * The body parsed as JSON, read under `maxBytes`.
+ *
+ * Mirrors what `response.json().catch(() => ({}))` used to give — an empty,
+ * non-JSON or unreadable body becomes `{}` — with the one exception that a
+ * body over the cap rejects, so it surfaces as an ordinary request error
+ * instead of being buffered.
+ */
+async function readJsonBody(response: Response, maxBytes: number): Promise<unknown> {
+  let text: string
+  try {
+    text = new TextDecoder().decode(await readLimitedResponseBytes(response, maxBytes))
+  } catch (error) {
+    if (error instanceof ResponseTooLargeError) throw error
+    return {}
+  }
+  try {
+    return JSON.parse(text)
+  } catch {
+    return {}
   }
 }
