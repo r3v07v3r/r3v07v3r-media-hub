@@ -235,8 +235,3 @@ It boots its own daemon on port 8946 in a temporary directory and tears it
 down again. Not part of `npm test`, because it binds a port. The daemon's
 unit tests (`daemon/tests/*.test.ts`) are part of `npm test`, and
 `npm run typecheck:daemon` type-checks this directory as its own project.
-
-> Known gap (2026-09-27 audit): anime the daemon has pre-fetched is not
-> yet served from the LAN tier, because the app's feeder and its stream
-> resolver build the cache key differently for anime. Movies and series
-> are unaffected. See [docs/AUDIT-2026-09-27.md](../docs/AUDIT-2026-09-27.md).

@@ -21,7 +21,7 @@ subtitle hash matching, IMDb ratings import, a deeper catalog, chapter-based
 skip-intro for movies and series, Letterboxd import, and indexer visibility
 — has since merged to `preview` (PRs #115-#123); the branch that carried it,
 `claude/post-preview70-fixes`, is gone. As of 2026-09-27 the `test` script
-in `package.json` registers 88 test files (five of them under
+in `package.json` registers 89 test files (five of them under
 `daemon/tests`), and there are three typecheck projects: node, web and
 daemon. No pass count is quoted here, because one should not be without
 re-running it — run `npm test`, the three typechecks and `npm run lint`.

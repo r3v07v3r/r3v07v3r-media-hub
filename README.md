@@ -77,8 +77,10 @@ trending feed (either one alone fills the grid), anime from Kitsu. No key is req
 
 ### 2. Choose a source — needs TorBox or a Jellyfin server
 
-Play only works when **TorBox** or an enabled **Jellyfin** server is connected; without either,
-pressing Play shows a notice asking you to connect one. Sonarr, Radarr,
+A title that is already complete in this machine's cache, or held by a paired r3-cache server,
+plays with nothing else connected. Everything else needs **TorBox** or an enabled **Jellyfin**
+server; without either, pressing Play says the title is not on this computer or a paired cache
+server and asks you to connect one. Sonarr, Radarr,
 qBittorrent, Prowlarr and Bazarr are management and status connections, not playback sources: what
 they fetch becomes playable once it reaches your Jellyfin library.
 
@@ -103,10 +105,6 @@ limits:
 Balanced, Best quality), the maximum video quality and download size that every remote tier must
 meet, and a **Connection recommendation** test that suggests both. If the best copy is noticeably
 below your ceiling, the app asks once per title per session whether to play it anyway.
-
-> Known limitation: the "is a source connected" check runs before the two cache tiers, so a title
-> that is fully cached on this machine or on the LAN still needs TorBox or Jellyfin connected to
-> play. See the [audit report](docs/AUDIT-2026-09-27.md).
 
 **Storage while playing.** On first run the app asks whether video may be cached to disk. **Keep
 media on this device** off means memory-only streaming; on, you choose the cache size and folder
@@ -240,6 +238,11 @@ over to its second face. It is where the installation is configured and watched:
   pick it labels as random.
 - **Stay updated on your own terms.** Packaged builds check GitHub Releases a few times a day; an
   update downloads in the background and installs when you restart.
+- **Link a phone.** **Control centre → Media servers → Link a phone** shows a one-time QR code. The
+  phone app scans it and is signed in to the same services: TorBox, Simkl, the TMDB, OMDb and
+  SubDL keys, the OpenSubtitles login and your language preferences. Trakt, MyAnimeList, the
+  r3-cache device token and your room identity stay on the desktop. The code carries a one-time
+  ticket rather than the secrets, is served once, and stops after three minutes.
 
 ## Quick start
 
@@ -253,6 +256,10 @@ channel is yours to pick under **Control centre → Updates**.
 The installer is per-machine, so Windows asks for elevation, and the install folder is fixed. The
 app keeps its settings, database (`media-hub.sqlite`) and log (`logs/media-hub.log`) under
 `%APPDATA%\r3v07v3r-media-hub`; include that log in a bug report.
+
+Every release also carries `r3-media-hub-android.apk`, one build for phones and Android TV. It
+is signed with a debug key for now, so treat it as a build for test devices; see
+[android/README.md](android/README.md).
 
 macOS and Linux packages are configured in `electron-builder.yml` but are not published: the release
 workflow builds Windows only, and the bundled mpv player is fetched for Windows only. Building for
@@ -304,7 +311,8 @@ navigation moves to the bottom; use **More** for For You, Calendar and Settings.
 
 ### Every service, and whether you need it
 
-Playback requires **TorBox** or **Jellyfin**. Everything else is optional. All of these are set up in
+Playing anything that is not already cached requires **TorBox** or **Jellyfin**. Everything else
+is optional. All of these are set up in
 the control centre; API credentials are entered in the app, never in the source tree.
 
 | Service             | Required?                       | What it adds                                                                                                                               | Where                              |
@@ -364,7 +372,7 @@ variables are in [daemon/README.md](daemon/README.md).
 | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
 | `npm run dev`              | Start Electron with the Vite development server and hot reload.                                                                 |
 | `npm start`                | Preview an already-built application.                                                                                           |
-| `npm test`                 | Run every registered test file (86 today, plain `tsx` scripts chained in `package.json`).                                       |
+| `npm test`                 | Run every registered test file (89 today, plain `tsx` scripts chained in `package.json`).                                       |
 | `npm run lint`             | Check JavaScript and TypeScript with ESLint.                                                                                    |
 | `npm run typecheck`        | Type-check the Electron/Node and renderer projects. The daemon is a third project, checked separately.                          |
 | `npm run typecheck:daemon` | Type-check the r3-cache daemon (`daemon/`, `src/shared/`, `src/main/media-hub/`).                                               |
@@ -375,6 +383,7 @@ variables are in [daemon/README.md](daemon/README.md).
 | `npm run build:unpack`     | Build, then produce an unpacked directory instead of an installer.                                                              |
 | `npm run build:web`        | Build the renderer as a plain static site with no Electron, the front end a headless backend serves.                            |
 | `npm run build:headless`   | Bundle the service layer to run under plain Node with no Electron (`dist-headless/backend.cjs`).                                |
+| `npm run build:app`        | Build the small phone and TV interface (`src/app-ui`) as a static site, `dist-app/`.                                            |
 | `npm run build:daemon`     | Build the r3-cache daemon bundle. `build:daemon:sea` adds self-contained executables. See [daemon/README.md](daemon/README.md). |
 | `npm run release-notes`    | Regenerate the About-card and release changelog text from recent commit subjects.                                               |
 | `npm run format`           | Run Prettier over the tree.                                                                                                     |
@@ -393,11 +402,13 @@ src/
 │   └── media-hub/        Catalog, playback, stream cache, services, tracking, parties, rooms
 ├── preload/              Narrow renderer-to-main bridge (window.api)
 ├── renderer/             React user interface; src/web/ is the entry used outside Electron
+├── app-ui/               The small phone and TV interface: its own React tree, not the renderer
 ├── headless/             The same service layer with no Electron: an `electron` stand-in and a
 │                         loopback WebSocket bridge that serves the build:web site
 └── shared/               Types and logic shared across process boundaries, incl. the bridge and
                           r3-cache wire protocols
 daemon/                   r3-cache, the LAN pre-fetch server (its own Node bundle)
+android/                  The Android shell: runs the headless backend and app-ui on the device
 party-sync-worker/        R3 Party Sync, the Cloudflare Worker relay
 tests/, daemon/tests/     Plain tsx test scripts; two Playwright end-to-end tests for the web bundle
 
@@ -415,19 +426,22 @@ overlay window. Credentials live in two stores on purpose: Jellyfin and the down
 app's settings store, everything else in the media-hub settings file; both are encrypted with
 Electron's `safeStorage`.
 
-Three optional companions ship from this repository: [`daemon/`](daemon/README.md) is the r3-cache
-LAN pre-fetch server, [`party-sync-worker/`](party-sync-worker/README.md) is the Watch Party relay
-you deploy yourself, and `src/headless/` with `npm run build:web` is the same app built to run
-without Electron, the base for TV and phone clients that are still in progress. Playback in that
-build needs an mpv it can find: `MPV_PATH`, the copy `npm install` fetches into
-`resources/mpv-win` on Windows, or a standard Windows install.
+Four optional companions ship from this repository. [`daemon/`](daemon/README.md) is the r3-cache
+LAN pre-fetch server. [`party-sync-worker/`](party-sync-worker/README.md) is the Watch Party relay
+you deploy yourself. `src/headless/` with `npm run build:web` is the same app built to run without
+Electron; playback in that build needs an mpv it can find: `MPV_PATH`, the copy `npm install`
+fetches into `resources/mpv-win` on Windows, or a standard Windows install.
+[`android/`](android/README.md) is one APK for phones and Android TV: the headless backend run on
+the device behind a small separate interface (`src/app-ui`, `npm run build:app`), with libmpv as
+the player. Party sync, chapters and subtitle search are not on its player screen yet.
 
 ### What CI checks
 
 `.github/workflows/verify.yml` runs on every pull request and gates every release: lint, `npm run
 build` (both typechecks plus the bundle), `npm run typecheck:daemon`, `npm test`, a production
 dependency audit, the web bundle booted with no backend under the real CSP, the headless backend
-built and driven end to end in a browser, and the relay typechecked and dry-run deployed. Run the
+built and driven end to end in a browser, and the relay typechecked and dry-run deployed. A
+separate workflow builds the Android APK for any pull request that touches `src/` or `android/`. Run the
 same set before opening a pull request:
 
 ```bash
@@ -521,14 +535,15 @@ Use the full base URL, including `http://` or `https://` and a non-default port 
 
 Found by the 2026-09-27 audit and tracked in [docs/AUDIT-2026-09-27.md](docs/AUDIT-2026-09-27.md):
 
-- A fully cached title still needs TorBox or Jellyfin connected before it will play.
-- Anime the r3-cache server has pre-fetched is not yet served from the LAN tier, because the
-  feeder and the resolver build the cache key differently.
-- A watch mark made while a tracking service is unreachable is dropped rather than retried, and a
-  plan-to-watch push and a history push for the same title can land out of order.
+- A watch mark made while a tracking service is unreachable is dropped rather than retried.
 - When the usual episode sources fail, the Simkl episode fallback is expected to fail too (it omits
   Simkl's client id), so a degraded title page shows no episodes. Not yet confirmed live.
-- The weather readout in the top bar is a placeholder, not live data.
+- A partly downloaded title can only resume from the source it came from, so it still needs that
+  source connected.
+
+Three problems the same audit found are fixed: anime is now served from the r3-cache tier, cached
+titles play without TorBox or Jellyfin, and plan-to-watch and history pushes for a title keep
+their order. The placeholder weather readout is gone.
 
 ## Contributing
 
