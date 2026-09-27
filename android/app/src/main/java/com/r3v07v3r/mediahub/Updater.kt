@@ -95,6 +95,20 @@ object Updater {
         }
     }
 
+    private fun get(url: String): String {
+        val connection = URL(url).openConnection() as HttpURLConnection
+        connection.connectTimeout = 10_000
+        connection.readTimeout = 15_000
+        connection.setRequestProperty("Accept", "application/vnd.github+json")
+        connection.setRequestProperty("User-Agent", "r3-media-hub-android")
+        try {
+            if (connection.responseCode != 200) error("HTTP ${connection.responseCode} from $url")
+            return connection.inputStream.bufferedReader().use { it.readText() }
+        } finally {
+            connection.disconnect()
+        }
+    }
+
     /** Downloads the APK, checks it is this app and newer, and hands it to
      *  the system installer, which asks the person to confirm. */
     fun downloadAndInstall(context: Context, release: Release, onProgress: (Int) -> Unit) {
