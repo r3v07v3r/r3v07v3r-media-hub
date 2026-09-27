@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useAppState } from '@renderer/context/AppStateContext'
 import { Icon } from '@renderer/components/icons/Icon'
 import { useAsyncAction } from '@renderer/hooks/useAsyncAction'
@@ -757,7 +757,6 @@ export default function SettingsPage({
   embedded = false,
   category
 }: { embedded?: boolean; category?: SettingsCategory } = {}) {
-  const tileAreaRef = useRef<HTMLDivElement>(null)
   /** Only the asked-for group renders, which is what lets the control
    *  centre give each its own rail entry instead of a strip of tabs above
    *  one long scroll. */
@@ -1159,29 +1158,6 @@ export default function SettingsPage({
     }
   }
 
-  useEffect(() => {
-    const scroller = tileAreaRef.current
-    if (!scroller) return
-
-    const handleWheel = (event: WheelEvent) => {
-      if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return
-      const group = (event.target as HTMLElement).closest(
-        `.${styles.settingsGroup}`
-      ) as HTMLElement | null
-      if (group) {
-        const canScrollDown =
-          event.deltaY > 0 && group.scrollTop + group.clientHeight < group.scrollHeight - 1
-        const canScrollUp = event.deltaY < 0 && group.scrollTop > 0
-        if (canScrollDown || canScrollUp) return
-      }
-      event.preventDefault()
-      scroller.scrollBy({ left: event.deltaY, behavior: 'auto' })
-    }
-
-    scroller.addEventListener('wheel', handleWheel, { passive: false })
-    return () => scroller.removeEventListener('wheel', handleWheel)
-  }, [])
-
   // THE VIEWER'S PAGE IS SHORT NOW.
   //
   // Everything below used to render here as well as in the control centre:
@@ -1301,7 +1277,7 @@ export default function SettingsPage({
     // returned the short page above), so it is always the embedded one, and
     // the rail supplies the heading and the navigation between groups.
     <div className={`${styles.wrap} ${styles.embedded}`}>
-      <div className={styles.tileArea} ref={tileAreaRef}>
+      <div className={styles.tileArea}>
         {shows('general') && (
           <section
             id="settings-general"
