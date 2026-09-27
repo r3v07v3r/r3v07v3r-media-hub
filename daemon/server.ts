@@ -531,22 +531,15 @@ export function createDaemonServer(deps: ServerDeps): http.Server {
       return
     }
 
-    // The caller's OWN items, which is the one listing entitlement allows.
-    //
-    // The unfiltered catalog was deleted in A1 because it handed every
-    // paired device the whole disk with titles. This is the opposite: it is
-    // scoped to ownerDeviceId, so it can only ever return what this device
-    // paid for. Without it there is no way for somebody to see their own
-    // cached titles in order to share them, which left the sharing route
-    // built and unreachable.
-    // Cancel a queued or in-flight fetch. YOUR OWN only: the queue is
+    // Cancel a queued or in-flight fetch. Owner or admin only: the queue is
     // scoped to the caller everywhere else, and a route that cancelled by
     // contentKey alone would let any paired device stop a housemate's
     // download without ever being able to see it.
     //
-    // The admin gets no exception. Revoking a device already cancels its
-    // jobs, which is the administrative lever over somebody else's work;
-    // reaching into a queue item by item is not.
+    // This is the ONLY cancel route. A legacy DELETE /api/jobs/<contentKey>
+    // did exactly that — cancelled by key alone, for anyone paired — and
+    // nothing called it, so it was removed rather than given a second copy
+    // of this check.
     if (route === 'POST /api/jobs/cancel') {
       const body = await readBody(req)
       const contentKey = String(body.contentKey ?? '')
@@ -577,6 +570,14 @@ export function createDaemonServer(deps: ServerDeps): http.Server {
       return
     }
 
+    // The caller's OWN items, which is the one listing entitlement allows.
+    //
+    // The unfiltered catalog was deleted in A1 because it handed every
+    // paired device the whole disk with titles. This is the opposite: it is
+    // scoped to ownerDeviceId, so it can only ever return what this device
+    // paid for. Without it there is no way for somebody to see their own
+    // cached titles in order to share them, which left the sharing route
+    // built and unreachable.
     if (route === 'GET /api/items/mine') {
       const mine = (await storage.list()).filter((item) => item.ownerDeviceId === callerDeviceId)
       json(res, 200, {
@@ -654,6 +655,16 @@ export function createDaemonServer(deps: ServerDeps): http.Server {
       //
       // The feeder still gets all three states it needs to decide — cached,
       // in-flight, tombstoned — just only for keys it named.
+      //
+      // KNOWN LIMIT: only `items` is entitlement-scoped. `inFlight` and
+      // `tombstoned` answer for any key the caller names, whoever queued
+      // it, so a device can learn that a title it names is being fetched or
+      // was recently expired. Scoping them would change fetching, not just
+      // visibility: a feeder that stopped seeing a housemate's queued job
+      // would queue it again, and enqueue's ownership healing would hand
+      // that job to the second device; tombstones carry no owner at all, so
+      // hiding them would let every other device re-fetch what the TTL just
+      // expired. See "Known limits" in docs/CACHE-PERMISSIONS.md.
       const filter = (url.searchParams.get('keys') ?? '')
         .split(',')
         .map((key) => key.trim())
@@ -747,13 +758,6 @@ export function createDaemonServer(deps: ServerDeps): http.Server {
       // any tombstone for the same title.
       await storage.clearTombstone(record.contentKey)
       json(res, 200, { state: record.state })
-      return
-    }
-
-    const jobMatch = /^\/api\/jobs\/(.+)$/.exec(url.pathname)
-    if (jobMatch && req.method === 'DELETE') {
-      jobs.cancel(decodeURIComponent(jobMatch[1]))
-      json(res, 200, { ok: true })
       return
     }
 

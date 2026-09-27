@@ -2384,9 +2384,7 @@ async function myItemsTest(): Promise<void> {
     // CANCELLING A QUEUED FETCH, scoped the same way. The queue is per
     // device everywhere else, so a route that cancelled by contentKey alone
     // would let anyone stop a housemate's download without being able to
-    // see it — and the admin gets no exception, because revoking a device
-    // is the administrative lever over its work, not reaching in item by
-    // item.
+    // see it. Only the owner (or the admin) may cancel.
     jobs.enqueue({
       contentKey: 'tt-mine::1:2',
       infoHash: '1'.repeat(40),
@@ -2415,6 +2413,19 @@ async function myItemsTest(): Promise<void> {
     assert.ok(
       jobs.list().some((job) => job.contentKey === 'tt-theirs::1:2'),
       'and the refusal actually refused'
+    )
+    // The legacy per-key route, DELETE /api/jobs/<contentKey>, cancelled by
+    // key alone for anyone paired. It is gone; it must not come back as a
+    // side door around the check above.
+    const legacyDelete = await fetch(`${base}/api/jobs/${encodeURIComponent('tt-theirs::1:2')}`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${mineToken}` }
+    })
+    assert.equal(legacyDelete.status, 404, 'there is no per-key DELETE cancel route')
+    assert.equal(
+      jobs.list().find((job) => job.contentKey === 'tt-theirs::1:2')?.state,
+      'queued',
+      "and it did not cancel another device's fetch"
     )
     assert.equal(await cancelAs(mineToken, 'tt-mine::1:2'), 200, 'the owner may cancel their own')
     assert.equal(
