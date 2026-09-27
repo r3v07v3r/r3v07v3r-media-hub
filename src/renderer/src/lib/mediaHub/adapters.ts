@@ -1,4 +1,4 @@
-// Maps the media-hub backend's own data model (CatalogItem/TrackedItem/
+// Maps the media-hub backend's own data model (CatalogItem/
 // ContinueWatchingEntry/HistoryEntry — see @shared/media-hub/types) onto
 // this dashboard's pre-existing MediaItem/ContinueWatchingItem/
 // Recommendation interfaces (src/renderer/src/types). Deliberately kept
@@ -13,9 +13,7 @@ import type {
   ContinueWatchingEntry,
   HistoryEntry,
   MediaKind,
-  RecommendationReason,
-  TrackedItem,
-  TrackedItemEnriched
+  RecommendationReason
 } from '@shared/media-hub/types'
 import { episodeWatchState, hasAired, isRegularEpisode } from '@shared/media-hub/catalog-logic'
 import { parseRating, parseRuntimeMinutes, parseYear } from '@shared/media-hub/catalogFields'
@@ -341,31 +339,6 @@ export function catalogItemToMediaItem(
     artTint: tintFromSeed(item.id || item.title),
     initials: initialsFromTitle(item.title)
   }
-}
-
-/** Tracked-item rows (Home's "tracked" list, My Stuff) — a narrower shape than CatalogItem but with the same identity fields. */
-export function trackedItemToMediaItem(
-  item: TrackedItem | TrackedItemEnriched,
-  context: CatalogItemAdapterContext = {}
-): MediaItem {
-  return catalogItemToMediaItem(
-    {
-      id: item.id,
-      title: item.title,
-      type: item.type,
-      poster: item.poster,
-      background: item.background,
-      logo: item.logo,
-      year: item.year,
-      description: item.description,
-      rating: item.rating,
-      runtime: item.runtime,
-      genres: item.genres,
-      videos: [],
-      trailers: item.trailers
-    },
-    { ...context, trackedIds: new Set([...(context.trackedIds ?? []), item.id]) }
-  )
 }
 
 /**

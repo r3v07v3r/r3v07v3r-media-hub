@@ -328,10 +328,6 @@ async function applyAnime4k(active: boolean): Promise<void> {
   queuePatch({ anime4k: { available, active: on, mode: prefs.mode } }, true)
 }
 
-export function getPlayer(): MpvPlayer {
-  return player
-}
-
 // ---------------------------------------------------------------------------
 // State push
 // ---------------------------------------------------------------------------

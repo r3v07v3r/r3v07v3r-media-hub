@@ -30,8 +30,6 @@ const CACHE_KEY = 'lists:remote'
  *  the web stops being called by its old name within the day. */
 const TTL_MS = 12 * 60 * 60 * 1000
 
-export type RemoteListService = 'simkl' | 'trakt'
-
 /**
  * WHOSE LISTS THESE ARE.
  *

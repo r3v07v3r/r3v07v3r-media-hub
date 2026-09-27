@@ -1,19 +1,25 @@
-// Ported from r3v07v3r-media-hub's src/playback.cjs. This is the SSRF
-// defense boundary for remote media playback: it validates that a remote
-// media URL is public HTTPS (not a private/loopback/link-local address or
-// an internal-only hostname), re-resolves DNS and re-checks every resolved
-// address before fetching (to defeat DNS-rebinding attacks where the
-// hostname passes validation but later resolves to a private IP), follows
-// redirects manually with re-validation at every hop, and only ever binds
-// its local proxy server to 127.0.0.1. Every check here is preserved
-// exactly, byte-for-byte in intent, from the original — do not loosen,
-// skip, or "simplify" any of it without re-auditing against the source app.
+// The SSRF defense boundary for remote media. Ported from
+// r3v07v3r-media-hub's src/playback.cjs, which also held a loopback playback
+// proxy; that was deleted here once nothing constructed it (mpv plays either
+// a public HTTPS URL or streamCache.ts's own loopback server). What this file
+// holds is the checks themselves, which every remote media fetch goes
+// through:
+//
+//   - isAllowedRemoteMediaUrl: a media URL must be public HTTPS with no
+//     embedded credentials, not a private/loopback/link-local address or an
+//     internal-only hostname. mpv.ts and torbox.ts gate on it.
+//   - assertPublicMediaUrl: re-resolves DNS and re-checks every resolved
+//     address before fetching, to defeat DNS-rebinding attacks where the
+//     hostname passes validation but later resolves to a private IP.
+//   - safeFetchMedia / fetchMediaWithRetry: follow redirects manually with
+//     re-validation at every hop. streamCache.ts's upstream fetch and the
+//     r3-cache daemon's fetcher both go through these.
+//
+// Every check here is preserved exactly, byte-for-byte in intent, from the
+// original — do not loosen, skip, or "simplify" any of it without
+// re-auditing against the source app.
 
-import crypto from 'node:crypto'
 import dns from 'node:dns/promises'
-import http, { type IncomingMessage, type ServerResponse } from 'node:http'
-import { Readable } from 'node:stream'
-import type { ReadableStream as NodeWebReadableStream } from 'node:stream/web'
 
 /**
  * Classifies an IP-literal address (v4 or v6) as "private"/internal for
@@ -183,9 +189,9 @@ export function defaultResolveHost(host: string): Promise<string[]> {
  * address, so every fetch (including every redirect hop) must re-resolve
  * and re-check, not just re-check the hostname string.
  *
- * Extracted from createPlaybackProxy's own closure so streamCache.ts's
- * upstream fetch can reuse the exact same audited check instead of
- * duplicating it — the SSRF boundary must stay in exactly one place.
+ * Exported so streamCache.ts's upstream fetch uses this exact audited check
+ * instead of duplicating it — the SSRF boundary must stay in exactly one
+ * place.
  */
 export async function assertPublicMediaUrl(
   urlValue: string,
@@ -232,22 +238,13 @@ export async function safeFetchMedia(
   throw new Error('Playback source redirected too many times.')
 }
 
-// vlc.ts's ffmpeg transcoder gets `-reconnect`/`-reconnect_on_network_error`
-// for exactly this reason ("Streaming/debrid sources can drop the
-// connection briefly under load"), but that protection never covered
-// direct/proxied playback (no ffmpeg involved) — every distinct byte
-// range Chromium's <video> element asks for is its own fresh request
-// through this proxy, and a single failed upstream fetch here (before
-// any response has gone to the client) turned straight into a 502,
-// which the <video> element surfaces as a hard error that closes the
-// whole player — a transient blip on the MORE common playback path
-// (direct/proxied is used whenever a title doesn't need transcoding)
-// forcing a full "click Play again" restart, exactly the kind of
-// failure ffmpeg's own reconnect flags exist to absorb on its path.
-// Bounded to the pre-response window only: once headers are already
-// sent, a failure has to surface immediately (see the caller) — there is
-// no way to retry a fetch whose response Chromium has already started
-// consuming without a Range-aware resume this proxy doesn't implement.
+// Streaming/debrid sources can drop the connection briefly under load, and
+// one transient blip must not end a playback or a cache fill. So a fetch
+// that fails before any response has arrived is retried, up to three
+// attempts with a short growing delay; an abort is never retried.
+// Bounded to the pre-response window only: once a response is being
+// consumed, a failure surfaces to the caller, which asks again from the byte
+// it had reached (streamCache.ts's fill, the r3-cache daemon's fetcher).
 export async function fetchMediaWithRetry(
   remoteUrl: string,
   options: RequestInit,
@@ -268,138 +265,4 @@ export async function fetchMediaWithRetry(
   // Unreachable — the loop above always returns or throws — but keeps
   // this function's return type honest without a non-null assertion.
   throw new Error('Playback source could not be reached.')
-}
-
-interface PlaybackSession {
-  remoteUrl: string
-  expiresAt: number
-}
-
-export interface CreatePlaybackProxyOptions {
-  fetchImpl?: typeof fetch
-  randomBytes?: typeof crypto.randomBytes
-  resolveHost?: (host: string) => Promise<string[]>
-}
-
-export interface PlaybackProxy {
-  register: (remoteUrl: string) => Promise<string>
-  close: () => Promise<void>
-}
-
-export function createPlaybackProxy({
-  fetchImpl = globalThis.fetch,
-  randomBytes = crypto.randomBytes,
-  resolveHost = defaultResolveHost
-}: CreatePlaybackProxyOptions = {}): PlaybackProxy {
-  let server: http.Server | null = null
-  let origin = ''
-  const sessions = new Map<string, PlaybackSession>()
-
-  async function fetchUpstreamWithRetry(
-    remoteUrl: string,
-    options: RequestInit
-  ): Promise<Response> {
-    return fetchMediaWithRetry(remoteUrl, options, fetchImpl, resolveHost)
-  }
-
-  async function listen(): Promise<void> {
-    if (server) return
-    server = http.createServer(async (req: IncomingMessage, res: ServerResponse) => {
-      try {
-        const match = /^\/media\/([a-f0-9]{64})$/.exec(
-          new URL(req.url ?? '', 'http://127.0.0.1').pathname
-        )
-        const session = match && sessions.get(match[1])
-        if (
-          !session ||
-          session.expiresAt < Date.now() ||
-          !['GET', 'HEAD'].includes(req.method ?? '')
-        ) {
-          res.writeHead(404, { 'cache-control': 'no-store' })
-          res.end()
-          return
-        }
-
-        const headers: Record<string, string> = {}
-        if (req.headers.range) headers.Range = req.headers.range as string
-        const controller = new AbortController()
-        res.on('close', () => controller.abort())
-        const upstream = await fetchUpstreamWithRetry(session.remoteUrl, {
-          headers,
-          signal: controller.signal
-        })
-        if (!isAllowedRemoteMediaUrl(upstream.url || session.remoteUrl)) {
-          res.writeHead(502, { 'cache-control': 'no-store' })
-          res.end()
-          return
-        }
-
-        const forwarded: Record<string, string> = {}
-        for (const name of ['content-type', 'content-length', 'content-range', 'accept-ranges']) {
-          const value = upstream.headers.get(name)
-          if (value) forwarded[name] = value
-        }
-        forwarded['cache-control'] = 'no-store'
-        forwarded['x-content-type-options'] = 'nosniff'
-        res.writeHead(upstream.status, forwarded)
-        if (req.method === 'HEAD' || !upstream.body) {
-          res.end()
-          return
-        }
-        // Node's global `fetch` Response#body is typed against the whatwg-fetch
-        // lib.dom ReadableStream, while Readable.fromWeb expects
-        // node:stream/web's ReadableStream type. These are structurally
-        // near-identical but not assignable in strict TS, so a cast is needed
-        // to bridge the two at this one call site.
-        Readable.fromWeb(upstream.body as unknown as NodeWebReadableStream<Uint8Array>)
-          .on('error', () => res.destroy())
-          .pipe(res)
-      } catch (error) {
-        if (!res.headersSent) {
-          res.writeHead(
-            (error as { name?: string } | undefined)?.name === 'AbortError' ? 499 : 502,
-            {
-              'cache-control': 'no-store'
-            }
-          )
-        }
-        res.end()
-      }
-    })
-    await new Promise<void>((resolve, reject) => {
-      const activeServer = server as http.Server
-      activeServer.once('error', reject)
-      activeServer.listen(0, '127.0.0.1', () => {
-        activeServer.off('error', reject)
-        const address = activeServer.address()
-        const port = typeof address === 'object' && address ? address.port : 0
-        origin = `http://127.0.0.1:${port}`
-        resolve()
-      })
-    })
-  }
-
-  async function register(remoteUrl: string): Promise<string> {
-    if (!isAllowedRemoteMediaUrl(remoteUrl)) {
-      throw new Error('Playback requires a valid HTTPS media URL.')
-    }
-    await listen()
-    // Only one active playback session at a time, by design (mirrors the
-    // original): registering a new source invalidates any prior token.
-    sessions.clear()
-    const token = randomBytes(32).toString('hex')
-    sessions.set(token, { remoteUrl, expiresAt: Date.now() + 6 * 60 * 60 * 1000 })
-    return `${origin}/media/${token}`
-  }
-
-  async function close(): Promise<void> {
-    sessions.clear()
-    if (!server) return
-    const active = server
-    server = null
-    origin = ''
-    await new Promise<void>((resolve) => active.close(() => resolve()))
-  }
-
-  return { register, close }
 }

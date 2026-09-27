@@ -13,7 +13,7 @@
 // draw, and for the same reason: a confident wrong match is worse than a
 // missing one.
 
-import type { CatalogItem, MediaKind } from '../../shared/media-hub/types'
+import type { CatalogItem } from '../../shared/media-hub/types'
 
 /** The minimum a caller has to hand over. Mirrors SimklPushItem next door. */
 export type TraktPushItem = Pick<CatalogItem, 'id' | 'type' | 'title'> & Partial<CatalogItem>
@@ -235,9 +235,6 @@ export function scrobblePayload(
 export function hasTraktContent(payload: TraktSyncPayload): boolean {
   return Boolean(payload.movies?.length || payload.shows?.length)
 }
-
-/** Kinds this app can push. Exported so callers can say why they skipped. */
-export const TRAKT_PUSHABLE_KINDS: readonly MediaKind[] = ['movie', 'series']
 
 // ---------------------------------------------------------------------------
 // Reading Trakt back.

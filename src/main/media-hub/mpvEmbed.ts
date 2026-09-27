@@ -36,8 +36,7 @@ import {
   setShown,
   addWindowStyle,
   WS_CLIPSIBLINGS,
-  WS_DISABLED,
-  win32Available
+  WS_DISABLED
 } from './win32'
 
 let parentHwnd: bigint | null = null
@@ -46,10 +45,6 @@ let mpvPid = 0
 // party hub). Remembered so a sync arriving mid-panel (a resize, a
 // vo-configured from a title change) does not undo the hide.
 let videoHidden = false
-
-export function embedAvailable(): boolean {
-  return win32Available()
-}
 
 /** Remembers where the video embeds. Called once per session start, before
  *  mpv spawns — the HWND is what --wid gets. */

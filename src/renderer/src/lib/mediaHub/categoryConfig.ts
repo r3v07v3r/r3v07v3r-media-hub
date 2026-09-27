@@ -80,5 +80,3 @@ export const ANIME_CONFIG: CategoryConfig = {
     status: true
   }
 }
-
-export const CATEGORY_CONFIGS: CategoryConfig[] = [MOVIES_CONFIG, SERIES_CONFIG, ANIME_CONFIG]

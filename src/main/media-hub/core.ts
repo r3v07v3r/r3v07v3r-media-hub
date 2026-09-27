@@ -51,16 +51,6 @@ export { airingStatus, episodeWatchState, filterCatalog, isItemWatched, subtitle
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export type RawApiPayload = Record<string, any>
 
-const ROOM_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
-
-export function createRoomCode(random: () => number = Math.random): string {
-  let value = ''
-  for (let i = 0; i < 6; i++) {
-    value += ROOM_ALPHABET[Math.floor(random() * ROOM_ALPHABET.length) % ROOM_ALPHABET.length]
-  }
-  return `${value.slice(0, 3)}-${value.slice(3)}`
-}
-
 /** Every human-readable field a scraper puts the release details in.
  *  `description` is the important one and was previously read by nothing:
  *  Comet returns a generic `name` ("[TORRENT] Comet 2160p") and an empty

@@ -63,20 +63,6 @@ export async function testConnection(config: ServiceConfig): Promise<ConnectionT
   return { ok: true, message: `Connected — qBittorrent ${res.data ?? ''}`.trim() }
 }
 
-/**
- * True when a torrent is in one of qBittorrent's several stopped states.
- *
- * There is no single "paused" flag: the WebUI reports pausedDL, pausedUP,
- * stoppedDL and stoppedUP depending on version and on whether the torrent had
- * finished, and 4.x renamed the pair midway. Matching on the shape of the
- * name rather than on an exhaustive list is what keeps this working across
- * both, and across whatever the next rename is.
- */
-export function isPaused(torrent: QbTorrent): boolean {
-  const state = String(torrent.state ?? '').toLowerCase()
-  return state.startsWith('paused') || state.startsWith('stopped')
-}
-
 export async function getTorrents(config: ServiceConfig): Promise<ClientResult<QbTorrent[]>> {
   if (!isConfigured(config))
     return { ok: false, live: false, error: "qBittorrent isn't configured" }

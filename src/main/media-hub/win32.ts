@@ -21,14 +21,10 @@ export const SW_SHOWNA = 8
 
 export const GWL_STYLE = -16
 export const GWL_EXSTYLE = -20
-export const GWLP_HWNDPARENT = -8
 
-export const WS_VISIBLE = 0x10000000n
 export const WS_DISABLED = 0x08000000n
 export const WS_CHILD = 0x40000000n
 export const WS_CLIPSIBLINGS = 0x04000000n
-export const WS_CLIPCHILDREN = 0x02000000n
-export const WS_EX_TOOLWINDOW = 0x00000080n
 
 export const HWND_TOP = 0n
 

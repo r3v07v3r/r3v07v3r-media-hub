@@ -312,18 +312,6 @@ export function tracksLackLanguage(
   return !audio.some((track) => languageMatches(String(track.language ?? ''), want))
 }
 
-/** Which other language a release looks localised into, for a message
- *  worth showing someone ("this one is the French dub"). Null when it
- *  isn't marked, or is marked as the preferred language. */
-export function releaseLocalisedInto(text: string, preferred: string): string | null {
-  if (!releaseLacksPreferredLanguage(text, preferred)) return null
-  for (const token of tokenize(text)) {
-    const marked = LOCALISED_RELEASE_TOKENS[token]
-    if (marked && marked !== normalizeLanguage(preferred)) return marked
-  }
-  return null
-}
-
 const LANGUAGE_NAMES: Record<string, string> = {
   en: 'English',
   fr: 'French',

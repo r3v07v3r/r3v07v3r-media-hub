@@ -36,8 +36,6 @@ import { setAnime4kInstalledProbe } from './preferences'
 export const ANIME4K_RELEASE_TAG = 'v4.0.1'
 export const ANIME4K_ASSET = 'Anime4K_v4.0.zip'
 export const ANIME4K_SHA256 = '139cd282086457c5adc79caf7b75b8b825091d71c9b54958c18745fea62d7ed7'
-/** Shown in Settings so the person knows what a click downloads. */
-export const ANIME4K_ASSET_BYTES = 776303
 
 const ANIME4K_URL = `https://github.com/bloc97/Anime4K/releases/download/${ANIME4K_RELEASE_TAG}/${ANIME4K_ASSET}`
 

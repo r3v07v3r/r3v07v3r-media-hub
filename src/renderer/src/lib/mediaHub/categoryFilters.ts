@@ -255,13 +255,6 @@ export function availableYears(items: MediaItem[]): number[] {
   return Array.from(set).sort((a, b) => b - a)
 }
 
-/** Every status string actually present in this pool (series/anime). */
-export function availableStatuses(items: MediaItem[]): string[] {
-  const set = new Set<string>()
-  for (const item of items) if (item.status) set.add(item.status)
-  return Array.from(set).sort((a, b) => a.localeCompare(b))
-}
-
 /** Just the watched/completed/disliked predicate, factored out so search
  *  results (which bypass every other category filter — genre/year/rating
  *  etc. don't apply to a search query) can still respect these three. */
