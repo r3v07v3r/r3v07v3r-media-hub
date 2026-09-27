@@ -39,6 +39,9 @@ object Updater {
     /** Test builds were signed with the committed debug key; releases are
      *  signed with a key kept out of the repository. Android will not put one
      *  over the other, and only the person can remove the old build. */
+    // Android cuts a toast to two lines; the dialog carries the full text.
+    private const val DIFFERENT_KEY_SHORT =
+        "Update blocked: it is signed with a different key. Uninstall R3 Media Hub once, then install the latest release."
     private const val DIFFERENT_KEY = "This update is signed with a different key from the R3 Media Hub " +
         "on this phone, so Android will not install it over this one. To move to it, uninstall " +
         "R3 Media Hub once (this removes its settings and sign-ins from this phone), then install " +
@@ -230,7 +233,7 @@ object Updater {
                 PackageInstaller.STATUS_SUCCESS -> Log.i(TAG, "update installed")
                 PackageInstaller.STATUS_FAILURE_CONFLICT -> {
                     Log.w(TAG, "update not installed: ${intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE)}")
-                    Toast.makeText(context.applicationContext, DIFFERENT_KEY, Toast.LENGTH_LONG).show()
+                    Toast.makeText(context.applicationContext, DIFFERENT_KEY_SHORT, Toast.LENGTH_LONG).show()
                 }
                 else -> Log.w(TAG, "update not installed: ${intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE)}")
             }
