@@ -152,12 +152,6 @@ export type AssistantState = 'idle' | 'hover' | 'focused' | 'processing' | 'resp
 export type UIActivityState =
   'idle' | 'hovering' | 'processing' | 'responding' | 'playing' | 'loading' | 'error'
 
-export interface WeatherSnapshot {
-  tempC: number
-  condition: 'clear' | 'clouds' | 'rain' | 'storm' | 'snow'
-  loading: boolean
-}
-
 export interface PerformanceSnapshot {
   cpu: number
   gpu: number
