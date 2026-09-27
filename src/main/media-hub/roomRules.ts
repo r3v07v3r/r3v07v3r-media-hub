@@ -190,7 +190,7 @@ export function applyRekey(
 
 /** How many kicked identities a room remembers. Bounds a hostile admin
  *  growing the settings file; a real room never approaches it. */
-export const KICKED_MEMBERS_KEPT = 64
+const KICKED_MEMBERS_KEPT = 64
 
 /**
  * Records a removal the admin performed, bounded and idempotent.

@@ -201,10 +201,6 @@ html[data-motion-user-disabled='true'] .railButton {
 }
 
 @media (max-width: 767px) {
-  .header {
-    padding: 14px 16px 12px;
-  }
-
   .body {
     padding: 16px 16px 24px;
   }

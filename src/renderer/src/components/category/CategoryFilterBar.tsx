@@ -28,7 +28,7 @@ import {
 import { useAppState } from '@renderer/context/AppStateContext'
 import styles from './CategoryFilterBar.module.css'
 
-export interface CategoryFilterBarProps {
+interface CategoryFilterBarProps {
   config: CategoryConfig
   /** The index's own vocabulary for this kind (catalog:facets) — what
    *  the Genre/Year/Status dropdowns list. Null while the first fetch is

@@ -33,7 +33,7 @@ function logPath(): string {
 }
 
 /** Strips URLs out of a string before it's logged — VLC's stderr in particular can echo the playback URL (which carries a bearer-style proxy token). */
-export function redactUrls(value: unknown): string {
+function redactUrls(value: unknown): string {
   return String(value).replace(/https?:\/\/\S+/gi, '[redacted-url]')
 }
 

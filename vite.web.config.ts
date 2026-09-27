@@ -10,11 +10,8 @@ import { fontPackageRoot } from './vite.fonts'
 // CI is what keeps "the renderer has no Electron in it" true between now and
 // then.
 //
-// Not to be confused with vite.preview.config.ts, which inlines everything
-// into ONE html file for a throwaway click-around preview and has its CSP
-// stripped afterwards (scripts/build-preview.mjs) because inlined script
-// cannot run under `script-src 'self'`. This build keeps scripts, styles and
-// fonts as separate same-origin files precisely so the real CSP holds.
+// Scripts, styles and fonts stay separate same-origin files precisely so the
+// real CSP holds: inlined script cannot run under `script-src 'self'`.
 /**
  * index.html is shared with the desktop build and names the desktop entry.
  * Outside Electron there is no preload to have made `window.api` first, so

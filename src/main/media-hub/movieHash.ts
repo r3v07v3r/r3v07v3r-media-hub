@@ -102,7 +102,7 @@ function readRange(
   })
 }
 
-export interface StreamMovieHash {
+interface StreamMovieHash {
   hash: string
   bytes: number
 }

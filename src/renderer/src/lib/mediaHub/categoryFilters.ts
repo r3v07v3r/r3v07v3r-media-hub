@@ -131,7 +131,7 @@ export interface HideStateDefaults {
   hideDisliked: boolean
 }
 
-export const NO_HIDE_DEFAULTS: HideStateDefaults = {
+const NO_HIDE_DEFAULTS: HideStateDefaults = {
   hideWatched: false,
   hideCompleted: false,
   hideDisliked: false
@@ -253,13 +253,6 @@ export function availableYears(items: MediaItem[]): number[] {
   const set = new Set<number>()
   for (const item of items) if (item.releaseYear) set.add(item.releaseYear)
   return Array.from(set).sort((a, b) => b - a)
-}
-
-/** Every status string actually present in this pool (series/anime). */
-export function availableStatuses(items: MediaItem[]): string[] {
-  const set = new Set<string>()
-  for (const item of items) if (item.status) set.add(item.status)
-  return Array.from(set).sort((a, b) => a.localeCompare(b))
 }
 
 /** Just the watched/completed/disliked predicate, factored out so search

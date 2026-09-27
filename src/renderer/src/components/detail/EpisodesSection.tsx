@@ -23,7 +23,7 @@ export interface EpisodeResume {
   remainingMinutes: number | null
 }
 
-export interface EpisodesSectionProps {
+interface EpisodesSectionProps {
   /** The show's own id — startPlayback's resolvingMedia is keyed on this,
    *  not a per-episode id (only one resolve is ever in flight at a time),
    *  so a locally-tracked pendingKey (see below) narrows that down to

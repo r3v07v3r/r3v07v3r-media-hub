@@ -40,22 +40,22 @@ export type SimklPushItem = Pick<CatalogItem, 'id' | 'type' | 'title' | 'year'> 
   Partial<CatalogItem> & { name?: string }
 
 /** Simkl's generic "media reference" shape, embedded in movies/shows/anime/episode payloads. */
-export interface SimklMediaRef {
+interface SimklMediaRef {
   title?: string
   year?: number
   ids: SimklMediaIds
 }
 
-export interface SimklEpisodeRef {
+interface SimklEpisodeRef {
   number?: number
 }
 
-export interface SimklSeasonEntry {
+interface SimklSeasonEntry {
   number: number
   episodes: SimklEpisodeRef[]
 }
 
-export interface SimklShowRef extends SimklMediaRef {
+interface SimklShowRef extends SimklMediaRef {
   seasons: SimklSeasonEntry[]
 }
 
@@ -67,7 +67,7 @@ export interface SimklHistoryPayload {
 }
 
 /** Body for POST /scrobble/{start,pause,stop}. */
-export interface SimklScrobblePayload {
+interface SimklScrobblePayload {
   progress: number
   movie?: SimklMediaRef
   show?: SimklMediaRef
@@ -80,7 +80,7 @@ export interface SimklScrobblePayload {
  * idsForCatalogId in shared/media-hub/serviceIds.ts, which is the actual
  * implementation (and the doc for the id conventions).
  */
-export function mediaIds(item: SimklPushItem): SimklMediaIds {
+function mediaIds(item: SimklPushItem): SimklMediaIds {
   return idsForCatalogId(String(item.id || ''))
 }
 
@@ -137,7 +137,7 @@ export function historyPayload(
 
 /** One title in a batched history push — the same (item, playback) pair
  *  historyPayload takes for a single one. */
-export interface SimklHistoryEntry {
+interface SimklHistoryEntry {
   item: SimklPushItem
   playback?: PlaybackPosition
 }

@@ -84,7 +84,7 @@ export function setHostOverlay(win: BrowserWindow): void {
   hostOverlay = win
 }
 
-export function getPlayerOverlay(): BrowserWindow | null {
+function getPlayerOverlay(): BrowserWindow | null {
   if (hostOverlay) return hostOverlayOpen && !hostOverlay.isDestroyed() ? hostOverlay : null
   return overlayWindow && !overlayWindow.isDestroyed() ? overlayWindow : null
 }

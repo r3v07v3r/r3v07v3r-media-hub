@@ -5,7 +5,7 @@ import { Icon } from '@renderer/components/icons/Icon'
 import type { BrowsingOrigin } from '@renderer/lib/mediaHub/browsingContext'
 import styles from './ContextBackButton.module.css'
 
-export interface ContextBackButtonProps {
+interface ContextBackButtonProps {
   /** The captured origin to return to, if this detail page was opened
    *  from somewhere in the app. Null for a direct/deep link — falls back
    *  to a plain "Back to {fallbackLabel}" targeting that kind's category

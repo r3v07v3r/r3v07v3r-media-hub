@@ -167,11 +167,11 @@ export const ipcMain = new HeadlessIpcMain()
 /** The document the desktop renderer is loaded from. The service layer's
  *  sender check (ipc/trustedSender.ts) compares against exactly this, and it
  *  is the bridge — not this string — that decides who may connect at all. */
-export const HEADLESS_RENDERER_URL = 'app://index.html/'
+const HEADLESS_RENDERER_URL = 'app://index.html/'
 
-export type PushSink = (channel: string, payload: unknown) => void
+type PushSink = (channel: string, payload: unknown) => void
 
-export class HeadlessWebContents extends EventEmitter {
+class HeadlessWebContents extends EventEmitter {
   readonly mainFrame = { url: HEADLESS_RENDERER_URL }
   readonly session = session.defaultSession
   private sink: PushSink | null = null

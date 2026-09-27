@@ -144,7 +144,7 @@ export interface CatalogItem {
  * story a summary condensed — which are exactly what somebody following a
  * franchise in order needs to be shown and used to be filtered out.
  */
-export type AnimeStoryRelation =
+type AnimeStoryRelation =
   'prequel' | 'parent_story' | 'full_story' | 'side_story' | 'spin_off' | 'summary' | 'sequel'
 
 export interface AnimeStoryLink {
@@ -312,15 +312,6 @@ export interface MediaTracks {
   // targets during compatibility playback. Undefined if ffprobe didn't
   // report a usable duration (e.g. probing failed).
   durationSeconds?: number
-}
-
-export interface PlaybackSelection {
-  audio?: number
-  subtitle?: number
-  startTime?: number
-  externalSubtitlePath?: string
-  /** 0 (or omitted) means "no change to whatever's already active" — every restart (seek, track change, subtitle apply) round-trips through this same selection object, so upscale state has to stay sticky across all of them, not just the call that turned it on. Explicitly 0 from the player's own "Off" menu item is what actually turns it back off. */
-  upscaleHeight?: number
 }
 
 /**
@@ -1387,7 +1378,7 @@ export interface MalReconcileApplyResult {
  *  searched together and merged into one list (see subtitlesService.ts), so
  *  every result has to say where it came from — the download step differs
  *  per provider and cannot be inferred from the row's other fields. */
-export type SubtitleProvider = 'opensubtitles' | 'subdl'
+type SubtitleProvider = 'opensubtitles' | 'subdl'
 
 export interface SubtitleResult {
   id: string

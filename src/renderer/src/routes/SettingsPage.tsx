@@ -3,7 +3,6 @@ import { useAppState } from '@renderer/context/AppStateContext'
 import { Icon } from '@renderer/components/icons/Icon'
 import { useAsyncAction } from '@renderer/hooks/useAsyncAction'
 import { AboutUpdateSection } from './AboutUpdateSection'
-import { LanCacheSection } from './LanCacheSection'
 import { DevicePairingSection } from './DevicePairingSection'
 import { MediaServicesSection } from './MediaServicesSection'
 import {
@@ -1945,12 +1944,6 @@ export default function SettingsPage({
               ref={servicesGridBinding}
               className={`${styles.groupGrid} ${styles.groupGridWide}`}
             >
-              {/* Only on the standalone /settings route. Inside the control
-                centre the cache server has its own section in the rail,
-                with the administration this card cannot hold, and two
-                copies of the pairing flow on one surface is a way to have
-                them disagree. */}
-              {!embedded && <LanCacheSection />}
               <MediaServicesSection />
               <TorBoxSection />
               <DevicePairingSection />

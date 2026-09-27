@@ -187,7 +187,7 @@ function metaFilePath(root: string, token: string): string {
  * the retention window, the fill loop, the range server — is written
  * against chunk indices and does not care which of these is underneath.
  */
-export interface ChunkStore {
+interface ChunkStore {
   /** Whether chunks outlive the process. False for the memory store, and
    *  that single fact is what makes session reuse, chunk adoption, meta
    *  files and the Downloads listing all meaningless for it. */
@@ -364,7 +364,7 @@ export function chunkIndexForByte(byte: number, chunkBytes = CHUNK_BYTES): numbe
   return Math.floor(byte / chunkBytes)
 }
 
-export interface RangeReplyVerdict {
+interface RangeReplyVerdict {
   /** Why the reply must NOT be written as chunk data, or null when it may. */
   problem: string | null
   /** The file length the reply declared, when it declared one. */
@@ -427,7 +427,7 @@ export function inspectRangeReply(
   return { problem: null, total }
 }
 
-export interface RetentionParams {
+interface RetentionParams {
   /** Every chunk index currently on disk — in fullRetention mode nothing is ever evicted, so the retained set is just this, verbatim. */
   presentChunkIndices: Iterable<number>
   fullRetention: boolean
@@ -626,7 +626,7 @@ export function isOwnCacheUrl(url: unknown): boolean {
   return Boolean(match && activeCacheTokens.has(match[1]))
 }
 
-export interface StreamCacheStartResult {
+interface StreamCacheStartResult {
   url: string
   totalBytes: number | null
   /** True when the configured cache size is large enough to eventually hold
@@ -703,7 +703,7 @@ export interface StreamCache {
   applyStoragePolicy(): Promise<void>
 }
 
-export interface CreateStreamCacheOptions {
+interface CreateStreamCacheOptions {
   fetchImpl?: typeof fetch
   resolveHost?: (host: string) => Promise<string[]>
   randomBytesImpl?: typeof crypto.randomBytes

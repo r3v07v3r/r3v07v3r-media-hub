@@ -112,7 +112,7 @@ function cachedHistoryFor(account: string, allowExpired = false): HistoryEntry[]
 }
 
 /** What Simkl reports as watched, plus whether that picture can be trusted at all. */
-export interface SimklWatchedSnapshot {
+interface SimklWatchedSnapshot {
   entries: HistoryEntry[]
   /**
    * True when `entries` is a real answer about the remote side: freshly

@@ -34,12 +34,12 @@ import { useEffect, useState } from 'react'
  * its own answer for all of this, so the two height tiers deliberately
  * carry `(min-width: 1100px)` and never fight it.
  */
-export type DashboardLayoutMode = 'full' | 'short' | 'compact' | 'stacked'
+type DashboardLayoutMode = 'full' | 'short' | 'compact' | 'stacked'
 
 /** Kept beside the CSS that mirrors them so the pair stays honest — every
  *  `@media` block keyed to these numbers references this file by name. */
 export const STACKED_QUERY = '(max-width: 1099px)'
-export const SHORT_QUERY = '(min-width: 1100px) and (max-height: 1079px)'
+const SHORT_QUERY = '(min-width: 1100px) and (max-height: 1079px)'
 export const COMPACT_QUERY = '(min-width: 1100px) and (max-height: 940px)'
 
 function read(): DashboardLayoutMode {

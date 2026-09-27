@@ -53,7 +53,7 @@ export const MAX_RATE_DELTA = 0.08
 /** Proportional gain: rate = 1 - error x GAIN, clamped. Chosen so a
  *  half-second error produces roughly a 4% correction and anything past
  *  one second saturates at MAX_RATE_DELTA. */
-export const RATE_GAIN = 0.08
+const RATE_GAIN = 0.08
 
 /** Past this, nudging the speed would take too long and a hard seek is the
  *  lesser evil.

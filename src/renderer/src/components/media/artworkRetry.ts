@@ -7,7 +7,7 @@
 // cancelled during a fast scroll — without turning a genuinely dead URL
 // into a request loop.
 
-export type ArtworkLoadStatus = 'loading' | 'retrying' | 'loaded' | 'error'
+type ArtworkLoadStatus = 'loading' | 'retrying' | 'loaded' | 'error'
 
 export interface ArtworkLoadState {
   status: ArtworkLoadStatus

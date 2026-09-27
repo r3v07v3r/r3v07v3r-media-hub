@@ -27,12 +27,10 @@ import type {
   MediaHubSettingsSnapshot,
   OllamaAskResult,
   MediaKind,
-  MediaTracks,
   PartyHostResult,
   PartyChatMessage,
   PartyQueueEntry,
   PartyStatusResult,
-  PlaybackResult,
   ProfilePublic,
   ReconcileResolution,
   WatchStatusDiscrepancy
@@ -103,7 +101,7 @@ const MAX_TRAIL = 20
  *  same plural/singular forms App.tsx's own /movies, /series, /anime
  *  category routes already use. */
 function mediaKindToDetailPath(media: MediaItem): string {
-  // Same fallback PlaybackOverlay.tsx's own `kind` derivation uses:
+  // Same fallback every other `kind` derivation in the renderer uses:
   // mediaKind is real backend data (undefined for some mock items), and
   // MediaType has no 'anime' member at all (see adapters.ts's toMediaType)
   // so a plain mediaType check can only ever tell movie from everything
@@ -170,13 +168,6 @@ interface AppStateValue {
   hostParty: (name: string) => Promise<PartyHostResult>
   joinParty: (code: string, name: string) => Promise<void>
   leaveParty: () => Promise<void>
-  suggestToParty: (item: {
-    id: string
-    type?: string
-    title?: string
-    poster?: string
-    year?: string
-  }) => Promise<void>
   voteQueue: (queueId: string, direction: 1 | -1) => Promise<void>
   removeFromQueue: (queueId: string) => Promise<void>
   sendPartyChat: (text: string) => Promise<void>
@@ -290,7 +281,6 @@ interface AppStateValue {
   // MoodBrowser/My Stuff/the AI-recommend actions all fetch it once
   // instead of each mounting their own copy of the hook.
   catalog: MediaItem[]
-  catalogLoading: boolean
   /** True once at least one catalog kind has returned real rows this run
    *  — false means `catalog` is entirely remembered from the previous
    *  session (bridge missing, still loading, or every kind's fetch
@@ -347,8 +337,6 @@ interface AppStateValue {
   // time.
   assistantState: AssistantState
   setAssistantState: (s: AssistantState) => void
-  assistantQuery: string
-  setAssistantQuery: (q: string) => void
   assistantResponse: string | null
   /** What the app's OWN catalog search found for the current question —
    *  real, openable titles, filled in before the model has said anything
@@ -431,11 +419,11 @@ interface AppStateValue {
   // and starting it (play:stream, "buffering" — opening a StreamCache
   // session and handing it to the embedded mpv player) both take a real
   // network round trip.
-  // Previously PlaybackOverlay opened immediately on click and did this
+  // Previously the player opened immediately on click and did this
   // work itself, showing a mostly-blank full-screen takeover the whole
   // time (and, on a no-source/error outcome, staying open just to show
   // that one line of text) — now startPlayback does the resolving here,
-  // BEFORE the overlay ever mounts, so any Play button can show its own
+  // BEFORE the player ever opens, so any Play button can show its own
   // inline "Searching…"/"Buffering…" state instead, and a failure never
   // opens anything at all (just a notification, staying on whatever page
   // the person was already looking at). `resolvingMedia` is a single
@@ -455,21 +443,12 @@ interface AppStateValue {
   } | null
   cancelPlaybackPreparation: () => void
   playbackMedia: MediaItem | null
-  playbackResult: PlaybackResult | null
-  playbackTracks: MediaTracks | null
-  // Dispatch<SetStateAction<T>>, not a plain setter — PlaybackOverlay's
-  // seek/track-selection restart logic (selectTrack/handleSeek) updates
-  // these via the functional-updater form (`setResult(prev => ...)`),
-  // which only a real useState dispatch (passed straight through here)
-  // supports.
-  setPlaybackResult: Dispatch<SetStateAction<PlaybackResult | null>>
-  setPlaybackTracks: Dispatch<SetStateAction<MediaTracks | null>>
   startPlayback: (media: MediaItem) => Promise<boolean>
-  /** `watched` deletes this title's local stream cache outright on close instead of leaving it for the idle sweep — see PlaybackOverlay's markedWatchedRef, which is the only thing that should ever pass true. */
+  /** `watched` deletes this title's local stream cache outright on close instead of leaving it for the idle sweep — see usePlayerTracking's markedWatchedRef, which PlayerOverlayWindow reads when it asks to stop and is the only thing that should ever pass true. */
   stopPlayback: (watched?: boolean) => void
   /** Re-fetches both watch-status sources (tracking:list's history and home:personalized's continueWatching) — call after anything changes what tracking:list reports for an id, so grids/badges/Continue Watching/next-episode don't go stale until some unrelated refetch happens to pick it up. Same pair markContinueWatching below already refreshes after a manual toggle. */
   refreshWatchStatus: () => void
-  /** Bumped every time refreshWatchStatus() runs — MediaDetailPage keeps its own separate per-episode `history` fetch (tracking:list scoped to just the current id, for its watchedKeys/nextEpisode computation) and has no other way to know a mark-watched happened elsewhere, e.g. PlaybackOverlay's 80%-progress auto-mark. Depend on this in any effect that needs to re-fetch when watch status changes anywhere in the app. */
+  /** Bumped every time refreshWatchStatus() runs — MediaDetailPage keeps its own separate per-episode `history` fetch (tracking:list scoped to just the current id, for its watchedKeys/nextEpisode computation) and has no other way to know a mark-watched happened elsewhere, e.g. the player's 80%-progress auto-mark (usePlayerTracking). Depend on this in any effect that needs to re-fetch when watch status changes anywhere in the app. */
   watchStatusVersion: number
   /** Same as startPlayback, but (host only) also announces the title to the party so followers resolve their own stream of it. */
   startPartyPlayback: (
@@ -478,9 +457,6 @@ interface AppStateValue {
   ) => Promise<void>
   /** Follower-only: the title the host is currently getting ready, from the moment they pick it until this member's own stream actually starts. Null when nothing is pending. Drives PartyLoadingOverlay. */
   partyPreparing: { title: string; poster: string } | null
-  /** Absolute position (seconds) a follower should seek to once their own independently-resolved stream is ready — set from an incoming `nowPlaying` announcement, consumed once by PlaybackOverlay. */
-  partyPendingSeek: number | null
-  consumePartyPendingSeek: () => void
   /** Host-only, broadcast to every member: unlocks everyone's own play/pause/seek controls instead of just the host's. */
   setPartyMemberControl: (allow: boolean) => Promise<void>
   /** Any member can call this to start a suggested queue item playing for the whole party — the host resolves and starts it (directly if this device IS the host, otherwise by asking the host over the party channel). */
@@ -541,7 +517,6 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   const [partyWanAvailable, setPartyWanAvailable] = useState<boolean | null>(null)
   const [partyHostPort, setPartyHostPort] = useState<number | null>(null)
   const [partyPanelOpen, setPartyPanelOpen] = useState(false)
-  const [partyPendingSeek, setPartyPendingSeek] = useState<number | null>(null)
   const [partyPreparing, setPartyPreparing] = useState<{ title: string; poster: string } | null>(
     null
   )
@@ -601,7 +576,6 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   }, [dislikedIdsResult.dislikedIds])
   const [mediaHubSettings, setMediaHubSettings] = useState<MediaHubSettingsSnapshot | null>(null)
   const [assistantState, setAssistantState] = useState<AssistantState>('idle')
-  const [assistantQuery, setAssistantQuery] = useState('')
   const [assistantResponse, setAssistantResponse] = useState<string | null>(null)
   // The RAW rows behind the assistant's two title rows, for the same reason
   // categorySearchRaw below keeps rows rather than MediaItems: the watched/
@@ -647,8 +621,6 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   )
   const playbackPreparationGeneration = useRef(0)
   const [playbackMedia, setPlaybackMedia] = useState<MediaItem | null>(null)
-  const [playbackResult, setPlaybackResult] = useState<PlaybackResult | null>(null)
-  const [playbackTracks, setPlaybackTracks] = useState<MediaTracks | null>(null)
   const [activeMood, setActiveMood] = useState<string | null>(null)
   const [combinedMoods, setCombinedMoods] = useState<string[]>([])
   // The RAW backend rows behind categorySearch, not the MediaItems the rest
@@ -1378,16 +1350,6 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     setPartyChat([])
   }, [])
 
-  const suggestToParty = useCallback(
-    async (item: { id: string; type?: string; title?: string; poster?: string; year?: string }) => {
-      const api = window.api?.mediaHub?.party
-      if (!api) throw new Error("Watch Party isn't available outside the desktop app.")
-      await api.suggest(item)
-      refreshPartyStatus()
-    },
-    [refreshPartyStatus]
-  )
-
   const sendPartyChat = useCallback(async (text: string) => {
     const api = window.api?.mediaHub?.party
     if (!api) throw new Error("Watch Party isn't available outside the desktop app.")
@@ -1435,7 +1397,6 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     abandonAssistantRequest()
     setAssistantState('idle')
     setAssistantResponse(null)
-    setAssistantQuery('')
     setAssistantFindings({ results: [], similar: [], similarSource: null, searching: false })
   }, [abandonAssistantRequest])
 
@@ -1527,7 +1488,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   //
   // Does the actual stream:resolve ("searching") + stream:play
   // ("buffering") round trip itself now, rather than handing an
-  // unresolved title straight to PlaybackOverlay and letting IT show a
+  // unresolved title straight to the player and letting IT show a
   // full-screen "resolving"/"no source" state — see resolvingMedia's own
   // doc comment on the AppStateValue interface for why. playbackMedia
   // (and therefore the overlay) is only ever set once there's a real,
@@ -1837,16 +1798,9 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         // bit longer for one already under way. 90s gives real margin
         // over that while the ordinary fast path (a few seconds) is
         // completely unaffected — this is a ceiling, not a typical wait.
-        const played = await runPlaybackPreparationStage(
-          playTask,
-          'buffering',
-          90_000,
-          controller.signal
-        )
+        await runPlaybackPreparationStage(playTask, 'buffering', 90_000, controller.signal)
         if (!isCurrent()) return { started: false, target: media }
         setResolvingMedia({ id: media.id, title: media.title, stage: 'starting' })
-        setPlaybackResult(played)
-        setPlaybackTracks(played.tracks)
         setPlaybackMedia(media)
         // The two upfront warnings that used to fire here are gone with the
         // engine, not merely relocated. `videoCodecWarning` existed because
@@ -1897,17 +1851,14 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   }, [startPlayback])
   const stopPlayback = useCallback((watched?: boolean) => {
     // The one place that genuinely means "playback is over" — every close
-    // path routes through here. PlaybackOverlay's unmount deliberately no
-    // longer does this; see the comment there for why doing it per-title
-    // destroyed the session that had just been created. `watched` (passed
-    // from PlaybackOverlay's markedWatchedRef at its three real-close call
-    // sites) tells the backend whether to delete this title's local
-    // stream-cache directory outright rather than leaving it for the idle
-    // sweep — see playbackSession.ts's stopPlayback.
+    // path routes through here, by way of the player's 'stop-playback'
+    // event (see the onUiEvent listener below). `watched` (usePlayerTracking's
+    // markedWatchedRef, as PlayerOverlayWindow reports it) tells the backend
+    // whether to delete this title's local stream-cache directory outright
+    // rather than leaving it for the idle sweep — see playbackSession.ts's
+    // stopPlayback.
     window.api?.mediaHub?.playback.stop({ watched }).catch(() => {})
     setPlaybackMedia(null)
-    setPlaybackResult(null)
-    setPlaybackTracks(null)
   }, [])
 
   const refreshWatchStatus = useCallback(() => {
@@ -2427,7 +2378,6 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         .meta(msg.item.type as MediaKind, msg.item.id)
         .then((catalogItem) => {
           const media = catalogItemToMediaItem(catalogItem)
-          setPartyPendingSeek(Number(msg.position) || 0)
           return startPlayback(
             msg.season !== undefined || msg.episode !== undefined
               ? {
@@ -2627,8 +2577,6 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     [partyStatus, startSuggestedPlayback, pushNotification]
   )
 
-  const consumePartyPendingSeek = useCallback(() => setPartyPendingSeek(null), [])
-
   const toggleCombinedMood = useCallback((moodId: string) => {
     setCombinedMoods((prev) =>
       prev.includes(moodId) ? prev.filter((m) => m !== moodId) : [...prev, moodId]
@@ -2667,7 +2615,6 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       // been replaced — stop it before starting another one, so a small
       // machine isn't running two models at once.
       abandonAssistantRequest()
-      setAssistantQuery(query)
       setAssistantResponse(null)
       setAssistantFindings({ results: [], similar: [], similarSource: null, searching: false })
 
@@ -2857,7 +2804,6 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       hostParty,
       joinParty,
       leaveParty,
-      suggestToParty,
       voteQueue,
       removeFromQueue,
       sendPartyChat,
@@ -2877,7 +2823,6 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       markContinueWatching,
       removeContinueWatching,
       catalog: browseCatalog.items,
-      catalogLoading: browseCatalog.loading,
       catalogKindStates: browseCatalog.kindStates,
       refreshCatalog: browseCatalog.refresh,
       adaptCatalogItems,
@@ -2893,8 +2838,6 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       refreshMediaHubSettings,
       assistantState,
       setAssistantState,
-      assistantQuery,
-      setAssistantQuery,
       assistantResponse,
       assistantResults,
       assistantSimilar,
@@ -2916,18 +2859,12 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       resolvingMedia,
       cancelPlaybackPreparation,
       playbackMedia,
-      playbackResult,
-      playbackTracks,
-      setPlaybackResult,
-      setPlaybackTracks,
       startPlayback,
       stopPlayback,
       refreshWatchStatus,
       watchStatusVersion,
       startPartyPlayback,
       partyPreparing,
-      partyPendingSeek,
-      consumePartyPendingSeek,
       setPartyMemberControl,
       requestPartyPlay,
       openContextMenu,
@@ -2964,7 +2901,6 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       hostParty,
       joinParty,
       leaveParty,
-      suggestToParty,
       voteQueue,
       removeFromQueue,
       sendPartyChat,
@@ -2984,7 +2920,6 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       markContinueWatching,
       removeContinueWatching,
       browseCatalog.items,
-      browseCatalog.loading,
       browseCatalog.kindStates,
       browseCatalog.refresh,
       adaptCatalogItems,
@@ -2999,7 +2934,6 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       mediaHubSettings,
       refreshMediaHubSettings,
       assistantState,
-      assistantQuery,
       assistantResponse,
       assistantResults,
       assistantSimilar,
@@ -3021,18 +2955,12 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       resolvingMedia,
       cancelPlaybackPreparation,
       playbackMedia,
-      playbackResult,
-      playbackTracks,
-      setPlaybackResult,
-      setPlaybackTracks,
       startPlayback,
       stopPlayback,
       refreshWatchStatus,
       watchStatusVersion,
       startPartyPlayback,
       partyPreparing,
-      partyPendingSeek,
-      consumePartyPendingSeek,
       setPartyMemberControl,
       requestPartyPlay,
       openContextMenu,

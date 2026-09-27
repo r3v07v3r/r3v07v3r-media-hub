@@ -93,7 +93,7 @@ const RETENTION_MAX_AGE_MS = 10 * 60 * 1000
 export const MAX_RELAY_MESSAGE_BYTES = 60 * 1024
 // A Watch Party is intentionally a small room. This bounds retained state and
 // the O(connections) fan-out work a member can trigger with one message.
-export const MAX_ROOM_CONNECTIONS = 32
+const MAX_ROOM_CONNECTIONS = 32
 export const RELAY_RATE_WINDOW_MS = 10_000
 export const MAX_RELAY_MESSAGES_PER_WINDOW = 40
 
@@ -129,12 +129,12 @@ export function isRelayMessageWithinLimit(message: string): boolean {
  *  unknown identities need the CURRENT joinSecret — which rotated at
  *  the moment they were banned. */
 export const MAX_KNOWN_MEMBERS = 256
-export const MAX_BANNED_MEMBERS = 512
+const MAX_BANNED_MEMBERS = 512
 export const CRYPTOGRAM_FRESHNESS_MS = 5 * 60 * 1000
 
 const MEMBER_ID_RE = /^[0-9a-f]{64}$/
 
-export function isValidMemberId(id: unknown): id is string {
+function isValidMemberId(id: unknown): id is string {
   return typeof id === 'string' && MEMBER_ID_RE.test(id)
 }
 
@@ -222,7 +222,7 @@ export async function verifyCryptogram(
   return { ok: true, id: await sha256Hex(pubBytes) }
 }
 
-export type AdmissionVerdict = 'admit' | 'admit-and-register' | 'refuse'
+type AdmissionVerdict = 'admit' | 'admit-and-register' | 'refuse'
 
 /**
  * Whether a VERIFIED identity is let into the room. Pure and sync: the

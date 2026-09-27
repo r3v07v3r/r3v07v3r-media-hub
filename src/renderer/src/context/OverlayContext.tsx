@@ -61,13 +61,13 @@ function notificationTtlMs(notification: Pick<AppNotification, 'tone' | 'action'
   return notification.tone !== 'error' ? NOTIFICATION_TTL_MS : ERROR_TTL_MS
 }
 
-export interface ContextMenuTarget {
+interface ContextMenuTarget {
   x: number
   y: number
   media: MediaItem
 }
 
-export interface OverlayActions {
+interface OverlayActions {
   pushNotification: (notification: Omit<AppNotification, 'id' | 'createdAt'>) => void
   dismissNotification: (id: string) => void
   /** Drops every toast bound to a profile other than this one. */
@@ -76,7 +76,7 @@ export interface OverlayActions {
   closeContextMenu: () => void
 }
 
-export interface OverlayState {
+interface OverlayState {
   notifications: AppNotification[]
   contextMenu: ContextMenuTarget | null
 }

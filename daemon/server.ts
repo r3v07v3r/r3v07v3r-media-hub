@@ -41,7 +41,7 @@ const CONTENT_TYPES: Record<string, string> = {
   '.ts': 'video/mp2t'
 }
 
-export interface ServerDeps {
+interface ServerDeps {
   storage: ItemStore
   jobs: JobStore
   pairing: Pairing

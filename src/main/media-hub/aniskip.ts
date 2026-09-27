@@ -33,7 +33,7 @@ import { MEDIA_HUB_CHANNELS } from '../../shared/media-hub/ipc-channels'
 import type { SkipInterval, SkipTimes } from '../../shared/media-hub/types'
 
 /** Cached (30d — this cross-reference essentially never changes once published) Kitsu-to-MyAnimeList id bridge. Returns null when Kitsu has no myanimelist mapping for this id. `kitsuId` may be this app's catalog-id form (`kitsu:1234`, see catalog.ts/torbox.ts) or the bare numeric id Kitsu's own API expects — either works, mirroring animeSeasons.ts's `item.id.replace(/^kitsu:/, '')` at its own kitsuTvdbMapping call sites. */
-export async function kitsuMalId(kitsuId: string): Promise<number | null> {
+async function kitsuMalId(kitsuId: string): Promise<number | null> {
   const bareId = kitsuId.replace(/^kitsu:/, '')
   const key = `kitsu:mal:${bareId}`
   const db = getDatabase()
@@ -75,7 +75,7 @@ interface AniskipResponse {
  * how close this is to what was submitted with them, so a wildly wrong
  * value (or none) can turn a real match into "not found."
  */
-export async function aniskipTimes(
+async function aniskipTimes(
   malId: number,
   episode: number,
   episodeLengthSeconds: number

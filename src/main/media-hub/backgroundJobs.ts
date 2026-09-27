@@ -66,7 +66,7 @@ const CREDITS_PER_PASS = 60
 
 const PRESSURE_RANK: Record<SchedulerPressure, number> = { idle: 0, busy: 1, critical: 2 }
 
-export interface RecurringJob {
+interface RecurringJob {
   /** Stable id. Also the coalescing key, so a slow run can never be
    *  started a second time by the next tick. */
   name: string
@@ -108,7 +108,7 @@ function stagger(index: number): number {
   return index * 20_000
 }
 
-export function registerRecurringJob(job: RecurringJob): void {
+function registerRecurringJob(job: RecurringJob): void {
   jobs.push({
     job,
     dueAt: Date.now() + job.firstRunAfterMs + stagger(jobs.length),
@@ -147,7 +147,7 @@ export function registerRecurringJob(job: RecurringJob): void {
  * can see the change. The `running` flag in tick() is still what stops two
  * from overlapping.
  */
-export function requestJobRun(name: string): void {
+function requestJobRun(name: string): void {
   const state = jobs.find((entry) => entry.job.name === name)
   if (!state) return
   const now = Date.now()
@@ -484,7 +484,7 @@ export function stopBackgroundJobs(): void {
  *  now, what is queued behind it, and when each recurring job is next due.
  *  So "why does the app feel busy" and "why has nothing synced" both have
  *  an answer that does not require reading this file. */
-export function activitySnapshot(): ActivitySnapshot {
+function activitySnapshot(): ActivitySnapshot {
   return {
     ...schedulerSnapshot(),
     jobs: jobs.map((state) => ({

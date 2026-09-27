@@ -42,7 +42,7 @@ function HeroArtLayer({ item, current }: { item: MediaItem; current: boolean }) 
   )
 }
 
-export interface FeaturedHeroProps {
+interface FeaturedHeroProps {
   /** Overrides the default Home-page item source entirely — used by the
    *  Movies/Series/Anime category pages to rotate through that kind's own
    *  top-of-catalog pool instead of home:personalized's cross-kind

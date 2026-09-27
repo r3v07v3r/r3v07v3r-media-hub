@@ -7,7 +7,7 @@
 
 export type PlaybackBufferPreset = 'auto' | 'extra' | 'maximum'
 
-export const PLAYBACK_BUFFER_SECONDS: Record<PlaybackBufferPreset, number> = {
+const PLAYBACK_BUFFER_SECONDS: Record<PlaybackBufferPreset, number> = {
   auto: 3,
   extra: 8,
   maximum: 15

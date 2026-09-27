@@ -77,7 +77,7 @@ function withUpcoming(video: Episode, upcoming: boolean): Episode {
   return rest
 }
 
-export interface MarkUpcomingOptions {
+interface MarkUpcomingOptions {
   /** The title's own status string, as its source gave it — or, for a
    *  grouped anime, its LAST member's (see episodeAiring.ts): the one
    *  season that can still be airing has its own status, and the

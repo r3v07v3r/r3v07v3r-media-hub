@@ -37,7 +37,7 @@ interface ProwlarrIndexerStatus {
 /** One currently-failing indexer, joined against its name — the shape a
  *  failed-search UI actually wants, rather than the raw id pair Prowlarr's
  *  two separate endpoints report. */
-export interface FailingIndexer {
+interface FailingIndexer {
   id: number
   name: string
   disabledTill: string | null

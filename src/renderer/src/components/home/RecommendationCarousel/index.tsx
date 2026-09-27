@@ -31,7 +31,7 @@ const NO_PLANNED: MediaItem[] = []
  *  flags are part of the contract, not implementation detail: an empty
  *  list still being fetched must not be mistaken for an empty list, and a
  *  fetch that was refused must not be mistaken for one still coming. */
-export interface PlannedRail {
+interface PlannedRail {
   items: MediaItem[]
   loading: boolean
   failed: boolean

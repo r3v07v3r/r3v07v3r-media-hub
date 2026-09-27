@@ -47,7 +47,7 @@ const MAX_CATALOG_ITEMS = 5000
 // as the re-render that new data triggers.
 const WRITE_DELAY_MS = 1500
 
-export interface HomeFeedSnapshot {
+interface HomeFeedSnapshot {
   featured: MediaItem[]
   recommendations: Recommendation[]
   continueWatching: ContinueWatchingItem[]
@@ -383,7 +383,7 @@ export function rememberHomeFeed(feed: HomeFeedSnapshot): void {
  * every one of these sets starts out empty while its backend read is
  * still in flight.
  */
-export interface TrackingState {
+interface TrackingState {
   trackedIds?: Set<string>
   watchedIds?: Set<string>
   dislikedIds?: Set<string>

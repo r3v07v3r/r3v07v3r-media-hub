@@ -9,7 +9,7 @@
     {
       "name": "r3-party-sync",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["--prefix", "../r3v07v3r-party-sync", "run", "dev"],
+      "runtimeArgs": ["--prefix", "party-sync-worker", "run", "dev"],
       "port": 8787
     },
     {
@@ -17,8 +17,9 @@
       "runtimeExecutable": "npx",
       "runtimeArgs": [
         "vite",
+        "preview",
         "--config",
-        "vite.preview.config.ts",
+        "vite.web.config.ts",
         "--port",
         "5199",
         "--strictPort"

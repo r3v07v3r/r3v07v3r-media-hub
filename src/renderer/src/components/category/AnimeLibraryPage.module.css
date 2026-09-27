@@ -110,7 +110,6 @@
   transform: translateY(-10px);
 }
 .heroKicker,
-.eyebrow,
 .detailKicker {
   display: flex;
   align-items: center;
@@ -510,10 +509,6 @@
   color: var(--library-cyan);
   font-size: 12px;
 }
-.noResults {
-  color: var(--text-secondary);
-  font-size: 13px;
-}
 
 .details {
   position: sticky;
@@ -804,19 +799,6 @@
   color: var(--text-primary);
   border-color: rgba(80, 230, 255, 0.5);
   background: rgba(80, 230, 255, 0.08);
-}
-/* On-state colour for the two toggles, matching the grid tiles: green for
-   seen, the library's cyan for planned. Declared after .action:hover with
-   the same one-class weight, so hovering still reads as hovering. */
-.actionWatched {
-  color: var(--accent-green);
-  border-color: rgba(39, 230, 154, 0.5);
-  background: rgba(39, 230, 154, 0.12);
-}
-.actionPlanned {
-  color: var(--library-cyan);
-  border-color: rgba(80, 230, 255, 0.45);
-  background: rgba(80, 230, 255, 0.1);
 }
 
 @media (max-width: 1439px) {

@@ -10,7 +10,7 @@ import type { UpdateChannel, UpdateState, UpdateStatusPayload } from '@shared/me
 
 /** One sentence per state, written to be read by somebody who did not ask
  *  for it — no jargon, no version arithmetic, and never a bare state name. */
-export const UPDATE_STATE_LABEL: Record<UpdateState, string> = {
+const UPDATE_STATE_LABEL: Record<UpdateState, string> = {
   development: "Auto-update is disabled in development builds — this is what you're running now.",
   checking: 'Checking for updates…',
   available: 'An update is available and downloading…',
@@ -33,7 +33,7 @@ export function updateTone(state: UpdateState | undefined): UpdateTone {
   return 'idle'
 }
 
-export interface UpdateManager {
+interface UpdateManager {
   /** The running build, or undefined before settings have loaded. */
   version?: string
   channel: UpdateChannel

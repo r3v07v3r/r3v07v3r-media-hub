@@ -56,7 +56,7 @@ function randomPick(pool: MediaItem[]): MediaItem {
  *  See ollamaService.ts's inFlight map. */
 let requestSequence = 0
 
-export interface RecommendationActionsProps {
+interface RecommendationActionsProps {
   /** Which quick-action buttons to show — Home shows both movie+series
    *  (unchanged default); a category page passes its own single kind so
    *  the panel is page-aware ("Recommend Next Anime" only appears on the

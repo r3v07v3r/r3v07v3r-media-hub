@@ -22,7 +22,7 @@ export interface SubtitleStyle {
   color: SubtitleColor
 }
 
-export type SubtitleColor = 'white' | 'yellow' | 'cyan'
+type SubtitleColor = 'white' | 'yellow' | 'cyan'
 
 export const SUBTITLE_COLORS: readonly { value: SubtitleColor; label: string; hex: string }[] = [
   { value: 'white', label: 'White', hex: '#FFFFFF' },
