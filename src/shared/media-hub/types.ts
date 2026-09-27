@@ -1117,10 +1117,11 @@ export interface MediaHubPublicSettings {
    *  Off by default: an app that starts notifying because it was updated has
    *  made a decision that was not its to make. */
   notificationsEnabled: boolean
-  /** Which country "where to watch" answers for, ISO 3166-1 alpha-2. Always a
-   *  real value in the snapshot: an unset setting resolves to the machine's
-   *  locale before it gets here, so the Settings pane shows what is in use
-   *  rather than an empty field. */
+  /** Which country's content-rating certification is shown
+   *  (main/media-hub/contentRating.ts), ISO 3166-1 alpha-2. Always a real
+   *  value in the snapshot: an unset setting resolves to the machine's locale
+   *  before it gets here, so the Settings pane shows what is in use rather
+   *  than an empty field. */
   watchRegion: string
   /** Decorative UI animation (idle ambient motion, not playback itself) — layered alongside, not replacing, the automatic motion-suspend-during-playback behavior in global.css. */
   uiAnimationsEnabled: boolean
