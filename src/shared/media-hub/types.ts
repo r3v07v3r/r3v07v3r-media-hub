@@ -1197,8 +1197,9 @@ export interface MediaHubSettingsSnapshot extends MediaHubPublicSettings {
   themes: Theme[]
   torboxConnected: boolean
   /** Whether a media server is configured, enabled, and has credentials.
-   *  Playback is gated on having at least one of this and torboxConnected
-   *  — either source alone is a complete setup. */
+   *  Either this or torboxConnected alone is a complete setup. With
+   *  neither, stream:resolve in main refuses — but only after the
+   *  local-cache and LAN-cache tiers miss, so a title already held plays. */
   mediaServerConnected: boolean
   tmdbConnected: boolean
   omdbConnected: boolean

@@ -11,11 +11,12 @@
 //     typed as a side-effect of hosting a party. Asking once, up front,
 //     is what keeps those fallbacks from ever being seen.
 //
-//  2. A playback source. The catalog browses fine without one, but Play
-//     does nothing until TorBox or a media server is connected (see the
-//     torboxConnected/mediaServerConnected gate in AppStateContext's
-//     runPlayback) — so the choice is offered here, with "not right now"
-//     as an honest option that says exactly what it costs.
+//  2. A playback source. The catalog browses fine without one, but on a
+//     fresh install nothing plays until TorBox or a media server is
+//     connected (stream:resolve in main refuses once the local-cache and
+//     LAN-cache tiers miss, and a fresh install holds nothing in either)
+//     — so the choice is offered here, with "not right now" as an honest
+//     option that says exactly what it costs.
 //
 //  3. The storage question — the same StoragePolicyChoice the standalone
 //     prompt renders, asked here so first run is one sequence instead of

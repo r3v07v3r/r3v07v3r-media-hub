@@ -336,7 +336,7 @@ interface AppStateValue {
   refreshHomeFeed: () => void
 
   // Snapshot of the media-hub backend's settings (torboxConnected,
-  // simklClientId, theme, ...) — read by the playback gate below and by
+  // simklClientId, theme, ...) — read by playback's quality prompt and by
   // the Settings page's TorBox/Simkl/MAL/... sections. `null` until the
   // first fetch resolves (or forever, if window.api.mediaHub is absent).
   mediaHubSettings: MediaHubSettingsSnapshot | null
@@ -801,8 +801,10 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     refreshMediaHubSettings()
     // A TorBox 401 anywhere in the backend clears the stored token — pull
-    // a fresh settings snapshot so `torboxConnected` (the playback gate
-    // below) flips back to false instead of staying stale.
+    // a fresh settings snapshot so `torboxConnected` (what Settings and
+    // the Control Centre show) flips back to false instead of staying
+    // stale. Playback does not read it: stream:resolve in main refuses,
+    // and only after the local-cache and LAN-cache tiers miss.
     return window.api?.mediaHub?.torbox.onUnauthorized(() => refreshMediaHubSettings())
   }, [refreshMediaHubSettings])
 
@@ -1515,13 +1517,12 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
 
   const clearPendingRestore = useCallback(() => setPendingRestore(null), [])
 
-  // Playback gate (spec decision: keep the dashboard visible without a
-  // TorBox connection, only gate actual playback). `mediaHubSettings ===
-  // null` (bridge missing, or the first settings fetch hasn't resolved
-  // yet) is treated as "allow" rather than "block" — the resolve call
-  // below degrades to a clear notification if it turns out there's no
-  // real backend to resolve a stream from, which is a better first
-  // impression than silently refusing to open at all.
+  // No playback gate here (spec decision: keep the dashboard visible
+  // without a TorBox connection). The renderer cannot see what is on this
+  // disk or on the paired cache server, so it never refuses for want of a
+  // source: stream:resolve in main does, and only after the local-cache
+  // and LAN-cache tiers have both missed. Its sentence reaches the person
+  // through the catch below.
   //
   // Does the actual stream:resolve ("searching") + stream:play
   // ("buffering") round trip itself now, rather than handing an
@@ -1695,19 +1696,6 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
    */
   const runPlayback = useCallback(
     async (requested: MediaItem): Promise<{ started: boolean; target: MediaItem }> => {
-      // Either source alone is a complete setup — TorBox, a media server,
-      // or both. Only having neither blocks playback.
-      if (
-        mediaHubSettings &&
-        !mediaHubSettings.torboxConnected &&
-        !mediaHubSettings.mediaServerConnected
-      ) {
-        pushNotification({
-          tone: 'warning',
-          message: 'Connect TorBox or a media server in Settings to start playback.'
-        })
-        return { started: false, target: requested }
-      }
       const api = window.api?.mediaHub
       if (!api) {
         pushNotification({
