@@ -250,41 +250,64 @@ export function ServicesSection() {
                 {torrents.slice(0, 6).map((torrent) => {
                   const paused = /paus|stopped/i.test(torrent.state)
                   return (
-                    <li key={torrent.hash} className={styles.job}>
-                      <span className={styles.jobTitle}>{torrent.name}</span>
+                    <li key={torrent.hash} className={`${styles.job} ${own.torrentRow}`}>
+                      <span className={`${styles.jobTitle} ${own.torrentTitle}`}>
+                        <span className={styles.jobTitleText}>{torrent.name}</span>
+                      </span>
                       <span className={styles.jobState}>
                         {Math.round(torrent.progress * 100)}%
                         {torrent.dlspeed > 0 ? ` · ${speed(torrent.dlspeed)}` : ''}
                       </span>
-                      <button
-                        type="button"
-                        className={styles.ghostButton}
-                        disabled={busy === torrent.hash}
-                        onClick={() =>
-                          void act(torrent.hash, () =>
-                            paused
-                              ? resumeTorrent(settings[id], torrent.hash)
-                              : pauseTorrent(settings[id], torrent.hash)
-                          )
-                        }
-                      >
-                        {paused ? 'Resume' : 'Pause'}
-                      </button>
-                      {/* Deletes the torrent AND its files, so it says so.
-                          A "Delete" that quietly removes data is the kind
-                          of button people click once. */}
-                      <button
-                        type="button"
-                        className={styles.ghostButton}
-                        disabled={busy === torrent.hash}
-                        onClick={() =>
-                          void act(torrent.hash, () =>
-                            deleteTorrent(settings[id], torrent.hash, true)
-                          )
-                        }
-                      >
-                        Delete with files
-                      </button>
+                      <span className={own.torrentActions}>
+                        <button
+                          type="button"
+                          className={styles.ghostButton}
+                          disabled={busy === torrent.hash}
+                          onClick={() =>
+                            void act(torrent.hash, () =>
+                              paused
+                                ? resumeTorrent(settings[id], torrent.hash)
+                                : pauseTorrent(settings[id], torrent.hash)
+                            )
+                          }
+                        >
+                          {paused ? 'Resume' : 'Pause'}
+                        </button>
+                        {/* Two ways out, and each says which it is. "Remove"
+                            takes the torrent out of qBittorrent and leaves
+                            what it downloaded on disk; "Delete with files"
+                            deletes the downloaded files too. A "Delete" that
+                            quietly removes data is the kind of button people
+                            click once. */}
+                        <button
+                          type="button"
+                          className={styles.ghostButton}
+                          disabled={busy === torrent.hash}
+                          title="Remove from qBittorrent and keep the files"
+                          aria-label="Remove from qBittorrent and keep the files"
+                          onClick={() =>
+                            void act(torrent.hash, () =>
+                              deleteTorrent(settings[id], torrent.hash, false)
+                            )
+                          }
+                        >
+                          Remove
+                        </button>
+                        <button
+                          type="button"
+                          className={styles.ghostButton}
+                          disabled={busy === torrent.hash}
+                          title="Remove from qBittorrent and delete the downloaded files too"
+                          aria-label="Remove from qBittorrent and delete the downloaded files too"
+                          onClick={() =>
+                            void act(torrent.hash, () =>
+                              deleteTorrent(settings[id], torrent.hash, true)
+                            )
+                          }
+                        >
+                          Delete with files
+                        </button>
+                      </span>
                     </li>
                   )
                 })}
