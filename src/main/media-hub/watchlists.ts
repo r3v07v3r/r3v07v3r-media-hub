@@ -39,6 +39,7 @@ import {
   traktCredentials,
   trackingAccountMarks
 } from './settingsStore'
+import { titlePushQueue, titlePushKey } from './titlePushQueue'
 import { traktRequest } from './traktClient'
 import { failedServices, firstFailure, pushPlanEverywhere, type PushOutcome } from './watchlistPush'
 import { plannedRemovals, remotePlanAdoptable, type PlannedOrigin } from './watchlistRules'
@@ -672,21 +673,32 @@ export function pushLocalPlanChange(
   planned: boolean
 ): void {
   if (!twoWaySyncEnabled()) return
-  // Queued behind whatever change to the SAME title is still in flight. A
+  // Queued behind whatever push for the SAME title is still in flight —
+  // another plan change, or its watch history (see titlePushQueue.ts). A
   // plan followed by an un-plan before the first push settled used to read
   // the evidence record ahead of the add that writes to it: the removal
   // found nothing, skipped Simkl's destructive delete for want of evidence,
   // and the add then completed and recorded a presence the next pull
   // restored locally. In order, the removal sees the add's outcome.
-  const previous = planChangeChains.get(item.id) ?? Promise.resolve()
-  // Nothing in a change rethrows (each service's failure is logged by the
-  // push), and a settled chain — however it settled — must never block the
-  // next change to the title.
-  const next = previous.then(() => applyPlanChange(item, planned)).catch(() => {})
-  planChangeChains.set(item.id, next)
-  void next.then(() => {
-    if (planChangeChains.get(item.id) === next) planChangeChains.delete(item.id)
-  })
+  void titlePushQueue.run(titlePushKey(item), () => applyPlanChange(item, planned))
+}
+
+/**
+ * The same change as pushLocalPlanChange, run now rather than queued.
+ *
+ * Only to be called from inside a task that is already on titlePushQueue
+ * for this title — the task is the place in the order, and this is the
+ * work done there. Called from anywhere else it runs unordered, which is
+ * the race the queue exists to close; and pushLocalPlanChange must not be
+ * used from inside a task instead, since it would queue behind the very
+ * task that called it (see titlePushQueue.ts).
+ */
+export async function applyLocalPlanChange(
+  item: { id: string; type: MediaKind; title: string; year?: string },
+  planned: boolean
+): Promise<void> {
+  if (!twoWaySyncEnabled()) return
+  await applyPlanChange(item, planned)
 }
 
 /**
@@ -713,7 +725,7 @@ export function pushLocalPlanChange(
  * origin left standing would let the next pull "remove" it again.
  *
  * Callers run this on the same per-title chain as the history push (see
- * queueRemotePushes in tracking.ts) so it cannot overtake it.
+ * titlePushQueue.ts) so it cannot overtake it.
  */
 export async function unplanBecauseWatched(item: {
   id: string
@@ -756,11 +768,6 @@ export async function unplanBecauseWatched(item: {
     writeOrigins(origins)
   }
 }
-
-/** One chain per title with a change in flight — see pushLocalPlanChange.
- *  An entry is dropped as its chain drains, so this holds only what is
- *  actually pending. */
-const planChangeChains = new Map<string, Promise<void>>()
 
 const sentServices = (outcome: PushOutcome): PlannedSource[] =>
   (Object.keys(outcome) as PlannedSource[]).filter((s) => outcome[s].state === 'sent')
