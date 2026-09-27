@@ -251,6 +251,10 @@ export const MEDIA_HUB_CHANNELS = {
    *  controls' idle countdown ran during the load and a cold stream slower than
    *  it started the film with the bar already faded out. */
   playerControlsShown: 'mediahub:player:controls-shown', // push event
+  /** The session ended, however it ended — only where the host shows the
+   *  video (the Android app), whose player screen leaves on this. See
+   *  playerWindow.ts's HOST MODE. */
+  playerHostClosed: 'mediahub:player:host-closed', // push event
   streamCacheList: 'mediahub:stream-cache:list',
   /** One line of arithmetic for the Downloads page: what the cache holds
    *  and what is left on the drive it sits on. */

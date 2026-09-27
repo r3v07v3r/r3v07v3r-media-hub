@@ -109,13 +109,15 @@ assert.equal(openBundle(ticket, 'nonsense'), null)
 // ---- the link --------------------------------------------------------------
 
 const link = ticketLink(ticket)
-assert.ok(link.startsWith('r3hub://pair?v=1&'))
+assert.ok(link.startsWith('R3 PAIR v=1&'))
+// Not a URI anyone can register for: the code carries the key.
+assert.throws(() => new URL(link))
 const back = parseTicketLink(link)
 assert.ok(back.ok)
 assert.deepEqual(back.ticket.hosts, ticket.hosts)
 assert.ok(back.ticket.id.equals(ticket.id) && back.ticket.key.equals(ticket.key))
 // Pasted without its scheme still works.
-assert.ok(parseTicketLink(link.slice('r3hub://pair'.length)).ok)
+assert.ok(parseTicketLink(link.slice('R3 PAIR '.length)).ok)
 
 assert.equal(parseTicketLink('https://example.com').ok, false)
 assert.equal(parseTicketLink(link.replace('v=1', 'v=2')).ok, false)
@@ -129,8 +131,10 @@ assert.equal(parsePairingHost('evil.example:80'), null)
 assert.equal(parsePairingHost('192.168.1.5'), null)
 assert.equal(parsePairingHost('192.168.1.5:70000'), null)
 assert.equal(parsePairingHost('192.168.1.300:80'), null)
-const publicOnly = new URLSearchParams(link.split('?')[1])
+const publicOnly = new URLSearchParams(link.slice('R3 PAIR '.length))
 publicOnly.set('h', '203.0.113.9:80')
+assert.equal(parseTicketLink(`R3 PAIR ${publicOnly}`).ok, false)
+// The old link form is refused rather than half-understood.
 assert.equal(parseTicketLink(`r3hub://pair?${publicOnly}`).ok, false)
 
 // ---- applying it on the phone ----------------------------------------------

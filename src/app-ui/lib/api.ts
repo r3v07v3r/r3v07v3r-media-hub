@@ -3,7 +3,8 @@
 // backend" (never installed, or dropped mid-session) is handled once
 // instead of once per screen.
 import { useCallback, useEffect, useRef, useState, type DependencyList } from 'react'
-import type { Api } from '../../preload/api'
+import { createApi, type Api } from '../../preload/api'
+import { createWebSocketTransport } from '../../renderer/src/web/transport'
 
 export type MediaHubApi = Api['mediaHub']
 
@@ -76,4 +77,20 @@ export function useAsync<T>(fn: () => Promise<T>, deps: DependencyList): AsyncSt
   const reload = useCallback(() => setTick((t) => t + 1), [])
 
   return { ...state, reload }
+}
+
+let overlay: MediaHubApi | null = null
+
+/**
+ * The player's own connection: the 'overlay' scope, which is where the
+ * backend pushes player state (on the desktop that scope is the controls
+ * window; in the Android app it is the player screen — see
+ * main/media-hub/playerWindow.ts's HOST MODE). Opened on first use and kept:
+ * it is idle between sessions, and a transport cannot be closed.
+ */
+export function overlayApi(): MediaHubApi | null {
+  if (overlay) return overlay
+  if (!api()) return null
+  overlay = createApi(createWebSocketTransport('overlay')).mediaHub
+  return overlay
 }

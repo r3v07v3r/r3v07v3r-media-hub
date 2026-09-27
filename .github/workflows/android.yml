@@ -6,17 +6,19 @@ name: Android app
 # Debug-signed for now: installable by tapping the APK, not yet a release.
 on:
   workflow_dispatch: {}
+  # Called by build-and-release.yml so every release carries the APK built
+  # at that exact version, which is what the app's update check looks for.
+  workflow_call:
+    inputs:
+      ref:
+        description: Branch, tag, or SHA to build from
+        required: true
+        type: string
+      version:
+        description: Release version, e.g. 1.0.84-preview.130 (sets versionName and versionCode)
+        required: true
+        type: string
   pull_request:
-    paths:
-      - 'android/**'
-      - 'src/**'
-      - 'scripts/android-node-payload.mjs'
-      - 'scripts/build-headless.mjs'
-      - 'vite.app.config.ts'
-      - 'package-lock.json'
-      - '.github/workflows/android.yml'
-  push:
-    branches: [preview]
     paths:
       - 'android/**'
       - 'src/**'
@@ -27,8 +29,9 @@ on:
       - '.github/workflows/android.yml'
 
 concurrency:
-  group: android-${{ github.ref }}
-  cancel-in-progress: true
+  # A release run must never cancel, or be cancelled by, a PR build.
+  group: android-${{ inputs.version || github.ref }}
+  cancel-in-progress: ${{ !inputs.version }}
 
 permissions:
   contents: read
@@ -40,6 +43,8 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref || github.sha }}
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
@@ -68,8 +73,9 @@ jobs:
           gradle-version: '9.7.1'
       - name: Build debug APK
         env:
-          R3_VERSION_CODE: ${{ github.run_number }}
-          R3_VERSION_NAME: 0.1.${{ github.run_number }}
+          # Releases name the build after the release; anything else is a
+          # dev build that any release counts as newer than.
+          R3_VERSION_NAME: ${{ inputs.version || format('0.1.{0}', github.run_number) }}
         run: gradle -p android --no-daemon assembleDebug
       - name: Name the artifact for what it is
         run: cp android/app/build/outputs/apk/debug/app-debug.apk r3-media-hub-android.apk

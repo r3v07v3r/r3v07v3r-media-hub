@@ -67,7 +67,25 @@ let revealRequested = false
 // hidden until the hub closes.
 let hiddenForMainUi = false
 
+// ---------------------------------------------------------------------------
+// HOST MODE. When the host shows the video (the Android app — see
+// hostPlayer.ts), there is no controls window to create: the controls are a
+// screen of the app's own page, which opens a second bridge connection in the
+// 'overlay' scope for the duration of playback. `hostOverlay` is that scope's
+// stand-in window (src/headless/main.ts). It is never shown, hidden, moved or
+// destroyed — it is not a window — only opened and closed with the session,
+// so pushes reach the page only while something is playing, and the page
+// hears when that ends.
+let hostOverlay: BrowserWindow | null = null
+let hostOverlayOpen = false
+
+/** Host-facing, before the service layer starts. */
+export function setHostOverlay(win: BrowserWindow): void {
+  hostOverlay = win
+}
+
 export function getPlayerOverlay(): BrowserWindow | null {
+  if (hostOverlay) return hostOverlayOpen && !hostOverlay.isDestroyed() ? hostOverlay : null
   return overlayWindow && !overlayWindow.isDestroyed() ? overlayWindow : null
 }
 
@@ -155,6 +173,10 @@ function mirrorBounds(): void {
  * an open player does not tear the window down and rebuild it.
  */
 export function openPlayerOverlay(parent: BrowserWindow): BrowserWindow {
+  if (hostOverlay) {
+    hostOverlayOpen = true
+    return hostOverlay
+  }
   const existing = getPlayerOverlay()
   if (existing) {
     mirrorBounds()
@@ -368,6 +390,12 @@ export function revealPlayerOverlay(): void {
  * supposed to be sitting over has been put in front of the app.
  */
 function showOverlayWindow(): void {
+  if (hostOverlay) {
+    // Nothing to put on screen: the page shows its own controls. It is still
+    // told, for the same reason a window is.
+    if (revealRequested) sendToPlayerOverlay(MEDIA_HUB_CHANNELS.playerControlsShown)
+    return
+  }
   const win = getPlayerOverlay()
   if (!win || !readyToShow || !revealRequested || win.isVisible()) return
   if (hiddenForMainUi) return
@@ -387,6 +415,7 @@ function showOverlayWindow(): void {
  */
 export function hidePlayerOverlayForMainUi(): void {
   hiddenForMainUi = true
+  if (hostOverlay) return
   const win = getPlayerOverlay()
   if (win && win.isVisible()) win.hide()
 }
@@ -404,12 +433,23 @@ export function showPlayerOverlayAfterMainUi(): void {
  * and space dead while a title was playing.
  */
 export function focusPlayerOverlay(): void {
+  if (hostOverlay) return
   const win = getPlayerOverlay()
   if (!win) return
   win.focus()
 }
 
 export function closePlayerOverlay(): void {
+  if (hostOverlay) {
+    // Told BEFORE the session closes, while pushes still reach the page: it
+    // leaves its player screen on this, however playback ended.
+    if (hostOverlayOpen) sendToPlayerOverlay(MEDIA_HUB_CHANNELS.playerHostClosed)
+    hostOverlayOpen = false
+    inputReady = false
+    revealRequested = false
+    hiddenForMainUi = false
+    return
+  }
   const win = getPlayerOverlay()
   detachBoundsListeners?.()
   detachBoundsListeners = null

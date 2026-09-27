@@ -29,6 +29,8 @@ object Backend {
      *  cookies — is the same on every launch. */
     const val PORT = 47310
     private const val READY = "[headless] ready "
+    /** Requests from the backend to this app — see src/main/media-hub/hostPlayer.ts. */
+    private const val HOST = "[r3-host] "
     private const val START_TIMEOUT_MS = 60_000L
 
     sealed interface State {
@@ -40,6 +42,9 @@ object Backend {
     @Volatile var state: State? = null
         private set
     private val listeners = CopyOnWriteArrayList<(State) -> Unit>()
+    /** Where host requests go (start/stop the player). Called on the log
+     *  thread; the receiver moves to the main thread itself. */
+    @Volatile var onHostRequest: ((JSONObject) -> Unit)? = null
     private val recent = ArrayDeque<String>()
     private var process: Process? = null
     /** Held, never written: closing it is how the backend is told to stop. */
@@ -104,6 +109,8 @@ object Backend {
             put("R3_BRIDGE_PORT", PORT.toString())
             put("R3_MASTER_KEY", MasterKey.get(context))
             put("R3_STOP_ON_STDIN_CLOSE", "1")
+            // This app shows the video itself (PlayerHost.kt).
+            put("R3_HOST_PLAYER", "1")
         }
         val started = builder.start()
         synchronized(this) {
@@ -126,7 +133,13 @@ object Backend {
         running.inputStream.bufferedReader().forEachLine { line ->
             Log.i(TAG, line)
             remember(line)
-            if (line.startsWith(READY)) {
+            if (line.startsWith(HOST)) {
+                try {
+                    onHostRequest?.invoke(JSONObject(line.substring(HOST.length)))
+                } catch (error: Exception) {
+                    Log.w(TAG, "bad host request: $line", error)
+                }
+            } else if (line.startsWith(READY)) {
                 val info = JSONObject(line.substring(READY.length))
                 publish(State.Ready(info.getString("origin"), info.getString("launchUrl")))
             }

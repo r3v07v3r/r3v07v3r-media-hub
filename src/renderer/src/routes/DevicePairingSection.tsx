@@ -112,8 +112,8 @@ export function DevicePairingSection() {
         <h3 className={styles.serviceName}>Link a phone</h3>
       </div>
       <p className={styles.serviceNote}>
-        Sign the R3 phone app in to the same services as this computer. Show a code, scan it with
-        the phone’s camera, done. The code works once, for three minutes, on your own Wi-Fi. Trakt
+        Sign the R3 phone app in to the same services as this computer. Show a code, then press Scan code in
+        the phone app’s Settings. The code works once, for three minutes, on your own Wi-Fi. Trakt
         and MyAnimeList are not sent: a sign-in can’t be shared between devices, and signing in to
         them on the phone is still to come.
       </p>
@@ -123,7 +123,7 @@ export function DevicePairingSection() {
           <div className={styles.row} style={{ alignItems: 'flex-start', gap: 16 }}>
             <QrCode text={link} />
             <div className={styles.rowText}>
-              <span className={styles.rowTitle}>Scan with the phone</span>
+              <span className={styles.rowTitle}>Scan it from the phone app</span>
               <span className={styles.rowDescription}>
                 Sends: {contents.join(', ')}.
                 <br />

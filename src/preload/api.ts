@@ -803,6 +803,9 @@ export function createApi(transport: ApiTransport) {
          *  that for itself — see the channel's own comment. */
         onControlsShown: (onEvent: () => void): (() => void) =>
           subscribe<void>(MEDIA_HUB_CHANNELS.playerControlsShown, onEvent),
+        /** Host-shown video only (the Android app): the session ended. */
+        onHostClosed: (onEvent: () => void): (() => void) =>
+          subscribe<void>(MEDIA_HUB_CHANNELS.playerHostClosed, onEvent),
         /** Main-window side of the bridge: actions the overlay raised that belong
          *  to this window's state (close the player, toast, refresh watch
          *  status, open the party panel). */

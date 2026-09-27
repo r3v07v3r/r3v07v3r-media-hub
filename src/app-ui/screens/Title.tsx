@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import type { CatalogItem, Episode } from '@shared/media-hub/types'
+import { nativeHost } from '../lib/nativeHost'
+import { setNowPlaying } from '../lib/nowPlaying'
 import { hasAired } from '@shared/media-hub/catalog-logic'
 import { episodeToStart } from '@shared/media-hub/nextEpisode'
 // Reused rather than re-derived — see that file's own doc comment for
@@ -223,16 +225,33 @@ export default function Title() {
             })
             return null
           }
-          // The desktop's stream:play drives mpv in an Electron window, which a
-          // headless backend (the phone/TV app) does not have. Until the
-          // on-device player exists, resolving is as far as this goes: it
-          // still answers "can this be played", and caches the source.
-          setPlayStatus({
-            stage: 'found',
-            message:
-              'A source is ready. Playing on this device comes with the player, the next part of the app.'
-          })
-          return null
+          // Only the Android app can show video: it runs the player under this
+          // page (main/media-hub/hostPlayer.ts). In a plain browser against a
+          // headless backend there is nothing to show it in, so resolving is
+          // as far as it goes — it still answers "can this be played".
+          if (!nativeHost()) {
+            setPlayStatus({
+              stage: 'found',
+              message: 'A source is ready. Playback needs the R3 Media Hub app.'
+            })
+            return null
+          }
+          setPlayStatus({ stage: 'starting', season, episode })
+          setNowPlaying({ kind, item, season, episode })
+          return mediaHub.stream
+            .play(best, mediaId, kind, resolveId, {
+              catalogId: item.id,
+              title: item.title,
+              posterUrl: item.poster,
+              mediaKind: kind,
+              seasonNumber: season,
+              episodeNumber: episode
+            })
+            .then(() => {
+              if (playRequestRef.current !== requestId) return
+              setPlayStatus({ stage: 'idle' })
+              navigate('/player')
+            })
         })
         .catch((error: unknown) => {
           if (playRequestRef.current !== requestId) return
@@ -242,7 +261,7 @@ export default function Title() {
           })
         })
     },
-    [kind, item]
+    [kind, item, navigate]
   )
 
   // "My List" — a plain binary state read once from the whole tracked list

@@ -17,7 +17,15 @@ import crypto from 'node:crypto'
 
 import type { MediaHubRawSettings } from './settingsStore'
 
-export const PAIRING_SCHEME = 'r3hub:'
+/**
+ * What the QR code says, before the ticket's fields. Deliberately NOT a URI:
+ * the code carries the decryption key, and a link (r3hub://…, or an
+ * unverified https one) is handed by Android to whichever app registered for
+ * it, which could fetch and open the bundle first. Plain text with a space in
+ * it is a URI to nobody: the phone app's own scanner reads it (or it is
+ * pasted), and a system camera only offers to copy it.
+ */
+export const PAIRING_PREFIX = 'R3 PAIR '
 export const PAIRING_PATH_PREFIX = '/r3-pair/v1/'
 /** How long a ticket stays redeemable. Long enough to find the phone and
  *  point it at the screen; short enough that a photo of the screen taken
@@ -64,7 +72,7 @@ export function ticketLink(ticket: PairingTicket): string {
     t: b64url(ticket.id),
     k: b64url(ticket.key)
   })
-  return `r3hub://pair?${params.toString()}`
+  return `${PAIRING_PREFIX}${params.toString()}`
 }
 
 /**
@@ -89,22 +97,21 @@ export function parsePairingHost(value: string): string | null {
   return isPrivate ? `${octets.join('.')}:${port}` : null
 }
 
-/** Reads a pairing link back into a ticket, or says why it can't. Accepts
- *  the `r3hub://pair?...` form and a bare query string, since a link can be
- *  pasted with or without its scheme. */
+/** Reads a pairing code back into a ticket, or says why it can't. Accepts
+ *  the `R3 PAIR …` form and the bare fields, since a pasted code can lose
+ *  its prefix. */
 export function parseTicketLink(
   raw: string
 ): { ok: true; ticket: PairingTicket } | { ok: false; message: string } {
   const text = String(raw || '').trim()
   let query: string
-  if (text.toLowerCase().startsWith('r3hub://pair?')) query = text.slice('r3hub://pair?'.length)
-  else if (text.startsWith('?')) query = text.slice(1)
+  if (text.toUpperCase().startsWith(PAIRING_PREFIX)) query = text.slice(PAIRING_PREFIX.length)
   else if (/^v=/.test(text)) query = text
-  else return { ok: false, message: 'That is not a pairing link from R3 Media Hub.' }
+  else return { ok: false, message: 'That is not a pairing code from R3 Media Hub.' }
 
   const params = new URLSearchParams(query)
   if (params.get('v') !== '1') {
-    return { ok: false, message: 'This pairing link is from a newer version of the app.' }
+    return { ok: false, message: 'This pairing code is from a newer version of the app.' }
   }
   const id = fromB64url(params.get('t'), 16)
   const key = fromB64url(params.get('k'), 32)
@@ -114,7 +121,7 @@ export function parseTicketLink(
     .map(parsePairingHost)
     .filter((h): h is string => h !== null)
   if (!id || !key || hosts.length === 0) {
-    return { ok: false, message: 'This pairing link is incomplete. Scan the code again.' }
+    return { ok: false, message: 'This pairing code is incomplete. Scan the code again.' }
   }
   return { ok: true, ticket: { hosts, id, key } }
 }
@@ -176,6 +183,9 @@ export interface PairingBundle {
     audioLanguage?: string
     watchRegion?: string
     partyDisplayName?: string
+    /** 'preview' or 'stable': the phone app updates itself from the same
+     *  channel as the desktop it was linked to (android/.../Updater.kt). */
+    updateChannel?: string
   }
 }
 
@@ -240,7 +250,12 @@ export function buildBundle(
   if (os.apiKey && os.username && os.password) bundle.openSubtitles = os
 
   const prefs: NonNullable<PairingBundle['prefs']> = {}
-  for (const key of ['subtitleLanguage', 'audioLanguage', 'watchRegion'] as const) {
+  for (const key of [
+    'subtitleLanguage',
+    'audioLanguage',
+    'watchRegion',
+    'updateChannel'
+  ] as const) {
     const value = settings[key]
     if (typeof value === 'string' && value) prefs[key] = value
   }
@@ -291,9 +306,11 @@ export function normalizeBundle(value: unknown): PairingBundle | null {
       'subtitleLanguage',
       'audioLanguage',
       'watchRegion',
+      'updateChannel',
       'partyDisplayName'
     ] as const) {
       const v = str(o[key])
+      if (key === 'updateChannel' && v !== 'preview' && v !== 'stable') continue
       if (v && v.length <= 64) prefs[key] = v
     }
     if (Object.keys(prefs).length > 0) bundle.prefs = prefs

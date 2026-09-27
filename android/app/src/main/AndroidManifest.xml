@@ -2,6 +2,8 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Self-update (Updater.kt): Android still asks the person to confirm. -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
     <!-- One APK for phones (no leanback) and TVs (no touchscreen). -->
     <uses-feature android:name="android.software.leanback" android:required="false" />
@@ -32,14 +34,21 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
             </intent-filter>
-            <!-- The desktop's "Link a phone" QR code: the camera app offers to
-                 open r3hub://pair?... here. -->
-            <intent-filter>
-                <action android:name="android.intent.action.VIEW" />
-                <category android:name="android.intent.category.DEFAULT" />
-                <category android:name="android.intent.category.BROWSABLE" />
-                <data android:scheme="r3hub" android:host="pair" />
-            </intent-filter>
         </activity>
+
+        <!-- Where the system installer reports on a self-update. -->
+        <receiver
+            android:name=".Updater$StatusReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.r3v07v3r.mediahub.INSTALL_STATUS" />
+            </intent-filter>
+        </receiver>
+
+        <!-- Fetch the code scanner with the app, so the first "Scan code"
+             does not wait on a download. -->
+        <meta-data
+            android:name="com.google.mlkit.vision.DEPENDENCIES"
+            android:value="barcode_ui" />
     </application>
 </manifest>

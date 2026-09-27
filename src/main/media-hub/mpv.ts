@@ -273,6 +273,7 @@ export class MpvPlayer {
   private buffer = ''
   private nextId = 1
   private pipeName = ''
+  private ipcPath = ''
   private onLog: (line: string) => void = () => {}
 
   get running(): boolean {
@@ -293,9 +294,15 @@ export class MpvPlayer {
     const profile = bufferProfileFor(bufferSeconds)
     this.onLog = onLog ?? (() => {})
     this.pipeName = `r3-media-hub-mpv-${crypto.randomBytes(12).toString('hex')}`
+    // A named pipe on Windows; a Unix socket everywhere else, which is what
+    // the Android app's libmpv listens on (see hostPlayer.ts).
+    this.ipcPath =
+      process.platform === 'win32'
+        ? `\\\\.\\pipe\\${this.pipeName}`
+        : path.join(os.tmpdir(), `${this.pipeName}.sock`)
 
     const args = [
-      `--input-ipc-server=\\\\.\\pipe\\${this.pipeName}`,
+      `--input-ipc-server=${this.ipcPath}`,
       // Security posture — see this file's header. --no-config also means the
       // app's playback behaviour can never be altered by a stray mpv.conf on
       // the user's machine, which matters for reproducibility as much as safety.
@@ -432,7 +439,7 @@ export class MpvPlayer {
    *  connect attempts legitimately fail — retry rather than treat that as an
    *  error. Bounded so a genuinely dead process surfaces instead of hanging. */
   private async connect(retries = 100, delayMs = 100): Promise<void> {
-    const pipePath = `\\\\.\\pipe\\${this.pipeName}`
+    const pipePath = this.ipcPath
     for (let attempt = 0; attempt < retries; attempt++) {
       if (!this.child) throw new Error('mpv exited before its IPC socket was ready.')
       try {

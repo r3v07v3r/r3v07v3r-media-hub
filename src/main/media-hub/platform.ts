@@ -23,10 +23,17 @@ export interface PlatformCapabilities {
    *  (ipc/telemetry.ts). Off where there is no such worker to run, and where
    *  the numbers would describe a TV box nobody asked about. */
   systemTelemetry: boolean
+  /** The HOST shows the video, not a process this backend spawns: the
+   *  Android app runs libmpv under its WebView and starts it when asked
+   *  (hostPlayer.ts). The backend still drives it over mpv's own IPC
+   *  socket, exactly as on the desktop — only the launch, the window
+   *  embedding and the controls window differ. */
+  hostPlayer: boolean
 }
 
 const capabilities: PlatformCapabilities = {
-  systemTelemetry: true
+  systemTelemetry: true,
+  hostPlayer: false
 }
 
 /** Host-facing, and only before the service layer starts: several subsystems
