@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useAppState } from '@renderer/context/AppStateContext'
 import { Icon } from '@renderer/components/icons/Icon'
 import { useAsyncAction } from '@renderer/hooks/useAsyncAction'
@@ -23,11 +23,7 @@ import type {
   ProfilePublic,
   SourcePreference
 } from '@shared/media-hub/types'
-import {
-  ANIME4K_MODES,
-  anime4kModeLabel,
-  type Anime4kStatus
-} from '@shared/media-hub/anime4k'
+import { ANIME4K_MODES, anime4kModeLabel, type Anime4kStatus } from '@shared/media-hub/anime4k'
 import styles from './Settings.module.css'
 import { WatchlistSyncSection } from '@renderer/components/settings/WatchlistSyncSection'
 
@@ -747,135 +743,24 @@ function MoreOptionsSection({
   )
 }
 
-/**
- * Sizes one settings category's .groupGrid/.settingsGroup pair to exactly
- * fit however many columns its cards actually pack into.
- *
- * .groupGrid is `display:flex; flex-flow:column wrap` (see
- * Settings.module.css) so each column fills independently from its own
- * content — no shared row tracks, no gap under a short card sitting next
- * to a tall one. But flex-wrap's column count is inherently "however many
- * fit in the available width," and .settingsGroup is a scroll container
- * (overflow-y: auto — needed so an oversized category scrolls internally
- * instead of blowing out the page). Per the CSS Sizing spec, a scroll
- * container's intrinsic size (width:auto, or explicit max-content) is its
- * own specified size, not whatever its content needs — that's the entire
- * point of overflow:auto. Left alone, extra columns don't widen the
- * category; they get silently clipped and trapped in a nested horizontal
- * scrollbar next to the outer shelf's own scroll, invisible unless you go
- * looking (caught in PR review on the change that introduced this
- * masonry layout, confirmed live: "Media services" and "Accounts" both
- * needed 3 columns and got capped at .settingsGroup's 780px min-width
- * instead, hiding the rest of their cards off the right edge). A CSS
- * multi-column layout (column-width) was tried first and hits the exact
- * same wall for the exact same reason.
- *
- * A literal pixel width isn't an intrinsic-sizing keyword, so it isn't
- * subject to that rule. This measures the real column-packed layout
- * (briefly unconstrained by width, so flex-wrap finds its natural column
- * count from the category's available height alone) and locks the result
- * in as an explicit width on both the grid and its containing category —
- * all inside useLayoutEffect, so the oversized scratch state it passes
- * through is never painted.
- */
-/**
- * Measures each category's cards and pins an explicit pixel width on the
- * grid and its group, so the filmstrip's `flex-flow: column wrap` packs
- * into columns without clipping.
- *
- * `enabled` exists because the control centre face does NOT want this. It
- * lays the same cards out as a responsive CSS grid, and an inline pixel
- * width beats any stylesheet — which is exactly what went wrong: the packer
- * pinned one group at 1458px inside a 1160px parent, and the rest at 340px,
- * so five of the six categories collapsed to a single column while the
- * first overflowed. The symptom looked like a grid bug and was not one.
- *
- * When disabled it also CLEARS any width it previously set, so toggling
- * between the two layouts cannot leave a stale measurement behind.
- */
-function useColumnPackGrid<TGroup extends HTMLElement = HTMLElement>(enabled = true) {
-  const gridRef = useRef<HTMLDivElement>(null)
-  const groupRef = useRef<TGroup>(null)
-  const gridBinding = useCallback((node: HTMLDivElement | null) => {
-    gridRef.current = node
-  }, [])
-  const groupBinding = useCallback((node: TGroup | null) => {
-    groupRef.current = node
-  }, [])
-
-  useLayoutEffect(() => {
-    const grid = gridRef.current
-    const group = groupRef.current
-    if (!grid || !group) return
-    if (!enabled) {
-      grid.style.width = ''
-      group.style.width = ''
-      return
-    }
-
-    function pack(): void {
-      const grid = gridRef.current
-      const group = groupRef.current
-      if (!grid || !group) return
-      const cards = Array.from(grid.children) as HTMLElement[]
-      if (!cards.length) return
-      // Scratch width: comfortably more than any real category could need,
-      // so every card lands in whatever column its height naturally puts
-      // it in, unclipped.
-      grid.style.width = `${Math.max(4000, cards.length * 500)}px`
-      const gridLeft = grid.getBoundingClientRect().left
-      const tight = Math.ceil(
-        Math.max(...cards.map((c) => c.getBoundingClientRect().right)) - gridLeft
-      )
-      grid.style.width = `${tight}px`
-      // +12: .settingsGroup's own padding-right (6px) plus a little slop
-      // for the scrollbar overflow-y:auto can introduce.
-      group.style.width = `${tight + 12}px`
-    }
-
-    pack()
-    window.addEventListener('resize', pack)
-    const observer = new MutationObserver(pack)
-    observer.observe(grid, { childList: true })
-    return () => {
-      window.removeEventListener('resize', pack)
-      observer.disconnect()
-    }
-  }, [enabled])
-
-  return [gridBinding, groupBinding] as const
-}
-
-/**
- * `embedded` is set when this is hosted inside the control centre rather
- * than rendered as the /settings route. It only suppresses the page-level
- * heading — every control below behaves identically, which is the point:
- * the sections were re-homed, not rewritten.
- */
 /** The category ids this page is divided into — the same list the control
  *  centre's rail uses to give each one its own entry. */
 export type SettingsCategory = 'general' | 'playback' | 'services' | 'accounts' | 'ai' | 'community'
 
+/**
+ * Two ways in. The /settings route renders it with no props and gets the
+ * short viewer's page. The control centre renders it `embedded` with one
+ * `category`, and gets just that group of controls — the sections were
+ * re-homed there, not rewritten.
+ */
 export default function SettingsPage({
   embedded = false,
   category
 }: { embedded?: boolean; category?: SettingsCategory } = {}) {
-  const tileAreaRef = useRef<HTMLDivElement>(null)
-  /** With no category asked for, every group renders — the standalone
-   *  /settings route, unchanged. With one, only that group does, which is
-   *  what lets the control centre give each its own rail entry instead of a
-   *  strip of tabs above one long scroll. */
-  const shows = (id: SettingsCategory): boolean => !category || category === id
-
-  const [generalGridBinding, generalGroupBinding] = useColumnPackGrid<HTMLElement>(!embedded)
-  const [playbackGridBinding, playbackGroupBinding] = useColumnPackGrid<HTMLElement>(!embedded)
-  const [servicesGridBinding, servicesGroupBinding] = useColumnPackGrid<HTMLElement>(!embedded)
-  // No grid binding for Accounts: it is three smaller grids now, not one,
-  // and the packer sizes a single grid against its group. The group
-  // binding stays, since the group is still one scroll container.
-  const [, accountsGroupBinding] = useColumnPackGrid<HTMLElement>(!embedded)
-  const [communityGridBinding, communityGroupBinding] = useColumnPackGrid<HTMLElement>(!embedded)
-  const [aiGridBinding, aiGroupBinding] = useColumnPackGrid<HTMLElement>(!embedded)
+  /** Only the asked-for group renders, which is what lets the control
+   *  centre give each its own rail entry instead of a strip of tabs above
+   *  one long scroll. */
+  const shows = (id: SettingsCategory): boolean => category === id
   const {
     setControlCentreOpen,
     profiles,
@@ -955,12 +840,10 @@ export default function SettingsPage({
       setAnime4kStatus({ state: 'installing' })
       // The result is also pushed on anime4kStatus; taking it here as well
       // covers a push that raced ahead of this component mounting.
-      const status = await api.anime4k.install().catch(
-        (error): Anime4kStatus => ({
-          state: 'error',
-          message: error instanceof Error ? error.message : String(error)
-        })
-      )
+      const status = await api.anime4k.install().catch((error): Anime4kStatus => ({
+        state: 'error',
+        message: error instanceof Error ? error.message : String(error)
+      }))
       setAnime4kStatus(status)
     }
     refreshMediaHubSettings()
@@ -1275,29 +1158,6 @@ export default function SettingsPage({
     }
   }
 
-  useEffect(() => {
-    const scroller = tileAreaRef.current
-    if (!scroller) return
-
-    const handleWheel = (event: WheelEvent) => {
-      if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return
-      const group = (event.target as HTMLElement).closest(
-        `.${styles.settingsGroup}`
-      ) as HTMLElement | null
-      if (group) {
-        const canScrollDown =
-          event.deltaY > 0 && group.scrollTop + group.clientHeight < group.scrollHeight - 1
-        const canScrollUp = event.deltaY < 0 && group.scrollTop > 0
-        if (canScrollDown || canScrollUp) return
-      }
-      event.preventDefault()
-      scroller.scrollBy({ left: event.deltaY, behavior: 'auto' })
-    }
-
-    scroller.addEventListener('wheel', handleWheel, { passive: false })
-    return () => scroller.removeEventListener('wheel', handleWheel)
-  }, [])
-
   // THE VIEWER'S PAGE IS SHORT NOW.
   //
   // Everything below used to render here as well as in the control centre:
@@ -1413,62 +1273,14 @@ export default function SettingsPage({
   }
 
   return (
-    <div className={`${styles.wrap} ${embedded ? styles.embedded : ''}`}>
-      {/* Both of its children are conditional, and inside the control
-          centre with a category chosen BOTH are hidden — the heading
-          because the rail supplies one, the strip because each group
-          now has its own entry. What was left was an empty sticky bar
-          with a dark gradient and 10px of padding: the line above every
-          page title. Not rendered at all now rather than styled away. */}
-      {(!embedded || !category) && (
-        <div className={styles.pageHeader}>
-          {/* Hidden when hosted inside the control centre, which supplies its
-              own heading — two <h1>s describing the same content is a worse
-              document outline, not just visual duplication. The category nav
-              below stays either way: jumping between groups is more useful in
-              the panel than it ever was on the page. */}
-          {!embedded && (
-            <div>
-              <h1 className={styles.heading}>Settings</h1>
-              <p className={styles.headingDescription}>
-                Manage playback, services, and your R3 experience.
-              </p>
-            </div>
-          )}
-          {/* The strip is a way to jump between groups on one long page. With
-              each group on its own rail entry there is nothing to jump
-              between, and a second row of the same names would just be the
-              navigation twice. */}
-          {!category && (
-            <nav className={styles.categoryNav} aria-label="Settings categories">
-              {[
-                ['settings-general', 'General'],
-                ['settings-playback', 'Playback'],
-                ['settings-services', 'Services'],
-                ['settings-accounts', 'Accounts'],
-                ['settings-ai', 'AI'],
-                ['settings-community', 'Community']
-              ].map(([id, label]) => (
-                <button
-                  key={id}
-                  type="button"
-                  onClick={() =>
-                    document.getElementById(id)?.scrollIntoView({ behavior: 'smooth' })
-                  }
-                >
-                  {label}
-                </button>
-              ))}
-            </nav>
-          )}
-        </div>
-      )}
-
-      <div className={styles.tileArea} ref={tileAreaRef}>
+    // Only the control centre reaches this layout (the /settings route
+    // returned the short page above), so it is always the embedded one, and
+    // the rail supplies the heading and the navigation between groups.
+    <div className={`${styles.wrap} ${styles.embedded}`}>
+      <div className={styles.tileArea}>
         {shows('general') && (
           <section
             id="settings-general"
-            ref={generalGroupBinding}
             className={styles.settingsGroup}
             aria-labelledby="settings-general-title"
           >
@@ -1480,7 +1292,7 @@ export default function SettingsPage({
                   tile in here. */}
               <p>Display preferences, your library, and everyday behavior.</p>
             </header>
-            <div ref={generalGridBinding} className={styles.groupGrid}>
+            <div className={styles.groupGrid}>
               <section className={`${styles.section} glass-panel`} aria-labelledby="settings-perf">
                 <h2 id="settings-perf" className={styles.sectionTitle}>
                   Performance &amp; Display
@@ -1602,7 +1414,6 @@ export default function SettingsPage({
         {shows('playback') && (
           <section
             id="settings-playback"
-            ref={playbackGroupBinding}
             className={styles.settingsGroup}
             aria-labelledby="settings-playback-title"
           >
@@ -1611,7 +1422,7 @@ export default function SettingsPage({
               <h2 id="settings-playback-title">Playback</h2>
               <p>Choose language, quality, and connection preferences.</p>
             </header>
-            <div ref={playbackGridBinding} className={styles.groupGrid}>
+            <div className={styles.groupGrid}>
               <section
                 className={`${styles.section} glass-panel`}
                 aria-labelledby="settings-episodes"
@@ -1931,7 +1742,6 @@ export default function SettingsPage({
         {shows('services') && (
           <section
             id="settings-services"
-            ref={servicesGroupBinding}
             className={styles.settingsGroup}
             aria-labelledby="settings-services-title"
           >
@@ -1940,10 +1750,7 @@ export default function SettingsPage({
               <h2 id="settings-services-title">Media services</h2>
               <p>Connect servers, download clients, and your streaming provider.</p>
             </header>
-            <div
-              ref={servicesGridBinding}
-              className={`${styles.groupGrid} ${styles.groupGridWide}`}
-            >
+            <div className={`${styles.groupGrid} ${styles.groupGridWide}`}>
               <MediaServicesSection />
               <TorBoxSection />
               <DevicePairingSection />
@@ -1954,7 +1761,6 @@ export default function SettingsPage({
         {shows('accounts') && (
           <section
             id="settings-accounts"
-            ref={accountsGroupBinding}
             className={styles.settingsGroup}
             aria-labelledby="settings-accounts-title"
           >
@@ -2031,7 +1837,6 @@ export default function SettingsPage({
         {shows('ai') && (
           <section
             id="settings-ai"
-            ref={aiGroupBinding}
             className={styles.settingsGroup}
             aria-labelledby="settings-ai-title"
           >
@@ -2040,7 +1845,7 @@ export default function SettingsPage({
               <h2 id="settings-ai-title">AI</h2>
               <p>Run the assistant and recommendations on a model of your own.</p>
             </header>
-            <div ref={aiGridBinding} className={styles.groupGrid}>
+            <div className={styles.groupGrid}>
               <OllamaSection />
             </div>
           </section>
@@ -2049,7 +1854,6 @@ export default function SettingsPage({
         {shows('community') && (
           <section
             id="settings-community"
-            ref={communityGroupBinding}
             className={styles.settingsGroup}
             aria-labelledby="settings-community-title"
           >
@@ -2058,7 +1862,7 @@ export default function SettingsPage({
               <h2 id="settings-community-title">Community &amp; profiles</h2>
               <p>Set up shared viewing and choose who is watching.</p>
             </header>
-            <div ref={communityGridBinding} className={styles.groupGrid}>
+            <div className={styles.groupGrid}>
               <R3PartySyncSection />
 
               <section

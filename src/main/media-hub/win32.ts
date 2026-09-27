@@ -20,7 +20,6 @@ const SW_HIDE = 0
 const SW_SHOWNA = 8
 
 const GWL_STYLE = -16
-const GWL_EXSTYLE = -20
 
 export const WS_DISABLED = 0x08000000n
 export const WS_CHILD = 0x40000000n
@@ -38,16 +37,8 @@ const SWP_NOACTIVATE = 0x0010
 const big = (value: number | bigint): bigint => (typeof value === 'bigint' ? value : BigInt(value))
 
 interface User32 {
-  FindWindowExW: (
-    parent: bigint,
-    after: bigint,
-    cls: string | null,
-    title: string | null
-  ) => number | bigint
   GetWindow: (hwnd: bigint, cmd: number) => number | bigint
-  GetClassNameW: (hwnd: bigint, buf: Uint16Array, max: number) => number
   GetClientRect: (hwnd: bigint, rect: Record<string, number>) => boolean
-  GetWindowRect: (hwnd: bigint, rect: Record<string, number>) => boolean
   SetWindowPos: (
     hwnd: bigint,
     insertAfter: bigint,
@@ -61,7 +52,6 @@ interface User32 {
   IsWindow: (hwnd: bigint) => boolean
   GetWindowLongPtrW: (hwnd: bigint, index: number) => number | bigint
   SetWindowLongPtrW: (hwnd: bigint, index: number, value: bigint) => number | bigint
-  SetParent: (hwnd: bigint, parent: bigint) => number | bigint
   GetWindowThreadProcessId: (hwnd: bigint, pid: Uint32Array) => number
 }
 
@@ -77,26 +67,18 @@ function api(): User32 | null {
   const lib = koffi.load('user32.dll')
   koffi.struct('R3Rect', { left: 'long', top: 'long', right: 'long', bottom: 'long' })
   user32 = {
-    FindWindowExW: lib.func('int64_t FindWindowExW(int64_t, int64_t, str16, str16)'),
     GetWindow: lib.func('int64_t GetWindow(int64_t, uint32_t)'),
-    GetClassNameW: lib.func('int GetClassNameW(int64_t, _Out_ uint16_t *, int)'),
     GetClientRect: lib.func('bool GetClientRect(int64_t, _Out_ R3Rect *)'),
-    GetWindowRect: lib.func('bool GetWindowRect(int64_t, _Out_ R3Rect *)'),
     SetWindowPos: lib.func('bool SetWindowPos(int64_t, int64_t, int, int, int, int, uint32_t)'),
     ShowWindow: lib.func('bool ShowWindow(int64_t, int)'),
     IsWindow: lib.func('bool IsWindow(int64_t)'),
     GetWindowLongPtrW: lib.func('int64_t GetWindowLongPtrW(int64_t, int)'),
     SetWindowLongPtrW: lib.func('int64_t SetWindowLongPtrW(int64_t, int, int64_t)'),
-    SetParent: lib.func('int64_t SetParent(int64_t, int64_t)'),
     GetWindowThreadProcessId: lib.func(
       'uint32_t GetWindowThreadProcessId(int64_t, _Out_ uint32_t *)'
     )
   }
   return user32
-}
-
-export function win32Available(): boolean {
-  return api() !== null
 }
 
 /** The top-level HWND behind a BrowserWindow, as the unsigned pointer value. */
@@ -109,31 +91,12 @@ export function isWindowAlive(hwnd: bigint): boolean {
   return u ? u.IsWindow(hwnd) : false
 }
 
-function classNameOf(hwnd: bigint): string {
-  const u = api()
-  if (!u) return ''
-  const buf = new Uint16Array(256)
-  const len = u.GetClassNameW(hwnd, buf, buf.length)
-  return len > 0 ? Buffer.from(buf.buffer, 0, len * 2).toString('utf16le') : ''
-}
-
 function windowPidOf(hwnd: bigint): number {
   const u = api()
   if (!u) return 0
   const pid = new Uint32Array(1)
   u.GetWindowThreadProcessId(hwnd, pid)
   return pid[0]
-}
-
-function windowStyleOf(hwnd: bigint): { style: bigint; exStyle: bigint } {
-  const u = api()
-  if (!u) return { style: 0n, exStyle: 0n }
-  return {
-    // GetWindowLongPtr returns a sign-extended value; styles are 32-bit masks,
-    // so mask back to unsigned for readable logging and testable flags.
-    style: BigInt.asUintN(32, big(u.GetWindowLongPtrW(hwnd, GWL_STYLE))),
-    exStyle: BigInt.asUintN(32, big(u.GetWindowLongPtrW(hwnd, GWL_EXSTYLE)))
-  }
 }
 
 export function addWindowStyle(hwnd: bigint, flags: bigint): void {
@@ -150,43 +113,6 @@ export function removeWindowStyle(hwnd: bigint, flags: bigint): void {
   const current = BigInt.asUintN(32, big(u.GetWindowLongPtrW(hwnd, GWL_STYLE)))
   if ((current & flags) === 0n) return
   u.SetWindowLongPtrW(hwnd, GWL_STYLE, BigInt.asIntN(64, current & ~flags))
-}
-
-export interface ChildWindowInfo {
-  hwnd: bigint
-  depth: number
-  className: string
-  pid: number
-  style: bigint
-  exStyle: bigint
-}
-
-/** Depth-first walk of a window's child tree in sibling z-order (top first),
- *  via GetWindow rather than EnumChildWindows — no FFI callbacks needed. */
-export function listChildTree(parent: bigint, maxDepth = 3): ChildWindowInfo[] {
-  const u = api()
-  if (!u) return []
-  const out: ChildWindowInfo[] = []
-  const walk = (hwnd: bigint, depth: number): void => {
-    if (depth > maxDepth) return
-    let child = big(u.GetWindow(hwnd, GW_CHILD))
-    let guard = 0
-    while (child !== 0n && guard++ < 256) {
-      const { style, exStyle } = windowStyleOf(child)
-      out.push({
-        hwnd: child,
-        depth,
-        className: classNameOf(child),
-        pid: windowPidOf(child),
-        style,
-        exStyle
-      })
-      walk(child, depth + 1)
-      child = big(u.GetWindow(child, GW_HWNDNEXT))
-    }
-  }
-  walk(parent, 1)
-  return out
 }
 
 /** First direct child of `parent` belonging to process `pid`, or null. */

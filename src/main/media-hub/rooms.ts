@@ -53,6 +53,7 @@ import {
   type PresenceRecord,
   type StoredRoom
 } from './roomRules'
+import { fetchJson } from './httpClient'
 import { handle } from './ipcGuard'
 import { logError } from './logger'
 import { sendToRenderer } from './rendererBridge'
@@ -544,6 +545,48 @@ function scheduleReconnect(room: RoomState): void {
 const hopCapability = new Map<string, { ok: boolean; at: number }>()
 const HOP_CAPABILITY_TTL_MS = 60_000
 
+/**
+ * How long a relay POST (create a room, remove a member) may take before
+ * it is abandoned. Both are single round trips to a Cloudflare worker, so
+ * anything near this long means the relay accepted the connection and
+ * stalled — without a bound the handler, and the person's click, would
+ * wait for ever.
+ */
+const RELAY_REQUEST_TIMEOUT_MS = 15_000
+
+/**
+ * POSTs JSON to the party relay through the shared bounded client, and
+ * turns an HTTP refusal back into the caller's own wording. fetchJson
+ * would otherwise surface the relay's body text or its generic
+ * "Request failed" message; the room panel has always shown
+ * `<refused>: <status>`, and keeps doing so. Network failures and the
+ * timeout pass through unchanged.
+ */
+async function postToRelay<T>(url: string, body: unknown, refused: string): Promise<T> {
+  try {
+    return await fetchJson<T>(
+      url,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      },
+      { timeoutMs: RELAY_REQUEST_TIMEOUT_MS }
+    )
+  } catch (error) {
+    const status = (error as { status?: unknown } | null)?.status
+    if (typeof status === 'number') throw new Error(`${refused}: ${status}`)
+    // A relay that accepts the connection and then says nothing ends in the
+    // timeout's own abort, whose text ("This operation was aborted") tells
+    // the person nothing about what to do next.
+    const name = (error as { name?: unknown } | null)?.name
+    if (name === 'AbortError' || name === 'TimeoutError') {
+      throw new Error('The relay did not answer. Check that it is running, then try again.')
+    }
+    throw error
+  }
+}
+
 async function daemonAdvertisesHop(url: string): Promise<boolean> {
   const cached = hopCapability.get(url)
   if (cached && Date.now() - cached.at < HOP_CAPABILITY_TTL_MS) return cached.ok
@@ -785,17 +828,15 @@ export function registerRoomsIpc(): void {
       // needs. A worker deployed before it exists simply returns no
       // joinSecret, and the room comes up as a legacy room — everything
       // works except kick, which is the honest degradation.
-      const response = await fetch(`${creds.url}/host`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ inviteKey: creds.inviteKey, membership: true })
-      })
-      if (!response.ok) throw new Error(`The party-sync worker refused: ${response.status}`)
-      const { roomId, roomToken, joinSecret } = (await response.json()) as {
+      const { roomId, roomToken, joinSecret } = await postToRelay<{
         roomId: string
         roomToken: string
         joinSecret?: string
-      }
+      }>(
+        `${creds.url}/host`,
+        { inviteKey: creds.inviteKey, membership: true },
+        'The party-sync worker refused'
+      )
       const identity = roomsIdentity()
       const secret = crypto.randomBytes(24).toString('base64url')
       const name =
@@ -981,16 +1022,19 @@ export function registerRoomsIpc(): void {
         waiters.push(resolve)
         room.banWaiters.set(target, waiters)
       })
-      const response = await fetch(`${room.relayUrl}/party/${room.roomId}/kick`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ roomToken: room.stored.roomToken, memberIds: [target] })
-      })
-      if (!response.ok) {
+      let joinSecret: string
+      try {
+        ;({ joinSecret } = await postToRelay<{ joinSecret: string }>(
+          `${room.relayUrl}/party/${room.roomId}/kick`,
+          { roomToken: room.stored.roomToken, memberIds: [target] },
+          'The relay refused the removal'
+        ))
+      } catch (error) {
+        // Disarm the barrier on ANY failure — a refusal, a dropped
+        // connection or the timeout — so no waiter outlives the attempt.
         room.banWaiters.delete(target)
-        throw new Error(`The relay refused the removal: ${response.status}`)
+        throw error
       }
-      const { joinSecret } = (await response.json()) as { joinSecret: string }
 
       // WAIT TO SEE THE BAN before breathing a word of the new secret.
       // The kick's HTTP response and the relay's banned broadcast travel

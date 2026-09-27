@@ -536,14 +536,13 @@ Use the full base URL, including `http://` or `https://` and a non-default port 
 Found by the 2026-09-27 audit and tracked in [docs/AUDIT-2026-09-27.md](docs/AUDIT-2026-09-27.md):
 
 - A watch mark made while a tracking service is unreachable is dropped rather than retried.
-- When the usual episode sources fail, the Simkl episode fallback is expected to fail too (it omits
-  Simkl's client id), so a degraded title page shows no episodes. Not yet confirmed live.
 - A partly downloaded title can only resume from the source it came from, so it still needs that
   source connected.
 
 Three problems the same audit found are fixed: anime is now served from the r3-cache tier, cached
 titles play without TorBox or Jellyfin, and plan-to-watch and history pushes for a title keep
-their order. The placeholder weather readout is gone.
+their order. The placeholder weather readout is gone, and the Simkl episode fallback now sends
+its client id.
 
 ## License
 
