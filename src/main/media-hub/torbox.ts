@@ -72,6 +72,7 @@ import {
   writeSettings
 } from './settingsStore'
 import { streamReleaseName } from '../../shared/media-hub/streamQuality'
+import { lanCacheContentKey } from '../../shared/lancache/wantedList'
 import { knownTitles } from './titleNames'
 
 export const TORBOX = 'https://api.torbox.app/v1/api'
@@ -604,8 +605,15 @@ export function registerTorBoxIpc(): void {
       // /stream), so a hit here is playable this second.
       if (isLanCacheConnected()) {
         const meta = cacheMetaFor(payload, title)
+        // Must match the key the feeder queued (wantedList.ts
+        // lanCacheContentKey), so anime drops its season here too.
         const lanKey = meta
-          ? `${String(meta.catalogId).trim().toLowerCase()}:${meta.seasonNumber ?? ''}:${meta.episodeNumber ?? ''}`
+          ? lanCacheContentKey({
+              catalogId: meta.catalogId ?? '',
+              kind: type,
+              seasonNumber: meta.seasonNumber,
+              episodeNumber: meta.episodeNumber
+            })
           : ''
         const lan = await findLanCacheCandidate(lanKey)
         if (lan && withinQualityCeiling(lan.resolution, limits.maxResolution)) {
