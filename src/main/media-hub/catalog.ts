@@ -70,7 +70,8 @@ import {
   groupedIdsFor,
   invalidateAnimeGroupIndex,
   kitsuRealEpisodes,
-  groupedVideosAreComplete
+  groupedVideosAreComplete,
+  laterSeasonOf
 } from './animeSeasons'
 import { omdbRottenTomatoesRating } from './omdb'
 import { withUpcomingEpisodes } from './episodeAiring'
@@ -1736,7 +1737,16 @@ export function registerCatalogIpc(): void {
 
   handle<CatalogMetaPayload, CatalogItem>(
     MEDIA_HUB_CHANNELS.catalogMeta,
-    async (_e, { type, id }) => metadata(type, id)
+    async (_e, { type, id }) => {
+      const item = await metadata(type, id)
+      // A later season of a merged anime, asked for by its own id (a plan
+      // card pulled from a service, a sequel link). Answered as itself, with
+      // where it belongs, so the screen that asked opens the show — see
+      // CatalogItem.seasonOf. Worked out per request rather than cached with
+      // the item: the grouping can change under a day-old entry.
+      const show = type === 'anime' ? laterSeasonOf(String(id)) : null
+      return show ? { ...item, seasonOf: show } : item
+    }
   )
 
   handle<CatalogSearchPayload, CatalogItem[]>(

@@ -61,6 +61,7 @@
 // neither external source has anything to say.
 
 import type { CatalogItem, Episode } from '../../shared/media-hub/types'
+import { animeSeasonOf } from '../../shared/media-hub/serviceIds'
 import { fetchJson } from './httpClient'
 import { mapWithLimit, type TaskPriority } from './taskScheduler'
 import { logError } from './logger'
@@ -686,6 +687,25 @@ export function animeSiblingsWhenGrouped(): ((id: string) => string[] | undefine
 export function resolveAnimeGroupTarget(catalogId: string): { id: string; season: number } {
   if (!animeGroupPositionIndex) buildAnimeGroupIndexes()
   return animeGroupPositionIndex!.get(String(catalogId)) || { id: String(catalogId), season: 1 }
+}
+
+/**
+ * The show a later season of a merged franchise belongs to, asked by the
+ * season's own id — or null: for a show's own id, a title that was never
+ * merged, anything that is not a Kitsu id, and everything while the catalog
+ * is un-grouped (see animeGroupingReady), when no id can be told from one
+ * that stands alone.
+ *
+ * A later season keeps an id of its own because that is what a service
+ * lists it under, and so what a watchlist pull plans it under. Everything
+ * else about it belongs to the show: a page that opens it opens the show
+ * (catalog.ts's meta handler), and a viewing written under it is kept under
+ * the show (tracking.ts).
+ */
+export function laterSeasonOf(catalogId: string): { id: string; season: number } | null {
+  const id = String(catalogId)
+  if (!id.startsWith('kitsu:') || !animeGroupingReady()) return null
+  return animeSeasonOf(id, resolveAnimeGroupTarget)
 }
 
 /**

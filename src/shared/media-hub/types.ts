@@ -112,6 +112,15 @@ export interface CatalogItem {
    *  and lets metadata() build a real multi-season episode list for it. */
   groupedIds?: string[]
   /**
+   * Anime only, and only on the answer to catalog:meta — set when the id
+   * asked for is a LATER season of a merged franchise: the show it belongs
+   * to, and its season there. The item itself is still that one season
+   * under its own id. A screen that opens a title opens `seasonOf.id` at
+   * `seasonOf.season` instead, so a merged season has no page of its own
+   * and nothing is watched under an id the show does not read.
+   */
+  seasonOf?: { id: string; season: number }
+  /**
    * Grouped anime only — an override for the season/episode counts the
    * browse grid shows, when `videos` alone would under-report them.
    *

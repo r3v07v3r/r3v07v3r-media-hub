@@ -36,6 +36,8 @@ import {
 } from '../src/main/media-hub/simklCatchUpRules'
 import { bySeason } from '../src/main/media-hub/titleStatusRules'
 import {
+  animeHistoryCoordinates,
+  animeSeasonOf,
   fromSimklAnimeEpisode,
   toSimklAnimeEpisode,
   type AnimeGroupTarget,
@@ -231,6 +233,53 @@ check('the two rows that do not come back as they went out', () => {
   const labelled = toSimklAnimeEpisode({ id: ALONE, season: 2, episode: 4 }, siblingsOf)
   assert.ok(labelled)
   assert.deepEqual(fromSimklAnimeEpisode(labelled, targetOf), { id: ALONE, season: 1, episode: 4 })
+})
+
+// ---------------------------------------------------------------------------
+console.log('\na later season named by its own id')
+
+check('it belongs to its show; a show and an unmerged title belong to nothing', () => {
+  assert.deepEqual(animeSeasonOf(SEASON_2, targetOf), { id: SHOW, season: 2 })
+  assert.deepEqual(animeSeasonOf(SEASON_3, targetOf), { id: SHOW, season: 3 })
+  assert.equal(animeSeasonOf(SHOW, targetOf), null)
+  assert.equal(animeSeasonOf(ALONE, targetOf), null)
+})
+
+check('an episode written under it is kept under the show, at its season there', () => {
+  // Whatever season it arrived with: that is Kitsu's label for the one
+  // entry, and the episode number is already the entry's own.
+  for (const season of [1, 2, undefined]) {
+    assert.deepEqual(animeHistoryCoordinates({ id: SEASON_2, season, episode: 4 }, targetOf), {
+      id: SHOW,
+      season: 2,
+      episode: 4
+    })
+  }
+  assert.deepEqual(animeHistoryCoordinates({ id: SEASON_3, season: 1, episode: 1 }, targetOf), {
+    id: SHOW,
+    season: 3,
+    episode: 1
+  })
+})
+
+check('which is where the same episode comes back from Simkl', () => {
+  const kept = animeHistoryCoordinates({ id: SEASON_2, season: 1, episode: 4 }, targetOf)
+  const sent = toSimklAnimeEpisode(kept, siblingsOf)
+  assert.deepEqual(sent, { id: SEASON_2, episode: 4 }, "still the season's own entry")
+  assert.ok(sent)
+  assert.deepEqual(fromSimklAnimeEpisode(sent, targetOf), kept)
+})
+
+check('a show, an unmerged title and a row with no episode stay as they are', () => {
+  for (const local of [
+    { id: SHOW, season: 2, episode: 4 },
+    { id: SHOW, season: 0, episode: 1 },
+    { id: ALONE, season: 2, episode: 4 },
+    { id: SEASON_2, season: null, episode: null },
+    { id: SEASON_2 }
+  ]) {
+    assert.deepEqual(animeHistoryCoordinates(local, targetOf), local)
+  }
 })
 
 // ---------------------------------------------------------------------------

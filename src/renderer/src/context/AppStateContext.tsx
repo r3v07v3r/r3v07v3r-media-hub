@@ -1588,31 +1588,46 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     const api = window.api?.mediaHub
     if (api) {
       try {
-        const [meta, tracking] = await Promise.all([
+        const [asked, tracking] = await Promise.all([
           api.catalog.meta(kind, media.id),
           api.tracking.list()
         ])
+        // A later season of a merged anime, played from its own card (a
+        // plan card pulled from a service). What is played is the SHOW, at
+        // that season: its viewings are kept under the show, so that is
+        // where "what has been watched" has to be read, and the id the
+        // player, the bookmark and the scrobble go out under. Asked under
+        // the card's own id, every press would start at its first episode.
+        const part = asked?.seasonOf
+        const meta = part ? await api.catalog.meta(kind, part.id) : asked
+        const titleId = part ? part.id : media.id
+        const videos = part
+          ? (meta?.videos ?? []).filter((video) => video.season === part.season)
+          : meta?.videos
         const watchedKeys = new Set<string>()
         for (const row of tracking.history) {
-          if (String(row.id) !== String(media.id)) continue
+          if (String(row.id) !== String(titleId)) continue
           if (row.season == null || row.episode == null) continue
           watchedKeys.add(episodeWatchKey(row.season, row.episode))
         }
-        if (meta?.videos?.length) {
-          const target = episodeToStart(meta.videos, watchedKeys)
+        if (meta && videos?.length) {
+          const target = episodeToStart(videos, watchedKeys)
           // The picked episode's own name rides along — it is what the
           // player's badge shows under "S2 · E5".
-          const picked = meta.videos.find(
+          const picked = videos.find(
             (video) => video.season === target.season && video.episode === target.episode
           )
+          // The show's own record when it stands in for a later season's
+          // card, so what starts is exactly what its page would start.
+          const base = part ? catalogItemToMediaItem(meta) : media
           return {
-            ...media,
+            ...base,
             seasonNumber: target.season,
             episodeNumber: target.episode,
             episodeTitle: picked?.title,
             // See the coordinates branch above — the resolved record's
             // alternate title, which an index-backed card lacks.
-            originalTitle: media.originalTitle ?? meta.originalTitle
+            originalTitle: base.originalTitle ?? meta.originalTitle
           }
         }
       } catch {

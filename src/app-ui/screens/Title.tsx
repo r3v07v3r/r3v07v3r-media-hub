@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
+import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import type { CatalogItem, Episode, TitleWatchState } from '@shared/media-hub/types'
 import { nativeHost } from '../lib/nativeHost'
 import { setNowPlaying } from '../lib/nowPlaying'
@@ -167,15 +167,34 @@ export default function Title() {
   const id = params.id ?? null
 
   const {
-    data: item,
+    data: fetched,
     error,
-    loading
+    loading: fetching
   } = useAsync<CatalogItem | null>(() => {
     if (!kind || !id) return Promise.resolve(null)
     const mediaHub = api()
     if (!mediaHub) return Promise.reject(new Error('Not connected to a backend.'))
     return mediaHub.catalog.meta(kind, id)
   }, [kind, id])
+
+  // A later season of a merged anime, opened by its own id (a plan card the
+  // watchlist pull added): the show's page, at that season. A merged season
+  // has no page of its own — anything played from one was saved under an id
+  // the show never read. In place of this entry, so Back still leaves the
+  // title; and the page stays on its loading state until the show arrives,
+  // rather than offering a Play button for a title about to be replaced.
+  const seasonOf = fetched?.seasonOf ?? null
+  const item = seasonOf ? null : fetched
+  const loading = fetching || seasonOf !== null
+  useEffect(() => {
+    // Not again once the route is the show's: the answer for the id that
+    // was asked can still be in hand while the show's is on its way.
+    if (!kind || !seasonOf || seasonOf.id === id) return
+    navigate(`/title/${kind}/${seasonOf.id}`, { replace: true, state: { season: seasonOf.season } })
+  }, [kind, id, seasonOf, navigate])
+  // The season such a link asked for, left in the navigation state above.
+  const location = useLocation()
+  const openedSeason = (location.state as { season?: number } | null)?.season ?? null
 
   // What the local record says about this title: on the list or not, and
   // which episodes are watched. Asked by the id catalog.meta RETURNED, not
@@ -217,7 +236,12 @@ export default function Title() {
   )
 
   const [selectedSeason, setSelectedSeason] = useState<number | null>(null)
-  const activeSeason = selectedSeason ?? startTarget?.season ?? seasonNumbers[0] ?? null
+  const activeSeason =
+    selectedSeason ??
+    (openedSeason != null && seasons.has(openedSeason) ? openedSeason : null) ??
+    startTarget?.season ??
+    seasonNumbers[0] ??
+    null
   const activeEpisodes = useMemo(() => {
     const list = seasons.get(activeSeason ?? -1) ?? []
     return list.map((episode) => ({ episode, aired: hasAired(episode) }))

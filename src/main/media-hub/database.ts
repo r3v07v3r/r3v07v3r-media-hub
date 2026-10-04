@@ -79,15 +79,14 @@ interface EpisodePosition {
 }
 
 /**
- * One "these rows are actually that title" instruction for remapContentIds.
- * `seasonOffset` shifts each moved row's season — a merged franchise's
- * sibling was written as its own season 1, and belongs at whatever season
- * it really occupies inside the group.
+ * One "these rows are that season of this show" instruction for
+ * remapContentIds: what is filed under `fromId` — a merged franchise's
+ * later season, by its own id — belongs under `toId`, at `season`.
  */
 export interface ContentIdRemap {
   fromId: string
   toId: string
-  seasonOffset: number
+  season: number
 }
 
 /** Normalizes an arbitrary catalog-ish item into the shape we persist for tracked/watched rows. */
@@ -659,8 +658,22 @@ export interface MediaHubDatabase {
    */
   importRatings(rows: { id: string; score: number }[]): number
   /**
-   * Moves watch history, plays and ratings from one content id onto
-   * another, for EVERY profile on the install.
+   * Moves watch history, plays and ratings from a merged anime's later
+   * season onto the show it belongs to, for EVERY profile on the install.
+   *
+   * Every row lands on the season named, whatever season it carried. The
+   * rows of one later season are that one season of the show, and the
+   * season on them is only what labelled the entry when they were written:
+   * a 1 from the old sync, Kitsu's own label (often already 2 or 3) from
+   * the season's own page. The episode number is the entry's own either way.
+   *
+   * One exception, per profile: an id whose rows hold the SAME episode
+   * number under more than one season. Those are not one entry's episodes.
+   * The id once fronted the whole show, before the grouping changed which
+   * member does, and its seasons were the group's in an order nothing
+   * records any more. Only its season 1 — the id's own entry — can be
+   * placed; the rest stay where they are rather than be guessed onto one
+   * season, where they would collide and be dropped.
    *
    * Deliberately not profile-scoped, unlike almost everything above: this
    * repairs rows written under an id nothing reads any more (see
@@ -843,6 +856,9 @@ interface PreparedQueries {
   importPlay: StatementSync
   importRating: StatementSync
   remapWatched: StatementSync
+  dropPlacedWatched: StatementSync
+  remapProfiles: StatementSync
+  remapSplitProfiles: StatementSync
   dropRemappedWatched: StatementSync
   mergeWatched: StatementSync
   mergePlays: StatementSync
@@ -851,6 +867,7 @@ interface PreparedQueries {
   mergeTracked: StatementSync
   dropRemappedTracked: StatementSync
   remapPlays: StatementSync
+  dropPlacedPlays: StatementSync
   dropRemappedPlays: StatementSync
   remapRating: StatementSync
   dropRemappedRating: StatementSync
@@ -1110,16 +1127,18 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
            AND season IS @season AND episode IS @episode AND watched_at=@now
        )`
     ),
-    // The repair trio — see remapContentIds. Each is "copy the rows to the
-    // new id, letting the primary key drop anything already there", paired
-    // with a delete of whatever remains behind at the old id. Not scoped to
-    // a profile: the rows being repaired can belong to any of them.
+    // The repair set — see remapContentIds. Each pair is "copy the rows to
+    // the show, letting the primary key drop anything already there", then
+    // a delete of exactly the rows that were offered. Run once per profile
+    // holding rows under the old id: the rows being repaired can belong to
+    // any of them, and whether an id's rows are one entry's or a whole
+    // show's (@onlyFirst) is a fact about each profile's own rows.
     //
     // Three things have to change together, and missing any one leaves a
     // row that is moved in name only:
     //
     //  - watch_key embeds the id AND the season, so it is rebuilt, not
-    //    carried over. The season is cast to INTEGER first: @offset binds
+    //    carried over. The season is cast to INTEGER first: @season binds
     //    as a float, so a bare CAST(... AS TEXT) yields '2.0' and the key
     //    stops matching the `${id}:${season}:${episode}` form markWatched
     //    writes and unmarkWatched looks up.
@@ -1131,12 +1150,34 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
     remapWatched: sql.prepare(
       `INSERT INTO watch_history(profile_id,watch_key,content_id,type,title,season,episode,watched_at,metadata_json)
        SELECT profile_id,
-              @to || ':' || CAST(CAST(season + @offset AS INTEGER) AS TEXT) || ':' || CAST(episode AS TEXT),
-              @to,'anime',title,CAST(season + @offset AS INTEGER),episode,watched_at,
+              @to || ':' || CAST(CAST(@season AS INTEGER) AS TEXT) || ':' || CAST(episode AS TEXT),
+              @to,'anime',title,CAST(@season AS INTEGER),episode,watched_at,
               json_set(metadata_json,'$.id',@to,'$.type','anime')
          FROM watch_history
-        WHERE content_id=@from AND season IS NOT NULL AND episode IS NOT NULL
+        WHERE content_id=@from AND profile_id=@profile
+          AND season IS NOT NULL AND episode IS NOT NULL
+          AND (@onlyFirst=0 OR season=1)
        ON CONFLICT(profile_id,watch_key) DO NOTHING`
+    ),
+    dropPlacedWatched: sql.prepare(
+      `DELETE FROM watch_history
+        WHERE content_id=@from AND profile_id=@profile
+          AND season IS NOT NULL AND episode IS NOT NULL
+          AND (@onlyFirst=0 OR season=1)`
+    ),
+    // Every profile with rows under the old id, in either table.
+    remapProfiles: sql.prepare(
+      `SELECT profile_id FROM watch_history WHERE content_id=@from
+       UNION SELECT profile_id FROM plays WHERE content_id=@from`
+    ),
+    // The profiles whose rows under it are a whole show's, not one entry's:
+    // some episode number is there under two different seasons.
+    remapSplitProfiles: sql.prepare(
+      `SELECT DISTINCT a.profile_id FROM watch_history a
+         JOIN watch_history b
+           ON b.profile_id=a.profile_id AND b.content_id=a.content_id
+          AND b.episode=a.episode AND b.season<>a.season
+        WHERE a.content_id=@from`
     ),
     dropRemappedWatched: sql.prepare('DELETE FROM watch_history WHERE content_id=?'),
     // The type-preserving sibling of remapWatched, for mergeContentId. The
@@ -1158,10 +1199,18 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
     // unconditional and the delete below is what stops it doubling.
     remapPlays: sql.prepare(
       `INSERT INTO plays(profile_id,content_id,type,title,season,episode,watched_at,metadata_json)
-       SELECT profile_id,@to,'anime',title,CAST(season + @offset AS INTEGER),episode,watched_at,
+       SELECT profile_id,@to,'anime',title,CAST(@season AS INTEGER),episode,watched_at,
               json_set(metadata_json,'$.id',@to,'$.type','anime')
          FROM plays
-        WHERE content_id=@from AND season IS NOT NULL AND episode IS NOT NULL`
+        WHERE content_id=@from AND profile_id=@profile
+          AND season IS NOT NULL AND episode IS NOT NULL
+          AND (@onlyFirst=0 OR season=1)`
+    ),
+    dropPlacedPlays: sql.prepare(
+      `DELETE FROM plays
+        WHERE content_id=@from AND profile_id=@profile
+          AND season IS NOT NULL AND episode IS NOT NULL
+          AND (@onlyFirst=0 OR season=1)`
     ),
     dropRemappedPlays: sql.prepare('DELETE FROM plays WHERE content_id=?'),
     // A viewing already recorded under the real id within ten minutes is
@@ -2097,24 +2146,32 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
             for (const map of list) {
               const from = String(map.fromId)
               const to = String(map.toId)
-              const offset = Number(map.seasonOffset) || 0
+              const season = Number(map.season)
               if (!from || !to || from === to) continue
+              if (!Number.isInteger(season) || season < 1) continue
 
-              // Every profile at once, and every row of that id — see the
-              // interface comment for why this one method is not scoped to
-              // the active profile.
+              // Every profile at once — see the interface comment for why
+              // this one method is not scoped to the active profile — but
+              // one at a time, because which rows may move is decided per
+              // profile (see the interface comment's exception).
               //
-              // OR IGNORE, then DELETE what did not move: node:sqlite has
+              // OR IGNORE, then DELETE what was offered: node:sqlite has
               // no UPDATE ... ON CONFLICT, and an UPDATE that collides with
               // an existing destination row would abort the whole
               // transaction. Inserting the moved copy first lets the
               // primary keys arbitrate — a destination row already there
               // wins and the source is simply dropped.
-              moved += Number(q.remapWatched.run({ from, to, offset }).changes || 0)
-              q.dropRemappedWatched.run(from)
-
-              q.remapPlays.run({ from, to, offset })
-              q.dropRemappedPlays.run(from)
+              const split = new Set(
+                q.remapSplitProfiles.all({ from }).map((row) => String((row as Row).profile_id))
+              )
+              for (const row of q.remapProfiles.all({ from })) {
+                const profile = String((row as Row).profile_id)
+                const scope = { from, profile, onlyFirst: split.has(profile) ? 1 : 0 }
+                moved += Number(q.remapWatched.run({ ...scope, to, season }).changes || 0)
+                q.dropPlacedWatched.run(scope)
+                q.remapPlays.run({ ...scope, to, season })
+                q.dropPlacedPlays.run(scope)
+              }
 
               q.remapRating.run({ from, to })
               q.dropRemappedRating.run(from)

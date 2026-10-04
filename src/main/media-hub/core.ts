@@ -1366,6 +1366,32 @@ export function continueWatchingList(
 }
 
 /**
+ * The titles Continue Watching is asked about: every tracked title's own
+ * detail, except that a merged anime's later season tracked under its own
+ * id is answered for by the show it belongs to.
+ *
+ * Such a season's detail is that one season under that id, and its viewings
+ * are kept under the show — so asked of its own detail it is never in
+ * progress. `shows` are the shows standing in for the ones somebody has
+ * started; each is listed once, however many of its seasons are tracked and
+ * whether or not the show itself is.
+ */
+export function continueWatchingDetails(
+  details: readonly CatalogItem[],
+  shows: readonly (CatalogItem | null | undefined)[],
+  isLaterSeason: (id: string) => boolean
+): CatalogItem[] {
+  const byId = new Map<string, CatalogItem>()
+  for (const detail of details) {
+    if (!isLaterSeason(String(detail.id))) byId.set(String(detail.id), detail)
+  }
+  for (const show of shows) {
+    if (show && !byId.has(String(show.id))) byId.set(String(show.id), show)
+  }
+  return [...byId.values()]
+}
+
+/**
  * The tracked titles nobody has started: plan to watch, as a Home row.
  *
  * The complement of continueWatchingList, and it has to stay one — a show

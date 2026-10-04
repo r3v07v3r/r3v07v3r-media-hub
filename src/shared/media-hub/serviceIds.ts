@@ -181,3 +181,41 @@ export function fromSimklAnimeEpisode(
   if (!isCount(target.season)) return null
   return { id: target.id, season: target.season, episode: remote.episode }
 }
+
+/**
+ * The show a later season belongs to, when `id` names a later season of a
+ * merged franchise by its own id — or null, for a show's own id and for a
+ * title that was never merged.
+ *
+ * A later season still has an id of its own: it is what a service lists it
+ * under, and so what a watchlist pull plans it under. Opened or written by
+ * that id it must not become a second copy of the show's season, which is
+ * what this is asked for.
+ */
+export function animeSeasonOf(
+  id: string,
+  targetOf: AnimeGroupTarget
+): { id: string; season: number } | null {
+  const target = targetOf(id)
+  return target.id === id ? null : target
+}
+
+/**
+ * Where an episode named under `id` is KEPT here: for a later season named
+ * by its own id, under its show at the season it is there; for anything
+ * else, where it was named.
+ *
+ * The season such an id arrives with is not carried over. It is Kitsu's
+ * label inside that one entry (often the same number, not always), and the
+ * episode number is already the entry's own — the same numbering the show's
+ * episode list gives that season, and the one fromSimklAnimeEpisode files a
+ * Simkl entry by. A row with no episode is left alone: it is not an
+ * episode of anything.
+ */
+export function animeHistoryCoordinates<
+  T extends { id: string; season?: number | null; episode?: number | null }
+>(local: T, targetOf: AnimeGroupTarget): T {
+  if (local.episode == null) return local
+  const show = animeSeasonOf(local.id, targetOf)
+  return show ? { ...local, id: show.id, season: show.season } : local
+}
