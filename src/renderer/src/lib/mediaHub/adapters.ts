@@ -353,7 +353,11 @@ export function catalogItemToMediaItem(
  * the middle of one.
  */
 export function continueWatchingEntryToItem(entry: ContinueWatchingEntry) {
-  const media = catalogItemToMediaItem(entry, { trackedIds: new Set([entry.id]) })
+  // A row is on the list by construction — except one that is here for a
+  // later season of it (entry.trackedId), where the show itself is not.
+  const media = catalogItemToMediaItem(entry, {
+    trackedIds: new Set(entry.trackedId ? [] : [entry.id])
+  })
   const progressFraction = entry.totalCount > 0 ? entry.watchedCount / entry.totalCount : 0
   const durationSeconds = (media.runtimeMinutes ?? 45) * 60
   const completed = entry.totalCount > 0 && entry.watchedCount >= entry.totalCount
@@ -373,7 +377,8 @@ export function continueWatchingEntryToItem(entry: ContinueWatchingEntry) {
     },
     lastPlayedAt: entry.lastWatchedAt,
     playbackPositionSeconds: Math.round(durationSeconds * progressFraction),
-    durationSeconds
+    durationSeconds,
+    ...(entry.trackedId ? { trackedId: entry.trackedId } : {})
   }
 }
 

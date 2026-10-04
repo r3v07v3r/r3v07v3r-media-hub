@@ -11,7 +11,12 @@
 
 import assert from 'node:assert/strict'
 
-import { continueWatchingList, homeDetailWants, plannedList } from '../src/main/media-hub/core'
+import {
+  continueWatchingList,
+  homeDetailWants,
+  homeWatchedCounts,
+  plannedList
+} from '../src/main/media-hub/core'
 import type {
   CatalogItem,
   HistoryEntry,
@@ -287,13 +292,140 @@ check('a later season not yet started is planned, and asks for nothing', () => {
 })
 
 check('a show tracked itself is asked for once, with its own count kept', () => {
-  const { wanted } = homeDetailWants({
+  const { wanted, onBehalfOf } = homeDetailWants({
     tracked: [item('kitsu:2', 'anime'), item('kitsu:1', 'anime')],
     history: [play('kitsu:1', 'anime', 2, 1)],
     historyIdOf: showOf,
     seasonOf
   })
   assert.deepEqual(wanted, [{ type: 'anime', id: 'kitsu:1', countFor: 'kitsu:1' }])
+  assert.equal(onBehalfOf.size, 0, 'the show is on the list itself: its card is its own')
+})
+
+check('a show asked for on a later season’s behalf says which season that is', () => {
+  // The show is not on the list; the later season is. Whatever takes the
+  // show's Continue Watching card away by untracking has to untrack THAT —
+  // toggling the show itself would add it to the list.
+  const { onBehalfOf } = homeDetailWants({
+    tracked: [item('kitsu:2', 'anime')],
+    history: [play('kitsu:1', 'anime', 2, 1)],
+    historyIdOf: showOf,
+    seasonOf
+  })
+  assert.deepEqual([...onBehalfOf], [['kitsu:1', 'kitsu:2']])
+})
+
+check('a later season with rows of its own keeps its own card, and only that one', () => {
+  // Played from its own page before the show was grouped, and the same
+  // season's viewings also kept under the show: one tile, not two.
+  const { wanted, seasonCount, onBehalfOf } = homeDetailWants({
+    tracked: [item('kitsu:2', 'anime')],
+    history: [play('kitsu:2', 'anime', 1, 1), play('kitsu:1', 'anime', 2, 2)],
+    historyIdOf: showOf,
+    seasonOf
+  })
+  assert.deepEqual(wanted, [{ type: 'anime', id: 'kitsu:2', countFor: 'kitsu:2' }])
+  assert.equal(seasonCount.get('kitsu:2'), 1, 'still counted, for the larger of the two')
+  assert.equal(onBehalfOf.size, 0)
+})
+
+// ---------------------------------------------------------------------------
+// The counts plannedList reads (homeWatchedCounts).
+
+const detail = (id: string, episodes: Array<[number, number]>): CatalogItem =>
+  ({
+    id,
+    type: 'series',
+    title: id,
+    videos: episodes.map(([season, episode]) => ({
+      id: `${id}:${season}:${episode}`,
+      season,
+      episode,
+      title: `S${season}E${episode}`,
+      released: '2020-01-01T00:00:00.000Z'
+    }))
+  }) as unknown as CatalogItem
+
+check('a count is filed under the tracked id, from regular episodes only', () => {
+  const counts = homeWatchedCounts({
+    wanted: [
+      { type: 'series', id: 'tt-a', countFor: 'tt-a' },
+      // Metadata answers a legacy Simkl-keyed row under its real id.
+      { type: 'series', id: 'simkl:9', countFor: 'simkl:9' },
+      // Fetched only to be shown: no count is filed for it.
+      { type: 'anime', id: 'kitsu:1', countFor: null }
+    ],
+    fetched: [
+      detail('tt-a', [
+        [0, 1],
+        [1, 1],
+        [1, 2]
+      ]),
+      detail('tt-real', [[1, 1]]),
+      detail('kitsu:1', [[1, 1]])
+    ],
+    seasonCount: new Map(),
+    history: [
+      play('tt-a', 'series', 0, 1),
+      play('tt-a', 'series', 1, 1),
+      play('tt-real', 'series', 1, 1),
+      play('kitsu:1', 'anime', 1, 1)
+    ]
+  })
+  assert.deepEqual(
+    [...counts].sort(),
+    [
+      ['simkl:9', 1],
+      ['tt-a', 1]
+    ],
+    'the special is not counted; the show-only detail files nothing'
+  )
+})
+
+check('no episodes to count is no count, not zero', () => {
+  // Metadata that could not be fetched comes back as its catalog stand-in,
+  // with no episodes. Zero read off it would list a show somebody is half
+  // way through under Plan to Watch.
+  const history = [play('tt-degraded', 'series', 1, 1), play('tt-failed', 'series', 1, 1)]
+  const counts = homeWatchedCounts({
+    wanted: [
+      { type: 'series', id: 'tt-degraded', countFor: 'tt-degraded' },
+      { type: 'series', id: 'tt-failed', countFor: 'tt-failed' }
+    ],
+    fetched: [detail('tt-degraded', []), null],
+    seasonCount: new Map(),
+    history
+  })
+  assert.equal(counts.size, 0)
+  assert.deepEqual(
+    plannedList({
+      tracked: [item('tt-degraded', 'series'), item('tt-failed', 'series')],
+      startedIds: new Set(['tt-degraded', 'tt-failed']),
+      historyIdOf: sameId,
+      watchedRegularCount: counts,
+      posters: new Map()
+    }),
+    [],
+    'left out of Plan to Watch until a real episode list arrives'
+  )
+})
+
+check('a later season’s viewings under its show count even when its own detail has none', () => {
+  const counts = homeWatchedCounts({
+    wanted: [{ type: 'anime', id: 'kitsu:2', countFor: 'kitsu:2' }],
+    fetched: [detail('kitsu:2', [[1, 1]])],
+    seasonCount: new Map([['kitsu:2', 3]]),
+    history: [play('kitsu:2', 'anime', 1, 1)]
+  })
+  assert.equal(counts.get('kitsu:2'), 3, 'the larger of the two')
+  // And one with rows only under the show needs no detail at all.
+  const underShow = homeWatchedCounts({
+    wanted: [],
+    fetched: [],
+    seasonCount: new Map([['kitsu:2', 0]]),
+    history: [play('kitsu:1', 'anime', 1, 1)]
+  })
+  assert.equal(underShow.get('kitsu:2'), 0)
 })
 
 console.log(`\n${pass} passed`)

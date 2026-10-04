@@ -701,6 +701,15 @@ export interface ContinueWatchingEntry extends CatalogItem {
   watchedCount: number
   totalCount: number
   lastWatchedAt: string
+  /**
+   * The title on the list this row is here for, when that is not the row
+   * itself. A merged anime's later season can be tracked on its own while
+   * its viewings are kept under the show; the row is the show (that is what
+   * the viewings match, and the page to open), and the show is NOT on the
+   * list. Anything that takes the row away by untracking has to untrack
+   * this id — toggling the row's own would add the show to the list.
+   */
+  trackedId?: string
 }
 
 export interface TrackingListResult {

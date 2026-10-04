@@ -351,14 +351,23 @@ interface SimklPlannedPayload {
  * invented: a row that cannot be opened is worse than a row that is not
  * there, and now the count says how often that happens.
  */
+const STRICT = { strictBody: true } as const
+
 async function fetchSimklPlanned(
   priority: TaskPriority
 ): Promise<{ entries: PlannedEntry[]; unmapped: number }> {
   if (!simklCredentials().accessToken) return { entries: [], unmapped: 0 }
   const [movies, shows, anime] = await Promise.all([
-    simklRequest<SimklPlannedPayload>('/sync/all-items/movies/plantowatch', {}, priority),
-    simklRequest<SimklPlannedPayload>('/sync/all-items/shows/plantowatch', {}, priority),
-    simklRequest<SimklPlannedPayload>('/sync/all-items/anime/plantowatch', {}, priority)
+    // Strict about the body, all three. A list cut off part way would read
+    // as an empty one, and an empty list from a service that answered is
+    // exactly what the removal rule acts on: every title this app pulled
+    // from it would be taken off the plan. It would then be recorded as
+    // read, and not looked at again until Simkl's stamps moved or a day had
+    // passed (watchSync.ts). Cut off, it is an error, and an error is never
+    // an answer.
+    simklRequest<SimklPlannedPayload>('/sync/all-items/movies/plantowatch', {}, priority, STRICT),
+    simklRequest<SimklPlannedPayload>('/sync/all-items/shows/plantowatch', {}, priority, STRICT),
+    simklRequest<SimklPlannedPayload>('/sync/all-items/anime/plantowatch', {}, priority, STRICT)
   ])
   let unmapped = 0
   const out: PlannedEntry[] = []

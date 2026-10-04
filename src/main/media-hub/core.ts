@@ -1401,7 +1401,14 @@ export function homeDetailWants(input: {
   /** Which season of that show a later season is; only asked when
    *  historyIdOf differs from the item's own id. */
   seasonOf: (item: TrackedItem) => number
-}): { wanted: HomeDetailWant[]; seasonCount: Map<string, number> } {
+}): {
+  wanted: HomeDetailWant[]
+  seasonCount: Map<string, number>
+  /** show id -> the tracked later season it was asked for on behalf of.
+   *  The show itself is not on the list, and whatever takes its Continue
+   *  Watching card away has to act on the title that is. */
+  onBehalfOf: Map<string, string>
+} {
   const startedIds = new Set(input.history.map((entry) => String(entry.id)))
   const wanted: HomeDetailWant[] = []
   const asked = new Set<string>()
@@ -1418,7 +1425,9 @@ export function homeDetailWants(input: {
       want(item.type, id, id)
     }
   }
+  const trackedIds = new Set(input.tracked.map((item) => String(item.id)))
   const seasonCount = new Map<string, number>()
+  const onBehalfOf = new Map<string, string>()
   for (const item of input.tracked) {
     const id = String(item.id)
     const showId = input.historyIdOf(item)
@@ -1432,9 +1441,60 @@ export function homeDetailWants(input: {
       }
     }
     seasonCount.set(id, episodes.size)
-    if (episodes.size > 0) want(item.type, showId, null)
+    // Not when the season also has rows under its own id (written before
+    // the show was grouped, or played from its own page): it has a detail
+    // and a card of its own already, and the show's would be a second tile
+    // for the same thing.
+    if (episodes.size === 0 || startedIds.has(id)) continue
+    want(item.type, showId, null)
+    if (!trackedIds.has(showId) && !onBehalfOf.has(showId)) onBehalfOf.set(showId, id)
   }
-  return { wanted, seasonCount }
+  return { wanted, seasonCount, onBehalfOf }
+}
+
+/**
+ * How many regular, aired episodes of each started tracked show have been
+ * watched — what plannedList reads to tell "only a special watched" (still
+ * plan to watch) from "in progress". The same episodes continueWatchingList
+ * counts, so the two rows are each other's complement.
+ *
+ * `fetched` is index-aligned with `wanted` (a lookup that failed is null),
+ * which is what lets a count be filed under the TRACKED id when metadata
+ * answers under another one.
+ *
+ * No count at all is an answer too, and plannedList leaves such a show out
+ * of the row: a lookup that failed, and a detail with no episodes — which
+ * is metadata that could not be fetched and came back as its catalog
+ * stand-in, not a show with nothing to count. Zero read off that would file
+ * a show somebody is half way through under Plan to Watch until the real
+ * answer arrived.
+ */
+export function homeWatchedCounts(input: {
+  wanted: readonly HomeDetailWant[]
+  fetched: readonly (CatalogItem | null | undefined)[]
+  /** homeDetailWants' seasonCount: a later season's viewings under its show. */
+  seasonCount: ReadonlyMap<string, number>
+  history: HistoryEntry[]
+}): Map<string, number> {
+  const startedIds = new Set(input.history.map((entry) => String(entry.id)))
+  const counts = new Map<string, number>()
+  for (const [id, count] of input.seasonCount) {
+    // A later season with rows under its own id as well is counted below,
+    // once its own detail is in hand.
+    if (!startedIds.has(id)) counts.set(id, count)
+  }
+  input.fetched.forEach((detail, index) => {
+    const countFor = input.wanted[index]?.countFor
+    if (!detail || !countFor) return
+    const regular = (detail.videos || []).filter((v) => isRegularEpisode(v) && hasAired(v))
+    const underShow = input.seasonCount.get(countFor) ?? 0
+    if (!regular.length && !underShow) return
+    counts.set(
+      countFor,
+      Math.max(episodeWatchState(regular, input.history, detail.id).watchedCount, underShow)
+    )
+  })
+  return counts
 }
 
 /**

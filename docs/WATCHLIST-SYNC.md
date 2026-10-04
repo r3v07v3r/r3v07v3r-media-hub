@@ -302,16 +302,18 @@ under. Once a week the fetch that is due anyway is whole again, in case an
 incremental answer left something out. A kind Simkl gives no stamp for is
 read once a day, not on every pass. If the activities request fails,
 nothing is fetched and it is tried again after a pause that lengthens up to
-an hour; a 401 or 403
-stops the catch-up's own Simkl requests until the account is linked again
-(the half-hourly background sync asks again every six hours, and the
-history pushes are separate and keep trying). A kind whose fetch or write
-fails waits out its own, longer, pause without holding up the others. A
-library answer that was cut off part way counts as a failure, not as an
-empty library. When Trakt or MAL is connected, the pull also runs at most
-every ten minutes on its own, and at once after a fresh link. Anime waits
-until the catalog has been organised into its seasons, and is asked for
-again a few minutes later.
+an hour; a 401 or 403 stops the catch-up's own Simkl requests until this
+device is linked again or six hours have passed, whichever comes first (the
+half-hourly background sync asks again every six hours too, and the history
+pushes are separate and keep trying). A kind whose fetch or write fails
+waits out its own, longer, pause without holding up the others, and a kind
+that was fetched but could not be placed in full (an id lookup nobody could
+answer) is left ten minutes. Those pauses belong to the account and profile
+that earned them. A library answer, or a plan-to-watch list, that was cut
+off part way counts as a failure, never as an empty one. When Trakt or MAL
+is connected, the pull also runs at most every ten minutes on its own, and
+at once after a fresh link. Anime waits until the catalog has been
+organised into its seasons, and is asked for again a few minutes later.
 
 **It only ever adds.** It writes viewings this device has no record of and
 never removes one, however the Simkl library looks. A viewing already held

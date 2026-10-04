@@ -56,10 +56,7 @@ import {
 } from '../../shared/media-hub/reconcileQueue'
 import {
   applyCadence,
-  episodeWatchState,
   groupRecommendationRails,
-  hasAired,
-  isRegularEpisode,
   rankPersonalizedRecommendationsScored,
   watchCadenceProfile
 } from '../../shared/media-hub/catalog-logic'
@@ -72,7 +69,13 @@ import {
   storeRecommendations,
   SERVED_COUNT
 } from './recommendations'
-import { airingStatus, continueWatchingList, homeDetailWants, plannedList } from './core'
+import {
+  airingStatus,
+  continueWatchingList,
+  homeDetailWants,
+  homeWatchedCounts,
+  plannedList
+} from './core'
 import { catalogData, metadata } from './catalog'
 import { animeGroupingReady, resolveAnimeGroupTarget } from './animeSeasons'
 import { catchUpFromServices } from './simklCatchUp'
@@ -2178,7 +2181,7 @@ export function registerTrackingIpc(): void {
     // time, each a 24-hour cache entry — is what kept Home waiting tens of
     // seconds on a long list. See tracking:list above for the bound and the
     // shared coalescing.
-    const { wanted, seasonCount } = homeDetailWants({
+    const { wanted, seasonCount, onBehalfOf } = homeDetailWants({
       tracked,
       history,
       historyIdOf,
@@ -2186,27 +2189,9 @@ export function registerTrackingIpc(): void {
     })
     const fetched = await mapWithLimit(wanted, (x) => metadata(x.type, x.id, 'visible'))
     const details = fetched.filter((x): x is CatalogItem => Boolean(x))
-    // Index-aligned with `wanted` until the filter above. The same episodes
-    // continueWatchingList counts — regular and aired — so the two rows are
-    // each other's complement.
-    const watchedRegularCount = new Map<string, number>()
-    for (const [id, count] of seasonCount) {
-      // A later season with rows under its own id as well (written before
-      // the show was grouped) is counted below, once its detail is in hand.
-      if (!startedIds.has(id)) watchedRegularCount.set(id, count)
-    }
-    fetched.forEach((detail, index) => {
-      const countFor = wanted[index].countFor
-      if (!detail || !countFor) return
-      const regular = (detail.videos || []).filter((v) => isRegularEpisode(v) && hasAired(v))
-      watchedRegularCount.set(
-        countFor,
-        Math.max(
-          episodeWatchState(regular, history, detail.id).watchedCount,
-          seasonCount.get(countFor) ?? 0
-        )
-      )
-    })
+    // Index-aligned with `wanted` until the filter above, which is what the
+    // counts are read off — see homeWatchedCounts.
+    const watchedRegularCount = homeWatchedCounts({ wanted, fetched, seasonCount, history })
     // A title a watchlist pull added arrives as a name and a year; the
     // catalog index usually has the artwork.
     const posters = new Map<string, string>()
@@ -2220,7 +2205,14 @@ export function registerTrackingIpc(): void {
     return {
       tracked,
       updates: db.trackedUpdates(details),
-      continueWatching: continueWatchingList(details, history).slice(0, 18),
+      continueWatching: continueWatchingList(details, history)
+        .slice(0, 18)
+        // A show that is here only because a later season of it is on the
+        // list says which season that is — see ContinueWatchingEntry.trackedId.
+        .map((row) => {
+          const trackedId = onBehalfOf.get(String(row.id))
+          return trackedId ? { ...row, trackedId } : row
+        }),
       planned: plannedList({ tracked, startedIds, historyIdOf, watchedRegularCount, posters }),
       recommendations,
       recommendationReasons,
