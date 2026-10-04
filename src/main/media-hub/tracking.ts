@@ -63,6 +63,7 @@ import {
   rankPersonalizedRecommendationsScored,
   watchCadenceProfile
 } from '../../shared/media-hub/catalog-logic'
+import { watchedLaterSeasons } from '../../shared/media-hub/serviceIds'
 import {
   abandonedIds,
   liveExclusions,
@@ -1382,7 +1383,13 @@ export function registerTrackingIpc(): void {
       newEpisodeCount: newEpisodesById.get(String(item.id)) || 0,
       airing: airingById.get(String(item.id)) || ''
     }))
-    return { tracked, history, plannedSources: plannedSources() }
+    return {
+      tracked,
+      history,
+      plannedSources: plannedSources(),
+      // Where a later season's card finds its episodes: under the show.
+      laterSeasons: watchedLaterSeasons(history, animeSiblingsWhenGrouped())
+    }
   })
 
   /**

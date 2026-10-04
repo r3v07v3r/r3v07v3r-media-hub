@@ -400,6 +400,19 @@ const COMPLETED_SQL =
   ` ELSE (${WATCHED_EPISODES_SQL}) >= catalog_index.aired_episodes END)`
 
 /**
+ * Which anime rows are a later season of a merged show, and where: the show
+ * its viewings are kept under and the season there (animeSeasons.ts's
+ * laterSeasonLookup — the grouping is not something this file knows).
+ *
+ * COMPLETED_SQL counts the rows under a row's own id, and such a row has
+ * none, so asked that way it is never complete. indexByIds and indexQuery
+ * take this to count its `completedIds` membership where the rows are. The
+ * hideWatched/hideCompleted FILTERS are not corrected by it: they run inside
+ * the query, still on the row's own id.
+ */
+export type LaterSeasonLookup = (id: string) => { id: string; season: number } | null
+
+/**
  * The ORDER BY for one sort key.
  *
  * `rank, id` is appended to every one of them, and it is not decoration.
@@ -817,7 +830,7 @@ export interface MediaHubDatabase {
   /** One filtered, sorted, paged slice of the library, plus how many titles
    *  match the filters in total. See indexWhere/indexOrderBy for how each
    *  clause maps onto the in-memory filter it reproduces. */
-  indexQuery(query: CatalogQuery): CatalogQueryResult
+  indexQuery(query: CatalogQuery, seasonOf?: LaterSeasonLookup): CatalogQueryResult
   /** Titles of one kind whose name contains every word of `query`, best
    *  match first — the local half of catalog:search. This is what makes a
    *  title the crawl has already seen findable with no request at all,
@@ -834,7 +847,10 @@ export interface MediaHubDatabase {
    *  Stuff, the Planned row) read the index instead of scanning a
    *  loaded array, so a tracked title stays visible however small the
    *  candidate pool becomes and however deep the index grows. */
-  indexByIds(ids: readonly string[]): { items: CatalogItem[]; completedIds: string[] }
+  indexByIds(
+    ids: readonly string[],
+    seasonOf?: LaterSeasonLookup
+  ): { items: CatalogItem[]; completedIds: string[] }
   /** Which of these ids the index already holds for one kind — the
    *  deep-scan skip set. A cheap id-only projection rather than
    *  indexByIds because the caller wants membership, not rows. */
@@ -916,6 +932,7 @@ interface PreparedQueries {
   indexClearGenres: StatementSync
   indexPutGenre: StatementSync
   indexCount: StatementSync
+  seasonWatchedCount: StatementSync
   indexList: StatementSync
   facetGenres: StatementSync
   facetYears: StatementSync
@@ -1398,6 +1415,12 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
       'INSERT OR IGNORE INTO catalog_index_genre(id,kind,genre) VALUES(?,?,?)'
     ),
     indexCount: sql.prepare('SELECT COUNT(*) AS n FROM catalog_index WHERE kind=?'),
+    // WATCHED_EPISODES_SQL for ONE season of a title. No `season > 0`: it is
+    // only ever asked about a season of 2 or later (see rowCompleted).
+    seasonWatchedCount: sql.prepare(
+      `SELECT COUNT(DISTINCT episode) AS n FROM watch_history
+       WHERE profile_id=? AND content_id=? AND season=? AND episode IS NOT NULL`
+    ),
     // Facets deliberately exclude the empty/absent values, matching what the
     // dropdowns did over the loaded array: `if (g)`, `if (item.releaseYear)`,
     // `if (item.status)`. An "unknown" option would filter to nothing.
@@ -1472,6 +1495,21 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
     for (const r of q.titlePlays.all(currentProfileId, contentId)) take(r)
     for (const r of q.titleHistory.all(currentProfileId, contentId)) take(r)
     return rows.sort((a, b) => b.watchedAt.localeCompare(a.watchedAt))
+  }
+
+  /** Whether an index row read with `COMPLETED_SQL AS completed` (and its
+   *  `aired_episodes`) is complete — the SQL's own answer, except for a
+   *  later season of a merged anime, which is counted where its viewings
+   *  are: the same comparison against the same aired count, over that one
+   *  season of its show. See LaterSeasonLookup. */
+  function rowCompleted(row: Row, seasonOf: LaterSeasonLookup | undefined): boolean {
+    const part = seasonOf && row.kind === 'anime' ? seasonOf(String(row.id)) : null
+    if (!part) return Number(row.completed) === 1
+    const aired = Number(row.aired_episodes)
+    if (!Number.isFinite(aired) || aired <= 0) return false
+    const watched = q.seasonWatchedCount.get(currentProfileId, part.id, part.season) as
+      Row | undefined
+    return Number(watched?.n ?? 0) >= aired
   }
 
   const db: MediaHubDatabase = {
@@ -2604,7 +2642,7 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
       }
     },
 
-    indexByIds(ids) {
+    indexByIds(ids, seasonOf) {
       // Chunked: SQLite's bound-parameter ceiling is generous but a
       // watched-history id list is unbounded in principle, and 400 per
       // statement keeps every statement comfortably small.
@@ -2631,7 +2669,7 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
           const rows = sql
             .prepare(
               `SELECT id,kind,title,year,rating,runtime_min,status,poster,background,logo,description,
-                      total_seasons,total_episodes,simkl_id,grouped_ids,
+                      total_seasons,total_episodes,aired_episodes,simkl_id,grouped_ids,
                       (SELECT group_concat(genre, char(31)) FROM catalog_index_genre g
                         WHERE g.id = catalog_index.id AND g.kind = catalog_index.kind) AS genres,
                       ${COMPLETED_SQL} AS completed
@@ -2640,7 +2678,7 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
             .all(params) as Row[]
           for (const row of rows) {
             out.push(indexRowToItem(row, String(row.kind) as MediaKind, splitGenres(row.genres)))
-            if (Number(row.completed) === 1) completedIds.push(String(row.id))
+            if (rowCompleted(row, seasonOf)) completedIds.push(String(row.id))
           }
         }
         return { items: out, completedIds }
@@ -2710,7 +2748,7 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
       return found
     },
 
-    indexQuery(query) {
+    indexQuery(query, seasonOf) {
       // Built and prepared per call rather than kept in `q`, because the
       // shape genuinely varies: eight optional filters is 256 combinations,
       // and precompiling them all to avoid one prepare on a keystroke-driven
@@ -2729,7 +2767,7 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
         const rows = sql
           .prepare(
             `SELECT id,kind,title,year,rating,runtime_min,status,poster,background,logo,description,
-                    total_seasons,total_episodes,simkl_id,grouped_ids,
+                    total_seasons,total_episodes,aired_episodes,simkl_id,grouped_ids,
                     (SELECT group_concat(genre, char(31)) FROM catalog_index_genre g
                       WHERE g.id = catalog_index.id AND g.kind = catalog_index.kind) AS genres,
                     ${COMPLETED_SQL} AS completed
@@ -2741,7 +2779,7 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
           items: rows.map((row) => indexRowToItem(row, query.kind, splitGenres(row.genres))),
           total,
           completedIds: rows
-            .filter((row) => Number(row.completed) === 1)
+            .filter((row) => rowCompleted(row, seasonOf))
             .map((row) => String(row.id))
         }
       } catch (error) {

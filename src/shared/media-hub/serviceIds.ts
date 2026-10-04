@@ -201,6 +201,41 @@ export function animeSeasonOf(
 }
 
 /**
+ * The later seasons somebody has viewings of, keyed by the season's OWN id:
+ * the show those viewings are kept under, and the season they are at there.
+ *
+ * A card can name a later season by its own id (a plan card a watchlist
+ * pull added), and nothing is kept under that id — see
+ * animeHistoryCoordinates below. This is what lets such a card find its
+ * episodes: the rows of `id` at `season`. A season nobody has started is
+ * left out, since with no rows to find its card reads as not started
+ * either way.
+ *
+ * `siblingsOf` is left out while the catalog has not been grouped, for the
+ * reason toSimklAnimeEpisode gives; the answer is then empty.
+ */
+export function watchedLaterSeasons(
+  history: readonly { id: string; season?: number | null; episode?: number | null }[],
+  siblingsOf: AnimeSiblings | undefined
+): Record<string, { id: string; season: number }> {
+  const seasons: Record<string, { id: string; season: number }> = {}
+  if (!siblingsOf) return seasons
+  const asked = new Set<string>()
+  for (const entry of history) {
+    const id = String(entry?.id ?? '')
+    const season = entry?.season
+    if (!id.startsWith('kitsu:') || !isCount(season) || season < 2) continue
+    if (typeof entry.episode !== 'number' || !Number.isFinite(entry.episode)) continue
+    const key = `${id}:${season}`
+    if (asked.has(key)) continue
+    asked.add(key)
+    const member = siblingsOf(id)?.[season - 2]
+    if (member) seasons[String(member)] = { id, season }
+  }
+  return seasons
+}
+
+/**
  * Where an episode named under `id` is KEPT here: for a later season named
  * by its own id, under its show at the season it is there; for anything
  * else, where it was named.

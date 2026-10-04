@@ -709,6 +709,20 @@ export function laterSeasonOf(catalogId: string): { id: string; season: number }
 }
 
 /**
+ * laterSeasonOf for a list of ids, or nothing while the catalog is not
+ * grouped. The grouping marker is a database read, and asked once here
+ * rather than once per id: My Stuff asks about every watched title at once.
+ */
+export function laterSeasonLookup():
+  ((catalogId: string) => { id: string; season: number } | null) | undefined {
+  if (!animeGroupingReady()) return undefined
+  return (catalogId) => {
+    const id = String(catalogId)
+    return id.startsWith('kitsu:') ? animeSeasonOf(id, resolveAnimeGroupTarget) : null
+  }
+}
+
+/**
  * Builds the full multi-season episode list for a grouped anime's detail
  * page. canonical.groupedIds (set by groupAnimeCatalog) gives the sibling
  * ids in season order; the canonical item itself is always season 1 of the

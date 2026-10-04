@@ -71,6 +71,7 @@ import {
   invalidateAnimeGroupIndex,
   kitsuRealEpisodes,
   groupedVideosAreComplete,
+  laterSeasonLookup,
   laterSeasonOf
 } from './animeSeasons'
 import { omdbRottenTomatoesRating } from './omdb'
@@ -1701,7 +1702,8 @@ export function registerCatalogIpc(): void {
         ? payload.ids.filter((id): id is string => typeof id === 'string')
         : []
       if (!ids.length) return { items: [], completedIds: [] }
-      return getDatabase().indexByIds(ids)
+      // A later season's card is complete when that season of its show is.
+      return getDatabase().indexByIds(ids, laterSeasonLookup())
     }
   )
 
@@ -1724,7 +1726,9 @@ export function registerCatalogIpc(): void {
   // what is already there.
   handle<CatalogQuery, CatalogQueryResult>(MEDIA_HUB_CHANNELS.catalogQuery, async (_e, query) => {
     if (!isValidCatalogKind(query?.kind)) throw new Error('Unsupported catalog.')
-    return getDatabase().indexQuery(query)
+    // The index keeps a row for every season of a merged anime, so the
+    // grid shows later seasons as tiles too; same correction as byIds.
+    return getDatabase().indexQuery(query, query.kind === 'anime' ? laterSeasonLookup() : undefined)
   })
 
   handle<CatalogFacetsPayload, CatalogFacets>(

@@ -725,6 +725,17 @@ export interface TrackingListResult {
    * local-only, which is the ordinary case for anything marked here.
    */
   plannedSources: Record<string, PlannedServiceId[]>
+  /**
+   * The later seasons of merged anime that have viewings, keyed by the
+   * season's own id: the show the viewings are kept under, and the season
+   * there (see watchedLaterSeasons in serviceIds.ts).
+   *
+   * `history` holds nothing under a later season's own id, so a card that
+   * names one — a plan card a watchlist pull added — would read as not
+   * started from its own rows however much of it was watched. This is
+   * where its rows are.
+   */
+  laterSeasons: Record<string, { id: string; season: number }>
 }
 
 /** Services with both a login in this app and a personal list to read.

@@ -354,6 +354,20 @@ keeps using it, and nothing else does.
   marked, a bookmark saved or a scrobble sent under a later season's id is
   kept under the show, at the season that id is there. The card's watched
   and not watched act on that one season of the show.
+- **The card reads that season too.** Its watched and completed badge and
+  its progress are counted from the show's viewings at that season, since
+  none are kept under its own id: `tracking:list` answers with where each
+  started later season's viewings are (`laterSeasons`), and the index counts
+  a later season's completion there as well. On the desktop this covers
+  every grid such a card appears in — the plan, My Stuff, search results and
+  the Anime library, whose index keeps a row for every season. The side
+  panel names the episode Play will start, from the same viewings.
+
+One thing does not follow it yet. The library's Hide watched and Hide
+completed filters are applied inside the index query, by the row's own id,
+so a finished later season is marked as watched in the Anime library but is
+not filtered out of it. My Stuff filters after the badge is worked out, and
+does hide it.
 
 Home follows the same split. A later season on the plan with nothing of it
 watched is in Plan to Watch as its own card. Once an episode of it has been
