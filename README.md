@@ -73,7 +73,9 @@ trending feed (either one alone fills the grid), anime from Kitsu. No key is req
   the rest of a film's collection, better similar-title lists, and per-season episode data for
   grouped anime. **With an OMDb key**: the Rotten Tomatoes score.
 - **Anime franchises in story order.** An anime's page lays out its franchise (prequels, the main
-  or full story, side stories, spin-offs, recaps, sequels) from Kitsu, with no key needed.
+  or full story, side stories, spin-offs, recaps, sequels) from Kitsu, with no key needed. A show
+  merged from several seasons is treated as one title: what comes before it is what precedes its
+  first season, what comes after is what follows its last, and its own seasons are not listed.
 
 ### 2. Choose a source — needs TorBox or a Jellyfin server
 
