@@ -20,8 +20,9 @@
 // Three things it is careful about, because each was a way to do harm:
 //
 //  - Simkl suspends clients that poll the whole library without asking
-//    /sync/activities first. Every library fetch is behind that gate, and
-//    when the gate itself fails the pass fetches nothing and backs off.
+//    /sync/activities first. Every library fetch is behind that gate — the
+//    watchlist pull's Simkl lists included, see watchSync.ts — and when the
+//    gate itself fails the pass fetches nothing and backs off.
 //  - The pass awaits the network many times, and switching profile or
 //    Simkl account during it is ordinary. After every wait it re-checks
 //    both, and stops writing the moment either moved.
@@ -49,6 +50,7 @@ import {
   type SimklLibraryKind,
   type SimklLibraryTitle
 } from './simklCatchUpRules'
+import { pullPlannedGated, type SimklGate } from './watchSync'
 
 /** What the pass needs from the database — the real one, or a test's. */
 export type CatchUpDb = Pick<
@@ -82,8 +84,10 @@ export interface CatchUpDeps {
   activities(): Promise<unknown>
   /** One kind's /sync/all-items payload, raw. */
   library(kind: SimklLibraryKind): Promise<unknown>
-  /** The watchlist pull (watchlists.syncPlannedFromServices). */
-  syncPlanned(): Promise<{ added: number; removed: number }>
+  /** The watchlist pull, behind the gate this pass has just read
+   *  (watchSync.pullPlannedGated): Simkl's lists are fetched only if they
+   *  moved since they were last read, by this pass or the half-hourly job. */
+  syncPlanned(gate: SimklGate): Promise<{ added: number; removed: number }>
   /** Ids whose un-plan is still owed to a service (watchlists.idsAwaitingRemoval). */
   awaitingRemoval(): ReadonlySet<string>
   /** idBridge.kitsuIdLookup — `answered` is false when nobody could be asked. */
@@ -290,6 +294,8 @@ async function catchUpPass(
   // --- the activities gate -------------------------------------------------
   const startedAt = deps.now()
   let stamps: SimklActivityStamps | null = null
+  /** When the stamps were in hand — see SimklGate.readAt. */
+  let stampsAt = 0
   if (account !== memory.activitiesBackoffAccount) {
     // The backoff belongs to the account that earned it. Linking again
     // gives a new token, and a forced pass straight after must reach Simkl
@@ -303,6 +309,7 @@ async function catchUpPass(
   } else if (account && startedAt >= memory.activitiesBackoffUntil) {
     try {
       stamps = parseSimklActivities(await deps.activities())
+      stampsAt = deps.now()
       memory.activitiesFailures = 0
       memory.activitiesBackoffUntil = 0
       memory.signedOutAccount = ''
@@ -360,7 +367,11 @@ async function catchUpPass(
   if (simklMoved || ((marks.trakt || marks.mal) && pullDue)) {
     memory.lastPlannedAt = startedAt
     try {
-      const pulled = await deps.syncPlanned()
+      const pulled = await deps.syncPlanned({
+        stamps,
+        readAt: stampsAt,
+        error: report.error ?? (report.signedOut ? 'Simkl refused the sign-in.' : undefined)
+      })
       report.plannedAdded = pulled.added
       report.plannedRemoved = pulled.removed
     } catch (error) {
@@ -632,7 +643,18 @@ export async function catchUpFromServices(
     activities: () => simkl.simklActivities('visible'),
     // Large, and nobody is waiting on any one of them in particular.
     library: (kind) => simkl.simklLibrary(kind, 'background'),
-    syncPlanned: () => watchlists.syncPlannedFromServices('background'),
+    // Through the same record the half-hourly job keeps, so the two of
+    // them read Simkl's lists once per change, not once each.
+    syncPlanned: (gate) =>
+      pullPlannedGated(
+        {
+          db: getDatabase(),
+          account: settings.simklAccountMark,
+          syncPlanned: (options) => watchlists.syncPlannedFromServices('background', options),
+          now: () => Date.now()
+        },
+        gate
+      ),
     awaitingRemoval: watchlists.idsAwaitingRemoval,
     lookupKitsu: (service, value) => idBridge.kitsuIdLookup(service, value, 'background'),
     animeTarget: (kitsuId) => seasons.resolveAnimeGroupTarget(`kitsu:${kitsuId}`),
