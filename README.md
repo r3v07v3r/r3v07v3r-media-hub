@@ -246,6 +246,10 @@ over to its second face. It is where the installation is configured and watched:
   SubDL keys, the OpenSubtitles login and your language preferences. Trakt, MyAnimeList, the
   r3-cache device token and your room identity stay on the desktop. The code carries a one-time
   ticket rather than the secrets, is served once, and stops after three minutes.
+  Once linked, the phone's Home shows Continue Watching and a Plan to Watch row. They come from
+  your Simkl account, fetched by the phone each time the app opens or comes back to the front,
+  not read from the desktop. Shows Simkl lists as watching, and shows you play on the phone, are
+  added to the phone's own list.
 
 ## Quick start
 
@@ -437,7 +441,9 @@ Electron; playback in that build needs an mpv it can find: `MPV_PATH`, the copy 
 fetches into `resources/mpv-win` on Windows, or a standard Windows install.
 [`android/`](android/README.md) is one APK for phones and Android TV: the headless backend run on
 the device behind a small separate interface (`src/app-ui`, `npm run build:app`), with libmpv as
-the player. Party sync, chapters and subtitle search are not on its player screen yet.
+the player. Party sync, chapters and subtitle search are not on its player screen yet. Its Home
+catches up with Simkl's watched history (see [docs/WATCHLIST-SYNC.md](docs/WATCHLIST-SYNC.md));
+episodes watched on the phone are not yet taken into the desktop.
 
 ### What CI checks
 

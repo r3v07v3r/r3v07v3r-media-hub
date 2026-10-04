@@ -102,6 +102,14 @@ Settings → **Scan code**. The QR code is plain text, not a link, because it
 carries a decryption key and a link can be claimed by any installed app; the
 app's own scanner reads it. See `src/main/media-hub/devicePairingCore.ts`.
 
+Once linked, the phone catches up each time the app opens, comes back to the
+front, or is linked: it fetches your Plan to Watch list and Simkl's watched
+history from the services themselves, not from the desktop. Home then shows
+Continue Watching and Plan to Watch, and a title's Play starts at the next
+episode you have not watched. Shows Simkl lists as watching, and shows you
+play on the phone, are added to the phone's own list. It only adds; see
+`docs/WATCHLIST-SYNC.md`.
+
 ## Debugging
 
 - `adb logcat -s R3Backend` — the backend's own output.
@@ -112,4 +120,6 @@ app's own scanner reads it. See `src/main/media-hub/devicePairingCore.ts`.
 - Party sync, chapters, subtitle search and the other desktop player extras
   on the phone player screen: the backend supports them, the screen does not
   show them yet.
+- Episodes watched on the phone reaching the desktop's own history: the catch-up
+  runs from Simkl into the phone only.
 - 32-bit devices (`armeabi-v7a`): needs Termux's `arm` Node staged the same way.
