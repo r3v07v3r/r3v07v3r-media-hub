@@ -80,6 +80,22 @@ export interface BackupFile {
    * restore falls back to the first declared profile rather than staying put.
    */
   readonly activeProfileId?: string
+  /**
+   * The grouping the anime rows were filed under when the backup was taken
+   * (the ledger — see animeRegroup.ts).
+   *
+   * A merged anime's history is addressed by the id fronting the show and
+   * the season's position in it, and both can have changed by the time the
+   * file is restored. Restoring puts this back as the ledger, so the next
+   * comparison against the catalog moves the restored rows to where the
+   * grouping in force now has them. Without it they would be read by today's
+   * grouping at yesterday's addresses.
+   *
+   * Optional: an install that never grouped has none, and neither does a
+   * backup from before the ledger. Such a file's rows are taken to be filed
+   * the way this install's are, which is the only thing that can be assumed.
+   */
+  readonly animeGroups?: unknown[]
   readonly tables: Record<string, Row[]>
 }
 
@@ -133,6 +149,7 @@ export function writeBackup(
     appVersion: options.appVersion,
     profiles,
     activeProfileId: options.activeProfileId,
+    ...animeGroupsOf(sql),
     tables
   }
 
@@ -143,6 +160,19 @@ export function writeBackup(
   const temp = `${filePath}.partial`
   fs.writeFileSync(temp, JSON.stringify(backup), 'utf8')
   fs.renameSync(temp, filePath)
+}
+
+/** The ledger as the file carries it, or nothing when none is recorded. */
+function animeGroupsOf(sql: DatabaseSync): { animeGroups?: unknown[] } {
+  const row = sql.prepare('SELECT groups_json FROM anime_group_ledger WHERE id=1').get() as
+    Row | undefined
+  if (!row) return {}
+  try {
+    const groups: unknown = JSON.parse(String(row.groups_json))
+    return Array.isArray(groups) ? { animeGroups: groups } : {}
+  } catch {
+    return {}
+  }
 }
 
 /** Reads and validates a backup file, throwing a message worth showing. */
@@ -283,6 +313,17 @@ export function restoreBackup(sql: DatabaseSync, backup: BackupFile): RestoreSum
         statement.run(...present.map((column) => (row as Row)[column] ?? null))
         restored[table]++
       }
+    }
+    // The grouping those rows are filed under, in the same transaction as
+    // the rows: see BackupFile.animeGroups. A file without one leaves the
+    // ledger here as it is.
+    if (Array.isArray(backup.animeGroups)) {
+      sql
+        .prepare(
+          `INSERT INTO anime_group_ledger(id,groups_json,recorded_at) VALUES(1,?,?)
+           ON CONFLICT(id) DO UPDATE SET groups_json=excluded.groups_json,recorded_at=excluded.recorded_at`
+        )
+        .run(JSON.stringify(backup.animeGroups), new Date().toISOString())
     }
     sql.exec('COMMIT')
   } catch (error) {

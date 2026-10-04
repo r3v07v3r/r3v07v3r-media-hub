@@ -12,6 +12,7 @@ import {
   type SQLOutputValue,
   type StatementSync
 } from 'node:sqlite'
+import type { AnimeGroupRecord, AnimeHistoryMove, HeldSeason } from './animeRegroup'
 import { readBackup, restoreBackup, writeBackup, type RestoreSummary } from './backup'
 import { migrate } from './migrations'
 import { logError } from './logger'
@@ -87,6 +88,14 @@ export interface ContentIdRemap {
   fromId: string
   toId: string
   season: number
+}
+
+/** What moveAnimeHistory put down, by table. */
+export interface AnimeRowsMoved {
+  history: number
+  plays: number
+  positions: number
+  ratings: number
 }
 
 /** Normalizes an arbitrary catalog-ish item into the shape we persist for tracked/watched rows. */
@@ -690,6 +699,49 @@ export interface MediaHubDatabase {
    */
   remapContentIds(mappings: ContentIdRemap[]): number
   /**
+   * The grouping the anime rows here are filed under, as last recorded by
+   * moveAnimeHistory — or null when none has been, which is every install
+   * until its first grouping pass after the table was added. See
+   * animeRegroup.ts.
+   */
+  animeGroupLedger(): AnimeGroupRecord[] | null
+  /**
+   * Moves anime watch history, plays and resume points to new coordinates,
+   * and ratings to new ids, in one transaction — and, when `ledger` is
+   * given, records it as the grouping the rows are now filed under in that
+   * same transaction.
+   *
+   * Every move is lifted out before any is put down. A regroup swaps
+   * seasons (2 becomes 3 while 3 becomes 2) and passes rows along a chain,
+   * and moved one at a time the first would land on rows the second has not
+   * yet taken away, and lose to them.
+   *
+   * What is put down never overwrites. A history row or a resume point
+   * already at the destination, and not itself moving, is the one the app
+   * has been reading; the arriving copy of the same episode is dropped. A
+   * play is dropped only when the same viewing is already there, to the
+   * instant (importWatched's rule).
+   *
+   * Across every profile unless a move names one, for remapContentIds's
+   * reason: where a member sits in its show is true for everybody. The
+   * planned rows are not touched: a later season stays on the plan under
+   * its own id, which names its entry at the service (WATCHLIST-SYNC.md).
+   *
+   * Returns how many rows of each kind landed.
+   */
+  moveAnimeHistory(
+    plan: { moves: AnimeHistoryMove[]; ratings?: { fromId: string; toId: string }[] },
+    ledger?: AnimeGroupRecord[]
+  ): AnimeRowsMoved
+  /**
+   * The rows held under an id that once fronted a whole show, by profile
+   * and season: only the profiles where some episode number is there under
+   * two seasons, which is what tells a whole show's rows from one entry's.
+   */
+  wholeShowRowsUnder(id: string): { profileId: string; seasons: HeldSeason[] }[]
+  /** Every Kitsu id any profile has history or plays under. */
+  animeHistoryIds(): string[]
+  /**
    * Folds every row keyed by `fromId` into `toId` — watch history, plays,
    * rating and plan, across every profile — keeping each row's type, season
    * and date. A destination row already there wins and the source copy
@@ -871,6 +923,20 @@ interface PreparedQueries {
   dropRemappedPlays: StatementSync
   remapRating: StatementSync
   dropRemappedRating: StatementSync
+  regroupProfiles: StatementSync
+  liftHistory: StatementSync
+  dropLiftedHistory: StatementSync
+  liftPlays: StatementSync
+  dropLiftedPlays: StatementSync
+  liftPositions: StatementSync
+  dropLiftedPositions: StatementSync
+  landHistory: StatementSync
+  landPlays: StatementSync
+  landPositions: StatementSync
+  heldSeasons: StatementSync
+  animeHistoryIds: StatementSync
+  animeGroupLedger: StatementSync
+  recordAnimeGroupLedger: StatementSync
   track: StatementSync
   lists: StatementSync
   createList: StatementSync
@@ -1004,6 +1070,31 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
 
   migrate(sql, defaultProfileId)
   let currentProfileId = defaultProfileId
+
+  // Where moveAnimeHistory holds rows between taking them from one place
+  // and putting them down in another. Temporary tables: this connection's
+  // own, and gone with it. Made here rather than on first use because a
+  // statement cannot be prepared against a table that does not exist yet.
+  sql.exec(`
+    CREATE TEMP TABLE regroup_history AS SELECT * FROM watch_history WHERE 0;
+    CREATE TEMP TABLE regroup_plays AS SELECT * FROM plays WHERE 0;
+    CREATE TEMP TABLE regroup_positions AS SELECT * FROM playback_positions WHERE 0;
+  `)
+  const CLEAR_REGROUP_STAGING = `
+    DELETE FROM temp.regroup_history;
+    DELETE FROM temp.regroup_plays;
+    DELETE FROM temp.regroup_positions;`
+  // Which rows one move takes. The same test for history, plays and resume
+  // points, which share these columns. A row with no episode is not an
+  // episode of anything and never moves. `@onto` is the move that puts
+  // everything an id holds on one season (see AnimeHistoryMove): never the
+  // specials, only season 1 where the id's rows are a whole show's, and not
+  // the rows already at the season it lands on.
+  const LIFTED = `content_id=@from AND profile_id=@profile
+          AND season IS NOT NULL AND episode IS NOT NULL
+          AND (@fromSeason IS NULL OR season=@fromSeason)
+          AND (@onto=0 OR (season>=1 AND (@onlyFirst=0 OR season=1)
+                           AND NOT (@from=@to AND season=@toSeason)))`
 
   // Reclaims rows nothing has read in a long time. `catalog_cache` had no
   // eviction at all before this — every distinct key (a stream resolution,
@@ -1282,6 +1373,86 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
        ON CONFLICT(profile_id,content_id) DO NOTHING`
     ),
     dropRemappedRating: sql.prepare('DELETE FROM ratings WHERE content_id=?'),
+    // The regroup set — see moveAnimeHistory. Each move is lifted into the
+    // staging tables already wearing its new coordinates, and deleted from
+    // where it was; the three `land` statements then put everything down at
+    // once. The same three things change together as in remapWatched above:
+    // the key is rebuilt (season cast to INTEGER first, or it reads '2.0'),
+    // metadata_json's own copy of the id is rewritten, and the type is
+    // anime. COALESCE(@toSeason, season) is "the season named, or the row's
+    // own when the move keeps seasons".
+    regroupProfiles: sql.prepare(
+      `SELECT profile_id FROM watch_history WHERE content_id=@from
+       UNION SELECT profile_id FROM plays WHERE content_id=@from
+       UNION SELECT profile_id FROM playback_positions WHERE content_id=@from`
+    ),
+    liftHistory: sql.prepare(
+      `INSERT INTO temp.regroup_history(profile_id,watch_key,content_id,type,title,season,episode,watched_at,metadata_json)
+       SELECT profile_id,
+              @to || ':' || CAST(CAST(COALESCE(@toSeason,season) AS INTEGER) AS TEXT) || ':' || CAST(episode AS TEXT),
+              @to,'anime',title,CAST(COALESCE(@toSeason,season) AS INTEGER),episode,watched_at,
+              json_set(metadata_json,'$.id',@to,'$.type','anime')
+         FROM watch_history
+        WHERE ${LIFTED}`
+    ),
+    dropLiftedHistory: sql.prepare(`DELETE FROM watch_history WHERE ${LIFTED}`),
+    // play_id travels with the play: it breaks ties in the newest-first
+    // order, and a moved play is the same play.
+    liftPlays: sql.prepare(
+      `INSERT INTO temp.regroup_plays(play_id,profile_id,content_id,type,title,season,episode,watched_at,metadata_json)
+       SELECT play_id,profile_id,@to,'anime',title,CAST(COALESCE(@toSeason,season) AS INTEGER),episode,watched_at,
+              json_set(metadata_json,'$.id',@to,'$.type','anime')
+         FROM plays
+        WHERE ${LIFTED}`
+    ),
+    dropLiftedPlays: sql.prepare(`DELETE FROM plays WHERE ${LIFTED}`),
+    liftPositions: sql.prepare(
+      `INSERT INTO temp.regroup_positions(profile_id,position_key,content_id,season,episode,position_seconds,duration_seconds,volume,updated_at)
+       SELECT profile_id,
+              @to || ':' || CAST(CAST(COALESCE(@toSeason,season) AS INTEGER) AS TEXT) || ':' || CAST(episode AS TEXT),
+              @to,CAST(COALESCE(@toSeason,season) AS INTEGER),episode,position_seconds,duration_seconds,volume,updated_at
+         FROM playback_positions
+        WHERE ${LIFTED}`
+    ),
+    dropLiftedPositions: sql.prepare(`DELETE FROM playback_positions WHERE ${LIFTED}`),
+    // `WHERE true` is SQLite's own requirement for an upsert fed by a
+    // SELECT: without it the parser reads ON CONFLICT as a join constraint.
+    landHistory: sql.prepare(
+      `INSERT INTO watch_history(profile_id,watch_key,content_id,type,title,season,episode,watched_at,metadata_json)
+       SELECT profile_id,watch_key,content_id,type,title,season,episode,watched_at,metadata_json
+         FROM temp.regroup_history WHERE true
+       ON CONFLICT(profile_id,watch_key) DO NOTHING`
+    ),
+    landPlays: sql.prepare(
+      `INSERT INTO plays(play_id,profile_id,content_id,type,title,season,episode,watched_at,metadata_json)
+       SELECT s.play_id,s.profile_id,s.content_id,s.type,s.title,s.season,s.episode,s.watched_at,s.metadata_json
+         FROM temp.regroup_plays s
+        WHERE NOT EXISTS (
+          SELECT 1 FROM plays p WHERE p.profile_id=s.profile_id AND p.content_id=s.content_id
+            AND p.season IS s.season AND p.episode IS s.episode AND p.watched_at=s.watched_at
+        )`
+    ),
+    landPositions: sql.prepare(
+      `INSERT INTO playback_positions(profile_id,position_key,content_id,season,episode,position_seconds,duration_seconds,volume,updated_at)
+       SELECT profile_id,position_key,content_id,season,episode,position_seconds,duration_seconds,volume,updated_at
+         FROM temp.regroup_positions WHERE true
+       ON CONFLICT(profile_id,position_key) DO NOTHING`
+    ),
+    heldSeasons: sql.prepare(
+      `SELECT profile_id,season,COUNT(*) AS episodes,MIN(episode) AS first,MAX(episode) AS last
+         FROM watch_history
+        WHERE content_id=@from AND season IS NOT NULL AND episode IS NOT NULL
+        GROUP BY profile_id,season ORDER BY profile_id,season`
+    ),
+    animeHistoryIds: sql.prepare(
+      `SELECT content_id FROM watch_history WHERE content_id LIKE 'kitsu:%'
+       UNION SELECT content_id FROM plays WHERE content_id LIKE 'kitsu:%'`
+    ),
+    animeGroupLedger: sql.prepare('SELECT groups_json FROM anime_group_ledger WHERE id=1'),
+    recordAnimeGroupLedger: sql.prepare(
+      `INSERT INTO anime_group_ledger(id,groups_json,recorded_at) VALUES(1,@json,@now)
+       ON CONFLICT(id) DO UPDATE SET groups_json=excluded.groups_json,recorded_at=excluded.recorded_at`
+    ),
     // No ON CONFLICT clause at all, on purpose: an existing row means this
     // person already said what they thought, here, and the import does not
     // get an opinion about that.
@@ -2185,6 +2356,133 @@ export function createDatabase(filename: string, defaultProfileId: string): Medi
         return moved
       } catch (error) {
         return fail(error as Error) as unknown as number
+      }
+    },
+
+    animeGroupLedger() {
+      try {
+        const row = q.animeGroupLedger.get() as Row | undefined
+        if (!row) return null
+        const groups = parse<AnimeGroupRecord[] | null>(String(row.groups_json), null)
+        return Array.isArray(groups) ? groups : null
+      } catch (error) {
+        return fail(error as Error)
+      }
+    },
+
+    moveAnimeHistory(plan, ledger) {
+      try {
+        const moves = Array.isArray(plan?.moves) ? plan.moves : []
+        const ratings = Array.isArray(plan?.ratings) ? plan.ratings : []
+        const moved: AnimeRowsMoved = { history: 0, plays: 0, positions: 0, ratings: 0 }
+        if (!moves.length && !ratings.length && !ledger) return moved
+        const seasonOf = (value: number | null): number | null | undefined =>
+          value === null ? null : Number.isInteger(value) && value >= 0 ? value : undefined
+        durable(() => {
+          sql.exec('BEGIN')
+          try {
+            sql.exec(CLEAR_REGROUP_STAGING)
+            for (const move of moves) {
+              const from = String(move.fromId || '')
+              const to = String(move.toId || '')
+              const fromSeason = seasonOf(move.fromSeason)
+              const toSeason = seasonOf(move.toSeason)
+              if (!from || !to || fromSeason === undefined || toSeason === undefined) continue
+              // One season cannot "keep its season" somewhere else and mean
+              // anything other than naming it, and a move to where the rows
+              // already are is no move.
+              if (fromSeason !== null && toSeason === null) continue
+              if (from === to && (toSeason === null || fromSeason === toSeason)) continue
+
+              const onto = fromSeason === null && toSeason !== null
+              const split = onto
+                ? new Set(
+                    q.remapSplitProfiles.all({ from }).map((row) => String((row as Row).profile_id))
+                  )
+                : null
+              const profiles = move.profileId
+                ? [String(move.profileId)]
+                : q.regroupProfiles.all({ from }).map((row) => String((row as Row).profile_id))
+              for (const profile of profiles) {
+                const taken = {
+                  from,
+                  to,
+                  fromSeason,
+                  toSeason,
+                  profile,
+                  onto: onto ? 1 : 0,
+                  onlyFirst: split?.has(profile) ? 1 : 0
+                }
+                q.liftHistory.run(taken)
+                q.dropLiftedHistory.run(taken)
+                q.liftPlays.run(taken)
+                q.dropLiftedPlays.run(taken)
+                q.liftPositions.run(taken)
+                q.dropLiftedPositions.run(taken)
+              }
+            }
+            moved.history = Number(q.landHistory.run().changes || 0)
+            moved.plays = Number(q.landPlays.run().changes || 0)
+            moved.positions = Number(q.landPositions.run().changes || 0)
+
+            for (const rating of ratings) {
+              const from = String(rating.fromId || '')
+              const to = String(rating.toId || '')
+              if (!from || !to || from === to) continue
+              moved.ratings += Number(q.remapRating.run({ from, to }).changes || 0)
+              q.dropRemappedRating.run(from)
+            }
+            if (ledger) {
+              q.recordAnimeGroupLedger.run({
+                json: JSON.stringify(ledger),
+                now: new Date().toISOString()
+              })
+            }
+            sql.exec(CLEAR_REGROUP_STAGING)
+            sql.exec('COMMIT')
+          } catch (error) {
+            sql.exec('ROLLBACK')
+            throw error
+          }
+        })
+        return moved
+      } catch (error) {
+        return fail(error as Error)
+      }
+    },
+
+    wholeShowRowsUnder(id) {
+      try {
+        const from = String(id)
+        const split = new Set(
+          q.remapSplitProfiles.all({ from }).map((row) => String((row as Row).profile_id))
+        )
+        const held = new Map<string, HeldSeason[]>()
+        if (!split.size) return []
+        for (const r of q.heldSeasons.all({ from })) {
+          const row = r as Row
+          const profileId = String(row.profile_id)
+          if (!split.has(profileId)) continue
+          const seasons = held.get(profileId) || []
+          seasons.push({
+            season: Number(row.season),
+            episodes: Number(row.episodes),
+            first: Number(row.first),
+            last: Number(row.last)
+          })
+          held.set(profileId, seasons)
+        }
+        return [...held].map(([profileId, seasons]) => ({ profileId, seasons }))
+      } catch (error) {
+        return fail(error as Error)
+      }
+    },
+
+    animeHistoryIds() {
+      try {
+        return q.animeHistoryIds.all().map((row) => String((row as Row).content_id))
+      } catch (error) {
+        return fail(error as Error)
       }
     },
 

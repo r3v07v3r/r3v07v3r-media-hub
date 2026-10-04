@@ -367,15 +367,81 @@ once, in the background, after the anime catalog has been organised
 (`animeSyncRepair.ts`). Nothing is sent to a service when they move;
 MyAnimeList hears the right count the next time that season changes here.
 
-One kind of row is left where it is. When the grouping changes which
-season fronts a show, the id that used to front it becomes a later season,
-and the rows under it are the whole show's in the old season order, which
-nothing records. Its own season can still be placed and is moved; the rest
-cannot be, and stay under that id rather than be guessed onto one season.
-
 Until the catalog has been organised into its seasons nothing can tell a
 later season from a title that stands alone, so in that window a later
 season still opens, and saves, as itself.
+
+### When the grouping changes
+
+The grouping is worked out again every time the anime catalog is
+refreshed, and it does not always come out the same. Which season fronts a
+show, and the order of the rest, depend on lookups (a TheTVDB mapping,
+AniList's broadcast dates) that answer on one run and not on the next, and
+a season can enter or leave the crawl. In one real library, five weeks
+changed the members or order of 62 of 286 shows and put a different id in
+front of 43.
+
+History is addressed by both of those things: the id in front, and the
+season's place in the order. So the app keeps a record of the grouping the
+rows are filed under (the ledger, one row in the database), and when a
+refresh lands a different one, the rows are moved in the same moment
+(`animeRegroup.ts`). History, plays, resume points and the rating move,
+for every profile, in one transaction. Nothing is sent to a service.
+
+What moves depends on how the show's page numbers its seasons:
+
+- **A show with no TheTVDB mapping** is numbered by its members: season 3
+  is the third member's episodes. Its rows follow their member. A new
+  front, a new order, a member leaving (its season goes back under its own
+  id) and a member joining are all followed.
+- **A show with a TheTVDB mapping** has its page filled from TMDB: season 3
+  is TMDB's season 3, whichever member sits third. A member changing place
+  does not change what season 3 shows, so its rows stay at their numbers.
+  Only a new id in front is followed, with the season numbers kept, and
+  only when both ids map to the same series.
+- **Anything else is left where it is**, and named in the log: a show that
+  gained or lost its mapping between two runs, or one whose lookup has
+  never answered. A wrong move puts rows on another season's, where the
+  ones already there win and the arrivals are dropped.
+
+The plan is not moved. A planned title keeps its own id whatever the
+grouping does, for the reason given above.
+
+A row already at the place a move lands on is kept, and the arriving copy
+of that episode is dropped. Plays are all kept, except a viewing already
+there at the same instant.
+
+A backup carries the ledger, and a restore puts it back with the rows, so
+rows restored after the grouping has moved on are brought to where it is
+now. A backup from before the ledger has none; its rows are taken to be
+filed the way the install's own are.
+
+**Rows from before the ledger.** The first run only records the grouping;
+it has nothing to compare it with. An id that fronted its show before then
+and is a later season now still holds the whole show's rows, in an order
+nothing recorded. The repair places them once, where the old order can be
+shown rather than guessed:
+
+- Its own season is always placed (it was the first).
+- The catalog index still remembers the siblings an id had when it fronted
+  a show. Where no season under the id contradicts that order, each season
+  watched in full goes to the member the order names, if that member has
+  exactly that many episodes.
+- Without a usable remembered order, lengths alone decide, and only for
+  all the seasons together: every one watched in full, each matching
+  exactly one member's episode count, no member twice. Five episodes
+  marked could be a five-episode season or the start of a longer one, so
+  one season that cannot be placed leaves the rest as well.
+- Only on a show numbered by its members.
+
+What cannot be placed stays under the old id, and the log names it.
+
+**Not covered.** On a show numbered by TMDB, the page and the services
+disagree about a season number wherever the members are not exactly the TV
+seasons in order (a film or an OVA among them, or one TMDB season that
+Kitsu splits in two): the page shows TMDB's season, while Simkl and
+MyAnimeList are sent the member at that position. This change does not
+alter that, and it is why such a show's rows are not moved by member.
 
 ### Pushes made before the mapping
 
