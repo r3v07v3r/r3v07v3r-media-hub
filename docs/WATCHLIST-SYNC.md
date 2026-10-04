@@ -116,6 +116,15 @@ be split into "nothing answered" (do nothing) and "everything answered,
 with nothing in it" (a removal), or the one case this half exists for is
 the one case it never handles.
 
+**A list that was not read has not answered either.** The background pull
+leaves Simkl's lists unread when Simkl says nothing has changed (see "When
+Simkl's lists are read", below). Simkl then counts exactly as a service
+that errored: it is not evidence this pass, no title that came from it can
+be removed, and the tags its last real read left behind are carried over,
+where they can only hold a removal back. It is never counted as having
+answered with an empty list, which would remove every title this app ever
+pulled from it.
+
 ### 6. A removal that has not landed yet suppresses its own undo
 
 A delete a service rejects is queued — `planned:pending-removals` — and
@@ -207,6 +216,48 @@ carried stays: the status reads planned again. Taking it off the plan is
 "Remove from plan", the evidence-gated removal of rule 3, on purpose a
 separate action.
 
+## When Simkl's lists are read
+
+Simkl counts requests per person, not per device (500 a day on a free
+account), and a phone linked to the desktop uses the desktop's own Simkl
+sign-in, so every device draws on one allowance. Simkl also asks every
+client to read `/sync/activities`, one small request, before fetching any
+list, and suspends clients that fetch lists without it.
+
+So the half-hourly background sync (`src/main/media-hub/watchSync.ts`)
+asks that one question first and reads only what moved:
+
+- **The three plan-to-watch lists** are fetched when Simkl's activity
+  stamp for films, shows or anime differs from the one they were last read
+  under, and once a day even if none does. The daily read is there because
+  some things on this side change what a read would do without touching
+  Simkl: a queued removal given up on (rule 6), sync switched back on, a
+  title that came from Simkl and has since left Trakt as well.
+- **The watched library the desktop's review panel is compared against**
+  is fetched when the films stamp moved, and only if the app's interface
+  has asked for that panel since it started. The phone and TV app never
+  do, so there it is never fetched.
+- **Trakt and MyAnimeList** have no such question to ask, and are read
+  every half hour as before.
+
+On a day when nothing changes that is one Simkl request per half hour
+instead of five. What is **owed** is not gated: plan changes a service
+refused (rule 6) and watch-history decisions still queued are retried on
+every pass, whatever Simkl said.
+
+If the question itself fails, nothing behind it is fetched and Simkl is
+reported with that error. A refusal Simkl sent (a spent allowance, a
+server error) is waited out for longer each time it repeats, up to four
+hours; a refused sign-in is asked again every six hours; a request that
+never reached Simkl (this machine was offline) is simply asked again at
+the next half hour.
+
+"Sync now" is not gated. It reads every connected service, every time.
+
+The record of what was read is kept per profile and per Simkl account, and
+is shared with the phone and TV app's catch-up (below), so the two of them
+read Simkl's lists once per change between them rather than once each.
+
 ## What this deliberately does not do
 
 - **No merging of what a "list" means.** Trakt's watchlist, Simkl's
@@ -237,17 +288,19 @@ the two-minute wait.
 **What it reads.** First the watchlist pull above, so the plan is settled
 before any history lands: the pull refuses to plan anything with local
 history, so the other order would refuse a title for a viewing the same
-pass wrote. Then Simkl's watched history, one kind at a time (films, shows,
-anime), but only for a kind whose activity stamp at `/sync/activities` has
-moved since it was last fully applied. If that request fails, nothing is
-fetched and it is tried again after a pause that lengthens up to an hour;
-a 401 or 403 stops the catch-up's own Simkl requests until the account is
-linked again (the half-hourly background sync and the history pushes are
-separate, and keep trying). A kind whose fetch or write fails waits out its
-own, longer, pause without holding up the others. A library answer that was
-cut off part way counts as a failure, not as an empty library. When Trakt
-or MAL is connected, the pull also runs at most every ten minutes on its
-own. Anime waits until the catalog has been organised into its seasons, and
+pass wrote. Simkl's lists are skipped in that pull if they were already
+read under the same activity stamps ("When Simkl's lists are read", above).
+Then Simkl's watched history, one kind at a time (films, shows, anime), but
+only for a kind whose activity stamp at `/sync/activities` has moved since
+it was last fully applied. If that request fails, nothing is fetched and it
+is tried again after a pause that lengthens up to an hour; a 401 or 403
+stops the catch-up's own Simkl requests until the account is linked again
+(the half-hourly background sync asks again every six hours, and the
+history pushes are separate and keep trying). A kind whose fetch or write
+fails waits out its own, longer, pause without holding up the others. A
+library answer that was cut off part way counts as a failure, not as an
+empty library. When Trakt or MAL is connected, the pull also runs at most
+every ten minutes on its own. Anime waits until the catalog has been organised into its seasons, and
 is asked for again a few minutes later.
 
 **It only ever adds.** It writes viewings this device has no record of and
