@@ -234,9 +234,11 @@ asks that one question first and reads only what moved:
   Simkl: a queued removal given up on (rule 6), sync switched back on, a
   title that came from Simkl and has since left Trakt as well.
 - **The watched library the desktop's review panel is compared against**
-  is fetched when the films stamp moved, and only if the app's interface
-  has asked for that panel since it started. The phone and TV app never
-  do, so there it is never fetched.
+  is fetched when the films stamp moved, or when the set of films watched
+  here changed (a film marked here whose push to Simkl failed moves only
+  this side), and only if the app's interface has asked for that panel
+  since it started. The phone and TV app never do, so there it is never
+  fetched.
 - **Trakt and MyAnimeList** have no such question to ask, and are read
   every half hour as before.
 

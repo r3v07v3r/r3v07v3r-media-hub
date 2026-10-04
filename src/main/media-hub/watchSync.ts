@@ -18,8 +18,10 @@
 //    NOT having answered the pull, never as having answered with nothing:
 //    see watchlists.ts's SimklListSkip.
 //  - The library the review panel is diffed against, when the films stamp
-//    moved, and only on a backend whose interface has ever asked for that
-//    panel. The phone and TV app never do.
+//    moved or the films watched HERE did (the diff has two sides, and a
+//    film marked here whose push failed moves only this one), and only on a
+//    backend whose interface has ever asked for that panel. The phone and
+//    TV app never do.
 //
 // What is OWED is not polling and is not gated: plan changes a service
 // refused are retried inside every pull, and queued history decisions are
@@ -30,6 +32,8 @@
 // against a real temporary database with the services faked. The catch-up
 // shares the list half (pullPlannedGated) so that the two of them read
 // Simkl's lists once per change between them, not once each.
+
+import { createHash } from 'node:crypto'
 
 import type { MediaHubDatabase } from './database'
 import type { HttpError } from './httpClient'
@@ -86,9 +90,10 @@ export interface WatchSyncState {
   /** settingsStore's simklAccountMark when written. */
   account: string
   list: SimklListRead | null
-  /** The films stamp before the last diff made against a library fetched
-   *  from Simkl in that same pass. Null before one has been. */
-  diffed: { movies: string | null; at: number } | null
+  /** Both sides of the last diff made against a library fetched from Simkl
+   *  in that same pass, as they stood before it: Simkl's films stamp, and
+   *  the films watched here (localFilmsSignature). Null before one has been. */
+  diffed: { movies: string | null; local: string; at: number } | null
 }
 
 function stateKey(profile: string): string {
@@ -146,12 +151,31 @@ export function watchSyncStateFor(stored: unknown, account: string): WatchSyncSt
   if (
     diffed &&
     stampOrNull(diffed.movies) &&
+    typeof diffed.local === 'string' &&
     typeof diffed.at === 'number' &&
     Number.isFinite(diffed.at)
   ) {
-    fresh.diffed = { movies: diffed.movies, at: diffed.at }
+    fresh.diffed = { movies: diffed.movies, local: diffed.local, at: diffed.at }
   }
   return fresh
+}
+
+/**
+ * The films watched here, as one short comparable string.
+ *
+ * The review panel's diff is "which films does this side call watched"
+ * against the same question asked of Simkl, so this is its local half:
+ * which films, and nothing about when or how often. Simkl's stamp cannot
+ * stand in for it. A film marked or cleared here is pushed without being
+ * queued, and when that push fails Simkl never hears of it — its stamp
+ * stays put while the two sides have just come to disagree.
+ */
+export function localFilmsSignature(history: readonly { id: unknown; type?: string }[]): string {
+  const ids = [
+    ...new Set(history.filter((entry) => entry.type === 'movie').map((entry) => String(entry.id)))
+  ].sort()
+  const digest = createHash('sha256').update(ids.join('|')).digest('hex').slice(0, 16)
+  return `${ids.length}:${digest}`
 }
 
 /**
@@ -257,6 +281,7 @@ export async function pullPlannedGated(
 }
 
 export interface WatchSyncDeps extends GatedPullDeps {
+  db: Pick<MediaHubDatabase, 'activeProfile' | 'getCache' | 'putCache' | 'history'>
   /** GET /sync/activities, raw. Throws an HttpError (with `status`) on failure. */
   activities(): Promise<unknown>
   /** Sends the history decisions still queued (tracking's flushPendingPushes). */
@@ -338,7 +363,7 @@ async function readGate(
  * In the order things have to happen: the gate; the watchlists (which is
  * also where plan changes a service refused are retried); the history
  * decisions still queued; and last, if this backend has a review panel and
- * Simkl's films moved, the diff that panel shows.
+ * the films on either side moved, the diff that panel shows.
  */
 export async function runWatchSync(deps: WatchSyncDeps, memory: WatchSyncMemory): Promise<void> {
   const { db } = deps
@@ -373,7 +398,10 @@ export async function runWatchSync(deps: WatchSyncDeps, memory: WatchSyncMemory)
   const diffed = watchSyncStateFor(db.getCache(key, { allowExpired: true }), account).diffed
   // Films only, because the diff is: it compares the films watched here
   // with the films watched there, and an episode watched moves neither.
-  if (diffed && diffed.movies === gate.stamps.movies) return
+  // Both sides, because either can move alone. Read before the diff, like
+  // the stamp: a film marked while it runs is then seen by the next pass.
+  const local = localFilmsSignature(db.history())
+  if (diffed && diffed.movies === gate.stamps.movies && diffed.local === local) return
   let fetched = false
   try {
     fetched = await deps.reconcile()
@@ -381,11 +409,11 @@ export async function runWatchSync(deps: WatchSyncDeps, memory: WatchSyncMemory)
     deps.log('job:watch-sync', error)
   }
   // A diff inside its cooldown, or served from the snapshot cache, says
-  // nothing about these stamps: the stamp stays where it was and the next
+  // nothing about these stamps: the record stays where it was and the next
   // pass asks again.
   if (!fetched) return
   if (db.activeProfile() !== profile || deps.account() !== account) return
   const state = watchSyncStateFor(db.getCache(key, { allowExpired: true }), account)
-  state.diffed = { movies: gate.stamps.movies, at: deps.now() }
+  state.diffed = { movies: gate.stamps.movies, local, at: deps.now() }
   db.putCache(key, state, STATE_TTL_MS, { durable: true })
 }

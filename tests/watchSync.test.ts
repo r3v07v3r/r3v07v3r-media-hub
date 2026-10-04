@@ -20,6 +20,7 @@ import path from 'node:path'
 import { createDatabase } from '../src/main/media-hub/database'
 import {
   SIMKL_LIST_MAX_AGE_MS,
+  localFilmsSignature,
   newWatchSyncMemory,
   pullPlannedGated,
   runWatchSync,
@@ -114,7 +115,11 @@ check('a clock set back does not strand the record in the future', () => {
 console.log('watchSyncStateFor')
 
 check('another account, or nothing stored: an empty state', () => {
-  const stored: WatchSyncState = { account: 'acct-1', list: READ, diffed: { movies: 'm1', at: 5 } }
+  const stored: WatchSyncState = {
+    account: 'acct-1',
+    list: READ,
+    diffed: { movies: 'm1', local: '0:x', at: 5 }
+  }
   assert.deepEqual(watchSyncStateFor(stored, 'acct-2'), {
     account: 'acct-2',
     list: null,
@@ -129,24 +134,60 @@ check('another account, or nothing stored: an empty state', () => {
 })
 
 check('a well-formed state comes back as written', () => {
-  const stored: WatchSyncState = { account: 'acct-1', list: READ, diffed: { movies: null, at: 5 } }
+  const stored: WatchSyncState = {
+    account: 'acct-1',
+    list: READ,
+    diffed: { movies: null, local: '0:x', at: 5 }
+  }
   assert.deepEqual(watchSyncStateFor(JSON.parse(JSON.stringify(stored)), 'acct-1'), stored)
 })
 
 check('a malformed half reads as never read, and leaves the other alone', () => {
-  const good = { movies: 'm1', at: 5 }
+  const good = { movies: 'm1', local: '2:abc', at: 5 }
   const badList = { account: 'acct-1', list: { stamps: { movies: 7 }, at: 1 }, diffed: good }
   assert.deepEqual(watchSyncStateFor(badList, 'acct-1'), {
     account: 'acct-1',
     list: null,
     diffed: good
   })
-  const badDiff = { account: 'acct-1', list: READ, diffed: { movies: 'm1', at: 'yesterday' } }
+  const badDiff = {
+    account: 'acct-1',
+    list: READ,
+    diffed: { movies: 'm1', local: '2:abc', at: 'yesterday' }
+  }
   assert.deepEqual(watchSyncStateFor(badDiff, 'acct-1'), {
     account: 'acct-1',
     list: READ,
     diffed: null
   })
+  // A diff recorded without its local half vouches for one side only.
+  const oneSided = { account: 'acct-1', list: READ, diffed: { movies: 'm1', at: 5 } }
+  assert.equal(watchSyncStateFor(oneSided, 'acct-1').diffed, null)
+})
+
+// ---------------------------------------------------------------------------
+console.log('localFilmsSignature')
+
+check('which films, whatever the order and however often', () => {
+  const dune = { id: 'tt0000002', type: 'movie' }
+  const arrival = { id: 'tt0000003', type: 'movie' }
+  assert.equal(localFilmsSignature([dune, arrival]), localFilmsSignature([arrival, dune, dune]))
+  assert.notEqual(localFilmsSignature([dune]), localFilmsSignature([dune, arrival]))
+  // One film swapped for another: the count is the same, the set is not.
+  assert.notEqual(localFilmsSignature([dune]), localFilmsSignature([arrival]))
+})
+
+check('an episode watched is not part of it', () => {
+  const dune = { id: 'tt0000002', type: 'movie' }
+  assert.equal(
+    localFilmsSignature([
+      dune,
+      { id: 'tt0000001', type: 'series' },
+      { id: 'kitsu:1', type: 'anime' }
+    ]),
+    localFilmsSignature([dune])
+  )
+  assert.equal(localFilmsSignature([{ id: 'tt0000001', type: 'series' }]), localFilmsSignature([]))
 })
 
 // ---------------------------------------------------------------------------
@@ -310,7 +351,11 @@ async function passes(): Promise<void> {
       pulled: 12,
       unmapped: 1
     })
-    assert.deepEqual(h.state()?.diffed, { movies: 'm1', at: h.clock })
+    assert.deepEqual(h.state()?.diffed, {
+      movies: 'm1',
+      local: localFilmsSignature([]),
+      at: h.clock
+    })
   })
 
   await checkAsync('nothing changed: one Simkl request, and what is owed still goes', async () => {
@@ -348,7 +393,36 @@ async function passes(): Promise<void> {
     h.stamps.movies = 'm2'
     const calls = await passOf(h)
     assert.deepEqual(simklRequests(calls), [ACTIVITIES, ...LISTS, ...LIBRARIES])
-    assert.deepEqual(h.state()?.diffed, { movies: 'm2', at: h.clock })
+    assert.equal(h.state()?.diffed?.movies, 'm2')
+    assert.deepEqual(simklRequests(await passOf(h)), [ACTIVITIES])
+  })
+
+  await checkAsync(
+    'a film marked here that Simkl never heard of: the diff is made again',
+    async () => {
+      // The push that follows a mark is not queued. When it fails, Simkl's
+      // stamp stays where it was while the two sides have come to disagree.
+      const h = harness()
+      await passOf(h)
+      h.db.markWatched({ id: 'tt0000002', type: 'movie', title: 'Dune' })
+      const calls = await passOf(h)
+      assert.deepEqual(simklRequests(calls), [ACTIVITIES, ...LIBRARIES], 'the lists did not move')
+      assert.equal(h.state()?.diffed?.local, localFilmsSignature(h.db.history()))
+      assert.deepEqual(simklRequests(await passOf(h)), [ACTIVITIES])
+      // Cleared again here, and again nothing reached Simkl.
+      h.db.unmarkWatched('tt0000002')
+      assert.deepEqual(simklRequests(await passOf(h)), [ACTIVITIES, ...LIBRARIES])
+      assert.deepEqual(simklRequests(await passOf(h)), [ACTIVITIES])
+    }
+  )
+
+  await checkAsync('an episode watched here moves neither side of the diff', async () => {
+    const h = harness()
+    await passOf(h)
+    h.db.markWatched(
+      { id: 'tt0000001', type: 'series', title: 'Severance' },
+      { season: 1, episode: 1 }
+    )
     assert.deepEqual(simklRequests(await passOf(h)), [ACTIVITIES])
   })
 
