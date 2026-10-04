@@ -620,30 +620,58 @@ export function invalidateAnimeGroupIndex(): void {
   animeGroupPositionIndex = null
 }
 
-function buildAnimeGroupIndexes(): void {
-  const items =
-    getDatabase().getCache<CatalogItem[]>('catalog:v2:anime', { allowExpired: true }) || []
-  const groupIndex = new Map<string, string[]>()
-  const positionIndex = new Map<string, { id: string; season: number }>()
+/**
+ * The two lookups a grouped catalog gives: each canonical id's siblings,
+ * and each member's place in its group. No database in it, so the mapping
+ * to and from Simkl's per-season entries (serviceIds.ts) can be tested
+ * against the same construction the app runs on.
+ */
+export function animeGroupIndexesOf(items: readonly Pick<CatalogItem, 'id' | 'groupedIds'>[]): {
+  siblings: Map<string, string[]>
+  positions: Map<string, { id: string; season: number }>
+} {
+  const siblings = new Map<string, string[]>()
+  const positions = new Map<string, { id: string; season: number }>()
   for (const item of items) {
     if (!item.groupedIds?.length) continue
     const id = String(item.id)
-    groupIndex.set(id, item.groupedIds as string[])
+    siblings.set(id, item.groupedIds as string[])
     // The canonical item is always season 1 of its own group by
     // construction — see buildGroupedAnimeVideos above, which assigns
     // season numbers the same way (canonical = i+1 for i=0).
-    positionIndex.set(id, { id, season: 1 })
+    positions.set(id, { id, season: 1 })
     item.groupedIds.forEach((siblingId, index) => {
-      positionIndex.set(String(siblingId), { id, season: index + 2 })
+      positions.set(String(siblingId), { id, season: index + 2 })
     })
   }
-  animeGroupIndex = groupIndex
-  animeGroupPositionIndex = positionIndex
+  return { siblings, positions }
+}
+
+function buildAnimeGroupIndexes(): void {
+  const items =
+    getDatabase().getCache<CatalogItem[]>('catalog:v2:anime', { allowExpired: true }) || []
+  const { siblings, positions } = animeGroupIndexesOf(items)
+  animeGroupIndex = siblings
+  animeGroupPositionIndex = positions
 }
 
 export function groupedIdsFor(catalogId: string): string[] | undefined {
   if (!animeGroupIndex) buildAnimeGroupIndexes()
   return animeGroupIndex!.get(String(catalogId))
+}
+
+/**
+ * groupedIdsFor for a push to Simkl, or nothing while the catalog is not
+ * grouped.
+ *
+ * Until the pass has run the index is empty, and groupedIdsFor answers "no
+ * siblings" for a show that has five. A push built on that would send a
+ * later season to the canonical id's own entry — the first season's. Handed
+ * nothing instead, toSimklAnimeEpisode (serviceIds.ts) places a first season
+ * only and sends no later one. See animeGroupingReady.
+ */
+export function animeSiblingsWhenGrouped(): ((id: string) => string[] | undefined) | undefined {
+  return animeGroupingReady() ? groupedIdsFor : undefined
 }
 
 /**

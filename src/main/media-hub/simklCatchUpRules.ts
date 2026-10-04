@@ -514,8 +514,10 @@ export function planCatchUp(
         // Anime: a Simkl anime entry is one Kitsu-shaped show, numbered
         // flat. Its own season 1 (or none) is that numbering; the season it
         // lands in HERE is whichever one of the merged franchise this entry
-        // is. A Simkl season 0 or 2+ has no place in that mapping, so it is
-        // refused rather than guessed into one.
+        // is — fromSimklAnimeEpisode (serviceIds.ts), the inverse of the
+        // mapping every push goes out through. A Simkl season 0 or 2+ has
+        // no place in that mapping, so it is refused rather than guessed
+        // into one.
         if (ep.season !== null && ep.season !== 1) {
           plan.rejected++
           continue
@@ -525,10 +527,13 @@ export function planCatchUp(
           continue
         }
         season = resolved.animeSeason
-        // Echo guard: this app's own push of a LATER season of a merged
-        // franchise can come back from Simkl filed under the first entry.
-        // Episode 3 watched here as season 2 must not reappear as season 1
-        // episode 3. Not a rejection: it is a viewing already recorded.
+        // Echo guard: until pushes went out through toSimklAnimeEpisode,
+        // a LATER season of a merged franchise was sent under the first
+        // season's id, and can come back from Simkl filed under the first
+        // entry. Those pushes are still on the account (see "Pushes made
+        // before the mapping" in docs/WATCHLIST-SYNC.md). Episode 3 watched
+        // here as season 2 must not reappear as season 1 episode 3. Not a
+        // rejection: it is a viewing already recorded.
         if (
           season === 1 &&
           later.get(id)?.has(ep.episode) &&

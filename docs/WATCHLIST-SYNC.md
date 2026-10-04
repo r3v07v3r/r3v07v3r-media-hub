@@ -293,12 +293,76 @@ with viewings recorded here, the unscoped Simkl removal is not sent.
 - Anime takes only each Simkl entry's own first-season numbering (its
   season 1, or none), filed under whichever season of the merged franchise
   that entry is here. An episode Simkl files under season 0, or 2 and
-  later, is refused. Later seasons of a merged franchise that this app
-  pushed may be misfiled under the first entry at Simkl; the catch-up skips
-  an episode the device already holds under a later season, but cannot
-  repair what Simkl holds.
+  later, is refused. The next section has the mapping, and what became of
+  later seasons pushed before it existed.
 - A local un-watch whose removal at Simkl failed can come back when that
   title next has activity there.
+
+## Anime: one show here, an entry per season at Simkl
+
+This app merges a franchise's seasons into one show. Watch history is kept
+under the first season's Kitsu id, and "season 2" means the second member
+of that group. Simkl, like MyAnimeList, keeps an entry per season, each
+numbered from episode 1, and an anime id names one of those entries.
+
+So every anime episode sent to Simkl (a mark, an unmark, a whole season, a
+whole title, a scrobble) is translated first, by `toSimklAnimeEpisode` in
+`src/shared/media-hub/serviceIds.ts`:
+
+- Season _s_, episode _e_ of a merged show goes out as episode _e_ of the
+  group's _s_-th member, under that member's own Kitsu id and with no
+  season number. A change that spans seasons is one entry per season, the
+  same split `planMalPushes` makes for MAL.
+- A title that was never merged is its own entry. So is a later season
+  opened and watched under its own id.
+- Specials (season 0) are not sent. They are TMDB's list for the whole
+  franchise and belong to no entry this app can name.
+- A season the group has no member for is not sent.
+- While the anime catalog is still being organised into its seasons, only
+  a first season is sent. A later one is skipped rather than queued, and
+  reaches Simkl when it is next marked.
+- A later season's entry is named by its id alone. The title and year in
+  hand are the show's, and Simkl matches on those when it cannot place an
+  id, which would land on the first season.
+- No entry goes out without its episodes. At `/sync/history/remove`, an
+  anime reference that names none removes that entry's whole history.
+
+The catch-up reads the same mapping backwards (`fromSimklAnimeEpisode`):
+episode _e_ of an entry is kept under the show that entry's Kitsu id
+belongs to, at the season it is there. `tests/simklAnime.test.ts` runs the
+two round trip, and through the catch-up's own rules.
+
+**Not verified against Simkl.** The request shape is the one Simkl's anime
+guide gives for an anime id: an `anime` entry with a flat `episodes` list.
+The tests model an account that behaves as that guide says. No request has
+been made to the live API from a development machine, so whether Simkl
+files these as described is still to be confirmed on a real account.
+
+### Pushes made before the mapping
+
+Until this change a later season went out under the first season's id with
+a season number. Simkl most likely filed it as that episode number of the
+first season, or dropped it.
+
+- **Nothing is re-sent and nothing is removed.** Later-season episodes
+  marked before the change are still missing from their own entries at
+  Simkl, and any that were misfiled are still on the first season's. The
+  app cannot tell a misfiled episode from a first-season one watched
+  somewhere else, so it leaves both alone.
+- Marking such an episode again (or its season, or the title) sends it to
+  the right entry. The misfiled copy stays until it is removed at Simkl by
+  hand; un-watching the episode here asks only its own entry.
+- The catch-up keeps its guard: a first-season episode at Simkl is skipped
+  when this device holds the same episode number under a later season and
+  not under the first. That is what stops this device's own old pushes
+  coming back as season 1.
+- A device that never held the later-season row (a phone linked
+  afterwards, or one where the episode was since un-watched) has nothing
+  to recognise a misfiled episode by, and takes it as a first-season
+  viewing.
+- The guard has a cost that outlives the fix: a first-season episode
+  really watched somewhere else is skipped for as long as this device
+  holds that episode number under a later season only.
 
 ## How to undo it
 

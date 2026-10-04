@@ -26,7 +26,12 @@ import type {
   MalStatus,
   MediaKind
 } from '../../shared/media-hub/types'
-import { animeGroupingReady, groupedIdsFor, resolveAnimeGroupTarget } from './animeSeasons'
+import {
+  animeGroupingReady,
+  animeSiblingsWhenGrouped,
+  groupedIdsFor,
+  resolveAnimeGroupTarget
+} from './animeSeasons'
 import { getDatabase } from './dbState'
 import { fetchJson } from './httpClient'
 import { crossIdsForKitsu, kitsuIdForExternal } from './idBridge'
@@ -535,8 +540,15 @@ export function registerMalIpc(): void {
           }
           // Empty when Simkl has no id for this title — see
           // historyPayload. Posting it would ask Simkl to match by title
-          // and year and change the account on a guess.
-          const simklBody = seasonHistoryPayload(media, target.season, episodeNumbers)
+          // and year and change the account on a guess. A later season of
+          // a merged show goes to that season's own entry, which is the
+          // one MAL matched in the first place.
+          const simklBody = seasonHistoryPayload(
+            media,
+            target.season,
+            episodeNumbers,
+            animeSiblingsWhenGrouped()
+          )
           if (simklCredentials().accessToken && hasSimklContent(simklBody)) {
             try {
               await simklRequest('/sync/history', {
