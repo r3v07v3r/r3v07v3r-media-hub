@@ -303,6 +303,16 @@
   color: var(--accent-blue);
 }
 
+/* Quiet on purpose: the row is still something to press, and a loud mark
+   on most of a long season's rows would drown the one that isn't watched. */
+.episode-row__watched {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  color: var(--accent-green);
+  opacity: 0.8;
+}
+
 /* ---------- Loading skeleton (catalog.meta in flight) ---------- */
 /* Shaped like the real hero + header above so nothing jumps around once
    the real data replaces it — see the task brief. */

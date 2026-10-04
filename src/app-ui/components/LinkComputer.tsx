@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react'
 import { api } from '../lib/api'
+import { requestCatchUp } from '../lib/librarySync'
 import { nativeHost } from '../lib/nativeHost'
 import Spinner from './Spinner'
 import StatusNote from './StatusNote'
@@ -39,6 +40,10 @@ export default function LinkComputer({ onLinked }: { onLinked?: () => void }) {
           if (answer.ok) {
             setCode('')
             onLinked?.()
+            // The services just changed, so this is the moment to fetch what
+            // they hold. Forced: a pass that ran a minute ago saw the old
+            // accounts (or none), and its report must not stand in for this.
+            requestCatchUp({ force: true })
           }
         })
         .catch((error: unknown) => {
