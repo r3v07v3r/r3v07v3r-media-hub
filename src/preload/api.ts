@@ -21,6 +21,7 @@ import type {
   CacheSessionMeta,
   CalendarEntry,
   CatalogFacets,
+  CatchUpReport,
   DeepScanEvent,
   DeepScanReport,
   CatalogByIdsResult,
@@ -94,6 +95,7 @@ import type {
   SubtitleSelection,
   SubtitlesApplyResult,
   TitleCollectionResult,
+  TitleWatchState,
   TorBoxConnectResult,
   TrackingListResult,
   TraktPollResult,
@@ -132,6 +134,10 @@ type TrackableItem = Partial<CatalogItem> & { id: string }
 interface MarkWatchedPayload {
   item: SimklPushItem
   playback?: PlaybackPosition
+  /** Also start following the show, if nobody is yet, so it appears in
+   *  Continue Watching. Set by the phone and TV app's player, which has no
+   *  separate control for it; a local write only — see tracking.ts. */
+  follow?: boolean
 }
 
 interface MarkSeasonWatchedPayload {
@@ -587,6 +593,17 @@ export function createApi(transport: ApiTransport) {
          *  docs/WATCHLIST-SYNC.md for what each direction does. */
         setWatchlistTwoWay: (enabled: boolean): Promise<{ watchlistTwoWay: boolean }> =>
           transport.invoke(MEDIA_HUB_CHANNELS.trackingSetTwoWay, { enabled }),
+        /** Bring this device up to date with the tracking services — the
+         *  watchlist pull, then what Simkl says was watched. For the phone
+         *  and TV app; the desktop settles disagreements in its review panel
+         *  instead. Cheap to call often: a pass that ran moments ago, or is
+         *  still running, answers for this call too. */
+        catchUp: (options?: { force?: boolean }): Promise<CatchUpReport> =>
+          transport.invoke(MEDIA_HUB_CHANNELS.trackingCatchUp, options),
+        /** Whether one title is on the list, and which of it is watched —
+         *  the database only, so it answers at once. */
+        titleState: (id: string): Promise<TitleWatchState> =>
+          transport.invoke(MEDIA_HUB_CHANNELS.trackingTitleState, { id }),
         toggle: (item: TrackableItem): Promise<{ tracked: boolean }> =>
           transport.invoke(MEDIA_HUB_CHANNELS.trackingToggle, item),
         markWatched: (payload: MarkWatchedPayload): Promise<MarkWatchedResult> =>

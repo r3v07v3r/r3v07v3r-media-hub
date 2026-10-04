@@ -42,9 +42,18 @@ import {
 import { titlePushQueue, titlePushKey } from './titlePushQueue'
 import { traktRequest } from './traktClient'
 import { failedServices, firstFailure, pushPlanEverywhere, type PushOutcome } from './watchlistPush'
-import { plannedRemovals, remotePlanAdoptable, type PlannedOrigin } from './watchlistRules'
+import {
+  answeredServices,
+  plannedRemovals,
+  remotePlanAdoptable,
+  removalEvidence,
+  startedHere,
+  startedTitles,
+  type PlannedOrigin
+} from './watchlistRules'
+import { resolveAnimeGroupTarget } from './animeSeasons'
 import type { MediaKind } from '../../shared/media-hub/types'
-import type { TaskPriority } from './taskScheduler'
+import { isForegroundPriority, type TaskPriority } from './taskScheduler'
 
 /** Which services a title is planned on. The renderer tags cards with it. */
 const PLANNED_SOURCES_CACHE_KEY = 'planned:sources'
@@ -86,10 +95,18 @@ export interface PlannedServiceReport {
   pulled: number
   unmapped: number
   error?: string
+  /** The list was not read this pass — see SimklListSkip. Never evidence
+   *  of anything: watchlistRules' answeredServices leaves it out. */
+  skipped?: boolean
 }
 
 export interface PlannedSyncReport {
   at: number
+  /** When the pull began, before its first request. A caller that read
+   *  something first (watchSync.ts's activity stamps) needs to know the
+   *  lists were fetched after it, and a pull it merely joined may not
+   *  have been. */
+  startedAt?: number
   services: PlannedServiceReport[]
   /** Titles newly added to the local list by this pull. */
   added: number
@@ -215,6 +232,41 @@ function writePendingRemovals(pending: PendingRemovals): void {
 }
 
 /**
+ * Titles whose un-plan is still owed to a service.
+ *
+ * Only removals: a queued ADD is the opposite case — the title is on the
+ * local list already. Read by the pull's own add loop and by the catch-up
+ * (simklCatchUp.ts), neither of which may put one of these back on the
+ * list: the service still holds it only because the removal has not landed
+ * (docs/WATCHLIST-SYNC.md rule 6).
+ */
+export function idsAwaitingRemoval(): Set<string> {
+  return new Set(
+    Object.entries(pendingRemovals())
+      .filter(([, entry]) => entry.planned !== true)
+      .map(([id]) => id)
+  )
+}
+
+/**
+ * Ids with a viewing recorded here, and the history id a title is kept
+ * under. A merged anime's later season is planned under its own Kitsu id
+ * but watched under the show it belongs to, so "has it been started" has
+ * to ask the show.
+ */
+function historyIds(): Set<string> {
+  return new Set(
+    getDatabase()
+      .history()
+      .map((entry) => String(entry.id))
+  )
+}
+
+function historyIdOf(id: string): string {
+  return id.startsWith('kitsu:') ? resolveAnimeGroupTarget(id).id : id
+}
+
+/**
  * Tries the queued removals again, before the pull that would otherwise
  * undo them.
  *
@@ -234,8 +286,16 @@ async function retryPendingRemovals(): Promise<void> {
   for (const id of ids) {
     const entry = pending[id]
     const planned = entry.planned === true
+    // A removal queued before the show was started here, retried after:
+    // the unscoped delete would now erase that viewing at Simkl, so it is
+    // held back exactly as a fresh un-plan would be. A removal owed only to
+    // Simkl then sends nothing, reports nothing failed, and is dropped as
+    // settled below — which is the truth: nothing is owed that may be sent.
+    const onServices = planned
+      ? entry.services
+      : removalEvidence(entry.services, startedHere(entry.item, historyIds(), historyIdOf))
     const outcome = await pushPlanEverywhere(entry.item, planned, {
-      onServices: entry.services,
+      onServices,
       only: entry.services
     })
     // An add that got through is evidence of presence from now on, exactly
@@ -291,14 +351,23 @@ interface SimklPlannedPayload {
  * invented: a row that cannot be opened is worse than a row that is not
  * there, and now the count says how often that happens.
  */
+const STRICT = { strictBody: true } as const
+
 async function fetchSimklPlanned(
   priority: TaskPriority
 ): Promise<{ entries: PlannedEntry[]; unmapped: number }> {
   if (!simklCredentials().accessToken) return { entries: [], unmapped: 0 }
   const [movies, shows, anime] = await Promise.all([
-    simklRequest<SimklPlannedPayload>('/sync/all-items/movies/plantowatch', {}, priority),
-    simklRequest<SimklPlannedPayload>('/sync/all-items/shows/plantowatch', {}, priority),
-    simklRequest<SimklPlannedPayload>('/sync/all-items/anime/plantowatch', {}, priority)
+    // Strict about the body, all three. A list cut off part way would read
+    // as an empty one, and an empty list from a service that answered is
+    // exactly what the removal rule acts on: every title this app pulled
+    // from it would be taken off the plan. It would then be recorded as
+    // read, and not looked at again until Simkl's stamps moved or a day had
+    // passed (watchSync.ts). Cut off, it is an error, and an error is never
+    // an answer.
+    simklRequest<SimklPlannedPayload>('/sync/all-items/movies/plantowatch', {}, priority, STRICT),
+    simklRequest<SimklPlannedPayload>('/sync/all-items/shows/plantowatch', {}, priority, STRICT),
+    simklRequest<SimklPlannedPayload>('/sync/all-items/anime/plantowatch', {}, priority, STRICT)
   ])
   let unmapped = 0
   const out: PlannedEntry[] = []
@@ -442,6 +511,42 @@ async function fetchMalPlanned(): Promise<{ entries: PlannedEntry[]; unmapped: n
 }
 
 /**
+ * Why a pull is leaving Simkl's list unread.
+ *
+ * Simkl asks every client to read /sync/activities before any of
+ * /sync/all-items, and counts requests per person rather than per device —
+ * so the recurring pull goes through watchSync.ts's gate, which says one of
+ * two things here:
+ *
+ *  - `unchanged`: Simkl's stamps are where they were when the list was last
+ *    read. The counts from that read are passed back in so the report still
+ *    says what the list holds, rather than "0 titles".
+ *  - `unasked`: the gate itself could not be read, so nothing may be
+ *    fetched behind it. Reported as the error it is.
+ *
+ * Either way Simkl has said NOTHING this pass. It is left out of the
+ * `answered` set exactly as a failed fetch is, its tags from the last real
+ * read are carried over, and so the only thing a skip can do to a removal
+ * is hold it back. Only ever passed by a background caller: the Sync
+ * button reads everything, always.
+ */
+export type SimklListSkip =
+  { reason: 'unchanged'; pulled: number; unmapped: number } | { reason: 'unasked'; error: string }
+
+export interface PlannedPullOptions {
+  skipSimkl?: SimklListSkip
+}
+
+/** The pull that is running, if one is; whether somebody is waiting on it
+ *  at a screen; and whether it is leaving Simkl unread — see
+ *  syncPlannedFromServices. */
+let plannedSyncInFlight: {
+  run: Promise<PlannedSyncReport>
+  foreground: boolean
+  skipsSimkl: boolean
+} | null = null
+
+/**
  * Pulls every connected service's plan-to-watch and folds it into the
  * local list.
  *
@@ -457,9 +562,55 @@ async function fetchMalPlanned(): Promise<{ entries: PlannedEntry[]; unmapped: n
  * whatever answered, because a partial list is much closer to right than
  * no list at all.
  */
-export async function syncPlannedFromServices(
-  priority: TaskPriority = 'background'
+export function syncPlannedFromServices(
+  priority: TaskPriority = 'background',
+  options: PlannedPullOptions = {}
 ): Promise<PlannedSyncReport> {
+  // One pull at a time. The 30-minute job, the Sync button and the catch-up
+  // (simklCatchUp.ts) can all land together, and two passes interleave
+  // their read-modify-writes of the origins and sources records: one
+  // writes back a map the other has already changed underneath it, and
+  // the evidence rule 3 depends on is lost or resurrected at random.
+  const foreground = isForegroundPriority(priority)
+  const skipsSimkl = Boolean(options.skipSimkl)
+  const running = plannedSyncInFlight
+  if (running) {
+    // A caller no more urgent than the pull already running shares it —
+    // provided that pull reads everything this caller wants read. One that
+    // is leaving Simkl out is no answer for a caller whose gate has just
+    // said Simkl moved.
+    const readsEnough = !running.skipsSimkl || skipsSimkl
+    if ((running.foreground || !foreground) && readsEnough) return running.run
+    // The Sync button, pressed while a background pull is under way, does
+    // not: that pull's requests went out before whatever was just added
+    // on the web, and they are queued at a tier that stands down for
+    // other work (see isForegroundPriority). So it waits for the one
+    // running to finish — the passes stay one at a time — and then gets
+    // a pull of its own.
+    return running.run.then(
+      () => syncPlannedFromServices(priority, options),
+      () => syncPlannedFromServices(priority, options)
+    )
+  }
+  const run = pullPlanned(priority, options).finally(() => {
+    if (plannedSyncInFlight?.run === run) plannedSyncInFlight = null
+  })
+  plannedSyncInFlight = { run, foreground, skipsSimkl }
+  return run
+}
+
+/** What a fetch that was not made contributes: nothing. */
+const NOT_READ: { entries: PlannedEntry[]; unmapped: number } = { entries: [], unmapped: 0 }
+
+async function pullPlanned(
+  priority: TaskPriority,
+  options: PlannedPullOptions
+): Promise<PlannedSyncReport> {
+  const startedAt = Date.now()
+  // Whose list this pull is about. Everything below the fetches writes to
+  // the active profile's tracked table; a switch while three services were
+  // being read would pour this profile's remote lists into the next one's.
+  const profile = getDatabase().activeProfile()
   // First, because the pull is what would undo them: a removal still
   // owed to a service is a title the service still lists, and the add
   // loop below would put it back.
@@ -473,8 +624,11 @@ export async function syncPlannedFromServices(
     trakt: Boolean(traktCredentials().accessToken),
     mal: Boolean(malCredentials().accessToken)
   }
+  // Only a connected Simkl can be skipped: with no account there is no
+  // list, and "not connected" is what the report should say.
+  const skipSimkl = connected.simkl ? options.skipSimkl : undefined
   const settled = await Promise.allSettled([
-    fetchSimklPlanned(priority),
+    skipSimkl ? NOT_READ : fetchSimklPlanned(priority),
     fetchTraktPlanned(priority),
     fetchMalPlanned()
   ])
@@ -484,6 +638,29 @@ export async function syncPlannedFromServices(
     // Same order as the Promise.allSettled above, which is why ORDER is
     // one shared constant rather than a literal in each place.
     const service = ORDER[index]
+    if (service === 'simkl' && skipSimkl) {
+      // Not read, so not an answer — `skipped` is what keeps this line out
+      // of the `answered` set below. See SimklListSkip.
+      services.push(
+        skipSimkl.reason === 'unchanged'
+          ? {
+              service,
+              connected: true,
+              pulled: skipSimkl.pulled,
+              unmapped: skipSimkl.unmapped,
+              skipped: true
+            }
+          : {
+              service,
+              connected: true,
+              pulled: 0,
+              unmapped: 0,
+              skipped: true,
+              error: skipSimkl.error
+            }
+      )
+      return
+    }
     if (result.status === 'fulfilled') {
       entries.push(...result.value.entries)
       services.push({
@@ -508,7 +685,7 @@ export async function syncPlannedFromServices(
   })
 
   const report = (added: number, removed = 0): PlannedSyncReport => {
-    const full = { at: Date.now(), services, added, removed }
+    const full = { at: Date.now(), startedAt, services, added, removed }
     getDatabase().putCache(REPORT_CACHE_KEY, full, SOURCES_TTL_MS, { durable: true })
     return full
   }
@@ -518,10 +695,9 @@ export async function syncPlannedFromServices(
   // Computed BEFORE anything short-circuits, because "answered and empty"
   // and "did not answer" are the two states this whole feature turns on.
   // A title is absent from a list that failed to load in exactly the same
-  // way it is absent from an empty one — see rule 5.
-  const answered = new Set(
-    services.filter((entry) => entry.connected && !entry.error).map((entry) => entry.service)
-  )
+  // way it is absent from an empty one — see rule 5 — and from one that
+  // was not read at all, which is why a skipped Simkl is not in this set.
+  const answered = answeredServices(services)
 
   // Nothing answered — not "nothing is planned". The sources map is
   // deliberately NOT touched: every service being unreachable is not
@@ -535,6 +711,8 @@ export async function syncPlannedFromServices(
   // removal there is. Stopping here would mean the one case the inward
   // half exists for never ran.
   if (answered.size === 0) return report(0)
+  // Before the first write, after the last wait: see `profile` above.
+  if (getDatabase().activeProfile() !== profile) return report(0)
 
   const sources: PlannedSources = {}
   for (const entry of entries) {
@@ -546,7 +724,8 @@ export async function syncPlannedFromServices(
   // the last pull rather than dropped, for the same reason as above — and
   // it matters twice, because this map is also the "somebody still has
   // it" evidence the removal rule reads. Carrying a stale tag can only
-  // ever hold a removal back.
+  // ever hold a removal back. A Simkl skipped as unchanged lands here too,
+  // and its tags are not even stale: they are the list as it still stands.
   for (const [id, list] of Object.entries(plannedSources())) {
     const kept = list.filter((service) => !answered.has(service))
     if (!kept.length) continue
@@ -563,13 +742,10 @@ export async function syncPlannedFromServices(
   // Only removals still owed suppress a re-add. A queued ADD is the opposite
   // case: the title is on the local list already, and a pull that finds it
   // at a service that did take it must be free to record that source.
-  const awaitingRemoval = new Set(
-    Object.entries(pendingRemovals())
-      .filter(([, entry]) => entry.planned !== true)
-      .map(([id]) => id)
-  )
+  const awaitingRemoval = idsAwaitingRemoval()
   // Watched here outranks planned there — see remotePlanAdoptable.
-  const watched = new Set(db.history().map((entry) => String(entry.id)))
+  const history = db.history()
+  const watched = new Set(history.map((entry) => String(entry.id)))
   let added = 0
   // One row per id, not per entry: a film on all three lists is one title
   // planned three times over, not three titles.
@@ -605,18 +781,29 @@ export async function syncPlannedFromServices(
   if (twoWaySyncEnabled()) {
     const origins = plannedOrigins()
     const marks = trackingAccountMarks()
+    const trackedNow = db.tracked()
+    // Shows somebody has started here. Starting one is what moves it off
+    // plan to watch at the service, and that is not a removal — see
+    // plannedRemovals' sixth condition. Films are left out on purpose:
+    // a film watched leaves the plan by rule 8.
+    const started = startedTitles({
+      history,
+      tracked: trackedNow.map((item) => String(item.id)),
+      historyIdOf
+    })
     // The decision lives in watchlistRules, which has no database or
     // network in it and is tested directly. This half just carries it
     // out — a second copy of the reasoning here is how the tested rule
     // and the shipped behaviour drift apart.
     const doomed = plannedRemovals({
-      tracked: db.tracked().map((item) => String(item.id)),
+      tracked: trackedNow.map((item) => String(item.id)),
       origins,
       sources,
       answered,
       // Whose accounts these are right now. An origin stamped with a
       // different login is not evidence about the list in front of us.
-      accounts: marks
+      accounts: marks,
+      started
     })
     for (const id of doomed) {
       try {
@@ -792,7 +979,14 @@ async function applyPlanChange(
     delete queued[item.id]
     writePendingRemovals(queued)
   }
-  const onServices = planned ? [] : (plannedSources()[item.id] ?? [])
+  // A show with viewings recorded here never sends the unscoped removal,
+  // evidence or not: at Simkl it is a bare show reference to the un-watch
+  // endpoint, and would erase every episode watched there. Taking a show
+  // somebody is half way through off the list means "stop showing me
+  // this", not "forget I watched it" — see removalEvidence.
+  const onServices = planned
+    ? []
+    : removalEvidence(plannedSources()[item.id] ?? [], startedHere(item, historyIds(), historyIdOf))
   const outcome = await pushPlanEverywhere(item, planned, { onServices })
   if (planned) {
     // An add this app made IS evidence the title is on those services —

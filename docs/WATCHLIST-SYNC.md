@@ -53,6 +53,17 @@ This is the whole safety property. A first sync against an account you
 have never pulled from cannot delete anything, because nothing has an
 origin yet.
 
+One more condition holds a removal back even with an origin: **a title
+that has been started here is never removed by a pull.** Leaving plan to
+watch at a service is what starting a show looks like there. Simkl moves
+it to "watching" on the first episode, MAL on the first progress push, so
+a series that was planned at a service and then watched is absent from
+that service's plan list without anybody having removed it. Read as a
+removal, it would untrack the show and drop it out of Continue Watching.
+"Started" means a viewing recorded under the title, or under the show a
+merged anime season belongs to. Films are not in this set: a film watched
+leaves the plan by rule 8, not by a pull.
+
 ### 3. A local removal is only sent where it cannot do collateral damage
 
 Un-planning here removes the title from the services that have it. What
@@ -73,6 +84,15 @@ So an unscoped removal is sent **only** where this app's last pull
 actually found the title. No evidence, no request. Being wrong that way
 leaves a stale row on somebody's list, which they can delete; being wrong
 the other way destroys history nobody can get back.
+
+Evidence is necessary but not always enough: **the unscoped removal is
+never sent for a show with viewings recorded here.** Simkl's request there
+is a bare show reference, which erases the show's whole history, including
+episodes watched elsewhere. Taking a half-watched show off the list here
+means "stop showing me this", not "forget I watched it"; rule 8 says the
+same about a title marked watched. The same holds when a queued removal is
+retried after the show was started: a removal owed only to Simkl then
+sends nothing and is dropped as settled. Trakt and MAL are unaffected.
 
 ### 4. Local always wins a genuine conflict
 
@@ -95,6 +115,15 @@ the most ordinary removal there is. "Nothing came back" therefore has to
 be split into "nothing answered" (do nothing) and "everything answered,
 with nothing in it" (a removal), or the one case this half exists for is
 the one case it never handles.
+
+**A list that was not read has not answered either.** The background pull
+leaves Simkl's lists unread when Simkl says nothing has changed (see "When
+Simkl's lists are read", below). Simkl then counts exactly as a service
+that errored: it is not evidence this pass, no title that came from it can
+be removed, and the tags its last real read left behind are carried over,
+where they can only hold a removal back. It is never counted as having
+answered with an empty list, which would remove every title this app ever
+pulled from it.
 
 ### 6. A removal that has not landed yet suppresses its own undo
 
@@ -187,6 +216,50 @@ carried stays: the status reads planned again. Taking it off the plan is
 "Remove from plan", the evidence-gated removal of rule 3, on purpose a
 separate action.
 
+## When Simkl's lists are read
+
+Simkl counts requests per person, not per device (500 a day on a free
+account), and a phone linked to the desktop uses the desktop's own Simkl
+sign-in, so every device draws on one allowance. Simkl also asks every
+client to read `/sync/activities`, one small request, before fetching any
+list, and suspends clients that fetch lists without it.
+
+So the half-hourly background sync (`src/main/media-hub/watchSync.ts`)
+asks that one question first and reads only what moved:
+
+- **The three plan-to-watch lists** are fetched when Simkl's activity
+  stamp for films, shows or anime differs from the one they were last read
+  under, and once a day even if none does. The daily read is there because
+  some things on this side change what a read would do without touching
+  Simkl: a queued removal given up on (rule 6), sync switched back on, a
+  title that came from Simkl and has since left Trakt as well.
+- **The watched library the desktop's review panel is compared against**
+  is fetched when the films stamp moved, or when the set of films watched
+  here changed (a film marked here whose push to Simkl failed moves only
+  this side), and only if the app's interface has asked for that panel
+  since it started. The phone and TV app never do, so there it is never
+  fetched.
+- **Trakt and MyAnimeList** have no such question to ask, and are read
+  every half hour as before.
+
+On a day when nothing changes that is one Simkl request per half hour
+instead of five. What is **owed** is not gated: plan changes a service
+refused (rule 6) and watch-history decisions still queued are retried on
+every pass, whatever Simkl said.
+
+If the question itself fails, nothing behind it is fetched and Simkl is
+reported with that error. A refusal Simkl sent (a spent allowance, a
+server error) is waited out for longer each time it repeats, up to four
+hours; a refused sign-in is asked again every six hours; a request that
+never reached Simkl (this machine was offline) is simply asked again at
+the next half hour.
+
+"Sync now" is not gated. It reads every connected service, every time.
+
+The record of what was read is kept per profile and per Simkl account, and
+is shared with the phone and TV app's catch-up (below), so the two of them
+read Simkl's lists once per change between them rather than once each.
+
 ## What this deliberately does not do
 
 - **No merging of what a "list" means.** Trakt's watchlist, Simkl's
@@ -197,7 +270,100 @@ separate action.
   feature, read-only first.
 - **No history.** This is plan-to-watch only. Watch history has its own
   reconcile queue with its own review UI, and the two should not be
-  confused for each other.
+  confused for each other. The one exception is the phone and TV app's
+  catch-up, below, which takes Simkl's history in without a review.
+
+## The catch-up on the phone and TV app
+
+The desktop settles disagreements with Simkl in a review panel. The phone
+and TV app have no panel and nobody to ask, so they run a **catch-up**
+(`src/main/media-hub/simklCatchUp.ts`; what it decides to write is in
+`simklCatchUpRules.ts`, which is tested directly).
+
+**Who asks.** Only the phone and TV interface, through `tracking.catchUp`:
+when the app opens, when it comes back to the front, and straight after
+linking to a desktop. The desktop app never runs it. A call within two
+minutes of the last pass, or while one is running, is answered with that
+pass's report; nothing runs while something is playing; a fresh link skips
+the two-minute wait. All of that is per profile: a pass for one profile
+never answers for another, which gets its own.
+
+**What it reads.** First the watchlist pull above, so the plan is settled
+before any history lands: the pull refuses to plan anything with local
+history, so the other order would refuse a title for a viewing the same
+pass wrote. Simkl's lists are skipped in that pull if they were already
+read under the same activity stamps ("When Simkl's lists are read", above).
+Then Simkl's watched history, one kind at a time (films, shows, anime), but
+only for a kind whose activity stamp at `/sync/activities` has moved since
+it was last fully applied. A kind is fetched whole the first time and with
+`date_from` after that, which is what Simkl asks of a client that keeps in
+step: only what changed since the stamp its last applied fetch was made
+under. Once a week the fetch that is due anyway is whole again, in case an
+incremental answer left something out. A kind Simkl gives no stamp for is
+read once a day, not on every pass. If the activities request fails,
+nothing is fetched and it is tried again after a pause that lengthens up to
+an hour; a 401 or 403 stops the catch-up's own Simkl requests until this
+device is linked again or six hours have passed, whichever comes first (the
+half-hourly background sync asks again every six hours too, and the history
+pushes are separate and keep trying). A kind whose fetch or write fails
+waits out its own, longer, pause without holding up the others, and a kind
+that was fetched but could not be placed in full (an id lookup nobody could
+answer) is left ten minutes. Those pauses belong to the account and profile
+that earned them. A library answer, or a plan-to-watch list, that was cut
+off part way counts as a failure, never as an empty one. When Trakt or MAL
+is connected, the pull also runs at most every ten minutes on its own, and
+at once after a fresh link. Anime waits until the catalog has been
+organised into its seasons, and is asked for again a few minutes later.
+
+**It only ever adds.** It writes viewings this device has no record of and
+never removes one, however the Simkl library looks. A viewing already held
+here is skipped rather than written again, because this device's own
+viewing comes back from Simkl stamped differently and would otherwise
+appear as a second play. Each title's state at Simkl is remembered, and a
+title that has not changed since is left entirely alone. A film taken as
+watched that is still on the plan comes off it, exactly as in rule 8:
+Simkl and MAL are not asked to remove anything.
+
+**How a show comes to be followed.** A show or anime that Simkl lists as
+"watching", with a viewing in the last year, that is not already on the
+local list, and of which the pass has just taken a viewing this device did
+not have, is added to it. That last condition is what tells a viewing made
+somewhere else from the echo of one made here: an episode played on this
+device is pushed to Simkl and changes the title there too. This is local
+only: nothing is pushed, because a plan add sent to Simkl would move a show
+being watched back to plan to watch. "On hold" is not followed, and neither
+is an anime film, special or music video. A title whose un-plan is still
+owed to a service (rule 6) is not followed either. A show played on the
+phone itself is followed the same way from its first episode, when it has
+more than one playable episode.
+
+**"Remove from My List" on a followed show** takes it off the local list
+like any other un-plan. The catch-up does not follow it again until a
+viewing of it made somewhere else arrives; playing it on the phone follows
+it again at once. Rule 3 applies to the removal as it does anywhere:
+with viewings recorded here, the unscoped Simkl removal is not sent.
+
+**Known limits.**
+
+- It is only as good as Simkl. A viewing Simkl never recorded cannot
+  arrive. An entry with no IMDb id (films and series) or no resolvable
+  Kitsu id (anime) is skipped and counted, not guessed. An episode Simkl
+  holds without a usable date is left out. A finished film with no watched
+  date is recorded at the date it was added to the list there, or failing
+  that at the time of the catch-up.
+- One direction. The desktop still does not take in episodes watched on the
+  phone. Those reach Simkl through the ordinary history push; a film then
+  shows up in the desktop's review panel, and an episode does not reach the
+  desktop at all yet.
+- Anime takes only each Simkl entry's own first-season numbering (its
+  season 1, or none), filed under whichever season of the merged franchise
+  that entry is here. An episode Simkl files under season 0, or 2 and
+  later, is refused. Later seasons of a merged franchise that this app
+  pushed may be misfiled under the first entry at Simkl; the catch-up skips
+  an episode the device already holds under a later season, but cannot
+  repair what Simkl holds.
+- A local un-watch whose removal at Simkl failed can come back when that
+  title next has activity there.
 
 ## How to undo it
 

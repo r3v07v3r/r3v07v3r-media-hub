@@ -18,6 +18,7 @@ import {
   HistoryEntry,
   MediaKind,
   StreamCandidate,
+  TrackedItem,
   Trailer
 } from '../../shared/media-hub/types'
 import {
@@ -1362,4 +1363,180 @@ export function continueWatchingList(
   return rows.sort(
     (a, b) => new Date(b.lastWatchedAt).getTime() - new Date(a.lastWatchedAt).getTime()
   )
+}
+
+/** One title Home needs the episode list of. */
+export interface HomeDetailWant {
+  type: MediaKind
+  id: string
+  /** The TRACKED id this detail's watched count is filed under — metadata
+   *  may answer under another id. Null for a detail fetched only to be
+   *  shown in Continue Watching. */
+  countFor: string | null
+}
+
+/**
+ * Which titles Home needs episode lists for, out of everything tracked.
+ *
+ * Only shows somebody has started — plus the legacy Simkl-keyed rows whose
+ * real id only metadata can supply. Resolving every planned series is what
+ * kept Home waiting on a long list, and nothing reads a count for a show
+ * nobody has started.
+ *
+ * A merged anime's later season, tracked under its own id, is the case that
+ * needs care. Its metadata is that one season under that id, while its
+ * viewings are kept under the show, at the season it is there — so counted
+ * against its own detail it always reads zero. It is counted where the rows
+ * are (`seasonCount`; the season is 2 or later, so no special is among
+ * them), and when it is in progress the SHOW is asked for: that is the
+ * detail the viewings match, and the page a Continue Watching card should
+ * open. Without that a season somebody is half way through sat in neither
+ * of Home's rows.
+ */
+export function homeDetailWants(input: {
+  tracked: readonly TrackedItem[]
+  history: readonly HistoryEntry[]
+  /** The id a tracked title's history is kept under. */
+  historyIdOf: (item: TrackedItem) => string
+  /** Which season of that show a later season is; only asked when
+   *  historyIdOf differs from the item's own id. */
+  seasonOf: (item: TrackedItem) => number
+}): {
+  wanted: HomeDetailWant[]
+  seasonCount: Map<string, number>
+  /** show id -> the tracked later season it was asked for on behalf of.
+   *  The show itself is not on the list, and whatever takes its Continue
+   *  Watching card away has to act on the title that is. */
+  onBehalfOf: Map<string, string>
+} {
+  const startedIds = new Set(input.history.map((entry) => String(entry.id)))
+  const wanted: HomeDetailWant[] = []
+  const asked = new Set<string>()
+  const want = (type: MediaKind, id: string, countFor: string | null): void => {
+    if (asked.has(id)) return
+    asked.add(id)
+    wanted.push({ type, id, countFor })
+  }
+  // Every title's own detail first, so one asked for on a later season's
+  // behalf never takes the place of the one its own count is read from.
+  for (const item of input.tracked) {
+    const id = String(item.id)
+    if (item.type !== 'movie' && (startedIds.has(id) || id.startsWith('simkl:'))) {
+      want(item.type, id, id)
+    }
+  }
+  const trackedIds = new Set(input.tracked.map((item) => String(item.id)))
+  const seasonCount = new Map<string, number>()
+  const onBehalfOf = new Map<string, string>()
+  for (const item of input.tracked) {
+    const id = String(item.id)
+    const showId = input.historyIdOf(item)
+    if (item.type === 'movie' || showId === id || !startedIds.has(showId)) continue
+    const season = input.seasonOf(item)
+    const episodes = new Set<number>()
+    for (const entry of input.history) {
+      if (String(entry.id) !== showId || entry.season !== season) continue
+      if (typeof entry.episode === 'number' && Number.isFinite(entry.episode)) {
+        episodes.add(entry.episode)
+      }
+    }
+    seasonCount.set(id, episodes.size)
+    // Not when the season also has rows under its own id (written before
+    // the show was grouped, or played from its own page): it has a detail
+    // and a card of its own already, and the show's would be a second tile
+    // for the same thing.
+    if (episodes.size === 0 || startedIds.has(id)) continue
+    want(item.type, showId, null)
+    if (!trackedIds.has(showId) && !onBehalfOf.has(showId)) onBehalfOf.set(showId, id)
+  }
+  return { wanted, seasonCount, onBehalfOf }
+}
+
+/**
+ * How many regular, aired episodes of each started tracked show have been
+ * watched — what plannedList reads to tell "only a special watched" (still
+ * plan to watch) from "in progress". The same episodes continueWatchingList
+ * counts, so the two rows are each other's complement.
+ *
+ * `fetched` is index-aligned with `wanted` (a lookup that failed is null),
+ * which is what lets a count be filed under the TRACKED id when metadata
+ * answers under another one.
+ *
+ * No count at all is an answer too, and plannedList leaves such a show out
+ * of the row: a lookup that failed, and a detail with no episodes — which
+ * is metadata that could not be fetched and came back as its catalog
+ * stand-in, not a show with nothing to count. Zero read off that would file
+ * a show somebody is half way through under Plan to Watch until the real
+ * answer arrived.
+ */
+export function homeWatchedCounts(input: {
+  wanted: readonly HomeDetailWant[]
+  fetched: readonly (CatalogItem | null | undefined)[]
+  /** homeDetailWants' seasonCount: a later season's viewings under its show. */
+  seasonCount: ReadonlyMap<string, number>
+  history: HistoryEntry[]
+}): Map<string, number> {
+  const startedIds = new Set(input.history.map((entry) => String(entry.id)))
+  const counts = new Map<string, number>()
+  for (const [id, count] of input.seasonCount) {
+    // A later season with rows under its own id as well is counted below,
+    // once its own detail is in hand.
+    if (!startedIds.has(id)) counts.set(id, count)
+  }
+  input.fetched.forEach((detail, index) => {
+    const countFor = input.wanted[index]?.countFor
+    if (!detail || !countFor) return
+    const regular = (detail.videos || []).filter((v) => isRegularEpisode(v) && hasAired(v))
+    const underShow = input.seasonCount.get(countFor) ?? 0
+    if (!regular.length && !underShow) return
+    counts.set(
+      countFor,
+      Math.max(episodeWatchState(regular, input.history, detail.id).watchedCount, underShow)
+    )
+  })
+  return counts
+}
+
+/**
+ * The tracked titles nobody has started: plan to watch, as a Home row.
+ *
+ * The complement of continueWatchingList, and it has to stay one — a show
+ * in both rows reads as a bug, and a show in neither has vanished from
+ * Home. So a started show counts as planned only when every viewing of it
+ * is a special (watched count of regular episodes exactly 0, where
+ * continueWatchingList needs at least 1). A started show whose episode list
+ * failed to load has no count and is left out: it is not knowably
+ * unstarted, and the next refresh will place it.
+ *
+ * A merged anime franchise is one tile. A later season tracked on its own
+ * keeps its history under the first season's id; when that id is tracked
+ * too, the later one is skipped rather than shown twice.
+ */
+export function plannedList(input: {
+  /** Newest first, as db.tracked() returns. */
+  tracked: TrackedItem[]
+  /** Ids with at least one history row. */
+  startedIds: ReadonlySet<string>
+  /** The id a tracked title's history is kept under (differs for a merged anime's later season). */
+  historyIdOf: (item: TrackedItem) => string
+  /** tracked id -> watched REGULAR aired episode count, for started shows whose metadata loaded. */
+  watchedRegularCount: ReadonlyMap<string, number>
+  /** Poster by id from the catalog index, for rows that carry none. */
+  posters: ReadonlyMap<string, string>
+}): TrackedItem[] {
+  const trackedIds = new Set(input.tracked.map((item) => item.id))
+  const rows: TrackedItem[] = []
+  for (const item of input.tracked) {
+    const historyId = input.historyIdOf(item)
+    if (historyId !== item.id && trackedIds.has(historyId)) continue
+    const started = input.startedIds.has(item.id) || input.startedIds.has(historyId)
+    if (started) {
+      if (item.type === 'movie') continue
+      if (input.watchedRegularCount.get(item.id) !== 0) continue
+    }
+    // A title a watchlist pull added arrives as a name and a year; the
+    // catalog index usually has its artwork.
+    rows.push({ ...item, poster: item.poster || input.posters.get(item.id) || '' })
+  }
+  return rows
 }

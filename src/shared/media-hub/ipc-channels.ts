@@ -150,6 +150,14 @@ export const MEDIA_HUB_CHANNELS = {
   recommendationsChanged: 'mediahub:recommendations:changed', // push event
   trackingList: 'mediahub:tracking:list',
   trackingToggle: 'mediahub:tracking:toggle',
+  /** Bring this device up to date with the tracking services: the watchlist
+   *  pull, then Simkl's watched history taken into the local record. Asked
+   *  for by the phone and TV app, which has no review panel to settle a
+   *  disagreement in — see main/media-hub/simklCatchUp.ts. */
+  trackingCatchUp: 'mediahub:tracking:catch-up',
+  /** Whether one title is on the list and which of it has been watched,
+   *  from the database alone — see TitleWatchState. */
+  trackingTitleState: 'mediahub:tracking:title-state',
   trackingMarkWatched: 'mediahub:tracking:mark-watched',
   trackingUnmarkWatched: 'mediahub:tracking:unmark-watched',
   trackingMarkSeasonWatched: 'mediahub:tracking:mark-season-watched',

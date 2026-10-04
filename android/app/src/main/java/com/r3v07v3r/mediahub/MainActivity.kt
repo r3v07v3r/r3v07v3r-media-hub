@@ -131,6 +131,15 @@ class MainActivity : Activity() {
         if (savedInstanceState == null) checkForUpdate()
     }
 
+    override fun onResume() {
+        super.onResume()
+        // Coming back to the app is when the page asks the backend what was
+        // watched elsewhere (src/app-ui/lib/librarySync.ts). Android promises
+        // nothing about the page's own visibilitychange on a resume, so the app
+        // says so itself. Before the page has loaded there is nobody to tell.
+        if (ready != null) web.evaluateJavascript("window.dispatchEvent(new Event('r3-resume'))", null)
+    }
+
     @Deprecated("Below Android 13 only; newer versions use the callback above.")
     override fun onBackPressed() {
         goBack()

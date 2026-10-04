@@ -2,7 +2,9 @@ import { useMemo } from 'react'
 import { recommendationRailTitle } from '@shared/media-hub/recommendationReason'
 import type { HomePersonalizedResult } from '@shared/media-hub/types'
 import { api, useAsync } from '../lib/api'
-import { toPosterItem, type PosterItem } from '../lib/posterItem'
+import { useCatchUp, useLibraryRefresh } from '../lib/librarySync'
+import { toPosterItem, trackedToPosterItem, type PosterItem } from '../lib/posterItem'
+import { useSlowLoad } from '../lib/useSlowLoad'
 import PosterRow from '../components/PosterRow'
 import PosterSkeleton from '../components/PosterSkeleton'
 import LoadingNote from '../components/LoadingNote'
@@ -58,12 +60,21 @@ function buildRails(data: HomePersonalizedResult | null): Rail[] {
   return []
 }
 
+/** Under this long, a catch-up finishes before anybody could read a note
+ *  about it, so none is shown and a fast pass never flickers the page. */
+const UPDATING_NOTE_DELAY_MS = 1000
+
 export default function Home() {
-  const { data, error, loading } = useAsync(() => {
+  const { data, error, loading, refresh } = useAsync(() => {
     const mediaHub = api()
     if (!mediaHub) return Promise.reject(new Error('Not connected to a backend.'))
     return mediaHub.home.personalized()
   }, [])
+  // Home is where a catch-up's results show, so it refetches behind what is
+  // on screen whenever one lands — never back to the skeleton.
+  useLibraryRefresh(refresh)
+  const catchUp = useCatchUp()
+  const updating = useSlowLoad(catchUp.inFlight, UPDATING_NOTE_DELAY_MS)
 
   const continueItems = useMemo(
     () =>
@@ -73,9 +84,19 @@ export default function Home() {
       })),
     [data]
   )
+  // All of it, in one row. Browse already holds hundreds of lazily loaded
+  // cards in a row like this, so a long list needs no second screen.
+  const plannedItems = useMemo(() => (data?.planned ?? []).map(trackedToPosterItem), [data])
   const rails = useMemo(() => buildRails(data), [data])
-  const empty = !loading && !continueItems.length && !rails.length
+  const noPersonalRows = !continueItems.length && !plannedItems.length
+  // Not "empty" while a catch-up is still running: on a freshly linked phone
+  // the rows are empty precisely because it has not answered yet.
+  const empty = !loading && !catchUp.inFlight && noPersonalRows && !rails.length
   const firstLoad = loading && !data
+  // A report with no `at` is the backend declining to run (something was
+  // playing) before any pass ever has; it knows nothing about what is
+  // connected, so it must not be read as "nothing is".
+  const report = catchUp.report && catchUp.report.at > 0 ? catchUp.report : null
 
   return (
     <div className="home-screen" aria-busy={loading}>
@@ -91,7 +112,22 @@ export default function Home() {
           {error && (
             <StatusNote tone="error">Could not reach the backend for recommendations.</StatusNote>
           )}
+          {updating && <StatusNote>Updating…</StatusNote>}
+          {report?.signedOut ? (
+            <StatusNote>
+              Simkl signed this device out. Link your computer again in Settings.
+            </StatusNote>
+          ) : (
+            report?.connected === false &&
+            noPersonalRows && (
+              <StatusNote>
+                Link your computer in Settings to see what you&apos;re watching and your plan to
+                watch list.
+              </StatusNote>
+            )
+          )}
           <PosterRow title="Continue Watching" items={continueItems} />
+          <PosterRow title="Plan to Watch" items={plannedItems} />
           {rails.map((rail) => (
             <PosterRow key={rail.id} title={rail.title} items={rail.items} />
           ))}

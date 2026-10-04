@@ -74,6 +74,18 @@ interface FetchScheduling {
    * known to answer with something larger than an ordinary API page.
    */
   maxResponseBytes?: number
+  /**
+   * Reject when the body could not be read to its end, or is not JSON,
+   * instead of answering `{}`.
+   *
+   * The lenient default suits a call whose body is a status and little
+   * else. It is wrong for one whose body IS the answer: a whole-library
+   * read cut off by the timeout or a dropped connection would come back as
+   * an empty library, and a caller that then records "library read" has
+   * skipped everything in it. An empty body still reads as `{}` — that is
+   * how an empty library is spelled.
+   */
+  strictBody?: boolean
 }
 
 const REQUEST_TIMEOUT_MS = 30000
@@ -108,7 +120,14 @@ export function fetchJson<T = unknown>(
   scheduling: FetchScheduling = {}
 ): Promise<T> {
   return schedule(
-    () => request<T>(url, options, scheduling.timeoutMs, scheduling.maxResponseBytes),
+    () =>
+      request<T>(
+        url,
+        options,
+        scheduling.timeoutMs,
+        scheduling.maxResponseBytes,
+        scheduling.strictBody
+      ),
     {
       lane: scheduling.lane ?? laneForUrl(url),
       priority: scheduling.priority ?? 'interactive',
@@ -130,15 +149,21 @@ async function request<T>(
   url: string | URL,
   options: RequestInit,
   timeoutMs = REQUEST_TIMEOUT_MS,
-  maxResponseBytes = DEFAULT_MAX_RESPONSE_BYTES
+  maxResponseBytes = DEFAULT_MAX_RESPONSE_BYTES,
+  strictBody = false
 ): Promise<T> {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), timeoutMs)
 
   try {
     const response = await fetch(String(url), { ...options, signal: controller.signal })
-    const body = (await readJsonBody(response, maxResponseBytes)) as JsonErrorBody &
-      Record<string, unknown>
+    // Lenient for a failed response whatever was asked: its body is only
+    // read for an error message, and the status is thrown below either way.
+    const body = (await readJsonBody(
+      response,
+      maxResponseBytes,
+      strictBody && response.ok
+    )) as JsonErrorBody & Record<string, unknown>
 
     if (!response.ok || body.success === false) {
       const error = new Error(
@@ -161,18 +186,28 @@ async function request<T>(
  * non-JSON or unreadable body becomes `{}` — with the one exception that a
  * body over the cap rejects, so it surfaces as an ordinary request error
  * instead of being buffered.
+ *
+ * `strict` (FetchScheduling.strictBody) rejects the other two as well: a
+ * read that failed part way — the timeout firing mid-stream, a connection
+ * dropped — and text that is there but does not parse. Only a body with
+ * nothing in it still reads as `{}`.
  */
-async function readJsonBody(response: Response, maxBytes: number): Promise<unknown> {
+async function readJsonBody(
+  response: Response,
+  maxBytes: number,
+  strict = false
+): Promise<unknown> {
   let text: string
   try {
     text = new TextDecoder().decode(await readLimitedResponseBytes(response, maxBytes))
   } catch (error) {
-    if (error instanceof ResponseTooLargeError) throw error
+    if (error instanceof ResponseTooLargeError || strict) throw error
     return {}
   }
   try {
     return JSON.parse(text)
-  } catch {
+  } catch (error) {
+    if (strict && text.trim()) throw error
     return {}
   }
 }

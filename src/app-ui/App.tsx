@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { HashRouter, Navigate, Route, Routes } from 'react-router-dom'
 import { useSpatialNav } from './lib/spatialNav'
+import { useCatchUpTriggers } from './lib/librarySync'
 import NavChrome from './components/NavChrome'
 import Home from './screens/Home'
 import Browse from './screens/Browse'
@@ -12,6 +13,7 @@ import NotConnected from './screens/NotConnected'
 
 function Shell() {
   useSpatialNav()
+  useCatchUpTriggers()
   return (
     <div className="app-shell">
       <main className="app-content">

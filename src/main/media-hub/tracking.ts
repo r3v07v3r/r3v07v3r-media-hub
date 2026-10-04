@@ -15,6 +15,7 @@
 import { app } from 'electron'
 import type {
   CatalogItem,
+  CatchUpReport,
   ConnectResult,
   DislikedListResult,
   EpisodePlaybackPosition,
@@ -41,6 +42,8 @@ import type {
   SimklPinStart,
   SimklPollResult,
   SimklStatus,
+  TitleWatchState,
+  TrackedItem,
   TrackedItemEnriched,
   TrackingListResult,
   WatchStatusDiscrepancy
@@ -66,8 +69,16 @@ import {
   storeRecommendations,
   SERVED_COUNT
 } from './recommendations'
-import { airingStatus, continueWatchingList } from './core'
+import {
+  airingStatus,
+  continueWatchingList,
+  homeDetailWants,
+  homeWatchedCounts,
+  plannedList
+} from './core'
 import { catalogData, metadata } from './catalog'
+import { animeGroupingReady, resolveAnimeGroupTarget } from './animeSeasons'
+import { catchUpFromServices } from './simklCatchUp'
 import { getDatabase } from './dbState'
 import {
   applyLocalPlanChange,
@@ -127,10 +138,12 @@ import {
 import {
   forgetSimklWatchedCache,
   invalidateSimklWatchedCache,
+  simklActivities,
   simklRequest,
   simklUrl,
   simklWatchedSnapshot
 } from './simklClient'
+import { newWatchSyncMemory, runWatchSync } from './watchSync'
 import { titlePushQueue, titlePushKey } from './titlePushQueue'
 import { cachedMetadata } from './titleNames'
 import { imdbForSimklKeyedId, isSimklKeyedId } from './simklKeyedHistory'
@@ -269,6 +282,10 @@ function pushTitleHistory(
 interface MarkWatchedPayload {
   item: SimklPushItem
   playback?: PlaybackPosition
+  /** Also start following the show, if nobody is yet, so it appears in
+   *  Continue Watching. Set by the phone and TV app's player, which has no
+   *  separate control for it. A local write only — see the handler. */
+  follow?: boolean
 }
 
 /** Each entry needs a concrete episode number (unlike the loose `PlaybackPosition` used elsewhere) since these feed seasonHistoryPayload's `episodeNumbers: number[]`. */
@@ -1036,14 +1053,22 @@ async function pushPendingToServices(priority: TaskPriority): Promise<Set<string
 }
 
 /**
- * The recurring watch-history pass, for backgroundJobs.ts.
+ * Whether anything in this process has asked for the review panel's check.
  *
- * Two things, in the order they have to happen. First anything already
- * decided and still queued goes out — a decision made in a previous
- * session that never reached the services is the one piece of this that
- * is genuinely owed to somebody. Then, if the cooldown allows, the local
- * history is diffed against Simkl's so new disagreements are ready for
- * the review panel the next time it is opened.
+ * The desktop's interface asks a few seconds after it mounts. The phone and
+ * TV app's has no review panel and never does — and for that backend the
+ * recurring diff below would be two whole Simkl libraries fetched every
+ * time a film changed, for a result nothing will ever read.
+ */
+let reviewAsked = false
+
+/** What the recurring pass remembers about Simkl's gate — see watchSync.ts. */
+const watchSyncMemory = newWatchSyncMemory()
+
+/**
+ * The review panel's diff, made in the background so it is ready when the
+ * panel is next opened. Resolves true only when it was made against a
+ * library fetched from Simkl in this call.
  *
  * Deliberately does NOT push discrepancies at the renderer. The review
  * panel is opened from the renderer's own reconcileCheck call (see
@@ -1051,31 +1076,43 @@ async function pushPendingToServices(priority: TaskPriority): Promise<Set<string
  * cooperate rather than double-asking, and a background pass never
  * interrupts anyone with a panel they did not ask for.
  */
-export async function runBackgroundWatchSync(): Promise<void> {
-  // Watchlists come in on the same schedule as history goes out. They are
-  // both "make the local picture match the services", and giving them
-  // separate timers would mean two independent things to reason about for
-  // no benefit. Failures are swallowed inside the pull, per service.
-  try {
-    await syncPlannedFromServices('background')
-  } catch (error) {
-    logError('job:planned-sync', error)
-  }
-  if (!simklCredentials().accessToken) return
-  // Background: this is a recurring job nobody asked for, so its pushes
-  // must not jump ahead of the screen someone is looking at, and must
-  // stand down along with the rest of the job once playback starts.
-  await flushPendingPushes('background')
+async function backgroundReconcile(): Promise<boolean> {
   const db = getDatabase()
-  if (db.getCache(reconcileKey(RECONCILE_COOLDOWN_KEY_PREFIX))) return
+  if (db.getCache(reconcileKey(RECONCILE_COOLDOWN_KEY_PREFIX))) return false
   db.putCache(reconcileKey(RECONCILE_COOLDOWN_KEY_PREFIX), true, RECONCILE_COOLDOWN_MS)
   const account = simklAccountMark()
   const profile = db.activeProfile()
-  try {
-    writeReconcileResult(account, profile, await computeMovieDiscrepancies('background'))
-  } catch (error) {
-    logError('job:watch-sync', error)
-  }
+  const diff = await computeMovieDiscrepancies('background')
+  writeReconcileResult(account, profile, diff.discrepancies)
+  return diff.fetched
+}
+
+/**
+ * The recurring watch-history pass, for backgroundJobs.ts.
+ *
+ * What it does, in what order, and what it will not ask Simkl for unless
+ * Simkl says something changed is watchSync.ts — which takes everything it
+ * touches as a dependency so it can be tested. This is the real set.
+ */
+export async function runBackgroundWatchSync(): Promise<void> {
+  await runWatchSync(
+    {
+      db: getDatabase(),
+      account: simklAccountMark,
+      // Background throughout: this is a recurring job nobody asked for, so
+      // its requests must not jump ahead of the screen someone is looking
+      // at, and must stand down along with the rest of the job once
+      // playback starts.
+      activities: () => simklActivities('background'),
+      syncPlanned: (options) => syncPlannedFromServices('background', options),
+      flushPushes: () => flushPendingPushes('background'),
+      reviewAsked: () => reviewAsked,
+      reconcile: backgroundReconcile,
+      now: () => Date.now(),
+      log: logError
+    },
+    watchSyncMemory
+  )
 }
 
 /** Single-flight wrapper — the debounce timer and a reconcile check can
@@ -1183,13 +1220,21 @@ function canonicalWriteId(item: { id: unknown; type?: unknown }): string {
   return imdb
 }
 
+interface MovieDiff {
+  discrepancies: WatchStatusDiscrepancy[]
+  /** Whether Simkl's library was read from Simkl for this diff — not from
+   *  the snapshot cache, and not left unread. The recurring pass records
+   *  Simkl's activity stamp only against a diff that was (watchSync.ts). */
+  fetched: boolean
+}
+
 /** The actual diff. Local and remote are each reduced to "which movie ids
  *  does this side consider watched," and only ids where the two sides
  *  disagree are returned — an id watched (or not) on both sides is
  *  already in agreement and never surfaced. */
 async function computeMovieDiscrepancies(
   priority: TaskPriority = 'background'
-): Promise<WatchStatusDiscrepancy[]> {
+): Promise<MovieDiff> {
   const ignored = ignoredReconcileIds()
   // Titles this app has stopped trying to push for the connected
   // account — see addAbandonedReconcileId.
@@ -1233,7 +1278,7 @@ async function computeMovieDiscrepancies(
   // panel offering to push the person's entire watch history to an account
   // that already has it. Reporting nothing is the honest answer: the
   // cooldown lapses and the next pass asks again.
-  if (!snapshot.complete) return []
+  if (!snapshot.complete) return { discrepancies: [], fetched: false }
   const remoteMovies = new Map(
     snapshot.entries.filter((h) => h.type === 'movie').map((h) => [h.id, h] as const)
   )
@@ -1278,7 +1323,7 @@ async function computeMovieDiscrepancies(
   // has opened yet. mapWithLimit never returns null for an item here —
   // the per-item catch below always yields the unenriched row — so the
   // fallback is only satisfying the type.
-  return (
+  const discrepancies = (
     await mapWithLimit(out, async (discrepancy) => {
       // An unmappable id 404s every metadata provider on every single
       // pass (three such lines per check, for weeks, in the live log).
@@ -1299,6 +1344,7 @@ async function computeMovieDiscrepancies(
       }
     })
   ).map((row, index) => row ?? out[index])
+  return { discrepancies, fetched: snapshot.fetched }
 }
 
 /** Registers every `tracking:*`, `home:personalized`, and `simkl:*` IPC handler. Call once during main-process startup. */
@@ -1366,6 +1412,34 @@ export function registerTrackingIpc(): void {
   )
 
   /**
+   * The phone and TV app's catch-up — see simklCatchUp.ts. Asked for on
+   * launch and on every resume; the pass itself decides whether that is
+   * worth a request, so the screen never has to.
+   */
+  handle<{ force?: boolean } | undefined, CatchUpReport>(
+    MEDIA_HUB_CHANNELS.trackingCatchUp,
+    async (_e, payload) => catchUpFromServices({ force: payload?.force === true })
+  )
+
+  /**
+   * Whether one title is on the list and which of it is watched, from the
+   * database alone. The detail screen needs this to start Play at the right
+   * episode, and tracking:list answers it only after resolving metadata for
+   * every tracked series — seconds on a long list, for one title's rows.
+   */
+  handle<{ id: string }, TitleWatchState>(MEDIA_HUB_CHANNELS.trackingTitleState, (_e, payload) => {
+    const db = getDatabase()
+    const id = String(payload?.id ?? '')
+    return {
+      tracked: db.isTracked(id),
+      watched: db
+        .history()
+        .filter((entry) => String(entry.id) === id)
+        .map((entry) => ({ season: entry.season, episode: entry.episode }))
+    }
+  })
+
+  /**
    * Named lists from the services, read only.
    *
    * Answers from cache first and refreshes behind it: reading these
@@ -1426,7 +1500,7 @@ export function registerTrackingIpc(): void {
 
   handle<MarkWatchedPayload, MarkWatchedResult>(
     MEDIA_HUB_CHANNELS.trackingMarkWatched,
-    async (_e, { item, playback }) => {
+    async (_e, { item, playback, follow }) => {
       // This handler used to refuse any id no tracking service can
       // express, on the grounds that only mockData's m-* demo pool could
       // produce one — the write that put three demo-id duplicates into
@@ -1439,7 +1513,14 @@ export function registerTrackingIpc(): void {
       // hasExpressibleSimklId in reconcileCheck).
       //
       item = { ...item, id: canonicalWriteId(item) }
-      getDatabase().markWatched(item, playback || {})
+      const db = getDatabase()
+      db.markWatched(item, playback || {})
+      // A show played on the phone or TV is followed, so it reaches
+      // Continue Watching there — the lite UI has no My List button on the
+      // player to do it by hand. Local only, never pushLocalPlanChange: a
+      // plan add would move the show back to plan to watch at Simkl, and
+      // Simkl learns it is being watched from the history push below.
+      if (follow && item.type !== 'movie' && !db.isTracked(item.id)) db.track(item)
       requestRecommendationsRebuild()
       // None of the services is awaited. The local row IS the record; each
       // push logs its own failure (syncSimklHistory, pushMalProgress,
@@ -1749,6 +1830,9 @@ export function registerTrackingIpc(): void {
   // renderer already owns exactly when "the app has settled in and this
   // won't compete with anything the person is actively doing" is true.
   handle<undefined, ReconcileCheckResult>(MEDIA_HUB_CHANNELS.trackingReconcileCheck, async () => {
+    // Before anything can return: this is the proof that the interface in
+    // front of this backend has a review panel at all — see reviewAsked.
+    reviewAsked = true
     if (!simklCredentials().accessToken) return { ran: false, discrepancies: [] }
     const db = getDatabase()
     // Ahead of the cooldown below, which throttles the diff, not this.
@@ -1773,7 +1857,7 @@ export function registerTrackingIpc(): void {
     const account = simklAccountMark()
     const profile = db.activeProfile()
     try {
-      const discrepancies = await computeMovieDiscrepancies()
+      const { discrepancies } = await computeMovieDiscrepancies()
       writeReconcileResult(account, profile, discrepancies)
       // Anything confirmed moments ago is settled, whatever Simkl's
       // all-items view says — that read can lag its own write, and
@@ -2079,19 +2163,57 @@ export function registerTrackingIpc(): void {
       recommendationRails = groupRecommendationRails(full)
     }
 
-    // See tracking:list above — same fan-out, same bound, and the two
-    // share their per-title fetches through metadata()'s coalescing.
-    const details = (
-      await mapWithLimit(
-        tracked.filter((x) => x.type !== 'movie'),
-        (x) => metadata(x.type, x.id, 'visible')
-      )
-    ).filter((x): x is CatalogItem => Boolean(x))
+    // The id a tracked title's viewings are kept under. A merged anime's
+    // later season is planned under its own Kitsu id and watched under the
+    // show it belongs to — but only once the catalog has been grouped;
+    // before then every id resolves to itself anyway (see
+    // animeGroupingReady), so asking would only build an empty index.
+    const groupingReady = animeGroupingReady()
+    const historyIdOf = (item: TrackedItem): string => {
+      const id = String(item.id)
+      return groupingReady && id.startsWith('kitsu:') ? resolveAnimeGroupTarget(id).id : id
+    }
+    const startedIds = new Set(history.map((entry) => String(entry.id)))
+
+    // Metadata only for the shows somebody has started — see
+    // homeDetailWants. Nothing in either UI reads `updates` for a title
+    // nobody has started, and resolving every planned series — six at a
+    // time, each a 24-hour cache entry — is what kept Home waiting tens of
+    // seconds on a long list. See tracking:list above for the bound and the
+    // shared coalescing.
+    const { wanted, seasonCount, onBehalfOf } = homeDetailWants({
+      tracked,
+      history,
+      historyIdOf,
+      seasonOf: (item) => resolveAnimeGroupTarget(String(item.id)).season
+    })
+    const fetched = await mapWithLimit(wanted, (x) => metadata(x.type, x.id, 'visible'))
+    const details = fetched.filter((x): x is CatalogItem => Boolean(x))
+    // Index-aligned with `wanted` until the filter above, which is what the
+    // counts are read off — see homeWatchedCounts.
+    const watchedRegularCount = homeWatchedCounts({ wanted, fetched, seasonCount, history })
+    // A title a watchlist pull added arrives as a name and a year; the
+    // catalog index usually has the artwork.
+    const posters = new Map<string, string>()
+    const bare = tracked.filter((item) => !item.poster).map((item) => String(item.id))
+    if (bare.length) {
+      for (const item of db.indexByIds(bare).items) {
+        if (item.poster) posters.set(String(item.id), item.poster)
+      }
+    }
 
     return {
       tracked,
       updates: db.trackedUpdates(details),
-      continueWatching: continueWatchingList(details, history).slice(0, 18),
+      continueWatching: continueWatchingList(details, history)
+        .slice(0, 18)
+        // A show that is here only because a later season of it is on the
+        // list says which season that is — see ContinueWatchingEntry.trackedId.
+        .map((row) => {
+          const trackedId = onBehalfOf.get(String(row.id))
+          return trackedId ? { ...row, trackedId } : row
+        }),
+      planned: plannedList({ tracked, startedIds, historyIdOf, watchedRegularCount, posters }),
       recommendations,
       recommendationReasons,
       recommendationRails,

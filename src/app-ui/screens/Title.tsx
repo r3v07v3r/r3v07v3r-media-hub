@@ -1,14 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import type { CatalogItem, Episode } from '@shared/media-hub/types'
+import type { CatalogItem, Episode, TitleWatchState } from '@shared/media-hub/types'
 import { nativeHost } from '../lib/nativeHost'
 import { setNowPlaying } from '../lib/nowPlaying'
 import { hasAired } from '@shared/media-hub/catalog-logic'
-import { episodeToStart } from '@shared/media-hub/nextEpisode'
+import { episodeToStart, episodeWatchKey } from '@shared/media-hub/nextEpisode'
 // Reused rather than re-derived — see that file's own doc comment for
 // exactly why series/anime need the season/episode suffix and movies don't.
 import { buildMediaId } from '../../renderer/src/lib/mediaHub/streamId'
 import { api, useAsync } from '../lib/api'
+import { useLibraryRefresh } from '../lib/librarySync'
 import { isMediaKind } from '../lib/mediaKind'
 import { releaseCountdown, type ReleaseCountdown } from '../lib/releaseCountdown'
 import LoadingNote from '../components/LoadingNote'
@@ -51,12 +52,6 @@ function groupBySeason(videos: Episode[] | undefined): Map<number, Episode[]> {
   for (const list of seasons.values()) list.sort((a, b) => a.episode - b.episode)
   return seasons
 }
-
-// No watch history is read here — this app has no continue-watching
-// wiring yet (browse-first; see the task brief) — so episodeToStart always
-// lands on the first playable episode, which is exactly what it falls
-// back to internally once every episode is treated as unwatched.
-const NO_WATCHED_KEYS = new Set<string>()
 
 // Above this many characters the overview gets clamped with a More/Less
 // toggle; below it, the full text already fits in the clamp's own line
@@ -130,6 +125,26 @@ function CheckIcon() {
   )
 }
 
+/** The small mark beside a watched episode's number — the check from My
+ *  List, scaled down to sit inside the row rather than compete with it. */
+function WatchedTick() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      width="12"
+      height="12"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="3"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <polyline points="20 6 9 17 4 12" />
+    </svg>
+  )
+}
+
 function PlayGlyph() {
   return (
     <svg
@@ -162,11 +177,43 @@ export default function Title() {
     return mediaHub.catalog.meta(kind, id)
   }, [kind, id])
 
+  // What the local record says about this title: on the list or not, and
+  // which episodes are watched. Asked by the id catalog.meta RETURNED, not
+  // the route's — that is the id history is kept under, and the two differ
+  // whenever a link names a title by another of its ids. The answer carries
+  // the id it is for, so a page that has moved on to another title can tell
+  // a stale answer from a current one.
+  const itemId = item?.id ?? null
+  const watchState = useAsync<{ id: string; state: TitleWatchState } | null>(() => {
+    if (!itemId) return Promise.resolve(null)
+    const mediaHub = api()
+    if (!mediaHub) return Promise.reject(new Error('Not connected to a backend.'))
+    return mediaHub.tracking.titleState(itemId).then((state) => ({ id: itemId, state }))
+  }, [itemId])
+  // A catch-up or the watchlist pull can change either half while the page
+  // is open; refetched behind the page, so nothing on it blinks.
+  useLibraryRefresh(watchState.refresh)
+  const stateForItem = itemId && watchState.data?.id === itemId ? watchState.data.state : null
+  // Answered, or failed — failing falls back to "nothing watched", which is
+  // exactly what Play did before this screen read any history.
+  const watchStateSettled =
+    stateForItem !== null || (!watchState.loading && watchState.error !== null)
+
+  const watchedKeys = useMemo(() => {
+    const keys = new Set<string>()
+    for (const row of stateForItem?.watched ?? []) {
+      if (Number.isFinite(row.season) && Number.isFinite(row.episode)) {
+        keys.add(episodeWatchKey(row.season, row.episode))
+      }
+    }
+    return keys
+  }, [stateForItem])
+
   const seasons = useMemo(() => groupBySeason(item?.videos), [item])
   const seasonNumbers = useMemo(() => Array.from(seasons.keys()).sort((a, b) => a - b), [seasons])
   const startTarget = useMemo(
-    () => (item ? episodeToStart(item.videos, NO_WATCHED_KEYS) : null),
-    [item]
+    () => (item ? episodeToStart(item.videos, watchedKeys) : null),
+    [item, watchedKeys]
   )
 
   const [selectedSeason, setSelectedSeason] = useState<number | null>(null)
@@ -264,37 +311,50 @@ export default function Title() {
     [kind, item, navigate]
   )
 
-  // "My List" — a plain binary state read once from the whole tracked list
+  // "My List" — a plain binary state from the title's own watch state above
   // (see the task brief: this is deliberately NOT the desktop's tri-state
   // TitleStatusButton, just tracked/not), with an optimistic local override
   // keyed to the current item so the button flips the instant it's pressed
   // rather than waiting on the round trip, and reverts if the call fails.
-  const tracking = useAsync(() => {
-    const mediaHub = api()
-    if (!mediaHub) return Promise.reject(new Error('Not connected to a backend.'))
-    return mediaHub.tracking.list()
-  }, [])
-  const [pendingTracked, setPendingTracked] = useState<{ id: string; tracked: boolean } | null>(
-    null
-  )
-  const trackedFromList = Boolean(
-    item && tracking.data?.tracked.some((entry) => entry.id === item.id)
-  )
+  //
+  // The override stands only against the watch state it was made over
+  // (`basis`). That state refreshes behind the page now — a catch-up or a
+  // watchlist pull can put a title back on the list, or take one off —
+  // and an override that outlived a newer answer would leave the button
+  // saying "add" over a title that is already on the list: toggle() flips
+  // whatever the backend holds, so the press would remove it.
+  const [pendingTracked, setPendingTracked] = useState<{
+    id: string
+    tracked: boolean
+    basis: TitleWatchState | null
+  } | null>(null)
+  const trackedLoaded = stateForItem !== null
   const isTracked =
-    item && pendingTracked?.id === item.id ? pendingTracked.tracked : trackedFromList
+    item && pendingTracked?.id === item.id && pendingTracked.basis === stateForItem
+      ? pendingTracked.tracked
+      : Boolean(stateForItem?.tracked)
+  const refreshWatchState = watchState.refresh
   const toggleTracked = useCallback(() => {
     // toggle() flips whatever the backend holds, so pressing it before the
-    // list has loaded could remove a title the button offered to add.
-    if (!item || !tracking.data) return
+    // state has loaded could remove a title the button offered to add.
+    if (!item || !trackedLoaded) return
     const mediaHub = api()
     if (!mediaHub) return
     const next = !isTracked
-    setPendingTracked({ id: item.id, tracked: next })
+    const basis = stateForItem
+    setPendingTracked({ id: item.id, tracked: next, basis })
     mediaHub.tracking.toggle(item).then(
-      (result) => setPendingTracked({ id: item.id, tracked: result.tracked }),
-      () => setPendingTracked({ id: item.id, tracked: !next })
+      (result) => {
+        setPendingTracked({ id: item.id, tracked: result.tracked, basis })
+        // Read back what the backend now holds, so the override is retired
+        // by a real answer rather than standing for the life of the page.
+        // refresh() queues behind a fetch already running, so this one is
+        // certain to land after the write.
+        refreshWatchState()
+      },
+      () => setPendingTracked({ id: item.id, tracked: !next, basis })
     )
-  }, [item, isTracked, tracking.data])
+  }, [item, isTracked, trackedLoaded, stateForItem, refreshWatchState])
 
   const [overviewExpanded, setOverviewExpanded] = useState(false)
 
@@ -358,6 +418,11 @@ export default function Title() {
     busyTarget !== null &&
     busyTarget.season === mainPlayTarget.season &&
     busyTarget.episode === mainPlayTarget.episode
+  // A series' main Play waits for the watch state: pressed any sooner it
+  // would start S1E1 for somebody halfway through the show. It reads as busy
+  // (the spinner) rather than broken while it waits. Episode rows are not
+  // held back — choosing one is explicit — and a film has nothing to wait for.
+  const waitingForWatchState = isSeries && !watchStateSettled
 
   return (
     <div className="title-screen" aria-busy={loading}>
@@ -409,12 +474,12 @@ export default function Title() {
             <button
               type="button"
               className="title-screen__play"
-              disabled={isUnreleasedMovie || busyTarget !== null}
-              aria-busy={isMainPlayBusy}
+              disabled={isUnreleasedMovie || busyTarget !== null || waitingForWatchState}
+              aria-busy={isMainPlayBusy || waitingForWatchState}
               onClick={() => play(mainPlayTarget.season, mainPlayTarget.episode)}
             >
-              {isMainPlayBusy && <Spinner size="sm" />}
-              {playLabel}
+              {(isMainPlayBusy || waitingForWatchState) && <Spinner size="sm" />}
+              {waitingForWatchState ? 'Play' : playLabel}
             </button>
             <button
               type="button"
@@ -422,7 +487,7 @@ export default function Title() {
               aria-pressed={isTracked}
               aria-label={isTracked ? 'Remove from My List' : 'Add to My List'}
               onClick={toggleTracked}
-              disabled={!tracking.data}
+              disabled={!trackedLoaded}
             >
               {isTracked ? <CheckIcon /> : <PlusIcon />}
             </button>
@@ -479,6 +544,7 @@ export default function Title() {
                   busyTarget !== null &&
                   busyTarget.season === episode.season &&
                   busyTarget.episode === episode.episode
+                const watched = watchedKeys.has(episodeWatchKey(episode.season, episode.episode))
                 return (
                   <li key={`${episode.season}:${episode.episode}`}>
                     <button
@@ -497,6 +563,15 @@ export default function Title() {
                           <span className="episode-row__date">{secondaryLine}</span>
                         )}
                       </span>
+                      {/* Its own flex item at the row's end, beside the play
+                          glyph, so a watched row's title starts where every
+                          other row's does. */}
+                      {watched && (
+                        <span className="episode-row__watched">
+                          <WatchedTick />
+                          <span className="visually-hidden">Watched</span>
+                        </span>
+                      )}
                       {isBusyHere ? <Spinner size="sm" /> : aired && <PlayGlyph />}
                     </button>
                   </li>

@@ -5,6 +5,7 @@ import type {
   PlayerSessionSnapshot,
   PlayerStatePatch
 } from '@shared/media-hub/player'
+import { playableEpisodesInOrder } from '@shared/media-hub/nextEpisode'
 import { usePlayerTracking } from '../../renderer/src/hooks/usePlayerTracking'
 import { api, overlayApi } from '../lib/api'
 import { nativeHost } from '../lib/nativeHost'
@@ -101,6 +102,15 @@ export default function Player() {
     onMarkWatched: useCallback(() => {
       const current = nowPlaying()
       if (!current) return
+      // Watching an episode here follows the show, so it turns up in
+      // Continue Watching — this app has no other control for that. Only a
+      // real episode of a show with more than one: a one-off anime film or a
+      // lone special arrives with episode coordinates too, and following it
+      // would leave a "show" on Home with nothing after it.
+      const follow =
+        current.episode != null &&
+        (current.season ?? 1) >= 1 &&
+        playableEpisodesInOrder(current.item.videos).length > 1
       api()
         ?.tracking.markWatched({
           item: {
@@ -110,7 +120,8 @@ export default function Player() {
             poster: current.item.poster,
             year: current.item.year
           },
-          playback: { season: current.season, episode: current.episode }
+          playback: { season: current.season, episode: current.episode },
+          follow
         })
         .catch(() => {})
     }, [])
