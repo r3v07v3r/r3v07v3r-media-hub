@@ -40,6 +40,11 @@ export interface RemovalInput {
    *  this pull's snapshot says nothing about it. Empty string is "not
    *  connected" and must match no stamp at all. */
   accounts: Readonly<Record<PlannedSource, string>>
+  /** Titles (never films) somebody has STARTED here — a viewing recorded
+   *  under the title, or under the show a merged anime season belongs to.
+   *  Optional so a caller that has no history to hand removes exactly what
+   *  it did before. */
+  started?: ReadonlySet<string>
 }
 
 /**
@@ -78,10 +83,74 @@ export function mayRemoveAt(service: PlannedSource, known: readonly PlannedSourc
 }
 
 /**
+ * Whether somebody has started this title here: a viewing recorded under
+ * it, or under the show its history is kept under (`historyIdOf` — a merged
+ * anime's later season is planned under its own id and watched under the
+ * show it belongs to).
+ *
+ * Never true of a film. A film watched leaves the plan by rule 8, and the
+ * two things that read this — the removal a pull may make, and the removal
+ * an un-plan may send — must both still happen for it.
+ */
+export function startedHere(
+  item: { id: string; type?: string },
+  historyIds: ReadonlySet<string>,
+  historyIdOf: (id: string) => string
+): boolean {
+  if (item.type === 'movie') return false
+  return historyIds.has(item.id) || historyIds.has(historyIdOf(item.id))
+}
+
+/**
+ * The set plannedRemovals holds back as `started`: every title with a
+ * viewing recorded here that is not a film's, and every planned title whose
+ * viewings are kept under another id that has some.
+ *
+ * A history row with no type is counted. It cannot be shown to be a film,
+ * and being wrong that way only ever holds a removal back.
+ */
+export function startedTitles(input: {
+  history: readonly { id: string; type?: string }[]
+  /** Ids on the local planned list. */
+  tracked: readonly string[]
+  historyIdOf: (id: string) => string
+}): Set<string> {
+  const started = new Set<string>()
+  for (const entry of input.history) {
+    if (entry.type !== 'movie') started.add(String(entry.id))
+  }
+  for (const id of input.tracked) {
+    const kept = input.historyIdOf(id)
+    if (kept !== id && started.has(kept)) started.add(id)
+  }
+  return started
+}
+
+/**
+ * The services a removal may be sent to, given the evidence and whether
+ * the title has been started here.
+ *
+ * For a show with viewings recorded here, an unscoped removal is never the
+ * right request: Simkl's "remove from the watchlist" is
+ * /sync/history/remove with a bare show reference, which erases the
+ * show's whole history there. Somebody taking a show they are half way
+ * through off their list here means "stop showing me this", not "forget I
+ * watched it" — rule 8 says the same about a title marked watched. Those
+ * services are dropped from the evidence, so mayRemoveAt refuses them.
+ */
+export function removalEvidence(
+  known: readonly PlannedSource[],
+  startedHere: boolean
+): PlannedSource[] {
+  if (!startedHere) return [...known]
+  return known.filter((service) => !UNSCOPED_REMOVALS.includes(service))
+}
+
+/**
  * Which locally-planned titles should be un-planned because they have
  * left the service they came from.
  *
- * Five conditions, all required, and each one is a rule from the doc:
+ * Six conditions, all required, and each one is a rule from the doc:
  *
  *  1. It has a recorded origin — this app watched it arrive (rule 2).
  *     Without this, a title somebody added here would be deleted for the
@@ -97,7 +166,29 @@ export function mayRemoveAt(service: PlannedSource, known: readonly PlannedSourc
  *  4. No service still holds it. Still on Simkl means it has not left
  *     anywhere that counts.
  *  5. It is still on the local list, or there is nothing to remove.
+ *  6. It has not been STARTED here. Leaving plan to watch at a service is
+ *     what starting a show looks like there — Simkl moves it to "watching"
+ *     on the first episode, MAL to watching on the first progress push —
+ *     not somebody removing it. Without this, a series planned at a
+ *     service and then started is untracked by the next pull and drops
+ *     out of Continue Watching. Films are never in the set: a film
+ *     finished leaves the plan by rule 8, not by this.
  */
+export function plannedRemovals(input: RemovalInput): string[] {
+  const tracked = new Set(input.tracked)
+  const out: string[] = []
+  for (const [id, origin] of Object.entries(input.origins)) {
+    const account = input.accounts[origin.source]
+    if (!account || origin.account !== account) continue
+    if (!input.answered.has(origin.source)) continue
+    if ((input.sources[id] ?? []).length > 0) continue
+    if (!tracked.has(id)) continue
+    if (input.started?.has(id)) continue
+    out.push(id)
+  }
+  return out
+}
+
 /**
  * Whether a title a service reports as planned should be planned here.
  *
@@ -119,18 +210,4 @@ export function remotePlanAdoptable(
   }
 ): boolean {
   return !state.tracked.has(id) && !state.awaitingRemoval.has(id) && !state.watched.has(id)
-}
-
-export function plannedRemovals(input: RemovalInput): string[] {
-  const tracked = new Set(input.tracked)
-  const out: string[] = []
-  for (const [id, origin] of Object.entries(input.origins)) {
-    const account = input.accounts[origin.source]
-    if (!account || origin.account !== account) continue
-    if (!input.answered.has(origin.source)) continue
-    if ((input.sources[id] ?? []).length > 0) continue
-    if (!tracked.has(id)) continue
-    out.push(id)
-  }
-  return out
 }

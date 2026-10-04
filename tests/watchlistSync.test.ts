@@ -16,7 +16,10 @@ import assert from 'node:assert/strict'
 import {
   mayRemoveAt,
   plannedRemovals,
-  remotePlanAdoptable
+  remotePlanAdoptable,
+  removalEvidence,
+  startedHere,
+  startedTitles
 } from '../src/main/media-hub/watchlistRules'
 
 const HOUR = 60 * 60 * 1000
@@ -217,5 +220,106 @@ assert.equal(
   }),
   true
 )
+
+// --- rule 6 of plannedRemovals: starting a show is not removing it ---------
+//
+// Simkl moves a show from plan to watch to "watching" on its first episode,
+// and MAL to watching on the first progress push. The next pull finds it
+// gone from every plan list — a successful answer that does not contain it,
+// exactly the removal shape. Untracking it then would drop a show somebody
+// is half way through out of Continue Watching.
+assert.deepEqual(
+  plannedRemovals({
+    tracked: ['tt-show'],
+    origins: { 'tt-show': fromTrakt },
+    sources: {},
+    answered: new Set(['trakt']),
+    accounts: ACCOUNTS,
+    started: new Set(['tt-show'])
+  }),
+  [],
+  'a show started here is not removed because it left plan to watch'
+)
+
+// The set only ever holds shows, so a film gone from its source is removed
+// as before — rule 8 is what takes a watched film off the plan.
+assert.deepEqual(
+  plannedRemovals({
+    tracked: ['tt-show', 'tt-film'],
+    origins: { 'tt-show': fromTrakt, 'tt-film': fromTrakt },
+    sources: {},
+    answered: new Set(['trakt']),
+    accounts: ACCOUNTS,
+    started: new Set(['tt-show'])
+  }),
+  ['tt-film'],
+  'a title not in the started set is unaffected by it'
+)
+
+// --- the evidence a removal is sent on, for a show watched here -----------
+//
+// Simkl's removal for a show is a bare reference to /sync/history/remove,
+// which erases everything watched of it there. A show with viewings here is
+// never sent that; the scoped services still are.
+assert.deepEqual(removalEvidence(['simkl', 'trakt', 'mal'], false), ['simkl', 'trakt', 'mal'])
+assert.deepEqual(removalEvidence(['simkl', 'trakt', 'mal'], true), ['trakt', 'mal'])
+assert.equal(
+  mayRemoveAt('simkl', removalEvidence(['simkl'], true)),
+  false,
+  'a started show is never removed from Simkl'
+)
+assert.equal(mayRemoveAt('simkl', removalEvidence(['simkl'], false)), true)
+
+// --- what counts as started -----------------------------------------------
+//
+// The set the pull holds removals back for, and the question an un-plan asks
+// before it sends Simkl its removal. A film is in neither, whatever has been
+// watched of it: rule 8 is what takes a watched film off the plan, and both
+// the pull's removal and the un-plan's request must still reach it. A merged
+// anime's later season is planned under its own id and watched under the
+// show's, so it is started when the show has viewings.
+const groupOf = (id: string): string => (id === 'kitsu:2' ? 'kitsu:1' : id)
+const startedSet = startedTitles({
+  history: [
+    { id: 'tt-film', type: 'movie' },
+    { id: 'tt-show', type: 'series' },
+    { id: 'kitsu:1', type: 'anime' },
+    { id: 'tt-legacy' }
+  ],
+  tracked: ['tt-film', 'tt-show', 'kitsu:2', 'kitsu:9', 'tt-unwatched'],
+  historyIdOf: groupOf
+})
+assert.deepEqual(
+  [...startedSet].sort(),
+  ['kitsu:1', 'kitsu:2', 'tt-legacy', 'tt-show'],
+  'shows with viewings, a later season of one, and a row that cannot be shown to be a film'
+)
+assert.equal(startedSet.has('tt-film'), false, 'a watched film is never in the set')
+// A later season whose show has only a FILM's history under that id is not
+// started by it.
+assert.deepEqual(
+  [
+    ...startedTitles({
+      history: [{ id: 'kitsu:1', type: 'movie' }],
+      tracked: ['kitsu:2'],
+      historyIdOf: groupOf
+    })
+  ],
+  []
+)
+
+const watchedIds = new Set(['tt-film', 'tt-show', 'kitsu:1'])
+assert.equal(startedHere({ id: 'tt-show', type: 'series' }, watchedIds, groupOf), true)
+assert.equal(
+  startedHere({ id: 'kitsu:2', type: 'anime' }, watchedIds, groupOf),
+  true,
+  'through the show it belongs to'
+)
+assert.equal(
+  startedHere({ id: 'tt-film', type: 'movie' }, watchedIds, groupOf),
+  false,
+  'a film is never started, so its un-plan is sent as before'
+)
+assert.equal(startedHere({ id: 'tt-other', type: 'series' }, watchedIds, groupOf), false)
 
 console.log('ok  watchlist two-way removal rule')
