@@ -285,7 +285,8 @@ when the app opens, when it comes back to the front, and straight after
 linking to a desktop. The desktop app never runs it. A call within two
 minutes of the last pass, or while one is running, is answered with that
 pass's report; nothing runs while something is playing; a fresh link skips
-the two-minute wait.
+the two-minute wait. All of that is per profile: a pass for one profile
+never answers for another, which gets its own.
 
 **What it reads.** First the watchlist pull above, so the plan is settled
 before any history lands: the pull refuses to plan anything with local
@@ -294,16 +295,23 @@ pass wrote. Simkl's lists are skipped in that pull if they were already
 read under the same activity stamps ("When Simkl's lists are read", above).
 Then Simkl's watched history, one kind at a time (films, shows, anime), but
 only for a kind whose activity stamp at `/sync/activities` has moved since
-it was last fully applied. If that request fails, nothing is fetched and it
-is tried again after a pause that lengthens up to an hour; a 401 or 403
+it was last fully applied. A kind is fetched whole the first time and with
+`date_from` after that, which is what Simkl asks of a client that keeps in
+step: only what changed since the stamp its last applied fetch was made
+under. Once a week the fetch that is due anyway is whole again, in case an
+incremental answer left something out. A kind Simkl gives no stamp for is
+read once a day, not on every pass. If the activities request fails,
+nothing is fetched and it is tried again after a pause that lengthens up to
+an hour; a 401 or 403
 stops the catch-up's own Simkl requests until the account is linked again
 (the half-hourly background sync asks again every six hours, and the
 history pushes are separate and keep trying). A kind whose fetch or write
 fails waits out its own, longer, pause without holding up the others. A
 library answer that was cut off part way counts as a failure, not as an
 empty library. When Trakt or MAL is connected, the pull also runs at most
-every ten minutes on its own. Anime waits until the catalog has been organised into its seasons, and
-is asked for again a few minutes later.
+every ten minutes on its own, and at once after a fresh link. Anime waits
+until the catalog has been organised into its seasons, and is asked for
+again a few minutes later.
 
 **It only ever adds.** It writes viewings this device has no record of and
 never removes one, however the Simkl library looks. A viewing already held

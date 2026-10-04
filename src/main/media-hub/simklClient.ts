@@ -97,12 +97,22 @@ const LIBRARY_TIMEOUT_MS = 90 * 1000
  * timeout or a dropped connection into `{}`, which is exactly how an empty
  * library looks. The catch-up would record the kind as applied and not
  * fetch it again until something else changed at Simkl.
+ *
+ * `since` is Simkl's `date_from`: only what changed after that moment (an
+ * activity stamp, passed back exactly as Simkl gave it). Simkl asks a client
+ * that keeps in step to fetch whole once and by `date_from` afterwards, and
+ * says it suspends ones that go on downloading everything. Null fetches the
+ * kind whole — see simklCatchUpRules.ts's librarySince for when.
  */
 export function simklLibrary(
   kind: SimklLibraryKind,
-  priority: TaskPriority = 'background'
+  priority: TaskPriority = 'background',
+  since: string | null = null
 ): Promise<unknown> {
-  return simklRequest<unknown>(LIBRARY_PATHS[kind], {}, priority, {
+  const path = since
+    ? `${LIBRARY_PATHS[kind]}&date_from=${encodeURIComponent(since)}`
+    : LIBRARY_PATHS[kind]
+  return simklRequest<unknown>(path, {}, priority, {
     timeoutMs: LIBRARY_TIMEOUT_MS,
     strictBody: true
   })

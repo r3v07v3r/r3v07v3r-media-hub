@@ -1365,6 +1365,78 @@ export function continueWatchingList(
   )
 }
 
+/** One title Home needs the episode list of. */
+export interface HomeDetailWant {
+  type: MediaKind
+  id: string
+  /** The TRACKED id this detail's watched count is filed under — metadata
+   *  may answer under another id. Null for a detail fetched only to be
+   *  shown in Continue Watching. */
+  countFor: string | null
+}
+
+/**
+ * Which titles Home needs episode lists for, out of everything tracked.
+ *
+ * Only shows somebody has started — plus the legacy Simkl-keyed rows whose
+ * real id only metadata can supply. Resolving every planned series is what
+ * kept Home waiting on a long list, and nothing reads a count for a show
+ * nobody has started.
+ *
+ * A merged anime's later season, tracked under its own id, is the case that
+ * needs care. Its metadata is that one season under that id, while its
+ * viewings are kept under the show, at the season it is there — so counted
+ * against its own detail it always reads zero. It is counted where the rows
+ * are (`seasonCount`; the season is 2 or later, so no special is among
+ * them), and when it is in progress the SHOW is asked for: that is the
+ * detail the viewings match, and the page a Continue Watching card should
+ * open. Without that a season somebody is half way through sat in neither
+ * of Home's rows.
+ */
+export function homeDetailWants(input: {
+  tracked: readonly TrackedItem[]
+  history: readonly HistoryEntry[]
+  /** The id a tracked title's history is kept under. */
+  historyIdOf: (item: TrackedItem) => string
+  /** Which season of that show a later season is; only asked when
+   *  historyIdOf differs from the item's own id. */
+  seasonOf: (item: TrackedItem) => number
+}): { wanted: HomeDetailWant[]; seasonCount: Map<string, number> } {
+  const startedIds = new Set(input.history.map((entry) => String(entry.id)))
+  const wanted: HomeDetailWant[] = []
+  const asked = new Set<string>()
+  const want = (type: MediaKind, id: string, countFor: string | null): void => {
+    if (asked.has(id)) return
+    asked.add(id)
+    wanted.push({ type, id, countFor })
+  }
+  // Every title's own detail first, so one asked for on a later season's
+  // behalf never takes the place of the one its own count is read from.
+  for (const item of input.tracked) {
+    const id = String(item.id)
+    if (item.type !== 'movie' && (startedIds.has(id) || id.startsWith('simkl:'))) {
+      want(item.type, id, id)
+    }
+  }
+  const seasonCount = new Map<string, number>()
+  for (const item of input.tracked) {
+    const id = String(item.id)
+    const showId = input.historyIdOf(item)
+    if (item.type === 'movie' || showId === id || !startedIds.has(showId)) continue
+    const season = input.seasonOf(item)
+    const episodes = new Set<number>()
+    for (const entry of input.history) {
+      if (String(entry.id) !== showId || entry.season !== season) continue
+      if (typeof entry.episode === 'number' && Number.isFinite(entry.episode)) {
+        episodes.add(entry.episode)
+      }
+    }
+    seasonCount.set(id, episodes.size)
+    if (episodes.size > 0) want(item.type, showId, null)
+  }
+  return { wanted, seasonCount }
+}
+
 /**
  * The tracked titles nobody has started: plan to watch, as a Home row.
  *

@@ -72,7 +72,7 @@ import {
   storeRecommendations,
   SERVED_COUNT
 } from './recommendations'
-import { airingStatus, continueWatchingList, plannedList } from './core'
+import { airingStatus, continueWatchingList, homeDetailWants, plannedList } from './core'
 import { catalogData, metadata } from './catalog'
 import { animeGroupingReady, resolveAnimeGroupTarget } from './animeSeasons'
 import { catchUpFromServices } from './simklCatchUp'
@@ -2171,51 +2171,40 @@ export function registerTrackingIpc(): void {
       return groupingReady && id.startsWith('kitsu:') ? resolveAnimeGroupTarget(id).id : id
     }
     const startedIds = new Set(history.map((entry) => String(entry.id)))
-    const started = (item: TrackedItem): boolean =>
-      startedIds.has(String(item.id)) || startedIds.has(historyIdOf(item))
 
-    // Metadata only for the shows somebody has started, plus the legacy
-    // Simkl-keyed rows whose real id only metadata can supply. Nothing in
-    // either UI reads `updates` for a title nobody has started, and
-    // resolving every planned series — six at a time, each a 24-hour cache
-    // entry — is what kept Home waiting tens of seconds on a long list.
-    // See tracking:list above for the bound and the shared coalescing.
-    const wanted = tracked.filter(
-      (x) => x.type !== 'movie' && (started(x) || String(x.id).startsWith('simkl:'))
-    )
+    // Metadata only for the shows somebody has started — see
+    // homeDetailWants. Nothing in either UI reads `updates` for a title
+    // nobody has started, and resolving every planned series — six at a
+    // time, each a 24-hour cache entry — is what kept Home waiting tens of
+    // seconds on a long list. See tracking:list above for the bound and the
+    // shared coalescing.
+    const { wanted, seasonCount } = homeDetailWants({
+      tracked,
+      history,
+      historyIdOf,
+      seasonOf: (item) => resolveAnimeGroupTarget(String(item.id)).season
+    })
     const fetched = await mapWithLimit(wanted, (x) => metadata(x.type, x.id, 'visible'))
     const details = fetched.filter((x): x is CatalogItem => Boolean(x))
-    // Index-aligned with `wanted` until the filter above, which is what
-    // lets a count be filed under the TRACKED id when metadata answers
-    // under another one. The same episodes continueWatchingList counts —
-    // regular and aired — so the two rows are each other's complement.
+    // Index-aligned with `wanted` until the filter above. The same episodes
+    // continueWatchingList counts — regular and aired — so the two rows are
+    // each other's complement.
     const watchedRegularCount = new Map<string, number>()
+    for (const [id, count] of seasonCount) {
+      // A later season with rows under its own id as well (written before
+      // the show was grouped) is counted below, once its detail is in hand.
+      if (!startedIds.has(id)) watchedRegularCount.set(id, count)
+    }
     fetched.forEach((detail, index) => {
-      if (!detail) return
-      const trackedId = String(wanted[index].id)
-      if (historyIdOf(wanted[index]) !== trackedId) {
-        // A merged anime's later season, tracked under its own Kitsu id.
-        // Its metadata is that one season under that id, and its viewings
-        // are kept under the show at the season it is there — so counted
-        // against its own detail it always reads zero, and a season
-        // somebody is half way through would be listed as plan to watch.
-        // Counted where the rows actually are instead. The season is 2 or
-        // later by construction, so no special is among them.
-        const target = resolveAnimeGroupTarget(trackedId)
-        const episodes = new Set<number>()
-        for (const entry of history) {
-          if (String(entry.id) !== target.id || entry.season !== target.season) continue
-          if (typeof entry.episode === 'number' && Number.isFinite(entry.episode)) {
-            episodes.add(entry.episode)
-          }
-        }
-        watchedRegularCount.set(trackedId, episodes.size)
-        return
-      }
+      const countFor = wanted[index].countFor
+      if (!detail || !countFor) return
       const regular = (detail.videos || []).filter((v) => isRegularEpisode(v) && hasAired(v))
       watchedRegularCount.set(
-        trackedId,
-        episodeWatchState(regular, history, detail.id).watchedCount
+        countFor,
+        Math.max(
+          episodeWatchState(regular, history, detail.id).watchedCount,
+          seasonCount.get(countFor) ?? 0
+        )
       )
     })
     // A title a watchlist pull added arrives as a name and a year; the
