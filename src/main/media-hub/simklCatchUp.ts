@@ -744,10 +744,15 @@ export async function catchUpFromServices(
     db: getDatabase(),
     account: settings.simklAccountMark,
     connected: settings.trackingAccountMarks,
-    // Small and asked for by a screen somebody is looking at.
+    // Everything this pass asks the network for is at `visible`: a screen
+    // somebody is looking at asked for it, and Home is waiting on the rows
+    // it fills. At `background` these requests stand down while anything
+    // more urgent is queued — and on a fresh install that is the whole
+    // first catalog crawl, a minute or more of it, so a phone that had just
+    // been linked sat on "Updating…" until the crawl was done. They are a
+    // handful of requests, and nothing runs at all while something plays.
     activities: () => simkl.simklActivities('visible'),
-    // Large, and nobody is waiting on any one of them in particular.
-    library: (kind, since) => simkl.simklLibrary(kind, 'background', since),
+    library: (kind, since) => simkl.simklLibrary(kind, 'visible', since),
     // Through the same record the half-hourly job keeps, so the two of
     // them read Simkl's lists once per change, not once each.
     syncPlanned: (gate) =>
@@ -755,13 +760,13 @@ export async function catchUpFromServices(
         {
           db: getDatabase(),
           account: settings.simklAccountMark,
-          syncPlanned: (options) => watchlists.syncPlannedFromServices('background', options),
+          syncPlanned: (options) => watchlists.syncPlannedFromServices('visible', options),
           now: () => Date.now()
         },
         gate
       ),
     awaitingRemoval: watchlists.idsAwaitingRemoval,
-    lookupKitsu: (service, value) => idBridge.kitsuIdLookup(service, value, 'background'),
+    lookupKitsu: (service, value) => idBridge.kitsuIdLookup(service, value, 'visible'),
     animeTarget: (kitsuId) => seasons.resolveAnimeGroupTarget(`kitsu:${kitsuId}`),
     animeReady: seasons.animeGroupingReady,
     // On the title's own push chain, like every other plan change — see
