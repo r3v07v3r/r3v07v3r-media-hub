@@ -18,6 +18,7 @@ import {
   HistoryEntry,
   MediaKind,
   StreamCandidate,
+  TrackedItem,
   Trailer
 } from '../../shared/media-hub/types'
 import {
@@ -1362,4 +1363,48 @@ export function continueWatchingList(
   return rows.sort(
     (a, b) => new Date(b.lastWatchedAt).getTime() - new Date(a.lastWatchedAt).getTime()
   )
+}
+
+/**
+ * The tracked titles nobody has started: plan to watch, as a Home row.
+ *
+ * The complement of continueWatchingList, and it has to stay one — a show
+ * in both rows reads as a bug, and a show in neither has vanished from
+ * Home. So a started show counts as planned only when every viewing of it
+ * is a special (watched count of regular episodes exactly 0, where
+ * continueWatchingList needs at least 1). A started show whose episode list
+ * failed to load has no count and is left out: it is not knowably
+ * unstarted, and the next refresh will place it.
+ *
+ * A merged anime franchise is one tile. A later season tracked on its own
+ * keeps its history under the first season's id; when that id is tracked
+ * too, the later one is skipped rather than shown twice.
+ */
+export function plannedList(input: {
+  /** Newest first, as db.tracked() returns. */
+  tracked: TrackedItem[]
+  /** Ids with at least one history row. */
+  startedIds: ReadonlySet<string>
+  /** The id a tracked title's history is kept under (differs for a merged anime's later season). */
+  historyIdOf: (item: TrackedItem) => string
+  /** tracked id -> watched REGULAR aired episode count, for started shows whose metadata loaded. */
+  watchedRegularCount: ReadonlyMap<string, number>
+  /** Poster by id from the catalog index, for rows that carry none. */
+  posters: ReadonlyMap<string, string>
+}): TrackedItem[] {
+  const trackedIds = new Set(input.tracked.map((item) => item.id))
+  const rows: TrackedItem[] = []
+  for (const item of input.tracked) {
+    const historyId = input.historyIdOf(item)
+    if (historyId !== item.id && trackedIds.has(historyId)) continue
+    const started = input.startedIds.has(item.id) || input.startedIds.has(historyId)
+    if (started) {
+      if (item.type === 'movie') continue
+      if (input.watchedRegularCount.get(item.id) !== 0) continue
+    }
+    // A title a watchlist pull added arrives as a name and a year; the
+    // catalog index usually has its artwork.
+    rows.push({ ...item, poster: item.poster || input.posters.get(item.id) || '' })
+  }
+  return rows
 }

@@ -20,6 +20,7 @@ import type { TaskPriority } from './taskScheduler'
 import { logError } from './logger'
 import { simklAccountMark, simklCredentials } from './settingsStore'
 import { watchedFromAllItems, type SimklMoviesPayload, type SimklShowsPayload } from './simkl'
+import type { SimklLibraryKind } from './simklCatchUpRules'
 import { getDatabase } from './dbState'
 
 export function simklUrl(pathname: string, clientId: string): string {
@@ -30,11 +31,17 @@ export function simklUrl(pathname: string, clientId: string): string {
   return url.toString()
 }
 
-/** Authenticated Simkl request (requires both a client ID and a connected account's access token). */
+/**
+ * Authenticated Simkl request (requires both a client ID and a connected
+ * account's access token). `scheduling` is for the rare call that needs
+ * more than the default 30 seconds, or whose body is the whole answer and
+ * must not be read as empty when it was cut off — see simklLibrary.
+ */
 export async function simklRequest<T = unknown>(
   pathname: string,
   options: RequestInit = {},
-  priority: TaskPriority = 'interactive'
+  priority: TaskPriority = 'interactive',
+  scheduling: { timeoutMs?: number; strictBody?: boolean } = {}
 ): Promise<T> {
   const { clientId, accessToken } = simklCredentials()
   if (!clientId || !accessToken) throw new Error('Simkl is not connected.')
@@ -49,8 +56,56 @@ export async function simklRequest<T = unknown>(
         ...options.headers
       }
     },
-    { priority, label: 'Simkl' }
+    {
+      priority,
+      label: 'Simkl',
+      timeoutMs: scheduling.timeoutMs,
+      strictBody: scheduling.strictBody
+    }
   )
+}
+
+/**
+ * When each part of the connected account's library last changed — the
+ * one request Simkl asks every client to make before fetching any of it.
+ * Raw; simklCatchUpRules.ts's parseSimklActivities reads it.
+ */
+export function simklActivities(priority: TaskPriority = 'interactive'): Promise<unknown> {
+  // Strict: a body that was cut off would read as "Simkl gave no stamps",
+  // which the catch-up treats as a reason to fetch, not as a failure.
+  return simklRequest<unknown>('/sync/activities', {}, priority, { strictBody: true })
+}
+
+const LIBRARY_PATHS: Record<SimklLibraryKind, string> = {
+  // Completed only: a film anywhere else on Simkl is not a viewing, and
+  // plan to watch arrives through the watchlist pull.
+  movie: '/sync/all-items/movies/completed?extended=full',
+  show: '/sync/all-items/shows/all?extended=full&episode_watched_at=yes&include_all_episodes=yes',
+  anime: '/sync/all-items/anime/all?extended=full&episode_watched_at=yes&include_all_episodes=yes'
+}
+
+/** A whole library over a phone's connection can outlast the default 30
+ *  seconds, and a timeout here costs the whole kind until its backoff ends. */
+const LIBRARY_TIMEOUT_MS = 90 * 1000
+
+/**
+ * One kind of the connected account's library, with every watched episode
+ * and its date. Raw; simklCatchUpRules.ts's parseSimklLibrary reads it.
+ * Only ever called behind simklActivities — see simklCatchUp.ts.
+ *
+ * Strict about its body: the lenient default turns a read cut off by the
+ * timeout or a dropped connection into `{}`, which is exactly how an empty
+ * library looks. The catch-up would record the kind as applied and not
+ * fetch it again until something else changed at Simkl.
+ */
+export function simklLibrary(
+  kind: SimklLibraryKind,
+  priority: TaskPriority = 'background'
+): Promise<unknown> {
+  return simklRequest<unknown>(LIBRARY_PATHS[kind], {}, priority, {
+    timeoutMs: LIBRARY_TIMEOUT_MS,
+    strictBody: true
+  })
 }
 
 /**

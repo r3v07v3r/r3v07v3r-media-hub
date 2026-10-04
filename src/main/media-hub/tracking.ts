@@ -15,6 +15,7 @@
 import { app } from 'electron'
 import type {
   CatalogItem,
+  CatchUpReport,
   ConnectResult,
   DislikedListResult,
   EpisodePlaybackPosition,
@@ -41,6 +42,8 @@ import type {
   SimklPinStart,
   SimklPollResult,
   SimklStatus,
+  TitleWatchState,
+  TrackedItem,
   TrackedItemEnriched,
   TrackingListResult,
   WatchStatusDiscrepancy
@@ -53,7 +56,10 @@ import {
 } from '../../shared/media-hub/reconcileQueue'
 import {
   applyCadence,
+  episodeWatchState,
   groupRecommendationRails,
+  hasAired,
+  isRegularEpisode,
   rankPersonalizedRecommendationsScored,
   watchCadenceProfile
 } from '../../shared/media-hub/catalog-logic'
@@ -66,8 +72,10 @@ import {
   storeRecommendations,
   SERVED_COUNT
 } from './recommendations'
-import { airingStatus, continueWatchingList } from './core'
+import { airingStatus, continueWatchingList, plannedList } from './core'
 import { catalogData, metadata } from './catalog'
+import { animeGroupingReady, resolveAnimeGroupTarget } from './animeSeasons'
+import { catchUpFromServices } from './simklCatchUp'
 import { getDatabase } from './dbState'
 import {
   applyLocalPlanChange,
@@ -269,6 +277,10 @@ function pushTitleHistory(
 interface MarkWatchedPayload {
   item: SimklPushItem
   playback?: PlaybackPosition
+  /** Also start following the show, if nobody is yet, so it appears in
+   *  Continue Watching. Set by the phone and TV app's player, which has no
+   *  separate control for it. A local write only — see the handler. */
+  follow?: boolean
 }
 
 /** Each entry needs a concrete episode number (unlike the loose `PlaybackPosition` used elsewhere) since these feed seasonHistoryPayload's `episodeNumbers: number[]`. */
@@ -1366,6 +1378,34 @@ export function registerTrackingIpc(): void {
   )
 
   /**
+   * The phone and TV app's catch-up — see simklCatchUp.ts. Asked for on
+   * launch and on every resume; the pass itself decides whether that is
+   * worth a request, so the screen never has to.
+   */
+  handle<{ force?: boolean } | undefined, CatchUpReport>(
+    MEDIA_HUB_CHANNELS.trackingCatchUp,
+    async (_e, payload) => catchUpFromServices({ force: payload?.force === true })
+  )
+
+  /**
+   * Whether one title is on the list and which of it is watched, from the
+   * database alone. The detail screen needs this to start Play at the right
+   * episode, and tracking:list answers it only after resolving metadata for
+   * every tracked series — seconds on a long list, for one title's rows.
+   */
+  handle<{ id: string }, TitleWatchState>(MEDIA_HUB_CHANNELS.trackingTitleState, (_e, payload) => {
+    const db = getDatabase()
+    const id = String(payload?.id ?? '')
+    return {
+      tracked: db.isTracked(id),
+      watched: db
+        .history()
+        .filter((entry) => String(entry.id) === id)
+        .map((entry) => ({ season: entry.season, episode: entry.episode }))
+    }
+  })
+
+  /**
    * Named lists from the services, read only.
    *
    * Answers from cache first and refreshes behind it: reading these
@@ -1426,7 +1466,7 @@ export function registerTrackingIpc(): void {
 
   handle<MarkWatchedPayload, MarkWatchedResult>(
     MEDIA_HUB_CHANNELS.trackingMarkWatched,
-    async (_e, { item, playback }) => {
+    async (_e, { item, playback, follow }) => {
       // This handler used to refuse any id no tracking service can
       // express, on the grounds that only mockData's m-* demo pool could
       // produce one — the write that put three demo-id duplicates into
@@ -1439,7 +1479,14 @@ export function registerTrackingIpc(): void {
       // hasExpressibleSimklId in reconcileCheck).
       //
       item = { ...item, id: canonicalWriteId(item) }
-      getDatabase().markWatched(item, playback || {})
+      const db = getDatabase()
+      db.markWatched(item, playback || {})
+      // A show played on the phone or TV is followed, so it reaches
+      // Continue Watching there — the lite UI has no My List button on the
+      // player to do it by hand. Local only, never pushLocalPlanChange: a
+      // plan add would move the show back to plan to watch at Simkl, and
+      // Simkl learns it is being watched from the history push below.
+      if (follow && item.type !== 'movie' && !db.isTracked(item.id)) db.track(item)
       requestRecommendationsRebuild()
       // None of the services is awaited. The local row IS the record; each
       // push logs its own failure (syncSimklHistory, pushMalProgress,
@@ -2079,19 +2126,79 @@ export function registerTrackingIpc(): void {
       recommendationRails = groupRecommendationRails(full)
     }
 
-    // See tracking:list above — same fan-out, same bound, and the two
-    // share their per-title fetches through metadata()'s coalescing.
-    const details = (
-      await mapWithLimit(
-        tracked.filter((x) => x.type !== 'movie'),
-        (x) => metadata(x.type, x.id, 'visible')
+    // The id a tracked title's viewings are kept under. A merged anime's
+    // later season is planned under its own Kitsu id and watched under the
+    // show it belongs to — but only once the catalog has been grouped;
+    // before then every id resolves to itself anyway (see
+    // animeGroupingReady), so asking would only build an empty index.
+    const groupingReady = animeGroupingReady()
+    const historyIdOf = (item: TrackedItem): string => {
+      const id = String(item.id)
+      return groupingReady && id.startsWith('kitsu:') ? resolveAnimeGroupTarget(id).id : id
+    }
+    const startedIds = new Set(history.map((entry) => String(entry.id)))
+    const started = (item: TrackedItem): boolean =>
+      startedIds.has(String(item.id)) || startedIds.has(historyIdOf(item))
+
+    // Metadata only for the shows somebody has started, plus the legacy
+    // Simkl-keyed rows whose real id only metadata can supply. Nothing in
+    // either UI reads `updates` for a title nobody has started, and
+    // resolving every planned series — six at a time, each a 24-hour cache
+    // entry — is what kept Home waiting tens of seconds on a long list.
+    // See tracking:list above for the bound and the shared coalescing.
+    const wanted = tracked.filter(
+      (x) => x.type !== 'movie' && (started(x) || String(x.id).startsWith('simkl:'))
+    )
+    const fetched = await mapWithLimit(wanted, (x) => metadata(x.type, x.id, 'visible'))
+    const details = fetched.filter((x): x is CatalogItem => Boolean(x))
+    // Index-aligned with `wanted` until the filter above, which is what
+    // lets a count be filed under the TRACKED id when metadata answers
+    // under another one. The same episodes continueWatchingList counts —
+    // regular and aired — so the two rows are each other's complement.
+    const watchedRegularCount = new Map<string, number>()
+    fetched.forEach((detail, index) => {
+      if (!detail) return
+      const trackedId = String(wanted[index].id)
+      if (historyIdOf(wanted[index]) !== trackedId) {
+        // A merged anime's later season, tracked under its own Kitsu id.
+        // Its metadata is that one season under that id, and its viewings
+        // are kept under the show at the season it is there — so counted
+        // against its own detail it always reads zero, and a season
+        // somebody is half way through would be listed as plan to watch.
+        // Counted where the rows actually are instead. The season is 2 or
+        // later by construction, so no special is among them.
+        const target = resolveAnimeGroupTarget(trackedId)
+        const episodes = new Set<number>()
+        for (const entry of history) {
+          if (String(entry.id) !== target.id || entry.season !== target.season) continue
+          if (typeof entry.episode === 'number' && Number.isFinite(entry.episode)) {
+            episodes.add(entry.episode)
+          }
+        }
+        watchedRegularCount.set(trackedId, episodes.size)
+        return
+      }
+      const regular = (detail.videos || []).filter((v) => isRegularEpisode(v) && hasAired(v))
+      watchedRegularCount.set(
+        trackedId,
+        episodeWatchState(regular, history, detail.id).watchedCount
       )
-    ).filter((x): x is CatalogItem => Boolean(x))
+    })
+    // A title a watchlist pull added arrives as a name and a year; the
+    // catalog index usually has the artwork.
+    const posters = new Map<string, string>()
+    const bare = tracked.filter((item) => !item.poster).map((item) => String(item.id))
+    if (bare.length) {
+      for (const item of db.indexByIds(bare).items) {
+        if (item.poster) posters.set(String(item.id), item.poster)
+      }
+    }
 
     return {
       tracked,
       updates: db.trackedUpdates(details),
       continueWatching: continueWatchingList(details, history).slice(0, 18),
+      planned: plannedList({ tracked, startedIds, historyIdOf, watchedRegularCount, posters }),
       recommendations,
       recommendationReasons,
       recommendationRails,

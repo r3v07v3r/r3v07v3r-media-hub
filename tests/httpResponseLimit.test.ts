@@ -203,6 +203,54 @@ async function main(): Promise<void> {
     )
   })
 
+  // strictBody is for a call whose body IS the answer — a whole library. Cut
+  // off part way, the lenient `{}` reads as an empty library, and a caller
+  // that records "library read" has then skipped everything in it.
+  console.log('\nfetchJson with strictBody')
+  await check('a body that fails midway rejects', async () => {
+    const failure = new Error('reset')
+    await withFetch(
+      () => chunkedResponse([new TextEncoder().encode('{"shows":[')], failure),
+      () =>
+        assert.rejects(
+          () => fetchJson('https://example.test/h', {}, { strictBody: true }),
+          (error: unknown) => error === failure
+        )
+    )
+  })
+  await check('a body that is not JSON rejects', async () => {
+    await withFetch(
+      () => new Response('{"shows":[{"show"'),
+      () => assert.rejects(() => fetchJson('https://example.test/i', {}, { strictBody: true }))
+    )
+  })
+  await check('an empty body is still an empty answer', async () => {
+    const body = await withFetch(
+      () => new Response(''),
+      () => fetchJson('https://example.test/j', {}, { strictBody: true })
+    )
+    assert.deepEqual(body, {})
+  })
+  await check('a whole JSON body is read as usual', async () => {
+    const body = await withFetch(
+      () => Response.json({ shows: [] }),
+      () => fetchJson('https://example.test/k', {}, { strictBody: true })
+    )
+    assert.deepEqual(body, { shows: [] })
+  })
+  await check('a failed status still reports its own message, not a parse error', async () => {
+    await withFetch(
+      () => new Response('<html>Bad gateway</html>', { status: 502 }),
+      () =>
+        assert.rejects(
+          () => fetchJson('https://example.test/l', {}, { strictBody: true }),
+          (error: unknown) =>
+            (error as HttpError).status === 502 &&
+            (error as Error).message === 'Request failed (502)'
+        )
+    )
+  })
+
   console.log(`\n${pass} passed`)
 }
 

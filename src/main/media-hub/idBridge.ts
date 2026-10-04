@@ -151,10 +151,24 @@ export async function kitsuIdForExternal(
   value: string | number,
   priority: TaskPriority = 'interactive'
 ): Promise<number | null> {
+  return (await kitsuIdLookup(service, value, priority)).kitsuId
+}
+
+/**
+ * kitsuIdForExternal, saying as well whether any resolver ANSWERED (a cached
+ * answer counts). A bare null cannot separate "this title has no Kitsu id"
+ * from "nobody could be asked", and the catch-up (simklCatchUp.ts) has to:
+ * the first is a title to skip, the second is a kind to fetch again.
+ */
+export async function kitsuIdLookup(
+  service: 'mal' | 'imdb' | 'anidb',
+  value: string | number,
+  priority: TaskPriority = 'interactive'
+): Promise<{ kitsuId: number | null; answered: boolean }> {
   const key = `idbridge:rev:${service}:${value}`
   const db = getDatabase()
   const cached = db.getCache<number>(key)
-  if (cached !== null) return cached || null
+  if (cached !== null) return { kitsuId: cached || null, answered: true }
 
   let kitsuId = 0
   // See crossIdsForKitsu — a thrown request is not a "no match" answer, and
@@ -181,5 +195,5 @@ export async function kitsuIdForExternal(
   }
 
   if (answered) db.putCache(key, kitsuId, MAPPING_TTL_MS)
-  return kitsuId || null
+  return { kitsuId: kitsuId || null, answered }
 }

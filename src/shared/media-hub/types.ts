@@ -746,6 +746,54 @@ export interface PlannedSyncReport {
   removed: number
 }
 
+/**
+ * What one catch-up pass did — see main/media-hub/simklCatchUp.ts.
+ *
+ * A catch-up is how a device with no review panel (the phone and TV app)
+ * learns what was planned and watched elsewhere: the watchlist pull, then
+ * Simkl's watched history taken into the local record. It only ever adds.
+ * A call that did no work of its own — one ran moments ago, or one is still
+ * running — answers with that pass's report, so `at` is what tells a caller
+ * whether it has already seen this one.
+ */
+export interface CatchUpReport {
+  /** When the pass this describes finished. 0 before any has. */
+  at: number
+  /** Whether any tracking service is connected at all. False is the state
+   *  where there is nothing to catch up FROM, which a screen may want to
+   *  say rather than show an empty row. */
+  connected: boolean
+  /** Whether anything this app shows may have changed. */
+  changed: boolean
+  plannedAdded: number
+  plannedRemoved: number
+  /** Viewings taken from Simkl into the local history. */
+  plays: number
+  /** Shows this pass started following, so they appear in Continue Watching. */
+  followed: number
+  /** Titles Simkl listed that could not be matched to one this app knows. */
+  skipped: number
+  /** Part of the pass was put off (anime, until the catalog has been
+   *  organised into its seasons) — worth asking again in a few minutes. */
+  deferred: boolean
+  /** Simkl refused the sign-in: this device needs linking again. */
+  signedOut?: boolean
+  error?: string
+}
+
+/**
+ * What the local record says about one title, read straight from the
+ * database with no metadata lookups — the detail screen's "where am I up to"
+ * question, which tracking:list answers only after resolving every tracked
+ * series.
+ */
+export interface TitleWatchState {
+  /** On the list (planned or followed). */
+  tracked: boolean
+  /** Every watched row for the title. Both null for a film. */
+  watched: Array<{ season: number | null; episode: number | null }>
+}
+
 export interface DislikedListResult {
   disliked: TrackedItem[]
 }
@@ -767,8 +815,17 @@ export interface RecommendationRail {
 
 export interface HomePersonalizedResult {
   tracked: TrackedItem[]
+  /** New episodes of the tracked shows somebody has started. */
   updates: TrackedUpdate[]
   continueWatching: ContinueWatchingEntry[]
+  /**
+   * The tracked titles nobody has started — plan to watch, as a row. Newest
+   * first, with artwork filled in from the catalog index where the tracked
+   * row carries none (a title a watchlist pull added arrives as a name and
+   * a year). The complement of `continueWatching`: a show with a watched
+   * regular episode is there, or finished, and never here.
+   */
+  planned: TrackedItem[]
   recommendations: CatalogItem[]
   /**
    * Why each suggestion is there, by title id — see RecommendationReason.
