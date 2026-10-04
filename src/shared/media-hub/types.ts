@@ -734,10 +734,16 @@ export interface PlannedServiceReport {
    *  anime, in practice. Counted so the gap is visible. */
   unmapped: number
   error?: string
+  /** The list was not read this pass: the service said nothing had changed
+   *  since the last read (the counts are that read's), or could not be
+   *  asked (`error` says why). See docs/WATCHLIST-SYNC.md. */
+  skipped?: boolean
 }
 
 export interface PlannedSyncReport {
   at: number
+  /** When the pull began. Absent on reports stored before this existed. */
+  startedAt?: number
   services: PlannedServiceReport[]
   added: number
   /** Titles removed locally because they left every service that had

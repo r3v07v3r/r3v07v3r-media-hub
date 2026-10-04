@@ -43,6 +43,7 @@ import { titlePushQueue, titlePushKey } from './titlePushQueue'
 import { traktRequest } from './traktClient'
 import { failedServices, firstFailure, pushPlanEverywhere, type PushOutcome } from './watchlistPush'
 import {
+  answeredServices,
   plannedRemovals,
   remotePlanAdoptable,
   removalEvidence,
@@ -94,10 +95,18 @@ export interface PlannedServiceReport {
   pulled: number
   unmapped: number
   error?: string
+  /** The list was not read this pass — see SimklListSkip. Never evidence
+   *  of anything: watchlistRules' answeredServices leaves it out. */
+  skipped?: boolean
 }
 
 export interface PlannedSyncReport {
   at: number
+  /** When the pull began, before its first request. A caller that read
+   *  something first (watchSync.ts's activity stamps) needs to know the
+   *  lists were fetched after it, and a pull it merely joined may not
+   *  have been. */
+  startedAt?: number
   services: PlannedServiceReport[]
   /** Titles newly added to the local list by this pull. */
   added: number
@@ -492,9 +501,41 @@ async function fetchMalPlanned(): Promise<{ entries: PlannedEntry[]; unmapped: n
   return { entries: out, unmapped }
 }
 
-/** The pull that is running, if one is, and whether somebody is waiting on
- *  it at a screen — see syncPlannedFromServices. */
-let plannedSyncInFlight: { run: Promise<PlannedSyncReport>; foreground: boolean } | null = null
+/**
+ * Why a pull is leaving Simkl's list unread.
+ *
+ * Simkl asks every client to read /sync/activities before any of
+ * /sync/all-items, and counts requests per person rather than per device —
+ * so the recurring pull goes through watchSync.ts's gate, which says one of
+ * two things here:
+ *
+ *  - `unchanged`: Simkl's stamps are where they were when the list was last
+ *    read. The counts from that read are passed back in so the report still
+ *    says what the list holds, rather than "0 titles".
+ *  - `unasked`: the gate itself could not be read, so nothing may be
+ *    fetched behind it. Reported as the error it is.
+ *
+ * Either way Simkl has said NOTHING this pass. It is left out of the
+ * `answered` set exactly as a failed fetch is, its tags from the last real
+ * read are carried over, and so the only thing a skip can do to a removal
+ * is hold it back. Only ever passed by a background caller: the Sync
+ * button reads everything, always.
+ */
+export type SimklListSkip =
+  { reason: 'unchanged'; pulled: number; unmapped: number } | { reason: 'unasked'; error: string }
+
+export interface PlannedPullOptions {
+  skipSimkl?: SimklListSkip
+}
+
+/** The pull that is running, if one is; whether somebody is waiting on it
+ *  at a screen; and whether it is leaving Simkl unread — see
+ *  syncPlannedFromServices. */
+let plannedSyncInFlight: {
+  run: Promise<PlannedSyncReport>
+  foreground: boolean
+  skipsSimkl: boolean
+} | null = null
 
 /**
  * Pulls every connected service's plan-to-watch and folds it into the
@@ -513,7 +554,8 @@ let plannedSyncInFlight: { run: Promise<PlannedSyncReport>; foreground: boolean 
  * no list at all.
  */
 export function syncPlannedFromServices(
-  priority: TaskPriority = 'background'
+  priority: TaskPriority = 'background',
+  options: PlannedPullOptions = {}
 ): Promise<PlannedSyncReport> {
   // One pull at a time. The 30-minute job, the Sync button and the catch-up
   // (simklCatchUp.ts) can all land together, and two passes interleave
@@ -521,10 +563,15 @@ export function syncPlannedFromServices(
   // writes back a map the other has already changed underneath it, and
   // the evidence rule 3 depends on is lost or resurrected at random.
   const foreground = isForegroundPriority(priority)
+  const skipsSimkl = Boolean(options.skipSimkl)
   const running = plannedSyncInFlight
   if (running) {
-    // A caller no more urgent than the pull already running shares it.
-    if (running.foreground || !foreground) return running.run
+    // A caller no more urgent than the pull already running shares it —
+    // provided that pull reads everything this caller wants read. One that
+    // is leaving Simkl out is no answer for a caller whose gate has just
+    // said Simkl moved.
+    const readsEnough = !running.skipsSimkl || skipsSimkl
+    if ((running.foreground || !foreground) && readsEnough) return running.run
     // The Sync button, pressed while a background pull is under way, does
     // not: that pull's requests went out before whatever was just added
     // on the web, and they are queued at a tier that stands down for
@@ -532,18 +579,25 @@ export function syncPlannedFromServices(
     // running to finish — the passes stay one at a time — and then gets
     // a pull of its own.
     return running.run.then(
-      () => syncPlannedFromServices(priority),
-      () => syncPlannedFromServices(priority)
+      () => syncPlannedFromServices(priority, options),
+      () => syncPlannedFromServices(priority, options)
     )
   }
-  const run = pullPlanned(priority).finally(() => {
+  const run = pullPlanned(priority, options).finally(() => {
     if (plannedSyncInFlight?.run === run) plannedSyncInFlight = null
   })
-  plannedSyncInFlight = { run, foreground }
+  plannedSyncInFlight = { run, foreground, skipsSimkl }
   return run
 }
 
-async function pullPlanned(priority: TaskPriority): Promise<PlannedSyncReport> {
+/** What a fetch that was not made contributes: nothing. */
+const NOT_READ: { entries: PlannedEntry[]; unmapped: number } = { entries: [], unmapped: 0 }
+
+async function pullPlanned(
+  priority: TaskPriority,
+  options: PlannedPullOptions
+): Promise<PlannedSyncReport> {
+  const startedAt = Date.now()
   // Whose list this pull is about. Everything below the fetches writes to
   // the active profile's tracked table; a switch while three services were
   // being read would pour this profile's remote lists into the next one's.
@@ -561,8 +615,11 @@ async function pullPlanned(priority: TaskPriority): Promise<PlannedSyncReport> {
     trakt: Boolean(traktCredentials().accessToken),
     mal: Boolean(malCredentials().accessToken)
   }
+  // Only a connected Simkl can be skipped: with no account there is no
+  // list, and "not connected" is what the report should say.
+  const skipSimkl = connected.simkl ? options.skipSimkl : undefined
   const settled = await Promise.allSettled([
-    fetchSimklPlanned(priority),
+    skipSimkl ? NOT_READ : fetchSimklPlanned(priority),
     fetchTraktPlanned(priority),
     fetchMalPlanned()
   ])
@@ -572,6 +629,29 @@ async function pullPlanned(priority: TaskPriority): Promise<PlannedSyncReport> {
     // Same order as the Promise.allSettled above, which is why ORDER is
     // one shared constant rather than a literal in each place.
     const service = ORDER[index]
+    if (service === 'simkl' && skipSimkl) {
+      // Not read, so not an answer — `skipped` is what keeps this line out
+      // of the `answered` set below. See SimklListSkip.
+      services.push(
+        skipSimkl.reason === 'unchanged'
+          ? {
+              service,
+              connected: true,
+              pulled: skipSimkl.pulled,
+              unmapped: skipSimkl.unmapped,
+              skipped: true
+            }
+          : {
+              service,
+              connected: true,
+              pulled: 0,
+              unmapped: 0,
+              skipped: true,
+              error: skipSimkl.error
+            }
+      )
+      return
+    }
     if (result.status === 'fulfilled') {
       entries.push(...result.value.entries)
       services.push({
@@ -596,7 +676,7 @@ async function pullPlanned(priority: TaskPriority): Promise<PlannedSyncReport> {
   })
 
   const report = (added: number, removed = 0): PlannedSyncReport => {
-    const full = { at: Date.now(), services, added, removed }
+    const full = { at: Date.now(), startedAt, services, added, removed }
     getDatabase().putCache(REPORT_CACHE_KEY, full, SOURCES_TTL_MS, { durable: true })
     return full
   }
@@ -606,10 +686,9 @@ async function pullPlanned(priority: TaskPriority): Promise<PlannedSyncReport> {
   // Computed BEFORE anything short-circuits, because "answered and empty"
   // and "did not answer" are the two states this whole feature turns on.
   // A title is absent from a list that failed to load in exactly the same
-  // way it is absent from an empty one — see rule 5.
-  const answered = new Set(
-    services.filter((entry) => entry.connected && !entry.error).map((entry) => entry.service)
-  )
+  // way it is absent from an empty one — see rule 5 — and from one that
+  // was not read at all, which is why a skipped Simkl is not in this set.
+  const answered = answeredServices(services)
 
   // Nothing answered — not "nothing is planned". The sources map is
   // deliberately NOT touched: every service being unreachable is not
@@ -636,7 +715,8 @@ async function pullPlanned(priority: TaskPriority): Promise<PlannedSyncReport> {
   // the last pull rather than dropped, for the same reason as above — and
   // it matters twice, because this map is also the "somebody still has
   // it" evidence the removal rule reads. Carrying a stale tag can only
-  // ever hold a removal back.
+  // ever hold a removal back. A Simkl skipped as unchanged lands here too,
+  // and its tags are not even stale: they are the list as it still stands.
   for (const [id, list] of Object.entries(plannedSources())) {
     const kept = list.filter((service) => !answered.has(service))
     if (!kept.length) continue
