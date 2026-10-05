@@ -54,6 +54,7 @@ import {
 } from './settingsStore'
 import { notifyLibraryChanged } from './rendererBridge'
 import { markTraktHistoryPulled, pullTraktHistory, type TraktPullReport } from './traktHistoryPull'
+import { withWatchedAt } from './episodeSync'
 
 const API = 'https://api.trakt.tv'
 
@@ -352,13 +353,16 @@ export async function pushTraktSeasonHistory(
 /** Every named episode of a series, added or removed in one request — the
  *  whole-title mark and unmark. Movies are pushTraktHistory's; see
  *  trakt.ts's titleHistoryPayload for why a series entry always names its
- *  seasons. */
+ *  seasons. `watchedAt` dates each episode (`season:episode` to a time),
+ *  for the episode comparison's adds (episodeSync.ts's withWatchedAt). */
 export async function pushTraktTitleHistory(
   item: TraktPushItem,
   seasons: readonly { season: number; episodes: readonly number[] }[],
-  action: 'add' | 'remove'
+  action: 'add' | 'remove',
+  watchedAt?: ReadonlyMap<string, string>
 ): Promise<TraktPushResult> {
-  const payload = titleHistoryPayload(item, seasons)
+  const plain = titleHistoryPayload(item, seasons)
+  const payload = watchedAt ? withWatchedAt(plain, watchedAt) : plain
   if (!hasTraktContent(payload)) return { sent: false }
   if (!traktCredentials().accessToken) return { sent: false }
   return sendTraktHistory(

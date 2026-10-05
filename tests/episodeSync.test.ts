@@ -7,10 +7,16 @@
 //    not a position: "here S1E8, Trakt S2E2" is the episodes each side holds
 //    that the other does not, and nothing else.
 //  - The comparison only ever adds. Episodes held here that a service lacks
-//    are sent to it; what only Trakt holds is taken in on the first
-//    comparison against that account and never after (the pull does that);
-//    nothing is removed anywhere. A read that failed writes nothing and
-//    records nothing (rule 5), and is read again next time.
+//    are sent to it, dated as watched here; what only Trakt holds is taken
+//    in on the first comparison against that account and never after (the
+//    pull does that); nothing is removed anywhere. A read that failed writes
+//    nothing and records nothing (rule 5), and is read again next time.
+//  - It stays cheap. A comparison that hits the cap on shows sent is
+//    recorded as partial and read again no sooner than half an hour later,
+//    and the rest move up; an episode sent once under an account, or seen
+//    arriving from the service and gone from it now, is not sent again, so
+//    a show the service never lists under that id cannot keep a slot or
+//    bring a reviewed row back.
 //  - An anime season the placing rules cannot name an entry for is listed as
 //    "cannot be sent", never sent by position.
 //  - The record of what was merged survives a restart, belongs to the
@@ -18,7 +24,10 @@
 //    the same unsendable set.
 //  - Each choice's exact requests to Simkl and Trakt: always named episodes,
 //    never a show reference without them (rule 3; at Simkl that removes the
-//    whole show's history).
+//    whole show's history). "Make here match" does not remove at the other
+//    service what that service recorded itself (rule 2). An Undo that
+//    cannot reach the service the episodes came from holds them back from
+//    its pull, so they do not arrive again.
 //  - A choice stands once made: a push that then fails is kept and retried,
 //    and does not bring the row back or the episodes back here.
 //
@@ -34,6 +43,9 @@ import path from 'node:path'
 
 import { createDatabase } from '../src/main/media-hub/database'
 import {
+  MAX_SENT_SHOWS,
+  PARTIAL_INTERVAL_MS,
+  UNDONE_HOLD_MS,
   compareEpisodeSets,
   comparedKey,
   decideShow,
@@ -45,8 +57,11 @@ import {
   simklAnimeRead,
   simklShowsRead,
   traktShowsRead,
+  undoneHeldBack,
+  withWatchedAt,
   writeShowSync,
   type CompareDeps,
+  type CompareState,
   type Ep,
   type EpisodeService,
   type EpisodeSource,
@@ -55,6 +70,7 @@ import {
   type SyncShow
 } from '../src/main/media-hub/episodeSync'
 import {
+  historyPushKey,
   historyRetryBatches,
   readHistoryPending,
   removalsOwed,
@@ -70,6 +86,7 @@ import {
   titleHistoryPayload as traktTitleHistoryPayload
 } from '../src/main/media-hub/trakt'
 import { bySeason } from '../src/main/media-hub/titleStatusRules'
+import { markTraktHistoryPulled, pullTraktHistory } from '../src/main/media-hub/traktHistoryPull'
 import { hasExpressibleSimklId, toSimklAnimeEpisode } from '../src/shared/media-hub/serviceIds'
 
 let pass = 0
@@ -273,7 +290,7 @@ function decideDeps(db: ReturnType<typeof createDatabase>, marks = MARKS) {
 }
 
 function recordWith(...notes: Parameters<typeof noteMerge>[1][]): ShowSyncRecord {
-  let record: ShowSyncRecord = { entries: {}, quiet: {} }
+  let record: ShowSyncRecord = { entries: {}, quiet: {}, settled: {} }
   for (const note of notes) record = noteMerge(record, note, T0)
   return record
 }
@@ -392,7 +409,7 @@ async function main(): Promise<void> {
       assert.deepEqual(heldKeys(db, 'tt0000003'), [])
       // Andor is not at Trakt at all: all three episodes go to it, as an add.
       assert.deepEqual(h.sent, [{ service: 'trakt', id: OTHER.id, eps: range(1, 1, 3) }])
-      const rows = liveShowSync(readShowSync(db, PROFILE), MARKS)
+      const rows = liveShowSync(readShowSync(db, PROFILE), MARKS, T0)
       const severance = rows.find((row) => row.id === SHOW.id)!
       assert.deepEqual(
         keysOf(severance.parts.trakt!.arrived),
@@ -466,7 +483,7 @@ async function main(): Promise<void> {
     const report = await compareEpisodeSets(h.deps)
     assert.deepEqual(report, { compared: [], added: 0, sent: 0 })
     assert.equal(JSON.stringify(db.history()), before)
-    assert.deepEqual(readShowSync(db, PROFILE), { entries: {}, quiet: {} })
+    assert.deepEqual(readShowSync(db, PROFILE), { entries: {}, quiet: {}, settled: {} })
     assert.equal(db.getCache(comparedKey(PROFILE), { allowExpired: true }), null)
     assert.deepEqual(h.sent, [])
     await compareEpisodeSets(h.deps)
@@ -503,7 +520,7 @@ async function main(): Promise<void> {
       await compareEpisodeSets(h.deps)
       // Season 2 has an entry (kitsu:200) and goes to it; season 3 has none.
       assert.deepEqual(h.sent, [{ service: 'simkl', id: ANIME.id, eps: range(2, 1, 2) }])
-      const row = liveShowSync(readShowSync(db, PROFILE), MARKS)[0]
+      const row = liveShowSync(readShowSync(db, PROFILE), MARKS, T0)[0]
       assert.deepEqual(row.parts.simkl!.unsendable, range(3, 1, 1))
       // And the request that goes out names season 2's own entry, by episode.
       assert.deepEqual(
@@ -528,10 +545,10 @@ async function main(): Promise<void> {
     const db = createDatabase(file, PROFILE)
     assert.deepEqual(readShowSync(db, PROFILE), record)
     // Another Trakt account connected: its part is inert, Simkl's stays.
-    const rows = liveShowSync(readShowSync(db, PROFILE), { ...MARKS, trakt: 'trakt-2' })
+    const rows = liveShowSync(readShowSync(db, PROFILE), { ...MARKS, trakt: 'trakt-2' }, T0)
     assert.deepEqual(Object.keys(rows[0].parts), ['simkl'])
     // Another profile has a record of its own.
-    assert.deepEqual(readShowSync(db, 'profile-b'), { entries: {}, quiet: {} })
+    assert.deepEqual(readShowSync(db, 'profile-b'), { entries: {}, quiet: {}, settled: {} })
     db.close()
   })
 
@@ -544,7 +561,7 @@ async function main(): Promise<void> {
     })
     assert.equal(Object.keys(record.entries).length, 1)
     // Kept: the row goes.
-    record = { entries: {}, quiet: record.quiet }
+    record = { ...record, entries: {} }
     record = noteMerge(
       record,
       { service: 'simkl', mark: 'simkl-1', show: ANIME, unsendable: range(3, 1, 1) },
@@ -571,7 +588,7 @@ async function main(): Promise<void> {
 
   await check('what a pull wrote is noted per show as arrivals; films are not', () => {
     const record = noteArrivals(
-      { entries: {}, quiet: {} },
+      { entries: {}, quiet: {}, settled: {} },
       'simkl',
       'simkl-1',
       [
@@ -627,7 +644,7 @@ async function main(): Promise<void> {
     ])
     for (const { body } of sent) assertNamesEpisodes(body)
     // The row is gone, and the removals are held back from the pulls.
-    assert.deepEqual(liveShowSync(readShowSync(db, PROFILE), MARKS), [])
+    assert.deepEqual(liveShowSync(readShowSync(db, PROFILE), MARKS, T0), [])
     assert.ok(removalsOwed(pending, 'trakt').has(watchKeyOf(SHOW.id, 1, 9)))
     db.close()
   })
@@ -678,7 +695,7 @@ async function main(): Promise<void> {
         }
       ])
       // Only Trakt's part was settled; Simkl's stays for review.
-      const rows = liveShowSync(readShowSync(db, PROFILE), MARKS)
+      const rows = liveShowSync(readShowSync(db, PROFILE), MARKS, T0)
       assert.deepEqual(Object.keys(rows[0].parts), ['simkl'])
       db.close()
     }
@@ -783,7 +800,7 @@ async function main(): Promise<void> {
     assert.ok(Object.values(after).every((entry) => entry.attempts === 1))
     // ...and the choice is as it was made: the row stays gone, and so do the
     // episodes here.
-    assert.deepEqual(liveShowSync(readShowSync(db, PROFILE), MARKS), [])
+    assert.deepEqual(liveShowSync(readShowSync(db, PROFILE), MARKS, T0), [])
     assert.deepEqual(heldKeys(db, SHOW.id), keysOf(range(1, 1, 8)))
     db.close()
   })
@@ -800,9 +817,339 @@ async function main(): Promise<void> {
     assert.deepEqual(outcome, { ok: true, queued: false, removedHere: 0, cannotSend: [] })
     assert.deepEqual(heldKeys(db, SHOW.id), keysOf(range(1, 1, 10)))
     assert.deepEqual(readHistoryPending(db, PROFILE, MARKS), {})
-    assert.deepEqual(liveShowSync(readShowSync(db, PROFILE), MARKS), [])
+    assert.deepEqual(liveShowSync(readShowSync(db, PROFILE), MARKS, T0), [])
     db.close()
   })
+
+  // --- staying cheap, and not sending twice --------------------------------
+
+  await check(
+    'a comparison that hits the cap is partial: read again after half an hour, the rest sent',
+    async () => {
+      const db = tempDb()
+      const shows: SyncShow[] = []
+      for (let n = 0; n < MAX_SENT_SHOWS + 5; n++) {
+        const show: SyncShow = {
+          id: `tt10000${String(n).padStart(2, '0')}`,
+          type: 'series',
+          title: `Show ${n}`
+        }
+        shows.push(show)
+        seed(db, show, eps(1, 1))
+      }
+      const h = harness(db)
+      let clock = T0
+      h.deps.now = () => clock
+      h.stamps['simkl-shows'] = 'stamp-1'
+      h.answer['simkl-shows'] = () => readOf(shows.map((show) => ({ show, eps: [] })))
+      const state = (): CompareState[EpisodeSource] =>
+        db.getCache<CompareState>(comparedKey(PROFILE), { allowExpired: true })?.['simkl-shows']
+
+      await compareEpisodeSets(h.deps)
+      assert.equal(h.sent.length, MAX_SENT_SHOWS)
+      assert.equal(state()?.partial, true)
+      // The sends move the stamp; ten minutes on, nothing is read.
+      h.stamps['simkl-shows'] = 'stamp-2'
+      clock += 10 * 60 * 1000
+      await compareEpisodeSets(h.deps)
+      assert.deepEqual(h.reads, ['simkl-shows'])
+      // Half an hour on: read again, and only the five left over are sent,
+      // although Simkl still lists none of the first twenty.
+      clock = T0 + PARTIAL_INTERVAL_MS
+      await compareEpisodeSets(h.deps)
+      assert.deepEqual(h.reads, ['simkl-shows', 'simkl-shows'])
+      assert.equal(h.sent.length, MAX_SENT_SHOWS + 5)
+      assert.equal(new Set(h.sent.map((send) => send.id)).size, MAX_SENT_SHOWS + 5)
+      assert.equal(state()?.partial, undefined)
+      // Complete now: back to every six hours.
+      h.stamps['simkl-shows'] = 'stamp-3'
+      clock += 60 * 60 * 1000
+      await compareEpisodeSets(h.deps)
+      assert.equal(h.reads.length, 2)
+      db.close()
+    }
+  )
+
+  await check(
+    'an episode sent once is not sent again while the service still lacks it, and a kept row stays gone',
+    async () => {
+      const db = tempDb()
+      seed(db, SHOW, range(1, 1, 2))
+      const h = harness(db)
+      h.stamps['trakt-shows'] = 'stamp-1'
+      // Trakt files this show under another id: it never lists it.
+      h.answer['trakt-shows'] = () => readOf([])
+      await compareEpisodeSets(h.deps)
+      assert.deepEqual(h.sent, [{ service: 'trakt', id: SHOW.id, eps: range(1, 1, 2) }])
+      assert.equal(decideShow(decideDeps(db), SHOW.id, 'keep').ok, true)
+      h.stamps['trakt-shows'] = 'stamp-2'
+      await compareEpisodeSets(h.deps)
+      assert.equal(h.reads.length, 2)
+      assert.equal(h.sent.length, 1)
+      assert.deepEqual(liveShowSync(readShowSync(db, PROFILE), MARKS, T0), [])
+      db.close()
+    }
+  )
+
+  await check(
+    'an episode that arrived from a service and is gone from it now is not sent back, after Keep too',
+    async () => {
+      const db = tempDb()
+      seed(db, SHOW, range(1, 1, 3))
+      writeShowSync(
+        db,
+        PROFILE,
+        noteArrivals(
+          { entries: {}, quiet: {}, settled: {} },
+          'simkl',
+          'simkl-1',
+          [{ ...SHOW, season: 1, episode: 3, watchedAt: OLD }],
+          T0
+        )
+      )
+      assert.equal(decideShow(decideDeps(db), SHOW.id, 'keep').ok, true)
+      const h = harness(db)
+      h.stamps['simkl-shows'] = 'stamp-1'
+      // Removed at Simkl since: only the first two are there.
+      h.answer['simkl-shows'] = () => readOf([{ show: SHOW, eps: range(1, 1, 2) }])
+      await compareEpisodeSets(h.deps)
+      assert.deepEqual(h.sent, [])
+      assert.deepEqual(liveShowSync(readShowSync(db, PROFILE), MARKS, T0), [])
+      db.close()
+    }
+  )
+
+  await check('a comparison send names each episode with the time it was watched here', () => {
+    const item = { ...SHOW, year: '2022' }
+    const dates = new Map([
+      ['1:1', OLD],
+      ['1:2', '']
+    ])
+    assert.deepEqual(
+      withWatchedAt(traktTitleHistoryPayload(item, bySeason(range(1, 1, 2))), dates),
+      {
+        shows: [
+          {
+            ids: { imdb: SHOW.id },
+            seasons: [{ number: 1, episodes: [{ number: 1, watched_at: OLD }, { number: 2 }] }]
+          }
+        ]
+      }
+    )
+    assert.deepEqual(
+      withWatchedAt(simklTitleHistoryPayload(item, bySeason(range(1, 1, 2))), dates),
+      {
+        shows: [
+          {
+            title: 'Severance',
+            year: 2022,
+            ids: { imdb: SHOW.id },
+            seasons: [{ number: 1, episodes: [{ number: 1, watched_at: OLD }, { number: 2 }] }]
+          }
+        ]
+      }
+    )
+    // An anime body's numbers are the entry's at Simkl: left undated.
+    const anime = simklTitleHistoryPayload({ ...ANIME, year: '' }, bySeason(eps(2, 1)), SIBLINGS)
+    assert.deepEqual(withWatchedAt(anime, new Map([['2:1', OLD]])), anime)
+  })
+
+  await check('a row past 90 days is not listed, even before a write prunes it', () => {
+    const record = recordWith({ service: 'trakt', mark: 'trakt-1', show: SHOW, arrived: eps(1, 9) })
+    assert.equal(liveShowSync(record, MARKS, T0).length, 1)
+    assert.deepEqual(liveShowSync(record, MARKS, T0 + 91 * 24 * 60 * 60 * 1000), [])
+  })
+
+  // --- more choices --------------------------------------------------------
+
+  await check(
+    '"Make Simkl match here" takes back what came from it and sends what it lacks',
+    () => {
+      const db = tempDb()
+      seed(db, SHOW, [...range(1, 1, 3), ...eps(2, 1)])
+      writeShowSync(
+        db,
+        PROFILE,
+        recordWith({
+          service: 'simkl',
+          mark: 'simkl-1',
+          show: SHOW,
+          arrived: eps(2, 1),
+          sent: range(1, 1, 3)
+        })
+      )
+      const outcome = decideShow(decideDeps(db), SHOW.id, 'service-match-here', 'simkl')
+      assert.equal(outcome.ok, true)
+      assert.deepEqual(heldKeys(db, SHOW.id), keysOf(range(1, 1, 3)))
+      const held = new Set(heldKeys(db, SHOW.id).map((k) => `${SHOW.id}:${k}`))
+      const named = { title: 'Severance', year: 2022, ids: { imdb: SHOW.id } }
+      const sent = bodies(readHistoryPending(db, PROFILE, MARKS), held)
+      assert.deepEqual(sent, [
+        {
+          service: 'simkl',
+          action: 'remove',
+          body: { shows: [{ ...named, seasons: [{ number: 2, episodes: [{ number: 1 }] }] }] }
+        },
+        {
+          service: 'simkl',
+          action: 'add',
+          body: {
+            shows: [
+              {
+                ...named,
+                seasons: [{ number: 1, episodes: [{ number: 1 }, { number: 2 }, { number: 3 }] }]
+              }
+            ]
+          }
+        }
+      ])
+      for (const { body } of sent) assertNamesEpisodes(body)
+      db.close()
+    }
+  )
+
+  await check(
+    '"Make here match Simkl" removes what Simkl lacked here and at Trakt, and passes its episodes on',
+    () => {
+      const db = tempDb()
+      seed(db, SHOW, [...range(1, 1, 4), ...eps(2, 1)])
+      writeShowSync(
+        db,
+        PROFILE,
+        recordWith({
+          service: 'simkl',
+          mark: 'simkl-1',
+          show: SHOW,
+          arrived: eps(2, 1),
+          sent: eps(1, 4)
+        })
+      )
+      const outcome = decideShow(decideDeps(db), SHOW.id, 'here-match-service', 'simkl')
+      assert.equal(outcome.ok, true)
+      assert.equal(outcome.removedHere, 1)
+      assert.deepEqual(heldKeys(db, SHOW.id), keysOf([...range(1, 1, 3), ...eps(2, 1)]))
+      const held = new Set(heldKeys(db, SHOW.id).map((k) => `${SHOW.id}:${k}`))
+      const named = { title: 'Severance', year: 2022, ids: { imdb: SHOW.id } }
+      const ref = { ids: { imdb: SHOW.id } }
+      const sent = bodies(readHistoryPending(db, PROFILE, MARKS), held)
+      assert.deepEqual(sent, [
+        {
+          service: 'simkl',
+          action: 'remove',
+          body: { shows: [{ ...named, seasons: [{ number: 1, episodes: [{ number: 4 }] }] }] }
+        },
+        {
+          service: 'trakt',
+          action: 'remove',
+          body: { shows: [{ ...ref, seasons: [{ number: 1, episodes: [{ number: 4 }] }] }] }
+        },
+        {
+          service: 'trakt',
+          action: 'add',
+          body: { shows: [{ ...ref, seasons: [{ number: 2, episodes: [{ number: 1 }] }] }] }
+        }
+      ])
+      for (const { body } of sent) assertNamesEpisodes(body)
+      db.close()
+    }
+  )
+
+  await check('"Make here match Trakt" leaves at Simkl an episode Simkl recorded itself', () => {
+    const db = tempDb()
+    seed(db, SHOW, range(1, 1, 4))
+    // S1E4 was watched at Simkl and came in with the catch-up; Trakt
+    // lacked it and the comparison sent it there.
+    writeShowSync(
+      db,
+      PROFILE,
+      recordWith(
+        { service: 'simkl', mark: 'simkl-1', show: SHOW, arrived: eps(1, 4) },
+        { service: 'trakt', mark: 'trakt-1', show: SHOW, sent: eps(1, 4) }
+      )
+    )
+    const outcome = decideShow(decideDeps(db), SHOW.id, 'here-match-service', 'trakt')
+    assert.equal(outcome.ok, true)
+    assert.deepEqual(heldKeys(db, SHOW.id), keysOf(range(1, 1, 3)))
+    const held = new Set(heldKeys(db, SHOW.id).map((k) => `${SHOW.id}:${k}`))
+    assert.deepEqual(bodies(readHistoryPending(db, PROFILE, MARKS), held), [
+      {
+        service: 'trakt',
+        action: 'remove',
+        body: {
+          shows: [{ ids: { imdb: SHOW.id }, seasons: [{ number: 1, episodes: [{ number: 4 }] }] }]
+        }
+      }
+    ])
+    db.close()
+  })
+
+  await check(
+    'a choice that removes anime episodes here has MyAnimeList recount those seasons',
+    () => {
+      const db = tempDb()
+      const marks = { ...MARKS, mal: 'mal-1' }
+      seed(db, ANIME, [...range(1, 1, 2), ...eps(2, 1)])
+      writeShowSync(
+        db,
+        PROFILE,
+        recordWith({ service: 'simkl', mark: 'simkl-1', show: ANIME, arrived: eps(2, 1) })
+      )
+      assert.equal(decideShow(decideDeps(db, marks), ANIME.id, 'undo').ok, true)
+      const pending = readHistoryPending(db, PROFILE, marks)
+      const mal = pending[historyPushKey('mal', ANIME.id, 2, null)]
+      assert.ok(mal, 'season 2 is owed to MyAnimeList')
+      assert.equal(mal.mark, 'mal-1')
+      assert.equal(pending[historyPushKey('mal', ANIME.id, 1, null)], undefined)
+      db.close()
+    }
+  )
+
+  await check(
+    'an Undo that cannot reach the service the episodes came from keeps its pull from bringing them back',
+    async () => {
+      const db = tempDb()
+      seed(db, ANIME, range(1, 1, 5))
+      // The Trakt pull filed S1E5 under the anime here; Trakt is never sent
+      // anime, so it cannot be told to remove it.
+      writeShowSync(
+        db,
+        PROFILE,
+        recordWith({ service: 'trakt', mark: 'trakt-1', show: ANIME, arrived: eps(1, 5) })
+      )
+      const outcome = decideShow(decideDeps(db), ANIME.id, 'undo')
+      assert.equal(outcome.ok, true)
+      assert.deepEqual(outcome.cannotSend, [{ service: 'trakt', seasons: [1] }])
+      assert.deepEqual(heldKeys(db, ANIME.id), keysOf(range(1, 1, 4)))
+      const record = readShowSync(db, PROFILE)
+      const key = watchKeyOf(ANIME.id, 1, 5)
+      assert.deepEqual([...undoneHeldBack(record, 'trakt', 'trakt-1', T0)], [key])
+      assert.deepEqual([...undoneHeldBack(record, 'trakt', 'trakt-2', T0)], [])
+      assert.deepEqual([...undoneHeldBack(record, 'trakt', 'trakt-1', T0 + UNDONE_HOLD_MS)], [])
+
+      // The next Trakt pull reads it again (three days back) and leaves it.
+      markTraktHistoryPulled(db, PROFILE, 'trakt-1', T0 - 60 * 60 * 1000)
+      const pulled = await pullTraktHistory({
+        db,
+        account: () => 'trakt-1',
+        lastActivities: async () => ({
+          movies: { watched_at: 'm1' },
+          episodes: { watched_at: 'e1' }
+        }),
+        history: async () => ({ rows: [], truncated: false }),
+        removalsOwed: () => undoneHeldBack(readShowSync(db, PROFILE), 'trakt', 'trakt-1', T0),
+        file: async () => [
+          { ...ANIME, season: 1, episode: 5, watchedAt: '2026-08-31T20:00:00.000Z' }
+        ],
+        backup: () => {},
+        announce: () => {},
+        now: () => T0,
+        log: () => {}
+      })
+      assert.equal(pulled.plays, 0)
+      assert.deepEqual(heldKeys(db, ANIME.id), keysOf(range(1, 1, 4)))
+      db.close()
+    }
+  )
 
   console.log(`\n${pass} passed`)
 }

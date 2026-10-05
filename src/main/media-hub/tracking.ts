@@ -199,6 +199,8 @@ import {
   liveShowSync,
   noteArrivals,
   readShowSync,
+  undoneHeldBack,
+  withWatchedAt,
   seasonsOf,
   simklAnimeRead,
   simklShowsRead,
@@ -561,6 +563,11 @@ export function removalsHeldBack(service: 'simkl' | 'trakt'): Set<string> {
       keys.add(key)
     }
   }
+  // An Undo of episodes that cannot be removed at the service they came
+  // from (episodeSync.ts's noteUndone): held back here instead.
+  const record = readShowSync(db, profile)
+  const mark = trackingAccountMarks()[service]
+  for (const key of undoneHeldBack(record, service, mark, Date.now())) keys.add(key)
   return keys
 }
 
@@ -1813,7 +1820,9 @@ function canSendEpisode(service: EpisodeService, show: SyncShow, ep: Ep): boolea
 /**
  * Sends episodes held here to one service, as an add, on the title's own
  * chain, so a failure is kept and retried (keptSimkl, keptTrakt). Read again
- * when the push runs: an episode un-marked in the meantime is not sent.
+ * when the push runs: an episode un-marked in the meantime is not sent. Each
+ * episode carries the time it was watched here (withWatchedAt); a retry
+ * after a failure goes without it, as every retried push does.
  */
 function sendEpisodesTo(service: EpisodeService, show: SyncShow, eps: Ep[]): void {
   const item = { id: show.id, type: show.type, title: show.title, year: show.year ?? '' }
@@ -1821,10 +1830,18 @@ function sendEpisodesTo(service: EpisodeService, show: SyncShow, eps: Ep[]): voi
   queueRemotePushes(item, () => {
     const db = getDatabase()
     if (db.activeProfile() !== profile) return []
-    const held = new Set(
-      db.history().map((row) => watchKeyOf(String(row.id), row.season ?? null, row.episode ?? null))
-    )
-    const rows = eps.filter((ep) => held.has(watchKeyOf(show.id, ep.season, ep.episode)))
+    const dates = new Map<string, string>()
+    for (const row of db.history()) {
+      if (String(row.id) !== show.id || row.season == null || row.episode == null) continue
+      const key = `${row.season}:${row.episode}`
+      const held = dates.get(key)
+      if (row.watchedAt && (!held || Date.parse(row.watchedAt) > Date.parse(held))) {
+        dates.set(key, row.watchedAt)
+      } else if (!held) {
+        dates.set(key, '')
+      }
+    }
+    const rows = eps.filter((ep) => dates.has(`${ep.season}:${ep.episode}`))
     if (!rows.length) return []
     const at: HistoryPushAt = { item, rows, action: 'add', profile }
     const seasons = bySeason(rows)
@@ -1834,12 +1851,12 @@ function sendEpisodesTo(service: EpisodeService, show: SyncShow, eps: Ep[]): voi
             at,
             syncSimklHistory(
               '/sync/history',
-              titleHistoryPayload(item, seasons, animeSiblingsWhenGrouped()),
+              withWatchedAt(titleHistoryPayload(item, seasons, animeSiblingsWhenGrouped()), dates),
               'background'
             )
           )
         ]
-      : [keptTrakt(at, pushTraktTitleHistory(item, seasons, 'add'))]
+      : [keptTrakt(at, pushTraktTitleHistory(item, seasons, 'add', dates))]
   })
 }
 
@@ -1974,7 +1991,7 @@ export function noteEpisodeArrivals(service: EpisodeService, rows: readonly Impo
 /** The shows section as the panel draws it. */
 function showSyncRows(): ShowSyncRow[] {
   const db = getDatabase()
-  const entries = liveShowSync(readShowSync(db, db.activeProfile()), episodeMarks())
+  const entries = liveShowSync(readShowSync(db, db.activeProfile()), episodeMarks(), Date.now())
   if (!entries.length) return []
   const posters = new Map(
     db

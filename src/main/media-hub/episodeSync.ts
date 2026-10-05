@@ -77,6 +77,13 @@ export const RECENT_LOCAL_MS = 15 * 60 * 1000
  *  rest are sent by the next comparison, which the sends themselves cause
  *  (they move the service's activity stamp). */
 export const MAX_SENT_SHOWS = 20
+/** How long what was seen of a show at a service is kept after anything
+ *  was last added to it: as long as a comparison's own state. */
+export const SETTLED_TTL_MS = 400 * DAY
+/** How long the pulls leave out an episode an Undo could not remove at the
+ *  service it came from. The Trakt pull reads back three days before its
+ *  last pass; this covers that with room for an app left closed a while. */
+export const UNDONE_HOLD_MS = 30 * DAY
 
 function epKey(ep: Ep): string {
   return `${ep.season}:${ep.episode}`
@@ -141,11 +148,32 @@ export interface ShowSyncEntry extends SyncShow {
   parts: Partial<Record<EpisodeService, ShowSyncPart>>
 }
 
+/**
+ * Per service, account and show: what this app has seen of the show at that
+ * service, kept after the row is reviewed (Keep takes the row, not this).
+ * It is what the comparison goes by: an episode that arrived from the
+ * service and is gone from it now was removed there, and one already sent
+ * to it under this account is not sent again. Episodes are `season:episode`.
+ */
+export interface SettledPart {
+  arrived: string[]
+  sent: string[]
+  /** Episodes an Undo or a match choice removed here that could not be
+   *  removed at this service (it cannot be named to it). The pulls leave
+   *  them out for UNDONE_HOLD_MS after `undoneAt`, so the choice sticks. */
+  undone: string[]
+  undoneAt: number
+  /** When anything was last added to this. */
+  at: number
+}
+
 export interface ShowSyncRecord {
   entries: Record<string, ShowSyncEntry>
   /** Per service, account and show: the unsendable set last raised. The
    *  same set found again does not bring a reviewed row back. */
   quiet: Record<string, string>
+  /** Keyed like `quiet`. */
+  settled: Record<string, SettledPart>
 }
 
 export function showSyncKey(profile: string): string {
@@ -153,7 +181,17 @@ export function showSyncKey(profile: string): string {
 }
 
 function emptyRecord(): ShowSyncRecord {
-  return { entries: {}, quiet: {} }
+  return { entries: {}, quiet: {}, settled: {} }
+}
+
+function keysFrom(value: unknown): string[] {
+  if (!Array.isArray(value)) return []
+  return epsFrom(
+    value.map((key) => {
+      const [season, episode] = String(key).split(':').map(Number)
+      return { season, episode }
+    })
+  ).map(epKey)
 }
 
 function epsFrom(value: unknown): Ep[] {
@@ -198,6 +236,16 @@ function normalizeRecord(stored: unknown): ShowSyncRecord {
   for (const [key, quiet] of Object.entries(value.quiet ?? {})) {
     if (typeof quiet === 'string') record.quiet[key] = quiet
   }
+  for (const [key, raw] of Object.entries(value.settled ?? {})) {
+    if (!raw || typeof raw !== 'object') continue
+    record.settled[key] = {
+      arrived: keysFrom(raw.arrived),
+      sent: keysFrom(raw.sent),
+      undone: keysFrom(raw.undone),
+      undoneAt: typeof raw.undoneAt === 'number' ? raw.undoneAt : 0,
+      at: typeof raw.at === 'number' ? raw.at : 0
+    }
+  }
   return record
 }
 
@@ -239,12 +287,38 @@ function quietKey(service: EpisodeService, mark: string, id: string): string {
   return `${service}|${mark}|${id}`
 }
 
+/** What has been seen of a show at a service under an account, or an empty
+ *  part when nothing has. */
+export function settledOf(
+  record: ShowSyncRecord,
+  service: EpisodeService,
+  mark: string,
+  id: string
+): SettledPart {
+  return (
+    record.settled[quietKey(service, mark, id)] ?? {
+      arrived: [],
+      sent: [],
+      undone: [],
+      undoneAt: 0,
+      at: 0
+    }
+  )
+}
+
+function keyUnion(a: readonly string[], b: readonly Ep[]): string[] {
+  const keys = new Set(a)
+  for (const ep of b) keys.add(epKey(ep))
+  return keysFrom([...keys])
+}
+
 /**
  * Adds one pass's findings to the record. Arrivals and sends add to what the
  * row already holds; the unsendable set replaces it. A part made under
  * another account is replaced, never added to. A show gets a row (or its row
  * comes back) only for something new: an arrival, a send, or an unsendable
- * set different from the one last raised.
+ * set different from the one last raised. Arrivals and sends are also kept
+ * in `settled`, which a review does not clear.
  */
 export function noteMerge(record: ShowSyncRecord, note: MergeNote, now: number): ShowSyncRecord {
   const entries = { ...record.entries }
@@ -252,7 +326,21 @@ export function noteMerge(record: ShowSyncRecord, note: MergeNote, now: number):
   for (const [id, entry] of Object.entries(entries)) {
     if (now - entry.at > SHOW_SYNC_TTL_MS) delete entries[id]
   }
+  const settled = { ...record.settled }
+  for (const [key, part] of Object.entries(settled)) {
+    if (now - part.at > SETTLED_TTL_MS) delete settled[key]
+  }
   const quiet = { ...record.quiet }
+  const key = quietKey(note.service, note.mark, note.show.id)
+  if (note.arrived?.length || note.sent?.length) {
+    const seen = settledOf({ ...record, settled }, note.service, note.mark, note.show.id)
+    settled[key] = {
+      ...seen,
+      arrived: keyUnion(seen.arrived, note.arrived ?? []),
+      sent: keyUnion(seen.sent, note.sent ?? []),
+      at: now
+    }
+  }
   const existing = entries[note.show.id]
   const prev = existing?.parts[note.service]
   const base: ShowSyncPart =
@@ -262,7 +350,6 @@ export function noteMerge(record: ShowSyncRecord, note: MergeNote, now: number):
   let raise = Boolean(note.arrived?.length || note.sent?.length)
   let unsendable = base.unsendable
   if (note.unsendable) {
-    const key = quietKey(note.service, note.mark, note.show.id)
     const sorted = sortEps(note.unsendable)
     const signature = sorted.map(epKey).join(',')
     if (!signature) delete quiet[key]
@@ -270,7 +357,7 @@ export function noteMerge(record: ShowSyncRecord, note: MergeNote, now: number):
     if (signature) quiet[key] = signature
     unsendable = sorted
   }
-  if (!raise && !(prev && prev.mark === note.mark)) return { entries, quiet }
+  if (!raise && !(prev && prev.mark === note.mark)) return { entries, quiet, settled }
   const part: ShowSyncPart = {
     mark: note.mark,
     arrived: union(base.arrived, note.arrived ?? []),
@@ -285,7 +372,7 @@ export function noteMerge(record: ShowSyncRecord, note: MergeNote, now: number):
   }
   if (!Object.keys(parts).length) {
     delete entries[note.show.id]
-    return { entries, quiet }
+    return { entries, quiet, settled }
   }
   entries[note.show.id] = {
     id: note.show.id,
@@ -295,17 +382,71 @@ export function noteMerge(record: ShowSyncRecord, note: MergeNote, now: number):
     at: raise ? now : (existing?.at ?? now),
     parts
   }
-  return { entries, quiet }
+  return { entries, quiet, settled }
+}
+
+/**
+ * Notes episodes a choice removed here that could not be removed at
+ * `service`, so the pulls leave them out for a while (UNDONE_HOLD_MS).
+ */
+export function noteUndone(
+  record: ShowSyncRecord,
+  service: EpisodeService,
+  mark: string,
+  id: string,
+  eps: readonly Ep[],
+  now: number
+): ShowSyncRecord {
+  if (!mark || !eps.length) return record
+  const seen = settledOf(record, service, mark, id)
+  const held = now - seen.undoneAt < UNDONE_HOLD_MS ? seen.undone : []
+  return {
+    ...record,
+    settled: {
+      ...record.settled,
+      [quietKey(service, mark, id)]: {
+        ...seen,
+        undone: keyUnion(held, eps),
+        undoneAt: now,
+        at: now
+      }
+    }
+  }
+}
+
+/** History keys (watchKeyOf) the pulls from `service` leave out because a
+ *  choice removed them here and could not remove them there. */
+export function undoneHeldBack(
+  record: ShowSyncRecord,
+  service: EpisodeService,
+  mark: string,
+  now: number
+): Set<string> {
+  const keys = new Set<string>()
+  if (!mark) return keys
+  const prefix = `${service}|${mark}|`
+  for (const [key, part] of Object.entries(record.settled)) {
+    if (!key.startsWith(prefix) || now - part.undoneAt >= UNDONE_HOLD_MS) continue
+    const id = key.slice(prefix.length)
+    for (const ep of part.undone) {
+      const [season, episode] = ep.split(':').map(Number)
+      keys.add(watchKeyOf(id, season, episode))
+    }
+  }
+  return keys
 }
 
 /** The rows that belong to the accounts connected now, newest first. A part
- *  made under another account is inert (rule 7) and left out. */
+ *  made under another account is inert (rule 7) and left out, and so is a
+ *  row past SHOW_SYNC_TTL_MS that no write has pruned yet. */
 export function liveShowSync(
   record: ShowSyncRecord,
-  marks: Readonly<Record<EpisodeService, string>>
+  marks: Readonly<Record<EpisodeService, string>>,
+  now: number
 ): ShowSyncEntry[] {
   const live: ShowSyncEntry[] = []
   for (const entry of Object.values(record.entries)) {
+    if (now - entry.at > SHOW_SYNC_TTL_MS) continue
     const parts: ShowSyncEntry['parts'] = {}
     for (const service of EPISODE_SERVICES) {
       const part = entry.parts[service]
@@ -333,7 +474,7 @@ export function dismissShow(
   } else {
     delete entries[id]
   }
-  return { entries, quiet: record.quiet }
+  return { ...record, entries }
 }
 
 /** History rows a pull wrote, noted as arrivals from `service`. Films and
@@ -385,9 +526,6 @@ export const SOURCE_SERVICE: Record<EpisodeSource, EpisodeService> = {
   'simkl-anime': 'simkl',
   'trakt-shows': 'trakt'
 }
-/** Whether a first comparison takes in what only the service holds. Only
- *  Trakt's: the Simkl catch-up reads each kind whole the first time, while
- *  the Trakt pull starts from the moment it first runs. */
 /** The least time between two reads of a source once it has been compared
  *  under an account, however often its stamp moves. Simkl's stamp moves with
  *  every episode pushed from here, its whole lists are the largest reads
@@ -398,6 +536,15 @@ const MIN_INTERVAL_MS: Record<EpisodeSource, number> = {
   'simkl-anime': 6 * 60 * 60 * 1000,
   'trakt-shows': 0
 }
+/** The least time before a source is read again after a comparison that
+ *  left shows unsent (MAX_SENT_SHOWS), for every source: the half-hourly
+ *  pass's own pace. Sooner and the launch check, the job and each focus
+ *  catch-up would all read the whole list again while the first sends are
+ *  still on their way. */
+export const PARTIAL_INTERVAL_MS = 30 * 60 * 1000
+/** Whether a first comparison takes in what only the service holds. Only
+ *  Trakt's: the Simkl catch-up reads each kind whole the first time, while
+ *  the Trakt pull starts from the moment it first runs. */
 const TAKES_IN_ON_FIRST: Record<EpisodeSource, boolean> = {
   'simkl-shows': false,
   'simkl-anime': false,
@@ -565,10 +712,11 @@ export function traktShowsRead(payload: unknown): RemoteRead {
 // ---------------------------------------------------------------------------
 // The comparison.
 
-/** Per source: the account and stamp the last complete comparison was made
- *  under. A source is read again only when one of the two differs. */
+/** Per source: the account and stamp the last comparison was made under. A
+ *  source is read again only when one of the two differs. `partial` is a
+ *  comparison that left shows for the next one (MAX_SENT_SHOWS). */
 export type CompareState = Partial<
-  Record<EpisodeSource, { mark: string; stamp: string; at: number }>
+  Record<EpisodeSource, { mark: string; stamp: string; at: number; partial?: boolean }>
 >
 
 export function comparedKey(profile: string): string {
@@ -587,7 +735,8 @@ function readCompareState(db: Pick<MediaHubDatabase, 'getCache'>, profile: strin
       state[source] = {
         mark: value.mark,
         stamp: value.stamp,
-        at: typeof value.at === 'number' ? value.at : 0
+        at: typeof value.at === 'number' ? value.at : 0,
+        ...(value.partial === true ? { partial: true } : {})
       }
     }
   }
@@ -651,7 +800,8 @@ export async function compareEpisodeSets(deps: CompareDeps): Promise<CompareRepo
     const last = readCompareState(db, profile)[source]
     if (last && last.mark === mark) {
       if (last.stamp === stamp) continue
-      if (deps.now() - last.at < MIN_INTERVAL_MS[source]) continue
+      const wait = last.partial ? PARTIAL_INTERVAL_MS : MIN_INTERVAL_MS[source]
+      if (deps.now() - last.at < wait) continue
     }
     const first = !last || last.mark !== mark
 
@@ -697,42 +847,47 @@ export async function compareEpisodeSets(deps: CompareDeps): Promise<CompareRepo
     for (const [id, here] of local) {
       const there = read.shows.get(id)
       const remote = there?.episodes ?? new Map<string, string>()
+      const diff = showEpisodeDiff(
+        [...here.eps.values()].map(({ ep }) => ep),
+        [...remote.keys()].map((key) => {
+          const [season, episode] = key.split(':').map(Number)
+          return { season, episode }
+        })
+      )
+      const seen = settledOf(record, service, mark, id)
       // What this app saw arrive from the service and is gone from it now
       // was removed there. Sending it back would undo that; removing it here
-      // is a choice the panel offers, not something done unasked.
-      const fromThere = new Set(
-        (record.entries[id]?.parts[service]?.mark === mark
-          ? record.entries[id].parts[service]!.arrived
-          : []
-        ).map(epKey)
-      )
+      // is a choice the panel offers, not something done unasked. And what
+      // was sent to it once under this account and is still not there was
+      // either not taken (an id or a numbering the service files elsewhere)
+      // or removed there since: sending it at every comparison would only
+      // add a play at Trakt each time, and bring a reviewed row back.
+      const fromThere = new Set(seen.arrived)
+      const sentBefore = new Set(seen.sent)
       if (first && TAKES_IN_ON_FIRST[source] && there) {
-        for (const [key, watchedAt] of remote) {
-          if (here.eps.has(key)) continue
-          const [season, episode] = key.split(':').map(Number)
-          if (pending.has(watchKeyOf(id, season, episode))) continue
+        for (const ep of diff.remoteOnly) {
+          if (pending.has(watchKeyOf(id, ep.season, ep.episode))) continue
           imports.push({
             id,
             type: here.show.type,
             title: here.show.title,
             ...(here.show.year ? { year: here.show.year } : {}),
-            season,
-            episode,
-            watchedAt
+            season: ep.season,
+            episode: ep.episode,
+            watchedAt: remote.get(epKey(ep)) as string
           })
         }
       }
-      const localOnly: Ep[] = []
-      for (const { ep, watchedAt } of here.eps.values()) {
+      const localOnly = diff.localOnly.filter((ep) => {
         const key = epKey(ep)
-        if (remote.has(key) || fromThere.has(key)) continue
-        if (pending.has(watchKeyOf(id, ep.season, ep.episode))) continue
+        if (fromThere.has(key) || sentBefore.has(key)) return false
+        if (pending.has(watchKeyOf(id, ep.season, ep.episode))) return false
+        const watchedAt = here.eps.get(key)?.watchedAt
         const at = watchedAt ? Date.parse(watchedAt) : NaN
-        if (Number.isFinite(at) && now - at < RECENT_LOCAL_MS) continue
-        localOnly.push(ep)
-      }
-      const sendable = sortEps(localOnly.filter((ep) => deps.canSend(service, here.show, ep)))
-      const unsendable = without(sortEps(localOnly), sendable)
+        return !(Number.isFinite(at) && now - at < RECENT_LOCAL_MS)
+      })
+      const sendable = localOnly.filter((ep) => deps.canSend(service, here.show, ep))
+      const unsendable = without(localOnly, sendable)
       let sent: Ep[] = []
       if (sendable.length) {
         if (sends.length < MAX_SENT_SHOWS) {
@@ -757,20 +912,61 @@ export async function compareEpisodeSets(deps: CompareDeps): Promise<CompareRepo
       }
       record = noteArrivals(record, service, mark, imports, now)
     }
-    if (JSON.stringify(record) !== before) writeShowSync(db, profile, record)
+    // What is sent is written down first: it is what keeps the next
+    // comparison from sending it again while it is still on its way. A
+    // record that did not stick sends nothing and leaves the stamp.
+    if (JSON.stringify(record) !== before && !writeShowSync(db, profile, record)) {
+      deps.log(`episode-sync:${source}:record`, new Error('The record did not stick.'))
+      continue
+    }
     for (const { show, eps } of sends) {
       deps.send(service, show, eps)
       report.sent += eps.length
     }
-    if (!leftOver) {
-      const state = readCompareState(db, profile)
-      state[source] = { mark, stamp, at: now }
-      db.putCache(comparedKey(profile), state, COMPARED_TTL_MS, { durable: true })
-    }
+    // A comparison that left shows unsent is recorded as partial: the next
+    // moved stamp reads again, but not before PARTIAL_INTERVAL_MS, and the
+    // shows sent this time are not sent again (`sentBefore`), so the rest
+    // move up.
+    const state = readCompareState(db, profile)
+    state[source] = { mark, stamp, at: now, ...(leftOver ? { partial: true } : {}) }
+    db.putCache(comparedKey(profile), state, COMPARED_TTL_MS, { durable: true })
     report.compared.push(source)
   }
   if (report.added) deps.announce()
   return report
+}
+
+/**
+ * A history body with each named episode of a show given its watched time
+ * from `dates` (`season:episode` to a time). Simkl and Trakt both take
+ * `watched_at` per episode; without it they record an episode the
+ * comparison sends as watched at the moment it is sent, and a backlog sent
+ * to a newly connected Trakt account would all land on one day of its
+ * history. Anime bodies (Simkl's flat entries) are left as they are: their
+ * numbers are the entry's at Simkl, not the show's here.
+ */
+export function withWatchedAt<T>(body: T, dates: ReadonlyMap<string, string>): T {
+  const shows = (body as { shows?: unknown } | null)?.shows
+  if (!Array.isArray(shows) || !dates.size) return body
+  return {
+    ...body,
+    shows: shows.map((show: { seasons?: unknown }) => {
+      if (!Array.isArray(show?.seasons)) return show
+      return {
+        ...show,
+        seasons: show.seasons.map((season: { number?: unknown; episodes?: unknown }) => {
+          if (!Array.isArray(season?.episodes)) return season
+          return {
+            ...season,
+            episodes: season.episodes.map((ep: { number?: unknown }) => {
+              const at = dates.get(`${season.number}:${ep?.number}`)
+              return at && parsesAsDate(at) ? { ...ep, watched_at: new Date(at).toISOString() } : ep
+            })
+          }
+        })
+      }
+    })
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -791,6 +987,10 @@ export interface ShowDecisionPlan {
   pushes: ShowPush[]
   /** What a service was meant to be told and cannot be. */
   cannotSend: Array<{ service: EpisodeService; episodes: Ep[] }>
+  /** Episodes taken back here that could not be removed at the service
+   *  they arrived from: the pulls from it must leave them out
+   *  (noteUndone), or they would arrive again. */
+  holdBack: Array<{ service: EpisodeService; episodes: Ep[] }>
 }
 
 export interface DecisionContext {
@@ -799,6 +999,9 @@ export interface DecisionContext {
   /** Which services are connected now. */
   connected: Readonly<Record<HistoryService, boolean>>
   canSend(service: EpisodeService, ep: Ep): boolean
+  /** `season:episode` keys of this show seen arriving from a service under
+   *  its current account (`settled`, kept past a review). */
+  arrivedFrom(service: EpisodeService): ReadonlySet<string>
 }
 
 /**
@@ -813,8 +1016,11 @@ export interface DecisionContext {
  *    where it was passed on), and what it lacked is sent again.
  *  - here-match-service: this app ends up with the service's set: what was
  *    held here and not there is removed here, taken back from the service
- *    where the comparison sent it, and removed at the other services too;
- *    what arrived from the service is sent on to the others (rule 1).
+ *    where the comparison sent it, and removed at the other services too,
+ *    except what this app saw arrive from that other service: that viewing
+ *    was recorded there by itself, not put there from here, and a removal
+ *    only goes where this app put the thing (rules 2 and 3). What arrived
+ *    from the service is sent on to the others (rule 1).
  */
 export function planShowDecision(
   entry: ShowSyncEntry,
@@ -822,7 +1028,7 @@ export function planShowDecision(
   service: EpisodeService | undefined,
   ctx: DecisionContext
 ): ShowDecisionPlan {
-  const plan: ShowDecisionPlan = { removeHere: [], pushes: [], cannotSend: [] }
+  const plan: ShowDecisionPlan = { removeHere: [], pushes: [], cannotSend: [], holdBack: [] }
   if (action === 'keep') return plan
   const isHeld = (ep: Ep): boolean => ctx.held.has(epKey(ep))
   const part = (s: EpisodeService): ShowSyncPart | undefined => entry.parts[s]
@@ -844,6 +1050,10 @@ export function planShowDecision(
     if (!arrived.length) return
     plan.removeHere = union(plan.removeHere, arrived)
     owe(from, 'remove', arrived)
+    if (ctx.connected[from]) {
+      const stays = arrived.filter((ep) => !ctx.canSend(from, ep))
+      if (stays.length) plan.holdBack.push({ service: from, episodes: stays })
+    }
     for (const other of EPISODE_SERVICES) {
       if (other === from) continue
       const passedOn = new Set((part(other)?.sent ?? []).map(epKey))
@@ -872,7 +1082,12 @@ export function planShowDecision(
       const arrived = mine.arrived.filter(isHeld)
       for (const other of EPISODE_SERVICES) {
         if (other === service) continue
-        owe(other, 'remove', notThere)
+        const itsOwn = ctx.arrivedFrom(other)
+        owe(
+          other,
+          'remove',
+          notThere.filter((ep) => !itsOwn.has(epKey(ep)))
+        )
         owe(other, 'add', arrived)
       }
     }
@@ -977,7 +1192,7 @@ export function decideShow(
   const profile = db.activeProfile()
   const marks = deps.marks()
   const record = readShowSync(db, profile)
-  const entry = liveShowSync(record, marks).find((row) => row.id === id)
+  const entry = liveShowSync(record, marks, deps.now()).find((row) => row.id === id)
   const fail = (error: string): DecideOutcome => ({
     ok: false,
     queued: false,
@@ -1011,7 +1226,8 @@ export function decideShow(
       trakt: Boolean(marks.trakt),
       mal: Boolean(marks.mal)
     },
-    canSend: (s, ep) => deps.canSend(s, entry, ep)
+    canSend: (s, ep) => deps.canSend(s, entry, ep),
+    arrivedFrom: (s) => new Set(settledOf(record, s, marks[s], id).arrived)
   })
 
   if (plan.pushes.length) {
@@ -1023,8 +1239,11 @@ export function decideShow(
     )
     if (!stuck) return fail('Could not keep that choice. Nothing was changed.')
   }
-  const after =
+  let after =
     action === 'service-match-here' ? dismissShow(record, id, service) : dismissShow(record, id)
+  for (const { service: s, episodes } of plan.holdBack) {
+    after = noteUndone(after, s, marks[s], id, episodes, deps.now())
+  }
   if (!writeShowSync(db, profile, after)) {
     // The changes are queued and are what was asked for; the row staying
     // only offers the same choice again.
