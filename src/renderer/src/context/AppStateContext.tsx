@@ -53,7 +53,12 @@ import {
   forgetContinueWatching,
   rememberTrackedId
 } from '@renderer/lib/mediaHub/startupSnapshot'
-import { plannedToast } from '@renderer/lib/mediaHub/statusToasts'
+import {
+  planToastAfterStatus,
+  planToastAfterToggle,
+  plannedToast,
+  toggleApplies
+} from '@renderer/lib/mediaHub/statusToasts'
 import type { HeldChange } from '@renderer/lib/mediaHub/heldFeed'
 import {
   startupContinueWatchingFallback,
@@ -937,7 +942,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   const toggleMyListRef = useRef<(media: MediaItem, to?: boolean) => void>(() => {})
   const toggleMyList = useCallback(
     (media: MediaItem, to?: boolean) => {
-      if (to !== undefined && myListRef.current.has(media.id) === to) return
+      if (!toggleApplies(myListRef.current.has(media.id), to)) return
       holdInFeed(media.id)
       // This used to refuse the click outright when `media.id` was not
       // expressible to a tracking service, on the grounds that such an id
@@ -993,7 +998,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
           // A plan is one click from a card's menu, and on a recommendation
           // row it is also what takes the card out of the row; the toast's
           // Undo is the one-click way back. See statusToasts.ts.
-          if (result?.tracked === true) {
+          if (planToastAfterToggle(result?.tracked)) {
             pushNotification(
               plannedToast(media, activeProfileId, () => toggleMyListRef.current(media, false))
             )
@@ -1023,7 +1028,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       }
       holdInFeed(media.id)
       setDislikedIds((prev) => {
-        if (to !== undefined && prev.has(media.id) === to) return prev
+        if (!toggleApplies(prev.has(media.id), to)) return prev
         const next = new Set(prev)
         if (next.has(media.id)) {
           next.delete(media.id)
@@ -2044,10 +2049,8 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
           settle()
           clearPending()
           // A plan from the pill gets the same toast and Undo as one from
-          // the card menu. Only a title that was not planned before: the
-          // Undo takes it off the plan, which is not where it started
-          // otherwise.
-          if (status === 'planned' && !wasPlanned && !episodes) {
+          // the card menu; planToastAfterStatus says when.
+          if (planToastAfterStatus(status, wasPlanned, episodes)) {
             pushNotification(
               plannedToast(media, result.profileId, () => toggleMyList(media, false))
             )

@@ -4,8 +4,10 @@
 // Pinned here: the toast each one raises carries an Undo that runs exactly
 // the reversal it was given, and it goes away by itself after a few seconds
 // rather than waiting to be dismissed like the whole-show Undo does
-// (statusToasts.ts, OverlayContext's notificationTtlMs). Removing a dislike
-// offers no Undo: it is already the way back.
+// (statusToasts.ts, notificationTtl.ts). An Undo pressed after the title
+// already went back another way does nothing (toggleApplies). Removing a
+// plan or a dislike offers no Undo: Plan, or Not interested, is already
+// the way back.
 //
 // The Movies, Series and Anime grids (LibraryTile in AnimeLibraryPage.tsx)
 // open the same card menu as MediaCard, on right-click and on a "..."
@@ -40,10 +42,13 @@ import path from 'node:path'
 
 import {
   dislikedToast,
+  planToastAfterStatus,
+  planToastAfterToggle,
   plannedToast,
-  QUICK_UNDO_MS
+  QUICK_UNDO_MS,
+  toggleApplies
 } from '../src/renderer/src/lib/mediaHub/statusToasts'
-import { notificationTtlMs } from '../src/renderer/src/context/OverlayContext'
+import { notificationTtlMs } from '../src/renderer/src/lib/notificationTtl'
 import { hideDislikedDefault, logoutSettings } from '../src/main/media-hub/preferences'
 import { holdEntries, holdTouchedEntries } from '../src/renderer/src/lib/mediaHub/heldFeed'
 import { resolveLibrarySelection } from '../src/renderer/src/lib/mediaHub/librarySelection'
@@ -108,6 +113,64 @@ check('the quick Undo toasts leave by themselves; other Undo toasts still wait',
     null
   )
   assert.ok((notificationTtlMs({ tone: 'info' }) ?? 0) > 0)
+})
+
+check('an Undo reverses only a change that is still there', () => {
+  // A plain click (no target) always toggles.
+  assert.equal(toggleApplies(false), true)
+  assert.equal(toggleApplies(true), true)
+  // An Undo names the state it restores and runs only if the title is not
+  // already in it.
+  assert.equal(toggleApplies(true, false), true)
+  assert.equal(toggleApplies(false, false), false)
+  assert.equal(toggleApplies(false, true), true)
+  assert.equal(toggleApplies(true, true), false)
+  // The sequence it guards: Plan, then Remove from plan from the card
+  // menu, then the plan toast's Undo. The Undo must not plan it again.
+  let planned = new Set<string>()
+  const toggle = (id: string, to?: boolean): void => {
+    if (!toggleApplies(planned.has(id), to)) return
+    planned = new Set(planned)
+    if (planned.has(id)) planned.delete(id)
+    else planned.add(id)
+  }
+  toggle('dune')
+  toggle('dune')
+  toggle('dune', false)
+  assert.equal(planned.has('dune'), false)
+  // And while the plan is still there, the Undo takes it off.
+  toggle('dune')
+  toggle('dune', false)
+  assert.equal(planned.has('dune'), false)
+})
+
+check('both toggles in AppStateContext check the Undo target before acting', () => {
+  const context = fs.readFileSync(
+    path.resolve(__dirname, '../src/renderer/src/context/AppStateContext.tsx'),
+    'utf8'
+  )
+  assert.match(context, /if \(!toggleApplies\(myListRef\.current\.has\(media\.id\), to\)\) return/)
+  assert.match(context, /if \(!toggleApplies\(prev\.has\(media\.id\), to\)\) return prev/)
+  assert.match(context, /if \(planToastAfterToggle\(result\?\.tracked\)\)/)
+  assert.match(context, /if \(planToastAfterStatus\(status, wasPlanned, episodes\)\)/)
+})
+
+check('the card menu raises the plan toast for a plan and not for a removal', () => {
+  assert.equal(planToastAfterToggle(true), true)
+  assert.equal(planToastAfterToggle(false), false)
+  // No answer from the write (no bridge, or a failed call): no toast.
+  assert.equal(planToastAfterToggle(undefined), false)
+})
+
+check('the status pill raises the plan toast only for a new plan', () => {
+  assert.equal(planToastAfterStatus('planned', false, undefined), true)
+  // Already planned: the Undo would take it somewhere it was not.
+  assert.equal(planToastAfterStatus('planned', true, undefined), false)
+  // Watched and not watched are not plans.
+  assert.equal(planToastAfterStatus('watched', false, undefined), false)
+  assert.equal(planToastAfterStatus('unwatched', true, undefined), false)
+  // A replay of the whole-show Undo is not offered another.
+  assert.equal(planToastAfterStatus('planned', false, []), false)
 })
 
 // --- the library grids' card menu ------------------------------------------
