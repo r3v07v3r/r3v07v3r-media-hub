@@ -1073,10 +1073,22 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       setContinueWatching((prev) => prev.filter((c) => c.media.id !== id))
       const api = window.api?.mediaHub
       if (!api || !entry) return
+      // The title on the list this row is here for. Usually the row itself;
+      // for a show that is here because a later season of it is tracked on
+      // its own, that season (see ContinueWatchingEntry.trackedId).
+      const trackedId = entry.trackedId ?? id
+      // toggle() flips whatever the backend holds, so it is only ever sent
+      // for a title that is on the list. Sent for one that is not, Remove
+      // would ADD it — and push a plan-to-watch add for a show somebody is
+      // half way through.
+      if (!homeFeed.trackedIds.has(trackedId)) {
+        forgetContinueWatching(id)
+        return
+      }
       // No dedicated "remove from continue watching" channel — untracking
       // is what actually drops it from home:personalized's list.
       api.tracking
-        .toggle(mediaItemToTrackablePayload(entry.media))
+        .toggle(mediaItemToTrackablePayload({ ...entry.media, id: trackedId }))
         .then((result) => {
           // Written straight to the snapshot rather than waiting for the
           // refresh below, which throws during exactly the outage where
@@ -1084,7 +1096,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
           // on restart, and a second Remove toggled tracking the other way
           // and re-added it.
           forgetContinueWatching(id)
-          if (typeof result?.tracked === 'boolean') rememberTrackedId(id, result.tracked)
+          if (typeof result?.tracked === 'boolean') rememberTrackedId(trackedId, result.tracked)
           homeFeed.refresh()
         })
         .catch(() => {})

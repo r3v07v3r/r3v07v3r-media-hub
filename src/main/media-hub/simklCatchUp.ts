@@ -20,8 +20,9 @@
 // Three things it is careful about, because each was a way to do harm:
 //
 //  - Simkl suspends clients that poll the whole library without asking
-//    /sync/activities first. Every library fetch is behind that gate, and
-//    when the gate itself fails the pass fetches nothing and backs off.
+//    /sync/activities first. Every library fetch is behind that gate — the
+//    watchlist pull's Simkl lists included, see watchSync.ts — and when the
+//    gate itself fails the pass fetches nothing and backs off.
 //  - The pass awaits the network many times, and switching profile or
 //    Simkl account during it is ordinary. After every wait it re-checks
 //    both, and stops writing the moment either moved.
@@ -39,6 +40,7 @@ import { currentPressure, mapWithLimit } from './taskScheduler'
 import {
   catchUpStateFor,
   kindsToFetch,
+  librarySince,
   parseSimklActivities,
   parseSimklLibrary,
   planCatchUp,
@@ -49,19 +51,12 @@ import {
   type SimklLibraryKind,
   type SimklLibraryTitle
 } from './simklCatchUpRules'
+import { pullPlannedGated, type SimklGate } from './watchSync'
 
 /** What the pass needs from the database — the real one, or a test's. */
 export type CatchUpDb = Pick<
   MediaHubDatabase,
-  | 'activeProfile'
-  | 'getCache'
-  | 'putCache'
-  | 'history'
-  | 'tracked'
-  | 'track'
-  | 'untrack'
-  | 'isTracked'
-  | 'importWatched'
+  'activeProfile' | 'getCache' | 'putCache' | 'history' | 'tracked' | 'applyCatchUp'
 >
 
 /** The services' account marks, as settingsStore's trackingAccountMarks
@@ -80,10 +75,13 @@ export interface CatchUpDeps {
   connected(): ConnectedAccounts
   /** GET /sync/activities, raw. Throws an HttpError (with `status`) on failure. */
   activities(): Promise<unknown>
-  /** One kind's /sync/all-items payload, raw. */
-  library(kind: SimklLibraryKind): Promise<unknown>
-  /** The watchlist pull (watchlists.syncPlannedFromServices). */
-  syncPlanned(): Promise<{ added: number; removed: number }>
+  /** One kind's /sync/all-items payload, raw: whole when `since` is null,
+   *  else only what changed after that activity stamp (Simkl's date_from). */
+  library(kind: SimklLibraryKind, since: string | null): Promise<unknown>
+  /** The watchlist pull, behind the gate this pass has just read
+   *  (watchSync.pullPlannedGated): Simkl's lists are fetched only if they
+   *  moved since they were last read, by this pass or the half-hourly job. */
+  syncPlanned(gate: SimklGate): Promise<{ added: number; removed: number }>
   /** Ids whose un-plan is still owed to a service (watchlists.idsAwaitingRemoval). */
   awaitingRemoval(): ReadonlySet<string>
   /** idBridge.kitsuIdLookup — `answered` is false when nobody could be asked. */
@@ -114,10 +112,16 @@ export interface CatchUpDeps {
  */
 export interface CatchUpMemory {
   inFlight: Promise<CatchUpReport> | null
+  /** The profile the running pass is for. */
+  inFlightProfile: string
   /** When the last pass finished. 0 before any has. */
   lastAt: number
   /** The connected accounts at the last pass, as one comparable string. */
   lastAccounts: string
+  /** The profile the last pass was for. History, the list and the stored
+   *  state are all per profile, so a report about one says nothing about
+   *  another. */
+  lastProfile: string
   lastReport: CatchUpReport | null
   /** When this module last ran the watchlist pull. */
   lastPlannedAt: number
@@ -126,9 +130,13 @@ export interface CatchUpMemory {
   /** Whose failures those were. A backoff earned by one account must not
    *  hold up the first pass of the account somebody has just linked. */
   activitiesBackoffAccount: string
-  /** The Simkl account mark that was refused (401/403). No Simkl call is
-   *  made again until the mark changes, which is somebody linking again. */
+  /** The Simkl account mark that was refused (401/403), and when. No Simkl
+   *  call is made for it again until the mark changes, a pass is forced
+   *  (somebody linking again), or REFUSED_RETRY_MS has passed. */
   signedOutAccount: string
+  signedOutAt: number
+  /** Whose pauses the two below are: `${account}|${profile}`. */
+  kindBackoffOwner: string
   kindBackoffUntil: Record<SimklLibraryKind, number>
   kindFailures: Record<SimklLibraryKind, number>
 }
@@ -136,14 +144,18 @@ export interface CatchUpMemory {
 export function newCatchUpMemory(): CatchUpMemory {
   return {
     inFlight: null,
+    inFlightProfile: '',
     lastAt: 0,
     lastAccounts: '',
+    lastProfile: '',
     lastReport: null,
     lastPlannedAt: 0,
     activitiesBackoffUntil: 0,
     activitiesFailures: 0,
     activitiesBackoffAccount: '',
     signedOutAccount: '',
+    signedOutAt: 0,
+    kindBackoffOwner: '',
     kindBackoffUntil: { movie: 0, show: 0, anime: 0 },
     kindFailures: { movie: 0, show: 0, anime: 0 }
   }
@@ -160,6 +172,16 @@ const FLOOR_MS = 2 * MINUTE
 const PULL_INTERVAL_MS = 10 * MINUTE
 const ACTIVITIES_BACKOFF = { base: 5 * MINUTE, cap: HOUR }
 const KIND_BACKOFF = { base: 30 * MINUTE, cap: 6 * HOUR }
+/** How long a kind that was fetched but could not be applied in full is
+ *  left before it is fetched again. Its stamp has not advanced, so without
+ *  a pause every resume would fetch it — and what held it up (an id lookup
+ *  nobody could answer, a catalog being re-grouped) takes minutes to clear. */
+const INCOMPLETE_RETRY_MS = 10 * MINUTE
+/** How long a refused sign-in (401/403) is taken at its word before Simkl
+ *  is asked again — the same six hours the half-hourly job waits
+ *  (watchSync.ts), and for the same reason: one stray refusal must not end
+ *  the syncing until somebody restarts the app. */
+const REFUSED_RETRY_MS = 6 * HOUR
 /** The state is the memory of what has been applied; losing it costs one
  *  full fetch of everything, so it is kept well past any plausible gap. */
 const STATE_TTL_MS = 400 * 24 * HOUR
@@ -217,23 +239,30 @@ export function runCatchUp(
   memory: CatchUpMemory,
   options: { force?: boolean } = {}
 ): Promise<CatchUpReport> {
-  if (memory.inFlight) return memory.inFlight
+  const profile = deps.db.activeProfile()
+  if (memory.inFlight) {
+    // The pass running is for this profile: share it.
+    if (memory.inFlightProfile === profile) return memory.inFlight
+    // It is for another one. It stops writing the moment it notices the
+    // switch, and its report is about somebody else's library — so this
+    // call waits for it to end and then gets a pass of its own.
+    return memory.inFlight.then(
+      () => runCatchUp(deps, memory, options),
+      () => runCatchUp(deps, memory, options)
+    )
+  }
   const marks = deps.connected()
+  // What the last pass found, if it was about this profile at all.
+  const last = memory.lastProfile === profile ? memory.lastReport : null
   // Playback is the one thing nothing may compete with — a whole library
   // parsed on a phone's CPU mid-episode is a stutter somebody sees.
-  if (deps.busy()) {
-    return Promise.resolve(memory.lastReport ?? emptyReport(0, anyConnected(marks)))
-  }
+  if (deps.busy()) return Promise.resolve(last ?? emptyReport(0, anyConnected(marks)))
   const accounts = accountsKey(marks)
-  if (
-    !options.force &&
-    memory.lastReport &&
-    accounts === memory.lastAccounts &&
-    deps.now() - memory.lastAt < FLOOR_MS
-  ) {
-    return Promise.resolve(memory.lastReport)
-  }
-  const run = catchUpPass(deps, memory, marks)
+  // Somebody has just linked this device, or a pass is being asked for by
+  // name: the pauses that exist to space out idle passes do not apply.
+  const fresh = Boolean(options.force) || accounts !== memory.lastAccounts
+  if (!fresh && last && deps.now() - memory.lastAt < FLOOR_MS) return Promise.resolve(last)
+  const run = catchUpPass(deps, memory, marks, fresh)
     .catch((error) => {
       // Never thrown to the caller: the screen that asked would only turn
       // it into an error over a row it can draw perfectly well without.
@@ -242,19 +271,23 @@ export function runCatchUp(
       memory.lastReport = report
       memory.lastAt = report.at
       memory.lastAccounts = accounts
+      memory.lastProfile = profile
       return report
     })
     .finally(() => {
       memory.inFlight = null
     })
   memory.inFlight = run
+  memory.inFlightProfile = profile
   return run
 }
 
 async function catchUpPass(
   deps: CatchUpDeps,
   memory: CatchUpMemory,
-  marks: ConnectedAccounts
+  marks: ConnectedAccounts,
+  /** A forced pass, or the first since the connected accounts changed. */
+  fresh: boolean
 ): Promise<CatchUpReport> {
   const { db } = deps
   // Who this pass is FOR, captured before the first wait. Every write below
@@ -279,6 +312,7 @@ async function catchUpPass(
     memory.lastReport = report
     memory.lastAt = report.at
     memory.lastAccounts = accountsKey(marks)
+    memory.lastProfile = profile
     // The pull adds titles as a name and a year, and a follow adds one with
     // even less. Detached: nothing on screen should wait for artwork.
     if (report.connected) deps.artwork(profile)
@@ -290,6 +324,8 @@ async function catchUpPass(
   // --- the activities gate -------------------------------------------------
   const startedAt = deps.now()
   let stamps: SimklActivityStamps | null = null
+  /** When the stamps were in hand — see SimklGate.readAt. */
+  let stampsAt = 0
   if (account !== memory.activitiesBackoffAccount) {
     // The backoff belongs to the account that earned it. Linking again
     // gives a new token, and a forced pass straight after must reach Simkl
@@ -298,11 +334,32 @@ async function catchUpPass(
     memory.activitiesBackoffUntil = 0
     memory.activitiesBackoffAccount = account
   }
-  if (account && memory.signedOutAccount === account) {
+  const owner = `${account}|${profile}`
+  if (owner !== memory.kindBackoffOwner) {
+    // The same for a kind's own pause, which is about one account's library
+    // as one profile holds it. Left standing, a film fetch that timed out
+    // three times for the last account would keep the next one's films off
+    // this device for hours.
+    memory.kindBackoffOwner = owner
+    memory.kindFailures = { movie: 0, show: 0, anime: 0 }
+    memory.kindBackoffUntil = { movie: 0, show: 0, anime: 0 }
+  }
+  // A refusal stands for this account, but not for ever and not against
+  // somebody asking by name. Linking again hands over the desktop's own
+  // token — the same one, if it was never really revoked — so "until the
+  // account changes" could mean until the app is restarted, with Home
+  // telling them to link again the whole time.
+  const refused =
+    Boolean(account) &&
+    memory.signedOutAccount === account &&
+    !fresh &&
+    startedAt - memory.signedOutAt < REFUSED_RETRY_MS
+  if (refused) {
     report.signedOut = true
   } else if (account && startedAt >= memory.activitiesBackoffUntil) {
     try {
       stamps = parseSimklActivities(await deps.activities())
+      stampsAt = deps.now()
       memory.activitiesFailures = 0
       memory.activitiesBackoffUntil = 0
       memory.signedOutAccount = ''
@@ -313,6 +370,7 @@ async function catchUpPass(
         // The token was refused. Asking again on every resume would be a
         // request a minute to an account that has already said no.
         memory.signedOutAccount = account
+        memory.signedOutAt = startedAt
         report.signedOut = true
       } else {
         // Never read as "everything changed": a revoked token or a spent
@@ -355,12 +413,21 @@ async function catchUpPass(
   // not land first or a title planned at Simkl and watched elsewhere would
   // be refused here for a viewing this same pass wrote. And a planned film
   // since watched elsewhere is taken off the plan by the pull's own rule.
-  const pullDue = startedAt - memory.lastPlannedAt >= PULL_INTERVAL_MS
+  //
+  // The interval paces Trakt and MyAnimeList, which have no gate to ask
+  // first. It does not apply to a fresh pass: an account linked a minute
+  // after the last pull has a list nobody has read yet, and waiting out the
+  // rest of ten minutes would leave Plan to Watch empty for it.
+  const pullDue = fresh || startedAt - memory.lastPlannedAt >= PULL_INTERVAL_MS
   const simklMoved = kinds.length > 0 || (report.deferred && pullDue)
   if (simklMoved || ((marks.trakt || marks.mal) && pullDue)) {
     memory.lastPlannedAt = startedAt
     try {
-      const pulled = await deps.syncPlanned()
+      const pulled = await deps.syncPlanned({
+        stamps,
+        readAt: stampsAt,
+        error: report.error ?? (report.signedOut ? 'Simkl refused the sign-in.' : undefined)
+      })
       report.plannedAdded = pulled.added
       report.plannedRemoved = pulled.removed
     } catch (error) {
@@ -382,9 +449,13 @@ async function catchUpPass(
       report.error = messageOf(error)
     }
 
+    // Whole the first time, and only what changed since the stored stamp
+    // after that — see librarySince. Read before the fetch: the stored
+    // stamp is about to be replaced by this pass's.
+    const since = librarySince(state, kind, startedAt)
     let payload: unknown
     try {
-      payload = await deps.library(kind)
+      payload = await deps.library(kind, since)
     } catch (error) {
       failKind(`catch-up:library:${kind}`, error)
       if (moved()) return finish()
@@ -421,6 +492,8 @@ async function catchUpPass(
       })
     }
     const kitsuIds = await mapWithLimit(anime, (title) => kitsuIdFor(deps, title))
+    /** The kind is incomplete only because the catalog was un-grouped. */
+    let heldForGrouping = false
     if (anime.length && !deps.animeReady()) {
       // Asked again, after the waits: the fetch and the lookups can take
       // minutes, and the catalog re-crawling in that time un-groups it
@@ -431,6 +504,7 @@ async function catchUpPass(
       // the stamp would advance. malSync's apply re-checks for the same
       // reason. Nothing here is resolved; the kind is fetched again later.
       complete = false
+      heldForGrouping = true
       report.deferred = true
     } else {
       anime.forEach((title, index) => {
@@ -459,43 +533,54 @@ async function catchUpPass(
     }
     const plan = planCatchUp(resolved, local, seen, new Date(deps.now()))
 
-    // Rule 8: a planned film now known to be watched comes off the plan.
-    // Collected here, with the other local writes, so no wait can come
-    // between a film being taken as watched and its leaving the plan: the
-    // rule only fires for a NEW play, so one missed now is never offered
-    // again and the film would stay planned and watched for good.
-    const unplan: typeof plan.unplan = []
+    // The viewings, the follows and the films coming off the plan (rule 8),
+    // in ONE transaction. A follow and an un-plan are only offered for a
+    // viewing that is new here, so viewings that landed without them would
+    // never get them: the next pass finds every play already recorded and
+    // offers nothing — a show never followed, a film planned and watched
+    // for good.
+    //
+    // The follow is local and nowhere else. tracking.toggle would push a
+    // plan add, and at Simkl that moves a show somebody is watching back to
+    // plan to watch.
+    let unplan: typeof plan.unplan = []
     try {
-      report.plays += db.importWatched(plan.plays)
-      // Followed locally and nowhere else. tracking.toggle would push a
-      // plan add, and at Simkl that moves a show somebody is watching back
-      // to plan to watch.
-      for (const item of plan.follow) {
-        db.track(item)
-        report.followed += 1
-      }
-      for (const item of plan.unplan) {
-        if (!db.isTracked(item.id)) continue
-        db.untrack(item.id)
-        unplanned += 1
-        unplan.push(item)
-      }
+      const applied = db.applyCatchUp({
+        plays: plan.plays,
+        follow: plan.follow,
+        unplan: plan.unplan.map((item) => item.id)
+      })
+      report.plays += applied.plays
+      report.followed += plan.follow.length
+      unplanned += applied.unplanned.length
+      unplan = plan.unplan.filter((item) => applied.unplanned.includes(item.id))
     } catch (error) {
-      // importWatched is one transaction and repeatable, so a kind that
-      // failed here is simply fetched and applied again later. Nothing is
-      // recorded: a title marked seen whose rows never landed would be
-      // skipped by every later pass.
+      // Nothing landed and nothing is recorded — a title marked seen whose
+      // rows never landed would be skipped by every later pass — so the
+      // kind is simply fetched and applied again later.
       failKind(`catch-up:write:${kind}`, error)
       continue
     }
 
     state.seen = { ...state.seen, ...plan.seen }
     state.fetchedAt[stamp] = deps.now()
+    // Only a whole fetch that was applied in full counts as one: the weekly
+    // whole read exists to pick up what incremental answers left out, and
+    // one that could not place every title has not done that yet.
+    if (!since && complete) state.fullAt[stamp] = deps.now()
     if (complete) state.stamps[stamp] = stamps[stamp]
     try {
       db.putCache(key, state, STATE_TTL_MS, { durable: true })
       memory.kindFailures[kind] = 0
-      memory.kindBackoffUntil[kind] = 0
+      // An incomplete kind keeps its old stamp, so it is due again on the
+      // very next pass. Nothing failed, but a lookup nobody could answer
+      // will not have an answer by the next resume either. Not when the
+      // catalog being re-grouped is what held it up: that is checked before
+      // the fetch on every pass anyway, the interface asks again in three
+      // minutes because the report says `deferred`, and a pause here would
+      // outlast that retry and leave nothing to ask a fourth time.
+      memory.kindBackoffUntil[kind] =
+        complete || heldForGrouping ? 0 : deps.now() + INCOMPLETE_RETRY_MS
     } catch (error) {
       // The rows are in; only the note that they are was lost. That costs a
       // refetch which finds everything already here. Caught rather than
@@ -550,14 +635,21 @@ export interface ArtworkDeps {
   db: Pick<MediaHubDatabase, 'activeProfile' | 'tracked' | 'track' | 'isTracked' | 'indexByIds'>
   metadata(type: MediaKind, id: string): Promise<CatalogItem>
   announce(): void
-  /** Ids already tried in this process — a title metadata cannot draw once
-   *  will not draw on the next resume either. */
+  /** Ids not to ask about again in this process: being asked right now,
+   *  answered (a title metadata cannot draw once will not draw on the next
+   *  resume either), or given up on after ARTWORK_MAX_FAILURES. */
   tried: Set<string>
+  /** How many times each id's lookup has failed outright in this process. */
+  failures: Map<string, number>
 }
 
 /** At most this many rows per pass: a first pull of a long list should not
  *  queue hundreds of metadata resolves behind the screen that asked. */
 const ARTWORK_PER_PASS = 40
+/** A lookup that fails this many times in one process is left alone. A
+ *  failure is usually the network, and is tried again; a title no source
+ *  can resolve fails every time, and must not be asked for on every resume. */
+const ARTWORK_MAX_FAILURES = 3
 
 /**
  * Fills in posters for tracked rows that have none.
@@ -583,14 +675,37 @@ export async function fillTrackedArtwork(profile: string, deps: ArtworkDeps): Pr
   const due = bare
     .filter((row) => !indexed.has(String(row.id)) && !deps.tried.has(String(row.id)))
     .slice(0, ARTWORK_PER_PASS)
+  // Marked before the lookups go out, so a second fill started while this
+  // one is still waiting does not ask for the same rows.
   for (const row of due) deps.tried.add(String(row.id))
   let filled = 0
   await mapWithLimit(due, async (row) => {
-    const detail = await deps.metadata(row.type, String(row.id))
+    const id = String(row.id)
+    let detail: CatalogItem
+    try {
+      detail = await deps.metadata(row.type, id)
+    } catch {
+      // Nobody answered, which says nothing about whether the title has
+      // artwork. Left marked, one dropped connection would cost the card
+      // its poster until the app was restarted — so it is let go again,
+      // until it has failed often enough to be the title rather than the
+      // network.
+      const failures = (deps.failures.get(id) ?? 0) + 1
+      deps.failures.set(id, failures)
+      if (failures < ARTWORK_MAX_FAILURES) deps.tried.delete(id)
+      return
+    }
     if (!detail?.poster) return
     // Checked after the wait: the profile can change, and somebody can take
     // the title off their list while its artwork was loading.
-    if (db.activeProfile() !== profile || !db.isTracked(row.id)) return
+    if (db.activeProfile() !== profile) {
+      // Answered, but for a profile that is no longer the one to write to.
+      // Let go, or the row would stay blank for the rest of the process once
+      // somebody switched back.
+      deps.tried.delete(id)
+      return
+    }
+    if (!db.isTracked(row.id)) return
     db.track({ ...detail, id: row.id, type: row.type })
     filled += 1
   })
@@ -603,6 +718,7 @@ export async function fillTrackedArtwork(profile: string, deps: ArtworkDeps): Pr
 
 const memory = newCatchUpMemory()
 const artworkTried = new Set<string>()
+const artworkFailures = new Map<string, number>()
 
 /**
  * The catch-up against the real services and database, with this process's
@@ -628,13 +744,29 @@ export async function catchUpFromServices(
     db: getDatabase(),
     account: settings.simklAccountMark,
     connected: settings.trackingAccountMarks,
-    // Small and asked for by a screen somebody is looking at.
+    // Everything this pass asks the network for is at `visible`: a screen
+    // somebody is looking at asked for it, and Home is waiting on the rows
+    // it fills. At `background` these requests stand down while anything
+    // more urgent is queued — and on a fresh install that is the whole
+    // first catalog crawl, a minute or more of it, so a phone that had just
+    // been linked sat on "Updating…" until the crawl was done. They are a
+    // handful of requests, and nothing runs at all while something plays.
     activities: () => simkl.simklActivities('visible'),
-    // Large, and nobody is waiting on any one of them in particular.
-    library: (kind) => simkl.simklLibrary(kind, 'background'),
-    syncPlanned: () => watchlists.syncPlannedFromServices('background'),
+    library: (kind, since) => simkl.simklLibrary(kind, 'visible', since),
+    // Through the same record the half-hourly job keeps, so the two of
+    // them read Simkl's lists once per change, not once each.
+    syncPlanned: (gate) =>
+      pullPlannedGated(
+        {
+          db: getDatabase(),
+          account: settings.simklAccountMark,
+          syncPlanned: (options) => watchlists.syncPlannedFromServices('visible', options),
+          now: () => Date.now()
+        },
+        gate
+      ),
     awaitingRemoval: watchlists.idsAwaitingRemoval,
-    lookupKitsu: (service, value) => idBridge.kitsuIdLookup(service, value, 'background'),
+    lookupKitsu: (service, value) => idBridge.kitsuIdLookup(service, value, 'visible'),
     animeTarget: (kitsuId) => seasons.resolveAnimeGroupTarget(`kitsu:${kitsuId}`),
     animeReady: seasons.animeGroupingReady,
     // On the title's own push chain, like every other plan change — see
@@ -652,7 +784,8 @@ export async function catchUpFromServices(
         db: getDatabase(),
         metadata: (type, id) => catalog.metadata(type, id, 'background'),
         announce: () => bridge.notifyLibraryChanged('catch-up', 'planned'),
-        tried: artworkTried
+        tried: artworkTried,
+        failures: artworkFailures
       }).catch((error) => logError('catch-up:artwork', error))
     },
     busy: () => currentPressure() === 'critical',
